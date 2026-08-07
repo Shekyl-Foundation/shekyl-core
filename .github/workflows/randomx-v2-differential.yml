@@ -227,7 +227,7 @@ jobs:
       - name: cargo clippy -D warnings (harness + sys)
         working-directory: rust
         # Targeted at the two new crates. The workspace-wide clippy
-        # gate runs in `build.yml`'s `rust-audit-and-test` job; this
+        # gate runs in `rust-audit-test.yml`'s `rust-audit-and-test` job; this
         # narrower invocation re-runs clippy against the harness in
         # the substrate-correct environment (with
         # `RANDOMX_V2_INSTALL_DIR` set, so `gen_canonical_outputs`
@@ -544,7 +544,7 @@ jobs:
         run: apt update
       - name: install build dependencies
         # Mirrors build.yml APT_INSTALL_LINUX.
-        run: apt -y install build-essential cmake libboost-all-dev miniupnpc libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl
+        run: apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5

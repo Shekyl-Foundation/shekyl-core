@@ -92,14 +92,13 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 
 **Phase 1 complete: Daemon RPC migrated to Rust/Axum** (see `docs/DAEMON_RPC_RUST.md`):
 
-- `shekyl-daemon-rpc` Rust crate replaces `epee::http_server_impl_base` for daemon RPC transport.
-- `core_rpc_ffi.h`/`.cpp` provides a C dispatch facade over the existing `core_rpc_server` handlers.
-- All 90 endpoints (33 JSON REST, 9 binary, 48 JSON-RPC) are routed through Axum.
-- JSON REST accepts both GET and POST; binary endpoints return 400 on parse failure (matching epee).
-- Enabled by default; use `--no-rust-rpc` to fall back to legacy epee HTTP.
-- Validated on live testnet: 23 pass, 2 expected diffs, 2 binary skips (see `docs/DAEMON_RPC_RUST.md`).
-- Validation harness at `tests/rpc_comparison/compare_rpc.sh`; test data in `shekyl-dev/data/rpc_comparison/`.
-- **Remaining for cutover**: wallet sync test (binary endpoints with real payloads), standard port binding.
+- `shekyl-daemon-rpc` Rust crate is the sole daemon HTTP transport (epee
+  listener + `--no-rust-rpc` deleted).
+- `core_rpc_ffi.h`/`.cpp` provides a C dispatch facade over `core_rpc_server`
+  handlers (epee KV serialization remains until Phase 2).
+- CORS default-deny; shekyld has no inbound `--rpc-login` / `--rpc-ssl*`.
+- **Phase 2 remaining:** replace epee KV in the FFI path; see FOLLOWUPS for
+  inert connection limits, `rpc_connections_count`, onion operator docs.
 
 **Deferred hard areas** (tagged `TODO(shekyl-v4)` in source):
 

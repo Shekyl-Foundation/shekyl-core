@@ -15,8 +15,8 @@ use shekyl_archival_retention::{
     bond_floor, challenge_fire_height, challenge_seal_height, p_canonical_id_from_hybrid_pubkey,
     r_market_count, serve_credit_epoch_ok, sigma_work_milli, verify_conservation_snapshot,
     verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
-    ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondPostError, BondPostKind,
-    ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow,
+    ArchivalServeCreditResponse, BadInterval, BondPostError, BondPostKind, ConservationError,
+    ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow, ShardSet,
     ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
@@ -56,14 +56,20 @@ fn build_gate4_document() -> Value {
         .expect("integration pk");
     let hybrid_pk_bytes = decode_hex(hybrid_pk_hex);
     let p_id = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes).to_bytes();
+    // The GF-1 debit authorizer (§9.11, JoinMarket-coupled). A deterministic
+    // canonical-length pattern — the KAT pins wire shape and record commit,
+    // not key validity; the C++ integration auth KAT references this hex.
+    let bond_spend_pk = vec![0xB5u8; hybrid_pk_bytes.len()];
 
     let join_vin = ArchivalBondPostVin {
         hybrid_public_key: hybrid_pk_bytes,
         p_canonical_id: p_id,
         post_kind: BondPostKind::JoinMarket,
+        bond_spend_pk: bond_spend_pk.clone(),
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![integration["shard_id"].as_u64().expect("shard")],
+            shard_ids: ShardSet::new(vec![integration["shard_id"].as_u64().expect("shard")])
+                .unwrap(),
         },
         bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
         bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
@@ -73,14 +79,14 @@ fn build_gate4_document() -> Value {
 
     json!({
         "format_version": 1,
-        "description": "Gate-4 §8 phase-1: join bond-post, serve at E_first, bonded-aggregation KAT.",
+        "description": "Gate-4 §8 phase-1: join bond-post, bonded-aggregation KAT. The serve-at-E_first leg reads gate2_serve_credit_kat_v1.json's integration section directly (single source; the embedded copy drifted).",
         "join": {
             "wire_hex": encode_hex(&join_vin.serialize().expect("join wire")),
             "p_canonical_id_hex": encode_hex(&p_id),
+            "bond_spend_pk_hex": encode_hex(&bond_spend_pk),
             "bond_credit": ARCHIVAL_BOND_FLOOR_ATOMIC,
             "join_settlement_epoch": integration["join_settlement_epoch"].as_u64().expect("join epoch"),
         },
-        "serve_e_first": integration.clone(),
         "negative_serve_at_e_join": {
             "settlement_epoch": 0,
             "join_settlement_epoch": 0,
@@ -99,10 +105,6 @@ fn build_gate4_document() -> Value {
             },
             "per_p_work_milli": [4000, 0, 12000],
             "market_mask": [true, false, false],
-            "curve": {
-                "plateau_work_milli": 16000,
-                "plateau_value_milli": 8000
-            },
             "serve_credit_rows": [
                 {
                     "p_id_hex": "01",
@@ -134,14 +136,6 @@ fn build_gate4_document() -> Value {
 }
 
 fn gate4_emission_phase2_vectors(emission: &Value) {
-    let curve = BandedCurveParams {
-        plateau_work_milli: emission["curve"]["plateau_work_milli"]
-            .as_u64()
-            .expect("plateau_work"),
-        plateau_value_milli: emission["curve"]["plateau_value_milli"]
-            .as_u64()
-            .expect("plateau_value"),
-    };
     let e = emission["settlement_epoch"].as_u64().expect("epoch");
     let shard = emission["shard_id"].as_u64().expect("shard");
 
@@ -198,7 +192,7 @@ fn gate4_emission_phase2_vectors(emission: &Value) {
         .map(|v| v.as_bool().unwrap())
         .collect();
     assert_eq!(
-        sigma_work_milli(&works, &curve, &mask),
+        sigma_work_milli(&works, &mask),
         expected["sigma_work_milli"].as_u64().expect("sigma")
     );
 }
@@ -242,7 +236,14 @@ fn gate4_lifecycle_kat_vectors() {
         neg["join_settlement_epoch"].as_u64().expect("E_join"),
     ));
 
-    let serve = &kat["serve_e_first"];
+    // The serve-at-E_first leg reads gate-2's integration section DIRECTLY —
+    // the gate-4 fixture used to embed a wholesale copy, and the copy silently
+    // drifted on dev (no consumer failed); one source of truth, no drift
+    // channel. The join fixture above still derives from the same section, so
+    // a gate-2 re-pin that changes the pubkey fails these cross-assertions
+    // loudly until gate-4 is regenerated.
+    let gate2: Value = serde_json::from_str(GATE2_KAT).expect("gate2 json");
+    let serve = &gate2["integration"];
     let join_epoch = serve["join_settlement_epoch"].as_u64().expect("join epoch");
     let settlement_epoch = serve["settlement_epoch"]
         .as_u64()
@@ -382,7 +383,10 @@ fn gate4_conservation_rejects_aggregation_mismatch() {
 #[test]
 fn gate4_join_wire_p_id_matches_recomputed_pubkey() {
     let kat: Value = serde_json::from_str(GATE4_KAT).expect("gate4 json");
-    let serve = &kat["serve_e_first"];
+    // Gate-2's integration section is the pubkey's single source (see
+    // gate4_lifecycle_kat_vectors); this pins the gate-4 join fixture to it.
+    let gate2: Value = serde_json::from_str(GATE2_KAT).expect("gate2 json");
+    let serve = &gate2["integration"];
     let pk_bytes = decode_hex(serve["bond_hybrid_pubkey_hex"].as_str().expect("hybrid pk"));
     let expected = decode_hex32(kat["join"]["p_canonical_id_hex"].as_str().expect("p_id"));
     assert_eq!(

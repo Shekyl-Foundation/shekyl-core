@@ -125,6 +125,41 @@ pub fn select_reference_height(tip: u64) -> Option<u64> {
     tip.checked_sub(REF_ANCHOR_AGE)
 }
 
+/// Why [`two_sided_reference_height`] refused — both arms are transient
+/// resync states, not defects: the caller resyncs and retries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwoSidedRefusal {
+    /// `min(tip, ingested) < REF_ANCHOR_AGE` — the chain (or the tree's
+    /// coverage of it) is too short to have a legal reference block.
+    ChainTooShort,
+    /// The anchored reference is already at/past [`REBUILD_AT`] as seen
+    /// from the live tip — the tree is too far behind to anchor a
+    /// reference whose proof would survive to submission.
+    TreeTooFarBehind,
+}
+
+/// The two-sided reference gate shared by every proof-building pipeline
+/// (the transfer path's re-anchor and the emission-claim orchestrator —
+/// one definition; the anchoring rule is a consensus-facing acceptance
+/// window and must not fork per call site):
+///
+/// - **Lower arm:** [`select_reference_height`] over `min(tip,
+///   ingested_tip)` — the canonical [`REF_ANCHOR_AGE`] offset, taken off
+///   the lower of the daemon tip and the curve tree's ingested tip so the
+///   anchored root exists on both sides.
+/// - **Upper arm:** refuse a fresh reference *already* due for re-anchor
+///   as seen from the live `tip` ([`should_reanchor`], inclusive at
+///   [`REBUILD_AT`]) — a proof built against it could expire before
+///   submission.
+pub fn two_sided_reference_height(tip: u64, ingested_tip: u64) -> Result<u64, TwoSidedRefusal> {
+    let reference_height =
+        select_reference_height(tip.min(ingested_tip)).ok_or(TwoSidedRefusal::ChainTooShort)?;
+    if should_reanchor(tip, reference_height) {
+        return Err(TwoSidedRefusal::TreeTooFarBehind);
+    }
+    Ok(reference_height)
+}
+
 /// The age of a reference block as seen from `tip_now`:
 /// `tip_now − reference_height`.
 ///

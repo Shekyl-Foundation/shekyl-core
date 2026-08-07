@@ -12,7 +12,7 @@ use curve25519_dalek::{EdwardsPoint, Scalar};
 
 use shekyl_crypto_pq::{handle::OutputHandle, kem::HybridCiphertext, key_image::KeyImage};
 use shekyl_curve_primitives::Commitment;
-use shekyl_types::TxHash;
+use shekyl_types::{BlockCount, BlockHeight, Timelock, TxHash};
 use shekyl_units::AtomicUnits;
 
 use crate::{
@@ -22,8 +22,52 @@ use crate::{
 };
 
 /// Outputs must mature this many blocks before the daemon inserts them into
-/// the curve tree. Mirrors `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (C++).
-pub const SPENDABLE_AGE: u64 = 10;
+/// the curve tree.
+///
+/// Defined as [`shekyl_consensus::DEFAULT_LOCK_WINDOW`] — the same constant
+/// `shekyl-curve-tree`'s `recon::maturity_height` uses for tree insertion —
+/// rather than an independent literal, so the wallet's eligibility math and
+/// the daemon's deferred insertion cannot drift (GF4b-6 single-source
+/// sharpening, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.6). Mirrors
+/// `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (C++).
+pub const SPENDABLE_AGE: u64 = shekyl_consensus::DEFAULT_LOCK_WINDOW as u64;
+
+/// The height at which an output's leaf is present in the curve tree and the
+/// output becomes spendable — the **single** wallet-side definition of "in
+/// the tree yet" (X5/CT-5c).
+///
+/// `max(block_height + SPENDABLE_AGE, timelock_block)`: the daemon inserts an
+/// output at the *maximum* of its spendable-age maturity and its additional
+/// timelock. Both wallet consumers resolve through this one function so they
+/// cannot drift from each other or from tree insertion
+/// (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.6):
+///
+/// - the transfer path (`TransferDetails::eligible_height`, set at the
+///   `ledger_ext` construction seam), and
+/// - the pscan funding path (`PFundingOutputRecord::spendable_height`, set at
+///   the dual-extract seam; the GF-4b sweep filters on it).
+///
+/// **The coinbase +60 arrives through the timelock channel, contingently.**
+/// Tree insertion computes the coinbase window from `is_miner`
+/// (`recon::maturity_height`); this function sees only `unlock_time`. The two
+/// agree via two consensus invariants: a coinbase's `unlock_time` is exactly
+/// `height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` (`blockchain.cpp` block
+/// validation), and a regular tx's nonzero `unlock_time` is pool-rejected.
+/// That contingency is recorded here, once — not per call site. [`Timelock`]
+/// is block-height-only ([`Timelock::Block`] wraps a [`BlockHeight`]; the
+/// CryptoNote timestamp form is not representable).
+///
+/// Typed in and out ([`BlockHeight`] → [`BlockHeight`], rule 18): the pscan
+/// funding path stores the result directly; the legacy `u64`-shaped
+/// [`TransferDetails::eligible_height`] field converts at its own edge.
+#[must_use]
+pub fn eligible_height(block_height: BlockHeight, additional_timelock: Timelock) -> BlockHeight {
+    let maturity = block_height + BlockCount::from_raw(SPENDABLE_AGE);
+    match additional_timelock {
+        Timelock::None => maturity,
+        Timelock::Block(unlock) => maturity.max(unlock),
+    }
+}
 
 /// The F14 awaiting-confirmation lock state
 /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.6).
@@ -153,6 +197,29 @@ pub struct TransferDetails {
     /// watchdog horizon (confirmed-absent). See [`AwaitingConfirmation`].
     #[serde(default)]
     pub awaiting_confirmation: Option<AwaitingConfirmation>,
+    /// Canonical txid of the **confirmed** transaction that spent this
+    /// output — the WI-RPC-3 spend-quadruple leg (F-9,
+    /// `docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE).
+    ///
+    /// Set together with `spent = true` / `spent_height = Some` by
+    /// [`crate::ledger_indexes::LedgerIndexes::mark_spent`] when refresh
+    /// observes the spend on-chain; cleared wherever the spent mark is
+    /// reverted (`unmark_spent`, reorg orphaning in `handle_reorg`).
+    /// `None` while a spend is merely in flight (`spent_height = None`).
+    ///
+    /// **Why it exists:** the wallet's own outbound transaction that
+    /// produces *no* owned output (a no-change send) leaves no
+    /// `TransferDetails` row carrying its txid. Without this field, the
+    /// retained per-tx secret in `tx_meta.tx_keys` would lose its last
+    /// live reference at confirmation and the I-2 orphan invariant
+    /// (`tx-keys-no-orphans`) would force the secret's deletion — killing
+    /// OUTBOUND tx-proof generation for exactly the txs that need it.
+    /// The spent rows' `spending_tx_hash` is the rescan-coherent chain
+    /// reference: it is rebuilt from chain data by any rescan (the spend
+    /// is observed on-chain), so `tx_keys` retention survives
+    /// `rescan_blockchain` without a special case.
+    #[serde(default)]
+    pub spending_tx_hash: Option<TxHash>,
 
     // ── M3b deterministic-handle pathway (per `STAGE_1_PR_3_M3B_PREFLIGHT.md`) ──
     //
@@ -294,6 +361,8 @@ struct TransferDetailsSchema {
     // `AwaitingConfirmation` mirrored field-for-field: `TxHash` is a
     // transparent 32-byte-array newtype on the wire.
     awaiting_confirmation: Option<AwaitingConfirmationSchema>,
+    // `TxHash` is a transparent 32-byte-array newtype on the wire.
+    spending_tx_hash: Option<[u8; 32]>,
     // Non-secret on-chain payloads; reference the workspace types
     // directly (their `postcard_schema::Schema` derives lock the wire
     // shape from the source side per
@@ -333,6 +402,9 @@ impl Zeroize for TransferDetails {
         // the hand-rolled `if let Some` left it `Some(all-zero)`, and would
         // have silently skipped any future secret field on the inner struct.
         self.awaiting_confirmation.zeroize();
+        // `Option<TxHash>::zeroize` wipes the inner hash and resets the
+        // tag to `None`, matching the sibling `Option` fields.
+        self.spending_tx_hash.zeroize();
         // `source_ciphertext` and `output_handle` are non-secret — see
         // the field docs above. `HybridCiphertext` is on-chain public
         // data; `OutputHandle` is wallet-private-derivable from any
@@ -380,6 +452,46 @@ impl std::fmt::Debug for TransferDetails {
 }
 
 #[cfg(test)]
+mod eligible_height_tests {
+    use super::*;
+
+    fn h(raw: u64) -> BlockHeight {
+        BlockHeight::from_raw(raw)
+    }
+
+    /// Baseline: no additional timelock → `block + SPENDABLE_AGE`.
+    #[test]
+    fn baseline_is_spendable_age() {
+        assert_eq!(
+            eligible_height(h(100), Timelock::None),
+            h(100 + SPENDABLE_AGE)
+        );
+    }
+
+    /// A coinbase-shaped block timelock (`unlock_time = height + 60`, the
+    /// consensus-enforced shape) floors the result above the flat
+    /// `+SPENDABLE_AGE` — the channel through which coinbase maturity
+    /// reaches both consumers of this function (GF4b-6 §3.6).
+    #[test]
+    fn coinbase_shaped_timelock_floors() {
+        assert_eq!(
+            eligible_height(h(100), Timelock::Block(h(160))),
+            h(160),
+            "block timelock (160) floors above block + SPENDABLE_AGE (110)"
+        );
+    }
+
+    /// A timelock at or below the spendable-age maturity is subsumed by it.
+    #[test]
+    fn low_timelock_is_subsumed() {
+        assert_eq!(
+            eligible_height(h(100), Timelock::Block(h(105))),
+            h(100 + SPENDABLE_AGE)
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
@@ -398,6 +510,7 @@ mod tests {
             spent_height: None,
             key_image: None,
             awaiting_confirmation: None,
+            spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: 110,

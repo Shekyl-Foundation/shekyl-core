@@ -66,7 +66,23 @@ pub struct SubmitFactsFfi {
     /// the narrower fact to a foreign caller so the submit endpoint is not a
     /// stem-presence oracle (§3.1 identity-category pin).
     pub in_pool_broadcast: u8,
-    pub reserved: [u8; 3],
+    /// The §8.7.1 BP3 record probe ran (the caller passed a bond
+    /// `p_canonical_id`, or the commit re-derived one from the blob's
+    /// bond-post vin). Gates the validity of `bond_record_exists`.
+    pub bond_record_probed: u8,
+    /// An archival bond record exists for the probed `p_canonical_id`
+    /// (`get_archival_bond_hybrid_pubkey`). Valid iff
+    /// `bond_record_probed`; zeroed otherwise.
+    pub bond_record_exists: u8,
+    /// The §8.7.2 E6 claim-slot probe ran (the caller passed the emission
+    /// `(p_canonical_id, epochs)`, or the commit re-derived them from the
+    /// blob's emission vin). Gates `emission_claim_conflict`.
+    pub emission_probed: u8,
+    /// The claimant record is gone OR a claimed epoch overlaps the
+    /// record's claimed set. Valid iff `emission_probed`; Rust classifies
+    /// (`DoubleSpendConflict`).
+    pub emission_claim_conflict: u8,
+    pub reserved: [u8; 7],
     pub ref_height: u64,
     pub root: [u8; 32],
     pub fee_per_byte: u64,
@@ -89,7 +105,11 @@ impl SubmitFactsFfi {
             ref_block_found: 0,
             tree_depth: 0,
             in_pool_broadcast: 0,
-            reserved: [0; 3],
+            bond_record_probed: 0,
+            bond_record_exists: 0,
+            emission_probed: 0,
+            emission_claim_conflict: 0,
+            reserved: [0; 7],
             ref_height: 0,
             root: [0; 32],
             fee_per_byte: 0,
@@ -103,25 +123,120 @@ impl SubmitFactsFfi {
 
 // §4.5 layout pins — the Rust twins of daemon_submit_ffi.cpp's
 // static_asserts. A drift on either side fails that side's build.
-const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 88);
+const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 96);
 const _: () = assert!(std::mem::align_of::<SubmitFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_pool) == 0);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain) == 1);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, ref_block_found) == 2);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, tree_depth) == 3);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_pool_broadcast) == 4);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, reserved) == 5);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, ref_height) == 8);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, root) == 16);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_per_byte) == 48);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_quantization_mask) == 56);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, weight_limit) == 64);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, chain_height) == 72);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain_height) == 80);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_probed) == 5);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_exists) == 6);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, emission_probed) == 7);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, emission_claim_conflict) == 8);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, reserved) == 9);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, ref_height) == 16);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, root) == 24);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_per_byte) == 56);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_quantization_mask) == 64);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, weight_limit) == 72);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, chain_height) == 80);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain_height) == 88);
+
+// ── §8.7.2 emission fact marshal (rows E6/E7) ──────────────────────────────
+// Mirrors of `daemon_submit_ffi.h`'s emission PODs; the row shapes are the
+// `shekyl_ffi.h` gather rows (`shekyl_archival_epoch_close_*`) the block
+// path already marshals — one C definition, mirrored per Rust boundary
+// (shekyl-ffi's twins carry the same layout; both sides are same-build ABI).
+
+/// `shekyl_archival_epoch_close_bond`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ArchivalEpochCloseBondFfi {
+    pub join_settlement_epoch: u64,
+    /// Flattened `(start_epoch, end_exclusive)` pairs; `2 × len` u64s.
+    pub bad_intervals_ptr: *const u64,
+    /// Pair count (not u64 count).
+    pub bad_intervals_len: usize,
+    pub is_foundation_complete_tree: u8,
+}
+
+/// `shekyl_archival_epoch_close_shard`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ArchivalEpochCloseShardFfi {
+    pub shard_id: u64,
+    pub freeze_height: u64,
+    pub has_segment: u8,
+}
+
+/// `shekyl_archival_credit_pair`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ArchivalCreditPairFfi {
+    pub bond_idx: usize,
+    pub shard_idx: usize,
+}
+
+/// `shekyl_submit_emission_bond_ffi` (row E6).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SubmitEmissionBondFfi {
+    pub join_settlement_epoch: u64,
+    pub holdings_kind: u8,
+    pub shard_ids: *const u64,
+    pub shard_ids_len: usize,
+    pub claimed_epochs: *const u64,
+    pub claimed_epochs_len: usize,
+}
+
+/// `shekyl_submit_emission_snapshot_ffi` (row E7).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SubmitEmissionSnapshotFfi {
+    pub has_budget_row: u8,
+    pub settlement_epoch: u64,
+    pub close_block_height: u64,
+    pub sigma_work_milli: u64,
+    pub budget_atomic: u64,
+    /// `usize::MAX` = claimant has no serve-credit row in `E`.
+    pub claimant_bond_idx: usize,
+    pub bonds: *const ArchivalEpochCloseBondFfi,
+    pub bonds_len: usize,
+    pub shards: *const ArchivalEpochCloseShardFfi,
+    pub shards_len: usize,
+    pub credit_pairs: *const ArchivalCreditPairFfi,
+    pub credit_pairs_len: usize,
+}
+
+/// `shekyl_submit_emission_facts_ffi`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SubmitEmissionFactsFfi {
+    pub bond_present: u8,
+    pub bond: SubmitEmissionBondFfi,
+    pub snapshots: *const SubmitEmissionSnapshotFfi,
+    pub snapshots_len: usize,
+}
+
+/// Opaque C++-owned buffer holder (`shekyl_submit_emission_facts_handle`).
+#[repr(C)]
+pub struct SubmitEmissionFactsHandle {
+    _opaque: [u8; 0],
+}
 
 extern "C" {
     pub fn core_rpc_ffi_create(rpc_server_ptr: *mut std::ffi::c_void) -> *mut CoreRpcHandle;
     pub fn core_rpc_ffi_destroy(h: *mut CoreRpcHandle);
+
+    /// §55: relay stem-outcome tallies as a JSON array. Caller frees.
+    ///
+    /// **Transit, not structure** — the tallies are Rust's (the relay zone
+    /// owns them) and this consumer is Rust; the hop out to C++ and back
+    /// exists only because C++ `net_node` owns the zone handles' lifetime.
+    /// It disappears with the p2p migration, at which point this crate reads
+    /// the zone directly. Do not build on the round trip.
+    pub fn core_rpc_ffi_stem_tallies(h: *mut CoreRpcHandle) -> *mut std::os::raw::c_char;
 
     pub fn core_rpc_ffi_json_endpoint(
         h: *mut CoreRpcHandle,
@@ -149,15 +264,27 @@ extern "C" {
 
     // Submit shims (daemon_submit_ffi.h §4.1–§4.3). Contracts documented on
     // the C++ declarations; `FfiSubmitShim` is the only caller.
+    #[allow(clippy::too_many_arguments)]
     pub fn shekyl_submit_snapshot_facts(
         h: *mut CoreRpcHandle,
         txid: *const u8,
         key_images: *const u8,
         n_key_images: usize,
         reference_block: *const u8,
+        bond_p_canonical_id: *const u8,
+        emission_p_canonical_id: *const u8,
+        emission_epochs: *const u64,
+        n_emission_epochs: usize,
+        out_emission: *mut *mut SubmitEmissionFactsHandle,
         out_facts: *mut SubmitFactsFfi,
         out_ki_conflicts: *mut u8,
     ) -> i32;
+
+    pub fn shekyl_submit_emission_facts_view(
+        h: *const SubmitEmissionFactsHandle,
+    ) -> *const SubmitEmissionFactsFfi;
+
+    pub fn shekyl_submit_emission_facts_free(h: *mut SubmitEmissionFactsHandle);
 
     #[allow(clippy::too_many_arguments)]
     pub fn shekyl_submit_commit_tx(

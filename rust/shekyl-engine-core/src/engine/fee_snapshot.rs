@@ -15,7 +15,7 @@ use std::sync::Arc;
 use super::error::{FeeEstimatorError, IoError};
 use super::traits::{DaemonEngine, FeeEstimates};
 
-fn map_daemon_engine_fee_error<E: Into<IoError>>(err: E) -> FeeEstimatorError {
+pub(crate) fn map_daemon_engine_fee_error<E: Into<IoError>>(err: E) -> FeeEstimatorError {
     match err.into() {
         IoError::Daemon { detail } if detail.contains("connection error") => {
             FeeEstimatorError::DaemonUnreachable

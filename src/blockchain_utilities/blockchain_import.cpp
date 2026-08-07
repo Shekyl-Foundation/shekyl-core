@@ -190,9 +190,14 @@ int check_flush(cryptonote::core &core, std::vector<block_complete_entry> &block
     // process block
 
     block_verification_context bvc = {};
-    pool_supplement ps{};
+    block_connect_supplement connect{};
+    // Thread the credit-wire attestation witness the chunk carried into the connect
+    // path (same as p2p make_block_connect_supplement_from_block_entry), so verifying
+    // import writes the height-keyed side table instead of dropping it. Its size was
+    // already bounded by bootstrap::block_package's own codec.
+    connect.attestation_witness = block_entry.attestation_witness;
 
-    core.handle_incoming_block(block_entry.block, pblocks.empty() ? NULL : &pblocks[blockidx++], bvc, ps, false); // <--- process block
+    core.handle_incoming_block(block_entry.block, pblocks.empty() ? NULL : &pblocks[blockidx++], bvc, connect, false); // <--- process block
 
     if(bvc.m_verifivation_failed)
     {
@@ -231,7 +236,7 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
   if (!std::filesystem::exists(fs_import_file_path, ec))
   {
     MFATAL("bootstrap file not found: " << fs_import_file_path);
-    return false;
+    return 2;
   }
 
   uint64_t block_first;
@@ -248,7 +253,7 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
 
   if (total_source_blocks+block_first-1 <= start_height)
   {
-    return false;
+    return 0; // nothing to import: no blocks beyond the current height — a no-op success, not an error
   }
 
   std::cout << ENDL;
@@ -263,13 +268,40 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
   if (import_file.fail())
   {
     MFATAL("import_file.open() fail");
-    return false;
+    return 2;
   }
 
   // 4 byte magic + (currently) 1024 byte header structures
   uint8_t major_version, minor_version;
   uint64_t dummy;
   bootstrap.seek_to_first_chunk(import_file, major_version, minor_version, dummy, dummy);
+
+  // Refuse a file written before chunks carried the credit-wire attestation witness
+  // (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2). The field is trailing, so such a
+  // chunk cannot parse as the current block_package in any case — but the reason has
+  // to be legible: importing it would otherwise mean a chain whose every block is
+  // permanently witness-less, which only surfaces after the cutover.
+  //
+  // The gate covers EVERY major, including 0. An earlier form excluded major 0,
+  // which left the one hole it was written to close: a v0 chunk is a
+  // `block_package_1`, which has no witness field at all, so it would have
+  // imported to exactly the permanently witness-less chain this refuses. Major 0
+  // is Monero-era anyway — Shekyl is v3-from-genesis with no Monero chain history
+  // (rule 60), its block serializer cannot parse a Monero block blob, and
+  // BootstrapFile::initialize_file has only ever written major 1 — so the v0
+  // reader is gone with this check rather than kept as a second thing to
+  // remember.
+  if (major_version != bootstrap::BOOTSTRAP_MAJOR_VERSION
+      || minor_version < bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS)
+  {
+    MFATAL("bootstrap file is v" << unsigned(major_version) << "." << unsigned(minor_version)
+      << ", which this build cannot import. Expected v"
+      << unsigned(bootstrap::BOOTSTRAP_MAJOR_VERSION) << "."
+      << unsigned(bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS)
+      << " or later — earlier files predate the attestation-witness field. "
+         "Re-export it with this build.");
+    return 2;
+  }
 
   std::string str1;
   char buffer1[1024];
@@ -389,23 +421,10 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
     try
     {
       str1.assign(buffer_block, chunk_size);
+      // One chunk shape: the version gate above already refused everything that is
+      // not v1.BOOTSTRAP_MINOR_VERSION_WITNESS-or-later.
       bootstrap::block_package bp;
-      bool res;
-      if (major_version == 0)
-      {
-        bootstrap::block_package_1 bp1;
-        res = ::serialization::parse_binary(str1, bp1);
-        if (res)
-        {
-          bp.block = std::move(bp1.block);
-          bp.txs = std::move(bp1.txs);
-          bp.block_weight = bp1.block_weight;
-          bp.cumulative_difficulty = bp1.cumulative_difficulty;
-          bp.coins_generated = bp1.coins_generated;
-        }
-      }
-      else
-        res = ::serialization::parse_binary(str1, bp);
+      bool res = ::serialization::parse_binary(str1, bp);
       if (!res)
         throw std::runtime_error("Error in deserialization of chunk");
 
@@ -448,6 +467,9 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
           bce.pruned = false;
           bce.block = std::move(block);
           bce.txs = std::move(txs);
+          // The witness the chunk carried; check_flush threads it into the connect
+          // supplement (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2).
+          bce.attestation_witness = bp.attestation_witness;
           blocks.push_back(bce);
           int ret = check_flush(core, blocks, false);
           if (ret)
@@ -458,6 +480,32 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
         }
         else
         {
+          // Raw (non-verifying) import cannot produce the staker-inflow
+          // accrual that freezes budget(E)
+          // (ARCHIVAL_BUDGET_SCHEDULE.md §3.1): that operand is
+          // validate_miner_transaction's base_reward + fee summary, computed
+          // only on the verifying connect path (Blockchain::
+          // handle_block_to_main_chain). Importing a block here writes no
+          // accrual row, so the epoch close freezes a present-and-zero
+          // budget(E) — a structurally non-claimable row (§5) that then
+          // makes this node REJECT valid emission txs the network accepts
+          // (a silent consensus split, not mere bookkeeping). Fail closed:
+          // emission is a genesis fact, so raw import is refused for any
+          // non-genesis block. Re-run without --dangerous-unverified-import
+          // to use the verifying path, which computes the accrual correctly.
+          // (h is the 1-based block count at this point — ++h above — so
+          // h - 1 is the imported block's height, matching the logging.)
+          const uint64_t import_height = h - 1;
+          if (import_height > 0)
+          {
+            std::cout << refresh_string;
+            MFATAL("Raw unverified import cannot produce archival budget(E) "
+              "accrual rows for emission-active block " << import_height
+              << "; re-run without --dangerous-unverified-import");
+            quit = 2; // make sure we don't commit partial block data
+            break;
+          }
+
           std::vector<std::pair<transaction, blobdata>> txs;
           std::vector<transaction> archived_txs;
 
@@ -489,7 +537,13 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
           try
           {
             uint64_t long_term_block_weight = core.get_blockchain_storage().get_next_long_term_block_weight(block_weight);
-            core.get_blockchain_storage().get_db().add_block(std::make_pair(b, block_to_blob(b)), block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, txs);
+            // Only the genesis block (height 0) reaches add_block on the raw
+            // path — emission-active blocks are refused above. Genesis has no
+            // staker leg (its coinbase pays the whole hardcoded emission), so
+            // a zero accrual is correct here, not a gap.
+            // The witness the chunk carried, on the same terms as the verifying path
+            // above — empty for genesis, which is the only block that reaches here.
+            core.get_blockchain_storage().get_db().add_block(std::make_pair(b, block_to_blob(b)), block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, 0, bp.attestation_witness, txs);
           }
           catch (const std::exception& e)
           {
@@ -734,7 +788,6 @@ int main(int argc, char* argv[])
   try
   {
 
-  core.disable_dns_checkpoints(true);
 #if defined(PER_BLOCK_CHECKPOINT)
   const GetCheckpointsCallback& get_checkpoints = blocks::GetCheckpointsData;
 #else

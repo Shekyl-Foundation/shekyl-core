@@ -77,16 +77,45 @@ protocol_version = 3
 ### Protocol version 3
 
 FCMP++ curve tree membership proofs, hybrid Ed25519 + ML-DSA-65 spend
-authorization, hybrid X25519 + ML-KEM-768 output encryption, V3.1
-multisig wire format (FROST-style). Minimum transaction type:
-`RCTTypeFcmpPlusPlusPqc`.
+authorization, hybrid X25519 + ML-KEM-768 output encryption, and
+multisig authorization via **`scheme_id = 2`** (M-of-N hybrid
+signature list on the wire — the blob 15.4b may one day shrink).
+Minimum transaction type: `CTTypeFcmpPlusPlusPqc`.
 
-### Protocol version 4 (future)
+Spend-auth *ceremony* shape is gated by `spend_auth_version`, not by
+protocol version: product path **E′** uses `0x02` (FROST on `y`);
+protocol version 3 does not become "FROST-style" by a wallet opt-in
+(§15.5 — no implicit upgrades). Do **not** describe protocol-3
+multisig as FROST — that conflates the wire auth list with the
+classical SAL ceremony.
 
-Lattice-only threshold signatures, removing the classical Ed25519
-component. Gated on NIST lattice threshold algorithm standardization.
-Timeline: 12-24 months after protocol version 3 launch. See
-`00-mission.mdc` for the V4 transition commitment.
+### Protocol version 4 (future) / spend_auth evolution
+
+Two separable tracks (see `PQC_MULTISIG.md` §15.4). **Product path
+(2026-07-15):** Option **E′** issues `spend_auth_version = 0x02` from
+the start (`0x01` never issued) — dealer-mode FROST on `y`, plaintext
+`b`. That is 15.4a in product form, not a later migration from
+mandatory-prover Option D.
+
+- **15.4a FROST SAL / Option E′** — threshold classical spend-auth
+  inside FCMP++ (**availability**: eliminate mandatory-prover 1/N
+  *loss*). **Two-component gate discharged** —
+  `derive_output_secrets` asserts `y ≠ 0`
+  (`rust/shekyl-crypto-pq/src/derivation.rs`; point formula
+  `O = ho·G + B + y·T` in `output.rs`). **Remaining blockers:**
+  threshold-share `y_group` + wire
+  `0x02` + nonce discipline — **not** NIST. Auth is already PQ
+  (M × ML-DSA); this does not add authorization strength.
+  `spend_auth_version = 0x02` means 15.4a / E′, **not** lattice SAL.
+- **15.4b composite / lattice-only *auth*** — size win replacing the
+  M-of-N hybrid signature list (or dropping the classical half of
+  hybrid auth). **Not** a lattice SAL (impossible under FCMP++).
+  NIST IR 8214C (final 2026-01) is a **reference-material collection**,
+  not a standard; MPTC characterization report ~2027 may recommend a
+  later process (2030+ plausible). Do not reinflate "12–24 months."
+
+See `00-mission.mdc` for the V4 transition commitment and
+`V3_1_MULTISIG_RUST_ENGINE.md` §0.5 for E′.
 
 ### Where protocol_version lives in code
 

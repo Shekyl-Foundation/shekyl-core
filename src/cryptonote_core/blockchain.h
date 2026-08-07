@@ -373,14 +373,14 @@ namespace cryptonote
      *
      * @param bl_ the block to be added
      * @param bvc metadata about the block addition's success/failure
-     * @param extra_block_txs txs belonging to this block that may not be in the mempool
+     * @param connect pool txs + block-level admission data (attestation witness)
      *
      * @return true on successful addition to the blockchain, else false
      */
     bool add_new_block(const block& bl_, block_verification_context& bvc);
 
     bool add_new_block(const block& bl_, block_verification_context& bvc,
-      pool_supplement& extra_block_txs);
+      block_connect_supplement& connect);
 
     /**
      * @brief clears the blockchain and starts a new one
@@ -395,7 +395,6 @@ namespace cryptonote
      * @brief creates a new block to mine against
      *
      * @param b return-by-reference block to be filled in
-     * @param from_block optional block hash to start mining from (main chain tip if NULL)
      * @param miner_address address new coins for the block will go to
      * @param di return-by-reference tells the miner what the difficulty target is
      * @param height return-by-reference tells the miner what height it's mining against
@@ -405,7 +404,6 @@ namespace cryptonote
      * @return true if block template filled in successfully, else false
      */
     bool create_block_template(block& b, const account_public_address& miner_address, difficulty_type& di, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash);
-    bool create_block_template(block& b, const crypto::hash *from_block, const account_public_address& miner_address, difficulty_type& di, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash);
 
     /**
      * @brief gets data required to create a block template and start mining on it
@@ -542,6 +540,22 @@ namespace cryptonote
      * @return true unless any blocks or transactions are missing
      */
     bool handle_get_objects(NOTIFY_REQUEST_GET_OBJECTS::request& arg, NOTIFY_RESPONSE_GET_OBJECTS::request& rsp);
+
+    /**
+     * @brief the credit-wire attestation witness a main-chain block carries
+     *
+     * The single read site for the height-keyed witness table
+     * (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2). EVERY outgoing
+     * block_complete_entry must fill `attestation_witness` from here — a peer that
+     * receives a block without its witness stores none, cannot serve one, and
+     * relays the gap onward. The `+1` key convention lives behind
+     * `archival_attestation_witness_key`, so no caller re-derives it.
+     *
+     * @param b a block on the main chain (its coinbase height keys the lookup)
+     *
+     * @return the witness blob, empty when the block has none or it has been pruned
+     */
+    blobdata get_block_attestation_witness(const block& b) const;
 
     /**
      * @brief get the public key for an output
@@ -807,32 +821,21 @@ namespace cryptonote
     /**
      * @brief check the blockchain against a set of checkpoints
      *
-     * If a block fails a checkpoint and enforce is enabled, the blockchain
-     * will be rolled back to two blocks prior to that block.  If enforce
-     * is disabled, as is currently the default case with DNS-based checkpoints,
-     * an error will be printed to the user but no other action will be taken.
+     * If a block fails a checkpoint, the blockchain is rolled back to two
+     * blocks prior to that block.
      *
      * @param points the checkpoints to check against
-     * @param enforce whether or not to take action on failure
      */
-    void check_against_checkpoints(const checkpoints& points, bool enforce);
+    void check_against_checkpoints(const checkpoints& points);
 
     /**
-     * @brief configure whether or not to enforce DNS-based checkpoints
-     *
-     * @param enforce the new enforcement setting
-     */
-    void set_enforce_dns_checkpoints(bool enforce);
-
-    /**
-     * @brief loads new checkpoints from a file and optionally from DNS
+     * @brief loads new checkpoints from a file
      *
      * @param file_path the path of the file to look for and load checkpoints from
-     * @param check_dns whether or not to check for new DNS-based checkpoints
      *
      * @return false if any enforced checkpoint type fails to load, otherwise true
      */
-    bool update_checkpoints(const std::string& file_path, bool check_dns);
+    bool update_checkpoints(const std::string& file_path);
 
 
     // user options, must be called before calling init()
@@ -1176,7 +1179,37 @@ namespace cryptonote
     bool check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
       uint64_t current_height) const;
 
-    bool check_archival_bond_post_input(const txin_archival_bond_post& bond) const;
+    // `auth_pubkey` is the bond input's pqc auth key
+    // (`tx.pqc_auths[bond_index].hybrid_public_key`); the §3.5 step-5
+    // selection is pinned inside — identity key on credit paths, the record's
+    // committed GF-1 `bond_spend_pk` on debit paths (never the identity key).
+    bool check_archival_bond_post_input(const txin_archival_bond_post& bond,
+      const std::vector<uint8_t>& auth_pubkey, uint64_t chain_height) const;
+
+    /**
+     * @brief FAKECHAIN-only: inject an archival serve-credit bit directly.
+     *
+     * Regtest stand-in for the Gate-6 serve-credit accrual path
+     * (ARCHIVAL_FIREWALL_GATE6.md): writes through the production setter
+     * (BlockchainDB::set_archival_serve_credit_bit — the same writer the
+     * txin_archival_serve_credit_response connect path drives at
+     * blockchain_db.cpp) so the WS-1 single-source shape holds: bits are
+     * the sole work_P source and the epoch close derives everything else.
+     * It deliberately bypasses check_archival_serve_credit_input
+     * (acceptance + segment-freeze substrate is Gate-6 scope, out of the
+     * E4 gate) — that coverage boundary is the point of the shim.
+     *
+     * NOT pop-symmetric: a bit injected here has no carrier transaction,
+     * so no block pop ever calls remove_archival_serve_credit_bit for it.
+     * Callers (the emission regtest e2e) must hard-bound any pop/reorg
+     * below the injection height, or the reverted-and-replayed close
+     * derives Σwork over a stranded bit. Deletion target: replaced by the
+     * production serve-credit response builder when Gate-6 R3–R5 land.
+     *
+     * @return false unless nettype is FAKECHAIN.
+     */
+    bool regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
+      uint64_t shard_id, uint64_t settlement_epoch);
 
 #ifndef IN_UNIT_TESTS
   private:
@@ -1189,6 +1222,21 @@ namespace cryptonote
 
     typedef std::unordered_map<crypto::hash, block_extended_info> blocks_ext_by_hash;
 
+    /**
+     * @brief a block a reorg has popped off the main chain, with what its height
+     *   rows held.
+     *
+     * The credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire
+     * CW-2) is height-keyed while the block is on main, so it must be read before
+     * the pop deletes that row. It then travels with the block to whichever owner
+     * takes it next — the alt-block table (kept as an alternate) or the main chain
+     * again (a failed switch rolled back). Blocks that are simply discarded drop it.
+     */
+    struct detached_block
+    {
+      block bl;
+      blobdata attestation_witness;
+    };
 
     BlockchainDB* m_db;
 
@@ -1240,7 +1288,6 @@ namespace cryptonote
 
 
     checkpoints m_checkpoints;
-    bool m_enforce_dns_checkpoints;
 
     HardFork *m_hardfork;
 
@@ -1393,12 +1440,12 @@ namespace cryptonote
      * @param bl the block to be added
      * @param id the hash of the block
      * @param bvc metadata concerning the block's validity
-     * @param extra_block_txs txs belonging to this block that may not be in the mempool
+     * @param connect pool txs + block-level admission data (attestation witness)
      *
      * @return true if the block was added successfully, otherwise false
      */
     bool handle_block_to_main_chain(const block& bl, const crypto::hash& id,
-      block_verification_context& bvc, pool_supplement& extra_block_txs);
+      block_verification_context& bvc, block_connect_supplement& connect);
 
     /**
      * @brief validate and add a new block to an alternate blockchain
@@ -1410,12 +1457,12 @@ namespace cryptonote
      * @param b the block to be added
      * @param id the hash of the block
      * @param bvc metadata concerning the block's validity
-     * @param extra_block_txs txs belonging to this block that may not be in the mempool
+     * @param connect pool txs + block-level admission data (attestation witness)
      *
      * @return true if the block was added successfully, otherwise false
      */
     bool handle_alternative_block(const block& b, const crypto::hash& id,
-      block_verification_context& bvc, pool_supplement& extra_block_txs);
+      block_verification_context& bvc, block_connect_supplement& connect);
 
     /**
      * @brief builds a list of blocks connecting a block to the main chain
@@ -1454,6 +1501,33 @@ namespace cryptonote
     bool prevalidate_miner_transaction(const block& b, uint64_t height, uint8_t hf_version);
 
     /**
+     * @brief reads the D2 escalation operand n = frozen_segment_count at parent-block state
+     *
+     * The staker-share escalation (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
+     * §6.2) is a pure map of the frozen-segment count derived from the curve
+     * tree's leaf count, and the count MUST be the parent block's: reading tip
+     * state after the tree has grown would let a block move its own split.
+     * add_block advances the chain height and grows the tree in one write txn,
+     * and pop_block trims both in one write txn, so
+     * m_db->height() == block_height is equivalent to "the tree has not yet
+     * grown for this block" — the check proves the read is parent-state.
+     *
+     * Throws (rather than logging) on violation: template and connect must
+     * price the coinbase against the same n, and a divergence produces blocks
+     * that fail validate_miner_transaction's exact-equality money check — a
+     * chain halt, not a warning.
+     *
+     * @param block_height height of the block being built or validated. At a
+     *   load-bearing (connect) site this MUST be a height captured before
+     *   m_db->add_block — never a fresh m_db->height() read, which turns the
+     *   check into a permanent tautology while looking correct and passing
+     *   every test.
+     *
+     * @return frozen_segment_count at the parent of block_height
+     */
+    uint64_t parent_frozen_segment_count(uint64_t block_height) const;
+
+    /**
      * @brief validates a miner (coinbase) transaction
      *
      * This function makes sure that the miner calculated his reward correctly
@@ -1465,10 +1539,11 @@ namespace cryptonote
      * @param base_reward return-by-reference the new block's generated coins
      * @param already_generated_coins the amount of currency generated prior to this block
      * @param version hard fork version for that transaction
+     * @param frozen_segment_count D2 escalation operand n, read at parent state via parent_frozen_segment_count
      *
      * @return false if anything is found wrong with the miner transaction, otherwise true
      */
-    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version);
+    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count);
 
     /**
      * @brief reverts the blockchain to its previous state following a failed switch
@@ -1477,12 +1552,13 @@ namespace cryptonote
      * to do so, this function reverts the blockchain to how it was before
      * the attempted switch.
      *
-     * @param original_chain the chain to switch back to
+     * @param original_chain the chain to switch back to, each block paired with the
+     *   credit-wire attestation witness it held on main (captured at pop)
      * @param rollback_height the height to revert to before appending the original chain
      *
      * @return false if something goes wrong with reverting (very bad), otherwise true
      */
-    bool rollback_blockchain_switching(std::list<block>& original_chain, uint64_t rollback_height);
+    bool rollback_blockchain_switching(std::list<detached_block>& original_chain, uint64_t rollback_height);
 
     /**
      * @brief gets recent block weights for median calculation
@@ -1577,6 +1653,40 @@ namespace cryptonote
      */
     bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const;
     bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b) const { uint64_t median_ts; return check_block_timestamp(timestamps, b, median_ts); }
+
+    /**
+     * @brief verifies a block's archival attestation (ARCHIVAL_CREDIT_WIRE.md §3-§4)
+     *
+     * Recompute-and-compare the block's `attestation_root` and verify every pass
+     * record's P-countersignature. ALL logic is in Rust
+     * (`shekyl_archival_verify_attestation`); this member only marshals — it reads
+     * the header blob from the coinbase `tx_extra`, names the pass p_ids (step 1),
+     * reads each bond's hybrid pubkey from LMDB by those keys, reads the coinbase
+     * output key, hands the raw bytes across, and obeys the verdict. It parses
+     * nothing structural and decides nothing (rule 20), so it needs `m_db` and is
+     * not static.
+     *
+     * Pre-cutover no block carries pass records, so on every VALID block (empty
+     * witness, well-formed coinbase) this matches the interim's
+     * `attestation_root == empty_attestation_root()`. It is strictly stricter on
+     * three pinned shapes: unsolicited witness bytes on an empty-root block
+     * (`MALFORMED_WITNESS`) and an unreadable coinbase `vout[0]`
+     * (`CBKEY_UNREADABLE`, which `prevalidate_miner_transaction` rejects anyway)
+     * are already-invalid; a coinbase `tx_extra` that fails to parse
+     * (`HEADERS_UNREADABLE`) is a deliberate tightening of the inherited
+     * arbitrary-tx_extra tolerance — the `attestation_root` commitment over the
+     * kept headers is unverifiable when they cannot be read, and the settlement
+     * scan later reads those same bytes (pinned by
+     * `unreadable_headers_is_headers_unreadable`). The populated path is proven by
+     * the across-FFI KAT and turns on for producers at the cutover.
+     *
+     * @param b the block to be checked
+     * @param witness the block's opaque attestation-witness blob
+     *   (`connect.attestation_witness`); empty is the zero-record set
+     *
+     * @return true iff the Rust verdict is OK, otherwise false
+     */
+    bool verify_block_attestation(const block& b, const blobdata& witness);
 
     /**
      * @brief finish an alternate chain's timestamp window from the main chain

@@ -131,7 +131,7 @@ visitor. The closest existing shape is `txin_archival_bond_post` (carries
 - **`blockchain.cpp` `check_tx_inputs`** — tx-class detection
   (`is_stake_claim_only`, `is_archival_serve_credit_only`,
   `is_archival_bond_post_tx`), per-class input handling, and a
-  `RCTTypeFcmpPlusPlusPqc` switch with per-class branches; full spends call
+  `CTTypeFcmpPlusPlusPqc` switch with per-class branches; full spends call
   `shekyl_fcmp_verify`.
 - **`cryptonote_format_utils.cpp` `check_inputs_types_supported`** —
   structural allow/forbid of txin combinations (§7.1 step 1 hook).
@@ -691,6 +691,16 @@ mempool/explorer must read without the Rust parser; append to `txin_v`; three
 `get_signature_size → 0`; boost serialize; JSON. The C++ side does **no**
 semantic validation — it transports bytes the Rust codec owns.
 
+> **Landed-state note (2026-07-07).** The Rust half of PR-E2 (codec + wire
+> freeze, field set A) **has landed** (`emission_wire.rs`; commits `c6b4d0ab6`
+> …`cc28bee37`). The **C++ transport shim above was reassigned to C-1**, not
+> landed as residual PR-E2: the landed codec pins the Rust wire tag **`0x04`**
+> and the C++ oracle `VARIANT_TAG` **`0x06`** to the C-1 dispatch
+> (`emission_wire.rs:44–46`), because under gate-last the whitelist rejects the
+> vin on both mempool and block paths, so an early inert C++ struct buys nothing.
+> See [`REWARD_EMISSION_E3_GATING_ROUND.md`](../completed/REWARD_EMISSION_E3_GATING_ROUND.md)
+> §1.2.
+
 Inert: `check_inputs_types_supported` continues to reject the type until
 PR-E3. **Gates:** Rust canonical-encoding roundtrip + property/fuzz parse
 (the untrusted-input surface); C++ epee/boost/JSON transport roundtrip
@@ -907,7 +917,7 @@ Q1's two-auth answer.
 
 | Item | Built (verified `dev`) | Open — the lean to ratify |
 |------|------------------------|---------------------------|
-| **Q7** FFI seam | `shekyl_archival_verify_*` **snapshot-by-value** pattern ([`archival_ffi.rs:346`](../../rust/shekyl-ffi/src/archival_ffi.rs) — C++ reads LMDB, marshals scalars/arrays by value, Rust verify pure) | **resolved by house pattern** — emission verify follows it; work = enumerate the field set |
+| **Q7** FFI seam | `shekyl_archival_verify_*` **snapshot-by-value** pattern ([`archival_ffi/`](../../rust/shekyl-ffi/src/archival_ffi/) — C++ reads LMDB, marshals scalars/arrays by value, Rust verify pure; see `codes::ShekylArchivalVerifyCtx`) | **resolved by house pattern** — emission verify follows it; work = enumerate the field set |
 | **M-2** numerator as-of-E | `r_market_count` / `sigma_work_milli` / `scarcity` / `curve_milli` + `EpochCloseOutputs` (`consensus_state.rs`); schema implemented 2026-06-12; invariant-2 finalized-immutable-at-E-close | pin the **as-of-E snapshot field set** = the Q7 struct; every field from the frozen E-close materialization, never live |
 | **Q10 `held(P,E)`** | *(two-condition pin below)* | the one genuine design piece |
 | **Q9** dedup atomicity | `claimed_epochs_check_and_set` ([`claimed_epochs.rs:99`](../../rust/shekyl-archival-retention/src/claimed_epochs.rs)) | **PINNED** (§8.0.1) — check/set **fused in tx-connect scope**, mark rolls back with the tx |
@@ -1048,6 +1058,21 @@ is unblocked — its wire freeze is (A).**
   **ladder + sweep** are both **specified** (done: gate-6 §2.4 GF-4b, `PRINCIPAL_STAKE_LIFECYCLE.md`
   §3 GF-4b) **and wired in the wallet's pre-join path** (the `BackingSet` type + zero-pre-bond-output
   test). Guards against the mechanism going live with its privacy mitigation still on paper.
+
+  **UPDATE 2026-07-08 — precondition SATISFIED** (design + landing:
+  [`ARCHIVAL_GF4B_BACKING_LINEAGE.md`](ARCHIVAL_GF4B_BACKING_LINEAGE.md)). Ladder specified
+  and classified at the scan seam (`MintLineageOutput` on `PFundingOutputRecord`, schema v5;
+  no miner rung exists — GF4b-1 owner ruling); sweep specified **and implemented**
+  (`sweep_funding_outputs`, spendability-filtered per GF4b-6, go-live structurally gated on
+  the `SpentRecordsDurablyPruned` witness per GF4b-5); pre-join wiring **landed**
+  (`engine/backing_set.rs` `BackingSet` + the zero-pre-bond-output test, GF4b-3 survivor
+  tripwire armed). The remaining **C-1-scope residue is enumerated with named checkable
+  criteria** at the GF-4b doc §5 (arity-1 selector exclusively through `BackingSet`;
+  `EmissionReward` scan arm fail-toward-forbidden per GF4b-4; emission-path integration
+  test; witness-token zero-production-constructors confirmation) — the rule-21 shape this
+  guard requires. Launch-window note: GF4b-2 (funding-input-count leak) does **not** gate
+  C-1 merge but **does** gate genesis readiness on `stake_in` single-structured-output
+  funding (FOLLOWUPS V3.0 pre-genesis queue, 2026-07-08).
 
 1. **ML-DSA vin auth shape (F-E4) — RESOLVED 2026-07-01; PR-E2 wire freeze unblocked.**
    Binding message pinned in R1.A (cSHAKE family). Auth *count* = **two** (Q1 ratified,

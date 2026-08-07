@@ -3,40 +3,94 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Balance and address commands.
+//! Balance and address commands over the native RPC surface (WI-RPC-2a).
 
-use crate::engine::EngineContext;
+use serde_json::json;
 
-pub fn cmd_address(ctx: &EngineContext, account_index: u32) {
-    if !super::require_open(ctx) {
+use super::{format_amount_str, require_open};
+use crate::rpc_client::RpcSession;
+
+pub fn cmd_balance(rpc: &RpcSession) {
+    if !require_open(rpc) {
         return;
     }
-    match ctx.get_address(account_index) {
+    match rpc.call("get_balance", json!({})) {
         Ok(val) => {
-            if let Some(addr) = val.get("address").and_then(|a| a.as_str()) {
-                println!("Primary address: {addr}");
-            } else {
-                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
-            }
+            let field = |name: &str| {
+                val.get(name)
+                    .and_then(|v| v.as_str())
+                    .map(format_amount_str)
+                    .unwrap_or_else(|| "?".to_owned())
+            };
+            println!("Balance:");
+            println!("  Unlocked:           {} SKL", field("unlocked"));
+            println!("  Liquid:             {} SKL", field("liquid"));
+            println!("  Pending:            {} SKL", field("pending"));
+            println!("  Staked:             {} SKL", field("staked"));
+            println!("  Claimable rewards:  {} SKL", field("claimable_rewards"));
         }
-        Err(e) => eprintln!("Failed to get address: {e}"),
+        Err(e) => rpc.report("Failed to get balance", &e),
     }
 }
 
-pub fn cmd_balance(ctx: &EngineContext, account_index: u32) {
-    if !super::require_open(ctx) {
+pub fn cmd_address(rpc: &RpcSession) {
+    if !require_open(rpc) {
         return;
     }
-    match ctx.get_balance(account_index) {
+    match rpc.call("get_primary_address", json!({})) {
+        Ok(val) => match val.get("address").and_then(|v| v.as_str()) {
+            Some(address) => println!("{address}"),
+            None => eprintln!("Malformed get_primary_address response."),
+        },
+        Err(e) => rpc.report("Failed to get address", &e),
+    }
+}
+
+/// One-round-trip wallet summary over `get_wallet_info` (WI-RPC-4).
+pub fn cmd_engine_info(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("get_wallet_info", json!({})) {
         Ok(val) => {
-            let balance = val.get("balance").and_then(|v| v.as_u64()).unwrap_or(0);
-            let unlocked = val
-                .get("unlocked_balance")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            println!("Balance:          {} SKL", super::format_amount(balance));
-            println!("Unlocked balance: {} SKL", super::format_amount(unlocked));
+            let s = |name: &str| val.get(name).and_then(|v| v.as_str()).unwrap_or("?");
+            // A missing required field is a malformed response, not a zero.
+            // Height 0 is a real, plausible value — rendering it for an
+            // absent field would report a fully unsynced wallet to a user
+            // whose wallet may be fully synced.
+            let i = |name: &str| {
+                val.get(name)
+                    .and_then(serde_json::Value::as_i64)
+                    .map_or_else(|| "?".to_owned(), |h| h.to_string())
+            };
+            println!("Wallet: {}", s("name"));
+            println!("  Network:         {}", s("network"));
+            println!("  Capability:      {}", s("capability"));
+            println!("  Address:         {}", s("address"));
+            println!("  Wallet height:   {}", i("wallet_height"));
+            match val.get("daemon_height").and_then(|v| v.as_i64()) {
+                Some(h) => println!("  Daemon height:   {h}"),
+                None => println!("  Daemon height:   unavailable"),
+            }
+            println!("  Restore height:  {}", i("restore_height"));
+            if let Some(bal) = val.get("balance") {
+                let field = |name: &str| {
+                    bal.get(name)
+                        .and_then(|v| v.as_str())
+                        .map(format_amount_str)
+                        .unwrap_or_else(|| "?".to_owned())
+                };
+                println!("  Balance unlocked: {} SKL", field("unlocked"));
+                println!("  Balance liquid:   {} SKL", field("liquid"));
+            }
+            if let Some(staking) = val.get("staking") {
+                let enabled = staking
+                    .get("staking_enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                println!("  Staking enabled:  {enabled}");
+            }
         }
-        Err(e) => eprintln!("Failed to get balance: {e}"),
+        Err(e) => rpc.report("Failed to get wallet info", &e),
     }
 }

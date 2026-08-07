@@ -3,177 +3,321 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Transfer commands: transfer, transfers (list), show_transfer, sweep_all.
+//! Transfer commands over the native RPC surface (WI-RPC-2a).
+//!
+//! The send flow follows the wallet-RPC three-phase contract:
+//! `build_pending_tx` (funds reserved) → CLI-side confirmation showing the
+//! actual fee → `submit_pending_tx` on an explicit "yes", or
+//! `discard_pending_tx` on anything else. Confirmation lives here, not in
+//! the server (rewrite-plan pin: the RPC surface is UI-free).
 
-use crate::engine::EngineContext;
+use serde_json::{json, Value};
+use shekyl_wallet_rpc::types::{SubmitPendingTxResult, SubmitVerdictView};
 
-pub fn cmd_transfer(ctx: &EngineContext, args: &[&str], account_index: u32) {
-    if !super::require_open(ctx) {
+use super::{confirm, format_amount, format_amount_str, require_open};
+use crate::rpc_client::RpcSession;
+
+/// Map the wallet2-era numeric `--priority N` flag onto the wallet-RPC
+/// named tiers: 0-1 → ECONOMY, 2 (and unset) → STANDARD, 3+ → PRIORITY.
+pub(crate) fn priority_tier(priority: Option<u32>) -> &'static str {
+    match priority {
+        None | Some(2) => "STANDARD",
+        Some(0 | 1) => "ECONOMY",
+        Some(_) => "PRIORITY",
+    }
+}
+
+pub fn cmd_transfer(
+    rpc: &RpcSession,
+    amount: u64,
+    dest: &str,
+    priority: Option<u32>,
+    no_confirm: bool,
+) {
+    if !require_open(rpc) {
         return;
     }
-    if args.len() < 2 {
-        eprintln!("Usage: transfer <amount> <address>");
-        return;
-    }
 
-    let amount_str = args[0];
-    let address = args[1];
-
-    let atomic = match super::parse_amount(amount_str) {
-        Some(a) => a,
-        None => {
-            eprintln!("Invalid amount: {amount_str}. Use decimal SKL (e.g. 1.5).");
+    let built = match rpc.call(
+        "build_pending_tx",
+        json!({
+            "recipients": [{ "address": dest, "amount": amount.to_string() }],
+            "priority": priority_tier(priority),
+        }),
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            rpc.report("Failed to build transaction", &e);
             return;
         }
     };
 
-    let destinations = serde_json::json!([{
-        "amount": atomic,
-        "address": address
-    }]);
-
-    println!(
-        "Sending {} SKL to {address}...",
-        super::format_amount(atomic)
-    );
-
-    match ctx.transfer(&destinations.to_string(), 0, account_index) {
-        Ok(val) => {
-            if let Some(tx_hash) = val.get("tx_hash").and_then(|h| h.as_str()) {
-                println!("Transaction sent: {tx_hash}");
-            } else if let Some(tx_hash_list) = val.get("tx_hash_list").and_then(|l| l.as_array()) {
-                for h in tx_hash_list {
-                    if let Some(hash) = h.as_str() {
-                        println!("Transaction sent: {hash}");
-                    }
-                }
-            } else {
-                println!("Transfer submitted.");
-                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
-            }
-        }
-        Err(e) => eprintln!("Transfer failed: {e}"),
-    }
-}
-
-pub fn cmd_transfers(ctx: &EngineContext, account_index: u32) {
-    if !super::require_open(ctx) {
+    // build_pending_tx succeeded, so the server now holds a funds reservation
+    // keyed by pending_tx_id. Every abort path from here MUST release it, or
+    // the reserved outputs stay unspendable (drain_balance nets out reserved
+    // gindexes) until the wallet is closed and reopened.
+    let Some(pending_tx_id) = built
+        .get("pending_tx_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+    else {
+        // Without the handle there is nothing to discard with; the contract
+        // guarantees this field, so its absence is a genuine protocol error.
+        eprintln!("Malformed build_pending_tx response (missing pending_tx_id).");
         return;
-    }
-    match ctx.get_transfers(true, true, true, false, false, account_index) {
-        Ok(val) => {
-            let mut found = false;
-            for direction in &["in", "out", "pending"] {
-                if let Some(txs) = val.get(direction).and_then(|v| v.as_array()) {
-                    for tx in txs {
-                        found = true;
-                        let amount = tx.get("amount").and_then(|a| a.as_u64()).unwrap_or(0);
-                        let height = tx.get("height").and_then(|h| h.as_u64()).unwrap_or(0);
-                        let txid = tx.get("txid").and_then(|t| t.as_str()).unwrap_or("?");
-                        println!(
-                            "  [{direction:>7}] height={height:<8} amount={:<14} tx={txid}",
-                            super::format_amount(amount)
-                        );
-                    }
-                }
-            }
-            if !found {
-                println!("No transactions found.");
-            }
-        }
-        Err(e) => eprintln!("Failed to get transfers: {e}"),
-    }
-}
+    };
 
-pub fn cmd_show_transfer(ctx: &EngineContext, txid: &str) {
-    if !super::require_open(ctx) {
+    // content_gen and fee are contractually required. Do NOT default them: a
+    // wrong seen_gen guarantees a CONTENT_GEN_MISMATCH on submit (leaving the
+    // reservation live), and a missing fee would ask the user to confirm a
+    // send without its real cost. Treat either as malformed → discard + abort.
+    let Some(seen_gen) = built.get("content_gen").and_then(|v| v.as_i64()) else {
+        eprintln!("Malformed build_pending_tx response (missing content_gen).");
+        discard_reservation(rpc, &pending_tx_id);
         return;
-    }
-    let params = serde_json::json!({ "txid": txid });
-    match ctx.json_rpc("get_transfer_by_txid", &params.to_string()) {
-        Ok(val) => {
-            if let Some(transfer) = val.get("transfer") {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(transfer).unwrap_or_default()
-                );
-            } else {
-                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
-            }
-        }
-        Err(e) => eprintln!("Failed to get transfer: {e}"),
-    }
-}
+    };
+    let Some(fee) = built
+        .get("fee")
+        .and_then(|v| v.as_str())
+        .map(format_amount_str)
+    else {
+        eprintln!("Malformed build_pending_tx response (missing fee).");
+        discard_reservation(rpc, &pending_tx_id);
+        return;
+    };
 
-pub fn cmd_sweep_all(ctx: &EngineContext, account_index: u32, dest: &str, priority: Option<u32>) {
-    if !super::require_open(ctx) {
+    println!("Transaction summary:");
+    println!("  To:     {dest}");
+    println!("  Amount: {} SKL", format_amount(amount));
+    println!("  Fee:    {fee} SKL");
+
+    let stdin_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let accepted = if no_confirm {
+        if stdin_is_tty {
+            eprintln!("--no-confirm is only honored for non-interactive input; confirming.");
+            confirm("Send this transaction?")
+        } else {
+            true
+        }
+    } else if !stdin_is_tty {
+        // Non-interactive input without --no-confirm: reading confirm() here
+        // would silently consume the next piped line (or hit EOF) as the
+        // answer and discard the send with no clear reason — automation would
+        // see funds "sent" that never moved. Refuse loudly and point at the
+        // explicit flag instead.
+        eprintln!(
+            "Refusing to send without confirmation on non-interactive input. \
+             Re-run with --no-confirm to send unattended, or run interactively."
+        );
+        false
+    } else {
+        confirm("Send this transaction?")
+    };
+
+    if !accepted {
+        match rpc.call(
+            "discard_pending_tx",
+            json!({ "pending_tx_id": pending_tx_id }),
+        ) {
+            Ok(_) => println!("Transaction discarded."),
+            Err(e) => rpc.report("Failed to discard pending transaction", &e),
+        }
         return;
     }
 
-    eprintln!(
-        "WARNING: Sweeping all outputs to a single address reveals that all\n\
-         listed outputs belong to one engine. This creates strong on-chain linkage."
-    );
-
-    match ctx.get_balance(account_index) {
-        Ok(val) => {
-            let balance = val
-                .get("unlocked_balance")
-                .and_then(|b| b.as_u64())
-                .unwrap_or(0);
-            let amount_str = super::format_amount(balance);
-            println!(
-                "Will sweep approximately {} SKL from account {account_index}.",
-                amount_str
-            );
-
-            let addr_match = match ctx.get_address(account_index) {
-                Ok(addr_val) => {
-                    let own_addr = addr_val
-                        .get("address")
-                        .and_then(|a| a.as_str())
-                        .unwrap_or("");
-                    dest.starts_with(&own_addr[..8.min(own_addr.len())])
+    match rpc.call(
+        "submit_pending_tx",
+        json!({ "pending_tx_id": pending_tx_id, "seen_gen": seen_gen }),
+    ) {
+        // Decoded through the server's own result type, not a second copy of
+        // the verdict vocabulary: `SubmitVerdictView` owns the wire strings,
+        // and matching it exhaustively means a new verdict arm fails this
+        // build instead of silently rendering as a plain submit.
+        Ok(val) => match serde_json::from_value::<SubmitPendingTxResult>(val.clone()) {
+            // Render the verdict distinctly (rule 82): all three are success —
+            // the funds are on their way either way — but "already" tells the
+            // user an earlier attempt went through, so they neither resubmit
+            // nor double-count.
+            Ok(result) => {
+                let tx_hash = result.tx_hash;
+                match result.verdict {
+                    SubmitVerdictView::Accepted => println!("Transaction submitted: {tx_hash}"),
+                    SubmitVerdictView::AlreadyInPool => println!(
+                        "Transaction already in the network's pool (an earlier submit went \
+                         through): {tx_hash}"
+                    ),
+                    // The height is the daemon's claim, not an observation of
+                    // ours — say "reported" so the user reads it as such.
+                    SubmitVerdictView::AlreadyInChain => match result.confirmed_height {
+                        Some(h) => println!(
+                            "Transaction already confirmed on chain (reported height {h}): \
+                             {tx_hash}"
+                        ),
+                        None => println!("Transaction already confirmed on chain: {tx_hash}"),
+                    },
                 }
-                Err(_) => false,
-            };
-            if !addr_match {
-                eprintln!("Destination is an external address. This will link your entire balance to that address on-chain.");
             }
-
-            let prompt = format!("Type the total amount in SKL to confirm ({amount_str}): ");
-            if !super::confirm_dangerous(&prompt, &amount_str) {
-                println!("Cancelled.");
-                return;
+            // A server newer than this CLI, or a malformed reply: the submit
+            // still succeeded, so never swallow the hash — print what we can
+            // and say the verdict was not understood.
+            Err(_) => {
+                let tx_hash = val.get("tx_hash").and_then(|v| v.as_str()).unwrap_or("?");
+                println!("Transaction submitted (verdict not recognized): {tx_hash}");
             }
-        }
+        },
         Err(e) => {
-            eprintln!("Failed to get balance: {e}");
-            return;
+            rpc.report("Failed to submit transaction", &e);
+            // The failed submit left the reservation live; release it so the
+            // user's spendable balance is not silently tied up.
+            discard_reservation(rpc, &pending_tx_id);
         }
     }
+}
 
-    let mut params = serde_json::json!({
-        "address": dest,
-        "account_index": account_index,
-    });
-    if let Some(p) = priority {
-        params["priority"] = serde_json::json!(p);
+/// Best-effort release of a `build_pending_tx` reservation on an abort path
+/// (malformed response or failed submit). A failure to discard is surfaced,
+/// since the reserved funds stay unspendable until the wallet is reopened.
+fn discard_reservation(rpc: &RpcSession, pending_tx_id: &str) {
+    if let Err(e) = rpc.call(
+        "discard_pending_tx",
+        json!({ "pending_tx_id": pending_tx_id }),
+    ) {
+        rpc.report(
+            "Failed to release reserved funds (close and reopen the wallet if a \
+             later send reports insufficient funds)",
+            &e,
+        );
     }
+}
 
-    match ctx.json_rpc("sweep_all", &params.to_string()) {
+pub fn cmd_transfers(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("get_transfers", json!({})) {
         Ok(val) => {
-            if let Some(hashes) = val.get("tx_hash_list").and_then(|l| l.as_array()) {
-                for h in hashes {
-                    if let Some(hash) = h.as_str() {
-                        println!("Swept: {hash}");
-                    }
-                }
-            } else {
-                println!("Sweep submitted.");
-                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+            let transfers = val.get("transfers").and_then(|v| v.as_array());
+            let Some(transfers) = transfers.filter(|a| !a.is_empty()) else {
+                println!("No transfers.");
+                return;
+            };
+            println!(
+                "{:<10} {:<10} {:>18} {:>14} {:>10}  TxID",
+                "Direction", "State", "Amount (SKL)", "Fee (SKL)", "Height"
+            );
+            for t in transfers {
+                print_transfer_row(t);
             }
         }
-        Err(e) => eprintln!("Sweep failed: {e}"),
+        Err(e) => rpc.report("Failed to get transfers", &e),
+    }
+}
+
+/// One history row.
+///
+/// A single send produces several rows sharing one TxID — the OUTGOING
+/// journal row plus the receive-side rows for its change and for the
+/// inputs it consumed — so the fee is rendered per row rather than
+/// folded into the amount: a user reconciling the table needs the
+/// amount and the cost to be separately visible, not summed for them.
+/// A row that was never mined has no height, and prints `—` rather than
+/// a block number it does not have.
+fn print_transfer_row(t: &Value) {
+    let s = |name: &str| t.get(name).and_then(|v| v.as_str()).unwrap_or("?");
+    let direction = s("direction");
+    let state = s("state");
+    let amount = format_amount_str(s("amount"));
+    let fee = format_amount_str(s("fee"));
+    let height = format_height(t);
+    let tx_hash = s("tx_hash");
+    println!("{direction:<10} {state:<10} {amount:>18} {fee:>14} {height:>10}  {tx_hash}");
+}
+
+/// Inclusion height, or `—` when the transaction is not on chain.
+///
+/// `block_height` is absent for a send that was never mined (PENDING /
+/// FAILED / DROPPED). Printing `0` there would render a plausible block
+/// number beside a send that does not exist on chain.
+fn format_height(t: &Value) -> String {
+    t.get("block_height")
+        .and_then(serde_json::Value::as_i64)
+        .map_or_else(|| "—".to_owned(), |h| h.to_string())
+}
+
+pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("get_transfer_by_id", json!({ "id": id })) {
+        Ok(val) => {
+            let Some(t) = val.get("transfer") else {
+                eprintln!("Malformed get_transfer_by_id response.");
+                return;
+            };
+            let s = |name: &str| t.get(name).and_then(|v| v.as_str()).unwrap_or("?");
+            println!("Transfer {}:", s("id"));
+            println!("  Direction: {}", s("direction"));
+            println!("  State:     {}", s("state"));
+            println!("  TxID:      {}", s("tx_hash"));
+            println!("  Amount:    {} SKL", format_amount_str(s("amount")));
+            println!("  Fee:       {} SKL", format_amount_str(s("fee")));
+            println!("  Height:    {}", format_height(t));
+            if let Some(spent) = t.get("spent_height").and_then(|v| v.as_i64()) {
+                println!("  Spent at:  {spent}");
+            }
+            if let Some(attr) = t.get("attribution") {
+                let kind = attr.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
+                println!("  Attribution: {kind}");
+            }
+        }
+        Err(e) => rpc.report("Failed to get transfer", &e),
+    }
+}
+
+/// FA-8 unattributed receives — `get_transfers` with INCOMING + UNATTRIBUTED
+/// (WI-RPC-4; closes the WI-RPC-2b `history incoming --unattributed` deferral).
+pub fn cmd_history_incoming_unattributed(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call(
+        "get_transfers",
+        json!({
+            "direction": "INCOMING",
+            "attribution": "UNATTRIBUTED",
+        }),
+    ) {
+        Ok(val) => {
+            let transfers = val.get("transfers").and_then(|v| v.as_array());
+            let Some(transfers) = transfers.filter(|a| !a.is_empty()) else {
+                println!("No unattributed receives.");
+                return;
+            };
+            println!(
+                "{:<10} {:<10} {:>18} {:>14} {:>10}  TxID",
+                "Direction", "State", "Amount (SKL)", "Fee (SKL)", "Height"
+            );
+            for t in transfers {
+                print_transfer_row(t);
+            }
+        }
+        Err(e) => rpc.report("Failed to list unattributed receives", &e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::priority_tier;
+
+    /// The named tiers are the OpenAPI `FeePriority` enum values; the
+    /// default (no flag) is the server's documented STANDARD default.
+    #[test]
+    fn priority_flag_maps_onto_named_tiers() {
+        assert_eq!(priority_tier(None), "STANDARD");
+        assert_eq!(priority_tier(Some(0)), "ECONOMY");
+        assert_eq!(priority_tier(Some(1)), "ECONOMY");
+        assert_eq!(priority_tier(Some(2)), "STANDARD");
+        assert_eq!(priority_tier(Some(3)), "PRIORITY");
+        assert_eq!(priority_tier(Some(9)), "PRIORITY");
     }
 }

@@ -1,5 +1,5 @@
 - [ ] **Stressnet stable for 4 consecutive weeks** (Phase 7.7)
-  - [ ] **Prerequisite of stressnet ENTRY: `K_COVER` sealed** (§14.4-derived value landed, `k_cover_provisional` cleared — `docs/design/ARCHIVAL_REWARD_GATE_M1.md` §4 seal-before-stressnet pin). While provisional the M1 gate runs as identity, so only a post-seal stressnet exercises the activation boundary live; sealing after stressnet entry would leave mainnet genesis as the boundary's first live execution.
+  - [x] ~~Prerequisite of stressnet ENTRY: `K_COVER` sealed~~ **RETIRED 2026-07-19** (`docs/completed/ARCHIVAL_REWARD_GATE_M1.md` §13): the gate and the collective reward-withholding concept are retired by ruling — reward withholding is individually-caused only (slash, onset, holdings shape, claim expiry). No seal act remains; the machinery-removal implementation PR is tracked in `docs/FOLLOWUPS.md`. The stressnet-entry prerequisite this row guarded is dissolved (the gate has only ever run as the `k_cover = 0` identity, so no activation boundary exists to exercise).
   - [ ] All stressnet acceptance criteria met (see `tests/stressnet/README.md`)
   - [ ] Zero tree root divergences for full 4-week run
   - [ ] Block validation p95 < 500ms sustained
@@ -26,7 +26,7 @@
 - [ ] PQC interoperability verification
   - [ ] wallet sign/daemon verify path tested
   - [x] malformed hybrid signature rejection tested (3 negative vector integration tests)
-  - [x] encoded transaction size impact measured (~5,385 bytes per user tx)
+  - [x] encoded transaction size impact measured (5389 bytes `pqc_auth` per input via `pqc_auth_weight()`)
   - [x] payload limit guidance documented in V3_ROLLOUT.md
 - [ ] Ledger integration (deferred to v1.1)
   - [x] FCMP++ device abstraction stubs in place (`device_ledger.cpp`)

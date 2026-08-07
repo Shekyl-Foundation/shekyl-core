@@ -39,6 +39,7 @@
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "fcmp/rctSigs.h"
+#include "shekyl/shekyl_ffi.h"
 
 using namespace epee;
 
@@ -131,7 +132,7 @@ namespace cryptonote
     if (tx.version >= 2 && !is_coinbase(tx))
     {
       rct::rctSig &rv = tx.rct_signatures;
-      if (rv.type == rct::RCTTypeNull)
+      if (rv.type == rct::CTTypeNull)
         return true;
       if (rv.outPk.size() != tx.vout.size())
       {
@@ -306,7 +307,7 @@ namespace cryptonote
   {
     CHECK_AND_ASSERT_MES(tx.pruned, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support non pruned txes");
     CHECK_AND_ASSERT_MES(tx.version >= 2, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support v1 txes");
-    CHECK_AND_ASSERT_MES(tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc,
+    CHECK_AND_ASSERT_MES(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc,
         std::numeric_limits<uint64_t>::max(), "Unsupported rct_signatures type in get_pruned_transaction_weight");
     CHECK_AND_ASSERT_MES(!tx.vin.empty(), std::numeric_limits<uint64_t>::max(), "empty vin");
 
@@ -491,6 +492,7 @@ namespace cryptonote
     if (!pick<tx_extra_multisig_migration>(nar, tx_extra_fields, TX_EXTRA_TAG_MULTISIG_MIGRATION)) return false;
     if (!pick<tx_extra_pqc_view_tag_hints>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS)) return false;
     if (!pick<tx_extra_pqc_spend_auth_pubkeys>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS)) return false;
+    if (!pick<tx_extra_archival_attestation>(nar, tx_extra_fields, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION)) return false;
     if (!pick<tx_extra_padding>(nar, tx_extra_fields, TX_EXTRA_TAG_PADDING)) return false;
 
     // if not empty, someone added a new type and did not add a case above
@@ -614,6 +616,43 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
+  bool add_archival_attestation_to_tx_extra(std::vector<uint8_t>& tx_extra, const std::string& attestation_blob)
+  {
+    // Serialize through the tx_extra variant so the tag + length-prefixed blob are
+    // emitted canonically (matching parse_tx_extra / sort_tx_extra). `attestation_blob`
+    // is the concatenation of k canonical ARCHIVAL_ATTESTATION_HEADER_BYTES-byte records
+    // (shekyl-archival-retention's AttestationHeader). The k ≤ MAX_ATTESTATION_RECORDS +
+    // multiple-of-header-length bounds are a consensus rule enforced at miner-tx
+    // admission, not here.
+    tx_extra_field field = tx_extra_archival_attestation{attestation_blob};
+    std::ostringstream oss;
+    binary_archive<true> ar(oss);
+    if (!::do_serialize(ar, field))
+      return false;
+    const std::string s = oss.str();
+    tx_extra.insert(tx_extra.end(), s.begin(), s.end());
+    return true;
+  }
+  //---------------------------------------------------------------
+  bool parse_archival_attestation_from_extra(const std::vector<uint8_t>& tx_extra, std::string& attestation_blob)
+  {
+    // parse_* convention (same bool as parse_tx_extra): false ONLY on a tx_extra
+    // parse failure -- the headers are UNREADABLE. A successful parse with no
+    // attestation tag is true with an empty blob (the committed empty set), a
+    // distinction the get_*/find_* "found?" convention cannot carry. Collapsing
+    // the two would let a malformed coinbase extra pass for the empty attestation
+    // set at admission while the settlement scan later reads the same bytes.
+    attestation_blob.clear();
+    std::vector<tx_extra_field> tx_extra_fields;
+    if (!parse_tx_extra(tx_extra, tx_extra_fields))
+      return false;
+
+    tx_extra_archival_attestation field;
+    if (find_tx_extra_field_by_type(tx_extra_fields, field))
+      attestation_blob = field.blob;
+    return true;
+  }
+  //---------------------------------------------------------------
   void set_payment_id_to_tx_extra_nonce(blobdata& extra_nonce, const crypto::hash& payment_id)
   {
     extra_nonce.clear();
@@ -690,6 +729,7 @@ namespace cryptonote
     size_t bond_posts = 0;
     size_t serve_credits = 0;
     size_t spend_keys = 0;
+    size_t emissions = 0;
     for (const auto& in : tx.vin)
     {
       if (std::holds_alternative<txin_gen>(in))
@@ -702,6 +742,8 @@ namespace cryptonote
         ++serve_credits;
       else if (std::holds_alternative<txin_archival_bond_post>(in))
         ++bond_posts;
+      else if (std::holds_alternative<txin_archival_reward_emission>(in))
+        ++emissions;
       else if (std::holds_alternative<txin_to_key>(in))
         ++spend_keys;
       else
@@ -711,15 +753,30 @@ namespace cryptonote
         return false;
       }
     }
-    if (serve_credits > 0 && (bond_posts + spend_keys) > 0)
+    if (serve_credits > 0 && (bond_posts + spend_keys + emissions) > 0)
     {
-      MERROR("archival serve-credit vins cannot mix with spend/bond inputs, tx id="
+      MERROR("archival serve-credit vins cannot mix with spend/bond/emission inputs, tx id="
         << get_transaction_hash(tx));
       return false;
     }
     if (bond_posts > 1)
     {
       MERROR("archival bond-post tx has multiple bond vins, tx id=" << get_transaction_hash(tx));
+      return false;
+    }
+    // C-1 activation (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 item 4): Q3
+    // arity 1, Q11 mixing — key-imaged txin_to_key fee inputs are the only
+    // permitted co-residents.
+    if (emissions > 1)
+    {
+      MERROR("archival emission tx has multiple emission vins, tx id="
+        << get_transaction_hash(tx));
+      return false;
+    }
+    if (emissions == 1 && bond_posts > 0)
+    {
+      MERROR("archival emission cannot mix with bond-post vins, tx id="
+        << get_transaction_hash(tx));
       return false;
     }
     if (bond_posts == 1 && serve_credits > 0)
@@ -733,14 +790,32 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool check_outs_valid(const transaction& tx)
   {
+    if (tx.vout.empty())
+      return true;
+
+    std::vector<uint8_t> keys_flat;
+    keys_flat.reserve(tx.vout.size() * sizeof(crypto::public_key));
     for(const tx_out& out: tx.vout)
     {
       crypto::public_key output_public_key;
       CHECK_AND_ASSERT_MES(get_output_public_key(out, output_public_key), false, "Failed to get output public key (output target index: "
         << out.target.index() << "), in transaction id=" << get_transaction_hash(tx));
+      keys_flat.insert(keys_flat.end(),
+        reinterpret_cast<const uint8_t*>(&output_public_key),
+        reinterpret_cast<const uint8_t*>(&output_public_key) + sizeof(output_public_key));
+    }
 
-      if(!check_key(output_public_key))
-        return false;
+    // GENESIS_TX_WIRE_FORMAT.md §2.3 output-point rule: every output public
+    // key must be a canonical, prime-order (torsion-free), non-identity point
+    // — the same strictness the FCMP++ leaf builder applies, so nothing
+    // accepted here is silently skipped from the curve tree. Replaces the
+    // inherited crypto::check_key, which only checked on-curve.
+    const uint8_t rc = shekyl_check_output_keys(keys_flat.data(), tx.vout.size());
+    if (rc != SHEKYL_OUTPUT_POINTS_OK)
+    {
+      MERROR("Invalid output public key (non-canonical, torsioned, or identity; rc="
+        << unsigned(rc) << "), in transaction id=" << get_transaction_hash(tx));
+      return false;
     }
     return true;
   }
@@ -764,6 +839,8 @@ namespace cryptonote
         continue;
       else if (std::holds_alternative<txin_archival_bond_post>(in))
         continue;
+      else if (std::holds_alternative<txin_archival_reward_emission>(in))
+        continue; // mint amounts live inside the opaque blob; balance is CT-side
       else
         return false;
       if(money > amount + money)
@@ -1125,7 +1202,7 @@ namespace cryptonote
 
     // prunable rct
     crypto::hash prunable_hash;
-    if (t.rct_signatures.type == rct::RCTTypeNull)
+    if (t.rct_signatures.type == rct::CTTypeNull)
       prunable_hash = crypto::null_hash;
     else
       prunable_hash = pruned_data_hash;
@@ -1193,7 +1270,7 @@ namespace cryptonote
 
     // prunable rct
     crypto::hash prunable_hash;
-    if (t.rct_signatures.type == rct::RCTTypeNull)
+    if (t.rct_signatures.type == rct::CTTypeNull)
       prunable_hash = crypto::null_hash;
     else
     {

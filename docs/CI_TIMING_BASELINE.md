@@ -6,6 +6,15 @@ per-job runtimes on the `Shekyl-Foundation/shekyl-core` repository's
 tip; rows are grouped by the change that motivated the capture, with
 explicit "before" / "after" labels so deltas are auditable.
 
+> **Note (workflow split, `chore/split-rust-ci-workflow`).** The
+> `Rust: audit, test, determinism` job moved out of `ci/gh-actions/cli`
+> (`build.yml`) into its own workflow `ci/gh-actions/rust`
+> (`rust-audit-test.yml`) so an OS-runner flake can be re-run without
+> waiting on this ~35–48m job to conclude. Historical rows below remain
+> valid for their captured SHAs (the job body is byte-identical); future
+> captures of this job should be queried under the `ci/gh-actions/rust`
+> workflow-run id, not `ci/gh-actions/cli`.
+
 This document exists because the `chore/ci-cache-tightening` PR
 (2026-05-02) needed a published anchor for the cache-effectiveness
 claim; subsequent caching changes (APT cache for the C++ build matrix,

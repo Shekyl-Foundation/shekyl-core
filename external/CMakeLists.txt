@@ -29,11 +29,7 @@
 # Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 
-# This is broken up into two parts: first we check for miniupnp, compile it if we can't
-# find it, and thereafter we check for libunbound, and compile it if we can't find it.
-# We always compile if we are building statically to reduce static dependency issues...
-# ...except for FreeBSD, because FreeBSD is a special case that doesn't play well with
-# others.
+# We check for miniupnp, and compile it if we can't find it.
 
 find_package(Miniupnpc REQUIRED)
 
@@ -53,27 +49,6 @@ if(CMAKE_SYSTEM_NAME MATCHES "NetBSD")
 endif()
 
 set(UPNP_LIBRARIES "libminiupnpc-static" PARENT_SCOPE)
-
-find_package(Unbound)
-
-if(NOT UNBOUND_INCLUDE_DIR)
-  if(MSVC)
-    message(STATUS "libunbound not found -- DNS utilities will be stubbed out (MSVC wallet-core build)")
-    set(UNBOUND_INCLUDE_DIR "" PARENT_SCOPE)
-    set(UNBOUND_LIBRARIES "" PARENT_SCOPE)
-    set(UNBOUND_AVAILABLE OFF PARENT_SCOPE)
-  else()
-    die("Could not find libunbound")
-  endif()
-else()
-  message(STATUS "Found libunbound include (unbound.h) in ${UNBOUND_INCLUDE_DIR}")
-  if(UNBOUND_LIBRARIES)
-    message(STATUS "Found libunbound library")
-    set(UNBOUND_AVAILABLE ON PARENT_SCOPE)
-  else()
-    die("Found libunbound includes, but could not find libunbound library. Please make sure you have installed libunbound or libunbound-dev or the equivalent")
-  endif()
-endif()
 
 add_subdirectory(db_drivers)
 add_subdirectory(qrcodegen)

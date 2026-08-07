@@ -11,18 +11,30 @@
 //! the coinbase `Null` ct base (`enc_amounts`/`enc_labels`/`outPk`) and died with
 //! `UnexpectedEof`. See `docs/design/GENESIS_TX_WIRE_FORMAT.md` (§9, §11) and
 //! `tests/vectors/README.md`.
+//!
+//! Regenerated for the credit-wire cutover and the five-founder genesis re-pin
+//! (2026-08-04): the `block_header` gained `attestation_root` and `GENESIS_TX`
+//! changed, so all three heights were recaptured.
+//!
+//! Corpus shape: h0 **is** the mainnet genesis (regtest shares `GENESIS_TX`) and
+//! therefore carries five founder outputs; h1/h2 are mined regtest blocks with a
+//! single miner output, mined to the local fixture in
+//! `vectors/regtest_mining_recipients.json` (vector isolation — not the genesis
+//! allocation). See `coinbase_hash.rs` and `vectors/README.md`.
 
 use shekyl_wire::Block;
 
 #[test]
 fn regtest_coinbase_blocks_round_trip_byte_identical() {
-    let corpus: [(u64, &[u8]); 3] = [
-        (0, include_bytes!("vectors/regtest_coinbase_h0.block")),
-        (1, include_bytes!("vectors/regtest_coinbase_h1.block")),
-        (2, include_bytes!("vectors/regtest_coinbase_h2.block")),
+    // Output count is height-dependent: h0 = mainnet genesis (5 × 20,000 SKL);
+    // mined heights pay a single miner output.
+    let corpus: [(u64, usize, &[u8]); 3] = [
+        (0, 5, include_bytes!("vectors/regtest_coinbase_h0.block")),
+        (1, 1, include_bytes!("vectors/regtest_coinbase_h1.block")),
+        (2, 1, include_bytes!("vectors/regtest_coinbase_h2.block")),
     ];
 
-    for (height, blob) in corpus {
+    for (height, n_outputs, blob) in corpus {
         let block = Block::from_bytes(blob)
             .unwrap_or_else(|e| panic!("height {height}: Block::from_bytes failed: {e}"));
 
@@ -32,9 +44,13 @@ fn regtest_coinbase_blocks_round_trip_byte_identical() {
             Some(height),
             "height {height}: coinbase gen height mismatch"
         );
-        // Coinbase shape: one gen input, one tagged_key output, Null ct base.
+        // Coinbase shape: one gen input, tagged_key outputs, Null ct base.
         assert_eq!(block.miner_transaction.prefix.inputs.len(), 1);
-        assert_eq!(block.miner_transaction.prefix.outputs.len(), 1);
+        assert_eq!(
+            block.miner_transaction.prefix.outputs.len(),
+            n_outputs,
+            "height {height}: coinbase output count"
+        );
         assert!(block.transaction_hashes.is_empty());
 
         let reserialized = block.serialize();

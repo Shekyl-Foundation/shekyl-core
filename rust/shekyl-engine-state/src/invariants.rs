@@ -38,9 +38,10 @@
 //! | Stable name                          | Cross-block relationship                                                              |
 //! |--------------------------------------|---------------------------------------------------------------------------------------|
 //! | `tip-height-not-below-transfer`      | `ledger.tip.synced_height >= max(ledger.transfers[*].block_height)`                   |
-//! | `tx-keys-no-orphans`                 | Every tx-hash in `tx_meta.tx_keys` appears in a live reference (transfers, pool, or pending) |
+//! | `tx-keys-no-orphans`                 | Every tx-hash in `tx_meta.tx_keys` appears in a live reference (transfer tx_hash / spending_tx_hash / awaiting_confirmation, pool, or pending) |
 //! | `reorg-trail-monotonic`              | `ledger.reorg_blocks.blocks` is strictly ascending and capped by `tip.synced_height`  |
 //! | `spent-state-consistent`             | Within `ledger.transfers`: spend-triple self-consistency + key-image uniqueness       |
+//! | `send-journal-lock-equivalence`      | F14 `awaiting_confirmation` ⟺ `send_journal` dispatch facts (derived-cache both-agree, `WALLET_SEND_RECORD.md` P3-1a; retired with the field at PR-SJ-1b) |
 //!
 //! # Cost
 //!
@@ -72,6 +73,12 @@ pub const INV_REORG_TRAIL_MONOTONIC: &str = "reorg-trail-monotonic";
 /// Stable machine-readable name for invariant I-4.
 pub const INV_SPENT_STATE_CONSISTENT: &str = "spent-state-consistent";
 
+/// Stable name for the send-journal lock-equivalence invariant
+/// (`WALLET_SEND_RECORD.md` P3-1a: the F14 awaiting-confirmation field
+/// is a derived cache of `send_journal` dispatch facts — both must
+/// agree until PR-SJ-1b deletes the field).
+pub const INV_SEND_JOURNAL_LOCK_EQUIVALENCE: &str = "send-journal-lock-equivalence";
+
 impl WalletLedger {
     /// Run every aggregator-level invariant against `self` and return
     /// a typed [`WalletLedgerError::InvariantFailed`] on the first
@@ -86,6 +93,7 @@ impl WalletLedger {
         check_tx_keys_no_orphans(&self.ledger, &self.tx_meta, &self.sync_state)?;
         check_reorg_trail_monotonic(&self.ledger)?;
         check_spent_state_consistent(&self.ledger)?;
+        check_send_journal_lock_equivalence(&self.ledger, &self.send_journal)?;
         Ok(())
     }
 
@@ -149,13 +157,20 @@ fn check_tip_not_below_transfer(ledger: &LedgerBlock) -> Result<(), WalletLedger
 
 /// I-2. Every tx-hash in `tx_meta.tx_keys` must still be referenced
 /// by *something* the wallet actively tracks: a live
-/// [`TransferDetails`] (the scanner observed it), a scanned pool
-/// entry (we saw it in mempool), or the user-submitted pending list
-/// (we originated it and it has not yet been mined). A tx-hash in
-/// `tx_keys` with no live reference is an orphan — the secret scalar
-/// for a transaction the wallet has forgotten exists, which is both
-/// a secret-handling leak and a sign that the garbage-collection
-/// logic is broken.
+/// [`TransferDetails`] (the scanner observed it — as the receiving
+/// txid, as a confirmed `spending_tx_hash` (WI-RPC-3 F-9
+/// spend-quadruple), or as an in-flight `awaiting_confirmation`
+/// lock), a scanned pool entry (we saw it in mempool), or the
+/// user-submitted pending list (we originated it and it has not yet
+/// been mined). A tx-hash in `tx_keys` with no live reference is an
+/// orphan — the secret scalar for a transaction the wallet has
+/// forgotten exists, which is both a secret-handling leak and a sign
+/// that the garbage-collection logic is broken.
+///
+/// The `spending_tx_hash` leg is what keeps retention alive for a
+/// no-change outbound tx: such a tx produces no owned output, so once
+/// it confirms (leaving `pending_tx_hashes`) the *only* live
+/// references to its txid are the spent rows it consumed.
 ///
 /// `tx_notes` and `attributes` are deliberately *not* part of this
 /// check: user-authored notes may legitimately reference an arbitrary
@@ -180,6 +195,18 @@ fn check_tx_keys_no_orphans(
         // `live` unifies typed transfer hashes with the still-raw `tx_meta` /
         // `pending_tx_hashes` keys; convert at this boundary.
         live.insert(t.tx_hash.to_bytes());
+        // Spend-quadruple leg (F-9): the confirmed tx that spent this
+        // output keeps its retained secret live even when it produced
+        // no owned output of its own.
+        if let Some(spending) = &t.spending_tx_hash {
+            live.insert(spending.to_bytes());
+        }
+        // F14 lock: a network-exposed spend awaiting confirmation is a
+        // tracked tx — its secret must not be collected in the window
+        // between broadcast-accept and refresh-observed confirmation.
+        if let Some(lock) = &t.awaiting_confirmation {
+            live.insert(lock.tx_hash.to_bytes());
+        }
     }
     for h in tx_meta.scanned_pool_txs.keys() {
         live.insert(*h);
@@ -193,7 +220,8 @@ fn check_tx_keys_no_orphans(
             INV_TX_KEYS_NO_ORPHANS,
             format!(
                 "tx_meta.tx_keys contains an entry for tx_hash = {} that does not appear in \
-                 ledger.transfers, tx_meta.scanned_pool_txs, or sync_state.pending_tx_hashes",
+                 ledger.transfers (tx_hash / spending_tx_hash / awaiting_confirmation), \
+                 tx_meta.scanned_pool_txs, or sync_state.pending_tx_hashes",
                 hex::encode(orphan)
             ),
         ));
@@ -320,6 +348,107 @@ fn check_spend_triple(idx: usize, t: &TransferDetails) -> Result<(), WalletLedge
 // one check and asserts on the stable `invariant` name.
 // ---------------------------------------------------------------------------
 
+/// I-5 (`send-journal-lock-equivalence`). The F14 awaiting-confirmation
+/// field on a transfer is a **derived cache** of `send_journal` dispatch
+/// facts (`WALLET_SEND_RECORD.md` C2 / P3-1a): until PR-SJ-1b deletes
+/// the field, both representations must agree.
+///
+/// Forward: every locked transfer has a journal row in `Dispatched`
+/// state whose `lock_baseline` equals the lock's baseline and whose
+/// carried input set contains the transfer's gindex. Reverse: every
+/// `Dispatched` row with a baseline has each carried input — **when
+/// present in the ledger** (a mid-rescan ledger may not have replayed
+/// the row yet) — either spent (confirmed evidence supersedes) or
+/// locked by exactly this tx at exactly this baseline.
+fn check_send_journal_lock_equivalence(
+    ledger: &LedgerBlock,
+    journal: &crate::send_journal_block::SendJournalBlock,
+) -> Result<(), WalletLedgerError> {
+    use crate::send_journal_block::SendState;
+
+    for (idx, td) in ledger.transfers.iter().enumerate() {
+        let Some(lock) = &td.awaiting_confirmation else {
+            continue;
+        };
+        let key = lock.tx_hash.to_bytes();
+        let Some(row) = journal.rows.get(&key) else {
+            return Err(invariant_error(
+                INV_SEND_JOURNAL_LOCK_EQUIVALENCE,
+                format!("transfers[{idx}] holds an F14 lock for a tx with no send-journal row"),
+            ));
+        };
+        if row.state != SendState::Dispatched {
+            return Err(invariant_error(
+                INV_SEND_JOURNAL_LOCK_EQUIVALENCE,
+                format!(
+                    "transfers[{idx}] holds an F14 lock but the journal row is {:?}, not Dispatched",
+                    row.state
+                ),
+            ));
+        }
+        if row.lock_baseline != Some(lock.accepted_at_height) {
+            return Err(invariant_error(
+                INV_SEND_JOURNAL_LOCK_EQUIVALENCE,
+                format!(
+                    "transfers[{idx}] lock baseline {} != journal lock_baseline {:?}",
+                    lock.accepted_at_height, row.lock_baseline
+                ),
+            ));
+        }
+        if !row
+            .inputs
+            .iter()
+            .any(|i| i.gindex == td.global_output_index)
+        {
+            return Err(invariant_error(
+                INV_SEND_JOURNAL_LOCK_EQUIVALENCE,
+                format!(
+                    "transfers[{idx}] (gindex {}) locked by a tx whose journal row does not carry it",
+                    td.global_output_index
+                ),
+            ));
+        }
+    }
+
+    for (txid, row) in &journal.rows {
+        if row.state != SendState::Dispatched {
+            continue;
+        }
+        let Some(base) = row.lock_baseline else {
+            continue;
+        };
+        for inp in &row.inputs {
+            let Some(td) = ledger
+                .transfers
+                .iter()
+                .find(|t| t.global_output_index == inp.gindex)
+            else {
+                continue; // mid-rescan: not replayed yet — reconciler re-locks on arrival
+            };
+            if td.spent {
+                continue; // confirmed evidence supersedes the lock
+            }
+            match &td.awaiting_confirmation {
+                Some(lock)
+                    if lock.tx_hash.to_bytes() == *txid && lock.accepted_at_height == base => {}
+                other => {
+                    return Err(invariant_error(
+                        INV_SEND_JOURNAL_LOCK_EQUIVALENCE,
+                        format!(
+                            "journal row {} carries gindex {} but the transfer's lock is {:?}",
+                            hex::encode(txid),
+                            inp.gindex,
+                            other
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +483,7 @@ mod tests {
             spent_height: None,
             key_image: None,
             awaiting_confirmation: None,
+            spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,
@@ -431,7 +561,6 @@ mod tests {
             [0x77; 32],
             TxSecretKeys {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
-                additional: Vec::new(),
             },
         );
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
@@ -453,7 +582,6 @@ mod tests {
             txid,
             TxSecretKeys {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
-                additional: Vec::new(),
             },
         );
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
@@ -477,7 +605,6 @@ mod tests {
             txid,
             TxSecretKeys {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
-                additional: Vec::new(),
             },
         );
         let mut pool = BTreeMap::new();
@@ -491,6 +618,101 @@ mod tests {
             StakingBlock::empty(),
         );
         w.check_invariants().expect("pool ref satisfies I-2");
+    }
+
+    /// WI-RPC-3 F-9 spend-quadruple: a no-change outbound tx produces no
+    /// owned output, so after confirmation its *only* live references
+    /// are the spent rows' `spending_tx_hash`. The retained secret must
+    /// stay I-2-live through that leg alone.
+    #[test]
+    fn tx_key_referenced_by_spending_tx_hash_is_accepted() {
+        let txid = [0x77; 32];
+        let mut tx_keys = BTreeMap::new();
+        tx_keys.insert(
+            txid,
+            TxSecretKeys {
+                primary: TxSecretKey::new(Zeroizing::new([0; 32])),
+            },
+        );
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        // The spent row's own tx_hash differs from `txid`; only the
+        // `spending_tx_hash` leg satisfies I-2 here.
+        let mut spent_row = mk_transfer(0x11, 10);
+        spent_row.spent = true;
+        spent_row.spent_height = Some(20);
+        spent_row.key_image = Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+            [0x33; 32],
+        ));
+        spent_row.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
+        let ledger = LedgerBlock::new(
+            vec![spent_row],
+            BlockchainTip::new(30, [0xAA; 32]),
+            ReorgBlocks::default(),
+        );
+        let w = WalletLedger::new(
+            ledger,
+            BookkeepingBlock::empty(),
+            tx_meta,
+            SyncStateBlock::empty(),
+            StakingBlock::empty(),
+        );
+        w.check_invariants()
+            .expect("spending_tx_hash ref satisfies I-2");
+    }
+
+    /// F14 lock leg: a network-exposed spend awaiting confirmation is a
+    /// tracked tx; its secret must not be orphaned in the window between
+    /// broadcast-accept and refresh-observed confirmation.
+    #[test]
+    fn tx_key_referenced_by_awaiting_confirmation_is_accepted() {
+        let txid = [0x77; 32];
+        let mut tx_keys = BTreeMap::new();
+        tx_keys.insert(
+            txid,
+            TxSecretKeys {
+                primary: TxSecretKey::new(Zeroizing::new([0; 32])),
+            },
+        );
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let mut locked_row = mk_transfer(0x11, 10);
+        locked_row.awaiting_confirmation = Some(crate::transfer::AwaitingConfirmation {
+            tx_hash: shekyl_types::TxHash::from_bytes(txid),
+            accepted_at_height: 25,
+        });
+        let ledger = LedgerBlock::new(
+            vec![locked_row],
+            BlockchainTip::new(30, [0xAA; 32]),
+            ReorgBlocks::default(),
+        );
+        let mut w = WalletLedger::new(
+            ledger,
+            BookkeepingBlock::empty(),
+            tx_meta,
+            SyncStateBlock::empty(),
+            StakingBlock::empty(),
+        );
+        {
+            // The equivalence invariant (I-5) requires the lock's owning
+            // journal row: dispatch facts the F14 cache derives from.
+            use crate::send_journal_block::{SendInputRef, SendRecord, SendState};
+            w.send_journal.rows.insert(
+                txid,
+                SendRecord {
+                    dispatched_at_height: 20,
+                    fee: 5,
+                    recipients: Vec::new(),
+                    change_amount: 0,
+                    inputs: vec![SendInputRef {
+                        gindex: 0x11,
+                        amount: 1,
+                    }],
+                    lock_baseline: Some(25),
+                    state: SendState::Dispatched,
+                },
+            );
+        }
+        w.check_invariants()
+            .expect("awaiting_confirmation ref satisfies I-2");
     }
 
     #[test]

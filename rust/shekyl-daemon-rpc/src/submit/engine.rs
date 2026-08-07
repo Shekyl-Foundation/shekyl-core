@@ -163,9 +163,23 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         };
 
         // ── Phase B: POD fact snapshot (shim 1, one short lock) ────────
+        // A bond-post additionally asks for the §8.7.1 BP3 record fact,
+        // keyed on the vin's claimed p_canonical_id (BP2 pins the claim to
+        // the pubkey in Phase C).
+        let bond_p_canonical_id = parsed.bond_post().map(|(_, bond)| bond.p_canonical_id);
+        // An emission claim asks for the §8.7.2 E6/E7 facts, keyed on the
+        // vin-derived claimant id + claimed epochs (E2 pins the derivation
+        // to the auth key in Phase C).
+        let emission_probe = parsed.emission_probe();
         let facts = self
             .shim
-            .snapshot_facts(&parsed.txid, &parsed.key_images, &parsed.reference_block)
+            .snapshot_facts(
+                &parsed.txid,
+                &parsed.key_images,
+                &parsed.reference_block,
+                bond_p_canonical_id.as_ref(),
+                emission_probe.as_ref().map(|(id, epochs)| (id, *epochs)),
+            )
             .map_err(|_| EngineFault::SnapshotFault)?;
 
         // Early return on identity only. In-chain outranks in-pool (a
@@ -258,7 +272,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // consults referenceBlock for a serve-credit-only tx
         // (blockchain.cpp:3565-3609), and neither does the engine.
         let reference = match parsed.kind {
-            SubmitTxKind::Spend | SubmitTxKind::BondPost => {
+            SubmitTxKind::Spend | SubmitTxKind::BondPost | SubmitTxKind::Emission => {
                 let Some(reference) = facts.reference else {
                     // Defect 0.6's named verdict: unknown-by-hash at
                     // snapshot time is a sync-gated retry, not a flagless
@@ -271,9 +285,11 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                     RefAgeWindow::TooOld => return Ok(Err(RejectCause::StaleRoot)),
                     RefAgeWindow::InWindow => {}
                 }
-                // Tree-depth range (row K10): cheap arithmetic the engine
-                // owns; the crypto seam re-consumes the depth for the
-                // proof itself.
+                // Tree-depth range (row K10 / §8.7.2 row E4): cheap
+                // arithmetic the engine owns; the crypto seam re-consumes
+                // the depth for the proofs. One tx-declared depth serves
+                // both emission proofs (the backing proof's wire depth is
+                // pinned equal by `verify_membership_only`).
                 let tx_depth = match &parsed.tx.ct {
                     shekyl_wire::transaction::Ct::Fcmp {
                         prunable: Some(prunable),
@@ -288,6 +304,23 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             }
             SubmitTxKind::ServeCreditOnly => None,
         };
+
+        // The §8.7.1 BP3 fact contract: a bond-post's snapshot must carry
+        // the record probe (the engine asked for it above). A missing fact
+        // is a shim defect — loud, never a guessed verdict (§3.4); the
+        // verifier can then consume `Some` totally.
+        if parsed.kind == SubmitTxKind::BondPost && facts.bond_record_exists.is_none() {
+            return Err(EngineFault::ShimContract(
+                "bond-post snapshot carries no bond_record_exists fact (BP3 probe skipped?)",
+            ));
+        }
+        // The §8.7.2 E6/E7 contract twin: an emission snapshot must carry
+        // the fact bundle the engine asked for.
+        if parsed.kind == SubmitTxKind::Emission && facts.emission.is_none() {
+            return Err(EngineFault::ShimContract(
+                "emission snapshot carries no E6/E7 fact bundle (probe skipped?)",
+            ));
+        }
 
         // Fee floor against the snapshot params (row P2; re-gated at D
         // against fresh params, F34). Serve-credit txs carry fee 0 by
@@ -371,12 +404,32 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 cause: RejectCause::DoubleSpendConflict,
             });
         }
+        // 3b. Claim-slot conflict, the §8.7.1 BP3 re-check: a bond-post
+        //     block for the same P landed while we verified (Phase C
+        //     required the record absent). Same terminality as the
+        //     key-image leg — someone else consumed the claim slot.
+        if parsed.kind == SubmitTxKind::BondPost && fresh.bond_record_exists == Some(true) {
+            return Ok(SubmitVerdict::Rejected {
+                cause: RejectCause::DoubleSpendConflict,
+            });
+        }
+        // 3c. Emission claim-slot conflict, the §8.7.2 E6 re-check: the
+        //     claimant record vanished (an Unbond connected) or a claimed
+        //     epoch was consumed by a competing claim during Phase C.
+        if parsed.kind == SubmitTxKind::Emission && fresh.emission_claim_conflict == Some(true) {
+            return Ok(SubmitVerdict::Rejected {
+                cause: RejectCause::DoubleSpendConflict,
+            });
+        }
         // 4. Reference/root drift (reorg, pop, root-table motion): the
         //    certificate's anchoring premise no longer holds → rebuild
         //    against a fresh root. Every drift shape — hash vanished,
         //    height moved, root mismatch, age window failed on the fresh
         //    height — classifies StaleRoot (retryable: rebuild).
-        if matches!(parsed.kind, SubmitTxKind::Spend | SubmitTxKind::BondPost) {
+        if matches!(
+            parsed.kind,
+            SubmitTxKind::Spend | SubmitTxKind::BondPost | SubmitTxKind::Emission
+        ) {
             let drifted = match fresh.reference {
                 None => true,
                 Some(reference) => {

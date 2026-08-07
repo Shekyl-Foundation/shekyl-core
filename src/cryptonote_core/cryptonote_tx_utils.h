@@ -38,7 +38,12 @@
 namespace cryptonote
 {
   //---------------------------------------------------------------
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce = blobdata(), size_t max_outs = 999, uint8_t hard_fork_version = 1, uint64_t tx_volume_avg = 0, uint64_t circulating_supply = 0, uint64_t stake_ratio = 0, uint64_t genesis_ng_height = 0);
+  // frozen_segment_count is the D2 escalation operand n and is deliberately
+  // REQUIRED (not defaulted, unlike the economics tail): a defaulted n is a
+  // silently-wrong split the moment the asymptote is non-neutral, priced at
+  // template build and refused at connect — a chain halt. Every call site must
+  // state its n; production reads it via Blockchain::parent_frozen_segment_count.
+  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce = blobdata(), size_t max_outs = 999, uint8_t hard_fork_version = 1, uint64_t tx_volume_avg = 0, uint64_t circulating_supply = 0, uint64_t genesis_ng_height = 0);
 
   struct tx_source_entry
   {
@@ -124,11 +129,6 @@ namespace cryptonote
   bool construct_tx(const account_keys& sender_account_keys, std::vector<tx_source_entry> &sources, const std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx);
   bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, bool rct = false, bool shuffle_outs = true, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
   bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, bool rct = false, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
-  bool build_genesis_coinbase_from_destinations(
-      const std::vector<tx_destination_entry>& destinations
-    , std::string& tx_hex_out
-    );
-
   bool generate_genesis_block(
       block& bl
     , std::string const & genesis_tx

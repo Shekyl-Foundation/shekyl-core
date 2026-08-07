@@ -1,12 +1,33 @@
-//! Keccak-256 hashing for Shekyl's `cn_fast_hash` primitive.
+//! Shekyl's hash primitives, both backed by the audited RustCrypto `sha3` crate.
 //!
-//! Backed by the audited RustCrypto `sha3` crate (`Keccak256`) — original Keccak
-//! padding (0x01), NOT NIST SHA3 padding (0x06). This is consensus-critical: the
-//! output must be byte-identical to the C `src/crypto/keccak.c` (the empty-input KAT
-//! in `tests` pins exactly that). The byte-identity, not the implementation crate, is
-//! what is genesis-locked — `sha3` and the prior `tiny-keccak` both compute the same
-//! original-Keccak-256, and standardizing on the RustCrypto crate collapses the
-//! codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
+//! Two primitives, two jobs, and the split is the point:
+//!
+//! - [`cn_fast_hash`] / [`tree_hash`] — **Keccak-256, for consensus parity only.**
+//!   Use these *iff* the output must be byte-identical to the Monero-descended C++
+//!   daemon: `prefix_hash`, `tree_hash`, block IDs, `pqc_signing_payload_hashes`,
+//!   `multisig_pqc_leaf_hash`. They are un-domained because the thing they must
+//!   match is un-domained.
+//! - [`cshake256_32`] — **cSHAKE256 (SP 800-185), for everything new.** A new
+//!   artifact on no consensus path takes this, with a customization string, so
+//!   domain separation is structural rather than definitional.
+//!
+//! # Why Keccak-256 is not the default
+//!
+//! "Keccak-256" does not identify a function. Original Keccak (0x01 padding, what
+//! this crate computes, and what Ethereum's `keccak256` is) and NIST FIPS 202
+//! SHA3-256 (0x06) share a permutation and a rate and differ in one byte — so an
+//! independent implementer reading "Keccak-256" has a coin-flip, and the failure is
+//! silent: a different digest, no diagnostic. That ambiguity is tolerable exactly
+//! where a KAT and a C++ twin pin it, and nowhere else. `cSHAKE256` has one meaning.
+//!
+//! # Keccak-256 (consensus)
+//!
+//! Original Keccak padding (0x01), NOT NIST SHA3 padding (0x06). Consensus-critical:
+//! the output must be byte-identical to the C `src/crypto/keccak.c` (the empty-input
+//! KAT in `tests` pins exactly that). The byte-identity, not the implementation
+//! crate, is what is genesis-locked — `sha3` and the prior `tiny-keccak` both compute
+//! the same original-Keccak-256, and standardizing on the RustCrypto crate collapses
+//! the codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
 //!
 //! The `cn_fast_hash` *name* is the inherited CryptoNote consensus-primitive name
 //! ("cn" = CryptoNote; the *fast* hash vs. the slow PoW hash), kept for 1:1 source
@@ -15,7 +36,9 @@
 
 #![deny(unsafe_code)]
 
-use sha3::{Digest, Keccak256};
+use sha3::digest::core_api::CoreWrapper;
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use sha3::{CShake256, CShake256Core, Digest, Keccak256};
 
 pub const HASH_SIZE: usize = 32;
 
@@ -30,6 +53,48 @@ pub type Hash = [u8; HASH_SIZE];
 /// spend hash KATs in shekyl-wire.
 pub fn cn_fast_hash(data: &[u8]) -> Hash {
     Keccak256::digest(data).into()
+}
+
+/// cSHAKE256 (SP 800-185) with a customization string, 32-byte output.
+///
+/// **The default for any new hashed artifact.** The customization string makes
+/// domain separation structural: two contexts cannot collide even over identical
+/// input bytes, without anyone having to remember a convention. Use
+/// [`cn_fast_hash`] only where byte-identity with the C++ daemon is required.
+///
+/// `customization` follows the house convention `b"shekyl/<domain>-v1"` (see
+/// `shekyl/archival-bond-post-v1`, `shekyl/receive-label-hash-v1`); version it, so
+/// a preimage change is a new domain rather than a silent reinterpretation.
+///
+/// # Panics
+///
+/// Panics if `customization` is empty: cSHAKE with an empty function-name and
+/// empty customization is defined to be plain SHAKE256, which would silently drop
+/// the domain separation this primitive exists to provide.
+///
+/// This is the canonical home for the primitive. Two open-coded copies predate it
+/// — `shekyl-archival-retention::hash` and `shekyl-crypto-pq::label` — and are
+/// tracked for collapse onto this one (FOLLOWUPS), mirroring the one-audited-keccak
+/// consolidation described above.
+#[must_use]
+pub fn cshake256_32(customization: &[u8], input: &[u8]) -> Hash {
+    // cSHAKE with an empty function-name AND empty customization is defined to be
+    // plain SHAKE256 (SP 800-185 §3.3; RustCrypto special-cases it back to SHAKE
+    // padding). That would silently strip the domain separation this primitive
+    // exists to provide, so an empty customization is a caller bug, not a valid
+    // "no domain" request — reject it loudly rather than degrade in release.
+    assert!(
+        !customization.is_empty(),
+        "cshake256_32 requires a non-empty customization string \
+         (empty customization degrades to plain SHAKE256, defeating domain separation)"
+    );
+    let core = CShake256Core::new(customization);
+    let mut hasher: CShake256 = CoreWrapper::from_core(core);
+    hasher.update(input);
+    let mut reader = hasher.finalize_xof();
+    let mut out = [0u8; HASH_SIZE];
+    reader.read(&mut out);
+    out
 }
 
 /// Compute `tree_hash_cnt`: largest power of 2 strictly less than count.
@@ -118,6 +183,52 @@ mod tests {
         let h = cn_fast_hash(b"Shekyl");
         assert_eq!(h.len(), HASH_SIZE);
         assert_ne!(h, [0u8; 32]);
+    }
+
+    #[test]
+    fn cshake256_nist_sp800_185_kat() {
+        // Known-answer test pinned to an *external* authority — NIST SP 800-185
+        // cSHAKE256 Sample #3 (not a value regenerated from our own output). This
+        // is what fixes customization handling, cSHAKE padding, and XOF extraction
+        // to the standard so any independent implementer computes the same bytes.
+        //
+        //   function name N = "" (empty), customization S = "Email Signature",
+        //   input X = 00 01 02 03, requested output = 512 bits.
+        //
+        // `cshake256_32` takes the first 32 bytes of that XOF stream (our N is
+        // always empty — CShake256Core::new maps its arg to S), so we pin the
+        // leading 32 bytes of the published 64-byte sample output.
+        let digest = cshake256_32(b"Email Signature", &[0x00, 0x01, 0x02, 0x03]);
+        assert_eq!(
+            digest,
+            [
+                0xd0, 0x08, 0x82, 0x8e, 0x2b, 0x80, 0xac, 0x9d, 0x22, 0x18, 0xff, 0xee, 0x1d, 0x07,
+                0x0c, 0x48, 0xb8, 0xe4, 0xc8, 0x7b, 0xff, 0x32, 0xc9, 0x69, 0x9d, 0x5b, 0x68, 0x96,
+                0xee, 0xe0, 0xed, 0xd1,
+            ],
+        );
+    }
+
+    #[test]
+    fn cshake256_domain_separation() {
+        // The whole point of the customization string: identical input under two
+        // different domains must not collide.
+        let input = b"same bytes, different domain";
+        let a = cshake256_32(b"shekyl/domain-a-v1", input);
+        let b = cshake256_32(b"shekyl/domain-b-v1", input);
+        assert_ne!(
+            a, b,
+            "distinct customizations must not collide on same input"
+        );
+        assert_eq!(a.len(), HASH_SIZE);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-empty customization")]
+    fn cshake256_rejects_empty_customization() {
+        // An empty customization silently degrades to plain SHAKE256 (no domain
+        // separation); the guard must reject it rather than return a SHAKE digest.
+        let _hash = cshake256_32(b"", b"anything");
     }
 
     #[test]

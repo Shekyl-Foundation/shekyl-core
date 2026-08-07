@@ -137,7 +137,7 @@ PQC authentication data for v3+ transactions (second unprunable segment, between
 
 ### `txs_prunable`
 
-Prunable suffix of serialized transactions (ring signatures, FCMP++ proofs, range proofs).
+Prunable suffix of serialized transactions (`rctSigPrunable`: Bulletproof+ range proofs, pseudo-outs, and the opaque FCMP++ membership-proof blob).
 
 | Property | Value |
 |---|---|
@@ -504,7 +504,9 @@ per-branch monotone), `R_k` = the layer-2 chunk hash the grow computed
 (MMR-final). The pop hook deletes rows whose segment un-completes after the
 same-txn `trim_curve_tree` (O-3 pop-symmetry: re-applying the block rewrites
 a bit-identical row). Writer/deleter one-site and the cursor accounting are
-CI-enforced (`scripts/ci/check_reward_gate_predicate_sites.sh`).
+CI-enforced (`scripts/ci/check_segment_freeze_sites.sh` — renamed from
+`check_reward_gate_predicate_sites.sh` at the M1 gate's retirement, PR #346; the
+writer/deleter one-site and counting-read invariants survived the split intact).
 
 The row count is mirrored by the persisted `"archival_frozen_shard_count"`
 counter in `properties` (V8; `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4):

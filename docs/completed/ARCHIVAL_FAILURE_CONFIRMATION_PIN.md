@@ -106,8 +106,8 @@ that is **simultaneously**:
 |-----------|-------------|
 | **Tail-robust** | `m` above true p99 (or agreed quantile) single-outage baseline span |
 | **Bond-resolution acceptable** | Slash latency bounded for bond/holdings cleanup (and any metric not serve-credit-gated) |
-| **Crisis-tail robust (swan-2/W6)** | `m` above the outage **run-length** quantile measured under **induced correlated failure**, not just the normal-times marginal CDF |
-| **Deterrence-credible (swan-3/W16)** | Expected slash cost under a realistic degrade play (drop bytes, keep bond, answer what can be re-fetched) **exceeds the storage-opex savings at crisis prices** — evaluated at the pinned crisis multiplier below |
+| ~~**Crisis-tail robust (swan-2/W6)**~~ | ~~`m` above the outage **run-length** quantile measured under **induced correlated failure**, not just the normal-times marginal CDF~~ **DROPPED 2026-08-01 — cadence artifact; see the dated amendment below** |
+| **Deterrence-credible (swan-3/W16)** | Expected slash cost under a realistic degrade play (drop bytes, keep bond, answer what can be re-fetched) **exceeds the storage-opex savings at crisis prices** — evaluated at the pinned crisis multiplier below. **The exit path rides this same envelope:** release anchors on last-*served* and the cooldown (2) is far below `m`, so a departing record escapes only the `m − 1` misses this degrade play already prices — no separate sub-criterion — §4.1.1 |
 
 **The W16 tension — crisis-tail `m` and slash deterrence pull in opposite directions.**
 The W6 fix raises `m` to ride out correlated honest outages; but every baseline a `P` may
@@ -130,6 +130,38 @@ level; a row that passes at ×0.5 but fails at ×0.25 fails the criterion. Reope
 multiplier only if the L17 grid itself is re-anchored (reversion trigger (a)/(b) of
 that layer) — the pin tracks the fatal channel, not a preference.
 
+**AMENDED 2026-08-01 (maintainer ruling) — the crisis-tail row (swan-2/W6) is DROPPED
+as a cadence artifact, and `m`'s floor moves from stressnet to derivation.** Three
+parts, each checked at source:
+
+1. **The row's premise is impossible at epoch cadence.** Each `(P, shard)` window is
+   evaluated independently — the pin has no cross-`P` inference — so correlation was
+   only ever an arithmetic concern on the marginal distribution (fat-tailed outages
+   crossing `m`), amplified because simultaneous crossings compound exits (the
+   participation strike loop, `shekyl-staking-sim/src/participation.rs:160–167`). But
+   with one baseline per settlement epoch (~13.9 days), reaching `m = 11` requires
+   misses across 11 *observed epochs* — months. An infrastructure outage lasts hours
+   and cannot produce a miss on more than one epoch per `P`; a record dark for months
+   is not experiencing a transient — it is gone, and slashing it is correct. The row
+   was written under a sub-daily-baseline assumption that item 1 (whole-shard reads)
+   and the set-size direction have since moved. The stressnet campaign it gates on
+   measures the wrong thing at this cadence. The §3.2 escape clause's "all four"
+   accordingly reads "all three".
+
+2. **W16 (deterrence-credible) is KEPT.** "10-of-13 free" at the ×0.25 crisis
+   multiplier is a live deterrence question and does not depend on outage duration.
+
+3. **`m` is really sized against transport noise, not archiver availability.** The
+   measured witness-side cold-path failure rate (~30 % per attempt, 2026-07-30
+   measurement in `FOLLOWUPS.md` TJ-2 — tor's 120 s SOCKS timeout, independent per
+   attempt) dominates the observed miss distribution; genuine availability events are
+   the minority term. Consecutive-miss probability falls as `0.3^k` (11 consecutive
+   ≈ 2×10⁻⁶ before any retry depth), so the floor is **derivable — pick a false-slash
+   target at population scale, solve for `m` jointly with the per-observation retry
+   depth** — rather than a stressnet question. The `(m, n)` decision is now smaller:
+   a transport-derived floor, W16 as the ceiling, one objective each way, and a wide
+   band between them.
+
 If the tail is heavy enough that no `m` satisfies **all four**, the named escape — faster
 dead-`P` detection **decoupled from `m`** (a separate liveness signal) — **stops being a
 contingency and becomes the design**: the slash keyed to the liveness signal restores
@@ -147,6 +179,14 @@ stressnet planning; do not treat Round-1 `m=11` as final without the CDF.
 
 **Gating input.** Outage-duration **CDF** (residual-life derived); steady-state `u_eff` alone
 does not pin tail shape.
+
+**Hard ceiling on the re-pin (added with the implementation).** `n` is bounded above by
+the serve-credit ledger's retention: the window may not reach past
+`prune_archival_epochs_before`'s horizon, which gives `n ≤ MAX_CLAIM_AGE_W − 1` (= **25**
+at the current `W = 26`). Raising `n` past that does not fork the chain — it silently
+converts pruned-but-served epochs into misses. A const-assert in `failure_window.rs`
+fails the build at the boundary, so a re-pin that needs a wider `n` is a joint decision
+about `n` **and** `W`, not a numerics bump. §4.1 has the derivation.
 
 ### 3.3 Enforcement pro-cyclicality (swan-2/W6, 2026-06-11)
 
@@ -177,12 +217,117 @@ Two consequences pinned into the Round-2 close criteria:
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Sliding-window m-of-n in consensus | **Pinned — implement** | `m`/`n` from Round-2 CDF gate |
+| Sliding-window m-of-n in consensus | **Built** | `shekyl-archival-retention::failure_window`; `m`/`n` re-pinned at the Round-2 CDF gate |
 | Per-`P` confirmation FSM | **Rejected** | §5 |
 | Gate-2 baseline + `serve_credit_bit` wire | In progress | Orthogonal to scheduling choice |
 | Round-2 stressnet | **Open** | §3.2 joint `m` feasibility |
 
 Cross-reference: gate-2 §10; challenge **scheduling** is orthogonal to vin verify.
+
+### 4.1 As built
+
+Before this landed, consensus single-struck: gate-2 §6's `challenge_failed(P, s, E)`
+went straight to the gate-4 §4.2 slash, so one missed baseline forfeited a `FLOOR` —
+punishing exactly the isolated connectivity flukes §1 exists to absorb. The window now
+sits between the two. The **interval-append is unchanged** (`slash_open_interval_to_append`
+still produces exactly what the writer appends); only **whether** the slash fires moved.
+
+| Layer | Where |
+|-------|-------|
+| Decision (m-of-n arithmetic, window contract) | `rust/shekyl-archival-retention/src/failure_window.rs` |
+| `m` / `n` authority | `config/consensus_constants.json` → `build.rs` (`bond_duration` precedent) |
+| FFI | `shekyl_archival_failure_window_params` / `_slashable` |
+| Gather (LMDB reads only; decides nothing) | `db_lmdb.cpp` `archival_failure_window_slashable` |
+| Observability predicate | `db_lmdb.cpp` `archival_baseline_observed_at_epoch` |
+
+**Observations, not epochs.** The window counts epochs at which a challenge was actually
+**posed** to the `(P_id, shard)` pair; a bonded-but-untested epoch is not an observation
+and can never become a miss. This is §3.1's Round-2 confirmation concern stated on the
+enforcement side.
+
+**Scoped to the current standing run.** Look-back walks epochs downward and stops at the
+first non-observation, which yields three boundaries with no special-casing: before
+`E_join + 1` and inside a bad interval (`good_through` false), and at or before the
+shard's `E_add` (the as-of-`H_fire` holdings read). The bad-interval case is a **ruling**:
+*a reinstated record starts the window clean*. Carrying pre-slash misses across a `Rebond`
+would punish one absence twice and leave an already-slashed archiver one or two misses
+from the next slash — the single-strike knife-edge, rebuilt. Gate-4 §3.4 calls `Rebond`
+*reinstatement* and §4.2 makes slash forward-only; the clean window is the symmetric
+reading, and the burned collateral is what makes it not a cheap reset.
+
+**Nothing persisted — with one thing to keep in sync.** The window is recomputed from
+the `serve_credit_bit` ledger and the bond record, both of which `pop_block` already
+reverts (gate-2 §8, gate-4 §5). No new schema, no `42-serialization-policy` bump, and
+reorg safety comes free: a rewound bit is a rewound observation.
+
+The price is that **`n` is now a retention constraint**. The decision used to read one
+epoch's bit; it now reads up to `n − 1` epochs further back, into rows
+`prune_archival_epochs_before` deletes below `tip_epoch − MAX_CLAIM_AGE_W`. A pruned row
+is indistinguishable from a never-earned one, so a window out-reaching the prune horizon
+would read *served* epochs as misses. A const-assert in `failure_window.rs` couples the
+two (`n + LAG ≤ MAX_CLAIM_AGE_W + 1`, where `LAG = 2` is the settlement lag at the
+genesis schedule) and fails the build if either constant moves across it — verified by
+mutation. Not a fork risk: pruning is deterministic in tip height, so nodes would agree
+on the wrong answer rather than split.
+
+**Tests.** The consensus decision is pinned against the Round-1 sim policy itself —
+`failure_confirmation::sliding_window_first_slash_baseline` was extracted from
+`run_sliding` so `sliding_window_matches_consensus_exhaustively_to_length_16` compares
+consensus to the measured code, not a re-typed copy. That equivalence pins the arithmetic
+and the firing epoch; it pins **nothing** about the observability filter, which has no sim
+counterpart (every baseline in the sim's grid is an observation) and carries its own
+coverage in `failure_window.rs` and the `archival_substrate_lmdb` KATs
+(`slash_scheduler_absorbs_a_single_missed_challenge`,
+`slash_scheduler_slashes_sustained_absence_at_m_of_n`,
+`failure_window_recomputes_from_reverted_state_on_pop`).
+
+#### 4.1.1 Consequence for the exit path — subsumed by the `m`/`n` sizing, NOT a separate gate
+
+Landing the window **widened the exit-forgiven tail**. The consequence is recorded here
+because it is criterion 4 of the §3.2 joint gate (deterrence-credible) made concrete —
+and, grounded in the numbers, it turns out to be *subsumed by that criterion's `m`
+sizing*, not a separate decision.
+
+`Unbond` legality (gate-4 §4.3, `release_cooldown.rs`) rests on two predicates, both
+anchored on the record's **last-served** epoch: the release cooldown
+(`current ≥ anchor + RELEASE_COOLDOWN_EPOCHS`, 2 epochs) and slash settlement
+(`archival_last_slash_epoch ≥ anchor`). **Neither asks whether the window holds
+unresolved misses**, and the scheduler's watermark advances whether or not a slash fired.
+Under single-strike a persona that went dark was slashed at the next deadline; under the
+window it is slash-free for `m − 1` observed misses, and both release predicates clear
+within roughly a cooldown of its last serve — so it can `Unbond` with **full collateral**
+during the grace. The same reasoning applies to `HoldingsUpdate`-drop's per-shard tail.
+
+**Why this is not a separate gap.** The cooldown is 2 epochs, far below `m = 11`: a
+departing record rides the **same** `m − 1` forgiveness envelope a still-bonded record
+already gets anywhere in its life — forgiving sub-`m` absence is the window's whole
+purpose — and it earns no `serve_credit_bit` while dark, so what it gains is only the
+storage opex saved over `m − 1` epochs plus its collateral back. It cannot exceed the
+window's tolerance without first crossing `m`-of-`n` and being slashed. And the honest
+crash-then-leave record and the adversarial squeeze are **on-chain indistinguishable**,
+both sitting inside a tolerance the window already grants: an exit-time "clear the
+window" gate would slash the first exactly as it slashes the second — a mis-fix
+(rule 82) — and extending the anchor from last-*served* to last-*observed* to force it
+is the pre-provisioned flexibility rule 21 rejects.
+
+**So the exit path is priced by whatever `m` criterion 4 pins.** Making `m − 1`
+lost-service tolerable at the L17 ×0.25 crisis multiplier (the §3.2 W16 fetch-on-demand
+degrade play) makes "exit at `m − 1`" tolerable by the same token — there is no
+independent knob and no independent decision; Round-2 owns it only in that it owns `m`.
+The code comments at both slash-scan sites in `db_lmdb.cpp` state this rather than
+repeating the retired single-strike rationale.
+
+**Round-2 re-pin: one authority, and a deliberate two-site edit.** `m`/`n` live in
+`config/consensus_constants.json` and nowhere else — the C++ reads both through the FFI
+rather than a generated header constant, so there is **no cross-language drift pair** to
+keep aligned. Re-pinning them touches **two** sites, by design: the JSON value, and the
+Round-1 sentinel const-assert in `failure_window.rs` that pins the shipped pair. The
+sentinel is the `bond_floor` idiom — it exists so a genesis-sensitive numerics change
+cannot happen incidentally (this JSON carries ~20 constants for many crates), and it
+fails the build naming this document until the new values are acknowledged. `build.rs`
+additionally refuses `m = 0`, `n < m`, and a pair too wide for the FFI accessor, and a
+second const-assert holds `n` inside the retention ceiling (§3.2). The KATs derive their
+epochs from the FFI values and survive a re-pin without edits.
 
 ---
 

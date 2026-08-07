@@ -32,10 +32,12 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_basic/tx_extra.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "crypto/hash-ops.h"
 #include "crypto/pow_registry.h"
@@ -166,11 +168,13 @@ TEST(mining_parity, genesis_identity_is_pow_independent)
   //
   // frozen_id is a regression anchor. If a *legitimate* pre-genesis change to
   // GENESIS_TX or a header field moves it, set frozen_id to "" to re-capture the
-  // printed value, then re-pin it. The mainnet id is independently anchored: it
-  // equals the height-0 block_hash in
-  // rust/shekyl-wire/tests/vectors/regtest_coinbase_hashes.json, captured from
-  // the daemon by capture_coinbase.py before this cutover — two independent
-  // derivations of the same PoW-independent genesis id.
+  // printed value, then re-pin it. Each id is independently anchored by
+  // `geblock block-id --network <net>` (rust/shekyl-genesis-tool), which derives
+  // the same id in pure Rust from config/genesis_recipients.<net>.json; the
+  // mainnet id is also CI-cross-anchored to the height-0 block_hash in
+  // rust/shekyl-wire/tests/vectors/regtest_coinbase_hashes.json (daemon capture
+  // via capture_coinbase.py; see coinbase_hash.rs MAINNET_GENESIS_BLOCK_ID) —
+  // three independent derivations of the same PoW-independent genesis id.
   struct NetCase
   {
     cryptonote::network_type net;
@@ -178,9 +182,9 @@ TEST(mining_parity, genesis_identity_is_pow_independent)
     const char* frozen_id;
   };
   const NetCase nets[] = {
-    { cryptonote::MAINNET,  "mainnet",  "919f8db5a0696c4969af09755c1acc42ae95e4ec573cab0a095c2e7849a144c4" },
-    { cryptonote::TESTNET,  "testnet",  "21b163229fc1a33c52d46452160ca4668d06bba54a72555d3978e04093a6e4a3" },
-    { cryptonote::STAGENET, "stagenet", "a0cfacd95a96004935b450f1230336f280afd0d793357ef358430b9c0bce88bb" },
+    { cryptonote::MAINNET,  "mainnet",  "49d590b6e783c77dbe019436b283009c76de76ef6800211f56ca41a137a70d89" },
+    { cryptonote::TESTNET,  "testnet",  "ac2c43bd041edb3d379f203a3648e50c26c3ef19d35c51bb510593f99fd0f20e" },
+    { cryptonote::STAGENET, "stagenet", "f34560b4787451edb6ddba36c8b5d4be90dabf4a00847df96b6c1a44696d3e70" },
   };
 
   for (const NetCase& nc : nets)
@@ -200,6 +204,55 @@ TEST(mining_parity, genesis_identity_is_pow_independent)
                   nc.name, static_cast<unsigned>(bl.nonce), got.c_str());
     else
       EXPECT_EQ(std::string(nc.frozen_id), got) << nc.name << ": genesis block id changed";
+  }
+}
+
+// geblock (rust/shekyl-genesis-tool) emits genesis tx_extra in canonical order
+// rather than porting sort_tx_extra. This test makes that claim fully
+// executable against the C++ sorter and field parser:
+//   1. fixed point of sort_tx_extra (input already canonical), and
+//   2. explicit field sequence pubkey → KEM ciphertext → leaf hashes
+//      (the pick order sort_tx_extra uses for the genesis field subset).
+// Complements rust/shekyl-genesis-tool/tests/golden_kat.rs::extra_is_canonical_fixed_point.
+TEST(mining_parity, genesis_tx_extra_is_sort_tx_extra_fixed_point)
+{
+  struct NetCase
+  {
+    cryptonote::network_type net;
+    const char* name;
+  };
+  const NetCase nets[] = {
+    { cryptonote::MAINNET,  "mainnet"  },
+    { cryptonote::TESTNET,  "testnet"  },
+    { cryptonote::STAGENET, "stagenet" },
+  };
+
+  for (const NetCase& nc : nets)
+  {
+    const cryptonote::config_t& cfg = cryptonote::get_config(nc.net);
+    cryptonote::block bl{};
+    ASSERT_TRUE(cryptonote::generate_genesis_block(bl, cfg.GENESIS_TX, cfg.GENESIS_NONCE))
+      << nc.name << ": generate_genesis_block failed";
+
+    std::vector<uint8_t> sorted_extra;
+    ASSERT_TRUE(cryptonote::sort_tx_extra(bl.miner_tx.extra, sorted_extra))
+      << nc.name << ": sort_tx_extra failed on the genesis extra";
+    EXPECT_EQ(bl.miner_tx.extra, sorted_extra)
+      << nc.name << ": genesis tx_extra is not a fixed point of sort_tx_extra "
+                    "(geblock emit order vs C++ canonicalizer drift)";
+
+    std::vector<cryptonote::tx_extra_field> fields;
+    ASSERT_TRUE(cryptonote::parse_tx_extra(bl.miner_tx.extra, fields))
+      << nc.name << ": parse_tx_extra failed on the genesis extra";
+    ASSERT_EQ(3u, fields.size())
+      << nc.name << ": genesis extra must carry exactly three fields "
+                    "(0x01 pubkey, 0x06 KEM, 0x07 leaf hashes)";
+    EXPECT_TRUE(std::holds_alternative<cryptonote::tx_extra_pub_key>(fields[0]))
+      << nc.name << ": field 0 must be TX_EXTRA_TAG_PUBKEY (0x01)";
+    EXPECT_TRUE(std::holds_alternative<cryptonote::tx_extra_pqc_kem_ciphertext>(fields[1]))
+      << nc.name << ": field 1 must be TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT (0x06)";
+    EXPECT_TRUE(std::holds_alternative<cryptonote::tx_extra_pqc_leaf_hashes>(fields[2]))
+      << nc.name << ": field 2 must be TX_EXTRA_TAG_PQC_LEAF_HASHES (0x07)";
   }
 }
 

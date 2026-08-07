@@ -40,7 +40,6 @@
 #include "cryptonote_core/i_core_events.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler_common.h"
 #include "cryptonote_protocol/enums.h"
-#include "common/download.h"
 #include "common/command_line.h"
 #include "tx_pool.h"
 #include "blockchain.h"
@@ -151,7 +150,7 @@ namespace cryptonote
      bool handle_single_incoming_block(const blobdata& block_blob,
       const block *b,
       block_verification_context& bvc,
-      pool_supplement& extra_block_txs,
+      block_connect_supplement& connect,
       bool update_miner_blocktemplate = true);
 
      /**
@@ -181,7 +180,7 @@ namespace cryptonote
        bool update_miner_blocktemplate = true);
 
      bool handle_incoming_block(const blobdata& block_blob, const block *b,
-       block_verification_context& bvc, pool_supplement& extra_block_txs,
+       block_verification_context& bvc, block_connect_supplement& connect,
        bool update_miner_blocktemplate = true);
 
      /**
@@ -236,7 +235,6 @@ namespace cryptonote
       * @note see Blockchain::create_block_template
       */
      bool get_block_template(block& b, const account_public_address& adr, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash) final;
-     bool get_block_template(block& b, const crypto::hash *prev_block, const account_public_address& adr, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash);
 
      /**
       * @copydoc Blockchain::get_miner_data
@@ -285,11 +283,10 @@ namespace cryptonote
       * @param vm command line parameters
       * @param test_options configuration options for testing
       * @param get_checkpoints if set, will be called to get checkpoints data, must return checkpoints data pointer and size or nullptr if there ain't any checkpoints for specific network type
-      * @param allow_dns whether or not to allow DNS requests
       *
       * @return false if one of the init steps fails, otherwise true
       */
-     bool init(const boost::program_options::variables_map& vm, const test_options *test_options = NULL, const GetCheckpointsCallback& get_checkpoints = nullptr, bool allow_dns = true);
+     bool init(const boost::program_options::variables_map& vm, const test_options *test_options = NULL, const GetCheckpointsCallback& get_checkpoints = nullptr);
 
      /**
       * @copydoc Blockchain::reset_and_set_genesis_block
@@ -419,6 +416,13 @@ namespace cryptonote
      bool get_block_by_hash(const crypto::hash &h, block &blk, bool *orphan = NULL) const;
 
      /**
+      * @copydoc Blockchain::get_block_attestation_witness
+      *
+      * @note see Blockchain::get_block_attestation_witness
+      */
+     blobdata get_block_attestation_witness(const block &blk) const;
+
+     /**
       * @copydoc Blockchain::get_alternative_blocks
       *
       * @note see Blockchain::get_alternative_blocks(std::vector<block>&) const
@@ -459,20 +463,6 @@ namespace cryptonote
       * @param path the path to set ours as
       */
      void set_checkpoints_file_path(const std::string& path);
-
-     /**
-      * @brief set whether or not we enforce DNS checkpoints
-      *
-      * @param enforce_dns enforce DNS checkpoints or not
-      */
-     void set_enforce_dns_checkpoints(bool enforce_dns);
-
-     /**
-      * @brief set whether or not to enable or disable DNS checkpoints
-      *
-      * @param disble whether to disable DNS checkpoints
-      */
-     void disable_dns_checkpoints(bool disable = true) { m_disable_dns_checkpoints = disable; }
 
      /**
       * @copydoc tx_memory_pool::have_tx
@@ -759,7 +749,7 @@ namespace cryptonote
       *
       * @note see Blockchain::update_checkpoints()
       */
-     bool update_checkpoints(const bool skip_dns = false);
+     bool update_checkpoints();
 
      /**
       * @brief tells the daemon to wind down operations and stop running
@@ -825,16 +815,6 @@ namespace cryptonote
       * @return which network are we on?
       */     
      network_type get_nettype() const { return m_nettype; };
-
-     /**
-      * @brief check whether an update is known to be available or not
-      *
-      * This does not actually trigger a check, but returns the result
-      * of the last check
-      *
-      * @return whether an update is known to be available or not
-      */
-     bool is_update_available() const { return m_update_available; }
 
      /**
       * @brief check a set of hashes against the precompiled hash set
@@ -998,7 +978,7 @@ namespace cryptonote
       * @note see Blockchain::add_new_block
       */
      bool add_new_block(const block& b, block_verification_context& bvc,
-       pool_supplement& extra_block_txs);
+       block_connect_supplement& connect);
 
      /**
       * @brief load any core state stored on disk
@@ -1042,13 +1022,6 @@ namespace cryptonote
      bool notify_txpool_event(const epee::span<const cryptonote::blobdata> tx_blobs, epee::span<const crypto::hash> tx_hashes, epee::span<const cryptonote::transaction> txs, const std::vector<bool> &just_broadcasted) const;
 
      /**
-      * @brief checks DNS versions
-      *
-      * @return true on success, false otherwise
-      */
-     bool check_updates();
-
-     /**
       * @brief checks free disk space
       *
       * @return true on success, false otherwise
@@ -1089,7 +1062,6 @@ namespace cryptonote
 
      epee::math_helper::once_a_time_seconds<60*60*12, false> m_store_blockchain_interval; //!< interval for manual storing of Blockchain, if enabled
      epee::math_helper::once_a_time_seconds<60*60*2, true> m_fork_moaner; //!< interval for checking HardFork status
-     epee::math_helper::once_a_time_seconds<60*60*12, true> m_check_updates_interval; //!< interval for checking for new versions
      epee::math_helper::once_a_time_seconds<60*10, true> m_check_disk_space_interval; //!< interval for checking for disk space
      epee::math_helper::once_a_time_seconds<90, false> m_block_rate_interval; //!< interval for checking block rate
      epee::math_helper::once_a_time_seconds<60*60*5, true> m_blockchain_pruning_interval; //!< interval for incremental blockchain pruning
@@ -1101,29 +1073,14 @@ namespace cryptonote
 
      network_type m_nettype; //!< which network are we on?
 
-     std::atomic<bool> m_update_available;
-
      std::string m_checkpoints_path; //!< path to json checkpoints file
-     time_t m_last_dns_checkpoints_update; //!< time when dns checkpoints were last updated
      time_t m_last_json_checkpoints_update; //!< time when json checkpoints were last updated
 
      std::atomic_flag m_checkpoints_updating; //!< set if checkpoints are currently updating to avoid multiple threads attempting to update at once
-     bool m_disable_dns_checkpoints;
 
      size_t block_sync_size;
 
      time_t start_time;
-
-     enum {
-       UPDATES_DISABLED,
-       UPDATES_NOTIFY,
-       UPDATES_DOWNLOAD,
-       UPDATES_UPDATE,
-     } check_updates_level;
-
-     tools::download_async_handle m_update_download;
-     size_t m_last_update_length;
-     boost::mutex m_update_mutex;
 
      bool m_offline;
 

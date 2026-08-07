@@ -94,6 +94,19 @@ impl PReconcileSet {
         &self.matches
     }
 
+    /// Full-scan reconcile: the whole-`covered` absence form (SP-R0 arms #2/#3 —
+    /// "no post anywhere the scan has exhaustively covered"). Encapsulates the
+    /// evidence-height bookkeeping: with nothing covered (`high == 0`) every
+    /// verdict is [`ReconcileVerdict::OutsideCovered`] (absence unknown, GC
+    /// must not act); otherwise the evidence height is the last covered block.
+    pub(crate) fn reconcile_full_scan(&self, persona: PCanonicalId) -> ReconcileVerdict {
+        let high = self.covered.high().to_raw();
+        if high == 0 {
+            return ReconcileVerdict::OutsideCovered;
+        }
+        self.reconcile(persona, BlockHeight::from_raw(high - 1))
+    }
+
     /// Reconcile one persona against the verified evidence. `evidence_height` is the
     /// height whose coverage makes the verdict **meaningful** — typically the slot's bond
     /// height: an absence is only sound if the range since the persona could first have
@@ -276,6 +289,34 @@ mod tests {
         assert_eq!(
             set.reconcile(p, BlockHeight::from_raw(103)),
             ReconcileVerdict::OutsideCovered
+        );
+    }
+
+    /// The full-scan form: empty covered ⇒ `OutsideCovered` (never GC);
+    /// non-empty ⇒ identical to `reconcile` at the last covered height.
+    #[test]
+    fn reconcile_full_scan_gates_on_coverage() {
+        use crate::engine::pscan::exhaustiveness::VerifiedBatch;
+        let persona = PCanonicalId::from_bytes([9; 32]);
+        let empty = PReconcileSet::from_verified_scan(
+            VerifiedBatch::for_test(0, 0, [1; 32]).range(),
+            Vec::new(),
+        );
+        assert_eq!(
+            empty.reconcile_full_scan(persona),
+            ReconcileVerdict::OutsideCovered
+        );
+        let covered = PReconcileSet::from_verified_scan(
+            VerifiedBatch::for_test(0, 42, [1; 32]).range(),
+            Vec::new(),
+        );
+        assert_eq!(
+            covered.reconcile_full_scan(persona),
+            covered.reconcile(persona, BlockHeight::from_raw(41))
+        );
+        assert_eq!(
+            covered.reconcile_full_scan(persona),
+            ReconcileVerdict::AbsentWithinCovered
         );
     }
 }

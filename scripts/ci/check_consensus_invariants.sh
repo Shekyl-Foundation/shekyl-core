@@ -170,11 +170,13 @@ fi
 echo
 
 # ----------------------------------------------------------------------
-# Invariant 5: M1 reward-gate predicate + operand one-site guarantees
-# (ARCHIVAL_REWARD_GATE_M1.md §6 tripwire row, §10 M1-1, §11.8 M3-1).
+# Invariant 5: segment-freeze one-site tripwires (cursor accounting,
+# boundary operator, writer/division/counter-mutation one-site —
+# ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4/§8; the substrate half of the
+# retired M1 gate's former tripwire, ARCHIVAL_REWARD_GATE_M1.md §13).
 # ----------------------------------------------------------------------
-echo "[5/5] M1 reward-gate predicate/operand sites"
-if ! scripts/ci/check_reward_gate_predicate_sites.sh; then
+echo "[5/5] Segment-freeze one-site tripwires"
+if ! scripts/ci/check_segment_freeze_sites.sh; then
   FAIL=1
 else
   echo "      OK"

@@ -5,6 +5,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+# `benches/relay_admission_fixture.rs` is a shared module `#[path]`-included by
+# both bench targets, NOT a bench of its own. Autodiscovery would compile and
+# run it as a third target -- a libtest harness over zero tests, whose only
+# effect is CI time and a bench name that measures nothing. The two real
+# targets are declared explicitly below.
+autobenches = false
 
 [lib]
 name = "shekyl_ffi"
@@ -31,9 +37,8 @@ shekyl-difficulty = { path = "../shekyl-difficulty" }
 # never enabled in production builds.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-economics = { path = "../shekyl-economics" }
-# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
 # (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
-shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # Single-sourced CT cleartext balance equation (`shekyl_verify_ct_balance`
 # general export in `ct_balance_ffi.rs`). Same crate the bond-post path reaches
 # via archival-retention; depended on directly here for the no-bond-term shape.
@@ -57,6 +62,16 @@ shekyl-engine-state = { path = "../shekyl-engine-state" }
 # silently dropped. See V3_WALLET_DECISION_LOG.md (single-image contract)
 # and the nm gate in src/daemon/CMakeLists.txt.
 shekyl-logging = { path = "../shekyl-logging" }
+# Dandelion++ embargo / propagation-timeout (`dandelionpp_ffi.rs`, RP-4).
+# Stem-map exports retired at RP-3a. The FFI owns the CSPRNG (`OsRng`); the
+# measurement crate stays deterministic.
+shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+# Live relay zone (RP-3a). The scheduling logic; this crate only marshals.
+shekyl-relay = { path = "../shekyl-relay" }
+# Levin payload compression (`levin_ffi.rs`): the C++ epee::levin compression
+# shim reaches the Rust-pinned libzstd through these exports, making it the
+# single zstd in the binary (system-libzstd link dropped).
+shekyl-levin = { path = "../shekyl-levin" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is
@@ -81,6 +96,22 @@ multiexp = "0.4"
 ciphersuite = "0.4"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs" }
+# §72.6: two instruments, two consumers. `criterion` is wall clock -- the `hop`
+# input, and the arm that must run on BOTH the reference machine and the slow
+# one. `gungraun` is hardware-independent instruction counts -- the CI drift
+# gate that fires when the proof system moves, x86 only. Conflating them gives
+# either a gate that flaps with runner hardware or a number that cannot be
+# gated.
+criterion = { version = "0.5", features = ["html_reports"] }
+gungraun = "0.19"
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "relay_admission_verify"
+harness = false
+
+[[bench]]
+name = "relay_admission_verify_iai"
+harness = false

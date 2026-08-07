@@ -3,10 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Shared fixture decoders for the epoch-close KATs (`reward_gate_kat`,
-//! `consensus_state_kat`). The JSON → `EpochClose*` shape lives in one place so
-//! a fixture-schema change (e.g. the M1 `k_cover` / `frozen_shard_count` fields)
-//! edits one decoder, not two that could silently drift apart.
+//! Shared fixture decoders for the epoch-close KATs (`consensus_state_kat`;
+//! `reward_gate_kat` was deleted with the M1 gate's retirement,
+//! `ARCHIVAL_REWARD_GATE_M1.md` §13). The JSON → `EpochClose*` shape lives in
+//! one place so a fixture-schema change edits one decoder, not several that
+//! could silently drift apart.
 //!
 //! These are computational-replay fixtures, not byte-pinned crypto vectors, so
 //! centralizing the decode carries none of the `30-cryptography.mdc`
@@ -19,17 +20,16 @@
 
 use serde_json::Value;
 use shekyl_archival_retention::{
-    BadInterval, BandedCurveParams, CreditPair, EpochCloseBond, EpochCloseResult, EpochCloseShard,
+    BadInterval, CreditPair, EpochCloseBond, EpochCloseResult, EpochCloseShard,
 };
 
-/// Owned bond storage. `EpochCloseBond` borrows its interval/held-id slices, so
-/// the fixture-owned vectors must outlive the `epoch_close_compute` call that
+/// Owned bond storage. `EpochCloseBond` borrows its interval slice, so the
+/// fixture-owned vectors must outlive the `epoch_close_compute` call that
 /// borrows them — decode into this, then [`bonds_as_slice`] to borrow.
 pub struct BondOwned {
     pub join: u64,
     pub complete: bool,
     pub bad: Vec<BadInterval>,
-    pub held: Vec<u64>,
 }
 
 impl BondOwned {
@@ -38,7 +38,6 @@ impl BondOwned {
             join_settlement_epoch: self.join,
             is_foundation_complete_tree: self.complete,
             bad_intervals: &self.bad,
-            held_shard_ids: &self.held,
         }
     }
 }
@@ -67,12 +66,6 @@ pub fn parse_bonds(v: &Value) -> Vec<BondOwned> {
             join: b["join_epoch"].as_u64().expect("join_epoch"),
             complete: b["complete_tree"].as_bool().expect("complete_tree"),
             bad: parse_bad_intervals(&b["bad_intervals"]),
-            held: b["held_shard_ids"]
-                .as_array()
-                .expect("held_shard_ids")
-                .iter()
-                .map(|v| v.as_u64().expect("shard id"))
-                .collect(),
         })
         .collect()
 }
@@ -98,13 +91,6 @@ pub fn parse_pairs(v: &Value) -> Vec<CreditPair> {
             shard_idx: usize::try_from(p["shard"].as_u64().expect("shard idx")).unwrap(),
         })
         .collect()
-}
-
-pub fn parse_curve(v: &Value) -> BandedCurveParams {
-    BandedCurveParams {
-        plateau_work_milli: v["plateau_work_milli"].as_u64().expect("plateau_work"),
-        plateau_value_milli: v["plateau_value_milli"].as_u64().expect("plateau_value"),
-    }
 }
 
 pub fn expected_result(v: &Value) -> EpochCloseResult {

@@ -20,7 +20,7 @@ use shekyl_daemon_rpc::submit::{
     CommitOutcome, KeyImageConflict, ParsedSubmission, ReferenceFacts, ShimFault, SubmitFacts,
     SubmitStateShim, TxMeta, TxVerifier, VerificationCertificate, VerifyFailure,
 };
-use shekyl_types::{BlockHash, BlockHeight, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, ServeCredit, Transaction, TxPrefix,
@@ -165,6 +165,90 @@ pub fn serve_credit_tx(fee: u64) -> Transaction {
     }
 }
 
+/// A synthetic-but-decodable emission vin (the retention `emission_wire`
+/// sample-vin shape: canonical key/sig lengths, strictly increasing epochs,
+/// aligned per-epoch claims) serialized to `canonical_bytes`.
+pub fn emission_vin_bytes() -> Vec<u8> {
+    use shekyl_archival_retention::{
+        ArchivalRewardEmissionVin, HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking,
+        ShardSet, ShardWorkEntry, WorkEpochClaim,
+    };
+    use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
+    let vin = ArchivalRewardEmissionVin {
+        p_pubkey: vec![0xA1; SINGLE_KEY_CANONICAL_LEN],
+        holdings: HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
+        },
+        settlement_epochs: vec![11, 12],
+        work_claim: vec![
+            WorkEpochClaim {
+                epoch: 11,
+                shard_entries: vec![ShardWorkEntry {
+                    shard_id: 7,
+                    serve_credit_bit: true,
+                    scarcity_micro: 850_000,
+                }],
+            },
+            WorkEpochClaim {
+                epoch: 12,
+                shard_entries: vec![],
+            },
+        ],
+        backing: MembershipOnlyBacking {
+            proof: vec![0xEE; 512],
+            pseudo_out: [0x22; 32],
+            pqc_pk_hash: [0x33; 32],
+            backing_pubkey: vec![0xB2; SINGLE_KEY_CANONICAL_LEN],
+            tree_depth: 3,
+        },
+        reward_amount_plain: vec![1_000_000, 2_000_000],
+        auth_backing: vec![0xC3; SINGLE_SIG_CANONICAL_LEN],
+        auth_claim: vec![0xD4; SINGLE_SIG_CANONICAL_LEN],
+    };
+    vin.serialize().expect("sample emission vin serializes")
+}
+
+/// An emission-shaped tx that clears Phase A: the decodable emission vin,
+/// one `ToKey` fee input, one loud reward vout + one confidential change
+/// vout, per-slot pqc_auths, `pseudoOuts == ToKey subset`, non-empty
+/// FCMP++ proof.
+pub fn emission_tx(fee: u64) -> Transaction {
+    let ki = valid_key_images(1);
+    let (mut outputs, base) = two_outputs_base();
+    // One loud reward vout (EV3's non-zero sum static).
+    outputs[0].amount = 3_000_000;
+    Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: vec![
+                Input::ToKey {
+                    amount: 0,
+                    key_offsets: vec![],
+                    key_image: ki[0],
+                },
+                Input::ArchivalRewardEmission {
+                    canonical_bytes: emission_vin_bytes(),
+                },
+            ],
+            outputs,
+            extra: vec![],
+        },
+        ct: Ct::Fcmp {
+            fee,
+            reference_block: FIXTURE_REF_BLOCK,
+            base,
+            pqc_auths: vec![pqc_auth(), pqc_auth()],
+            prunable: Some(Prunable {
+                bulletproofs: vec![bp_plus()],
+                tree_depth: 3,
+                fcmp_proof: vec![0xEF; 2500],
+                pseudo_outs: vec![[0x30; 32]],
+            }),
+        },
+    }
+}
+
 /// Hex-encode a transaction for `parse_submission` / `SubmitEngine::submit`.
 pub fn hexify(tx: &Transaction) -> String {
     hex::encode(tx.serialize())
@@ -187,7 +271,10 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         fee_per_byte: 1,
         fee_quantization_mask: 1,
         weight_limit: 149_400,
-        chain_height: BlockHeight::from_raw(200),
+        chain_height: ChainCount::from_raw(200),
+        bond_record_exists: None,
+        emission: None,
+        emission_claim_conflict: None,
     }
 }
 
@@ -211,6 +298,12 @@ pub struct SnapshotRecord {
     pub txid: TxHash,
     pub key_images: Vec<[u8; 32]>,
     pub reference_block: BlockHash,
+    /// The §8.7.1 BP3 probe key the engine passed (bond-post submissions
+    /// only).
+    pub bond_p_canonical_id: Option<[u8; 32]>,
+    /// The §8.7.2 E6/E7 probe the engine passed (emission submissions
+    /// only): the vin-derived claimant id + claimed epochs.
+    pub emission_probe: Option<([u8; 32], Vec<u64>)>,
 }
 
 /// Deterministic [`SubmitStateShim`]: serves a fixed snapshot, replays a
@@ -255,11 +348,15 @@ impl SubmitStateShim for MockShim {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
+        bond_p_canonical_id: Option<&[u8; 32]>,
+        emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault> {
         self.snapshots.lock().unwrap().push(SnapshotRecord {
             txid: *txid,
             key_images: key_images.to_vec(),
             reference_block: *reference_block,
+            bond_p_canonical_id: bond_p_canonical_id.copied(),
+            emission_probe: emission_probe.map(|(id, epochs)| (*id, epochs.to_vec())),
         });
         Ok(self.facts.clone())
     }

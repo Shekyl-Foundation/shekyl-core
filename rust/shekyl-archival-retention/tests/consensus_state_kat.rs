@@ -6,8 +6,8 @@
 //! Consensus-state KAT: `R_market`, `Σwork`, determinism (ARCHIVAL_CONSENSUS_STATE.md).
 
 use shekyl_archival_retention::{
-    curve_milli, epoch_close_compute, r_market_count, sigma_work_milli, BadInterval,
-    BandedCurveParams, EpochCloseInputs, KCover, ServeCreditRow, WORK_MILLI_SCALE,
+    epoch_close_compute, r_market_count, sigma_work_milli, BadInterval, EpochCloseInputs,
+    ServeCreditRow, WORK_MILLI_SCALE,
 };
 
 mod common;
@@ -17,7 +17,6 @@ const KAT: &str = include_str!("fixtures/consensus_state_kat_v1.json");
 #[test]
 fn consensus_state_kat_v1() {
     let doc: serde_json::Value = serde_json::from_str(KAT).expect("kat json");
-    let curve = common::parse_curve(&doc["curve"]);
     let e = doc["settlement_epoch"].as_u64().expect("epoch");
     let shard = doc["shard_id"].as_u64().expect("shard");
 
@@ -67,15 +66,7 @@ fn consensus_state_kat_v1() {
             .map(|v| v.as_bool().unwrap())
             .collect();
         let expected_sigma = doc["expected"]["sigma_work_milli"].as_u64().expect("sigma");
-        assert_eq!(sigma_work_milli(&works, &curve, &mask), expected_sigma);
-    }
-
-    if let Some(cases) = doc["curve_cases"].as_array() {
-        for case in cases {
-            let work = case["work_milli"].as_u64().unwrap();
-            let want = case["capped_milli"].as_u64().unwrap();
-            assert_eq!(curve_milli(work, &curve), want, "work_milli={work}");
-        }
+        assert_eq!(sigma_work_milli(&works, &mask), expected_sigma);
     }
 
     // Composed epoch-close replay — the exact computation the daemon delegates
@@ -96,17 +87,9 @@ fn consensus_state_kat_v1() {
         close_block_height: ec["close_block_height"].as_u64().expect("close height"),
         settlement_epoch_blocks: ec["settlement_epoch_blocks"].as_u64().expect("seb"),
         age_weight_milli: ec["age_weight_milli"].as_u64().expect("age weight"),
-        curve,
         bonds: &bonds,
         shards: &shards,
         credit_pairs: &pairs,
-        // M1 gate inputs (ARCHIVAL_REWARD_GATE_M1.md §2.1). The fixture
-        // carries them explicitly — parameterized, never baked from the
-        // provisional constant — so the KAT survives the §4 seal unchanged.
-        frozen_shard_count: ec["frozen_shard_count"]
-            .as_u64()
-            .expect("frozen_shard_count"),
-        k_cover: KCover::for_kat(ec["k_cover"].as_u64().expect("k_cover")),
     })
     .expect("well-formed fixture indices");
 
@@ -124,13 +107,9 @@ fn consensus_state_kat_v1() {
 }
 
 #[test]
-fn curve_milli_plateau_and_scale_pin() {
-    // Plateau + scale golden pins. The comprehensive cross-implementation /
-    // cross-arch determinism vectors — including the Form-C division path
-    // (reward_share_floor / mul_div_floor, the u128-before-divide order) — live
-    // in tests/reward_arithmetic_determinism_kat.rs. (The previous body here was
-    // a same-arch in-process double-call that proved nothing about determinism.)
-    let curve = BandedCurveParams::default_provisional();
-    assert_eq!(curve_milli(16_000, &curve), 8_000);
+fn work_milli_scale_is_frozen() {
+    // Banded-PL curve golden pins live in reward_arithmetic_determinism_kat
+    // (sim/counterfactual only after D3/R2). The consensus fixed-point scale
+    // remains a consensus-state pin.
     assert_eq!(WORK_MILLI_SCALE, 1_000);
 }

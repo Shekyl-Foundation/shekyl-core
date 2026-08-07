@@ -176,7 +176,7 @@ audit — the producer issues exactly these two daemon RPCs;
 `PendingTxEngine`, not the refresh producer.
 `ProtocolErrorKind` is **fresh-defined**, not a re-export of
 upstream
-[`shekyl_rpc::RpcError`](../../rust/shekyl-oxide/shekyl-oxide/rpc/src/lib.rs);
+`shekyl_rpc::RpcError`;
 upstream `RpcError` carries `String` payloads in three of
 its eight variants and is not a bounded re-export candidate,
 so the producer must **classify upstream into a bounded
@@ -590,7 +590,7 @@ on the C14 head `30798d783`); **C16** `376e1e821`
 `debug_assert!` message fix in
 [`engine/fault_injecting_refresh.rs`](../../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
 and
-[`engine/fault_injecting_ledger.rs`](../../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs) —
+`engine/fault_injecting_ledger.rs` —
 the messages instructed test authors to "drain via
 queued_failures() and consume_or_inject", but
 `consume_or_inject` does not exist anywhere in the
@@ -1406,7 +1406,7 @@ call-site audit).**
 
   `ProtocolErrorKind` — fresh-define (not re-export), seeded
   against the call-site-reachable upstream
-  [`shekyl_rpc::RpcError`](../../rust/shekyl-oxide/shekyl-oxide/rpc/src/lib.rs)
+  `shekyl_rpc::RpcError`
   subset. The upstream `RpcError` is a flat enum carrying
   `String` payloads in three of its eight variants
   (`InternalError(String)` / `ConnectionError(String)` /
@@ -6727,7 +6727,7 @@ code-path touched.
   fix in
   [`engine/fault_injecting_refresh.rs`](../../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
   and
-  [`engine/fault_injecting_ledger.rs`](../../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs).
+  `engine/fault_injecting_ledger.rs`.
   Both Drop messages instructed test authors to "drain via
   `queued_failures()` and `consume_or_inject`", but
   `consume_or_inject` does not exist anywhere in the

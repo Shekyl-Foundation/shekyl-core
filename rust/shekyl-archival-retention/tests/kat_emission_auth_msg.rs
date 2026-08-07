@@ -20,18 +20,40 @@
 //! A deliberate digest/wire-format change (pre-genesis only!) must regenerate
 //! that corpus and update these constants in lockstep; the lockstep is the
 //! tripwire.
+//!
+//! **Regenerated for the D1 micro-precision fix** (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`
+//! F-E): the auth customizations bumped `-v1 → -v2` because the digested
+//! work-claim entries changed meaning (scarcity-milli → scarcity-micro), so both
+//! role digests moved.
+//!
+//! **The corpus *name* is historical.** `EMISSION_AUTH_MSG_V1` is a directory
+//! label fixed at the corpus's birth; the **active customizations are `-v2`**.
+//! The path was deliberately not renamed — renaming it would churn every
+//! reference for no tripwire benefit — so read `V1` as "corpus rev 1", never as
+//! "customization v1".
+//!
+//! **What "values unchanged" does and does not mean.** The fixture's scarcity
+//! numbers are **retained operands**, not micro-unit recomputes: the same
+//! integers are now *interpreted* as micro where they were milli, which is why
+//! the wire bytes — and `EXPECTED_WIRE_LEN` / `EXPECTED_WIRE_DIGEST_HEX` — did
+//! not move and the only movement is the isolated `-v2` auth change. They are
+//! **not** the ×1000-scaled values a physical micro recompute would produce
+//! (other fixtures *were* rescaled where their arithmetic is under test). Holding
+//! the operands fixed is deliberate: it keeps the wire digest a stable tripwire
+//! so an unintended *format* change cannot hide behind an intended *semantic*
+//! one.
 
 use shekyl_archival_retention::hash::cshake256_32;
 use shekyl_archival_retention::{
     ArchivalRewardEmissionVin, EmissionAuthRole, HoldingsDescriptor, HoldingsKind,
-    MembershipOnlyBacking, RewardCommit, ShardWorkEntry, WorkEpochClaim,
+    MembershipOnlyBacking, RewardCommit, ShardSet, ShardWorkEntry, WorkEpochClaim,
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 
 /// Expected 64-byte `auth_msg` digest, stake-side (`Backing`) customization.
-const EXPECTED_BACKING_HEX: &str = "07daaf9c75b3c536a32ad25abb727f1bdacac2783505941a135a709dbc07fa292d1efa279328b209fae8b2863051644d5f0a5f8182599360bceb9a7c686343c9";
+const EXPECTED_BACKING_HEX: &str = "c975235c70fa6c9bd80b429e8a92f06dea988a22edb6d6af38e53d62fdb7943270947bbcd8320ca7061e0e9b6c3161fdf93dfbfc4116d208287f8d54ac73c901";
 /// Expected 64-byte `auth_msg` digest, claim-side (`Claim`) customization.
-const EXPECTED_CLAIM_HEX: &str = "c861085cc864eafcd407f681effe8e80b9698fae61653187dde181650b35ae894beaeb37c466da2a904e800c50e1916eaa800b2396b592193ecf4a786693800e";
+const EXPECTED_CLAIM_HEX: &str = "dd39154467976ebd6ca98456ffde6934cbcd29adee749e8621903e7908230fbc28ceeca5dd693e9b571fe7965bc64987ed684e320d46ab5d62f8858eb338b6f5";
 /// Expected serialized wire length of the fixture vin.
 const EXPECTED_WIRE_LEN: usize = 10_933;
 /// Expected `cshake256_32("shekyl/emission-wire-kat-v1", wire_bytes)` of the
@@ -46,7 +68,7 @@ fn fixture_vin() -> ArchivalRewardEmissionVin {
         p_pubkey: vec![0x5A; SINGLE_KEY_CANONICAL_LEN],
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![7, 42],
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         },
         settlement_epochs: vec![11, 12, 15],
         work_claim: vec![
@@ -56,12 +78,12 @@ fn fixture_vin() -> ArchivalRewardEmissionVin {
                     ShardWorkEntry {
                         shard_id: 7,
                         serve_credit_bit: true,
-                        scarcity_milli: 850,
+                        scarcity_micro: 850,
                     },
                     ShardWorkEntry {
                         shard_id: 42,
                         serve_credit_bit: false,
-                        scarcity_milli: 0,
+                        scarcity_micro: 0,
                     },
                 ],
             },
@@ -70,7 +92,7 @@ fn fixture_vin() -> ArchivalRewardEmissionVin {
                 shard_entries: vec![ShardWorkEntry {
                     shard_id: 7,
                     serve_credit_bit: true,
-                    scarcity_milli: 1_000,
+                    scarcity_micro: 1_000,
                 }],
             },
             WorkEpochClaim {

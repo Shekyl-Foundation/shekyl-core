@@ -37,12 +37,11 @@
 //! forgotten regen cannot silently pass.
 
 use serde::{Deserialize, Serialize};
-use shekyl_economics::burn::compute_burn_split;
 use shekyl_economics::params::{EconomicParams, SCALE};
 use shekyl_economics::{
     base_block_reward, base_emission_at, calc_burn_pct_from_activity,
-    calc_effective_emission_share, calc_release_multiplier, params_digest,
-    release::apply_release_multiplier, split_block_emission,
+    calc_effective_emission_share, calc_release_multiplier, compute_burn_split_at, params_digest,
+    release::apply_release_multiplier, split_block_emission, FrozenSegmentCount,
 };
 
 use crate::engine::SimParams;
@@ -159,6 +158,9 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         emission_speed_factor_per_minute: sim.emission_speed_factor_per_minute,
         final_subsidy_per_minute: sim.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
+        // Escalation numerics come from the shipped config: the sim must never
+        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
+        ..EconomicParams::default()
     };
 
     let blocks_per_year = sim.blocks_per_year;
@@ -217,20 +219,17 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             0
         };
 
-        // Engine-equivalent burn: the `from_activity` path forms
-        // `stake_ratio` via the single shared helper (Bug-2 class), so
-        // the recorded `burn_pct_bp` is reproducible by
-        // `LocalEconomics::burn_amount`'s composition.
-        let burn_pct = calc_burn_pct_from_activity(
-            tx_volume,
-            sim.tx_volume_baseline,
-            circulating,
-            total_staked,
-            &params,
-        );
+        // Engine-equivalent burn over the `from_activity` path, so the
+        // recorded `burn_pct_bp` is reproducible by
+        // `LocalEconomics::burn_amount`'s composition (Bug-2 class). Burn no
+        // longer consumes stake (F-D); `total_staked` is recorded below as a
+        // scenario observable only.
+        let burn_pct =
+            calc_burn_pct_from_activity(tx_volume, sim.tx_volume_baseline, circulating, &params);
         let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
             .min(u128::from(u64::MAX)) as u64;
-        let fee_split = compute_burn_split(total_fees, burn_pct, sim.staker_pool_share);
+        let fee_split =
+            compute_burn_split_at(total_fees, burn_pct, FrozenSegmentCount::ZERO, &params);
 
         if samples.contains(&block) {
             // Pool-weighted total: at V3.0 the sim has no separate

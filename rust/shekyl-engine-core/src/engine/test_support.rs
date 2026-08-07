@@ -71,8 +71,11 @@ use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use sha2::Sha256;
 
+use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
 use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
+use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
@@ -136,6 +139,92 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
     hkdf.expand(role, &mut output)
         .expect("32-byte OKM is well within HKDF-SHA256's 255 * HashLen limit");
     output
+}
+
+/// Serialize a whole transaction to its wire bytes — the shared helper the
+/// wire-shape byte-diff tests compare over.
+pub(crate) fn whole_tx_wire_bytes(tx: &shekyl_wire::Transaction) -> Vec<u8> {
+    let mut buf = Vec::new();
+    tx.write(&mut buf).expect("serialize whole tx");
+    buf
+}
+
+/// Zero every value-bearing / randomized / independently-priced leaf while
+/// preserving all counts, lengths, and structural tags, so two txs compare
+/// equal iff their wire SKELETON — the shape an observer classifies on — is
+/// identical. A genuine structural divergence (an extra output, a different
+/// proof arity, a surviving Monero-era field) survives as a length/count delta
+/// and still fails the diff; only the hidden/committed/priced interior is
+/// flattened.
+///
+/// The single source of truth for the FCMP wire-leaf enumeration — shared by
+/// the `stake_engine` drain-vs-drain diff (partial vs drain-all) and the
+/// `regtest_e2e` transfer-vs-drain diff (T-DS-6 ∧ T-DS-7). The **public `fee`
+/// varint** is flattened too: a real transfer is weight-priced and a real drain
+/// is caller-priced, so the fee is an expected difference the transfer-vs-drain
+/// skeleton comparison must absorb (both go to `0`, a 1-byte varint, so the
+/// length stays equal); the drain-vs-drain diff shares one fee, so zeroing it
+/// there is a no-op on an already-equal field. One enumeration means a future
+/// wire-format change updates exactly one place, never a lockstep pair.
+pub(crate) fn normalize_fcmp_wire_shape(tx: &mut shekyl_wire::Transaction) {
+    use shekyl_wire::{Ct, Input};
+    for input in &mut tx.prefix.inputs {
+        if let Input::ToKey { key_image, .. } = input {
+            *key_image = [0u8; 32];
+        }
+    }
+    for out in &mut tx.prefix.outputs {
+        out.key = [0u8; 32];
+        out.view_tag = 0;
+    }
+    // tx_extra: tx pubkey(s) + KEM blobs + pqc leaf hashes — random / value
+    // interior at a fixed length for a given output arity. Zeroing the content
+    // in place keeps the length, so a field that appears in one regime but not
+    // the other still diverges.
+    for b in &mut tx.prefix.extra {
+        *b = 0;
+    }
+    if let Ct::Fcmp {
+        fee,
+        reference_block,
+        base,
+        pqc_auths,
+        prunable,
+        ..
+    } = &mut tx.ct
+    {
+        *fee = 0;
+        *reference_block = [0u8; 32];
+        for c in &mut base.commitments {
+            *c = [0u8; 32];
+        }
+        for e in &mut base.enc_amounts {
+            *e = [0u8; 9];
+        }
+        for e in &mut base.enc_labels {
+            *e = [0u8; 9];
+        }
+        for auth in pqc_auths.iter_mut() {
+            auth.hybrid_public_key.iter_mut().for_each(|b| *b = 0);
+            auth.hybrid_signature.iter_mut().for_each(|b| *b = 0);
+        }
+        if let Some(p) = prunable {
+            for bp in &mut p.bulletproofs {
+                bp.a = [0u8; 32];
+                bp.a1 = [0u8; 32];
+                bp.b = [0u8; 32];
+                bp.r1 = [0u8; 32];
+                bp.s1 = [0u8; 32];
+                bp.d1 = [0u8; 32];
+                bp.l.iter_mut().for_each(|x| *x = [0u8; 32]);
+                bp.r.iter_mut().for_each(|x| *x = [0u8; 32]);
+            }
+            p.fcmp_proof.iter_mut().for_each(|b| *b = 0);
+            for po in &mut p.pseudo_outs {
+                *po = [0u8; 32];
+            }
+        }
+    }
 }
 
 /// In-memory implementor of [`shekyl_rpc_client::Rpc`] **and** the
@@ -571,15 +660,16 @@ impl Rpc for TestDaemon {
 impl DaemonEngine for TestDaemon {
     type Error = RpcError;
 
-    /// Serve the in-memory chain directly, overriding the
-    /// [`block_fetch`](super::block_fetch) default (which would drive the
-    /// real RPC transport `TestDaemon::post` panics on). The body is the
-    /// former `Rpc::fetch_scannable_block` override, now returning the
-    /// `shekyl_wire`-typed [`ScannableBlock`]; the migration moved block
-    /// fetching from the `Rpc` surface to `DaemonEngine::fetch_scannable_block`.
-    fn fetch_scannable_block(
+    /// Serve the in-memory chain directly, overriding the single fetch
+    /// override point (the [`block_fetch`](super::block_fetch) default
+    /// would drive the real RPC transport `TestDaemon::post` panics on).
+    /// The synthetic chain stores full bodies (nothing is ever pruned), so
+    /// the body `form` is irrelevant here — the same lookup serves both,
+    /// and the scripted error/reorg queues fire identically on either.
+    fn fetch_scannable_block_in_form(
         &self,
         number: usize,
+        _form: super::block_fetch::TxBodyForm,
     ) -> impl Send + std::future::Future<Output = Result<ScannableBlock, RpcError>> {
         let state = self.state.clone();
         async move {
@@ -718,6 +808,9 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
         // field, so it must be the sentinel (not `[0u8; 32]`) for the verify to
         // pass on the synthetic-block test paths.
         curve_tree_root: shekyl_fcmp::tree::selene_hash_init(),
+        // Same lesson as curve_tree_root: the valid empty is the empty-set
+        // root (ARCHIVAL_CREDIT_WIRE.md §3), never `[0u8; 32]` (null_hash).
+        attestation_root: shekyl_archival_retention::empty_attestation_root(),
     };
 
     // A coinbase carrying no outputs: the sole `Gen` input and a `Null` ct whose
@@ -745,6 +838,42 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
         },
         transactions: vec![],
         first_output_index: None,
+    }
+}
+
+/// Canonical [`PFundingOutputRecord`] test fixture — the single owner of the
+/// full field list, so a field added to the record is applied here once
+/// rather than hand-mirrored across every module's local builder.
+/// `spendable_height` is derived through the same shared X5 maturity math the
+/// production paths use (`transfer::eligible_height`, plain no-timelock
+/// maturity); tests exercising the immature-exclusion case override the field
+/// on the returned record.
+pub(crate) fn funding_record(
+    p_slot: u32,
+    gindex: u64,
+    height: u64,
+    amount: u64,
+    lineage: MintLineageOutput,
+) -> PFundingOutputRecord {
+    PFundingOutputRecord {
+        p_slot: shekyl_types::PSlot::from_raw(p_slot),
+        tx_hash: shekyl_types::TxHash::from_bytes(
+            [u8::try_from(gindex & 0xFF).expect("masked to a byte"); 32],
+        ),
+        index_in_transaction: 0,
+        gindex: shekyl_types::GlobalOutputIndex::from_raw(gindex),
+        output_key: [1u8; 32],
+        commitment: [2u8; 32],
+        ciphertext_x25519: [3u8; 32],
+        ciphertext_ml_kem: vec![4u8; 8],
+        amount: AtomicUnits::from_raw(amount),
+        height: BlockHeight::from_raw(height),
+        epoch: SettlementEpoch::from_raw(0),
+        lineage,
+        spendable_height: shekyl_engine_state::transfer::eligible_height(
+            BlockHeight::from_raw(height),
+            shekyl_types::Timelock::None,
+        ),
     }
 }
 

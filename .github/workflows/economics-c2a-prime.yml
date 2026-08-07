@@ -24,6 +24,14 @@ on:
       - "src/cryptonote_basic/**"
       - "src/cryptonote_core/blockchain.cpp"
       - "src/cryptonote_core/blockchain.h"
+      # Conservation-KAT guarded surface: the accrual/burn row write +
+      # pop-removal (blockchain_db), compute_emission_split /
+      # compute_fee_burn (src/shekyl), and the HF_VERSION_* activation
+      # constants (cryptonote_config.h). A regression in any of these must
+      # trigger the gate that exists to catch it.
+      - "src/blockchain_db/**"
+      - "src/shekyl/**"
+      - "src/cryptonote_config.h"
       - "rust/shekyl-economics/**"
       - "rust/shekyl-economics-sim/**"
       - "rust/shekyl-ffi/**"
@@ -39,6 +47,11 @@ on:
       - "src/cryptonote_basic/**"
       - "src/cryptonote_core/blockchain.cpp"
       - "src/cryptonote_core/blockchain.h"
+      # Keep in lockstep with the pull_request paths above (conservation-KAT
+      # guarded surface).
+      - "src/blockchain_db/**"
+      - "src/shekyl/**"
+      - "src/cryptonote_config.h"
       - "rust/shekyl-economics/**"
       - "rust/shekyl-economics-sim/**"
       - "rust/shekyl-ffi/**"
@@ -64,7 +77,7 @@ env:
     && cmake --build build --target unit_tests core_tests
   APT_INSTALL_LINUX: >-
     apt -y install build-essential cmake libboost-all-dev miniupnpc
-    libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev
+    graphviz doxygen libunwind8-dev pkg-config libssl-dev
     libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev
     protobuf-compiler ccache git curl ripgrep python3
   CCACHE_SETTINGS: |
@@ -196,6 +209,11 @@ jobs:
             subcommand: layer3
             needs_rust: false
             needs_disks: true
+          - layer: conservation
+            label: archival budget conservation KAT
+            subcommand: conservation
+            needs_rust: false
+            needs_disks: true
     container:
       image: ubuntu:22.04
       env:
@@ -218,7 +236,7 @@ jobs:
           # the layer jobs install a minimal runtime set and must add it here.
           apt -y install git ripgrep python3 libboost-system1.74.0 libboost-filesystem1.74.0 \
             libboost-thread1.74.0 libboost-chrono1.74.0 libboost-regex1.74.0 \
-            libssl3 libsodium23 libunbound8 libprotobuf23
+            libssl3 libsodium23 libprotobuf23
       - name: install build toolchain for Rust tests
         # curl + ca-certificates: required by the install-Rust step
         # below. They were NEVER installed in this job — the old

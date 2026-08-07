@@ -1,5 +1,23 @@
 # V3 Design Notes — Staker Archival as Useful Work
 
+> **Ship-timing correction (2026-07-19).** This document's body still carries the
+> earlier scoping in which archival shipped in a **V3.x dot-release** with V3.0
+> "without this mechanism active." That framing is **superseded**: archival
+> pay-for-service is the **genesis (V3.0) staking model**. The confidential
+> claim/tier staking it would have replaced was retired pre-genesis
+> ([`design/LEGACY_CLAIM_ERA_RETIREMENT.md`](design/LEGACY_CLAIM_ERA_RETIREMENT.md)),
+> the reward leg is specified "for genesis"
+> ([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)), and the
+> archival bond/claim stack is built and exercised as genesis-live (the
+> emission-claim regtest e2e drove a real accepted-and-applied claim on
+> 2026-07-19, PR #345). *(This clause originally cited the `K_COVER`
+> genesis-seal stack as the evidence; that gate was retired 2026-07-19,
+> PR #346. The correction it supports is unaffected — the evidence is
+> now the live claim path itself, which is stronger.)* Read internal
+> "V3.x dot-release" / "V3.0 ships without this mechanism active" statements below
+> as historical. The *design* is unchanged by this correction — only the ship
+> version. Calibration/simulation gates still apply per `STAKER_ARCHIVAL_SIM.md`.
+
 **Status:** V3 ship feature. Originally drafted as V4-scoped; rescoped to
 V3 by the 2026-04-27 actor-architecture decision-log entry, which
 established `ArchivalEngine` as a Stage 5 actor (sibling to
@@ -187,21 +205,38 @@ pass/fail — no economic extraction path.
 #### Foundation complete-tree seeds (first subsection — the guarantee's base)
 
 Foundation **seed nodes are seeds of the tree, not just of discovery:**
+> **Correction (2026-08-03).** This subsection previously said the Foundation
+> seeds sit at "known locations (Tor-client fetch to **public addresses** — **not**
+> six-hop hidden-service rendezvous for the fetch leg)", and repeated the claim
+> twice more (the seeding bullet below, and the seeding-transport note in the
+> retrieval-latency section). **Both halves were wrong**, and the sentence
+> actively misled: it reads as though the Foundation has a clearnet fetch path
+> that ordinary `P`s do not.
+>
+> **The ruling: all shard retrieval occurs across Tor, period.** "Known" describes
+> the **address**, not the transport — a *published, known `.onion` v3 address* —
+> and the fetch is an **ordinary v3 rendezvous**, the same path every `P` serves
+> over. There is **no separate Foundation retrieval mechanism** and no clearnet
+> leg. (Non-anonymous serving is not merely unused: `ADD_ONION`'s `NonAnonymous`
+> flag is absent from `shekyl_tor::control::onion::OnionFlags`, so it is
+> unrepresentable.)
+
 each holds **complete sets B + C** (deep archival substrate and canonical
-block history; §*Archival data scope*) from genesis, at **known**
-locations (Tor-client fetch to public addresses — not six-hop hidden-
-service rendezvous for the fetch leg). They provide:
+block history; §*Archival data scope*) from genesis, at **known `.onion` v3
+addresses** — retrieved over an **ordinary v3 rendezvous**, exactly as any other
+`P` is. They provide:
 
 - **Durability floor** — observable, placement-controlled correlated-loss
-  tail (you choose providers/jurisdictions; location-hiding does not
-  apply here).
+  tail (you choose providers/jurisdictions — a **placement** property; the
+  *durability* argument does not lean on location-hiding, which is a separate
+  statement from the transport, and the transport is still a rendezvous).
 - **Bootstrap source** — real complete tree before any market archiver
   seats (L12 cold-start closes against a source, not a synthetic decay
   alone).
-- **Fast seeding source** — new archivers backfill from public complete
-  copies; onion rendezvous remains for **serving anonymous queriers**, not
-  for fetching from a public foundation source (soundness pass step 2
-  scope shrinks accordingly).
+- **Fast seeding source** — new archivers backfill from the Foundation's
+  complete copies **over the same v3 rendezvous** every other read uses. What is
+  "public" about the source is its **published address**, not its transport;
+  backfill is not a privileged or clearnet path.
 - **Fee-era backstop** — always present when the market thins (replaces
   L12 **decaying** floor — see gate-list item 5 amendment below).
 
@@ -436,9 +471,10 @@ code paths today.
 
 Archivers seeding or backfilling deep shards should meet a **bounded
 seeding latency** internal target (L10 timing channel). User historical
-queries do not inherit that bound. Transport for seeding may differ from
-user query transport (soundness pass step 2 — largely reduced if fetch
-is from public foundation complete copies).
+queries do not inherit that bound. **Transport for seeding does not differ from
+user query transport** — both are the v3 rendezvous (2026-08-03 correction; the
+earlier "may differ … if fetch is from public foundation complete copies" wording
+contradicted the one-mechanism ruling).
 
 ---
 
@@ -825,7 +861,11 @@ principal) are **ordinary FCMP++ main-tree transfers** — firewall = base priva
   archiver **before** earning — peers present/observe backing off-chain; otherwise
   spam or ignored challenges. The **first on-chain reward emission** anchors bond
   state (holdings + claimed-epoch bitmap) — there is **no** separate registration
-  transaction; fusion removes the tx, not the event.
+  transaction; fusion removes the tx, not the event. *(Superseded, noted 2026-07-19:
+  gate 4 refined fusion to "no separate registration transaction **type** in the
+  retired stake sense" — join-Market **is** the registration event and rides its own
+  dedicated `txin_archival_bond_post` vin;
+  [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md) §2.3/§3.1.)*
 - **Reward emission crypto:** FCMP++ **membership-only control** at settlement-epoch
   cadence (prove backing, **no** key image in spent set). **No published
   reward-dedup tag** — `N_arch = x·G_arch` is **rejected** (stake-keyed tags
@@ -938,9 +978,13 @@ as everywhere else in the privacy design. Three layers must hold:
   the right post-V3 strengthening.
 - **Timing.** Stake-in (principal → `P`) and first emission pair if immediate.
   Decouple with a randomized delay/window so the pairing is ambiguous.
-- **Output.** Rewards land in **stealth outputs `P` controls**; **decorrelated
-  drains** on unstake-out (no lump sweep when a public `P` goes quiet). No
-  linkable consolidation back to principal.
+- **Output.** Rewards land in **stealth outputs `P` controls**. No linkable
+  consolidation back to principal — and per the 2026-07-16 re-walk (F-W10,
+  `ARCHIVAL_FIREWALL_GATE6.md` §12.9) this holds **by construction** under FCMP++:
+  the drain is not an identifiable transaction (no spend graph, spend set
+  unenumerable), so the earlier "decorrelated drains, no lump sweep" wallet
+  discipline is retired as a ring-signature-era carry with no substrate here. The
+  consensus delay floor (`RELEASE_COOLDOWN_EPOCHS`) stands.
 - **Bond funding.** Bond is `P`'s central collateral; lump principal→`P` bond
   funding is a correlation channel — weigh fund-from-earnings ramp vs lump initial
   bond in wallet hygiene.

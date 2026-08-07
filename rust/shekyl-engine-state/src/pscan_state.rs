@@ -34,23 +34,86 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot, SettlementEpoch, TxHash};
 use shekyl_units::AtomicUnits;
 
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. **v4** adds the durable
-/// `funding_outputs` (WI-2 D-A1, `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.1 — the
-/// per-output funding-discovery records bond assembly selects from); **v3** added
-/// the durable `bond_post_matches` (SP-6 reconcile evidence); **v2** tracked the
-/// nested [`PScanCursor`] gaining its verified-frontier `frontier_hash`. Any field
-/// addition / removal / renaming bumps this; loads that see a different version
-/// **refuse rather than migrate** (the `StakingBlock` precedent). No migration at any
-/// step: pre-genesis, a version mismatch means re-scan (rule 15). Distinct from the
-/// inner [`PScanCursor`]'s own version (nested, like the wallet ledger over its
-/// sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 4;
+/// Schema version of the durable P-scan state. **v6** domain-newtypes the
+/// residual raw fields on [`PFundingOutputRecord`] (`p_slot` → [`PSlot`],
+/// `tx_hash` → [`TxHash`], `gindex` → [`GlobalOutputIndex`] — FOLLOWUPS
+/// WI-2 orchestrator carrier; postcard-transparent, fail-closed on mismatch);
+/// **v5** adds the
+/// [`MintLineageOutput`] `lineage` field and the `spendable_height` field on
+/// [`PFundingOutputRecord`] (GF-4b backing-lineage ladder + sweep
+/// spendability filter, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3/§3.6 — one
+/// bump covers both); **v4** added
+/// the durable `funding_outputs` (WI-2 D-A1, `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.1
+/// — the per-output funding-discovery records bond assembly selects from); **v3**
+/// added the durable `bond_post_matches` (SP-6 reconcile evidence); **v2** tracked
+/// the nested [`PScanCursor`] gaining its verified-frontier `frontier_hash`. Any
+/// field addition / removal / renaming bumps this; loads that see a different
+/// version **refuse rather than migrate** (the `StakingBlock` precedent). No
+/// migration at any step: pre-genesis, a version mismatch means re-scan (rule 15).
+/// Distinct from the inner [`PScanCursor`]'s own version (nested, like the wallet
+/// ledger over its sub-blocks).
+pub const PSCAN_STATE_VERSION: u32 = 7;
+
+/// The GF-4b mint-lineage ladder for a `P`-owned funding output — the
+/// scan-provenance classification (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
+/// ladder: `ARCHIVAL_FIREWALL_GATE6.md` §2.4 GF-4b), most→least safe as an
+/// emission backing output. The emission vin reveals the backing output's
+/// `pqc_pk` in cleartext, deterministically identifying that one output and
+/// its creating tx; the ladder classifies what that identification newly
+/// reveals.
+///
+/// **Classification is structural and fails toward the forbidden rung:**
+/// anything not structurally proven rung 1/2 at the scan seam classifies
+/// [`ExternalTransfer`](Self::ExternalTransfer). A misclassification in that
+/// direction can only *exclude* a safe output from backing eligibility, never
+/// admit an unsafe one.
+///
+/// **There is no miner/coinbase rung.** `P` is a shard-serving persona only;
+/// mining is conducted under the principal (adding capability to `P` adds
+/// identification surface — owner ruling, `ARCHIVAL_GF4B_BACKING_LINEAGE.md`
+/// §3.3). A coinbase output recovered by `P`'s scanner is an anomaly (wallet
+/// bug or adversarial tag — `P`'s hybrid pubkey is on-chain in the bond
+/// post), and it classifies [`ExternalTransfer`](Self::ExternalTransfer)
+/// structurally: a coinbase tx carries only `Input::Gen`, never a `BondPost`
+/// input.
+///
+/// Consensus is lineage-blind (`REWARD_EMISSION_VIN_PLAN.md` §8.0.3 —
+/// unenforceable by construction), so this wallet-side type is the **only**
+/// enforcement layer; the `BackingSet` pre-join type consumes it.
+///
+/// Plain derived `Debug`: a rung tag alone is not a row of `P`'s funding
+/// history — the records carrying it stay redacted wholesale.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+pub enum MintLineageOutput {
+    /// Rung 1 — recovered from a transaction carrying `P`'s own
+    /// `txin_archival_reward_emission`. Constructed by C-1's emission-vin
+    /// scan arm (`shekyl-engine-core`'s `run_dual_extractor` rung-1
+    /// pre-pass), which is bound to the fail-toward-forbidden rule as its
+    /// acceptance criterion (GF4b-4, `ARCHIVAL_GF4B_BACKING_LINEAGE.md`
+    /// §5 residue item 2): only a structurally-proven own emission vin —
+    /// blob parsed exactly by the archival-retention reader, derived
+    /// `p_canonical_id` ours, carrying-tx hash present — lifts an output
+    /// here; every non-own case stays
+    /// [`ExternalTransfer`](Self::ExternalTransfer).
+    EmissionReward,
+    /// Rung 2 — recovered from a transaction carrying a `BondPost` input whose
+    /// `p_canonical_id` is the recovered output's **own** persona: bond-post
+    /// change. The creating tx is already `P`-public and its backward lineage
+    /// is FCMP++-hidden — the bond post is itself one churn hop.
+    BondPostChange,
+    /// Rung 3 — everything else: raw pre-bond-post principal funding, the
+    /// **forbidden** backing rung (its reveal newly identifies the funding tx
+    /// and its timing — funding-height → off-chain-principal correlation).
+    /// The GF-4b sweep makes this rung structurally empty post-bond; the
+    /// `BackingSet` constructor makes it unrepresentable as backing.
+    ExternalTransfer,
+}
 
 /// A persisted archival bond-post match (SP-6 reconcile evidence): an on-chain
 /// bond-post whose `p_canonical_id` is one of `P`'s personas. The **durable, sealed
@@ -105,15 +168,15 @@ impl std::fmt::Debug for BondPostRecord {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct PFundingOutputRecord {
     /// The owning persona's slot ordinal (selects the re-derivation keys).
-    pub p_slot: u32,
+    pub p_slot: PSlot,
     /// Hash of the transaction carrying the output.
-    pub tx_hash: [u8; 32],
+    pub tx_hash: TxHash,
     /// The output's index within its transaction — the KEM derivation index
     /// the spend-bundle re-derivation consumes.
     pub index_in_transaction: u64,
     /// The global (chain-wide) output index — the curve-tree leaf position
     /// (`AssembleInput::gindex`).
-    pub gindex: u64,
+    pub gindex: GlobalOutputIndex,
     /// The on-chain output key `O` (compressed Edwards bytes).
     pub output_key: [u8; 32],
     /// The on-chain amount commitment point `C` (compressed Edwards bytes) —
@@ -130,6 +193,20 @@ pub struct PFundingOutputRecord {
     pub height: BlockHeight,
     /// The settlement epoch `height` falls in.
     pub epoch: SettlementEpoch,
+    /// GF-4b mint-lineage rung, classified at the scan seam
+    /// (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3). Persisted so the C-1
+    /// backing-eligibility gate (`BackingSet`) survives restart.
+    pub lineage: MintLineageOutput,
+    /// The height at which this output's leaf is present in the curve tree
+    /// and the output becomes spendable — **literally** the shared
+    /// [`crate::transfer::eligible_height`] result, stored at the scan seam
+    /// (GF4b-6, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.6). The GF-4b sweep
+    /// excludes records above its reference height: consuming an unspendable
+    /// output would deny bonding until maturity (the leaf is absent from the
+    /// tree, so no membership path exists), whether it arrived by ordinary
+    /// fresh funding (+`SPENDABLE_AGE`) or an adversarial coinbase-to-`P`
+    /// (+60 via the consensus-enforced `unlock_time` shape).
+    pub spendable_height: BlockHeight,
 }
 
 impl std::fmt::Debug for PFundingOutputRecord {
@@ -150,6 +227,43 @@ impl std::fmt::Debug for PFundingOutputRecord {
 /// log path, and the persisted state is the form most likely to hit one (a deserialize
 /// error). The other fields render normally — `bond_post_matches` is the high-bar field
 /// (see the field doc + the redacting `BondPostRecord::Debug`).
+/// One retired persona — a row of the **authoritative done-side slot ledger**
+/// (SP-R0 arm #2; `ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §"Records-driven
+/// retirement"). Written exactly once, by the token-corroborated retire-time
+/// prune, in the same atomic seal that drops the persona's
+/// `funding_outputs` / `bond_post_matches` / `pending_unbonds` rows.
+///
+/// The ledger is *authoritative for retirement and monotonicity, advisory
+/// for live bonds* (the one-sentence invariant): the open path subtracts
+/// retired slots from the derive-forward set ("stop deriving slot N" — the
+/// fix the forever-derive problem was waiting for) and drops them from the
+/// live `bonded_slots` hint; nothing ever treats it as authority about live
+/// chain state.
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+pub struct RetiredPersonaRecord {
+    /// The retired persona's slot ordinal — what the derive-forward
+    /// subtraction keys on ("stop deriving slot N").
+    pub p_slot: PSlot,
+    /// The retired persona's public canonical id (matches the
+    /// `pending_unbonds` / `bond_post_matches` keying).
+    pub p_canonical_id: PCanonicalId,
+    /// The settlement epoch the `Unbond` was confirmed in (carried from the
+    /// `pending_unbonds` entry this record replaces).
+    pub unbond_epoch: SettlementEpoch,
+    /// The settlement epoch the retire-time prune ran in (the settled epoch
+    /// at prune time — after the claim-window lapse, by construction).
+    pub retired_epoch: SettlementEpoch,
+}
+
+impl std::fmt::Debug for RetiredPersonaRecord {
+    /// Redacted: a retired row is still a row of `P`'s persona history
+    /// (slot × id × epochs) — same no-clear-`Debug` discipline as
+    /// [`BondPostRecord`].
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RetiredPersonaRecord(<redacted persona-history>)")
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct PScanState {
     /// Per-state schema version — [`PSCAN_STATE_VERSION`] on construction,
@@ -166,14 +280,17 @@ pub struct PScanState {
     /// epoch its `Unbond` was confirmed in (2d-1 DQ8).
     ///
     /// The **sole durable record** that a persona is unbonded: the `Unbond` block
-    /// is behind the cursor and never re-scanned, and the StakeEngine union wipe is
-    /// not durable until SP-6 (the persona re-derives on restart with no notion of
-    /// "unbonded"). So this entry is what **re-triggers** the retire on each
-    /// restart — it is kept until SP-6 durably removes the persona, **not** dropped
-    /// when the retire fires (dropping it would let the re-derived persona regrow
-    /// the union permanently). Public content (the id is a public on-chain
-    /// pseudonym handle), bounded by `P`'s own unbonded-persona count (not
-    /// adversary-controllable).
+    /// is behind the cursor and never re-scanned. This entry **re-triggers** the
+    /// retire on each restart, surviving until SP-R0 **arm #2**'s
+    /// token-corroborated retire-time prune removes it — in the same atomic seal
+    /// that writes the [`RetiredPersonaRecord`] and drops the persona's
+    /// `bond_post_matches` rows (the removal the pre-arm-#2 design said it was
+    /// "kept until"). The slot's `funding_outputs` are **not** dropped here: the
+    /// retire is **funded-gated** — deferred until the slot is drained — so a
+    /// retiring slot holds no funding rows to remove. An uncorroborated retire
+    /// (the DQ-D tip clamp declines) leaves this entry in place to re-fire. Public
+    /// content (the id is a public on-chain pseudonym handle), bounded by `P`'s
+    /// own unbonded-persona count (not adversary-controllable).
     pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
     /// Matched archival bond-posts (`p_canonical_id` ∈ `P`'s personas) accumulated
     /// across the scan — the **reconcile evidence** SP-6 binds to the verified
@@ -184,13 +301,25 @@ pub struct PScanState {
     /// `P`'s own posting.
     bond_post_matches: Vec<BondPostRecord>,
     /// Per-output funding-discovery records (WI-2 D-A1) — the `P`-local output
-    /// set bond assembly selects funding from (the "steady-state funding-output
-    /// discovery" reader of `ARCHIVAL_BOND_PR2_CHAIN.md` §3.6 reader (a)).
-    /// Ordered by scan (height, then gindex); everything behind the same
-    /// finality horizon as `accruals` (an entry exists iff its epoch delta was
-    /// ingested), and per-epoch sums of these records equal the `accruals`
-    /// entries by construction. Bounded by `P`'s own funding inflow.
+    /// set bond assembly and the drain planner select funding from (the
+    /// "steady-state funding-output discovery" reader of
+    /// `ARCHIVAL_BOND_PR2_CHAIN.md` §3.6 reader (a)). Ordered by scan (height,
+    /// then gindex); discovered behind the same finality horizon as `accruals`.
+    ///
+    /// **Tracks *unspent* funding, not the full inflow.** SP-R0 **arm #1** removes
+    /// a record when its output's spend is observed (the key-image watch prune),
+    /// so once anything is spent the per-epoch sums here are `≤` the cumulative
+    /// `accruals` inflow, not equal. SP-R0 **arm #2** (retire) does **not** prune
+    /// here — the retire is **funded-gated**, deferred until the slot's funding is
+    /// drained, so a retiring slot contributes no rows to remove. Draining is
+    /// amount-targeted coin selection (`plan_drain` / `select_for_drain`), not a
+    /// lump sweep, so the drain's own spends prune these records through arm #1
+    /// like any other spend. Bounded by `P`'s own funding inflow.
     funding_outputs: Vec<PFundingOutputRecord>,
+    /// The done-side slot ledger (SP-R0 arm #2): personas durably retired by
+    /// the token-corroborated retire-time prune. Append-only; bounded by
+    /// `P`'s own retired-persona count. See [`RetiredPersonaRecord`].
+    retired_records: Vec<RetiredPersonaRecord>,
 }
 
 impl std::fmt::Debug for PScanState {
@@ -206,6 +335,7 @@ impl std::fmt::Debug for PScanState {
             .field("pending_unbonds", &self.pending_unbonds)
             .field("bond_post_matches", &"<redacted persona-history>")
             .field("funding_outputs", &"<redacted funding-history>")
+            .field("retired_records", &"<redacted persona-history>")
             .finish()
     }
 }
@@ -221,6 +351,7 @@ impl PScanState {
             pending_unbonds: BTreeMap::new(),
             bond_post_matches: Vec::new(),
             funding_outputs: Vec::new(),
+            retired_records: Vec::new(),
         }
     }
 
@@ -234,12 +365,14 @@ impl PScanState {
     /// scan is exhaustive over that verified range), and `funding_outputs` holds
     /// every recovered funding output over the same range (per-epoch sums equal the
     /// `accruals` entries).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cursor: PScanCursor,
         accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
         pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
         bond_post_matches: Vec<BondPostRecord>,
         funding_outputs: Vec<PFundingOutputRecord>,
+        retired_records: Vec<RetiredPersonaRecord>,
     ) -> Self {
         Self {
             version: PSCAN_STATE_VERSION,
@@ -248,6 +381,7 @@ impl PScanState {
             pending_unbonds,
             bond_post_matches,
             funding_outputs,
+            retired_records,
         }
     }
 
@@ -282,6 +416,12 @@ impl PScanState {
     /// `[0, synced_height)` (the exhaustively-scanned verified range).
     pub fn bond_post_matches(&self) -> &[BondPostRecord] {
         &self.bond_post_matches
+    }
+
+    /// The done-side slot ledger (SP-R0 arm #2) — retired personas, in
+    /// retire order.
+    pub fn retired_records(&self) -> &[RetiredPersonaRecord] {
+        &self.retired_records
     }
 
     /// The per-output funding-discovery records (WI-2 D-A1) — the `P`-local
@@ -371,10 +511,10 @@ mod tests {
 
     fn funding_output(slot: u32, gindex: u64, amount: u64, height: u64) -> PFundingOutputRecord {
         PFundingOutputRecord {
-            p_slot: slot,
-            tx_hash: [0xA1; 32],
+            p_slot: PSlot::from_raw(slot),
+            tx_hash: TxHash::from_bytes([0xA1; 32]),
             index_in_transaction: 1,
-            gindex,
+            gindex: GlobalOutputIndex::from_raw(gindex),
             output_key: [0xB2; 32],
             commitment: [0xC3; 32],
             ciphertext_x25519: [0xD4; 32],
@@ -382,6 +522,11 @@ mod tests {
             amount: AtomicUnits::from_raw(amount),
             height: BlockHeight::from_raw(height),
             epoch: SettlementEpoch::from_raw(2),
+            lineage: MintLineageOutput::ExternalTransfer,
+            spendable_height: crate::transfer::eligible_height(
+                BlockHeight::from_raw(height),
+                shekyl_types::Timelock::None,
+            ),
         }
     }
 
@@ -393,6 +538,7 @@ mod tests {
             pending(&[(0xAB, 7)]),
             bond_posts(&[(12_345, 0xAB, 0), (39_000, 0xCD, 2)]),
             vec![funding_output(3, 77, 100, 12_400)],
+            Vec::new(),
         );
         let bytes = state.to_postcard_bytes().expect("serialize");
         let back = PScanState::from_postcard_bytes(&bytes).expect("deserialize");
@@ -449,6 +595,7 @@ mod tests {
                 funding_output(3, 77, 100, 12_400),
                 funding_output(3, 78, 200, 12_401),
             ],
+            Vec::new(),
         );
         let rendered = format!("{state:?}");
         assert!(
@@ -482,6 +629,7 @@ mod tests {
             pending(&[]),
             bond_posts(&[(123_456, 0xAB, 2), (789_012, 0xCD, 0)]),
             vec![],
+            Vec::new(),
         );
         let rendered = format!("{state:?}");
         assert!(
@@ -512,6 +660,7 @@ mod tests {
             pending(&[]),
             bond_posts(&[]),
             vec![],
+            Vec::new(),
         );
         assert_eq!(
             state.accrual_for(SettlementEpoch::from_raw(4)),
@@ -531,6 +680,7 @@ mod tests {
             pending(&[]),
             bond_posts(&[]),
             vec![],
+            Vec::new(),
         );
         assert_eq!(state.total_accrued(), Some(AtomicUnits::from_raw(60)));
     }
@@ -543,6 +693,7 @@ mod tests {
             pending(&[]),
             bond_posts(&[]),
             vec![],
+            Vec::new(),
         );
         assert_eq!(state.total_accrued(), None, "must not wrap a money total");
     }
@@ -552,6 +703,7 @@ mod tests {
         // A wrong-version state, serialized through the real path (the test child
         // module can reach the private fields).
         let wrong = PScanState {
+            retired_records: Vec::new(),
             version: PSCAN_STATE_VERSION + 1,
             cursor: PScanCursor::genesis(),
             accruals: BTreeMap::new(),

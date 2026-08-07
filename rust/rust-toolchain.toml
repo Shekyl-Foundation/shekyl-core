@@ -23,9 +23,11 @@
 # first cargo call auto-installs the default profile (rustfmt + clippy) serially —
 # no race for a single developer.
 #
-# Bump policy: raise `channel` here, `rust-version` in Cargo.toml, AND the
-# `--default-toolchain` / `dtolnay/rust-toolchain@` versions in the CI workflows
-# together, in one deliberate PR; run `cargo fmt --all` in that PR so any rustfmt
+# Bump policy: raise `channel` here, `rust-version` in Cargo.toml, the
+# `--default-toolchain` / `dtolnay/rust-toolchain@` versions in the CI workflows,
+# AND the `--default-toolchain 1.94.0` pins in the gitian descriptors
+# (contrib/gitian/gitian-{linux,osx,win,freebsd,android}.yml) together, in one
+# deliberate PR; run `cargo fmt --all` in that PR so any rustfmt
 # layout change lands as a single reviewed reflow. The `@stable` canary
 # (.github/workflows/rust-stable-canary.yml) gives advance warning of what the next
 # stable would change. No `@beta`/nightly — controlled, audited bumps only.

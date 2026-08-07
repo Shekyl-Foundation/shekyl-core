@@ -1,7 +1,10 @@
 # Daemon RPC: Rust/Axum Migration
 
 Phase 1 of the epee-to-Rust migration replaces the daemon's HTTP transport layer
-with Axum while keeping all handler logic in C++.
+with Axum while keeping all handler logic in C++. **Phase 1 is complete:** the
+epee HTTP listener, `--no-rust-rpc`, and inbound daemon `--rpc-login` /
+`--rpc-ssl*` surface are deleted. Phase 2 replaces epee KV serialization in the
+FFI dispatch path.
 
 ## Architecture
 
@@ -9,25 +12,26 @@ with Axum while keeping all handler logic in C++.
   Client
     │
     ▼
-  Axum (Rust)            ◀─ HTTP transport, CORS, body limits, route dispatch
+  Axum (Rust)            ◀─ HTTP transport, CORS (default-deny), body limits, route dispatch
     │
     ▼
   CoreRpc (Rust)         ◀─ FFI wrapper, spawn_blocking for C++ calls
     │
     ▼ C ABI
-  core_rpc_ffi.cpp       ◀─ Dispatch tables: URI → handler, epee serialization
+  core_rpc_ffi.cpp       ◀─ Dispatch tables: URI → handler, epee serialization (Phase 2 target)
     │
     ▼
-  core_rpc_server (C++)  ◀─ on_* handlers (unchanged)
+  core_rpc_server (C++)  ◀─ on_* handlers (plain class; no epee HTTP base)
     │
     ▼
   cryptonote::core / p2p
 ```
 
-The `core_rpc_server` class retains its `on_*` methods and still inherits from
-`epee::http_server_impl_base` (the legacy server remains available via
-`--no-rust-rpc`). The Axum server runs on a dedicated Tokio runtime started
-from the Rust FFI.
+`core_rpc_server` retains its `on_*` methods but no longer inherits
+`epee::http_server_impl_base`. Axum is the sole HTTP acceptor. Epee KV
+serialization remains inside `core_rpc_ffi.cpp` until Phase 2. Levin P2P
+(`nodetool::node_server` / `epee::levin::`) remains C++ until a separate P2P
+port — it is not part of this Phase 1 transport deletion.
 
 ## Files
 
@@ -35,41 +39,81 @@ from the Rust FFI.
 |------|------|
 | `src/rpc/core_rpc_ffi.h` | C API header for the FFI facade |
 | `src/rpc/core_rpc_ffi.cpp` | Dispatch tables mapping URIs/methods to `on_*` handlers |
-| `rust/shekyl-daemon-rpc/` | Axum crate: server, routes, handlers, types; produces `libshekyl_daemon_rpc.a` |
+| `rust/shekyl-daemon-rpc/` | Axum crate: server, routes, handlers, types |
 | `rust/shekyl-daemon-rpc/src/ffi_exports.rs` | `shekyl_daemon_rpc_start/stop` FFI exports (daemon-only) |
 | `src/shekyl/shekyl_ffi.h` | C++ declarations for Rust FFI functions |
-| `src/daemon/daemon.cpp` | Daemon lifecycle: start/stop Rust RPC alongside epee |
-| `tests/rpc_comparison/compare_rpc.sh` | Validation harness for dual-server diffing |
+| `src/daemon/daemon.cpp` | Daemon lifecycle: always starts Axum on the configured RPC port |
+| `src/rpc/rpc_args.cpp` | Shared CLI; daemon registers bind/CORS only (`include_listener_tls_auth=false`) |
 
 ## Endpoint Coverage
 
-- **31 JSON REST** endpoints (`/get_info`, `/get_transactions`, etc.)
-  - Accept both **GET and POST** (matching epee behavior)
+- **JSON REST** endpoints (`/get_info`, `/get_transactions`, etc.)
+  - Accept both **GET and POST** (matching historical epee behavior)
   - The legacy `/send_raw_transaction` + `/sendrawtransaction` pair was
     deleted (`design/DAEMON_SUBMIT_VERDICT.md` §9.3); transaction submit
     is the native `/submit_transaction` route below, not an FFI proxy
 - **1 native Rust** endpoint: `POST /submit_transaction` — served
   directly by the Rust admission engine (`src/submit/`), never crossing
   the C++ dispatch tables (`design/DAEMON_SUBMIT_VERDICT.md` §2–§3)
-- **9 binary** endpoints (`/get_blocks.bin`, `/get_o_indexes.bin`, etc.)
-  - POST-only; return **400 Bad Request** on parse failure (matching epee)
-- **36 JSON-RPC 2.0** methods (`get_block_count`, `get_block_template`, etc.)
-  - POST-only (per JSON-RPC 2.0 spec)
-- **76 total** FFI dispatcher registrations (62 unique C++ handlers),
-  plus the native Rust submit route (counts as of the 2026-07
-  submit-verdict series; earlier snapshots predate the RPC-payment and
-  legacy-submit deletions)
+- **Binary** endpoints (`/get_blocks.bin`, `/get_o_indexes.bin`, etc.)
+  - POST-only; return **400 Bad Request** on parse failure
+- **JSON-RPC 2.0** methods via `POST /json_rpc` (includes curve-tree and
+  `get_archival_emission_claim_source`)
 
-All URI aliases (e.g. `/getheight` ↔ `/get_height`) are registered.
+All URI aliases (e.g. `/getheight` ↔ `/get_height`) are registered on Axum.
+Registration is FFI-table + Axum only — MAP macros are gone.
+
+### Deleted decoy surface (no Axum route)
+
+`get_output_distribution` / `/get_output_distribution.bin` (and
+`wallet2::get_rct_distribution`) are deleted. FCMP++ does not use ring-decoy
+distribution. **Rule-21 reopen:** iff a live wallet path re-acquires a
+distribution consumer; re-evaluation shape: restore a typed Axum+FFI route
+with a named caller, never “keep epee.”
 
 ## Restricted Mode
 
-In restricted mode (`--restricted-rpc`):
+In restricted mode (`--restricted-rpc` or a separate restricted bind port):
 
-- JSON REST: admin-only routes (`/start_mining`, `/stop_daemon`, etc.) are not
-  registered in the Axum router.
-- JSON-RPC: admin-only methods are rejected with code `-32601` before reaching
-  the C++ handler.
+- JSON REST: admin-only routes are not registered in the Axum router.
+- JSON-RPC: admin-only methods are rejected with code `-32601` before C++.
+
+Note: the restricted-method list exists in both Axum and (historically) epee
+maps — dual-list single-sourcing is a FOLLOWUPS item.
+
+## Auth, TLS, and remote access
+
+| Context | Story |
+|---------|--------|
+| Local | Plaintext loopback (`127.0.0.1`). shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
+| Remote | Onion (address = key; `has_strong_verification` already) or a reverse proxy outside the daemon. |
+| Wallet-RPC | Keeps full `--rpc-login` / `--rpc-ssl*` (separate process). |
+| CLI outbound | `process_ssl` / `net_ssl` remain for `t_command_server` reaching a daemon. |
+
+**Rule-21 reopen for in-daemon clearnet TLS / digest auth:** named production
+need + threat-model review. Disposition is never “implement Axum `--rpc-ssl`”
+as the remote-security story — that remains onion / reverse proxy.
+
+## CORS
+
+Default-deny (`CorsLayer::new()`). When `--rpc-access-control-origins` is set,
+Axum honors the comma-separated allow-list (never `*`).
+
+## Connection limits
+
+`--rpc-max-connections` (total), `--rpc-max-connections-per-public-ip`, and
+`--rpc-max-connections-per-private-ip` are **enforced by the Axum listener**.
+The caps are parsed and cross-validated in `core_rpc_server::init` (C++) and
+handed to the Rust listener via `shekyl_daemon_rpc_start`; enforcement itself is
+a purpose-built Rust layer (`conn_limit`: `LimitedListener` + `ConnTracker`)
+that admits each accepted TCP connection against the total and the applicable
+per-IP cap (public vs. private/loopback), immediately closing any connection
+over a cap and releasing the slot when a connection closes. `0` means unlimited
+for a given dimension. The soft-limit arg remains advisory.
+
+`get_info.rpc_connections_count` reports the live tracked total from that same
+layer (both the REST and json_rpc surfaces; restricted RPC continues to
+disclose `0`, matching the other peer/connection fields).
 
 ## PQC Readiness
 
@@ -80,70 +124,50 @@ In restricted mode (`--restricted-rpc`):
   strings and binary blobs without interpretation.
 - `get_outs` / `get_outs.bin` endpoints are removed — FCMP++ uses
   full-chain membership proofs, so there is no ring member fetching.
-- Curve tree RPC endpoints — the C++ `on_get_curve_tree_*` handlers exist and
-  are registered in the **legacy epee** dispatch (`src/rpc/core_rpc_server.h`),
-  but are **not yet registered in this Axum/FFI JSON-RPC dispatch table**
-  (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`), so under the default Rust
-  RPC server they currently return **404**. Wiring them into the FFI dispatch
-  (plus the `on_get_curve_tree_path` handler fixes that surfaced alongside) is
-  tracked in [`FOLLOWUPS.md`](FOLLOWUPS.md) — "Rust/Axum daemon RPC: curve-tree
-  endpoints missing from the FFI dispatch table". The endpoints:
-  - `get_curve_tree_path` — retrieve a Merkle path for a given leaf
-  - `get_curve_tree_info` — retrieve the current curve tree root hash, depth, and leaf count
-  - `get_curve_tree_checkpoint` — retrieve a curve tree snapshot at a given height
+- Curve tree RPC endpoints — registered in the Axum/FFI JSON-RPC dispatch
+  table (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`) since PR #174
+  (2026-06-23):
+  - `get_curve_tree_path` — Merkle path for a given leaf
+  - `get_curve_tree_info` — current curve tree root hash, depth, leaf count
+  - `get_curve_tree_checkpoint` — curve tree snapshot at a given height
 
 ## Running
 
 ```bash
-# Rust RPC is enabled by default on port = epee_port + 10000
-shekyld --testnet              # epee 12029, Axum 22029
-shekyld                        # epee 11029, Axum 21029
-
-# Disable Rust RPC (legacy only)
-shekyld --no-rust-rpc
-
-# Validation: run both servers and diff responses
-./tests/rpc_comparison/compare_rpc.sh 12029 22029
+shekyld                        # Axum on 11029
+shekyld --testnet              # Axum on 12029
 ```
 
 ### Port Mapping
 
-| Network  | P2P   | epee RPC | Axum RPC |
-|----------|-------|----------|----------|
-| Mainnet  | 11021 | 11029    | 21029    |
-| Testnet  | 12021 | 12029    | 22029    |
-| Stagenet | 13021 | 13029    | 23029    |
+| Network  | P2P   | RPC (Axum) |
+|----------|-------|------------|
+| Mainnet  | 11021 | 11029      |
+| Testnet  | 12021 | 12029      |
+| Stagenet | 13021 | 13029      |
 
-## Validation Results
+## Reachability predicate (Phase 1 audit)
 
-Tested on testnet (2026-04-02) with dual-server mode. Test data saved to
-`shekyl-dev/data/rpc_comparison/`.
+A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
+**and** a live consumer. MAP macros are gone; registration is FFI-only + Axum.
 
-- **23 PASS** across JSON REST, JSON-RPC, and restricted endpoints
-- **2 expected diffs** (`get_info` via both REST and JSON-RPC): `rpc_connections_count`
-  differs because epee counts its own active HTTP connection while Axum does not
-  go through epee's connection tracker
-- **2 binary SKIP**: Both servers return 400 for empty-POST binary requests
-  (matching behavior confirmed); full binary validation requires wallet sync test
+| Surface | Axum | FFI | Live consumer | Disposition |
+|---------|------|-----|---------------|-------------|
+| JSON REST (info, height, txs, pool, …) | yes | yes | wallets / CLI | keep |
+| Binary sync (`/get_blocks.bin`, hashes, indexes) | yes | yes | wallet refresh | keep |
+| JSON-RPC admin + query set | `/json_rpc` | yes | wallets / tools | keep |
+| `POST /submit_transaction` | native Rust | n/a | wallets | keep |
+| `get_archival_emission_claim_source` | `/json_rpc` | yes | claim-builder | keep |
+| `get_output_distribution` (+ `.bin`) | **no** | **removed** | none (`get_rct_distribution` deleted) | deleted |
+| epee HTTP listener / `--no-rust-rpc` | n/a | n/a | none | deleted |
 
-### Cutover Remaining Work
+## Phase 2 (KV serialization)
 
-Before removing the epee HTTP listener entirely:
-
-1. **Wallet sync test** -- connect `shekyl-cli` to Axum-only RPC,
-   verify block sync via `/getblocks.bin` and curve tree path fetch via `/get_curve_tree_path`
-2. **Standard port binding** -- when Axum is sole server, bind to 11029/12029/13029
-   (not +10000) so existing clients and config files work unchanged
+Replace epee portable-storage in `core_rpc_ffi.cpp` with a Rust-native
+codec. Out of scope for the Phase 1 transport deletion.
 
 ## Thread Safety
 
-The C++ `core_rpc_server` handlers are designed for concurrent access (epee's
-thread pool model). Axum dispatches each request on a Tokio worker, and the FFI
-call is offloaded via `tokio::task::spawn_blocking` to avoid blocking the async
-runtime. The `CoreRpc` wrapper is `Send + Sync`.
-
-## Future Work (Phases 2–4)
-
-- **Phase 2**: Replace epee KV serialization with a Rust encoding crate.
-- **Phase 3**: Replace P2P networking (`abstract_tcp_server2`, Levin) with Rust.
-- **Phase 4**: Remove `contrib/epee/` entirely; strip remaining Boost deps.
+C++ `on_*` handlers are designed for concurrent access. Axum dispatches each
+request on a Tokio worker; FFI calls use `spawn_blocking`. `CoreRpc` is
+`Send + Sync`.

@@ -558,9 +558,16 @@ pub(crate) struct FcmpPlusPlusContext {
     pub tree: TreeContext,
 }
 
-/// Output of [`KeyEngine::sign_transaction`] (§3.9). Secret-free on-chain
-/// material for final wire encode in `LocalSigner`.
-#[derive(Debug, Clone)]
+/// Output of [`KeyEngine::sign_transaction`] (§3.9). On-chain material
+/// for final wire encode in `LocalSigner`, plus the per-tx secret
+/// scalar retained for OUTBOUND tx proofs (WI-RPC-3).
+///
+/// **Not `Clone`** — `tx_key_secret` refuses duplication
+/// ([`TxSecretKey`] is deliberately non-`Clone`); the struct moves
+/// through the actor reply channel and the signer, never fans out.
+/// `Debug` stays derivable because `TxSecretKey`'s own `Debug` is
+/// redacted.
+#[derive(Debug)]
 #[non_exhaustive]
 pub(crate) struct TxSignatures {
     pub bulletproof_plus: Vec<u8>,
@@ -576,6 +583,13 @@ pub(crate) struct TxSignatures {
     pub output_keys: Vec<[u8; 32]>,
     pub view_tags: Vec<Option<u8>>,
     pub tx_extra: Vec<u8>,
+    /// The tx secret scalar minted by `sign_bridge::sign_tx` for this
+    /// transaction — carried out of the signing frame so the submit
+    /// path can persist it into `TxMetaBlock.tx_keys` at
+    /// submit-ACCEPTED (`docs/api/wallet_rpc.yaml` OUTBOUND
+    /// PREREQUISITE, lifecycle pin 1). Zeroizes on drop; every
+    /// build-then-discard path wipes it structurally.
+    pub tx_key_secret: shekyl_engine_state::TxSecretKey,
 }
 
 /// Per-input public signature bundle (§3.9).

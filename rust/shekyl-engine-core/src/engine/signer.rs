@@ -9,10 +9,27 @@
 //!
 //! The Phase 1 plan locks the wallet's solo / multisig dispatch into the
 //! type system: `Engine<S: EngineSignerKind>`, with `S` ranging over
-//! [`SoloSigner`] (V3.0 default) and `MultisigSigner<N, K>` (V3.1, lands
-//! behind the `multisig` Cargo feature). Choosing the dispatch axis at
-//! compile time means the V3.1 enablement is a feature flip on call
-//! sites, not a refactor.
+//! [`SoloSigner`] (V3.0 default) and the multisig kind(s) — `MultisigSigner`,
+//! one type or a per-version family (V3.1, behind the `multisig` Cargo feature;
+//! MS-1 fixes which).
+//! Choosing the dispatch axis at compile time means the V3.1 enablement is
+//! a feature flip on call sites, not a refactor.
+//!
+//! **Decided (MS-1): the multisig kind takes no const generics.** The earlier
+//! `MultisigSigner<N, K>` notation is retired — it read as K-of-N threshold, but
+//! participant count and threshold (`n_total`, `m_required`) are *runtime*
+//! values the address payload hands over: you cannot const-generic a value read
+//! from the wire, so `N`/`M` are runtime fields, never type parameters. The
+//! coexistence axis — the two multisig stacks (E′ now, a lattice-only V4 later)
+//! that one `Engine` must hold at once, discriminated by the `spend_auth` /
+//! scheme version byte — is not a const generic either: the version is read at
+//! runtime, and a version const-generic would multiply `Engine<S>`
+//! monomorphization per config for no benefit. Coexistence is a **type /
+//! dispatch** matter (per-version `EngineSignerKind` markers, or a runtime
+//! version field — MS-1's trait-identity design settles which), never a
+//! `<N, K>` parameterization. So the multisig kind takes no type parameters;
+//! whether it is one type with a runtime version or a per-version family is
+//! MS-1's call.
 //!
 //! [`EngineSignerKind`] is sealed: only this crate may add variants.
 //! Downstream code parameterizes `Engine<S>` with `SoloSigner` (or, in
@@ -58,11 +75,29 @@ mod private {
 /// `match` at runtime, which produces unreachable arms in V3.0 (where
 /// only `SoloSigner` exists) and reintroduces the runtime-mode-flag
 /// pattern the rewrite plan rejects. A trait with associated items lets
-/// each kind name its own associated types (e.g., the eventual
-/// `SignaturePayload`, `SigningCeremony`) and lets the type system
+/// each kind name its own associated types and lets the type system
 /// statically prove that solo and multisig code paths never share a
-/// runtime branch.
-pub trait EngineSignerKind: private::Sealed + 'static {}
+/// runtime branch. The first such item is
+/// [`SigningCeremony`](EngineSignerKind::SigningCeremony) (below); further
+/// per-kind types (e.g. an eventual `SignaturePayload`) land with the code
+/// that consumes them, not before.
+pub trait EngineSignerKind: private::Sealed + 'static {
+    /// The ceremony this signer kind runs to authorize a spend, before any
+    /// signature can be produced.
+    ///
+    /// [`SoloSigner`] sets this to the uninhabited [`core::convert::Infallible`]:
+    /// a solo wallet holds the spend secret and signs in-process, running
+    /// **no** multisig ceremony. Because the type has no values, every code
+    /// path that would consume a `SoloSigner::SigningCeremony` is statically
+    /// dead — "a solo wallet ran a multisig ceremony" is unrepresentable, the
+    /// same compile-forced guarantee as the `!Clone` archival keys. The multisig
+    /// signer kind is a per-version family (MS-1, no const generics):
+    /// `MultisigSignerV2` (spend-auth version `0x02`, Option E′) sets this to
+    /// `shekyl_multisig::FrostCeremony`, its four-blob two-round-trip FROST
+    /// ceremony; a future V4 marker gets its own type, so "a V4 wallet ran an E′
+    /// ceremony" is a compile error.
+    type SigningCeremony;
+}
 
 /// V3.0 default: this wallet holds the spend secret directly and signs
 /// transactions in-process.
@@ -74,7 +109,92 @@ pub trait EngineSignerKind: private::Sealed + 'static {}
 pub struct SoloSigner;
 
 impl private::Sealed for SoloSigner {}
-impl EngineSignerKind for SoloSigner {}
+impl EngineSignerKind for SoloSigner {
+    /// A solo wallet runs no multisig ceremony; the type is uninhabited.
+    type SigningCeremony = core::convert::Infallible;
+}
+
+// F-7 (R1-F-7): the first `EngineSignerKind` associated item, landed before
+// MS-1 so the compiler doesn't discover a missing item mid-implementation.
+// `SoloSigner`'s ceremony type is uninhabited — the guarantee MS-5's ceremony
+// dispatch relies on: a `SoloSigner::SigningCeremony` value cannot exist, so
+// handling one is the empty match, dead code the compiler erases. This block
+// compiles only while that stays true; a non-uninhabited type would make the
+// `match ceremony {}` non-exhaustive and fail the build.
+const _: () = {
+    fn solo_ceremony_is_uninhabited(
+        ceremony: <SoloSigner as EngineSignerKind>::SigningCeremony,
+    ) -> ! {
+        match ceremony {}
+    }
+    // Referenced (never called — no `Infallible` value can exist) so the
+    // definition, and thus the empty-match check, is not elided as unused.
+    let _ = solo_ceremony_is_uninhabited;
+};
+
+// ----------------------------------------------------------------------------
+// MS-5 — the multisig signer kind. MS-1 settled two questions: it takes no const
+// generics, and it is a per-version *family* (not one type with a runtime version
+// field). See docs/design/V3_1_MULTISIG_RUST_ENGINE.md MS-1.
+// ----------------------------------------------------------------------------
+
+/// The V3.1 multisig signer kind for spend-auth version `0x02` (Option E′).
+///
+/// Per-version family (MS-1): each multisig protocol version is its own marker,
+/// so `Engine<MultisigSignerV2>` and a future `Engine<MultisigSignerV4>` cannot
+/// be confused — "a V4 wallet ran an E′ ceremony" is a compile error, the same
+/// compile-forced guarantee as `SoloSigner`'s uninhabited ceremony. The
+/// reconciliation of the monomorphization objection (a per-version marker
+/// monomorphizes `Engine<S>` per version, like a version const-generic would):
+/// today the cost is zero (`SoloSigner` + `MultisigSignerV2` = two, identical to
+/// the one-type world) and V4 is years out, whereas one type would need a
+/// one-variant `SigningCeremony` enum *now* — coexistence machinery before
+/// coexistence. §15.5 (a group *is* its version; one Engine = one group = one
+/// version) makes the family shape what the version discipline already asserts.
+///
+/// Zero-sized; the group's key material never lives on the marker.
+#[cfg(feature = "multisig")]
+#[derive(Debug, Clone, Copy, Default)]
+#[allow(dead_code)] // constructed as `Engine<MultisigSignerV2>` in MS-5 S2
+pub struct MultisigSignerV2;
+
+#[cfg(feature = "multisig")]
+impl private::Sealed for MultisigSignerV2 {}
+
+#[cfg(feature = "multisig")]
+impl EngineSignerKind for MultisigSignerV2 {
+    /// The four-blob, two-round-trip, pqc-last FROST ceremony (`shekyl-multisig`).
+    type SigningCeremony = shekyl_multisig::FrostCeremony;
+}
+
+/// engine-core's durable impl of the ceremony's persist-before-use capability
+/// ([`shekyl_multisig::NonceCounterSink`]).
+///
+/// The proposer's held FROST nonce is released to the share-producing path only
+/// after this sink durably advances the monotonic nonce counter (the ceremony
+/// then mints a `ConsumedNonce`). engine-core owns the ledger, so it — not
+/// `shekyl-multisig`, which owns no I/O — carries the durable write. S2 wires the
+/// body to the wallet ledger's crash-atomic `save_state` path (the
+/// `persist_bond_record` discipline); here it is the compile-time proof that the
+/// cross-crate capability is impl-able from the ledger side.
+#[cfg(feature = "multisig")]
+#[allow(dead_code)] // constructed + wired to the ceremony in MS-5 S2
+pub(crate) struct MultisigNonceSink {
+    _private: (),
+}
+
+#[cfg(feature = "multisig")]
+impl shekyl_multisig::NonceCounterSink for MultisigNonceSink {
+    fn persist_nonce_counter(
+        &mut self,
+        _intent_hash: [u8; 32],
+        _counter: u64,
+    ) -> Result<(), shekyl_multisig::NonceCounterError> {
+        Err(shekyl_multisig::NonceCounterError(
+            "durable nonce-counter persist not yet wired to the ledger (MS-5 S2)".to_string(),
+        ))
+    }
+}
 
 // ----------------------------------------------------------------------------
 // PR 5 — `Signer` trait surface (R11 (b), Phase 0h)
@@ -136,6 +256,14 @@ pub struct SignedTransfer {
     /// behavior (`tx_bytes: Vec::new()`); Phase 2a's tx-builder
     /// integration replaces this with the actual on-wire body.
     pub(crate) tx_bytes: Vec<u8>,
+    /// Per-tx secret scalar carried alongside the signed body so the
+    /// submit path can persist it into `TxMetaBlock.tx_keys` at
+    /// submit-ACCEPTED (WI-RPC-3 retention, `docs/api/wallet_rpc.yaml`
+    /// OUTBOUND PREREQUISITE pin 1). Zeroize-on-drop; non-`Clone` —
+    /// which also makes `SignedTransfer` itself non-`Clone`, keeping
+    /// the secret single-copy through the pipeline. `Debug` is safe:
+    /// [`shekyl_engine_state::TxSecretKey`]'s impl is redacted.
+    pub(crate) tx_key_secret: shekyl_engine_state::TxSecretKey,
 }
 
 impl SignedTransfer {
@@ -324,6 +452,7 @@ impl Signer for LocalSigner {
                 .iter()
                 .map(|i| *i.key_image.as_bytes())
                 .collect(),
+            output_amounts: vec![0; signatures.output_keys.len()],
             output_keys: signatures.output_keys,
             view_tags: signatures.view_tags,
             tx_extra: signatures.tx_extra,
@@ -351,7 +480,10 @@ impl Signer for LocalSigner {
             }
         })?;
 
-        Ok(SignedTransfer { tx_bytes })
+        Ok(SignedTransfer {
+            tx_bytes,
+            tx_key_secret: signatures.tx_key_secret,
+        })
     }
 }
 

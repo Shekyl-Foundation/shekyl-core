@@ -197,7 +197,7 @@ pub fn scenario_7_bootstrap(params: &SimParams) -> ScenarioConfig {
     }
 }
 
-pub fn scenario_8_late_tail(_params: &SimParams) -> ScenarioConfig {
+pub fn scenario_8_late_tail(params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
         name: "late_chain_tail".into(),
         description: "95%+ supply already emitted, high burn, fee-market-dominated economy over 5 years (starting at ~year 30)".into(),
@@ -219,7 +219,46 @@ pub fn scenario_8_late_tail(_params: &SimParams) -> ScenarioConfig {
         },
         fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.95,
-        genesis_height_offset: 30 * 262_800, // ~year 30
+        // ~year 30 in the configured chain timing (derived, not a literal —
+        // byte-identical at the default 262_800; see `fee_era` in
+        // budget_scenarios.rs for the drift rationale).
+        genesis_height_offset: 30 * params.blocks_per_year,
+        archival_lock: None,
+    }
+}
+
+/// Scenario 9 — high history / low activity (§11.2, the missing sim quadrant):
+/// large `n`, low *current* volume, the post-boom settled chain. An early boom
+/// (years 0–20, ~250 tx/block) accretes ~120k shards, then a long low-activity
+/// tail (years 20–60, 15 tx/block). Run to **60 years** so the emission leg is
+/// exhausted (`0.9^60 ≈ 0.002` of the initial staker-emission share, and most
+/// supply emitted) — the only regime where the fee leg is the primary budget and
+/// escalation is decisive (A1's binding case; F-G). None of scenarios 1–8 reach
+/// it (`scenario_8` is high-history but *busy* and only 5 years long).
+pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConfig {
+    ScenarioConfig {
+        name: "high_history_low_activity".into(),
+        description: "post-boom settled chain: ~120k shards accreted in an early boom, then a low-activity fee-era tail over 60 years (emission exhausted) — the §11.2 quadrant where escalation is decisive".into(),
+        sim_years: 60,
+        volume: VolumeSchedule {
+            get_volume: Box::new(|block, blocks_per_year| {
+                let year = block / blocks_per_year;
+                match year {
+                    // Early boom accretes the shard corpus.
+                    0..=4 => 150,
+                    5..=14 => 250,
+                    15..=19 => 120,
+                    // Long low-activity tail: few txs, thin fee leg.
+                    _ => 15,
+                }
+            }),
+        },
+        stake: StakeSchedule {
+            get_stake_ratio: Box::new(|_block, _bpy, _circ| 400_000),
+        },
+        fee_per_tx: 100_000_000,
+        initial_emitted_fraction: 0.0,
+        genesis_height_offset: 0,
         archival_lock: None,
     }
 }
@@ -234,6 +273,7 @@ pub fn all_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
         scenario_6_mass_unstaking(params),
         scenario_7_bootstrap(params),
         scenario_8_late_tail(params),
+        scenario_9_high_history_low_activity(params),
     ]
 }
 

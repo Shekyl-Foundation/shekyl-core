@@ -78,6 +78,24 @@ inline uint32_t load_be32(const uint8_t* in) noexcept
     return v;
 }
 
+// Append helpers for variable-length encoders (mirror store_be*, but grow a
+// vector instead of writing a fixed offset). Fixed-size values/keys use
+// store_be* into a pre-sized buffer; these are the canonical BE writer for the
+// push_back-append idiom, so no encoder need hand-roll the byte loop.
+inline void push_be64(std::vector<uint8_t>& out, uint64_t v)
+{
+    uint8_t be[8];
+    store_be64(be, v);
+    out.insert(out.end(), be, be + 8);
+}
+
+inline void push_be32(std::vector<uint8_t>& out, uint32_t v)
+{
+    uint8_t be[4];
+    store_be32(be, v);
+    out.insert(out.end(), be, be + 4);
+}
+
 // ─── Strong identifiers ────────────────────────────────────────────────────
 //
 // Each Tag creates a distinct type. Passing OutputIndex where TreePosition
@@ -398,6 +416,14 @@ public:
         return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
     }
 
+    // Raw key bytes for non-LMDB consumers (the block-level uniqueness pass in
+    // blockchain.cpp shares this encoding per SCE-1,
+    // ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md §6).
+    const std::array<uint8_t, kArchivalServeCreditKeySize>& bytes() const noexcept
+    {
+        return bytes_;
+    }
+
 private:
     std::array<uint8_t, kArchivalServeCreditKeySize> bytes_{};
 };
@@ -457,6 +483,20 @@ private:
     std::array<uint8_t, kArchivalEpochCloseLogKeySize> bytes_{};
 };
 
+// ─── ArchivalBudgetKey / ArchivalBudgetAccrualKey (ARCHIVAL_BUDGET_SCHEDULE.md §3)
+//
+// Same byte shapes as the sigma / close-log keys they sit beside: the frozen
+// per-epoch budget row is keyed `BE(E)` and the per-height accrual row
+// `BE(height)` — big-endian so cursor order is numeric order (the close's
+// bounded range-sum over `[E·SEB, (E+1)·SEB)` and the prune walk depend on
+// it). Aliased, not redefined, per the ArchivalEmissionClaimLogKey precedent.
+
+static constexpr size_t kArchivalBudgetKeySize = kArchivalSigmaWorkKeySize;                // BE(E)
+static constexpr size_t kArchivalBudgetAccrualKeySize = kArchivalEpochCloseLogKeySize;    // BE(height)
+
+using ArchivalBudgetKey = ArchivalSigmaWorkKey;
+using ArchivalBudgetAccrualKey = ArchivalEpochCloseLogKey;
+
 // ─── ArchivalSlashLogKey / ArchivalSlashRevertValue ───────────────────────
 //
 // Per-block journal for gate-4 slash revert on `pop_block` (gate-2 §8).
@@ -479,25 +519,58 @@ private:
 };
 
 struct ArchivalSlashRevertValue {
-    static constexpr uint8_t kVersion = 1;
-    static constexpr size_t kEncodedSize = 1 + 32 + 8 + 8 + 8;
+    // Version history (newest first):
+    // - v3 (HoldingsUpdate record v6) appends the slashed shard's add-epoch, so a
+    //   compact-slash pop restores the reverted shard's per-shard add-epoch
+    //   (index-parallel `shard_add_epochs`) exactly, not just its id.
+    // - v2 (WS-1, REWARD_EMISSION_E3_GATING_ROUND.md §5) appended the pre-slash
+    //   holdings kind, so pop-revert restores the recorded pre-image directly
+    //   instead of guessing complete-tree-vs-compact by an amount/emptiness
+    //   heuristic (which mis-restored a slashed single-shard compact bond to
+    //   complete-tree, and left as-of-height reconstruction ambiguous).
+    // - v1 could not distinguish a complete-tree demotion (which cleared *all*
+    //   holdings) from a compact erase of a bond's last shard.
+    // Prior versions are rejected at decode per the pre-genesis posture: no
+    // migration, reset the data directory.
+    static constexpr uint8_t kVersion = 3;
+    static constexpr size_t kEncodedSize = 1 + 32 + 8 + 8 + 8 + 1 + 8;
+
+    // Pre-slash holdings kind. Values mirror ArchivalBondValue's
+    // kHoldingsShardSetCompact / kHoldingsCompleteTree (pinned by the
+    // static_assert following that struct's definition below).
+    static constexpr uint8_t kPreKindShardSetCompact = 0;
+    static constexpr uint8_t kPreKindCompleteTree = 1;
 
     uint8_t p_id[32]{};
     uint64_t shard_id = 0;
     uint64_t settlement_epoch = 0;
     uint64_t slashed_amount = 0;
+    /// Holdings kind of the bond *before* this slash applied. Complete-tree
+    /// means the slash demoted the bond and cleared every holding (the bond
+    /// held all shards at every height up to the slash); compact means the
+    /// slash erased exactly `shard_id` from the held set.
+    uint8_t holdings_pre_kind = kPreKindShardSetCompact;
+    /// v3: the add-epoch of the slashed `shard_id` before it was erased, so a
+    /// compact-slash pop restores its `shard_add_epochs` entry exactly.
+    /// Unused (0) for a complete-tree demotion (which clears the array).
+    uint64_t slashed_shard_add_epoch = 0;
 
     [[nodiscard]] std::vector<uint8_t> encode() const
     {
+        if (holdings_pre_kind != kPreKindShardSetCompact
+            && holdings_pre_kind != kPreKindCompleteTree)
+        {
+            throw std::runtime_error(
+                "ArchivalSlashRevertValue encode: unknown holdings_pre_kind");
+        }
         std::vector<uint8_t> out(kEncodedSize);
         out[0] = kVersion;
         std::memcpy(out.data() + 1, p_id, 32);
-        for (int i = 7; i >= 0; --i)
-            out[1 + 32 + (7 - i)] = static_cast<uint8_t>((shard_id >> (i * 8)) & 0xFF);
-        for (int i = 7; i >= 0; --i)
-            out[1 + 32 + 8 + (7 - i)] = static_cast<uint8_t>((settlement_epoch >> (i * 8)) & 0xFF);
-        for (int i = 7; i >= 0; --i)
-            out[1 + 32 + 16 + (7 - i)] = static_cast<uint8_t>((slashed_amount >> (i * 8)) & 0xFF);
+        store_be64(out.data() + 33, shard_id);
+        store_be64(out.data() + 41, settlement_epoch);
+        store_be64(out.data() + 49, slashed_amount);
+        out[57] = holdings_pre_kind;
+        store_be64(out.data() + 58, slashed_shard_add_epoch);
         return out;
     }
 
@@ -512,6 +585,11 @@ struct ArchivalSlashRevertValue {
         out.shard_id = load_be64(p + 33);
         out.settlement_epoch = load_be64(p + 41);
         out.slashed_amount = load_be64(p + 49);
+        out.holdings_pre_kind = p[57];
+        if (out.holdings_pre_kind != kPreKindShardSetCompact
+            && out.holdings_pre_kind != kPreKindCompleteTree)
+            return false;
+        out.slashed_shard_add_epoch = load_be64(p + 58);
         return true;
     }
 
@@ -519,6 +597,396 @@ struct ArchivalSlashRevertValue {
     {
         static const uint8_t zero[32] = {};
         return std::memcmp(p_id, zero, 32) == 0 && slashed_amount == 0;
+    }
+};
+
+// ─── ArchivalEmissionClaimLogKey / ArchivalEmissionClaimRevertValue ────────
+//
+// Per-block journal for the emission-claim dedup revert on `pop_block`
+// (REWARD_EMISSION_E3_GATING_ROUND.md §6.3, WS-2). Same BE(height)||BE(seq)
+// idiom as the slash log — one reorg mechanism, many tables.
+
+using ArchivalEmissionClaimLogKey = ArchivalSlashLogKey;
+
+struct ArchivalEmissionClaimRevertValue {
+    // §6.3 pins the row as the pre-image of what the connect mutation
+    // destroyed, as one unit: an insert-only journal (record just the
+    // inserted `E`) cannot restore the entries the same connect's window
+    // prune evicted, and a floor-lowering pop then leaves an
+    // already-claimed epoch absent from the restored set — the double-mint.
+    // The row therefore carries the *full* pre-mutation claimed set plus
+    // the pre-mutation `first_paying_emission_height`: the delta's closure,
+    // restored byte-identically by a single write with no reconstruction.
+    static constexpr uint8_t kVersion = 1;
+    /// Same derivation as `ArchivalBondValue::kMaxClaimedEpochs` (that struct
+    /// is defined further down this header; the static_assert after it pins
+    /// the two to the same value).
+    static constexpr size_t kMaxClaimedEpochs =
+        static_cast<size_t>(SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W) + 6;
+    static constexpr size_t kFixedSize = 1 + 32 + 8 + 4; // ver, p_id, first_paying, count
+
+    uint8_t p_id[32]{};
+    /// `claimed_settlement_epochs` as it stood before the emission connect
+    /// mutated it (strictly increasing; may be empty).
+    std::vector<uint64_t> pre_claimed_epochs;
+    /// `first_paying_emission_height` before the connect (0 = was unset, so
+    /// the revert un-sets it iff this emission was the setter).
+    uint64_t pre_first_paying_emission_height = 0;
+
+    [[nodiscard]] std::vector<uint8_t> encode() const
+    {
+        if (pre_claimed_epochs.size() > kMaxClaimedEpochs)
+            throw std::runtime_error(
+                "ArchivalEmissionClaimRevertValue encode: claimed set exceeds cap");
+        for (size_t i = 1; i < pre_claimed_epochs.size(); ++i)
+        {
+            if (pre_claimed_epochs[i] <= pre_claimed_epochs[i - 1])
+                throw std::runtime_error(
+                    "ArchivalEmissionClaimRevertValue encode: claimed set not strictly increasing");
+        }
+        std::vector<uint8_t> out;
+        out.reserve(kFixedSize + pre_claimed_epochs.size() * 8);
+        out.push_back(kVersion);
+        out.insert(out.end(), p_id, p_id + 32);
+        push_be64(out, pre_first_paying_emission_height);
+        push_be32(out, static_cast<uint32_t>(pre_claimed_epochs.size()));
+        for (const uint64_t epoch : pre_claimed_epochs)
+            push_be64(out, epoch);
+        return out;
+    }
+
+    static bool decode(const void* data, size_t len, ArchivalEmissionClaimRevertValue& out)
+    {
+        if (!data || len < kFixedSize)
+            return false;
+        const auto* p = static_cast<const uint8_t*>(data);
+        if (p[0] != kVersion)
+            return false;
+        std::memcpy(out.p_id, p + 1, 32);
+        out.pre_first_paying_emission_height = load_be64(p + 33);
+        const uint32_t count = (static_cast<uint32_t>(p[41]) << 24)
+            | (static_cast<uint32_t>(p[42]) << 16)
+            | (static_cast<uint32_t>(p[43]) << 8)
+            | static_cast<uint32_t>(p[44]);
+        if (count > kMaxClaimedEpochs || len != kFixedSize + static_cast<size_t>(count) * 8)
+            return false;
+        out.pre_claimed_epochs.clear();
+        out.pre_claimed_epochs.reserve(count);
+        size_t off = kFixedSize;
+        for (uint32_t i = 0; i < count; ++i, off += 8)
+        {
+            const uint64_t epoch = load_be64(p + off);
+            if (!out.pre_claimed_epochs.empty() && epoch <= out.pre_claimed_epochs.back())
+                return false;
+            out.pre_claimed_epochs.push_back(epoch);
+        }
+        return true;
+    }
+};
+
+// ─── ArchivalBondUnbondLogKey / ArchivalBondUnbondRevertValue ──────────────
+//
+// Per-block journal for the Unbond connect's record pre-image (gate-4 §3.5
+// connect step 1 / §5 pop twin). Same BE(height)||BE(seq) idiom as the slash
+// and emission-claim logs — one reorg mechanism, many tables. The vin carries
+// the POST-connect state (§3.5 debit-path pin), so the pre-release holdings
+// and interval log are not reconstructible at pop without this row; it
+// carries the full pre-image of exactly the three fields the connect mutates
+// (bonded_total, holdings, bad_intervals — disjoint from the emission-claim
+// journal's fields, so the two reverts compose in any order).
+
+using ArchivalBondUnbondLogKey = ArchivalSlashLogKey;
+
+struct ArchivalBondUnbondRevertValue {
+    // v2 (HoldingsUpdate record v6) appends the per-shard add-epoch array,
+    // index-parallel to pre_shard_ids under the same shard count, so the Unbond
+    // pop restores `shard_add_epochs` exactly. v1 stored ids only. v1 is
+    // rejected at decode per the pre-genesis posture: no migration, reset.
+    static constexpr uint8_t kVersion = 2;
+    /// Same bounds as `ArchivalBondValue` (defined further down this header;
+    /// the static_asserts after it pin the pairs to the same values).
+    static constexpr size_t kMaxHoldings = 4096;
+    static constexpr size_t kMaxBadIntervals = 256;
+    // ver, p_id, pre_bonded_total, pre_holdings_kind, shard count, interval count
+    static constexpr size_t kFixedSize = 1 + 32 + 8 + 1 + 4 + 4;
+
+    uint8_t p_id[32]{};
+    /// `bonded_total_atomic` before the release (== the connect's bond_debit;
+    /// never 0 — a zero-balance record fails Unbond verify and connect alike).
+    uint64_t pre_bonded_total = 0;
+    uint8_t pre_holdings_kind = 0;
+    std::vector<uint64_t> pre_shard_ids;
+    /// v2: the pre-release add-epochs, index-parallel to `pre_shard_ids` under
+    /// the same shard count (single-count coupling; a length desync cannot
+    /// round-trip). Restored alongside the ids on Unbond pop.
+    std::vector<uint64_t> pre_shard_add_epochs;
+    /// `bad_intervals` before the clean interval-close was appended, as
+    /// flattened (start_epoch, end_exclusive) pairs.
+    std::vector<std::pair<uint64_t, uint64_t>> pre_bad_intervals;
+
+    [[nodiscard]] std::vector<uint8_t> encode() const
+    {
+        if (pre_shard_ids.size() > kMaxHoldings
+            || pre_bad_intervals.size() > kMaxBadIntervals)
+        {
+            throw std::runtime_error(
+                "ArchivalBondUnbondRevertValue encode: bounds exceeded");
+        }
+        if (pre_shard_ids.size() != pre_shard_add_epochs.size())
+            throw std::runtime_error(
+                "ArchivalBondUnbondRevertValue encode: shard id / add-epoch length mismatch");
+        if (pre_bonded_total == 0)
+            throw std::runtime_error(
+                "ArchivalBondUnbondRevertValue encode: empty pre-image");
+        std::vector<uint8_t> out;
+        out.reserve(kFixedSize + pre_shard_ids.size() * 16 + pre_bad_intervals.size() * 16);
+        out.push_back(kVersion);
+        out.insert(out.end(), p_id, p_id + 32);
+        push_be64(out, pre_bonded_total);
+        out.push_back(pre_holdings_kind);
+        push_be32(out, static_cast<uint32_t>(pre_shard_ids.size()));
+        for (const uint64_t shard_id : pre_shard_ids)
+            push_be64(out, shard_id);
+        for (const uint64_t add_epoch : pre_shard_add_epochs)
+            push_be64(out, add_epoch);
+        push_be32(out, static_cast<uint32_t>(pre_bad_intervals.size()));
+        for (const auto& iv : pre_bad_intervals)
+        {
+            push_be64(out, iv.first);
+            push_be64(out, iv.second);
+        }
+        return out;
+    }
+
+    static bool decode(const void* data, size_t len, ArchivalBondUnbondRevertValue& out)
+    {
+        if (!data || len < kFixedSize)
+            return false;
+        const auto* p = static_cast<const uint8_t*>(data);
+        size_t off = 0;
+        if (p[off++] != kVersion)
+            return false;
+        std::memcpy(out.p_id, p + off, 32);
+        off += 32;
+        out.pre_bonded_total = load_be64(p + off);
+        off += 8;
+        if (out.pre_bonded_total == 0)
+            return false;
+        out.pre_holdings_kind = p[off++];
+        const uint32_t shard_count = load_be32(p + off);
+        off += 4;
+        // v2: the single shard_count governs BOTH the id and add-epoch arrays
+        // (2 * count * 8), then the interval count (4).
+        if (shard_count > kMaxHoldings
+            || len < off + static_cast<size_t>(shard_count) * 8u * 2u + 4)
+            return false;
+        out.pre_shard_ids.clear();
+        out.pre_shard_ids.reserve(shard_count);
+        for (uint32_t i = 0; i < shard_count; ++i, off += 8)
+            out.pre_shard_ids.push_back(load_be64(p + off));
+        out.pre_shard_add_epochs.clear();
+        out.pre_shard_add_epochs.reserve(shard_count);
+        for (uint32_t i = 0; i < shard_count; ++i, off += 8)
+            out.pre_shard_add_epochs.push_back(load_be64(p + off));
+        const uint32_t interval_count = load_be32(p + off);
+        off += 4;
+        if (interval_count > kMaxBadIntervals
+            || len != off + static_cast<size_t>(interval_count) * 16)
+            return false;
+        out.pre_bad_intervals.clear();
+        out.pre_bad_intervals.reserve(interval_count);
+        for (uint32_t i = 0; i < interval_count; ++i, off += 16)
+            out.pre_bad_intervals.emplace_back(load_be64(p + off), load_be64(p + off + 8));
+        return true;
+    }
+};
+
+// ─── ArchivalBondHoldingsUpdateLogKey / ArchivalBondHoldingsUpdateRevertValue ─
+//
+// Per-block journal for the HoldingsUpdate connect's record pre-image (gate-4
+// §4.4; the add/drop grace-tail path). Same BE(height)||BE(seq) idiom as the
+// slash, emission-claim, and Unbond logs — one reorg mechanism, many tables.
+//
+// A HoldingsUpdate stays `Bonded` (no Exited transition, no clean interval-close
+// — grace-tail returns the FLOOR via the bond_debit source term), so it cannot
+// share the Unbond journal / pop path (whose fold validates Exited + trailing
+// clean close). The connect mutates a strict subset of Unbond's fields —
+// `bonded_total`, `held_shard_ids`, `shard_add_epochs` — and leaves
+// `holdings_kind` (stays ShardSetCompact) and `bad_intervals` untouched, so the
+// pre-image here is smaller than the Unbond value by exactly those two
+// never-mutated fields (honest minimal journal, not the Unbond superset reused).
+
+using ArchivalBondHoldingsUpdateLogKey = ArchivalSlashLogKey;
+
+struct ArchivalBondHoldingsUpdateRevertValue {
+    // Born at v1 (pre-genesis; no migration, reset on any format change).
+    static constexpr uint8_t kVersion = 1;
+    /// Same holdings bound as `ArchivalBondValue` (the static_assert after it
+    /// pins the pair to the same value).
+    static constexpr size_t kMaxHoldings = 4096;
+    // ver, p_id, pre_bonded_total, shard count
+    static constexpr size_t kFixedSize = 1 + 32 + 8 + 4;
+
+    uint8_t p_id[32]{};
+    /// `bonded_total_atomic` before the connect. Never 0: a HoldingsUpdate
+    /// record holds at least one shard pre-connect (drop-last is rejected; add
+    /// grows an already-Bonded record), so `bonded_total >= FLOOR`.
+    uint64_t pre_bonded_total = 0;
+    std::vector<uint64_t> pre_shard_ids;
+    /// The pre-connect add-epochs, index-parallel to `pre_shard_ids` under the
+    /// same shard count (single-count coupling; a length desync cannot
+    /// round-trip). Restored alongside the ids on HoldingsUpdate pop.
+    std::vector<uint64_t> pre_shard_add_epochs;
+
+    [[nodiscard]] std::vector<uint8_t> encode() const
+    {
+        if (pre_shard_ids.size() > kMaxHoldings)
+            throw std::runtime_error(
+                "ArchivalBondHoldingsUpdateRevertValue encode: holdings bound exceeded");
+        if (pre_shard_ids.size() != pre_shard_add_epochs.size())
+            throw std::runtime_error(
+                "ArchivalBondHoldingsUpdateRevertValue encode: shard id / add-epoch length mismatch");
+        if (pre_bonded_total == 0)
+            throw std::runtime_error(
+                "ArchivalBondHoldingsUpdateRevertValue encode: empty pre-image");
+        std::vector<uint8_t> out;
+        out.reserve(kFixedSize + pre_shard_ids.size() * 16);
+        out.push_back(kVersion);
+        out.insert(out.end(), p_id, p_id + 32);
+        push_be64(out, pre_bonded_total);
+        push_be32(out, static_cast<uint32_t>(pre_shard_ids.size()));
+        for (const uint64_t shard_id : pre_shard_ids)
+            push_be64(out, shard_id);
+        for (const uint64_t add_epoch : pre_shard_add_epochs)
+            push_be64(out, add_epoch);
+        return out;
+    }
+
+    static bool decode(const void* data, size_t len, ArchivalBondHoldingsUpdateRevertValue& out)
+    {
+        if (!data || len < kFixedSize)
+            return false;
+        const auto* p = static_cast<const uint8_t*>(data);
+        size_t off = 0;
+        if (p[off++] != kVersion)
+            return false;
+        std::memcpy(out.p_id, p + off, 32);
+        off += 32;
+        out.pre_bonded_total = load_be64(p + off);
+        off += 8;
+        if (out.pre_bonded_total == 0)
+            return false;
+        const uint32_t shard_count = load_be32(p + off);
+        off += 4;
+        // The single shard_count governs BOTH the id and add-epoch arrays
+        // (2 * count * 8), with no trailing bytes.
+        if (shard_count > kMaxHoldings
+            || len != off + static_cast<size_t>(shard_count) * 8u * 2u)
+            return false;
+        out.pre_shard_ids.clear();
+        out.pre_shard_ids.reserve(shard_count);
+        for (uint32_t i = 0; i < shard_count; ++i, off += 8)
+            out.pre_shard_ids.push_back(load_be64(p + off));
+        out.pre_shard_add_epochs.clear();
+        out.pre_shard_add_epochs.reserve(shard_count);
+        for (uint32_t i = 0; i < shard_count; ++i, off += 8)
+            out.pre_shard_add_epochs.push_back(load_be64(p + off));
+        return true;
+    }
+};
+
+// ─── ArchivalBondRebondLogKey / ArchivalBondRebondRevertValue ───────────────
+//
+// Per-block journal for the Rebond connect's record pre-image (gate-4 §3.4;
+// P2B-9 reinstatement). Same BE(height)||BE(seq) idiom as the other reorg
+// journals. Rebond is the one bond-post kind that mutates an EXISTING interval
+// in place (end_exclusive: MAX → E_rebond + 1), so alongside the holdings
+// pre-image the row carries the closed interval's index + start: the pop
+// re-opens exactly that entry to MAX (belt: the start must match and the entry
+// must currently be closed). pre_bonded_total == 0 is LEGAL here — a
+// terminal-slash reinstatement starts from a zero-balance record (unlike the
+// Unbond/HoldingsUpdate journals, whose zero pre-image is unreachable).
+
+using ArchivalBondRebondLogKey = ArchivalSlashLogKey;
+
+struct ArchivalBondRebondRevertValue {
+    // Born at v1 (pre-genesis; no migration, reset on any format change).
+    static constexpr uint8_t kVersion = 1;
+    /// Same holdings bound as `ArchivalBondValue` (static_assert below).
+    static constexpr size_t kMaxHoldings = 4096;
+    // ver, p_id, pre_bonded_total, closed idx, closed start, shard count
+    static constexpr size_t kFixedSize = 1 + 32 + 8 + 4 + 8 + 4;
+
+    uint8_t p_id[32]{};
+    /// `bonded_total_atomic` before the connect (0 legal: terminal-slash
+    /// reinstatement).
+    uint64_t pre_bonded_total = 0;
+    /// Index into the record's `bad_intervals` of the interval the connect
+    /// closed; the pop re-opens it to `end_exclusive = MAX`.
+    uint32_t closed_interval_index = 0;
+    /// The closed interval's `start_epoch` (pop-side identity belt).
+    uint64_t closed_interval_start = 0;
+    std::vector<uint64_t> pre_shard_ids;
+    /// The pre-connect add-epochs, index-parallel to `pre_shard_ids` under the
+    /// same shard count (single-count coupling; a length desync cannot
+    /// round-trip). Restored alongside the ids on Rebond pop.
+    std::vector<uint64_t> pre_shard_add_epochs;
+
+    [[nodiscard]] std::vector<uint8_t> encode() const
+    {
+        if (pre_shard_ids.size() > kMaxHoldings)
+            throw std::runtime_error(
+                "ArchivalBondRebondRevertValue encode: holdings bound exceeded");
+        if (pre_shard_ids.size() != pre_shard_add_epochs.size())
+            throw std::runtime_error(
+                "ArchivalBondRebondRevertValue encode: shard id / add-epoch length mismatch");
+        std::vector<uint8_t> out;
+        out.reserve(kFixedSize + pre_shard_ids.size() * 16);
+        out.push_back(kVersion);
+        out.insert(out.end(), p_id, p_id + 32);
+        push_be64(out, pre_bonded_total);
+        push_be32(out, closed_interval_index);
+        push_be64(out, closed_interval_start);
+        push_be32(out, static_cast<uint32_t>(pre_shard_ids.size()));
+        for (const uint64_t shard_id : pre_shard_ids)
+            push_be64(out, shard_id);
+        for (const uint64_t add_epoch : pre_shard_add_epochs)
+            push_be64(out, add_epoch);
+        return out;
+    }
+
+    static bool decode(const void* data, size_t len, ArchivalBondRebondRevertValue& out)
+    {
+        if (!data || len < kFixedSize)
+            return false;
+        const auto* p = static_cast<const uint8_t*>(data);
+        size_t off = 0;
+        if (p[off++] != kVersion)
+            return false;
+        std::memcpy(out.p_id, p + off, 32);
+        off += 32;
+        out.pre_bonded_total = load_be64(p + off);
+        off += 8;
+        out.closed_interval_index = load_be32(p + off);
+        off += 4;
+        out.closed_interval_start = load_be64(p + off);
+        off += 8;
+        const uint32_t shard_count = load_be32(p + off);
+        off += 4;
+        // The single shard_count governs BOTH the id and add-epoch arrays
+        // (2 * count * 8), with no trailing bytes.
+        if (shard_count > kMaxHoldings
+            || len != off + static_cast<size_t>(shard_count) * 8u * 2u)
+            return false;
+        out.pre_shard_ids.clear();
+        out.pre_shard_ids.reserve(shard_count);
+        for (uint32_t i = 0; i < shard_count; ++i, off += 8)
+            out.pre_shard_ids.push_back(load_be64(p + off));
+        out.pre_shard_add_epochs.clear();
+        out.pre_shard_add_epochs.reserve(shard_count);
+        for (uint32_t i = 0; i < shard_count; ++i, off += 8)
+            out.pre_shard_add_epochs.push_back(load_be64(p + off));
+        return true;
     }
 };
 
@@ -568,18 +1036,34 @@ private:
 //
 // Versioned LMDB value for `archival_bond` (gate-4 §4; serve-credit reads).
 //
-// v4 (REWARD_EMISSION_LEG.md §6.2/§6.3, encoding pinned 2026-06-11) appends
-// the windowed claimed-epoch set and `first_paying_emission_height`. v3 is
-// rejected at decode per the pre-genesis posture: no migration, reset the
-// data directory.
+// v6 (HoldingsUpdate, gate-4 §4.4) appends the per-shard `shard_add_epochs`
+// array — index-parallel to `held_shard_ids` under one shared count — powering
+// the drop-eligibility gate and per-shard E_add+1 counting. v5 (GF-1, gate-4
+// §4.1) inserted the committed `bond_spend_pk` — the debit authorizer, written
+// once at JoinMarket connect and immutable for the record's life — after
+// `hybrid_pubkey`. v4 (REWARD_EMISSION_LEG.md §6.2/§6.3, encoding pinned
+// 2026-06-11) appended the windowed claimed-epoch set and
+// `first_paying_emission_height`. Prior versions are rejected at decode per the
+// pre-genesis posture: no migration, reset the data directory.
 
 struct ArchivalBondValue {
-    static constexpr uint8_t kVersion = 4;
+    static constexpr uint8_t kVersion = 6;
     static constexpr uint8_t kHoldingsShardSetCompact = 0;
     static constexpr uint8_t kHoldingsCompleteTree = 1;
     static constexpr size_t kMaxPubkeyLen = 2048;
     static constexpr size_t kMaxHoldings = 4096;
+    /// Interval-log entry cap. GENESIS-FROZEN CONSENSUS CONSTANT, not a codec
+    /// tunable: Unbond verify rejects a record at this cap (the connect's
+    /// clean interval-close could not append — `IntervalLogFull`,
+    /// `shekyl-archival-retention::bond_post`), so tx validity depends on the
+    /// value. The Rust twin is `bond_connect::MAX_BOND_BAD_INTERVALS`; the
+    /// static_assert below pins the pair against silent drift.
     static constexpr size_t kMaxBadIntervals = 256;
+    static_assert(kMaxBadIntervals == 256,
+        "kMaxBadIntervals is genesis-frozen (Unbond verify's IntervalLogFull "
+        "belt keys on it); a change is a hard fork and must move "
+        "shekyl-archival-retention::bond_connect::MAX_BOND_BAD_INTERVALS in "
+        "lockstep");
     /// Claimed-epoch entry cap: claim window `W` plus reorg slack
     /// (REWARD_EMISSION_LEG.md §6.3 pins the cap at 32). Derived from the
     /// JSON authority so a `max_claim_age_w` change cannot drift past this
@@ -591,18 +1075,50 @@ struct ArchivalBondValue {
         "REWARD_EMISSION_LEG.md §6.3 pins the claimed-epoch cap at 32 "
         "(W = 26 + 6 reorg slack); revisit the pin if max_claim_age_w moves");
 
+    // Interval-log entry (gate-4 F3). Half-open [start_epoch, end_exclusive).
+    // Carries TWO entry kinds — do not assume every entry is a slash:
+    //   - bad-standing interval: start < end (a slash opens with
+    //     end_exclusive = UINT64_MAX; Rebond closes it in place), and
+    //   - the Unbond clean interval-close: ZERO-LENGTH start == end — a pure
+    //     exit marker recording the unbond settlement epoch. Its empty range
+    //     excludes no epoch from good_through by construction, and the codec
+    //     deliberately carries start == end (KAT:
+    //     archival_substrate_lmdb.unbond_clean_close_marker_round_trips).
+    //     Never add a "valid interval is non-empty" assertion here.
     struct BadInterval {
         uint64_t start_epoch = 0;
         uint64_t end_exclusive = 0; // UINT64_MAX = open-ended bad standing
     };
 
     std::vector<uint8_t> hybrid_pubkey;
+    /// GF-1 debit authorizer (gate-4 §4.1 / gate-6 §9.6): committed once at
+    /// JoinMarket connect from the vin's §9.11 field, immutable for the
+    /// record's life. Every later `bond_debit` (Unbond, HoldingsUpdate-drop)
+    /// verifies its pqc auth against THIS copy — never the identity key.
+    /// The codec bounds it like `hybrid_pubkey` (≤ kMaxPubkeyLen); the exact
+    /// canonical-length requirement is the writers'/verify's (every record is
+    /// created by JoinMarket connect, whose vin serializer enforces it).
+    std::vector<uint8_t> bond_spend_pk;
     uint64_t join_settlement_epoch = 0;
     /// Per-P bonded balance (gate-4 §4.1); must equal `bond_floor(holdings)` post-connect.
     uint64_t bonded_total_atomic = 0;
     /// `kHoldingsShardSetCompact` or `kHoldingsCompleteTree` (gate-4 §3.4.1).
     uint8_t holdings_kind = kHoldingsShardSetCompact;
     std::vector<uint64_t> held_shard_ids;
+    /// v6 (HoldingsUpdate): the settlement epoch at which each held shard was
+    /// acquired, **index-parallel to `held_shard_ids`** (`shard_add_epochs[i]` is
+    /// the add-epoch of `held_shard_ids[i]`). Join-time shards carry `E_join`;
+    /// `HoldingsUpdate`-add appends the new shard's `E_add`. It powers both the
+    /// drop-eligibility gate (`current − add_epoch ≥ bond_duration(ShardAgeAtAdd)`,
+    /// gate-4 §4.4) and per-shard `E_add+1` serve-credit counting (P2B-7 Pin 5).
+    /// The codec couples the two arrays under ONE `holdings_count` (`encode`
+    /// throws on a length mismatch; `decode` reads `holdings_count` entries into
+    /// each), so a length desync is unrepresentable in the persisted form. In
+    /// memory the coupling is call-site discipline: every mutation site
+    /// (`put_archival_bond_record`, slash apply/revert, Unbond and HoldingsUpdate
+    /// connect/pop) adds or removes the matching index in both arrays — there is
+    /// no accessor that enforces it, and the `encode` throw is the backstop.
+    std::vector<uint64_t> shard_add_epochs;
     std::vector<BadInterval> bad_intervals;
     /// Strictly increasing absolute settlement-epoch indices already claimed
     /// by an emission vin (REWARD_EMISSION_LEG.md §6.3). Empty at join. The
@@ -626,11 +1142,21 @@ struct ArchivalBondValue {
     [[nodiscard]] std::vector<uint8_t> encode() const
     {
         if (hybrid_pubkey.size() > kMaxPubkeyLen
+            || bond_spend_pk.size() > kMaxPubkeyLen
             || held_shard_ids.size() > kMaxHoldings
             || bad_intervals.size() > kMaxBadIntervals
             || claimed_settlement_epochs.size() > kMaxClaimedEpochs)
         {
             throw std::runtime_error("ArchivalBondValue encode: bounds exceeded");
+        }
+        // v6 single-count coupling: the two per-shard arrays share one
+        // `holdings_count` on the wire, so a length mismatch cannot round-trip.
+        // A writer that desynced them is a bug, surfaced loudly here rather than
+        // silently truncating add-epochs (or over-reading) at the next decode.
+        if (held_shard_ids.size() != shard_add_epochs.size())
+        {
+            throw std::runtime_error(
+                "ArchivalBondValue encode: held_shard_ids / shard_add_epochs length mismatch");
         }
         // decode() rejects any holdings_kind outside the two known values, so a
         // serializer that accepted them would persist a record no read path can
@@ -650,13 +1176,18 @@ struct ArchivalBondValue {
                 "ArchivalBondValue encode: claimed_settlement_epochs order/span violated");
 
         std::vector<uint8_t> out;
-        out.reserve(1 + 2 + hybrid_pubkey.size() + 8 + 8 + 1 + 4 + held_shard_ids.size() * 8
+        out.reserve(1 + 2 + hybrid_pubkey.size() + 2 + bond_spend_pk.size() + 8 + 8 + 1 + 4
+            + held_shard_ids.size() * 8 + shard_add_epochs.size() * 8
             + 4 + bad_intervals.size() * 16 + 4 + claimed_settlement_epochs.size() * 8 + 8);
         out.push_back(kVersion);
         const uint16_t pk_len = static_cast<uint16_t>(hybrid_pubkey.size());
         out.push_back(static_cast<uint8_t>(pk_len >> 8));
         out.push_back(static_cast<uint8_t>(pk_len));
         out.insert(out.end(), hybrid_pubkey.begin(), hybrid_pubkey.end());
+        const uint16_t spk_len = static_cast<uint16_t>(bond_spend_pk.size());
+        out.push_back(static_cast<uint8_t>(spk_len >> 8));
+        out.push_back(static_cast<uint8_t>(spk_len));
+        out.insert(out.end(), bond_spend_pk.begin(), bond_spend_pk.end());
         for (int i = 7; i >= 0; --i)
             out.push_back(static_cast<uint8_t>((join_settlement_epoch >> (i * 8)) & 0xFF));
         for (int i = 7; i >= 0; --i)
@@ -669,6 +1200,13 @@ struct ArchivalBondValue {
         {
             for (int i = 7; i >= 0; --i)
                 out.push_back(static_cast<uint8_t>((shard_id >> (i * 8)) & 0xFF));
+        }
+        // v6 add-epochs, index-parallel under the same holdings_count (no
+        // separate count field — the coupling is structural in the wire form).
+        for (const uint64_t add_epoch : shard_add_epochs)
+        {
+            for (int i = 7; i >= 0; --i)
+                out.push_back(static_cast<uint8_t>((add_epoch >> (i * 8)) & 0xFF));
         }
         const uint32_t interval_count = static_cast<uint32_t>(bad_intervals.size());
         for (int i = 3; i >= 0; --i)
@@ -715,7 +1253,7 @@ struct ArchivalBondValue {
 
     static bool decode(const void* data, size_t len, ArchivalBondValue& out)
     {
-        if (!data || len < 1 + 2 + 8 + 8 + 1 + 4 + 4 + 4 + 8)
+        if (!data || len < 1 + 2 + 2 + 8 + 8 + 1 + 4 + 4 + 4 + 8)
             return false;
         const auto* p = static_cast<const uint8_t*>(data);
         size_t off = 0;
@@ -726,10 +1264,16 @@ struct ArchivalBondValue {
             return false;
         const uint16_t pk_len = static_cast<uint16_t>((p[off] << 8) | p[off + 1]);
         off += 2;
-        if (pk_len > kMaxPubkeyLen || off + pk_len + 8 + 8 + 1 > len)
+        if (pk_len > kMaxPubkeyLen || off + pk_len + 2 > len)
             return false;
         out.hybrid_pubkey.assign(p + off, p + off + pk_len);
         off += pk_len;
+        const uint16_t spk_len = static_cast<uint16_t>((p[off] << 8) | p[off + 1]);
+        off += 2;
+        if (spk_len > kMaxPubkeyLen || off + spk_len + 8 + 8 + 1 > len)
+            return false;
+        out.bond_spend_pk.assign(p + off, p + off + spk_len);
+        off += spk_len;
         out.join_settlement_epoch = load_be64(p + off);
         off += 8;
         out.bonded_total_atomic = load_be64(p + off);
@@ -742,13 +1286,14 @@ struct ArchivalBondValue {
         }
         if (off + 4 > len)
             return false;
-        const uint32_t holdings_count = static_cast<uint32_t>(
-            (static_cast<uint32_t>(p[off]) << 24)
-            | (static_cast<uint32_t>(p[off + 1]) << 16)
-            | (static_cast<uint32_t>(p[off + 2]) << 8)
-            | static_cast<uint32_t>(p[off + 3]));
+        const uint32_t holdings_count = load_be32(p + off);
         off += 4;
-        if (holdings_count > kMaxHoldings || off + holdings_count * 8u + 4 > len)
+        // v6: the single holdings_count governs BOTH the shard-id array and the
+        // index-parallel add-epoch array (2 * count * 8 bytes), then the
+        // interval count (4). `holdings_count <= kMaxHoldings` keeps the byte
+        // product well inside size_t.
+        if (holdings_count > kMaxHoldings
+            || off + static_cast<size_t>(holdings_count) * 8u * 2u + 4 > len)
             return false;
         out.held_shard_ids.clear();
         out.held_shard_ids.reserve(holdings_count);
@@ -757,11 +1302,14 @@ struct ArchivalBondValue {
             out.held_shard_ids.push_back(load_be64(p + off));
             off += 8;
         }
-        const uint32_t interval_count = static_cast<uint32_t>(
-            (static_cast<uint32_t>(p[off]) << 24)
-            | (static_cast<uint32_t>(p[off + 1]) << 16)
-            | (static_cast<uint32_t>(p[off + 2]) << 8)
-            | static_cast<uint32_t>(p[off + 3]));
+        out.shard_add_epochs.clear();
+        out.shard_add_epochs.reserve(holdings_count);
+        for (uint32_t i = 0; i < holdings_count; ++i)
+        {
+            out.shard_add_epochs.push_back(load_be64(p + off));
+            off += 8;
+        }
+        const uint32_t interval_count = load_be32(p + off);
         off += 4;
         if (interval_count > kMaxBadIntervals || off + interval_count * 16u + 4 > len)
             return false;
@@ -776,11 +1324,7 @@ struct ArchivalBondValue {
             off += 8;
             out.bad_intervals.push_back(iv);
         }
-        const uint32_t claimed_count = static_cast<uint32_t>(
-            (static_cast<uint32_t>(p[off]) << 24)
-            | (static_cast<uint32_t>(p[off + 1]) << 16)
-            | (static_cast<uint32_t>(p[off + 2]) << 8)
-            | static_cast<uint32_t>(p[off + 3]));
+        const uint32_t claimed_count = load_be32(p + off);
         off += 4;
         if (claimed_count > kMaxClaimedEpochs || off + claimed_count * 8u + 8 != len)
             return false;
@@ -813,6 +1357,29 @@ struct ArchivalBondValue {
         return false;
     }
 };
+
+// The slash log's pre-image kind field copies the bond's holdings_kind byte
+// verbatim (apply writes `bond.holdings_kind` pre-mutation); pin the two
+// enums together so neither can drift.
+static_assert(ArchivalSlashRevertValue::kPreKindShardSetCompact
+        == ArchivalBondValue::kHoldingsShardSetCompact
+    && ArchivalSlashRevertValue::kPreKindCompleteTree
+        == ArchivalBondValue::kHoldingsCompleteTree,
+    "slash-log holdings_pre_kind must mirror ArchivalBondValue holdings_kind");
+
+static_assert(ArchivalEmissionClaimRevertValue::kMaxClaimedEpochs
+        == ArchivalBondValue::kMaxClaimedEpochs,
+    "emission-claim journal cap must mirror ArchivalBondValue::kMaxClaimedEpochs");
+static_assert(ArchivalBondUnbondRevertValue::kMaxHoldings == ArchivalBondValue::kMaxHoldings,
+    "unbond journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");
+static_assert(ArchivalBondUnbondRevertValue::kMaxBadIntervals
+        == ArchivalBondValue::kMaxBadIntervals,
+    "unbond journal interval cap must mirror ArchivalBondValue::kMaxBadIntervals");
+static_assert(ArchivalBondHoldingsUpdateRevertValue::kMaxHoldings
+        == ArchivalBondValue::kMaxHoldings,
+    "holdings-update journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");
+static_assert(ArchivalBondRebondRevertValue::kMaxHoldings == ArchivalBondValue::kMaxHoldings,
+    "rebond journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");
 
 // ─── ArchivalShardSegmentValue ─────────────────────────────────────────────
 

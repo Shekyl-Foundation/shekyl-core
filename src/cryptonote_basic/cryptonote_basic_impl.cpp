@@ -32,6 +32,8 @@
 #include "include_base_utils.h"
 using namespace epee;
 
+#include <stdexcept>
+
 #include "cryptonote_basic_impl.h"
 #include "string_tools.h"
 #include "cryptonote_format_utils.h"
@@ -41,12 +43,25 @@ using namespace epee;
 #include "shekyl/shekyl_ffi.h"
 #include "crypto/hash.h"
 #include "int-util.h"
-#include "common/dns_utils.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "cn"
 
 namespace cryptonote {
+
+  const crypto::hash& empty_attestation_root()
+  {
+    // Once-per-process: Rust owns the cSHAKE derivation (rule 20). Fail closed
+    // if the FFI cannot produce the empty-set root — a header must never fall
+    // back to null_hash for "empty".
+    static const crypto::hash h = [] {
+      crypto::hash out{};
+      if (!shekyl_attestation_root_empty(reinterpret_cast<uint8_t*>(&out)))
+        throw std::runtime_error("shekyl_attestation_root_empty failed");
+      return out;
+    }();
+    return h;
+  }
 
   static uint8_t nettype_to_ffi_network(network_type nettype)
   {
@@ -297,21 +312,6 @@ namespace cryptonote {
     }
 
     return true;
-  }
-  //--------------------------------------------------------------------------------
-  bool get_account_address_from_str_or_url(
-      address_parse_info& info
-    , network_type nettype
-    , const std::string& str_or_url
-    , std::function<std::string(const std::string&, const std::vector<std::string>&, bool)> dns_confirm
-    )
-  {
-    if (get_account_address_from_str(info, nettype, str_or_url))
-      return true;
-    bool dnssec_valid;
-    std::string address_str = tools::dns_utils::get_account_address_as_str_from_url(str_or_url, dnssec_valid, dns_confirm);
-    return !address_str.empty() &&
-      get_account_address_from_str(info, nettype, address_str);
   }
   //--------------------------------------------------------------------------------
   bool operator ==(const cryptonote::transaction& a, const cryptonote::transaction& b) {

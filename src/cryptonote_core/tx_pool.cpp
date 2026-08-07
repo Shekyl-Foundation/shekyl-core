@@ -29,6 +29,7 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include <algorithm>
+#include <chrono>
 #include <boost/filesystem.hpp>
 #include <unordered_set>
 #include <vector>
@@ -46,6 +47,7 @@
 #include "misc_language.h"
 #include "misc_log_ex.h"
 #include "tx_verification_utils.h"
+#include "shekyl/shekyl_ffi.h"
 #include "warnings.h"
 #include "common/perf_timer.h"
 #include "crypto/hash.h"
@@ -62,28 +64,18 @@ namespace cryptonote
 {
   namespace
   {
-    /*! The Dandelion++ has formula for calculating the average embargo timeout:
-                          (-k*(k-1)*hop)/(2*log(1-ep))
-        where k is the number of hops before this node and ep is the probability
-        that one of the k hops hits their embargo timer, and hop is the average
-        time taken between hops. So decreasing ep will make it more probable
-        that "this" node is the first to expire the embargo timer. Increasing k
-        will increase the number of nodes that will be "hidden" as a prior
-        recipient of the tx.
-
-        As example, k=5 and ep=0.1 means "this" embargo timer has a 90%
-        probability of being the first to expire amongst 5 nodes that saw the
-        tx before "this" one. These values are independent to the fluff
-        probability, but setting a low k with a low p (fluff probability) is
-        not ideal since a blackhole is more likely to reveal earlier nodes in
-        the chain.
-
-        This value was calculated with k=5, ep=0.10, and hop = 175 ms. A
-        testrun from a recent Intel laptop took ~80ms to
-        receive+parse+proces+send transaction. At least 50ms will be added to
-        the latency if crossing an ocean. So 175ms is the fudge factor for
-        a single hop with 39s being the embargo timer. */
-    constexpr const std::chrono::seconds dandelionpp_embargo_average{CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE};
+    /* The stem embargo — its value and its distribution — lives in
+       shekyl-relay-privacy's `EmbargoTimer`, reached through
+       `shekyl/shekyl_ffi.h`. The prose derivation that used to stand here
+       is gone with the constant it justified: it printed a formula
+       (-k*(k-1)*hop)/(2*log(1-ep)) that, over its own stated k=5, ep=0.10 and
+       hop=175ms, yields 16.61s rather than the 39s it claimed, and the draw
+       beside it was a Poisson under a derivation assuming exponential survival,
+       so the backstop never fired. The corrected mean is 190s (144s until F-7
+       re-measured `fluff_return_ms`; sec 44), memoryless, solved exactly
+       against the survival target rather than through a closed form that
+       substituted E[K] into an expression in K(K-1).
+       See docs/design/DAEMON_RELAY_PRIVACY.md sec 17 (and sec 5 for the solve). */
 
     //TODO: constants such as these should at least be in the header,
     //      but probably somewhere more accessible to the rest of the
@@ -127,6 +119,20 @@ namespace cryptonote
       if (std::holds_alternative<txin_to_key>(in))
         return &std::get<txin_to_key>(in).k_image;
       return nullptr;
+    }
+  }
+
+  namespace detail
+  {
+    std::time_t embargo_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs)
+    {
+      // Cast: the FFI returns uint64_t; seconds::rep is signed, so list-init
+      // would be a narrowing conversion on some standard libraries.
+      const auto delay = std::chrono::seconds{static_cast<std::chrono::seconds::rep>(draw_secs)};
+      // ceil, not to_time_t's truncation — the header explains why the direction
+      // is a privacy decision rather than a formatting one.
+      return std::chrono::system_clock::to_time_t(
+        std::chrono::ceil<std::chrono::seconds>(now + delay));
     }
   }
   //---------------------------------------------------------------------------------
@@ -323,7 +329,7 @@ namespace cryptonote
           meta.bf_padding = 0;
           memset(meta.padding, 0, sizeof(meta.padding));
 
-          if (tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc)
+          if (tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc)
           {
             meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(tx);
             meta.fcmp_verified = (meta.fcmp_verification_hash != null_hash) ? 1 : 0;
@@ -432,7 +438,7 @@ namespace cryptonote
 
     // §3.5 attestation: same derivation as the P2P path above. The
     // certificate gate lives in the (only) caller.
-    if (tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc)
+    if (tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc)
     {
       meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(tx);
       meta.fcmp_verified = (meta.fcmp_verification_hash != null_hash) ? 1 : 0;
@@ -1027,7 +1033,6 @@ namespace cryptonote
   {
     just_broadcasted.clear();
 
-    crypto::random_poisson_seconds embargo_duration{dandelionpp_embargo_average};
     const auto now = std::chrono::system_clock::now();
     uint64_t next_relay = uint64_t{std::numeric_limits<time_t>::max()};
 
@@ -1049,7 +1054,8 @@ namespace cryptonote
 
           if (meta.dandelionpp_stem)
           {
-            meta.last_relayed_time = std::chrono::system_clock::to_time_t(now + embargo_duration());
+            meta.last_relayed_time =
+              detail::embargo_deadline(now, shekyl_dandelionpp_embargo_draw_seconds());
             next_relay = std::min(next_relay, meta.last_relayed_time);
           }
           else
@@ -1229,6 +1235,7 @@ namespace cryptonote
     uint64_t w = 0;
 
     std::unordered_set<crypto::key_image> k_images;
+    std::unordered_set<std::string> archival_keys;
 
     for (const tx_block_template_backlog_entry& e : tmp)
     {
@@ -1246,6 +1253,11 @@ namespace cryptonote
         if (is_transaction_ready_to_go(meta, e.id, txblob, tx))
         {
           if (have_key_images(k_images, tx))
+            continue;
+          // Same archival block-unique dedup as fill_block_template: a pair
+          // sharing a bond-post P / emission (P, E) / serve-credit key would
+          // make the template self-invalid at its block-level pass.
+          if (!append_archival_block_unique_keys(archival_keys, tx))
             continue;
           append_key_images(k_images, tx);
 
@@ -1578,7 +1590,7 @@ namespace cryptonote
   {
     if (!meta.fcmp_verified)
       return false;
-    if (tx.rct_signatures.type != rct::RCTTypeFcmpPlusPlusPqc)
+    if (tx.rct_signatures.type != rct::CTTypeFcmpPlusPlusPqc)
       return false;
     const crypto::hash expected = Blockchain::compute_fcmp_verification_hash(tx);
     return expected != crypto::null_hash && expected == meta.fcmp_verification_hash;
@@ -1715,6 +1727,80 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------------------------
+  bool tx_memory_pool::append_archival_block_unique_keys(std::unordered_set<std::string>& keys, const transaction_prefix& tx)
+  {
+    // Mirrors the block-level archival uniqueness passes
+    // (Blockchain::handle_block_to_main_chain), domain-tagged so the three
+    // key spaces cannot collide: 'B' + P (bond post, keyed on P alone —
+    // gate-4 §3.5), 'E' + P + epoch (emission (P, E) claim), 'S' + the
+    // serve-credit (P, shard, E) composite. A template that carried two txs
+    // sharing any such key would fail its own block-level pass on connect.
+    //
+    // Integer key fields are appended BIG-ENDIAN (shekyl::db::store_be64) —
+    // the archival composite-key convention (SCE-1; db_lmdb.cpp forbids
+    // native-endian composite keys). This ephemeral in-process set would
+    // dedup correctly with any fixed byte order, but keeping every archival
+    // key big-endian removes the endianness question outright and matches
+    // the persisted keys these mirror.
+    //
+    // Two-phase: collect the tx's keys first, commit only on full success —
+    // a skipped tx must leave no keys behind to over-exclude later
+    // candidates.
+    const auto append_be64 = [](std::string& key, uint64_t v) {
+      uint8_t be[8];
+      shekyl::db::store_be64(be, v);
+      key.append(reinterpret_cast<const char*>(be), sizeof(be));
+    };
+    std::vector<std::string> tx_keys;
+    for (const auto& vin : tx.vin)
+    {
+      if (std::holds_alternative<txin_archival_bond_post>(vin))
+      {
+        const auto& bond = std::get<txin_archival_bond_post>(vin);
+        std::string key(1, 'B');
+        key.append(bond.p_canonical_id.data, sizeof(bond.p_canonical_id.data));
+        tx_keys.push_back(std::move(key));
+      }
+      else if (std::holds_alternative<txin_archival_reward_emission>(vin))
+      {
+        const auto& emission = std::get<txin_archival_reward_emission>(vin);
+        crypto::hash p_canonical_id{};
+        uint64_t vin_epochs[SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS] = {};
+        size_t vin_epochs_len = 0;
+        const uint8_t extract_rc = shekyl_archival_emission_vin_extract(
+          emission.canonical_bytes.data(), emission.canonical_bytes.size(),
+          reinterpret_cast<uint8_t*>(p_canonical_id.data),
+          vin_epochs, SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS, &vin_epochs_len);
+        if (extract_rc != SHEKYL_EMISSION_VIN_OK || vin_epochs_len == 0)
+          return false; // unparseable claim: the block pass rejects it too
+        for (size_t e = 0; e < vin_epochs_len; ++e)
+        {
+          std::string key(1, 'E');
+          key.append(p_canonical_id.data, sizeof(p_canonical_id.data));
+          append_be64(key, vin_epochs[e]);
+          tx_keys.push_back(std::move(key));
+        }
+      }
+      else if (std::holds_alternative<txin_archival_serve_credit_response>(vin))
+      {
+        const auto& resp = std::get<txin_archival_serve_credit_response>(vin);
+        std::string key(1, 'S');
+        key.append(resp.p_canonical_id.data, sizeof(resp.p_canonical_id.data));
+        append_be64(key, resp.shard_id);
+        append_be64(key, resp.settlement_epoch);
+        tx_keys.push_back(std::move(key));
+      }
+    }
+    for (const std::string& key : tx_keys)
+      if (keys.count(key))
+        return false;
+    // Intra-tx duplicates cannot reach here (per-tx verify rejects them), but
+    // insert() dedups harmlessly regardless.
+    for (std::string& key : tx_keys)
+      keys.insert(std::move(key));
+    return true;
+  }
+  //---------------------------------------------------------------------------------
   void tx_memory_pool::mark_double_spend(const transaction &tx)
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
@@ -1815,6 +1901,7 @@ namespace cryptonote
     size_t max_total_weight_v5 = 2 * median_weight - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
     size_t max_total_weight = version >= 5 ? max_total_weight_v5 : max_total_weight_pre_v5;
     std::unordered_set<crypto::key_image> k_images;
+    std::unordered_set<std::string> archival_keys;
 
     LOG_PRINT_L2("Filling block template, median weight " << median_weight << ", " << m_txs_by_fee_and_receive_time.size() << " txes in the pool");
 
@@ -1924,6 +2011,15 @@ namespace cryptonote
       if (have_key_images(k_images, tx))
       {
         LOG_PRINT_L2("  key images already seen");
+        continue;
+      }
+      // Two txs sharing an archival block-unique key (bond-post P, emission
+      // (P, E), serve-credit (P, shard, E)) carry no key images to conflict
+      // on, yet make the template fail its own block-level pass on connect —
+      // the mining-stall vector. First candidate wins the slot.
+      if (!append_archival_block_unique_keys(archival_keys, tx))
+      {
+        LOG_PRINT_L2("  archival block-unique key already seen");
         continue;
       }
 

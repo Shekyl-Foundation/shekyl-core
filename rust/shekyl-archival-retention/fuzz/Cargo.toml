@@ -1,0 +1,43 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+# Local-only cargo-fuzz harness for the serve-credit decision mirrors
+# (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md §5 fuzz plan). Isolated from
+# the parent workspace via its own [workspace] table (same shape as
+# shekyl-fcmp/fuzz and shekyl-crypto-pq/fuzz) so stable-Rust CI never
+# attempts to resolve libfuzzer-sys. Builds and runs only under nightly:
+#   cargo +nightly fuzz run fuzz_serve_credit_gate
+#   cargo +nightly fuzz run fuzz_serve_credit_block_unique
+
+[package]
+name = "shekyl-archival-retention-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "BSD-3-Clause"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# (ARCHIVAL_REWARD_GATE_M1.md §4) — a fuzz harness is not a genesis artifact.
+shekyl-archival-retention = { path = ".." }
+
+[[bin]]
+name = "fuzz_serve_credit_gate"
+path = "fuzz_targets/fuzz_serve_credit_gate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_serve_credit_block_unique"
+path = "fuzz_targets/fuzz_serve_credit_block_unique.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

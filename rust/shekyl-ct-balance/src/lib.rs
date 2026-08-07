@@ -25,12 +25,20 @@
 //!
 //! Bulletproof+ range-proof verification remains in C++ (`rctSigs`); this crate
 //! is only the commitment-sum balance.
+//!
+//! The crate is also the single home for the §2.3 **output-point validity**
+//! rule ([`check_output_keys`] / [`check_commitment_masks`]): the same
+//! canonical-prime-order gate the balance equation applies to its commitments,
+//! extended to the output points the balance equation never sees (output
+//! public keys, and coinbase `outPk` masks under `CTTypeNull`).
 
 #![deny(unsafe_code)]
 
 use curve25519_dalek::{
+    constants::ED25519_BASEPOINT_POINT,
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
+    traits::IsIdentity,
 };
 use shekyl_curve_generators::H as H_POINT_LAZY;
 use shekyl_units::AtomicUnits;
@@ -193,6 +201,114 @@ pub fn verify_ct_balance(
     }
 }
 
+/// Output-point validity failure modes (`GENESIS_TX_WIRE_FORMAT.md` §2.3,
+/// output-point rule).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputPointsError {
+    /// An output public key was not a canonical, torsion-free, non-identity
+    /// prime-order point (or the flat buffer was not a multiple of 32).
+    InvalidOutputKey,
+    /// A commitment mask was not a canonical, torsion-free prime-order point
+    /// (or the flat buffer was not a multiple of 32).
+    InvalidMask,
+    /// A commitment mask took a trivial, amount-leaking form: the identity
+    /// (`mask=0, amount=0`), bare `G` (`mask=1, amount=0`), or — coinbase only —
+    /// `zeroCommit(amount) = G + amount*H` (`mask=1`, public amount).
+    TrivialMask,
+}
+
+impl core::fmt::Display for OutputPointsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            OutputPointsError::InvalidOutputKey => {
+                "an output public key is not a canonical, torsion-free, \
+                 non-identity prime-order point"
+            }
+            OutputPointsError::InvalidMask => {
+                "a commitment mask is not a canonical, torsion-free prime-order point"
+            }
+            OutputPointsError::TrivialMask => {
+                "a commitment mask uses a trivial amount-leaking form (identity, G, \
+                 or coinbase zeroCommit)"
+            }
+        })
+    }
+}
+
+impl std::error::Error for OutputPointsError {}
+
+/// Check every output public key `O` in a flattened `N × 32` buffer against the
+/// §2.3 output-point rule: canonical encoding, prime-order (torsion-free), and
+/// not the identity.
+///
+/// The identity is rejected on top of the canonical/torsion gates because the
+/// FCMP++ leaf builder cannot represent it (Wei25519 `to_xy` has no affine form
+/// for the point at infinity), so an identity `O` accepted at admission would be
+/// a permanently skipped tree leaf — exactly the silent-skip hole this rule
+/// closes. Honest output keys (`O = ho·G + B + y·T`, torsion-checked at
+/// creation) are never affected; the rule is adversarial-only.
+pub fn check_output_keys(flat: &[u8]) -> Result<(), OutputPointsError> {
+    if !flat.len().is_multiple_of(32) {
+        return Err(OutputPointsError::InvalidOutputKey);
+    }
+    for chunk in flat.chunks_exact(32) {
+        let key: &[u8; 32] = chunk
+            .try_into()
+            .map_err(|_| OutputPointsError::InvalidOutputKey)?;
+        let point = decompress_point(key).map_err(|_| OutputPointsError::InvalidOutputKey)?;
+        if point.is_identity() {
+            return Err(OutputPointsError::InvalidOutputKey);
+        }
+    }
+    Ok(())
+}
+
+/// Check every commitment mask (`outPk[i].mask`) in a flattened `N × 32` buffer
+/// against the §2.3 output-point rule plus the trivial-mask fingerprint guards.
+///
+/// Structural gates (every mask): canonical encoding and prime-order
+/// (torsion-free), rejected as [`OutputPointsError::InvalidMask`].
+/// For non-coinbase txs these are redundant with the balance equation's own
+/// point gate; applying them here keeps the rule uniform and covers coinbase
+/// (`CTTypeNull`), which has no balance equation.
+///
+/// Trivial-form gates (every mask): the identity (`mask=0, amount=0`) and bare
+/// `G` (`mask=1, amount=0`) → [`OutputPointsError::TrivialMask`] — defense in
+/// depth against construction bugs.
+///
+/// Coinbase fingerprint gate: when `coinbase_amounts` is `Some`, mask `i` (for
+/// `i < coinbase_amounts.len()`) must not equal
+/// `zeroCommit(amount) = G + amount*H` — the trivially-computable commitment
+/// that leaks the confidential-coinbase amount to any observer. Pass `None` for
+/// non-coinbase txs.
+pub fn check_commitment_masks(
+    flat: &[u8],
+    coinbase_amounts: Option<&[u64]>,
+) -> Result<(), OutputPointsError> {
+    if !flat.len().is_multiple_of(32) {
+        return Err(OutputPointsError::InvalidMask);
+    }
+    for (i, chunk) in flat.chunks_exact(32).enumerate() {
+        let key: &[u8; 32] = chunk
+            .try_into()
+            .map_err(|_| OutputPointsError::InvalidMask)?;
+        let point = decompress_point(key).map_err(|_| OutputPointsError::InvalidMask)?;
+        if point.is_identity() || point == ED25519_BASEPOINT_POINT {
+            return Err(OutputPointsError::TrivialMask);
+        }
+        if let Some(amounts) = coinbase_amounts {
+            if let Some(&amount) = amounts.get(i) {
+                let trivial =
+                    ED25519_BASEPOINT_POINT + amount_commitment(AtomicUnits::from_raw(amount));
+                if point == trivial {
+                    return Err(OutputPointsError::TrivialMask);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +427,112 @@ mod tests {
             ),
             Err(CtBalanceError::InvalidPoint)
         );
+    }
+
+    // A known curve25519 small-order (8-torsion) point, shared with
+    // `rejects_small_order_commitment`.
+    const TORSION: [u8; 32] = [
+        0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67,
+        0x0f, 0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac,
+        0x03, 0xfa,
+    ];
+
+    /// `y = p + 1`: a non-canonical encoding of the identity.
+    fn non_canonical_identity() -> [u8; 32] {
+        let mut b = [0xffu8; 32];
+        b[0] = 0xee;
+        b[31] = 0x7f;
+        b
+    }
+
+    #[test]
+    fn output_keys_accept_honest_points() {
+        // G and a generic multiple of G are canonical prime-order non-identity.
+        let mut flat = Vec::new();
+        flat.extend_from_slice(G.compress().as_bytes());
+        flat.extend_from_slice(
+            (Scalar::from_bytes_mod_order([9u8; 32]) * G)
+                .compress()
+                .as_bytes(),
+        );
+        assert!(check_output_keys(&flat).is_ok());
+        assert!(check_output_keys(&[]).is_ok());
+    }
+
+    #[test]
+    fn output_keys_reject_torsion_identity_and_non_canonical() {
+        assert_eq!(
+            check_output_keys(&TORSION),
+            Err(OutputPointsError::InvalidOutputKey)
+        );
+        // Canonical identity: decompresses fine, is torsion-free — the explicit
+        // identity gate is what rejects it (no Wei25519 affine form => no leaf).
+        let identity = EdwardsPoint::default().compress().to_bytes();
+        assert_eq!(
+            check_output_keys(&identity),
+            Err(OutputPointsError::InvalidOutputKey)
+        );
+        assert_eq!(
+            check_output_keys(&non_canonical_identity()),
+            Err(OutputPointsError::InvalidOutputKey)
+        );
+        assert_eq!(
+            check_output_keys(&[0u8; 31]),
+            Err(OutputPointsError::InvalidOutputKey)
+        );
+    }
+
+    #[test]
+    fn masks_reject_torsion_and_non_canonical_as_invalid() {
+        assert_eq!(
+            check_commitment_masks(&TORSION, None),
+            Err(OutputPointsError::InvalidMask)
+        );
+        assert_eq!(
+            check_commitment_masks(&non_canonical_identity(), None),
+            Err(OutputPointsError::InvalidMask)
+        );
+        assert_eq!(
+            check_commitment_masks(&[0u8; 33], None),
+            Err(OutputPointsError::InvalidMask)
+        );
+    }
+
+    #[test]
+    fn masks_reject_trivial_forms() {
+        let identity = EdwardsPoint::default().compress().to_bytes();
+        assert_eq!(
+            check_commitment_masks(&identity, None),
+            Err(OutputPointsError::TrivialMask)
+        );
+        let g = G.compress().to_bytes();
+        assert_eq!(
+            check_commitment_masks(&g, None),
+            Err(OutputPointsError::TrivialMask)
+        );
+    }
+
+    #[test]
+    fn coinbase_masks_reject_zero_commit_of_amount() {
+        const AMOUNT: u64 = 600_000_000_000;
+        // zeroCommit(amount) = G + amount*H — the amount-leaking fingerprint.
+        let zero_commit = (G + amount_commitment(au(AMOUNT))).compress().to_bytes();
+        assert_eq!(
+            check_commitment_masks(&zero_commit, Some(&[AMOUNT])),
+            Err(OutputPointsError::TrivialMask)
+        );
+        // Same point with a different claimed amount is not the fingerprint.
+        assert!(check_commitment_masks(&zero_commit, Some(&[AMOUNT + 1])).is_ok());
+        // And without the coinbase amounts it is just a well-formed mask.
+        assert!(check_commitment_masks(&zero_commit, None).is_ok());
+    }
+
+    #[test]
+    fn honest_masks_accept() {
+        let mask = commit(42, Scalar::from_bytes_mod_order([3u8; 32]));
+        assert!(check_commitment_masks(&mask, None).is_ok());
+        assert!(check_commitment_masks(&mask, Some(&[42])).is_ok());
+        assert!(check_commitment_masks(&[], None).is_ok());
     }
 
     #[test]

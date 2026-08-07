@@ -47,7 +47,6 @@ set(unit_tests_sources
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp
-  dns_resolver.cpp
   epee_boosted_tcp_server.cpp
   epee_levin_protocol_handler_async.cpp
   epee_http_server.cpp
@@ -81,6 +80,7 @@ set(unit_tests_sources
   pruning.cpp
   random.cpp
   rpc_target_wire_contract.cpp
+  rpc_args_daemon_surface.cpp
   rolling_median.cpp
   scaling_2021.cpp
   seed_epoch.cpp
@@ -95,7 +95,6 @@ set(unit_tests_sources
   test_protocol_pack.cpp
   threadpool.cpp
   hardfork.cpp
-  unbound.cpp
   uri.cpp
   util.cpp
   varint.cpp
@@ -107,16 +106,25 @@ set(unit_tests_sources
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp
+  archival_credit_wire.cpp
   archival_serve_credit.cpp
+  archival_serve_credit_equivalence.cpp
   archival_serve_credit_integration.cpp
   archival_bond_post.cpp
   archival_bond_post_integration.cpp
+  archival_attestation_verify.cpp
+  archival_reward_emission.cpp
+  archival_emission_connect.cpp
+  archival_emission_ct_balance.cpp
   archival_segment_freeze.cpp
   archival_substrate_lmdb.cpp
+  archival_claim_source_rpc.cpp
   ct_balance_differential.cpp
   deferred_insertion.cpp
+  economics_b5_fee_coinbase.cpp
   tx_data_pruning_lmdb.cpp
   txpool_ref_age.cpp
+  txpool_relay_timers.cpp
   pending_tree_fuzz.cpp
   )
 
@@ -183,8 +191,20 @@ endif ()
 SET_PROPERTY(SOURCE main.cpp PROPERTY COMPILE_FLAGS -DDEFAULT_DATA_DIR="\\"${CMAKE_SOURCE_DIR}/tests/data\\"")
 SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_FLAGS
   -DGATE2_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json\\"")
+# COMPILE_DEFINITIONS (not COMPILE_FLAGS) so CMake owns the per-generator
+# quoting of the string-literal values. The quote characters below are part
+# of each definition's value (CMake only treats quotes as delimiters at
+# argument start), so the compiler receives -DNAME="/abs/path" and the
+# macro expands to a valid C string literal — verified in build.ninja.
+SET_PROPERTY(SOURCE archival_serve_credit_equivalence.cpp PROPERTY COMPILE_DEFINITIONS
+  GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json"
+  SERVE_CREDIT_EQUIVALENCE_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/serve_credit_equivalence_kat_v1.json")
 SET_PROPERTY(SOURCE archival_bond_post_integration.cpp PROPERTY COMPILE_FLAGS
   -DGATE4_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate4_lifecycle_kat_v1.json\\"")
+SET_PROPERTY(SOURCE archival_emission_connect.cpp PROPERTY COMPILE_FLAGS
+  -DEMISSION_CONNECT_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/emission_connect_kat_v1.json\\"")
+SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_FLAGS
+  -DEMISSION_CONNECT_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/emission_connect_kat_v1.json\\"")
 
 SET_PROPERTY(SOURCE memwipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
 SET_PROPERTY(SOURCE transfer_details_wipe.cpp PROPERTY COMPILE_FLAGS -Ofast)

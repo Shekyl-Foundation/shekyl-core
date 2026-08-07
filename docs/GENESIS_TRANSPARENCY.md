@@ -157,11 +157,12 @@ genesis allocation:
   participate in the same emission, staking, and fee mechanisms as all other
   participants. There is no ongoing preferential treatment.
 
-- **Lock commitments.** Founding allocations are subject to the same staking
-  lock tiers available to all participants. Founders are expected to
-  demonstrate conviction through the long lock tier (150,000 blocks, ~208
-  days) for the majority of their genesis allocation, making the commitment
-  public and verifiable on-chain.
+- **Bond commitments.** Founding allocations participate in the same
+  archival staking market as everyone else, on the same terms — on-chain
+  bonds backing archival service, with no preferential treatment. Founders
+  are expected to demonstrate conviction by bonding the majority of their
+  genesis allocation into archival staking, making the commitment public and
+  verifiable on-chain.
 
 - **Transparency over time.** The founding team commits to publishing their
   genesis addresses publicly so that any participant can verify lock status,
@@ -193,18 +194,28 @@ governed institution funded voluntarily — whether through founder donations,
 community fundraising, or other means decided at that time. No coins are
 reserved or earmarked for this purpose at launch.
 
-**Pre-launch treasury (mainnet and stagenet).** Until production wallets
-can emit final founder addresses, genesis allocates the full 100_000 SKL
-founder pool to a single on-chain treasury output per network. Keys are
-deterministic placeholders (domain-separated BIP-39 entropy; see
-the `shekyl-dev` repository (`tools/genesis_builder/GENESIS_BUILD_INFO.txt`) and
-`rust/shekyl-crypto-pq/examples/gen_genesis_addrs.rs`), not operational
-founder wallets. Testnet continues to use five separate developer outputs
-for integration testing.
+**Genesis shape and reproducibility.** Genesis carries the five-output
+20,000 SHEKYL split on **every** network (the earlier single combined
+treasury output on mainnet/stagenet is retired). The genesis coinbase is
+built by the Rust `geblock` tool (`rust/shekyl-genesis-tool`) from the
+committed recipients files `config/genesis_recipients.{mainnet,testnet,stagenet}.json`,
+with a **deterministic transaction key** derived from the recipients file
+itself (cSHAKE256, customization `shekyl/genesis-txkey-v1`; full spec in
+the tool's `txkey` module). Genesis is transparent by design — CT type
+Null, cleartext amounts, published recipients — so the public derivation
+discloses nothing beyond this document, and it makes the pinned
+`GENESIS_TX` byte-reproducible by anyone: `geblock verify` rebuilds all
+three networks from the committed files and byte-compares against
+`src/cryptonote_config.h`.
 
-The specific genesis addresses for each founder on mainnet/stagenet will
-be published in `docs/GENESIS_ALLOCATIONS.md` when production wallet
-addresses replace the treasury placeholders.
+**The allocations are final and published.** The recipient wallets were
+generated with fresh operating-system entropy, restore-verified from their
+written seeds, and their addresses committed to the recipients files above.
+Every genesis address, amount, and block identity — together with the exact
+commands to rebuild and check the pinned bytes yourself — is published in
+[`GENESIS_ALLOCATIONS.md`](GENESIS_ALLOCATIONS.md). No seed material has ever
+been committed to any repository; the placeholder era ended with that
+ceremony.
 
 ---
 

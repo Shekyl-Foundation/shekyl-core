@@ -126,6 +126,25 @@ namespace boost { namespace serialization {
 #include "fcmp/rctTypes.h"
 #include "fcmp/rctOps.h"
 
+namespace cryptonote
+{
+  // Content-validation failure inside a boost serializer (non-canonical or
+  // coupling-violating data). Derives from archive_exception so the archive
+  // load/save paths' corruption handling catches it exactly like boost's own
+  // throws, but overrides what(): the base's other_exception code renders only
+  // "unknown derived exception" — it is boost's designated slicing marker for
+  // derived exceptions like this one, not a message carrier. `msg` must be a
+  // string literal (the pointer is stored, not copied).
+  struct boost_archive_content_error : boost::archive::archive_exception
+  {
+    explicit boost_archive_content_error(const char* msg) noexcept
+      : boost::archive::archive_exception(boost::archive::archive_exception::other_exception),
+        m_msg(msg) {}
+    const char* what() const noexcept override { return m_msg; }
+    const char* m_msg;
+  };
+}
+
 namespace boost
 {
   namespace serialization
@@ -257,6 +276,23 @@ namespace boost
     a & x.hybrid_public_key;
     a & x.p_canonical_id;
     a & x.post_kind;
+    // §9.11 coupling mirrored from the binary serializer: the GF-1 debit
+    // authorizer exists iff JoinMarket, with the exact canonical single-key
+    // length. Boost archives are internal (blob/pool paths), but they must
+    // refuse the same shapes the binary codec refuses — on load so a
+    // non-canonical key can never enter memory through this path (the
+    // record-commit at connect assumes no codec admits one), and on save so
+    // a misconstruction is loud instead of silently dropping the key.
+    if (x.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket))
+    {
+      a & x.bond_spend_pk;
+      if (x.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+        throw cryptonote::boost_archive_content_error("archival bond-post bond_spend_pk length not canonical");
+    }
+    else if (!x.bond_spend_pk.empty())
+    {
+      throw cryptonote::boost_archive_content_error("bond_spend_pk is JoinMarket-coupled");
+    }
     a & x.holdings;
     a & x.bonded_total_atomic;
     a & x.bond_credit;
@@ -274,6 +310,12 @@ namespace boost
     a & x.leaf_bytes;
     a & x.path;
     a & x.hybrid_signature;
+  }
+
+  template <class Archive>
+  inline void serialize(Archive &a, cryptonote::txin_archival_reward_emission &x, const boost::serialization::version_type ver)
+  {
+    a & x.canonical_bytes;
   }
 
   template <class Archive>
@@ -319,7 +361,7 @@ namespace boost
     else
     {
       a & (rct::rctSigBase&)x.rct_signatures;
-      if (x.rct_signatures.type != rct::RCTTypeNull)
+      if (x.rct_signatures.type != rct::CTTypeNull)
         a & x.rct_signatures.p;
       if (x.version >= 3 && !x.vin.empty() && !std::holds_alternative<cryptonote::txin_gen>(x.vin[0]))
         a & x.pqc_auths;
@@ -329,12 +371,22 @@ namespace boost
   template <class Archive>
   inline void serialize(Archive &a, cryptonote::block &b, const boost::serialization::version_type ver)
   {
+    // Class version 1: attestation_root joined the header (ARCHIVAL_CREDIT_WIRE.md
+    // §3, the LMDB VERSION 9 format change). A version-0 archive — a pre-V9
+    // poolstate.bin or alt-block cache — lacks the field and would misparse from
+    // shifted bytes; refuse it loudly instead. unsupported_class_version is the
+    // one code whose what() renders the custom text (as "class version <text>");
+    // other_exception swallows it into "unknown derived exception".
+    if (ver < 1)
+      throw boost::archive::archive_exception(boost::archive::archive_exception::unsupported_class_version,
+        "is pre-V9 (block header lacks attestation_root); delete the stale cache or re-export with a current build");
     a & b.major_version;
     a & b.minor_version;
     a & b.timestamp;
     a & b.prev_id;
     a & b.nonce;
     a & b.curve_tree_root;
+    a & b.attestation_root;
     //------------------
     a & b.miner_tx;
     a & b.tx_hashes;
@@ -399,7 +451,7 @@ namespace boost
   inline void serialize(Archive &a, rct::rctSigBase &x, const boost::serialization::version_type ver)
   {
     a & x.type;
-    if (x.type == rct::RCTTypeNull)
+    if (x.type == rct::CTTypeNull)
     {
       a & x.enc_amounts;
       a & x.enc_labels;
@@ -407,8 +459,8 @@ namespace boost
       a & x.txnFee;
       return;
     }
-    if (x.type != rct::RCTTypeFcmpPlusPlusPqc)
-      throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
+    if (x.type != rct::CTTypeFcmpPlusPlusPqc)
+      throw cryptonote::boost_archive_content_error("Unsupported rct type");
     a & x.enc_amounts;
     a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
@@ -426,7 +478,7 @@ namespace boost
   inline void serialize(Archive &a, rct::rctSig &x, const boost::serialization::version_type ver)
   {
     a & x.type;
-    if (x.type == rct::RCTTypeNull)
+    if (x.type == rct::CTTypeNull)
     {
       a & x.enc_amounts;
       a & x.enc_labels;
@@ -434,8 +486,8 @@ namespace boost
       a & x.txnFee;
       return;
     }
-    if (x.type != rct::RCTTypeFcmpPlusPlusPqc)
-      throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
+    if (x.type != rct::CTTypeFcmpPlusPlusPqc)
+      throw cryptonote::boost_archive_content_error("Unsupported rct type");
     a & x.enc_amounts;
     a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
@@ -477,3 +529,6 @@ namespace boost
 
 BOOST_CLASS_VERSION(rct::rctSigPrunable, 2)
 BOOST_CLASS_VERSION(rct::rctSig, 2)
+// V1: attestation_root (ARCHIVAL_CREDIT_WIRE.md §3); version-0 archives are
+// refused in serialize() above.
+BOOST_CLASS_VERSION(cryptonote::block, 1)

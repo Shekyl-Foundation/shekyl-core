@@ -1,0 +1,22 @@
+# Deliberate exceptions to the dead-relative-link gate
+# (scripts/ci/check_doc_links.py). Suffix entries match any link target ending
+# with the suffix; `file:target` entries match one exact link in one file.
+# Every entry carries its reason on the same line — the gate rejects an
+# allowlist entry without one, because an unexplained exception is how the
+# list grows silently (the closed-exception-list rule, applied to itself).
+
+.plan.md              # cursor plan files were never committed; the historical references are accurate as written
+.active               # live-pin marker files are deleted when their window closes; references record that they existed
+shekyl-gui-wallet/    # sibling repository; unresolvable in a single-repo checkout
+shekyl-mobile-wallet/ # sibling repository; unresolvable in a single-repo checkout
+
+docs/design/WALLET_REWRITE_PLAN.md:rust/shekyl-staking/ # planned crate layout; staking later absorbed into shekyl-consensus
+docs/design/WALLET_REWRITE_PLAN.md:rust/shekyl-wallet-prefs/ # planned crate; landed as shekyl-engine-prefs
+docs/design/WALLET_REWRITE_PLAN.md:rust/shekyl-ffi/src/wallet_ledger_ffi.rs # planned file; the FFI landed under different module names
+docs/design/IMPLEMENTATION_INDEX.md:X.md # template placeholder in the how-to-register prose
+docs/CHANGELOG.md:src/... # prose placeholder describing a path pattern
+docs/CHANGELOG.md:rust/... # prose placeholder describing a path pattern
+docs/CHANGELOG.md:../../src/... # prose placeholder describing a path pattern
+docs/FOLLOWUPS.md:rust/... # the followup entry describing this rot class quotes the broken pattern
+docs/FOLLOWUPS.md:docs/... # the followup entry describing this rot class quotes the broken pattern
+docs/FOLLOWUPS.md:../` # prose example of the fix idiom in the same followup entry

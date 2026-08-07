@@ -30,7 +30,6 @@
 
 #include "checkpoints.h"
 
-#include "common/dns_utils.h"
 #include "string_tools.h"
 #include "storages/portable_storage_template_helper.h" // epee json include
 #include "serialization/keyvalue_serialization.h"
@@ -229,78 +228,4 @@ namespace cryptonote
     return true;
   }
 
-  bool checkpoints::load_checkpoints_from_dns(network_type nettype)
-  {
-    std::vector<std::string> records;
-
-    // Shekyl checkpoint DNS records -- to be configured when DNS infrastructure is ready
-    static const std::vector<std::string> dns_urls = {
-      "checkpoints.shekyl.org",
-      "checkpoints.shekyl.net",
-      "checkpoints.shekyl.com",
-      "checkpoints.shekyl.biz",
-      "checkpoints.shekyl.io"
-    };
-
-    static const std::vector<std::string> testnet_dns_urls = {
-      "testpoints.shekyl.org",
-      "testpoints.shekyl.net",
-      "testpoints.shekyl.com",
-      "testpoints.shekyl.biz",
-      "testpoints.shekyl.io"
-    };
-
-    static const std::vector<std::string> stagenet_dns_urls = {
-      "stagenetpoints.shekyl.org",
-      "stagenetpoints.shekyl.net",
-      "stagenetpoints.shekyl.com",
-      "stagenetpoints.shekyl.biz",
-      "stagenetpoints.shekyl.io"
-    };
-
-    if (!tools::dns_utils::load_txt_records_from_dns(records, nettype == TESTNET ? testnet_dns_urls : nettype == STAGENET ? stagenet_dns_urls : dns_urls))
-      return true; // why true ?
-
-    for (const auto& record : records)
-    {
-      auto pos = record.find(":");
-      if (pos != std::string::npos)
-      {
-        uint64_t height;
-        crypto::hash hash;
-
-        // parse the first part as uint64_t,
-        // if this fails move on to the next record
-        std::stringstream ss(record.substr(0, pos));
-        if (!(ss >> height))
-        {
-    continue;
-        }
-
-        // parse the second part as crypto::hash,
-        // if this fails move on to the next record
-        std::string hashStr = record.substr(pos + 1);
-        if (!epee::string_tools::hex_to_pod(hashStr, hash))
-        {
-    continue;
-        }
-
-        ADD_CHECKPOINT(height, hashStr);
-      }
-    }
-    return true;
-  }
-
-  bool checkpoints::load_new_checkpoints(const std::string &json_hashfile_fullpath, network_type nettype, bool dns)
-  {
-    bool result;
-
-    result = load_checkpoints_from_json(json_hashfile_fullpath);
-    if (dns)
-    {
-      result &= load_checkpoints_from_dns(nettype);
-    }
-
-    return result;
-  }
 }

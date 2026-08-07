@@ -48,7 +48,7 @@ outside scope, write it down in `FOLLOWUPS.md` and keep going.
 However, this does not preclude disciplined "the file I'm editing for
 substantive reasons should be left in good shape after my edit." It's entirely
 appropriate and responsible to fix mechanical formatting errors in a file that 
-already being modified.
+is already being modified.
 
 ## V3.x as the long-term platform
 
@@ -57,7 +57,6 @@ on external standardization (NIST lattice threshold algorithms) and may be
 12–24 months away. Between those points, V3.x is where improvements land:
 
 - V3.1: transfer_details Rust migration, audit response
-- V3.2: wallet_rpc_server Rust cutover, performance work
-- V3.3+: as findings emerge
+- V3.2+: as findings emerge
 
-Items that don't fit V3.0 don't have to wait for V4.
+Items that don't fit V3.0 don't have to wait for V4. Genesis ships as complete as possible.

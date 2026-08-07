@@ -16,7 +16,7 @@ support crates, and reconciling the tracking machinery to one honest story.
 Q6-frozen surface and feeds the divisor EC-membership external review); the
 residual-move track is a **reversible code reorg**, not a consensus decision.
 **Parents:** [`GENESIS_TX_WIRE_FORMAT.md`](../design/GENESIS_TX_WIRE_FORMAT.md) (slice 1),
-[`CONSENSUS_PORT_SEQUENCE.md`](CONSENSUS_PORT_SEQUENCE.md),
+`CONSENSUS_PORT_SEQUENCE.md`,
 [`TRACK2_REGTEST_PARITY.md`](../design/TRACK2_REGTEST_PARITY.md).
 
 ## 0. Posture — legibility, not ownership

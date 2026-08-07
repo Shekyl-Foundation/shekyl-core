@@ -1,0 +1,449 @@
+name: ci/gh-actions/rust
+
+# Split out of build.yml (workflow `ci/gh-actions/cli`) so the long-running,
+# most-commonly-flaking Rust gate is its own workflow *run*. In GitHub Actions
+# you cannot "Re-run failed jobs" until the whole run concludes; while this job
+# (the longest in the CLI workflow, ~35–48m per docs/CI_TIMING_BASELINE.md) was
+# bundled with the C/C++ compile_by_OS matrix, an OS-runner flake could not be
+# re-run until this job finished. This job never depended on those OS builds —
+# no `needs:`, no artifact download, its own Swatinem cache — so the split is
+# purely a re-run-isolation change, not a graph change.
+#
+# Branch-protection note: required status checks are keyed by the bare job
+# name ("Rust: audit, test, determinism") plus the GitHub Actions app, not by
+# the workflow name — the "ci/gh-actions/cli /" prefix in the PR UI is display
+# grouping only. Because this split keeps the job name identical, the existing
+# required-check context keeps matching this job in its new workflow; no
+# ruleset / branch-protection change is needed.
+
+on:
+  push:
+    # dev/main only. PR branches are covered by the pull_request event
+    # (which tests the PR merged into its base — the stronger signal);
+    # an unrestricted push trigger double-runs every job on each push
+    # to an open PR. Branches without a PR get CI by opening a draft PR.
+    branches: [dev, main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/README.md'
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/README.md'
+
+# Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
+# reruns of the Rust gate supersede only each other, not the OS build run.
+concurrency:
+  group: rust-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  APT_SET_CONF: |
+    tee -a /etc/apt/apt.conf.d/80-custom << EOF
+    Acquire::Retries "3";
+    Acquire::http::Timeout "120";
+    Acquire::ftp::Timeout "120";
+    EOF
+
+jobs:
+  rust-audit-and-test:
+    name: "Rust: audit, test, determinism"
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: set apt conf
+        run: ${{env.APT_SET_CONF}}
+      - name: update apt
+        run: apt update
+      - name: install dependencies
+        # ripgrep: hard-required by scripts/lint_cpp_clamp_ban.sh below.
+        run: apt -y install build-essential git curl pkg-config libssl-dev ripgrep
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: install Rust
+        # Composite action (.github/actions/install-rust), after
+        # checkout — see the build job's step comment.
+        uses: ./.github/actions/install-rust
+      - name: guard against absolute local Cargo paths
+        shell: bash
+        run: |
+          MATCHES=""
+          while IFS= read -r file; do
+            HITS="$(grep -nE '/home/|/Users/|[A-Za-z]:\\\\Users\\\\' "$file" || true)"
+            if [ -n "$HITS" ]; then
+              MATCHES="${MATCHES}${file}\n${HITS}\n"
+            fi
+          done < <(find rust -type f \( -name Cargo.toml -o -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \))
+          if [ -n "$MATCHES" ]; then
+            echo "FATAL: detected absolute local paths in Cargo manifests/config:"
+            printf "%b" "$MATCHES"
+            exit 1
+          fi
+          echo "Cargo path portability guard passed."
+      - name: verify x86_64 architecture
+        run: |
+          ARCH=$(uname -m)
+          echo "Runner architecture: $ARCH"
+          if [ "$ARCH" != "x86_64" ]; then
+            echo "FATAL: expected x86_64 runner, got $ARCH"
+            exit 1
+          fi
+      - name: verify fuzz harness inventory (smoke gate)
+        shell: bash
+        run: |
+          REQUIRED_TARGETS=(
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_fcmp_proof_deserialize.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_curve_tree_leaf_hash.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_block_header_tree_root.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_tx_deserialize_fcmp_type7.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_kem_decapsulate.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_bech32m_address_decode.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_verify.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_key_blob.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_sig_blob.rs
+            rust/shekyl-archival-retention/fuzz/fuzz_targets/fuzz_serve_credit_gate.rs
+            rust/shekyl-archival-retention/fuzz/fuzz_targets/fuzz_serve_credit_block_unique.rs
+          )
+          MISSING=0
+          for target in "${REQUIRED_TARGETS[@]}"; do
+            if [ ! -f "$target" ]; then
+              echo "FATAL: missing required fuzz harness: $target"
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Fuzz harness inventory smoke gate passed (${#REQUIRED_TARGETS[@]} targets present)."
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Workspace at rust/ with target dir at rust/target/.
+          # Swatinem auto-caches ~/.cargo/{registry,git,bin} plus the
+          # workspace target/. The default cache key already mixes
+          # rustc version + Cargo.lock hash + a per-job component, so
+          # toolchain bumps (e.g. 1.94.0 -> 1.95.0) and lockfile-only
+          # diffs (e.g. deps/bump-rand-to-0.8.6) get correctly-scoped
+          # invalidation. Replaces the prior actions/cache@v5 block,
+          # which had three known waste modes documented in
+          # docs/CI_TIMING_BASELINE.md:
+          #   - ~8m post-job upload of the entire target/ even when
+          #     only a few crates changed (Swatinem only writes deltas).
+          #   - No rustc-version key component (so a 1.94 -> 1.95 bump
+          #     would have silently restored a 1.94-built target/).
+          #   - No ~/.cargo/bin caching (cargo-audit reinstalled from
+          #     source every run, ~2m30s).
+          workspaces: rust -> target
+      - name: install cargo-audit
+        # `cargo install --locked` is idempotent: on Swatinem cache
+        # hits the binary is already present in ~/.cargo/bin and this
+        # step exits in a few seconds rather than recompiling from
+        # source. Moved here from pre-checkout so the cache restore
+        # has a chance to populate ~/.cargo/bin first.
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        working-directory: rust
+        run: |
+          # Retry wrapper: `cargo audit` fetches the RustSec advisory DB
+          # from https://github.com/RustSec/advisory-db.git on every run.
+          # That endpoint occasionally returns HTTP 500 under load; the
+          # failure is transient and unrelated to our Cargo.lock.
+          # Three attempts with backoff cover the common infra-flake window.
+          # A genuine advisory hit will still fail every attempt (the audit
+          # logic is deterministic given a successful DB fetch), so this
+          # does not mask real findings — it only burns ~30s extra CI time
+          # before re-reporting the hit on a permanent fail.
+          for attempt in 1 2 3; do
+            if cargo audit; then
+              exit 0
+            fi
+            echo "cargo audit attempt ${attempt} failed; retrying in $((attempt * 10))s" >&2
+            sleep $((attempt * 10))
+          done
+          echo "cargo audit failed after 3 attempts" >&2
+          exit 1
+      - name: cargo fmt --check (workspace)
+        working-directory: rust
+        # Fails CI on any unformatted Rust file. Pairs with the clippy
+        # gate below; both land together in chore/workspace-fmt-clippy-
+        # baseline. Pre-existing fmt debt was discharged in that PR's
+        # first commit (`cargo fmt --all` over the whole workspace) and
+        # the .cursor/rules/15-deletion-and-debt.mdc carve-out
+        # (refined in the same commit) makes "leave the file you
+        # touched fmt-clean" the going-forward expectation.
+        run: cargo fmt --all -- --check
+      - name: cargo clippy -D warnings (workspace, all targets)
+        working-directory: rust
+        # Fails CI on any clippy finding (warning or error). The
+        # workspace's [lints.clippy] section in rust/Cargo.toml already
+        # configures many lints at deny-level (let_underscore_must_use,
+        # cast_possible_truncation, uninlined_format_args, …); this
+        # gate adds `-D warnings` so the remaining default-warn lints
+        # (clone_on_copy, type_complexity, dead_code, …) are equally
+        # enforced. `--keep-going` collects findings across the whole
+        # workspace in one pass instead of stopping at the first crate's
+        # first error, so reviewers see the full triage in one log.
+        run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
+      - name: "cargo clippy: gf7-hooks harness lane (shekyl-engine-core)"
+        working-directory: rust
+        # The GF-7 sealing seam + harness (`pscan/start.rs` SealingRunOverrides,
+        # `gf7_sealing_run.rs`) are gated `cfg(all(test, feature = "gf7-hooks"))`
+        # — a combination NO other lane compiles: the workspace gates above run
+        # without the feature, and gf7-no-emit-guard.yml is metadata-only
+        # (`cargo tree`). Without this lane a refactor of any callee the
+        # harness binds (staker_wallet, DispatchConfig, PScanConfig) merges
+        # green and the WI-4 §19.1 reopening-criterion re-run harness is
+        # discovered broken exactly when the multi-hour re-run is demanded.
+        # Clippy (not test): the harness tests are `#[ignore]`d and need a
+        # live `shekyld`; type-checking all targets at `-D warnings` is the
+        # compile gate. The no-emit guard's layer-3 containment is untouched:
+        # this is a dev/test lane, and dev edges are deliberately in scope
+        # for the feature (see gf7-no-emit-guard.yml header).
+        run: cargo clippy -p shekyl-engine-core --all-targets --features gf7-hooks -- -D warnings
+      - name: rustdoc -D warnings (shekyl-tor)
+        working-directory: rust
+        # shekyl-tor's docs carry load-bearing security contracts (the trust
+        # gate, the §3c supervisor posture, the pin-time/runtime split) and its
+        # reviews repeatedly turned up public→private intra-doc links that only a
+        # `-D warnings` doc build catches. Scoped to shekyl-tor (not `--workspace`)
+        # because other crates carry pre-existing rustdoc warnings; widening this
+        # to the workspace is a separate hygiene task, tracked in FOLLOWUPS.
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --locked -p shekyl-tor --no-deps --lib
+      - name: build shekyl-fcmp crate
+        working-directory: rust
+        run: cargo build --locked -p shekyl-fcmp
+      - name: cargo test (all workspace crates)
+        working-directory: rust
+        # `shekyl-randomx-differential` excluded from the workspace-wide
+        # test because its `c_oracle` module links against the C
+        # reference's `librandomx.a` via `randomx-v2-sys`, which requires
+        # the `RANDOMX_V2_INSTALL_DIR` env var to point at a CMake-built
+        # install prefix (per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`
+        # §5.1.16 + §5.2.2 R5-D2). The `rust-audit-and-test` job does not
+        # configure CMake or build the C library; that work lives in the
+        # dedicated `.github/workflows/randomx-v2-differential.yml`
+        # workflow (per §5.5.1 + R1-D12), which builds the C library and
+        # runs `cargo test -p shekyl-randomx-differential` with the env
+        # var set. Excluding here is the discipline-correct shape:
+        # workspace-wide test asserts every crate that builds in the
+        # bare-Rust environment passes; the differential harness asserts
+        # under its own substrate-correct environment.
+        run: cargo test --locked --workspace --exclude shekyl-randomx-differential
+      - name: "shekyl-levin: zstd-feature-off unavailability lane (--no-default-features)"
+        working-directory: rust
+        # `shekyl-levin`'s `zstd` feature is default-on (production always
+        # compresses via the shekyl_levin_* FFI; there is no C++ HAVE_ZSTD
+        # gate). Feature-off keeps try_compress_message as the identity and
+        # treats a COMPRESSED bucket as a hard error. The workspace-wide
+        # test above only ever builds default features, so without this lane
+        # the unavailability arms are never compiled *or* executed and can
+        # rot green. Clippy too: the `#[cfg(not(feature = "zstd"))]` arms
+        # are invisible to the workspace clippy step for the same reason.
+        #
+        # `src/compress.rs` carries `tests_without_zstd`, which only compiles
+        # in this configuration — otherwise this lane would prove nothing but
+        # that the crate builds.
+        run: |
+          cargo clippy --locked -p shekyl-levin --no-default-features --all-targets -- -D warnings
+          cargo test --locked -p shekyl-levin --no-default-features
+      - name: shekyl-standoff conformance suite (x86_64 only)
+        working-directory: rust
+        # `shekyl-standoff`'s conformance grading + negative controls
+        # (`tests/conformance_grading.rs`) are gated behind the `conformance`
+        # feature, so the default-feature workspace-wide test above does NOT
+        # compile or run them. Run them explicitly here so the chi-square /
+        # order-balance / serial-independence grader and its triangular-trap
+        # negative control are exercised in CI (ARCHIVAL_FIREWALL_GATE6.md
+        # §10.12). x86_64 only by design: these are float goodness-of-fit
+        # probes, and float is not bit-identical across arches — the
+        # cross-arch guarantee is the integer golden vector run under qemu in
+        # depends.yml, not these probes (which pass by margin, not by
+        # determinism). The aarch64 lane deliberately builds default features
+        # only for the same reason.
+        run: cargo test --locked -p shekyl-standoff --features conformance
+      - name: shekyl-engine-core conformance suite — StakeEngine RNG self-cert (x86_64 only)
+        working-directory: rust
+        # S6 (ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md): `shekyl-engine-core`'s
+        # `conformance` feature wires `shekyl-standoff`'s `certify_draw` grader
+        # into `StakeEngine::on_start` over the production `OsRngGapAdapter`, so
+        # the staker actor fail-stops on a non-conformant CSPRNG. It is NOT in the
+        # default feature set (the grader is float + pulls `shekyl-stats`;
+        # production stays float-free), so the workspace-wide test above does not
+        # compile or run it. Run it explicitly here. x86_64 only by the same
+        # reason as the standoff lane above — the grade is a float goodness-of-fit,
+        # not bit-identical across arches; a module-level `compile_error!` in
+        # `stake_engine.rs` rejects the `conformance` feature on non-x86 targets so
+        # the skip is loud, never a silent false "conformance passed".
+        run: cargo test --locked -p shekyl-engine-core --features conformance
+      - name: "Gate 1: proptest (--release for speed)"
+        working-directory: rust
+        run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip
+      - name: "Gate 2: shekyl-pow-randomx debug-vs-release equivalence"
+        # Per `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.11.3 R4:
+        # Rust integer-overflow semantics differ between debug (panic)
+        # and release (wrapping). The verifier ships release. Any 2c
+        # arithmetic that accidentally uses `+`/`*` where it should use
+        # `wrapping_add`/`wrapping_mul` is invisible to debug-mode
+        # `cargo test` but produces a different hash for overflow
+        # inputs in release. The T1-T8 spec-vector tests (commit 7)
+        # contain byte-equality assertions against fork-generated
+        # fixtures; re-running them under `--release` asserts that
+        # release-profile output matches debug-profile output (both
+        # match the fork). Any divergence fails the PR.
+        #
+        # Cost: ~50 s additional CI wall-clock (measured on the
+        # i9-11950H reference machine; CI hardware likely differs).
+        # The §5.11.3 cost estimate was ~30 s under the planned ~200 ms
+        # per-`Cache::derive` budget; R0-D12 (see
+        # `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §14 + `BENCH_RESULTS.md`)
+        # measured ~341 ms median, which inflates T1''s 100-iteration
+        # determinism property test from ~26 s → ~34 s and pushes total
+        # release-test wall-clock to ~47 s. The cost increase is
+        # acceptable: T1'/T2'/T3'–T8' determinism properties are
+        # plan-doc-mandated per §5.11.1 with an explicit reopening
+        # criterion that names the audits-are-clean-so-compress anti-
+        # pattern, i.e. "remove the non-determinism source, not the
+        # property test." Acceptable for the consensus-split-bug class
+        # this gate catches.
+        working-directory: rust
+        run: cargo test --locked --release -p shekyl-pow-randomx
+      - name: Bech32m address encoding tests
+        working-directory: rust
+        run: cargo test --locked -p shekyl-crypto-pq -- address
+      - name: C++ clamp-ban lint (address-freeze)
+        run: bash scripts/lint_cpp_clamp_ban.sh
+      - name: "CI grep gate: no shekyl_y in C++ source"
+        run: |
+          if grep -rn 'shekyl_y' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: 'shekyl_y' salt still present in C++ source"
+            exit 1
+          fi
+          echo "PASS: no shekyl_y in C++ source"
+      - name: "CI grep gate: no derivation_to_y_scalar in C++ source"
+        run: |
+          if grep -rn 'derivation_to_y_scalar' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: derivation_to_y_scalar still present in C++ source"
+            exit 1
+          fi
+          echo "PASS: no derivation_to_y_scalar in C++ source"
+      - name: "CI grep gate: no RCTTypeFull/Simple/Bulletproof in C++ source"
+        run: |
+          if grep -rn 'RCTTypeFull\|RCTTypeSimple\|RCTTypeBulletproof[^P]' src/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: legacy RCT types still referenced in C++ source"
+            exit 1
+          fi
+          echo "PASS: no legacy RCT types"
+      - name: "CI grep gate: no v1/v2 tx version branches"
+        run: |
+          if grep -rn 'tx\.version\s*==\s*1\b\|tx\.version\s*<\s*2\b\|hf_version\s*<\s*1\b' src/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: legacy v1/v2 transaction version checks still present"
+            exit 1
+          fi
+          echo "PASS: no v1/v2 tx version branches"
+      - name: "CI grep gate: no HASH_KEY_TXPROOF in C++ source"
+        run: |
+          if grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/; then
+            echo "FATAL: legacy HASH_KEY_TXPROOF still referenced"
+            exit 1
+          fi
+          echo "PASS: no HASH_KEY_TXPROOF"
+      - name: "CI grep gate: combined_shared_secret confined to wallet"
+        run: |
+          if grep -rn 'combined_shared_secret' --include='*.cpp' --include='*.h' src/common/ src/rpc/ src/cryptonote_protocol/; then
+            echo "FATAL: combined_shared_secret leaked outside wallet boundary"
+            exit 1
+          fi
+          echo "PASS: combined_shared_secret confined"
+      - name: "CI grep gate: no ecdhEncode/ecdhDecode outside Ledger"
+        run: |
+          if grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/ | grep -v device_ledger; then
+            echo "FATAL: ecdhEncode/ecdhDecode used outside Ledger gate"
+            exit 1
+          fi
+          echo "PASS: no ecdhEncode/ecdhDecode outside Ledger"
+      - name: "CI grep gate: no direct dalek_ff_group 0.4 usage"
+        working-directory: rust
+        run: |
+          # Design intent (see docs/FOLLOWUPS.md "dalek-ff-group version isolation"):
+          #
+          # The workspace carries two dalek-ff-group versions:
+          #   0.5.x — used directly by shekyl crates
+          #   0.4.x — pulled transitively by vendored serai/ciphersuite internals
+          #
+          # Direct dalek_ff_group usage in our source is allowed (must resolve
+          # to 0.5). The informational grep below prints matches for visibility
+          # but does NOT fail — legitimate 0.5 usage is expected.
+          #
+          # The structural check below asserts that none of our crates pull
+          # 0.4 as a *normal* (non-dev, non-build) dependency. If upstream
+          # ciphersuite upgrades to 0.5, this gate can be removed entirely.
+          DIRECT=$(grep -rn 'dalek_ff_group' --include='*.rs' \
+                   shekyl-*/src shekyl-ffi/src shekyl-ffi/tests 2>/dev/null \
+                   | grep -v '^\s*//' || true)
+          if [ -n "$DIRECT" ]; then
+            echo "Files referencing dalek_ff_group directly (must all resolve to 0.5):"
+            echo "$DIRECT"
+          fi
+          # Fail if any shekyl crate has a normal dependency on the 0.4 line
+          for crate in shekyl-ffi shekyl-fcmp shekyl-crypto-pq shekyl-proofs shekyl-tx-builder shekyl-scanner shekyl-daemon-rpc; do
+            if cargo tree -p "$crate" --edges normal 2>/dev/null \
+               | grep 'dalek-ff-group v0\.4'; then
+              echo "FATAL: $crate has a normal (non-dev) dependency on dalek-ff-group 0.4"
+              exit 1
+            fi
+          done
+          echo "PASS: all shekyl crates isolated from dalek-ff-group 0.4"
+      - name: determinism check (build twice, compare hashes)
+        working-directory: rust
+        run: |
+          cargo build --locked --release -p shekyl-ffi
+          sha256sum target/release/libshekyl_ffi.a > /tmp/build1.sha256
+          cargo clean -p shekyl-ffi --release
+          cargo build --locked --release -p shekyl-ffi
+          sha256sum target/release/libshekyl_ffi.a > /tmp/build2.sha256
+          echo "=== Build 1 ===" && cat /tmp/build1.sha256
+          echo "=== Build 2 ===" && cat /tmp/build2.sha256
+          diff /tmp/build1.sha256 /tmp/build2.sha256 || (echo "FATAL: non-deterministic Rust build" && exit 1)
+          echo "Determinism check PASSED"
+      - name: "rust-cache post-run ENOENT workaround (Swatinem/rust-cache#144)"
+        # Swatinem/rust-cache@v2's post-run cleanup walker
+        # (src/cleanup.ts cleanProfileTarget) treats any subdirectory
+        # of `target/` named `tests` as a kaos/macrotest/trybuild
+        # nested-workspace layout and recursively cleans both
+        # `tests/target/` and `tests/trybuild/`. The recursive
+        # cleanTargetDir calls are NOT awaited, so async ENOENT
+        # rejections on missing paths escape the synchronous
+        # try/catch and surface as `##[error]ENOENT: opendir
+        # rust/target/tests/target` annotations in the job summary.
+        #
+        # The error is non-fatal (the action continues, the job
+        # concludes success), but the annotation pollutes the run
+        # summary and obscures real errors. Upstream issue:
+        #   https://github.com/Swatinem/rust-cache/issues/144 (open
+        #   since 2023, no merged fix)
+        #
+        # Why we hit it: rust/shekyl-logging/tests/trybuild.rs uses
+        # dtolnay/trybuild, which creates rust/target/tests/trybuild/.
+        # We do NOT use kaos/macrotest, so rust/target/tests/target/
+        # never gets created. Swatinem's walker tries it anyway.
+        #
+        # Workaround: pre-create the empty directory so the action's
+        # opendir call succeeds (and finds nothing to clean). Cache
+        # cost: a single empty directory entry, negligible.
+        #
+        # Removal condition: when Swatinem/rust-cache merges either
+        # the proposed `if (e.code === "ENOENT") continue;` patch or
+        # adds `await` to the recursive cleanTargetDir calls in
+        # cleanProfileTarget, this step can be deleted in the same
+        # PR that bumps the action pin.
+        if: always()
+        run: mkdir -p rust/target/tests/target

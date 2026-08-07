@@ -153,7 +153,6 @@ fn economics_differential_records_match_engine() {
             row.tx_volume,
             params.tx_volume_baseline,
             row.circulating_supply,
-            row.total_staked,
             &params,
         );
         assert_eq!(

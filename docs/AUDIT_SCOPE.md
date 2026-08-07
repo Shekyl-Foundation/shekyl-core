@@ -258,15 +258,18 @@ For the protocol specification of these properties, see
    - Bit-clamping behavior is correct for the FCMP++ circuit
    - No bias in derived scalars
 
-3. **FCMP++ proof binding to Y_prover**
-   - `multisig_pqc_leaf_hash` correctly binds the rotating prover's key
-   - `fcmp_proof_commitment` in `ProverOutput` is collision-resistant
-   - Equivocation detection via commitment comparison is sound
+3. **FCMP++ proof binding to Y_prover** — **OUT OF SCOPE (Option-D deleted, MS-5 PR-B):**
+   Option E′ has no mandatory prover; `rotating_prover_index`, `group_id`, and the
+   `ProverOutput`/equivocation machinery are deleted (`PQC_MULTISIG.md` §11 banner).
+   Retained here only so the audit index stays contiguous.
+   - ~~`multisig_pqc_leaf_hash` correctly binds the rotating prover's key~~
+   - ~~`fcmp_proof_commitment` in `ProverOutput` is collision-resistant~~
+   - ~~Equivocation detection via commitment comparison is sound~~
 
-4. **Rotating prover assignment grinding resistance**
-   - `rotating_prover_index` uses `cn_fast_hash(group_id || tx_secret_key_hash || reference_block_hash || output_index)`
-   - Cost to grind a favorable assignment exceeds feasibility threshold
-   - Output-index binding prevents per-output grinding
+4. **Rotating prover assignment grinding resistance** — **OUT OF SCOPE (deleted, see item 3)**
+   - ~~`rotating_prover_index` uses `cn_fast_hash(group_id || tx_secret_key_hash || reference_block_hash || output_index)`~~
+   - ~~Cost to grind a favorable assignment exceeds feasibility threshold~~
+   - ~~Output-index binding prevents per-output grinding~~
 
 5. **SpendIntent validation pipeline** (14 checks, SS9.2–SS9.4)
    - Structural, temporal, chain-state, and balance validation
@@ -387,7 +390,7 @@ weaken soundness, zero-knowledge, or inflation bounds established for spends.
    The entitlement Schnorr challenge is
    `keccak256_to_scalar("shekyl-stake-entitlement-v1" ‖ G ‖ H ‖ N_le ‖ D_le ‖ C~ ‖ C_claim ‖ C_ρ ‖ R ‖ μ_claim)`;
    its **field set and order** are locked in
-   [`entitlement::transcript`](../rust/shekyl-staking/src/entitlement/transcript.rs) (KAT) so the
+   `entitlement::transcript` (KAT) so the
    prover and C++/FFI verifier cannot drift. **Audit:** (i) every public input and `μ_claim` is
    absorbed by each component (a dropped field is a splice hole); (ii) distinct domain separators
    prevent cross-component challenge reuse; (iii) `C~`/`C_claim`/`C_ρ` are single public points

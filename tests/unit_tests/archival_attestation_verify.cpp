@@ -1,0 +1,177 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+// Cross-language KAT for the credit-wire attestation verify (CW-3,
+// ARCHIVAL_CREDIT_WIRE.md §3-§4). The verify LOGIC is exhaustively tested in Rust
+// (shekyl-ffi archival_ffi.rs attestation_verify_tests); what only C++ can prove is
+// that the C-side structs in shekyl/shekyl_ffi.h (shekyl_archival_attestation_verify_ctx,
+// shekyl_archival_pid_pubkey) marshal byte-identically to the Rust #[repr(C)]
+// definitions across the real ABI boundary -- the "byte-identical-or-split" surface.
+//
+// A single frozen valid one-pass vector, generated once by
+// shekyl-ffi::attestation_verify_tests::emit_attestation_verify_kat, is fed back
+// through the C structs; a passing verdict proves the layout agrees end to end, and
+// each negative control moves exactly one field to prove that field is read where the
+// C header says it is. Regenerate + re-paste only if the genesis-frozen wire format
+// changes (the emitter's keypair is random, so the bytes differ each run):
+//   cargo test -p shekyl-ffi emit_attestation_verify_kat -- --ignored --nocapture
+
+#include "gtest/gtest.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include "cryptonote_config.h"
+#include "shekyl/shekyl_ffi.h"
+
+namespace
+{
+std::vector<uint8_t> from_hex(const std::string& h)
+{
+  std::vector<uint8_t> out;
+  out.reserve(h.size() / 2);
+  for (size_t i = 0; i + 1 < h.size(); i += 2)
+    out.push_back(static_cast<uint8_t>(std::stoul(h.substr(i, 2), nullptr, 16)));
+  return out;
+}
+
+// Frozen valid one-pass vector (see file header). headers = p_id(32) || shard(8 LE) ||
+// epoch(8 LE) || kind(1); p_id is the first 32 bytes of headers; cb_out_key is the
+// constant [0x09; 32] the emitter binds; root is attestation_root over the one pass record.
+const std::string KAT_HEADERS =
+  "db5448639eff037f8b6bd29bb09ff9ff8661779c34b308a21ffd9070ae04dd932a00000000000000e80300000000000001";
+const std::string KAT_P_ID =
+  "db5448639eff037f8b6bd29bb09ff9ff8661779c34b308a21ffd9070ae04dd93";
+const std::string KAT_ROOT =
+  "656318a91d767395cf69b76f485d2e783d55b385280a0fff4dd31aeafa368bfc";
+const std::string KAT_CBKEY =
+  "0909090909090909090909090909090909090909090909090909090909090909";
+const std::string KAT_WITNESS =
+  "07070707070707070707070707070707070707070707070707070707070707070100000000000000010100004000000037dc51fff3668244fd24c79675e167d3a6a68856c24ab592ff856c3a4d0ddaf175d94456432a75bf308aa8fbc3934792ce58052e6375f86979981fde106ae602ed0c00006f66509bbc244c89cad259e4fdd26805b145882ced6fbb23125e47c5b1d793f231e12f726005a62d59e4dbda5ad20c79f4824fe55ecbc630f74eed567afd3c90d5deae682638dcf7a92b85798d8da97e3c7b707bb41ad09f74b07fef011f09f6390b3431976ebcbb4de15e69faf877ed9fc236bf41ac17bd69e7fbfb564ac1e6caa85f9370f0993e8b97ff1809ab1567ebe60946b561da197e9eaa2fdcc60fb045d4f59019047368f75f82b3ab8b5dc2f6922170616abdafd0ed135d7c9aa63f00102376d2da8ee6b9f6a95022120b5bb1589fd4eea02dcb4a92c4795b38616ed6fc022dd3ca7fe245e35a21ece8f9bebf3fc7da5b16429e2fc344696d9fd22b57c6e1df163ad6551c5c35866be5d04a8178380c03682eb9d11f3ebfd908ecef5ce319f89e9c697c4f166efbd457f094f2cfc8c67c429614f3bde5f87288a4a0ef5e95e79b2fe19e6a5d9eae5ba5a5bed52b6e0835caa2510ac3abe1e0c5d4ce8361f06caf1737de1701f4c9cf215b400158b77bd933ed3764c74c5e812d862ab290f8b2915a616968ccd88c2bbd7e065e4d2d92141426f8b03759b8beb2efcefa3a77c4608b34c64eefb807b34e7e93f28af1c8d28f50012b2535124eb53db78b47b3fc174c71e1f4be8262cb3e5fad3f4e227d447a8d815af57d052c49cfb35325616c816ba364359ec6e2b534629271bd868cf17a1f7ef6814a5c423abb8bcd84930f2797846a86dd02ea335c5d50960ca5dc70b4e13234ac78f246ac99741bae2100759219dcfc9c4ba67c93e77885f1ea0993630efaf036db09ee25844b701e456f2f047f397540e4ded1dd5dffde8a6c7fb1e17bf46ac00db82a361122b1c019d1316c731057de871253e741af96bc3531cb27716101ea7b81bf2ee82c44e7f97a4e7e403fb3a8fa5cb8b4ce09cbe660593775097120ce04b4208cb57fb574c516e10f9655e2f5de9c4e733f19501489bcba64e1df0ff3b0b4688530bdce4f38a8c43963506bce0c011d853af578666c51b7f440403d2b88da67560a86ddf82ecaa3f9b656fa220591cf12132e272ee35dde5b61fececbacafa135aa7c18e021efe8712e3b93a5fc10be0ca136485d2788ebf16fe864983b83a167f95d01e6c81b8fb1135e461c5a18bb6ab437399b103af717d9f943c969a4272ba51c98e24d5dadd3257df77fa8478d65322c5557ef66068ec8330950bcfab05c14ee30f8a87d05b7ec8e8d62a2258ba7e3522b6863f029e57f93a50fafdcbb033fb337f7a5429a452c0512e921a262b747de447f83d9a060370b1d75e6bb546e0e0d2bdb5860dc3bb2531e98ffe574e9bbc1095c72235ca0dd6f5b8f2533262e90123773d265f5d43323fe8d3d5eb216379514566958a4c22d6800bf04b459cce316034af9aadd4a862981b9f597dff529d5cbf680c06e5eb1e35ba3fbdf06c45c48f5df93d3d763bc9d7a9ebef15cb3eb1a7042b507470c9dde8e27a2b429f928060e52c88196f2798345044cad9c3ecf39e5a44f60aa0f81f1be1aaede1f9d78d03c479a6922ec20448bd431c06972bac32b6392afcd3acb687b1e8d8a603cfb5a156d5653ace6efc591d99eb9a8cfd96b779b93ebeb3017985cdd5a13910c223875ec32e07478458983f632ebafa0b61aecd92151075386fa57f4b9a83ee08d0dd951a35a769591d64d407561347b7e1240f595f6e87cc8cd34274ab97c21a1bd33929dd3aade3b0970567ac38784081ccaa663a9379a3e954daa1de58b9a77f769ef5b3381caf280b16a07191fef75df256521fa7949e76db9b209c5645cb2ec925d53eebac2da4c9a23f9fcbe973515bcf09315931c740d84842033668a7f943eda9a4e3347c3c1f6efdd1e5dc830296b49d2b6bedb417e81ad4346d58b61954b9fbe6c37b35454590faea30b164ee504eefb9b04f59cc8c2e04ef89bd6a61c92c90eab5427488a5de64dd99045d45f5d7a72f8971e1e9f4f3898233f76c6ec32d1499b95615bc78e6f47a4763247df9bdd188c3cc3b86c846b518b9cad783ef7d47bb0f095363bf21be5f8779a745f9d78f6ebab03d9e5b8b5bb583e69a9cd7047141c9e58f73db14ddb6cdb41908ea40b850abbd1dcfa41614412dd1ef77f9d544860979f84fa8e8a2d45fd4e0f3dd01fe130a096a72d97f066a3576ec7e0bb0efa4782eb1e2373f77dcc1d62f13f45ee43d55e1686b55b4ecbfb646495cb7e76a1c432782d0c673c44013d797adf4fcc50b361175e68bacdf2bdf36b9e3a1669b4c751b0694d4786ff01bec410e4544eb155de168fb126cb34f4fab4d3d11392f8f6549d7a0410533b67c20ccfc166dda33f44b0d57c9d9d6da7b15473f24699f6475fd1a46a6528057fcac2a32468727de594fbf27b4f19cea0c3fc0ff5f72c7b40746a93fd869e35707f02c49755c8e085abed10c19a868f5a274d64f5588c7d83a79de4b4dda099923ed8b6f4071b43f0968b9f8a55efeb4887ac19101f700e95743b50be366feffd127931683599804131fd2acf8f7fd502523320c03205f74d466be99d30c5e1b9ed44fb2084f63f078315bfab9af88ec753aa755fb7016f6f64014f49f5178102ec6ada96075a6a70c23bfd5cb6fc0964f7b3a0b5c51b12252d20af37140c3d33fa7bdfc155ce0c63d6b5ce6ac8f0294754349b350b2089426312351ea65b9d1cb39ab45c2f6559eff9ae60e39e85e9ac29054b9d2b982ab5fe877532f73f37533ed626717385821ab7ae1291d8166349e188b91c1bb7d1e9668389b4c05313cf8393dc03e6861a74ea78be15a6537bcd073d1ef645d7f34798e8f39fe168f0008e8bd70b0027782bb56e4998a73467802cbd1d838651469806ffbb444739c0296f785afe299a0d55a224915cd8518b944a109a86da04d6dba89dc870f50e0eba8e8b807aa2bcc288b5706943cfe8114fa9511ca08a8a51c9bb7faeb38e0baeceaef1becd16d709251167f14556590baac8de6e947510cac188c0b29200332d4af62846ce9e433975b5a7949412accd71be82c561fcd978c3154d2e22c1c7698c01c82818869377f34680db3610f6d6224ef7087e57b990253a5e0ec27f5a148f288ed779d4e3911c575132125ac6ff1eead4dbea34b8172ad8e5a005b6f7ee99ed0eb7d50c32ff5e09283b2ee5d42c1346e3cef53fda1df404cbfeea225f10de819abc75fab5134b7ccee32cea202b769efcb9e8d13cf3196627424b1cf600dcfcbe477a66b336999ec5d89657026ceab01ffb464c2c733751dcdced4dc04e7e3a578187bca4c48b5ea500ec2f0a9112f0bf98a57b90c13264c7da6e4193cd0c3f8844a2323ff08494f301029e5d9e9983bd04c8bec60395382ccac3b8ece4ff1eed38fecb57f599c1e26759b4234d59b5268835d924e70cc40a8b401dbabf9cb69c572624d221179a3c7fa1c8674b63d4fdde7f4d0bc6c1ab0a3298ce46fc64d9a2d5b31dd9c10e84ab5c890f4f58796c0198a58dad63ef1be7164be33b594508e9dd2b9edde65c4d5b399b1c85eee7c7844bd5278cb36b90a3da1fac7cb3146f6bee4dd697f733a11f5445a8b495caf373bcae957b1c21a51f8b62b36e7b1e94deb7ee0a9370f8930b9597f2d6877736f325ab3555813cc0694534bbb726b9417a90733d9d2ed3ee77091d61f3fe002e0ae0c0b2ab0ae00b4bc010d3d1773d2b3cad8b43e3cc4aaaa2f4739e1860f25ea0e630d18f82bdc098bf08a9f25dbba6811b64b34fed44d1113fdd22ee56bdc3f387eeaa6db2fb2355c3551f51c701619de06b2fceb948b32fded7dbc73adf7c1a90764ed34c6c0032332e6b3025d4c2e18167139061bf3054f70075d40443865cfaf550e443731ee0f5e0efe5ae79ed418fd1b39b31b8b74b6e6312146903f9f893afc92dadc22be8162f2d582adf1a2de74529459ea586c8023bb13377b0bbc26039ec55730bac5285e01d56e9ed8b752a36743dd9b6cb3b2706629559a1e9ef06c67877293ec059c6ce7a382a49bf413722e84ebd66d1311277f2608cf03e326bde5f72ceb0bb6c7ee16f35736b7d2a30c26c624204805b37f0feb38817d25b86e0819b6c8616968ba4ed656c0d57a6ffa4cc9147663ef733f5399ae4b0d6a7eee38506521c805d152568e512101066e53092251cc91af29fd46d0005ebb050822e873dc8ec396cb2ccac2d8eccb5f4199b66f41ded59ee6073913cdbc94b4a7a123e90176d3f4c7d6e2d39af2ff234379297520479b1697ed6a35a9499067d1a59b1231fe9b92d32fe7a8c58dde4133b078b1772e7f3398a11d8303d373e1b4ab833ea41baf0ebff25a9b9216b42ab89d7075d3344ae28430526cfba46fdec69e465bff42d333bc25a2bf7c24a8217f1a820d3a366e57454d5ce51444a177636670a63e0fabf0f385c042b348df5a5c8f10edec6f4d2f8eddd64065a729d4328106227f1ce4caebb757621add83aa1852594a20717b2e9d7c7ed217d25dfbee596879750e2e436e8e9cfeb49b3beb08432db871ef7bbbb842a9414616d2fa8209fc679a14c9199fb922fea3c6845994c71a70c091051d4ef7f83e4d5298af2c11489f47a168da83f5f6e651a039997acc11721506278e1eef02b7eb1c1c9e725517186abb0d34a4f507299a0aeb1fd23396c9ceaef04141f474c69b5bddbdc000000000000000000080e151e242e";
+const std::string KAT_PUBKEY =
+  "0101000020000000a4fe26b38f3ae679e19801ea3e9eac6ea09d4700d8dfe3e12d5bccabad0a7136a0070000d2d0fab920e49f5662fbda50e5da7d70a08e205912c3088d1d40427c60d66fd354bbeb95bf0686403fc17e317185d3c26b36fc0bce3ea57fdc9b091f3b65e4165809c8b4f6c498f45f3e601ba72dbe1b66086062d1129041f9e51a2b005adf7bfab6265c412137ebea469f7aecd4217317116da22fa1bb9e60f6114d9f4c4dcefa2fe01c12e9af5e9e512c2e7aa8786acae1d8da53a6aec3e560d26177784f7c7cfafbe54c005dc1ae0686385aa28c0ae27a2c809bc58b669e2b6ecf2e6046118ad94f034e39e6d3abbdd73dce2c16c99b7e6be8bb9d158f09d3c34acb1e6bed10af67f8137cf5ffa18a76d2f7e7f89069b5d0a05c2164132f2a09b589d8c22aafe04ee2fe86b371c87313ab5e5e8bbc56e3fc47cd5a616fd7d3f7098cf15e954a6eae8e863b28642116896a0ee42449cb44e3f2858f6e782e4814b29005a30c57959338f1b68f3694ca3505a6b8569b001334a4f17da56e9ebcf59cc62862bfd09022f27ddd4c00d37b5cbf479809710ca5dbcb0227eccba0810c9c300f69aba079bf5ed9ea0aa20b4ece7cb6dec338d23aad30ac0043c3939c6443bb592fdbf4ebeb1ee91ab03f50096c5360d38060b10235de98302d859dde90806b8a9ea806677eb88bd6116d70736f95636381ff3961859eb56616844003a8def010a2e188b00f08bd4db6f8559ed68511e1fc76e32b4a3b70ded58eba78ae202e982af20ed61752d5d58af33be2cbdded09211b115b4e4e0265c51ba5aab062b9114c16dd91d3988f166e47283bb7e10de77c53cbbc7a306bf52495149f449a44ab89271fa670c3a85536ec3294137076da0b52b3d7c3163fe51cfee16dee3a597efa38deecdf46115360f7fc4d065ebe06b17fea15f1325820e6582515041bb520ca183fa3fee249953ab9e0161b2abef7d1f06ccee608e89eac4287862847a26d21c4e524d21c876c830a3c715ee48392456d7b7535969fa60013ebadab6f54120be1435b247a799ad806fcfc9a90622d4e810cd47f751a1dc63a9696b9518879202eac95a2cd4438cd9087fdaaf7c63a9a20466ac9a2009fb1b8b1017e5e43c5b68abffae1ca84fdd9ed6c95caabc959da9dbdd42def3bb752c93a3540cfcf6afa8ceaaa1747941a1847e63039670f34f637188a4a68272ab61a09eab62d336c4351808c579a6d34b4ca120cf6c256e388856c2c9327279d16c2c68e9bf6c52ed7093267c7fc2a3111de91f12e390350b6512fb6552db336aed4eca1e848561f47a82d09d1dbdb3ac1f320f4c927cd55221be94ea3636c16946b01e438090c5429a88517a0b59a0b219e02483b2aa20b4c697d0fdfbdb68fe609ad2207eb24c1f157bee8c220ecbf19f7380dcda001086bb703f60625adb7ec26e8c617b6896172c5ea29569e51682e7eae9807a6cad59b4c2feedf4a060a5b1f6ed727647f86ba899e16e8fe47148a1cd7b89334267235f2c195547d413920fab28aef3ccbc15e47767a90b55841062bea831c2477d2dba0966b3f1b397d913b8b9bc2936e440612b17135818e661f575b47894a8534d6c3724d2cdc99b5f76b645eab8e7e140c4d9c291c4f1f995eadf30b85ac2db87149196685ec9b923369f2fe9767a1609995a064ce305f9d22b1d1c56f7d021437776c95d555df94de39528a27315f8316d40275564a13ec86c9f42dfec6c6d7e29abdffd1991dacf8b88a036fdab84a7e0bf0d7112f5ece2f7f1233d63dc22f2194b591cbbf96070c2ae4e40575a26d01547989121e209ca0c06e534d143509c36db9f2f200d280c3bceb78c4d84d500b747db9add6dd51526ad44f1c930f541eb233e6e5a572de0c8d8e14df0bd563951e3839ae9f4ab0487357a653b4c2b835d118828f6665ee3f14507b600f3a7a605be7fe55912889adc4f9c0155fb543c4b9e2a277dd68a311cc76611cfc7d8ca9332d3d88b696d515f4890437f05a47f8de9da3f77b681d0bb9d3eeb4b9242f248cc55953da1f085b846e5979bd047a84dbd0847914a08d0320578a4cfbea76fcca7ae4f697b5243c66f0f92c0e7f1bd7c350881ad6638fe609c5f16491abe4fffe2cf549ca3babd93e017191b7d4c2c298e45c9555d5d2db20d8bba3d828f9ed324eb8a285d5f3b43555145be7967ca4ee2af33fd5d07d10260d8c9a83f300c5577cb9c483777d3f086f454ac62ee490480e337bf66636f94e0b8ae03df66ee6903eeb6b92b4be853bbdab41eb76559aff07ec81908a2a6c5bc36bbac45e31772f99b80b340c303075fbc928c6e400f468fe4b8eb6ab689f24e05d416ee2e8628240a70c0e7e25ae4548e35ec42f7e6aa5ce025bacde44b71a75e3f191d41b48615e324f822960cfa1c1ff72e439b8bb8845e34fcb831e59e2b786d55364588149e37c07ca9939ad8c4d409b8945129ad8afb8df1c9052da4b546bf833a0981fe0df897ad7e3c41334c4351eca51989f914895b5c6b333e547ad7348084e89744a2f4712b0f973222f4482dd08a0d5ad05e3e51e313fd620e364f2c8f63ceaa17109dcb5ab4eaf7f6ac9130bd3d4f1b4ddd8ad4c7c1cf28791cc5c569ecc3513d18dc8ea4e33e61b28f1962726a2de23672360b42640abf8a7dea20905c758a8dcae0339c3ec0090935c5fc1fc1789add52eff63819236fc142b7cae5710a9a9eced054e6d4db1dee0e6c7b58143599aefad5c3dd6e241565585564543ce96e6788b0199c6291dd3dda47d43d5380ee909e97153b901741347c22c197867c2855a";
+
+// Verify the pinned vector with one (pair_pid, pair_pubkey) pair, a chosen root and a
+// chosen cb-readable flag. Every buffer lives for the synchronous FFI call.
+uint8_t run_verify(const std::vector<uint8_t>& root, uint8_t cb_readable,
+  const std::vector<uint8_t>& pair_pid, const std::vector<uint8_t>& pair_pubkey)
+{
+  const std::vector<uint8_t> headers = from_hex(KAT_HEADERS);
+  const std::vector<uint8_t> witness = from_hex(KAT_WITNESS);
+  const std::vector<uint8_t> cbkey = from_hex(KAT_CBKEY);
+
+  shekyl_archival_pid_pubkey pair{};
+  std::memcpy(pair.p_id, pair_pid.data(), 32);
+  pair.pubkey_ptr = pair_pubkey.empty() ? nullptr : pair_pubkey.data();
+  pair.pubkey_len = pair_pubkey.size();
+
+  shekyl_archival_attestation_verify_ctx ctx{};
+  std::memcpy(ctx.attestation_root, root.data(), 32);
+  std::memcpy(ctx.cb_out_key, cbkey.data(), 32);
+  ctx.cb_out_key_readable = cb_readable;
+  ctx.headers_readable = 1;
+  ctx.headers_ptr = headers.data();
+  ctx.headers_len = headers.size();
+  ctx.pairs_ptr = &pair;
+  ctx.pairs_len = 1;
+  return shekyl_archival_verify_attestation(witness.data(), witness.size(), &ctx);
+}
+}  // namespace
+
+// The layout agrees end to end: the frozen vector, marshaled through the C structs, verifies OK.
+TEST(archival_attestation_verify, pinned_valid_vector_verifies_ok)
+{
+  EXPECT_EQ(run_verify(from_hex(KAT_ROOT), 1, from_hex(KAT_P_ID), from_hex(KAT_PUBKEY)),
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+}
+
+// attestation_root field offset: flip one byte -> ROOT_MISMATCH.
+TEST(archival_attestation_verify, flipped_root_is_root_mismatch)
+{
+  std::vector<uint8_t> root = from_hex(KAT_ROOT);
+  root[0] ^= 0x01;
+  EXPECT_EQ(run_verify(root, 1, from_hex(KAT_P_ID), from_hex(KAT_PUBKEY)),
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH);
+}
+
+// pubkey_len == 0 is the bond-absent marker (a missing LMDB bond), not a bad signature.
+TEST(archival_attestation_verify, absent_bond_is_bond_absent)
+{
+  EXPECT_EQ(run_verify(from_hex(KAT_ROOT), 1, from_hex(KAT_P_ID), std::vector<uint8_t>{}),
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT);
+}
+
+// pair p_id offset + coverage: a pair that names no pass record (and a pass record with no
+// pair) is a set mismatch, the loud verdict that makes the pairs-not-positional design safe.
+TEST(archival_attestation_verify, wrong_pair_pid_is_set_mismatch)
+{
+  const std::vector<uint8_t> wrong_pid(32, 0xAB);
+  EXPECT_EQ(run_verify(from_hex(KAT_ROOT), 1, wrong_pid, from_hex(KAT_PUBKEY)),
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH);
+}
+
+// cb_out_key_readable flag: 0 means C++ could not read the coinbase key -> the verify refuses
+// rather than binding the nonce to garbage.
+TEST(archival_attestation_verify, unreadable_cbkey_is_cbkey_unreadable)
+{
+  EXPECT_EQ(run_verify(from_hex(KAT_ROOT), 0, from_hex(KAT_P_ID), from_hex(KAT_PUBKEY)),
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE);
+}
+
+// headers_readable flag offset: 0 means C++ could not parse the coinbase tx_extra -> the verify
+// refuses rather than misreading a malformed extra as the committed empty attestation set.
+TEST(archival_attestation_verify, unreadable_headers_is_headers_unreadable)
+{
+  uint8_t empty_root[32];
+  ASSERT_TRUE(shekyl_attestation_root_empty(empty_root));
+
+  shekyl_archival_attestation_verify_ctx ctx{};
+  std::memcpy(ctx.attestation_root, empty_root, 32);
+  ctx.cb_out_key_readable = 1;
+  ctx.headers_readable = 0;
+  EXPECT_EQ(shekyl_archival_verify_attestation(nullptr, 0, &ctx),
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE);
+}
+
+// The empty (pre-cutover) shape across the FFI: the C++ empty root (shekyl_attestation_root_empty)
+// agrees with the Rust verify's recompute over zero records -> OK; a non-empty root -> reject.
+TEST(archival_attestation_verify, empty_shape_across_ffi)
+{
+  uint8_t empty_root[32];
+  ASSERT_TRUE(shekyl_attestation_root_empty(empty_root));
+
+  shekyl_archival_attestation_verify_ctx ctx{};
+  std::memcpy(ctx.attestation_root, empty_root, 32);
+  ctx.cb_out_key_readable = 1;  // no records -> the key value is unused, but the flag must be set
+  ctx.headers_readable = 1;     // parsed extra, no attestation tag -> the committed empty set
+  ctx.headers_ptr = nullptr;
+  ctx.headers_len = 0;
+  ctx.pairs_ptr = nullptr;
+  ctx.pairs_len = 0;
+  EXPECT_EQ(shekyl_archival_verify_attestation(nullptr, 0, &ctx),
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+
+  ctx.attestation_root[0] ^= 0x01;
+  EXPECT_EQ(shekyl_archival_verify_attestation(nullptr, 0, &ctx),
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH);
+}
+
+// Step 1 marshaling: C++ hands the same header blob to shekyl_archival_attestation_pass_p_ids and
+// gets back exactly the pinned pass p_id the ctx above pairs against.
+TEST(archival_attestation_verify, step1_names_the_pinned_pass_pid)
+{
+  const std::vector<uint8_t> headers = from_hex(KAT_HEADERS);
+  uint8_t out[config::ARCHIVAL_MAX_ATTESTATION_RECORDS][32];
+  size_t n = 0;
+  const uint8_t code = shekyl_archival_attestation_pass_p_ids(
+    headers.data(), headers.size(), out, config::ARCHIVAL_MAX_ATTESTATION_RECORDS, &n);
+  EXPECT_EQ(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+  ASSERT_EQ(n, 1u);
+  const std::vector<uint8_t> p_id = from_hex(KAT_P_ID);
+  EXPECT_EQ(std::memcmp(out[0], p_id.data(), 32), 0);
+}

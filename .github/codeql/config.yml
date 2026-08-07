@@ -57,12 +57,24 @@ name: "Shekyl CodeQL config"
 # re-attribute these pre-existing library alerts as PR-introduced; suppressing
 # the query keeps CodeQL signal on findings we can actually act on.
 
+# `rust/cleartext-logging` on `rust/shekyl-cli/src/display.rs` only.
+#
+# `show_secret` deliberately writes the once-only wallet seed backup to
+# stdout after `preflight_secret_display` has refused non-TTY stdout and
+# required an explicit YES under multiplexers. CodeQL treats every
+# `println!` as a log sink and flags the parameter named `secret`, which
+# is exactly the intended UX for a TTY-gated one-time backup — not a
+# logging bug. Path-scoping the exclude keeps the query live on every
+# other Rust file (including CLI paths that should never print secrets).
+# Inline `// codeql[...]` suppressions are not yet reliable for Rust
+# (AlertSuppression.ql still landing upstream).
+
 # ----------------------------------------------------------------------
 # Vendored-code path exclusion
 # ----------------------------------------------------------------------
 #
 # `external/**` is third-party vendored code (LMDB, qrcodegen, RandomX,
-# unbound, etc.), tracked as submodules/imports. Shekyl does not patch
+# etc.), tracked as submodules/imports. Shekyl does not patch
 # these in place — the remediation path for a real finding is a dep
 # update or a fork, never a local edit — so CodeQL alerts anchored in
 # `external/` are not an actionable Shekyl surface. Analyzing them only
@@ -87,11 +99,13 @@ name: "Shekyl CodeQL config"
 # by query id at the results stage, regardless of build mode) and are
 # retained deliberately, not made redundant by this path filter:
 # `rust/hard-coded-cryptographic-value` targets `rust/` test code
-# (outside `external/`), and `cpp/upcast-array-pointer-arithmetic` traces
+# (outside `external/`); `cpp/upcast-array-pointer-arithmetic` traces
 # dataflow through a Shekyl-owned wrapper in
 # `src/blockchain_db/lmdb/db_lmdb.cpp` — if buildless anchors that finding
-# on the `src/` side, `paths-ignore` would not catch it, so the id filter
-# remains the safety net.
+# on the `src/` side, `paths-ignore` would not catch it; and the
+# path-scoped `rust/cleartext-logging` exclude for
+# `rust/shekyl-cli/src/display.rs` is intentional TTY seed display (see
+# rationale above).
 paths-ignore:
   - 'external/**'
 
@@ -100,3 +114,7 @@ query-filters:
       id: rust/hard-coded-cryptographic-value
   - exclude:
       id: cpp/upcast-array-pointer-arithmetic
+  - exclude:
+      id: rust/cleartext-logging
+      paths:
+        - rust/shekyl-cli/src/display.rs

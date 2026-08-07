@@ -74,10 +74,9 @@ Use the CLI tools when you want to:
 | `shekyl-blockchain-export` | Export blockchain to a file |
 | `shekyl-blockchain-prune` | Prune or copy-prune a blockchain database |
 | `shekyl-blockchain-stats` | Print blockchain statistics |
-| `shekyl-blockchain-mark-spent-outputs` | Build a database of known-spent outputs |
 | `shekyl-blockchain-ancestry` | Trace transaction ancestry chains |
 | `shekyl-blockchain-depth` | Compute minimum chain depth for outputs |
-| `shekyl-blockchain-usage` | Analyse blockchain storage usage |
+| `shekyl-blockchain-usage` | Histogram of output reuse as ring members (legacy) |
 | `shekyl-blockchain-prune-known-spent-data` | Remove provably-spent prunable data |
 
 ### Getting the binaries
@@ -158,13 +157,15 @@ example.
 
 | Flag | Description |
 |------|-------------|
-| `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet) |
+| `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet); Axum is the sole transport |
 | `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1) |
-| `--rpc-login <user:pass>` | Require HTTP digest authentication |
 | `--restricted-rpc` | Disable admin endpoints (safe for public-facing nodes) |
-| `--rpc-ssl <mode>` | `enabled`, `disabled`, or `autodetect` |
+| `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
 | `--confirm-external-bind` | Required when binding RPC to 0.0.0.0 |
-| `--no-rust-rpc` | Disable the Axum-based Rust RPC transport (on by default) |
+
+shekyld does **not** accept `--rpc-login` or `--rpc-ssl*` (inbound RPC is
+plaintext). Use loopback locally; for remote access prefer an onion service
+or a reverse proxy. Wallet-RPC retains login/SSL flags for its own listener.
 
 **Peer-to-peer**
 
@@ -489,75 +490,60 @@ approximately 23 KB. Fees scale with transaction size.
 
 ## Staking
 
-Shekyl uses a **claim-based** staking model. You lock SKL for a chosen
-period, rewards accrue in a global pool, and you claim your share with
-explicit claim transactions. You never hand control of your coins to anyone.
+Shekyl staking is **archival pay-for-service**. You bond SKL as on-chain
+collateral backing archival service, and you earn a share of the block
+reward-emission leg for the archival work your position verifiably performs.
+There are **no duration tiers, no lock period, no claim/unstake transactions,
+and no minimum stake** — those belonged to an earlier claim-based design that
+was retired before genesis. Your principal stays yours the whole time; the
+bond is an honesty anchor (slashable for misbehavior), not a custody transfer.
 
-### Staking tiers
+For the economic model, see
+[`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) §Component 3–4 and the canonical
+specs [`V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) (mechanism) and
+[`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) (reward leg).
+If you intend to *run* a staker, read the
+[`STAKER_OPERATOR_GUIDE.md`](STAKER_OPERATOR_GUIDE.md) first — it covers the
+timing and funding footguns that matter for your privacy.
 
-| Tier | Lock Period | Yield Multiplier |
-|------|-------------|------------------|
-| Short | ~1,000 blocks (~33 hours) | 1.0x |
-| Medium | ~25,000 blocks (~35 days) | 1.5x |
-| Long | ~150,000 blocks (~208 days) | 2.0x |
+### How it works
 
-There is no minimum stake amount.
+- **Activation is one-time.** You activate staking once; the wallet then posts
+  your archival bond and runs the background scan that answers challenges and
+  tracks your service. You do not hand control of your coins to anyone.
+- **Reward is by verified serve-work, not by amount or duration.** The
+  reward budget is divided among stakers in proportion to *capped* verified
+  serve-work, so a larger position does not buy a proportionally larger share.
+- **Rewards arrive automatically.** They are paid through the loud
+  reward-emission leg (public amounts) and received to a firewalled pseudonym
+  — there is no manual "claim" step and no separate claim transaction.
+- **Principal stays liquid.** You can release collateral by unbonding, subject
+  to a release cooldown. There is no fixed lock height to wait out.
 
-### Commands
+### Wallet support today
 
-**Stake:**
+Archival staking activation and status are driven through the wallet's staking
+surface, **not** through interactive `shekyl-cli` commands yet:
 
-```
-[wallet]: stake <tier> <amount>
-```
+- **Wallet RPC** exposes staking activation (`stake`) and read-only status
+  (`get_staked_balance`, `get_staked_outputs`, `staking_info`). Reward-related
+  reads never conflate bonded principal with received rewards.
+- **The desktop GUI** exposes staker activation directly.
 
-Where `<tier>` is 0 (Short), 1 (Medium), or 2 (Long).
-
-**View staking status:**
-
-```
-[wallet]: staking_info
-```
-
-Shows your staked outputs, lock heights, accrued rewards, and claim status.
-
-**Claim rewards:**
-
-```
-[wallet]: claim_rewards
-```
-
-You can claim rewards at any time after the staked output is created -- even
-during the lock period. Claims draw from the global pool and do not touch
-your principal. Each claim transaction can cover a maximum range of blocks
-(`MAX_CLAIM_RANGE`), so multiple claims may be needed to drain a large
-backlog.
-
-**Unstake:**
-
-```
-[wallet]: unstake
-```
-
-Unlocks your principal after the lock period has elapsed (i.e., the chain
-height exceeds `creation_height + tier_lock_blocks`). If the lock has not
-expired, the transaction will be rejected.
-
-### Accrual rules
-
-- Rewards accrue for blocks in the range `(creation_height, effective_lock_until]`,
-  where `effective_lock_until = creation_height + tier_lock_blocks`.
-- After `effective_lock_until`, the output **stops accruing** new rewards but
-  you can still claim the backlog that accumulated during the lock window.
-- A staked output that is never unstaked does **not** earn indefinitely. The
-  accrual cap at `effective_lock_until` keeps the commitment symmetric.
+Interactive `shekyl-cli` staking commands are on the roadmap but **not yet
+available**; this section will document them when they land. Until then, the
+above is the honest status — use the GUI or the wallet-RPC methods to stake.
 
 ### Privacy considerations
 
-- Staked outputs are on-chain distinguishable (lock tier is visible).
-- Claim transactions use `RCTTypeNull` and do not generate FCMP++ proofs.
-- Batch your claims rather than claiming every block -- frequent claims
-  create a more fingerprintable on-chain pattern.
+- **Bond-post timing is a privacy surface, and the wallet handles it for
+  you.** The wallet draws a randomized entry standoff before posting your bond;
+  do not override, batch, or schedule bond-posts to a clock or an external
+  event (see the operator guide's footguns).
+- **Reward reception is firewalled.** Emission-leg rewards are attributed to a
+  pseudonym, keeping your archival identity separate from your spending
+  identity — provided you do not defeat the firewall by funding or draining
+  through linked events.
 
 ---
 
@@ -644,22 +630,28 @@ threshold lives entirely in the PQC auth layer.
 
 ### Transaction size
 
-Each additional signer adds approximately 5.3 KB of authentication material.
+Each additional signer adds roughly another hybrid key + signature of
+authentication material (~5.4 KB solo baseline via `pqc_auth_weight()`).
 
 | Configuration | Auth Size | vs. Single |
 |---------------|-----------|------------|
-| Single signer | ~5.3 KB | baseline |
-| 2-of-3 | ~12.5 KB | 2.4x |
-| 3-of-5 | ~19.7 KB | 3.7x |
-| 5-of-7 | ~30.2 KB | 5.7x |
+| Single signer | ~5.4 KB | baseline |
+| 2-of-3 | ~12.8 KB | ~2.4× |
+| 3-of-5 | ~20.2 KB | ~3.7× |
+| 5-of-5 | ~27 KB | ~5.0× |
+
+Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
+5-of-5 — see `V3_ROLLOUT.md`. Target cap is
+`MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G; code still `= 7` until MSW-1).
 
 ### Use cases
 
 - **Treasury management:** 2-of-3 or 3-of-5 ensures no single person can
   spend development or community funds.
-- **Staking security:** Long-tier staked positions (up to ~208 days) locked
-  for months are a single point of failure with one key. Multisig staked
-  outputs use the same `scheme_id = 2` for claims and unlocks.
+- **Staking security:** A bonded archival position keeps significant
+  collateral committed over a long service life and is slashable for
+  misbehavior, so controlling it with a single key is a single point of
+  failure. Use multisig to protect the keys that control bonded value.
 - **Inheritance and recovery:** 2-of-3 where the owner holds two keys and a
   trusted party holds one.
 - **Escrow:** Buyer, seller, and arbitrator each hold a key in a 2-of-3.
@@ -802,7 +794,7 @@ building applications on top of Shekyl.
 | `--restricted-rpc` | Limit to read-only and transfer operations |
 | `--rpc-ssl <mode>` | Enable SSL (`enabled`, `disabled`, `autodetect`) |
 | `--daemon-address <addr>` | Connect to a specific daemon |
-| `--trusted-daemon` | Disable privacy-preserving request splitting |
+| `--trusted-daemon` | Enable commands that rely on a trusted daemon (your own node) |
 
 ### Method categories
 
@@ -815,15 +807,17 @@ All methods are called via `POST /json_rpc`. Key groups:
   `get_transfers`, `get_transfer_by_txid`
 - **Keys and proofs:** `query_key`, `get_tx_key`, `check_tx_key`,
   `get_tx_proof`, `sign`, `verify`
-- **Staking:** `stake`, `unstake`, `claim_rewards`, `get_staked_outputs`,
-  `get_staked_balance`
+- **Staking (archival):** `stake` (activation), `get_staked_balance`,
+  `get_staked_outputs`, `staking_info` (reads). There is no `unstake`/`claim`
+  RPC — archival staking has no claim/unstake wire; those methods are reserved.
 - **PQC Multisig:** `create_pqc_multisig_group`, `get_pqc_multisig_info`,
   `export_multisig_signing_request`, `sign_multisig_partial`,
   `import_multisig_signatures`
 - **UTXO control:** `freeze`, `thaw`, `frozen`
 - **Mining:** `start_mining`, `stop_mining`
 
-For the full RPC reference, see [WALLET_RPC_RUST.md](WALLET_RPC_RUST.md).
+For the full RPC reference, see the wallet-RPC contract
+[`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml).
 
 ---
 
@@ -880,14 +874,21 @@ Additional flags: `--with-inputs`, `--with-outputs`, `--with-hours`.
 
 | Tool | Purpose |
 |------|---------|
-| `shekyl-blockchain-mark-spent-outputs` | Build a database of provably-spent outputs for privacy analysis |
 | `shekyl-blockchain-ancestry` | Trace the input ancestry of a transaction |
 | `shekyl-blockchain-depth` | Compute minimum chain depth for an output or transaction |
-| `shekyl-blockchain-usage` | Analyse storage usage across the blockchain |
+| `shekyl-blockchain-usage` | Histogram of output reuse as ring members (legacy) |
 | `shekyl-blockchain-prune-known-spent-data` | Remove prunable data for outputs that are provably spent |
 
 All tools accept `--data-dir`, `--testnet`, `--stagenet`, and
 `--log-level` flags.
+
+> **Note:** `shekyl-blockchain-ancestry`, `shekyl-blockchain-depth`,
+> `shekyl-blockchain-usage`, and `shekyl-blockchain-prune-known-spent-data`
+> all analyze spend-graph relationships that FCMP++ transactions do not
+> reveal (a spend never discloses which output it consumes, and inputs carry
+> no ring-member references). They have no substrate on Shekyl chain data
+> and are scheduled for a deletion audit (see `docs/EXECUTABLES.md` and
+> `docs/FOLLOWUPS.md`).
 
 ---
 
@@ -968,8 +969,6 @@ Higher values slow down wallet opening but make password cracking much harder.
 - **Corrupted database:** Try `pop_blocks 100` in the daemon console to
   roll back recent blocks. As a last resort, delete the LMDB directory and
   resync.
-- **DNS:** If checkpoint DNS resolution fails, try
-  `--disable-dns-checkpoints`.
 
 ### Wallet balance is wrong or zero
 
@@ -1118,8 +1117,8 @@ Behavior changes to be aware of when upgrading:
    must be updated.
 2. **`MLOG_SET_THREAD_NAME` is a no-op.** The macro still accepts
    its argument so existing call sites (`abstract_tcp_server2.inl`,
-   `miner.cpp`, `download.cpp`) keep compiling, but the label
-   (`[SRV_MAIN]`, `[miner 3]`, `DL12`) no longer appears in the log
+   `miner.cpp`) keep compiling, but the label
+   (`[SRV_MAIN]`, `[miner 3]`) no longer appears in the log
    stream. Restoring semantic thread labels via
    `pthread_setname_np` / equivalent is tracked in
    `docs/FOLLOWUPS.md` as a minor follow-up.

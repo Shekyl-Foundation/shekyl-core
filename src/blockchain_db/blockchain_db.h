@@ -43,6 +43,7 @@
 #include "cryptonote_basic/hardfork.h"
 #include "cryptonote_protocol/enums.h"
 #include "blockchain_db/shekyl_types.h"
+#include "shekyl/shekyl_ffi.h" // epoch-close FFI row structs for ArchivalEmissionEpochSnapshot::to_ffi_*
 
 /** \file
  * Cryptonote Blockchain Database Interface
@@ -118,6 +119,19 @@ enum class relay_category : uint8_t
 };
 
 bool matches_category(relay_method method, relay_category category) noexcept;
+
+/**
+ * @brief LMDB height key for a block's attestation witness.
+ *
+ * Mirrors `store_curve_tree_root_at_height`: keyed at the post-add chain height
+ * (`block_index + 1`), not the block's 0-based index. Every read/write site that
+ * starts from a 0-based block index MUST go through this helper so the +1
+ * cannot drift between add / serve / reorg paths.
+ */
+inline uint64_t archival_attestation_witness_key(uint64_t block_index) noexcept
+{
+  return block_index + 1;
+}
 
 #pragma pack(push, 1)
 
@@ -392,6 +406,76 @@ class KEY_IMAGE_EXISTS : public DB_EXCEPTION
  * End of Exception Definitions
  ***********************************/
 
+
+/// The as-of-E consensus snapshot for one claimed settlement epoch, gathered
+/// by `gather_archival_emission_epoch_snapshot` (M-2/Q7,
+/// REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2). Plain-value rows mirroring
+/// the epoch-close gather shape; the consumer marshals them into the
+/// `shekyl_archival_emission_epoch_snapshot` FFI struct (pointers into these
+/// vectors) for `shekyl_emission_vin_verify` /
+/// `shekyl_archival_emission_epoch_work`.
+///
+/// Deliberately carries no holdings descriptor (WS-1 §5): the held-and-served
+/// set is the serve-credit rows themselves; tip holdings never enter the work
+/// channel.
+struct ArchivalEmissionEpochSnapshot
+{
+  uint64_t settlement_epoch = 0;
+  /// The close-processing height (E+1)·SEB the close ran at (the shard-age
+  /// operand). NOT H_close(E): that is `shekyl_archival_epoch_close_height(E)`
+  /// = the epoch's last block / credit deadline = (E+1)·SEB − 1, one block
+  /// lower. Source this from `shekyl_archival_epoch_close_processing_height`,
+  /// never the lookalike `shekyl_archival_epoch_close_height`.
+  uint64_t close_block_height = 0;
+  /// Persisted finalized Σwork(E) milli (0 when the epoch closed empty or
+  /// was M1-gated) — the stored denominator, never a recompute.
+  uint64_t sigma_work_milli = 0;
+  /// Frozen `budget(E)` (ARCHIVAL_BUDGET_SCHEDULE.md §3.3): the stored
+  /// close-row value — budget and denominator freeze in the same close
+  /// event; verify never re-sums the accrual rows. Meaningful only when
+  /// `has_budget_row`.
+  uint64_t budget_atomic = 0;
+  /// Whether the frozen `archival_budget` row exists. Absent (never closed
+  /// or pruned) is a gather failure → the verify shim rejects; a
+  /// present-and-zero row is a closed zero-budget epoch, rejected
+  /// downstream by wire positivity, not by the gather.
+  bool has_budget_row = false;
+  struct BondRow
+  {
+    uint64_t join_settlement_epoch = 0;
+    bool is_foundation_complete_tree = false;
+    /// Flattened (start_epoch, end_exclusive) pairs.
+    std::vector<uint64_t> bad_intervals_flat;
+  };
+  struct ShardRow
+  {
+    uint64_t shard_id = 0;
+    uint64_t freeze_height = 0;
+    bool has_segment = false;
+  };
+  struct CreditPair
+  {
+    size_t bond_idx = 0;
+    size_t shard_idx = 0;
+  };
+  std::vector<BondRow> bonds;
+  std::vector<ShardRow> shards;
+  std::vector<CreditPair> credit_pairs;
+  /// Claimant P's index into `bonds`; SIZE_MAX when P has no serve-credit
+  /// row in E (its work is then zero by construction).
+  size_t claimant_bond_idx = SIZE_MAX;
+
+  // Marshal the plain-value rows into the epoch-close FFI arrays. Single
+  // source for the struct→FFI field mapping so the close path
+  // (`process_archival_epoch_close_at_height`), the emission-verify shim, and
+  // the KATs cannot drift on it (WS-1 §5.5 single sourcing — the row *gather*
+  // is single-sourced in `gather_archival_epoch_rows`, this is the marshaling
+  // half). The returned vectors' `bad_intervals_ptr`s alias this snapshot's
+  // `BondRow::bad_intervals_flat`, so the snapshot must outlive them.
+  std::vector<shekyl_archival_epoch_close_bond> to_ffi_bonds() const;
+  std::vector<shekyl_archival_epoch_close_shard> to_ffi_shards() const;
+  std::vector<shekyl_archival_credit_pair> to_ffi_credit_pairs() const;
+};
 
 /**
  * @brief The BlockchainDB backing store interface declaration/contract
@@ -860,6 +944,22 @@ public:
    * @param long_term_block_weight the long term weight of the block (transactions and all)
    * @param cumulative_difficulty the accumulated difficulty after this block
    * @param coins_generated the number of coins generated total after this block
+   * @param archival_budget_accrual the block's staker inflow
+   *   (ARCHIVAL_BUDGET_SCHEDULE.md §3.1); 0 when the inflow is zero (genesis,
+   *   or fully decayed). Computed by the caller BEFORE add_block so the
+   *   hardfork operand is the connecting block's own validated version, and
+   *   written here (keyed at the block's index) before the epoch-close hook
+   *   fires, so the close of an epoch sees its final block's row
+   *   (F-B1a/F-B1b).
+   * @param attestation_witness the block's prunable credit-wire admission
+   *   witness (`r` + per-pass HybridSignatures; ARCHIVAL_CREDIT_WIRE.md
+   *   §3.2/§4, transport B2). Opaque bytes here, decoded/verified in Rust behind
+   *   the FFI. Stored in the height-keyed m_archival_attestation_witness side
+   *   table in this same write txn (keyed to mirror the curve-tree root) and
+   *   pruned after horizon. Empty until the cutover packs pass records (interim
+   *   blocks carry the empty attestation set); an empty witness writes no row —
+   *   absent key reads as "no witness", the skip-when-empty convention the
+   *   accrual row above uses.
    * @param txs the transactions in the block
    *
    * @return the height of the chain post-addition
@@ -869,6 +969,8 @@ public:
                             , uint64_t long_term_block_weight
                             , const difficulty_type& cumulative_difficulty
                             , const uint64_t& coins_generated
+                            , uint64_t archival_budget_accrual
+                            , const blobdata& attestation_witness
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 
@@ -1922,18 +2024,37 @@ public:
    */
   void set_auto_remove_logs(bool auto_remove) { m_auto_remove_logs = auto_remove; }
 
-  // Per-height destroyed-amount record (adaptive fee burn + retired-share
-  // burn), so pop_block can roll `total_burned` back without recomputing
+  // Per-height destroyed-amount record (the adaptive fee burn's destroyed
+  // share), so pop_block can roll `total_burned` back without recomputing
   // the block's burn.
   virtual void add_block_burn(uint64_t height, uint64_t amount) = 0;
   virtual uint64_t get_block_burn(uint64_t height) const = 0;
   virtual void remove_block_burn(uint64_t height) = 0;
+
+  // Per-height staker-inflow accrual row (`archival_budget_accrual`,
+  // ARCHIVAL_BUDGET_SCHEDULE.md §3.1). The amount is computed for every
+  // non-genesis block since the pre-activation burn leg's deletion
+  // (emission is a genesis fact; §2.2), but the row is persisted only
+  // when the amount is nonzero — the burn-record idiom: absent height
+  // reads as 0, pop removes the height row. The rows are summed once per
+  // epoch into the frozen `archival_budget` close row and pruned with
+  // the epoch family.
+  virtual void add_archival_budget_accrual(uint64_t height, uint64_t amount) = 0;
+  virtual uint64_t get_archival_budget_accrual(uint64_t height) const = 0;
+  virtual void remove_archival_budget_accrual(uint64_t height) = 0;
 
   virtual void set_total_bonded_atomic(uint64_t balance) = 0;
   virtual uint64_t get_total_bonded_atomic() const = 0;
 
   virtual void set_total_burned(uint64_t amount) = 0;
   virtual uint64_t get_total_burned() const = 0;
+
+  // Fakechain settlement-epoch schedule pin (Blockchain::init): the schedule
+  // the datadir's epoch-derived rows (bond join epochs, serve-credit bits)
+  // were written under. 0 = not pinned yet. The setter manages its own write
+  // transaction — it runs at init, outside any block-add txn.
+  virtual void set_settlement_epoch_blocks_pin(uint64_t blocks) = 0;
+  virtual uint64_t get_settlement_epoch_blocks_pin() const = 0;
 
 
   // ─── Archival serve-credit ledger (gate-2 §3.1) ───────────────────────────
@@ -1962,8 +2083,14 @@ public:
     crypto::hash& out_rk, uint64_t& out_leaf_count) const;
 
   // Gate-4 bond-post / registry writers (substrate seeding until bond vin lands).
+  // `bond_spend_pk` is the GF-1 debit authorizer the JoinMarket connect
+  // commits (gate-4 §4.1) — deliberately no default: every caller states the
+  // key, so the production connect can never silently commit a record whose
+  // debits are unauthorized-forever. Test seeders pass {} when the record's
+  // debit path is not under test.
   virtual void put_archival_bond_record(const crypto::hash& p_id,
-    const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
+    const std::vector<uint8_t>& hybrid_pubkey,
+    const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
     uint64_t bonded_total_atomic, uint8_t holdings_kind,
     const std::vector<uint64_t>& held_shard_ids,
     const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals = {});
@@ -2003,12 +2130,156 @@ public:
   virtual void process_archival_slash_at_height(uint64_t block_height);
   /// Revert slash journal rows recorded when `block_height` connected.
   virtual void revert_archival_slashes_at_height(uint64_t block_height);
+  /// Emission-claim dedup writer (WS-2 §6.2, the connect-path single writer):
+  /// records every epoch in `settlement_epochs` in `P`'s claimed set via the
+  /// windowed `claimed_epochs_check_and_set` FFI, sets
+  /// `first_paying_emission_height` if unset, and journals the pre-image for
+  /// pop-revert. A dedup hit or an unclaimable epoch is a hard error, never a
+  /// soft skip — verify's contains-check and the block-level `(P,E)` pass
+  /// (C-1) foreclose both, so reaching either means a dedup layer was
+  /// bypassed. Caller: the emission vin connect dispatch (C-1).
+  virtual void apply_archival_emission_claim(uint64_t block_height, const crypto::hash& p_id,
+    const std::vector<uint64_t>& settlement_epochs);
+  /// Restore the pre-image journal rows recorded when `block_height`
+  /// connected (§6.3: the naive remove-inverse leaves prune-evicted
+  /// already-claimed epochs out of the restored set — the double-mint).
+  virtual void revert_archival_emission_claims_at_height(uint64_t block_height);
+  /// Unbond connect writer (gate-4 §4.3 "On confirm"; the Rust fold
+  /// `shekyl_archival_unbond_connect` dictates the entire write set — record
+  /// to the Exited shape, clean interval-close appended, counter debited):
+  /// journals the record's full pre-image first (the emission WS-2 §6.3
+  /// shape — the vin carries the POST-state, so holdings are otherwise
+  /// unreconstructible at pop). Reads the LIVE `total_bonded_atomic`
+  /// internally (per-post get→fold→set threading — a hoisted per-block read
+  /// would clobber across multiple bond posts; §3.5 counter-threading
+  /// obligation). Any fold error is a hard abort, never a soft skip.
+  /// Caller: the bond-post vin connect dispatch (add_transaction).
+  virtual void apply_archival_unbond(uint64_t block_height, const crypto::hash& p_id,
+    uint64_t vin_bond_debit);
+  /// Restore the Unbond pre-image journal rows recorded when `block_height`
+  /// connected, re-crediting `total_bonded_atomic` via the Rust pop fold
+  /// (which validates the tip record is the connect's product — Exited state
+  /// + trailing clean close). Trailing-entry invariant (ratified 2026-07-12,
+  /// §3.5): slashability ends at the Unbond connect — the slash scheduler
+  /// only challenges currently held shards and an Exited record holds none —
+  /// so nothing appends after the clean close and the trailing entry is
+  /// always the connect's close. pop_block still runs the slash revert first
+  /// as a defensive ordering belt; a violation surfaces in the fold as
+  /// MISSING_CLEAN_CLOSE, loud.
+  virtual void revert_archival_unbonds_at_height(uint64_t block_height);
+  /// HoldingsUpdate-add connect writer (gate-4 §4.4; the Rust fold
+  /// `shekyl_archival_holdings_update_add_connect` dictates the counter
+  /// movement): sets `held_shard_ids = post` and rebuilds the index-parallel
+  /// `shard_add_epochs` (carried shards keep their add-epoch; the one added
+  /// shard takes `E_add = settlement_epoch(block_height)`). The record stays
+  /// `Bonded` (ShardSetCompact) — no interval, no clean close (grace-tail
+  /// posture). Journals the full pre-image of the mutated fields first, and
+  /// reads the LIVE `total_bonded_atomic` internally (per-post threading, as
+  /// Unbond). Any fold error is a hard abort. Caller: the bond-post vin
+  /// connect dispatch (add_transaction).
+  virtual void apply_archival_holdings_update_add(uint64_t block_height,
+    const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids);
+  /// HoldingsUpdate-drop connect writer (gate-4 §4.4 grace-tail): sets
+  /// `held_shard_ids = post` and rebuilds `shard_add_epochs` (the dropped
+  /// shard's add-epoch vanishes with it); the released FLOOR returns via the
+  /// `bond_debit` CT-balance source term (no ledger write). Same journal +
+  /// per-post counter threading as the add. Caller: add_transaction.
+  virtual void apply_archival_holdings_update_drop(uint64_t block_height,
+    const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids);
+  /// Restore the HoldingsUpdate pre-image journal rows recorded when
+  /// `block_height` connected, reverting `total_bonded_atomic` via the Rust
+  /// pop fold (which guards that the tip and pre-image balances differ by
+  /// exactly one FLOOR — a single-shard change). The record stays Bonded
+  /// throughout, so there is no Exited/clean-close check (the add/drop pop
+  /// twin, gate-4 §5).
+  virtual void revert_archival_holdings_updates_at_height(uint64_t block_height);
+  /// Rebond connect writer (gate-4 §3.4; P2B-9 reinstatement; the Rust fold
+  /// `shekyl_archival_rebond_connect` dictates the write set): sets
+  /// `held_shard_ids = post` (a verified superset of current) and rebuilds the
+  /// index-parallel `shard_add_epochs` (carried shards keep theirs; added
+  /// shards take `E_rebond` — Pin 7), closes the open bad interval IN PLACE
+  /// (`end_exclusive = E_rebond + 1` — Pin 3; the record stays `Bonded`,
+  /// standing resumes at `E_rebond + 1`), and credits the counters by
+  /// `|added|·FLOOR` (zero for standing-only). Journals the pre-image of the
+  /// mutated fields (including the closed interval's index + start) first, and
+  /// reads the LIVE `total_bonded_atomic` internally (per-post threading). Any
+  /// fold error is a hard abort. Caller: the bond-post vin connect dispatch.
+  virtual void apply_archival_rebond(uint64_t block_height, const crypto::hash& p_id,
+    const std::vector<uint64_t>& post_shard_ids);
+  /// Restore the Rebond pre-image journal rows recorded when `block_height`
+  /// connected: re-open the journaled interval to `end_exclusive = MAX`
+  /// (identity-belted against the journal's index + start and the connect's
+  /// `E_rebond + 1` close), restore holdings/add-epochs/balance, and revert
+  /// `total_bonded_atomic` via the Rust pop fold (non-negative whole-FLOOR
+  /// delta guard — zero included).
+  virtual void revert_archival_rebonds_at_height(uint64_t block_height);
+  /// HoldingsUpdate-drop verify marshaling: the dropped shard's segment
+  /// freeze height (feeds the retention-horizon age-at-add). Returns false
+  /// when the shard has no frozen segment — a REACHABLE state, not
+  /// corruption: the add verify deliberately does not require a frozen
+  /// segment (bond_post.rs), so the caller fails closed by marshaling
+  /// freeze_height 0 (the genesis-band "oldest" sentinel → the longest
+  /// horizon); the Rust age computation pins a segment that froze at/after
+  /// H_close(add_epoch) to the same longest-horizon extreme.
+  virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const;
+  /// Unbond verify marshaling (P2B-8 Q1/Q2): each held shard's last-served
+  /// settlement epoch — one reverse-cursor seek per shard over the BE
+  /// composite serve-credit key `P_id ‖ BE64(shard) ‖ BE64(epoch)` — with
+  /// never-served shards omitted (they carry no bit; the Rust fold treats an
+  /// empty result as never-served ⇒ cooldown vacuously elapsed). The fold to
+  /// the whole-record anchor and the cooldown verdict stay Rust-side
+  /// (`whole_record_last_served` via the verify FFI).
+  virtual std::vector<uint64_t> archival_bond_last_served_epochs(
+    const crypto::hash& p_id, const std::vector<uint64_t>& shard_ids) const;
+  /// The all-shards form of the last-served marshal, for records that store
+  /// no shard list (CompleteTree holds every shard): a `P`-prefix hop scan
+  /// over the serve-credit table yielding each *served* shard's last-served
+  /// epoch — one reverse seek per served shard, never a full-table walk.
+  /// Without this, a CompleteTree persona's cooldown anchor would fold from
+  /// an empty list and the release gate would be vacuously open.
+  virtual std::vector<uint64_t> archival_bond_all_last_served_epochs(
+    const crypto::hash& p_id) const;
+  /// The slash scheduler's monotone settled watermark
+  /// (`archival_last_slash_epoch`): every settlement epoch `<=` the returned
+  /// value has been scanned at its slash deadline. u64 max = no epoch settled
+  /// yet (the storage sentinel). Marshaled into the Unbond release verify
+  /// (SLASH_SETTLEMENT_PENDING gate).
+  virtual uint64_t get_archival_last_slash_epoch() const;
   /// Finalize `R_market` / `Σwork` at settlement-epoch close (`ARCHIVAL_CONSENSUS_STATE.md` §3.3–§3.5).
   virtual void process_archival_epoch_close_at_height(uint64_t block_height);
   /// Revert epoch-close materialization when `block_height` is popped.
   virtual void revert_archival_epoch_close_at_height(uint64_t block_height);
   virtual uint64_t get_archival_r_market(uint64_t shard_id, uint64_t settlement_epoch) const;
   virtual uint64_t get_archival_sigma_work_milli(uint64_t settlement_epoch) const;
+  /// Frozen `budget(E)` close row (ARCHIVAL_BUDGET_SCHEDULE.md §3.2): the
+  /// bounded accrual-row sum the close materialized in the same txn as the
+  /// sigma row. NOTFOUND is laundered to 0 like the sigma getter; the
+  /// verify-side gather distinguishes absent-row (never closed / pruned →
+  /// reject) via the stored-shape probe on the LMDB class.
+  virtual uint64_t get_archival_budget(uint64_t settlement_epoch) const;
+  /// Re-derive the as-of-E consensus snapshot for a claimed settlement epoch
+  /// (M-2/Q7, REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2): the same
+  /// serve-credit/bond/shard row gather the close ran at H_close(E) — via the
+  /// one shared gather routine — plus the **persisted** Σwork(E) and
+  /// budget(E) close rows. Sound because every gathered row is immutable for
+  /// a claimable E: credit acceptance rejects responses past H_close, pruning
+  /// deletes only below the claim window's floor, and reorg pops revert close
+  /// and credits symmetrically. Caller gates claimability (epoch closed,
+  /// claim window) before calling; the C-1 emission dispatch in
+  /// `Blockchain::check_tx_inputs` is the production consumer, the snapshot
+  /// identity KATs the test consumer. Default resets `out` (has_budget_row
+  /// false → the dispatch rejects).
+  virtual void gather_archival_emission_epoch_snapshot(const crypto::hash& p_id,
+    uint64_t settlement_epoch, ArchivalEmissionEpochSnapshot& out) const;
+  /// Windowed form of the snapshot gather (EMISSION_CLAIM_BUILDER.md §7):
+  /// one snapshot per epoch in `[epoch_lo, epoch_hi)`, per-epoch identical
+  /// to `gather_archival_emission_epoch_snapshot`. The LMDB override
+  /// collects every epoch's rows in a single serve-credit table pass so the
+  /// unauthenticated claim-source RPC costs one scan per request, not one
+  /// per window epoch; the default delegates to the per-epoch gather.
+  virtual void gather_archival_emission_window_snapshots(const crypto::hash& p_id,
+    uint64_t epoch_lo, uint64_t epoch_hi,
+    std::vector<ArchivalEmissionEpochSnapshot>& out) const;
 
   // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
 
@@ -2279,6 +2550,75 @@ public:
    * Called during pop_block to keep the table consistent with chain state.
    */
   virtual void remove_curve_tree_root_at_height(uint64_t block_height) = 0;
+
+  // ─── Credit-wire attestation witness (prunable, admission-only) ───────────
+  // The per-block `r` + pass-signature witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4,
+  // credit-wire CW-2): two tables, each with ONE owner.
+  //   * height-keyed — owned by the MAIN CHAIN. Written by add_block, deleted by
+  //     pop_block, reaped by the retention prune.
+  //   * hash-keyed — owned by the ALT-BLOCK TABLE. Written beside add_alt_block,
+  //     deleted beside remove_alt_block / drop_alt_blocks / reset. A row exists
+  //     there iff its alt block does, so no path can orphan one.
+  // Neither owner writes the other's table; a block moving between main and alt
+  // carries its witness explicitly through block_connect_supplement.
+  // Mined commitment lives in the block header's attestation_root (not the blob).
+  // Opaque bytes at this layer; decode/verify live in Rust.
+
+  /**
+   * @brief store a block's attestation witness keyed by block height.
+   *
+   * Called from add_block in the same write txn as the block add (keyed to
+   * mirror store_curve_tree_root_at_height). Not called for an empty witness.
+   */
+  virtual void store_archival_attestation_witness_at_height(uint64_t block_height, const blobdata& witness) = 0;
+
+  /**
+   * @brief retrieve the attestation witness stored at a given height.
+   *
+   * @return the witness blob, or empty if no row exists (a block with an empty
+   *   attestation set, or a pruned/never-written height).
+   */
+  virtual blobdata get_archival_attestation_witness_at_height(uint64_t block_height) const = 0;
+
+  /**
+   * @brief remove the stored attestation witness for a given height.
+   *
+   * Tolerant of a missing key. Called by pop_block (the block leaves main) and
+   * by the retention prune.
+   */
+  virtual void remove_archival_attestation_witness_at_height(uint64_t block_height) = 0;
+
+  // ─── Alt-chain attestation witness (hash-keyed) ───────────────────────────
+  // Hash-keyed counterpart to the height-keyed main table, holding the witness of
+  // every block currently in the alt-block table — whether it arrived as an alt
+  // block or was demoted there by a reorg. Its rows are owned by the alt block:
+  // written beside add_alt_block, removed by remove_alt_block / drop_alt_blocks /
+  // reset(). Nothing else writes or deletes here, so a row cannot outlive (or
+  // survive without) its alt block.
+
+  /**
+   * @brief store an alt block's attestation witness keyed by block hash.
+   *
+   * Called from handle_alternative_block alongside add_alt_block, in the same
+   * write txn. Not called for an empty witness (stores no row).
+   */
+  virtual void store_archival_alt_attestation_witness(const crypto::hash& blkid, const blobdata& witness) = 0;
+
+  /**
+   * @brief retrieve the attestation witness stashed for an alt block.
+   *
+   * @return the witness blob, or empty if no row exists (an alt block with an
+   *   empty attestation set, or one added before this table existed).
+   */
+  virtual blobdata get_archival_alt_attestation_witness(const crypto::hash& blkid) const = 0;
+
+  /**
+   * @brief remove the stashed attestation witness for an alt block.
+   *
+   * Tolerant of a missing key. Invoked implicitly by remove_alt_block /
+   * drop_alt_blocks so the witness never outlives its alt block.
+   */
+  virtual void remove_archival_alt_attestation_witness(const crypto::hash& blkid) = 0;
 
   // ─── FCMP++ Curve Tree Checkpoints & Pruning ─────────────────────────────
 

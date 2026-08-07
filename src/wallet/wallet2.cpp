@@ -81,7 +81,6 @@ using namespace epee;
 #include "common/json_util.h"
 #include "memwipe.h"
 #include "common/combinator.h"
-#include "common/dns_utils.h"
 #include "common/notify.h"
 #include "common/perf_timer.h"
 #include "fcmp/rctSigs.h"
@@ -1354,10 +1353,7 @@ wallet2::wallet2(network_type nettype, uint64_t kdf_rounds, bool unattended, std
   m_export_format(ExportFormat::Binary),
   m_pool_info_query_time(0),
   m_has_ever_refreshed_from_node(false),
-  m_allow_mismatched_daemon_version(false),
-  m_pqc_multisig_group_id(crypto::null_hash),
-  m_pqc_multisig_n(0),
-  m_pqc_multisig_m(0)
+  m_allow_mismatched_daemon_version(false)
 {
 }
 
@@ -3958,7 +3954,17 @@ void wallet2::process_unconfirmed_transfer(bool incremental, const crypto::hash 
     }
   };
 
-  constexpr const std::chrono::seconds tx_propagation_timeout{CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE * 3 / 2};
+  // A pending transaction is invisible to us until it fluffs, so this deadline
+  // is a quantile of the stem embargo, not a free-standing timeout. The Rust
+  // side derives it from the shipped distribution at a stated false-fail rate
+  // (at most 1 in 100 embargoes still running). The inherited `39s * 3/2` was
+  // wrong twice over: the mean was wrong, and a bare multiple of the mean is
+  // only the ~78th percentile of a memoryless distribution — so roughly a fifth
+  // of black-holed transactions were judged failed while their backstop was
+  // still running, which un-reserves their inputs (see below) and invites a
+  // re-spend. See docs/design/DAEMON_RELAY_PRIVACY.md sec 17.
+  const std::chrono::seconds tx_propagation_timeout{
+    static_cast<std::chrono::seconds::rep>(shekyl_dandelionpp_propagation_timeout_seconds())};
   if (seen_in_pool)
   {
     if (tx_details.m_state != wallet2::unconfirmed_transfer_details::pending_in_pool)
@@ -4595,46 +4601,6 @@ bool wallet2::refresh(bool trusted_daemon, uint64_t & blocks_fetched, bool& rece
     ok = false;
   }
   return ok;
-}
-//----------------------------------------------------------------------------------------------------
-bool wallet2::get_rct_distribution(uint64_t &start_height, std::vector<uint64_t> &distribution)
-{
-  MDEBUG("Requesting rct distribution");
-
-  cryptonote::COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::request req = AUTO_VAL_INIT(req);
-  cryptonote::COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::response res = AUTO_VAL_INIT(res);
-  req.amounts.push_back(0);
-  req.from_height = 0;
-  req.cumulative = false;
-  req.binary = true;
-  req.compress = true;
-
-  bool r;
-  try
-  {
-    const boost::lock_guard<boost::recursive_mutex> lock{m_daemon_rpc_mutex};
-    r = net_utils::invoke_http_bin("/get_output_distribution.bin", req, res, *m_http_client, rpc_timeout);
-    THROW_ON_RPC_RESPONSE_ERROR_GENERIC(r, {}, res, "/get_output_distribution.bin");
-  }
-  catch(...)
-  {
-    return false;
-  }
-  if (res.distributions.size() != 1)
-  {
-    MWARNING("Failed to request output distribution: not the expected single result");
-    return false;
-  }
-  if (res.distributions[0].amount != 0)
-  {
-    MWARNING("Failed to request output distribution: results are not for amount 0");
-    return false;
-  }
-  for (size_t i = 1; i < res.distributions[0].data.distribution.size(); ++i)
-    res.distributions[0].data.distribution[i] += res.distributions[0].data.distribution[i-1];
-  start_height = res.distributions[0].data.start_height;
-  distribution = std::move(res.distributions[0].data.distribution);
-  return true;
 }
 //----------------------------------------------------------------------------------------------------
 wallet2::detached_blockchain_data wallet2::detach_blockchain(uint64_t height, std::map<std::pair<uint64_t, uint64_t>, size_t> *output_tracker_cache)
@@ -6934,7 +6900,13 @@ void wallet2::trim_hashchain()
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::check_genesis(const crypto::hash& genesis_hash) const {
-  std::string what("Genesis block mismatch. You probably use wallet without testnet (or stagenet) flag with blockchain from test (or stage) network or vice versa");
+  // Two known causes, and the remedy differs: (a) wrong network flag (cache is
+  // from another nettype); (b) the wallet cache predates a block-header format
+  // change that moved the genesis id (e.g. the V9 attestation_root addition,
+  // ARCHIVAL_CREDIT_WIRE.md §3) — then the cache must be rebuilt: delete the
+  // wallet cache file (the one WITHOUT the .keys extension; keys are untouched)
+  // and reopen to re-sync.
+  std::string what("Genesis block mismatch. Either the wallet was opened without the matching --testnet/--stagenet flag, or the wallet cache predates a block-header format change (e.g. V9 attestation_root); in the latter case delete the wallet cache file (not the .keys file) and reopen to re-sync");
 
   THROW_WALLET_EXCEPTION_IF(genesis_hash != m_blockchain.genesis(), error::wallet_internal_error, what);
 }
@@ -8934,7 +8906,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
             error::wallet_internal_error, "Failed to parse SignedProofs JSON from Rust");
       }
 
-      tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+      tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
       tx.rct_signatures.txnFee = fee;
       tx.rct_signatures.message = rct::hash2rct(tx_prefix_hash);
       memcpy(&tx.rct_signatures.referenceBlock, &reference_block, 32);
@@ -9864,35 +9836,6 @@ skip_tx:
 
   // if we made it this far, we're OK to actually send the transactions
   return ptx_vector;
-}
-//----------------------------------------------------------------------------------------------------
-bool wallet2::create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys)
-{
-  THROW_WALLET_EXCEPTION_IF(is_pqc_multisig(), error::wallet_internal_error, "PQC multisig group already configured");
-  THROW_WALLET_EXCEPTION_IF(n_total < 1 || n_total > config::MAX_MULTISIG_PARTICIPANTS, error::wallet_internal_error,
-      "n_total out of range [1," + std::to_string(config::MAX_MULTISIG_PARTICIPANTS) + "]");
-  THROW_WALLET_EXCEPTION_IF(m_required < 1 || m_required > n_total, error::wallet_internal_error,
-      "m_required out of range [1," + std::to_string(n_total) + "]");
-  THROW_WALLET_EXCEPTION_IF(participant_public_keys.size() != n_total, error::wallet_internal_error,
-      "Expected " + std::to_string(n_total) + " public keys, got " + std::to_string(participant_public_keys.size()));
-
-  std::vector<uint8_t> keys_blob;
-  keys_blob.push_back(n_total);
-  keys_blob.push_back(m_required);
-  for (const auto& pk : participant_public_keys)
-    keys_blob.insert(keys_blob.end(), pk.begin(), pk.end());
-
-  crypto::hash group_id;
-  bool ok = shekyl_pqc_multisig_group_id(keys_blob.data(), keys_blob.size(),
-      reinterpret_cast<uint8_t*>(group_id.data));
-  THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to compute multisig group ID");
-
-  m_pqc_multisig_keys = std::move(keys_blob);
-  m_pqc_multisig_group_id = group_id;
-  m_pqc_multisig_n = n_total;
-  m_pqc_multisig_m = m_required;
-
-  return true;
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs) const
@@ -10832,26 +10775,44 @@ std::string wallet2::get_tx_proof(const crypto::hash &txid, const cryptonote::ac
   {
     const crypto::secret_key& view_sk = m_account.get_keys().m_view_secret_key;
 
-    std::vector<uint8_t> ps_buf;
-    uint32_t output_count = 0;
-    for (const auto& td : m_transfers)
+    // Collect (vout index, transfer) pairs sorted by vout index — the proof
+    // wire format carries each entry's index and requires strict ascending
+    // order.
+    std::vector<size_t> matching;
+    for (size_t i = 0; i < m_transfers.size(); ++i)
     {
+      const auto& td = m_transfers[i];
       if (td.m_txid == txid && td.m_combined_shared_secret_set)
-      {
-        uint8_t ho[32], y_buf[32], z_buf[32], k_amount[32];
-        shekyl_derive_proof_secrets(
-            td.m_combined_shared_secret.data(),
-            td.m_internal_output_index,
-            ho, y_buf, z_buf, k_amount);
-        ps_buf.insert(ps_buf.end(), ho, ho + 32);
-        ps_buf.insert(ps_buf.end(), y_buf, y_buf + 32);
-        ps_buf.insert(ps_buf.end(), z_buf, z_buf + 32);
-        ps_buf.insert(ps_buf.end(), k_amount, k_amount + 32);
-        memwipe(ho, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_amount, 32);
-        ++output_count;
-      }
+        matching.push_back(i);
     }
-    THROW_WALLET_EXCEPTION_IF(output_count == 0, error::wallet_internal_error,
+    std::sort(matching.begin(), matching.end(), [this](size_t a, size_t b) {
+      return m_transfers[a].m_internal_output_index < m_transfers[b].m_internal_output_index;
+    });
+
+    std::vector<uint8_t> ps_buf;
+    std::vector<uint32_t> vout_indices;
+    // Reserve up front: ps_buf carries derived proof secrets, and a
+    // reallocation mid-loop would copy them to a fresh heap block and
+    // free the old one unwiped — the memwipe below only scrubs the
+    // final allocation. 4 secrets x 32 bytes per entry.
+    ps_buf.reserve(matching.size() * 128);
+    vout_indices.reserve(matching.size());
+    for (size_t i : matching)
+    {
+      const auto& td = m_transfers[i];
+      uint8_t ho[32], y_buf[32], z_buf[32], k_amount[32];
+      shekyl_derive_proof_secrets(
+          td.m_combined_shared_secret.data(),
+          td.m_internal_output_index,
+          ho, y_buf, z_buf, k_amount);
+      ps_buf.insert(ps_buf.end(), ho, ho + 32);
+      ps_buf.insert(ps_buf.end(), y_buf, y_buf + 32);
+      ps_buf.insert(ps_buf.end(), z_buf, z_buf + 32);
+      ps_buf.insert(ps_buf.end(), k_amount, k_amount + 32);
+      memwipe(ho, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_amount, 32);
+      vout_indices.push_back(static_cast<uint32_t>(td.m_internal_output_index));
+    }
+    THROW_WALLET_EXCEPTION_IF(vout_indices.empty(), error::wallet_internal_error,
         "No matching transfers found — cannot generate inbound proof");
 
     ShekylBuffer proof_buf{};
@@ -10860,7 +10821,8 @@ std::string wallet2::get_tx_proof(const crypto::hash &txid, const cryptonote::ac
         reinterpret_cast<const uint8_t*>(&txid),
         reinterpret_cast<const uint8_t*>(addr_blob.data()), addr_blob.size(),
         reinterpret_cast<const uint8_t*>(message.data()), message.size(),
-        ps_buf.data(), output_count,
+        ps_buf.data(), vout_indices.data(),
+        static_cast<uint32_t>(vout_indices.size()),
         &proof_buf);
     memwipe(ps_buf.data(), ps_buf.size());
     THROW_WALLET_EXCEPTION_IF(!gen_ok, error::wallet_internal_error,

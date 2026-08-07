@@ -5,8 +5,9 @@
 
 //! Terminal safety for secret display.
 //!
-//! Secrets (seed, viewkey, spendkey) must never leak through pipes, log files,
-//! or terminal scrollback. This module gates display behind safety checks.
+//! Secrets (the once-only seed backup at create/restore time) must never
+//! leak through pipes, log files, or terminal scrollback. This module gates
+//! display behind safety checks.
 
 use std::io::{self, IsTerminal, Write};
 use zeroize::Zeroize;
@@ -30,15 +31,19 @@ impl std::fmt::Display for DisplaySafetyError {
     }
 }
 
-/// Display a secret with full terminal-safety protocol:
+/// Preflight the terminal for a one-time secret display, WITHOUT printing
+/// anything:
 ///
-/// 1. Refuse if stdout is not a TTY.
-/// 2. Warn if running under a terminal multiplexer (tmux, screen).
-/// 3. Print the secret.
-/// 4. Wait for Enter, then best-effort clear screen + scrollback.
-/// 5. Print honest residual-scrollback warning.
-/// 6. Zeroize the secret string.
-pub fn display_secret(label: &str, secret: &mut String) -> Result<(), DisplaySafetyError> {
+/// 1. Refuse if stdout is not a TTY (pipe / redirect / log file).
+/// 2. Under a terminal multiplexer (tmux, screen) whose scrollback may retain
+///    the secret, require an explicit `YES`.
+///
+/// This MUST be called *before* the secret exists (before the wallet is
+/// created), so that a refusal creates nothing rather than orphaning a wallet
+/// whose one-time backup can never be shown — the server never re-exposes it.
+/// The deliberate, auditable way to capture a seed non-interactively is the
+/// `create --seed-out <path>` subcommand, not a redirected terminal.
+pub fn preflight_secret_display() -> Result<(), DisplaySafetyError> {
     if !io::stdout().is_terminal() {
         return Err(DisplaySafetyError::NotATty);
     }
@@ -51,11 +56,19 @@ pub fn display_secret(label: &str, secret: &mut String) -> Result<(), DisplaySaf
 
         let mut confirm = String::new();
         if io::stdin().read_line(&mut confirm).is_err() || confirm.trim() != "YES" {
-            secret.zeroize();
             return Err(DisplaySafetyError::UserDeclined);
         }
     }
 
+    Ok(())
+}
+
+/// Display a secret to the terminal and best-effort clear it afterwards, then
+/// zeroize `secret`. Call ONLY after [`preflight_secret_display`] returned
+/// `Ok` (stdout is a TTY and any multiplexer warning was accepted); there is
+/// deliberately no non-TTY fallback here, so the secret can never reach a pipe
+/// or file.
+pub fn show_secret(label: &str, secret: &mut String) {
     println!("\n{label}:");
     println!("{secret}");
     println!();
@@ -78,7 +91,6 @@ pub fn display_secret(label: &str, secret: &mut String) -> Result<(), DisplaySaf
     );
 
     secret.zeroize();
-    Ok(())
 }
 
 /// Check for well-known terminal multiplexer environment variables.
@@ -98,8 +110,55 @@ fn multiplexer_warning() -> Option<&'static str> {
     None
 }
 
-/// Returns true if the given command name is a secret-displaying command
-/// whose input line should NOT be added to readline history.
+/// Returns true if the given command's input line carries secret material
+/// and must NOT be added to readline history. `restore`'s arguments are the
+/// BIP-39 mnemonic itself. The proof-check commands carry someone's proof
+/// string, a bearer artifact: an OUTBOUND tx proof embeds the raw per-tx
+/// key, and a reserve proof is a permanent spend-detection beacon (contract
+/// DISCLOSURE SEMANTICS) — neither belongs in a plaintext history file.
+/// (The wallet2-era secret-*display* commands — seed/viewkey/spendkey —
+/// were removed in WI-RPC-2b; their input lines carried no secret.)
 pub fn is_secret_command(cmd: &str) -> bool {
-    matches!(cmd, "seed" | "viewkey" | "spendkey")
+    matches!(cmd, "restore" | "check_tx_proof" | "check_reserve_proof")
+}
+
+/// Neutralize control characters in free-form, externally-supplied text before
+/// printing it to the terminal, replacing each with the Unicode replacement
+/// char. A payment-request label is free-form and, when carried on a
+/// counterparty's `shekyl:` URI (`parse_uri`), attacker-controlled — rendering
+/// it raw would let a crafted value inject ANSI/OSC escape sequences (cursor
+/// moves, screen clears, clipboard writes). Borrows unchanged when the text is
+/// already clean, so the common path does not allocate.
+pub fn sanitize_for_terminal(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.chars().any(char::is_control) {
+        std::borrow::Cow::Owned(
+            s.chars()
+                .map(|c| if c.is_control() { '\u{FFFD}' } else { c })
+                .collect(),
+        )
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_for_terminal;
+    use std::borrow::Cow;
+
+    #[test]
+    fn sanitize_neutralizes_control_chars_and_borrows_clean_text() {
+        // An embedded ANSI clear-screen escape and a newline are neutralized.
+        let cleaned = sanitize_for_terminal("safe\u{1b}[2Jmore\ntail");
+        assert!(
+            !cleaned.chars().any(char::is_control),
+            "no control chars survive: {cleaned:?}"
+        );
+        assert!(cleaned.contains('\u{FFFD}'));
+        // Clean text is borrowed unchanged — no allocation on the common path.
+        assert!(matches!(
+            sanitize_for_terminal("plain label"),
+            Cow::Borrowed("plain label")
+        ));
+    }
 }

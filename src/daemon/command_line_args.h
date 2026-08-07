@@ -99,22 +99,12 @@ namespace daemon_args
     "Network communication through proxy: [socks5://[user:pass@]]<socks-ip:port> i.e. \"127.0.0.1:9050\"",
     "",
   };
-  const command_line::arg_descriptor<bool> arg_proxy_allow_dns_leaks = {
-    "proxy-allow-dns-leaks",
-    "Allow DNS leaks outside of proxy",
-    false,
-  };
   const command_line::arg_descriptor<bool> arg_public_node = {
     "public-node"
   , "Allow other users to use the node as a remote (restricted RPC mode, view-only commands) and advertise it over P2P"
   , false
   };
 
-  const command_line::arg_descriptor<bool> arg_no_rust_rpc = {
-    "no-rust-rpc"
-  , "Disable the Rust/Axum daemon RPC server (enabled by default)"
-  , false
-  };
 
   // shekyld's local --non-interactive flag. This is the only surviving piece
   // of the old daemonizer CLI on either binary: it suppresses the interactive

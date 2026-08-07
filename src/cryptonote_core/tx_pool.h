@@ -32,6 +32,9 @@
 #include "include_base_utils.h"
 
 #include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <ctime>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -54,6 +57,24 @@
 namespace cryptonote
 {
   class Blockchain;
+
+  namespace detail
+  {
+    /*! The whole-second deadline at which a stem transaction's embargo expires.
+
+        `now` carries a sub-second remainder and `last_relayed_time` is a
+        whole-second `time_t`, so the conversion has to round — and the direction
+        is a privacy decision, not a formatting one. Under-provisioning the
+        embargo fluffs early (the D-5 asymmetry), so this rounds **away from
+        now**: the returned deadline is never earlier than `now + draw_secs`.
+        Truncating instead would hand back up to ~999ms of every embargo, undoing
+        one layer down what the Rust side's `div_ceil` does one layer up.
+
+        Extracted from `set_relayed` so the rounding is testable on a synthetic
+        `now` rather than only on whatever fraction the system clock happens to
+        hold. See docs/design/DAEMON_RELAY_PRIVACY.md sec 17. */
+    std::time_t embargo_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs);
+  }
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/
@@ -629,6 +650,26 @@ namespace cryptonote
      * @return false if any append fails, otherwise true
      */
     static bool append_key_images(std::unordered_set<crypto::key_image>& kic, const transaction_prefix& tx);
+
+    /**
+     * @brief check-and-record a transaction's archival block-unique keys
+     *
+     * The block-level archival passes reject any block carrying two txs with
+     * the same bond-post P_canonical_id, emission (P, E) claim, or serve-credit
+     * (P, shard, E) — and neither vin class carries a key image, so nothing in
+     * the key-image dedup keeps such a pair out of one template. Without this,
+     * two conflicting pool txs make EVERY mined template fail its own
+     * block-level pass on connect and bounce back to the pool: a cheap
+     * network-wide mining stall. Pool admission deliberately accepts both
+     * (first-connect-wins; the loser fails per-tx re-verify after the winner
+     * lands and drops) — the template must simply never carry both.
+     *
+     * Inserts all of `tx`'s domain-tagged archival keys into `keys` and
+     * returns true; returns false (inserting nothing further) on the first
+     * key already present, or on an unparseable emission vin (fail closed —
+     * the block-level pass would reject it too).
+     */
+    static bool append_archival_block_unique_keys(std::unordered_set<std::string>& keys, const transaction_prefix& tx);
 
     /**
      * @brief check if a transaction is a valid candidate for inclusion in a block

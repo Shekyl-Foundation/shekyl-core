@@ -325,7 +325,7 @@ adopt the new layout or maintain a path-mapping. Affected paths:
 
 The `wallet/` and `ringct/{borromean, clsag, mlsag}/` upstream additions
 are **Monero-only** (per `60-no-monero-legacy.mdc`, Shekyl ships only
-`RCTTypeFcmpPlusPlusPqc` from genesis and uses Shekyl-native wallet
+`CTTypeFcmpPlusPlusPqc` from genesis and uses Shekyl-native wallet
 crates). Re-vendoring should not pull them in.
 
 The `ringct/{bulletproofs, fcmp++}/` reorg is structural — same code,

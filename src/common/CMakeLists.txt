@@ -31,8 +31,6 @@ include_directories(SYSTEM ${OPENSSL_INCLUDE_DIR})
 set(common_sources
   command_line.cpp
   daemon_default_data_dir.cpp
-  dns_utils.cpp
-  download.cpp
   error.cpp
   expect.cpp
   util.cpp
@@ -44,7 +42,6 @@ set(common_sources
   removed_flags.cpp
   spawn.cpp
   threadpool.cpp
-  updates.cpp
   aligned.c
   timings.cc
   combinator.cpp)
@@ -68,14 +65,10 @@ monero_add_library(common
   ${common_headers}
   ${common_private_headers}
   DEPENDS generate_translations_header)
-if(UNBOUND_AVAILABLE)
-  target_compile_definitions(obj_common PRIVATE HAVE_DNS_UNBOUND=1)
-endif()
 
 target_link_libraries(common
   PUBLIC
     cncrypto
-    ${UNBOUND_LIBRARIES}
     ${LIBUNWIND_LIBRARIES}
     ${Boost_DATE_TIME_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}

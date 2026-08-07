@@ -43,6 +43,12 @@ hardware wallet firmware:
 - `protocol.cpp` contains a `#error` that fires if `DEVICE_TREZOR_READY` is
   defined, preventing accidental Trezor compilation without firmware support.
 
+- The `external/trezor-common` submodule is **removed** while hardware wallets
+  are unsupported. It existed only to feed Trezor protobuf generation, which
+  never runs under the V3 default. Re-add it from
+  `https://github.com/trezor/trezor-common.git` if/when Trezor support returns
+  (see V4 roadmap below).
+
 ### V4 Roadmap
 
 Hardware wallet support may be revisited in V4 if there is demand and if device

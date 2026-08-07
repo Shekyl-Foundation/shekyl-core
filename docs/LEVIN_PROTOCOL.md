@@ -24,6 +24,16 @@ PQC note:
 > protocol, that portion is a work-in-progress. Please take the time to do it
 > if interested in learning about Shekyl p2p traffic!
 
+Implementations: the live daemon path is C++ (`contrib/epee/include/net/levin_*`,
+`contrib/epee/src/levin_*`). A byte-identical Rust framing implementation
+lives at `rust/shekyl-levin` (LV-1, KAT'd against the C++ unit tests, with
+`ci/levin-constant-parity` guarding the shared wire constants); it is
+deliberately unwired until the scheduled p2p cutover. Where it is
+deliberately stricter than the C++, the authoritative list is the crate's
+own docs (`rust/shekyl-levin/src/lib.rs`) — kept in one place on purpose.
+See also `docs/design/IMPLEMENTATION_INDEX.md` (LV row) and the
+`docs/FOLLOWUPS.md` "Levin p2p migration" entry.
+
 
 ## Header
 This header is sent for every Shekyl p2p message.
@@ -186,7 +196,8 @@ excluded from `pqc_auth`.
 
 Carries one or more serialized transactions for mempool relay. This is the
 primary message type affected by v3 PQC sizing: each `TransactionV3` user
-transaction adds ~5,385 bytes of hybrid authentication data.
+transaction adds **5389** bytes of hybrid authentication data
+  (`pqc_auth_weight()`; see `docs/V3_ROLLOUT.md`).
 
 Over anonymity networks, this message is the most fingerprinting-sensitive:
 it is sent shortly after a wallet constructs a transaction and is the

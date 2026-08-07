@@ -1,0 +1,65 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-wallet-rpc"
+description = "Shekyl-native wallet JSON-RPC server (Phase 4; Engine-backed)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "shekyl_wallet_rpc"
+crate-type = ["lib"]
+
+[[bin]]
+name = "shekyl-wallet-rpc"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "limit"] }
+http = "1"
+base64 = "0.22"
+# Constant-time credential compare for HTTP basic auth (password is a
+# secret under 35-secure-memory.mdc). Same pin as shekyl-scanner.
+subtle = "2"
+tracing = "0.1"
+clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+hex = "0.4"
+zeroize = { workspace = true }
+shekyl-logging = { path = "../shekyl-logging" }
+shekyl-engine-core = { path = "../shekyl-engine-core" }
+shekyl-engine-file = { path = "../shekyl-engine-file" }
+shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
+shekyl-engine-state = { path = "../shekyl-engine-state" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
+shekyl-scanner = { path = "../shekyl-scanner" }
+# WI-RPC-3 proofs: decode / network-check the counterparty address the
+# proof binds to (canonical decoded-form comparison per the contract).
+shekyl-address = { path = "../shekyl-address" }
+shekyl-units = { path = "../shekyl-units" }
+shekyl-types = { path = "../shekyl-types" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile = "3"
+# Enable the engine-core `test-helpers` surface for this crate's tests only
+# (the `__test_helpers::make_staker_for_test` staker constructor the WI-1 P-scan
+# lifecycle test needs). Dev-dep self-referencing the same path dep so the
+# feature is on for `cargo test`/`cargo clippy --all-targets` but never for the
+# production dependency edge above (mirrors the shekyl-scanner precedent).
+shekyl-engine-core = { path = "../shekyl-engine-core", features = ["test-helpers"] }

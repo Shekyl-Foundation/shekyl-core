@@ -1,0 +1,48 @@
+[package]
+name = "shekyl-levin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Levin p2p framing layer (bucket header, fragments, noise, compression). See docs/LEVIN_PROTOCOL.md."
+
+[features]
+# Codec gate for pure-Rust builds of this crate. Default-on: the production
+# daemon image always compresses (C++ reaches this crate through the
+# shekyl_levin_* FFI; there is no C++ HAVE_ZSTD gate anymore). Feature-off
+# keeps `try_compress_message` as the identity and treats a COMPRESSED
+# bucket as a hard error — exercised by the dedicated CI lane so the
+# unavailability arms cannot rot green.
+default = ["zstd"]
+zstd = ["dep:zstd"]
+
+[dependencies]
+thiserror = { workspace = true }
+# This vendored, pinned libzstd (zstd-sys `cc`-compiles the copy in the
+# crate; the non-default `pkg-config` feature is NOT enabled) is the
+# binary's SINGLE zstd implementation since the compression-shim cut
+# (2026-08-06): the C++ epee::levin path reaches it through the
+# shekyl_levin_* FFI, the system-libzstd link and HAVE_ZSTD gate are
+# deleted, and `links = "zstd"` is claimed exactly once, by zstd-sys.
+# The dual-libzstd / symbol-collision question formerly parked at the
+# FOLLOWUPS LV-3 entry is resolved by construction.
+#
+# Optional: only pulled in by the `zstd` feature above. The version AND the
+# feature set are the single-source [workspace.dependencies] pin (decision
+# 2026-08-06): further consumers are anticipated (shard serving), and one
+# pin keeps every component's frames interoperable by construction. The pin
+# is `default-features = false` — see the reasoning at the workspace entry;
+# in short, the crate's defaults compile dictionary-builder C that does not
+# link on mingw and legacy-format decoders we never emit. Inheriting the
+# feature set (rather than restating it here) is what keeps a second
+# consumer from quietly re-enabling either.
+zstd = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Round-trip property tests (rule 50): builder → chunked reader → same
+# message, over arbitrary payloads, commands, and chunk boundaries.
+proptest = "1"
+
+[lints]
+workspace = true

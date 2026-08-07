@@ -86,14 +86,16 @@
 //! per-`P` independence since `t0` is the principal's private intent). The
 //! published conformance test vector must reject the triangular construction.
 //!
-//! **`window` is per-seam.** This harness models the *entry* seam
-//! (announce↔bond, order-symmetric, inversion-eligible). The *exit* seam
-//! (terminal drain + recurring partial-unbond) is a separate standoff with its
-//! own envelope, modeled nowhere here: it is **one-sided** (collateral is not
-//! spendable before the 20_000-block release cooldown, so there is no
-//! inversion), and its latency is measured **from cooldown expiry, not from the
-//! unbond event** (the cooldown already pins the earliest spend deterministically;
-//! the standoff's job is to break that fixed-offset tell).
+//! **This harness models the *entry* seam only** (announce↔bond,
+//! order-symmetric, inversion-eligible). The *exit* seam carries **no standoff
+//! draw**: the F-D4 exit mechanism was deleted at Gate-6 §12.9 decision 5 after
+//! the premise audit found its principal-side referent unobservable
+//! (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §2.1/§15.4 — the phantom-`T`
+//! finding). What remains on the exit side is the consensus release cooldown
+//! (`RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS` blocks — derived from
+//! named consts, never restated as an integer;
+//! `shekyl_archival_retention::release_cooldown_elapsed` is the verify-path
+//! predicate), which is slashability plumbing, not a privacy mechanism.
 
 use serde::Serialize;
 
@@ -585,9 +587,10 @@ mod tests {
         // `shekyl-standoff/tests/conformance_grading.rs`.
         let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
         let report = shekyl_standoff::conformance::certify_draw(&mut rng, 600, 200_000);
-        assert!(
-            report.passed(),
-            "sim RNG failed standoff self-cert: {report:?}"
-        );
+        // No report formatting in the assert message: CodeQL
+        // `rust/cleartext-logging` treats assert-format sinks as log writes
+        // and taints `CertifyReport` via the `certify_*` name heuristic.
+        // Report fields are public grading stats only.
+        assert!(report.passed(), "sim RNG failed standoff self-cert");
     }
 }

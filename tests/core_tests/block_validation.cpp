@@ -148,6 +148,22 @@ bool gen_block_invalid_prev_id::check_block_verification_context(const cryptonot
     return !bvc.m_marked_as_orphaned && bvc.m_added_to_main_chain && !bvc.m_verifivation_failed;
 }
 
+bool gen_block_invalid_attestation_root::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  // ARCHIVAL_CREDIT_WIRE.md §3: null_hash is the banned dual-empty; slice-1
+  // consensus accepts only empty_attestation_root() until the cutover.
+  block blk_1;
+  generator.construct_block_manually(blk_1, blk_0, miner_account);
+  blk_1.attestation_root = crypto::null_hash;
+  events.push_back(blk_1);
+
+  DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
 bool gen_block_no_miner_tx::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
@@ -395,7 +411,9 @@ bool gen_block_miner_tx_has_out_to_alice::generate(std::vector<test_event_entry>
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
   events.push_back(blk_1);
 
-  DO_CALLBACK(events, "check_block_accepted");
+  // F-H: a two-output coinbase must be refused (output-count cap = 1); this
+  // test asserted acceptance until the cap landed -- see the header comment.
+  DO_CALLBACK(events, "check_block_purged");
 
   return true;
 }

@@ -168,17 +168,24 @@ public:
   virtual void add_block_burn(uint64_t height, uint64_t amount) override {}
   virtual uint64_t get_block_burn(uint64_t height) const override { return 0; }
   virtual void remove_block_burn(uint64_t height) override {}
+  virtual void add_archival_budget_accrual(uint64_t height, uint64_t amount) override {}
+  virtual uint64_t get_archival_budget_accrual(uint64_t height) const override { return 0; }
+  virtual void remove_archival_budget_accrual(uint64_t height) override {}
   virtual void set_total_bonded_atomic(uint64_t balance) override {}
   virtual uint64_t get_total_bonded_atomic() const override { return 0; }
 
   virtual void set_total_burned(uint64_t amount) override {}
   virtual uint64_t get_total_burned() const override { return 0; }
 
+  virtual void set_settlement_epoch_blocks_pin(uint64_t blocks) override {}
+  virtual uint64_t get_settlement_epoch_blocks_pin() const override { return 0; }
+
   virtual bool has_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) const override { return false; }
   virtual void set_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
   virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
 
-  virtual void put_archival_bond_record(const crypto::hash&, const std::vector<uint8_t>&, uint64_t,
+  virtual void put_archival_bond_record(const crypto::hash&, const std::vector<uint8_t>&,
+    const std::vector<uint8_t>&, uint64_t,
     uint64_t, uint8_t, const std::vector<uint64_t>&,
     const std::vector<std::pair<uint64_t, uint64_t>>&) override {}
   virtual void put_archival_bond_value(const crypto::hash&,
@@ -223,6 +230,13 @@ public:
   virtual void store_curve_tree_root_at_height(uint64_t, const std::array<uint8_t, 32>&) override {}
   virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t) const override { return {}; }
   virtual void remove_curve_tree_root_at_height(uint64_t) override {}
+
+  virtual void store_archival_attestation_witness_at_height(uint64_t, const cryptonote::blobdata&) override {}
+  virtual cryptonote::blobdata get_archival_attestation_witness_at_height(uint64_t) const override { return {}; }
+  virtual void remove_archival_attestation_witness_at_height(uint64_t) override {}
+  virtual void store_archival_alt_attestation_witness(const crypto::hash&, const cryptonote::blobdata&) override {}
+  virtual cryptonote::blobdata get_archival_alt_attestation_witness(const crypto::hash&) const override { return {}; }
+  virtual void remove_archival_alt_attestation_witness(const crypto::hash&) override {}
 
   virtual void save_curve_tree_checkpoint(uint64_t) override {}
   virtual bool get_curve_tree_checkpoint(uint64_t, std::vector<uint8_t>&) const override { return false; }

@@ -61,6 +61,45 @@ pub(crate) enum SubmitterError {
     },
 }
 
+/// Which daemon verdict produced a [`SubmitSuccess::Broadcast`] — a
+/// fresh `Accepted` or a pool-resident `AlreadyInPool` duplicate.
+///
+/// An **inform-only sub-fact**: both kinds share the one `Broadcast`
+/// disposition (§2.5 — F14 awaiting-confirmation lock, watchdog
+/// takeover), and nothing dispatches on this field internally. It exists
+/// so the orchestrator can project the Engine-public
+/// [`SubmitOutcome`](super::pending::SubmitOutcome) (and the wallet-RPC
+/// `ALREADY_IN_POOL` verdict) without re-partitioning the disposition
+/// enum — the variant set stays the §2.5 lock-lifecycle partition, so
+/// the two kinds' dispositions cannot diverge by accident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BroadcastKind {
+    /// Fresh daemon accept.
+    Accepted,
+    /// The daemon already held these bytes in its pool (dedup by txid);
+    /// also resolves prior transport ambiguity — the earlier attempt
+    /// did reach the network.
+    AlreadyInPool,
+}
+
+impl BroadcastKind {
+    /// Project this kind onto the Engine-public
+    /// [`SubmitOutcome`](super::pending::SubmitOutcome) Broadcast-class
+    /// variant, carrying `hash`.
+    ///
+    /// The single definition of the kind→outcome mapping, called at the
+    /// orchestrator's dispatch sites **after** the accept finalizer
+    /// returns — the finalizer itself is deliberately kind-blind (it
+    /// never receives this value), so a kind-conditional disposition is
+    /// unrepresentable inside the disposition code, not merely untested.
+    pub(crate) fn into_outcome(self, hash: TxHash) -> super::pending::SubmitOutcome {
+        match self {
+            Self::Accepted => super::pending::SubmitOutcome::Accepted { hash },
+            Self::AlreadyInPool => super::pending::SubmitOutcome::AlreadyInPool { hash },
+        }
+    }
+}
+
 /// Success surface of a [`TransactionSubmitter`] — the identity-bearing
 /// resolutions, split by **lock-lifecycle disposition**
 /// (`DAEMON_SUBMIT_VERDICT.md` §2.5).
@@ -68,7 +107,8 @@ pub(crate) enum SubmitterError {
 /// `Accepted` and `AlreadyInPool` share a disposition (network-exposed, not
 /// settled → the orchestrator places the persisted F14
 /// awaiting-confirmation lock, §2.6) and so share the [`Self::Broadcast`]
-/// variant. `AlreadyInChain` is **distinct**: confirmation observed by
+/// variant, whose [`BroadcastKind`] payload records which verdict it was
+/// (inform-only). `AlreadyInChain` is **distinct**: confirmation observed by
 /// verdict, refresh remains the settlement authority. The F14 lock is
 /// still placed (F40: fund safety first — no selectable-input window in
 /// either height case), but baselined at the daemon-claimed confirming
@@ -89,6 +129,9 @@ pub(crate) enum SubmitSuccess {
     Broadcast {
         /// The locally computed tx id.
         hash: TxHash,
+        /// Which verdict produced this `Broadcast` (inform-only; see
+        /// [`BroadcastKind`]).
+        kind: BroadcastKind,
     },
     /// `AlreadyInChain`: this txid is in the main chain. Disposition
     /// (F40, §2.5): release the reservation, place the F14 awaiting-lock
@@ -114,6 +157,22 @@ pub(crate) fn canonical_tx_id_opt(tx_bytes: &[u8]) -> Option<TxHash> {
     Transaction::from_bytes(tx_bytes)
         .ok()
         .map(|tx| TxHash::from_bytes(tx.hash()))
+}
+
+/// Realized fee of the wallet's own built bytes — the wire tx's
+/// cleartext `Ct::Fcmp` fee field, the same value the chain sees
+/// (`WALLET_SEND_RECORD.md` R-4: the journal records what happened,
+/// never what an estimator predicted). Same known-valid-blob contract
+/// as [`canonical_tx_id`].
+pub(crate) fn wire_fee(tx_bytes: &[u8]) -> u64 {
+    let tx = Transaction::from_bytes(tx_bytes)
+        .expect("wallet-built tx_bytes parse as canonical shekyl-wire");
+    match tx.ct {
+        shekyl_wire::Ct::Fcmp { fee, .. } => fee,
+        // The transfer dispatch path never builds a Null-ct shape; a
+        // fee-less shape honestly has fee 0.
+        shekyl_wire::Ct::Null(_) => 0,
+    }
 }
 
 /// [`canonical_tx_id_opt`] for the wallet's own built bytes, which are canonical wire by
@@ -167,7 +226,8 @@ pub(crate) fn submit_outcome_from_verdict(
 /// The `Ok` arm splits by lock-lifecycle disposition (§2.5):
 /// `AlreadyInPool` is the same disposition as a fresh accept (the bytes
 /// are held; it also resolves prior transport ambiguity) →
-/// [`SubmitSuccess::Broadcast`]; `AlreadyInChain` is confirmation observed
+/// [`SubmitSuccess::Broadcast`], with the verdict recorded in the
+/// inform-only [`BroadcastKind`]; `AlreadyInChain` is confirmation observed
 /// by verdict (refresh remains the settlement authority) →
 /// [`SubmitSuccess::AlreadyInChain`]. Rejections split by remedy class:
 ///
@@ -182,9 +242,14 @@ pub(crate) fn submit_outcome_from_verdict(
 ///   [`SubmitError`](super::error::SubmitError).
 pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<SubmitSuccess, SubmitterError> {
     match outcome {
-        TxSubmitOutcome::Submitted { hash } | TxSubmitOutcome::AlreadyInPool { hash } => {
-            Ok(SubmitSuccess::Broadcast { hash })
-        }
+        TxSubmitOutcome::Submitted { hash } => Ok(SubmitSuccess::Broadcast {
+            hash,
+            kind: BroadcastKind::Accepted,
+        }),
+        TxSubmitOutcome::AlreadyInPool { hash } => Ok(SubmitSuccess::Broadcast {
+            hash,
+            kind: BroadcastKind::AlreadyInPool,
+        }),
         TxSubmitOutcome::AlreadyInChain { hash, height } => {
             Ok(SubmitSuccess::AlreadyInChain { hash, height })
         }
@@ -389,6 +454,13 @@ pub(crate) enum BroadcastSubmitError {
     Submit(#[from] SubmitterError),
 }
 
+/// Tor's conventional local SOCKS port. A **placeholder** feeding
+/// [`BroadcastSubmitter::local`]'s pre-bound ① construction: the `Local`
+/// arm never dials SOCKS (it ignores the endpoint entirely), but
+/// construction must stay on the audited posture→submitter choke point
+/// rather than reach around it to a bare submitter.
+const TOR_SOCKS_PLACEHOLDER_PORT: u16 = 9050;
+
 /// The closed-set posture→submitter dispatch
 /// (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1, frozen 2026-07-04): the
 /// broadcast submitter set is closed *by type* — [`BroadcastPosture`] has no
@@ -455,6 +527,29 @@ impl<D: DaemonEngine> BroadcastSubmitter<D> {
                 PTransactionSubmitter::for_persona(persona, socks, base_url)?,
             )),
         }
+    }
+
+    /// The hardwired ① `Local`-posture construction — the operator's own
+    /// loopback node, the privacy default — shared by every seam that
+    /// dispatches through it today (the WI-3 bond broadcast, the CB-3
+    /// claim dispatch, the regtest harness), so the placeholder-endpoint
+    /// idiom exists once instead of as drifting copies. Still the audited
+    /// choke point: this is [`Self::for_posture`] with the ① arm's inputs
+    /// pre-bound. The operator's explicit ② posture choice plugs in via
+    /// the 2c config-source slice, which swaps the call sites' posture,
+    /// not this constructor.
+    pub(crate) fn local(persona: PCanonicalId, local_daemon: Arc<D>) -> Self {
+        Self::for_posture(
+            BroadcastPosture::Local,
+            persona,
+            local_daemon,
+            // Tor's conventional local SOCKS port — a placeholder feeding
+            // the signature: the ① arm never dials SOCKS.
+            &TorSocksEndpoint::loopback(TOR_SOCKS_PLACEHOLDER_PORT),
+        )
+        // The ① arm is infallible (`for_posture` docs): only the ② arm's
+        // SOCKS proxy configuration can be rejected, and ① never builds one.
+        .expect("the Local arm of for_posture is infallible")
     }
 
     /// Submit `P`-bound bytes through the dispatch, enforcing the
@@ -547,22 +642,30 @@ mod tests {
 
     /// All three identity-bearing outcomes resolve `Ok`, split by
     /// lock-lifecycle disposition (§2.5): a fresh accept and a
-    /// pool-resident duplicate share `Broadcast` (network-exposed, F14
-    /// lock placed); a mined duplicate is the distinct `AlreadyInChain`
-    /// (F40: lock placed too, baselined at the carried `height`, which
-    /// routes the release path). All carry the locally computed hash.
+    /// pool-resident duplicate share the `Broadcast` **variant**
+    /// (network-exposed, F14 lock placed) and differ only in the
+    /// inform-only [`BroadcastKind`] the Engine surface projects; a
+    /// mined duplicate is the distinct `AlreadyInChain` (F40: lock
+    /// placed too, baselined at the carried `height`, which routes the
+    /// release path). All carry the locally computed hash.
     #[test]
     fn identity_outcomes_resolve_ok_split_by_disposition() {
         let hash = TxHash::from_bytes([9u8; 32]);
-        for outcome in [
-            TxSubmitOutcome::Submitted { hash },
-            TxSubmitOutcome::AlreadyInPool { hash },
-        ] {
-            assert_eq!(
-                outcome_to_result(outcome).expect("identity outcome"),
-                SubmitSuccess::Broadcast { hash }
-            );
-        }
+        assert_eq!(
+            outcome_to_result(TxSubmitOutcome::Submitted { hash }).expect("identity outcome"),
+            SubmitSuccess::Broadcast {
+                hash,
+                kind: BroadcastKind::Accepted,
+            }
+        );
+        assert_eq!(
+            outcome_to_result(TxSubmitOutcome::AlreadyInPool { hash }).expect("identity outcome"),
+            SubmitSuccess::Broadcast {
+                hash,
+                kind: BroadcastKind::AlreadyInPool,
+            },
+            "pool-resident duplicate: same Broadcast disposition, distinct inform-only kind"
+        );
         assert_eq!(
             outcome_to_result(TxSubmitOutcome::AlreadyInChain { hash, height: 77 })
                 .expect("identity outcome"),
@@ -803,7 +906,13 @@ mod tests {
             ))
             .await
             .expect("loopback submit succeeds");
-        assert_eq!(success, SubmitSuccess::Broadcast { hash: expected });
+        assert_eq!(
+            success,
+            SubmitSuccess::Broadcast {
+                hash: expected,
+                kind: BroadcastKind::Accepted,
+            }
+        );
         assert_eq!(daemon.submitted_count(), 1);
     }
 

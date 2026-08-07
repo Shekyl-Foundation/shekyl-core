@@ -102,8 +102,11 @@ preventing transaction linkability.
   "X25519 Binding to View Key" and "DH Semantics" below)
 - PQ component: `ML-KEM-768` (NIST level 3)
 - Combining rule: `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
-- ML-KEM ciphertexts are stored in `tx_extra` under tag `0x06`
-  (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`), one per output (1088 bytes each).
+- Hybrid KEM ciphertexts are stored in `tx_extra` under a **single**
+  `0x06` field (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`): all outputs'
+  ciphertexts concatenated in output order, one
+  `x25519_ct[32] || ml_kem_ct[1088]` entry (1120 bytes) per output;
+  readers slice output `o`'s entry at offset `o × 1120`.
 
 See "Per-Output PQC Key Derivation" section below for the full flow.
 
@@ -294,7 +297,9 @@ The derivation flow is:
    ml_kem_seed = per_output_seed[32..64]
    (ml_kem_shared_secret, ml_kem_ciphertext) = ML-KEM-768.EncapsFromSeed(recipient_ek, ml_kem_seed)
    ```
-   `ml_kem_ciphertext` (1088 bytes) is stored in `tx_extra` tag `0x06`.
+   `ml_kem_ciphertext` (1088 bytes) is stored — prefixed by the 32-byte
+   X25519 ephemeral key, at this output's offset within the single
+   concatenated `tx_extra` `0x06` field (see §Hybrid KEM above).
 5. **Combined shared secret:**
    ```
    combined_ss = HKDF-SHA-512(
@@ -552,37 +557,54 @@ within Bech32m's proven checksum detection range (<1023 characters):
 
 Example structure:
 ```
-shekyl1<version 0x01><spend_key 32B><view_key 32B><checksum>
+shekyl1<version 0x01><spend_key 32B><view_key 32B><ek_bind_tag 16B><checksum>
 /skpq1<ml_kem_first_592B><checksum>
 /skpq21<ml_kem_last_592B><checksum>
 ```
 
 | Segment | HRP | Raw bytes | Bech32m chars (approx) |
 |---|---|---|---|
-| Classical | `shekyl` | 1 + 64 = 65 | ~113 |
+| Classical | `shekyl` | 1 + 64 + 16 = 81 | ~140 |
 | PQC-A | `skpq` | 592 | ~956 |
 | PQC-B | `skpq2` | 592 | ~957 |
-| **Total** | — | **1249** | **~2030** |
+| **Total** | — | **1265** | **~2055** |
 
 Design notes:
 
 - The version byte (`0x01`) enables future address format upgrades (e.g.,
-  compact addresses via on-chain KEM registration).
-- The classical segment alone (`shekyl1...`) is sufficient for view-only
-  wallets, human identification, and scanning infrastructure.
+  a compact registry-backed form — tracked in `FOLLOWUPS.md`, "Solo address
+  registry", a genesis-consensus decision, not scheduled).
+- The classical segment alone (`shekyl1...`), **without** the 16-byte
+  `ek_bind_tag` (65 B, ~113 chars), is sufficient for view-only wallets,
+  human identification, and scanning infrastructure. It is a non-payable
+  label; the tag exists only to bind PQC segments, which the label lacks.
 - The `/`-separated PQC segments carry the ML-KEM-768 encapsulation key
   (1184 bytes) needed for per-output PQC key derivation. The X25519 public
   key is **not** transmitted in the address; it is derived from the Ed25519
   view public key in the classical segment via the canonical
   Edwards→Montgomery map (see §X25519 Binding to View Key). This means the
-  PQC segments carry ML-KEM material exclusively.
+  PQC segments carry ML-KEM material exclusively. (The `(B, V, x25519_pk,
+  ml_kem_ek)` tuple in `SUBADDRESS_UNDER_PQC.md` §5.7.4 lists `x25519_pk` as
+  a *derived* capability, not a carried field — it is not in the payload.)
+- **`ek_bind_tag` binds the PQC segments to the classical segment.** The full
+  address's classical segment carries `cSHAKE256("shekyl/ek-bind-v1",
+  ml_kem_ek)[..16]`. Each segment has an independent Bech32m checksum that
+  detects corruption *within* a segment but nothing *across* them; without the
+  tag, a spliced address (classical from one party, PQC from another) decodes
+  clean and a payer builds an output to a mismatched encapsulation key (funds
+  lost, undetected). Decode reconstructs `ml_kem_ek` from the PQC segments and
+  rejects on mismatch. It is a splice/transcription detector (16 bytes: 2^128
+  classical, 2^64 Grover), not a cryptographic binding against a preimage
+  adversary who could substitute the whole address anyway.
 - The three-segment design ensures each individual Bech32m string stays
-  within the proven error-detection range of the Bech32m checksum polynomial.
+  within the proven error-detection range of the Bech32m checksum polynomial —
+  an invariant now pinned by `const _` compile-time asserts in `address.rs`, so
+  a future key-size increase becomes a build error rather than a KAT surprise.
 - Addresses are too long for QR codes at standard error correction levels.
   Wallets should support URI-based sharing and clipboard operations. A future
-  compact address format (via on-chain KEM key registration) is planned to
-  reduce the address to ~120 characters.
-- Implementation: `rust/shekyl-crypto-pq/src/address.rs` (`ShekylAddress`
+  compact address format (a registry-backed 67-char name) is a tracked
+  genesis-consensus follow-up, not a committed plan.
+- Implementation: `rust/shekyl-address/src/address.rs` (`ShekylAddress`
   type with `encode()`, `decode()`, `encode_classical_display()` methods).
   FFI: `shekyl_address_encode()`, `shekyl_address_decode()`.
 
@@ -691,21 +713,21 @@ High-level rule:
 `TransactionV3` keeps the existing CryptoNote-style prefix and FCMP++ body, but
 adds a dedicated hybrid authorization structure outside `tx_extra`.
 
-The FCMP++ type for user transactions is `RCTTypeFcmpPlusPlusPqc = 7`. This is
-Shekyl's only non-coinbase RCT type. It replaces CLSAG ring signatures with
+The FCMP++ type for user transactions is `CTTypeFcmpPlusPlusPqc = 1`. This is
+Shekyl's only non-coinbase CT type. It replaces CLSAG ring signatures with
 FCMP++ membership proofs, uses Bulletproof+ range proofs, and adds a
 `referenceBlock` field to `rctSigBase` anchoring the proof to a specific curve
 tree snapshot. The prunable section carries `curve_trees_tree_depth` and an
 opaque `fcmp_pp_proof` blob instead of CLSAGs.
 
-Coinbase transactions continue to use `RCTTypeNull = 0`.
+Coinbase transactions continue to use `CTTypeNull = 0`.
 
 Conceptually:
 
 ```text
 TransactionV3 {
   prefix: TransactionPrefixV3
-  rct_signatures: rctSig          // type = RCTTypeFcmpPlusPlusPqc (7)
+  rct_signatures: rctSig          // type = CTTypeFcmpPlusPlusPqc (1)
   pqc_auths: std::vector<PqcAuthentication>   // one per input (pqc_auths.size() == vin.size())
 }
 ```
@@ -902,8 +924,13 @@ Measured from canonical serialization output in
 
 - `HybridPublicKey` canonical bytes: `1996` bytes
 - `HybridSignature` canonical bytes: `3385` bytes
-- `PqcAuthentication` payload contribution (`u8,u8,u16` + key + signature):
-  `4 + 1996 + 3385 = 5385` bytes
+- `pqc_auth` body contribution (single-signer, per input): **`5389`**
+  bytes — oracle `tx_fee_model::pqc_auth_weight()` =
+  `auth_version` + `scheme_id` + `flags(u16)` +
+  `varint(pk_len)‖pk` + `varint(sig_len)‖sig`
+  (`1+1+2 + 2+1996 + 2+3385`). Summing only the fixed header fields
+  plus the two blob lengths (omitting the two length varints) under-
+  counts by two bytes and is **not** the fee/weight figure.
 
 The measured values match the canonical field layout:
 
@@ -1123,8 +1150,10 @@ The hybrid KEM combines:
 - **Combining rule:** `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
 
 The combined shared secret feeds into per-output PQC key derivation (see
-§Per-Output PQC Key Derivation). ML-KEM ciphertexts (1088 bytes each) are
-stored in `tx_extra` tag `0x06` (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`).
+§Per-Output PQC Key Derivation). Hybrid KEM ciphertexts
+(`x25519_ct[32] || ml_kem_ct[1088]`, 1120 bytes per output) are stored
+concatenated in output order in the single `tx_extra` tag `0x06` field
+(`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`).
 
 Implementation: `rust/shekyl-crypto-pq/src/kem.rs`
 
@@ -1197,10 +1226,10 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | 5 | Wallet construction | Done | `src/cryptonote_core/cryptonote_tx_utils.cpp` (standard txs), `src/wallet/wallet2.cpp` (claim txs) |
 | 6 | Documentation | Done | `docs/POST_QUANTUM_CRYPTOGRAPHY.md`, `docs/DOCUMENTATION_TODOS_AND_PQC.md`, `docs/CHANGELOG.md` |
 | 7 | Rust multisig core (scheme_id=2) | Done | `rust/shekyl-crypto-pq/src/multisig.rs` |
-| 8 | FFI scheme dispatch + multisig | Done | `rust/shekyl-ffi/src/lib.rs` (`shekyl_pqc_verify` returning typed `u8` error codes, `shekyl_pqc_multisig_group_id`) |
+| 8 | FFI scheme dispatch + multisig | Done | `rust/shekyl-ffi/src/lib.rs` (`shekyl_pqc_verify` returning typed `u8` error codes) |
 | 9 | Consensus verification + scheme downgrade | Done | `src/cryptonote_core/tx_pqc_verify.cpp` (size-format checks), FCMP++ `h_pqc` leaf binding (see `PQC_MULTISIG.md` Attack 1) |
-| 10 | Wallet multisig coordination | Done | `src/wallet/wallet2.cpp` (group creation, file-based signing), `src/wallet/wallet2.h` |
-| 11 | Fuzz testing (4 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
+| 10 | Wallet multisig coordination | Rust rewrite (S2–S5) | Option-D `wallet2.cpp` group-creation fossil **deleted** (MS-5 PR-B; it threw on every input); E′ coordination lives in `rust/shekyl-multisig` + `shekyl-engine-core` |
+| 11 | Fuzz testing (10 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
 | 12 | FCMP++ FFI (prove/verify) | Done | `rust/shekyl-fcmp/`, `rust/shekyl-ffi/src/lib.rs` |
 | 13 | Curve tree DB (grow/trim/root/path) | Done | `src/blockchain_db/`, `rust/shekyl-fcmp/` |
 | 14 | Per-output KEM derivation | Done | `rust/shekyl-crypto-pq/src/kem.rs`, `rust/shekyl-crypto-pq/src/output.rs`, `rust/shekyl-crypto-pq/src/montgomery.rs`; wallet scanning via `shekyl_scan_and_recover` FFI, construction via `shekyl_construct_output` FFI; X25519 derived from Ed25519 view key via Edwards→Montgomery map |
@@ -1237,7 +1266,7 @@ sets the intended direction:
 - **Ownership binding:** `PqcAuthentication` is attached to `TransactionV3`;
   the signed payload covers prefix + RCT base + auth header (excluding the
   signature itself). Implemented in `tx_pqc_verify.cpp`.
-- **Max transaction size:** Measured at 5,385 bytes per user tx for `pqc_auths`
+- **Max transaction size:** Measured at 5,389 bytes per user tx for `pqc_auths`
   (see Measured Sizes above). Operator limits documented in
   `docs/V3_ROLLOUT.md` under "Payload Limit Guidance."
 - **Multisig approach:** V3 uses signature-list (`scheme_id = 2`); lattice

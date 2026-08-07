@@ -28,6 +28,10 @@ serde_json = { workspace = true }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# Live empty-set attestation_root for block-header KATs (no hand-copied pin).
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# Regtest mining-address emitter (`tests/emit_regtest_addr.rs`).
+shekyl-address = { path = "../shekyl-address" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-units = { path = "../shekyl-units" }
 # Single source for the coinbase maturity window consensus constant

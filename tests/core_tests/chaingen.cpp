@@ -169,6 +169,12 @@ namespace
     virtual void store_curve_tree_root_at_height(uint64_t, const std::array<uint8_t, 32>&) override {}
     virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t) const override { return {}; }
     virtual void remove_curve_tree_root_at_height(uint64_t) override {}
+    virtual void store_archival_attestation_witness_at_height(uint64_t, const cryptonote::blobdata&) override {}
+    virtual cryptonote::blobdata get_archival_attestation_witness_at_height(uint64_t) const override { return {}; }
+    virtual void remove_archival_attestation_witness_at_height(uint64_t) override {}
+    virtual void store_archival_alt_attestation_witness(const crypto::hash&, const cryptonote::blobdata&) override {}
+    virtual cryptonote::blobdata get_archival_alt_attestation_witness(const crypto::hash&) const override { return {}; }
+    virtual void remove_archival_alt_attestation_witness(const crypto::hash&) override {}
 
     virtual void save_curve_tree_checkpoint(uint64_t) override {}
     virtual bool get_curve_tree_checkpoint(uint64_t, std::vector<uint8_t>&) const override { return false; }
@@ -281,6 +287,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   blk.timestamp = timestamp;
   blk.prev_id = prev_id;
   shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&blk.curve_tree_root));
+  blk.attestation_root = cryptonote::empty_attestation_root();
 
   blk.tx_hashes.reserve(tx_list.size());
   for (const transaction &tx : tx_list)
@@ -305,8 +312,14 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   size_t target_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
   while (true)
   {
-    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), 10, hf_ver ? *hf_ver : 1,
-        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*stake_ratio=*/0, /*genesis_ng_height=*/0))
+    // frozen_segment_count = 0: the generator builds blocks offline and tracks
+    // no curve tree, and the shipped genesis-neutral parameterization makes
+    // the burn split independent of n (asymptote == floor, bit-identity
+    // pinned in shekyl-ffi). A test that configures a non-neutral asymptote
+    // must thread the real parent leaf-derived n here or its coinbase will be
+    // refused at connect — which is the loud failure we want.
+    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), /*max_outs=*/1, hf_ver ? *hf_ver : 1,
+        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
       return false;
 
     size_t actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
@@ -410,8 +423,13 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   blk.timestamp     = actual_params & bf_timestamp ? timestamp : prev_block.timestamp + SHEKYL_DAA_TARGET_SECONDS; // Keep difficulty unchanged
   blk.prev_id       = actual_params & bf_prev_id   ? prev_id   : get_block_hash(prev_block);
   shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&blk.curve_tree_root));
+  blk.attestation_root = cryptonote::empty_attestation_root();
   blk.tx_hashes     = actual_params & bf_tx_hashes ? tx_hashes : std::vector<crypto::hash>();
-  max_outs          = actual_params & bf_max_outs ? max_outs : 9999;
+  // F-H harness conformance: the consensus coinbase output-count cap is 1, and
+  // the harness conforms to consensus rather than the cap inflating for the
+  // harness (FOLLOWUPS F-H principle). bf_max_outs still lets a test state a
+  // deliberate violation.
+  max_outs          = actual_params & bf_max_outs ? max_outs : 1;
   hf_version        = actual_params & bf_hf_version ? hf_version : 1;
   fees              = actual_params & bf_tx_fees ? fees : 0;
 
@@ -427,8 +445,8 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   {
     size_t current_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
     // TODO: This will work, until size of constructed block is less then CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE
-    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, current_block_weight, fees, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), max_outs, hf_version,
-        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*stake_ratio=*/0, /*genesis_ng_height=*/0))
+    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, current_block_weight, fees, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), max_outs, hf_version,
+        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
       return false;
   }
 
@@ -1294,7 +1312,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0, hf_version);
     block_reward = em_split.miner_emission;
 
-    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, 0, hf_version);
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, /*frozen_segment_count=*/0, hf_version);
     block_reward += burn.miner_fee_income;
 
     tx_extra_pqc_kem_ciphertext kem_field;

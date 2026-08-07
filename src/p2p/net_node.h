@@ -69,17 +69,19 @@ namespace nodetool
 {
   struct proxy
   {
+    // There is deliberately no covert/"noise" flag here. The configuration-B
+    // deletion removed the channel from configuration entirely; the rationale
+    // lives at the `disable_noise` compatibility shim in net_node.cpp and in
+    // docs/design/DAEMON_RELAY_PRIVACY.md §§25, 29-31, 41.
     proxy()
       : max_connections(-1),
         address(),
-        zone(epee::net_utils::zone::invalid),
-        noise(true)
+        zone(epee::net_utils::zone::invalid)
     {}
 
     std::int64_t max_connections;
     net::socks::endpoint address;
     epee::net_utils::zone zone;
-    bool noise;
   };
 
   struct anonymous_inbound
@@ -248,6 +250,9 @@ namespace nodetool
     };
 
   public:
+    //! §55: stem-outcome tallies across every zone, as one JSON array.
+    //! Transit for a Rust->Rust readout -- see net_node.inl.
+    std::string stem_tallies_json() const;
     typedef t_payload_net_handler payload_net_handler;
 
     node_server(t_payload_net_handler& payload_handler)
@@ -261,7 +266,6 @@ namespace nodetool
         m_offline(false),
         is_closing(false),
         m_network_id(),
-        m_enable_dns_seed_nodes(true),
         max_connections(1)
     {}
     virtual ~node_server();
@@ -270,7 +274,7 @@ namespace nodetool
 
     bool run();
     network_zone& add_zone(epee::net_utils::zone zone);
-    bool init(const boost::program_options::variables_map& vm, const std::string& proxy = {}, bool proxy_dns_leaks_allowed = {});
+    bool init(const boost::program_options::variables_map& vm, const std::string& proxy = {});
     bool deinit();
     bool send_stop_signal();
     uint32_t get_this_peer_port(){return m_listening_port;}
@@ -305,15 +309,6 @@ namespace nodetool
     virtual void clear_used_stripe_peers();
 
   private:
-    // Shekyl DNS seed nodes -- to be configured when DNS infrastructure is ready
-    const std::vector<std::string> m_seed_nodes_list =
-    {
-      "seedaus.shekyl.org",
-      "seedusw.shekyl.org",
-      "seeduse.shekyl.org",
-      "seedeu.shekyl.org",
-    };
-
     bool islimitup=false;
     bool islimitdown=false;
 
@@ -351,6 +346,7 @@ namespace nodetool
     //----------------- i_p2p_endpoint -------------------------------------------------------------
     virtual bool relay_notify_to_list(int command, epee::levin::message_writer message, std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections) final;
     virtual epee::net_utils::zone send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay);
+    virtual void record_tx_arrivals(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& from);
     virtual bool invoke_notify_to_peer(int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context) final;
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context);
     virtual void request_callback(const epee::net_utils::connection_context_base& context);
@@ -378,7 +374,6 @@ namespace nodetool
     bool peer_sync_idle_maker();
     bool do_handshake_with_peer(peerid_type& pi, p2p_connection_context& context, bool just_take_peerlist = false);
     bool do_peer_timed_sync(const epee::net_utils::connection_context_base& context, peerid_type peer_id);
-    bool update_dns_blocklist();
 
     bool make_new_connection_from_anchor_peerlist(const std::vector<anchor_peerlist_entry>& anchor_peerlist);
     bool make_new_connection_from_peerlist(network_zone& zone, bool use_white_list);
@@ -403,7 +398,6 @@ namespace nodetool
     bool is_addr_recently_failed(const epee::net_utils::network_address& addr);
     bool is_priority_node(const epee::net_utils::network_address& na);
     std::set<std::string> get_ip_seed_nodes() const;
-    std::set<std::string> get_dns_seed_nodes();
     std::set<std::string> get_seed_nodes(epee::net_utils::zone);
     bool connect_to_seed(epee::net_utils::zone);
 
@@ -484,7 +478,6 @@ namespace nodetool
     epee::math_helper::once_a_time_seconds<60*30, false> m_peerlist_store_interval;
     epee::math_helper::once_a_time_seconds<60> m_gray_peerlist_housekeeping_interval;
     epee::math_helper::once_a_time_seconds<3600, false> m_incoming_connections_interval;
-    epee::math_helper::once_a_time_seconds<7000> m_dns_blocklist_interval;
 
     std::list<epee::net_utils::network_address>   m_priority_peers;
     std::vector<epee::net_utils::network_address> m_exclusive_peers;
@@ -524,9 +517,6 @@ namespace nodetool
 
     epee::net_utils::ssl_support_t m_ssl_support;
 
-    bool m_enable_dns_seed_nodes;
-    bool m_enable_dns_blocklist;
-
     uint32_t max_connections;
   };
 
@@ -549,7 +539,6 @@ namespace nodetool
     extern const command_line::arg_descriptor<std::string> arg_ban_list;
     extern const command_line::arg_descriptor<bool> arg_p2p_hide_my_port;
     extern const command_line::arg_descriptor<bool> arg_no_sync;
-    extern const command_line::arg_descriptor<bool> arg_enable_dns_blocklist;
 
     extern const command_line::arg_descriptor<bool>        arg_no_igd;
     extern const command_line::arg_descriptor<std::string> arg_igd;

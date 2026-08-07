@@ -33,7 +33,7 @@ use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
 use shekyl_types::BlockHeight;
 
-use crate::engine::block_fetch::default_fetch_scannable_block;
+use crate::engine::block_fetch::default_fetch_scannable_block_full;
 use crate::engine::prpc::PRpc;
 use crate::engine::traits::DaemonEngine;
 
@@ -127,10 +127,18 @@ pub(crate) trait BlockSource {
 // strings) per impl, where the copies could drift.
 
 /// A source's claimed tip height: the bare [`Rpc::get_height`] converted
-/// fail-closed to a [`BlockHeight`]. Generic over the transport so the local
-/// (`DaemonEngine: Rpc`) and remote ([`PRpc`]) sources share one body; the
-/// returned future is `Send` because `get_height`'s is.
-async fn tip_height_via<R: Rpc>(rpc: &R) -> Result<BlockHeight, BlockSourceError> {
+/// fail-closed to a [`BlockHeight`].
+///
+/// **Named daemon-claimed-tip clock (WI-2 F-2 / WI-3 R2-1).** This is the
+/// single function both (a) bond-assemble `anchor_t0` stamps and (b) the
+/// pscan dispatch due-check tip read through (`BlockSource::tip_height` →
+/// here). Explicitly **not** `synced_height` or `ingested_tip_height` —
+/// those clocks have different bases and must not feed `anchor_t0`.
+///
+/// Generic over the transport so the local (`DaemonEngine: Rpc`) and remote
+/// ([`PRpc`]) sources share one body; the returned future is `Send` because
+/// `get_height`'s is.
+pub(crate) async fn daemon_claimed_tip<R: Rpc>(rpc: &R) -> Result<BlockHeight, BlockSourceError> {
     let height = rpc.get_height().await?;
     // Checked, fail-closed conversion. The 64-bit-only build gate already makes
     // `usize <= u64` (so this never errors), but the uniform checked form keeps
@@ -156,9 +164,10 @@ fn block_number(height: BlockHeight) -> Result<usize, BlockSourceError> {
 /// [`DaemonEngine`] connection.
 ///
 /// It is generic over [`DaemonEngine`] (not the bare `Rpc` transport) on
-/// purpose — it calls the high-level [`DaemonEngine::fetch_scannable_block`],
-/// which the daemon actor and the test double both override; routing through
-/// the low-level `Rpc` transport instead would bypass those overrides.
+/// purpose — it calls the high-level
+/// [`DaemonEngine::fetch_scannable_block_full`], which the daemon actor and
+/// the test double both override; routing through the low-level `Rpc`
+/// transport instead would bypass those overrides.
 ///
 /// This establishes the *interface* only. The per-`P` network **isolation**
 /// (separate connection, no shared cache with the principal) is 2d-2's
@@ -177,7 +186,7 @@ impl<D: DaemonEngine> DaemonBlockSource<D> {
 impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
     async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
         // `DaemonEngine: Rpc`, so `get_height` is the inherited tip query.
-        tip_height_via(&self.daemon).await
+        daemon_claimed_tip(&self.daemon).await
     }
 
     async fn block_at(
@@ -185,10 +194,14 @@ impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
         height: BlockHeight,
     ) -> Result<Option<ScannableBlock>, BlockSourceError> {
         let number = block_number(height)?;
-        // High-level fetch: whole block, all transactions, no selectivity. Routes
-        // through `DaemonEngine::fetch_scannable_block` (which the daemon actor and
-        // the test double override) — not the bare `Rpc`, which would bypass them.
-        let block = self.daemon.fetch_scannable_block(number).await?;
+        // High-level fetch: whole block, all transactions, no selectivity. The
+        // **full**-body variant, because SP-6's exhaustiveness gate recomputes
+        // each body's committed hash — a pruned FCMP++ spend can never satisfy
+        // it (`Transaction::hash()` substitutes the null prunable hash). Routes
+        // through `DaemonEngine::fetch_scannable_block_full` (which the daemon
+        // actor and the test double override) — not the bare `Rpc`, which
+        // would bypass them.
+        let block = self.daemon.fetch_scannable_block_full(number).await?;
         Ok(Some(block))
     }
 }
@@ -225,7 +238,7 @@ impl BlockSource for PBlockSource {
     async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
         // `PRpc: Rpc`, so `get_height` is the inherited tip query — over `P`'s
         // circuit, same claimed-not-trusted semantics as any single source.
-        tip_height_via(&self.rpc).await
+        daemon_claimed_tip(&self.rpc).await
     }
 
     async fn block_at(
@@ -233,12 +246,17 @@ impl BlockSource for PBlockSource {
         height: BlockHeight,
     ) -> Result<Option<ScannableBlock>, BlockSourceError> {
         let number = block_number(height)?;
-        // P-SH: exactly one height per call — `default_fetch_scannable_block`
-        // issues a single `get_block` (+ its txs) for `number`. Like
+        // P-SH: exactly one height per call — the fetch issues a single
+        // `get_block` (+ its txs) for `number`. Full bodies, same as
+        // `DaemonBlockSource`: the SP-6 per-body hash recompute requires the
+        // prunable section. (The pruned-fetch bandwidth optimization over Tor
+        // is the reopening candidate if 2d-2 posture profiling demands it —
+        // it would need a daemon-claimed `prunable_hash` leg, which weakens
+        // recompute-from-received; see `docs/FOLLOWUPS.md`.) Like
         // `DaemonBlockSource`, a missing block surfaces as `Err` (this source
         // cannot *prove* absence; `Ok(None)` is the withheld-body-robustness
         // slice, out of scope for SP-T2).
-        let block = default_fetch_scannable_block(&self.rpc, number).await?;
+        let block = default_fetch_scannable_block_full(&self.rpc, number).await?;
         Ok(Some(block))
     }
 }

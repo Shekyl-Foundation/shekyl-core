@@ -4,7 +4,7 @@
 §11–§15 add the buildable SP decomposition (grounded surface map, SP enumeration, type-safety,
 dependency posture, per-SP design). The transport is greenfield (no Arti/Tor/onion code on
 dev; the only network primitive is `ureq` + `socks-proxy` in `rust/shekyl-cli/Cargo.toml:25`,
-and the wallet→daemon path is HTTP(S) `DaemonClient` over `SimpleRequestRpc`,
+and the wallet→daemon path is HTTP(S) `DaemonClient` over `HttpRpc`,
 `rust/shekyl-engine-core/src/engine/daemon.rs`). 2d-1 pinned the *seams* (below); 2d-2 fills
 them. **The scope is deliberately small** — most of the apparent surface dissolved on
 grounding (see §0): the privacy job is one boundary, the liveness job is ordinary, and the
@@ -81,21 +81,28 @@ as `PScanCursor` not being passable where `BlockchainTip` is expected.
 The 2d-1 plan *designed* these seams; only some are **code on dev**. The rest are
 design-level names (do not cite them as landed surfaces — the read-the-code rule). 2d-1's
 SP-3/SP-5 (PR-A, **#201**) landed the dual-extractor scan-step; **PR-B is in progress** (the
-driving task + SP-4 finalize + the cadence); SP-6/SP-7 are future.
+driving task + SP-4 finalize + the cadence); SP-6/SP-7 are future. **[Table corrected
+2026-07-18 — this intro and three rows below were written pre-PR-B and went stale when it
+landed: PR-B (#205) is complete, and SP-6/SP-7 are code on dev (`pscan/reconcile.rs` /
+`exhaustiveness.rs` / `cover_discovery.rs` / `cadence.rs`, landed 2026-06-29). The §12
+SP-R0 row was corrected by PR #333; this table is the same correction at the §2 seam
+layer.]**
 
 | Seam | State on dev | What 2d-2 does with it |
 | --- | --- | --- |
 | `BlockSource` (SP-0) — per-`P`, fetch-everything | **landed** | Provide the Tor-backed impl underneath the unchanged trait |
 | `ScanStep` / `run_dual_extractor` (SP-3/SP-5) | **landed (PR-A #201)** — the task owns the `BlockSource`; bond-posts are *"collected for SP-6 reconcile"* | The Tor `BlockSource` feeds it; reconcile consumes its public bond-post matches |
-| Scan **cadence** (SP-5 / TM-6) — "no hardwired timer" | **not built** — the driving task is **PR-B, in progress**; pinned as a *design* constraint, not yet a `ScanSchedule` type | Drive it constant-rate/jittered over the per-`P` circuit — **gated on PR-B exposing an injectable cadence** |
-| `VerifiedRange` / `PReconcileSet` (SP-6) | **0 files — design-level, future** | Consume for half (B); **gated on SP-6 being built** (PR-A only *collects* the inputs) |
-| `CoverDiscovery` (SP-7) — re-fund takes `AbsentVerified` only | **0 files — design-level, future** | Honor it once built; no auto-escalation of `Incomplete` |
+| Scan **cadence** (SP-5 / TM-6) — "no hardwired timer" | **landed with PR-B (#205)** — injectable cadence (`pscan/cadence.rs`) driving `run_pscan_task` *(row corrected 2026-07-18; previously "not built, PR-B in progress")* | Drive it constant-rate/jittered over the per-`P` circuit — the injectable seam exists |
+| `VerifiedRange` / `PReconcileSet` (SP-6) | **landed 2026-06-29** (`pscan/reconcile.rs:67` / `exhaustiveness.rs:64`; `82870235b` + PR #211 review) *(row corrected 2026-07-18; previously "0 files — design-level, future")* | Consume for half (B) — **gate CLEARED**; the consumer is SP-R0 **arm #2** ([`ARCHIVAL_BOND_SP_R0_PLAN.md`](ARCHIVAL_BOND_SP_R0_PLAN.md)) |
+| `CoverDiscovery` (SP-7) — re-fund takes `AbsentVerified` only | **landed with the 2d-1 slices** (`pscan/cover_discovery.rs`) *(row corrected 2026-07-18; previously "0 files")* | Honor it; no auto-escalation of `Incomplete` |
 | `tip_height()` = "this source's *claimed* tip" (TM-3) | concept (in the plan) | Resolved by **posture**, not multi-source machinery (§4) |
 | `spread` / `bond_first` broadcast placement | **drawn AND consumed** (2c-2b PR #255): `plan_entry_seam` turns the draw into an `EntrySeamPlan` (block offsets for both events), carried in the `SignBond` reply (`SignedBondPost`); the write-side *seam* it will feed is built (SP-T4a `PTransactionSubmitter` + `BroadcastPosture`), but the plan is **not** yet wired into any broadcast | Carry the `EntrySeamPlan` to the wire over the per-`P` circuit (§5) — gated on the 2c-2a assemble / 2d dispatch wiring, not the seam or the plan |
 
-**Implication for 2d-2 half (B):** the reconcile is **blocked** until SP-6 (`PReconcileSet`)
-and the PR-B driving task exist; only half (A) transport can proceed now. The doc treats (B)
-as a forward-dependency, not a present build.
+**Implication for 2d-2 half (B) (corrected 2026-07-18):** the reconcile's SP-6 and
+driving-task gates are **both cleared** (see the corrected rows above and the §12 SP-R0
+row). Half (B) is unblocked as SP-R0 arm #2, sequenced per the SP-R0 round's DQ-C/DQ-F
+split ([`ARCHIVAL_BOND_SP_R0_PLAN.md`](ARCHIVAL_BOND_SP_R0_PLAN.md) §5) — no longer a
+forward-dependency of this doc.
 
 ---
 
@@ -346,7 +353,7 @@ starting one layer deeper than §2: the *real* substrate, read at the function, 
 | --- | --- | --- | --- |
 | **SP-0 `BlockSource`** (`engine-core/pscan/block_source.rs`, over `shekyl-rpc-client`) | the per-`P` fetch keystone — whole-block-by-height, **no selective fetch** (isolation is the trait's *shape*). 2d-1 ships `DaemonBlockSource`, a placeholder over an existing `DaemonEngine`. | **`P`'s** | **the seam 2d-2 implements** — the real per-`P`-isolated transport goes *behind this trait* |
 | `cli/daemon.rs::DaemonClient` (`ureq` + SOCKS) | the lightweight, "independent-of-wallet2-FFI" client for unauthenticated CLI queries (`get_info`, …) | **principal's** | a circuit `P` must stay disjoint from; the `IsolateSOCKSAuth` *model* |
-| `engine-core::DaemonClient` over `SimpleRequestRpc` | the wallet2-FFI refresh path | **principal's** | the other circuit `P` must stay disjoint from |
+| `engine-core::DaemonClient` over `HttpRpc` | the wallet2-FFI refresh path | **principal's** | the other circuit `P` must stay disjoint from |
 
 The firewall requirement is exactly: **`P`'s `BlockSource` transport shares a circuit with
 neither principal surface.** That is the whole of half (A).
@@ -398,7 +405,7 @@ non-empty** (§13(b)) — and leaves principal-side isolation to its own ticket,
 
 | SP | Deliverable | Gated on |
 | --- | --- | --- |
-| **SP-R0** | **Reconcile GC over the per-`P` transport** — consume SP-6's `PReconcileSet`; GC phantom `bonded_slots`/`p_slot` **only** on confirmed-absence within `covered`. | **SP-6** (`PReconcileSet`, not built — downstream of PR-B) |
+| **SP-R0** | **Reconcile GC over the per-`P` transport** — consume SP-6's `PReconcileSet`; GC phantom `bonded_slots`/`p_slot` **only** on confirmed-absence within `covered`. | **SP-6 — CLEARED 2026-06-29** (`PReconcileSet` landed: `pscan/reconcile.rs:67`, SP-6 part 2 `82870235b` + PR #211 review commits). **SP-R0 is unblocked**; carried pins in §15. *(Row updated 2026-07-18 — it read "not built" for 19 days after SP-6 landed.)* |
 
 **Out of this round (separate ticket):** principal-side `IsolateSOCKSAuth` — wiring the principal's
 two `DaemonClient`s to non-empty usernames. Kept out to protect the firewall round's collision
@@ -560,7 +567,8 @@ isolate).
 
 **SP-R0 — reconcile GC (gated).** On SP-6's `PReconcileSet`, GC phantom `bonded_slots`/`p_slot`
 **only** on confirmed-absence within `covered` (the SP-6 rule); never on absence-from-one-source.
-Designed here, built after SP-6. **Frame the removal around the slot ledger** (2d-1 records-driven
+Designed here, built after SP-6 (which landed 2026-06-29, `82870235b` + PR #211 — SP-R0 has been
+buildable since; gate row in §12 updated 2026-07-18). **Frame the removal around the slot ledger** (2d-1 records-driven
 retirement): the done-side record is *authoritative*, the live `bonded_slots` is *advisory*, and
 no-reuse is already enforced by `StakingBlock::monotone_current_slot` (`staking_block.rs:75`) — so
 SP-R0's job is the *removal*, not the trigger, and `covered` *corroborates* the presence-events the
@@ -637,7 +645,7 @@ not implement). The scope shrank to §0–§7 precisely *because* these collapse
 | --- | --- | --- |
 | **Serving requires a full validating node → scan is forced local → TM-3/TM-6 dissolve** | **Refuted.** The chain model is light-client (daemon serves leaves, wallet verifies vs. per-block header `curve_tree_root`); no doc requires a validating node. Remote scan is a supported posture, not a phantom. | `CURVE_TREE_CLIENT.md`; grep for "full node required" (empty) |
 | **Slash forces a *local* node** | **Refuted.** "Trusted" ≠ "local" — a self-hosted *remote* node is equally trusted. The real structure is the three-posture taxonomy (§4): trust dissolves TM-3 (local *or* own-remote); only locality dissolves TM-6. | the posture analysis, §4 |
-| **Challenge-response is a single-missed-deadline capital knife-edge** | **Refuted at the code.** The slash is **sliding-window m-of-n** — `failure_confirmation::run_sliding` slashes only when `miss_count >= miss_threshold` within the window; a single transient is a scored `false_slash` the tuning avoids. A transient is absorbed by retry + Tor failover; only *sustained* failure slashes (the mechanism working). | `run_sliding`, `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` |
+| **Challenge-response is a single-missed-deadline capital knife-edge** | **Refuted at the code** — though only since the m-of-n landed in consensus. The slash is **sliding-window m-of-n**: it fires only when `m` misses fall within the last `n` baseline observations for a `(P_id, shard)`; a single transient is absorbed by retry + Tor failover, and only *sustained* failure slashes (the mechanism working). **Pointer corrected:** when this row was written the only implementation was `failure_confirmation::run_sliding` — the **sim** — while consensus still single-struck, so the refutation was citing a model of the mechanism rather than the mechanism. The consensus implementation now exists and the two are held equal by an exhaustive equivalence test. | `shekyl-archival-retention::failure_window`, `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §4.1 |
 | **Multi-path liveness has a privacy tension (N paths = N origin exposures)** | **Dissolved.** `P` is public (§0); the vin is public-content; multi-path only keeps each path's origin in `P`-space, never the principal's — no competing privacy axis. So multi-path is a *latency nicety*, not bond protection. | §0 charter + §5 |
 | **Guard-level censorship is a hard liveness floor needing bundled PT/bridges** | **Over-scoped → out of scope.** Default-Tor guard behavior is correct (deviation creates a signature); reaching Tor where it is *blocked* is the Tor Project's cat-and-mouse — a doc pointer (§8), not our machinery — and §5's backoff makes it not a capital cliff. | Tor SOCKS/guard model (§3) |
 | **Operator runs K *simultaneous* personas; cardinality is a structural 2d-2 hand-off** | **Retracted** — the design is sequential (`stake_engine`: "never two active personas"); the channel does not exist. | `ARCHIVAL_TM1_CLUSTERING.md` §0 |

@@ -1,0 +1,43 @@
+[package]
+name = "shekyl-multisig-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-multisig = { path = ".." }
+shekyl-units = { path = "../../shekyl-units" }
+
+[[bin]]
+name = "fuzz_envelope_parse"
+path = "fuzz_targets/fuzz_envelope_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_decrypted_payload_parse"
+path = "fuzz_targets/fuzz_decrypted_payload_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_encrypt_decrypt_roundtrip"
+path = "fuzz_targets/fuzz_encrypt_decrypt_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_intent_validation"
+path = "fuzz_targets/fuzz_intent_validation.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

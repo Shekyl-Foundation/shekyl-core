@@ -46,8 +46,8 @@
 #include "cryptonote_protocol/levin_notify.h"
 #include "int-util.h"
 #include "p2p/net_node.h"
-#include "net/dandelionpp.h"
 #include "net/levin_base.h"
+#include "net/levin_compression.h"
 #include "span.h"
 
 namespace
@@ -180,6 +180,21 @@ namespace
             static_cast<base_type&>(context_) = base_type{random_generator(), {}, is_incoming, false};
             context_.m_state = cryptonote::cryptonote_connection_context::state_normal;
             handler_.after_init_connection();
+        }
+
+        //! Sizes of the frames still queued, as they would go on the wire.
+        //!
+        //! The decoded-message assertions elsewhere in this file cannot see
+        //! a size defect: the receive path inflates a COMPRESSED bucket
+        //! before handing it up, so padding present in the *decoded*
+        //! message says nothing about whether it survived to the wire.
+        std::vector<std::size_t> queued_wire_sizes() const
+        {
+            std::vector<std::size_t> sizes;
+            sizes.reserve(endpoint_.send_queue_.size());
+            for (const auto& message : endpoint_.send_queue_)
+                sizes.push_back(message.size());
+            return sizes;
         }
 
         //\return Number of messages processed
@@ -361,6 +376,60 @@ namespace
               new cryptonote::levin::notify{io_service_, connections_, std::move(noise), zone, pad_txs, events_}
             );
             return receiver_.notifier;
+        }
+
+        /*! Advance the zone schedule until `stop(sent)` holds, or give up after
+            `max_advances`. Each advance processes every context's send queue and
+            accumulates the count. Used for covert noise *and* scheduled fluff —
+            both ride `run_next_wake()` / the production timer path.
+
+            One advance = one `run_next_wake()` = one poll at the zone's next
+            deadline. For covert, that is **one** channel firing (two only when
+            independent draws collide on the same millisecond). The inherited
+            tests instead cancelled every channel's timer per call, which
+            synchronized the channels — a state the production schedule
+            structurally cannot produce, and one that would be a covert-traffic
+            defect if it could: simultaneous emission makes the aggregate bursty
+            and periodic, the exact shape constant-rate cover exists to deny
+            (§20.9). Oracles that drive through this helper assert totals over
+            however many advances a round needs; the per-advance cadence property
+            lives where it can be held deterministically:
+            `covert_channels_emit_one_per_advance_not_synchronized` in
+            `shekyl-relay`, whose RNG and clock are parameters. */
+        template<typename F>
+        std::size_t drive_schedule(cryptonote::levin::notify& notifier, F&& stop, const unsigned max_advances = 16)
+        {
+            std::size_t sent = 0;
+            for (unsigned i = 0; i < max_advances && !stop(sent); ++i)
+            {
+                notifier.run_next_wake();
+                io_service_.restart();
+                if (io_service_.poll() == 0)
+                    break; // the drive is dead; the caller's assertions report it
+                for (auto& context : contexts_)
+                    sent += context.process_send_queue();
+            }
+            return sent;
+        }
+
+        /*! Fluff totals oracle shared by the force-driven and schedule-driven
+            paths. Payload identity, aggregate count, padding empty, and the
+            fluff bit are force-independent (§20.10 audit): if either driver
+            needs different totals, a fluff assertion has started encoding the
+            forced side. Source exclusion and per-peer queue counts stay at the
+            call site — those interact with when queues are drained. */
+        void expect_fluff_totals(std::vector<cryptonote::blobdata> txs, const std::size_t eligible_peers = 9)
+        {
+            EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+            std::sort(txs.begin(), txs.end());
+            ASSERT_EQ(eligible_peers, receiver_.notified_size());
+            for (std::size_t count = 0; count < eligible_peers; ++count)
+            {
+                auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
+                EXPECT_EQ(txs, notification.txs);
+                EXPECT_TRUE(notification._.empty());
+                EXPECT_TRUE(notification.dandelionpp_fluff);
+            }
         }
 
         boost::uuids::random_generator random_generator_;
@@ -584,6 +653,114 @@ TEST(make_fragment, multiple)
     EXPECT_EQ(18, std::count(fragment.cbegin(), fragment.cend(), 0));
 }
 
+// ── Compression shim (shekyl_levin_* FFI) ──────────────────────────────────
+//
+// These bite against the C++↔Rust marshaling seam (buffer ownership, length
+// handling, return-code mapping, limit plumbing); the codec itself — the
+// constants, the frame handling, the caps, and which messages may be
+// compressed at all — is owned and tested by rust/shekyl-levin. Before this
+// seam existed the C++ tree had no compression coverage at all.
+//
+// The emit half has no payload-level entry point to test: `epee::levin`
+// exposes only whole-message compression, because every question that
+// decides whether a buffer may be compressed is about its bucket header.
+
+TEST(levin_compression, message_roundtrips_through_the_ffi)
+{
+    // End-to-end over the emit path: finalize a notify, compress the whole
+    // message, verify the header rewrite, then inflate the payload back.
+    std::string payload(8 * 1024, '\0');
+    for (std::size_t i = 0; i < payload.size(); ++i)
+        payload[i] = static_cast<char>(i % 251);
+
+    epee::levin::message_writer message;
+    message.buffer.write(epee::to_span(payload));
+
+    epee::byte_slice compressed_msg =
+        epee::levin::try_compress_message(message.finalize_notify(2002));
+    ASSERT_LE(sizeof(epee::levin::bucket_head2), compressed_msg.size());
+    EXPECT_LT(compressed_msg.size(), payload.size());
+
+    epee::levin::bucket_head2 head;
+    std::memcpy(std::addressof(head), compressed_msg.data(), sizeof(head));
+    EXPECT_TRUE(SWAP32LE(head.m_flags) & LEVIN_PACKET_COMPRESSED);
+    EXPECT_EQ(SWAP64LE(head.m_cb), compressed_msg.size() - sizeof(head));
+
+    const epee::span<const uint8_t> frame{
+        compressed_msg.data() + sizeof(head), compressed_msg.size() - sizeof(head)};
+    std::string decompressed;
+    ASSERT_TRUE(epee::levin::decompress_payload(
+        frame, decompressed, LEVIN_DEFAULT_MAX_PACKET_SIZE));
+    EXPECT_EQ(payload, decompressed);
+}
+
+TEST(levin_compression, small_message_is_returned_unchanged)
+{
+    // Below the 256-byte payload minimum (single-sourced in
+    // rust/shekyl-levin) the decline must hand the caller its own message
+    // back byte for byte — not an empty slice, and not a re-framed one.
+    const std::string payload(255, 'a');
+    epee::levin::message_writer message;
+    message.buffer.write(epee::to_span(payload));
+
+    epee::byte_slice original = message.finalize_notify(2002);
+    epee::byte_slice result = epee::levin::try_compress_message(original.clone());
+
+    ASSERT_EQ(original.size(), result.size());
+    EXPECT_EQ(0, std::memcmp(original.data(), result.data(), original.size()));
+
+    epee::levin::bucket_head2 head;
+    std::memcpy(std::addressof(head), result.data(), sizeof(head));
+    EXPECT_FALSE(SWAP32LE(head.m_flags) & LEVIN_PACKET_COMPRESSED);
+}
+
+TEST(levin_compression, cover_traffic_is_returned_unchanged)
+{
+    // A noise bucket's constant on-wire size is the entire property the
+    // white-noise feature buys. The C++ this shim replaced did not check the
+    // noise class at all — it would have compressed one and shortened it.
+    epee::byte_slice noise = epee::levin::make_noise_notify(4096);
+    ASSERT_EQ(4096u, noise.size());
+
+    epee::byte_slice result = epee::levin::try_compress_message(noise.clone());
+    ASSERT_EQ(noise.size(), result.size());
+    EXPECT_EQ(0, std::memcmp(noise.data(), result.data(), noise.size()));
+}
+
+TEST(levin_compression, garbage_frame_rejected)
+{
+    // The false⇒empty contract on the decompress failure path: a reused
+    // non-empty `output` must not retain stale bytes after rejection.
+    const std::string garbage = "definitely not a zstd frame";
+    std::string decompressed = "stale-caller-reuse";
+    EXPECT_FALSE(epee::levin::decompress_payload(
+        epee::strspan<uint8_t>(garbage), decompressed, LEVIN_DEFAULT_MAX_PACKET_SIZE));
+    EXPECT_TRUE(decompressed.empty());
+}
+
+TEST(levin_compression, inflation_bounded_by_the_callers_limit)
+{
+    // A valid frame whose declared content size exceeds max_output must be
+    // rejected before allocation — this is the limit the async handler
+    // passes from min(packet limit, per-command cap).
+    const std::string payload(8 * 1024, '\0');
+    epee::levin::message_writer message;
+    message.buffer.write(epee::to_span(payload));
+    epee::byte_slice compressed_msg =
+        epee::levin::try_compress_message(message.finalize_notify(2002));
+    ASSERT_LT(sizeof(epee::levin::bucket_head2), compressed_msg.size());
+
+    const epee::span<const uint8_t> frame{
+        compressed_msg.data() + sizeof(epee::levin::bucket_head2),
+        compressed_msg.size() - sizeof(epee::levin::bucket_head2)};
+
+    std::string decompressed = "stale-caller-reuse";
+    EXPECT_FALSE(epee::levin::decompress_payload(frame, decompressed, 1024));
+    EXPECT_TRUE(decompressed.empty());
+    EXPECT_TRUE(epee::levin::decompress_payload(frame, decompressed, payload.size()));
+    EXPECT_EQ(payload, decompressed);
+}
+
 TEST_F(levin_notify, defaulted)
 {
     cryptonote::levin::notify notifier{};
@@ -635,16 +812,7 @@ TEST_F(levin_notify, fluff_without_padding)
         for (++context; context != contexts_.end(); ++context)
             EXPECT_EQ(1u, context->process_send_queue());
 
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
-        std::sort(txs.begin(), txs.end());
-        ASSERT_EQ(9u, receiver_.notified_size());
-        for (unsigned count = 0; count < 9; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_TRUE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
+        expect_fluff_totals(txs);
     }
 }
 
@@ -1074,6 +1242,155 @@ TEST_F(levin_notify, fluff_with_padding)
     }
 }
 
+// A padded transaction message must reach the wire padded.
+//
+// `make_tx_message` quantizes the serialized payload to a 1024-byte boundary
+// with a run of spaces so an observer cannot read transaction volume off the
+// frame size. zstd erases that run almost perfectly, so compressing a padded
+// message puts the frame size back in step with the real payload and hands
+// the observer exactly the signal the operator paid bandwidth to hide.
+//
+// This has to be asserted on the *wire* bytes. Every other padding test in
+// this file inspects the decoded notification, and the decoded message
+// carries its padding either way — the receive path inflates a COMPRESSED
+// bucket before handing it up. Reverting the `if (!pad)` guard in
+// `make_payload_send_txs` leaves all of those green and fails only this.
+//
+// The transaction bodies are pseudorandom on purpose. Real Shekyl wire
+// bytes measure 7.97–7.995 bits/B of entropy and zstd level 1 *expands*
+// them (FOLLOWUPS Z-1, 2026-08-06), so a compressible corpus here would
+// prove the guard matters for traffic that does not exist. What makes a
+// padded message compressible is not its payload, it is the padding: a run
+// of ~1000 identical spaces collapses to a couple of dozen bytes, which
+// beats the ~0.1% the incompressible bodies expand by. That is why the
+// quantization falls even when the transactions themselves are noise.
+TEST_F(levin_notify, padding_survives_the_emit_path)
+{
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, true);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    // Incompressible bodies, matching the Z-1 measurement of real traffic.
+    // A cheap deterministic PRNG, not `crypto::rand`: the test must fail the
+    // same way on every run.
+    std::vector<cryptonote::blobdata> txs(2);
+    std::uint32_t state = 0x9e3779b9u;
+    for (auto& tx : txs)
+    {
+        tx.resize(4096);
+        for (char& byte : tx)
+        {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            byte = static_cast<char>(state & 0xff);
+        }
+    }
+
+    ASSERT_EQ(10u, contexts_.size());
+    auto context = contexts_.begin();
+    EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::fluff));
+
+    io_service_.restart();
+    ASSERT_LT(0u, io_service_.poll());
+    notifier.run_fluff();
+    ASSERT_LT(0u, io_service_.poll());
+
+    unsigned inspected = 0;
+    for (++context; context != contexts_.end(); ++context)
+    {
+        for (const std::size_t wire_size : context->queued_wire_sizes())
+        {
+            ASSERT_LT(sizeof(epee::levin::bucket_head2), wire_size);
+            const std::size_t payload = wire_size - sizeof(epee::levin::bucket_head2);
+            EXPECT_EQ(0u, payload % 1024)
+                << "padded message went on the wire at " << payload
+                << " payload bytes, which is not a 1024-byte multiple";
+            ++inspected;
+        }
+    }
+    EXPECT_LT(0u, inspected) << "no frames observed; the test proved nothing";
+
+    // Drain, so the receive path is still exercised and the fixture's
+    // teardown invariants hold.
+    for (context = contexts_.begin(); context != contexts_.end(); ++context)
+        context->process_send_queue();
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+    std::sort(txs.begin(), txs.end());
+    for (unsigned count = 0; count < inspected; ++count)
+    {
+        auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
+        EXPECT_EQ(txs, notification.txs);
+        EXPECT_FALSE(notification._.empty());
+    }
+}
+
+// The guard above must not have simply switched compression off: with
+// padding disabled the compressor still has to be reachable.
+//
+// This one deliberately uses a *compressible* corpus, which the padding
+// test deliberately does not. The claim here is only "the !pad branch
+// still reaches the codec" — a wire frame smaller than the transactions it
+// carries is possible only if the compressor ran. It is emphatically NOT a
+// claim that real traffic compresses; Z-1 measured real bodies at 7.99
+// bits/B, where zstd level 1 expands them and the only-if-smaller rule
+// declines. Using realistic bytes here would make this test pass for the
+// wrong reason — by proving nothing at all.
+TEST_F(levin_notify, unpadded_messages_still_compress)
+{
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    std::vector<cryptonote::blobdata> txs(2);
+    txs[0].resize(4096, 'f');
+    txs[1].resize(4096, 'e');
+
+    ASSERT_EQ(10u, contexts_.size());
+    auto context = contexts_.begin();
+    EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::fluff));
+
+    io_service_.restart();
+    ASSERT_LT(0u, io_service_.poll());
+    notifier.run_fluff();
+    ASSERT_LT(0u, io_service_.poll());
+
+    unsigned inspected = 0;
+    for (++context; context != contexts_.end(); ++context)
+    {
+        for (const std::size_t wire_size : context->queued_wire_sizes())
+        {
+            EXPECT_LT(wire_size, txs[0].size() + txs[1].size())
+                << "unpadded message went on the wire uncompressed";
+            ++inspected;
+        }
+    }
+    EXPECT_LT(0u, inspected) << "no frames observed; the test proved nothing";
+
+    // Draining also proves the compressed frames are the receive path's
+    // problem and not just smaller bytes: each one must inflate back into
+    // the original transactions.
+    for (context = contexts_.begin(); context != contexts_.end(); ++context)
+        context->process_send_queue();
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+    std::sort(txs.begin(), txs.end());
+    for (unsigned count = 0; count < inspected; ++count)
+    {
+        auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
+        EXPECT_EQ(txs, notification.txs);
+    }
+}
+
 TEST_F(levin_notify, stem_with_padding)
 {
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, true);
@@ -1489,6 +1806,22 @@ TEST_F(levin_notify, private_fluff_without_padding)
 TEST_F(levin_notify, private_stem_without_padding)
 {
     // private mode always uses fluff but marked as stem
+    //
+    // Load-bearing beyond its inherited scope (§63 of
+    // docs/design/DAEMON_RELAY_PRIVACY.md). Three assertions below pin facts
+    // four sections of relay-privacy analysis were written against the
+    // opposite of, and each is the tripwire for a different claim:
+    //
+    //   - every outbound peer is notified (not one successor): the anonymity
+    //     zone DIFFUSES, so there is no stem slot on it (§63.4);
+    //   - `dandelionpp_fluff` is true on the wire: the flag does not vary on
+    //     this zone, which is why exit (b) is not dominated (§63.7);
+    //   - the txpool is told `stem`: the embargo still arms, which is the
+    //     half of "stem and embargo present" that was right (§63.3).
+    //
+    // If a future change makes this zone run Dandelion++ — the design
+    // question §63.6 leaves open — this test SHOULD fail, and §63 is what to
+    // re-read before adjusting it.
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
     auto &notifier = *notifier_ptr;
 
@@ -2276,6 +2609,49 @@ TEST_F(levin_notify, fluff_with_duplicate)
 
 }
 
+/*! The fluff totals oracle, reached through the SCHEDULED path.
+    Closes the force-flag half of the §20.10 carry-forward and part of the
+    §18.4c honest-scope gap ("the production timer path has no C++-side
+    coverage — every gtest drives through force hooks").
+
+    Shares `expect_fluff_totals` with `fluff_without_padding` — the coupling is
+    structural, not prose. Drive is `drive_schedule` (same helper noise uses),
+    so per-peer deadlines fall due across several advances instead of releasing
+    together under `run_fluff`. The force branch's per-peer simultaneous queue
+    counts are not re-asserted here: those are force-path-shaped. If this ever
+    needs the force hook to pass, a fluff assertion has started encoding the
+    forced side. */
+TEST_F(levin_notify, fluff_via_scheduled_drive)
+{
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    std::vector<cryptonote::blobdata> txs(2);
+    txs[0].resize(100, 'f');
+    txs[1].resize(200, 'e');
+
+    ASSERT_EQ(10u, contexts_.size());
+    auto context = contexts_.begin();
+    EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::fluff));
+    io_service_.restart();
+    ASSERT_LT(0u, io_service_.poll());
+
+    // 64 > default 16: fluff releases one peer (or a small collision set) per
+    // advance, so nine eligible peers need headroom for epoch wakes in between.
+    drive_schedule(notifier,
+        [this](std::size_t) { return receiver_.notified_size() >= 9u; },
+        64);
+
+    EXPECT_EQ(0u, context->process_send_queue());
+    expect_fluff_totals(txs);
+}
+
 TEST_F(levin_notify, noise)
 {
     for (unsigned count = 0; count < 10; ++count)
@@ -2302,31 +2678,26 @@ TEST_F(levin_notify, noise)
         EXPECT_TRUE(status.has_outgoing);
     }
 
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
     {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
+        // Dummies only: advance until both sends are out. Which channel fired
+        // per advance is deliberately not asserted here — cadence is the Rust
+        // witness's job (see drive_schedule).
+        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 2u <= s; });
         EXPECT_EQ(2u, sent);
         EXPECT_EQ(0u, receiver_.notified_size());
     }
 
     EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::local));
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
-
-    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
     {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
-        ASSERT_EQ(2u, sent);
-        while (sent--)
+        const std::size_t sent =
+            drive_schedule(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
+        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
+        // ≥ rather than ==: a channel that comes due again after draining its
+        // queue sends a dummy, so real-notification count is the stop
+        // condition and the send count is a floor.
+        EXPECT_LE(2u, sent);
+        ASSERT_EQ(2u, receiver_.notified_size());
+        for (unsigned i = 0; i < 2u; ++i)
         {
             auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
             EXPECT_EQ(txs, notification.txs);
@@ -2337,30 +2708,19 @@ TEST_F(levin_notify, noise)
 
     txs[0].resize(3000, 'r');
     EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::fluff));
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
-
-    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
     {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
-        EXPECT_EQ(2u, sent);
-        EXPECT_EQ(0u, receiver_.notified_size());
-    }
-
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
-    {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
-        ASSERT_EQ(2u, sent);
-        while (sent--)
+        const std::size_t sent =
+            drive_schedule(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
+        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+        /* 3000 bytes against a 2048-byte covert payload fragments, so each
+           channel takes two sends per complete notification: two notifications
+           cost at least four sends. `sent == 2` here would mean the message
+           was not fragmented — the property the old two-block structure
+           (first fragments, then completions) could only see through hook
+           synchronization. */
+        EXPECT_LE(4u, sent);
+        ASSERT_EQ(2u, receiver_.notified_size());
+        for (unsigned i = 0; i < 2u; ++i)
         {
             auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
             EXPECT_EQ(txs, notification.txs);
@@ -2396,38 +2756,115 @@ TEST_F(levin_notify, noise_stem)
         EXPECT_TRUE(status.has_outgoing);
     }
 
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
     {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
+        // Dummies only: advance until both sends are out. Which channel fired
+        // per advance is deliberately not asserted here — cadence is the Rust
+        // witness's job (see drive_schedule).
+        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 2u <= s; });
         EXPECT_EQ(2u, sent);
         EXPECT_EQ(0u, receiver_.notified_size());
     }
 
     EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::stem));
-    notifier.run_stems();
-    io_service_.restart();
-    ASSERT_LT(0u, io_service_.poll());
-
-    // downgraded to local when being notified
-    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
     {
-        std::size_t sent = 0;
-        for (auto& context : contexts_)
-            sent += context.process_send_queue();
-
-        ASSERT_EQ(2u, sent);
-        while (sent--)
+        const std::size_t sent =
+            drive_schedule(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
+        // downgraded to local when being notified
+        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
+        EXPECT_LE(2u, sent);
+        ASSERT_EQ(2u, receiver_.notified_size());
+        for (unsigned i = 0; i < 2u; ++i)
         {
             auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
             EXPECT_EQ(txs, notification.txs);
             EXPECT_TRUE(notification._.empty());
             EXPECT_FALSE(notification.dandelionpp_fluff);
         }
+    }
+}
+
+/*! CV-1 (§20.5): repointing a covert channel discards any in-flight message
+    remainder — the message is restarted from its first fragment or dropped,
+    never resumed. The inherited rule lived in `update_channel` as an
+    imperative comment ("DO NOT try to send the remainder of the fragments,
+    this additional send time can leak that this node was sending out a real
+    notify (tx) instead of dummy noise") and had no test anywhere — §20.5's
+    named finding, verified by grep over this whole file. After the §20.3
+    inversion the discard lives at exactly ONE site, `send_noise`'s
+    rebind-at-send, which is what makes this witness meaningful now and not
+    before part B: while the old repoint path was alive there were two
+    discard sites, and a resume injected into one could pass behind the
+    other's discard.
+
+    Fixture: ONE outbound peer, so the stem map holds one slot and channel 0
+    is the only sender. A 3000-byte tx against a 2048-byte covert payload
+    takes two sends per complete notification, so stopping after one send
+    leaves a genuine remainder in flight — asserted via
+    `notified_size() == 0`, without which this is the RP-3a seal's no-input
+    vacuity in covert costume. The peer is then closed, a successor added,
+    and the map refreshed: the churned slot rebinds (bound→bound crosses
+    with the next send, not as an unbind), and the next send must restart.
+
+    The property is asserted where the defect is observable: the SUCCESSOR
+    reassembles the complete, intact notification. A resumed remainder
+    cannot satisfy this — the successor receives a fragment stream with no
+    start fragment, and the message is popped from the queue once the
+    remainder drains, so no notification ever arrives.
+
+    Negative control (run and observed to fail): removing the rebind's
+    `channel.active = nullptr;` in `send_noise` fails this test — the final
+    drive exhausts its advances with zero notifications. */
+TEST_F(levin_notify, noise_repoint_discards_in_flight_remainder)
+{
+    add_connection(false); // the one outbound peer; channel 0's slot
+
+    std::vector<cryptonote::blobdata> txs(1);
+    txs[0].resize(3000, 'r'); // > 2048 ⇒ two fragments ⇒ interruptible
+
+    const boost::uuids::uuid incoming_id = random_generator_();
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(2048, false, true);
+    auto &notifier = *notifier_ptr;
+    ASSERT_LT(0u, io_service_.poll());
+
+    // Bind channel 0 at its first (dummy) send. The enqueue guard opens at
+    // send time (§20.3), so the real message below must find it open, or it
+    // is dropped as unbound and nothing is ever in flight to interrupt.
+    {
+        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 1u <= s; });
+        ASSERT_EQ(1u, sent);
+        EXPECT_EQ(0u, receiver_.notified_size());
+    }
+
+    EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::local));
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
+
+    // One more send = the first fragment, and only the first: the message
+    // is now genuinely in flight, and the send below proves it by NOT
+    // having completed a notification.
+    {
+        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 1u <= s; });
+        ASSERT_EQ(1u, sent);
+        ASSERT_EQ(0u, receiver_.notified_size())
+            << "fixture: 3000 bytes must not complete in one 2048-byte send";
+    }
+
+    // Repoint mid-message: successor up, holder down, map refreshed — the
+    // production order for connection churn. All three queue onto the zone
+    // strand; one poll runs them.
+    add_connection(false);  // the successor
+    contexts_.pop_front();  // the holder closes; del_connection notifies
+    notifier.new_out_connection();
+    ASSERT_LT(0u, io_service_.poll());
+
+    {
+        drive_schedule(notifier, [this](std::size_t) { return 1u <= receiver_.notified_size(); });
+        ASSERT_EQ(1u, receiver_.notified_size());
+        auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        EXPECT_EQ(contexts_.front().get_id(), notification.first)
+            << "the restarted message must land on the successor";
+        EXPECT_EQ(txs, notification.second.txs);
+        EXPECT_TRUE(notification.second._.empty());
+        EXPECT_FALSE(notification.second.dandelionpp_fluff);
     }
 }
 
@@ -2464,4 +2901,96 @@ TEST_F(levin_notify, command_max_bytes)
     EXPECT_EQ(1, get_connections().send(std::move(bytes), contexts_.front().get_id()));
     EXPECT_EQ(1u, contexts_.front().process_send_queue(false));
     EXPECT_EQ(0u, receiver_.notified_size());
+}
+
+TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
+{
+    // §46 wiring witness: a successful Dandelion++ stem send must arm one
+    // observation per tx in the zone's stem watch (record_stem at the xmit
+    // site), and record_arrival with the same blobs must resolve them. The
+    // arithmetic is covered Rust-side; what this asserts is that the TWO C++
+    // call sites are actually wired — negative controls: removing the
+    // record_stem call leaves in-flight at 0 (first assert fails); removing
+    // the record_arrival dispatch leaves it at 2 (second assert fails).
+    static constexpr const unsigned test_connections_count = (CRYPTONOTE_DANDELIONPP_STEMS + 1) * 2;
+
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    auto &notifier = *notifier_ptr;
+
+    for (unsigned count = 0; count < test_connections_count; ++count)
+        add_connection(count % 2 == 0);
+    notifier.new_out_connection();
+    io_service_.poll();
+
+    /* F-9: the watch keys on CANONICAL tx hashes, parsed at the call sites —
+       so unlike the other tests in this file, the blobs must parse. Two
+       minimal transactions, distinguished by unlock_time. */
+    std::vector<cryptonote::blobdata> txs(2);
+    {
+        cryptonote::transaction tx{};
+        tx.unlock_time = 1;
+        txs[0] = cryptonote::t_serializable_object_to_blob(tx);
+        tx.unlock_time = 2;
+        txs[1] = cryptonote::t_serializable_object_to_blob(tx);
+    }
+
+    ASSERT_EQ(0u, notifier.stem_in_flight());
+
+    // Drive until a stem epoch actually sends (fluff epochs re-roll). Bound
+    // the re-rolls so a scheduling regression fails with an assertion rather
+    // than hanging the suite — q is high enough that a stem epoch arrives
+    // well within a few dozen flips under the test RNG.
+    static constexpr unsigned kMaxEpochRolls = 64;
+    unsigned rolls = 0;
+    for (;;)
+    {
+        ASSERT_LT(rolls, kMaxEpochRolls)
+            << "no stem send after " << kMaxEpochRolls
+            << " epoch rolls — zone never entered a stem epoch";
+        auto context = contexts_.begin();
+        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
+        io_service_.restart();
+        ASSERT_LT(0u, io_service_.poll());
+        if (events_.has_stem_txes())
+            break;
+        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
+        notifier.run_fluff();
+        io_service_.restart();
+        io_service_.poll();
+        for (auto &ctx : contexts_)
+            ctx.process_send_queue();
+        while (receiver_.notified_size())
+            receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+        notifier.run_epoch();
+        io_service_.restart();
+        io_service_.poll();
+        ++rolls;
+    }
+    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::stem));
+    for (auto &ctx : contexts_)
+        ctx.process_send_queue();
+    while (receiver_.notified_size())
+        receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
+
+    EXPECT_EQ(2u, notifier.stem_in_flight())
+        << "a successful stem send must arm one observation per tx";
+
+    /* F-10: an arrival from the charged successor resolves nothing. The
+       stem destination is always an OUTGOING connection, so the first
+       context (created incoming) is provably not it — using it proves the
+       exclusion is peer-scoped rather than blanket. The exclusion's own
+       semantics are witnessed Rust-side; this asserts the uuid reaches it. */
+    auto incoming = contexts_.begin();
+    ASSERT_TRUE(incoming->is_incoming());
+    /* Arrival path takes canonical hashes (join key), not blobs — same shape
+       production uses after the one-shot parse at fan-out. */
+    notifier.record_arrival(
+        std::make_shared<const std::vector<crypto::hash>>(
+            cryptonote::levin::stem_watch_tx_hashes(txs)),
+        incoming->get_id());
+    io_service_.restart();
+    io_service_.poll();
+
+    EXPECT_EQ(0u, notifier.stem_in_flight())
+        << "the same txs arriving from another peer must resolve the observations";
 }

@@ -407,6 +407,10 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
     {
       INSERT_INTO_JSON_OBJECT(dest, archival_bond_post, input);
     }
+    void operator()(cryptonote::txin_archival_reward_emission const& input) const
+    {
+      INSERT_INTO_JSON_OBJECT(dest, archival_reward_emission, input);
+    }
   };
   std::visit(add_input{dest}, txin);
   dest.EndObject();
@@ -460,6 +464,12 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_v& txin)
     else if (elem.name == "archival_bond_post")
     {
       cryptonote::txin_archival_bond_post tmpVal;
+      fromJsonValue(elem.value, tmpVal);
+      txin = std::move(tmpVal);
+    }
+    else if (elem.name == "archival_reward_emission")
+    {
+      cryptonote::txin_archival_reward_emission tmpVal;
       fromJsonValue(elem.value, tmpVal);
       txin = std::move(tmpVal);
     }
@@ -681,6 +691,21 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
   INSERT_INTO_JSON_OBJECT(dest, hybrid_public_key, txin.hybrid_public_key);
   INSERT_INTO_JSON_OBJECT(dest, p_canonical_id, txin.p_canonical_id);
   INSERT_INTO_JSON_OBJECT(dest, post_kind, txin.post_kind);
+  // §9.11 coupling: the GF-1 debit authorizer is emitted iff JoinMarket,
+  // mirroring the binary serializer — including its write-side refusals: a
+  // non-canonical key (or a stray key on another kind) must fail HERE at the
+  // producer, not surface later as a parse failure of daemon-emitted JSON
+  // (fromJsonValue below rejects both shapes).
+  if (txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket))
+  {
+    if (txin.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+      throw WRONG_TYPE("archival bond-post bond_spend_pk length not canonical");
+    INSERT_INTO_JSON_OBJECT(dest, bond_spend_pk, txin.bond_spend_pk);
+  }
+  else if (!txin.bond_spend_pk.empty())
+  {
+    throw WRONG_TYPE("bond_spend_pk is JoinMarket-coupled");
+  }
   INSERT_INTO_JSON_OBJECT(dest, holdings, txin.holdings);
   INSERT_INTO_JSON_OBJECT(dest, bonded_total_atomic, txin.bonded_total_atomic);
   INSERT_INTO_JSON_OBJECT(dest, bond_credit, txin.bond_credit);
@@ -704,10 +729,44 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_bond_p
   GET_FROM_JSON_OBJECT(val, txin.post_kind, post_kind);
   if (txin.post_kind > static_cast<uint8_t>(cryptonote::archival_bond_post_kind::HoldingsUpdate))
     throw WRONG_TYPE("invalid archival_bond_post_kind");
+  // §9.11 coupling: JoinMarket requires the exact-canonical-length GF-1 debit
+  // authorizer; every other kind must not carry one (the field stays empty).
+  if (txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket))
+  {
+    GET_FROM_JSON_OBJECT(val, txin.bond_spend_pk, bond_spend_pk);
+    if (txin.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+      throw WRONG_TYPE("archival bond-post bond_spend_pk length not canonical");
+  }
+  else if (val.HasMember("bond_spend_pk"))
+  {
+    throw WRONG_TYPE("bond_spend_pk is JoinMarket-coupled");
+  }
   GET_FROM_JSON_OBJECT(val, txin.holdings, holdings);
   GET_FROM_JSON_OBJECT(val, txin.bonded_total_atomic, bonded_total_atomic);
   GET_FROM_JSON_OBJECT(val, txin.bond_credit, bond_credit);
   GET_FROM_JSON_OBJECT(val, txin.bond_debit, bond_debit);
+}
+
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_reward_emission& txin)
+{
+  dest.StartObject();
+  INSERT_INTO_JSON_OBJECT(dest, canonical_bytes, txin.canonical_bytes);
+  dest.EndObject();
+}
+
+void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_reward_emission& txin)
+{
+  if (!val.IsObject())
+    throw WRONG_TYPE("json object");
+  GET_FROM_JSON_OBJECT(val, txin.canonical_bytes, canonical_bytes);
+  // Transport-shape bounds matching the binary serializer (cryptonote_basic.h):
+  // allocation cap + Rust wire-tag echo. Semantic validation is the Rust
+  // parser's alone (emission_wire.rs) — the JSON/RPC entrypoint must not
+  // admit blobs the binary path rejects.
+  if (txin.canonical_bytes.size() < 2 || txin.canonical_bytes.size() > config::ARCHIVAL_EMISSION_VIN_MAX_BYTES)
+    throw WRONG_TYPE("archival reward-emission canonical_bytes length out of bounds");
+  if (txin.canonical_bytes[0] != cryptonote::TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG)
+    throw WRONG_TYPE("archival reward-emission canonical_bytes wire tag mismatch");
 }
 
 
@@ -968,6 +1027,10 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::b
 
   INSERT_INTO_JSON_OBJECT(dest, block, blk.block);
   INSERT_INTO_JSON_OBJECT(dest, transactions, blk.txs);
+  // NB: the credit-wire attestation_witness field is intentionally NOT serialized here. This
+  // JSON codec is an introspection-only surface with no block-ingestion consumer, and it does
+  // not round-trip block_complete_entry today; the witness travels the consensus path over the
+  // epee KV codec (cryptonote_protocol_defs.h) instead. See credit-wire CW-2 / ARCHIVAL_CREDIT_WIRE.md §3.
 
   dest.EndObject();
 }
@@ -1337,7 +1400,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
     INSERT_INTO_JSON_OBJECT(dest, enc_labels, sig.enc_labels);
   if (!sig.outPk.empty())
     INSERT_INTO_JSON_OBJECT(dest, commitments, transform(sig.outPk, just_mask));
-  if (sig.type == rct::RCTTypeFcmpPlusPlusPqc)
+  if (sig.type == rct::CTTypeFcmpPlusPlusPqc)
   {
     INSERT_INTO_JSON_OBJECT(dest, fee, sig.txnFee);
     INSERT_INTO_JSON_OBJECT(dest, referenceBlock, sig.referenceBlock);
@@ -1379,7 +1442,7 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
     GET_FROM_JSON_OBJECT(val, sig.enc_labels, enc_labels);
   if (val.HasMember("commitments"))
     GET_FROM_JSON_OBJECT(val, sig.outPk, commitments);
-  if (sig.type == rct::RCTTypeFcmpPlusPlusPqc)
+  if (sig.type == rct::CTTypeFcmpPlusPlusPqc)
   {
     GET_FROM_JSON_OBJECT(val, sig.txnFee, fee);
     if (val.HasMember("referenceBlock"))

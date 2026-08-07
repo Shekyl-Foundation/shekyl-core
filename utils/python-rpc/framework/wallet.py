@@ -847,13 +847,12 @@ class Wallet(object):
         }
         return self.rpc.send_json_rpc_request(set_log_categories)
 
-    def validate_address(self, address, any_net_type = False, allow_openalias = False):
+    def validate_address(self, address, any_net_type = False):
         validate_address = {
             'method': 'validate_address',
             'params': {
                 'address': address,
                 'any_net_type': any_net_type,
-                'allow_openalias': allow_openalias,
             },
             'jsonrpc': '2.0',
             'id': '0'
@@ -1085,7 +1084,7 @@ class Wallet(object):
         }
         return self.rpc.send_json_rpc_request(stop_mining)
 
-    def estimate_tx_size_and_weight(self, n_inputs, n_outputs, ring_size = 0, rct = True):
+    def estimate_tx_size_and_weight(self, n_inputs, n_outputs, ring_size = 0, ct = True):
         estimate_tx_size_and_weight = {
             'method': 'estimate_tx_size_and_weight',
             'jsonrpc': '2.0',
@@ -1093,7 +1092,7 @@ class Wallet(object):
                 'n_inputs': n_inputs,
                 'n_outputs': n_outputs,
                 'ring_size': ring_size,
-                'rct': rct,
+                'ct': ct,
             },
             'id': '0'
         }

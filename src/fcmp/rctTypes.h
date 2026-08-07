@@ -160,18 +160,17 @@ namespace rct {
     /// Exactly one aggregated BP+ proof with 1..MAX outputs (consensus canonical form).
     bool is_canonical_bulletproof_plus_layout(const std::vector<BulletproofPlus> &proofs);
 
-    // RCT type tags:
-    //  RCTTypeNull = coinbase (no confidential data)
-    //  RCTTypeFcmpPlusPlusPqc = FCMP++ with Bulletproofs+ and post-quantum commitment
+    // CT type tags:
+    //  CTTypeNull = coinbase (no confidential data)
+    //  CTTypeFcmpPlusPlusPqc = FCMP++ with Bulletproofs+ and post-quantum commitment
     // Genesis dense ct type scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c) item 2).
     enum {
-      RCTTypeNull = 0,
-      RCTTypeFcmpPlusPlusPqc = 1,
+      CTTypeNull = 0,
+      CTTypeFcmpPlusPlusPqc = 1,
     };
     struct rctSigBase {
         uint8_t type;
         key message;
-        keyV pseudoOuts;
         // Per-output encrypted amount: bytes [0..8) = amount XOR k_amount[..8],
         // byte [8] = amount_tag (HKDF-derived AAD for cheap integrity).
         //
@@ -191,24 +190,24 @@ namespace rct {
         crypto::hash referenceBlock; // FCMP++: block hash anchoring the tree root for proof
 
         rctSigBase() :
-          type(RCTTypeNull), message{}, pseudoOuts{}, enc_amounts{}, enc_labels{}, outPk{}, txnFee(0), referenceBlock{}
+          type(CTTypeNull), message{}, enc_amounts{}, enc_labels{}, outPk{}, txnFee(0), referenceBlock{}
         {}
 
         template<bool W, template <bool> class Archive>
         bool serialize_rctsig_base(Archive<W> &ar, size_t inputs, size_t outputs)
         {
           FIELD(type)
-          if (type != RCTTypeNull && type != RCTTypeFcmpPlusPlusPqc)
+          if (type != CTTypeNull && type != CTTypeFcmpPlusPlusPqc)
             return false;
 
-          if (type == RCTTypeFcmpPlusPlusPqc)
+          if (type == CTTypeFcmpPlusPlusPqc)
           {
             VARINT_FIELD(txnFee)
             FIELD(referenceBlock)
           }
 
-          // outPk and enc_amounts are serialized for both RCTTypeNull (coinbase)
-          // and RCTTypeFcmpPlusPlusPqc. Coinbase outputs carry real Pedersen
+          // outPk and enc_amounts are serialized for both CTTypeNull (coinbase)
+          // and CTTypeFcmpPlusPlusPqc. Coinbase outputs carry real Pedersen
           // commitments C = z*G + amount*H so that check_commitment_mask_valid
           // can reject mask=1 (trivial) commitments on all outputs uniformly.
           ar.tag("enc_amounts");
@@ -282,60 +281,19 @@ namespace rct {
           return ar.good();
         }
 
-        BEGIN_SERIALIZE_OBJECT()
-          FIELD(type)
-          FIELD(message)
-          if (type != RCTTypeFcmpPlusPlusPqc)
-          {
-            FIELD(pseudoOuts)
-          }
-          {
-            std::string enc_amounts_blob;
-            if (typename Archive<W>::is_saving())
-            {
-              enc_amounts_blob.resize(enc_amounts.size() * 9);
-              for (size_t i = 0; i < enc_amounts.size(); ++i)
-                memcpy(&enc_amounts_blob[i * 9], enc_amounts[i].data(), 9);
-            }
-            FIELD(enc_amounts_blob)
-            if (!typename Archive<W>::is_saving())
-            {
-              if (enc_amounts_blob.size() % 9 != 0)
-                return false;
-              enc_amounts.resize(enc_amounts_blob.size() / 9);
-              for (size_t i = 0; i < enc_amounts.size(); ++i)
-                memcpy(enc_amounts[i].data(), &enc_amounts_blob[i * 9], 9);
-            }
-          }
-          {
-            std::string enc_labels_blob;
-            if (typename Archive<W>::is_saving())
-            {
-              enc_labels_blob.resize(enc_labels.size() * 9);
-              for (size_t i = 0; i < enc_labels.size(); ++i)
-                memcpy(&enc_labels_blob[i * 9], enc_labels[i].data(), 9);
-            }
-            FIELD(enc_labels_blob)
-            if (!typename Archive<W>::is_saving())
-            {
-              if (enc_labels_blob.size() % 9 != 0)
-                return false;
-              if (!enc_amounts.empty() && enc_labels_blob.size() != enc_amounts.size() * 9)
-                return false;
-              enc_labels.resize(enc_labels_blob.size() / 9);
-              for (size_t i = 0; i < enc_labels.size(); ++i)
-                memcpy(enc_labels[i].data(), &enc_labels_blob[i * 9], 9);
-              if (enc_labels.size() != enc_amounts.size())
-                return false;
-            }
-          }
-          FIELD(outPk)
-          VARINT_FIELD(txnFee)
-          if (type == RCTTypeFcmpPlusPlusPqc)
-          {
-            FIELD(referenceBlock)
-          }
-        END_SERIALIZE()
+        // NOTE (dead-serializer removal, pre-genesis cleanup): this struct
+        // deliberately has NO standalone object serializer. The only wire
+        // encoding of the rct base is `serialize_rctsig_base` above, invoked
+        // from the transaction serializer (cryptonote_basic.h), the tx-hash
+        // paths (cryptonote_format_utils.cpp), the FCMP++ pre-hash
+        // (rctSigs.cpp) and the PQC payload binding (tx_pqc_verify.cpp).
+        // A second BEGIN_SERIALIZE_OBJECT definition used to live here —
+        // caller-less, and disagreeing with the real wire (it emitted
+        // `message` and a legacy base `pseudoOuts`) — and its existence
+        // produced a phantom wire-format finding. Do not re-add one; if a
+        // standalone encoding is ever needed, route it through
+        // `serialize_rctsig_base` so there is exactly one definition of the
+        // bytes.
     };
     struct rctSigPrunable {
         std::vector<BulletproofPlus> bulletproofs_plus;
@@ -358,9 +316,9 @@ namespace rct {
             return false;
           if (outputs >= 0xffffffff)
             return false;
-          if (type == RCTTypeNull)
+          if (type == CTTypeNull)
             return ar.good();
-          if (type != RCTTypeFcmpPlusPlusPqc)
+          if (type != CTTypeFcmpPlusPlusPqc)
             return false;
 
           {
@@ -417,30 +375,27 @@ namespace rct {
           return ar.good();
         }
 
-        BEGIN_SERIALIZE_OBJECT()
-          FIELD(bulletproofs_plus)
-          FIELD(pseudoOuts)
-          VARINT_FIELD(curve_trees_tree_depth)
-          FIELD(fcmp_pp_proof)
-        END_SERIALIZE()
+        // No standalone object serializer — see the rctSigBase note above.
+        // `serialize_rctsig_prunable` is the only encoding.
     };
     struct rctSig: public rctSigBase {
         rctSigPrunable p;
 
+        // The pseudo-out commitments live in the prunable section for every
+        // rct type: CTTypeFcmpPlusPlusPqc carries one per spend input, and
+        // CTTypeNull (coinbase) has none, so the empty prunable vector is
+        // the correct value there too. (A legacy base-side fallback field was
+        // removed in the dead-serializer cleanup — it was never serialized on
+        // any wire and never held a value.)
         keyV& get_pseudo_outs()
         {
-          return type == RCTTypeFcmpPlusPlusPqc ? p.pseudoOuts : pseudoOuts;
+          return p.pseudoOuts;
         }
 
         keyV const& get_pseudo_outs() const
         {
-          return type == RCTTypeFcmpPlusPlusPqc ? p.pseudoOuts : pseudoOuts;
+          return p.pseudoOuts;
         }
-
-        BEGIN_SERIALIZE_OBJECT()
-          FIELDS((rctSigBase&)*this)
-          FIELD(p)
-        END_SERIALIZE()
     };
 
     //other basepoint H = toPoint(cn_fast_hash(G)), G the basepoint

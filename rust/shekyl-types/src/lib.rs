@@ -234,6 +234,33 @@ scalar_u64! {
 }
 
 scalar_u64! {
+    /// The chain's total **block count** — the daemon's `m_db->height()`
+    /// operand, which is **one past the tip** (a chain of N blocks has tip
+    /// height N − 1).
+    ///
+    /// Distinct from both [`BlockHeight`] (an absolute instant — a count is
+    /// not a position) and [`BlockCount`] (a relative span between two
+    /// heights — a count is anchored at genesis and carries the two chain
+    /// facts below). C++ overloads the word "height" for this value, which
+    /// is exactly the confusion this type exists to stop: laundering a
+    /// count into a height via `BlockHeight::from_raw` admitted records one
+    /// block early in the emission-claim spendability anchor and stored a
+    /// not-yet-existing "height" in refusals (claim-builder PR-3 review).
+    ///
+    /// The only bridges to [`BlockHeight`] are the two named chain facts:
+    ///
+    /// - [`ChainCount::tip`] — the newest existing block (`count − 1`;
+    ///   `None` on an empty chain), the spendability / anchoring operand;
+    /// - [`ChainCount::next_height`] — the height the *next* block will
+    ///   carry (numerically the count itself), the earliest-inclusion
+    ///   operand (e.g. an emission claim's verify-context height).
+    ///
+    /// Which fact a call site means is now spelled at the call site instead
+    /// of carried in a comment.
+    ChainCount
+}
+
+scalar_u64! {
     /// A ledger-wide global output index (the daemon's `next_output_seq`
     /// counter), assigned densely to every output in drain order.
     ///
@@ -241,6 +268,52 @@ scalar_u64! {
     /// Distinct from [`OutputIndexInTx`]: this is the chain-wide position, not
     /// the position within a single transaction's output vector.
     GlobalOutputIndex
+}
+
+/// An archival-persona slot ordinal — the index into the staker's derive-forward
+/// persona set (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2 Model D).
+///
+/// Distinct from [`OutputIndexInTx`] / [`GlobalOutputIndex`] / raw `u32` so a
+/// persona slot cannot be silently passed where a tx-output index or a
+/// chain-wide gindex is expected. Wire-transparent (`#[serde(transparent)]` +
+/// `#[repr(transparent)]`) over `u32`.
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    Default,
+    ::serde::Serialize,
+    ::serde::Deserialize,
+)]
+#[cfg_attr(feature = "schema", derive(::postcard_schema::Schema))]
+#[serde(transparent)]
+#[repr(transparent)]
+pub struct PSlot(u32);
+
+impl PSlot {
+    /// Wrap a raw slot index at the typed-domain edge.
+    #[must_use]
+    pub const fn from_raw(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Unwrap to the raw `u32` at a `u32`-typed boundary (e.g. HKDF slot args).
+    #[must_use]
+    pub const fn to_raw(self) -> u32 {
+        self.0
+    }
+
+    /// Alias for [`Self::to_raw`] — matches the historical `stake_engine::PSlot::index`
+    /// call sites that feed `derive_archival_p_keys`.
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        self.0
+    }
 }
 
 scalar_u64! {
@@ -397,6 +470,26 @@ impl Timestamp {
     #[must_use]
     pub const fn checked_secs_since(self, earlier: Timestamp) -> Option<u64> {
         self.0.checked_sub(earlier.0)
+    }
+}
+
+impl ChainCount {
+    /// The newest existing block's height (`count − 1`), or `None` on an
+    /// empty chain. The spendability / reference-anchoring operand.
+    #[must_use]
+    pub const fn tip(self) -> Option<BlockHeight> {
+        match self.0.checked_sub(1) {
+            Some(v) => Some(BlockHeight(v)),
+            None => None,
+        }
+    }
+
+    /// The height the **next** block will carry — numerically the count
+    /// itself, typed as the instant it will become. The earliest-inclusion
+    /// operand (a tx assembled now lands at this height at the soonest).
+    #[must_use]
+    pub const fn next_height(self) -> BlockHeight {
+        BlockHeight(self.0)
     }
 }
 

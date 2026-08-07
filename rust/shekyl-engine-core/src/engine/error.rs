@@ -13,6 +13,11 @@
 //! > The RPC layer (`shekyl-engine-rpc`) defines a single
 //! > `WalletRpcError` enum that every domain error converts into.
 //!
+//! The quoted lock is verbatim; the crate it names has moved. The RPC layer
+//! is now `shekyl-wallet-rpc` — the transitional `shekyl-engine-rpc`
+//! wallet2-FFI bridge is deleted (roadmap B1). The shape of the lock is
+//! unchanged: one RPC-layer error enum, every domain error converting in.
+//!
 //! Each enum is *closed* — no `Other(String)` catch-all — so a reviewer
 //! can read the variants and know every distinguishable failure mode.
 //! The RPC-layer translation is the single audited site for mapping
@@ -406,6 +411,39 @@ pub enum RefreshError {
         /// escalation for a deterministically-corrupt store (O3-sub) is CT-5d.
         recoverable_by_respawn: bool,
     },
+
+    /// [`Engine::start_rescan`](super::Engine::start_rescan) refused: a
+    /// pending-tx **reservation** (consumer-held or in-flight) is anchored
+    /// to transfer rows the reset clears — its in-memory output locks are
+    /// indices into the very rows the wipe destroys, and no send-journal
+    /// row exists to re-derive from (nothing dispatched yet). Resolution
+    /// is in-session and cheap: submit or discard, then retry.
+    ///
+    /// The refusal's former second half — **unconfirmed submitted** txs
+    /// whose spend marking a replay cannot re-derive — retired with
+    /// PR-SJ-1 (`WALLET_SEND_RECORD.md` P3-1): the send journal carries
+    /// each dispatched input set across the wipe, and the merge
+    /// reconciler re-derives the F14 locks as replay re-creates the
+    /// rows, closing the §7.1 self-link hazard structurally rather than
+    /// by refusing. The abandon surface for a never-confirming tx is
+    /// PR-SJ-3 (`docs/FOLLOWUPS.md`).
+    #[error(
+        "cannot rescan while pending-tx reservations are held ({reservations} reservation(s))"
+    )]
+    RescanBlocked {
+        /// Consumer-held + in-flight pending-tx reservations.
+        reservations: usize,
+    },
+
+    /// Rescan emptied scan-derived state in memory but failed to persist the
+    /// reset before the scan producer started. Unlike the other
+    /// `start_rescan` refusals this one is *past* the point of no return:
+    /// the in-memory ledger is already reset while the durable copy may
+    /// still hold the pre-rescan tip. Retry `start_rescan` once the
+    /// persistence fault clears; do not treat the wallet as authoritative
+    /// until a rescan completes.
+    #[error("rescan reset persistence failed: {0}")]
+    RescanPersist(String),
 }
 
 // --- Ledger ----------------------------------------------------------------
@@ -847,6 +885,20 @@ pub(crate) enum KeyEngineError {
     /// Non-crypto structural failure during signing (address decode, wire encode, …).
     #[error("key engine primitive failure: {detail}")]
     Primitive { detail: &'static str },
+
+    /// Proof generation failed inside the key actor (WI-RPC-3 inbound
+    /// tx proofs / reserve proofs). Wraps [`shekyl_proofs::error::ProofError`]
+    /// so the proofs workflow keeps the typed proof failure: its
+    /// `From<KeyEngineError> for ProofsError` maps this variant to
+    /// `ProofsError::Generate` — the proof-generation error class,
+    /// which the RPC layer reports as a generation failure — instead
+    /// of flattening it into the stringified key-engine class like
+    /// every other actor failure. The generation inputs are the
+    /// wallet's own persisted state, so — as with
+    /// [`Self::SourceCiphertextDecapsulationFailed`] — the expected
+    /// operational frequency is zero; the variant is loud, not silent.
+    #[error("proof generation failure: {0}")]
+    Proof(#[from] shekyl_proofs::error::ProofError),
 }
 
 // --- IO --------------------------------------------------------------------
@@ -1396,6 +1448,11 @@ impl From<KeyEngineError> for SignerError {
             },
             KeyEngineError::SourceCiphertextDecapsulationFailed(_) => Self::RemoteFailure {
                 reason: "source ciphertext re-decapsulation failed",
+            },
+            // Unreachable on the signing path (proofs never route through
+            // `Signer`), but the conversion must stay total.
+            KeyEngineError::Proof(_) => Self::RemoteFailure {
+                reason: "proof generation failure",
             },
         }
     }

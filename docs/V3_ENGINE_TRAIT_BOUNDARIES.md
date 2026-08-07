@@ -240,7 +240,7 @@ preservation. The two are complementary disciplines.
 | Mailbox sizing, backpressure policy, supervision strategy | Stage 2 onwards, per actor |
 | Message-type definitions (`enum KeyEngineMsg { ... }`) | Stage 2 onwards, per actor |
 | `ActorRef` wiring on `Engine<S>` | Stage 4 (replaces concrete fields) |
-| Removal of the outer `Arc<RwLock<Engine<S>>>` at the binary boundary | Stage 4 (Path B decision; coordinated with `shekyl-engine-rpc` cutover) |
+| Removal of the outer `Arc<RwLock<Engine<S>>>` at the binary boundary | Stage 4 (Path B decision; coordinated with the `shekyl-wallet-rpc` cutover) |
 | `RefreshSummary::stake_events` going non-zero | Phase 2b (`StakeEngine`; consumes `EconomicsEngine` per §2.7) |
 | `StakeEngine` trait surface (per-stake state, FSM, claim/unstake) | Phase 2b — separate trait that *consumes* `EconomicsEngine` for parameters and derived values; not a sub-trait of it (per §2.7's dependency-not-subsumption framing) |
 | `ArchivalEngine` trait surface (per-shard state, archival operations) | V3.x — separate trait that consumes `EconomicsEngine` |
@@ -639,7 +639,7 @@ preserve:
 **`pub(crate)` until JSON-RPC server cutover** (V3.2 per
 `docs/FOLLOWUPS.md`'s `wallet_rpc_server` Rust migration
 target). The traits are internal contracts of `shekyl-engine-core`
-that consumers (the wallet binaries, the `shekyl-engine-rpc`
+that consumers (the wallet binaries, the `shekyl-wallet-rpc`
 JSON-RPC server) reach via `Engine<S>`'s inherent methods, not
 via direct trait dispatch. `pub(crate)` keeps the trait surfaces
 *internally* reviewable while the implementations stabilize and
@@ -1081,7 +1081,10 @@ surface.** Three independent grounds:
    which returns a borrowed view rather than an owned `Vec`:
    `shekyl-engine-rpc`'s `scanner_get_transfers` /
    `scanner_incoming_transfers` (gated on the `rust-scanner`
-   feature) call `ledger.transfers().iter().filter().map().collect()`
+   feature; that crate is deleted at roadmap B1, but it was the
+   motivating caller when this was decided and the conclusion is
+   unchanged for its successors) called
+   `ledger.transfers().iter().filter().map().collect()`
    into `Vec<Value>`; without `rust-scanner` the same RPCs route
    through C++ `wallet2_ffi_get_transfers`. Either way no caller
    asks for owned `Vec<TransferDetails>` from the trait — the
@@ -1275,7 +1278,7 @@ wiring at
 test-substrate wrappers at
 [`engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
 (commit `e9310542a`, PR 4 C6α) and
-[`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs)
+`engine/fault_injecting_ledger.rs`
 (commit `e94526dec`, PR 4 C6β). The PR 4 §7.X commit list and per-
 commit landing-SHA cross-references are in that doc's §7.X header.
 The trait as declared:
@@ -1886,7 +1889,7 @@ the canary tracked in [`docs/CI_BASELINE.md`](CI_BASELINE.md)) or
 be defined as an extension trait — which *is* the two-trait shape
 under a different name.
 
-**Ownership.** The RPC client (today: `SimpleRequestRpc` wrapped
+**Ownership.** The RPC client (today: `HttpRpc` wrapped
 in `DaemonClient`), connection state, retry policy.
 
 **Stage 1 surface.**
@@ -1910,7 +1913,7 @@ code that uses `Rpc` methods (`get_height`,
 without re-importing. The wallet-specific methods
 (`get_fee_estimates`, `submit_transaction`) live on `DaemonEngine`
 itself, never on `Rpc`. The test-support mock implements `Rpc`
-directly (rather than wrapping `SimpleRequestRpc`) and carries an
+directly (rather than wrapping `HttpRpc`) and carries an
 `impl DaemonEngine for MockDaemon` that satisfies the trait
 contract — including the `submit_transaction` per-tx-hash dedup
 clause from §6.1 and the fee-estimate / submit error-queue surface
@@ -1923,7 +1926,7 @@ is `MockDaemon` in
 **Why `Clone + Send + Sync + 'static`** — same as Round 1: the
 daemon handle is shared by clone with the producer task in
 `run_refresh_task`'s `tokio::spawn`'d future. Bound holds for
-`DaemonClient`/`SimpleRequestRpc` already; Stage-4-actor-compatible
+`DaemonClient`/`HttpRpc` already; Stage-4-actor-compatible
 (`ActorRef<DaemonActor>` satisfies the bound).
 
 **Stage 4 framing (per §1.4).** At Stage 4, `DaemonEngine` is
@@ -2803,7 +2806,7 @@ at Stage 4. Round 4a pins its origin, lifetime, and Stage 1 /
 Stage 4 field-relevance shift.
 
 **Origin.** `EngineConfig` exists at Stage 1 with all fields
-defined; lives in [`engine/config.rs`](../rust/shekyl-engine-core/src/engine/config.rs)
+defined; lives in `engine/config.rs`
 (new module, sibling to `engine/error.rs`). The struct is
 `#[non_exhaustive]` so future fields (V3.1 multisig, V3.x
 Component 3 adaptive-burn knobs) extend additively without
@@ -3724,7 +3727,7 @@ not the cancellation surface; the token is).
 | `LedgerEngine` | `balance` | sync | yes (read-only) | n/a |
 | `LedgerEngine` | `apply_scan_result` | async | **conditionally** — idempotent given the same `ScanResult` against the same starting `synced_height`; if the height has advanced (because a concurrent merge landed), the second apply returns `RefreshError::ConcurrentMutation` deterministically. Never produces a double-applied state. | **b** (mutates ledger state; Stage 4 drop after enqueue is observation-only — the merge may complete asynchronously) |
 | `RefreshEngine` | `produce_scan_result` | async | no (each call observes the daemon's current tip; tip advances over time) | **c** (explicit `CancellationToken` parameter; five-checkpoint cancellation per §7) |
-| `PendingTxEngine` | `build` | async | no (each build picks fresh decoys; reservation IDs are monotonic) | **b** (allocates a reservation and mutates the reservation tracker; Stage 4 drop after enqueue is observation-only) |
+| `PendingTxEngine` | `build` | async | no (each build assembles a fresh FCMP++ membership witness against the daemon's current tree root and re-randomizes blinding factors; reservation IDs are monotonic) | **b** (allocates a reservation and mutates the reservation tracker; Stage 4 drop after enqueue is observation-only) |
 | `PendingTxEngine` | `submit` | async | **conditionally** — daemon dedupes by tx hash; calling `submit` twice on the same `ReservationId` produces one mempool submission | **b** (network side effect via `DaemonEngine`; Stage 4 drop after enqueue is observation-only) |
 | `PendingTxEngine` | `discard` | sync | no (a second `discard` of the same rid returns `ReservationNotFound`; the end state is unchanged but the return value is not a success the caller can ignore without mapping it) | n/a (synchronous `fn`; cannot be cancelled mid-call) |
 | `PendingTxEngine` | `signal_mempool_evicted` | sync | no (a second call for the same rid returns `ReservationNotFound`; end state unchanged) | n/a (synchronous `fn`; cannot be cancelled mid-call) |
@@ -4372,7 +4375,7 @@ Today's test coverage:
   cover the linear-scan / reorg / RPC-failure / cancellation paths.
 - **Driver-only with partial mocking:** the driver-side tests in
   `engine/refresh.rs` build a real `Engine<SoloSigner>` against an
-  unreachable `SimpleRequestRpc` URL and assert error-path
+  unreachable `HttpRpc` URL and assert error-path
   behavior. Stage 1 PR 1 (`DaemonEngine`) closes the
   end-to-end-against-synthetic-chain gap that previously existed:
   with `MockDaemon: DaemonEngine` and `Engine<S, D: DaemonEngine =
@@ -4923,7 +4926,7 @@ discipline pin saves re-litigation cost.
 
 **Anti-pattern 1 — Cost-benefit-defer-to-later at R-residual altitude.**
 Named in
-[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+[`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
 at load-bearing-question altitude; extended in
 [PR 5 segment 2b](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) to
 R-residual disposition altitude. The pattern: a residual disposition
@@ -4945,7 +4948,7 @@ questions. PR pre-flights run the anti-pattern check at *both* altitudes,
 not just the load-bearing-question altitude.
 
 **Anti-pattern 2 — Pre-provision-for-flexibility.** Named in
-[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc);
+[`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc);
 worked-example in
 [PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G1.
 The pattern: a wider trait-surface or enum shape *appears* extensible
@@ -4970,7 +4973,7 @@ adjudication on identical grounds*; consolidation is substrate-anchored,
 not convenience-anchored.
 
 **Anti-pattern 3 — Priority-hierarchy-rejection-as-evaluation.** Named
-in [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) priority
+in [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) priority
 ordering; worked-example in
 [PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G3.
 The pattern: a feature whose privacy cost (priority 2) is bounded but
@@ -5105,7 +5108,7 @@ type-of-change (rare in trait-extraction PRs).
 
 **Discipline 3 — Workspace-state verification before dependency
 recommendations.** Named in
-[`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc);
+[`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc);
 worked-example in
 [PR 5 segment 2g Copilot-fix follow-up](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
 The pattern: a dependency recommendation cites a Cargo.toml line as
@@ -5133,7 +5136,7 @@ rounds, beyond the baseline established at Round-5 acceptance.
 **Anchor 1 — Adversary-controlled-daemon as expected deployment.**
 Strengthened in
 [PR 5 segment 2a](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
-[`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md). Shekyl's Tor/I2P-first
+[`ANONYMITY_NETWORKS.md`](ANONYMITY_NETWORKS.md). Shekyl's Tor/I2P-first
 deployment posture means wallets routinely connect to daemons under
 adversary control — anonymous-network exit operators, hosted-wallet
 deployments, mixed-trust environments where the daemon operator's
@@ -5154,7 +5157,7 @@ rejected at design-rounds altitude.
 
 **Anchor 2 — HW-wallet as core, not edge.** Sharpened in
 [PR 5 segment 2b](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
-[`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) §1 (security as
+[`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §1 (security as
 precondition, not optimization). Hardware-backed secure-storage paths
 (Trezor / Ledger / YubiKey-class) are dominant for privacy-conscious
 users; the Shekyl Foundation's own release-key signing already uses
@@ -5216,7 +5219,7 @@ their pre-flight; substrate that emerges from PR 6+ extends §8.3 via
 the same Round-6-style amendment vehicle this section landed under.
 
 **Continuous-discipline corollary.** Per
-[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc),
+[`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc),
 the disciplines compound only as long as the per-engine PR design
 rounds *cite them at pre-flight*. The inheritance is not automatic;
 it is paid for by the pre-flight citation discipline. §8.3 makes the
@@ -5753,8 +5756,22 @@ the 8th trait if it clears §1.5; or it may live as method
 extensions on `KeyEngine` and `PendingTxEngine` if it
 doesn't).
 
+*Status (2026-07-15).* Design phase **open**. Engine-integration
+carrier:
+[`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
+(Round 1 **CLOSED 2026-07-16** — F-3/F-6 (#310) + F-7 (#317) discharged;
+Track B **MS-1…MS-7** → Round 2 / MS-5; **MS-8 RETIRED**; product path
+**Option E′** — MS-4/MS-5 **restated** under E′, not Option D prover
+path; Track A **MSW-1…MSW-8** + MSW-G=5 landed #316). Protocol remains
+[`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§15.4a). Further trait-surface
+amendments (§8.2) wait on Round 2 closure (Phase 0 **P0-b**); the F-7
+`SigningCeremony` amend landed with Round 1.
+
 *Trigger.* "V3.1 multisig design phase begins." (External —
 owned by V3.1 release planning; tracked against project plan.)
+**Discharged 2026-07-14** by opening the carrier; **premise updated
+2026-07-15** for E′ / MSW-G=5 (do not read the discharge date as the
+carrier's current Round 1 shape).
 
 *Structural cross-reference.* §2.1 `KeyEngine`; §2.6
 `PendingTxEngine`; §1.5 trait-identity criteria (for

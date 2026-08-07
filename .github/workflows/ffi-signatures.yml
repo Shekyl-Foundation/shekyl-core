@@ -1,0 +1,59 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Relay-FFI signature gate — the hand-written declarations in
+# src/shekyl/shekyl_ffi.h must agree with the Rust definitions in
+# rust/shekyl-ffi/src/relay_zone_ffi/mod.rs. C linkage erases types, so this
+# drift compiles and links today and is UB at runtime; the gate closes it by
+# generating a declarations-only header from the Rust source (cbindgen,
+# version-pinned — output varies across versions) and compiling both headers
+# into one TU, where extern "C" redeclaration rules turn any disagreement
+# into a conflicting-declaration compile error. Mechanism note and the
+# negative controls run at introduction: scripts/ci/relay_ffi_signature_gate.cpp.
+#
+# Scope is the relay surface deliberately — the post-2026-05-audit surface
+# nothing had ever checked. Full-surface generation is blocked on a named
+# cbindgen limitation (cross-crate constant re-exports); docs/FOLLOWUPS.md
+# tracks the extension.
+#
+# Structure mirrors consensus-invariants.yml: single job, single runner,
+# superseded-run cancellation.
+
+name: ci/ffi-signatures
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "rust/shekyl-ffi/src/relay_zone_ffi/**"
+      - "src/shekyl/shekyl_ffi.h"
+      - "scripts/ci/check_relay_ffi_signatures.sh"
+      - "scripts/ci/cbindgen-relay-signatures.toml"
+      - "scripts/ci/relay_ffi_signature_gate.cpp"
+      - ".github/workflows/ffi-signatures.yml"
+
+concurrency:
+  group: ffi-signatures-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check-ffi-signatures:
+    name: "Relay FFI signature gate"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Version-pinned: cbindgen's generated output differs across versions,
+      # and the gate compares generated output against a hand-written header.
+      # Pin lives in the gate script (--print-pin) so install and check cannot
+      # drift. `cargo install --locked` is the house idiom (rust-audit-test.yml).
+      - name: Install cbindgen (pinned)
+        run: cargo install cbindgen --version "$(scripts/ci/check_relay_ffi_signatures.sh --print-pin)" --locked
+
+      - name: Run relay FFI signature gate
+        run: scripts/ci/check_relay_ffi_signatures.sh

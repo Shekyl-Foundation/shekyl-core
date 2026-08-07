@@ -46,10 +46,14 @@
 namespace {
   constexpr uint8_t PQC_SCHEME_SINGLE = 1;
   constexpr uint8_t PQC_SCHEME_MULTISIG = 2;
-  constexpr size_t HYBRID_SINGLE_KEY_LEN = 1996; // Ed25519 (32) + ML-DSA-65 (1952) + 12 header
-  constexpr size_t MULTISIG_KEY_HEADER_LEN = 2;  // n_total + m_required
-  constexpr size_t MULTISIG_MAX_KEY_BLOB = MULTISIG_KEY_HEADER_LEN +
-      (config::MAX_MULTISIG_PARTICIPANTS * HYBRID_SINGLE_KEY_LEN);
+  // Minimum multisig key container: version(1) + n_total(1) + m_required(1).
+  // MSW-1: the single-key length and the DoS ceiling are the canonical
+  // `config::PQC_HYBRID_SINGLE_KEY_LEN` / `config::PQC_MAX_PUBLIC_KEY_BLOB`
+  // (the old local `HYBRID_SINGLE_KEY_LEN` shadow and the `2 + MAX*LEN` fossil
+  // ceiling are deleted). Exact length + `n <= MAX` are enforced by the Rust
+  // container parse (verify_multisig via shekyl_pqc_verify); this header const
+  // is only the DoS lower bound.
+  constexpr size_t MULTISIG_KEY_HEADER_LEN = 3;
 }
 
 namespace cryptonote
@@ -153,8 +157,7 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
   return true;
 }
 
-bool verify_transaction_pqc_auth(const transaction& tx,
-                                  const boost::optional<uint8_t>& expected_scheme_id)
+bool verify_transaction_pqc_auth(const transaction& tx)
 {
   if (tx.version < 3 || tx.vin.empty() || std::holds_alternative<txin_gen>(tx.vin[0]))
     return true;
@@ -186,13 +189,6 @@ bool verify_transaction_pqc_auth(const transaction& tx,
       return false;
     }
 
-    if (expected_scheme_id && auth.scheme_id != *expected_scheme_id)
-    {
-      MERROR("PQC verify: scheme_id mismatch (spend=" << (int)auth.scheme_id
-             << ", output committed=" << (int)*expected_scheme_id << ", input " << idx << ")");
-      return false;
-    }
-
     if (auth.hybrid_public_key.empty())
     {
       MERROR("PQC verify: empty hybrid_public_key (input " << idx << ")");
@@ -201,10 +197,10 @@ bool verify_transaction_pqc_auth(const transaction& tx,
 
     if (auth.scheme_id == PQC_SCHEME_SINGLE)
     {
-      if (auth.hybrid_public_key.size() != HYBRID_SINGLE_KEY_LEN)
+      if (auth.hybrid_public_key.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
       {
         MERROR("PQC verify: single-signer key blob size " << auth.hybrid_public_key.size()
-               << " != expected " << HYBRID_SINGLE_KEY_LEN << " (input " << idx << ")");
+               << " != expected " << config::PQC_HYBRID_SINGLE_KEY_LEN << " (input " << idx << ")");
         return false;
       }
     }
@@ -215,10 +211,10 @@ bool verify_transaction_pqc_auth(const transaction& tx,
         MERROR("PQC verify: multisig key blob too short (" << auth.hybrid_public_key.size() << " bytes, input " << idx << ")");
         return false;
       }
-      if (auth.hybrid_public_key.size() > MULTISIG_MAX_KEY_BLOB)
+      if (auth.hybrid_public_key.size() > config::PQC_MAX_PUBLIC_KEY_BLOB)
       {
         MERROR("PQC verify: multisig key blob exceeds maximum (" << auth.hybrid_public_key.size()
-               << " > " << MULTISIG_MAX_KEY_BLOB << ", input " << idx << ")");
+               << " > " << config::PQC_MAX_PUBLIC_KEY_BLOB << ", input " << idx << ")");
         return false;
       }
     }

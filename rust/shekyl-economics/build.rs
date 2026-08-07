@@ -52,6 +52,8 @@ fn main() {
          pub const GENERATED_BURN_BASE_RATE: u64 = {burn_base_rate};\n\
          pub const GENERATED_BURN_CAP: u64 = {burn_cap};\n\
          pub const GENERATED_STAKER_POOL_SHARE: u64 = {staker_pool_share};\n\
+         pub const GENERATED_ESCALATION_KNEE_N: u64 = {escalation_knee_n};\n\
+         pub const GENERATED_ESCALATION_ASYMPTOTE_SHARE: u64 = {escalation_asymptote};\n\
          pub const GENERATED_MONEY_SUPPLY: u64 = {money_supply};\n\
          pub const GENERATED_EMISSION_SPEED_FACTOR_PER_MINUTE: u64 = {esf};\n\
          pub const GENERATED_FINAL_SUBSIDY_PER_MINUTE: u64 = {final_subsidy};\n\
@@ -66,6 +68,8 @@ fn main() {
         burn_base_rate = get_u64(&map, "shekyl_burn_base_rate"),
         burn_cap = get_u64(&map, "shekyl_burn_cap"),
         staker_pool_share = get_u64(&map, "shekyl_staker_pool_share"),
+        escalation_knee_n = get_u64(&map, "shekyl_escalation_knee_n"),
+        escalation_asymptote = get_u64(&map, "shekyl_escalation_asymptote_share"),
         money_supply = get_u64(&map, "money_supply"),
         esf = get_u64(&map, "emission_speed_factor_per_minute"),
         final_subsidy = get_u64(&map, "final_subsidy_per_minute"),

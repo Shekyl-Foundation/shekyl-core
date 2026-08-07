@@ -87,8 +87,16 @@ pub mod wire;
 mod tests;
 
 pub use error::TxBuilderError;
-pub use sign::{sign_pqc_auths, sign_transaction, sign_transaction_with_terms};
+pub use sign::{
+    prove_backing_membership, sign_pqc_auths, sign_transaction, sign_transaction_with_terms,
+    MembershipOnlyProof,
+};
 pub use types::{LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
+
+/// Cleartext balance terms, re-exported so `sign_transaction_with_terms`
+/// callers name them through this crate (the signing boundary) rather than
+/// depending on `shekyl-ct-balance` directly.
+pub use shekyl_ct_balance::{InputTerm, OutputTerm};
 pub use wire::{
     encode_final_tx, phase1_payload_hashes, tx_prefix_hash_for_signing, tx_prefix_hash_from_parts,
     tx_prefix_hash_from_parts_with_extra, WireEncodeInput,

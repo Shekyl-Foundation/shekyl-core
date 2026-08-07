@@ -19,7 +19,7 @@ The CI workflows install all dependencies automatically. For local builds:
 - **Rust toolchain**: stable Rust via [rustup](https://rustup.rs/) (builds `libshekyl_ffi.a`)
 - **CMake** >= 3.14 (required for `FetchContent`)
 - **Google Test**: system `libgtest-dev` is preferred; if absent, CMake fetches GoogleTest v1.16.0 at configure time
-- **Boost, OpenSSL, libunbound, libsodium** and other standard Monero-derived dependencies
+- **Boost, OpenSSL, libsodium** and other standard Monero-derived dependencies
 
 ## Branch Strategy
 
@@ -173,9 +173,16 @@ The pipeline has two phases:
    pre-built binaries, generates a source archive and `SHA256SUMS`, then
    publishes the GitHub Release.
 
-Each Gitian build descriptor installs the Rust toolchain via `rustup` with
-the appropriate cross-compilation targets (aarch64, RISC-V for Linux;
-64-bit MinGW for Windows; Darwin targets for macOS). 32-bit targets were
+Each Gitian build descriptor installs the Rust toolchain via `rustup`,
+pinned to the workspace toolchain (`--default-toolchain 1.94.0`, kept in
+lockstep with `rust/rust-toolchain.toml`) with the minimal profile and the
+appropriate cross-compilation targets (aarch64, RISC-V for Linux; 64-bit
+MinGW for Windows; Darwin targets for macOS). The pin is serial and
+up-front by design: the parallel `make` build invokes many `cargo`
+processes at once, and letting them auto-install the toolchain concurrently
+races `~/.rustup/downloads` and aborts the build (`component download
+failed … could not rename`). The minimal profile omits clippy/rustfmt —
+a release build compiles the Rust FFI, it never lints. 32-bit targets were
 permanently retired in v3.1.0-alpha.5 (Chore #3) on PQC constant-time
 grounds — see `docs/CHANGELOG.md` entry "Retired 32-bit build targets".
 

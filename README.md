@@ -169,12 +169,10 @@ library archives (`.a`).
 | pkg-config   | any           | NO       | `pkg-config`         | `base-devel` | `base-devel`       | `pkgconf`           | NO       |                 |
 | Boost        | 1.66          | NO       | `libboost-all-dev`   | `boost`      | `boost-devel`      | `boost-devel`       | NO       | C++ libraries   |
 | OpenSSL      | basically any | NO       | `libssl-dev`         | `openssl`    | `openssl-devel`    | `openssl-devel`     | NO       | sha256 sum      |
-| libunbound   | 1.4.16        | YES      | `libunbound-dev`     | `unbound`    | `unbound-devel`    | `unbound-devel`     | NO       | DNS resolver    |
 | libsodium    | ?             | NO       | `libsodium-dev`      | `libsodium`  | `libsodium-devel`  | `libsodium-devel`   | NO       | cryptography    |
 | libunwind    | any           | NO       | `libunwind8-dev`     | `libunwind`  | `libunwind-devel`  | `libunwind-devel`   | YES      | Stack traces    |
 | liblzma      | any           | NO       | `liblzma-dev`        | `xz`         | `liblzma-devel`    | `xz-devel`          | YES      | For libunwind   |
 | libreadline  | 6.3.0         | NO       | `libreadline6-dev`   | `readline`   | `readline-devel`   | `readline-devel`    | YES      | Input editing   |
-| expat        | 1.1           | NO       | `libexpat1-dev`      | `expat`      | `expat-devel`      | `expat-devel`       | YES      | XML parsing     |
 | GTest        | 1.5           | YES      | `libgtest-dev`[1]    | `gtest`      | `gtest-devel`      | `gtest-devel`       | YES      | Test suite      |
 | ccache       | any           | NO       | `ccache`             | `ccache`     | `ccache`           | `ccache`            | YES      | Compil. cache   |
 | Doxygen      | any           | NO       | `doxygen`            | `doxygen`    | `doxygen`          | `doxygen`           | YES      | Documentation   |
@@ -198,23 +196,23 @@ then:
 Install all dependencies at once on Debian/Ubuntu:
 
 ```
-sudo apt update && sudo apt install build-essential cmake pkg-config libssl-dev libunbound-dev libsodium-dev libunwind8-dev liblzma-dev libreadline6-dev libexpat1-dev qttools5-dev-tools libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler libudev-dev libboost-chrono-dev libboost-date-time-dev libboost-filesystem-dev libboost-locale-dev libboost-program-options-dev libboost-regex-dev libboost-serialization-dev libboost-system-dev libboost-thread-dev python3 ccache doxygen graphviz
+sudo apt update && sudo apt install build-essential cmake pkg-config libssl-dev libsodium-dev libunwind8-dev liblzma-dev libreadline6-dev qttools5-dev-tools libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler libudev-dev libboost-chrono-dev libboost-date-time-dev libboost-filesystem-dev libboost-locale-dev libboost-program-options-dev libboost-regex-dev libboost-serialization-dev libboost-system-dev libboost-thread-dev python3 ccache doxygen graphviz
 ```
 
 Install all dependencies at once on Arch:
 ```
-sudo pacman -Syu --needed base-devel cmake boost openssl unbound libsodium libunwind xz readline expat gtest python3 ccache doxygen graphviz qt5-tools hidapi libusb protobuf systemd
+sudo pacman -Syu --needed base-devel cmake boost openssl libsodium libunwind xz readline gtest python3 ccache doxygen graphviz qt5-tools hidapi libusb protobuf systemd
 ```
 
 Install all dependencies at once on Fedora:
 ```
-sudo dnf install gcc gcc-c++ cmake pkgconf boost-devel openssl-devel unbound-devel libsodium-devel libunwind-devel xz-devel readline-devel expat-devel gtest-devel ccache doxygen graphviz qt5-linguist hidapi-devel libusbx-devel protobuf-devel protobuf-compiler systemd-devel
+sudo dnf install gcc gcc-c++ cmake pkgconf boost-devel openssl-devel libsodium-devel libunwind-devel xz-devel readline-devel gtest-devel ccache doxygen graphviz qt5-linguist hidapi-devel libusbx-devel protobuf-devel protobuf-compiler systemd-devel
 ```
 
 Install all dependencies at once on openSUSE:
 
 ```
-sudo zypper ref && sudo zypper in libboost_chrono-devel libboost_date_time-devel libboost_filesystem-devel libboost_locale-devel libboost_program_options-devel libboost_regex-devel libboost_serialization-devel libboost_system-devel libboost_thread-devel libexpat-devel libminiupnpc-devel libsodium-devel libunwind-devel unbound-devel cmake doxygen ccache fdupes gcc-c++ libevent-devel libopenssl-devel pkgconf-pkg-config readline-devel xz-devel libqt5-qttools-devel patterns-devel-C-C++-devel_C_C++
+sudo zypper ref && sudo zypper in libboost_chrono-devel libboost_date_time-devel libboost_filesystem-devel libboost_locale-devel libboost_program_options-devel libboost_regex-devel libboost_serialization-devel libboost_system-devel libboost_thread-devel libminiupnpc-devel libsodium-devel libunwind-devel cmake doxygen ccache fdupes gcc-c++ libevent-devel libopenssl-devel pkgconf-pkg-config readline-devel xz-devel libqt5-qttools-devel patterns-devel-C-C++-devel_C_C++
 ```
 
 Install all dependencies at once on macOS with the provided Brewfile:
@@ -226,7 +224,7 @@ brew update && brew bundle --file=contrib/brew/Brewfile
 FreeBSD 12.1 one-liner required to build dependencies:
 
 ```
-pkg install git gmake cmake pkgconf boost-libs libsodium unbound
+pkg install git gmake cmake pkgconf boost-libs libsodium
 ```
 
 ### Cloning the repository
@@ -366,7 +364,7 @@ application.
 * Install dependencies for 64-bit Windows:
 
     ```bash
-    pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-unbound
+    pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi
     ```
 
 * Open the MingW shell via the `MinGW-w64-Win64 Shell` shortcut.
@@ -551,10 +549,6 @@ setting the following configuration parameters and environment variables:
   the config file to disable listening for connections on external interfaces.
 * `--no-igd` on the command line or `no-igd=1` in the config file to disable IGD
   (UPnP port forwarding negotiation), which is pointless with Tor.
-* `DNS_PUBLIC=tcp` or `DNS_PUBLIC=tcp://x.x.x.x` where x.x.x.x is the IP of the
-  desired DNS server, for DNS requests to go over TCP, so that they are routed
-  through Tor. When IP is not specified, shekyld uses the default list of
-  servers defined in [src/common/dns_utils.cpp](src/common/dns_utils.cpp).
 * `TORSOCKS_ALLOW_INBOUND=1` to tell torsocks to allow shekyld to bind to interfaces
    to accept connections from the wallet. On some Linux systems, torsocks
    allows binding to localhost by default, so setting this variable is only
@@ -571,7 +565,7 @@ setting the following configuration parameters and environment variables:
 Example command line to start shekyld through Tor:
 
 ```bash
-DNS_PUBLIC=tcp torsocks shekyld --p2p-bind-ip 127.0.0.1 --no-igd
+torsocks shekyld --p2p-bind-ip 127.0.0.1 --no-igd
 ```
 
 A helper script is in `contrib/tor/`. It assumes Tor is installed
@@ -585,7 +579,7 @@ allow inbound connections. Full example:
 
 ```bash
 sudo iptables -I OUTPUT 2 -p tcp -d 127.0.0.1 -m tcp --dport 11029 -j ACCEPT
-DNS_PUBLIC=tcp torsocks ./shekyld --p2p-bind-ip 127.0.0.1 --no-igd --rpc-bind-ip 127.0.0.1 \
+torsocks ./shekyld --p2p-bind-ip 127.0.0.1 --no-igd --rpc-bind-ip 127.0.0.1 \
     --data-dir /home/amnesia/Persistent/your/directory/to/the/blockchain
 ```
 

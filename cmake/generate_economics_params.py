@@ -18,7 +18,6 @@ KEYS = [
     "shekyl_tx_volume_baseline",
     "shekyl_burn_base_rate",
     "shekyl_burn_cap",
-    "shekyl_staker_pool_share",
     "shekyl_staker_emission_share",
     "shekyl_staker_emission_decay",
     "shekyl_blocks_per_year",
@@ -59,7 +58,6 @@ def main() -> int:
 #define SHEKYL_TX_VOLUME_BASELINE                       UINT64_C({data["shekyl_tx_volume_baseline"]})
 #define SHEKYL_BURN_BASE_RATE                           UINT64_C({data["shekyl_burn_base_rate"]})
 #define SHEKYL_BURN_CAP                                 UINT64_C({data["shekyl_burn_cap"]})
-#define SHEKYL_STAKER_POOL_SHARE                        UINT64_C({data["shekyl_staker_pool_share"]})
 #define SHEKYL_STAKER_EMISSION_SHARE                    UINT64_C({data["shekyl_staker_emission_share"]})
 #define SHEKYL_STAKER_EMISSION_DECAY                    UINT64_C({data["shekyl_staker_emission_decay"]})
 #define SHEKYL_BLOCKS_PER_YEAR                          UINT64_C({data["shekyl_blocks_per_year"]})

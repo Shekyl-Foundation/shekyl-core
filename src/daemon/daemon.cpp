@@ -70,10 +70,9 @@ namespace {
   struct rpc_instance final {
     std::unique_ptr<cryptonote::core_rpc_server> server;
     std::string description;
-    // Configured listen host:port for this instance. When the epee acceptor is
-    // not bound (Rust/Axum transport active), get_binded_port() returns 0 and
-    // the bound host is unavailable, so both are recorded here (from the
-    // resolved RPC config) for the Axum server to bind. Empty when unset.
+    // Configured listen host:port for this instance. Axum owns the HTTP
+    // listener; bind_host/bind_port are recorded at init from the resolved
+    // RPC config for the Axum server to bind. Empty when unset.
     std::string bind_host;
     std::string bind_port;
     // Whether this instance serves the restricted command set. Passed to the
@@ -111,32 +110,22 @@ struct t_internals {
   // One or more RPC servers (main, optionally a separate restricted one).
   std::vector<rpc_instance> rpcs;
 
-  // Rust/Axum RPC handles, populated lazily by run().
-  bool rust_rpc_enabled;
+  // Axum RPC handles, populated by run().
   std::vector<ShekylDaemonRpcHandle*> rust_rpc_handles;
 
   explicit t_internals(boost::program_options::variables_map const & vm)
     : core(nullptr)
     , protocol{core, nullptr, command_line::get_arg(vm, cryptonote::arg_offline)}
     , p2p{protocol}
-    , rust_rpc_enabled{!command_line::get_arg(vm, daemon_args::arg_no_rust_rpc)}
   {
     // === core ===
     MGINFO("Initializing core...");
-    if (command_line::is_arg_defaulted(vm, daemon_args::arg_proxy)
-        && command_line::get_arg(vm, daemon_args::arg_proxy_allow_dns_leaks))
-    {
-      MLOG_RED(el::Level::Warning, "--" << daemon_args::arg_proxy_allow_dns_leaks.name
-        << " is enabled, but --" << daemon_args::arg_proxy.name << " is not specified.");
-    }
 #if defined(PER_BLOCK_CHECKPOINT)
     cryptonote::GetCheckpointsCallback const & get_checkpoints = blocks::GetCheckpointsData;
 #else
     cryptonote::GetCheckpointsCallback const & get_checkpoints = nullptr;
 #endif
-    const bool allow_dns = command_line::is_arg_defaulted(vm, daemon_args::arg_proxy)
-      || command_line::get_arg(vm, daemon_args::arg_proxy_allow_dns_leaks);
-    if (!core.init(vm, nullptr, get_checkpoints, allow_dns))
+    if (!core.init(vm, nullptr, get_checkpoints))
     {
       throw std::runtime_error("Failed to initialize core");
     }
@@ -153,8 +142,7 @@ struct t_internals {
     // === p2p ===
     MGINFO("Initializing p2p server...");
     if (!p2p.init(vm,
-        command_line::get_arg(vm, daemon_args::arg_proxy),
-        command_line::get_arg(vm, daemon_args::arg_proxy_allow_dns_leaks)))
+        command_line::get_arg(vm, daemon_args::arg_proxy)))
     {
       throw std::runtime_error("Failed to initialize p2p server.");
     }
@@ -164,30 +152,25 @@ struct t_internals {
     protocol.set_p2p_endpoint(&p2p);
     core.set_cryptonote_protocol(&protocol);
 
-    // === rpc(s) ===
+    // === rpc(s) — Axum is the sole HTTP transport ===
     const bool restricted = command_line::get_arg(vm, cryptonote::core_rpc_server::arg_restricted_rpc);
     auto const main_rpc_port = command_line::get_arg(vm, cryptonote::core_rpc_server::arg_rpc_bind_port);
     auto const & restricted_rpc_port_arg = cryptonote::core_rpc_server::arg_rpc_restricted_bind_port;
     const bool has_restricted_rpc_port_arg = !command_line::is_arg_defaulted(vm, restricted_rpc_port_arg);
 
-    // When the Rust/Axum transport is enabled it owns the HTTP listener, so the
-    // epee acceptor must not bind (or it would hold the port and Axum's bind
-    // would fail with EADDRINUSE). Pass bind_http_listener accordingly and
-    // record the configured port for run() to hand to Axum.
-    const bool bind_epee_listener = !rust_rpc_enabled;
     {
       rpcs.emplace_back(core, p2p, "core");
       rpcs.back().bind_port = main_rpc_port;
       rpcs.back().restricted = restricted;
       auto const & proxy = command_line::get_arg(vm, daemon_args::arg_proxy);
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
-      if (!rpcs.back().server->init(vm, restricted, main_rpc_port, proxy, bind_epee_listener))
+      if (!rpcs.back().server->init(vm, restricted, main_rpc_port, proxy))
       {
         throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
       }
       rpcs.back().bind_host = rpcs.back().server->get_rpc_bind_ip();
       MGINFO(rpcs.back().description << " RPC server initialized OK on port: " << main_rpc_port
-        << (bind_epee_listener ? "" : " (epee acceptor not bound; served by Axum)"));
+        << " (Axum)");
     }
 
     if (has_restricted_rpc_port_arg)
@@ -198,26 +181,21 @@ struct t_internals {
       rpcs.back().bind_port = restricted_rpc_port;
       rpcs.back().restricted = true;
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
-      if (!rpcs.back().server->init(vm, true, restricted_rpc_port, proxy, bind_epee_listener))
+      if (!rpcs.back().server->init(vm, true, restricted_rpc_port, proxy))
       {
         throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
       }
       rpcs.back().bind_host = rpcs.back().server->get_rpc_bind_ip();
       MGINFO(rpcs.back().description << " RPC server initialized OK on port: " << restricted_rpc_port
-        << (bind_epee_listener ? "" : " (epee acceptor not bound; served by Axum)"));
+        << " (Axum)");
     }
   }
 
   ~t_internals()
   {
-    // rpcs: deinit via their own dtors below; explicit deinit for symmetry with
-    // the old t_rpc::~t_rpc().
-    for (auto & rpc : rpcs)
-    {
-      MGINFO("Deinitializing " << rpc.description << " RPC server...");
-      try { rpc.server->deinit(); }
-      catch (...) { MERROR("Failed to deinitialize " << rpc.description << " RPC server..."); }
-    }
+    // Axum RPC servers are already stopped via shekyl_daemon_rpc_stop() in
+    // Daemon::run()/stop(); the core_rpc_server objects are torn down when
+    // `rpcs` is destroyed below. No explicit RPC deinit step remains.
 
     MGINFO("Deinitializing p2p...");
     try { p2p.deinit(); }
@@ -282,51 +260,38 @@ bool Daemon::run(bool interactive)
 
   try
   {
-    if (mp_internals->rust_rpc_enabled)
+    for (auto & rpc : mp_internals->rpcs)
     {
-      for (auto & rpc : mp_internals->rpcs)
+      auto * server = rpc.server.get();
+      // Honors --rpc-bind-ip / --rpc-restricted-bind-ip. IPv6 dual-bind
+      // parity is tracked in FOLLOWUPS; Axum binds the configured host here.
+      std::string host = rpc.bind_host.empty() ? "127.0.0.1" : rpc.bind_host;
+      std::string bind_addr = (host.find(':') != std::string::npos)
+        ? ("[" + host + "]:" + rpc.bind_port)
+        : (host + ":" + rpc.bind_port);
+      // Comma-joined CORS allow-list for Axum (empty = default-deny).
+      std::string cors_origins;
       {
-        auto * server = rpc.server.get();
-        // The epee acceptor was deliberately not bound at init time (Axum owns
-        // the listener), so get_binded_port()/bound-host would be unavailable;
-        // use the resolved host and port recorded on the instance instead. This
-        // honors --rpc-bind-ip / --rpc-restricted-bind-ip rather than forcing
-        // loopback. (IPv6 dual-bind parity with epee is tracked in FOLLOWUPS;
-        // Axum binds the single configured IPv4 host here.)
-        std::string host = rpc.bind_host.empty() ? "127.0.0.1" : rpc.bind_host;
-        // Bracket IPv6 literals for the host:port form.
-        std::string bind_addr = (host.find(':') != std::string::npos)
-          ? ("[" + host + "]:" + rpc.bind_port)
-          : (host + ":" + rpc.bind_port);
-        auto * rust_handle = shekyl_daemon_rpc_start(
-          static_cast<void*>(server), bind_addr.c_str(), rpc.restricted);
-        if (!rust_handle)
+        const auto & origins = server->get_access_control_origins();
+        for (size_t i = 0; i < origins.size(); ++i)
         {
-          // Axum is the sole RPC transport when rust_rpc_enabled; there is no
-          // bound epee listener to fall back to (the fallback was interim
-          // scaffolding for the migration and has been removed). The FFI binds
-          // the socket synchronously before returning, so a null handle means
-          // the bind/start genuinely failed — treat it as fatal rather than
-          // leaving the daemon silently without RPC.
-          throw std::runtime_error(
-            "Failed to start Axum RPC for " + rpc.description + " on " + bind_addr);
+          if (i) cors_origins.push_back(',');
+          cors_origins += origins[i];
         }
-        MGINFO("Axum RPC listening on " << bind_addr << " for " << rpc.description
-          << " (epee acceptor not bound)");
-        mp_internals->rust_rpc_handles.push_back(rust_handle);
       }
-    }
-    else
-    {
-      for (auto & rpc : mp_internals->rpcs)
+      auto * rust_handle = shekyl_daemon_rpc_start(
+        static_cast<void*>(server), bind_addr.c_str(), rpc.restricted,
+        cors_origins.empty() ? nullptr : cors_origins.c_str(),
+        server->get_rpc_max_connections(),
+        server->get_rpc_max_connections_per_public_ip(),
+        server->get_rpc_max_connections_per_private_ip());
+      if (!rust_handle)
       {
-        MGINFO("Starting " << rpc.description << " RPC server...");
-        if (!rpc.server->run(2, false))
-        {
-          throw std::runtime_error("Failed to start " + rpc.description + " RPC server.");
-        }
-        MGINFO(rpc.description << " RPC server started ok");
+        throw std::runtime_error(
+          "Failed to start Axum RPC for " + rpc.description + " on " + bind_addr);
       }
+      MGINFO("Axum RPC listening on " << bind_addr << " for " << rpc.description);
+      mp_internals->rust_rpc_handles.push_back(rust_handle);
     }
 
     std::unique_ptr<daemonize::t_command_server> rpc_commands;
@@ -357,13 +322,6 @@ bool Daemon::run(bool interactive)
     for (auto * rust_handle : mp_internals->rust_rpc_handles)
       shekyl_daemon_rpc_stop(rust_handle);
     mp_internals->rust_rpc_handles.clear();
-
-    for (auto & rpc : mp_internals->rpcs)
-    {
-      MGINFO("Stopping " << rpc.description << " RPC server...");
-      rpc.server->send_stop_signal();
-      rpc.server->timed_wait_server_stop(5000);
-    }
     MGINFO("Node stopped.");
     return true;
   }
@@ -390,12 +348,6 @@ void Daemon::stop()
   mp_internals->rust_rpc_handles.clear();
 
   mp_internals->p2p.send_stop_signal();
-  for (auto & rpc : mp_internals->rpcs)
-  {
-    rpc.server->send_stop_signal();
-    rpc.server->timed_wait_server_stop(5000);
-  }
-
   mp_internals.reset(nullptr);
 }
 

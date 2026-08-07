@@ -20,7 +20,7 @@
 //! is generic over signer / daemon / ledger trait implementors, with
 //! defaults that preserve the existing concrete-typed shape for
 //! production callers — the CLI ([`shekyl-cli`]) and the JSON-RPC
-//! server ([`shekyl-engine-rpc`]) sit on top of this surface, never
+//! server ([`shekyl-wallet-rpc`]) sit on top of this surface, never
 //! reaching around it.
 //!
 //! # What this module rejects on purpose
@@ -60,7 +60,7 @@
 //! 1. **Async runtime** — caller-provided multi-threaded `tokio`. IO-bound
 //!    methods are `async`; pure compute stays sync.
 //! 2. **Error types** — per-domain enums in [`error`], unified at the
-//!    RPC boundary by [`shekyl-engine-rpc`].
+//!    RPC boundary by [`shekyl-wallet-rpc`].
 //! 3. **Locking discipline** — `&self` queries / `&mut self` mutations.
 //!    The RPC binary wraps in [`Arc<RwLock<Engine>>`].
 //! 4. **`PendingTx` lifetime** — process-local, chain-state-tagged,
@@ -109,7 +109,7 @@
 //! | `reservations`        | `BTreeMap<ReservationId, Reservation>`               | runtime-only `PendingTx` tracker        |
 //! | `next_reservation_id` | `u64`                                                | process-local monotonic counter         |
 //! | `prefs`               | [`shekyl_engine_prefs::WalletPrefs`]                 | plaintext-with-HMAC layer 2             |
-//! | `daemon`              | [`DaemonClient`]                                     | thin wrapper around `SimpleRequestRpc`  |
+//! | `daemon`              | [`DaemonClient`]                                     | thin wrapper around `HttpRpc`  |
 //! | `network`             | [`Network`]                                          | cached from `file.network()`            |
 //! | `capability`          | [`Capability`]                                       | cached from `file.capability()`         |
 //! | `_signer`             | `PhantomData<S>`                                     | compile-time signer dispatch            |
@@ -189,14 +189,77 @@ pub(crate) mod curve_tree_decode;
 // Native `ScannableBlock` fetch over the `shekyl-wire` parse — the engine-side
 // replacement for the legacy `shekyl_rpc_client::Rpc::get_scannable_block_by_*` path.
 // Backs `DaemonEngine::fetch_scannable_block`'s default impl.
+/// GF-4b (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.4, §5 item 1): the
+/// `BackingSet` constructor-mint gate — the sole enforcement layer for
+/// backing-lineage eligibility (consensus is lineage-blind and spend-blind
+/// for backing) — and the C-1 designated-backing selector
+/// (`designate_backing`, most-recent-eligible, arity-1), which consumes
+/// candidates exclusively through it and owns the Q11 fee-exclusion
+/// (`DesignatedBacking::fee_sweep`).
+pub(crate) mod backing_set;
 pub(crate) mod block_fetch;
 /// WI-2 (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`): production bond assembly — the
 /// `PBoundBytes` P-1 provenance boundary (single private mint site), the D-A2
-/// funding-selection policy over the sealed `PFundingOutputRecord` set, and
-/// the assemble path's typed failure surface.
+/// funding-sweep policy over the sealed `PFundingOutputRecord` set (GF-4b
+/// sweep semantics), and the assemble path's typed failure surface.
 pub(crate) mod bond_assembly;
+/// WI-2 §3.3 Engine-side `assemble_bond_post` orchestrator (public halves +
+/// persist-before-return via an independent `PendingPostStore`).
+pub(crate) mod bond_orchestrator;
+/// PR-4's CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8): the Engine-side
+/// emission-claim **request path** — activate the claimant slot, assemble via
+/// `claim_orchestrator`, dispatch through the audited posture→submitter choke
+/// point. Scheduling policy stays external (the GF-4 seam).
+pub(crate) mod claim_dispatch;
+/// PR-3's Engine-side emission-claim orchestration (`EMISSION_CLAIM_BUILDER.md`
+/// §8): the fetch → designate → fee-sweep → path-assembly →
+/// `AssembleEmissionClaim` pipeline that prepares the operands the
+/// `StakeEngine` handler validates and signs against. Returns the reply
+/// unbroadcast (CB-3: dispatch is the `claim_dispatch` seam).
+pub(crate) mod claim_orchestrator;
 pub mod daemon;
 pub(crate) mod diagnostics;
+/// F-D1 amount stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): the drain amount
+/// is chosen from `{user target, cadence, RNG}` and an aggregate-scalar
+/// affordability check only — a guarded module the M1 import-check arm keeps
+/// blind to the per-output reward vector.
+pub(crate) mod drain_amount;
+/// F-D2 drain assembly (`ARCHIVAL_P_DRAIN.md` §DS-PR-1): the `P`→principal
+/// value-out transaction builder. Produces a **transfer-shaped** tx (two
+/// confidential outputs — principal payment + `P`-space change) byte-identical
+/// to a modal 2-out transfer (T-DS-6 ∧ T-DS-7), by reusing the transfer path's
+/// output primitive (`sign_bridge::build_output`), the bond/claim fee-sweep
+/// spend leg (`stake_engine::prepare_funding_inputs`), and the plain-transfer
+/// prefix/prove/PQC-auth calls with empty `extra_inputs` and spend-only auths.
+pub(crate) mod drain_assembly;
+/// DS-PR-2's CB-3 dispatch seam (`ARCHIVAL_DRAIN_SEND_FD2.md` §6, the
+/// `claim_dispatch` sibling): the Engine-side drain **request path** — resolve
+/// the principal destination, assemble via `drain_orchestrator`, persist the
+/// `PendingDrain` before any send, dispatch through the persona-transport
+/// choke point (T-DS-2). Scheduling stays external.
+pub(crate) mod drain_dispatch;
+/// F-D1 projection / drain trust boundary (`ARCHIVAL_FIREWALL_GATE6.md`
+/// §12.3): the sole drain-path site holding the funding records, projecting
+/// them into the aggregate scalar + stripped candidate operands the guarded
+/// stages consume, and composing the three stages ([`drain_orchestrator::plan_drain`]).
+/// Carries the F-D2 core-side aggregate-only balance surface
+/// ([`drain_orchestrator::DrainBalance`]). Public: the drain planner is the
+/// API the eventual drain command/actor calls.
+pub mod drain_orchestrator;
+/// F-D2 aggregate drain-balance read (`ARCHIVAL_DRAIN_SEND_FD2.md`): the
+/// engine-side "how much is drainable?" accessor a UI polls. Lifts the sealed
+/// `P` funding set, anchors the canonical send-path reference
+/// ([`bond_orchestrator::anchored_reference_block`], the same helper the drain
+/// itself anchors through), and returns the aggregate spendable scalar. Its
+/// [`drain_read::DrainBalanceReadError`] is two-armed by design (transient
+/// "syncing" vs. non-transient state fault) so the read never renders a
+/// misleading zero.
+pub(crate) mod drain_read;
+/// F-D1 select stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): lineage-blind coin
+/// selection over the stripped `{output_id, amount, spendable_height}`
+/// vector — a guarded module the M1 import-check arm keeps blind to the
+/// lineage tag and the persisted funding record.
+pub(crate) mod drain_select;
 /// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
 /// posture is named, never defaulted; no-choice + local-unreachable *refuses*,
 /// never falls back to a remote/third-party node). §2b build invariant 3.
@@ -217,13 +280,32 @@ mod daemon_observability;
 #[cfg(test)]
 mod economics_differential;
 pub(crate) mod economics_snapshot;
+/// Emission claim assembly (`EMISSION_CLAIM_BUILDER.md` §2, PR 2): the pure,
+/// KAT-able derivation/assembly core the PR-3 `StakeEngine` handler drives.
+pub(crate) mod emission_claim;
+/// Emission claim-source RPC decode (`EMISSION_CLAIM_BUILDER.md` §7, PR 1):
+/// the wallet-side twin of the daemon's claim-source serializer, producing
+/// the verify-side `EmissionEpochSource`/`ClaimantBondRecord` views the
+/// PR-2 assembly consumes.
+pub(crate) mod emission_source;
 pub mod error;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_pending_tx;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
+// WI-RPC-1: read-only fee/weight query projection for the wallet-RPC surface.
+pub mod fee_query;
 pub(crate) mod fee_snapshot;
+/// GF-7 leg-(b) sealing re-run harness (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`
+/// §19.8): drives the **production** P-scan task + dispatch driver
+/// (`start_pscan_sealing_run`, production config/cadence, real sleeps)
+/// against a live `shekyld --regtest` and writes the receipts artifact that
+/// `shekyl-staking-sim --gf7-seal` grades. `#[ignore]`d; requires
+/// `SHEKYLD_BIN` and the non-default `gf7-hooks` feature; multi-hour by
+/// design (§19.8.2 wall-clock budget).
+#[cfg(all(test, feature = "gf7-hooks"))]
+mod gf7_sealing_run;
 pub(crate) mod key_actor;
 /// §5.3 B9 dispatch-overhead bench support. Gated behind
 /// `bench-internals`; re-exported through [`crate::__bench_internals`]
@@ -242,13 +324,22 @@ pub mod network;
 pub mod output_selector;
 pub mod payment_requests;
 pub mod pending;
+pub(crate) mod principal_stake;
+/// WI-RPC-3 proof-generation bridge: the crypto bodies behind the
+/// [`key_actor::KeyActor`]'s inbound-tx-proof and reserve-proof messages.
+pub(crate) mod proof_bridge;
+pub mod proofs;
 pub(crate) mod pscan;
 pub mod refresh;
+/// Per-engine single-flight slot shared by `start_refresh` / `start_rescan`.
+pub(crate) mod refresh_slot;
 /// Track-2 end-to-end FAKECHAIN regtest (C++↔Rust FCMP++ verify parity). Spawns
 /// a real `shekyld --regtest` and drives the production [`Engine`] against it;
 /// all tests are `#[ignore]`d and require `SHEKYLD_BIN`.
 #[cfg(test)]
 mod regtest_e2e;
+/// Full-wallet rescan: reset scan-derived ledger state (Phase 4c).
+pub(crate) mod rescan;
 pub(crate) mod scan_floor;
 pub(crate) mod sealing_keys;
 pub(crate) mod sign_bridge;
@@ -271,6 +362,12 @@ pub(crate) mod stake_persist;
 /// (distinct inner types → compile error on cross-apply). Design-now; real checks
 /// wire in cold-start / 2d wiring.
 pub(crate) mod stake_timing;
+/// Transfer / pending-tx workflow (extracted from the former monofile
+/// `local_pending_tx.rs` — see `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`).
+pub mod transfer;
+// WI-RPC-1: read-only staked-balance/staked-output aggregation over the
+// authoritative sealed pscan/pending records, for the wallet-RPC surface.
+pub mod staking_read;
 /// `docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3: the submit lifecycle
 /// driver — the wallet-side actor that lifts the [`submit_watchdog`]
 /// kernel (projection → escape ladder → resubmit-same-bytes probe →
@@ -316,6 +413,7 @@ pub use error::{
     RefreshError, SendError, SubmitError, TxError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
+pub use fee_query::{FeeTierQuote, TxShapeEstimate};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use local_economics::LocalEconomics;
 pub use local_ledger::LocalLedger;
@@ -327,26 +425,41 @@ pub use tx_counts::{InputCount, OutputCount};
 // can name the return type without a direct `shekyl-address` dependency,
 // mirroring the `Network` re-export above.
 pub use shekyl_address::ShekylAddress;
+// Re-exported so consumers of [`DaemonClient::fetch_scannable_block`] can
+// name the return type without a direct `shekyl-scanner` dependency —
+// same shape as `ShekylAddress` above. Canonical definition stays in
+// `shekyl-scanner`; do not wrap or redefine (type-placement).
+pub use shekyl_scanner::ScannableBlock;
 
 pub use output_selector::{
     OutputCandidate, OutputSelector, SelectedOutputs, WalletGreedyOutputSelector,
 };
 pub use pending::{
     FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
-    TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
+    SubmitOutcome, TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
 };
 // The P-scan lifecycle surface (WI-1): handle + start error + cadence default,
 // re-exported so embedders holding the `PScanHandle` (the module keeps the
 // handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
 // the types without reaching into the `pub(crate)` pscan internals.
+pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome};
+// F-D2 aggregate drain-balance read error: two-armed (transient "syncing" vs.
+// non-transient state fault), re-exported flat so the wallet/GUI can match on
+// the arm across the command boundary without reaching into the `pub(crate)`
+// drain-read module (mirrors the `FirstStakeError` re-export just above).
+pub use drain_read::DrainBalanceReadError;
 pub use pscan::start::{PScanHandle, PScanStartError, DEFAULT_PSCAN_CADENCE};
 pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
 };
 pub use sealing_keys::StateWrapKey;
+/// The MS-5 multisig signer marker — only present under `--features multisig`.
+#[cfg(feature = "multisig")]
+pub use signer::MultisigSignerV2;
 pub use signer::{
     EngineSignerKind, LocalSigner, SignedTransfer, Signer, SoloSigner, TransferSigningContext,
 };
+pub use staking_read::{StakedBalance, StakedOutput, StakingReadError, StakingReadView};
 pub use view_material::ViewMaterial;
 
 use std::marker::PhantomData;
@@ -545,12 +658,17 @@ pub struct Engine<
     /// [`LedgerEngine`]: traits::LedgerEngine
     ledger: Arc<L>,
 
-    /// [`PendingTxEngine`] implementor for the build / submit / discard
-    /// lifecycle. Shares the same [`Arc`] ledger handle as
-    /// [`Engine::ledger`] at assembly time (C6).
+    /// **Transfer workflow handle** — the production default is
+    /// [`LocalPendingTx`](local_pending_tx::LocalPendingTx) in
+    /// [`transfer`](transfer). Multi-step send (build / submit / discard /
+    /// re-anchor) is owned by that implementor, not by inherent methods on
+    /// `Engine`. Prefer `self.pending.…` / `PendingTxEngine` over growing
+    /// send bodies here (`ENGINE_COMPOSITION_DECOMPOSITION.md` §Transfer
+    /// workflow ownership).
     ///
-    /// `Engine::close` consults `outstanding_pending_txs()` and refuses
-    /// with
+    /// Shares the same [`Arc`] ledger handle as [`Engine::ledger`] at
+    /// assembly time (C6). `Engine::close` consults
+    /// `outstanding_pending_txs()` and refuses with
     /// [`OpenError::OutstandingPendingTx`](error::OpenError::OutstandingPendingTx)
     /// when any reservation is in flight.
     pub(crate) pending: P,
@@ -581,7 +699,7 @@ pub struct Engine<
     ///
     /// Generic over `D: DaemonEngine`. Production code defaults `D` to
     /// [`DaemonClient`] (a thin wrapper over
-    /// `shekyl_rpc_transport::SimpleRequestRpc`); crate-internal
+    /// `shekyl_rpc_transport::HttpRpc`); crate-internal
     /// tests substitute `TestDaemon` to drive failure-injection and
     /// deduplication scenarios against the same orchestration logic.
     /// See `crate::engine::traits::daemon` for the trait contract.
@@ -781,7 +899,7 @@ impl<
     ///   accessors.
     /// - `daemon` — passes through to [`DaemonClient`]'s `Debug`, which
     ///   includes the daemon URL but no auth credentials (see
-    ///   [`shekyl_rpc_transport::SimpleRequestRpc`]).
+    ///   [`shekyl_rpc_transport::HttpRpc`]).
     /// - `network`, `capability` — printed verbatim; these are cached
     ///   public values from region 1 of the wallet file.
     /// - `pending` — printed as an outstanding-count via
@@ -964,6 +1082,14 @@ impl<
     /// `TestDaemon` and observe the same accessor shape.
     pub fn daemon(&self) -> &D {
         &self.daemon
+    }
+
+    /// Whether a StakeEngine actor is resident (a staker open, or an
+    /// open-with-first-stake-intent). The embedder-facing predicate the
+    /// `stake` entry uses to decide whether the SA-R1-a intent reopen is
+    /// needed; deliberately a bool — the handle itself stays crate-private.
+    pub fn has_stake_engine(&self) -> bool {
+        self.stake.is_some()
     }
 
     /// Clone the archival-bond [`StakeEngineHandle`], or `None` if no stake

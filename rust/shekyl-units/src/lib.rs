@@ -279,5 +279,9 @@ impl fmt::Display for ParseAmountError {
 
 impl std::error::Error for ParseAmountError {}
 
+pub mod banded_pl;
+
+pub use banded_pl::{curve_milli, mul_div_floor, BandedCurveParams};
+
 #[cfg(test)]
 mod tests;

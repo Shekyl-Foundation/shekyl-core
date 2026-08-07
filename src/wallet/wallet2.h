@@ -1138,11 +1138,6 @@ namespace tools
     std::vector<wallet2::pending_tx> create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, fee_priority priority, const std::vector<uint8_t>& extra);
 
     // PQC multisig (scheme_id = 2)
-    bool is_pqc_multisig() const { return m_pqc_multisig_n > 0 && m_pqc_multisig_m > 0; }
-    uint8_t pqc_multisig_n() const { return m_pqc_multisig_n; }
-    uint8_t pqc_multisig_m() const { return m_pqc_multisig_m; }
-    crypto::hash pqc_multisig_group_id() const { return m_pqc_multisig_group_id; }
-    bool create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys);
     bool sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs = {}) const;
     void cold_tx_aux_import(const std::vector<pending_tx>& ptx, const std::vector<std::string>& tx_device_aux);
     void cold_sign_tx(const std::vector<pending_tx>& ptx_vector, signed_tx_set &exported_txs, std::vector<cryptonote::address_parse_info> &dsts_info, std::vector<std::string> & tx_device_aux);
@@ -1200,10 +1195,6 @@ namespace tools
       a & m_cold_key_images.parent();
       a & m_has_ever_refreshed_from_node;
       a & m_background_sync_data;
-      a & m_pqc_multisig_keys;
-      a & m_pqc_multisig_group_id;
-      a & m_pqc_multisig_n;
-      a & m_pqc_multisig_m;
     }
 
     BEGIN_SERIALIZE_OBJECT()
@@ -1655,8 +1646,6 @@ namespace tools
     void register_devices();
     hw::device& lookup_device(const std::string & device_descriptor);
 
-    bool get_rct_distribution(uint64_t &start_height, std::vector<uint64_t> &distribution);
-
     uint64_t get_segregation_fork_height() const;
 
     void cache_tx_data(const cryptonote::transaction& tx, const crypto::hash &txid, tx_cache_data &tx_cache_data) const;
@@ -1878,12 +1867,6 @@ namespace tools
     native_sign_state m_native_sign_state;
 
   private:
-    // PQC multisig state (scheme_id = 2)
-    std::vector<uint8_t> m_pqc_multisig_keys;
-    crypto::hash m_pqc_multisig_group_id;
-    uint8_t m_pqc_multisig_n = 0;
-    uint8_t m_pqc_multisig_m = 0;
-
     // Rust-owned wallet handle (transitional 2k.a -> 2m-keys). Opened
     // lazily by `load_keys` when the on-disk file has the SHKW1 magic;
     // null for legacy wallets still being opened via the JSON path.

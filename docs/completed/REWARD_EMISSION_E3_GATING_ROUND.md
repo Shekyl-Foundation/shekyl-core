@@ -1,0 +1,1657 @@
+# Reward-emission E3 gating round — pre-flight audit + policy-trio closure
+
+**Status:** Round 3 **CLOSED** (2026-07-07). Q3/Q12 resolved; **Q11 ACCEPT
+ratified**; **WS-1 (Q10/M-2/Q7 two-conjunct held-sourcing) ratified** (§5);
+**WS-2 (Q9/F-E3 dedup atomicity) ratified** (§6: block-level `(P,E)` pass +
+journaled claimed-set revert, severity-upgraded — the prune straddle is a
+**double-mint**, journal row = the full claimed-set pre-image, restoring the
+prune-evicted members atomically with the inserted `E`; §3a pin (a)).
+The leg's design is complete; the PR-E3 implementation pre-flight runs against
+current `dev` (§7.1, §8).
+**Process:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+(A2 audit-against-actual-code; the pre-flight substrate re-check).
+Dispositions follow [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
+**Spec of record:** [`REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md);
+**plan:** [`REWARD_EMISSION_VIN_PLAN.md`](../design/REWARD_EMISSION_VIN_PLAN.md) §8.
+
+This round exists because the pre-flight substrate re-check of the reward-emission
+leg (opened as a "PR-E2 design round") found the premise stale: **PR-E2 has
+landed, and the E3 keystone design mostly closed on 2026-07-01.**
+
+The re-check then found **one keystone item was closed too early.** A source
+wargame of Q10 (`held(P,E)` frozen-at-E) against the supply-conservation
+adversary (§5) showed the Round-2 "one build item: as-of-E interval marshaling"
+disposition conflated two different quantities: **standing** (`bad_intervals`,
+genuinely interval-semantic and as-of-E correct) and **held-shard-set** (the
+`held_shard_ids` bond descriptor, which is *tip-mutable* — mid-life add/drop is
+genesis-scoped V3.0 — and whose only accessor is the documented M2-1 tip-read at
+`db_lmdb.cpp:4984–4990`). So the leg has **two** open design surfaces, not the
+one the opening assumed:
+
+1. **WS-1 — the Q10→M-2→Q7 held-sourcing correction (§5).** The as-of-E `held`
+   ground truth is the per-`(P,s,E)` serve-credit bits, not the mutable
+   descriptor — but the bits only *mean* held-at-E because acceptance gates on
+   holding, and that gate (`:4307`) uses the same broken tip accessor. So M-2
+   closes under **bits-sourcing ∧ as-of-fire-height acceptance** (§5.4), one
+   shared sourcing function and one shared accessor: the supply-conservation
+   hard blocker, and the keystone with no backstop underneath it (§5.5).
+2. **The §8 policy trio** (Q3 / Q11-F-E7 / Q12-F-E8) — "round-closable; not deep"
+   (§2), unchanged from the opening.
+
+Q9/F-E3 dedup atomicity is a third, *parallel* surface (WS-2): pinned at the
+function, open in the load-at-verify / write-at-connect plumbing (§6). This doc
+records the audit, closes the trio (§2), settles the WS-1 sourcing question at
+source (§5), and enumerates the PR-E3 scope (§3) the closures unblock.
+
+---
+
+## 1. Pre-flight substrate audit (A2) — leg state at `dev` `1f67652b0`
+
+The reward-emission leg is **substantially further along than the plan's linear
+E0→E1→E2→E3 narrative and the `IMPLEMENTATION_INDEX` reflect.** Reconciled against
+source at the pin:
+
+| Sub-PR | Plan status | **Landed reality** | Evidence |
+|--------|-------------|--------------------|----------|
+| **PR-E0** bond-state write path | LANDED | LANDED | plan §3 PR-E0 |
+| **PR-E1** membership-only FFI seam + ML-DSA/hybrid auth primitive | landed | **LANDED** | `shekyl_fcmp_membership_only_verify`, `shekyl_emission_hybrid_auth_verify` (`shekyl-ffi`); header decls |
+| **PR-E2** emission-vin codec + wire freeze (field set A) | "opens when cluster closes" | **LANDED** | `rust/shekyl-archival-retention/src/emission_wire.rs` (full codec + KATs); commits `c6b4d0ab6`, `1a759a803`, `9f748e0d5`, `cc28bee37` |
+| PR-E2 **C++ transport shim** | part of E2 | **reassigned to C-1** (not a gap) | `emission_wire.rs:44–46`: the C++ `VARIANT_TAG 0x06` "lands with the C-1 dispatch, not this codec" |
+| **E3 keystone design** (M-2/Q7/Q9/Q1/Q10) | "open" | **MOSTLY closed 2026-07-01; Q10/M-2 held-sourcing reopened by the §5 source audit** — Q1/Q7 pinned; Q9 pinned-at-function/plumbing-open (WS-2); M-2/Q10 held-term needs the bits-sourcing correction (§5) | plan §8.0/§8.0.1/§8.0.2; **corrected §5** |
+| **E3 verify body** `shekyl_emission_vin_verify` | not started | **not started** (implementation) | no symbol in `rust/` or `src/` |
+| **C-1** activating cut | not started | **not started** (implementation) | — |
+
+**Keystone design closure (Round 2, 2026-07-01), verified against code — with two
+rows corrected by the Round-3 §5 source audit:**
+
+| Item | Disposition | Built substrate |
+|------|-------------|-----------------|
+| **Q9 / F-E3** intra-block `(P,E)` dedup atomicity | **PINNED** at the function; **plumbing open** (WS-2) — the fused check/set is atomic on its *passed* set, but the load-at-verify / write-at-connect straddle lets two same-block same-`(P,E)` emissions both pass (§6) | `claimed_epochs_check_and_set` (`rust/shekyl-archival-retention/src/claimed_epochs.rs:99`) |
+| **Q1 / F-E4** auth count + algorithm | **PINNED** — two hybrid (Ed25519+ML-DSA-65) auths, rotation-forced; drove E2's wire freeze | `emission_wire.rs` `auth_backing`/`auth_claim`; `shekyl_emission_hybrid_auth_verify` |
+| **Q7** FFI seam | **resolved by house pattern** — snapshot-by-value | `archival_ffi.rs:346` (`shekyl_archival_verify_*` marshal-by-value) |
+| **M-2** numerator as-of-E sourcing | **design closed *conditional on bits-sourcing ∧ as-of-fire-height acceptance* (§5.4) — the conjunction.** `R_market(s,E)`/`Σwork(E)` frozen-persisted (invariant 2). The `held(P,E)` term is sound **only if** (1) sourced from the per-`(P,s,E)` serve-credit bits, not the mutable descriptor, **and** (2) those bits were populated by an acceptance gate reading as-of-fire-height (`:4307`, currently the broken tip accessor). Round-2 "snapshot field set (B)" omitted both; corrected in §5 | `consensus_state.rs` `EpochCloseResult`; `market_member_at_epoch:98`; `archival_serve_credit`; `blockchain.cpp:4307` |
+| **Q10 / F-E6** `held(P,E)` frozen-at-E | **CORRECTED (§5): not a marshaling pin — a sourcing correction + one accessor build.** The "as-of-E interval marshaling" framing conflated **standing** (`bad_intervals`, genuinely interval/as-of-E) with **held** (no interval log; `held_shard_ids` is tip-mutable — M2-1 at `db_lmdb.cpp:4975`/`4984–4990`). As-of-E held ground truth = the serve-credit bits; the one `at_height`-honoring accessor serves **both** :4307 acceptance and the V3.0 mutable-holdings read (**Open**, FOLLOWUPS P2B-7 Pin 4) | `good_through` straddle-close (`consensus_state.rs:84–92`) is the **standing** half; held half in §5 |
+
+### 1.1 Stale-doc corrections (this round lands them)
+
+- **`IMPLEMENTATION_INDEX.md:153`** — "Reward-emission leg (PR-E1…E3, C-1
+  verifier) | **Missing**" is wrong: E0/E1/E2 have landed. Corrected to reflect
+  E0/E1/E2 landed, keystone design closed, E3 body + C-1 the open implementation.
+- **`REWARD_EMISSION_VIN_PLAN.md` §3 PR-E2 tag prose** — describes the C++
+  struct at binary `0x06` as a PR-E2 deliverable. The landed codec pins the Rust
+  wire tag `0x04` and reassigns the C++ `VARIANT_TAG 0x06` to C-1
+  (`emission_wire.rs:44–46`). Annotated so the two tags (Rust wire `0x04` /
+  C++ oracle `0x06`) and the C-1 ownership are not misread as a gap.
+
+### 1.2 PR-E2 C++ transport shim — boundary disposition (A4)
+
+**Rejection.** A standalone inert C++ transport shim as residual PR-E2 work.
+**Substrate.** Under gate-last (§3.0) the whitelist `check_inputs_types_supported`
+default-rejects the emission vin on **both** the mempool (`tx_pool.cpp:171`) and
+block-verify (`blockchain.cpp:2371`) paths, so an early inert C++ struct buys
+zero relay/parse benefit and only adds surface ([`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)).
+The C++ transport is only *needed* where the dispatch consumes it — at C-1. The
+landed codec already recorded this disposition (`emission_wire.rs:44–46`).
+**Reopening (rule 21).** Reopens only if a pre-C-1 consumer emerges that must
+parse the vin from C++ without the Rust codec (e.g., an explorer path landing
+before C-1) — decided in that consumer's PR, not by default.
+
+---
+
+## 2. Policy trio — dispositions (the residual open design)
+
+The trio is the last open *design* on the leg (plan §8 table row
+`Q3 / Q11 (F-E7) / Q12 (F-E8)` — "acceptance-path policy; round-closable; not
+deep"). Two are resolved-by-landed-substrate; one (Q11) was a genuine — if
+shallow — decision, proposed for human ratification because it is
+consensus-acceptance-path (priority-1), and **ratified** (§7).
+
+### 2.1 Q3 — backing-input distinctness — RESOLVED (vacuous at arity 1)
+
+**Disposition.** No vin-layer input-distinctness rule. The backing carries
+**exactly one** input (the arity-1 pin, `emission_wire.rs:115–124`), so the
+membership-doc §8.2 multi-input distinctness concern has no surface: "the §8 open
+item 3 (backing-input distinctness) is vacuous at arity 1" (same source).
+**Rejection.** A multi-input dedup/distinctness rule at the vin layer.
+**Reopening (rule 21).** Reopens **iff** backing arity rises above 1 — which
+*first* reopens the §8.0.1 two-auth arity pin (per-output one-time keys ⇒ *n*
+inputs need *n* auths, contradicting the frozen two-auth wire). Q3 therefore
+cannot reopen without the auth-arity pin reopening ahead of it.
+**Re-evaluation shape.** Design-round 1 of the PR that raises backing arity, with
+the auth-arity reopen and call-graph evidence.
+
+### 2.2 Q11 / F-E7 — same-tx backing + key-imaged fee double-use — **RATIFIED: ACCEPT**
+
+**Threat (plan §8 open item 11).** §5.2 permits ≥0 fee `txin_to_key` inputs (with
+key images) alongside the one membership-only backing; the threat model names
+"mixing to launder a key-image spend" — i.e., one underlying output used as both
+membership-only backing **and** a key-imaged fee spend in the same tx.
+
+**Proposed disposition: ACCEPT — no vin-layer exclusion.** Three substrate-anchored
+reasons:
+
+1. **No value path.** Membership-only backing publishes **no key image** and
+   **moves no value** (`REWARD_EMISSION_LEG.md` §7.3). The fee `txin_to_key`
+   carries its own key image and rides the FCMP++ balance/inflation check, which
+   prevents value double-spend **independently of** the backing. Using the same
+   output as backing adds no mintable value.
+2. **Unenforceable by construction.** An "exclude same-tx-spent output from the
+   backing" rule keys on the backing↔fee identity that **consensus is blind to**:
+   the membership proof hides the leaf, so consensus cannot correlate the backing
+   with a fee key image. This is the exact shape of the §7.3 lineage disposition
+   ("consensus is **blind to lineage** … unenforceable by construction").
+3. **Already inside the accepted model.** §7.5's intra-epoch unbacked lemma
+   already accepts that `P` spends funding outputs while serving; backing validity
+   is anchored at the **reference tree root**, not at "output still unspent at tx
+   time." The mix changes nothing the model does not already permit.
+
+**Rejection.** A consensus rule requiring the backing output to be excluded from
+the same tx's key-imaged spend set.
+**Reopening (rule 21).** Reopens iff a concrete construction shows the mix yields
+either (a) value double-use surviving the FCMP++ balance check, or (b) a
+`(P,E)` dedup / anti-replay bypass (dedup is bond-record state, independent of
+the backing output — so no path is known). Also reopens if the backing primitive
+ever publishes a key image.
+**Re-evaluation shape.** Threat-model addendum carrying the concrete construction;
+if real, the mitigation lands at the **gate-6 wallet-policy** layer first
+(consensus cannot enforce it), escalating to consensus only if wallet policy is
+demonstrably insufficient.
+**Ratification.** **RATIFIED (2026-07-07)** — the one trio item that is a genuine
+decision rather than a substrate readout (consensus-acceptance-path, priority-1),
+signed off with its arming KAT below.
+**What actually protects the ACCEPT: the structural exclusion (three legs).**
+The ACCEPT rests on reason 1 (no value path), and the *guard* that delivers it
+is structural, not a test: (i) the backing lives in the emission vin's opaque
+`canonical_bytes` and **nothing deserializes the blob into `rv.p.pseudoOuts`**;
+(ii) the dispatch size check (`tx_verification_utils.cpp:175`,
+`rv.p.pseudoOuts.size() != spend_input_count`); and (iii) the leaf size check
+(`rctSigs.cpp:362`, `rv.p.pseudoOuts.size() == fee_input_count`). Routing the
+backing into the balance is not a line-removal — it is a blob-parse **plus** an
+append **plus** a lockstep bump of *both* size checks: a make-bad-states-
+unrepresentable guard. The KAT below is the **tripwire on that guard**, not the
+guard itself; it is necessary-not-sufficient, and its coverage boundary is
+stated per arm so a reader does not credit a leaf-check test with a dispatch-
+level proof.
+**Arming KAT landed (2026-07-09, strengthened same day,
+`tests/unit_tests/archival_emission_ct_balance.cpp`).** Two arms, each with its
+coverage boundary:
+- `backing_identity_O_vs_O_prime` — **bites** against a refactor that parsed
+  the blob into the balance *operands* (leg i, operand side): it derives
+  `spend_input_count`/`total_reward` through the **same production functions the
+  dispatch uses** (`classify_archival_tx` + `shekyl_checked_sum_amounts`, not a
+  test-local mirror) on two txs differing **only** in the backing bytes, and
+  asserts the operands do not move. It also pins leg (iii) via
+  `EXPECT_TRUE(verdict_O)` — bumping the leaf size check to `+ 1` breaks the
+  legitimate 1-pseudo-out tx. **Does NOT cover:** the `verdict_O ==
+  verdict_O_prime` identity is **green-by-construction** —
+  `verCtSemanticsEmission`'s signature `(rv, total_reward, fee_input_count)` has
+  no parameter the blob-resident backing can enter, so equal verdicts document
+  the *signature-level* exclusion; they are **not** the coordinated-regression
+  catch this paragraph previously claimed.
+- `backing_inclusion_shape_rejects_in_production` — **bites** against weakening
+  the balance *equation* (leg iii, value side): a fixture whose balance closes
+  **only** with the backing summed must reject through the production leaf, and
+  the same fixture with the backing appended passes the single-sourced balance
+  FFI — proving the rejection is the exclusion working, not an unrelated
+  malformation. **Does NOT cover:** the blob boundary (leg i, `pseudoOuts` side)
+  or the dispatch check (leg ii).
+- **Not covered by either arm:** driving the full production dispatch
+  (`ver_non_input_consensus_templated`) with a valid FCMP++ emission tx and
+  asserting the CT-balance verdict is **invariant under `canonical_bytes`
+  variation** — the arm that catches a future deserialization change parsing the
+  backing out of the blob into `pseudoOuts`. That arm is harness-gated on a
+  valid-proof emission-tx builder and rides the claim-builder PR
+  (`FOLLOWUPS.md` Q11-KAT item, `EMISSION_CLAIM_BUILDER.md` §3 CB-4 follow-up
+  (a)).
+
+Any edit that flips a *biting* assertion above is the reopen signal and requires
+this round's re-evaluation shape, not a lockstep test update.
+
+### 2.3 Q12 / F-E8 — zero-work / zero-reward emission — RESOLVED (foreclosed)
+
+**Threat (plan §8 open item 12).** §4.3's R-ceiling dead zone (`R > 1000·g(age)`
+→ `scarcity_milli = 0`) plus `Curve(0)` lets a `P` with all shards in the dead
+zone recompute `work_P = 0`, `reward = 0` — block-space spam if accepted with a
+zero vout.
+
+**Disposition: REJECT — already foreclosed, no new acceptance-path branch.**
+
+1. **Structural (wire).** The landed codec enforces **strict per-epoch
+   positivity**: `reward_amount_plain[i] == 0` is unencodable on both write and
+   read (`WireError::RewardAmountZero`, `emission_wire.rs` §2.3 —
+   `validate()` :436–441, `read_payload` :606–614), and an empty claim is
+   rejected (`EpochCountOutOfRange`, ≥1 epoch). A zero-total emission **cannot be
+   built.**
+2. **Economic (verify).** The §5.4 zero-tolerance recompute rejects a claimed
+   *positive* amount whose recompute is 0 (all-dead-zone → `work_P = 0` →
+   `reward = 0` ≠ claimed positive). So the dead-zone case fails the equality
+   check regardless.
+
+Width is already u128-safe (`mul_div_floor`; plan §8 item 12, confirmed at
+source).
+**Rejection.** An accept-with-zero-vout policy branch.
+**Reopening (rule 21).** Reopens iff the wire positivity invariant is relaxed, or
+a legitimate non-spam zero-reward use emerges (none known). The §4.3 dead-zone
+*scale* reopen (gate 3/5 permitting `R` large enough to zero most shards) is a
+separate scale concern, not a policy reopen.
+**Re-evaluation shape.** If wire positivity is ever relaxed, this disposition
+reopens in the same PR.
+
+---
+
+## 3. Unblocked PR-E3 scope (implementation, not design)
+
+With the trio, WS-1, and WS-2 all ratified (§7), everything below is
+implementation, in dependency order:
+
+1. **`held(P,E)` as-of-E sourcing — the WS-1 build item (§5, corrects §8.0's
+   "one build item").** **IMPLEMENTED 2026-07-07 on
+   `feat/emission-ws1-held-sourcing`** — all four pieces (a)–(d) below, with
+   two implementation findings recorded there: the slash log gained a v2
+   `holdings_pre_kind` field (the as-of-height reconstruction *and* the
+   pop-revert both needed the pre-slash holdings kind; the v1
+   amount/emptiness revert heuristic mis-restored a slashed single-shard
+   compact bond to complete-tree), and the compact-requires-shards encode
+   invariant moved from the general bond writer to the join-time writer
+   (post-slash compact-and-empty is a legitimate record shape both slash
+   paths write). M-2 closes under the **two-conjunct** rule (§5.4). Four
+   concrete pieces: **(a)** a single `as_of_E_served_work(frozen_ledger, P, E)`
+   sourcing function called by **both** `epoch_close_compute` (denominator) and
+   the verify body (numerator) — divergence unrepresentable, M-3 pushed one layer
+   deeper (§5.5-1); **(b)** **remove `held_shard_ids` from the work-channel
+   input type** (not merely delete the `consensus_state.rs:386–389` filter line —
+   remove the field from work's scope so a re-filter does not compile, §5.5-2),
+   sourcing the shard set from `archival_serve_credit` (keyed
+   `ArchivalServeCreditKey(P,shard,E)`), marshaled by value at the claimed `E`
+   (keyed by `E` — point read, no reconstruction); **(c)** the **one
+   `at_height`-honoring accessor** (FOLLOWUPS P2B-7 Pin 4) fixing conjunct 2.
+   **This is not a pure emission-leg change — the accessor is shared between
+   the reward side and the slash side, so fixing it silently changes slash
+   consensus too.** The consumer inventory is **three sites** (§8.1), all
+   riding tip descriptor reads today: `blockchain.cpp:4307` (serve-credit
+   *acceptance* — credit if `P` held-and-served at `h_fire`),
+   `db_lmdb.cpp:5270` in `archival_challenge_failed_at_height` (slash
+   *eligibility* — punish if `P` held-and-didn't-serve at `h_fire`; the tip
+   read under-slashes a held-then-dropped `P` and wrongfully slashes an
+   acquired-after-fire `P`), **and `db_lmdb.cpp:5241`** — a direct
+   `bond.holds_shard(shard_id)` tip read that early-outs slash eligibility
+   *before* `h_fire` is even derived (§8.1 finding: the tip-drop-escapes-slash
+   leak survives an accessor-only fix). Item 1(c)'s scope is therefore **"the
+   accessor + all three consumers + both KAT sides"**: the fix must be
+   validated against slash KATs ("P held at fire, didn't respond → slash,
+   regardless of tip holdings"), not just serve-credit acceptance. The
+   **coherence dividend** that makes this the right shape rather than a
+   burden: one as-of-fire read makes reward and slash consistent by
+   construction, foreclosing the asymmetry exploit the tip read admits under
+   mutable holdings (credited on as-of-fire while escaping slash on a
+   tip-drop, or the inverse) — but only if all sites move together. Shared
+   with the V3.0 mutable-holdings read — co-designed in the bond-lifecycle
+   connect-path work, not a duplicate emission-only reader; **(d)** the
+   **armed KATs on both sides** (§5.6: drop-after-serve, acceptance-gate,
+   ledger reorg-symmetry — **plus the slash-side mirror of the acceptance-gate
+   KAT**: slashed when held-at-fire-and-silent despite a tip drop; not slashed
+   when acquired-after-fire despite tip holding). **Standing** stays
+   as-is: `bad_intervals` + `join` → `market_member_at_epoch`
+   (`consensus_state.rs:98`) is genuinely as-of-E.
+2. **M-2/Q7 as-of-E snapshot struct.** **IMPLEMENTED 2026-07-08 on
+   `feat/emission-ws1-held-sourcing`** (same PR as item 1 — one validation
+   surface: the snapshot's work channel consumes item 1's sourcing function,
+   and the close==verify row identity is only checkable with both in one
+   diff). Three cuts, with one implementation finding: **(a)** the close's
+   inline row gather extracted into the shared
+   `BlockchainLMDB::gather_archival_epoch_rows`, called by both the close
+   and the new `gather_archival_emission_epoch_snapshot` — row-selection
+   divergence unrepresentable (§5.5's shape at the C++ layer); the
+   `(E+1)·SEB` boundary single-sourced via the new
+   `shekyl_archival_epoch_close_processing_height` FFI wrapper; **(b)**
+   `shekyl_archival_emission_epoch_work` computes `work_P(E)` +
+   `Curve(work_P)` via `as_of_e_served_work` over arrays decoded by the
+   same `decode_epoch_rows` helper the close FFI uses; **(c)** identity
+   KATs at both layers (sum-of-capped == persisted `Σwork`;
+   live-descriptor-immunity under the M2-1 tip mutation; no-credit
+   sentinel). **Finding — the snapshot carries the *persisted* `Σwork(E)`,
+   never a recompute:** `bad_intervals` grow after E's close (an E-slash
+   applies `[E, ∞)` post-close), so a live re-derivation of the denominator
+   at verify time could diverge from the close's. *(A second reason was
+   given when this was written — that the M1 `K_COVER` gate's operand,
+   `frozen_shard_count` as-of-close, is close-only, so the gate's outcome
+   reached verify only through the stored value. The gate was retired
+   2026-07-19, PR #346; that leg is void. The `bad_intervals` reason
+   stands alone and is sufficient, so the finding is unchanged. Note the
+   same close-only property still holds for `shard_age_milli`'s
+   `freeze_height` operand, which is marshaled by value below.)* Per-P work
+   recomputes from the frozen credit rows; a claimant slashed after close
+   under-mints itself (policy-acceptable direction), never over-mints
+   another. Marshaled by value, each field from the
+   frozen E-close materialization (invariant 2: `R_market(s,E)`, `Σwork(E)`,
+   shard `freeze_height`) **plus** the per-`(P,s,E)` serve-credit bits for the
+   claimed epoch (the §5 held source); never the live bond descriptor; carries
+   the two Q1 auth fields (auth fields ride the verify body, item 3 — the
+   substrate snapshot is consensus rows only).
+3. **`shekyl_emission_vin_verify` — verify body, steps 1–7** (KAT-tested; **not**
+   on the consensus dispatch — still unwhitelisted). Recompute `work_P(E)` ==
+   `work_claim`; `reward_P(E)` via `reward_arithmetic` == `reward_amount_plain` +
+   Σvout; dedup per the WS-2 layering (§6.2): verify does the **read-only**
+   `claimed_epochs_contains` against the pre-block bond record; backing via
+   membership-only + the two hybrid auths. The auth result enters as an
+   **unforgeable `AuthVerified` witness** the body cannot mint itself
+   (fail-closed by type, §3.0) — E3 physically cannot accept an authed emission.
+   **IMPLEMENTED (2026-07-08, `feat/emission-ws1-held-sourcing` — same PR by
+   validation-surface bundling).** New
+   `shekyl-archival-retention::emission_verify` module; steps 1–5 in
+   `emission_vin_verify_claims` (minting a sealed `ClaimsVerified`), step 6
+   in `emission_vin_verify_backing` (leaf-hash equality +
+   `verify_membership_only`; minting `BackingVerified`), and the infallible
+   assembly `emission_vin_verify(claims, backing, auth)` — three witnesses
+   or no verdict. Step 7 (fee-input FCMP balance) stays at the C++ tx layer
+   via the existing `shekyl_fcmp_verify`; step 8's `AuthVerified` has **no
+   production constructor** (the ML-DSA minter is C-1's; KATs use a
+   `consensus-kat`-gated forge, PF-6a shape, named `kat_forge` so the
+   KCover tripwire grep stays scoped *(the `KCover` newtype and that tripwire were deleted
+with the M1 gate, PR #346; `kat_forge` keeps the name for its own sake — the scoping
+rationale no longer applies)*). Implementation pins beyond the round
+   text: (a) **per-shard exactness** — each `ShardWorkEntry`'s
+   `serve_credit_bit` must equal the ledger fact and `scarcity_milli` the
+   member-masked recompute, so a wrong split can't hide behind a right
+   total, and duplicates reject outright; (b) the **claim-window operand**
+   is the tip epoch index (`settlement_epoch_at_height(H)`) — the same `C`
+   the connect-time `claimed_epochs_check_and_set` windows against, so
+   verify and connect cannot disagree about expiry, while F-E1's strict
+   `H > h_close(E)` remains the tighter same-block boundary; (c) **no FFI
+   entry point in E3** — gate-last extends to the FFI seam: an exported
+   pre-auth verify would be an un-gated path C++ could mistake for full
+   verification, and the witness types cannot cross the C ABI un-minted, so
+   the entry point lands with C-1's dispatch wiring. Twelve KATs in
+   `tests/emission_verify_kat.rs` (honest-accept identity over the same
+   sourcing functions, F-E1 + claim-age boundaries, read-only dedup,
+   wrong-epoch/wrong-claimant polarity, entry-level work-claim polarity,
+   no-credit sentinel = the Q12 economic leg, economics ±1 / vout drift,
+   step-6 negatives).
+3a. **WS-2 dedup plumbing (§6).** The block-level `(P,E)` uniqueness pass in
+   `handle_block_to_main_chain` (mirror of `:4882`, every `(P, E_i)` pair);
+   connect-path `claimed_epochs_check_and_set` FFI wrapper as the single writer
+   (`Ok(false)` at connect = hard error); the claimed-set revert **journal** +
+   pop-path restore (slash-log idiom, §6.3) — **the journal row must restore
+   the prune-evicted set members atomically with reversing the inserted
+   `E`** (an insert-only journal leaves the §6.3 double-mint alive), covering
+   `first_paying_emission_height`; the three §6.4 KATs (prune-straddle KAT
+   asserts post-reorg re-claim **rejection**).
+   **IMPLEMENTED (2026-07-08, `feat/emission-ws1-held-sourcing` — same PR),
+   minus one C-1-blocked piece.** The single writer is
+   `shekyl_archival_claimed_epochs_check_and_set` (validated write-back over a
+   caller-owned buffer; five status codes); the connect path is
+   `BlockchainLMDB::apply_archival_emission_claim`, the journal is the new
+   `archival_emission_claim_log` table (`BE(height)||BE(seq)`), and the pop
+   restore is `revert_archival_emission_claims_at_height`, wired into
+   `pop_block` after the slash/close reverts. Two implementation pins beyond
+   the round text: (a) the journal row widened from the minimal delta
+   `{inserted E, evicted set members}` the round originally ratified to the
+   **full pre-image** (`claimed_settlement_epochs` + `first_paying_emission_height`
+   before the mutation, ≤ 301 bytes at the 32-entry cap) — restoration is a
+   byte-identical overwrite with no reconstruct step, which closes the same
+   §6.3 double-mint with strictly less revert logic to audit; (b) *all* FFI
+   non-insert codes at connect are hard errors, not just the dedup hit —
+   unsettled/expired at connect equally mean a vin bypassed verify. The four
+   KATs landed (`archival_substrate_lmdb.cpp`): apply/revert roundtrip with
+   journal consumption, connect-breach hard errors, the §6.4 prune-straddle
+   double-mint property (post-reorg re-claim of the evicted-then-restored
+   `E_old` **rejected**), and first-paying set-once/pop-symmetric. The
+   **block-level `(P,E)` pass defers to C-1**: it iterates
+   `txin_archival_reward_emission`, whose C++ variant type is C-1's transport
+   shim — there is no type to iterate until the activating cut. Its KATs
+   defer with it; C-1's merge blocker list grows by this item.
+4. **C-1 — the activating cut** (separate PR; [`07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)):
+   ML-DSA witness minter + `check_inputs_types_supported` whitelist flip + C++
+   shim dispatch + `VARIANT_TAG 0x06`. Merge blocker = ML-DSA present/tested **and**
+   the gate-6 backing-lineage ladder + sweep wired in the wallet pre-join path
+   (§8.0.3 C-1 precondition).
+5. **E4/E5** — delete `txin_stake_claim`/`C_stake` only after emission is
+   accepted-and-applied on a regtest chain through the real C-1 path; constants,
+   KATs, audit-scope, docs.
+   **CLOSED 2026-07-19 (PR-4c): the precondition fired and the residue is
+   zero.** Emission is accepted-and-applied live (§9.5 item 8 below);
+   `txin_stake_claim` was already deleted (`2615c0dae`), and a full-source
+   sweep found **no `C_stake` code residue** — the single source hit is a
+   "no `C_stake`" negation comment (`principal_stake.rs`); remaining
+   mentions are design-doc theory (retained deliberately,
+   `CONFIDENTIAL_STAKING.md`). Nothing to delete: item 5 closes docs-only.
+
+---
+
+## 5. WS-1 — `held(P,E)` as-of-E sourcing (Q10 → M-2 → Q7 keystone)
+
+**This section reopens and re-closes the Q10/M-2 held-term that Round 2 closed
+too early.** It is the supply-conservation hard blocker; it is settled here at
+source.
+
+### 5.1 The wargame — Q10 against the supply-conservation adversary
+
+`work_P(E)` sums `shard_work_milli(R_market(s,E), age, …)` over the shards `P`
+**held and served** at `E` (`consensus_state.rs:381–409`). `R_market(s,E)` is
+frozen-persisted at close (`archival_r_market`, §4 invariant 2), so the
+denominator side is as-of-E by construction. The adversary target is the
+**numerator's held term**: if PR-E3's verify recomputes `work_P(E)` with a
+`held` set that differs from the frozen as-of-E truth, the reward drifts from
+the finalized `Σwork(E)` denominator — the plan's named silent-mint failure.
+
+Verify runs up to `MAX_CLAIM_AGE_W` epochs after `E`, so "held as-of-E" ≠ "held
+at verify-time tip" whenever `P` mutated holdings in between. Mid-life add/drop
+(`HoldingsUpdate`) is **genesis-scoped V3.0** (`FOLLOWUPS.md:1317–1319`;
+`ARCHIVAL_BOND_GATE4.md` §4.4), so the gap is live, not hypothetical.
+
+### 5.2 Standing vs. held — the asymmetry Round 2 conflated
+
+The bond record (`ArchivalBondValue` v4, `shekyl_types.h`) carries the two
+temporal quantities with **different shapes**:
+
+| Quantity | Storage | As-of-E? |
+|----------|---------|----------|
+| **Standing** (`good_through` / market membership) | `bad_intervals: [{start_epoch, end_exclusive}]` — interval-semantic | **Yes** — `market_member_at_epoch(join, E, bad_intervals, …)` (`consensus_state.rs:98`) evaluates it at any `E` |
+| **Held shard set** | `held_shard_ids: Vec<u64>` — a **flat, tip-current** vector, mutated in place by add/drop | **No** — no epoch dimension; the pre-mutation set as-of-E is overwritten |
+
+The only C++ hold accessor takes `at_height` and **ignores it**, reading the
+tip descriptor — the documented M2-1 defect, verbatim in the source:
+
+```4984:4990:src/blockchain_db/lmdb/db_lmdb.cpp
+  // NOTE: returns tip holdings (ignores at_height). This was sound while holdings were
+  // immutable, but HoldingsUpdate is now genesis-scoped (V3.0, 2026-06-15) — a P can add/drop
+  // shards mid-life, so "holds shard now" no longer implies "held shard at at_height". The
+  // serve-credit window check must be reconciled with mutable holdings when the
+  // Rebond/Unbond/HoldingsUpdate connect paths land (PHASE_2B_FSM_RETOOL.md; FOLLOWUPS V3.0
+  // bond-lifecycle item). Behavior unchanged here pending that work.
+```
+
+Round 2's "as-of-E interval marshaling" disposition applied the **standing**
+shape (correct, interval-based) to the **held** term (wrong: there is no held
+interval log to marshal). That is the conflation this section corrects.
+
+### 5.3 The ground truth exists — table identity settled at source
+
+The spec already pins the correct source against exactly this failure:
+
+> `work_P(E)` is derived from per-`(P,s,E)` **retention bits**, not the mutable
+> holdings descriptor. HoldingsUpdate cannot corrupt historical work; descriptor
+> = current membership, **bits = per-epoch ground truth.**
+> — `ARCHIVAL_BOND_GATE4.md:479–481` (§4.4)
+
+Enumerated at source, the archival LMDB tables are `archival_serve_credit`,
+`archival_bond`, `archival_shard_segment`, `archival_slash_applied/_log`,
+`archival_r_market`, `archival_sigma_work`, `archival_epoch_close_log`
+(`db_lmdb.cpp:1632–1646`). **There is no separate retention-bit table and no
+`archival_held` table.** Therefore the "per-`(P,s,E)` retention bits" the spec
+names *are* the serve-credit bits in `archival_serve_credit`, keyed
+`ArchivalServeCreditKey(P_id, shard_id, E)` (`db_lmdb.cpp:4893–4935`). Those bits
+are **set on connect / removed on disconnect** (`blockchain_db.cpp:224` / `:586`)
+— reorg-symmetric by the same pop-ordering discipline as invariant 2.
+
+**`credit(P,s,E) ⟹ held(P,s,E)`-as-of-E — cryptographically, not by convention.**
+Setting the bit requires a `txin_archival_serve_credit_response` that passes
+`verify_segment_path(&leaf_bytes, …, &segment_subroot_rk)` against the **frozen
+registry segment subroot**, gated on `registry_segment_subroot_rk` match
+(`archival_ffi.rs:295–297, 337–344`). The leaf binds `(P_canonical_id, shard_id,
+E)` to the frozen registry — i.e., the bit cannot be set unless `P`'s shard `s`
+was a registry leaf as-of-E. So the serve-credit bit is a *sound* as-of-E
+held-and-served witness; the descriptor filter adds nothing it doesn't already
+imply, except drift.
+
+### 5.4 Disposition — the two conjuncts of supply conservation
+
+M-2 is *literally* the supply-conservation keystone: there is **no independent
+per-epoch cap** — no `Σ minted(E) ≤ budget(E)` enforced separately from the
+share formula. `reward_share_floor(budget, capped_milli, sigma_work_milli)`
+(`reward_arithmetic.rs:129`) takes `budget` as an **input** (set by the emission
+schedule + tx-responsive release, *work-independent*), and conservation is
+purely structural: `reward_P = budget · capped_P / Σwork_stored` sums to `budget`
+**iff every verify-time numerator `capped_P` equals P's exact frozen term in the
+stored denominator `Σwork(E)`**. `VIN_PLAN:495–523` spells out the failure: a
+live- or tip-descriptor-sourced numerator exceeds P's frozen term (R_market has
+drifted up since close), `Σ > budget`, **real inflation** breaking R1.B. That
+same passage names `held(P,E)` as the still-open *fourth* input gated on Q10 —
+the correction below is that it is **not a fourth input**: it collapses into the
+E-indexed serve-credit bit (input #2, §5.3), and the descriptor was a phantom
+fifth source.
+
+**RATIFIED (consensus sourcing rule; priority-1):** M-2 closes under
+**bits-sourcing ∧ as-of-fire-height acceptance** — the conjunction, not
+bits-sourcing alone.
+
+- **Conjunct 1 — bits-sourcing.** `work_P(E)`'s held-and-served shard set is
+  sourced from the per-`(P,s,E)` serve-credit bits (`archival_serve_credit`),
+  never from `held_shard_ids`.
+- **Conjunct 2 — as-of-fire-height acceptance.** The bit only *means*
+  "held-and-served as-of-E" because acceptance gates on holding at fire height —
+  and that gate uses the **same broken accessor**: `blockchain.cpp:4307` calls
+  `archival_bond_holds_shard(resp.p_canonical_id, resp.shard_id, h_fire)`
+  (verified this round), which ignores `at_height` and reads tip
+  (`db_lmdb.cpp:4975`, the M2-1 defect). Under immutable holdings tip ≡ h_fire,
+  so every extant credit is a sound as-of-E bit; under **V3.0 mutable holdings**
+  it is not — :4307 can admit a credit for a shard `P` acquired *after* the
+  challenge fired, or reject one `P` held-at-fire-then-dropped.
+
+**Both conjuncts, or the conflation returns.** Bits-sourcing *without* fixing
+:4307 merely moves the as-of-E defect one layer up: the ledger you would trust
+was itself populated by a tip-descriptor gate. Stating conjunct 1 alone
+reproduces the exact M2-1 shape the original defect was — a sound-looking
+sourcing rule resting on an unsound populate path.
+
+**One build, not two.** The `at_height`-honoring accessor (FOLLOWUPS P2B-7
+Pin 4) discharges conjunct 2 at :4307 **and** is the identical read the V3.0
+mutable-holdings rule needs — one accessor, one as-of-E semantics, one
+implementation. Retiring the descriptor filter (conjunct 1) is *sound only
+because* that accessor makes the bit trustworthy; neither change is correct in
+isolation. That is the coupling made precise: not "share one source," but "the
+ledger only *means* held-at-E once acceptance reads as-of-fire-height."
+
+### 5.5 Make the single path unbreakable by construction
+
+Deleting the filter promotes the credit ledger to the **sole** gate on
+`work_P(E)`. That is correct — the descriptor filter was never sound
+defense-in-depth; it was a *second, silently-wrong source of "held,"* and that
+wrong source is precisely what manufactures the over-mint. Collapsing to one
+path genuinely reduces attack surface. But the honest blast radius is that the
+path is **unbackstopped**: the §5.4 zero-tolerance recompute (leg step 5) catches
+a *wallet* lying about the amount, and per-`(P,E)` dedup caps one claim per
+epoch — **neither catches a consensus-rule sourcing inconsistency.** Both sides
+recompute with the same rule, so if the rule mis-sources, *consensus itself*
+mints the inflated amount and the zero-tolerance compare passes it. Sourcing is
+the one correctness obligation with nothing underneath it; the protection must
+therefore be structural, not a second checker. Three moves, all
+make-bad-states-unrepresentable:
+
+1. **One sourcing function, both sides.** A single
+   `as_of_E_served_work(frozen_ledger, P, E)` that **close** calls to build
+   `Σwork` and **verify** calls to build `capped_P`. Then the numerator is P's
+   exact term in the denominator *by construction* — same code, same frozen data
+   — and divergence is **unrepresentable**, not tested-against. This is M-3's
+   single-source idiom (`reward_arithmetic`/`Curve`, both sides) pushed one layer
+   deeper: from same-arithmetic to same-input-sourcing.
+2. **Descriptor out of the work-channel type.** Not "delete the filter line" —
+   **remove `held_shard_ids` from the input the work computation sees**, so a
+   future "shouldn't we re-check they still hold it?" edit does not compile. The
+   descriptor keeps its real job (current membership: bond-floor, gate-4 connect)
+   elsewhere; it is simply unreachable from work.
+3. **Reorg-symmetry inherited, not bespoke.** The bits' set-on-connect /
+   remove-on-disconnect (`blockchain_db.cpp:224`/`:586`, verified this round —
+   keyed `(P, shard, E)`, E-indexed) is an instance of the **M1 O-3
+   pop-symmetric discipline that just landed** (`CHANGELOG.md`; `LMDB_SCHEMA.md`
+   v8; `ARCHIVAL_REWARD_GATE_M1.md:89`), not a hand-rolled parallel path — one
+   reorg mechanism, many tables. And the frozen snapshot is **one marshaled
+   struct passed to both readers**, so **Q7 falls out as "one snapshot, two
+   readers"** (`archival_ffi.rs:346` house pattern) — resolved as Round 2 held,
+   but now over the *correct* source, and with no new schema or revert path.
+
+### 5.6 The three armed KATs (triggers, not prose invariants)
+
+Because the deletion promotes the ledger to the sole work gate, its correctness
+rests on (acceptance-time membership at :4307) + (ledger reorg-symmetry). Three
+KATs arm that — the load-bearing test set the WS-1 build lands with:
+
+1. **Drop-after-serve KAT (regression guard on the deletion).** `P` holds `s` at
+   `h_fire`, serves (credit accepted), **drops `s` before close** → `work_P(E)`
+   counts `s`. This is the case the descriptor filter got wrong; it guards the
+   deletion against re-introduction.
+2. **Acceptance-gate KAT (the :4307 fix's boundary).** Credit **rejected** when
+   `P` did not hold at `h_fire` (even if held at tip); **accepted** when `P` held
+   at `h_fire` (even if dropped by tip). Forecloses the only case that could put
+   a credit in the ledger without a real as-of-E hold.
+3. **Ledger reorg-symmetry KAT (now load-bearing, not corroborating) — pins the
+   *composition*, not a duplicate that can occur.** The unconditional set/remove
+   has **no refcount**, and that is *sound because duplicates are structurally
+   unreachable*: `(P,s,E)` multiplicity is provably ≤ 1 on any canonical chain —
+   `blockchain.cpp:4247` rejects a credit whose `(P,s,E)` bit is already set
+   ("Duplicate archival serve-credit", against pre-block DB state), and
+   `blockchain.cpp:4882` rejects two `(P,s,E)` credits across txs in one block
+   (48-byte `(P,shard,E)` block set). So the block whose connect set the bit is
+   the *only* block whose disconnect can clear it; a refcount would be dead
+   machinery. The KAT therefore proves the composition: **(a)** a second
+   `(P,s,E)` credit is rejected both intra-block (`:4882`) and against prior DB
+   state (`:4247`), **and** **(b)** given that rejection, the single credit's bit
+   round-trips **bit-identically** across a pop spanning its set height
+   (`blockchain_db.cpp:224` set / `:586` remove, keyed `(P,s,E)`). It proves
+   duplicates are *unreachable* and that their unreachability is the load-bearing
+   reason no-refcount is sound — not that a duplicate is handled.
+
+### 5.7 Reopening (rule 21)
+
+Reopens iff (a) a serve-credit bit can be set for a shard `P` did **not** hold
+as-of-E — i.e., the §5.3 segment-path binding **or** conjunct-2 acceptance is
+ever weakened so `credit ⇏ held` (then the descriptor filter, or a dedicated
+held interval log, returns as a real requirement); or (b) `work_P` is redefined
+to count held-but-**unserved** shards (none such today — work requires credit).
+
+**No-refcount ↔ dedup coupling (armed trigger).** The bit's reorg-symmetry
+(§5.6) is not self-contained — it is a theorem with a dependency on the two
+dedup guards. **Reopens iff serve-credit dedup at `blockchain.cpp:4247` or
+`:4882` is ever relaxed to admit multiple `(P,s,E)` credits:** the unconditional
+remove-on-disconnect then becomes a reorg **under-count** (pop the second
+crediting block → its disconnect clears a bit the first block's still-live credit
+justifies → `work_P(E)` silently drops it), so **the bit must gain a refcount or
+the disconnect must become conditional.** Recording this ties the two decisions
+together; without it the coupling lives only in review and a future dedup change
+breaks reorg-symmetry with nothing biting.
+
+**Proof-carrying acceptance — named reopen, not now.** The purist "derive, don't
+hold state" would have the serve-credit response **carry a proof** it held `s` at
+fire height against a committed **per-P holdings-history root** — acceptance
+verifies an in-tx witness and there is *no stateful accessor at all*. It is
+cleaner in principle but needs new commitment machinery (the holdings-history
+root), i.e. more complexity and surface, against the very preference it serves.
+The height-honoring accessor + one-sourcing-function gets essentially all the
+conservation benefit at a fraction of the cost. **Build the accessor for
+genesis; record proof-carrying acceptance as this reopen,** triggered iff
+mutable-holdings behavior makes the stateful accessor's as-of-E reads a
+demonstrated correctness or performance problem.
+**Re-evaluation shape.** Design-round 1 of the PR that weakens the segment-path
+binding, weakens :4307 acceptance, or redefines `work_P`'s shard predicate, with
+the credit-implies-held proof re-examined at source.
+
+---
+
+## 6. WS-2 — Q9/F-E3 dedup atomicity — **RATIFIED**
+
+Independent of WS-1 (different mechanism; shared only in the PR-E3
+verify/connect split). Closed here at source (operands re-verified at `dev`
+`90e790c9c`; the `1f67652b0→90e790c9c` delta touched only CI config + CHANGELOG
+— zero operand drift).
+
+### 6.1 The straddle, at source — architectural, not accidental
+
+**The function is not where the bug is.** `claimed_epochs_check_and_set(&mut
+set, …)` (`claimed_epochs.rs:99`) is atomic on its *passed-in* set and correctly
+returns `Ok(false)` on the second call for the same epoch (its own tests,
+`:137–138`). The straddle is in the **plumbing**, and it is by design:
+
+- The set is an **inline field on the per-P bond record** —
+  `ArchivalBondValue::claimed_settlement_epochs` (`shekyl_types.h:613`, v4
+  codec: at-rest cap/order/span validation only; semantics live in Rust,
+  mirroring the `good_through` split).
+- The mutation site is **connect**: "The FFI wrapper lands with its first
+  caller, the emission vin's **connect path**" (`claimed_epochs.rs:16`).
+- Verify therefore reads the bond record from **pre-block DB state** — which is
+  exactly what the ratified Q7 pin demands (verify = pure function of the
+  marshaled pre-block frozen snapshot).
+
+So two same-block emissions from the same `P` claiming the same `E` both load
+the same pre-state set, both check their own copy, both see `E` unset — the
+double-mint window, purely intra-block.
+
+### 6.2 Disposition — the block-level `(P,E)` pass (option 2); option 1 foreclosed by Q7
+
+**RATIFIED (consensus acceptance rule; priority-1):** dedup is delivered by
+**three layers, one per scope**, of which only the middle one is new:
+
+| Scope | Mechanism | Status |
+|-------|-----------|--------|
+| **Intra-tx** | Wire: `settlement_epochs` strictly increasing ⇒ duplicates **unencodable** (`emission_wire.rs:427–428`/`:564–565`, `EpochsNotStrictlyIncreasing`) | **Landed** |
+| **Intra-block, cross-tx** | **Block-level `(P,E)` uniqueness pass** in `handle_block_to_main_chain`, over every `(P, E_i)` of every emission vin in the block, before connect | **The WS-2 build item** |
+| **Cross-block** | Verify: read-only `claimed_epochs_contains` against the pre-block bond record; connect: `claimed_epochs_check_and_set` as the single writer | Function landed; FFI wrapper lands with connect |
+
+**Option 2 is not merely preferred — it is the landed house idiom for this exact
+straddle.** The serve-credit leg hit the identical shape and solved it with the
+identical pass: `blockchain.cpp:4882–4901` in `handle_block_to_main_chain`
+(`:4504`), commented verbatim "Per-tx serve-credit idempotency checks run
+against pre-block DB state; reject duplicate (P, shard, E) credits across
+multiple txs in the same block." The emission pass mirrors it with key `(P,E)`
+instead of `(P,s,E)`, with one difference that widens the loop: an emission vin
+claims a **vector** of epochs, so the pass inserts every `(P, E_i)` pair, not
+one key per vin.
+
+**Option 1 (intra-block write-visibility) is rejected on keystone coherence,
+not taste:** letting tx2's verify see tx1's connect-scope write makes the verify
+**order-dependent within the block**, destroying the Q7-ratified
+pure-function-of-frozen-snapshot property that the supply-conservation audit
+argument rests on (§5.5 — one sourcing function over one frozen input set).
+The pass keeps per-tx verify order-independent and pushes the ordering question
+into one structural, auditable site.
+
+**Connect-time `Ok(false)` is an invariant breach, not a reject.** With the
+three layers in place, `claimed_epochs_check_and_set` returning `Ok(false)` at
+connect is unreachable (verify's contains-check + the block pass already
+foreclosed it). The connect path treats it as a hard error (`throw`, matching
+the connect-path `FATAL:` style at `blockchain_db.cpp:230`), never a soft skip
+— a silent skip would connect a block whose emission paid without marking `E`.
+
+### 6.3 The prune-resurrection double-mint — the journal is mandatory, not hygiene
+
+The connect mutation is **insert `E` + prune entries below the window floor**
+(`claimed_epochs.rs:114–116`), and the floor keys on `current_settled_epoch` —
+**a quantity that is non-monotonic under reorg.** Verified at source: the
+epoch-close revert **definalizes `E`** when its boundary block pops
+(`ARCHIVAL_CONSENSUS_STATE.md:224–239`, "a pop sequence removes all of them
+before `revert_archival_epoch_close_at_height` definalizes `E` at
+`h_close(E)`"). The failure is therefore **not** a bit-identity blemish; it is
+a **double-mint**, the same priority-1 supply-violation class as the WS-1
+keystone:
+
+1. `E_old` is claimed and its reward **mints** (block long since connected).
+2. A later claim of `E_new` connects in a boundary-crossing region; its
+   `check_and_set` prunes `E_old` at the then-current window edge
+   (`E_old < floor(S)`).
+3. A pop spanning the boundary definalizes a settled epoch → `S′ < S` → the
+   floor lowers → **`E_old` re-enters the claim window** (a one-block pop past
+   a boundary suffices: `E_old = floor(S) − 1 ≥ floor(S−1)`).
+4. Under the naive inverse ("remove the inserted `E`"), `E_old` is absent from
+   the restored set → a fresh emission claiming `E_old` passes dedup → **the
+   reward mints twice.** (The module's own prune-safety note — reorg depth
+   720 ≪ epoch length 10 000 — answers pruned-entry *claimability at tip*,
+   not resurrectability under a floor-lowering pop; and `:224–239`'s
+   no-stranded-emission argument covers citing emissions above `h_close`,
+   not the pruned dedup state.)
+
+**Disposition (RATIFIED): journaled revert, inheriting the slash-log
+precedent — and the journal row is pinned as a pre-image sufficient to
+restore the prune-evicted set members atomically with reversing the inserted
+`E`.** (Ratified here as the minimal delta `{inserted E, evicted set
+members}`; the implementation widened it to the full claimed-set pre-image
+per §3a pin (a) — same double-mint closure, simpler byte-identical restore.)
+A journal that reverses only the insert
+still leaves the pruned-already-claimed `E_old` gone and the double-mint alive
+— the *point* of the journal is restoring what the prune removed. The slash
+path already carries full pre-image revert rows (`m_archival_slash_log`,
+"BE(height)‖BE(seq) → revert journal", `db_lmdb.h:694`;
+`revert_archival_slashes_at_height` in the pop path, `blockchain_db.cpp:478`);
+the emission journal rides the same idiom, keyed by height, restored exactly on
+disconnect. One reorg mechanism, many tables — the same O-3 inheritance §5.5-3
+uses for the serve-credit bits. (`first_paying_emission_height`, set-once per
+`shekyl_types.h:614–619`, rides the same journal row: unset on pop iff this
+emission was the setter.)
+
+### 6.4 Armed KATs
+
+1. **Same-block double-claim KAT (the double-mint trigger).** Two txs from the
+   same `P`, overlapping claimed epoch `E`, same block → block **rejected** by
+   the `(P,E)` pass. The direct regression test on the straddle.
+2. **Cross-block double-claim KAT.** `E` claimed at height `h`; a second claim
+   of `E` at `h' > h` → tx rejected at verify (`claimed_epochs_contains`
+   against the connected bond record).
+3. **Prune-straddle double-mint KAT (the journal's load-bearing case — a
+   property test, not a mechanism test).** Claim `E_new` in a
+   boundary-crossing block whose connect **prunes** the already-claimed
+   `E_old`; pop past the boundary (floor lowers, `E_old` re-enters the
+   window); submit a fresh emission claiming `E_old` → **rejected**
+   (`Ok(false)` / vin-reject). Byte-identity of the restored
+   `claimed_settlement_epochs` (and `first_paying_emission_height`) is
+   asserted as a corollary, but "no second mint of `E_old` post-reorg" is the
+   property — it is the assertion the naive remove-inverse fails (§6.3 step
+   4) and the reason the journal exists.
+
+### 6.5 Reopening (rule 21)
+
+- **Prune-against-finalized retires the journal** — reopens iff a
+  **reorg-immune finalized settled epoch becomes a first-class quantity
+  plumbable to the prune site** (e.g. a checkpoint/finality boundary lands
+  for other reasons). The §6.3 root cause is that the prune keys on the tip
+  settled epoch, which is non-monotonic under reorg; pruning against a
+  reorg-immune floor instead would make the resurrectable state
+  **unrepresentable** (the prune only ever evicts epochs no legal reorg can
+  bring back into the window), the naive remove-inverse becomes correct, and
+  the journal, its bond-record row, and its KAT all retire. **Rejected now**
+  because the invariant it needs does not currently exist: settled epochs
+  themselves definalize under reorg (`ARCHIVAL_CONSENSUS_STATE.md:224–239`),
+  so "finalized settled epoch" is not reorg-immune without a hard *enforced*
+  reorg-depth limit — and none is plumbed to the prune site
+  (`claimed_epochs_check_and_set` receives only `current_settled_epoch`,
+  `claimed_epochs.rs:99`; `ARCHIVAL_REORG_DEPTH_BLOCKS` = 720 is a wallet-side
+  scan-ceiling constant, not a consensus pop bound). The journal is correct
+  for **any** reorg depth; prune-against-finalized is correct only up to a
+  bound it would newly depend on — in a priority-1 double-mint context,
+  self-contained-and-depth-independent beats clever-but-coupled.
+  **Re-evaluation shape:** design round of the PR that lands the finality
+  boundary, with the §6.3 straddle re-run against the new floor.
+- Reopens iff a **second claimer** of `claimed_settlement_epochs` appears (any
+  vin type other than the emission vin writing the set): the block pass is
+  scope-bounded to emission vins and must widen to the union of writers, or the
+  intra-block window reopens between claimer types.
+- Reopens iff per-tx verify is ever made **order-dependent within a block**
+  (option-1 shape) — which *first* reopens the Q7 pure-function pin (§5.5);
+  WS-2 cannot flip to option 1 without the keystone reopening ahead of it,
+  the same dependency shape as Q3's arity coupling (§2.1).
+- The window constants (`MAX_CLAIM_AGE_W = 26`, cap 32, reorg depth 720 ≪
+  epoch 10 000) are load-bearing for the prune-safety argument; the
+  `claimed_epochs.rs:39–43` const assertion is the armed guard, and a change
+  to any of the three re-runs §6.3's double-mint straddle analysis in its own
+  PR.
+**Re-evaluation shape.** Design-round 1 of the PR introducing the second
+claimer / the ordering change / the constant move, with this section's
+straddle analysis re-run at source.
+
+---
+
+## 7. Round status
+
+- **Q3** — RESOLVED (vacuous at arity 1).
+- **Q12 / F-E8** — RESOLVED (foreclosed by wire positivity + zero-tolerance recompute).
+- **Q11 / F-E7** — **RATIFIED: ACCEPT** — with the backing-pseudo-out
+  balance-exclusion arming KAT as its reopen (§2.2).
+- **WS-1 (Q10 → M-2 → Q7)** — **RATIFIED: M-2 closes under bits-sourcing ∧
+  as-of-fire-height acceptance (§5.4, the conjunction); one shared
+  `as_of_E_served_work` sourcing function both sides; `held_shard_ids` out of
+  the work-channel type; one `at_height` accessor with two consumers
+  (`:4307` acceptance + `:5270` slash-eligibility — **post-closure pin: the
+  §8.1 pre-flight found a third, `db_lmdb.cpp:5241`, expanding item 1(c)'s
+  inventory**); reorg-symmetry inherited from
+  M1 O-3 with the no-refcount↔dedup coupling armed (§5.7); three armed KATs
+  (§5.6, reorg KAT pins the composition).** The supply-conservation keystone,
+  the one obligation with no backstop under it (§5.5). Corrects the Round-2
+  Q10/M-2 closure.
+- **WS-2 (Q9 / F-E3)** — **RATIFIED (§6), with a severity upgrade:** three
+  dedup layers (wire strictly-increasing landed; **block-level `(P,E)`
+  uniqueness pass** mirroring the landed `:4882` serve-credit idiom; per-tx
+  contains-check at verify + connect `check_and_set` single writer). Option 1
+  (intra-block write-visibility) rejected on Q7 pure-function coherence.
+  The prune-straddle is a **double-mint** (the floor keys on
+  `current_settled_epoch`, non-monotonic under reorg — a pop resurrects a
+  pruned already-claimed epoch into the window), so claimed-set
+  reorg-symmetry is via **journaled revert** whose row restores the
+  prune-evicted members atomically with the inserted `E` — implemented as
+  the full claimed-set pre-image per §3a pin (a) (slash-log
+  idiom); three armed KATs (§6.4, the prune-straddle KAT asserts re-claim
+  **rejection**, the property, not byte round-trip, the mechanism);
+  prune-against-finalized recorded as the rule-21 reopen that retires the
+  journal (§6.5). **The round's design work is complete.**
+
+**Build progress:** §3 item 1 (the WS-1 sourcing correction, all four
+pieces including the three-consumer accessor cut and both KAT sides)
+**implemented 2026-07-07 on `feat/emission-ws1-held-sourcing`** — see the
+item-1 status note in §3 for the two implementation findings (slash-log v2
+`holdings_pre_kind`; encode-invariant relocation). §3 item 2 (the M-2/Q7
+snapshot struct) **implemented 2026-07-08 on the same branch** — same PR
+by validation-surface bundling; see the item-2 status note for the
+persisted-`Σwork` finding (post-close `bad_intervals` growth + the
+close-only M1 operand make the stored denominator load-bearing). §3 item 3
+(the verify body, steps 1–6 + witness-typed assembly) **implemented
+2026-07-08 on the same branch** — see the item-3 status note for the three
+implementation pins (per-shard exactness; the tip-epoch claim-window
+operand shared with the connect writer; FFI entry point deferred to C-1
+with the dispatch wiring). §3 item 3a (the WS-2 write side: single-writer
+FFI, connect-path journal, pop restore, four KATs including the §6.4
+prune-straddle double-mint property) **implemented 2026-07-08 on the same
+branch** — see the item-3a status note for the two pins (full-pre-image
+journal row; all non-insert codes fatal at connect) and the one
+C-1-blocked piece (the block-level `(P,E)` pass, which iterates a variant
+type that doesn't exist until C-1's transport shim). Items 4, 5 remain
+open in dependency order. **The C-1 pre-flight ran 2026-07-08 against
+`dev` `6671d565b` (after #269/#271/#272 landed) — executed in §9**: all
+merge blockers green, dispatch anchors confirmed, two findings — both
+dispositioned same day. F-C1b (`VARIANT_TAG 0x06 → 0x04`) **ratified**
+(§9.4). F-C1a (`budget(E)` production source) ratified in direction but
+**gated on a spec-first round**:
+[`ARCHIVAL_BUDGET_SCHEDULE.md`](../design/ARCHIVAL_BUDGET_SCHEDULE.md) pins the
+redirect-the-write straddle transition, reorg-across-fork symmetry, and
+zero-budget-epoch handling (§9.3 disposition); **item 4 does not open
+until that spec is ratified.**
+
+### 7.1 Next action — PR-E3 implementation pre-flight (re-pin to current `dev`)
+
+All design on the leg is ratified (Q3/Q12 resolved, Q11 accepted, WS-1 and
+WS-2 ratified); the full §3 build list is unblocked. The PR-E3 implementation
+pre-flight opens against the §3 build list and **runs against the current
+`dev` head, not the `1f67652b0` round pin** — `dev` has already moved to **`90e790c9c`** (twice mid-round in
+this arc; the WS-2 closure's operands were re-verified at `90e790c9c` and the
+delta was CI/CHANGELOG-only, §6). The **§11.1 pattern — read every operand at
+its production site** — is precisely what turned the last two "closed" premises
+(PR-E2's landed-not-open state; Q10's descriptor-vs-bits conflation), so the
+pre-flight re-verifies the §3 file:line anchors (`consensus_state.rs:386–389`,
+`:4307`, `:5270`, `:4882`, `blockchain_db.cpp:224`/`:586`,
+`claimed_epochs.rs:99`, `shekyl_types.h:613`, `archival_serve_credit`) at the
+branch head before the build lands. **Executed in §8.**
+
+---
+
+## 8. PR-E3 implementation pre-flight — anchors confirmed at `dev` `90e790c9c`
+
+Run 2026-07-07, after round closure. `origin/dev` fetched and confirmed
+**unmoved at `90e790c9c`** (the head the WS-2 operands were already
+re-verified against). Every §3 operand read at its production site at that
+commit — all **confirmations**, no discoveries, plus one path correction:
+
+| §3 item | Operand | At `90e790c9c` |
+|---------|---------|----------------|
+| 1(b) deletion target | `held_shard_ids` filter | **Present** at `consensus_state.rs:386–389` (`.held_shard_ids.contains(&shard.shard_id)` inside the `credit_pairs` loop at `:381`) — the WS-1 build removes the field from the work-channel input type |
+| 1(c) consumer 1 | serve-credit acceptance gate | `blockchain.cpp:4307` — `archival_bond_holds_shard(p, shard, h_fire)`, `h_fire` passed |
+| 1(c) consumer 2 | slash eligibility | `db_lmdb.cpp:5270` — forwards `h_fire` to the same accessor |
+| 1(c) consumer 3 (§8.1 finding) | slash-eligibility early-out | `db_lmdb.cpp:5241` — **direct** `bond.holds_shard` tip read before `h_fire` derivation; the tip-drop-escapes-slash leak an accessor-only fix misses |
+| 1(c) defect site | tip accessor | `db_lmdb.cpp:4975–4976` — parameter literally `uint64_t /*at_height*/` (ignored) |
+| 1(d)/§5.7 coupling | duplicate-bit guard | `blockchain.cpp:4247` — `has_archival_serve_credit_bit` reject |
+| 3a block-pass idiom | serve-credit cross-tx pass | `blockchain.cpp:4880–4886` — `block_serve_credits` set over `txs`, the mirror template |
+| 3a single writer | `check_and_set` | `claimed_epochs.rs:99` — signature `(set, epoch, current_settled_epoch)`; prune-on-insert at `:114–116` (`set.retain(|&e| e >= window_floor)`) |
+| 3a journal substrate | claimed set + set-once height | **`src/blockchain_db/shekyl_types.h`** `:613` / `:619` — *path correction: the file is `src/blockchain_db/`, not `src/cryptonote_basic/`; line anchors unchanged* |
+| 3a revert slot | pop-path revert order | `blockchain_db.cpp:478–480` — `revert_archival_slashes_at_height` → `revert_archival_epoch_close_at_height` → `remove_block()`; the emission-claim journal revert slots into this per-height sequence |
+| 1(d)/§5.6 KAT 3 | bit set/remove symmetry | `blockchain_db.cpp:224` (connect set) / `:586` (disconnect remove) |
+
+**Build order** is §3's dependency order: item 1 (WS-1 sourcing: accessor +
+`as_of_E_served_work` + field removal + KATs both sides) → item 2 (snapshot
+struct) → items 3/3a (verify body + dedup plumbing + journal + 3 KATs), with
+item 4 (C-1 activating cut) and item 5 (E4/E5 deletions) as separate PRs per
+their own gates. Test gates per `45`/`50`: `cargo fmt --check`, `clippy -D
+warnings`, workspace tests, plus the armed KATs (§5.6 both sides + §6.4) and
+the Q11 balance-exclusion KAT (§2.2). Implementation proceeds on fresh
+short-lived branches off `dev` per `06-branching.mdc`; this round branch
+carries docs only.
+
+### 8.1 The `h_fire` symmetry check — CONFIRMED, with one new consumer found
+
+The item-1 gating source-check ("do `:4307` and `:5270` derive the same
+`h_fire` for the same `(P,s,E)`?") was run at `90e790c9c` ahead of the build,
+because a divergence would predate the accessor fix and need its own
+disposition.
+
+**Symmetry CONFIRMS.** Both sides derive `h_fire` identically and
+deterministically, with no tx-supplied component: `h_open`/`h_close` from
+`settlement_epoch`, `h_seal = shekyl_archival_challenge_seal_height(h_open)`,
+`seal_hash = get_block_hash_from_height(h_seal)` from the chain, then the same
+`shekyl_archival_challenge_fire_height(h_open, h_close, seal_hash, p_id,
+shard_id, settlement_epoch)` FFI call (`blockchain.cpp:4278–4300`;
+`db_lmdb.cpp:5250–5266`). The response tx carries no fire height — nothing
+attacker-influenceable on the reward side; a reorg replacing the seal block
+changes both sides identically. One cosmetic guard asymmetry to align in
+item 1: the slash side additionally rejects `h_fire > h_close`
+(`db_lmdb.cpp:5267`) where acceptance checks only `h_fire == 0`
+(`blockchain.cpp:4301`) — harmless if the derivation guarantees range, but the
+two sites should carry byte-identical guards.
+
+**Finding — a third tip-read consumer at `db_lmdb.cpp:5241`.**
+`archival_challenge_failed_at_height` early-outs on a **direct**
+`bond.holds_shard(shard_id)` tip read *before* deriving `h_fire`. Today it
+doubles as a re-slash guard (slash-apply *removes* the shard from
+`held_shard_ids`; the revert at `:5513` pushes it back), but per-epoch
+double-slash is already blocked by `has_archival_slash_applied` at `:5239` —
+so under mutable holdings the `:5241` read is a pure eligibility leak: `P`
+held at fire, stayed silent, drops the shard before the slash sweep →
+`:5241` returns false → **escapes slash even after `:5270` is fixed.** The
+accessor-only fix does not close the asymmetry exploit; `:5241` must be
+dispositioned (delete as redundant, or convert to the as-of-fire read) inside
+item 1, and the disposition interacts with the slash-apply-mutates-holdings
+coupling: post-slash, tip `holds_shard` is false *by construction*, so any
+surviving tip read in an eligibility path conflates "voluntarily dropped"
+with "already slashed." Item 1(c)'s consumer inventory is updated to three
+sites (§3).
+
+### 8.2 Forward notes (recorded, non-blocking)
+
+- **The 720-finality reconciliation (extends the §6.5 reopen).**
+  `ARCHIVAL_REORG_DEPTH_BLOCKS` = 720 is already a *de-facto* finality
+  assumption the wallet trusts (pscan ceiling, bond assembly, segment cache)
+  while consensus enforces no pop bound — that wallet/consensus gap exists
+  today, independent of emission. When a finality boundary lands (the §6.5
+  trigger), setting it to 720 closes **both at once**: it makes
+  prune-against-finalized available (retiring the claimed-set journal) *and*
+  retroactively converts the wallet's 720 heuristic into a consensus-enforced
+  invariant. Whoever lands finality reconciles two things, not one.
+- **Shared-surface ledger for the §3 build.** This pre-flight came back
+  all-confirmations — credible, since each operand was verified at its
+  production site as it landed — but it checked operands *individually*, and
+  the residual risk in a multi-item build is the seams. Items 1, 2, and 3a
+  all touch the **connect path**; items 2 and 3a both touch the **bond-record
+  struct** (`src/blockchain_db/shekyl_types.h:613`); items 1 and 2 share the
+  **FFI snapshot**. As the items land, those three surfaces go into one
+  shared-surface ledger (the parallel-tracks discipline): a collision, if
+  there is one, shows up at the seam between items, which an operand
+  pre-flight structurally cannot see.
+
+---
+
+## 9. C-1 pre-flight — operands at production sites, `dev` `6671d565b`
+
+Run 2026-07-08, after **#269** (E3 verify body + WS-1/WS-2 write side),
+**#271** (round docs), and **#272** (GF-4b backing-lineage pre-join) all
+landed on `dev`. Same §11.1 pattern as §8: every C-1 operand read at its
+production site at the branch head. Outcome: **all merge blockers green,
+all dispatch anchors confirmed, plus two findings** — one design gap that
+blocks the cut (§9.3, `budget(E)` has no production source) and one stale
+consensus-facing pin that needs a ratified correction before the wire
+freezes around it (§9.4, the `VARIANT_TAG 0x06`). *Both dispositioned
+2026-07-08 — see the ratification boxes in §9.3 (spec-first:
+[`ARCHIVAL_BUDGET_SCHEDULE.md`](../design/ARCHIVAL_BUDGET_SCHEDULE.md)) and §9.4
+(`0x04` ratified).*
+
+### 9.1 Merge-blocker status — all green
+
+| §3-item-4 blocker | Status at `6671d565b` | Evidence |
+|---|---|---|
+| ML-DSA / hybrid auth primitive (E1) | **landed** | `shekyl-ffi/src/lib.rs:1649` `shekyl_emission_hybrid_auth_verify`; role-separated binding messages `emission_wire.rs` `auth_msgs()` (`:706–713`, customizations `:65`/`:69`) |
+| Verify body, steps 1–6 (E3 item 3) | **landed** | `emission_verify.rs:321` (claims), `:548` (backing), `:587` (assembly) |
+| WS-2 write side (item 3a) | **landed** | `db_lmdb.cpp:5667` `apply_archival_emission_claim`; pop revert wired `blockchain_db.cpp` (after slash + close reverts) |
+| As-of-E snapshot gather (item 2) | **landed** | `db_lmdb.cpp:6434` `gather_archival_emission_epoch_snapshot`; persisted `Σwork` read `:6451` |
+| §8.0.3 GF-4b ladder + sweep precondition | **landed** | #272: `rust/shekyl-engine-core/src/engine/backing_set.rs`, `docs/design/ARCHIVAL_GF4B_BACKING_LINEAGE.md` |
+
+### 9.2 Dispatch-anchor table — where each C-1 cut lands
+
+| C-1 piece | Anchor at `6671d565b` | Note |
+|---|---|---|
+| C++ transport shim | `cryptonote_basic.h:841–846` — txin `VARIANT_TAG` registry (`gen 0x00`, `to_key 0x01`, `serve_credit 0x02`, `bond_post 0x03`) | length-bounded blob after the bond-post `hybrid_public_key` pattern (plan PR-E2 §); tag per §9.4 |
+| Whitelist flip | `cryptonote_format_utils.cpp:688` `check_inputs_types_supported` | mixing rule per Q11 (§2.2): emission vin **may** co-reside with key-imaged `txin_to_key` fee inputs; arity 1 per Q3 (§2.1) |
+| Per-tx verify seam | `blockchain.cpp:3579` (serve-credit branch) / `:3630–3700` (bond-post branch) in `check_tx_inputs` | emission gets its own branch, marshaling per the serve-credit FFI idiom (`:4360–4394`: serialize vin, strip the C++ tag byte, pass payload + ctx to Rust) |
+| Backing root sourcing | `blockchain.cpp:3630–3653` — `rv.referenceBlock` → `block_exists` → min/max age windows → `get_curve_tree_root_at_height(ref_height)` + `get_curve_tree_depth()` | exactly the operands `emission_vin_verify_backing` takes (`tree_root`, `tree_depth`, `signable_tx_hash`); `MembershipOnlyBacking` carries no height — the tx-level reference is the source, as for bond-post |
+| `AuthVerified` minter | Rust-side only: `auth_msgs()` (`emission_wire.rs:706`) → `shekyl_emission_hybrid_auth_verify` internals → mint | the witness **never crosses FFI**; C-1's single FFI entry (`shekyl_emission_vin_verify`) runs the three minters in §7.1 fail-fast order and returns verdict + `epochs_to_commit` + `total_reward` |
+| Block-level `(P,E)` pass | `blockchain.cpp:4887–4913` — the `block_serve_credits` set over `txs` | mirror with key = `P_canonical_id ‖ E` per settlement epoch in each emission vin |
+| Connect-side apply | `blockchain_db.cpp:221–232` — the `add_transaction_data` vin loop (serve-credit `:221`, bond-post `:226`) | emission arm calls `apply_archival_emission_claim(height, p_id, settlement_epochs)`; the pop side needs **no** vin arm — the journal revert is already height-keyed in `pop_block` |
+
+### 9.3 Finding F-C1a — `budget(E)` has no production source — **BLOCKER**
+
+The verify body consumes `EmissionEpochSource.budget` per claimed epoch
+(`emission_verify.rs:223`), and Form-C distributes
+`floor(budget·capped_P/Σwork)` — but nothing in the tree **produces** a
+per-epoch budget. The leg spec scopes it out ("gate 1 `Σwork` budget
+schedule source" — `REWARD_EMISSION_LEG.md:20–21`), and no gate-1 schedule
+spec exists.
+
+What exists instead is the redirect promise at the burn site,
+`blockchain.cpp:5011–5041`: every block computes
+`staker_inflow = em_split.staker_emission + burn.staker_pool_amount`
+(`:5026`) and **burns it**, with the comment that "the archival
+reward-emission leg (2b, C-1 activation) is where this inflow gets
+redirected to fund `txin_archival_reward_emission` payouts."
+
+Two consequences:
+
+1. **The natural definition** is `budget(E) = Σ staker_inflow` over `E`'s
+   blocks `[E·SEB, (E+1)·SEB)`. That sum is **not recomputable cheaply** —
+   `staker_pool_amount` depends on per-block fees — so it needs persistence:
+   a per-block (or running) accumulator maintained at connect and reverted
+   at pop, frozen into a per-epoch row at close. The recommended shape
+   mirrors the persisted-`Σwork` pattern §3-item-2 already landed: **persist
+   `budget(E)` alongside `Σwork(E)` at close materialization**
+   (`db_lmdb.cpp:6486–6520` writes sigma; the budget row is its sibling),
+   so verify reads both operands from the same frozen close row and the
+   supply-conservation conjunction (§5.4) gains no new live operand.
+2. **The redirect itself is a consensus change** to the burn bookkeeping
+   (`actually_destroyed`, `block_burn` rows, `total_burned`) with its own
+   operand set and reorg symmetry (accumulator must pop with the block).
+   It is C-1-scope by the burn comment's own framing, but it is a
+   *separable, consensus-safe-inert* piece: the accrual can land and
+   persist budget rows while the whitelist still rejects the vin —
+   nothing reads the row until the flip. Recommended: **land the budget
+   accrual as the first commit-block of the C-1 PR** (still one PR — the
+   accrual without the consumer is inert, the consumer without the
+   accrual is unbuildable, and the flip is atomic per §3 item 4).
+
+**Open sub-question the disposition must pin:** does the burn *stop* at
+C-1 (inflow accrues to the budget purse from the flip height), and what
+happens to budget in epochs where `Σwork(E) = 0` or no claim arrives
+before `MAX_CLAIM_AGE_W` expiry — burn-on-expiry, roll-forward, or
+implicit under-mint (unminted stays unminted, the R1.B remainder posture
+extended to whole epochs)? The R1.B floor-remainder precedent
+(under-mint, never over-mint; remainder simply never minted) extends
+naturally to expiry: **recommend implicit under-mint** — no roll-forward
+state, no expiry sweep, the unclaimed budget is supply never created.
+That keeps the purse stateless beyond the per-epoch row.
+
+**Rule-21 shape:** reopen the roll-forward question iff a measured
+genesis-era claim-rate shows systematic budget stranding that changes the
+archival-incentive calculus (economics evidence, not preference), via a
+design round on the economics doc with `STAKER_ARCHIVAL_SIM.md` re-run.
+
+> **Disposition (ratified 2026-07-08): direction ratified, NOT
+> build-ready — spec-first.** The accumulator + frozen-close-row +
+> under-mint-on-expiry shape is ratified, but the recommendation as
+> written carried a supply-conservation gap: "`budget(E)` = sum of
+> staker inflow over E's blocks" taken literally includes the
+> **pre-activation burned portion** in the epoch straddling the
+> activation height — emitting coins that were already destroyed, a
+> genesis-frozen over-mint. The ratified structure that dissolves it is
+> **redirect-the-write**: the fork switches the *target* of the existing
+> per-height `staker_inflow` write (pre-activation → burn record;
+> post-activation → budget accrual), per each block's own height —
+> making the straddle correct by construction, burn-stop/accrual-start
+> atomic (one write, redirected), and reorg symmetry inherited from the
+> landed burn-record pop idiom. "Consensus-inert until the flip" is
+> re-scoped accordingly: the accrual **starts at activation**, never
+> runs pre-flip recording budget for burned inflow. Budget is the other
+> half of the supply-conservation equation the M-2 arc protected, so it
+> gets what the emission half got: a spec —
+> [`ARCHIVAL_BUDGET_SCHEDULE.md`](../design/ARCHIVAL_BUDGET_SCHEDULE.md) (gate 1),
+> pinning the straddle transition (§2), the three pop-symmetric writes
+> (§3), expiry under-mint (§4), zero-budget epochs as structurally
+> non-claimable via the M1 §2.3 positivity path with the builder's
+> single omission predicate covering the budget factor (§5), and four
+> armed KATs including reorg-across-the-fork (§6). **C-1's §9.5 build
+> list does not open until that spec is ratified** — every downstream
+> piece assumes `budget(E)` means "emittable inflow for E," which is
+> exactly what the spec pins.
+
+### 9.4 Finding F-C1b — the `VARIANT_TAG 0x06` pin is stale — recommend **`0x04`**
+
+The `0x06` pin derives from the plan's tag inventory
+(`REWARD_EMISSION_VIN_PLAN.md:118`: "serve_credit (`0x4`), bond_post
+(`0x5`). Next free binary tag: `0x06`") — a **pre-renumber** snapshot.
+The gate-(c) dense renumber (`0b7a93c23`, 2026-06-21) moved the C++
+oracle to the dense scheme (`serve_credit 0x02`, `bond_post 0x03` —
+`cryptonote_basic.h:845–846`), which makes **`0x04` the next free txin
+tag**, and the genesis dense registry already assigns it:
+`GENESIS_TX_WIRE_FORMAT.md:443` — "`+ deferred 04 reward_emission`". The
+"`0x06` C++" references that survive in the plan (`:690`, the 2026-07-07
+landed-state note) and the genesis doc's dual-scheme rows (`:44`, `:286`,
+`:288`, `:291`) are drift carried forward from the pre-renumber era — the
+same class as the serve-credit oracle comment's own history
+(`blockchain.cpp:4370`: "renumbered from the legacy 0x04 in PR #168").
+
+**Recommend:** C-1 pins `VARIANT_TAG(binary_archive,
+txin_archival_reward_emission, 0x04)` — dense, aligned with the Rust wire
+tag (`emission_wire.rs:47`), and lands the stale-doc corrections in the
+plan + genesis registry as §1.1-class fixes inside the C-1 PR. This is a
+consensus-facing wire byte: the pin is presented here for ratification,
+not silently flipped.
+
+> **Disposition (ratified 2026-07-08): `0x04`.** Independently verified:
+> the claim-era retirement removed `txin_stake_claim` (`0xf2`/`0xf3`
+> retired-never-reassigned), `0x04` is the next free dense txin tag, and
+> it is the value the landed Rust wire already uses — the plan's `0x06`
+> is the pre-renumber inventory, stale. The byte-for-byte alignment with
+> the Rust wire tag is the tell. C-1 pins `VARIANT_TAG 0x04` and carries
+> the plan/genesis-registry stale-doc corrections.
+
+### 9.5 C-1 scope enumeration (the build list, in dependency order)
+
+1. **Budget accrual + redirect** (F-C1a disposition): per-block staker-inflow
+   accumulator (connect/pop symmetric), per-epoch `budget(E)` row persisted
+   at close beside `Σwork(E)`, burn-site redirect at `blockchain.cpp:5026`.
+2. **C++ transport shim**: `txin_archival_reward_emission` blob struct,
+   `txin_v` append, three `VARIANT_TAG`s (binary `0x04` per §9.4), epee/
+   boost/JSON transport, `get_signature_size → 0`, cross-parse drift KAT.
+3. **FFI entry** `shekyl_emission_vin_verify`: parse (Rust codec) → claims
+   minter (snapshot marshal per epoch + bond record + budget row) → backing
+   minter (root/depth/signable-hash) → auth minter (`auth_msgs` + hybrid
+   verify, both roles) → assembly; verdict + `epochs_to_commit` +
+   `total_reward` out.
+4. **Whitelist flip** in `check_inputs_types_supported` (Q11 mixing rule,
+   arity 1) — the activation byte.
+5. **Dispatch wiring** in `check_tx_inputs` (serve-credit idiom) +
+   `vout_reward_sum` cross-check + reference-block age windows.
+6. **Block-level `(P,E)` pass** (§6.2's deferred third layer) at the
+   `blockchain.cpp:4887` *placement* — but the duplicate **decision** is
+   a Rust function over the block's marshaled `(P,E)` claim pairs, not a
+   mirror of the C++ `std::set` idiom (decision-placement pin below) —
+   + its two §6.4 KATs.
+7. **Connect arm** in `add_transaction_data` calling
+   `apply_archival_emission_claim` (single writer, §6.3 journal already
+   armed).
+8. **Regtest end-to-end**: emission accepted-and-applied through the real
+   path; then E4/E5 per item 5.
+   **PARTIALLY LANDED (2026-07-09, commit-block 6).** The fee-side
+   decision KAT (budget-schedule **B5**) landed at unit level
+   (`economics_b5_fee_coinbase.cpp`): `validate_miner_transaction` driven
+   directly with fee-bearing operands — exact
+   `miner_emission + miner_fee_income` accepts (fix-α full-subsidy
+   out-param pinned), staker-pool / staker-emission overclaims and
+   underclaims reject. The regtest e2e itself **defers on the wallet-side
+   claim builder** (gate-6 backing-lineage ladder + claim assembly, the
+   §4 item 4 merge-blocker half that has not landed): there is no
+   production path that can assemble a `txin_archival_reward_emission`
+   transaction to feed a regtest chain, and hand-rolling one in the test
+   would exercise a parallel builder, not the real path — the opposite of
+   what item 8 exists to prove. Reopening trigger: claim builder lands →
+   e2e rides the Track-2 regtest harness → E4/E5 unblocks per item 5.
+   Tracked in `docs/FOLLOWUPS.md` (V3.0 pre-genesis queue).
+   **LANDED 2026-07-19 (PR-4c; the reopening trigger fired on schedule).**
+   `e2e_emission_claim_accepted_and_applied` drives the real path end to
+   end — production CB-3 build, PR-4b battery accept, connect-arm apply —
+   and asserts the conservation identity **byte-exactly over real RPC**:
+   the loud reward vout equals `budget_atomic(E)`, the per-block accrual
+   `staker_emission + staker_pool_amount` summed over the claimed epoch.
+   The claim carries real `ToKey` fee inputs (the fee-subset battery leg
+   runs live; the Q11 zero-fee form is what the fixture deliberately is
+   NOT). The fee-pool half's **positivity** stays out of regtest reach by
+   the law itself — `get_tx_volume_avg` is an integer per-block mean, e2e
+   activity floors it to 0, and a zero volume operand zeroes `burn_pct` —
+   so the e2e pins that disposition executably (`total_burned == 0`) and
+   the positive-pool split coverage remains the unit-level B5 KATs, as
+   this item already carried. Pop legs bound the identity under reorgs
+   (depth-1 idempotency; epoch-straddling re-close byte-identical from
+   pop-surviving credit bits; deep pop through the claim reference —
+   stranded claim inert). E4/E5 closed per item 5 (zero code residue).
+
+**Decision-placement pin (ratified 2026-07-08).** Verified split at this
+head: **computation is uniformly Rust; decisions are mixed.** The
+emission leg already Rust-decides — the verify body returns typed errors
+that `archival_ffi.rs:130` (`map_verify_error`) merely maps to FFI codes,
+and C++ never re-decides — while the older serve-credit path decides in
+C++ directly against LMDB: the dedup if-check (`blockchain.cpp:4247`),
+the holds check (`:4312`), and the block-level `(P,E)` set-insert loop
+(`:4889–4910`, reject at `:4904`). C-1 builds every new consensus
+**decision** in Rust with
+C++ as the mechanical applier/marshaler:
+
+- **Item 6** marshals the block's claim pairs and takes its verdict from
+  a Rust function; only the placement mirrors `:4887`.
+- **Item 7's** dedup decision is already Rust
+  (`claimed_epochs_check_and_set` via FFI); C++ journals the pre-image
+  and writes the bond — application, not decision. The mint application
+  to supply is mechanical and stays C++.
+
+Rationale (not aesthetic): the arc's enforcement mechanism —
+make-bad-states-unrepresentable via the type system (`K_COVER`
+const-assert *(exemplar retired 2026-07-19, PR #346 — the remaining three carry the
+argument unchanged)*, wire positivity, sealed witnesses, the WS-2 single-writer
+framing) — is a Rust capability. A consensus decision in C++ can be
+protected only by convention + KAT + review, the armed-gate-with-no-trigger
+pattern that produced the tip-vs-as-of and dedup findings this round
+spent itself catching. The determinism seam is a *separate* concern and
+is already foreclosed by single-evaluator (the arithmetic has one Rust
+implementation; C++ passes operands) — "more Rust" is not what forecloses
+it; "one evaluator" is. The older serve-credit decisions
+(`:4247`/`:4312`/`:4904`) are queued as post-C-1 extraction candidates
+under the equivalence-proof discipline, **decoupled at the genesis
+boundary (ratified 2026-07-08)** (`docs/FOLLOWUPS.md`): the *audit
+half* — mirror in Rust,
+prove behavior-equivalent against the C++ (the `recon.rs` /
+`collect_outputs` pattern), install as a standing equivalence KAT — is
+V3.0 pre-genesis, because it is a verification task whose findings are
+free fixes before genesis and hard forks after; the *decision-site
+flip* is V3.1, because a behavior-preserving flip buys genesis nothing
+on safety while putting fresh decision-sites on the critical path in
+place of the archival path's most battle-tested code. Mirror-then-fix
+ordering: the mirror reproduces the C++ including any reachable bad
+state (never mirror a fixed version); an audit-surfaced bug is fixed in
+the C++ as its own behavior-change commit, and the flip stays
+behavior-preserving against the fixed C++ — never
+reimplement-and-hope, because a divergence in a replaced consensus
+decision is the fork the extraction exists to prevent.
+
+**Boundary note (do not blur).** The extraction queue covers *only* the
+three existing **serve-credit** decisions above. Item 6's block-level
+**emission** `(P,E)` pass is not among them: it is new C-1 code with no
+C++ predecessor, built Rust-decided from the start — there is nothing
+to mirror, prove equivalent, or flip. The two passes will look nearly
+identical in the code (same shape, same placement idiom, adjacent
+concerns — serve-credit dedups `(P,s,E)` at `:4904`, emission dedups
+`(P,E)`), so the disambiguation lives here in prose: "block-level pass,
+V3.0 audit" refers to the serve-credit pass; the emission pass ships at
+C-1 and is never deferred.
+
+### 9.6 Finding F-C1c — signable-hash circularity — pinned exclusion rule
+**(RATIFIED 2026-07-09** — full-binding wargame verified: reward
+redirection, non-vin alteration, vin-swap, and cross-tx transplant all
+foreclosed; the zero-fee case checked hardest and holds via the
+emission slot's own pqc_auth, see the why-notes below**)**
+
+Surfaced building item 5. The vin's two binding surfaces — the Q1 auth
+message (`emission_wire.rs::auth_msg_input`, field inventory 1–7 +
+`signable_tx_hash`) and the backing membership proof — both take
+`signable_tx_hash` as an operand. The plan glosses it as "tx prefix +
+pseudo-outs" (§7.1), but the full prefix **contains the emission vin
+itself**, and the vin carries the very signatures and proof being
+verified: the signer cannot compute the hash its own signature must
+cover. Bond-post never hit this because its vin-level artifacts bind
+vin-local fields only; the tx-wide binding lives solely in the tx-level
+hybrid auth, which signs *after* assembly.
+
+**Pinned rule (consensus-visible, hence flagged):**
+`signable_tx_hash` = the transaction-prefix hash of the tx with the
+emission vin **removed wholesale** (erase `vin[emission_index]`, hash the
+result — `blockchain.cpp` emission dispatch, item 5). Wallet and verifier
+compute it identically; the vin's serialized position is recoverable
+(emission txs carry exactly one emission vin, Q3 arity).
+
+Nothing the exclusion drops goes unbound — each property is re-bound by
+a surface that does not sit inside the hash's own preimage:
+
+| dropped from the hash | re-bound by |
+|---|---|
+| vin claim fields (P, epochs, holdings, amounts) | Q1 auth message fields 1–6 (signed directly) |
+| reward destinations | Q1 field 7's ordered commit set (commitment ‖ amount ‖ one-time key) |
+| the assembled vin inside the full prefix | tx-level hybrid auth (`tx_pqc_verify.cpp`) signs the complete prefix post-assembly |
+| full-prefix binding for fee spends | fee-input FCMP++ proof binds the unmodified `tx_prefix_hash` |
+
+The two hashes deliberately differ: the emission vin's artifacts bind
+the *reduced* signable; the fee-input FCMP proof binds the *full*
+prefix. A tx whose vin is swapped post-signing fails the tx-level
+hybrid auth; a tx whose non-vin bytes are altered fails both the Q1
+auths and (when fee inputs exist) the FCMP proof.
+
+**Why-note 1 — the two-hash split is forced, not arbitrary.** The
+tx-level pqc_auth escapes the circularity the Q1 auths hit because
+`pqc_auths` lives in the **signature section, outside the prefix**
+(like the CT sigs), so it signs the full prefix without sitting inside
+its own preimage. The Q1 auths are carried **in the vin, inside the
+prefix** — which is the whole reason they need the reduced hash.
+Out-of-prefix signs full; in-prefix signs reduced.
+
+**Why-note 2 — row 3's tx-level auth is the emission slot's own, not
+the fee inputs'.** `check_tx_inputs` requires `pqc_auths.size() ==
+num_inputs` for every non-serve-credit tx (the `:3580` sizing), and
+`num_inputs ≥ 1` for the emission vin itself — so the emission vin
+carries its own tx-level pqc_auth **present regardless of fee inputs**.
+The dispatch binds that slot's hybrid key to the vin's
+`P_canonical_id`, and `tx_pqc_verify.cpp` signature-verifies it over
+the complete prefix. P therefore signs the assembled tx as a whole
+under P's key even in the zero-fee case; a swapped vin changes the
+prefix and fails a signature no attacker can re-produce. (The natural
+reading — "the tx-level binding rides the fee inputs" — invites a
+spurious zero-fee gap; it does not exist.)
+
+**Ordering pin (implementation invariant).** `erase(vin[emission_index])`
+is deterministic only because Q3 arity (exactly one emission vin) is
+enforced **before** the hash is computed: the verifier's classification
+(`emission_count == 1`) gates entry to the dispatch branch, and the
+hash is constructed inside it. The wallet-side builder, when it lands,
+must order identically — classify/assert arity, then compute the
+signable. Two candidate emission vins must never reach the removal
+rule.
+
+### 9.7 Non-blocking notes
+
+- **E4 shrinkage.** `txin_stake_claim` and its C++ wire are already gone —
+  deleted by PR-4 of the claim-era retirement (`2615c0dae`, tags
+  `0xf2`/`0xf3` retired-never-reassigned). Item-5's deletion surface is
+  now `C_stake` residue + constants/audit-scope/docs only.
+- **The §8.1 guard asymmetry landed fixed.** `blockchain.cpp:4301` now
+  carries the `h_fire > h_close` guard symmetric with `db_lmdb.cpp:5267`
+  (landed in #269 with item 1).
+- **Rule 07 check re-confirmed at this head:** C-1 remains a normal
+  atomic acceptance flip — the inert-until-flip decomposition exists
+  (accrual and shim are consensus-inert before the whitelist byte), so
+  criterion 2 fails and the exception is not invoked. The PR carries this
+  §9 operand enumeration as its §11.1-pattern evidence.
+
+### 9.8 Findings F-B5a / F-B5b — connect-arm height operands — **FIXED**
+
+Block-5 file:line review of the connect arm surfaced two defects in how
+the production call sites derive the heights the §6.3 journal keys on.
+The WS-2 KATs could not see either: they call apply/revert directly with
+explicit heights, bypassing the derivation under test.
+
+- **F-B5a (connect crash).** The emission arm in
+  `BlockchainDB::add_transaction` derived the block height via
+  `get_block_height(blk_hash)` — but `add_transaction` runs from
+  `add_block` *before* the LMDB subclass writes the `block_heights` row,
+  so the lookup threw `BLOCK_DNE` and every block carrying an emission
+  vin failed to connect. **Fix:** the arm reads `height()`, which at that
+  point is the connecting block's index N — also verify's pin-(b)
+  operand (`chain_height = height()` read at the same pre-connect
+  point), so connect and verify derive the same settled epoch by
+  construction. The bond-post arm carried the identical latent crash
+  (pre-dating C-1); fixed in its own commit.
+- **F-B5b (revert no-op → double-mint).** The connect journal keys on
+  the block index N, but `pop_block`'s `removed_block_height` is the
+  post-block chain height N+1 (the slash/close hooks' convention).
+  Passed through unconverted, the claim revert read an empty journal
+  slot and silently no-opped: the claimed-epoch set survived the pop,
+  the journal row leaked, and a re-mined claim for the same epochs
+  would be rejected while a *different* epoch set double-counted
+  `first_paying_emission_height`. **Fix:** `pop_block` reverts claims
+  at `removed_block_height - 1`. Convert, don't unify — journaling at
+  N+1 instead would shift the connect-side settled-epoch operand off
+  verify's at every epoch boundary.
+- **Armed KAT:** `emission_connect_pop_roundtrip_through_real_block_path`
+  (`tests/unit_tests/archival_substrate_lmdb.cpp`) drives the shared
+  fixture vin through the real `add_block → add_transaction → pop_block`
+  machinery against real LMDB. Verified armed against both findings
+  independently: unfixed F-B5a reproduces the `BLOCK_DNE` throw at
+  connect; unfixed F-B5b (with F-B5a fixed) fails the post-pop
+  pre-image assertions. The fixture's claimed epochs moved from
+  {10, 11} to {1, 2} so the KAT reaches claimability after ~3
+  settlement epochs of appended blocks (~2 s), matching the slash
+  scheduler KAT's scale.
+
+### 9.9 Findings F-B1a / F-B1b / F-B1c — budget accrual and redirect — **FIXED** (incl. c2, disposition (a))
+
+Block-1 file:line review of the budget-accrual/redirect write
+(`ARCHIVAL_BUDGET_SCHEDULE.md` §§2–3). The substrate KATs B1–B3 drive
+`add_archival_budget_accrual` and the close hook directly, so none of
+them could see defects in *when* and *with which operands* the connect
+path performs the write. Three findings; the first two share one
+structural fix.
+
+- **F-B1a (budget misses the last block of every epoch).** The accrual
+  row was written by `handle_block_to_main_chain` **after**
+  `m_db->add_block` returned — but the epoch-close hook runs *inside*
+  `add_block`, so when the close of epoch E fired (while connecting E's
+  final block, close operand `(E+1)·SEB`), the range-sum over
+  `[E·SEB, (E+1)·SEB)` found no row for the final block. Every epoch's
+  `budget(E)` silently dropped one block's inflow: a per-epoch
+  under-mint and a standing violation of §2.2's conservation identity
+  (the dropped inflow was neither burned nor emittable). Live on
+  mainnet-shaped chains from the first close.
+- **F-B1b (redirect flips on the next block's version).** The redirect
+  gate read `m_hardfork->get_current_version()` **after** `add_block` —
+  by which point `HardFork::add` has advanced `current_fork_index` via
+  `get_voted_fork_index(height + 1)`, the *next* block's version. At an
+  activation boundary the boundary block's inflow accrued under the next
+  block's rules — one block over-mint against §2.2's per-block pin.
+  Latent on mainnet (single-entry fork table, active-from-genesis);
+  armed on any testnet or post-genesis fork. Independently discovered
+  and confirmed by the maintainer during review.
+- **Structural fix (both):** the staker-inflow computation and target
+  decision moved **before** `m_db->add_block`
+  (`blockchain.cpp:5352–5398`), where `get_current_version()` is exactly
+  the connecting block's validated version — the same operand
+  `validate_miner_transaction` received. The accrual amount rides into
+  `add_block` as a new `archival_budget_accrual` parameter
+  (`blockchain_db.h`), and `BlockchainDB::add_block` writes the row
+  **before** the slash/close hooks fire, same wtxn. The pop-side removal
+  moved into `BlockchainDB::pop_block` (keyed at the block index,
+  the §9.8 claim-journal convention), so both sides of the row live in
+  the same layer inside the block's txn. The burn-record write stays in
+  the Blockchain layer (its landed idiom), now fed by the pre-add
+  computation.
+- **F-B1c (accrual-site operand drift vs verify).** Two operand
+  mismatches between the accrual computation and
+  `validate_miner_transaction`:
+  - **c1 (fee leg) — fixed.** The accrual site called
+    `compute_fee_burn` with `tx_volume = 0`, which zeroes `burn_pct`
+    (`burn.rs:46–79`) and with it both `staker_pool_amount` (the fee
+    half of the inflow never accrued anywhere) and `actually_destroyed`
+    (the destroyed share never reached `block_burn`/`total_burned`).
+    Fix: the site passes `get_tx_volume_avg(blockchain_height)` — the
+    verify path's exact operand at the same pre-add read point.
+  - **c2 (emission leg) — adjudicated as post-closure pin, disposition
+    (a), merge blocker.** The accrual site derived `full_block_emission`
+    from the 5-arg `get_block_reward` (no release multiplier, no weight
+    penalty), while verify's `base_reward` comes from the 6-arg form
+    (volume-run release multiplier + weight penalty). This operand shape
+    predates C-1: at the merge base the same unmodulated quantity fed
+    the staker-leg **burn**, where the mismatch was benignly
+    deflationary (over-destroying removes more from circulation). The
+    C-1 redirect inverted its sign: redirecting the over-sized staker
+    leg into `budget(E)` makes the excess (unmodulated − modulated)
+    *re-mintable* — coins the emission claim can mint that
+    `already_generated_coins` never counted as emitted. An open
+    inflation surface of the same class as F-B1a, hence the
+    merge-blocker classification (it gates this PR; the economics
+    question below gates genesis and must not be conflated with it).
+
+    **Adjudicated disposition (a), applied to both legs.** The split
+    operand is now verify's `base_reward` itself — the modulated
+    quantity the coinbase was just bound against and that
+    `already_generated_coins` advances by. Conservation is then by
+    construction: the ledger advance decomposes as
+    `base_reward = miner_emission (coinbase) + staker leg
+    (burned | accrued)`, so `budget(E)` is provably "ledger minus
+    coinbase" and claiming cannot inflate. Both the pre-activation burn
+    and the post-activation accrual take the modulated leg, which makes
+    the redirect a **pure destination switch** — same quantity,
+    burn-vs-accrue on the block's own version — restoring §2.2's "one
+    write, one target" invariant in full (fixing only the accrual would
+    have changed both destination *and* quantity across the boundary).
+    Bonus: the pre-activation burn becomes conservation-exact instead
+    of benignly deflationary. Genesis is excluded from the split
+    (its emission is the hardcoded `GENESIS_TX` amount, paid whole by
+    the genesis coinbase; splitting would accrue a share of coins the
+    coinbase already fully paid).
+
+    **Dispositions (b) and (c) rejected now, (b) with a rule-21
+    reopen.** (c) — split first, modulate the miner leg only — touches
+    the coinbase-binding rule for no offsetting gain over (a). (b) —
+    the staker leg as the unmodulated subsidy, demand-insulated —
+    is not economically wrong but economically *unproven*, and it pays
+    the highest-risk price: it amends the supply-ledger advance rule
+    and the conservation identity the Q11 KAT guards, the most
+    catastrophic-if-wrong genesis-frozen surface in the system.
+    **Reopening criteria (rule 21):** the archival-funding
+    demand-insulation sim (companion to the servo/fee-era sim; see
+    `docs/FOLLOWUPS.md`, V3.0 pre-genesis queue) measures how much
+    `budget(E)` swings with tx volume under (a) and whether that swing
+    plausibly starves the serving incentive in low-volume scenarios.
+    If it does, (b) reopens as a deliberate, evidence-backed
+    supply-accounting amendment — pre-genesis if it lands in the
+    window, a named post-genesis-blocked item if not. If the swing is
+    tolerable, (a) stands permanently and the reopen closes.
+    **Re-evaluation shape:** sim results reviewed against this section;
+    an adopting amendment requires a threat-model review of the
+    supply-accounting change plus a Q11-identity KAT amendment in the
+    same PR.
+
+    **Reopen RESOLVED — swing tolerable, (a) stands permanently
+    (2026-07-09, sim evidence).** The demand-insulation sim ran as two
+    companion modes: `shekyl-economics-sim --fb1c-c2` (the budget-swing
+    magnitude, per-SEB-epoch, (a) vs the (b) counterfactual over six
+    volume regimes) and `shekyl-staking-sim --budget-throttle` (the
+    coverage cross-check on the L11 `budget → APR → entry → coverage`
+    transfer curve, 8-seed-averaged). Three findings close the
+    criterion:
+    1. **The swing is floored, not open.** The (a)-vs-(b) delta is the
+       release multiplier on the emission leg only, clamped to
+       `[release_min, release_max]` — the worst sustained-low-volume
+       throttle is exactly 0.8000, never zero, so (b) could restore at
+       most 25 % of the emission leg in the worst window. The fee leg
+       (`staker_pool_amount`) is disposition-neutral.
+    2. **The throttle and the coverage knee live in disjoint regimes.**
+       Where the throttle is deep (mining-era low volume,
+       `emis_frac ≈ 1.0`), the purse sits far above the co-location-
+       saturated ceiling (L11 `b200 ≡ b400`): 0.8× of a saturated purse
+       stays fully covered (cDeepU 0.000 both arms). Where the purse is
+       knee-adjacent (fee era), the emission share has decayed to
+       ~1 % of budget, so the worst throttle moves total funding by
+       ~0.24 % — coverage delta +0.023, under the 0.05 material bar and
+       within seed noise. The honest counterfactual (a full 0.8× on a
+       *lean* purse, a combination that does not occur) *does* cross
+       the knee (+0.354 cDeepU): the safety is **regime separation**,
+       decay-guaranteed by the 0.90/yr emission-share schedule, not
+       throttle harmlessness.
+    3. **The residual low-funding risk is shared, not (a)-specific.**
+       Fee-era lean coverage is marginal under *both* dispositions
+       (cDeepU ≈ 0.15 at the lean attractor) — that is the L13
+       servo + backstop disposition's problem, which (b) would not fix.
+    Per the reopening criteria: the swing is tolerable ⇒ disposition
+    (a) stands permanently and the reopen closes. Evidence artifacts:
+    `rust/shekyl-economics-sim/src/budget.rs`,
+    `rust/shekyl-staking-sim/src/budget_throttle.rs` (both
+    reproducible: `cargo run -p <crate> -- <flag>`).
+- **Armed KAT:**
+  `budget_epoch_boundary_includes_final_block_through_real_block_path`
+  (`tests/unit_tests/archival_substrate_lmdb.cpp`) drives per-block
+  accrual amounts through the real `add_block` across the epoch-0
+  boundary: asserts `budget(0)` equals all `SEB` rows including the
+  boundary block's (verified armed: re-ordering the write after the
+  hooks reproduces the one-row-short sum, `409959` vs `410000`), then
+  pops the boundary block (frozen row reverts with the close family,
+  the block's own accrual row reverts with the pop, prior rows
+  survive) and re-connects it (byte-identical re-close).
+- **F-B1b hardening (c2 review round).** The maintainer's review of the
+  c2 fix flagged the redirect's version operand — still
+  `get_current_version()`, the tip-relative API — as fragile even in
+  its pre-add position: the split two lines below keys on
+  `blockchain_height` explicitly, while the burn-vs-accrue decision
+  keyed on an API whose correctness rests on the height+1 advance
+  convention (§2.2 was written to stop depending on exactly that).
+  Verified at source before changing: the pre-add read *is* correct —
+  `HardFork::add` for block `h−1` advances `current_fork_index` via
+  `get_voted_fork_index(h)`, the connecting block's own voted version
+  (`hardfork.cpp:155`), and independently `m_hardfork->check(bl)`
+  (`blockchain.cpp:4915`, `do_check` at `hardfork.cpp:111`) enforces
+  `bl.major_version == get_current_version()` before the redirect is
+  reachable — so the activation block **accrues** under the current
+  form and no one-epoch budget error exists. The operand is
+  nevertheless replaced with **`bl.major_version`**: the block's own
+  declared, consensus-checked version — explicit, convention-free,
+  matching the `blockchain_height` anchoring the split already uses.
+  (`get_ideal_version(h)` was considered and rejected: it is the
+  static-table lookup, ignores the vote threshold, and can disagree
+  with the version the block was validated as.) A **CI tripwire**
+  (`scripts/ci/check_archival_reward_gates.sh`, wired into the
+  consensus-invariants gate) extracts the redirect block by its
+  comment anchor and fails on any `get_block_reward`,
+  `get_current_version`, or `get_ideal_version(` reintroduction inside
+  it, with positive anchor checks (`bl.major_version`,
+  `compute_emission_split`) so a refactor that moves the block cannot
+  silently retire the gate — verified armed (reverting the operand
+  fails the gate on both the negative and anchor checks).
+- **Fast-follow (prioritized): end-to-end conservation KAT.** The
+  operand-identity construction cannot cover the *branch-selection*
+  class — a wrong burn-vs-accrue decision fires with identical
+  operands. The independent guard is the conservation identity
+  `accrual + burn + coinbase == ledger advance` driven through the
+  real connect path with an **activation-boundary block in the
+  fixture** (burn-when-should-accrue breaks the identity at exactly
+  that block). Needs a core-tests-level harness (multi-entry fork
+  table + real block flow), out of this PR's LMDB-substrate KAT
+  reach — tracked in `docs/FOLLOWUPS.md` V3.0 queue as the C-1
+  fast-follow.
+- **Fast-follow LANDED (2026-07-09, branch
+  `feat/emission-conservation-kat`):**
+  `archival_budget_conservation_boundary`
+  (`tests/core_tests/archival_budget_conservation.{h,cpp}`), registered
+  in the chaingen harness and wired into CI as the `conservation`
+  subcommand of `run_economics_c2a_prime.sh` (own workflow matrix
+  entry). Two upgrades over the bullet above, both load-bearing:
+  - **Labeled-row form, not sum form.** The redirect is a pure
+    destination switch (same `staker_inflow`, burn vs accrue), so the
+    *sum* `accrual + burn + coinbase == ledger advance` holds even when
+    the wrong branch fires. The KAT therefore checks each row against
+    its expected value given the block's **own `major_version`** —
+    row-level equality is what catches the branch-selection class. The
+    capstone sum is asserted too, plus the genesis exclusion, the
+    coinbase = `miner_emission` binding, ledger advance = an
+    independently recomputed modulated subsidy (not read back from the
+    connect path), and pop/reconnect byte-identical row restoration
+    across the fork boundary. Arming-verified: inverting the redirect
+    branch fails with `accrual row mismatch at height 1`.
+  - **Genesis-posture caveat (recorded in the test header).**
+    `HF_VERSION_ARCHIVAL_EMISSION == 1` and block versions start at 1,
+    so no pre-activation block is constructible through the real
+    connect path today — the burn leg of the expectations is
+    compile-alive but unexercised. The expectations are written against
+    the constant generically and the fixture's fork table already
+    crosses v1→v2 mid-chain (height 8, epoch-unaligned), so a
+    post-genesis activation bump to the fixture's top fork version
+    (constant == 2) arms the burn leg and the true boundary straddle
+    with **no test change**. A bump PAST 2 would instead leave every
+    fixture block pre-activation — accrue leg and straddle silently
+    de-armed with CI green — so the test header carries a
+    `static_assert(HF_VERSION_ARCHIVAL_EMISSION <= k_post_fork_version)`
+    that forces the fork table to be extended first.
+  - **Fee-leg coverage gap (disclosed).** The fixture is fee-free, so
+    the KAT exercises only the emission half of production's redirected
+    quantity `staker_inflow = staker_emission + staker_pool_amount`;
+    `compute_fee_burn(0, …) == {0,0,0}` makes the fee-pool half
+    byte-invisible here. chaingen cannot construct valid FCMP++ fee
+    transactions (empty `pqc_auths` stubs reject even in FAKECHAIN —
+    `chaingen_main.cpp` disabled-tests note), so the fee-pool half's
+    end-to-end coverage rides the §9.5 item-8 regtest e2e (E4/E5)
+    carrier; until then its guards are the unit-level B5 KATs
+    (`economics_b5_fee_coinbase.cpp`) and the F-B1c-c1 operand pin.
+
+- **Burn-leg deletion LANDED (2026-07-09, branch
+  `chore/delete-emission-burn-leg`):** the genesis-posture caveat above
+  is retired by deletion, not by arming. The pre-activation burn leg
+  (`else block_burn_amount += staker_inflow` in the connect-site
+  redirect) was unreachable-by-construction — emission is a genesis
+  fact (`HF_VERSION_ARCHIVAL_EMISSION == 1`, block version floor 1,
+  versions never decrease) — and its lineage traces to the scrapped
+  direct-distribution model's conditional no-staker burn
+  (`cebbe017b` → unconditional placeholder in PR-4 `2615c0dae` →
+  version-gated leg in C-1 block 1 `2a6f8e01a`), so rule 60's
+  delete-the-dead-branch disposition applies. Deleted with it:
+  `HF_VERSION_ARCHIVAL_EMISSION` (its two live reads — the redirect
+  gate and the raw-import guard — were both tautologies at version
+  floor 1; the import guard now refuses all non-genesis blocks
+  outright) and the conservation KAT's `static_assert`/burn-leg
+  expectations (now unconditional: whole inflow in the accrual row,
+  zero burn row in the fee-free fixture — the labeled-row form is
+  retained as the guard against inflow routed into the burn row). The
+  accrual write is now unconditional per non-genesis block. KATs
+  B1/B2 reframed to the burn-leg-free shape
+  (`budget_burn_accrual_partition_and_conservation`,
+  `budget_reorg_pop_symmetry` — the storage-layer properties they pin,
+  table independence and pop symmetry, survive the leg because fee-burn
+  rows still coexist with accrual rows). CI tripwire re-anchored to the
+  accrual block with the same banned symbols (`get_block_reward`,
+  `get_current_version`, `get_ideal_version(`) — the version operand
+  still feeds `compute_emission_split`/`compute_fee_burn`, so F-B1b's
+  operand discipline outlives the branch it originally selected;
+  arming re-verified post-rewrite. ARCHIVAL_BUDGET_SCHEDULE.md §2
+  rewritten to the one-write-one-target current form with §2.1 as the
+  historical record; a future post-genesis activation-gated inflow
+  change (the §8 servo) re-derives the redirect discipline from that
+  record rather than resurrecting the code.

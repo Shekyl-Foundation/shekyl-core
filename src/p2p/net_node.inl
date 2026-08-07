@@ -48,7 +48,6 @@
 #include "version.h"
 #include "string_tools.h"
 #include "common/util.h"
-#include "common/dns_utils.h"
 #include "common/pruning.h"
 #include "net/error.h"
 #include "net/net_helper.h"
@@ -59,6 +58,7 @@
 #include "storages/levin_abstract_invoke2.h"
 #include "net/levin_base.h"
 #include "cryptonote_config.h"
+#include "shekyl/shekyl_ffi.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "net/parse.h"
 
@@ -122,7 +122,6 @@ namespace nodetool
     command_line::add_arg(desc, arg_ban_list);
     command_line::add_arg(desc, arg_p2p_hide_my_port);
     command_line::add_arg(desc, arg_no_sync);
-    command_line::add_arg(desc, arg_enable_dns_blocklist);
     command_line::add_arg(desc, arg_no_igd);
     command_line::add_arg(desc, arg_igd);
     command_line::add_arg(desc, arg_out_peers);
@@ -585,8 +584,6 @@ namespace nodetool
     if (command_line::has_arg(vm, arg_no_sync))
       m_payload_handler.set_no_sync(true);
 
-    m_enable_dns_blocklist = command_line::get_arg(vm, arg_enable_dns_blocklist);
-
     if ( !set_max_out_peers(public_zone, command_line::get_arg(vm, arg_out_peers) ) )
       return false;
     else
@@ -609,7 +606,6 @@ namespace nodetool
       return false;
 
 
-    epee::byte_slice noise = nullptr;
     auto proxies = get_proxies(vm);
     if (!proxies)
       return false;
@@ -630,18 +626,12 @@ namespace nodetool
       else
         m_payload_handler.set_max_out_peers(proxy.zone, proxy.max_connections);
 
-      epee::byte_slice this_noise = nullptr;
-      if (proxy.noise)
-      {
-        static_assert(sizeof(epee::levin::bucket_head2) < CRYPTONOTE_NOISE_BYTES, "noise bytes too small");
-        if (noise.empty())
-          noise = epee::levin::make_noise_notify(CRYPTONOTE_NOISE_BYTES);
-
-        this_noise = noise.clone();
-      }
-
+      // No covert/"noise" payload is wired here — the configuration-B
+      // deletion removed it from configuration (see the `disable_noise` note
+      // in net_node.cpp). The levin machinery behind `make_noise_notify`
+      // stays as Q-11 Unit 2's substrate.
       zone.m_notifier = cryptonote::levin::notify{
-        zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), std::move(this_noise), proxy.zone, pad_txs, m_payload_handler.get_core()
+        zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), nullptr, proxy.zone, pad_txs, m_payload_handler.get_core()
       };
     }
 
@@ -760,127 +750,12 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  std::set<std::string> node_server<t_payload_net_handler>::get_dns_seed_nodes()
-  {
-    if (!m_exclusive_peers.empty() || m_offline)
-    {
-      return {};
-    }
-    if (m_nettype == cryptonote::TESTNET)
-    {
-      return get_ip_seed_nodes();
-    }
-    if (m_nettype == cryptonote::STAGENET)
-    {
-      return get_ip_seed_nodes();
-    }
-    if (!m_enable_dns_seed_nodes)
-    {
-      // TODO: a domain can be set through socks, so that the remote side does the lookup for the DNS seed nodes.
-      m_fallback_seed_nodes_added.test_and_set();
-      return get_ip_seed_nodes();
-    }
-
-    std::set<std::string> full_addrs;
-
-    // for each hostname in the seed nodes list, attempt to DNS resolve and
-    // add the result addresses as seed nodes
-    // TODO: at some point add IPv6 support, but that won't be relevant
-    // for some time yet.
-
-    std::vector<std::vector<std::string>> dns_results;
-    dns_results.resize(m_seed_nodes_list.size());
-
-    // some libc implementation provide only a very small stack
-    // for threads, e.g. musl only gives +- 80kb, which is not
-    // enough to do a resolve with unbound. we request a stack
-    // of 1 mb, which should be plenty
-    boost::thread::attributes thread_attributes;
-    thread_attributes.set_stack_size(1024*1024);
-
-    std::list<boost::thread> dns_threads;
-    uint64_t result_index = 0;
-    for (const std::string& addr_str : m_seed_nodes_list)
-    {
-      boost::thread th = boost::thread(thread_attributes, [=, &dns_results, &addr_str]
-      {
-        MDEBUG("dns_threads[" << result_index << "] created for: " << addr_str);
-        // TODO: care about dnssec avail/valid
-        bool avail, valid;
-        std::vector<std::string> addr_list;
-
-        try
-        {
-          addr_list = tools::DNSResolver::instance().get_ipv4(addr_str, avail, valid);
-          MDEBUG("dns_threads[" << result_index << "] DNS resolve done");
-          boost::this_thread::interruption_point();
-        }
-        catch(const boost::thread_interrupted&)
-        {
-          // thread interruption request
-          // even if we now have results, finish thread without setting
-          // result variables, which are now out of scope in main thread
-          MWARNING("dns_threads[" << result_index << "] interrupted");
-          return;
-        }
-
-        MINFO("dns_threads[" << result_index << "] addr_str: " << addr_str << "  number of results: " << addr_list.size());
-        dns_results[result_index] = addr_list;
-      });
-
-      dns_threads.push_back(std::move(th));
-      ++result_index;
-    }
-
-    MDEBUG("dns_threads created, now waiting for completion or timeout of " << CRYPTONOTE_DNS_TIMEOUT_MS << "ms");
-    boost::chrono::system_clock::time_point deadline = boost::chrono::system_clock::now() + boost::chrono::milliseconds(CRYPTONOTE_DNS_TIMEOUT_MS);
-    uint64_t i = 0;
-    for (boost::thread& th : dns_threads)
-    {
-      if (! th.try_join_until(deadline))
-      {
-        MWARNING("dns_threads[" << i << "] timed out, sending interrupt");
-        th.interrupt();
-      }
-      ++i;
-    }
-
-    i = 0;
-    for (const auto& result : dns_results)
-    {
-      MDEBUG("DNS lookup for " << m_seed_nodes_list[i] << ": " << result.size() << " results");
-      // if no results for node, thread's lookup likely timed out
-      if (result.size())
-      {
-        for (const auto& addr_string : result)
-          full_addrs.insert(addr_string + ":" + std::to_string(cryptonote::get_config(m_nettype).P2P_DEFAULT_PORT));
-      }
-      ++i;
-    }
-
-    // append the fallback nodes if we have too few seed nodes to start with
-    if (full_addrs.size() < MIN_WANTED_SEED_NODES)
-    {
-      if (full_addrs.empty())
-        MINFO("DNS seed node lookup either timed out or failed, falling back to defaults");
-      else
-        MINFO("Not enough DNS seed nodes found, using fallback defaults too");
-
-      for (const auto &peer: get_ip_seed_nodes())
-        full_addrs.insert(peer);
-      m_fallback_seed_nodes_added.test_and_set();
-    }
-
-    return full_addrs;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
   std::set<std::string> node_server<t_payload_net_handler>::get_seed_nodes(epee::net_utils::zone zone)
   {
     switch (zone)
     {
     case epee::net_utils::zone::public_:
-      return get_dns_seed_nodes();
+      return get_ip_seed_nodes();
     case epee::net_utils::zone::tor:
       if (m_nettype == cryptonote::MAINNET)
       {
@@ -922,7 +797,7 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::init(const boost::program_options::variables_map& vm, const std::string& proxy, bool proxy_dns_leaks_allowed)
+  bool node_server<t_payload_net_handler>::init(const boost::program_options::variables_map& vm, const std::string& proxy)
   {
     bool res = handle_command_line(vm);
     CHECK_AND_ASSERT_MES(res, false, "Failed to handle command line");
@@ -934,8 +809,6 @@ namespace nodetool
       public_zone.m_connect = &socks_connect;
       public_zone.m_proxy_address = *endpoint;
       public_zone.m_can_pingback = false;
-      m_enable_dns_seed_nodes &= proxy_dns_leaks_allowed;
-      m_enable_dns_blocklist &= proxy_dns_leaks_allowed;
     }
 
     if (m_nettype == cryptonote::TESTNET)
@@ -2127,55 +2000,6 @@ namespace nodetool
     m_gray_peerlist_housekeeping_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::gray_peerlist_housekeeping, this));
     m_peerlist_store_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::store_config, this));
     m_incoming_connections_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::check_incoming_connections, this));
-    m_dns_blocklist_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::update_dns_blocklist, this));
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::update_dns_blocklist()
-  {
-    if (!m_enable_dns_blocklist)
-      return true;
-    if (m_nettype != cryptonote::MAINNET)
-      return true;
-
-    // Shekyl blocklist DNS records -- to be configured when DNS infrastructure is ready
-    static const std::vector<std::string> dns_urls = {
-      "blocklist.shekyl.org"
-    };
-
-    std::vector<std::string> records;
-    if (!tools::dns_utils::load_txt_records_from_dns(records, dns_urls))
-      return true;
-
-    unsigned good = 0;
-    for (const auto& record : records)
-    {
-      std::vector<std::string> ips;
-      boost::split(ips, record, boost::is_any_of(";"));
-      for (const auto &ip: ips)
-      {
-        if (ip.empty())
-          continue;
-        auto subnet = net::get_ipv4_subnet_address(ip);
-        if (subnet)
-        {
-          block_subnet(*subnet, DNS_BLOCKLIST_LIFETIME);
-          ++good;
-          continue;
-        }
-        const expect<epee::net_utils::network_address> parsed_addr = net::get_network_address(ip, 0);
-        if (parsed_addr)
-        {
-          block_host(*parsed_addr, DNS_BLOCKLIST_LIFETIME, true);
-          ++good;
-          continue;
-        }
-        MWARNING("Invalid IP address or subnet from DNS blocklist: " << ip << " - " << parsed_addr.error());
-      }
-    }
-    if (good > 0)
-      MINFO(good << " addresses added to the blocklist");
     return true;
   }
   //-----------------------------------------------------------------------------------
@@ -2361,11 +2185,75 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
+  std::string node_server<t_payload_net_handler>::stem_tallies_json() const
+  {
+    /* §55 TRANSIT, NOT STRUCTURE. Collects published rows from every zone
+       (a peer belongs to exactly one; zones do not share connection ids),
+       sorts globally by peer id so operator diffs are content-stable, and
+       emits one JSON array. Serialisation lives here — once — rather than
+       on the relay hot path or as multi-zone array splicing. Disappears
+       with the p2p migration. */
+    using row_t = cryptonote::levin::notify::stem_tally_row;
+    std::vector<row_t> rows;
+    for (const auto& zone : m_network_zones)
+    {
+      auto part = zone.second.m_notifier.stem_snapshot();
+      rows.insert(rows.end(), part.begin(), part.end());
+    }
+    std::sort(rows.begin(), rows.end(),
+      [](const row_t& a, const row_t& b) {
+        return std::lexicographical_compare(
+          std::begin(a.peer), std::end(a.peer),
+          std::begin(b.peer), std::end(b.peer));
+      });
+
+    static constexpr char HEX[] = "0123456789abcdef";
+    std::string out = "[";
+    for (std::size_t i = 0; i < rows.size(); ++i)
+    {
+      if (i)
+        out += ',';
+      out += "{\"peer\":\"";
+      for (std::uint8_t b : rows[i].peer)
+      {
+        out += HEX[b >> 4];
+        out += HEX[b & 0xf];
+      }
+      out += "\",\"propagated\":";
+      out += std::to_string(rows[i].propagated);
+      out += ",\"silent\":";
+      out += std::to_string(rows[i].silent);
+      out += ",\"distinct_sources\":";
+      out += std::to_string(rows[i].distinct_sources);
+      out += '}';
+    }
+    out += ']';
+    return out;
+  }
+
+  template<class t_payload_net_handler>
+  void node_server<t_payload_net_handler>::record_tx_arrivals(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& from)
+  {
+    /* §46: every zone's watch, not the receiving zone's alone — a stem placed
+       on one zone can return through another, and only the zone holding the
+       pending entry can resolve it. Parse to canonical hashes **once** (F-9
+       join key) and fan the shared hash vector; re-parsing the same batch in
+       each zone's strand was pure zone-count waste. */
+    auto hashes = std::make_shared<const std::vector<crypto::hash>>(
+      cryptonote::levin::stem_watch_tx_hashes(txs));
+    if (hashes->empty())
+      return;
+    for (auto& zone : m_network_zones)
+      zone.second.m_notifier.record_arrival(hashes, from);
+  }
+
+  template<class t_payload_net_handler>
   epee::net_utils::zone node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay)
   {
     namespace enet = epee::net_utils;
+    using zone_entry = std::pair<const enet::zone, network_zone>;
 
-    const auto send = [&txs, &source, tx_relay] (std::pair<const enet::zone, network_zone>& network)
+    const auto send = [&txs, &source, tx_relay] (zone_entry& network)
     {
       if (network.second.m_notifier.send_txs(std::move(txs), source, tx_relay))
         return network.first;
@@ -2375,42 +2263,180 @@ namespace nodetool
     if (m_network_zones.empty())
       return enet::zone::invalid;
 
-    if (origin != enet::zone::invalid)
-      return send(*m_network_zones.begin()); // send all txs received via p2p over public network
+    /* Anonymity-zone selection — one function for originated traffic and for
+       R-1 divert. The mix is only a mix if both classes land on the same zone:
+       a divert path that always took rbegin() (tor) while dual-stack origins
+       preferred i2p would leave i2p carrying originated traffic only — F-6's
+       oracle, still, on the preferred zone (§30.1 / §59.6).
 
-    if (m_network_zones.size() <= 2)
-      return send(*m_network_zones.rbegin()); // see static asserts below; sends over anonymity network iff enabled
-
-    /* These checks are to ensure that i2p is highest priority if multiple
-       zones are selected. Make sure to update logic if the values cannot be
-       in the same relative order. `m_network_zones` must be sorted map too. */
+       Order is pinned: public_ < i2p < tor. With one anonymity zone, rbegin()
+       is that zone. With both, i2p wins when usable (noise-filled, else
+       outbound), then tor. m_network_zones is a sorted map. */
     static_assert(std::is_same<std::underlying_type<enet::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
     static_assert(unsigned(enet::zone::invalid) == 0, "invalid expected to be 0");
     static_assert(unsigned(enet::zone::public_) == 1, "public_ expected to be 1");
     static_assert(unsigned(enet::zone::i2p) == 2, "i2p expected to be 2");
     static_assert(unsigned(enet::zone::tor) == 3, "tor expected to be 3");
 
-    // check for anonymity networks with noise and connections
-    for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
-    {
-      if (enet::zone::tor < network->first)
-        break; // unknown network
+    /* `require_usable` splits two callers whose correct behaviour differs when
+       the anonymity zone cannot currently send.
 
-      const auto status = network->second.m_notifier.get_status();
-      if (status.has_noise && status.connections_filled)
-        return send(*network);
+       ORIGINATED traffic (false) takes the zone regardless and fails closed:
+       falling back to clearnet would put our own transaction on the public
+       network, which is the first-spy case this arc exists to prevent (§30.5).
+       Better to send nothing.
+
+       RELAYED traffic diverted by R-1's roll (true) must NOT fail closed. Its
+       home was always clearnet, the roll is eligibility rather than a drop
+       commitment, and dropping a transaction that is not ours protects nobody
+       while costing the network a relay. So an unusable zone yields nullptr
+       and the caller falls through.
+
+       Without the split the two-zone case is silently wrong: `size() <= 2`
+       returned the zone unconditionally, so a divert onto a zone with no
+       outbound connections lost the transaction — while the same zone would
+       have been rejected on a three-zone node by the readiness loop below. */
+    const auto select_anonymity = [this](const bool require_usable) -> zone_entry*
+    {
+      if (m_network_zones.size() <= 2)
+      {
+        auto candidate = m_network_zones.rbegin();
+        if (require_usable && candidate->first != enet::zone::public_)
+        {
+          const auto status = candidate->second.m_notifier.get_status();
+          if (!candidate->second.m_connect || !status.has_outgoing)
+            return nullptr;
+        }
+        return std::addressof(*candidate); // public alone, or the one anonymity zone
+      }
+
+      for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
+      {
+        if (enet::zone::tor < network->first)
+          break; // unknown network
+
+        const auto status = network->second.m_notifier.get_status();
+        if (!status.has_noise || !status.connections_filled)
+          continue;
+        /* `require_usable` gates this tier as well as the one below it.
+           Noise-priority says which zone is PREFERRED, not that it can send:
+           a diverted relayed transaction handed to a zone with no outbound
+           connections is lost, and relayed traffic must fall through to
+           clearnet instead (§59.7). Dormant today -- `has_noise` is false
+           everywhere since §41 -- and live the moment covert returns. */
+        if (require_usable && (!network->second.m_connect || !status.has_outgoing))
+          continue;
+        return std::addressof(*network);
+      }
+
+      for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
+      {
+        if (enet::zone::tor < network->first)
+          break; // unknown network
+
+        const auto status = network->second.m_notifier.get_status();
+        if (network->second.m_connect && status.has_outgoing)
+          return std::addressof(*network);
+      }
+
+      return nullptr;
+    };
+
+    /* R-1 mixed eligibility (§59). The inherited rule sent every RELAYED
+       transaction to clearnet and every ORIGINATED one to the anonymity zone,
+       so a peer holding a stem slot there knew everything it saw was the
+       sender's own — F-6's origin oracle (§29), and the half configuration
+       B's deletion did not close (§58.3).
+
+       Two changes, and the second is not a second decision:
+
+       1. A relayed transaction still stemming is diverted onto the anonymity
+          zone with probability p (Rust owns the rate; this asks for a
+          verdict). Placement uses select_anonymity — same zone originated
+          traffic would take — so the preferred zone receives the mix.
+       2. A transaction that ARRIVED over an anonymity zone and is still
+          stemming stays on it — no re-roll. Rolling per hop would return it
+          to clearnet after one step, leaving the zone carrying originated
+          traffic only, which is the oracle we are removing. Coherence is the
+          absence of a second roll, not a policy beside it.
+
+       `tx_relay` is the exit. Once a transaction fluffs it leaves the zone
+       and goes public — this line is what carries an anonymity-originated
+       transaction to the clearnet network at all, and swallowing it into
+       coherence would strand those transactions in the anonymity subgraph.
+
+       If the roll says divert but no anonymity zone is currently usable,
+       fall through to clearnet: the roll is eligibility, not a drop
+       commitment. Relayed traffic's home was always clearnet; originated
+       traffic (below) still fails closed when anonymity cannot take it —
+       leaking an origin over clearnet is the first-spy case this arc exists
+       to prevent (§30.5). */
+    const bool still_stemming =
+      tx_relay == cryptonote::relay_method::stem ||
+      tx_relay == cryptonote::relay_method::forward ||
+      tx_relay == cryptonote::relay_method::local;
+
+    if (origin != enet::zone::invalid)
+    {
+      /* Dormant today, and for the same reason as the two paths below (§63.8).
+         Every anonymity-zone release sets `dandelionpp_fluff`
+         (`levin_notify.cpp:561`, "always send with fluff flag, even over
+         i2p/tor"), so a receiver overrides its `forward` default to `fluff`
+         (`cryptonote_protocol_handler.inl:946`) and `upgrade_relay_method` is
+         monotone upward, never walking it back. A transaction whose `origin`
+         is an anonymity zone therefore always arrives here as `fluff` and
+         `still_stemming` is false.
+
+         Correct for the world it wakes into: with covert on, the covert send
+         clears the flag (`levin_notify.cpp:1195`), the receiver keeps
+         `forward`, and coherence starts firing. Until then R-1 is the entry
+         roll alone. */
+      if (still_stemming && origin != enet::zone::public_ && m_network_zones.count(origin))
+        return send(*m_network_zones.find(origin)); // coherence: no re-roll
+
+      /* The roll fires only on a genuine ARRIVAL — `source` is a real peer.
+         A mempool re-relay passes a nil source (and `origin == public_`,
+         which is why coherence above cannot see it), and re-rolling those
+         would break the design in two ways at once: the same transaction
+         could be diverted on one pass and sent to clearnet on the next,
+         and the effective rate over `k` re-relays would be
+         `1 - (1-p)^k` rather than the `p` §59.2 states and pins.
+
+         One roll at entry means one roll per entry. Re-relays are not
+         entries — they carry no arrival zone to cohere with, and they go to
+         clearnet exactly as they did before R-1. */
+      if (still_stemming && !source.is_nil() && m_network_zones.size() > 1 &&
+          shekyl_relay_zone_divert_relayed_tx())
+      {
+        if (zone_entry* anonymity = select_anonymity(/*require_usable=*/true))
+        {
+          /* `send` MOVES `txs`, so a failed diverted send would otherwise
+             drop the batch: there is nothing left to hand to clearnet. Keep a
+             copy across the attempt and restore it on failure, so "the roll is
+             eligibility, not a drop commitment" holds for a send error and not
+             only for an unusable zone.
+
+             The copy is paid only on the diverted path -- ~2 % of relayed
+             traffic at the current rate -- and never on the clearnet path
+             below, which keeps the move.
+
+             Dormant today: the reachable failure is the covert
+             fragment-oversize check in `notify::send_txs`, and covert has been
+             off since §41. It goes live with the §30 composition, which is
+             scheduled work -- so this is a latent drop a planned change
+             activates, fixed now rather than left for it to surface. */
+          std::vector<cryptonote::blobdata> fallback = txs;
+          if (const auto placed = send(*anonymity); placed != enet::zone::invalid)
+            return placed;
+          txs = std::move(fallback);
+        }
+      }
+
+      return send(*m_network_zones.begin()); // relayed → clearnet, and every fluff
     }
 
-    // use the anonymity network with outbound support
-    for (auto network = ++m_network_zones.begin(); network != m_network_zones.end(); ++network)
-    {
-      if (enet::zone::tor < network->first)
-        break; // unknown network
-
-      const auto status = network->second.m_notifier.get_status();
-      if (network->second.m_connect && status.has_outgoing)
-        return send(*network);
-    }
+    if (zone_entry* anonymity = select_anonymity(/*require_usable=*/false))
+      return send(*anonymity);
 
     MWARNING("Unable to send " << txs.size() << " transaction(s): anonymity networks had no outgoing connections");
     return enet::zone::invalid;
@@ -2851,8 +2877,27 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::set_max_out_peers(network_zone& zone, int64_t max)
   {
     if(max == -1) {
-      zone.m_config.m_net_config.max_out_connection_count = P2P_DEFAULT_CONNECTIONS_COUNT;
+      zone.m_config.m_net_config.max_out_connection_count = shekyl_p2p_default_out_peers();
       return true;
+    }
+    // F-8b: the embargo constant is derived from a fluff first passage
+    // measured at outbound degree `shekyl_relay_zone_min_provisioned_out_peers()`.
+    // A zone capped below that degree fluffs slower than the derivation
+    // assumes, so the embargo is under-provisioned in the privacy-losing
+    // direction. This is the one place every zone's outbound cap is set —
+    // public (`--out-peers`) and anonymity (`--tx-proxy`, whose parser also
+    // refuses with a flag-specific message) — so the floor is enforced here
+    // rather than only at one parser. A cap of 0 stays legal: it stops
+    // outbound relay entirely, which is loud (liveness-visible), unlike a
+    // quietly degraded fluff degree.
+    const int64_t out_floor = shekyl_relay_zone_min_provisioned_out_peers();
+    if (0 < max && max < out_floor)
+    {
+      MERROR("Outbound connection cap " << max << " is below the floor of "
+          << out_floor << " that the relay embargo derivation assumes (F-8b); "
+          "refusing to start under-provisioned. Omit the option for the default ("
+          << shekyl_p2p_default_out_peers() << ") or give a value >= " << out_floor << ".");
+      return false;
     }
     zone.m_config.m_net_config.max_out_connection_count = max;
     return true;
@@ -2868,6 +2913,19 @@ namespace nodetool
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::change_max_out_public_peers(size_t count)
   {
+    // Same F-8b floor as set_max_out_peers, on the runtime path (`out_peers`
+    // console command / RPC) that no startup check can see. The daemon is
+    // already running here, so the under-floor request is clamped loudly
+    // rather than refused; 0 stays legal (see set_max_out_peers).
+    const size_t out_floor =
+        static_cast<size_t>(shekyl_relay_zone_min_provisioned_out_peers());
+    if (0 < count && count < out_floor)
+    {
+      MWARNING("out_peers " << count << " is below the floor of " << out_floor
+          << " that the relay embargo derivation assumes (F-8b); clamping to "
+          << out_floor << ".");
+      count = out_floor;
+    }
     auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);
     if (public_zone != m_network_zones.end())
     {

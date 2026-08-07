@@ -17,9 +17,9 @@ PQC note:
 
 ### Measured v3 Impact on Anonymity Networks
 
-`TransactionV3` adds ~5,385 bytes of `pqc_auth` material per user transaction
-(see `docs/V3_ROLLOUT.md` for exact component sizes). Practical consequences
-for anonymity relay:
+`TransactionV3` adds **5389** bytes of `pqc_auth` material per user
+transaction input (`pqc_auth_weight()`; see `docs/V3_ROLLOUT.md`).
+Practical consequences for anonymity relay:
 
 - A typical 2-in/2-out FCMP++ transaction grows from ~2–3 KB to ~7–8 KB.
 - On Tor, a single cell is 512 bytes; a v3 transaction spans ~14–16 cells
@@ -295,7 +295,7 @@ some metadata leakages to unknown hidden service operators.
 
 The transaction-broadcast transport above is inherited from Monero and is a
 *light, latency-tolerant, public-content* path. The **staker-archival** subsystem
-(see [`design/V3_STAKER_ARCHIVAL.md`](design/V3_STAKER_ARCHIVAL.md) and the sim in
+(see [`design/V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) and the sim in
 [`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md)) introduces a
 *second* traffic class with a different threat profile, and the transport choice
 turns out to be coupled to the sim's latency findings rather than independent of

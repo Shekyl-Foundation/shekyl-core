@@ -87,17 +87,22 @@
 namespace cryptonote
 {
   template <class CryptoHashContainer>
-  inline bool make_pool_supplement_from_block_entry(
+  inline bool make_block_connect_supplement_from_block_entry(
     const std::vector<cryptonote::tx_blob_entry>& tx_entries,
     const CryptoHashContainer& blk_tx_hashes,
     const bool allow_pruned,
-    cryptonote::pool_supplement& pool_supplement)
+    const cryptonote::blobdata& attestation_witness,
+    cryptonote::block_connect_supplement& connect)
   {
-    pool_supplement.nic_verified_hf_version = 0;
+    connect.pool.nic_verified_hf_version = 0;
+    // Single assignment site for the credit-wire attestation witness (opaque
+    // bytes). Block-level data lives on block_connect_supplement, not on the
+    // tx-shaped pool_supplement. Fluffy + full paths funnel through here.
+    connect.attestation_witness = attestation_witness;
 
     if (tx_entries.size() > blk_tx_hashes.size())
     {
-      MERROR("Failed to make pool supplement: Too many transaction blobs!");
+      MERROR("Failed to make block connect supplement: Too many transaction blobs!");
       return false;
     }
 
@@ -142,15 +147,15 @@ namespace cryptonote
         return false;
       }
 
-      pool_supplement.txs_by_txid.emplace(tx_hash, std::make_pair(std::move(tx), tx_entry.blob));
+      connect.pool.txs_by_txid.emplace(tx_hash, std::make_pair(std::move(tx), tx_entry.blob));
     }
 
     return true;
   }
 
-  inline bool make_full_pool_supplement_from_block_entry(
+  inline bool make_full_block_connect_supplement_from_block_entry(
     const cryptonote::block_complete_entry& blk_entry,
-    cryptonote::pool_supplement& pool_supplement)
+    cryptonote::block_connect_supplement& connect)
   {
     cryptonote::block blk;
     if (!cryptonote::parse_and_validate_block_from_blob(blk_entry.block, blk))
@@ -179,7 +184,8 @@ namespace cryptonote
 
     // We set `allow_pruned` equal to whether this block entry is pruned since the pruned flag
     // should be checked anyways by the time we deserialize transactions
-    return make_pool_supplement_from_block_entry(blk_entry.txs, blk_tx_hashes, blk_entry.pruned, pool_supplement);
+    return make_block_connect_supplement_from_block_entry(
+      blk_entry.txs, blk_tx_hashes, blk_entry.pruned, blk_entry.attestation_witness, connect);
   }
 
 
@@ -664,8 +670,24 @@ namespace cryptonote
     // directly to core::handle_single_incoming_block() -> Blockchain::add_block(), which means we
     // can skip the mempool for faster block propagation. Later in the function, we will erase all
     // transactions from the relayed block.
-    pool_supplement extra_block_txs;
-    if (!make_pool_supplement_from_block_entry(arg.b.txs, blk_txids_set, /*allow_pruned=*/false, extra_block_txs))
+    // The credit-wire attestation witness is bounded by block_complete_entry's own
+    // KV codec (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2), so an oversized blob
+    // never deserializes into `arg` and no check belongs here. Do not re-add one: it
+    // would be unreachable by construction, and an unreachable guard reads like a
+    // live one to the next maintainer.
+    //
+    // The trade this makes, deliberately: a codec refusal on a NOTIFICATION is
+    // discarded by the levin layer (levin_protocol_handler_async.h drops the notify
+    // return value), so the sender is not dropped the way the old call-site check
+    // dropped it — it only gets an epee-level "Failed to load in_struct" log and a
+    // message that accomplishes nothing. That is the same treatment
+    // txin_archival_reward_emission's in-codec bound already gives, the peer's
+    // resource use is still bounded by levin's own max packet size, and a peer that
+    // stalls a sync this way is collected by the existing request-timeout path.
+    // Unbypassable beats loud here; a bound only some ingresses check is the defect
+    // this replaced.
+    block_connect_supplement connect;
+    if (!make_block_connect_supplement_from_block_entry(arg.b.txs, blk_txids_set, /*allow_pruned=*/false, arg.b.attestation_witness, connect))
     {
       LOG_ERROR_CCONTEXT
       (
@@ -682,7 +704,7 @@ namespace cryptonote
     const bool handle_block_res = m_core.handle_single_incoming_block(arg.b.block,
       &new_block,
       bvc,
-      extra_block_txs);
+      connect);
 
     // handle result of attempted block add
     if (!handle_block_res || bvc.m_verifivation_failed)
@@ -792,6 +814,12 @@ namespace cryptonote
     txids.reserve(b.tx_hashes.size());
     NOTIFY_NEW_FLUFFY_BLOCK::request fluffy_response;
     fluffy_response.b.block = t_serializable_object_to_blob(b);
+    // Re-attach the credit-wire attestation witness we hold for this block
+    // (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2). This response is rebuilt from
+    // our own DB, so without this the requesting peer connects the block with no
+    // witness, stores no row, and relays that gap to ITS peers — the loss is
+    // permanent and spreads. Empty is omitted on the wire.
+    fluffy_response.b.attestation_witness = m_core.get_block_attestation_witness(b);
     fluffy_response.current_blockchain_height = arg.current_blockchain_height;
     std::vector<bool> seen(b.tx_hashes.size(), false);
     for(auto& tx_idx: arg.missing_tx_indices)
@@ -922,6 +950,11 @@ namespace cryptonote
       LOG_DEBUG_CC(context, "Received new tx while syncing, ignored");
       return 1;
     }
+
+    /* §46: hand every arrived blob to every zone's stem-observation watch
+       BEFORE pool admission — a returned tx the pool then rejects still
+       proves the successor relayed it (propagation, not admission). */
+    m_p2p->record_tx_arrivals(std::vector<blobdata>{arg.txs.begin(), arg.txs.end()}, context.m_connection_id);
 
     /* If the txes were received over i2p/tor, the default is to "forward"
        with a randomized delay to further enhance the "white noise" behavior,
@@ -1066,6 +1099,12 @@ namespace cryptonote
       blocks_size += element.block.size();
       for (const auto &tx : element.txs)
         blocks_size += tx.blob.size();
+      // The credit-wire attestation witness is held in RAM by m_block_queue for as
+      // long as the rest of the span is, and blocks_size is the ONLY bound the sync
+      // throttle has on that queue. Leaving it out would let a peer park up to one
+      // cap's worth of witness per queued block while the daemon believes it is
+      // under its size threshold.
+      blocks_size += element.attestation_witness.size();
     }
     size += blocks_size;
 
@@ -1509,8 +1548,8 @@ namespace cryptonote
             TIME_MEASURE_START(transactions_process_time);
             num_txs += block_entry.txs.size();
 
-            pool_supplement block_txs;
-            if (!make_full_pool_supplement_from_block_entry(block_entry, block_txs))
+            block_connect_supplement connect;
+            if (!make_full_block_connect_supplement_from_block_entry(block_entry, connect))
             {
                 drop_connections(span_origin);
                 if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
@@ -1541,7 +1580,7 @@ namespace cryptonote
             m_core.handle_incoming_block(block_entry.block,
               pblocks.empty() ? NULL : &pblocks[blockidx],
               bvc,
-              block_txs,
+              connect,
               false); // <--- process block
 
             if(bvc.m_verifivation_failed)

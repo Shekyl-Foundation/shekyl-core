@@ -1,7 +1,19 @@
 # PQC Multisig V3.1: Analysis Companion
 
-> **Status:** DRAFT v1.1 — companion to `PQC_MULTISIG.md` v1.1
-> **Purpose:** Size analysis, attack catalog, cryptographer review targets, wargame history, and design rationale documented in detail so the spec itself stays prescriptive and tight.
+> **Status:** HISTORICAL companion to `PQC_MULTISIG.md`.
+> **Supersession (2026-07-15):** Product path is **Option E′**
+> (`PQC_MULTISIG.md` §15.4a; design doc §0.5). Mandatory-prover
+> **Option D** is not shipped (`spend_auth_version = 0x01` never
+> issued). This document remains load-bearing evidence for **rejecting
+> Option A** (group-aggregate KEM key / fixed `pqc_public_key`) and for
+> the Solution C / Option C→D receiving analysis that E′ still inherits
+> (N-fold KEM fan-out, per-output forward privacy, `scheme_id=2`).
+> Live-voice rotating-prover content below is Option D history — do not
+> implement from it.
+>
+> **Purpose (unchanged):** Size analysis, attack catalog, cryptographer
+> review targets, wargame history, and design rationale — so the spec
+> stays prescriptive and tight.
 
 ---
 
@@ -72,13 +84,22 @@ v1.1 also incorporated four additional Round 3 findings:
 - CounterProof advancement lineage formalized with exact-match rules
   on consumed inputs
 
+**Phase 4 — Option E′ product path (2026-07-15).** Two-component
+`O = ho·G + B + y·T` landed with `y ≠ 0`. Product path thresholds `y`
+(FROST M-of-N, dealer-mode, `y_out = y_group + y_kem`) and makes `b`
+group-plaintext (local scan/KI). Mandatory prover deleted.
+`spend_auth_version = 0x02`; `0x01` never issued. See
+`PQC_MULTISIG.md` §15.4a.
+
 ---
 
 ## 2. Receiving Model Tradeoff Analysis
 
 ### 2.1 Options considered
 
-The receiving side was evaluated across four options:
+The receiving side was evaluated across four options; **E′** is the
+2026-07-15 product selection (spend-auth / SAL axis), inheriting C/D's
+N-fold KEM receiving:
 
 | Option | Description | Per-output size | Forward privacy |
 |---|---|---|---|
@@ -86,12 +107,19 @@ The receiving side was evaluated across four options:
 | B | Single KEM encap; shared secret split via OPRF | ~1.3 KB | Partial; requires per-spend OPRF ceremony |
 | C | N parallel KEM encaps; per-participant ephemeral key derivation | ~N × 1.2 KB | Full per-output forward privacy |
 | D | N parallel KEM encaps + N classical spend-auth pubkeys in tx_extra | ~N × 1.25 KB | Full per-output forward privacy + public prover verification |
+| **E′** | **C/D KEM fan-out + FROST on `y_group` with `y_out = y_group + y_kem`; `b` group-plaintext** | ~N × 1.25 KB auth path (same M hybrid sigs); address after MSW-8 is KEM-only + `B`/`Y` | Same per-output KEM privacy; **no** mandatory prover / 1/N lock |
 
-**Option D** (the Solution C refinement of Option C) was selected. The
+**Historical selection:** **Option D** (the Solution C refinement of
+Option C) was selected in v1.1 for the mandatory-prover path. The
 marginal size cost over Option C is ~32 bytes per participant for the
 published classical spend-auth pubkey — approximately 2.5% overhead —
 in exchange for making prover-assignment verification use purely public
 data.
+
+**Current selection (2026-07-15):** **Option E′**. Keeps N-fold KEM
+receiving (reject A/B for the same reasons below). Replaces mandatory
+prover + rotating assignment with threshold classical SAL on `y`.
+Does **not** reopen Option A.
 
 ### 2.2 Why not Option A
 
@@ -151,7 +179,6 @@ Per output totals:
 | 2 | 2,339 B | 2,435 B |
 | 3 | 3,492 B | 3,588 B |
 | 5 | 5,798 B | 5,894 B |
-| 7 | 8,104 B | 8,200 B |
 
 ### 3.2 Per-spend overhead
 
@@ -164,16 +191,19 @@ is the canonical `MultisigKeyContainer` serialized into
 | Component | Size |
 |---|---|
 | Version + n_total + m_required | 3 B |
-| Hybrid sign pubkeys (N × 1984 B) | 1984 × N B |
+| Hybrid keys (`HybridPublicKey`, N × 1996 B) | 1996 × N B |
 | Spend-auth pubkeys (N × 32 B) | 32 × N B |
-| **Total** | **3 + 2016 × N B** |
+| **Total** | **3 + 2028 × N B** |
+
+The container `keys` are `HybridPublicKey` at `SINGLE_KEY_CANONICAL_LEN`
+(1996 B, with the canonical framing) — **not** the address's raw 1984-B
+sign pubkey (MSW-1 corrected an earlier conflation of the two).
 
 | N | Container size |
 |---|---|
-| 2 | 4,035 B |
-| 3 | 6,051 B |
-| 5 | 10,083 B |
-| 7 | 14,115 B |
+| 2 | 4,059 B |
+| 3 | 6,087 B |
+| 5 | 10,143 B |
 
 ### 3.3 Network impact projections
 
@@ -193,16 +223,17 @@ At 25% multisig adoption with average N=5:
 
 ### 3.4 Address size
 
-Addresses are file-based (§6). Typical sizes:
+Addresses are file-based (§6). Typical sizes (post-MSW-8: the canonical
+payload carries KEM pubkeys only, `6 + N × 1216` B; see `PQC_MULTISIG.md` §6.2):
 
 | N | Bech32m chars | File size |
 |---|---|---|
-| 2 | ~10,260 | ~10 KB |
-| 3 | ~15,380 | ~15 KB |
-| 5 | ~25,620 | ~26 KB |
-| 7 | ~35,860 | ~36 KB |
+| 2 | ~3,900 | ~4 KB |
+| 3 | ~5,850 | ~6 KB |
+| 5 | ~9,740 | ~10 KB |
 
-Too large for QR codes; file transfer is mandatory. Fingerprint
+The N=2 address is now near the alphanumeric QR ceiling (~4,296); larger
+groups still require file transfer. Fingerprint
 (§6.3) is the human-verifiable handle (3 parallel representations).
 
 ---
@@ -228,7 +259,7 @@ attack, and the mitigation's location in v1.1.
 | A07 | Scheme downgrade (scheme_id=2 output spent as =1) | Spender | Leaf hash + size check; wired expected_scheme_id | §7.5 |
 | A08 | Key substitution within group | Group member | verify_multisig Check 8 (key uniqueness) | §3.4 |
 | A09 | Signer index manipulation | Signer | verify_multisig Checks 6-7 | §3.4 |
-| A10 | Replay across groups | External | group_id in canonical signing payload | §3.4 |
+| A10 | Replay across groups | External | address-fingerprint binding in the canonical signing intent (§5.3; replaces retired `group_id`) | §3.4 |
 | A11 | Replay within group (same intent) | External | intent_id + tx_counter + expires_at + kem_randomness_seed | §3.4 |
 | A12 | Griefing via malformed output | Malicious sender | §7.6 per-sender griefing scores + hard caps; §8.3 receive-time validation (I7) | §7.6, §8.3 |
 | A13 | Time-bomb output (decaps but binds wrong Y) | Malicious sender | §8.3 receive-time validation catches before balance | §8.3, §2.7 |
@@ -244,14 +275,14 @@ attack, and the mitigation's location in v1.1.
 | A23 | Simple-mode shared-secret compromise | Malicious setup participant | §5.2 DKG mandatory; simple-mode excluded from release builds | §5.2 |
 | A24 | Intent spam via proposer_index multi-indexing | Malicious member | §11.7 rate limit by signing pubkey, not index | §11.7 |
 | A25 | Unknown spend_auth_version confusion | Malicious sender | §8.2 silent skip; no error emission | §8.2 |
-| A26 | Silent scheme reinterpretation across versions | Future-version attack | §5.3 spend_auth_version in group_id; §15.5 no implicit upgrades | §5.3, §15.5 |
+| A26 | Silent scheme reinterpretation across versions | Future-version attack | §5.3 spend_auth_version in the address-fingerprint canonical payload; §15.5 no implicit upgrades | §5.3, §15.5 |
 | A27 | Filesystem metadata leakage via filenames | Forensic / accidental exposure | §12.6 opaque filenames + encrypted manifest | §12.6 |
 | A28 | Scanner CPU exhaustion via sustained griefing | Sender with budget | §7.6 7-day cooldowns + per-sender scores + 10k cap | §7.6 |
 | A29 | Honest-signer invariant bypass via flag | Malicious or coerced signer | §2.7 no unsafe flags in supported builds; mechanical enforcement | §2.7 |
 | A30 | State divergence unnoticed | Network partition | §9.3 chain_state_fingerprint + I2 | §9.3 |
-| A31 | Rotation rule grinding to bias prover assignment | Sender | Accepted bounded risk; grinding cost scales with bias; cryptographer review target | §11.1, §7 (this doc) |
-| A32 | Compromise of group's enduring KEM keys | Long-lived attacker | Out-of-scope for V3.1; mitigated by V3.2 rotation protocol | §3.2 |
-| A33 | Permanent participant key loss | Normal attrition | Accepted 1/N loss; §5.4 mandatory acknowledgment; V4 FROST SAL fixes | §5.4, §11.6 |
+| A31 | Rotation rule grinding to bias prover assignment | Sender | **Option D only** — deleted under E′; historical review target §7.4 | §11.1 |
+| A32 | Compromise of group's enduring KEM keys | Long-lived attacker | Out-of-scope for V3.1; mitigated by V3.2 *key* rotation protocol | §3.2 |
+| A33 | Permanent participant key loss | Normal attrition | **E′:** any M of N can spend (no 1/N lock). **Option D historical:** 1/N; §5.4 withdrawn for E′ | §15.4a |
 
 ### 4.3 Attacks added or strengthened in v1.1
 
@@ -348,6 +379,19 @@ Target focus:
 
 ## 6. Rationale for Deferring Full Rotation to V3.2
 
+> **Supersession note (2026-07-15).** This section is about V3.2
+> **participant / group *key* rotation** (new KEMs, new `group_id`,
+> migration txs) — **not** §11.1 rotating-*prover* assignment (deleted
+> by Option E′). Item 7 (**key escrow as 1/N loss mitigation**) is
+> **moot under E′** — there is no mandatory-prover 1/N lock. Struck in
+> `PQC_MULTISIG.md` §15.2. Items 1–6 (key rotation, migration,
+> privacy on migration txs) remain the deferral rationale.
+>
+> The closing paragraph's "ship V3.1 with documented 1/N loss" was the
+> Option D plan; E′ ships without that limitation. Spend-auth upgrade
+> language below that assumed `0x01 → 0x02` migration is also stale —
+> product path issues **`0x02` only**.
+
 Full rotation is the single largest surface area of protocol design
 still pending. The rationale for explicitly deferring it, rather than
 rushing it into V3.1, is **not scope protection but design maturity.**
@@ -357,15 +401,14 @@ A complete rotation protocol must handle:
 1. **Individual participant key rotation** (one member rotates without
    changing group identity)
 2. **Full group rotation** (all members rotate; produces new `group_id`)
-3. **Spend-auth scheme upgrade** (move from `spend_auth_version=0x01`
-   classical to `0x02` PQC when V4 FROST SAL ships)
+3. **Spend-auth scheme upgrade** (additional versions beyond E′ `0x02`
+   when lattice / mutual-distrust modes ship)
 4. **Migration transactions** consuming old outputs, producing new
 5. **Race conditions during rotation windows** (in-flight spends during
    rotation; recovery on rotation abort)
 6. **Privacy considerations on migration txs** (migration signals group
    activity in a distinct pattern; needs padding)
-7. **Key escrow as mitigation for 1/N loss** (threshold-split backup
-   keys to permit recovery of one participant's loss)
+7. ~~**Key escrow as mitigation for 1/N loss**~~ — **struck for E′**
 
 Each of these has failure modes that will surface primarily when real
 users run the protocol against real threats. A rushed pre-launch rotation
@@ -376,25 +419,21 @@ design would:
   later proves suboptimal
 - Lock in a specific rotation-window timing that produces liveness
   failures in practice
-- Pick a specific key-escrow topology before seeing how groups actually
-  form and manage risk
+- Pick speculative topologies before seeing how groups actually form
 
 V3.1 instead ships:
 
 - **Reserved namespace** (spend_auth_version byte, tag 0x08, message
   0x0A) so that V3.2 can slot in cleanly
-- **Forward-compatible primitives** (KDF labels per version; §5.3
-  group_id binds version; §15.5 no implicit upgrades) so that rotation
-  semantics remain unambiguous when V3.2 arrives
+- **Forward-compatible primitives** (KDF labels per version; §5.3 the
+  address fingerprint binds version; §15.5 no implicit upgrades) so that
+  rotation semantics remain unambiguous when V3.2 arrives
 - **An explicit public commitment** that rotation will surface flaws
   through actual use, and V3.2 will address them rather than predict them
 
-This commits the project to shipping V3.1 as a fully functional multisig
-with documented 1/N loss limitation, learning from real deployments, and
-then rolling out V3.2 with rotation once operational patterns are
-established. It is the same principle applied to the V4 FROST SAL
-timeline: wait for NIST standardization of the primitive rather than
-ship speculative cryptography.
+This commits the project to shipping E′ as a fully functional dealer-
+mode multisig, learning from real deployments, and then rolling out
+V3.2 *key* rotation once operational patterns are established.
 
 This is not optional scope protection. It is the "get it right, not get
 it now" design principle (spec §2 principle 5) applied to the most
@@ -467,8 +506,14 @@ that `Y=yG=O` is required; no alternate witness produces a valid proof.
 `rotating_prover_index()`. What is the concrete cost to achieve
 specific biases? Specifically:
 
-- To bias one output's prover to a specific participant: ~N expected tries
-- To bias all k outputs in a tx to one specific participant: ~N^k tries
+- To bias one output's prover to a specific participant: ~`n` expected
+  tries (one hash per try) — **availability-relevant lead figure**
+- To land `k` preferred assignments across independent targets:
+  ~`k · n` expected tries
+- To bias *all* `k` outputs in *one* tx to one participant under a
+  single shared `tx_secret_key_hash`: ~`n^k` expected trials (joint;
+  one trial re-samples the whole vector) — correct math, **not** the
+  everyday threat; do not lead with this
 - To achieve a target bias distribution (e.g., 80% to participant 2):
   what's the analysis?
 
@@ -485,6 +530,9 @@ whether to harden the rule further; confirmation that accepted bound is
 appropriate for V3.1's threat model (sender-side griefing is bounded by
 fee cost, which bounds grinding budget in practice).
 
+> **E′ note:** this target applies only if Option D were shipped. Under
+> Option E′ there is no rotating prover; §7.4 is historical. Prefer §7.6.
+
 ### 7.5 Out of review scope (for clarity)
 
 - Full protocol correctness (reviewer round 4 covers adversarial
@@ -494,14 +542,29 @@ fee cost, which bounds grinding budget in practice).
 - Transport-layer cryptography (standard ChaCha20-Poly1305 AEAD with
   per-message key derivation; no novel construction)
 - DKG ceremony correctness (reuses existing `dkg-pedpop` infrastructure,
-  already reviewed)
+  already reviewed; E′ dealer-mode does not ship DKG)
 
-### 7.6 Timeline
+### 7.6 Review target 5 (Option E′): public additive tweak on T (Phase 6)
+
+**Question:** is `y_out = y_group + y_kem` sound when FROST signs under
+`Y_group = y_group·T` and `y_kem·T` is added in the clear (Taproot-shaped
+key tweak)?
+
+**Specific concern:** confirm that knowledge of public `y_kem` does not
+weaken the FROST threshold share of `y_group`, and that the FCMP++ /
+SAL witness under `y_out` verifies correctly against
+`O = ho·G + B + y_out·T`.
+
+**Deliverable:** short written affirmation (or named counterexample).
+This is a small, well-formed question — not a full protocol review.
+
+### 7.7 Timeline
 
 Cryptographer review is Phase 6 of the rollout (§16.10) and is
 explicitly NOT a 1-2-hour task. Expect 2-4 weeks of engagement for
-these four targets: discovery, formal analysis, written report, possible
-iteration on spec language if findings require adjustment.
+the active targets (7.1–7.3 + **7.6** under E′; 7.4 historical):
+discovery, formal analysis, written report, possible iteration on spec
+language if findings require adjustment.
 
 ---
 
@@ -509,23 +572,23 @@ iteration on spec language if findings require adjustment.
 
 ### 8.1 V3.2 candidates
 
-- Full rotation protocol (§6 above)
-- Key escrow for 1/N loss mitigation
+- Full *key* rotation protocol (§6 above; ≠ rotating prover)
+- ~~Key escrow for 1/N loss mitigation~~ — struck under E′
 - Threshold-signed relay directory updates (remove GitHub-release
   trust root)
 
 ### 8.2 V3.3 candidates
 
-- Chain-anchored group registry (reduce ~10-36 KB addresses to ~100 B)
+- Chain-anchored group registry (optimization after MSW-8; was critical
+  path under the address fossil)
 - Traffic padding for transport privacy
 - Encrypted sender_index in envelopes (currently cleartext)
 
-### 8.3 V4 integration
+### 8.3 V4 / lattice auth
 
-- FROST SAL integration via `spend_auth_version = 0x02`
-- Migration protocol from V3.1 classical spend-auth to V4 threshold
-- Removal of rotating-prover role (threshold proving replaces it)
-- Elimination of 1/N permanent-loss limitation
+- Composite / lattice-only *auth* size (15.4b; dPN25 / TALUS watch)
+- Migration protocol between spend_auth versions under §15.5
+- E′ already eliminates rotating-prover / 1/N permanent-loss
 
 ### 8.4 Research questions
 

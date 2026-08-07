@@ -42,6 +42,35 @@ fn serve_credit_round_trips() {
 }
 
 #[test]
+fn bond_post_holdings_with_duplicate_shard_rejected_at_read() {
+    // "A set on the wire": the retention decoder (bond_wire::ShardSet) rejects a
+    // repeated holdings id; this oracle enforces the same rule independently, so
+    // the two decoders cannot diverge on validity. `write` does not validate
+    // (it just encodes the caller's vec), so a duplicate-carrying blob is
+    // constructible — `read` must reject it.
+    let input = Input::BondPost(Box::new(BondPost {
+        hybrid_public_key: vec![0xAB; PQC_HYBRID_SINGLE_KEY_LEN],
+        p_canonical_id: [0x77; 32],
+        kind: BondPostKind::JoinMarket {
+            bond_spend_pk: vec![0xCD; PQC_HYBRID_SINGLE_KEY_LEN],
+        },
+        holdings: Holdings::ShardSetCompact(vec![7, 42, 7]),
+        bonded_total_atomic: 750_000_000 * 3,
+        bond_credit: 750_000_000 * 3,
+        bond_debit: 0,
+    }));
+    let mut bytes = Vec::new();
+    input
+        .write(&mut bytes)
+        .expect("write encodes without validating");
+    let err = Input::read(&mut &bytes[..]).expect_err("duplicate holdings must reject at read");
+    assert!(
+        err.to_string().contains("appears more than once"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn bond_post_joinmarket_round_trips_with_bond_spend_pk() {
     let input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0xAB; PQC_HYBRID_SINGLE_KEY_LEN],

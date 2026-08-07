@@ -87,7 +87,8 @@ namespace cryptonote
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
 #define CORE_RPC_VERSION_MAJOR 3
-#define CORE_RPC_VERSION_MINOR 17
+// 3.21: block_header_response gained attestation_root (ARCHIVAL_CREDIT_WIRE.md §3)
+#define CORE_RPC_VERSION_MINOR 21
 #define MAKE_CORE_RPC_VERSION(major,minor) (((major)<<16)|(minor))
 #define CORE_RPC_VERSION MAKE_CORE_RPC_VERSION(CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR)
 
@@ -670,7 +671,6 @@ namespace cryptonote
       uint64_t height_without_bootstrap;
       bool was_bootstrap_ever_used;
       uint64_t database_size;
-      bool update_available;
       bool busy_syncing;
       std::string version;
       uint32_t protocol_version;
@@ -721,7 +721,6 @@ namespace cryptonote
         KV_SERIALIZE(height_without_bootstrap)
         KV_SERIALIZE(was_bootstrap_ever_used)
         KV_SERIALIZE(database_size)
-        KV_SERIALIZE(update_available)
         KV_SERIALIZE(busy_syncing)
         KV_SERIALIZE(version)
         KV_SERIALIZE(protocol_version)
@@ -1109,7 +1108,36 @@ namespace cryptonote
     };
     typedef epee::misc_utils::struct_init<response_t> response;
   };
-  
+
+  // FAKECHAIN-only: inject an archival serve-credit bit through the
+  // production setter (Gate-6 accrual-path regtest stand-in; contract and
+  // pop-range caveat at Blockchain::regtest_inject_archival_serve_credit).
+  struct COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT
+  {
+    struct request_t: public rpc_request_base
+    {
+      std::string p_canonical_id;  // hex hash
+      uint64_t shard_id;
+      uint64_t settlement_epoch;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_request_base)
+        KV_SERIALIZE(p_canonical_id)
+        KV_SERIALIZE(shard_id)
+        KV_SERIALIZE(settlement_epoch)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t: public rpc_response_base
+    {
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_response_base)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
   struct block_header_response
   {
       uint8_t major_version;
@@ -1135,7 +1163,8 @@ namespace cryptonote
       uint64_t long_term_weight;
       std::string miner_tx_hash;
       std::string curve_tree_root;
-      
+      std::string attestation_root;
+
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(major_version)
         KV_SERIALIZE(minor_version)
@@ -1160,6 +1189,7 @@ namespace cryptonote
         KV_SERIALIZE_OPT(long_term_weight, (uint64_t)0)
         KV_SERIALIZE(miner_tx_hash)
         KV_SERIALIZE(curve_tree_root)
+        KV_SERIALIZE(attestation_root)
       END_KV_SERIALIZE_MAP()
   };
 
@@ -2273,43 +2303,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  struct COMMAND_RPC_UPDATE
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::string command;
-      std::string path;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(command)
-        KV_SERIALIZE(path)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      bool update;
-      std::string version;
-      std::string user_uri;
-      std::string auto_uri;
-      std::string hash;
-      std::string path;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(update)
-        KV_SERIALIZE(version)
-        KV_SERIALIZE(user_uri)
-        KV_SERIALIZE(auto_uri)
-        KV_SERIALIZE(hash)
-        KV_SERIALIZE(path)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
   struct COMMAND_RPC_RELAY_TX
   {
     struct request_t: public rpc_request_base
@@ -2394,82 +2387,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  struct COMMAND_RPC_GET_OUTPUT_DISTRIBUTION
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::vector<uint64_t> amounts;
-      uint64_t from_height;
-      uint64_t to_height;
-      bool cumulative;
-      bool binary;
-      bool compress;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(amounts)
-        KV_SERIALIZE_OPT(from_height, (uint64_t)0)
-        KV_SERIALIZE_OPT(to_height, (uint64_t)0)
-        KV_SERIALIZE_OPT(cumulative, false)
-        KV_SERIALIZE_OPT(binary, true)
-        KV_SERIALIZE_OPT(compress, false)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct distribution
-    {
-      rpc::output_distribution_data data;
-      uint64_t amount;
-      std::string compressed_data;
-      bool binary;
-      bool compress;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(amount)
-        KV_SERIALIZE_N(data.start_height, "start_height")
-        KV_SERIALIZE(binary)
-        KV_SERIALIZE(compress)
-        if (this_ref.binary)
-        {
-          if (is_store)
-          {
-            if (this_ref.compress)
-            {
-              const_cast<std::string&>(this_ref.compressed_data) = compress_integer_array(this_ref.data.distribution);
-              KV_SERIALIZE(compressed_data)
-            }
-            else
-              KV_SERIALIZE_CONTAINER_POD_AS_BLOB_N(data.distribution, "distribution")
-          }
-          else
-          {
-            if (this_ref.compress)
-            {
-              KV_SERIALIZE(compressed_data)
-              const_cast<std::vector<uint64_t>&>(this_ref.data.distribution) = decompress_integer_array<uint64_t>(this_ref.compressed_data);
-            }
-            else
-              KV_SERIALIZE_CONTAINER_POD_AS_BLOB_N(data.distribution, "distribution")
-          }
-        }
-        else
-          KV_SERIALIZE_N(data.distribution, "distribution")
-        KV_SERIALIZE_N(data.base, "base")
-      END_KV_SERIALIZE_MAP()
-    };
-
-    struct response_t: public rpc_response_base
-    {
-      std::vector<distribution> distributions;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(distributions)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 
   struct COMMAND_RPC_POP_BLOCKS
   {
@@ -2650,6 +2567,166 @@ namespace cryptonote
         KV_SERIALIZE(depth)
         KV_SERIALIZE(leaf_count)
         KV_SERIALIZE(block_height)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  /// Emission claim-source query (`EMISSION_CLAIM_BUILDER.md` §7): the
+  /// claimant's bond-record claim context plus one as-of-`E` epoch snapshot
+  /// for **every** epoch in the claim window `[claim_window_floor(settled),
+  /// settled − 1]`, unconditionally — the request cannot encode an epoch
+  /// selection and the handler branches on nothing claimable-set-derived
+  /// (§7.2 transport cause-blindness). The per-epoch payload mirrors
+  /// `ArchivalEmissionEpochSnapshot` (blockchain_db.h) field-for-field and is
+  /// filled by the single landed gather,
+  /// `gather_archival_emission_epoch_snapshot` — never a second gather path
+  /// (§7.1, the daemon face of CB-1(b)'s single-evaluator invariant).
+  ///
+  /// Deliberately NOT carried (§7.3, each exclusion load-bearing):
+  /// consensus constants (`settlement_epoch_blocks` / `age_weight_milli` /
+  /// curve params — the wallet builds `EpochCloseInputs` from its own
+  /// compiled constants, no second source), close-only operands
+  /// (CB-5-structural: carrying them would make a cause-distinguishing
+  /// wallet branch representable; the retired M1 gate's operands were the
+  /// original entry in this class),
+  /// per-epoch holdings (WS-1: the work channel carries no holdings), and
+  /// tree/membership paths (existing spend-path machinery's concern).
+  struct COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE
+  {
+    struct request_t: public rpc_request_base
+    {
+      /// 32-byte `P_canonical_id`, hex. The ONLY request field (§7.2): no
+      /// epoch selector, no range, no claimable-subset encoding.
+      std::string p_id;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_request_base)
+        KV_SERIALIZE(p_id)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    /// Mirrors `ArchivalEmissionEpochSnapshot::BondRow`.
+    struct bond_row_t
+    {
+      uint64_t join_settlement_epoch;
+      bool is_foundation_complete_tree;
+      /// Flattened (start_epoch, end_exclusive) pairs, as landed.
+      std::vector<uint64_t> bad_intervals_flat;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(join_settlement_epoch)
+        KV_SERIALIZE(is_foundation_complete_tree)
+        KV_SERIALIZE(bad_intervals_flat)
+      END_KV_SERIALIZE_MAP()
+    };
+
+    /// Mirrors `ArchivalEmissionEpochSnapshot::ShardRow`.
+    struct shard_row_t
+    {
+      uint64_t shard_id;
+      uint64_t freeze_height;
+      bool has_segment;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(shard_id)
+        KV_SERIALIZE(freeze_height)
+        KV_SERIALIZE(has_segment)
+      END_KV_SERIALIZE_MAP()
+    };
+
+    /// Mirrors `ArchivalEmissionEpochSnapshot::CreditPair`.
+    struct credit_pair_t
+    {
+      uint64_t bond_idx;
+      uint64_t shard_idx;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(bond_idx)
+        KV_SERIALIZE(shard_idx)
+      END_KV_SERIALIZE_MAP()
+    };
+
+    /// One as-of-`E` snapshot; mirrors `ArchivalEmissionEpochSnapshot`
+    /// field-for-field (§7.3 part B — no field added, none dropped).
+    struct epoch_snapshot_t
+    {
+      uint64_t settlement_epoch;
+      /// The close-**processing** height `(E+1)·SEB` — sourced from
+      /// `shekyl_archival_epoch_close_processing_height`, NEVER the
+      /// lookalike `shekyl_archival_epoch_close_height` (= `(E+1)·SEB − 1`,
+      /// the epoch's last block). Carries the landed struct's hazard pin
+      /// verbatim (§7.3).
+      uint64_t close_block_height;
+      /// Persisted finalized `Σwork(E)` milli — the stored denominator,
+      /// never a recompute (the M1 gate outcome reaches the wallet only
+      /// through this value, same as verify).
+      uint64_t sigma_work_milli;
+      /// Frozen close-row `budget(E)`; meaningful only when `has_budget_row`.
+      uint64_t budget_atomic;
+      /// Absent close row ⇒ the wallet treats `E` as unclaimable (mirrors
+      /// the verify shim's reject); present-and-zero is rejected downstream
+      /// by wire positivity.
+      bool has_budget_row;
+      std::vector<bond_row_t> bonds;
+      std::vector<shard_row_t> shards;
+      std::vector<credit_pair_t> credit_pairs;
+      /// Claimant P's index into `bonds`; `UINT64_MAX` sentinel (= the
+      /// landed struct's `SIZE_MAX`) when P has no serve-credit row in `E`
+      /// → `Option<usize>::None` at the Rust decode, exactly as the verify
+      /// shim decodes it.
+      uint64_t claimant_bond_idx;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(settlement_epoch)
+        KV_SERIALIZE(close_block_height)
+        KV_SERIALIZE(sigma_work_milli)
+        KV_SERIALIZE(budget_atomic)
+        KV_SERIALIZE(has_budget_row)
+        KV_SERIALIZE(bonds)
+        KV_SERIALIZE(shards)
+        KV_SERIALIZE(credit_pairs)
+        KV_SERIALIZE(claimant_bond_idx)
+      END_KV_SERIALIZE_MAP()
+    };
+
+    struct response_t: public rpc_response_base
+    {
+      // ── Part A: claim context (§7.3) ─────────────────────────────────
+      /// Tip block count at gather time; the wallet's staleness check
+      /// operand (§2 step 3 same-tip rule), not a computation operand.
+      uint64_t chain_height;
+      /// `shekyl_archival_settlement_epoch_at_height` over `chain_height`
+      /// (the next block's height — the same operand class the connect
+      /// path's `apply_archival_emission_claim` uses for the earliest
+      /// block that can include the claim). Never a second derivation.
+      uint64_t current_settled_epoch;
+      /// `archival_bond_record` row existence for `p_id`. Absent ⇒ the
+      /// wallet refuses idle (`NoClaimableEpochs`), not an RPC error.
+      bool has_bond_record;
+      /// Bond-record fields (meaningful only when `has_bond_record`):
+      uint64_t join_settlement_epoch;
+      /// `HoldingsDescriptor` wire form: kind 0 = compact shard set,
+      /// 1 = foundation-complete tree.
+      uint8_t holdings_kind;
+      std::vector<uint64_t> held_shard_ids;
+      /// Strictly increasing; mirrors
+      /// `ClaimantBondRecord::claimed_settlement_epochs`.
+      std::vector<uint64_t> claimed_settlement_epochs;
+      // ── Part B: per-epoch snapshots, full window unconditionally ─────
+      std::vector<epoch_snapshot_t> epochs;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_response_base)
+        KV_SERIALIZE(chain_height)
+        KV_SERIALIZE(current_settled_epoch)
+        KV_SERIALIZE(has_bond_record)
+        KV_SERIALIZE(join_settlement_epoch)
+        KV_SERIALIZE(holdings_kind)
+        KV_SERIALIZE(held_shard_ids)
+        KV_SERIALIZE(claimed_settlement_epochs)
+        KV_SERIALIZE(epochs)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

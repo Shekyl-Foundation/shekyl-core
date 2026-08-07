@@ -1439,7 +1439,6 @@ static char* dispatch_validate_address(wallet2_handle* w, const rj::Value& p) {
     if (net == cryptonote::TESTNET) nt_str = "testnet";
     else if (net == cryptonote::STAGENET) nt_str = "stagenet";
     doc.AddMember("nettype", rj::Value(nt_str, a), a);
-    doc.AddMember("openalias_address", "", a);
     return json_to_string(doc);
 }
 
@@ -3233,62 +3232,13 @@ static char* dispatch_verify(wallet2_handle* w, const rj::Value& p) {
 static char* dispatch_estimate_tx_size_and_weight(wallet2_handle* w, const rj::Value& p) {
     uint32_t n_inputs = json_u32(p, "n_inputs");
     uint32_t n_outputs = json_u32(p, "n_outputs");
-    bool rct = json_bool(p, "rct", true);
-    auto sw = w->wallet->estimate_tx_size_and_weight(rct, n_inputs, n_outputs, 0);
+    bool ct = json_bool(p, "ct", true);
+    auto sw = w->wallet->estimate_tx_size_and_weight(ct, n_inputs, n_outputs, 0);
     rj::Document doc;
     doc.SetObject();
     auto& a = doc.GetAllocator();
     doc.AddMember("size", (uint64_t)sw.first, a);
     doc.AddMember("weight", (uint64_t)sw.second, a);
-    return json_to_string(doc);
-}
-
-static char* dispatch_create_pqc_multisig_group(wallet2_handle* w, const rj::Value& p) {
-    uint32_t n_total = json_u32(p, "n_total");
-    uint32_t m_required = json_u32(p, "m_required");
-    if (n_total == 0 || m_required == 0 || m_required > n_total) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Invalid n_total/m_required");
-        return nullptr;
-    }
-    if (!p.HasMember("participant_keys") || !p["participant_keys"].IsArray()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "participant_keys array required");
-        return nullptr;
-    }
-    std::vector<std::vector<uint8_t>> keys_vec;
-    for (auto& v : p["participant_keys"].GetArray()) {
-        if (!v.IsString()) {
-            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "participant_keys must be hex strings");
-            return nullptr;
-        }
-        std::string bin;
-        if (!epee::string_tools::parse_hexstr_to_binbuff(v.GetString(), bin)) {
-            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Invalid hex in participant_keys");
-            return nullptr;
-        }
-        keys_vec.emplace_back(bin.begin(), bin.end());
-    }
-    if (!w->wallet->create_pqc_multisig_group(static_cast<uint8_t>(n_total), static_cast<uint8_t>(m_required), keys_vec)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Failed to create PQC multisig group");
-        return nullptr;
-    }
-    rj::Document doc;
-    doc.SetObject();
-    auto& a = doc.GetAllocator();
-    doc.AddMember("group_id", json_val_str(epee::string_tools::pod_to_hex(w->wallet->pqc_multisig_group_id()), a), a);
-    doc.AddMember("n_total", (uint32_t)w->wallet->pqc_multisig_n(), a);
-    doc.AddMember("m_required", (uint32_t)w->wallet->pqc_multisig_m(), a);
-    return json_to_string(doc);
-}
-
-static char* dispatch_get_pqc_multisig_info(wallet2_handle* w, const rj::Value&) {
-    rj::Document doc;
-    doc.SetObject();
-    auto& a = doc.GetAllocator();
-    bool is_ms = w->wallet->is_pqc_multisig();
-    doc.AddMember("is_multisig", is_ms, a);
-    doc.AddMember("n_total", (uint32_t)w->wallet->pqc_multisig_n(), a);
-    doc.AddMember("m_required", (uint32_t)w->wallet->pqc_multisig_m(), a);
-    doc.AddMember("group_id", json_val_str(epee::string_tools::pod_to_hex(w->wallet->pqc_multisig_group_id()), a), a);
     return json_to_string(doc);
 }
 
@@ -3522,8 +3472,6 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
         if (m == "stop_background_sync") return dispatch_stop_background_sync(w, params);
 
         // PQC Multisig
-        if (m == "create_pqc_multisig_group") return dispatch_create_pqc_multisig_group(w, params);
-        if (m == "get_pqc_multisig_info") return dispatch_get_pqc_multisig_info(w, params);
 
         // Not yet implemented methods return a structured error
         w->set_error(-32601, "Method not implemented: " + m);

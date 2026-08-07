@@ -181,7 +181,7 @@ gate 6 firewall rigor; V3 form **C** reconciliation.
 
 | Constant | Value (genesis pin) | Role |
 |----------|---------------------|------|
-| `SETTLEMENT_EPOCH_BLOCKS` | **10_000** | Global boundary; inherited from confidential-staking epoch table ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §5) until migrated to `config/consensus_constants.json` |
+| `SETTLEMENT_EPOCH_BLOCKS` | **10_000** | Global boundary; inherited from confidential-staking epoch table ([`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §5) until migrated to `config/consensus_constants.json` |
 | `settlement_epoch(height)` | `height / SETTLEMENT_EPOCH_BLOCKS` | Integer division; boundaries are chain-wide |
 | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` | **15** | Max epochs batched in one emission vin; bounds work vector and dedup batch size (same envelope as retired `MAX_EPOCHS_PER_CLAIM`) |
 
@@ -231,10 +231,12 @@ across the whole market cohort, forcing the per-emission full-ledger re-walk §4
 and the wallet build path import the canonical `reward_arithmetic` integer `Curve`/Form-C — no
 reimplementation (single-source rule).
 
-**M1 cold-start gate (implemented — [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md)):**
-for settlement epochs where `frozen_shard_count(E) < K_COVER`, the close compute zeroes the
-finalized row (`R_market`, `Σwork`) at the top — so `reward_P(E) = 0` for every `P` falls out of
-the formula above with no verifier-side branch. Non-claimability is carried by two properties
+**M1 cold-start gate — RETIRED 2026-07-19, PR #346 ([`ARCHIVAL_REWARD_GATE_M1.md`](../completed/ARCHIVAL_REWARD_GATE_M1.md)
+§13):** the close compute has **no** zero-at-top gate; nothing zeroes the finalized row
+(`R_market`, `Σwork`) collectively. Cold start needs no gate: `shard_age_milli` is zero for a
+segment not yet frozen past the close height, so at genesis every shard is hot, every
+contribution is zero, and `reward_P(E) = 0` for every `P` falls out of the formula above by the
+work math — still with no verifier-side branch. Non-claimability is carried by two properties
 that already exist at this layer: the **lagged stored-`Σwork` read** (never a primaries
 recompute — that spec pins the read discipline as doubly load-bearing) and the **wire-level
 positivity rule** (`reward_amount_plain[i] == 0` is unencodable, `WireError::RewardAmountZero`),
@@ -381,7 +383,7 @@ proofs. Reopen only with explicit spec for that machinery; §4.4 does not implem
 
 ### 5.1 Accepted tx type
 
-`RCTTypeFcmpPlusPlusPqc` only ([`60-no-monero-legacy.mdc`](../../.cursor/rules/60-no-monero-legacy.mdc)).
+`CTTypeFcmpPlusPlusPqc` only ([`60-no-monero-legacy.mdc`](../../.cursor/rules/60-no-monero-legacy.mdc)).
 
 ### 5.2 Vin layout
 
@@ -1020,14 +1022,14 @@ amounts), bond post/slash reaction.
 |-----|----------------|
 | [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 | Parent shape |
 | [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | Economics + `P` model |
-| [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §5–§6 | **Retired** claim wire; §5 epoch length still authoritative until constant migrated |
+| [`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §5–§6 | **Retired** claim wire; §5 epoch length still authoritative until constant migrated |
 | [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | **Critical path** — gate 2/3 schema + `W` |
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Gate 6 — `P`↔principal firewall (parallel) |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; (ii) byte sweep |
 | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | Membership proof base |
 | [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) | §7.2 verify API — statement, wire, security argument, PQC gate |
 | [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) | **Implementation plan** for §12 — sub-PR sequence, pre-flight, ML-DSA hard gate |
-| [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md) | M1 cold-start gate — zeroed finalized row + wire positivity (§4 note) |
+| [`ARCHIVAL_REWARD_GATE_M1.md`](../completed/ARCHIVAL_REWARD_GATE_M1.md) | M1 cold-start gate — zeroed finalized row + wire positivity (§4 note) |
 
 ---
 

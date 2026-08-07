@@ -58,10 +58,6 @@
   #include <fstream>
 #endif
 
-#ifdef HAVE_DNS_UNBOUND
-#include "unbound.h"
-#endif
-
 #include <thread>
 #include "include_base_utils.h"
 #include "file_io_utils.h"
@@ -704,23 +700,6 @@ std::string get_nix_version_display_string()
     return std::error_code(code, std::system_category());
   }
 
-#ifdef HAVE_DNS_UNBOUND
-  static bool unbound_built_with_threads()
-  {
-    ub_ctx *ctx = ub_ctx_create();
-    if (!ctx) return false; // cheat a bit, should not happen unless OOM
-    char *shekyl = strdup("shekyl"), *unbound = strdup("unbound");
-    ub_ctx_zone_add(ctx, shekyl, unbound);
-    free(unbound);
-    free(shekyl);
-    // if no threads, bails out early with UB_NOERROR, otherwise fails with UB_AFTERFINAL id already finalized
-    bool with_threads = ub_ctx_async(ctx, 1) != 0; // UB_AFTERFINAL is not defined in public headers, check any error
-    ub_ctx_delete(ctx);
-    MINFO("libunbound was built " << (with_threads ? "with" : "without") << " threads");
-    return with_threads;
-  }
-#endif
-
   bool sanitize_locale()
   {
     // std::filesystem may throw for "invalid" locales, such as en_US.UTF-8, or kjsdkfs,
@@ -827,11 +806,6 @@ std::string get_nix_version_display_string()
     SSL_library_init();
 #else
     OPENSSL_init_ssl(0, NULL);
-#endif
-
-#ifdef HAVE_DNS_UNBOUND
-    if (!unbound_built_with_threads())
-      MCLOG_RED(el::Level::Warning, "global", "libunbound was not built with threads enabled - crashes may occur");
 #endif
 
     return true;

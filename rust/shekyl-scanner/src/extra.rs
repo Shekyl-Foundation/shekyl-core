@@ -232,14 +232,57 @@ impl Extra {
         None
     }
 
-    /// Transaction extra for a hybrid-PQC transfer: tx pubkey plus per-output KEM blobs.
+    /// Transaction extra for a hybrid-PQC transfer: tx pubkey plus ONE
+    /// `0x06` field carrying every output's KEM ciphertext concatenated
+    /// in output order (`n_out × HYBRID_KEM_CT_LEN` bytes).
+    ///
+    /// The single-field packing is the read-side contract everywhere:
+    /// [`Extra::pqc_kem_ciphertext`] is first-match and every consumer
+    /// slices output `o`'s ciphertext at `o * HYBRID_KEM_CT_LEN` within
+    /// that one blob (`shekyl-scanner`'s scan path, the engine
+    /// proof-check path, `shekyl-wire::tx_extra::pqc_kem_per_output`,
+    /// and the C++ `wallet2` reader) — and the C++ writers
+    /// (`cryptonote_tx_utils.cpp` coinbase/genesis/transfer) emit the
+    /// same single concatenated field. This writer's pre-fix
+    /// one-field-per-output packing was the sole deviant and made
+    /// every output at vout ≥ 1 — including all change — silently
+    /// unscannable (`FOLLOWUPS.md` "KEM-ciphertext extra packing
+    /// mismatch", 2026-07-24).
+    ///
+    /// # Panics
+    ///
+    /// Panics if any ciphertext is not exactly
+    /// [`shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN`] bytes. Because
+    /// readers slice the blob at fixed offsets, a single wrong-length
+    /// entry would shift every later output's slice and silently make
+    /// those vouts unscannable — the same failure class the
+    /// single-field packing fix closed. The lengths are fixed by the
+    /// KEM algorithms, so a violation is a caller bug, not an input
+    /// this function can validate away: the panic aborts transaction
+    /// assembly while the transaction is still local — before signing
+    /// and broadcast — rather than publishing outputs the recipient
+    /// can never see.
     pub fn for_hybrid_transfer(
         tx_pubkey: EdwardsPoint,
         kem_ciphertexts: impl IntoIterator<Item = Vec<u8>>,
     ) -> Extra {
+        use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
+
+        let kem_ciphertexts = kem_ciphertexts.into_iter();
+        let mut blob = Vec::with_capacity(kem_ciphertexts.size_hint().0 * HYBRID_KEM_CT_LEN);
+        for (vout, kem) in kem_ciphertexts.enumerate() {
+            assert_eq!(
+                kem.len(),
+                HYBRID_KEM_CT_LEN,
+                "output {vout}: hybrid KEM ciphertext must be exactly \
+                 HYBRID_KEM_CT_LEN ({HYBRID_KEM_CT_LEN}) bytes — a wrong-length \
+                 entry shifts every later output's slice offset",
+            );
+            blob.extend_from_slice(&kem);
+        }
         let mut fields = vec![ExtraField::PublicKey(tx_pubkey)];
-        for kem in kem_ciphertexts {
-            fields.push(ExtraField::PqcKemCiphertext(kem));
+        if !blob.is_empty() {
+            fields.push(ExtraField::PqcKemCiphertext(blob));
         }
         Extra(fields)
     }
@@ -250,9 +293,11 @@ impl Extra {
     /// The daemon's curve-tree ingestion reads this field to set each new
     /// output's `h_pqc` leaf component; an output ingested **without** it
     /// carries a zero leaf hash and can never satisfy the spend-side
-    /// `pqc_auths`-derived hash check — i.e. it is unspendable. Any
-    /// transaction whose outputs must be spendable (bond-post change, and
-    /// eventually the transfer path) appends this field.
+    /// `pqc_auths`-derived hash check — i.e. it is unspendable. Every
+    /// transaction whose outputs must be spendable appends this field:
+    /// bond-post/emission change (stake_engine.rs) and the ordinary
+    /// transfer path (sign_bridge.rs; its omission there made every
+    /// transfer output unspendable — surfaced live by the PR-4b bond e2e).
     pub fn push_pqc_leaf_hashes(&mut self, blob: Vec<u8>) {
         self.0.push(ExtraField::PqcLeafHashes(blob));
     }
@@ -348,5 +393,44 @@ mod pqc_leaf_hashes_tests {
         let wire = extra.serialize();
         let parsed = Extra::read(&mut wire.as_slice()).unwrap();
         assert_eq!(parsed.pqc_leaf_hashes(), Some(first.as_slice()));
+    }
+}
+
+#[cfg(test)]
+mod hybrid_transfer_packing_tests {
+    use super::*;
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+    use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
+
+    fn ct(fill: u8) -> Vec<u8> {
+        vec![fill; HYBRID_KEM_CT_LEN]
+    }
+
+    /// The write-side half of the single-field packing contract: one
+    /// `0x06` field, ciphertexts concatenated in output order, so the
+    /// readers' `o * HYBRID_KEM_CT_LEN` slicing recovers each entry.
+    #[test]
+    fn for_hybrid_transfer_packs_one_field_in_output_order() {
+        let extra = Extra::for_hybrid_transfer(ED25519_BASEPOINT_POINT, [ct(0xAA), ct(0xBB)]);
+        let blob = extra.pqc_kem_ciphertext().expect("one 0x06 field present");
+        assert_eq!(blob.len(), 2 * HYBRID_KEM_CT_LEN);
+        assert_eq!(&blob[..HYBRID_KEM_CT_LEN], ct(0xAA).as_slice());
+        assert_eq!(&blob[HYBRID_KEM_CT_LEN..], ct(0xBB).as_slice());
+        let n_kem_fields = extra
+            .0
+            .iter()
+            .filter(|f| matches!(f, ExtraField::PqcKemCiphertext(_)))
+            .count();
+        assert_eq!(n_kem_fields, 1, "exactly one concatenated 0x06 field");
+    }
+
+    /// A wrong-length ciphertext must refuse loudly at construction —
+    /// packed as-is it would shift every later output's slice offset
+    /// and silently make those vouts unscannable.
+    #[test]
+    #[should_panic(expected = "hybrid KEM ciphertext must be exactly")]
+    fn for_hybrid_transfer_rejects_wrong_length_ciphertext() {
+        let short = vec![0xCC; HYBRID_KEM_CT_LEN - 1];
+        let _ = Extra::for_hybrid_transfer(ED25519_BASEPOINT_POINT, [ct(0xAA), short]);
     }
 }

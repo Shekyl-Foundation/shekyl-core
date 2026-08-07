@@ -8,7 +8,7 @@ landed) and the C++ consumer rewire (commits 2k.5a onward, deferred).
 **Related specs:**
 [WALLET_FILE_FORMAT_V1.md](./WALLET_FILE_FORMAT_V1.md) ·
 [WALLET_PREFS.md](./WALLET_PREFS.md) ·
-[WALLET_STATE_MIGRATION.md](./WALLET_STATE_MIGRATION.md) ·
+WALLET_STATE_MIGRATION.md ·
 [POST_QUANTUM_CRYPTOGRAPHY.md](./POST_QUANTUM_CRYPTOGRAPHY.md).
 **Related rules:**
 [05-system-thinking.mdc](../.cursor/rules/05-system-thinking.mdc) ·

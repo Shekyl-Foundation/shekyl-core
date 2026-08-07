@@ -188,6 +188,9 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
   const transaction &tx = txp.first;
 
   bool miner_tx = false;
+  // Shared storage predicate (cryptonote_basic.h) — the SAME check the remove
+  // side uses, so amount-0 emission-vout storage and removal cannot drift.
+  const bool emission_tx = tx_has_archival_emission_vin(tx.vin);
   crypto::hash tx_hash, tx_prunable_hash;
   if (!tx_hash_ptr)
   {
@@ -226,17 +229,97 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
     else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
     {
       const auto& bond = std::get<txin_archival_bond_post>(tx_input);
-      if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
-        throw std::runtime_error("FATAL: bond-post connect supports JoinMarket only at genesis");
-      const uint64_t block_height = get_block_height(blk_hash);
-      const uint64_t join_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
-      put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key, join_epoch,
-        bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),
-        bond.holdings.shard_ids);
-      const uint64_t bonded_total = get_total_bonded_atomic();
-      if (bond.bond_credit > std::numeric_limits<uint64_t>::max() - bonded_total)
-        throw std::runtime_error("FATAL: total_bonded_atomic overflow on bond credit");
-      set_total_bonded_atomic(bonded_total + bond.bond_credit);
+      // F-B5a sibling: the block_heights row for blk_hash does not exist yet
+      // at add_transaction time — height() is the connecting block's index.
+      const uint64_t block_height = height();
+      if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+      {
+        const uint64_t join_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
+        // GF-1: commit the vin's §9.11 debit authorizer into the record.
+        // Every codec (binary, boost, JSON) enforces presence + canonical
+        // length on JoinMarket, so an empty key here is unreachable through
+        // ANY parse path — including pool/blob reloads via boost archives.
+        put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key,
+          bond.bond_spend_pk, join_epoch,
+          bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),
+          bond.holdings.shard_ids);
+        const uint64_t bonded_total = get_total_bonded_atomic();
+        if (bond.bond_credit > std::numeric_limits<uint64_t>::max() - bonded_total)
+          throw std::runtime_error("FATAL: total_bonded_atomic overflow on bond credit");
+        set_total_bonded_atomic(bonded_total + bond.bond_credit);
+      }
+      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Unbond))
+      {
+        // Unbond connect (gate-4 §4.3 "On confirm"): the single writer
+        // journals the record pre-image, applies the Rust fold's write set
+        // (Exited record + clean interval-close + counter debit, with the
+        // per-post live-counter threading inside), and FATALs on any fold
+        // error. The journal keys on the block's index N = height() (the
+        // F-B5a operand verify's epoch read used); the pop-side revert
+        // converts from its N+1 chain-height convention (see pop_block).
+        apply_archival_unbond(block_height, bond.p_canonical_id, bond.bond_debit);
+      }
+      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
+      {
+        // HoldingsUpdate connect (gate-4 §4.4): the record stays Bonded — one
+        // shard is added or dropped. Direction is verify-pinned (add: +FLOOR
+        // credit, no debit; drop: -FLOOR debit, no credit), so bond_debit == 0
+        // selects the add arm. Both writers journal the record pre-image and
+        // apply the Rust fold's counter movement with the per-post live-counter
+        // threading inside. The vin's holdings carry the POST shard set.
+        if (bond.bond_debit == 0)
+          apply_archival_holdings_update_add(block_height, bond.p_canonical_id,
+            bond.holdings.shard_ids);
+        else
+          apply_archival_holdings_update_drop(block_height, bond.p_canonical_id,
+            bond.holdings.shard_ids);
+      }
+      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Rebond))
+      {
+        // Rebond connect (gate-4 §3.4; P2B-9 reinstatement): the record stays
+        // Bonded — the open bad interval closes in place at E_rebond + 1 and
+        // the verified superset re-spec lands (carried shards keep add-epochs,
+        // added take E_rebond). The writer journals the pre-image (including
+        // the closed interval's identity) and applies the Rust fold's counter
+        // movement with the per-post live-counter threading inside. The vin's
+        // holdings carry the POST shard set.
+        apply_archival_rebond(block_height, bond.p_canonical_id,
+          bond.holdings.shard_ids);
+      }
+      else
+      {
+        throw std::runtime_error(
+          "FATAL: bond-post connect supports JoinMarket, Unbond, HoldingsUpdate, and Rebond only");
+      }
+    }
+    else if (std::holds_alternative<txin_archival_reward_emission>(tx_input))
+    {
+      // C-1 connect arm (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 item 7):
+      // re-extract the claim operands from the opaque blob (the Rust codec is
+      // its only parser) and hand them to the single writer. The pop side
+      // needs no vin arm — the §6.3 journal revert is height-keyed in
+      // pop_block.
+      const auto& emission = std::get<txin_archival_reward_emission>(tx_input);
+      crypto::hash p_canonical_id{};
+      uint64_t vin_epochs[SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS] = {};
+      size_t vin_epochs_len = 0;
+      const uint8_t extract_rc = shekyl_archival_emission_vin_extract(
+        emission.canonical_bytes.data(), emission.canonical_bytes.size(),
+        reinterpret_cast<uint8_t*>(p_canonical_id.data),
+        vin_epochs, SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS, &vin_epochs_len);
+      if (extract_rc != SHEKYL_EMISSION_VIN_OK || vin_epochs_len == 0)
+        throw std::runtime_error("FATAL: unparseable archival emission vin at connect");
+      // Height operand (F-B5a): height() here is the connecting block's index
+      // N — add_transaction runs from add_block before the subclass writes the
+      // block_heights row, so get_block_height(blk_hash) would throw BLOCK_DNE.
+      // N is also the pin-(b) operand: verify's claim-age bound read
+      // chain_height = height() at the same pre-connect point, so the two
+      // sides derive the same settled epoch. The claim journal keys on N; the
+      // pop-side revert converts from its N+1 chain-height convention
+      // (see pop_block).
+      const uint64_t block_height = height();
+      apply_archival_emission_claim(block_height, p_canonical_id,
+        std::vector<uint64_t>(vin_epochs, vin_epochs + vin_epochs_len));
     }
     else
     {
@@ -255,11 +338,17 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
   {
     // Shekyl: minimum tx version is 2, all outputs have on-chain outPk.
     // Coinbase (v3+) stores real Pedersen commitments in outPk via construct_output.
-    if (miner_tx)
+    // Archival emission reward vouts share the coinbase shape — plaintext
+    // amount in the tx (the loud mint), real Pedersen commitment in outPk
+    // (verCtSemanticsEmission verified the balance against it) — so both
+    // store as amount-0 RCT records with the commitment kept, keeping the
+    // output in the FCMP++-spendable class. Emission change vouts are
+    // already amount 0 and are unaffected by the zeroing.
+    if (miner_tx || emission_tx)
     {
       cryptonote::tx_out vout = tx.vout[i];
       CHECK_AND_ASSERT_THROW_MES(i < tx.rct_signatures.outPk.size(),
-        "miner tx outPk missing for output " + std::to_string(i));
+        "tx outPk missing for output " + std::to_string(i));
       rct::key commitment = tx.rct_signatures.outPk[i].mask;
       vout.amount = 0;
       amount_output_indices[i] = add_output(tx_hash, vout, i, tx.unlock_time,
@@ -281,6 +370,8 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
                                 , uint64_t long_term_block_weight
                                 , const difficulty_type& cumulative_difficulty
                                 , const uint64_t& coins_generated
+                                , uint64_t archival_budget_accrual
+                                , const blobdata& attestation_witness
                                 , const std::vector<std::pair<transaction, blobdata>>& txs
                                 )
 {
@@ -312,9 +403,13 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   {
     tx_hash = blk.tx_hashes[tx_i];
     add_transaction(blk_hash, tx, &tx_hash);
+    // Emission reward vouts carry a plaintext amount but store as amount-0
+    // RCT records with their outPk commitment (see add_transaction), so they
+    // count as RCT outputs — same treatment as coinbase vouts above.
+    const bool is_emission_tx = tx_has_archival_emission_vin(tx.first.vin);
     for (const auto &vout: tx.first.vout)
     {
-      if (vout.amount == 0)
+      if (vout.amount == 0 || is_emission_tx)
         ++num_rct_outs;
     }
     ++tx_i;
@@ -446,6 +541,22 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     store_curve_tree_root_at_height(prev_height + 1, ct_root);
   }
 
+  // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): the
+  // prunable admission bytes (r + pass signatures) ride this same write txn,
+  // keyed via archival_attestation_witness_key(prev_height) — the SAME height
+  // store_curve_tree_root_at_height uses above. An empty witness (interim /
+  // all-miss) writes no row: absent key reads as "no witness".
+  //
+  // This table is main-chain-only. The hash-keyed detached table is NOT touched
+  // here: its rows are owned by the alt-block table (written beside add_alt_block,
+  // removed beside remove_alt_block / drop_alt_blocks / reset), so a row exists
+  // there iff the alt block does. Clearing it on a main-chain add would break that
+  // ownership — a promote whose switch later fails still needs the row while the
+  // block is back in `alt_blocks`. It is dropped with the alt block instead.
+  if (!attestation_witness.empty())
+    store_archival_attestation_witness_at_height(
+      archival_attestation_witness_key(prev_height), attestation_witness);
+
   // call out to subclass implementation to add the block & metadata
   time1 = epee::misc_utils::get_tick_count();
   add_block(blk, block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, num_rct_outs, blk_hash);
@@ -453,6 +564,17 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   time_add_block1 += time1;
 
   m_hardfork->add(blk, prev_height);
+
+  // Redirected staker-inflow accrual row (ARCHIVAL_BUDGET_SCHEDULE.md §3.1),
+  // keyed at the connecting block's index (prev_height). Written BEFORE the
+  // epoch-close hook below: the close of epoch E fires while connecting E's
+  // last block (operand prev_height + 1 = (E+1)·SEB) and range-sums accrual
+  // keys over [E·SEB, (E+1)·SEB) — a window that includes this block. The
+  // pre-F-B1a shape (blockchain.cpp writing the row after add_block returned)
+  // left the final block of every epoch out of its own budget(E). Zero is not
+  // written: absent key reads as 0 (§3.1's burn-row convention).
+  if (archival_budget_accrual > 0)
+    add_archival_budget_accrual(prev_height, archival_budget_accrual);
 
   process_archival_slash_at_height(prev_height + 1);
   process_archival_epoch_close_at_height(prev_height + 1);
@@ -477,9 +599,79 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   const uint64_t removed_block_height = height();
   revert_archival_slashes_at_height(removed_block_height);
   revert_archival_epoch_close_at_height(removed_block_height);
+  // Emission-claim pre-image restore (WS-2 §6.3): claims connect at
+  // tx-connect time — before the slash/close hooks — so their revert runs
+  // after those two, completing the mirror of the connect order. The
+  // restored fields (claimed set, first_paying_emission_height) are disjoint
+  // from what the slash revert touches, and the journal is empty for any
+  // block without emission vins.
+  //
+  // Height convention (F-B5b): the slash/close hooks key on the chain height
+  // AFTER the block (connect fires them at prev_height + 1), which equals
+  // removed_block_height here. The claim journal keys on the block's INDEX
+  // N = removed_block_height - 1, because the connect arm must journal at
+  // the same operand verify's claim-age bound used (pin (b): both read
+  // height() before the block row exists). Convert, don't unify — moving
+  // the journal to N + 1 would shift the connect-side settled-epoch operand
+  // off verify's at every epoch boundary.
+  revert_archival_emission_claims_at_height(removed_block_height - 1);
+  // Unbond pre-image restore (gate-4 §3.5/§5): same journal-key convention
+  // as the emission claims (block index N = removed_block_height - 1), and
+  // AFTER the slash revert above as a defensive ordering belt. Nothing can
+  // actually trail the clean close (ratified 2026-07-12): slashability ends
+  // at the Unbond connect — the scheduler only challenges currently held
+  // shards and an Exited record holds none — so the pop fold's trailing
+  // clean-close check holds unconditionally; a future violation surfaces
+  // there as MISSING_CLEAN_CLOSE, loud. The restored fields (bonded_total,
+  // holdings, interval log) are disjoint from the emission journal's
+  // (claimed set, first_paying), so those two reverts compose in any order.
+  revert_archival_unbonds_at_height(removed_block_height - 1);
+  // HoldingsUpdate pre-image restore (gate-4 §4.4/§5): same journal-key
+  // convention (block index N = removed_block_height - 1) and the same
+  // vin-carries-POST-state reason it cannot drive its own restore. ORDER IS
+  // LOAD-BEARING: the slash journal restores the very same record fields
+  // (bonded_total, held_shard_ids, shard_add_epochs), and within a block the
+  // txs (HoldingsUpdate) connect before the epoch-deadline slash hook — so
+  // the pop must revert the slash FIRST (above) for this pop fold's
+  // exactly-one-FLOOR delta check to see the post-HoldingsUpdate state it
+  // journaled against. Reordering these two reverts (or adding a journal
+  // that touches these fields between them) makes holdings_update_pop see a
+  // FLOOR ± slashed_amount delta and abort the pop with NotSingleShardDelta.
+  // Only the emission journal's fields (claimed set, first_paying) are
+  // disjoint from this one's.
+  revert_archival_holdings_updates_at_height(removed_block_height - 1);
+  // Rebond pre-image restore (gate-4 §3.4/§5; P2B-9): same journal-key
+  // convention (block index N = removed_block_height - 1). Runs AFTER the
+  // slash revert: both journals touch bad_intervals, and within a block the
+  // connect order was tx-connect before slash-processing, so the pop mirrors
+  // it in reverse — the slash revert strips any interval its own rows appended
+  // before the rebond revert re-opens the journaled closed interval. The
+  // restored holdings/balance fields are disjoint from the other journals'.
+  revert_archival_rebonds_at_height(removed_block_height - 1);
+  // Mirror of the accrual write in add_block, keyed at the block's INDEX
+  // N = removed_block_height - 1 (the claim-journal convention above, not
+  // the hook convention). Runs inside the same wtxn as the pop — key
+  // deletion, tolerant of the missing key (the row exists only for
+  // post-activation blocks with nonzero inflow).
+  remove_archival_budget_accrual(removed_block_height - 1);
   remove_block();
 
   const uint64_t block_height = removed_block_height;
+
+  // Credit-wire attestation witness: drop the height-keyed row with the block it
+  // belongs to. Keyed at `block_height` (the matching half of
+  // archival_attestation_witness_key(prev_height) on add). Same write txn as the
+  // pop; tolerant of a missing key.
+  //
+  // Pop deliberately does NOT park the witness in the hash-keyed detached table.
+  // Most pops never come back (pop_blocks, the startup hard-fork unwind, the
+  // curve-tree-root-mismatch pop), and a row parked under a block hash that never
+  // becomes an alt block is unreachable: the detached table is hash-keyed, so the
+  // height-keyed retention prune structurally cannot see it and it would leak for
+  // the life of the database. Reorg survival is instead explicit — the reorg reads
+  // the witness before popping and hands it to handle_alternative_block, which
+  // stores it beside the alt block that owns it (Blockchain::switch_to_alternative_blockchain).
+  remove_archival_attestation_witness_at_height(block_height);
 
   for (const auto& h : boost::adaptors::reverse(blk.tx_hashes))
   {
@@ -588,6 +780,10 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
     {
       const auto& bond = std::get<txin_archival_bond_post>(tx_input);
+      // Only JoinMarket pops here (vin-driven: the record is deleted whole).
+      // Unbond, HoldingsUpdate, and Rebond pop via the height-keyed pre-image
+      // journals in pop_block — the vin carries the post-connect state, so it
+      // cannot drive the restore.
       if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
       {
         remove_archival_bond_record(bond.p_canonical_id);
@@ -1324,7 +1520,8 @@ bool BlockchainDB::get_archival_shard_segment_at_height(uint64_t /*shard_id*/, u
 }
 
 void BlockchainDB::put_archival_bond_record(const crypto::hash& /*p_id*/,
-  const std::vector<uint8_t>& /*hybrid_pubkey*/, uint64_t /*join_settlement_epoch*/,
+  const std::vector<uint8_t>& /*hybrid_pubkey*/,
+  const std::vector<uint8_t>& /*bond_spend_pk*/, uint64_t /*join_settlement_epoch*/,
   uint64_t /*bonded_total_atomic*/, uint8_t /*holdings_kind*/,
   const std::vector<uint64_t>& /*held_shard_ids*/,
   const std::vector<std::pair<uint64_t, uint64_t>>& /*bad_intervals*/)
@@ -1374,6 +1571,71 @@ void BlockchainDB::revert_archival_slashes_at_height(uint64_t /*block_height*/)
 {
 }
 
+void BlockchainDB::apply_archival_emission_claim(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*settlement_epochs*/)
+{
+}
+
+void BlockchainDB::revert_archival_emission_claims_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::apply_archival_unbond(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, uint64_t /*vin_bond_debit*/)
+{
+}
+
+void BlockchainDB::revert_archival_unbonds_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::apply_archival_holdings_update_add(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*post_shard_ids*/)
+{
+}
+
+void BlockchainDB::apply_archival_holdings_update_drop(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*post_shard_ids*/)
+{
+}
+
+void BlockchainDB::revert_archival_holdings_updates_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::apply_archival_rebond(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*post_shard_ids*/)
+{
+}
+
+void BlockchainDB::revert_archival_rebonds_at_height(uint64_t /*block_height*/)
+{
+}
+
+bool BlockchainDB::archival_shard_freeze_height(uint64_t /*shard_id*/, uint64_t& /*out*/) const
+{
+  return false;
+}
+
+std::vector<uint64_t> BlockchainDB::archival_bond_last_served_epochs(
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*shard_ids*/) const
+{
+  return {};
+}
+
+std::vector<uint64_t> BlockchainDB::archival_bond_all_last_served_epochs(
+  const crypto::hash& /*p_id*/) const
+{
+  return {};
+}
+
+uint64_t BlockchainDB::get_archival_last_slash_epoch() const
+{
+  // No scheduler state on the base class: the "no epoch settled yet" sentinel,
+  // which fails the release verify closed rather than open.
+  return std::numeric_limits<uint64_t>::max();
+}
+
 void BlockchainDB::process_archival_epoch_close_at_height(uint64_t /*block_height*/)
 {
 }
@@ -1391,6 +1653,75 @@ uint64_t BlockchainDB::get_archival_r_market(uint64_t /*shard_id*/,
 uint64_t BlockchainDB::get_archival_sigma_work_milli(uint64_t /*settlement_epoch*/) const
 {
   return 0;
+}
+
+uint64_t BlockchainDB::get_archival_budget(uint64_t /*settlement_epoch*/) const
+{
+  return 0;
+}
+
+void BlockchainDB::gather_archival_emission_epoch_snapshot(const crypto::hash& /*p_id*/,
+  uint64_t settlement_epoch, ArchivalEmissionEpochSnapshot& out) const
+{
+  // Non-LMDB backends have no archival state: reset the snapshot so
+  // has_budget_row stays false and the emission dispatch rejects.
+  out = ArchivalEmissionEpochSnapshot{};
+  out.settlement_epoch = settlement_epoch;
+}
+
+void BlockchainDB::gather_archival_emission_window_snapshots(const crypto::hash& p_id,
+  uint64_t epoch_lo, uint64_t epoch_hi, std::vector<ArchivalEmissionEpochSnapshot>& out) const
+{
+  out.clear();
+  if (epoch_hi <= epoch_lo)
+    return;
+  out.resize(static_cast<size_t>(epoch_hi - epoch_lo));
+  for (uint64_t epoch = epoch_lo; epoch < epoch_hi; ++epoch)
+    gather_archival_emission_epoch_snapshot(p_id, epoch, out[static_cast<size_t>(epoch - epoch_lo)]);
+}
+
+std::vector<shekyl_archival_epoch_close_bond>
+  ArchivalEmissionEpochSnapshot::to_ffi_bonds() const
+{
+  std::vector<shekyl_archival_epoch_close_bond> ffi;
+  ffi.reserve(bonds.size());
+  for (const BondRow& row : bonds)
+  {
+    shekyl_archival_epoch_close_bond b{};
+    b.join_settlement_epoch = row.join_settlement_epoch;
+    b.is_foundation_complete_tree = row.is_foundation_complete_tree ? 1 : 0;
+    b.bad_intervals_ptr = row.bad_intervals_flat.empty()
+      ? nullptr : row.bad_intervals_flat.data();
+    b.bad_intervals_len = row.bad_intervals_flat.size() / 2;
+    ffi.push_back(b);
+  }
+  return ffi;
+}
+
+std::vector<shekyl_archival_epoch_close_shard>
+  ArchivalEmissionEpochSnapshot::to_ffi_shards() const
+{
+  std::vector<shekyl_archival_epoch_close_shard> ffi;
+  ffi.reserve(shards.size());
+  for (const ShardRow& row : shards)
+  {
+    shekyl_archival_epoch_close_shard s{};
+    s.shard_id = row.shard_id;
+    s.freeze_height = row.freeze_height;
+    s.has_segment = row.has_segment ? 1 : 0;
+    ffi.push_back(s);
+  }
+  return ffi;
+}
+
+std::vector<shekyl_archival_credit_pair>
+  ArchivalEmissionEpochSnapshot::to_ffi_credit_pairs() const
+{
+  std::vector<shekyl_archival_credit_pair> ffi;
+  ffi.reserve(credit_pairs.size());
+  for (const CreditPair& pair : credit_pairs)
+    ffi.push_back({ pair.bond_idx, pair.shard_idx });
+  return ffi;
 }
 
 bool BlockchainDB::txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category)

@@ -63,7 +63,7 @@ the obligations above. Scope (single wave, **no separate Wave 2**):
 membership-only, §2.1), `tagged_key` output, ct, header, pow-blob, tx `version=3`.
 **rule-21 reopen** (a testnet-revealed change) stays free pre-genesis. **Process:**
 multi-round design ([`26-sub-pr-design-discipline`]) — consensus + FFI surface.
-**Parents:** [`CONSENSUS_PORT_SEQUENCE.md`](CONSENSUS_PORT_SEQUENCE.md) (Stage 1d),
+**Parents:** `CONSENSUS_PORT_SEQUENCE.md` (Stage 1d),
 [`TRACK2_REGTEST_PARITY.md`](TRACK2_REGTEST_PARITY.md).
 
 **Round-0 review outcome:** direction + both locked decisions approved. Two
@@ -330,15 +330,19 @@ prefilter. *(Corrects an earlier keccak/X25519 derivation that cited a stale pat
 
 **Terminology:** *CT = confidential transaction.* There is no RingCT — Monero's
 rings/decoys are gone — so this PR says **CT**, not RCT in prose. Per
-`CT_SURFACE_NAMING_PIN.md`, renaming the C++ `rct*` source symbols (`rctTypes.h`,
-`rct_signatures`) to `ct*` is **deferred to Phase 5** (wallet2 retirement),
-**not** a genesis change: the wire **tags + type values are already
-genesis-locked**, and `binary_archive` is positional (ignores names), so the
-rename has **no genesis-wire effect**.
+`CT_SURFACE_NAMING_PIN.md`, renaming the bulk C++ `rct*` source symbols
+(`rctTypes.h`, the `rct_signatures` field, the `rct::` namespace) to `ct*` is
+**deferred to Phase 5** (wallet2 retirement), **not** a genesis change: the
+**type values are genesis-locked**, and `binary_archive` is positional (ignores
+names), so identifier renames have **no genesis-wire effect**. The V3.0
+public-API slice landed 2026-07-11: the `RCTType*` enum variants are now
+`CTTypeNull` / `CTTypeFcmpPlusPlusPqc` (type byte values unchanged), and the
+JSON-archive-only `ar.tag` names are now `ct_signatures` / `ctsig_prunable`
+(affects `decode_as_json` output only — no binary-wire byte changed).
 
 | Element | Source | Disposition |
 |---|---|---|
-| type byte | rctTypes.h:167-168,200 | **Ratify** — already minimal: `Null=0`, `FcmpPlusPlusPqc=7`; C++ rejects all other type values. Already created, not inherited (Monero's ~8-variant enum is gone). **Type *value* numbering** is a Q7 decision. |
+| type byte | rctTypes.h:163-170,200 | **Ratify** — already minimal: `CTTypeNull=0`, `CTTypeFcmpPlusPlusPqc=1` (Q7 dense renumber, §2.0); C++ rejects all other type values. Already created, not inherited (Monero's ~8-variant enum is gone). |
 | coinbase `Null`-but-committed (`outPk`/`enc_amounts`/`enc_labels`) | rctTypes.h:209-212 | **Ratify as the exception.** Shekyl-intended for FCMP++ tree-leaf commitment uniformity (Monero's null coinbase has no commitments). Explicitly **not** the spend template. |
 | base: `VARINT(fee)` + `referenceBlock[32]` (Fcmp only) | rctTypes.h:205-206 | **Ratify** — `referenceBlock` lives in the **base**. |
 | base arrays: `enc_amounts[nout×9]`, `enc_labels[nout×9]`, `outPk[nout×32]` (no length prefix) | rctTypes.h:213-280 | **Ratify** — sized by `vout`. See the `enc_labels` invariant below. |
@@ -397,6 +401,52 @@ inherited `rct` token in the V3.0 ct sweep), shared by construct
 (`shekyl-tx-builder`) and verify (`shekyl-archival-retention`), exposed to C++
 consensus via the `shekyl_verify_ct_balance` FFI export.
 
+**Output-point validity — BINDING consensus rule (genesis, ratified 2026-07-22).**
+Every compressed curve25519 point a transaction places in the *output set* —
+each output public key `O` (all tx shapes, **including coinbase**) and each
+coinbase `outPk[i].mask` (non-coinbase masks are already gated by the CT rule
+above) — MUST be a canonical, prime-order (torsion-free), non-identity
+encoding. A non-canonical encoding, an order-8 (cofactor) component, or the
+identity is **rejected at admission** (`shekyl_check_output_keys` /
+`shekyl_check_commitment_masks` → `INVALID_KEY` / `INVALID_MASK`); the trivial-
+mask fingerprint checks (identity, `G`, coinbase `zeroCommit(amount)` — the
+confidential-coinbase leak guards previously native in
+`check_commitment_mask_valid`) ride the same Rust entry point.
+
+*Uniformity, plus a silent-skip hole closed.* This extends the commitment rule
+above to the two point classes it did not reach: output public keys (the
+inherited `crypto::check_key` accepts any curve point — no canonicality, no
+subgroup, no identity check) and coinbase masks (`CTTypeNull` has no balance
+equation, so `shekyl_verify_ct_balance` never sees them). Absent this rule, a
+torsioned or identity `O` — or a torsioned coinbase mask — is accepted on-chain
+but rejected by the FCMP++ leaf builder (`ed25519_point_to_selene_scalar`
+decodes prime-order-only; `to_xy` has no affine form for the identity), so the
+output is silently skipped from the curve tree (`blockchain_db.cpp` leaf
+construction returns false → no leaf) and is permanently unspendable. That is
+deterministic on every node (single shared leaf primitive) and self-inflicted
+— but it is a permanent hole in the every-on-chain-output-is-a-leaf invariant.
+With this rule the malformed tx never enters a block: "accepted on-chain"
+implies "representable in the tree."
+
+*Adversarial-only.* Honest output keys are torsion-free by construction
+(`O = ho·G + B + y·T`, `is_torsion_free`-checked at creation in
+`shekyl-crypto-pq::output`); honest masks are `zG + aH`. No valid transaction
+is affected. Prompted by advisory GHSA-r675-h3pj-wj2f: the reporter's
+Monero-compatibility premise does not apply (there is no Monero chain state to
+cover), but the admission-vs-leaf-builder strictness gap the report surfaced is
+real, and this rule closes it in the direction the tree already enforces.
+
+*Safe to freeze pre-genesis.* Same posture as the commitment rule above: no
+installed base ever ran the lax inherited check. Single home:
+`shekyl-ct-balance::{check_output_keys, check_commitment_masks}` (the crate
+already owning §2.3 point canonicality), exposed via the
+`shekyl_check_output_keys` / `shekyl_check_commitment_masks` FFI exports; the
+C++ `check_outs_valid` (`cryptonote_format_utils.cpp`, pool txs +
+`prevalidate_miner_transaction` for coinbase output keys) and
+`check_commitment_mask_valid` (`blockchain.cpp`) are thin marshaling shims per
+rule 20 boundary advancement — the native `crypto::check_key` /
+`rct::zeroCommit` logic is retired from the admission path in the same cut.
+
 ### 2.4 Coinbase construction
 
 | Element | Source | Disposition |
@@ -437,7 +487,7 @@ raw bytes; `vec(f)` = `V(len)` then `len ×` f.
 
 ```
 Block            := BlockHeader  Transaction(miner)  V(n_tx)  n_tx×Hash[32]
-BlockHeader      := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32]
+BlockHeader      := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32] attestation_root[32]
 Transaction      := V(version=3)  TxPrefix  Ct        # genesis version=3 (Q12: deliberate keep; V4 = future lattice-only)
 TxPrefix         := V(unlock_time)  vec(Input)  vec(Output)  V(extra_len) extra[extra_len]
 Input            := tag(1) ...        # 00 gen | 01 fcmp | 02 serve_credit | 03 bond_post  (+ deferred 04 reward_emission, membership-only — §2.5; stake_claim shed; bond_post = JoinMarket-only)
@@ -711,7 +761,7 @@ Genesis tags per §2.0. *(The C++ oracle still emits pre-renumber tag values unt
 the gate-(c) flip lands, §5; the captured corpus in `src/tests/vectors/` reflects
 pre-renumber tags until recapture.)*
 
-**9.1 BlockHeader** — `V(major) · V(minor) · V(timestamp) · prev[32] · nonce(u32 LE) · curve_tree_root[32]`; genesis `major=1, minor=0` (§13).
+**9.1 BlockHeader** — `V(major) · V(minor) · V(timestamp) · prev[32] · nonce(u32 LE) · curve_tree_root[32] · attestation_root[32]`; genesis `major=1, minor=0` (§13). (`attestation_root` added by the credit-wire cutover, `ARCHIVAL_CREDIT_WIRE.md` §3; the empty-set root is `attestation_root(&[])` / C++ `empty_attestation_root()` — **not** `null_hash` — and is the constructor default until a block has pass records.)
 **9.2 Block** — `BlockHeader · Transaction(miner) · V(n_tx) · n_tx×Hash[32]`.
 **9.3 Transaction** — `V(version=3) · TxPrefix · Ct`.
 **9.4 TxPrefix** — `V(unlock_time) · vec(Input) · vec(Output) · V(extra_len) · extra[extra_len]`.

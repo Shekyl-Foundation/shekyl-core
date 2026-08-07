@@ -52,11 +52,12 @@ merits, tracked in `docs/FOLLOWUPS.md` §"Re-examine `/FIiso646.h` and
 
 ## Third-Party / Dependency Issues
 
-> **`libunbound` MSVC stub, MSVC vendored-code warnings, and vcpkg
-> manifest-mode migration moved to [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md)
-> §"V3.2 — Rust cutover and cleanup" (MSVC / Windows build-debt cluster,
-> 2026-05-30).** They were open todos, not reviewer reference; open-debt
-> tracking now lives in one place.
+> **MSVC vendored-code warnings and vcpkg manifest-mode migration moved to
+> [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md) §"V3.2 — Rust cutover and cleanup"
+> (MSVC / Windows build-debt cluster, 2026-05-30).** They were open todos,
+> not reviewer reference; open-debt tracking now lives in one place. (The
+> `libunbound` MSVC stub item is gone entirely — `libunbound` was removed
+> from the tree by the DNS-surface retirement, PR #304/#305.)
 
 ### 32-bit targets cannot safely run Shekyl, and the wider "bit-width carve-out without coverage" pattern
 **Priority**: **High** — the 32-bit branches of the PQC pair
@@ -209,7 +210,7 @@ sections up: dormant branches of conditional code that look benign
 until the invariants they silently assumed change underneath them.
 
 This same "carve-out without coverage" antipattern shows up in at
-least eight places in the tree, none of which have CI coverage on
+least seven places in the tree, none of which have CI coverage on
 the narrow side:
 
 | Site | Gated branch | Severity under PQC argument |
@@ -219,12 +220,12 @@ the narrow side:
 | `src/blockchain_utilities/blockchain_import.cpp:64` | `#if ARCH_WIDTH != 32` branches default `db_batch_size` | Recoverability UX. 32-bit users bootstrapping hit an untested batch-size path; failure mode is silent (slow import, no crash). Delete with Chore #3. |
 | `CMakeLists.txt:1352` | `libatomic` link pulled on `Clang AND ARCH_WIDTH==32 AND !IOS AND !FREEBSD` | Build-only, untested. Delete with Chore #3 as dead scaffolding. |
 | `tests/hash/main.cpp:192, 206` | `sqrt_result` inline-asm under the same 64-bit guard | Test-only. Hazard is inverted: the test is width-gated away from exercising the production path it should be covering. Delete with Chore #3 (the 32-bit branch) or with `slow-hash.c` retirement. |
-| `contrib/depends/packages/unbound.mk:18` | `cflags_mingw32+="-D_WIN32_WINNT=0x600"` | Inconsistency + uncovered. Note: `0x600` and `0x0600` evaluate to the same integer in preprocessor arithmetic, so it is not a numerical bug — but it is an asymmetry the `mingw64` depends path doesn't mirror, the exact same carve-out-without-coverage shape as the root-CMake bug, mirrored into the depends layer. Delete entire `_cflags_mingw32` line under Chore #3 since the `mingw32` host is going away. |
 | `contrib/depends/packages/{boost,openssl}.mk` | Separate `i686_mingw32` / `x86_64_mingw32` config variants | Build-only; parallel config paths, one CI runner. Delete the `i686_mingw32` variants under Chore #3. |
 | `contrib/gitian/gitian-win.yml:26-30`, `Makefile` 32-bit targets — `debug-static-win32` (L84), `release-static-linux-armv6` (L117), `release-static-linux-armv7` (L121), `release-static-android-armv7` (L125), `release-static-linux-i686` (L151), `release-static-win32` (L159) — `cmake/32-bit-toolchain.cmake`, `contrib/depends/README.md:31` | Entire `i686-w64-mingw32` + 32-bit Linux + Android ARM32 target set | Advertised build targets with no CI runners and no release workflow shipping binaries. Delete with Chore #3. (Earlier drafts of this row named `release-static-armv7` / `release-static-armv6` *without* the `linux-` prefix; those two identifiers are phantoms and do not exist in `Makefile` at any point on `dev`. The live 32-bit `Makefile` targets are the six above.) |
 
-Note the pattern within the pattern: the `unbound.mk` line and the
-root-CMake `FSCTL_SET_COMPRESSION` misdirect are the *same* disease
+Note the pattern within the pattern: the `unbound.mk` `_cflags_mingw32`
+line (since deleted with the libunbound de-requisition, PR #305) and the
+root-CMake `FSCTL_SET_COMPRESSION` misdirect were the *same* disease
 mirrored into two different build layers — an architecture-
 specific directive defined for one width and silently absent for
 the other, with the "working" side running on whatever transitive
@@ -277,10 +278,8 @@ question.
   - Delete the `i686-w64-mingw32-*` alternatives block in
     `contrib/gitian/gitian-win.yml`.
   - Delete `_config_opts_i686_mingw32`, `_config_opts_mingw32`
-    (where purely 32-bit), the `_cflags_mingw32` line in
-    `contrib/depends/packages/unbound.mk` (arch-asymmetric carve-
-    out, deletion target — not a typo), and the `i686_mingw32`
-    variants in the other `contrib/depends/packages/*.mk`.
+    (where purely 32-bit) and the `i686_mingw32` variants in the
+    `contrib/depends/packages/*.mk`.
   - Delete `MDB_VL32` from `external/db_drivers/liblmdb/CMakeLists.txt`.
     Leaving the `MDB_VL32` code paths inside the *vendored* LMDB
     tree untouched is intentional — they become unreachable
@@ -525,14 +524,15 @@ audit finding.
 (2026-06-09). No rename PR before cutover; Rust vocabulary effective now.
 
 `transaction::rct_signatures` (typed `rct::rctSig`) no longer holds ring
-signatures. In Shekyl v3, the only accepted types are `RCTTypeNull`
-(coinbase) and `RCTTypeFcmpPlusPlusPqc`. The struct actually carries:
+signatures. In Shekyl v3, the only accepted types are `CTTypeNull`
+(coinbase) and `CTTypeFcmpPlusPlusPqc`. The struct actually carries:
 
 - **`rctSigBase`**: Pedersen commitments (`outPk`), HKDF-encrypted amounts
-  (`enc_amounts`), `txnFee`, `referenceBlock` (curve tree anchor),
-  `pseudoOuts`.
+  (`enc_amounts`), `txnFee`, `referenceBlock` (curve tree anchor). (The dead
+  legacy base-slot `pseudoOuts` was deleted 2026-07-09 —
+  `CT_SURFACE_NAMING_PIN.md` §2.)
 - **`rctSigPrunable`**: BP+ range proofs, the opaque FCMP++ membership
-  proof, `curve_trees_tree_depth`.
+  proof, `curve_trees_tree_depth`, `pseudoOuts` (one per spend input).
 
 All ring signature types (`RCTTypeFull`, `RCTTypeSimple`, `RCTTypeCLSAG`,
 `RCTTypeBulletproof`, `RCTTypeBulletproofPlus`) are rejected at

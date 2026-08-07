@@ -331,7 +331,7 @@ Request-surface trims relative to `COMMAND_RPC_SEND_RAW_TX`:
 | --- | --- |
 | `Accepted` | Pending-tx enters *awaiting confirmation*; watchdog (§5.3) takes over. Outputs move to the awaiting-confirmation lock state (§2.6: persisted, dual release paths) — **not** marked spent at submit-accept (the current `local_pending_tx.rs:775-807` behavior moves to refresh-authoritative confirmation; PR-4). |
 | `AlreadyInPool` | Same as `Accepted` (identity fact: the bytes are held). Resolves prior transport ambiguity for this txid. |
-| `AlreadyInChain{height}` | Confirmation observed by verdict; refresh remains the settlement authority (reorgs happen — the verdict authorizes lock-lifecycle transitions only). Outputs enter the awaiting-confirmation lock in **both** height cases (fund safety first: no selectable window either way); `height` decides the **release path** (F40). *(a) `height` > wallet synced height:* the ordinary §2.6 path-1 release — refresh reaches the confirming block and settles spent-marking; baseline the lock at `height`, not at current daemon height. *(b) `height` ≤ wallet synced height:* refresh already passed that height without observing the spend — path-1 release is unreachable by construction (the FOLLOWUPS stranded-lock wedge). Enqueue a **targeted re-scan** of the window around `height` (the reorg-heal machinery — the wallet's view of that height is stale or divergent); the re-scan re-observes the spend and settles refresh-authoritatively. A failed re-scan **never releases** (F40-R1: release is refresh- or watchdog-authoritative only); it falls through to the F31 resubmit-as-status-query for a fresh definite verdict, and consecutive fruitless daemon-directed re-scans are breaker-bounded (F40-R2, F28/F37 family) → operator alarm. Every exit is verdict, confirmation, or operator alarm — no silent strand, no daemon-steered release. |
+| `AlreadyInChain{height}` | Confirmation observed by verdict; refresh remains the settlement authority (reorgs happen — the verdict authorizes lock-lifecycle transitions only). Outputs enter the awaiting-confirmation lock in **both** height cases (fund safety first: no selectable window either way); `height` decides the **release path** (F40). *(a) `height` > wallet synced height:* the ordinary §2.6 path-1 release — refresh reaches the confirming block and settles spent-marking; baseline the lock at `height`, not at current daemon height — **clamped to the wallet's own synced height** (amended 2026-08-04, `feat/w4b-submit-verdict`). The clamp is what makes the §7.2 lie-high damage cap ("released by the confirmed-absent watchdog horizon, bounded liveness cost") true rather than claimed: the horizon gate is `synced_height − baseline ≥ escape_horizon_blocks`, so baselining at an unreachable claim (a lying remote node, a reorg-confused daemon, `u64::MAX`) parks it at zero forever — the rung-1 probe never runs, no alarm is raised, and the *persisted* F14 lock strands the inputs across restarts with no exit at all, which is precisely what §2.6's "every exit is verdict, confirmation, or operator alarm" forbids. The clamp costs nothing where the claim is honest: a wallet only holds this lock because it just built and submitted, which requires being at the tip, so an honest (a)-case claim sits a handful of blocks above the synced height against a horizon of hundreds — and it degrades the lie-high case to exactly the baseline the fresh-accept path already uses. Only the persisted baseline is bounded; the raw claim still selects between (a) and (b), still rides `RescanRequest.claimed_height`, and still reaches the consumer on the verdict. *(b) `height` ≤ wallet synced height:* refresh already passed that height without observing the spend — path-1 release is unreachable by construction (the FOLLOWUPS stranded-lock wedge). Enqueue a **targeted re-scan** of the window around `height` (the reorg-heal machinery — the wallet's view of that height is stale or divergent); the re-scan re-observes the spend and settles refresh-authoritatively. A failed re-scan **never releases** (F40-R1: release is refresh- or watchdog-authoritative only); it falls through to the F31 resubmit-as-status-query for a fresh definite verdict, and consecutive fruitless daemon-directed re-scans are breaker-bounded (F40-R2, F28/F37 family) → operator alarm. Every exit is verdict, confirmation, or operator alarm — no silent strand, no daemon-steered release. |
 | `Rejected{Malformed}` | Release locks, surface, **one-shot rebuild**: if the rebuilt tx also returns `Malformed`, escalate to operator alarm — two independent builds rejected as malformed is a systematic wallet/daemon rule disagreement, not a bad tx; a third silent build burns fees and multiplies linking-tag artifacts (§7.1). Never loop. |
 | `Rejected{FeeTooLow}` | Release, re-estimate fee, rebuild — **once** (F37; the F28 logic applies verbatim): a second consecutive `FeeTooLow` on the rebuilt tx is a systematic fee-model disagreement (a KAT gap on P2, or sustained pool pressure the wallet's estimate never meets) → operator alarm, never loop. The bound is privacy-load-bearing, not just liveness hygiene: unlike `Malformed`, a fee-driven rebuild can *change the input set* — covering a higher fee may pull in an additional input, so each iteration broadcasts a new tx sharing the original key image **and** revealing a newly co-owned input (F30 linkage plus wallet-clustering, once per loop, under the malicious-relay case of §7.1). Covers static-floor, Phase-D re-gate, and pool-pressure variants; under single-egress this verdict carries proof the tx is in neither pool nor chain, so release is safe. |
 | `Rejected{DoubleSpendConflict}` | Terminal release. A different tx spends the input; refresh will surface which. |
@@ -857,6 +857,17 @@ holdings/registry reads — exactly as `check_archival_serve_credit_input`
 does today (`blockchain.cpp:4288-4319`); the derivation is Rust either way,
 so this is fact-fetching, not logic.
 
+**PR-4b status.** The bond-post (JoinMarket) slice of that extension is
+implemented: the snapshot takes an optional `bond_p_canonical_id` (the
+vin's claimed id, non-NULL for a bond-post submission) and fills the
+validity-gated pair `bond_record_probed`/`bond_record_exists` (the BP3
+fact; `SubmitFacts::bond_record_exists: Option<bool>` Rust-side). The
+commit shim re-derives the id from the reparsed blob's bond-post vin and
+re-probes under the Phase-D lock — a record appearing during Phase C is
+`Raced{fresh}`, classified `DoubleSpendConflict` (the claim-slot leg).
+The serve-credit SC facts and the non-JoinMarket bond fact sets remain
+future work (§8.7.1 closure notes).
+
 ### 4.2 `shekyl_submit_commit_tx`
 
 In: blob, engine txid, meta fields (weight, fee), certificate facts
@@ -1155,6 +1166,18 @@ privacy-neutral ones (resubmit-same-bytes). Everything linkage-bearing
 
 ### 7.5 Anonymity-network black-hole — the embargo's deployment boundary (F35)
 
+> **Status note 2026-08-06** (`DAEMON_RELAY_PRIVACY.md` §41 / §63): this
+> section describes the pre-2026-08-01 noise-zone design and is kept as the
+> record of why the boundary was drawn. Two facts have since moved.
+> **Configuration B (Tor + noise) is deleted** — `proxy::noise` is gone and no
+> shipped configuration disables the embargo. And on the surviving anonymity
+> configuration the **embargo does arm** (the txpool is told `stem`) while the
+> wire runs an outbound-only diffusion with no stem (§63). The wargame below
+> survives with one repair: under anon-peer eclipse the embargo now fires a
+> forced fluff into the same eclipsed outbound set rather than not existing —
+> so the conclusion is unchanged: the wallet watchdog's operator-alarm rung
+> remains the sole effective backstop there, and obligations 1–2 stand.
+
 The F20 resolution rests on the Dandelion++ embargo being *the* mechanism no
 wallet policy can substitute (§5.2 item 2). That mechanism **does not run
 for the deployment a privacy-maximalist coin most expects**: noise zones
@@ -1332,11 +1355,47 @@ called at `:3614`; funding spend inputs run the regular K battery over
 
 | # | Check | Site | Disposition |
 | --- | --- | --- | --- |
-| BP1 | Hybrid pubkey length == `PQC_HYBRID_SINGLE_KEY_LEN` | `:4187-4191` | **A** ⚠ — confirm `shekyl-wire`'s per-arm archival bounds cover it, else engine rule; `Malformed` |
-| BP2 | `p_canonical_id` recomputation from pubkey | `:4193-4205` | **C** — already Rust behind `shekyl_archival_p_canonical_id_from_pubkey`; engine calls natively; `Malformed` |
+| BP1 | Hybrid pubkey length == `PQC_HYBRID_SINGLE_KEY_LEN` | `:4187-4191` | **A** — ⚠ resolved (PR-4b): `shekyl-wire` `BondPost::read`/`validate` pin the exact canonical length, so a `ParsedSubmission` cannot carry a violation; `Malformed` at Phase A |
+| BP2 | `p_canonical_id` recomputation from pubkey | `:4193-4205` | **C** — already Rust behind `shekyl_archival_p_canonical_id_from_pubkey`; engine calls natively (`p_canonical_id_from_hybrid_pubkey`); `Malformed` |
 | BP3 | Bond record does not already exist (DB) | `:4207-4208`, consumed at `bond_post.rs:73-75` | **B fact + D re-check** — a bond-post block landing during C flips it; conflict → `DoubleSpendConflict` (claim-slot leg) |
 | BP4 | Economic battery: post-kind, holdings-shape consistency, credit/debit exclusivity, debit == 0, **bond-floor equality** | `:4212-4226` → `verify_join_market_bond_post`, `bond_post.rs:40-78`; floor per `bond_floor.rs:19-30` | **C** — already Rust (`shekyl-archival-retention`), native call; violations → `Malformed` |
 | BP5 | `pqc_auths[i].hybrid_public_key == bond.hybrid_public_key` | `:3620-3626` | **A** — structural cross-field check; `Malformed` |
+
+**PR-4b closure (the BP rows are wired).** `verifier.rs::verify_bond_post`
+runs the battery natively for the **JoinMarket** kind: O6 → the bond CT
+balance (`verify_bond_post_ct_balance`, the `(credit, debit) → BondTerm`
+conversion at the battery edge mirroring the FFI boundary's) → BP2 → BP5 →
+BP3+BP4 (`verify_join_market_bond_post` over the Phase-B
+`bond_record_exists` fact; `RecordExists → DoubleSpendConflict`, all else
+`Malformed`) → Bp+ → the **funding-arm K12** (FCMP++ over the `ToKey`
+subset — key images, pseudo-outs, and leaf hashes from `spend_indices`
+only, the `blockchain.cpp:3762-3800` shape) → K13 over every input (the
+bond slot's identity-key signature included). The deterministic archival
+legs run before the expensive proofs; the check *set* is the C++ oracle's
+(which also probes the record before its FCMP/PQC legs — only the
+balance/Bp+ placement differs), and the BP3 conflict **deliberately
+outranks the proof legs**: a consumed claim slot is terminal for this `P`
+regardless of proof validity (a resubmission with repaired proofs fails
+BP3 again), so `DoubleSpendConflict` is the more actionable verdict even
+when a later proof leg would also have refused — the most-terminal-first
+doctrine applied inside the battery. Every other leg is `Malformed`, so
+the internal order is otherwise verdict-invisible. Semantic legs are the **same
+`shekyl-archival-retention` functions** the C++
+`check_archival_bond_post_input` dispatches to over FFI, so the two paths
+share the verifying code.
+
+**Non-JoinMarket kinds (Unbond / HoldingsUpdate / Rebond) — scoped out
+with a named reopen (rule 21).** The block path verifies them today
+(`archival_bond_post_kind` dispatch, all Rust-backed), but their
+*submit-side* fact sets — per-shard last-served cursors, the
+slash-settlement watermark, interval logs, the settlement epoch — and each
+fact's Phase-D re-check/race classification are not specified in this
+matrix, and no wallet constructs these kinds
+(`shekyl-archival-bond-builder` is JoinMarket-only). The submit battery
+refuses them `Malformed` (loud, logged). Reopening criterion: a wallet
+construction leg for a non-JoinMarket kind lands, or this matrix grows
+rows for it — then extend `SubmitFacts` with that kind's fact set (with
+Phase-D re-check semantics) and dispatch it in the same arm.
 
 Serve-credit rows (`check_archival_serve_credit_input`,
 `blockchain.cpp:4231-4379`, called at `:3602`):
@@ -1367,6 +1426,48 @@ pool-insert); block validation arbitrates, and the loser strands until the
 F22 leg-1 sweep evicts it. Parity preserved, no regression, recorded so
 nobody files it as a hole later.
 
+### 8.7.2 Emission-arm legs (PR-4b completion — pinned at source 2026-07-19)
+
+The §8.7.1 matrix (F36) predates the C-1 emission arm; these rows extend it
+with the same discipline. Sources: `ver_non_input_consensus`'s emission
+branch (`tx_verification_utils.cpp`, `verCtSemanticsEmission` →
+`rctSigs.cpp:348-370`) and `check_tx_inputs`' `is_archival_emission_tx`
+branch (`blockchain.cpp:3801-4110`). The semantic battery is already Rust
+(`shekyl-archival-retention::emission_verify` — the witness-minting
+`emission_vin_verify_claims` / `_backing` / `_auth` + the assembling
+`emission_vin_verify`), reached by the C++ oracle through
+`shekyl_emission_vin_verify`; the engine calls the minters natively.
+
+| # | Check | Site | Disposition |
+| --- | --- | --- | --- |
+| EV1 | `pqc_auths == vin` count; `pseudoOuts == ToKey subset`; `outPk == vout` | `tx_verification_utils.cpp` emission branch; `blockchain.cpp:3893` | **A** — `shekyl-wire` `validate()` couplings (every shape) |
+| EV2 | Loud vout amount sum does not overflow | same branch → `shekyl_checked_sum_amounts` | **A** — wire `check_money_overflow` parity sum |
+| EV3 | `total_reward > 0` (Σ loud vouts non-zero) | same branch | **A** — engine static (Phase A, emission kind) |
+| EV4 | CT semantics: canonical Bp+ layout; balance `Σ pseudoOuts + total_reward = Σ out_masks + fee` (mint rides the debit slot); Bp+ verify | `verCtSemanticsEmission` → `verArchivalCtBalanceAndRange` | **C** — native `verify_bond_post_ct_balance` with `BondTerm::Debit(total_reward)` + the shared Bp+ leg |
+| E1 | Vin `canonical_bytes` parse → (`P_canonical_id`, claimed epochs, `1..=MAX`) | `blockchain.cpp:3812` → `shekyl_archival_emission_vin_extract` | **C** — native `emission_wire` decode; Phase A pre-parses for the probe key (parse failure → `Malformed`) |
+| E2 | Emission slot's `pqc_auths` pubkey derives the vin's `P_canonical_id` | `:3830-3845` | **A** — structural cross-field (BP2/BP5 analogue, same canonical-id function); `Malformed` |
+| E3 | Reference block exists + age window — **required even with zero fee inputs** (the backing proof verifies against this root) | `:3865-3886` | engine Phase C — Emission joins the spending-shape reference arm (`ReferenceNotFound` / `ReferenceTooRecent` / `StaleRoot`) |
+| E4 | `curve_trees_tree_depth ∈ [1, current]` | `:3890` | engine Phase C (row-K10 shape) → `StaleRoot` |
+| E5 | Signable hash = prefix hash **with the emission vin removed** (F-C1c) | `:3907-3919` | **C** — native recompute over the parsed wire tx; feeds E10 |
+| E6 | Claimant bond record facts: present, `join_settlement_epoch`, holdings kind + held shards, `claimed_settlement_epochs` | `:3922-3924` | **B fact + D re-check** — a record consumed/extended during C is a claim-slot race: vin-epoch ∩ record-claimed ≠ ∅ **or** record gone → `DoubleSpendConflict`; the commit re-derives (P, epochs) from the reparsed blob, so no expected-state input is needed |
+| E7 | Per-claimed-epoch as-of-E snapshots: frozen budget row present; close height; `Σwork`; bonds/shards/credit-pair rows; claimant bond idx | `:3926-3960` → `gather_archival_emission_epoch_snapshot` | **B facts** — the large marshal (`shekyl_archival_emission_epoch_snapshot` POD rows, C++-owned handle freed after copy). Frozen-at-close ⇒ **no D re-check** (deep-reorg drift is block-validation-backstopped, the SC7 posture). Absent budget row → `Malformed` (the builder only claims finalized epochs — `EpochSkip::NotFinalized` is its own predicate — so an unclosed-epoch submit is a builder defect, not a retry) |
+| E8 | Claims battery (steps 1–5: window, join bound, per-vin + record dedup, share recompute, reward arithmetic vs budget + `vout_reward_sum`) | `shekyl_emission_vin_verify` step 1–5 | **C** — native `emission_vin_verify_claims`; violations → `Malformed`, record-dedup overlap → `DoubleSpendConflict` (E6's classification) |
+| E9 | Membership-only backing proof vs the reference root | same call, step 6 | **C** — native `emission_vin_verify_backing`; `Malformed` (root drift classes → `StaleRoot` via the shared error mapping) |
+| E10 | Dual hybrid auths — Auth-B (backing key, leaf-bound) + Auth-P (claim key) over the reward-commit set + E5's signable hash | same call, step 8 | **C** — native `emission_vin_verify_auth`; `Malformed` |
+| E11 | Fee-input FCMP++ over the `ToKey` subset; `n_fee == 0 ⇒ fcmp_proof` **empty**, `n_fee > 0 ⇒` non-empty | `:4046-4108` | **C** — the shared funding-subset K12 leg (bond-arm shape), **skipped when `n_fee == 0`** exactly as the oracle skips it; the empty/non-empty coupling is an engine Phase-A static (wire `validate()` does not pin it). The Q11 zero-fee form is representable (prunable present with empty proof + empty pseudo-outs; a prunable-LESS ct cannot carry outputs) and admitted; the wallet builds it **only on the destitute branch** — `P`-space pool below the exit-fee reserve (`V3_WALLET_DECISION_LOG.md` "P-lane fees", 2026-07-19) — and otherwise refuses (`ClaimFeeInputsRequired`) |
+| E12 | Whole-tx PQC auth battery (every slot, emission slot included) | `verify_transaction_pqc_auth` | **C** — shared `verify_pqc_auths` (K13) |
+| E13 | Block-level per-(P, E) cross-tx dedup | `emission_block_claims_unique` (block path); `fill_block_template` dedup | **out of submit scope** — same pool-level scope-honesty posture as §8.7.1's bond note; block validation arbitrates |
+
+**Fee floor:** no SP-T4a analogue. An emission claim carries a real,
+weight-priced fee (Q11: with zero fee inputs it is paid out of the mint —
+the balance closes through the debit slot), so the engine's standard
+`fee_meets_floor` arithmetic applies unchanged.
+
+**Classification rule** (extends §8.7.1's): state conflicts — E6's
+consumed/extended claim slot — → `DoubleSpendConflict`; every
+window/shape/proof failure → `Malformed`; snapshot-root drift classes →
+`StaleRoot` exactly as the spend arm maps them.
+
 ### 8.8 `tx_sanity_check` (`tx_sanity_check.cpp:42-102`) — F29
 
 | # | Check | Site | Disposition |
@@ -1376,12 +1477,13 @@ nobody files it as a hole later.
 | S3 | Decoy-median heuristics | `:57-101` | **DEL** — **vacuous, verified**: they operate on `key_offsets`, which FCMP++ requires empty (row K3), so `n_indices == 0` and the function early-returns `true` at `:78-82`. Not merely obsolete — dead at runtime today. Rule-60 deletion, reason recorded |
 
 **Freeze rule:** rows marked ⚠ (I3, N3, N6, N7, N8, M3, M8, O6, K13, and
-§8.7.1's BP1 + SC1) must be resolved — Rust location named or port
-completed, with KAT/pinned vectors — before the §2 contract freezes and
-PR-2's crate version is declared stable. The archival economic/semantic
-legs (BP2–BP4, SC4, SC8) are already Rust with named sources and carry no
-⚠; their obligation is the native-call binding, covered by PR-3. Everything
-else is verified as of this document.
+§8.7.1's SC1 — BP1 resolved at PR-4b, wire-covered) must be resolved —
+Rust location named or port completed, with KAT/pinned vectors — before
+the §2 contract freezes and PR-2's crate version is declared stable. The
+archival economic/semantic legs (BP2–BP4, SC4, SC8) are already Rust with
+named sources and carry no ⚠; the bond-post native-call binding landed at
+PR-4b (the closure note above); the serve-credit binding remains gated on
+SP-T4a. Everything else is verified as of this document.
 
 ---
 

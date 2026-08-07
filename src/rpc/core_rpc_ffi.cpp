@@ -219,7 +219,6 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/set_limit",                         on_set_limit,                    COMMAND_RPC_SET_LIMIT),
         DJSON("/out_peers",                         on_out_peers,                    COMMAND_RPC_OUT_PEERS),
         DJSON("/in_peers",                          on_in_peers,                     COMMAND_RPC_IN_PEERS),
-        DJSON("/update",                            on_update,                       COMMAND_RPC_UPDATE),
         DJSON("/pop_blocks",                        on_pop_blocks,                   COMMAND_RPC_POP_BLOCKS),
     };
     return t;
@@ -234,7 +233,6 @@ const std::unordered_map<std::string, bin_fn>& get_bin_table() {
         DBIN("/get_hashes.bin",            on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
         DBIN("/gethashes.bin",             on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
         DBIN("/get_o_indexes.bin",         on_get_indexes,                 COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES),
-        DBIN("/get_output_distribution.bin", on_get_output_distribution_bin, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION),
     };
     return t;
 }
@@ -374,6 +372,7 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("get_miner_data",          on_getminerdata,              COMMAND_RPC_GETMINERDATA),
         DJRPC_WE("add_aux_pow",            on_add_aux_pow,                COMMAND_RPC_ADD_AUX_POW),
         DJRPC_WE("generateblocks",          on_generateblocks,             COMMAND_RPC_GENERATEBLOCKS),
+        DJRPC_WE("inject_archival_serve_credit", on_inject_archival_serve_credit, COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT),
         DJRPC_WE("get_last_block_header",  on_get_last_block_header,      COMMAND_RPC_GET_LAST_BLOCK_HEADER),
         DJRPC_WE("getlastblockheader",     on_get_last_block_header,      COMMAND_RPC_GET_LAST_BLOCK_HEADER),
         DJRPC_WE("get_block_header_by_hash", on_get_block_header_by_hash, COMMAND_RPC_GET_BLOCK_HEADER_BY_HASH),
@@ -399,7 +398,6 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("relay_tx",              on_relay_tx,                    COMMAND_RPC_RELAY_TX),
         DJRPC_WE("sync_info",             on_sync_info,                   COMMAND_RPC_SYNC_INFO),
         DJRPC_WE("get_txpool_backlog",     on_get_txpool_backlog,         COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG),
-        DJRPC_WE("get_output_distribution", on_get_output_distribution,   COMMAND_RPC_GET_OUTPUT_DISTRIBUTION),
         DJRPC_WE("prune_blockchain",       on_prune_blockchain,           COMMAND_RPC_PRUNE_BLOCKCHAIN),
         DJRPC_WE("flush_cache",            on_flush_cache,                COMMAND_RPC_FLUSH_CACHE),
         // FCMP++ curve-tree membership-path endpoints. The handlers + KV-serializable
@@ -410,6 +408,12 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("get_curve_tree_path",       on_get_curve_tree_path,        COMMAND_RPC_GET_CURVE_TREE_PATH),
         DJRPC_WE("get_curve_tree_info",       on_get_curve_tree_info,        COMMAND_RPC_GET_CURVE_TREE_INFO),
         DJRPC_WE("get_curve_tree_checkpoint", on_get_curve_tree_checkpoint,  COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT),
+        // Emission claim-source query (EMISSION_CLAIM_BUILDER.md §7): the
+        // wallet-side claim builder's one read. Registered on both
+        // transports from the start (the Rust/Axum transport is the
+        // default; a missing entry here is a 404 — see the curve-tree
+        // comment above).
+        DJRPC_WE("get_archival_emission_claim_source", on_get_archival_emission_claim_source, COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE),
     };
     return t;
 }
@@ -438,6 +442,17 @@ bool core_rpc_ffi_is_restricted(const core_rpc_handle* h)
 {
     if (!h || !h->rpc) return true;
     return h->rpc->is_restricted();
+}
+
+char* core_rpc_ffi_stem_tallies(core_rpc_handle* h)
+{
+    if (!h || !h->rpc) return nullptr;
+    try {
+        return strdup(h->rpc->stem_tallies_json().c_str());
+    } catch (const std::exception& e) {
+        MERROR("core_rpc_ffi_stem_tallies: " << e.what());
+        return nullptr;
+    }
 }
 
 char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,

@@ -265,6 +265,35 @@ pub enum CapabilityInput<'a> {
     },
 }
 
+/// The **transient first-stake intent** (SA-R1-a,
+/// `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.6/§5.7): "spawn the StakeEngine for
+/// this slot even though `staking_enabled` is still false, because a
+/// credentialed first-stake is about to run."
+///
+/// A newtype rather than a bare `PSlot` because the **pin lives on the
+/// type**: the intent is a *call parameter and nothing more* — it is never
+/// persisted, never stored on the engine, and is set only by the
+/// credentialed `stake` entry's open-with-intent (a sticky intent would
+/// derive personas for a non-staker, the firewall hazard the pin names). Its
+/// only consumer is the spawn gate; an aborted first-stake leaves only
+/// transient derivation, dropped when the actor dies at close.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FirstStakeIntent {
+    slot: PSlot,
+}
+
+impl FirstStakeIntent {
+    /// The intent for `slot` — constructed only on the `stake` entry path.
+    pub(crate) fn for_slot(slot: PSlot) -> Self {
+        Self { slot }
+    }
+
+    /// The slot the first stake targets.
+    pub(crate) fn slot(&self) -> PSlot {
+        self.slot
+    }
+}
+
 /// Parameters for [`Engine::create`].
 ///
 /// Borrowed-where-possible to avoid stack copies of the master seed.
@@ -358,7 +387,7 @@ impl<'a> EngineCreateParams<'a> {
 /// from a wallet file's network byte. Wallets that need Fakechain
 /// keys must construct their `AllKeysBlob` outside the lifecycle
 /// methods.
-fn network_to_derivation(network: Network) -> DerivationNetwork {
+pub(crate) fn network_to_derivation(network: Network) -> DerivationNetwork {
     match network {
         Network::Mainnet => DerivationNetwork::Mainnet,
         Network::Testnet => DerivationNetwork::Testnet,
@@ -524,6 +553,9 @@ impl Engine<SoloSigner> {
             daemon,
             network,
             Capability::Full,
+            // SA-R1-d: first-stake is a credentialed post-create `stake` call,
+            // never a create-time flag.
+            None,
         )
     }
 
@@ -547,6 +579,44 @@ impl Engine<SoloSigner> {
         network: Network,
         daemon: DaemonClient,
         overrides: SafetyOverrides,
+    ) -> Result<OpenedEngine<SoloSigner>, OpenError> {
+        Self::open_full_inner(base_path, credentials, network, daemon, overrides, None)
+    }
+
+    /// [`Self::open_full`] carrying a **transient first-stake intent**
+    /// (SA-R1-a, `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.6/§5.7): the
+    /// StakeEngine spawns for `{slot} ∪ lookahead` even though
+    /// `staking_enabled` is still false, so the first-stake bootstrap has an
+    /// actor to derive/scan/assemble against. The intent exists only as this
+    /// call parameter — it is never persisted, and the sole production
+    /// caller is the credentialed `stake` RPC's open-with-intent (the
+    /// firewall pin: a sticky intent would derive personas for a
+    /// non-staker).
+    pub fn open_full_with_first_stake_intent(
+        base_path: &Path,
+        credentials: &Credentials<'_>,
+        network: Network,
+        daemon: DaemonClient,
+        overrides: SafetyOverrides,
+        intent_slot: u32,
+    ) -> Result<OpenedEngine<SoloSigner>, OpenError> {
+        Self::open_full_inner(
+            base_path,
+            credentials,
+            network,
+            daemon,
+            overrides,
+            Some(FirstStakeIntent::for_slot(PSlot::from_raw(intent_slot))),
+        )
+    }
+
+    fn open_full_inner(
+        base_path: &Path,
+        credentials: &Credentials<'_>,
+        network: Network,
+        daemon: DaemonClient,
+        overrides: SafetyOverrides,
+        first_stake_intent: Option<FirstStakeIntent>,
     ) -> Result<OpenedEngine<SoloSigner>, OpenError> {
         let (file, outcome) =
             WalletFile::open(base_path, credentials.password(), network, overrides)
@@ -633,6 +703,7 @@ impl Engine<SoloSigner> {
             daemon,
             network,
             capability,
+            first_stake_intent,
         )?;
 
         Ok(match restored_from {
@@ -684,21 +755,126 @@ impl Engine<SoloSigner> {
 
     /// Internal field-by-field assembly used by [`Self::create`] and
     /// [`Self::open_full`]. Pulled out so the cache invariants
-    /// (network, capability) are established in exactly one place.
+    /// (network, capability) are established in exactly one place, and the
+    /// arm-#3 phantom GC runs before the persona derive on every open path.
     #[allow(clippy::too_many_arguments)]
     fn assemble(
         mut file: WalletFile,
         keys: AllKeysBlob,
         master_seed: &[u8; MASTER_SEED_BYTES],
         seed_format: SeedFormat,
-        ledger: WalletLedger,
+        mut ledger: WalletLedger,
         indexes: LedgerIndexes,
         prefs: WalletPrefs,
         daemon: DaemonClient,
         network: Network,
         capability: Capability,
+        first_stake_intent: Option<FirstStakeIntent>,
     ) -> Result<Self, OpenError> {
         let state_wrap_key = super::sealing_keys::state_wrap_key_from_wallet_file(&file);
+
+        // SP-R0 arm #3 — open-time phantom `bonded_slots` GC, BEFORE the
+        // persona derive (the `StakingBlock` hint design's own locus: the
+        // hint is reconciled where it is consumed). A phantom slot — durable
+        // record, no pending post, persona confirmed-absent over the sealed
+        // scan evidence — is dropped here, so a crashed activation (the
+        // SA-DQ-3 window, un-resumed) reopens as a clean non-staker instead
+        // of deriving and scanning a persona "for nothing". The drop is
+        // in-memory (persisted by the normal save discipline; a lost drop
+        // re-GCs at the next open — idempotent). Wrongful-GC safety rests on
+        // the pending-record bridge; see `reconcile_phantom_bonded_slots`.
+        //
+        // A seal read/decode failure DEGRADES to skipping the GC (keep
+        // every slot, warn loud) rather than failing the open: the seals
+        // are auxiliary, re-derivable scan state, and a corrupt one must
+        // not brick wallet open (the user could no longer even spend
+        // principal). Keeping is the conservative direction — a wrongly
+        // kept phantom costs one persona derive; a wrongful drop is the
+        // forbidden stuck-funds failure. The staker's scan path still fails
+        // loud on the same corrupt seal at `start_pscan` (fail-closed for
+        // the scan, not for the open).
+        if !ledger.staking.bonded_slots.is_empty() {
+            match load_phantom_gc_evidence(&file, &state_wrap_key) {
+                Ok(Some(PhantomGcEvidence {
+                    evidence,
+                    pending_slots,
+                    retired_slots,
+                })) => {
+                    // SP-R0 arm #2 — "stop deriving slot N": drop durably
+                    // RETIRED slots from the live hint before anything
+                    // derives (records-driven, the wallet's own ledger — no
+                    // absence inference, so no evidence gate needed). The
+                    // derive-forward subtraction follows for free: the
+                    // lookahead starts at the monotone cursor, which the
+                    // persist path keeps strictly above every observed
+                    // bonded slot, so a cleaned hint means no path
+                    // re-derives a retired persona. An emptied hint reverts
+                    // the wallet to a non-staker (a fully-retired wallet
+                    // must not spawn an actor "for nothing" every open —
+                    // the forever-derive problem the ledger exists to fix).
+                    if !retired_slots.is_empty() {
+                        let before = ledger.staking.bonded_slots.len();
+                        ledger
+                            .staking
+                            .bonded_slots
+                            .retain(|s| !retired_slots.contains(s));
+                        let dropped = before - ledger.staking.bonded_slots.len();
+                        if dropped > 0 {
+                            if ledger.staking.bonded_slots.is_empty() {
+                                ledger.staking.staking_enabled = false;
+                            }
+                            tracing::info!(
+                                dropped,
+                                reverted = !ledger.staking.staking_enabled,
+                                "SP-R0 arm #2: retired slots cleaned from the live hint at open"
+                            );
+                        }
+                    }
+                    let derivation_network = network_to_derivation(network);
+                    let sweep = super::stake_persist::reconcile_phantom_bonded_slots(
+                        &mut ledger.staking,
+                        &evidence,
+                        &pending_slots,
+                        |slot| -> Result<_, OpenError> {
+                            let keys = derive_archival_p_keys(
+                                master_seed,
+                                derivation_network,
+                                seed_format,
+                                slot,
+                            )
+                            .map_err(|e| {
+                                OpenError::Key(KeyError::Primitive {
+                                    detail: rederivation_failure_detail(&e),
+                                })
+                            })?;
+                            super::stake_engine::persona_canonical_id(&keys).map_err(|_| {
+                                OpenError::Key(KeyError::Primitive {
+                                    detail: "persona canonical id encode failed",
+                                })
+                            })
+                        },
+                    )?;
+                    if !sweep.dropped.is_empty() {
+                        tracing::info!(
+                            dropped = sweep.dropped.len(),
+                            staking_disabled = sweep.staking_disabled,
+                            "SP-R0 arm #3: phantom bonded_slots collected at open"
+                        );
+                    }
+                }
+                // No sealed scan state yet — nothing to reconcile against.
+                Ok(None) => {}
+                Err(detail) => {
+                    tracing::warn!(
+                        %detail,
+                        "SP-R0 arm #3: phantom bonded_slots GC skipped — sealed scan \
+                         evidence unreadable; keeping every recorded slot (the wallet \
+                         opens; a staker's scan will fail loud on the same seal)"
+                    );
+                }
+            }
+        }
+
         let prefs_hmac_key = shekyl_engine_prefs::PrefsHmacKey::derive(
             &file.opened_keys().file_kek,
             file.expected_classical_address(),
@@ -781,6 +957,7 @@ impl Engine<SoloSigner> {
             network_to_derivation(network),
             seed_format,
             &ledger.staking,
+            first_stake_intent,
         )?;
 
         let ledger = std::sync::Arc::new(super::local_ledger::LocalLedger::new(ledger, indexes));
@@ -861,7 +1038,7 @@ impl Engine<SoloSigner> {
     /// where `cursor` is the **scan-reconciled monotone** persona cursor
     /// ([`StakingBlock::monotone_current_slot_from_record`]) — never at or below
     /// an observed bonded slot, so a stale/rolled-back `p_slot` can never re-derive
-    /// a rotated-past persona as "current". The bonded slots are unioned in because
+    /// a moved-past persona as "current". The bonded slots are unioned in because
     /// under Model D the seed is dropped after this function returns, so a persona
     /// absent from the held set is unreachable for the wallet's life — and a
     /// retired-but-bonded persona's `bond_spend` key is needed to unbond it.
@@ -890,9 +1067,35 @@ impl Engine<SoloSigner> {
         derivation_network: DerivationNetwork,
         seed_format: SeedFormat,
         staking: &StakingBlock,
+        first_stake_intent: Option<FirstStakeIntent>,
     ) -> Result<Option<StakeEngineHandle>, OpenError> {
-        if !staking.staking_enabled {
+        // SA-R1-a (ARCHIVAL_STAKE_ACTIVATION_PLAN.md §5.6/§5.7, RATIFIED):
+        // first-stake needs a spawned StakeEngine to assemble against BEFORE
+        // `persist_bond_record` flips `staking_enabled`, so the gate admits a
+        // transient first-stake intent. Pin (firewall gate): the intent is
+        // NEVER persisted — it is set only by the credentialed `stake` RPC's
+        // open-with-intent parameter and is `None` in every other open. An
+        // aborted first-stake (spawn without persist) leaves only transient
+        // derivation, dropped when the actor dies at close; the durable
+        // staker state is exactly what `persist_bond_record` writes.
+        if !staking.staking_enabled && first_stake_intent.is_none() {
             return Ok(None);
+        }
+
+        // The settlement-epoch schedule is consensus, and the wallet's epoch
+        // arithmetic (P-scan accrual join epochs, claim-window recomputes)
+        // runs on the genesis schedule unless this process explicitly armed
+        // the regtest override — which no production wallet ever does. A
+        // leaked SHEKYL_SETTLEMENT_EPOCH_BLOCKS (shared systemd template,
+        // container base layer) is therefore ignored, and this is the loud,
+        // once-per-open surface that names the ignored lever so the operator
+        // can clean the environment instead of guessing.
+        if shekyl_archival_retention::settlement_epoch_override_ignored() {
+            warn!(
+                "SHEKYL_SETTLEMENT_EPOCH_BLOCKS is set but this wallet is not an armed \
+                 regtest context; the override is IGNORED and the genesis settlement-epoch \
+                 schedule is in effect — unset the variable (it is a fakechain-only lever)"
+            );
         }
 
         let cursor = staking.monotone_current_slot_from_record();
@@ -904,13 +1107,20 @@ impl Engine<SoloSigner> {
             staking.bonded_slots.iter().copied().collect();
         for offset in 0..=ARCHIVAL_PERSONA_LOOKAHEAD {
             // `cursor + offset` can saturate at `u32::MAX` only for a wallet that
-            // has rotated ~4 billion times; `checked_add` drops the out-of-range
+            // has advanced ~4 billion slots; `checked_add` drops the out-of-range
             // tail rather than wrapping to slot 0 (which would re-derive a
-            // rotated-past persona — the exact unlinkability break the monotone
+            // moved-past persona — the exact unlinkability break the monotone
             // cursor prevents).
             if let Some(slot) = cursor.checked_add(offset) {
                 slots.insert(slot);
             }
+        }
+        // SA-R1-a: the intent slot rides the derive set (`{S} ∪ lookahead`,
+        // plan §5.0 step 3) — normally already inside the lookahead window
+        // (the monotone cursor IS the next slot), but unioned explicitly so
+        // the bootstrap spawn is the real spawn even for a non-default slot.
+        if let Some(intent) = first_stake_intent {
+            slots.insert(intent.slot().to_raw());
         }
 
         let mut bundles = std::collections::BTreeMap::new();
@@ -921,11 +1131,26 @@ impl Engine<SoloSigner> {
                     detail: rederivation_failure_detail(&e),
                 })
             })?;
-            bundles.insert(PSlot(slot), keys);
+            bundles.insert(PSlot::from_raw(slot), keys);
         }
 
-        let bonded: std::collections::BTreeSet<PSlot> =
-            staking.bonded_slots.iter().copied().map(PSlot).collect();
+        let mut bonded: std::collections::BTreeSet<PSlot> = staking
+            .bonded_slots
+            .iter()
+            .copied()
+            .map(PSlot::from_raw)
+            .collect();
+        // SA-R1-a: the intent slot is tagged bonded-ELECT (actor-local, never
+        // persisted): the bonded tag is what makes a persona scannable
+        // (`bonded_scan_inputs`) and activation-wipe-proof, and first-stake
+        // needs both — the `stake_in` funding output must be discoverable by
+        // the P-scan before the sweep can validate it, and an activation must
+        // not wipe the elect's keys mid-bootstrap. If the first-stake aborts,
+        // the tag dies with the actor (transient); durable bondedness remains
+        // solely `persist_bond_record`'s write.
+        if let Some(intent) = first_stake_intent {
+            bonded.insert(intent.slot());
+        }
 
         // Idle at open: the request path (2c-2b) mints a handle and activates.
         let handle = StakeEngineHandle::spawn(bundles, bonded, None);
@@ -1053,9 +1278,9 @@ impl<
     ///
     /// Pre-V3.2, the public `Engine::create` and `Engine::open_full`
     /// constructors are concrete-typed (`daemon: DaemonClient`)
-    /// because their callers — `shekyl-cli`, `shekyl-engine-rpc`,
-    /// the upcoming JSON-RPC server cutover — only ever wire a
-    /// real daemon transport. Until V3.2, `replace_daemon` is the
+    /// because their callers — `shekyl-cli`, `shekyl-wallet-rpc` —
+    /// only ever wire a real daemon transport. Until V3.2,
+    /// `replace_daemon` is the
     /// test surface; production paths cannot reach it because
     /// `pub(crate) #[cfg(test)]` excludes them from the published
     /// API and from the non-test build.
@@ -1108,6 +1333,63 @@ impl<
             _signer,
         }
     }
+}
+
+/// Read + decode the sealed evidence the arm-#3 phantom GC consumes: the
+/// pscan seal (reconcile evidence) and the pending-post seal (the W3 /
+/// scan-lag bridge). `Ok(None)` if no pscan seal exists yet; `Err(detail)`
+/// on ANY read/decode failure — including a pending seal that cannot be
+/// read while the pscan seal can, because a GC run without the pending
+/// bridge could wrongfully drop a W3 slot. The caller degrades an `Err` to
+/// skipping the GC (keep every slot, warn loud), never to an open failure.
+/// The sealed evidence the open-time SP-R0 sweeps consume, as one named
+/// bundle (arm #3's reconcile evidence + the W3 pending bridge + arm #2's
+/// done-side retired slots).
+struct PhantomGcEvidence {
+    evidence: super::pscan::reconcile::PReconcileSet,
+    pending_slots: std::collections::BTreeSet<u32>,
+    retired_slots: std::collections::BTreeSet<u32>,
+}
+
+fn load_phantom_gc_evidence(
+    file: &WalletFile,
+    state_wrap_key: &super::sealing_keys::StateWrapKey,
+) -> Result<Option<PhantomGcEvidence>, String> {
+    let Some(bytes) = file
+        .open_pscan_state(state_wrap_key.as_bytes())
+        .map_err(|e| format!("pscan seal read failed: {e}"))?
+    else {
+        return Ok(None);
+    };
+    let state = shekyl_engine_state::pscan_state::PScanState::from_postcard_bytes(&bytes)
+        .map_err(|e| format!("pscan seal decode failed: {e}"))?;
+    let evidence = super::pscan::accrual::PScanAccrual::from_state(&state).reconcile_set();
+    // SP-R0 arm #2: the done-side ledger's retired slots ride along so the
+    // caller can apply the records-driven hint clean before the phantom sweep.
+    let retired_slots: std::collections::BTreeSet<u32> = state
+        .retired_records()
+        .iter()
+        .map(|r| r.p_slot.to_raw())
+        .collect();
+    let pending_slots: std::collections::BTreeSet<u32> = match file
+        .open_pending_posts(state_wrap_key.as_bytes())
+        .map_err(|e| format!("pending seal read failed: {e}"))?
+    {
+        Some(bytes) => {
+            shekyl_engine_state::pending_post_block::PendingPostBlock::from_postcard_bytes(&bytes)
+                .map_err(|e| format!("pending seal decode failed: {e}"))?
+                .posts()
+                .iter()
+                .map(|p| p.p_slot.to_raw())
+                .collect()
+        }
+        None => std::collections::BTreeSet::new(),
+    };
+    Ok(Some(PhantomGcEvidence {
+        evidence,
+        pending_slots,
+        retired_slots,
+    }))
 }
 
 /// Render a `shekyl-crypto-pq::CryptoError` into the static-string
@@ -1194,6 +1476,47 @@ impl<
         Ok(())
     }
 
+    /// Persist final state + prefs for close, without consuming `self`.
+    ///
+    /// Callers that must keep the live `Engine` when flush fails (e.g.
+    /// wallet-rpc `close_wallet`, which re-installs the session on I/O
+    /// error) use this before dropping. [`Self::close`] is the
+    /// consume-on-any-outcome path for CLI / tests.
+    ///
+    /// # Errors
+    ///
+    /// - [`OpenError::OutstandingPendingTx`] when one or more
+    ///   reservations are still in flight.
+    /// - [`OpenError::Persistence`] for state-save / prefs-save failures.
+    pub fn persist_for_close(&self) -> Result<(), OpenError> {
+        let count = self.outstanding_pending_txs();
+        if count > 0 {
+            return Err(OpenError::OutstandingPendingTx { count });
+        }
+
+        // Persist final state and prefs via steady-state sealing keys
+        // (F5(b)); see `docs/WALLET_FILE_FORMAT_V1.md` §4.3.
+        //
+        // Acquire a `LocalLedger` read guard for the duration of the
+        // save call so the underlying `WalletLedger` is borrowed
+        // immutably. Callers that reach here from `close` have already
+        // taken sole ownership; the read guard is structural, not for
+        // contention with other Engine writers on this instance.
+        let ledger_guard = self.ledger.read();
+        drive_persistence(
+            self.persistence
+                .save_state(self.state_wrap_key(), &ledger_guard.ledger),
+        )
+        .map_err(|e| OpenError::Persistence(e.into()))?;
+        drop(ledger_guard);
+        drive_persistence(
+            self.persistence
+                .save_prefs(self.prefs_hmac_key(), &self.prefs),
+        )
+        .map_err(|e| OpenError::Persistence(e.into()))?;
+        Ok(())
+    }
+
     /// Close the wallet. Errors if `outstanding_pending_txs() > 0`.
     ///
     /// On success, `self` is consumed and the drop sequence runs:
@@ -1223,35 +1546,16 @@ impl<
     ///   reservations are still in flight.
     /// - [`OpenError::Persistence`] for state-save / prefs-save failures.
     ///
+    /// On either error variant, `self` is still dropped (by-value `self`
+    /// cannot be returned through `Result<(), E>`). Callers that must
+    /// retain the live engine on flush failure must call
+    /// [`Self::persist_for_close`] first and only drop on `Ok`.
+    ///
     /// `credentials` is ignored on the steady-state close path (region-2 sealing
     /// uses the session [`StateWrapKey`](super::sealing_keys::StateWrapKey)); the
     /// parameter remains for API stability with pre-F5(b) callers.
     pub fn close(self, _credentials: &Credentials<'_>) -> Result<(), OpenError> {
-        let count = self.outstanding_pending_txs();
-        if count > 0 {
-            return Err(OpenError::OutstandingPendingTx { count });
-        }
-
-        // Persist final state and prefs before drop via steady-state sealing
-        // keys (F5(b)); see `docs/WALLET_FILE_FORMAT_V1.md` §4.3.
-        //
-        // Acquire a `LocalLedger` read guard for the duration of the
-        // save call so the underlying `WalletLedger` is borrowed
-        // immutably. `Engine::close` consumes `self`, so no concurrent
-        // writers exist at this point; the read guard is structural,
-        // not for contention.
-        let ledger_guard = self.ledger.read();
-        drive_persistence(
-            self.persistence
-                .save_state(self.state_wrap_key(), &ledger_guard.ledger),
-        )
-        .map_err(|e| OpenError::Persistence(e.into()))?;
-        drop(ledger_guard);
-        drive_persistence(
-            self.persistence
-                .save_prefs(self.prefs_hmac_key(), &self.prefs),
-        )
-        .map_err(|e| OpenError::Persistence(e.into()))?;
+        self.persist_for_close()?;
 
         // Explicit drop so the chain documented above runs at a
         // named program point rather than at the end of the function
@@ -1274,7 +1578,7 @@ mod tests {
 
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
     use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
-    use shekyl_rpc_transport::SimpleRequestRpc;
+    use shekyl_rpc_transport::HttpRpc;
     use tempfile::TempDir;
     use zeroize::Zeroizing;
 
@@ -1287,16 +1591,16 @@ mod tests {
     /// became require-ambient (§4.2), every engine-building lifecycle test is a
     /// `#[tokio::test(flavor = "multi_thread")]`. This helper therefore must not
     /// build a *nested* runtime (`block_on` inside a runtime panics); it bridges
-    /// the async `SimpleRequestRpc::new` to the sync test body via
+    /// the async `HttpRpc::new` to the sync test body via
     /// `block_in_place` + the ambient handle — the same shape as
     /// [`super::drive_persistence`]'s multi-thread branch, and the reason the
     /// tests pin `flavor = "multi_thread"`.
     fn dummy_daemon() -> DaemonClient {
         let rpc = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(SimpleRequestRpc::new("http://127.0.0.1:1".to_string()))
+                .block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
         })
-        .expect("construct SimpleRequestRpc (no actual connection attempted)");
+        .expect("construct HttpRpc (no actual connection attempted)");
         DaemonClient::new(rpc)
     }
 
@@ -1412,6 +1716,264 @@ mod tests {
         )
         .expect_err("wrong password must refuse");
         assert!(matches!(err, OpenError::IncorrectPassword), "got {err:?}");
+    }
+
+    /// SA-R1-a: an open carrying the first-stake intent spawns the
+    /// StakeEngine for a NON-staker (`staking_enabled` still false), and an
+    /// aborted first-stake (intent open, then close with no persist) leaves
+    /// **nothing durable** — the next plain open is a plain non-staker open.
+    /// The intent is transient by construction (a call parameter, never
+    /// persisted): this test is the pin's executable form.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn first_stake_intent_spawns_transiently_and_aborts_clean() {
+        let fix = make_create_fixture();
+        let creds = Credentials::password_only(b"correct horse");
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let network = params.network;
+        Engine::<SoloSigner>::create(params, dummy_daemon())
+            .expect("create FULL wallet")
+            .close(&creds)
+            .expect("close after create");
+
+        // Plain open: a non-staker gets no StakeEngine (the existing gate).
+        let plain = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("plain open")
+        .into_wallet();
+        assert!(!plain.has_stake_engine(), "non-staker: no actor");
+        assert!(!plain.ledger().staking.staking_enabled);
+        plain.close(&creds).expect("close plain");
+
+        // Intent open: the actor spawns pre-persist (SA-R1-a), while the
+        // durable staking state is untouched.
+        let intent = Engine::<SoloSigner>::open_full_with_first_stake_intent(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+            0,
+        )
+        .expect("intent open")
+        .into_wallet();
+        assert!(intent.has_stake_engine(), "intent open spawns the actor");
+        assert!(
+            !intent.ledger().staking.staking_enabled,
+            "the intent flips nothing durable"
+        );
+        // Abort: close without persisting a bond record.
+        intent.close(&creds).expect("close aborted first-stake");
+
+        // The abort left nothing: a plain reopen is a plain non-staker open.
+        let after = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("reopen after abort")
+        .into_wallet();
+        assert!(
+            !after.has_stake_engine(),
+            "aborted intent must not stick (SA-R1-a pin: transient, never persisted)"
+        );
+        assert!(!after.ledger().staking.staking_enabled);
+        assert!(after.ledger().staking.bonded_slots.is_empty());
+    }
+
+    /// Integrated refusal paths of `Engine::first_stake` (rule 82 taxonomy),
+    /// and the W1 invariant: a refusal writes **nothing durable** — the
+    /// wallet remains a clean non-staker after any pre-persist failure.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn first_stake_refuses_cleanly_before_the_durable_point() {
+        use crate::engine::FirstStakeError;
+        use tokio::sync::RwLock;
+
+        let fix = make_create_fixture();
+        let creds = Credentials::password_only(b"correct horse");
+        let seed = fixed_seed();
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let network = params.network;
+        Engine::<SoloSigner>::create(params, dummy_daemon())
+            .expect("create FULL wallet")
+            .close(&creds)
+            .expect("close after create");
+
+        // No StakeEngine resident (plain open, no intent): the continuation
+        // refuses with the internal-sequencing arm — never a partial write.
+        let plain = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("plain open")
+        .into_wallet();
+        let arc = std::sync::Arc::new(RwLock::new(plain));
+        let err = Engine::first_stake(arc.clone(), 0)
+            .await
+            .expect_err("no stake engine must refuse");
+        assert!(matches!(err, FirstStakeError::NoStakeEngine), "got {err:?}");
+        {
+            let g = arc.read().await;
+            assert!(!g.ledger().staking.staking_enabled);
+            assert!(g.ledger().staking.bonded_slots.is_empty());
+        }
+        let plain = std::sync::Arc::try_unwrap(arc)
+            .unwrap_or_else(|_| panic!("sole owner"))
+            .into_inner();
+        plain.close(&creds).expect("close");
+
+        // Intent open (actor resident), unreachable daemon: the first
+        // pre-persist step to touch the daemon (the fee estimate) fails →
+        // the `FeeEstimate` arm (a daemon fault, deliberately NOT the
+        // `Funding` "fund and retry" misdiagnosis — rule 82), and — the W1
+        // pin — nothing durable was written: the wallet reopens as a plain
+        // non-staker.
+        let intent = Engine::<SoloSigner>::open_full_with_first_stake_intent(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+            0,
+        )
+        .expect("intent open")
+        .into_wallet();
+        let arc = std::sync::Arc::new(RwLock::new(intent));
+        let err = Engine::first_stake(arc.clone(), 0)
+            .await
+            .expect_err("unreachable daemon must refuse pre-persist");
+        assert!(
+            matches!(err, FirstStakeError::FeeEstimate(_)),
+            "got {err:?}"
+        );
+        {
+            let g = arc.read().await;
+            assert!(
+                !g.ledger().staking.staking_enabled,
+                "W1: a pre-persist refusal writes nothing durable"
+            );
+            assert!(g.ledger().staking.bonded_slots.is_empty());
+        }
+        let intent = std::sync::Arc::try_unwrap(arc)
+            .unwrap_or_else(|_| panic!("sole owner"))
+            .into_inner();
+        intent.close(&creds).expect("close");
+
+        let after = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("reopen")
+        .into_wallet();
+        assert!(!after.has_stake_engine(), "still a clean non-staker");
+    }
+
+    /// SP-R0 arm #2 — the open-time records-driven clean: a durably RETIRED
+    /// slot is dropped from the live hint before derive (no evidence gate —
+    /// the wallet's own ledger), and an emptied hint reverts the wallet to
+    /// a non-staker; an unrelated retired slot leaves the live one alone.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn retired_records_clean_the_live_hint_at_open() {
+        use shekyl_engine_state::pscan_cursor::PScanCursor;
+        use shekyl_engine_state::pscan_state::{
+            PScanState, RetiredPersonaRecord, PSCAN_STATE_VERSION,
+        };
+        use shekyl_types::{PCanonicalId, PSlot, SettlementEpoch};
+        let _ = PSCAN_STATE_VERSION; // version pinned by the schema snapshot
+
+        let fix = make_create_fixture();
+        let creds = Credentials::password_only(b"correct horse");
+        let seed = fixed_seed();
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let network = params.network;
+        let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create");
+        engine
+            .persist_bond_record(PSlot::from_raw(0))
+            .expect("persist");
+        engine.close(&creds).expect("close");
+
+        let seal_retired = |slots: &[u32]| {
+            let (file, _outcome) = shekyl_engine_file::WalletFile::open(
+                &fix.base_path,
+                b"correct horse",
+                network,
+                SafetyOverrides::none(),
+            )
+            .expect("file open");
+            let key = super::super::sealing_keys::state_wrap_key_from_wallet_file(&file);
+            let state = PScanState::new(
+                PScanCursor::genesis(),
+                std::collections::BTreeMap::new(),
+                std::collections::BTreeMap::new(),
+                Vec::new(),
+                Vec::new(),
+                slots
+                    .iter()
+                    .map(|&slot| RetiredPersonaRecord {
+                        p_slot: PSlot::from_raw(slot),
+                        p_canonical_id: PCanonicalId::from_bytes(
+                            [u8::try_from(slot).unwrap_or(0xFF); 32],
+                        ),
+                        unbond_epoch: SettlementEpoch::from_raw(0),
+                        retired_epoch: SettlementEpoch::from_raw(30),
+                    })
+                    .collect(),
+            );
+            file.save_pscan_state(key.as_bytes(), &state.to_postcard_bytes().expect("encode"))
+                .expect("seal");
+        };
+
+        // Unrelated retired slot: the live slot survives, still a staker.
+        seal_retired(&[5]);
+        let opened = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("open")
+        .into_wallet();
+        assert!(opened.ledger().staking.staking_enabled);
+        assert!(opened.ledger().staking.bonded_slots.contains(&0));
+        assert!(opened.has_stake_engine());
+        opened.close(&creds).expect("close");
+
+        // The bonded slot itself retired: cleaned, reverted, no actor.
+        seal_retired(&[5, 0]);
+        let opened = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("open")
+        .into_wallet();
+        assert!(
+            !opened.ledger().staking.staking_enabled,
+            "an emptied hint reverts the wallet to a non-staker"
+        );
+        assert!(opened.ledger().staking.bonded_slots.is_empty());
+        assert!(
+            !opened.has_stake_engine(),
+            "no actor for a fully-retired wallet"
+        );
+        opened.close(&creds).expect("close");
     }
 
     /// Phase 1 query surface: `Engine::primary_address` assembles the
@@ -1701,6 +2263,45 @@ mod tests {
             OpenError::OutstandingPendingTx { count } => assert_eq!(count, count_before),
             other => panic!("expected OutstandingPendingTx, got {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn persist_for_close_keeps_engine_on_outstanding_reservation() {
+        let fix = make_create_fixture();
+        let password: &[u8] = b"correct horse";
+        let creds = Credentials::password_only(password);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+
+        use super::super::local_pending_tx::ConsumerHeldEntry;
+
+        let id = super::super::pending::ReservationId::new(0);
+        wallet
+            .pending
+            .state
+            .lock()
+            .expect("pending state lock not poisoned")
+            .consumer_held
+            .insert(id, ConsumerHeldEntry::for_outstanding_test(vec![0xAB; 64]));
+
+        let count_before = wallet.outstanding_pending_txs();
+        assert_eq!(count_before, 1);
+
+        // Non-consuming flush must leave `wallet` usable (RPC restore path).
+        let err = wallet
+            .persist_for_close()
+            .expect_err("persist_for_close must refuse with outstanding reservation");
+        match err {
+            OpenError::OutstandingPendingTx { count } => assert_eq!(count, count_before),
+            other => panic!("expected OutstandingPendingTx, got {other:?}"),
+        }
+        assert_eq!(wallet.outstanding_pending_txs(), count_before);
+        wallet
+            .close(&creds)
+            .expect_err("still outstanding after failed persist");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -2,15 +2,45 @@
 members = [
     "shekyl-ffi",
     "shekyl-fcmp",
+
+    # V3.1 multisig — Option E′ (MS-5). The FROST spend-ceremony FSM, blob
+    # format, and nonce typestates. Pure logic; its dependency list is the
+    # structural "no transport" ban (docs/design/V3_1_MULTISIG_RUST_ENGINE.md,
+    # MS-1). Wired to the wallet ledger by shekyl-engine-core.
+    "shekyl-multisig",
+
     "shekyl-chacha",
     "shekyl-crypto-pq",
     "shekyl-crypto-hash",
     "shekyl-consensus",
 
+    # DISPOSABLE measurement spike (SP-T3 / PD-F-2): the Tor-borne shard-fetch
+    # dispersion harness. Named `-spike` on purpose -- nothing in it is canonical
+    # and it must be deleted or fully rewritten before TJ-B (rule 15: debt,
+    # labelled at birth). See docs/design/SP_T3_SKELETON_MEASUREMENT.md.
+    "shekyl-sp-t3-spike",
+
     # Canonical genesis block/tx binary wire-format serializer — the clean,
     # Shekyl-owned replacement for the vendored shekyl-oxide block/tx/ct modules
     # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).
     "shekyl-wire",
+
+    # Genesis build/verify tool (`geblock`) — Rust replacement for the deleted
+    # C++ genesis_builder (formerly shekyl-dev/tools/genesis_builder). Derives
+    # the genesis tx key deterministically (domain-separated cSHAKE over the
+    # recipients file), so the pinned GENESIS_TX in src/cryptonote_config.h is
+    # byte-reproducible from config/genesis_recipients.*.json — the property
+    # the fresh-txkey C++ tool could never provide and the config-pin CI gate
+    # rests on. Also owns the fresh-entropy genesis wallet ceremony
+    # (`geblock gen-wallets`).
+    "shekyl-genesis-tool",
+
+    # Structural tx-weight predictor (byte-mirror of shekyl_wire::Transaction::write)
+    # + bounded input/output counts. Hoisted from shekyl-engine-core so the wallet
+    # fee path and shekyl-economics-sim share one single-sourced weight model
+    # (docs/design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §12.3 D-1).
+    "shekyl-tx-weight",
+
     "shekyl-economics",
     "shekyl-economics-sim",
 
@@ -27,8 +57,41 @@ members = [
     # statistics utility both it and `shekyl-crypto-pq` reuse (rule 18).
     "shekyl-standoff",
     "shekyl-stats",
+
+    # Daemon relay-privacy timing core (Dandelion++ epoch/stem/fluff/embargo
+    # draws + the stem map), derived from the paper rather than inherited as
+    # `#define`s. Standalone measurement instrument: links nothing, replaces
+    # nothing, and precedes any decision to move the C++ relay path. Shares
+    # `shekyl-stats` with `shekyl-standoff` under the same `conformance`
+    # feature split.
+    "shekyl-relay-privacy",
+
+    # Live daemon relay scheduler (RP-3a): owns the Dandelion++ zone state and
+    # drives the timing primitives above. Deliberately separate — that crate's
+    # charter is "timing only, nothing chooses peers or touches a socket", and
+    # a zone actor does both. The split is what keeps the primitives
+    # synchronous and pure, which is what the daemon's run_epoch/run_next_wake/
+    # run_fluff force-step hooks — and therefore the gtest oracle — rest on.
+    # See docs/design/DAEMON_RELAY_PRIVACY.md §18.
+    "shekyl-relay",
+
+    # Levin p2p framing layer (bucket header, fragments, noise, zstd flag
+    # path) — the byte-exact Rust skeleton of docs/LEVIN_PROTOCOL.md, KAT'd
+    # against the C++ epee::levin oracle. Framing only: no portable_storage,
+    # no sockets. The compression half is production-live (the C++
+    # epee::levin compression path shims through shekyl-ffi's
+    # shekyl_levin_* exports — single-owner libzstd); the framing half is
+    # inert until the scheduled p2p cutover (IMPLEMENTATION_INDEX.md LV row).
+    "shekyl-levin",
+
     "shekyl-archival-retention",
-    "shekyl-engine-rpc",
+
+    # Phase 4 Engine-native wallet RPC (docs/api/wallet_rpc.yaml). Replaces
+    # C++ wallet_rpc_server. The transitional `shekyl-engine-rpc` wallet2-FFI
+    # bridge that used to sit beside it is deleted (roadmap B1); the C++
+    # `wallet2_ffi` surface it wrapped is Phase 5's to remove.
+    "shekyl-wallet-rpc",
+
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",
 
@@ -132,6 +195,10 @@ members = [
     # See `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1 + §8.
     "shekyl-randomx-differential",
     "shekyl-shard-visual",
+
+    # Shard data-source abstraction (list + aggregate lookup) consumed by the
+    # GUI shard view. Fixtures-backed today; ArchivalEngine impl at Stage 5.
+    "shekyl-shard-source",
 ]
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested
@@ -140,6 +207,7 @@ members = [
 # only builds under `cargo +nightly fuzz build`. Hardening-pass
 # commit 8 (`docs/MID_REWIRE_HARDENING.md` §3.8).
 exclude = [
+    "shekyl-archival-retention/fuzz",
     "shekyl-engine-state/fuzz",
     # FCMP++ research crypto, vendored from the monero-oxide fork (pinned by
     # UPSTREAM_MONERO_OXIDE_COMMIT). The clean upstream-formatted mirror lives on
@@ -190,6 +258,46 @@ repository = "https://github.com/radawson/Shekyl"
 
 [workspace.dependencies]
 thiserror = "2"
+# Single-source zstd pin (decision 2026-08-06). One consumer today:
+# `shekyl-levin`'s COMPRESSED path, which production reaches via the
+# shekyl_levin_* FFI.
+#
+# The original justification — "shard serving is the anticipated second
+# consumer" — was **falsified the same day** by the Z-1 measurement
+# (FOLLOWUPS, "Shard serving on `P`: zstd compression REJECTED by
+# measurement"): Shekyl wire bytes run 7.97–7.995 bits/B of entropy and
+# zstd levels 1/3/9 *expand* every corpus. So this entry is not holding a
+# place for a second consumer, and it is not here for frame
+# interoperability either.
+#
+# It stays because the **feature set below is load-bearing** and must not
+# be re-litigated per crate. A second crate that added `zstd = "0.13"` with
+# defaults would silently re-break the Win64 cross build and re-widen the
+# receive-path C surface, and `links = "zstd"` makes the graph collision a
+# hard error rather than a quiet one (Z-5 records that hazard). Centralising
+# the decision is what makes those failure modes unreachable.
+#
+# `default-features = false` drops all three of the crate's defaults, and
+# each is dropped for a reason — they are not incidental trimming:
+#
+# - `zdict_builder` compiles `zstd/lib/dictBuilder` (`cover.c`), which calls
+#   POSIX `qsort_r`. mingw-w64 has no `qsort_r`, so the Win64 cross build
+#   fails at link with an undefined reference the moment `libshekyl_ffi.a`
+#   carries those objects — which it does since the compression-shim cut
+#   folded `shekyl-levin` into the daemon's Rust image. We train no
+#   dictionaries; the builder is dead weight that breaks a supported target.
+# - `legacy` compiles the decoders for zstd frame formats v0.1–v0.7. Every
+#   frame we inflate came from this same pinned encoder, so a legacy frame
+#   on the wire is by definition non-conforming — keeping those decoders
+#   would only widen the attacker-reachable C surface on the p2p receive
+#   path for a format we never emit.
+# - `arrays` adds a `WriteBuf` impl for `[u8; N]` only. We write into
+#   `Vec<u8>` and `&mut [u8]`, both of which are impl'd unconditionally.
+#
+# What remains is what `shekyl-levin` actually calls: `zstd::bulk` and
+# `zstd::zstd_safe::{get_frame_content_size, decompress}`, over the
+# `std`-enabled `zstd-safe` that the crate pins internally.
+zstd = { version = "0.13", default-features = false }
 serde = { version = "1", features = ["derive"] }
 # Single source of truth for the secret-wiping crate, replacing the
 # per-crate pins that had drifted across two version floors (`1` / `^1.5`)

@@ -22,7 +22,7 @@ use shekyl_types::{BlockHeight, Timelock};
 use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, Ct, Transaction};
 
 use shekyl_crypto_pq::{
-    kem::{HybridCiphertext, ML_KEM_768_CT_LEN},
+    kem::{HybridCiphertext, HYBRID_KEM_CT_LEN, ML_KEM_768_CT_LEN, X25519_KEM_CT_LEN},
     key_image::KeyImage,
     output::{compute_output_key_image, scan_output_recover_with_ml_kem_dk},
 };
@@ -31,9 +31,6 @@ use shekyl_units::AtomicUnits;
 use subtle::ConstantTimeEq;
 
 use crate::{extra::Extra, output::*, GuaranteedViewPair, ViewPair};
-
-const X25519_CT_BYTES: usize = 32;
-const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
 
 /// Maximum number of outputs a single transaction may carry under
 /// Shekyl V3 consensus, mirroring the FCMP++ Bulletproofs+ commitment
@@ -230,7 +227,7 @@ pub struct RecoveredWalletOutput {
     /// One-byte view tag carried in the on-chain output. Public.
     #[zeroize(skip)]
     pub(crate) view_tag: u8,
-    /// Encrypted amount bytes from `RctSignaturesBase::encrypted_amounts`.
+    /// Encrypted amount bytes from `CtBase::enc_amounts`.
     /// Public on-chain residue.
     #[zeroize(skip)]
     pub(crate) enc_amount: [u8; 8],
@@ -293,7 +290,7 @@ impl RecoveredWalletOutput {
     pub fn view_tag(&self) -> u8 {
         self.view_tag
     }
-    /// Encrypted amount bytes from `RctSignaturesBase::encrypted_amounts`.
+    /// Encrypted amount bytes from `CtBase::enc_amounts`.
     pub fn enc_amount(&self) -> &[u8; 8] {
         &self.enc_amount
     }
@@ -645,16 +642,16 @@ impl InternalScanner {
 
             // --- Try KEM path (tag 0x06) ---
             let Some(blob) = kem_ct_blob else { continue };
-            let ct_offset = o * HYBRID_KEM_CT_BYTES;
-            if blob.len() < ct_offset + HYBRID_KEM_CT_BYTES {
+            let ct_offset = o * HYBRID_KEM_CT_LEN;
+            if blob.len() < ct_offset + HYBRID_KEM_CT_LEN {
                 continue;
             }
 
-            let ct_slice = &blob[ct_offset..ct_offset + HYBRID_KEM_CT_BYTES];
-            let ct_x25519: &[u8; 32] = ct_slice[..X25519_CT_BYTES]
+            let ct_slice = &blob[ct_offset..ct_offset + HYBRID_KEM_CT_LEN];
+            let ct_x25519: &[u8; 32] = ct_slice[..X25519_KEM_CT_LEN]
                 .try_into()
                 .expect("slice is exactly 32 bytes");
-            let ct_ml_kem = &ct_slice[X25519_CT_BYTES..];
+            let ct_ml_kem = &ct_slice[X25519_KEM_CT_LEN..];
             debug_assert_eq!(ct_ml_kem.len(), ML_KEM_768_CT_LEN);
 
             let Ok(recovered) = scan_output_recover_with_ml_kem_dk(
@@ -1593,6 +1590,7 @@ mod cancel_tests {
             previous: [0u8; 32],
             nonce: 0,
             curve_tree_root: [0u8; 32],
+            attestation_root: shekyl_archival_retention::empty_attestation_root(),
         };
         // Coinbase-shaped miner tx: a sole `gen` input and a `Null` ct (§2.5),
         // no outputs — so the inner per-output loop runs zero iterations and
@@ -1660,6 +1658,7 @@ mod cancel_tests {
             previous: [0u8; 32],
             nonce: 0,
             curve_tree_root: [0u8; 32],
+            attestation_root: shekyl_archival_retention::empty_attestation_root(),
         };
         let miner_tx = Transaction {
             prefix: TxPrefix {

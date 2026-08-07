@@ -110,7 +110,7 @@ impl DkgSession {
             DkgSession::AwaitingCommitments(machine) => {
                 let (next, shares) = machine
                     .generate_secret_shares(&mut OsRng, commitments)
-                    .map_err(|e| map_pedpop_error(e))?;
+                    .map_err(|e| map_pedpop_error(&e))?;
                 Ok((DkgSession::AwaitingShares(next), shares))
             }
             _ => Err(ProveError::UpstreamError(
@@ -132,7 +132,7 @@ impl DkgSession {
             DkgSession::AwaitingShares(machine) => {
                 let blame_machine = machine
                     .calculate_share(&mut OsRng, shares)
-                    .map_err(|e| map_pedpop_error(e))?;
+                    .map_err(|e| map_pedpop_error(&e))?;
                 Ok(DkgSession::AwaitingConfirmation(blame_machine))
             }
             _ => Err(ProveError::UpstreamError(
@@ -156,7 +156,7 @@ impl DkgSession {
     }
 }
 
-fn map_pedpop_error(e: PedPoPError<Ed25519T>) -> ProveError {
+fn map_pedpop_error(e: &PedPoPError<Ed25519T>) -> ProveError {
     ProveError::UpstreamError(format!("DKG PedPoP error: {e:?}"))
 }
 
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn test_key_serialization_roundtrip() {
         let keys_map = generate_test_keys(2, 3);
-        for (_participant, keys) in &keys_map {
+        for keys in keys_map.values() {
             let serialized = SerializedThresholdKeys::from_keys(keys);
             let deserialized = serialized.deserialize().unwrap();
 
@@ -299,7 +299,7 @@ mod tests {
     fn test_group_key_extraction() {
         let keys_map = generate_test_keys(2, 3);
         let mut group_keys: Vec<[u8; 32]> = Vec::new();
-        for (_, keys) in &keys_map {
+        for keys in keys_map.values() {
             group_keys.push(group_key_bytes(keys));
         }
         assert!(
@@ -393,7 +393,7 @@ mod tests {
             all_keys.push(keys);
         }
 
-        let group_keys: Vec<[u8; 32]> = all_keys.iter().map(|k| group_key_bytes(k)).collect();
+        let group_keys: Vec<[u8; 32]> = all_keys.iter().map(group_key_bytes).collect();
         assert!(
             group_keys.windows(2).all(|w| w[0] == w[1]),
             "All participants must agree on the group key"

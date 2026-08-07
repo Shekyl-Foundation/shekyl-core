@@ -92,7 +92,7 @@ existing `AtomicUnits` everywhere a raw `u64` *amount* persists or flows.
 | `shekyl-wire` transaction `fee` | `fee: u64` | the oxide `fcmp.rs` `ProofBase.fee` was deleted in the slice-1 wire extraction; the fee now lives on the genesis tx in `shekyl-wire` (see the `tx-builder wire.rs:26` row below) |
 | [`tx-builder wire.rs:26`](../../rust/shekyl-tx-builder/src/wire.rs) | `fee: u64` | |
 | economics [`burn.rs:27-29`](../../rust/shekyl-economics/src/burn.rs), [`params.rs:62`](../../rust/shekyl-economics/src/params.rs) `money_supply`, emission returns | reward/fee/supply | |
-| staking [`registry.rs:9`](../../rust/shekyl-staking/src/registry.rs) `StakeEntry.amount` | | |
+| staking [`registry.rs:9`](../../rust/shekyl-consensus/src/registry.rs) `StakeEntry.amount` | | |
 
 ## 5. PR B — Secret-material hardening (Priority 1, security; `35-secure-memory.mdc`)
 
@@ -194,7 +194,7 @@ class for free):
 `GlobalOutputIndex` / `OutputIndexInTx` adoption: `TransferDetails`
 ([`transfer.rs:89-91`](../../rust/shekyl-engine-state/src/transfer.rs)),
 scanner [`output.rs:26,54`](../../rust/shekyl-scanner/src/output.rs) /
-[`claim.rs`](../../rust/shekyl-scanner/src/claim.rs), tx-builder
+`claim.rs`, tx-builder
 [`types.rs:258`](../../rust/shekyl-tx-builder/src/types.rs),
 oxide `StakeClaim.staked_output_index`. `internal_output_index` (position
 within a tx, can be sparse) and `global_output_index` (dense, ledger-wide) are
@@ -204,7 +204,7 @@ different types — that distinction is part of the validation surface.
 
 Strong types are used at the *edges* — the C++ DB layer
 (`shekyl::db::{BlockHeight, OutputIndex, MaturityHeight, TreePosition}`,
-[`shekyl_types.h:100-122`](../../src/cryptonote_basic/shekyl_types.h)) and inside the
+`shekyl_types.h:100-122`) and inside the
 Rust curve-tree crate — while the **consensus validation path** (`blockchain.cpp`) and
 the FFI seam still run on bare `uint64_t`. The middle, where transposition is most
 catastrophic, is exactly where the types stop. Ranked by value (flagged 2026-06-25 from
@@ -263,7 +263,7 @@ crypto and less prone to the cross-domain confusion that bites the wallet path.
   upstream; the raw representation *is* the contract. Only the oxide
   application/protocol layer (transactions, blocks, ringct, rpc DTOs) is "ours
   to type."
-- **RPC/JSON DTO edges** ([engine-rpc](../../rust/shekyl-engine-rpc/src/types.rs),
+- **RPC/JSON DTO edges** ([wallet-rpc](../../rust/shekyl-wallet-rpc/src/lib.rs),
   [daemon-rpc](../../rust/shekyl-daemon-rpc/src/types.rs)): keep raw at the
   wire, convert inward — do not newtype the serde struct itself.
 - **`shekyl-encoding`, `shekyl-chacha`, `shekyl-crypto-hash`**: correctly

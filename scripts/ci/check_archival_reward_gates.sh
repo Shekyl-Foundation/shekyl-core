@@ -54,6 +54,55 @@ if NONFIXED_HITS="$(rg -n "$NONFIXED_PATTERN" "$REWARD_ARITH" | rg -v 'reward-ar
   FAIL=1
 fi
 
+# Staker-inflow accrual operand tripwire (F-B1b / F-B1c-c2, gating round
+# §9.9). The accrual block in handle_block_to_main_chain must:
+#
+#   - split verify's base_reward, with NO second get_block_reward call — a
+#     second call reintroduces the c2 operand drift (an unmodulated staker
+#     leg, re-mintable through emission claims once accrued into
+#     budget(E): an inflation surface);
+#   - take its version operand from bl.major_version, the block's own
+#     consensus-checked version — no tip-relative get_current_version()
+#     and no table-only get_ideal_version(h) reads, which respectively
+#     resurrect F-B1b's boundary off-by-one under API-convention drift and
+#     ignore the vote threshold. (The burn-vs-accrue branch this operand
+#     originally selected is deleted — emission is a genesis fact — but the
+#     version still feeds compute_emission_split/compute_fee_burn, so the
+#     operand discipline is unchanged.)
+#
+# The block is extracted by its comment anchor and its m_db->add_block
+# terminator; comment lines are stripped before the negative checks (the
+# block's own comments name the banned symbols as warnings). The positive
+# presence checks fail loudly if the anchors drift, so a refactor that
+# moves the block cannot silently retire the gate.
+BLOCKCHAIN_CPP="src/cryptonote_core/blockchain.cpp"
+ACCRUAL_BLOCK="$(awk '/Staker-inflow accrual \(ARCHIVAL_BUDGET_SCHEDULE/,/m_db->add_block\(/' "$BLOCKCHAIN_CPP")"
+ACCRUAL_CODE="$(rg -v '^\s*//' <<<"$ACCRUAL_BLOCK" || true)"
+if [[ -z "$ACCRUAL_BLOCK" ]]; then
+  echo "FAIL: staker-inflow accrual block not found in $BLOCKCHAIN_CPP" >&2
+  echo "  (if the anchors moved, update this tripwire; do not let it pass silently)" >&2
+  FAIL=1
+else
+  if rg -n 'get_block_reward' <<<"$ACCRUAL_CODE"; then
+    echo "FAIL: get_block_reward call inside the staker-inflow accrual block" >&2
+    echo "  (the split operand is verify's base_reward; a second reward computation" >&2
+    echo "   reintroduces the F-B1c-c2 operand drift — see gating round §9.9)" >&2
+    FAIL=1
+  fi
+  if rg -n 'get_current_version|get_ideal_version\(' <<<"$ACCRUAL_CODE"; then
+    echo "FAIL: tip-relative or table-only version read inside the accrual block" >&2
+    echo "  (the version operand is bl.major_version — the block's own consensus-checked" >&2
+    echo "   version; see F-B1b in gating round §9.9)" >&2
+    FAIL=1
+  fi
+  if ! rg -q 'bl\.major_version' <<<"$ACCRUAL_CODE" \
+     || ! rg -q 'compute_emission_split' <<<"$ACCRUAL_CODE"; then
+    echo "FAIL: accrual-block anchors drifted (bl.major_version / compute_emission_split" >&2
+    echo "  not found in the extracted block) — re-anchor this tripwire to the moved code" >&2
+    FAIL=1
+  fi
+fi
+
 # Mint gate: no live emission vin crediting outputs (provisional bands).
 MINT_PATTERN='reward_P|archival.*emission.*mint|mint.*archival.*reward'
 MINT_EXCLUDE='TODO|FOLLOWUP|comment'

@@ -188,21 +188,31 @@ arithmetic is owned by [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4.0.
 per-`P` delta when serve-credit state settles (re-cap one `P`, apply delta to `Σwork`) — the
 per-`P` cap is nonlinear. Reorg revert order must match the chosen path (§6).
 
-### 3.6 M1 reward gate — zero-at-top factor over §3.3/§3.5 (implemented)
+### 3.6 M1 reward gate — RETIRED (no zero-at-top factor exists)
 
-[`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md) adds the
-cold-start refusal as a consensus factor **inside** the close compute:
-for epochs where `frozen_shard_count(E) < K_COVER` (segment-table
-count, `freeze_height ≤ H_close(E)`), the stored §3.3 `R_market` and
-§3.5 `Σwork` values are **zero** — through the normal close path, never
-a skipped close (close-log/revert symmetry preserved). Readers of
-these quantities must not assume a stored zero implies an empty
-market: gated, legitimately-empty, and unclosed epochs are
-indistinguishable at the read surface (that spec's §2.1), and the
-emission leg's zero-tolerance compare inherits non-claimability from
-the stored zero. `K_COVER` is provisional (gate-identity `0`,
-compile-refused at seal time) until the WI-4 §14.4 partition run
-seals it.
+**There is no reward gate in the close compute.** The M1 `K_COVER`
+cold-start refusal was retired on 2026-07-19 (PR #346) and its
+machinery deleted; see [`ARCHIVAL_REWARD_GATE_M1.md`](../completed/ARCHIVAL_REWARD_GATE_M1.md)
+§13. No collective factor multiplies or zeroes §3.3 `R_market` or §3.5
+`Σwork`; the close compute derives them directly from member-credited
+work. Reward withholding is legitimate only as the consequence of an
+action the individual controls (slash/bad-intervals, membership onset,
+holdings shape, claim expiry, zero work).
+
+The cold-start behaviour the gate was written for is a **property of
+the work math, not a gate**: `shard_age_milli` is zero for a segment
+not yet frozen past the close height, so at genesis — where every
+shard is hot — every contribution is zero and `Σwork` is zero for
+everyone. Adding an unfrozen shard earns nothing (`bond_duration.rs`:
+"self-harm, not an attack"), which is why the ADD verify deliberately
+does not require a frozen segment.
+
+**The reader constraint survives, narrowed to two cases.** Readers of
+these quantities still must not assume a stored zero implies an empty
+market: legitimately-empty and unclosed epochs remain indistinguishable
+at the read surface (§2.1), and the emission leg's zero-tolerance
+compare still inherits non-claimability from the stored zero. Only the
+former third case — "gated" — is now impossible.
 
 ---
 
@@ -399,7 +409,7 @@ servo/emission-cadence need + privacy review — not F1 portfolio axis.
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; participation attractor |
 | [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) | Gate 4 — join-Market, bond-post wire |
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Gate 6 — `P`↔principal firewall (parallel) |
-| [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md) | M1 cold-start gate — zero-at-top factor over §3.3/§3.5 (§3.6) |
+| [`ARCHIVAL_REWARD_GATE_M1.md`](../completed/ARCHIVAL_REWARD_GATE_M1.md) | M1 cold-start gate — zero-at-top factor over §3.3/§3.5 (§3.6) |
 
 ---
 

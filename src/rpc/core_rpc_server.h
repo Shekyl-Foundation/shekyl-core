@@ -31,12 +31,13 @@
 #pragma  once 
 
 #include <memory>
+#include <vector>
 
 #include <boost/program_options/options_description.hpp>
 #include <boost/program_options/variables_map.hpp>
 
 #include "bootstrap_daemon.h"
-#include "net/http_server_impl_base.h"
+#include "net/net_utils_base.h"
 #include "net/http_client.h"
 #include "core_rpc_server_commands_defs.h"
 #include "cryptonote_core/cryptonote_core.h"
@@ -51,19 +52,20 @@ namespace cryptonote
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/
-  class core_rpc_server: public epee::http_server_impl_base<core_rpc_server>
+  class core_rpc_server
   {
   public:
+
+    //! §55: relay stem-outcome tallies as a JSON array. Admin-only at the
+    //! Rust route (`if !restricted` — unrestricted listener): this endpoint
+    //! is the anonymity graph, which Sharma Appendix B spends 50-100 probes
+    //! per node to reconstruct. Must not be registered on the restricted
+    //! (public) listener.
+    std::string stem_tallies_json() const;
 
     static const command_line::arg_descriptor<std::string, false, true, 2> arg_rpc_bind_port;
     static const command_line::arg_descriptor<std::string> arg_rpc_restricted_bind_port;
     static const command_line::arg_descriptor<bool> arg_restricted_rpc;
-    static const command_line::arg_descriptor<std::string> arg_rpc_ssl;
-    static const command_line::arg_descriptor<std::string> arg_rpc_ssl_private_key;
-    static const command_line::arg_descriptor<std::string> arg_rpc_ssl_certificate;
-    static const command_line::arg_descriptor<std::string> arg_rpc_ssl_ca_certificates;
-    static const command_line::arg_descriptor<std::vector<std::string>> arg_rpc_ssl_allowed_fingerprints;
-    static const command_line::arg_descriptor<bool> arg_rpc_ssl_allow_any_cert;
     static const command_line::arg_descriptor<std::string> arg_bootstrap_daemon_address;
     static const command_line::arg_descriptor<std::string> arg_bootstrap_daemon_login;
     static const command_line::arg_descriptor<std::string> arg_bootstrap_daemon_proxy;
@@ -85,110 +87,28 @@ namespace cryptonote
         const boost::program_options::variables_map& vm,
         const bool restricted,
         const std::string& port,
-        const std::string& proxy = {},
-        // When false, skip binding the epee HTTP listener. RPC is served by the
-        // Rust/Axum transport (see daemon.cpp), which binds the configured port
-        // itself; the epee handlers are still reachable via the direct dispatch
-        // shim in core_rpc_ffi.cpp, which never touches m_net_server's acceptor.
-        bool bind_http_listener = true
+        const std::string& proxy = {}
       );
+    //! Reported as 0 here; the live count is owned by the Rust Axum listener
+    //! (ConnTracker) and injected into get_info's rpc_connections_count there.
+    size_t get_connections_count() const { return 0; }
     network_type nettype() const { return m_core.get_nettype(); }
     // Resolved listen host for this server, valid after init(). Used by the
-    // daemon to build the Rust/Axum bind address when the epee acceptor is not
-    // bound. Empty until init() runs.
+    // daemon to build the Axum bind address. Empty until init() runs.
     const std::string& get_rpc_bind_ip() const { return m_rpc_bind_ip; }
+    const std::vector<std::string>& get_access_control_origins() const {
+      return m_access_control_origins;
+    }
+    // Connection caps parsed + cross-validated in init() (0 = unlimited).
+    // Passed to the Rust Axum listener via shekyl_daemon_rpc_start, which owns
+    // enforcement; valid after init() runs.
+    std::size_t get_rpc_max_connections() const { return m_rpc_max_connections; }
+    std::size_t get_rpc_max_connections_per_public_ip() const { return m_rpc_max_connections_per_public_ip; }
+    std::size_t get_rpc_max_connections_per_private_ip() const { return m_rpc_max_connections_per_private_ip; }
     // Core access for the Rust submit shims (daemon_submit_ffi.cpp), which
     // resolve pool/blockchain/protocol from the same handle the Axum
     // transport already holds. See DAEMON_SUBMIT_VERDICT.md §4.
     core& get_core() noexcept { return m_core; }
-
-    CHAIN_HTTP_TO_MAP2(connection_context); //forward http requests to uri map
-
-    BEGIN_URI_MAP2()
-      MAP_URI_AUTO_JON2("/get_height", on_get_height, COMMAND_RPC_GET_HEIGHT)
-      MAP_URI_AUTO_JON2("/getheight", on_get_height, COMMAND_RPC_GET_HEIGHT)
-      MAP_URI_AUTO_BIN2("/get_blocks.bin", on_get_blocks, COMMAND_RPC_GET_BLOCKS_FAST)
-      MAP_URI_AUTO_BIN2("/getblocks.bin", on_get_blocks, COMMAND_RPC_GET_BLOCKS_FAST)
-      MAP_URI_AUTO_BIN2("/get_blocks_by_height.bin", on_get_blocks_by_height, COMMAND_RPC_GET_BLOCKS_BY_HEIGHT)
-      MAP_URI_AUTO_BIN2("/getblocks_by_height.bin", on_get_blocks_by_height, COMMAND_RPC_GET_BLOCKS_BY_HEIGHT)
-      MAP_URI_AUTO_BIN2("/get_hashes.bin", on_get_hashes, COMMAND_RPC_GET_HASHES_FAST)
-      MAP_URI_AUTO_BIN2("/gethashes.bin", on_get_hashes, COMMAND_RPC_GET_HASHES_FAST)
-      MAP_URI_AUTO_BIN2("/get_o_indexes.bin", on_get_indexes, COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES)      
-      MAP_URI_AUTO_JON2("/get_transactions", on_get_transactions, COMMAND_RPC_GET_TRANSACTIONS)
-      MAP_URI_AUTO_JON2("/gettransactions", on_get_transactions, COMMAND_RPC_GET_TRANSACTIONS)
-      MAP_URI_AUTO_JON2("/get_alt_blocks_hashes", on_get_alt_blocks_hashes, COMMAND_RPC_GET_ALT_BLOCKS_HASHES)
-      MAP_URI_AUTO_JON2("/is_key_image_spent", on_is_key_image_spent, COMMAND_RPC_IS_KEY_IMAGE_SPENT)
-      MAP_URI_AUTO_JON2_IF("/start_mining", on_start_mining, COMMAND_RPC_START_MINING, !m_restricted)
-      MAP_URI_AUTO_JON2_IF("/stop_mining", on_stop_mining, COMMAND_RPC_STOP_MINING, !m_restricted)
-      MAP_URI_AUTO_JON2_IF("/mining_status", on_mining_status, COMMAND_RPC_MINING_STATUS, !m_restricted)
-      MAP_URI_AUTO_JON2_IF("/save_bc", on_save_bc, COMMAND_RPC_SAVE_BC, !m_restricted)
-      MAP_URI_AUTO_JON2_IF("/get_peer_list", on_get_peer_list, COMMAND_RPC_GET_PEER_LIST, !m_restricted)
-      MAP_URI_AUTO_JON2("/get_public_nodes", on_get_public_nodes, COMMAND_RPC_GET_PUBLIC_NODES)
-      MAP_URI_AUTO_JON2_IF("/set_log_hash_rate", on_set_log_hash_rate, COMMAND_RPC_SET_LOG_HASH_RATE, !m_restricted)
-      MAP_URI_AUTO_JON2_IF("/set_log_level", on_set_log_level, COMMAND_RPC_SET_LOG_LEVEL, !m_restricted)
-      MAP_URI_AUTO_JON2_IF("/set_log_categories", on_set_log_categories, COMMAND_RPC_SET_LOG_CATEGORIES, !m_restricted)
-      MAP_URI_AUTO_JON2("/get_transaction_pool", on_get_transaction_pool, COMMAND_RPC_GET_TRANSACTION_POOL)
-      MAP_URI_AUTO_JON2("/get_transaction_pool_hashes.bin", on_get_transaction_pool_hashes_bin, COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN)
-      MAP_URI_AUTO_JON2("/get_transaction_pool_hashes", on_get_transaction_pool_hashes, COMMAND_RPC_GET_TRANSACTION_POOL_HASHES)
-      MAP_URI_AUTO_JON2("/get_transaction_pool_stats", on_get_transaction_pool_stats, COMMAND_RPC_GET_TRANSACTION_POOL_STATS)
-      MAP_URI_AUTO_JON2_IF("/set_bootstrap_daemon", on_set_bootstrap_daemon, COMMAND_RPC_SET_BOOTSTRAP_DAEMON, !m_restricted)
-      MAP_URI_AUTO_JON2_IF("/stop_daemon", on_stop_daemon, COMMAND_RPC_STOP_DAEMON, !m_restricted)
-      MAP_URI_AUTO_JON2("/get_info", on_get_info, COMMAND_RPC_GET_INFO)
-      MAP_URI_AUTO_JON2("/getinfo", on_get_info, COMMAND_RPC_GET_INFO)
-      MAP_URI_AUTO_JON2_IF("/get_net_stats", on_get_net_stats, COMMAND_RPC_GET_NET_STATS, !m_restricted)
-      MAP_URI_AUTO_JON2("/get_limit", on_get_limit, COMMAND_RPC_GET_LIMIT)
-      MAP_URI_AUTO_JON2_IF("/set_limit", on_set_limit, COMMAND_RPC_SET_LIMIT, !m_restricted)
-      MAP_URI_AUTO_JON2_IF("/out_peers", on_out_peers, COMMAND_RPC_OUT_PEERS, !m_restricted)
-      MAP_URI_AUTO_JON2_IF("/in_peers", on_in_peers, COMMAND_RPC_IN_PEERS, !m_restricted)
-      MAP_URI_AUTO_JON2_IF("/update", on_update, COMMAND_RPC_UPDATE, !m_restricted)
-      MAP_URI_AUTO_BIN2("/get_output_distribution.bin", on_get_output_distribution_bin, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION)
-      MAP_URI_AUTO_JON2_IF("/pop_blocks", on_pop_blocks, COMMAND_RPC_POP_BLOCKS, !m_restricted)
-      BEGIN_JSON_RPC_MAP("/json_rpc")
-        MAP_JON_RPC("get_block_count",           on_getblockcount,              COMMAND_RPC_GETBLOCKCOUNT)
-        MAP_JON_RPC("getblockcount",             on_getblockcount,              COMMAND_RPC_GETBLOCKCOUNT)
-        MAP_JON_RPC_WE("on_get_block_hash",      on_getblockhash,               COMMAND_RPC_GETBLOCKHASH)
-        MAP_JON_RPC_WE("on_getblockhash",        on_getblockhash,               COMMAND_RPC_GETBLOCKHASH)
-        MAP_JON_RPC_WE("get_block_template",     on_getblocktemplate,           COMMAND_RPC_GETBLOCKTEMPLATE)
-        MAP_JON_RPC_WE("getblocktemplate",       on_getblocktemplate,           COMMAND_RPC_GETBLOCKTEMPLATE)
-        MAP_JON_RPC_WE("get_miner_data",         on_getminerdata,               COMMAND_RPC_GETMINERDATA)
-        MAP_JON_RPC_WE_IF("calc_pow",            on_calcpow,                    COMMAND_RPC_CALCPOW, !m_restricted)
-        MAP_JON_RPC_WE("add_aux_pow",            on_add_aux_pow,                COMMAND_RPC_ADD_AUX_POW)
-        MAP_JON_RPC_WE("submit_block",           on_submitblock,                COMMAND_RPC_SUBMITBLOCK)
-        MAP_JON_RPC_WE("submitblock",            on_submitblock,                COMMAND_RPC_SUBMITBLOCK)
-        MAP_JON_RPC_WE_IF("generateblocks",         on_generateblocks,             COMMAND_RPC_GENERATEBLOCKS, !m_restricted)
-        MAP_JON_RPC_WE("get_last_block_header",  on_get_last_block_header,      COMMAND_RPC_GET_LAST_BLOCK_HEADER)
-        MAP_JON_RPC_WE("getlastblockheader",     on_get_last_block_header,      COMMAND_RPC_GET_LAST_BLOCK_HEADER)
-        MAP_JON_RPC_WE("get_block_header_by_hash", on_get_block_header_by_hash,   COMMAND_RPC_GET_BLOCK_HEADER_BY_HASH)
-        MAP_JON_RPC_WE("getblockheaderbyhash",   on_get_block_header_by_hash,   COMMAND_RPC_GET_BLOCK_HEADER_BY_HASH)
-        MAP_JON_RPC_WE("get_block_header_by_height", on_get_block_header_by_height, COMMAND_RPC_GET_BLOCK_HEADER_BY_HEIGHT)
-        MAP_JON_RPC_WE("getblockheaderbyheight", on_get_block_header_by_height, COMMAND_RPC_GET_BLOCK_HEADER_BY_HEIGHT)
-        MAP_JON_RPC_WE("get_block_headers_range", on_get_block_headers_range,    COMMAND_RPC_GET_BLOCK_HEADERS_RANGE)
-        MAP_JON_RPC_WE("getblockheadersrange",   on_get_block_headers_range,    COMMAND_RPC_GET_BLOCK_HEADERS_RANGE)
-        MAP_JON_RPC_WE("get_block",              on_get_block,                 COMMAND_RPC_GET_BLOCK)
-        MAP_JON_RPC_WE("getblock",                on_get_block,                 COMMAND_RPC_GET_BLOCK)
-        MAP_JON_RPC_WE_IF("get_connections",     on_get_connections,            COMMAND_RPC_GET_CONNECTIONS, !m_restricted)
-        MAP_JON_RPC_WE("get_info",               on_get_info_json,              COMMAND_RPC_GET_INFO)
-        MAP_JON_RPC_WE("hard_fork_info",         on_hard_fork_info,             COMMAND_RPC_HARD_FORK_INFO)
-        MAP_JON_RPC_WE_IF("set_bans",            on_set_bans,                   COMMAND_RPC_SETBANS, !m_restricted)
-        MAP_JON_RPC_WE_IF("get_bans",            on_get_bans,                   COMMAND_RPC_GETBANS, !m_restricted)
-        MAP_JON_RPC_WE_IF("banned",              on_banned,                     COMMAND_RPC_BANNED, !m_restricted)
-        MAP_JON_RPC_WE_IF("flush_txpool",        on_flush_txpool,               COMMAND_RPC_FLUSH_TRANSACTION_POOL, !m_restricted)
-        MAP_JON_RPC_WE("get_output_histogram",   on_get_output_histogram,       COMMAND_RPC_GET_OUTPUT_HISTOGRAM)
-        MAP_JON_RPC_WE("get_version",            on_get_version,                COMMAND_RPC_GET_VERSION)
-        MAP_JON_RPC_WE_IF("get_coinbase_tx_sum", on_get_coinbase_tx_sum,        COMMAND_RPC_GET_COINBASE_TX_SUM, !m_restricted)
-        MAP_JON_RPC_WE("get_fee_estimate",       on_get_base_fee_estimate,      COMMAND_RPC_GET_BASE_FEE_ESTIMATE)
-        MAP_JON_RPC_WE_IF("get_alternate_chains",on_get_alternate_chains,       COMMAND_RPC_GET_ALTERNATE_CHAINS, !m_restricted)
-        MAP_JON_RPC_WE_IF("relay_tx",            on_relay_tx,                   COMMAND_RPC_RELAY_TX, !m_restricted)
-        MAP_JON_RPC_WE_IF("sync_info",           on_sync_info,                  COMMAND_RPC_SYNC_INFO, !m_restricted)
-        MAP_JON_RPC_WE("get_txpool_backlog",     on_get_txpool_backlog,         COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG)
-        MAP_JON_RPC_WE("get_output_distribution", on_get_output_distribution, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION)
-        MAP_JON_RPC_WE_IF("prune_blockchain",    on_prune_blockchain,           COMMAND_RPC_PRUNE_BLOCKCHAIN, !m_restricted)
-        MAP_JON_RPC_WE_IF("flush_cache",         on_flush_cache,                COMMAND_RPC_FLUSH_CACHE, !m_restricted)
-        MAP_JON_RPC_WE("get_curve_tree_path",       on_get_curve_tree_path,        COMMAND_RPC_GET_CURVE_TREE_PATH)
-        MAP_JON_RPC_WE("get_curve_tree_info",       on_get_curve_tree_info,        COMMAND_RPC_GET_CURVE_TREE_INFO)
-        MAP_JON_RPC_WE("get_curve_tree_checkpoint",  on_get_curve_tree_checkpoint,  COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT)
-      END_JSON_RPC_MAP()
-    END_URI_MAP2()
 
     bool on_get_height(const COMMAND_RPC_GET_HEIGHT::request& req, COMMAND_RPC_GET_HEIGHT::response& res, const connection_context *ctx = NULL);
     bool on_get_blocks(const COMMAND_RPC_GET_BLOCKS_FAST::request& req, COMMAND_RPC_GET_BLOCKS_FAST::response& res, const connection_context *ctx = NULL);
@@ -219,8 +139,6 @@ namespace cryptonote
     bool on_set_limit(const COMMAND_RPC_SET_LIMIT::request& req, COMMAND_RPC_SET_LIMIT::response& res, const connection_context *ctx = NULL);
     bool on_out_peers(const COMMAND_RPC_OUT_PEERS::request& req, COMMAND_RPC_OUT_PEERS::response& res, const connection_context *ctx = NULL);
     bool on_in_peers(const COMMAND_RPC_IN_PEERS::request& req, COMMAND_RPC_IN_PEERS::response& res, const connection_context *ctx = NULL);
-    bool on_update(const COMMAND_RPC_UPDATE::request& req, COMMAND_RPC_UPDATE::response& res, const connection_context *ctx = NULL);
-    bool on_get_output_distribution_bin(const COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::request& req, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::response& res, const connection_context *ctx = NULL);
     bool on_pop_blocks(const COMMAND_RPC_POP_BLOCKS::request& req, COMMAND_RPC_POP_BLOCKS::response& res, const connection_context *ctx = NULL);
     
     //json_rpc
@@ -232,6 +150,7 @@ namespace cryptonote
     bool on_add_aux_pow(const COMMAND_RPC_ADD_AUX_POW::request& req, COMMAND_RPC_ADD_AUX_POW::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_submitblock(const COMMAND_RPC_SUBMITBLOCK::request& req, COMMAND_RPC_SUBMITBLOCK::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_generateblocks(const COMMAND_RPC_GENERATEBLOCKS::request& req, COMMAND_RPC_GENERATEBLOCKS::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
+    bool on_inject_archival_serve_credit(const COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT::request& req, COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_last_block_header(const COMMAND_RPC_GET_LAST_BLOCK_HEADER::request& req, COMMAND_RPC_GET_LAST_BLOCK_HEADER::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_block_header_by_hash(const COMMAND_RPC_GET_BLOCK_HEADER_BY_HASH::request& req, COMMAND_RPC_GET_BLOCK_HEADER_BY_HASH::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_block_header_by_height(const COMMAND_RPC_GET_BLOCK_HEADER_BY_HEIGHT::request& req, COMMAND_RPC_GET_BLOCK_HEADER_BY_HEIGHT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
@@ -252,12 +171,12 @@ namespace cryptonote
     bool on_relay_tx(const COMMAND_RPC_RELAY_TX::request& req, COMMAND_RPC_RELAY_TX::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_sync_info(const COMMAND_RPC_SYNC_INFO::request& req, COMMAND_RPC_SYNC_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_txpool_backlog(const COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG::request& req, COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
-    bool on_get_output_distribution(const COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::request& req, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_prune_blockchain(const COMMAND_RPC_PRUNE_BLOCKCHAIN::request& req, COMMAND_RPC_PRUNE_BLOCKCHAIN::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_flush_cache(const COMMAND_RPC_FLUSH_CACHE::request& req, COMMAND_RPC_FLUSH_CACHE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_curve_tree_path(const COMMAND_RPC_GET_CURVE_TREE_PATH::request& req, COMMAND_RPC_GET_CURVE_TREE_PATH::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_curve_tree_info(const COMMAND_RPC_GET_CURVE_TREE_INFO::request& req, COMMAND_RPC_GET_CURVE_TREE_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_curve_tree_checkpoint(const COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::request& req, COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
+    bool on_get_archival_emission_claim_source(const COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::request& req, COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     //-----------------------
     bool is_restricted() const { return m_restricted; }
 
@@ -281,7 +200,7 @@ private:
     enum invoke_http_mode { JON, BIN, JON_RPC };
     template <typename COMMAND_TYPE>
     bool use_bootstrap_daemon_if_necessary(const invoke_http_mode &mode, const std::string &command_name, const typename COMMAND_TYPE::request& req, typename COMMAND_TYPE::response& res, bool &r);
-    bool get_block_template(const account_public_address &address, const crypto::hash *prev_block, const cryptonote::blobdata &extra_nonce, size_t &reserved_offset, cryptonote::difficulty_type &difficulty, uint64_t &height, uint64_t &expected_reward, block &b, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, epee::json_rpc::error &error_resp);
+    bool get_block_template(const account_public_address &address, const cryptonote::blobdata &extra_nonce, size_t &reserved_offset, cryptonote::difficulty_type &difficulty, uint64_t &height, uint64_t &expected_reward, block &b, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, epee::json_rpc::error &error_resp);
 
     core& m_core;
     nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >& m_p2p;
@@ -295,11 +214,16 @@ private:
     epee::critical_section m_host_fails_score_lock;
     std::map<std::string, uint64_t> m_host_fails_score;
     bool disable_rpc_ban;
-    // Resolved listen host for this server (the IP epee would have bound; the
-    // restricted variant resolves to its own bind IP). Recorded in init() so the
-    // Rust/Axum transport can bind the configured address even when the epee
-    // acceptor is skipped and get_binded_port()/host are unavailable.
+    // Resolved listen host for this server (restricted variant uses its own
+    // bind IP). Recorded in init() for the Axum transport bind address.
     std::string m_rpc_bind_ip;
+    // CORS allow-list from --rpc-access-control-origins (empty = deny).
+    std::vector<std::string> m_access_control_origins;
+    // Connection caps (0 = unlimited); set in init(), enforced by the Rust
+    // Axum listener.
+    std::size_t m_rpc_max_connections = 0;
+    std::size_t m_rpc_max_connections_per_public_ip = 0;
+    std::size_t m_rpc_max_connections_per_private_ip = 0;
   };
 }
 

@@ -92,7 +92,7 @@ const GLOBAL_TIMEOUT: Duration = Duration::from_secs(120);
 /// txs), so the default would reject legitimate large blocks the local posture
 /// (unbounded `read_to_end`) syncs fine. This cap sits above the largest legitimate
 /// daemon response while still bounding a runaway/malicious (posture ③) response —
-/// the reference `SimpleRequestRpc` reads unbounded because it dials only the
+/// the reference `HttpRpc` reads unbounded because it dials only the
 /// trusted local daemon; the per-`P` path may dial an untrusted node, so it keeps a
 /// (generous) explicit bound rather than ureq's too-small default.
 const MAX_RESPONSE_BODY_SIZE: u64 = 256 * 1024 * 1024;
@@ -362,6 +362,53 @@ impl PTorClient {
             .read_to_vec()
             .map_err(|_| PTransportError::Request(RequestErrorKind::Read))
     }
+
+    /// Issue **one** synchronous `GET` over `P`'s circuit and return the response
+    /// body.
+    ///
+    /// The read-side twin of [`Self::blocking_post`], added for the SP-T3 shard
+    /// read (a fetch is a GET, and `blocking_post` was the crate's only request
+    /// method). It shares the *same agent* — constructed once in
+    /// [`Self::for_persona`] with the SOCKS proxy, bounded timeouts,
+    /// `max_redirects(0)` and `http_status_as_error(false)` — so §2b invariant 1
+    /// still holds: the safe construction remains the only construction, and this
+    /// method adds no second way to configure a request.
+    ///
+    /// Every invariant `blocking_post` carries is carried here, and none of them
+    /// are re-derived locally:
+    ///
+    /// - **(a) username-free errors.** The `ureq` error is discarded rather than
+    ///   wrapped, because its rendering can echo the proxy URI, which embeds the
+    ///   per-`P` SOCKS username. Failures surface as the coarse
+    ///   [`RequestErrorKind`] only.
+    /// - **bounded timeouts** and **no redirects** come from the shared agent
+    ///   config, not from anything set here — a 3xx surfaces as `Http(3xx)`
+    ///   instead of being followed onto an attacker-chosen `Location` over `P`'s
+    ///   circuit.
+    /// - **explicit body cap** at `MAX_RESPONSE_BODY_SIZE`, above the largest
+    ///   legitimate response but bounding a hostile one.
+    /// - **no logging** of the username, the target, or the timing.
+    ///
+    /// The agent itself stays unexposed for ad-hoc use: [`Self::agent`] exists for
+    /// the SP-T2 fetch impl, and this method deliberately does not widen that
+    /// surface by taking caller-supplied headers or a body.
+    pub fn blocking_get(&self, url: &str) -> Result<Vec<u8>, PTransportError> {
+        let response = self
+            .agent
+            .get(url)
+            .call()
+            .map_err(|_| PTransportError::Request(RequestErrorKind::Transport))?;
+        let status = response.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(PTransportError::Request(RequestErrorKind::Http(status)));
+        }
+        response
+            .into_body()
+            .into_with_config()
+            .limit(MAX_RESPONSE_BODY_SIZE)
+            .read_to_vec()
+            .map_err(|_| PTransportError::Request(RequestErrorKind::Read))
+    }
 }
 
 #[cfg(test)]
@@ -483,6 +530,57 @@ mod tests {
             !proxy.resolve_target(),
             "per-P transport must resolve the target at the proxy (Tor), never locally — \
              a local resolve leaks the persona's target to the OS resolver and breaks .onion"
+        );
+    }
+
+    #[test]
+    fn blocking_get_maps_a_dead_proxy_to_a_username_free_transport_error() {
+        // The read-side twin of the POST case below, asserted independently
+        // rather than assumed to inherit: a new request method is a new place
+        // invariant (a) can be broken, and "it uses the same agent" is exactly
+        // the reasoning that would stop anyone from checking.
+        let client = PTorClient::for_persona(&pid(11), &TorSocksEndpoint::loopback(1))
+            .expect("proxy config is well-formed");
+        let err = client
+            .blocking_get("http://127.0.0.1:18081/x-spike/v0/shard/0")
+            .expect_err("a dead SOCKS proxy must fail the request");
+        assert!(
+            matches!(err, PTransportError::Request(RequestErrorKind::Transport)),
+            "expected a Transport error, got {err:?}"
+        );
+        assert!(
+            !format!("{err}").contains(client.username().as_str()),
+            "invariant (a): a request error must never render the SOCKS username"
+        );
+        assert!(
+            !format!("{err:?}").contains(client.username().as_str()),
+            "invariant (a) holds for Debug too, not only Display"
+        );
+    }
+
+    #[test]
+    fn blocking_get_rides_the_same_isolated_agent() {
+        // The GET must not have introduced a second agent (or a second proxy
+        // config) alongside `blocking_post`'s: §2b invariant 1 is that the safe
+        // construction is the *only* construction, which a per-method agent would
+        // quietly break.
+        let id = pid(12);
+        let client = PTorClient::for_persona(&id, &TorSocksEndpoint::loopback(9050))
+            .expect("proxy config is well-formed");
+        let proxy = client
+            .agent()
+            .config()
+            .proxy()
+            .expect("a per-P client always carries a SOCKS proxy");
+        assert!(
+            !proxy.resolve_target(),
+            "target resolves at Tor, never locally"
+        );
+        assert_eq!(client.username(), &derive_socks_user(&id));
+        assert_eq!(
+            client.agent().config().max_redirects(),
+            0,
+            "no-redirect is inherited by every request method, GET included"
         );
     }
 

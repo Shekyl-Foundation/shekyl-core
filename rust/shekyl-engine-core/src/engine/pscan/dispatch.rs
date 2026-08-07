@@ -112,10 +112,6 @@ impl<S: PendingSealStore> PendingPostStore<S> {
     /// Read the current block under the lock (a serialized snapshot; no
     /// seal write). The WI-2 assemble path reads the derived reservation
     /// set ([`PendingPostBlock::reserved_gindexes`]) through this.
-    // Transient — the consumer is the WI-2 Engine-side assemble orchestrator
-    // (WI-2's remaining slice, out of WI-3 scope per the design doc §1), which
-    // reads reservations through this shared handle.
-    #[allow(dead_code)]
     pub(crate) async fn read<R>(
         &self,
         f: impl FnOnce(&PendingPostBlock) -> R,
@@ -397,9 +393,10 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
     }
 
     /// Replace the GF-7 observer (sim wiring only; hooks-spec §4).
-    // In-crate callers are the gate-8 test today; the production-shaped
-    // consumer is WI-4's sealing re-run wiring against the live driver
-    // (design doc §5 reconvergence gate (b)).
+    // In-crate callers: the gate-8 test and the WI-4 §19.8.1 sealing-run
+    // seam (`spawn_pscan`'s injection arm). Both are `cfg(test)`-gated, so
+    // a feature-on **non-test** build still sees no caller — the
+    // `dead_code` allow covers exactly that build shape.
     #[cfg(feature = "gf7-hooks")]
     #[allow(dead_code)]
     pub(crate) fn set_observer(&mut self, observer: Box<dyn BroadcastTimelineObserver>) {
@@ -578,7 +575,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         // discipline: no wall-clock, no txid, no identity).
         #[cfg(feature = "gf7-hooks")]
         self.observer.record(TimelineEvent::BondPostDispatched {
-            persona: u64::from(post.p_slot),
+            persona: u64::from(post.p_slot.to_raw()),
             at: tip.to_raw(),
         });
 
@@ -678,9 +675,10 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
-    use shekyl_types::TxHash;
+    use shekyl_types::{PSlot, TxHash};
 
     use super::*;
+    use crate::engine::transaction_submitter::BroadcastKind;
 
     /// One scripted submit verdict (the `BondBroadcast` return shape).
     type Verdict = Result<SubmitSuccess, BroadcastSubmitError>;
@@ -755,6 +753,7 @@ mod tests {
                 .pop_front()
                 .unwrap_or(Ok(SubmitSuccess::Broadcast {
                     hash: TxHash::from_bytes([0u8; 32]),
+                    kind: BroadcastKind::Accepted,
                 }))
         }
     }
@@ -765,13 +764,16 @@ mod tests {
 
     fn post(persona_byte: u8, anchor: u64, offset: u64, gindexes: &[u64]) -> PendingBondPost {
         PendingBondPost {
-            p_slot: u32::from(persona_byte),
+            p_slot: PSlot::from_raw(u32::from(persona_byte)),
             persona: persona(persona_byte),
             tx_bytes: vec![persona_byte, 0xBE, 0xEF],
-            entry_offset_blocks: 3,
             bond_post_offset_blocks: offset,
             anchor_t0: BlockHeight::from_raw(anchor),
-            funding_gindexes: gindexes.to_vec(),
+            funding_gindexes: gindexes
+                .iter()
+                .copied()
+                .map(shekyl_types::GlobalOutputIndex::from_raw)
+                .collect(),
             state: PendingPostState::Pending,
         }
     }
@@ -823,6 +825,7 @@ mod tests {
     fn accepted() -> Verdict {
         Ok(SubmitSuccess::Broadcast {
             hash: TxHash::from_bytes([1u8; 32]),
+            kind: BroadcastKind::Accepted,
         })
     }
 
@@ -1138,7 +1141,7 @@ mod tests {
         assert_eq!(block.posts().len(), 1, "the record is held, not removed");
         assert_eq!(
             block.reserved_gindexes(),
-            [7u64].into(),
+            [shekyl_types::GlobalOutputIndex::from_raw(7)].into(),
             "the funding reservation stays intact (funds-safety over liveness)"
         );
     }

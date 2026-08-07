@@ -2445,11 +2445,11 @@ preserved for design-intent context.
   and `hex(difficulty_type)` functions).
 - [`src/cryptonote_basic/difficulty.h`](../../src/cryptonote_basic/difficulty.h)
   (the public header for the above).
-- [`tests/difficulty/difficulty.cpp`](../../tests/difficulty/difficulty.cpp)
+- [`tests/difficulty/difficulty.cpp`](../../tests/unit_tests/difficulty.cpp)
   and [`tests/difficulty/`](../../tests/difficulty/) test harness
   data files — replaced by `shekyl-difficulty/tests/` and the
   cross-check harness in §8.2.
-- [`tests/difficulty/gen_wide_data.py`](../../tests/difficulty/gen_wide_data.py)
+- `tests/difficulty/gen_wide_data.py`
   and `tests/difficulty/generate-data` (test-vector generation for
   the inherited algorithm).
 

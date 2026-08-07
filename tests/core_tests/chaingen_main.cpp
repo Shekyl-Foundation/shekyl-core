@@ -104,7 +104,7 @@ int main(int argc, char* argv[])
   else if (command_line::get_arg(vm, arg_generate_and_play_test_data) || (list_tests = command_line::get_arg(vm, arg_list_tests)))
   {
     // Disabled: these tests construct valid user transactions via MAKE_TX /
-    // construct_tx_rct, which now produces RCTTypeFcmpPlusPlusPqc stubs with
+    // construct_tx_rct, which now produces CTTypeFcmpPlusPlusPqc stubs with
     // empty pqc_auths. check_tx_inputs rejects them even in FAKECHAIN.
     // Re-enable once chaingen can construct full FCMP++ transactions with
     // valid PQC auth signatures and curve-tree membership proofs.
@@ -112,6 +112,7 @@ int main(int argc, char* argv[])
     // GENERATE_AND_PLAY(gen_simple_chain_split_1);
     GENERATE_AND_PLAY(one_block);
     GENERATE_AND_PLAY(economics_c2a_prime_layer3_pop_replay);
+    GENERATE_AND_PLAY(archival_budget_conservation_boundary);
     // GENERATE_AND_PLAY(gen_chain_switch_1);
     // Block verification tests
     GENERATE_AND_PLAY(gen_block_big_major_version);
@@ -120,6 +121,7 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_ts_in_past);
     GENERATE_AND_PLAY(gen_block_ts_in_future);
     GENERATE_AND_PLAY(gen_block_invalid_prev_id);
+    GENERATE_AND_PLAY(gen_block_invalid_attestation_root);
     GENERATE_AND_PLAY(gen_block_no_miner_tx);
     GENERATE_AND_PLAY(gen_block_unlock_time_is_low);
     GENERATE_AND_PLAY(gen_block_unlock_time_is_high);

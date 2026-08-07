@@ -1,6 +1,6 @@
 # Shekyl v3 Rollout (HF1)
 
-> **Last updated:** 2026-04-03
+> **Last updated:** 2026-07-15
 
 ## Scope
 
@@ -17,11 +17,15 @@ on Shekyl NG.
 
 ## Transaction Size Impact
 
-Measured canonical component sizes:
+Measured canonical component sizes (oracle:
+`shekyl-engine-core` `tx_fee_model::pqc_auth_weight`):
 
 - `HybridPublicKey`: `1996` bytes
 - `HybridSignature`: `3385` bytes
-- `pqc_auth` body contribution (single-signer, per input): `5385` bytes (`4` byte header + key + signature)
+- `pqc_auth` body contribution (single-signer, per input): **`5389`**
+  bytes — `auth_version` + `scheme_id` + `flags(u16)` +
+  `varint(pk_len)‖pk` + `varint(sig_len)‖sig`
+  (`1+1+2 + 2+1996 + 2+3385`)
 - FCMP++ membership proof: ~3-4 KB per input
 - ML-KEM ciphertext (per output): `1088` bytes (stored in `tx_extra` tag `0x06`)
 
@@ -38,15 +42,25 @@ Classical Monero-style multisig (secret-splitting) is removed from the
 rebooted chain. All multisig uses PQC-only authorization via `scheme_id = 2`.
 See `docs/PQC_MULTISIG.md` for full specification.
 
-Multisig transactions carry N public keys and M signatures. Consensus cap:
-`MAX_MULTISIG_PARTICIPANTS = 7`. Per-configuration overhead:
+Multisig transactions carry N public keys and M signatures. **Target**
+consensus cap (MSW-G, decided 2026-07-15):
+`MAX_MULTISIG_PARTICIPANTS = 5` (2f+1 at f=2 — largest group served;
+see `PQC_MULTISIG.md` §5). **Not yet live** — code still uses `= 7`
+until MSW-1. Size table below is sized to the target cap. Auth is ~⅓
+of a solo tx; whole-tx weights (1-in/2-out, depth 12, measured FCMP
+proof) dominate:
 
-| Configuration | Auth overhead | vs single-signer |
-|---|---|---|
-| 2-of-3 | ~12,769 bytes | +7,384 (~2.4x) |
-| 3-of-5 | ~20,153 bytes | +14,768 (~3.7x) |
-| 5-of-7 (typical max) | ~30,921 bytes | +25,536 (~5.7x) |
-| 7-of-7 (worst case) | ~37,680 bytes | +32,295 (~7.0x) |
+| Configuration | Approx tx total | vs 1 solo | vs N solos |
+|---|---|---|---|
+| solo | ~15.6 KB | 1.0× | — |
+| 3-of-3 | ~26.5 KB | ~1.7× | **~0.57×** (26.5 / (3×15.6)) |
+| 5-of-5 | ~37.3 KB | ~2.4× | **~0.48×** (37.3 / (5×15.6)) |
+
+A 5-of-5 spend is ~2.4× one solo and **well under** five separate
+solos — it amortizes FCMP++/Bp+/KEM/prefix fixed costs. Do **not**
+read auth-overhead "×N vs single-signer" as whole-tx cost.
+(Do **not** reuse figures from a former "vs 7 solos" column under a
+relabeled "vs N solos" header.)
 
 Multisig usage is expected to be well under 1% of transaction volume.
 Aggregate chain growth impact is negligible.
@@ -56,6 +70,9 @@ Practical effect:
 - larger mempool footprint
 - higher relay bandwidth usage
 - larger RPC transaction payloads
+- file-based at N≥3 after MSW-8 (~5.8k chars); N=2 QR-able; §15.3
+  registry is an optimization, not a ship prerequisite
+  (`PQC_MULTISIG.md` §15.3)
 
 ## Wallet Migration Notes
 
@@ -69,30 +86,38 @@ Practical effect:
   not carried forward to the rebooted chain. The `make_multisig` code path,
   MMS transport, and classical multisig wallet state are deleted. All
   multisig uses PQC-only authorization (`scheme_id = 2`).
-- **Multisig wallets:** Each participant generates their own hybrid keypair.
-  The FCMP++ layer uses a single classical key (coordinator-held).
-  M-of-N authorization lives in the `pqc_auth` layer. Signing coordination
-  uses file-based export/import of payload and signature blobs. See
-  `docs/PQC_MULTISIG.md` for full specification.
-- **Staking with multisig:** Multisig staked outputs and claim transactions
-  are supported with `scheme_id = 2`. This is the recommended configuration
-  for long-duration (150,000 block) staking positions with significant value.
-  Note: GUI staking integration depends on the Tauri↔wallet2 FFI bridge
-  being completed for single-signer staking first.
+- **Multisig wallets:** Product path is **Option E′**
+  (`PQC_MULTISIG.md` §15.4a / design §0.5): dealer-mode, group-plaintext
+  `b` (local balance/KI), FROST M-of-N on `y` with per-output tweak,
+  `spend_auth_version = 0x02` (`0x01` never issued). Address after
+  **MSW-8** is KEM-only per participant (+ E′ `B`/`Y`). **Not** fixed
+  group-aggregate PQC key (Option A rejected 2026-04-04) and **not**
+  mandatory-prover Option D. Signing coordination uses file-based
+  export/import of payload and signature blobs.
+- **Staking / archival bonds with multisig:** Funding inputs may use
+  `scheme_id = 2` while the bond vin authorizes with scheme-1 P
+  (`bond_spend_pk` remains a single hybrid key — pseudonym uniformity).
+  That requires relaxing tx-wide scheme agreement (**MSW-6**); archival
+  core never sees funding `pqc_auths`. Multisig is **not** "the
+  recommended configuration" for long-duration positions by default —
+  it is an optional custody shape once MSW-6 lands.
 
 ## Payload Limit Guidance
 
 Operators and indexers must accommodate the increased per-transaction size:
 
-- **Minimum recommended mempool tx limit:** The ~5,385 byte `pqc_auth` figure
-  is per-input, not per-transaction. With 2 inputs, that is ~10.8 KB of
-  pqc_auth alone, plus ~3-4 KB per input for FCMP++ proofs and ~1 KB per
-  output for ML-KEM ciphertexts. Budget at least 25 KB above current median
-  user tx size.
-- **Multisig headroom:** the consensus cap `MAX_MULTISIG_PARTICIPANTS = 7`
-  bounds the worst-case `pqc_auth` overhead to ~37 KB (7-of-7). Typical
-  configurations (2-of-3, 3-of-5) are well under this. Operators should not
-  reject transactions solely based on pre-PQC size assumptions.
+- **Minimum recommended mempool tx limit:** The **`5389`**-byte
+  `pqc_auth` figure (`pqc_auth_weight()`) is per-input, not
+  per-transaction. With 2 inputs, that is ~10.8 KB of pqc_auth alone,
+  plus ~3-4 KB per input for FCMP++ proofs and ~1 KB per output for
+  ML-KEM ciphertexts. Budget at least 25 KB above current median user
+  tx size.
+- **Multisig headroom:** the **target** cap
+  `MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G; code still `= 7` until
+  MSW-1) bounds planned worst-case `pqc_auth` overhead to **~27 KB**
+  (5-of-5). Typical configurations (2-of-3, 3-of-5) are well under
+  this. Operators should not reject transactions solely based on
+  pre-PQC size assumptions.
 - **RPC consumers:** adjust any hardcoded maximum payload buffers to at
   least 150 KB per transaction (typical 2-input/2-output tx + PQC auth).
   For multisig, budget up to 200 KB.
@@ -112,4 +137,5 @@ Operators and indexers must accommodate the increased per-transaction size:
 - Verify that transaction validation correctly handles both `scheme_id = 1`
   (single-signer) and `scheme_id = 2` (multisig signature list).
 - Test multisig transaction relay and mempool acceptance at realistic sizes
-  (2-of-3 through 5-of-7 configurations).
+  (2-of-2 through **5-of-5** — configurations with `n_total > 5` are
+  consensus-invalid under MSW-G).

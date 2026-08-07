@@ -27,6 +27,8 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
+#include <unordered_map>
 
 #include "blockchain_db/blockchain_db.h"
 #include "cryptonote_basic/blobdatatype.h" // for type blobdata
@@ -181,6 +183,10 @@ struct mdb_txn_safe
 };
 
 
+// ArchivalEmissionEpochSnapshot (the as-of-E gather's value type) lives on
+// the BlockchainDB interface (blockchain_db.h) since the C-1 verify shim
+// fixed the interface-level signature.
+
 // If m_batch_active is set, a batch transaction exists beyond this class, such
 // as a batch import with verification enabled, or possibly (later) a batch
 // network sync.
@@ -333,6 +339,8 @@ public:
                             , uint64_t long_term_block_weight
                             , const difficulty_type& cumulative_difficulty
                             , const uint64_t& coins_generated
+                            , uint64_t archival_budget_accrual
+                            , const blobdata& attestation_witness
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 
@@ -441,10 +449,15 @@ private:
   virtual void add_block_burn(uint64_t height, uint64_t amount) override;
   virtual uint64_t get_block_burn(uint64_t height) const override;
   virtual void remove_block_burn(uint64_t height) override;
+  virtual void add_archival_budget_accrual(uint64_t height, uint64_t amount) override;
+  virtual uint64_t get_archival_budget_accrual(uint64_t height) const override;
+  virtual void remove_archival_budget_accrual(uint64_t height) override;
   virtual void set_total_bonded_atomic(uint64_t balance) override;
   virtual uint64_t get_total_bonded_atomic() const override;
   virtual void set_total_burned(uint64_t amount) override;
   virtual uint64_t get_total_burned() const override;
+  virtual void set_settlement_epoch_blocks_pin(uint64_t blocks) override;
+  virtual uint64_t get_settlement_epoch_blocks_pin() const override;
 
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch) const override;
@@ -466,7 +479,8 @@ private:
     crypto::hash& out_rk, uint64_t& out_leaf_count) const override;
 
   virtual void put_archival_bond_record(const crypto::hash& p_id,
-    const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
+    const std::vector<uint8_t>& hybrid_pubkey,
+    const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
     uint64_t bonded_total_atomic, uint8_t holdings_kind,
     const std::vector<uint64_t>& held_shard_ids,
     const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals) override;
@@ -478,6 +492,68 @@ private:
 
   virtual void process_archival_slash_at_height(uint64_t block_height) override;
   virtual void revert_archival_slashes_at_height(uint64_t block_height) override;
+  virtual void apply_archival_emission_claim(uint64_t block_height, const crypto::hash& p_id,
+    const std::vector<uint64_t>& settlement_epochs) override;
+  virtual void revert_archival_emission_claims_at_height(uint64_t block_height) override;
+  virtual void apply_archival_unbond(uint64_t block_height, const crypto::hash& p_id,
+    uint64_t vin_bond_debit) override;
+  virtual void revert_archival_unbonds_at_height(uint64_t block_height) override;
+  virtual void apply_archival_holdings_update_add(uint64_t block_height, const crypto::hash& p_id,
+    const std::vector<uint64_t>& post_shard_ids) override;
+  virtual void apply_archival_holdings_update_drop(uint64_t block_height, const crypto::hash& p_id,
+    const std::vector<uint64_t>& post_shard_ids) override;
+  /// The kind-specific fold outputs consumed by the shared bond-record
+  /// connect-writer scaffold: the counter movement, the add-epoch overrides
+  /// for the rebuilt index-parallel `shard_add_epochs` (empty = every POST
+  /// shard is carried), and the optional in-place interval close (Rebond).
+  struct BondRecordFoldOuts
+  {
+    uint64_t new_bonded_total = 0;
+    uint64_t new_total_bonded = 0;
+    std::vector<uint64_t> override_shard_ids;
+    uint64_t override_add_epoch = 0;
+    bool has_interval_close = false;
+    uint64_t closed_interval_index = 0;
+    uint64_t interval_end_exclusive = 0;
+  };
+  using bond_record_fold_t = std::function<uint8_t(
+    const shekyl::db::ArchivalBondValue& bond, uint64_t total_bonded,
+    BondRecordFoldOuts& outs)>;
+  /// Pre-image facts the scaffold captures before any mutation, handed to the
+  /// kind's journal writer (`closed_interval_start` is meaningful iff the fold
+  /// set `has_interval_close`).
+  struct BondRecordPreImage
+  {
+    uint64_t pre_bonded_total = 0;
+    std::vector<uint64_t> pre_shard_ids;
+    std::vector<uint64_t> pre_shard_add_epochs;
+    uint64_t closed_interval_start = 0;
+  };
+  using bond_record_journal_t = std::function<void(
+    const BondRecordPreImage& pre, const BondRecordFoldOuts& outs)>;
+  /// Shared connect-writer scaffold for every POST-holdings bond-record
+  /// mutation (HoldingsUpdate add/drop, Rebond): txn guard, record load + v6
+  /// desync check, pre-image capture, live counter read, fold, optional
+  /// in-place interval close, coupled-array rebuild, record/counter writes,
+  /// then the kind's journal append (same atomic txn). Single-sourced so a
+  /// journal/ordering/invariant change cannot land on one bond-post kind and
+  /// silently miss another — the kinds must stay reorg-twinned with their pops.
+  void apply_archival_bond_record_update(uint64_t block_height, const crypto::hash& p_id,
+    const std::vector<uint64_t>& post_shard_ids, const char* arm,
+    const bond_record_fold_t& fold, const bond_record_journal_t& journal);
+  /// The HoldingsUpdate add/drop journal writer (one row type, one pop) —
+  /// passed to the scaffold by both directions.
+  void put_archival_holdings_update_journal(uint64_t block_height,
+    const crypto::hash& p_id, const BondRecordPreImage& pre);
+  virtual void revert_archival_holdings_updates_at_height(uint64_t block_height) override;
+  virtual void apply_archival_rebond(uint64_t block_height, const crypto::hash& p_id,
+    const std::vector<uint64_t>& post_shard_ids) override;
+  virtual void revert_archival_rebonds_at_height(uint64_t block_height) override;
+  virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const override;
+  virtual std::vector<uint64_t> archival_bond_last_served_epochs(const crypto::hash& p_id,
+    const std::vector<uint64_t>& shard_ids) const override;
+  virtual std::vector<uint64_t> archival_bond_all_last_served_epochs(
+    const crypto::hash& p_id) const override;
   virtual void process_archival_segment_freezes_at_height(uint64_t block_height) override;
   virtual void revert_archival_segment_freezes() override;
   virtual void process_archival_epoch_close_at_height(uint64_t block_height) override;
@@ -485,6 +561,7 @@ private:
   virtual uint64_t get_archival_r_market(uint64_t shard_id,
     uint64_t settlement_epoch) const override;
   virtual uint64_t get_archival_sigma_work_milli(uint64_t settlement_epoch) const override;
+  virtual uint64_t get_archival_budget(uint64_t settlement_epoch) const override;
 
   // Deferred tree leaf insertion (universal: all outputs go through pending)
   virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight maturity, shekyl::db::OutputIndex output, const uint8_t* leaf_data) override;
@@ -520,6 +597,13 @@ private:
   virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t block_height) const override;
   virtual void remove_curve_tree_root_at_height(uint64_t block_height) override;
 
+  virtual void store_archival_attestation_witness_at_height(uint64_t block_height, const blobdata& witness) override;
+  virtual blobdata get_archival_attestation_witness_at_height(uint64_t block_height) const override;
+  virtual void remove_archival_attestation_witness_at_height(uint64_t block_height) override;
+  virtual void store_archival_alt_attestation_witness(const crypto::hash& blkid, const blobdata& witness) override;
+  virtual blobdata get_archival_alt_attestation_witness(const crypto::hash& blkid) const override;
+  virtual void remove_archival_alt_attestation_witness(const crypto::hash& blkid) override;
+
   virtual void save_curve_tree_checkpoint(uint64_t block_height) override;
   virtual bool get_curve_tree_checkpoint(uint64_t block_height, std::vector<uint8_t>& checkpoint_data) const override;
   virtual uint64_t get_latest_curve_tree_checkpoint_height() const override;
@@ -549,7 +633,11 @@ private:
   bool load_archival_bond_value(const crypto::hash& p_id,
     shekyl::db::ArchivalBondValue& out) const;
 
-  uint64_t get_archival_last_slash_epoch() const;
+  // Overrides the BlockchainDB virtual (Unbond release verify marshals it as
+  // the slash-settled watermark); also called internally by the slash
+  // scheduler. Private override — reached via the base pointer from
+  // Blockchain, and as a member here.
+  uint64_t get_archival_last_slash_epoch() const override;
   void set_archival_last_slash_epoch(uint64_t settlement_epoch);
   bool has_archival_slash_applied(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch) const;
@@ -559,9 +647,44 @@ private:
     uint64_t settlement_epoch);
   void append_archival_slash_log(uint64_t block_height, uint32_t seq,
     const shekyl::db::ArchivalSlashRevertValue& entry);
+  /// True when a logged slash at a height strictly above `at_height` removed
+  /// `shard_id` from `p_id`'s holdings (compact erase of that shard, or a
+  /// complete-tree demotion, whose pre-image held every shard). Backs
+  /// archival_bond_holds_shard's as-of-height reconstruction (WS-1).
+  bool archival_slash_removed_holding_after(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t at_height) const;
+  /// archival_bond_holds_shard's as-of-height reconstruction over an ALREADY
+  /// DECODED record — for callers holding the value (the slash scan's cursor
+  /// walk, the failure-window look-back) so they do not pay a re-load and
+  /// re-decode per query.
+  bool archival_bond_holds_shard_of(const crypto::hash& p_id,
+    const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id, uint64_t at_height) const;
+  /// Call-scoped memo of per-settlement-epoch challenge seal-block hashes, keyed
+  /// by seal-block HEIGHT. The seal hash a baseline observation derives from is a
+  /// function of the epoch (via H_open), not the shard, so a single instance
+  /// shared across a whole process_archival_slash_for_epoch scan lets every
+  /// record's shards reuse the handful of seal-block reads instead of each
+  /// re-fetching them. Memoizing is exactly behaviour-preserving: a committed
+  /// height's block hash is immutable within the scan's write txn, so a null
+  /// cache (direct callers) evaluates identically, just without the reuse.
+  using ArchivalSealHashCache = std::unordered_map<uint64_t, crypto::hash>;
+  /// Was a baseline challenge POSED to (p_id, shard_id) at this settlement
+  /// epoch, and has its outcome resolved? The observability predicate the
+  /// sliding-window failure confirmation counts over — a bonded-but-untested
+  /// epoch is not an observation and can never be counted as a miss
+  /// (ARCHIVAL_FAILURE_CONFIRMATION_PIN.md §1). `seal_cache`, when non-null,
+  /// memoizes the epoch's seal-block hash across the caller's shard loop.
+  bool archival_baseline_observed_at_epoch(uint64_t block_height, const crypto::hash& p_id,
+    const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
+    uint64_t settlement_epoch, ArchivalSealHashCache* seal_cache = nullptr) const;
+  /// Gather this (P, shard)'s trailing observation window and ask Rust whether
+  /// it is a slashable m-of-n failure. Reads LMDB; decides nothing.
+  bool archival_failure_window_slashable(uint64_t block_height, const crypto::hash& p_id,
+    const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
+    uint64_t settlement_epoch, ArchivalSealHashCache* seal_cache = nullptr) const;
   bool archival_challenge_failed_at_height(uint64_t block_height, const crypto::hash& p_id,
     const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
-    uint64_t settlement_epoch) const;
+    uint64_t settlement_epoch, ArchivalSealHashCache* seal_cache = nullptr) const;
 
 public:
   // Single-slash load-modify-store helper. Production caller is the private
@@ -571,15 +694,59 @@ public:
   void apply_archival_slash_one(uint64_t block_height, uint32_t& seq, const crypto::hash& p_id,
     uint64_t shard_id, uint64_t settlement_epoch, uint64_t slashed_amount);
 
+  /// As-of-E consensus snapshot gather — see the BlockchainDB base
+  /// declaration (blockchain_db.h) for the soundness argument and the
+  /// caller contract. Delegates to the windowed form with a width-1 window.
+  virtual void gather_archival_emission_epoch_snapshot(const crypto::hash& p_id,
+    uint64_t settlement_epoch, ArchivalEmissionEpochSnapshot& out) const override;
+
+  /// Windowed snapshot gather: one snapshot per epoch in
+  /// `[epoch_lo, epoch_hi)`, all rows collected in a SINGLE serve-credit
+  /// table pass (the epoch is the key suffix, so a per-epoch range seek is
+  /// impossible — the windowed pass is what bounds the unauthenticated
+  /// claim-source RPC to one scan per request instead of one per window
+  /// epoch).
+  virtual void gather_archival_emission_window_snapshots(const crypto::hash& p_id,
+    uint64_t epoch_lo, uint64_t epoch_hi,
+    std::vector<ArchivalEmissionEpochSnapshot>& out) const override;
+
+  // Height-based prune of the attestation-witness side table at the retention
+  // horizon (ARCHIVAL_CREDIT_WIRE.md §3.2/§4). Public so the DB-level test can
+  // assert the prune's own key derivation directly; called internally from
+  // prune_archival_epochs_before.
+  void delete_archival_attestation_witness_before_height(uint64_t prune_below_height);
+
+  // Retention-horizon prune across every epoch-scoped archival table. Public for
+  // the same reason as the helper above, and one more: this is where the accrual
+  // table (keyed at the block index) and the witness table (keyed at index + 1)
+  // are pruned from a single epoch-open height, so it is the only place the
+  // boundary between their two key spaces is observable.
+  void prune_archival_epochs_before(uint64_t prune_below_epoch);
+
 private:
+  /// Single gather routine over the serve-credit rows for `settlement_epoch`
+  /// (WS-1 §5.5 single sourcing, C++ side): the epoch close and the emission
+  /// snapshot both call this, so the two consumers of the as-of-E gather
+  /// cannot diverge on row selection. `p_id` (optional) sets
+  /// `out.claimant_bond_idx` to that bond's gather index. Width-1 delegate
+  /// to the windowed routine below.
+  void gather_archival_epoch_rows(uint64_t settlement_epoch, const crypto::hash* p_id,
+    ArchivalEmissionEpochSnapshot& out) const;
+  /// The one row-selection routine (WS-1 §5.5): fills `outs[e - epoch_lo]`
+  /// for every `e` in `[epoch_lo, epoch_hi)` from one cursor pass. `outs`
+  /// must point at `epoch_hi - epoch_lo` snapshots.
+  void gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64_t epoch_hi,
+    const crypto::hash* p_id, ArchivalEmissionEpochSnapshot* outs) const;
   void process_archival_slash_for_epoch(uint64_t block_height, uint64_t settlement_epoch,
     uint32_t& seq);
-  void prune_archival_epochs_before(uint64_t prune_below_epoch);
   void delete_archival_r_market_for_epoch(uint64_t settlement_epoch);
   void delete_archival_r_market_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);
   void delete_archival_sigma_work_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch);
+  void delete_archival_budget_for_epoch(uint64_t settlement_epoch);
+  void delete_archival_budget_before_epoch(uint64_t prune_below_epoch);
+  void delete_archival_budget_accrual_before_height(uint64_t prune_below_height);
   /** M1 reward-gate operand (ARCHIVAL_REWARD_GATE_M1.md §1.1): the single
    * counting read over m_archival_shard_segment, O(1) via the persisted
    * pop-symmetric counter (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4) plus
@@ -608,6 +775,14 @@ public:
    * reader; recorded in the spec's §11.6 R2-2 stored-close reader
    * enumeration. */
   bool has_archival_sigma_work_row(uint64_t settlement_epoch) const;
+  /** Stored-shape probe for the frozen budget row
+   * (ARCHIVAL_BUDGET_SCHEDULE.md §3.3): distinguishes a present-and-zero
+   * `archival_budget` row (closed zero-budget epoch — claimable-shaped but
+   * structurally rejected at wire positivity) from MDB_NOTFOUND (never
+   * closed / pruned — gather failure, reject), which get_archival_budget
+   * deliberately launders to 0. Production consumer is the C-1 emission
+   * verify shim's snapshot gather; also a KAT reader. */
+  bool has_archival_budget_row(uint64_t settlement_epoch) const;
   /** Corruption-simulation writer (ARCHIVAL_REWARD_GATE_M1.md §11.8 M3-2):
    * plants a raw (undecodable) segment-table row so the count-pass
    * decode-failure loud abort is armed by a test. put_archival_shard_segment
@@ -692,9 +867,17 @@ private:
   MDB_dbi m_archival_shard_segment;   // BE(shard_id) -> segment metadata
   MDB_dbi m_archival_slash_applied;   // P_id||shard||E -> slash idempotency bit
   MDB_dbi m_archival_slash_log;       // BE(height)||BE(seq) -> revert journal
+  MDB_dbi m_archival_emission_claim_log; // BE(height)||BE(seq) -> claimed-set pre-image journal
+  MDB_dbi m_archival_bond_unbond_log; // BE(height)||BE(seq) -> Unbond record pre-image journal
+  MDB_dbi m_archival_bond_holdings_update_log; // BE(height)||BE(seq) -> HoldingsUpdate record pre-image journal
+  MDB_dbi m_archival_bond_rebond_log; // BE(height)||BE(seq) -> Rebond record pre-image journal
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)
   MDB_dbi m_archival_sigma_work;      // BE(E) -> BE(sigma_milli)
   MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized
+  MDB_dbi m_archival_budget_accrual;  // BE(height) -> BE(staker_inflow) (redirected write, §3.1)
+  MDB_dbi m_archival_budget;          // BE(E) -> BE(budget) frozen at close (§3.2)
+  MDB_dbi m_archival_attestation_witness; // height [8B native, INTEGERKEY] -> prunable admission witness blob (r||pass-sigs; ARCHIVAL_CREDIT_WIRE.md §3.2/§4, transport B2 — never in the block blob)
+  MDB_dbi m_archival_alt_attestation_witness; // block hash [32B, compare_hash32] -> prunable alt-chain admission witness blob (reorg-survival counterpart to m_archival_attestation_witness; ARCHIVAL_CREDIT_WIRE.md §3, transport B2)
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
   MDB_dbi m_pending_tree_drain;       // BE(block_height)||BE(output) [16B] -> maturity[8]||leaf[128] [136B]

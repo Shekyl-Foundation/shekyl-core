@@ -126,6 +126,23 @@ struct ShekylPqcSignatureResult {
     bool success;
 };
 
+/// MSW-1 cross-language consistency: the canonical PQC multisig wire lengths,
+/// owned by shekyl-crypto-pq. The `cryptonote_config.h` twins are pinned equal
+/// to these by a unit test — the only check that catches C++ and Rust drifting
+/// from each other (F-1: each side internally consistent, disagreeing across
+/// the FFI). All fields are byte counts.
+struct ShekylPqcCanonicalLens {
+    size_t single_key_len;
+    size_t single_sig_len;
+    size_t spend_auth_pubkey_len;
+    size_t max_multisig_participants;
+    size_t max_public_key_blob;
+    size_t max_signature_blob;
+};
+
+/// Return the canonical PQC multisig wire lengths (see ShekylPqcCanonicalLens).
+ShekylPqcCanonicalLens shekyl_pqc_canonical_lens();
+
 /// Generate a hybrid ML-DSA + Ed25519 keypair.
 /// Free both buffers with shekyl_buffer_free. Wipe secret_key after use.
 ShekylPqcKeypair shekyl_pqc_keypair_generate();
@@ -142,10 +159,13 @@ ShekylPqcSignatureResult shekyl_pqc_sign(
 /// Verify a hybrid PQC signature.
 ///
 /// Returns 0 on success, or a nonzero PqcVerifyError discriminant on failure:
-///   1  = SchemeMismatch         5  = ThresholdMismatch     9  = GroupIdMismatch
+///   1  = SchemeMismatch         5  = ThresholdMismatch     (9 retired — see below)
 ///   2  = ParameterBounds        6  = IndexOutOfRange       10 = CryptoVerifyFailed
 ///   3  = KeyBlobLength          7  = IndicesNotAscending   11 = DeserializationFailed
 ///   4  = SigBlobLength          8  = DuplicateKeys
+/// Discriminant 9 (formerly GroupIdMismatch, "check 9") is retired: Option E′
+/// deleted group_id, so verify is a 9-check pipeline. 9 is left as a gap; 10/11
+/// keep their values (not renumbered).
 /// For scheme_id 1 (single-signer), only codes 10 and 11 apply.
 /// See rust/shekyl-crypto-pq/src/error.rs PqcVerifyError for canonical definitions.
 uint8_t shekyl_pqc_verify(
@@ -158,28 +178,6 @@ uint8_t shekyl_pqc_verify(
     size_t message_len);
 
 /// Verify a hybrid PQC signature with optional group ID binding.
-/// Same error codes as shekyl_pqc_verify (0=success, 1-11=PqcVerifyError).
-/// For scheme_id=2, passes expected_group_id to verify_multisig for
-/// defense-in-depth group binding (PQC_MULTISIG.md SS16.3).
-/// expected_group_id: 32 bytes, or NULL to skip group ID check.
-uint8_t shekyl_pqc_verify_with_group_id(
-    uint8_t scheme_id,
-    const uint8_t* pubkey_blob,
-    size_t pubkey_len,
-    const uint8_t* sig_blob,
-    size_t sig_len,
-    const uint8_t* message,
-    size_t message_len,
-    const uint8_t* expected_group_id);
-
-/// Compute a deterministic group ID from a sorted set of participant keys.
-/// keys_ptr: concatenated public key blobs, keys_len total bytes.
-/// out_ptr: 32 writable bytes for the group ID hash.
-bool shekyl_pqc_multisig_group_id(
-    const uint8_t* keys_ptr,
-    size_t keys_len,
-    uint8_t* out_ptr);
-
 /// Compute Keccak-256 hash of data_ptr[0..data_len].
 /// out_ptr: 32 writable bytes for the hash output.
 bool shekyl_cn_fast_hash(
@@ -212,7 +210,6 @@ uint64_t shekyl_calc_burn_pct(
     uint64_t tx_baseline,
     uint64_t circulating_supply,
     uint64_t total_supply,
-    uint64_t stake_ratio,
     uint64_t burn_base_rate,
     uint64_t burn_cap);
 
@@ -226,6 +223,37 @@ ShekylBurnSplit shekyl_compute_burn_split(
     uint64_t total_fees,
     uint64_t burn_pct,
     uint64_t staker_pool_share);
+
+// D2 escalation (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §6.1). The staker
+// share is no longer a constant: it is a pure map of the burden operand
+// n = frozen_segment_count. Rust derives it from the shipped EconomicParams, so
+// the escalation numerics never cross this boundary and C++ cannot be handed a
+// parameterization that differs from the one consensus pays on.
+//
+// frozen_segment_count MUST be read at PARENT-BLOCK state -- the same
+// read-point discipline as the archival admission gate (M3-1 cached-counter
+// drift class). Reading tip would let the block under validation move its own
+// split.
+//
+// The share cannot reach miner_fee_income: compute_burn_split applies it to
+// burned_amount, while miner_fee_income = total_fees - burned_amount depends
+// only on total_fees and burn_pct. Escalating moves value from
+// actually_destroyed to staker_pool_amount and nowhere else, so the
+// security-budget channel is structurally unreachable (§12.11.1 Leg 1).
+//
+// At the genesis-neutral parameterization (asymptote == staker_pool_share) this
+// is BIT-IDENTICAL to shekyl_compute_burn_split with the flat constant, at
+// every n. Shipping the frozen shape does not ship an unpinned number; the
+// asymptote is ceremony-gated (§11.4).
+ShekylBurnSplit shekyl_compute_burn_split_escalated(
+    uint64_t total_fees,
+    uint64_t burn_pct,
+    uint64_t frozen_segment_count);
+
+/// The D2-escalated staker share at frozen_segment_count, fixed-point SCALE.
+/// Observability / callers needing the share without a split. Same parent-state
+/// read-point obligation as shekyl_compute_burn_split_escalated.
+uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
@@ -753,6 +781,8 @@ bool shekyl_verify_tx_proof_outbound(
 /// Generate inbound transaction proof (recipient proves receipt).
 /// proof_secrets: output_count * 128 bytes — packed (ho[32]+y[32]+z[32]+k_amount[32])
 ///   per output, derived via shekyl_derive_proof_secrets.
+/// output_indices: output_count u32 vout indices, strictly increasing, entry i
+///   pairing with proof-secrets entry i (carried in the proof wire format).
 bool shekyl_generate_tx_proof_inbound(
     const uint8_t* view_secret_key,        // 32 bytes
     const uint8_t* txid,                   // 32 bytes
@@ -761,6 +791,7 @@ bool shekyl_generate_tx_proof_inbound(
     const uint8_t* message,                // message_len bytes
     size_t message_len,
     const uint8_t* proof_secrets,          // output_count * 128 bytes
+    const uint32_t* output_indices,        // output_count u32 values
     uint32_t output_count,
     ShekylBuffer* proof_out);
 
@@ -1245,11 +1276,21 @@ typedef struct ShekylDaemonRpcHandle ShekylDaemonRpcHandle;
 /// rpc_server_ptr: pointer to an initialized core_rpc_server.
 /// bind_addr: "ip:port" C string.
 /// restricted: true to block admin-only endpoints.
+/// cors_origins: optional comma-separated allow-list from
+///   --rpc-access-control-origins; NULL or empty = CORS default-deny.
+/// max_connections / max_connections_per_public_ip /
+///   max_connections_per_private_ip: concurrent-connection caps enforced by the
+///   Rust listener (0 = unlimited), already cross-validated by
+///   core_rpc_server::init.
 /// Returns an opaque handle, or NULL on failure.
 ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
     void* rpc_server_ptr,
     const char* bind_addr,
-    bool restricted);
+    bool restricted,
+    const char* cors_origins,
+    uint64_t max_connections,
+    uint64_t max_connections_per_public_ip,
+    uint64_t max_connections_per_private_ip);
 
 /// Gracefully stop the Axum daemon RPC server and free the handle.
 void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
@@ -1739,6 +1780,11 @@ struct shekyl_archival_verify_ctx {
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH    13
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE      14
 
+/// Empty-set archival attestation root (`attestation_root(&[])`). Writes 32
+/// bytes to `out_ptr`. Returns true on success. Not the all-zero null hash —
+/// see ARCHIVAL_CREDIT_WIRE.md §3.
+bool shekyl_attestation_root_empty(uint8_t* out_ptr);
+
 /// Returns 1 on success; writes 32-byte `P_canonical_id` to `out_p_id`.
 uint8_t shekyl_archival_p_canonical_id_from_pubkey(
     const uint8_t* hybrid_pubkey_ptr,
@@ -1747,9 +1793,26 @@ uint8_t shekyl_archival_p_canonical_id_from_pubkey(
 
 uint64_t shekyl_archival_epoch_open_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_epoch_close_height(uint64_t settlement_epoch);
+
+// Attestation-witness cross-language constant authorities (credit-wire CW-2, CW-1b-iv).
+// The Rust-side authoritative values; C++ config must agree (equality) or over-bound
+// (the coarse witness cap). The block-hash differential is blind to the witness, so
+// these are the real gate. Asserted in tests/unit_tests/archival_credit_wire.cpp.
+uint64_t shekyl_archival_max_attestation_records(void);
+uint64_t shekyl_archival_attestation_header_bytes(void);
+uint64_t shekyl_archival_attestation_witness_max_bytes(void);
+/// The close-processing boundary (E+1)·SEB — the height the close runs at
+/// and the shard-age operand it received; 0 for the overflowing epoch.
+uint64_t shekyl_archival_epoch_close_processing_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_challenge_resolution_blocks(void);
 uint64_t shekyl_archival_epoch_slash_deadline_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_challenge_seal_height(uint64_t h_open);
+/// 1 iff the epoch's challenge seal block is committed at chain_height (block
+/// count, m_db->height()) — i.e. H_seal = challenge_seal_height(h_open) <
+/// chain_height. The serve-credit gate calls this before reading
+/// block_hash(H_seal), so a future-epoch response is rejected by predicate
+/// rather than by catching a BLOCK_DNE throw.
+uint8_t shekyl_archival_challenge_seal_on_chain(uint64_t h_open, uint64_t chain_height);
 uint64_t shekyl_archival_challenge_fire_height(
     uint64_t h_open,
     uint64_t h_close,
@@ -1763,6 +1826,78 @@ uint8_t shekyl_archival_verify_serve_credit_vin(
     const uint8_t* vin_payload_ptr,
     size_t vin_payload_len,
     const struct shekyl_archival_verify_ctx* ctx_ptr);
+
+// ---------------------------------------------------------------------------
+// Credit-wire attestation admission verify (CW-3, ARCHIVAL_CREDIT_WIRE.md §3-§4)
+// ---------------------------------------------------------------------------
+// The recompute-and-compare + countersignature verify that replaces the interim
+// check_attestation_root. ALL logic is in Rust (shekyl_archival_verify_attestation):
+// C++ reads LMDB by keys step-1 names, fills the ctx with raw bytes, and obeys the
+// verdict — it parses nothing and decides nothing. Codes mirror archival_ffi.rs
+// (hand-maintained header, rule 25); the Rust side pins each to its literal
+// (attestation_verify_tests::verdict_codes_are_pinned). Only OK == 0 is
+// consensus-relevant (C++ accepts iff OK, rejects on any non-OK); the rest are the
+// distinct MERROR_VER diagnostics that split marshaling drift from forgery.
+
+/// One (p_id, hybrid pubkey) pair C++ resolved for a distinct pass p_id. pubkey_len == 0 is the
+/// bond-absent marker; == the hybrid canonical length is a key; any other length is malformed.
+struct shekyl_archival_pid_pubkey {
+    uint8_t p_id[32];
+    const uint8_t* pubkey_ptr;
+    size_t pubkey_len;
+};
+
+/// Consensus context for shekyl_archival_verify_attestation, filled after C++'s LMDB reads.
+/// cb_out_key is the coinbase vout[0] output pubkey the nonce binds (consensus rule);
+/// cb_out_key_readable == 0 means C++ could not read it (-> ERR_CBKEY_UNREADABLE, never garbage).
+/// headers is the RAW 49-byte-record tx_extra blob — Rust splits and parses it;
+/// headers_readable == 0 means C++ could not parse the coinbase tx_extra at all
+/// (-> ERR_HEADERS_UNREADABLE, never misread as the committed empty set).
+struct shekyl_archival_attestation_verify_ctx {
+    uint8_t attestation_root[32];
+    uint8_t cb_out_key[32];
+    uint8_t cb_out_key_readable;
+    uint8_t headers_readable;
+    const uint8_t* headers_ptr;
+    size_t headers_len;
+    const struct shekyl_archival_pid_pubkey* pairs_ptr;
+    size_t pairs_len;
+};
+
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK                     0
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR           1
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS  2
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS  3
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED       4
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH      5
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID 6
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT        7
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE   8
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH 9
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY   10
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE 11
+
+/// Step 1: name the distinct pass p_ids in a block's attestation headers, so C++ knows which
+/// archival-bond pubkeys to read before it can build the ctx pairs above. Parses the same raw
+/// tx_extra header blob, keeps kind==Pass, writes the distinct p_ids to `out` (up to out_cap slots)
+/// and the count to *out_len (0 on any error). Zero authority — step 2 re-derives the authoritative
+/// set from the same blob and rejects any coverage mismatch, so this cannot cause a silent
+/// wrong-key read. Emits only {OK, ERR_NULL_PTR, ERR_MALFORMED_HEADERS, ERR_CAP_EXCEEDED} from the
+/// family above; size `out` at config::ARCHIVAL_MAX_ATTESTATION_RECORDS so overflow cannot occur.
+uint8_t shekyl_archival_attestation_pass_p_ids(
+    const uint8_t* headers_ptr,
+    size_t headers_len,
+    uint8_t (*out_ptr)[32],
+    size_t out_cap,
+    size_t* out_len);
+
+/// Verify a block's attestation set against its mined attestation_root. `witness` is the opaque
+/// `r || count || pass-signatures` blob (connect.attestation_witness); an empty blob is the
+/// zero-record set. Returns a SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_* code; reject on any non-OK.
+uint8_t shekyl_archival_verify_attestation(
+    const uint8_t* witness_ptr,
+    size_t witness_len,
+    const struct shekyl_archival_attestation_verify_ctx* ctx_ptr);
 
 // Bond-post CT balance (ARCHIVAL_BOND_GATE4.md §3.2)
 #define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK                    0
@@ -1802,7 +1937,43 @@ uint8_t shekyl_verify_ct_balance(
     size_t num_out_masks,
     uint64_t txn_fee);
 
-// JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++)
+// Output-point validity (GENESIS_TX_WIRE_FORMAT.md §2.3, output-point rule):
+// admission gates for output public keys and outPk commitment masks. Every
+// point must be a canonical, prime-order (torsion-free) encoding — the same
+// strictness the FCMP++ leaf builder applies, so nothing admitted here is
+// silently skipped from the curve tree. Replaces crypto::check_key and the
+// native check_commitment_mask_valid fingerprint block on the admission path.
+#define SHEKYL_OUTPUT_POINTS_OK                0
+#define SHEKYL_OUTPUT_POINTS_ERR_NULL_PTR      1
+/// Output key non-canonical / torsioned / identity, or count*32 overflow.
+#define SHEKYL_OUTPUT_POINTS_ERR_INVALID_KEY   2
+/// Mask non-canonical / torsioned, or count*32 overflow.
+#define SHEKYL_OUTPUT_POINTS_ERR_INVALID_MASK  3
+/// Mask in a trivial amount-leaking form: identity, G, or coinbase
+/// zeroCommit(amount).
+#define SHEKYL_OUTPUT_POINTS_ERR_TRIVIAL_MASK  4
+
+/// Flattened `num_keys x 32` output public keys; `keys_ptr` may be null when
+/// `num_keys` is zero.
+uint8_t shekyl_check_output_keys(
+    const uint8_t* keys_ptr,
+    size_t num_keys);
+
+/// Flattened `num_masks x 32` outPk masks. For a coinbase tx pass the
+/// cleartext vout amounts (mask i is checked against zeroCommit(amounts[i])
+/// for i < num_coinbase_amounts); for non-coinbase pass (NULL, 0). Either
+/// pointer may be null when its count is zero.
+uint8_t shekyl_check_commitment_masks(
+    const uint8_t* masks_ptr,
+    size_t num_masks,
+    const uint64_t* coinbase_amounts_ptr,
+    size_t num_coinbase_amounts);
+
+// JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++).
+// Codes 1 (NULL_PTR), 19 (LEN_OVERFLOW), and 23 (BOND_SPEND_PK_COUPLING) are shared
+// vin-marshaling guards from the common vin marshaler, so BOTH bond-post entry points
+// can return them: JoinMarket returns 0-10, 19, or 23; Unbond additionally returns
+// 11-18 and 20-22.
 #define SHEKYL_ARCHIVAL_BOND_POST_OK                           0
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR                 1
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND                2
@@ -1816,15 +1987,467 @@ uint8_t shekyl_verify_ct_balance(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND            10
 
 /// `record_exists` is 1 when LMDB already stores a bond record for this P_id.
+/// `bond_spend_pk_*` is the vin's GF-1 debit authorizer (§9.11); the shared vin
+/// marshaler enforces the JoinMarket coupling — exact canonical single-key
+/// length iff JoinMarket, empty otherwise — returning
+/// SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING (code 23, shared by
+/// both entry points like LEN_OVERFLOW) instead of building a vin the Rust
+/// wire codec would refuse to serialize.
 uint8_t shekyl_archival_verify_join_market_bond_post(
     uint8_t post_kind,
     uint8_t holdings_kind,
     const uint64_t* shard_ids_ptr,
     size_t shard_ids_len,
+    const uint8_t* bond_spend_pk_ptr,
+    size_t bond_spend_pk_len,
     uint64_t bonded_total_atomic,
     uint64_t bond_credit,
     uint64_t bond_debit,
     uint8_t record_exists);
+
+// D3/R3 admission viability gate (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md
+// §12.9). Its own error space — a separate consensus predicate called
+// alongside the vin verify, not part of it. The numeric codes below are
+// single-sourced from shekyl-archival-retention::admission::codes; the reason
+// STRINGS come from admission::admission_code_cstr -- the one table -- surfaced
+// here as shekyl_archival_admission_err_string. `codes` carries no strings, and
+// the FFI holds no second table of its own.
+#define SHEKYL_ARCHIVAL_ADMISSION_OK                            0
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR                  1
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND             2
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH           3
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR               4
+// Gather columns ragged among THEMSELVES -- distinct from _GATHER_MISMATCH,
+// which compares the gather to the vin. Two different caller bugs, so two
+// codes: sharing one would force a reason string too vague to help either.
+#define SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_COLUMNS            5
+
+/// Settlement epoch whose archival_r_market rows are readable as of the parent
+/// block. C++ uses this as the LMDB key; do not re-derive E-1 in the daemon.
+uint64_t shekyl_archival_last_settled_epoch_as_of_parent(uint64_t parent_height);
+
+/// NUL-terminated static reason for an admission code (do not free). Distinguishes
+/// marshal failures from the below-floor verdict.
+const char* shekyl_archival_admission_err_string(uint8_t code);
+
+/// Refuse a bond whose holdings credit no work: admission runs the SAME chain
+/// that pays (shard_work_micro -> work_milli_from_micro).
+///
+/// r_market_* / freeze_height_* / has_segment_* are ALL parallel to the vin's
+/// shard list; key r_market with
+/// shekyl_archival_last_settled_epoch_as_of_parent(parent_height). A missing
+/// r_market row marshals as 0 (Rust scores r_market+1). parent_height MUST be
+/// chain_height - 1. CompleteTree: vin_shard_count = 0 and NULL arrays.
+///
+/// has_segment_* MUST be the real presence bit -- the RETURN VALUE of
+/// archival_shard_freeze_height, not inferred from the height. A shard with no
+/// frozen segment scores age_milli = 0, matching the reward path's
+/// shard_contribution_micro; and freeze_height 0 is a legitimate genesis-band
+/// value, so presence cannot be recovered from the height. Passing true with a
+/// defaulted 0 height scores the MAXIMUM age where the reward path scores zero.
+uint8_t shekyl_archival_check_bond_admission(
+    uint8_t holdings_kind,
+    size_t vin_shard_count,
+    const uint64_t* r_market_ptr,
+    size_t r_market_len,
+    const uint64_t* freeze_height_ptr,
+    size_t freeze_height_len,
+    const uint8_t* has_segment_ptr,
+    size_t has_segment_len,
+    uint64_t parent_height);
+
+// Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
+// P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18,
+// 20, 21, and 22 are Unbond-semantic; 19 (LEN_OVERFLOW) and 23
+// (BOND_SPEND_PK_COUPLING) are shared vin-marshaling guards returned by both
+// entry points (see the JoinMarket block above).
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND    11
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING          12
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND       13
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_CREDIT           14
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH   15
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND         16
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL          17
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED    18
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW            19
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY 20
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL       21
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING 22
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING  23
+
+// HoldingsUpdate bond-post semantics (gate-4 §4.4; PHASE_2B_FSM_RETOOL.md P2B-7,
+// grace-tail DROP). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* space: 24-30
+// are the ADD (credit) arm, 31-35 the DROP (grace-tail debit) arm; the shared
+// vin-marshaling guards (19 LEN_OVERFLOW, 23 BOND_SPEND_PK_COUPLING) and the
+// HOLDINGS_KIND guard (10) apply to both entry points as above.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE 24
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE     25
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT     26
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS            27
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING    28
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_ADD       29
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH   30
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS           31
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP      32
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD      33
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH  34
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON  35
+// The record is not Bonded (zero collateral / no held shards) — P2B-7 Pin 1:
+// HoldingsUpdate is Bonded→Bonded; an Exited or slash-emptied record re-enters
+// via JoinMarket/Rebond, never a voluntary adjustment. Shared by both HU arms.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED    36
+
+// Rebond bond-post semantics (gate-4 §3.4; P2B-9 reinstatement pins). Extends
+// the shared SHEKYL_ARCHIVAL_BOND_POST_* space: 37-44 are Rebond-semantic; the
+// shared marshaling guards (10 HOLDINGS_KIND, 19 LEN_OVERFLOW, 23
+// BOND_SPEND_PK_COUPLING) and the reused RECORD_MISSING (12) /
+// SHARD_SET_EMPTY (2) apply as above.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND    37
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE 38
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT 39
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED      40
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN    41
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM     42
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS            43
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET     44
+// RETIRED — never returned. Code 45 was the Rebond verify-level oversize belt,
+// removed with the Rust ShardSet newtype (an oversize post is now
+// unrepresentable in the vin's holdings). The symbol stays DEFINED and reserved
+// (rather than renumbering 46/47/48) so the Rust<->C++ code contract is explicit
+// and a stray/legacy 45 maps to a meaningful message, not "unknown".
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED 45
+// Record bonded_total != bond_floor(record holdings) — floor-drifted record,
+// rejected at verify so the tx never rides to the connect fold's FATAL belt.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR     46
+// Shared vin marshal (every bond-post verify entry): the vin's holdings shard
+// count exceeds the wire codec bound (MAX_HOLDINGS_SHARDS) — the FFI marshal
+// routes through ShardSet::new, a second decoder for the same wire object.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED 47
+// Shared vin marshal: the vin's holdings carry a duplicate shard id (rejected
+// at the same ShardSet::new boundary as the count cap — "a set on the wire").
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD 48
+
+/// Unbond bond-post verify. `record_exists`/`record_bonded_total`/
+/// `record_bad_interval_count` come from the LMDB bond record;
+/// `per_shard_last_served_ptr` is the array of the served shards' last-served
+/// settlement epochs (never-served shards omitted; for a CompleteTree record,
+/// the all-shards P-prefix scan), folded Rust-side to the whole-record
+/// release-cooldown anchor. `last_settled_slash_epoch` is the slash scheduler's
+/// monotone watermark (archival_last_slash_epoch; u64 max = no epoch settled
+/// yet, the scheduler's own storage sentinel) — the release verifies only once
+/// every epoch through the anchor is slash-settled, closing the one-block
+/// connect-ordering race (add_transaction runs before
+/// process_archival_slash_at_height in add_block). `current_settlement_epoch`
+/// is the epoch the Unbond lands in. A record whose interval log is at the
+/// codec cap rejects (INTERVAL_LOG_FULL): the connect's clean interval-close
+/// could not append, and a verified-but-unconnectable tx would be a
+/// deterministic halt.
+uint8_t shekyl_archival_verify_unbond_bond_post(
+    uint8_t post_kind,
+    uint8_t holdings_kind,
+    const uint64_t* shard_ids_ptr,
+    size_t shard_ids_len,
+    const uint8_t* bond_spend_pk_ptr,
+    size_t bond_spend_pk_len,
+    uint64_t bonded_total_atomic,
+    uint64_t bond_credit,
+    uint64_t bond_debit,
+    uint8_t record_exists,
+    uint64_t record_bonded_total,
+    size_t record_bad_interval_count,
+    const uint64_t* per_shard_last_served_ptr,
+    size_t per_shard_last_served_len,
+    uint64_t last_settled_slash_epoch,
+    uint64_t current_settlement_epoch);
+
+// Unbond block-connect fold + pop twin (gate-4 §4.3 "On confirm" / §5;
+// PHASE_2B_FSM_RETOOL.md P2B-8 implementation locus). The C++ connect arm owns
+// the LMDB write txn and writes EXACTLY what the out-params dictate; no
+// consensus arithmetic caller-side. Non-OK codes are connect-time invariant
+// breaches / pop-time journal desyncs — the caller maps them to a FATAL abort
+// (the emission-connect posture), never a soft skip.
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_OK                          0
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR                1
+// Code 2 (LEN_OVERFLOW) is retired: the connect fold takes the record's held
+// shard COUNT, not a pointer/length pair, so no slice marshal exists to guard.
+// The value stays reserved so the family's codes never renumber.
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_HOLDINGS_KIND           3
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_ZERO              4
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL  5
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT  6
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_UNDERFLOW  7
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_INTERVAL_LOG_FULL       8
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_NOT_EXITED       9
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_MISSING_CLEAN_CLOSE    10
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_PRE_IMAGE_EMPTY        11
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_OVERFLOW  12
+
+/// Unbond connect fold: record inputs are the record's CURRENT state (before
+/// the release); the outs are the full post-connect write set — record becomes
+/// post_bonded_total/post_holdings_kind with post_held_shard_count (always 0)
+/// shard ids, the clean interval-close [start, end) is APPENDED to the record's
+/// interval log (zero-length — good_through-inert, records the exit epoch), and
+/// the global counter becomes new_total_bonded. Journal the record's full
+/// pre-image BEFORE applying (emission WS-2 §6.3 shape); the refund needs no
+/// write here — bond_debit is the CT-balance source term on the wire. The
+/// record's holdings arrive as (kind, held shard count) — the fold's floor
+/// invariant never reads shard-id values, so no shard-id array crosses the FFI
+/// (the shekyl_archival_unbond_pop shape).
+uint8_t shekyl_archival_unbond_connect(
+    uint64_t record_bonded_total,
+    uint8_t record_holdings_kind,
+    uint64_t record_held_shard_count,
+    size_t record_bad_interval_count,
+    uint64_t vin_bond_debit,
+    uint64_t total_bonded_atomic,
+    uint64_t unbond_settlement_epoch,
+    uint64_t* post_bonded_total_out,
+    uint8_t* post_holdings_kind_out,
+    uint64_t* post_held_shard_count_out,
+    uint64_t* interval_close_start_out,
+    uint64_t* interval_close_end_out,
+    uint64_t* new_total_bonded_out);
+
+/// Block-level intra-block cross-tx bond-post uniqueness verdict — at most ONE
+/// bond-post vin per P_canonical_id per block (gate-4 §3.5; the
+/// shekyl_emission_block_claims_unique sibling, keyed on P alone). Per-tx
+/// verify runs against pre-block DB state, so every same-P same-block pair
+/// (JoinMarket+JoinMarket double-credit, Unbond+Unbond double-debit, mixed
+/// kinds) passes it independently; this pass — run once per block over every
+/// bond-post vin's P_canonical_id, before connect — is the layer that REJECTS
+/// the block. The §4.5 conservation audit is NOT a backstop (a double-credit
+/// doubles both sides consistently). ids_ptr = flattened num_ids × 32-byte
+/// P_canonical_ids in block order. Returns 1 when all distinct; 0 on any
+/// duplicate or a null pointer with num_ids > 0 (fail closed).
+uint8_t shekyl_archival_bond_post_block_unique(
+    const uint8_t* ids_ptr,
+    size_t num_ids);
+
+/// Unbond pop twin: validates the tip record is the connect's product (Exited
+/// state + trailing clean interval-close for unbond_settlement_epoch), then
+/// re-credits total_bonded_atomic with the journaled pre-image balance. The
+/// record fields themselves are restored caller-side as a byte-copy of the
+/// pre-image journal row. `has_trailing_interval` is 0 when the record's
+/// interval log is empty (the trailing start/end operands are then ignored).
+uint8_t shekyl_archival_unbond_pop(
+    uint64_t current_record_bonded_total,
+    uint64_t current_record_held_shard_count,
+    uint8_t has_trailing_interval,
+    uint64_t trailing_interval_start,
+    uint64_t trailing_interval_end,
+    uint64_t unbond_settlement_epoch,
+    uint64_t journal_pre_bonded_total,
+    uint64_t total_bonded_atomic,
+    uint64_t* new_total_bonded_out);
+
+// HoldingsUpdate verify + connect/pop (gate-4 §4.4). Semantic verify returns the
+// shared SHEKYL_ARCHIVAL_BOND_POST_* space (OK=0, 24-35 HU-semantic, plus the
+// shared marshaling guards); the connect/pop folds return the HU_APPLY family
+// below. As with Unbond, a non-OK apply code is a connect-time invariant breach /
+// pop-time journal desync — the caller maps it to a FATAL abort, never a soft
+// skip.
+#define SHEKYL_ARCHIVAL_HU_APPLY_OK                        0
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_NULL_PTR              1
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_LEN_OVERFLOW          2
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_ADD        3
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DROP       4
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_DROP_LAST_SHARD       5
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_FLOOR_INVARIANT 6
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_COUNTER_RANGE         7
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DELTA      8
+// Connect-fold belt of the verify-side Bonded gate (an Exited record cannot
+// be resurrected through a voluntary adjustment).
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_NOT_BONDED     9
+
+/// HoldingsUpdate-ADD verify (gate-4 §4.4 credit path). `shard_ids_*` is the
+/// vin's POST holdings; `record_shard_ids_*` the record's CURRENT holdings (for
+/// the single-shard diff); `record_bad_intervals_ptr` is the flattened
+/// (start, end) interval pairs feeding good-standing, where
+/// `record_bad_intervals_len` counts **pairs** and the buffer therefore holds
+/// `2 * record_bad_intervals_len` u64s. A HoldingsUpdate vin never carries
+/// bond_spend_pk (credit path) — pass null/0.
+uint8_t shekyl_archival_verify_holdings_update_add(
+    uint8_t post_kind,
+    uint8_t holdings_kind,
+    const uint64_t* shard_ids_ptr,
+    size_t shard_ids_len,
+    const uint8_t* bond_spend_pk_ptr,
+    size_t bond_spend_pk_len,
+    uint64_t bonded_total_atomic,
+    uint64_t bond_credit,
+    uint64_t bond_debit,
+    uint8_t record_exists,
+    uint64_t record_bonded_total,
+    uint8_t record_holdings_kind,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    uint64_t record_join_settlement_epoch,
+    const uint64_t* record_bad_intervals_ptr,
+    size_t record_bad_intervals_len,
+    uint64_t current_settlement_epoch);
+
+/// HoldingsUpdate-DROP verify (gate-4 §4.4 grace-tail debit path). C++ finds the
+/// dropped shard by set-difference (record CURRENT \ vin POST) and reads its
+/// per-shard facts: `dropped_shard_add_epoch` (the shard's stored v6 add-epoch)
+/// and `dropped_shard_freeze_height` (the shard SEGMENT's freeze height — 0 when
+/// the segment has no freeze row yet, the fail-closed oldest sentinel); the Rust
+/// verify derives age-at-add from the pair by evaluating the freeze against
+/// `H_close(add_epoch)` (`ShardAgeAtAdd::from_add`), then the retention horizon.
+/// `dropped_shard_last_served` (u64 max = never served) is the release-cooldown
+/// anchor; `last_settled_slash_epoch` is the slash scheduler's monotone
+/// watermark (u64 max = no epoch settled yet). The Rust verify recomputes the
+/// diff and cross-checks `dropped_shard_id`.
+uint8_t shekyl_archival_verify_holdings_update_drop(
+    uint8_t post_kind,
+    uint8_t holdings_kind,
+    const uint64_t* shard_ids_ptr,
+    size_t shard_ids_len,
+    const uint8_t* bond_spend_pk_ptr,
+    size_t bond_spend_pk_len,
+    uint64_t bonded_total_atomic,
+    uint64_t bond_credit,
+    uint64_t bond_debit,
+    uint8_t record_exists,
+    uint64_t record_bonded_total,
+    uint8_t record_holdings_kind,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    uint64_t dropped_shard_id,
+    uint64_t dropped_shard_add_epoch,
+    uint64_t dropped_shard_freeze_height,
+    uint64_t dropped_shard_last_served,
+    uint64_t last_settled_slash_epoch,
+    uint64_t current_settlement_epoch);
+
+/// HoldingsUpdate-ADD connect fold (gate-4 §4.4). The C++ arm journals the record
+/// pre-image, sets held_shard_ids = post + appends `add_settlement_epoch_out` as
+/// the added shard's coupled add-epoch, and writes the counters from
+/// new_bonded_total_out / new_total_bonded_out. `total_bonded_atomic` is the LIVE
+/// global counter (thread it per post — never a hoisted block-start read).
+uint8_t shekyl_archival_holdings_update_add_connect(
+    uint64_t record_bonded_total,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    const uint64_t* post_shard_ids_ptr,
+    size_t post_shard_ids_len,
+    uint64_t total_bonded_atomic,
+    uint64_t add_settlement_epoch,
+    uint64_t* added_shard_id_out,
+    uint64_t* add_settlement_epoch_out,
+    uint64_t* new_bonded_total_out,
+    uint64_t* new_total_bonded_out);
+
+/// HoldingsUpdate-DROP connect fold (gate-4 §4.4 grace-tail). The C++ arm journals
+/// the pre-image, sets held_shard_ids = post (dropping the coupled add-epoch of
+/// `dropped_shard_id_out`), and writes the counters. `refund_out` (== FLOOR) is
+/// the bond_debit CT-balance source term — no ledger write here. `total_bonded_atomic`
+/// is the LIVE global counter (thread it per post).
+uint8_t shekyl_archival_holdings_update_drop_connect(
+    uint64_t record_bonded_total,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    const uint64_t* post_shard_ids_ptr,
+    size_t post_shard_ids_len,
+    uint64_t total_bonded_atomic,
+    uint64_t* dropped_shard_id_out,
+    uint64_t* new_bonded_total_out,
+    uint64_t* new_total_bonded_out,
+    uint64_t* refund_out);
+
+/// HoldingsUpdate pop twin (add + drop; gate-4 §5). The record fields are restored
+/// caller-side as a byte-copy of the pre-image journal row; this reverts the global
+/// total_bonded_atomic by the connect's ±FLOOR delta, guarding that the tip
+/// record's bonded_total and the journaled pre-image differ by exactly one FLOOR.
+uint8_t shekyl_archival_holdings_update_pop(
+    uint64_t current_record_bonded_total,
+    uint64_t journal_pre_bonded_total,
+    uint64_t total_bonded_atomic,
+    uint64_t* new_total_bonded_out);
+
+// Rebond verify + connect/pop (gate-4 §3.4; P2B-9 reinstatement). Semantic
+// verify returns the shared SHEKYL_ARCHIVAL_BOND_POST_* space (OK=0, 37-44
+// Rebond-semantic, plus the shared guards); the connect/pop folds return the
+// REBOND_APPLY family below. As with Unbond/HoldingsUpdate, a non-OK apply code
+// is a connect-time invariant breach / pop-time journal desync — the caller
+// maps it to a FATAL abort, never a soft skip.
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_OK                          0
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NULL_PTR                1
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_LEN_OVERFLOW            2
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_SUPERSET            3
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_EMPTY_POST              4
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT  5
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NO_OPEN_INTERVAL        6
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_MULTIPLE_OPEN_INTERVALS 7
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_INTERVAL_ORDERING       8
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_COUNTER_RANGE           9
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_REBOND_DELTA       10
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_ADDED_BUFFER_TOO_SMALL 11
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_POST_OVERSIZE          12
+
+/// Rebond verify (gate-4 §3.4; P2B-9). `shard_ids_*` is the vin's POST holdings
+/// (the superset re-spec); `record_shard_ids_*` the record's CURRENT holdings;
+/// `record_bad_intervals_ptr` the flattened (start, end_exclusive) interval
+/// pairs, where `record_bad_intervals_len` counts PAIRS (buffer holds 2*len
+/// u64s) — carries the open-interval precondition and the Pin-6 headroom bound.
+/// A Rebond vin never carries bond_spend_pk (credit path; the record keeps its
+/// join-time key) — pass null/0. No epoch operand: the precondition is interval-
+/// shaped, not epoch-shaped (an open interval covers every later epoch).
+uint8_t shekyl_archival_verify_rebond_bond_post(
+    uint8_t post_kind,
+    uint8_t holdings_kind,
+    const uint64_t* shard_ids_ptr,
+    size_t shard_ids_len,
+    const uint8_t* bond_spend_pk_ptr,
+    size_t bond_spend_pk_len,
+    uint64_t bonded_total_atomic,
+    uint64_t bond_credit,
+    uint64_t bond_debit,
+    uint8_t record_exists,
+    uint64_t record_bonded_total,
+    uint8_t record_holdings_kind,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    const uint64_t* record_bad_intervals_ptr,
+    size_t record_bad_intervals_len);
+
+/// Rebond connect fold (gate-4 §3.4; P2B-9). The C++ arm journals the record
+/// pre-image (including the closed interval's index + start), sets
+/// held_shard_ids = post and rebuilds the coupled add-epochs (carried shards
+/// keep theirs; every id in added_shard_ids_out takes add_settlement_epoch_out
+/// = E_rebond — Pin 7), closes the open interval IN PLACE
+/// (bad_intervals[closed_interval_index_out].end_exclusive =
+/// interval_end_exclusive_out == E_rebond + 1 — Pin 3), and writes the counters.
+/// `total_bonded_atomic` is the LIVE global counter (thread per post).
+/// `added_shard_ids_cap` must be >= the post length (added ⊆ post).
+uint8_t shekyl_archival_rebond_connect(
+    uint64_t record_bonded_total,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    const uint64_t* record_bad_intervals_ptr,
+    size_t record_bad_intervals_len,
+    const uint64_t* post_shard_ids_ptr,
+    size_t post_shard_ids_len,
+    uint64_t total_bonded_atomic,
+    uint64_t rebond_settlement_epoch,
+    uint64_t* added_shard_ids_out,
+    size_t added_shard_ids_cap,
+    size_t* added_shard_ids_len_out,
+    uint64_t* add_settlement_epoch_out,
+    uint64_t* closed_interval_index_out,
+    uint64_t* interval_end_exclusive_out,
+    uint64_t* new_bonded_total_out,
+    uint64_t* new_total_bonded_out);
+
+/// Rebond pop twin (gate-4 §5): the record fields are restored caller-side as a
+/// byte-copy of the pre-image journal row (including re-opening the closed
+/// interval to end_exclusive = MAX); this reverts the global total_bonded_atomic
+/// by the connect's |added|·FLOOR credit — zero delta included (the common
+/// standing-only reinstatement moved no collateral).
+uint8_t shekyl_archival_rebond_pop(
+    uint64_t current_record_bonded_total,
+    uint64_t journal_pre_bonded_total,
+    uint64_t total_bonded_atomic,
+    uint64_t* new_total_bonded_out);
 
 /// Returns 1 when settlement_epoch >= join_settlement_epoch + 1 (E_first lower bound).
 uint8_t shekyl_archival_serve_credit_epoch_ok(
@@ -1860,6 +2483,74 @@ uint8_t shekyl_archival_challenge_leaf_chunk_bounds(
 // Σwork — to Rust in one coarse call (40-ffi-discipline.mdc). C++ performs no
 // consensus arithmetic.
 
+// Same-epoch slash-coalescing decision (P2B-9 Pin 5). The decision AND the
+// interval shape live Rust-side; the C++ slash writer appends exactly what
+// the call returns, deciding nothing.
+#define SHEKYL_ARCHIVAL_SLASH_INTERVAL_COALESCE    0
+#define SHEKYL_ARCHIVAL_SLASH_INTERVAL_APPEND      1
+#define SHEKYL_ARCHIVAL_SLASH_INTERVAL_ERR_MARSHAL 2
+
+/// Returns SHEKYL_ARCHIVAL_SLASH_INTERVAL_APPEND and writes the open interval
+/// [settlement_epoch, u64 MAX) when the record carries no open bad interval;
+/// SHEKYL_ARCHIVAL_SLASH_INTERVAL_COALESCE (no write) when one exists (the
+/// same-epoch sibling slash appends nothing — at most one open interval ever).
+/// SHEKYL_ARCHIVAL_SLASH_INTERVAL_ERR_MARSHAL is a marshal fault the slash
+/// writer maps to a FATAL abort, never a skip. `bad_intervals_ptr` is
+/// `2 × bad_intervals_len` u64s — the shekyl_archival_good_through layout.
+uint8_t shekyl_archival_slash_open_interval_to_append(
+    const uint64_t* bad_intervals_ptr,
+    size_t bad_intervals_len,
+    uint64_t settlement_epoch,
+    uint64_t* interval_start_out,
+    uint64_t* interval_end_out);
+
+// Sliding-window m-of-n failure confirmation
+// (docs/completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md §1). A single missed
+// baseline is NOT a slashable failure: the slash fires only when m misses fall
+// within the last n baseline OBSERVATIONS for a (P_id, shard). The gather (LMDB
+// reads) is C++; the decision, the parameters, and the window contract are Rust.
+#define SHEKYL_ARCHIVAL_FAILURE_WINDOW_ABSORB      0
+#define SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH       1
+#define SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL 2
+
+/// Window parameters from the one authority (config/consensus_constants.json →
+/// shekyl-archival-retention). Read here rather than from a generated header
+/// constant so there is no cross-language drift pair: m/n exist in exactly one
+/// place, and C++ holds no second copy to keep aligned. (A Round-2 re-pin still
+/// touches two sites by design — the JSON value plus the Round-1 sentinel
+/// const-assert in failure_window.rs; see that module.) `serve_budget_out` is
+/// `n - m`: once the gather has
+/// seen more than that many PASSED observations, m is unreachable and the
+/// look-back can stop reading LMDB (the arithmetic is Rust-side by design).
+/// Returns SHEKYL_ARCHIVAL_FAILURE_WINDOW_ERR_MARSHAL on a null out-pointer.
+uint8_t shekyl_archival_failure_window_params(
+    uint32_t* m_out,
+    uint32_t* n_out,
+    uint32_t* serve_budget_out);
+
+/// Is this observation sequence a slashable failure? Two parallel arrays of
+/// `observations_len` entries, MOST RECENT FIRST: `observation_epochs_ptr` is
+/// strictly descending settlement epochs (head = the decision epoch);
+/// `observation_served_ptr` is 0 iff that epoch's serve_credit_bit is unset (the
+/// miss the window counts), nonzero for a pass.
+///
+/// Only epochs at which a challenge was actually POSED belong in the arrays —
+/// bonded-but-untested epochs are not observations and must not appear. The
+/// caller stops gathering at the boundary of the pair's current continuous
+/// challengeable run (before E_join + 1, before the shard's E_add + 1, or at a
+/// closed bad interval — a reinstated record starts the window clean), so a
+/// shorter-than-n window is normal and is evaluated as-is.
+///
+/// Returns SHEKYL_ARCHIVAL_FAILURE_WINDOW_SLASH / _ABSORB, or _ERR_MARSHAL for a
+/// malformed window (null pointer, an empty window with observations_len == 0,
+/// longer than n, non-descending epochs, passed head) — which the slash scan
+/// maps to a FATAL abort, never a skip in either direction: a slash decided over
+/// a malformed window is a consensus divergence.
+uint8_t shekyl_archival_failure_window_slashable(
+    const uint64_t* observation_epochs_ptr,
+    const uint8_t* observation_served_ptr,
+    size_t observations_len);
+
 /// `good_through(P, E)` from bond fields (§3.4 interval semantics).
 /// `bad_intervals_ptr` is `2 × bad_intervals_len` u64s — flattened
 /// `(start_epoch, end_exclusive)` pairs. Returns 0 (fail-closed) on malformed input.
@@ -1871,6 +2562,42 @@ uint8_t shekyl_archival_good_through(
 
 /// Settlement epoch containing `block_height` (bond-connect join epoch).
 uint64_t shekyl_archival_settlement_epoch_at_height(uint64_t block_height);
+
+/// The effective settlement-epoch length in blocks (genesis-pinned 10 000,
+/// or the clamped SHEKYL_SETTLEMENT_EPOCH_BLOCKS override — the
+/// fakechain-only regtest lever). Single source for consumers needing the
+/// length itself; the schedule functions here consume it internally.
+uint64_t shekyl_archival_settlement_epoch_blocks(void);
+
+/// True iff a SHEKYL_SETTLEMENT_EPOCH_BLOCKS override is active (effective
+/// schedule differs from the genesis default — which requires this process
+/// to have armed via shekyl_archival_settlement_epoch_arm_regtest). Drives
+/// the daemon's loud fakechain warning.
+bool shekyl_archival_settlement_epoch_overridden(void);
+
+/// True iff SHEKYL_SETTLEMENT_EPOCH_BLOCKS is present in the environment at
+/// all (no validation, no schedule latch). Drives Blockchain::init's
+/// fail-closed public-network refusal: the schedule is consensus, and on a
+/// non-FAKECHAIN net the lever's presence is the operator error to refuse
+/// on, before any question of the value's validity.
+bool shekyl_archival_settlement_epoch_override_present(void);
+
+/// Arm the SHEKYL_SETTLEMENT_EPOCH_BLOCKS override (FAKECHAIN startup path
+/// only), latching the validated override (or the genesis pin when unset).
+/// An unarmed process ignores the lever entirely.
+///
+/// Returns one of SHEKYL_ARCHIVAL_SEB_ARM_* below, because the two refusals
+/// need different remedies.
+uint8_t shekyl_archival_settlement_epoch_arm_regtest(void);
+
+/// Armed (or the variable is unset and the genesis pin latched).
+#define SHEKYL_ARCHIVAL_SEB_ARM_OK                   0
+/// The value is not an integer in the accepted range — an operator input
+/// error: fix the value or unset the variable.
+#define SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID          1
+/// The schedule already latched before the call — an initialization-order
+/// defect in the daemon, NOT a bad value.
+#define SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE         2
 
 /// Returns 1 and writes the settlement epoch whose close is processed at
 /// `block_height`; 0 (no write) at height 0 or non-boundary heights.
@@ -1884,6 +2611,39 @@ uint8_t shekyl_archival_prune_below_epoch(
     uint64_t block_height,
     uint64_t* out_prune_below_epoch);
 
+/// The oldest still-claimable settlement epoch for `current_settled_epoch` —
+/// a thin delegate to the Rust `claim_window_floor`, the single source of the
+/// claim-window boundary. The emission claim-source RPC handler derives its
+/// window low end through this (never an inline `settled - W` copy), per
+/// `EMISSION_CLAIM_BUILDER.md` §2 step 1.
+uint64_t shekyl_archival_claim_window_floor(uint64_t current_settled_epoch);
+
+/* `epoch` inserted into the claimed set (stale entries pruned in place). */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_INSERTED        0
+/* `epoch` already claimed — hard error on the connect path (WS-2 §6.2). */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ALREADY_CLAIMED 1
+/* `epoch >= current_settled_epoch`: not yet settled. */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_NOT_SETTLED 2
+/* `epoch` below the claim window (`MAX_CLAIM_AGE_W`). */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_EXPIRED     3
+/* Null pointer, capacity overflow, or non-strictly-increasing set. */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID     4
+
+/// Record `epoch` as claimed in the caller-owned claimed-epoch buffer — the
+/// single writer for `ArchivalBondValue::claimed_settlement_epochs` (WS-2
+/// §6.2; the emission connect path is the only caller). Window maintenance
+/// (prune below `current_settled_epoch − W`) happens on insert, so on
+/// `INSERTED` the buffer contents *and* `*set_len` change in place; on any
+/// other return both are untouched. `set_ptr` must address `set_cap`
+/// writable `uint64_t`s with `*set_len <= set_cap <= 32` (the
+/// `kMaxClaimedEpochs` cap).
+uint8_t shekyl_archival_claimed_epochs_check_and_set(
+    uint64_t* set_ptr,
+    size_t* set_len,
+    size_t set_cap,
+    uint64_t epoch,
+    uint64_t current_settled_epoch);
+
 #define SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK                0
 #define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR      1
 #define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_LEN_OVERFLOW  2
@@ -1891,6 +2651,10 @@ uint8_t shekyl_archival_prune_below_epoch(
 
 /// One gathered bond. Layout must match `ShekylArchivalEpochCloseBond` in
 /// `rust/shekyl-ffi/src/archival_ffi.rs`.
+///
+/// Carries no holdings descriptor (WS-1): the held-and-served set is sourced
+/// solely from the serve-credit ledger rows the gather passes as credit
+/// pairs, so tip holdings never cross into the work channel.
 struct shekyl_archival_epoch_close_bond
 {
   uint64_t join_settlement_epoch;
@@ -1898,8 +2662,6 @@ struct shekyl_archival_epoch_close_bond
   const uint64_t* bad_intervals_ptr;
   /// Pair count (not u64 count).
   size_t bad_intervals_len;
-  const uint64_t* held_shard_ids_ptr;
-  size_t held_shard_ids_len;
   uint8_t is_foundation_complete_tree;
 };
 
@@ -1927,15 +2689,9 @@ struct shekyl_archival_credit_pair
 /// non-zero return never leaves stale values. Credit pairs must be distinct
 /// (the serve-credit ledger key `(P, shard, E)` guarantees this at gather).
 ///
-/// `frozen_shard_count` is the M1 reward-gate input
-/// (ARCHIVAL_REWARD_GATE_M1.md §1.1): the segment-table count at
-/// `H_close(E)` from the single `count_frozen_shards_at_close` helper,
-/// inside the close's write txn. Epochs below `K_COVER` compute to the
-/// all-zero result (the §2.1 zero-at-top gate, applied inside Rust).
 uint8_t shekyl_archival_epoch_close_compute(
     uint64_t settlement_epoch,
     uint64_t close_block_height,
-    uint64_t frozen_shard_count,
     const struct shekyl_archival_epoch_close_bond* bonds_ptr,
     size_t bonds_len,
     const struct shekyl_archival_epoch_close_shard* shards_ptr,
@@ -1944,6 +2700,205 @@ uint8_t shekyl_archival_epoch_close_compute(
     size_t credit_pairs_len,
     uint64_t* out_r_market_ptr,
     uint64_t* out_sigma_work_milli_ptr);
+
+/// The M-2/Q7 as-of-E consensus snapshot for one claimed settlement epoch
+/// (REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2; REWARD_EMISSION_VIN_PLAN.md
+/// §8.0.2(B)). Layout must match `ShekylArchivalEmissionEpochSnapshot` in
+/// `rust/shekyl-ffi/src/archival_ffi.rs`.
+///
+/// Marshaled by value from the frozen E-close materialization: the
+/// serve-credit rows for E (the WS-1 §5 held source), the credited bonds'
+/// standing fields, shard freeze heights, and the **persisted** Σwork(E) —
+/// never the live bond holdings descriptor. Every row is immutable for a
+/// claimable E, so a re-gather at any height in the claim window reproduces
+/// the close's gather exactly
+/// (`BlockchainLMDB::gather_archival_emission_epoch_snapshot` performs it).
+///
+/// `sigma_work_milli` must be the persisted close output, not a recompute —
+/// the close's outcome reaches verify only through the stored denominator.
+struct shekyl_archival_emission_epoch_snapshot
+{
+  uint64_t settlement_epoch;
+  /// The close-processing height (E+1)·SEB the gather froze at (shard-age
+  /// operand; must equal the height the close ran at). NOT H_close(E) =
+  /// shekyl_archival_epoch_close_height(E) = the epoch's last block =
+  /// (E+1)·SEB − 1, one block lower.
+  uint64_t close_block_height;
+  /// Persisted finalized Σwork(E) milli — the stored denominator.
+  uint64_t sigma_work_milli;
+  /// Persisted frozen budget(E) atomic — the gate-1 numerator operand, stored
+  /// at close beside Σwork(E) (the archival_budget close row,
+  /// ARCHIVAL_BUDGET_SCHEDULE.md §5). Always the stored value, never a
+  /// recompute: the accrual accumulator is live state; only the close row is
+  /// frozen.
+  uint64_t budget_atomic;
+  const struct shekyl_archival_epoch_close_bond* bonds_ptr;
+  size_t bonds_len;
+  const struct shekyl_archival_epoch_close_shard* shards_ptr;
+  size_t shards_len;
+  const struct shekyl_archival_credit_pair* credit_pairs_ptr;
+  size_t credit_pairs_len;
+  /// Claimant P's index into `bonds`, or SIZE_MAX when P has no serve-credit
+  /// row in E (its work is then zero by construction).
+  size_t claimant_bond_idx;
+};
+
+/// Claimant work over the as-of-E snapshot: writes P's `work_P(E)` milli to
+/// `out_work_milli` and its membership-gated credited term to
+/// `out_credited_work_milli` — the emission verify numerator
+/// (REWARD_EMISSION_VIN_PLAN.md §8.0.2 step 4). D3/R2: credited work is linear
+/// in work (no plateau); non-members credit zero.
+///
+/// Sources via the same single sourcing function whose output built the
+/// persisted Σwork(E) denominator at close, over the same frozen gather, so
+/// the credited output is P's exact per-P term of that denominator by
+/// construction (WS-1 §5.5). Note this is the numerator only: it does NOT
+/// consult `snapshot->sigma_work_milli` — an empty epoch persists
+/// Σwork(E) == 0 while this may still return a positive credited term, so the
+/// consumer MUST divide through the persisted denominator (reward is 0 when
+/// Σwork(E) == 0). Both outputs are
+/// zero when P has no credit row in E or is not a market member at E. Errors
+/// reuse the SHEKYL_ARCHIVAL_EPOCH_CLOSE_* codes; outputs are zeroed on entry.
+uint8_t shekyl_archival_emission_epoch_work(
+    const struct shekyl_archival_emission_epoch_snapshot* snapshot,
+    uint64_t* out_work_milli,
+    uint64_t* out_credited_work_milli);
+
+/* ---------------------------------------------------------------------------
+ * C-1 emission-vin verify FFI (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 items
+ * 3–5; REWARD_EMISSION_VIN_PLAN.md §7.1). Two entries: a pre-parse extractor
+ * for operand gathering, and the coarse verify call running the full §7.1
+ * body (claims 1–5, membership-only backing 6, hybrid auth gate 8) in one
+ * FFI crossing. Step 7 (FCMP balance over fee txin_to_keys) stays with the
+ * existing C++ tx layer.
+ * ------------------------------------------------------------------------ */
+
+/* Verdict: the emission vin verified end-to-end. */
+#define SHEKYL_EMISSION_VIN_OK                        0
+/* Required pointer was null (or an output buffer too small). */
+#define SHEKYL_EMISSION_VIN_ERR_NULL_PTR              1
+/* Canonical bytes failed the wire parse or structural re-validate. */
+#define SHEKYL_EMISSION_VIN_ERR_WIRE                  2
+/* Caller marshaling inconsistent (snapshot misalignment, malformed gather,
+ * claimant index out of range) — a daemon bug surfaced loudly, never a
+ * claimant-attributable rejection. */
+#define SHEKYL_EMISSION_VIN_ERR_MARSHAL               3
+/* Step 1: claimed epoch not finalized at the carrying height. */
+#define SHEKYL_EMISSION_VIN_ERR_EPOCH_NOT_FINALIZED   4
+/* Step 1: claimed epoch below the claim window (MAX_CLAIM_AGE_W). */
+#define SHEKYL_EMISSION_VIN_ERR_EPOCH_EXPIRED         5
+/* Step 2: no bond record for the claimant. */
+#define SHEKYL_EMISSION_VIN_ERR_BOND_MISSING          6
+/* Step 2: vin holdings descriptor does not match the bond record. */
+#define SHEKYL_EMISSION_VIN_ERR_HOLDINGS_MISMATCH     7
+/* Step 2: claimed epoch precedes the join epoch's claimable range. */
+#define SHEKYL_EMISSION_VIN_ERR_EPOCH_BEFORE_JOIN     8
+/* Step 3 (WS-2 read-only layer): epoch already in the claimed set. */
+#define SHEKYL_EMISSION_VIN_ERR_ALREADY_CLAIMED       9
+/* Step 4: work claim contradicts the frozen as-of-E recompute. */
+#define SHEKYL_EMISSION_VIN_ERR_WORK_MISMATCH         10
+/* Step 5 (R1.B zero-tolerance): reward differs from the recompute. */
+#define SHEKYL_EMISSION_VIN_ERR_REWARD_MISMATCH       11
+/* Step 5 (loud inflation check): Σ rewards != reward vout sum. */
+#define SHEKYL_EMISSION_VIN_ERR_VOUT_SUM_MISMATCH     12
+/* Step 6: backing pubkey does not hash to the committed leaf. */
+#define SHEKYL_EMISSION_VIN_ERR_BACKING_LEAF          13
+/* Step 6: membership-only proof rejected. */
+#define SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED      14
+/* Step 8: auth pubkey/signature failed hybrid deserialization. */
+#define SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED        15
+/* Step 8: hybrid auth signature rejected over its Q1 binding message. */
+#define SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED         16
+
+/* Upper bound on settlement_epochs per emission vin — mirrors the Rust wire
+ * pin MAX_SETTLEMENT_EPOCHS_PER_EMISSION (emission_wire.rs; the parse rejects
+ * longer sets), sizing the extract/verify epoch output buffers. */
+#define SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS         15
+
+/// Pre-parse extractor for dispatch operand gathering: parses the opaque
+/// txin_archival_reward_emission canonical bytes (tag included) and writes
+/// the claimant's P_canonical_id (32 bytes, recomputed from P_pubkey per
+/// emission §6.1 — the bond-record key) and the claimed settlement_epochs
+/// (one as-of-E snapshot gather per entry). Extraction implies nothing about
+/// validity beyond the wire parse; shekyl_emission_vin_verify re-parses the
+/// same bytes. `out_epochs_ptr` must address `epochs_cap` writable uint64_t
+/// with `epochs_cap >= 15` (MAX_SETTLEMENT_EPOCHS_PER_EMISSION; the parse
+/// rejects longer sets). Returns SHEKYL_EMISSION_VIN_OK or an error above.
+uint8_t shekyl_archival_emission_vin_extract(
+    const uint8_t* vin_ptr,
+    size_t vin_len,
+    uint8_t* out_p_canonical_id,
+    uint64_t* out_epochs_ptr,
+    size_t epochs_cap,
+    size_t* out_epochs_len);
+
+/// Overflow-checked sum of plaintext output amounts (rule 20: amount
+/// arithmetic on untrusted tx data lives behind the FFI). Writes the sum to
+/// *out_sum; returns 0 on success, 1 on u64 overflow or invalid args (the
+/// caller MUST reject the tx on any non-zero return). `amounts_ptr` may be
+/// null iff `len == 0`.
+uint8_t shekyl_checked_sum_amounts(
+    const uint64_t* amounts_ptr,
+    size_t len,
+    uint64_t* out_sum);
+
+/// Block-level intra-block cross-tx (P, E) uniqueness verdict (E3 gating
+/// round §6.2 layer 2; decision-placement pin §9.5 item 6 — C++ marshals the
+/// block's claim pairs, Rust decides). `pairs_ptr` is a flattened array of
+/// `num_pairs` 40-byte entries: p_canonical_id[32] || epoch[8] (LE; any
+/// consistent injective encoding preserves the verdict), one entry per
+/// (P, E_i) of every emission vin in the block, in block order. Returns 1
+/// when every pair is distinct, 0 on any duplicate or on a null pointer
+/// with num_pairs > 0 (fail closed).
+uint8_t shekyl_emission_block_claims_unique(
+    const uint8_t* pairs_ptr,
+    size_t num_pairs);
+
+/// The full §7.1 emission verify body in one coarse crossing. Operands:
+/// - vin bytes: the opaque blob, tag included (C++ never parses inside it).
+/// - Bond record: the claimant's PRE-BLOCK ArchivalBondValue fields keyed by
+///   the extract call's P_canonical_id; `bond_present == 0` marshals "no
+///   record" (reject; remaining bond arguments are then ignored).
+/// - snapshots: one frozen as-of-E snapshot per claimed epoch in claim
+///   order (gather_archival_emission_epoch_snapshot), each carrying the
+///   persisted Σwork(E) and budget(E) close rows.
+/// - tree_root (32 bytes) / tree_depth: the reference block's curve-tree
+///   root context; signable_tx_hash (32 bytes): the emission tx's signable
+///   hash.
+/// - reward_commits: the ordered reward vout commit set as flattened
+///   72-byte entries (commitment[32] ‖ amount_plain LE u64[8] ‖
+///   one_time_key[32]) — the R1.A destination binding; reward_commits_len
+///   is the ENTRY count.
+/// - vout_reward_sum: Σ reward vout amount_plain (step 5's loud compare).
+///
+/// On SHEKYL_EMISSION_VIN_OK, `*out_total_reward` is the verified Σ reward
+/// (the connect arm's mint amount) and `out_epochs_ptr[0..*out_epochs_len]`
+/// the epochs to commit via shekyl_archival_claimed_epochs_check_and_set, in
+/// wire order (`epochs_cap >= 15` suffices). Outputs are zeroed on entry; a
+/// non-zero return never leaves stale values.
+uint8_t shekyl_emission_vin_verify(
+    const uint8_t* vin_ptr,
+    size_t vin_len,
+    uint64_t current_block_height,
+    uint64_t vout_reward_sum,
+    uint8_t bond_present,
+    uint64_t bond_join_settlement_epoch,
+    uint8_t bond_holdings_kind,
+    const uint64_t* bond_shard_ids_ptr,
+    size_t bond_shard_ids_len,
+    const uint64_t* claimed_epochs_ptr,
+    size_t claimed_epochs_len,
+    const struct shekyl_archival_emission_epoch_snapshot* snapshots_ptr,
+    size_t snapshots_len,
+    const uint8_t* tree_root,
+    uint8_t tree_depth,
+    const uint8_t* signable_tx_hash,
+    const uint8_t* reward_commits_ptr,
+    size_t reward_commits_len,
+    uint64_t* out_total_reward,
+    uint64_t* out_epochs_ptr,
+    size_t epochs_cap,
+    size_t* out_epochs_len);
 
 // ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface
@@ -2099,6 +3054,333 @@ uint64_t shekyl_pow_randomx_v2_seed_epoch_blocks(void);
 /// True iff a SEEDHASH_EPOCH_* override is active (schedule differs
 /// from the mainnet defaults); the daemon logs a startup warning.
 bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
+
+// ── Dandelion++ stem embargo (RP-4, DAEMON_RELAY_PRIVACY.md sec 17) ─────────
+//
+// There is no embargo constant in C++ any more, and that is the point. The
+// inherited CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE = 39 did not follow from the
+// derivation printed beside it (its own formula gives 16.61 s; 39 s reproduces
+// only if log10 is read for ln), and it was drawn from a Poisson under a
+// derivation assuming exponential survival, so the backstop never fired. Value
+// and distribution now both come from shekyl-relay-privacy's EmbargoTimer,
+// whose integer table *is* the distribution: reviewable, identical on every
+// platform, golden-vector pinned — none of which holds for the
+// implementation-defined std::poisson_distribution.
+//
+// Do not reintroduce a C++-side embargo constant or multiplier. If a number is
+// needed here, derive it in the crate and export it, so the number and its
+// reason cannot drift apart again.
+
+/// One embargo duration in seconds, drawn from the adopted memoryless
+/// distribution (mean 190 s). A 0 s draw is legitimate and rare (~0.13 %): the
+/// geometric support includes 0 and the table is not clamped at the boundary,
+/// so what ships is what was derived and tested. A zero draw does not mean "fire
+/// this instant" — deadlines are whole seconds, so it resolves to the earliest
+/// one that does not under-provision (the next second boundary; see
+/// cryptonote::detail::embargo_deadline). Rounding it down instead would put the
+/// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
+/// embargo is the privacy-losing direction at every draw value including zero.
+uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
+
+/// How long to wait before judging a still-unseen transaction failed, in
+/// seconds — a quantile of the embargo distribution (at most 1 in 100 embargoes
+/// still running), not a multiple of its mean. On the adopted table that is
+/// exactly 874 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
+/// pinned so the wait cannot drift from the distribution. A stem transaction is
+/// invisible to its sender until it fluffs, so a shorter deadline declares
+/// healthy transactions dead while their backstop is still running, and the
+/// sender then releases the inputs it had reserved.
+uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
+
+
+// ── Live relay zone (RP-3a, DAEMON_RELAY_PRIVACY.md sec 18) ────────────────
+//
+// The Dandelion++ scheduler: epoch role, stem routing, and per-peer fluff
+// batching. `levin_notify` forwards here and keeps transport — epee framing,
+// padding, the socket — so transaction bodies cross only as opaque blobs.
+//
+// RP-3a adds NO reactor. Rust owns the state and every timing DECISION; the
+// existing boost::asio timer is armed from shekyl_relay_zone_next_wake() and
+// owns the SLEEP. That is what the crate's reason-2 seal prescribes, so this
+// boundary is seal-consistent rather than seal-breaking.
+//
+// Effects are delivered through per-variant CALLBACKS rather than a marshalled
+// enum: dispatch happens in Rust where the compiler checks the match, so the
+// C++ side has no tag, no offsets and no decoding to get wrong (sec 18.4a).
+//
+// Rust twins: rust/shekyl-ffi/src/relay_zone_ffi/mod.rs.
+
+struct RelayZoneHandle;
+
+//! One transaction blob, borrowed for the duration of the call.
+struct ShekylRelayBlob
+{
+  const std::uint8_t* ptr;
+  std::size_t len;
+};
+static_assert(sizeof(ShekylRelayBlob) == sizeof(const std::uint8_t*) + sizeof(std::size_t),
+              "ShekylRelayBlob must be two packed words to match Rust's #[repr(C)]");
+
+//! A released fluff batch: one call carrying a peer's WHOLE batch, already
+//! sorted and de-duplicated by the zone (receive order is an observable). It
+//! becomes a single levin notification — delivered blob-by-blob it would become
+//! N notifications, leaking the batch size as a per-peer message count.
+typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
+                                   const ShekylRelayBlob* blobs, std::size_t n);
+//! Covert channel `channel` came due with its stem slot unbound: clear it —
+//! nil the binding, discard buffers — on the channel's own strand. The other
+//! half of the deleted slot array: the binding itself travels with each covert
+//! send, and the LOSS of a binding travels here, because an unbound channel
+//! emits no sends. One index crosses -- no array, no slot order, no width to
+//! reconcile. Fires at EVERY due tick while the slot stays unbound (derived
+//! from the map at each poll, never pushed once at a transition), so the
+//! receiver must be idempotent and a lost clear self-heals one covert interval
+//! later. Must not throw across the FFI boundary.
+typedef void (*ShekylRelayCovertUnbindCb)(void* ctx, std::size_t channel);
+//! Supply the outbound connection set on demand: write the id count through
+//! `out_n` and return a pointer to `*out_n` x 16 bytes valid until the poll
+//! returns (nullptr with `*out_n == 0` for none). shekyl_relay_zone_poll calls
+//! this ONLY at an epoch boundary, so a fluff-release wake never pays for the
+//! connection scan. Must not throw across the FFI boundary.
+typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out_n);
+
+//! Covert channel `channel` is due to send.
+//!
+//! Carries NO payload discriminant, and that is deliberate (CV-4): whether the
+//! send is a dummy or drains a queued real fragment is a queue question, and the
+//! queue is C++. Rust decides WHEN and WHICH CHANNEL; C++ decides WHAT. Adding a
+//! kind or a "has real pending" flag here would let the cadence react to traffic,
+//! and that change would look like a latency optimisation rather than the
+//! covert-channel leak it is. Must not throw across the FFI boundary.
+//! `peer` is the 16-byte connection id the channel's stem slot is bound to --
+//! never nil, since an unbound slot emits nothing (CV-2). The binding travels
+//! with the send (§20.3's inversion) rather than as a pushed slot array.
+typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel, const std::uint8_t* peer);
+
+//! Forward to the successor written into `out_dest`.
+#define SHEKYL_RELAY_PLAN_STEM        0
+//! Stem-eligible, but nothing routes yet — refresh connections and re-plan.
+#define SHEKYL_RELAY_PLAN_NO_ROUTE    1
+//! Settled for this epoch: fluff. Retrying cannot change the answer.
+#define SHEKYL_RELAY_PLAN_FLUFF_EPOCH 2
+
+//! Zone-shape flags for `shekyl_relay_zone_new`.
+//!
+//! Named bits rather than two `bool` parameters, deliberately. Adjacent bools
+//! in a C signature transpose silently — and transposing THESE two swaps the
+//! i2p/tor outbound-only fluff rule with the covert enable, which is the exact
+//! regression RP-3a's first pass shipped (caught only because eight `private_*`
+//! gtests happened to cover it). Function *signatures* on this surface are
+//! gated by `scripts/ci/check_relay_ffi_signatures.sh` (conflicting-declaration
+//! TU over a cbindgen-generated header). Flag *values* are not: the ABI pin
+//! `zone_flag_bits_do_not_transpose` owns those, and a bitmask removes the
+//! ordering question the signature gate cannot see.
+//!
+//! The i2p/tor rule follows the NETWORK, not covert mode: a hidden-service zone
+//! with covert disabled still needs it. That is why the bits are independent.
+//! Keep these values in sync with `SHEKYL_RELAY_ZONE_*` in `relay_zone_ffi`.
+#define SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY 1u
+#define SHEKYL_RELAY_ZONE_COVERT_ENABLED 2u
+
+//! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
+//! `flags` is a mask of the `SHEKYL_RELAY_ZONE_*` bits above.
+//! Null when a zone cannot be built: SIZE_MAX stems, or a zero epoch — which
+//! would expire at every wake and spin the relay timer. Treat null as fatal.
+RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems,
+                                       std::uint32_t min_epoch_secs,
+                                       std::uint32_t epoch_jitter_secs,
+                                       std::uint32_t flags);
+//! Whether this zone runs covert (noise) channels.
+//! The single owner of a fact this side used to re-derive at nine sites from
+//! `!zone::noise.empty()` — a byte payload doubling as its own enable flag.
+//! Frozen at construction, so this is a plain read. False for a null handle.
+bool shekyl_relay_zone_covert_enabled(const RelayZoneHandle* handle);
+
+//! R-1: should this RELAYED transaction be diverted onto the anonymity zone's
+//! stem? One roll, at entry. A verdict crosses, not a probability -- the rate
+//! and its per-hop meaning stay in Rust. Callers own the pre-fluff test: a
+//! transaction that has fluffed must leave the zone.
+bool shekyl_relay_zone_divert_relayed_tx();
+
+//! The outbound floor the embargo provisioning assumes (F-8b): counts below
+//! this put real fluff first-passage above the provisioned value.
+std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
+
+//! Outbound connections a node opens per zone by default. Rust-owned (rule
+//! 20); replaces `#define P2P_DEFAULT_CONNECTIONS_COUNT`. This is the degree
+//! the relay-privacy measurements are taken AT; the floor above is derived
+//! FROM those measurements. Same value today, opposite derivations -- do not
+//! substitute one for the other.
+std::uint32_t shekyl_p2p_default_out_peers();
+
+//! Record `n` packed 32-byte CANONICAL tx hashes stemmed to `successor`
+//! (16-byte uuid); `source` is the arriving peer's uuid or null for local
+//! origin. Canonical, not blob-derived — blob bytes are not a stable identity
+//! across relay hops (F-9). The observation deadline is drawn in the zone from
+//! its cached adopted-embargo timer at `now_ms` (not rebuilt at the FFI edge).
+void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
+    const std::uint8_t* hashes, std::size_t n,
+    const std::uint8_t* successor, const std::uint8_t* source,
+    std::uint64_t now_ms);
+
+//! Record `n` arrived canonical tx hashes, `from` a peer (16-byte uuid, or
+//! null when the arrival has no peer). Any zone, any path -- but NOT any
+//! peer: an arrival from the successor an observation is charged to resolves
+//! nothing, or a dropper clears its own record by echoing (F-10). Unknown
+//! hashes are ignored; call on EVERY zone's handle, since a stem placed on
+//! one zone can return through another.
+void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
+    const std::uint8_t* hashes, std::size_t n, const std::uint8_t* from);
+
+//! Fixed-layout stem-tally row for the §55 transit path (native endian, 40
+//! bytes). Must match `ShekylStemTallyRow` in the Rust FFI.
+struct ShekylStemTallyRow
+{
+  std::uint8_t peer[16];
+  std::uint64_t propagated;
+  std::uint64_t silent;
+  std::uint64_t distinct_sources;
+};
+static_assert(sizeof(ShekylStemTallyRow) == 40, "stem tally row layout");
+
+//! Copy this zone's published stem-outcome rows into `buf`. Returns the row
+//! count NEEDED, which may exceed `cap_rows` -- in that case nothing is
+//! written and the caller retries. The second call's return is authoritative
+//! when a write succeeds; do not require it to equal the first probe (publish
+//! can shrink or grow between calls). Reads a published snapshot, not the
+//! tallies map: safe from any thread, same discipline as stem_in_flight.
+//!
+//! TRANSIT, NOT STRUCTURE: rows (not JSON) so multi-zone merge can sort and
+//! serialise once. The data is Rust's and the consumer is Rust's
+//! (shekyl-daemon-rpc); this round trip exists only because C++ net_node owns
+//! the zone handles' lifetime. When p2p migrates, this and its C++
+//! passthrough both disappear. Do not build on it.
+std::size_t shekyl_relay_zone_stem_snapshot(const RelayZoneHandle* handle,
+    ShekylStemTallyRow* buf, std::size_t cap_rows);
+
+//! Stem observations still pending resolution (0 for null handle). Reads a
+//! published atomic — safe from any thread, same discipline as live_stems.
+std::size_t shekyl_relay_zone_stem_in_flight(const RelayZoneHandle* handle);
+//! Free a zone. Null is a no-op; free exactly once.
+void shekyl_relay_zone_free(RelayZoneHandle* handle);
+//! A peer completed its handshake.
+void shekyl_relay_zone_on_handshake(RelayZoneHandle* handle, const std::uint8_t* id, bool is_income);
+//! A peer disconnected.
+void shekyl_relay_zone_on_close(RelayZoneHandle* handle, const std::uint8_t* id);
+//! Stem slots backed by a live peer — the inherited `connection_count`. Reads a
+//! single-writer atomic, so it is safe from any thread.
+std::size_t shekyl_relay_zone_live_stems(const RelayZoneHandle* handle);
+//! Configured stem width (slot count). When covert is enabled this is also the
+//! channel count (channel i follows slot i). Size the C++ channel deque from
+//! this so the two widths cannot silently diverge.
+std::size_t shekyl_relay_zone_stem_width(const RelayZoneHandle* handle);
+//! Earliest time the zone has work; what the asio timer is armed against.
+std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
+//! One of the SHEKYL_RELAY_PLAN_* codes. Three-way, not a bool: a transient
+//! routing failure (retry after a refresh) and a settled fluff epoch (do not)
+//! also report different relay_method events. Deciding between them in C++
+//! would mean a second copy of the RD-4 predicate `!fluffing || local_origin`.
+//! A null handle reports NO_ROUTE. Pure plan — production notify prefers
+//! shekyl_relay_zone_plan_relay_with_refresh, which owns the one NoRoute
+//! refresh; keep this for a forced refresh already performed (send-failure
+//! retry) and for tests.
+std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::uint8_t* source,
+                                          bool local_origin, std::uint8_t* out_dest);
+//! Plan a relay; on NO_ROUTE merge `outbound` once and re-plan. Settled fluff
+//! epochs do not refresh. This is the production notify path: the refresh
+//! policy lives in Rust with the zone. No callback — commands return nothing;
+//! a covert channel the refresh leaves unbound clears at its next due tick
+//! through shekyl_relay_zone_poll's on_unbind.
+std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
+    RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
+    const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest);
+//! Merge the current outbound set into the stem map mid-epoch. Used for
+//! connection churn, covert-send recovery, and the forced refresh after a stem
+//! send failure. No callback — see plan_relay_with_refresh.
+void shekyl_relay_zone_update_stems(RelayZoneHandle* handle, const std::uint8_t* outbound,
+                                    std::size_t n);
+//! Accept a batch for fluffing to every peer but `source`. Returns how many
+//! peers took it — zero means nothing is connected to fluff to, or a blob span
+//! was invalid (null ptr with non-zero len). Empty blobs (`len == 0`) are valid
+//! and may pass a null ptr; non-empty spans require a live readable ptr.
+std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
+                                          const ShekylRelayBlob* blobs, std::size_t n,
+                                          const std::uint8_t* source);
+//! Run every step due at now_ms, delivering results through the callbacks. The
+//! outbound set is not passed in: `gather_outbound` is called back only when a
+//! wake crosses an epoch boundary and the stem map is rebuilt, so a fluff
+//! release never triggers the connection scan.
+void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
+                            ShekylRelayOutboundCb gather_outbound,
+                            ShekylRelayFluffCb on_fluff, ShekylRelayCovertUnbindCb on_unbind,
+                            ShekylRelayCovertSendCb on_covert);
+//! Release every pending fluff batch — what notify::run_fluff() drives.
+void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
+                                   void* ctx, ShekylRelayFluffCb on_fluff);
+//! Start a new epoch immediately — what notify::run_epoch() drives. No
+//! callback — the rollover's covert consequences ride the schedule, exactly
+//! as a deadline-crossing rollover's do.
+void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
+                                   const std::uint8_t* outbound, std::size_t n);
+
+// ── Levin payload compression (IMPLEMENTATION_INDEX.md LV row) ─────────────
+//
+// The epee::levin compression path is a marshaling shim over these exports
+// (emit: contrib/epee/src/levin_base.cpp try_compress_message; receive:
+// contrib/epee/src/levin_compression.cpp), so the Rust-pinned libzstd is the
+// single zstd implementation in the binary — the system-libzstd link and the
+// HAVE_ZSTD build gate are gone. The C++ carries no compression policy: what
+// may be compressed, at what level, above what size, and the COMPRESSED
+// header rewrite are all in rust/shekyl-levin.
+//
+// Emit is message-level and receive is frame-level, because the questions
+// differ: on the way out, whether a buffer may be compressed at all is a
+// property of its bucket header; on the way in, the handler has already
+// parsed and range-checked that header and holds one opaque zstd frame.
+//
+// Return codes (rule 40): 0 = ok (output parameter set); 1 = compression
+// declined, send uncompressed (not an error; out is nulled); -3 = malformed
+// or size-less frame; -4 = null pointer / undersized output buffer;
+// -6 = the Rust image was built without the zstd feature (production always
+// has it on; pure-Rust feature-off builds only); -7 = a size limit was
+// exceeded.
+//
+// -3 and -7 are separate because they call for opposite operator responses
+// — a corrupt or hostile peer versus an honest peer whose batch outgrew the
+// per-command cap — and the receive path closes the connection on both.
+//
+// Decompression writes into CALLER storage: size it with
+// shekyl_levin_inflated_size, then inflate with shekyl_levin_decompress_into.
+// Nothing is allocated on the Rust side and nothing is copied across the
+// boundary, which matters during IBD where these are multi-megabyte block
+// batches once per packet per connection. Only compression returns a
+// Rust-allocated ShekylBuffer (its output size is not knowable in advance),
+// and that buffer MUST be freed with shekyl_buffer_free.
+
+//! Compress one finalized Levin message — header and payload together.
+//! 0 = out holds the re-framed COMPRESSED message (free with
+//! shekyl_buffer_free); 1 = declined, send the input unchanged. Decline
+//! covers every refusal: below the 256-byte payload minimum, not smaller
+//! compressed, already compressed, not exactly one message, or the
+//! noise/fragment class whose constant on-wire size must not move. The
+//! caller keeps its input in both cases.
+int32_t shekyl_levin_compress_message(const uint8_t* input, size_t input_len,
+                                      ShekylBuffer* out);
+//! Read a COMPRESSED payload's frame header and report the exact inflated
+//! size. The frame must declare its content size, and that size is checked
+//! against min(max_output, 128 MiB) before the caller sizes anything from
+//! it — pass the packet-size limit the bucket header was checked against,
+//! which makes the bound on an inflated payload identical to the bound the
+//! same connection enforces on an uncompressed one.
+int32_t shekyl_levin_inflated_size(const uint8_t* input, size_t input_len,
+                                   uint64_t max_output, size_t* out_size);
+//! Inflate a COMPRESSED payload directly into caller-owned storage. `out`
+//! must be `out_cap` writable bytes sized from shekyl_levin_inflated_size on
+//! the same input; a frame that does not deliver exactly `out_cap` bytes is
+//! rejected rather than partially written.
+int32_t shekyl_levin_decompress_into(const uint8_t* input, size_t input_len,
+                                     uint8_t* out, size_t out_cap,
+                                     size_t* out_written);
 
 } // extern "C"
 

@@ -14,7 +14,6 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyl-gen-ssl-cert` | TLS certificate / key generator for RPC |
 | `shekyl-blockchain-import` | Import a bootstrap file into the chain DB |
 | `shekyl-blockchain-export` | Export chain DB to a bootstrap file |
-| `shekyl-blockchain-mark-spent-outputs` | Build a spent-output database (historical/analytical) |
 | `shekyl-blockchain-usage` | Output-reuse histogram |
 | `shekyl-blockchain-ancestry` | Trace output ancestry graphs |
 | `shekyl-blockchain-depth` | Measure transaction depth to coinbase (historical/analytical) |
@@ -23,9 +22,8 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyl-blockchain-prune-known-spent-data` | Prune known-spent output buckets |
 | `shekyl-utils-deserialize` | Decode hex blobs to human-readable JSON |
 | `shekyl-utils-object-sizes` | Print sizeof for core data structures |
-| `shekyl-utils-dns-checks` | Verify Shekyl DNS seed/update records |
 
-The last three (`shekyl-utils-*`) are only built when `BUILD_DEBUG_UTILITIES=ON`.
+The `shekyl-utils-*` executables are only built when `BUILD_DEBUG_UTILITIES=ON`.
 
 ---
 
@@ -66,14 +64,11 @@ shekyld [options] [command]
 | `--max-log-files <n>` | Number of rotated archives to retain (default 50; `0` disables pruning) |
 | `--non-interactive` | Disable interactive console (for use under a service manager) |
 | `--rpc-bind-ip <ip>` | RPC listen address (default `127.0.0.1`) |
-| `--rpc-bind-port <port>` | RPC listen port (default per network, see table above) |
+| `--rpc-bind-port <port>` | RPC listen port (default per network, see table above); Axum sole transport |
 | `--restricted-rpc` | Restrict RPC to view-only / safe methods |
 | `--rpc-restricted-bind-port <port>` | Separate restricted RPC listener |
-| `--rpc-login <user:pass>` | HTTP digest authentication for RPC |
+| `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
 | `--confirm-external-bind` | Required when binding RPC to non-loopback |
-| `--rpc-ssl <mode>` | `enabled`, `disabled`, or `autodetect` |
-| `--rpc-ssl-certificate <pem>` | TLS certificate for RPC |
-| `--rpc-ssl-private-key <pem>` | TLS private key for RPC |
 | `--p2p-bind-port <port>` | P2P listen port |
 | `--add-peer <ip:port>` | Add a persistent peer |
 | `--add-priority-node <ip:port>` | Always try to connect to this peer |
@@ -461,29 +456,13 @@ shekyl-blockchain-export --blocksdat --output-file blocks.dat
 Key options: `--output-file`, `--data-dir`, `--block-start`, `--block-stop`,
 `--blocksdat`.
 
-### `shekyl-blockchain-mark-spent-outputs`
-
-Builds a database of known-spent outputs. This tool is retained for
-historical and analytical purposes. Ring-based output selection analysis is
-not applicable to FCMP++ transactions, which use full UTXO set membership
-proofs.
-
-```bash
-# Scan the default chain database
-shekyl-blockchain-mark-spent-outputs ~/.shekyl/lmdb
-
-# Export the spent-output list
-shekyl-blockchain-mark-spent-outputs ~/.shekyl/lmdb --export
-```
-
-Key options: positional `<input path(s)>`, `--spent-output-db-dir`,
-`--rct-only`, `--check-subsets`, `--export`, `--extra-spent-list`.
-
 ### `shekyl-blockchain-usage`
 
-Prints a histogram of output amount references. This tool is retained for
-historical and analytical purposes. Ring-based analysis is not applicable to
-FCMP++ transactions.
+Prints a histogram of output reuse — how many times each output appears as a
+ring member in transaction inputs. FCMP++ inputs carry no ring-member
+references, so this tool has no substrate on post-genesis data; it is a
+deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
+utilities entry).
 
 ```bash
 shekyl-blockchain-usage ~/.shekyl/lmdb
@@ -495,8 +474,10 @@ Key options: positional `<input path>`, `--rct-only`.
 ### `shekyl-blockchain-ancestry`
 
 Traces the ancestry graph of transaction outputs to understand output
-provenance. This tool is retained for historical and analytical purposes.
-Ring-based ancestry analysis is not applicable to FCMP++ transactions.
+provenance. FCMP++ spends do not reveal which output they consume, so
+ancestry tracing has no substrate on post-genesis transactions; this tool is
+a deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
+utilities entry).
 
 ```bash
 # Refresh the ancestry cache, then query by txid
@@ -512,8 +493,10 @@ Key options: `--data-dir`, `--txid`, `--output <amount/offset>`, `--height`,
 ### `shekyl-blockchain-depth`
 
 For a given transaction or block, walks inputs back to coinbase and reports
-the minimum depth. This tool is retained for historical and analytical
-purposes. Ring-based depth analysis is not applicable to FCMP++ transactions.
+the minimum depth. FCMP++ spends do not reveal which output they consume, so
+input-walking has no substrate on post-genesis transactions; this tool is a
+deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
+utilities entry).
 
 ```bash
 # Depth of a specific transaction
@@ -562,7 +545,11 @@ Key options: `--data-dir`, `--db-sync-mode`, `--copy-pruned-database`.
 
 ### `shekyl-blockchain-prune-known-spent-data`
 
-Removes output data for amounts where all outputs are provably spent.
+Removes output data for amounts where all outputs are provably spent. Under
+FCMP++ no output is ever provably spent (spends do not reveal which output
+they consume), so this tool has no substrate on post-genesis data; it is a
+deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
+utilities entry).
 
 ```bash
 # Dry run to see what would be pruned
@@ -600,18 +587,6 @@ shekyl-utils-object-sizes
 ```
 
 No options — simply run and inspect the output.
-
-### `shekyl-utils-dns-checks`
-
-Resolves Shekyl's hardcoded DNS seed, update, checkpoint, and seg-height
-hostnames and verifies DNSSEC signatures. Reports whether all name servers
-return consistent results.
-
-```bash
-shekyl-utils-dns-checks
-```
-
-No options — performs all checks and prints results.
 
 ---
 

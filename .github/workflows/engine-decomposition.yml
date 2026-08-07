@@ -1,0 +1,48 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Engine decomposition anti-drift guard
+# (`docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`).
+#
+# Runs `scripts/ci/check_engine_decomposition.sh` on every PR that touches
+# the Engine composition root, the ratchet baselines, or the check itself.
+# The script turns the decomposition doc's "How you'll know it worked"
+# criteria from reviewer aspiration into an enforced, ratcheting invariant:
+# Engine's generic count is frozen, its field count and the named god-files
+# can only shrink, and no new engine/*.rs may cross the god-file cap without
+# a reviewed baseline entry. Same structural-enforcement family as
+# check_zeroize.sh and check_segment_freeze_sites.sh.
+
+name: ci/engine-decomposition
+
+on:
+  # No `branches:` filter: monolith re-formation can be introduced on any
+  # branch and merge up through a feature branch, so the gate must run on
+  # every PR regardless of base (house pattern: pending-post-write-path.yml).
+  pull_request:
+    paths:
+      - "rust/shekyl-engine-core/src/engine/**"
+      - "scripts/ci/check_engine_decomposition.sh"
+      - "scripts/ci/engine_decomposition_ratchet.conf"
+      - ".github/workflows/engine-decomposition.yml"
+
+concurrency:
+  group: engine-decomposition-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check-engine-decomposition:
+    name: "Engine decomposition ratchet"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pure awk/wc/find/sed — no ripgrep dependency, unlike the grep-family
+      # gates. Nothing to install.
+      - name: Run engine decomposition check
+        run: scripts/ci/check_engine_decomposition.sh

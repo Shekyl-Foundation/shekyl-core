@@ -20,7 +20,7 @@ that the alternatives are wrong forever.
 **Scope.** This doc covers wallet-side refresh — the pipeline by
 which a wallet identifies on-chain outputs addressed to it. The
 post-genesis chain is canonical
-`RCTTypeFcmpPlusPlusPqc`-only ([`60-no-monero-legacy.mdc`](../../.cursor/rules/60-no-monero-legacy.mdc));
+`CTTypeFcmpPlusPlusPqc`-only ([`60-no-monero-legacy.mdc`](../../.cursor/rules/60-no-monero-legacy.mdc));
 no pre-genesis chain or legacy transaction types factor into the
 landscape.
 
@@ -365,5 +365,5 @@ a different prune-shape refinement is preferable.
   [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc).
 - **No Monero legacy.**
   [`60-no-monero-legacy.mdc`](../../.cursor/rules/60-no-monero-legacy.mdc)
-  (canonical chain is `RCTTypeFcmpPlusPlusPqc` from genesis;
+  (canonical chain is `CTTypeFcmpPlusPlusPqc` from genesis;
   no pre-genesis refresh paths factor into the landscape).

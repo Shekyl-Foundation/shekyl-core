@@ -2036,7 +2036,7 @@ commit without any signature change.
 
 **Stub error variant.** `OpenError::CapabilityNotYetImplemented` is
 explicitly transient. It carries a deletion-target prose comment in
-[`rust/shekyl-wallet-core/src/wallet/error.rs`](../rust/shekyl-wallet-core/src/wallet/error.rs)
+`rust/shekyl-wallet-core/src/wallet/error.rs`
 naming `docs/FOLLOWUPS.md` *V3.0 → "View/HW lifecycle bodies in
 `shekyl-wallet-core`"* as the deletion gate. When the constructors
 land and the stub bodies are filled in, the variant is removed in
@@ -4424,6 +4424,201 @@ locally-built daemon. The dead in-place propagation + the now-unused
 
 **Reference.** PR #197;
 [`docs/completed/DEPTH3_CURVE_TREE_CUTOVER.md`](completed/DEPTH3_CURVE_TREE_CUTOVER.md).
+
+---
+
+## 2026-07-10 — `ShardSource::aggregate_for`: `shard_hash` is authoritative, not advisory
+
+**Decision.** The `ShardSource` trait contract requires `aggregate_for` to
+treat `handle.shard_hash` as an identity assertion, not just wire payload: it
+resolves the aggregate by `shard_id`, then **must** return an error when the
+resolved aggregate's `shard_hash` does not equal `handle.shard_hash`. A new
+`ShardSourceError::StaleHandle { shard_id, expected, found }` variant carries
+the mismatch. `FixtureShardSource` enforces this today (the fixtures are
+static, so the check always passes); the Stage 5 `ArchivalShardSource` inherits
+the contract in writing rather than rediscovering the trap. `hash_override` is
+unaffected — it remains a *separate*, explicit compositor-seed for the GUI's
+variant-explore path and is never an identity key.
+
+**Rationale.** The candidate.v1 visual *is* an identity signal: a shard's
+content hash deterministically produces its look, and that binding is the
+feature. Resolving purely by `shard_id` (the originally shipped behavior in
+PR #289) means a stale handle — a GUI holding a handle built from a previous
+shard list after the source's shard set changed — silently renders a different
+shard's aggregate under the hash the user expected, presenting one shard's
+identity under another's. Per rule 82 (failure modes are first-class), a stale
+handle is a genuine failure mode and must surface as an error, not a wrong
+render. The guard costs nothing on the fixtures path and is not speculative
+scaffolding (rule 21): it is a *contract*, written before the mutable source
+that makes the mismatch reachable exists, so the Stage 5 implementer conforms
+to it instead of reintroducing the silent-wrong-render path. Two independent
+reviewers (the high-effort review and GitHub Copilot) landed on this same
+concern.
+
+**Alternative rejected.** "Resolve-by-id is the contract; document `shard_hash`
+as renderer/wire-only." Rejected because it leaves the wrong-render failure
+mode latent through the entire fixtures era and defers the guard to a Stage 5
+author who has no written contract pointing at it — exactly the "silent trap
+rediscovered later" that a decision log exists to prevent. The mission
+hierarchy does not force this (it is UX-correctness, not a PQC/privacy
+tradeoff), but fail-closed is the cheaper and more honest default here.
+
+**Reference.** PR #289; high-effort review + Copilot review, 2026-07-10.
+
+---
+
+## 2026-07-17 — Solo address `ek_bind_tag`: bind the PQC segments to the classical segment
+
+**Decision.** The full solo address's classical segment carries a 16-byte
+`ek_bind_tag = cSHAKE256("shekyl/ek-bind-v1", ml_kem_ek)[..16]`. Decode
+reconstructs `ml_kem_ek` from the two PQC segments and rejects
+(`AddressError::EkBindMismatch`) when the recomputed tag does not match. This is
+a pre-genesis amendment to the solo address format: the classical payload grows
+`1 + 64 → 1 + 64 + 16 = 81` bytes (`CLASSICAL_PAYLOAD_LEN` unchanged; new
+`EK_BIND_TAG_LEN`), and the address grows ~2,030 → ~2,055 chars. The short
+display/view-only form (65 B, no tag) is unchanged — it is a non-payable label
+with no PQC segments to bind. A pinned KAT (`ek_bind_tag_kat`) freezes the
+preimage; `const _` asserts pin every segment under Bech32m's 1023-char bound at
+compile time.
+
+**Rationale.** Each of the three Bech32m segments carries an independent
+checksum that detects corruption *within* a segment but binds nothing *across*
+them. A spliced address — classical from one party, PQC segments from another —
+decoded clean, and a payer built an output encapsulating to a mismatched
+`ml_kem_ek`: the recipient cannot recover the KEM shared secret, so the output
+is unrecognizable and effectively burned, with no diagnostic. That is a live
+funds-loss path on any copy-paste/transcription splice (rule 82: failure modes
+are first-class). One hash over `ml_kem_ek`, committed in each legitimate
+classical segment, makes the mismatch a decode error in either splice direction.
+A hash — not a signature — because the binding is a PQ-critical integrity gate
+and a hash is the only compact PQ-secure primitive: any signature would drag a
+>1 KB PQ verification key into the address (the same wall). The tag is spec'd as
+a splice/transcription detector, **not** a cryptographic binding against a
+preimage adversary (16 bytes: 2^128 classical, 2^64 Grover), because an
+adversary who can rewrite half the pasted string can substitute the whole
+address for free — the compromised-origin limit no tag closes.
+
+**Alternative rejected.** (1) *Unify solo onto the multisig file+fingerprint
+model* (name = hash, payload filed). Rejected for V3.0: it makes solo
+unpasteable and reintroduces a payment-time metadata channel via any external
+registry fetch; solo is under the Bech32m wall and stays a full pasteable
+string. The multisig side (over the wall) correctly went file+fingerprint in PR
+#323 — two models, both correct, by validation surface, not symmetry. (2)
+*Widen the tag to `cSHAKE256(spend ‖ view ‖ ek)`* to also catch a deliberate
+classical-substitution-with-kept-ek. Rejected: spend/view corruption is already
+caught by the classical segment's own Bech32m checksum, and the deliberate
+splice is a burn (not theft) dominated by "hand over your own valid address,"
+so the extra preimage buys nothing over the accident-detection the tag is for.
+
+**Reference.** Solo `ek_bind` PR; `rust/shekyl-address/src/address.rs`;
+POST_QUANTUM_CRYPTOGRAPHY.md §Address Format; follows the multisig cSHAKE
+fingerprint precedent (PR #323).
+
+---
+
+## 2026-07-19 — `P`-lane fees: one uniform rule — canonical fee, paid from persona working capital (cover + earnings)
+
+**Decision.** Every `P`-attributed transaction — all five bond-post kinds
+(`JoinMarket`, `Rebond`, `Unbond`, both `HoldingsUpdate` directions) and the
+emission claim — carries the **standard weight-priced floor fee**. No fee-less
+transaction class exists on the `P` lane. The fee is funded from the
+**persona's own working capital**: the JoinMarket cover outputs first, claim
+(earnings) outputs as they carry — "cover + earnings, as required"
+(maintainer ruling, 2026-07-19). Four load-bearing consequences:
+
+1. **Typed `P`-space coin pool.** `P`-lane fee/funding-input selection draws
+   from a typed source set (cover outputs + claim outputs). Reaching a
+   principal output is made *unrepresentable* in the selector's type — an
+   enforced invariant, not selection-policy discipline. (On-chain either way
+   is membership-hidden under FCMP++; the type is origin-edge hygiene at the
+   wallet layer, same posture as `P`'s dedicated Arti client.)
+2. **Exit-fee reserve invariant (wallet-side, spend-time).** The wallet never
+   spends the `P`-space pool below a reserved exit allowance
+   (`EXIT_FEE_RESERVE_ATOMIC`, a pessimistically-margined weight-priced
+   `Unbond` fee). Every mid-life constructor treats the reserve as a spend
+   floor. The reserve is enforced at **spend** time only — it is *not* a
+   draw-time input, preserving the ratified DQ4 stance that the cover is an
+   entropy draw, privacy-primary, with working-capital use strictly
+   downstream (`ARCHIVAL_COVER_DRAW.md` §1.9/§2.2). The constant lands with a
+   pinned dominance assert against `COVER_RUNWAY_FLOOR_ATOMIC` (1 rung =
+   750,000,000 atomic dominates any realistic fee by orders of magnitude, so
+   `C_min` needs no re-derivation — the assert makes that arithmetic loud
+   instead of assumed).
+
+   **Update (2026-07-21) — the dominance premise is voided.** The cover draw
+   no longer has a guaranteed runway floor: `COVER_RUNWAY_FLOOR_ATOMIC` (and
+   the whole `span(C)` curve) is retired, and the production draw is
+   `cover ~ U(0, bond_floor)` (`ARCHIVAL_COVER_DRAW.md`), whose minimum is 1
+   atomic. Working capital is **supplied by the user on top** of the drawn
+   cover, not guaranteed by it. So there is no cover-side reserve to dominate a
+   fee with; the exit-fee guarantee must be re-derived against user-supplied
+   working capital (a wallet-enforced spend-time floor), and must **not** be
+   re-pinned against the cover draw's upper bound `COVER_RUNG_ATOMIC` — that is
+   a ceiling, not a floor. The original decision text above is preserved per
+   the append-only discipline; this note supersedes its `C_min`/dominance
+   arithmetic.
+3. **Destitute escape hatch = the already-admitted Q11 form.** Consensus
+   already admits the zero-fee-input emission claim (fee paid out of the
+   mint; the balance closes through the debit slot —
+   `DAEMON_SUBMIT_VERDICT.md` E11/Q11). The wallet's structural refusal
+   (`ClaimFeeInputsRequired`, `backing_set.rs`) becomes **conditional**:
+   allowed exactly when the `P`-space pool sits below the exit reserve. A
+   persona in the bad corner bootstraps in two steps — mint-funded claim,
+   then `Unbond` from the claimed output — so the exit chain is constructible
+   from zero pool balance whenever any earnings are claimable. The one
+   residual (drained pool *and* nothing claimable) is reachable only by
+   external violation of the reserve invariant (stale-state restore, reorg
+   eating the last claim) and is named here rather than assumed away.
+4. **No fee knob on the `P` lane.** The fee is the canonical per-block floor
+   at construction time, deterministic given (weight, floor params). A
+   wallet-side estimator multiplier or user-visible fee control would be a
+   wallet-fingerprint channel in a cleartext field on `P`-attributed
+   transactions — the one edge the firewall defends. Uniform fee = zero
+   fingerprint bits.
+
+The wire needs nothing: the balance equation carries `fee` for every
+`post_kind` (`Σ pseudoOuts + bond_debit = Σ out_masks + fee + bond_credit`,
+`bond_ct_balance.rs`), and the §3.3 envelope already admits `txin_to_key`
+inputs on every bond post. This is a construction-policy + admission-policy
+decision, implemented with the `Unbond` wallet constructor (the SP-R0 arm-#2
+production-discharge family).
+
+**Rationale.** The trigger question was whether the fee-less `Unbond` (the
+only fee-less class) is a privacy leak. Direct answer: **not incrementally**
+— the vin already names `p_canonical_id` and `post_kind` in cleartext, so
+fee-less-ness adds zero partition bits on top of the type's own disclosure
+(typed-island rule). The real defects were adjacent: (a) **admission** — the
+daemon-submit taxonomy classifies zero-fee as `Malformed`, deterministically
+permanent, so the fee-less exit was unrelayable as designed; (b) **exit
+liveness** — a relay/miner carve-out for one tx class is sustained-compliance
+infrastructure with zero inclusion incentive under fee pressure, i.e. a
+hostage failure mode on the one transaction a staker must always be able to
+make (rule 82); (c) **fee-fingerprint** — cleartext fee values chosen by
+tunable estimators leak wallet identity across the origin edge (hence
+consequence 4). One uniform rule dissolves the uniqueness question, closes
+the admission gap with machinery that already exists (E11's shared K12
+funding-subset leg), and realizes `C_min`'s stated purpose — the
+working-capital runway "until earnings carry" — as the fee source.
+
+**Alternatives rejected.** (1) *Keep `Unbond` fee-less + relay carve-out.*
+Differential relay treatment for one class, forever, at every node — the
+silent-compliance shape, plus starvation under fee pressure. (2) *Debit-funded
+exit fee* (`outputs = FLOOR − fee`, the Q11 mirror on the bond debit; no fee
+inputs). Unconditionally live and input-less, but it splits the `P` lane into
+two fee regimes and *routes around* the exhausted-runway edge case instead of
+addressing it — the reserve invariant + destitute hatch address it once, for
+every post kind, under one rule. Rejected by maintainer for exactly that
+edge-case-hygiene reason; retained on record as the shape the Q11 emission
+form already embodies (mint-funded), which is what makes the escape hatch in
+consequence 3 free.
+
+**Reference.** Maintainer ruling 2026-07-19 (this entry);
+`ARCHIVAL_BOND_GATE4.md` §3.2 fee note; `ARCHIVAL_BOND_CONSTRUCTION.md` §7.3;
+`ARCHIVAL_COVER_DRAW.md` §2.2 addendum; `DAEMON_SUBMIT_VERDICT.md` E11 + §8.7.2
+fee-floor note; `rust/shekyl-archival-retention/src/bond_ct_balance.rs`;
+`rust/shekyl-engine-core/src/engine/backing_set.rs`
+(`ClaimFeeInputsRequired`); FOLLOWUPS "V3.x — staker archival" (implementation
+rider).
 
 ---
 

@@ -7,13 +7,36 @@
 //!
 //! A Shekyl address consists of up to three Bech32m segments joined by `/`:
 //!
-//! 1. **Classical**: `<hrp>1<version><spend_key><view_key>` (~113 chars)
+//! 1. **Classical**: `<hrp>1<version><spend_key><view_key><ek_bind_tag>` (~140 chars)
 //! 2. **PQC-A**: `<pqc_a_hrp>1<first_half_ml_kem_key>` (~960 chars)
 //! 3. **PQC-B**: `<pqc_b_hrp>1<second_half_ml_kem_key>` (~960 chars)
 //!
 //! Each segment stays within Bech32m's proven checksum detection range
-//! (~1023 characters). The classical segment alone is sufficient for
-//! human identification; the PQC segments are machine-handled.
+//! (~1023 characters) — a per-payload invariant the `const _` asserts below
+//! pin at compile time, so a future key-size increase (e.g. a V4 lattice key)
+//! becomes a build error rather than a Bech32m checksum that validates but is
+//! no longer proven to detect. The classical segment alone (without the tag,
+//! 65 B) is sufficient for human identification and view-only wallets; the PQC
+//! segments are machine-handled.
+//!
+//! ## `ek_bind_tag` — binding the PQC segments to the classical segment
+//!
+//! Each of the three segments carries its own independent Bech32m checksum,
+//! which detects corruption *within* a segment but binds nothing *across*
+//! them. Without more, a spliced address — classical from one party, PQC from
+//! another — decodes clean and a payer builds an output to a mismatched key
+//! (funds lost, undetected). The full-address classical segment therefore
+//! carries a 16-byte `ek_bind_tag = cSHAKE256("shekyl/ek-bind-v1",
+//! ml_kem_ek)[..16]`; decode reconstructs `ml_kem_ek` from the PQC segments and
+//! rejects on mismatch. Each legitimate classical segment commits to *its own*
+//! `ek`, so an accidental swap in either direction fails.
+//!
+//! It is a splice / transcription detector, **not** a cryptographic binding
+//! against a preimage adversary: 16 bytes is 2^128 classical / 2^64 Grover, and
+//! any adversary who can rewrite half the pasted string can substitute the
+//! whole address for free (the compromised-origin limit no tag closes). Sized
+//! for accident resistance with generous margin. The short display form (65 B)
+//! omits the tag: it is a non-payable label with no PQC segments to bind.
 
 use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
 
@@ -22,14 +45,68 @@ use crate::network::{self, Network};
 /// Current address version byte.
 pub const ADDRESS_VERSION_V1: u8 = 0x01;
 
+/// Ed25519 public key size; the classical payload carries a spend key and a
+/// view key back to back.
+const PUBKEY_LEN: usize = 32;
+
 /// Ed25519 spend + view key total size.
-pub const CLASSICAL_PAYLOAD_LEN: usize = 64;
+pub const CLASSICAL_PAYLOAD_LEN: usize = 2 * PUBKEY_LEN;
+
+/// Length of the ek-binding tag carried in the full-address classical segment
+/// (a domain-separated cSHAKE256 commitment to the ML-KEM encapsulation key,
+/// truncated). See the module docs for the threat model and why 16 bytes.
+pub const EK_BIND_TAG_LEN: usize = 16;
+
+// Classical-segment byte layout: `version || spend || view || [ek_bind_tag]`.
+// Every offset and segment length is derived from the field sizes, so decode
+// slicing never hard-codes a literal offset that could drift if the layout
+// changes again.
+/// Address version prefix length (one byte, `ADDRESS_VERSION_V1`).
+const VERSION_LEN: usize = 1;
+/// Offset of the spend key (immediately after the version prefix).
+const SPEND_OFFSET: usize = VERSION_LEN;
+/// Offset of the view key.
+const VIEW_OFFSET: usize = SPEND_OFFSET + PUBKEY_LEN;
+/// Length of the display/view-only classical segment (`version || spend ||
+/// view`); also the offset at which the `ek_bind_tag` begins in the full form.
+const CLASSICAL_SEGMENT_LEN: usize = VIEW_OFFSET + PUBKEY_LEN;
+/// Length of the full-address classical segment (adds the `ek_bind_tag`).
+const CLASSICAL_BOUND_SEGMENT_LEN: usize = CLASSICAL_SEGMENT_LEN + EK_BIND_TAG_LEN;
+/// The offset-derived layout must agree with the exported payload length.
+const _: () = assert!(CLASSICAL_SEGMENT_LEN == VERSION_LEN + CLASSICAL_PAYLOAD_LEN);
+
+/// Domain separator for the ek-binding tag. Genesis-frozen: a preimage change
+/// is a new domain (`-v2`), never a silent reinterpretation. Not a consensus
+/// generator DST, so it is intentionally absent from `FROZEN_DOMAIN_SEPARATORS`
+/// (that list is for point-deriving DSTs); the freeze is this literal plus the
+/// pinned KAT in the tests below.
+const EK_BIND_DST: &[u8] = b"shekyl/ek-bind-v1";
 
 /// ML-KEM-768 encapsulation key size.
 pub const PQC_PAYLOAD_LEN: usize = 1184;
 
 /// Split point for PQC payload (half of 1184).
 const PQC_SPLIT: usize = 592;
+
+/// Bech32m string length for a `payload_bytes`-byte payload under an
+/// `hrp_len`-char HRP: `hrp + '1' separator + ceil(bytes*8/5) data chars +
+/// 6-char checksum`. `const fn` so the ceiling below is a compile-time fact.
+const fn bech32m_char_len(payload_bytes: usize, hrp_len: usize) -> usize {
+    hrp_len + 1 + (payload_bytes * 8).div_ceil(5) + 6
+}
+
+/// Longest HRP across the PQC segments and networks (`sskpq2` / `tskpq2`).
+const MAX_PQC_HRP_LEN: usize = 6;
+/// Longest classical HRP across networks (`tshekyl` / `sshekyl`, 7 chars).
+const MAX_CLASSICAL_HRP_LEN: usize = 7;
+
+// Bech32m's BCH checksum is proven to detect errors only up to 1023 characters.
+// Each segment must stay strictly under that bound, or its checksum can validate
+// a corrupted string undetected. These fire at build time if any payload grows
+// past what its segment can safely carry — the wall a KAT would otherwise find.
+const _: () = assert!(bech32m_char_len(PQC_SPLIT, MAX_PQC_HRP_LEN) < 1023);
+const _: () = assert!(bech32m_char_len(PQC_PAYLOAD_LEN - PQC_SPLIT, MAX_PQC_HRP_LEN) < 1023);
+const _: () = assert!(bech32m_char_len(CLASSICAL_BOUND_SEGMENT_LEN, MAX_CLASSICAL_HRP_LEN) < 1023);
 
 /// Separator between segments.
 pub const SEGMENT_SEPARATOR: char = '/';
@@ -64,6 +141,12 @@ pub enum AddressError {
 
     #[error("unrecognized address HRP '{0}'")]
     UnknownHrp(String),
+
+    #[error(
+        "ek-binding tag mismatch: the classical and PQC segments do not belong \
+         to the same address (spliced or corrupted)"
+    )]
+    EkBindMismatch,
 }
 
 /// A decoded Shekyl address.
@@ -95,6 +178,15 @@ fn parse_hrp(s: &str) -> Result<Hrp, AddressError> {
     Hrp::parse(s).map_err(|e| AddressError::Encoding(format!("invalid HRP '{s}': {e}")))
 }
 
+/// The ek-binding tag: `cSHAKE256("shekyl/ek-bind-v1", ml_kem_ek)` truncated to
+/// [`EK_BIND_TAG_LEN`]. Commits the classical segment to the PQC key material.
+fn ek_bind_tag(ml_kem_encap_key: &[u8]) -> [u8; EK_BIND_TAG_LEN] {
+    let digest = shekyl_crypto_hash::cshake256_32(EK_BIND_DST, ml_kem_encap_key);
+    let mut tag = [0u8; EK_BIND_TAG_LEN];
+    tag.copy_from_slice(&digest[..EK_BIND_TAG_LEN]);
+    tag
+}
+
 impl ShekylAddress {
     /// Create a new address for the given network.
     pub fn new(
@@ -122,7 +214,9 @@ impl ShekylAddress {
             });
         }
 
-        let classical = self.encode_classical()?;
+        // Full-address classical segment carries the ek-binding tag; the ek
+        // length was validated above, so the tag commits to a well-formed key.
+        let classical = self.encode_classical_bound()?;
 
         let hrp_a = parse_hrp(network::pqc_a_hrp(self.network))?;
         let hrp_b = parse_hrp(network::pqc_b_hrp(self.network))?;
@@ -135,17 +229,31 @@ impl ShekylAddress {
         ))
     }
 
-    /// Encode just the classical segment (short form for display).
+    /// Encode just the classical segment (short form for display). This is the
+    /// non-payable label form: `version || spend || view`, no ek-binding tag
+    /// (there are no PQC segments to bind).
     pub fn encode_classical_display(&self) -> Result<String, AddressError> {
         self.encode_classical()
     }
 
     fn encode_classical(&self) -> Result<String, AddressError> {
         let hrp = parse_hrp(network::classical_hrp(self.network))?;
-        let mut payload = Vec::with_capacity(1 + CLASSICAL_PAYLOAD_LEN);
+        let mut payload = Vec::with_capacity(CLASSICAL_SEGMENT_LEN);
         payload.push(self.version);
         payload.extend_from_slice(&self.spend_key);
         payload.extend_from_slice(&self.view_key);
+        Ok(bech32m_encode(&hrp, &payload))
+    }
+
+    /// Encode the full-address classical segment: `version || spend || view ||
+    /// ek_bind_tag`. Caller must have validated `ml_kem_encap_key`'s length.
+    fn encode_classical_bound(&self) -> Result<String, AddressError> {
+        let hrp = parse_hrp(network::classical_hrp(self.network))?;
+        let mut payload = Vec::with_capacity(CLASSICAL_BOUND_SEGMENT_LEN);
+        payload.push(self.version);
+        payload.extend_from_slice(&self.spend_key);
+        payload.extend_from_slice(&self.view_key);
+        payload.extend_from_slice(&ek_bind_tag(&self.ml_kem_encap_key));
         Ok(bech32m_encode(&hrp, &payload))
     }
 
@@ -199,11 +307,11 @@ impl ShekylAddress {
             });
         }
 
-        let expected_classical_len = 1 + CLASSICAL_PAYLOAD_LEN;
-        if c_data.len() != expected_classical_len {
+        // Full-address classical segment is `version || spend || view || tag`.
+        if c_data.len() != CLASSICAL_BOUND_SEGMENT_LEN {
             return Err(AddressError::BadLength {
                 segment: "classical",
-                expected: expected_classical_len,
+                expected: CLASSICAL_BOUND_SEGMENT_LEN,
                 got: c_data.len(),
             });
         }
@@ -213,10 +321,11 @@ impl ShekylAddress {
             return Err(AddressError::UnsupportedVersion { version });
         }
 
-        let mut spend_key = [0u8; 32];
-        let mut view_key = [0u8; 32];
-        spend_key.copy_from_slice(&c_data[1..33]);
-        view_key.copy_from_slice(&c_data[33..65]);
+        let mut spend_key = [0u8; PUBKEY_LEN];
+        let mut view_key = [0u8; PUBKEY_LEN];
+        spend_key.copy_from_slice(&c_data[SPEND_OFFSET..VIEW_OFFSET]);
+        view_key.copy_from_slice(&c_data[VIEW_OFFSET..CLASSICAL_SEGMENT_LEN]);
+        let carried_tag = &c_data[CLASSICAL_SEGMENT_LEN..CLASSICAL_BOUND_SEGMENT_LEN];
 
         let mut ml_kem_encap_key = Vec::with_capacity(PQC_PAYLOAD_LEN);
         ml_kem_encap_key.extend_from_slice(&a_data);
@@ -228,6 +337,14 @@ impl ShekylAddress {
                 expected: PQC_PAYLOAD_LEN,
                 got: ml_kem_encap_key.len(),
             });
+        }
+
+        // Bind the PQC segments to this classical segment: the tag committed to
+        // `ml_kem_ek` at encode time must match the key reconstructed from the
+        // PQC segments. A spliced or corrupted address fails here instead of
+        // silently yielding a mismatched encapsulation key.
+        if carried_tag != ek_bind_tag(&ml_kem_encap_key) {
+            return Err(AddressError::EkBindMismatch);
         }
 
         Ok(ShekylAddress {
@@ -244,11 +361,10 @@ impl ShekylAddress {
         let net = network::network_from_hrp(&c_hrp.to_string())
             .ok_or_else(|| AddressError::UnknownHrp(c_hrp.to_string()))?;
 
-        let expected_len = 1 + CLASSICAL_PAYLOAD_LEN;
-        if c_data.len() != expected_len {
+        if c_data.len() != CLASSICAL_SEGMENT_LEN {
             return Err(AddressError::BadLength {
                 segment: "classical",
-                expected: expected_len,
+                expected: CLASSICAL_SEGMENT_LEN,
                 got: c_data.len(),
             });
         }
@@ -258,10 +374,10 @@ impl ShekylAddress {
             return Err(AddressError::UnsupportedVersion { version });
         }
 
-        let mut spend_key = [0u8; 32];
-        let mut view_key = [0u8; 32];
-        spend_key.copy_from_slice(&c_data[1..33]);
-        view_key.copy_from_slice(&c_data[33..65]);
+        let mut spend_key = [0u8; PUBKEY_LEN];
+        let mut view_key = [0u8; PUBKEY_LEN];
+        spend_key.copy_from_slice(&c_data[SPEND_OFFSET..VIEW_OFFSET]);
+        view_key.copy_from_slice(&c_data[VIEW_OFFSET..CLASSICAL_SEGMENT_LEN]);
 
         Ok(ShekylAddress {
             network: net,
@@ -471,5 +587,52 @@ mod tests {
         let main = make_test_address(Network::Mainnet);
         let test = make_test_address(Network::Testnet);
         assert_ne!(main.encode().unwrap(), test.encode().unwrap());
+    }
+
+    #[test]
+    fn ek_bind_splice_rejected() {
+        // Same network (HRP checks pass) but different PQC keys, so the failure
+        // is the ek-binding tag, not an HRP mismatch. Splicing Alice's classical
+        // segment onto Bob's PQC segments must be rejected — the live burn.
+        let alice = ShekylAddress::new(
+            Network::Mainnet,
+            [0x01; 32],
+            [0x02; 32],
+            vec![0xcc; PQC_PAYLOAD_LEN],
+        );
+        let bob = ShekylAddress::new(
+            Network::Mainnet,
+            [0x03; 32],
+            [0x04; 32],
+            vec![0xdd; PQC_PAYLOAD_LEN],
+        );
+
+        let alice_enc = alice.encode().unwrap();
+        let bob_enc = bob.encode().unwrap();
+        let a: Vec<&str> = alice_enc.split('/').collect();
+        let b: Vec<&str> = bob_enc.split('/').collect();
+
+        // Alice's classical (tag commits to Alice's ek) + Bob's PQC segments.
+        let spliced = format!("{}/{}/{}", a[0], b[1], b[2]);
+        assert!(matches!(
+            ShekylAddress::decode(&spliced),
+            Err(AddressError::EkBindMismatch)
+        ));
+
+        // The un-spliced originals still round-trip.
+        assert_eq!(ShekylAddress::decode(&alice_enc).unwrap(), alice);
+        assert_eq!(ShekylAddress::decode(&bob_enc).unwrap(), bob);
+    }
+
+    #[test]
+    fn ek_bind_tag_kat() {
+        // Genesis-frozen preimage: cSHAKE256("shekyl/ek-bind-v1", ek)[..16].
+        // Fixed vector: ek[i] = (i % 256) over the 1184-byte ML-KEM-768 length.
+        // Cross-implementer KAT — any change to the DST, the primitive, the
+        // truncation, or the ek length moves this and fails the build's tests.
+        let ek: Vec<u8> = (0u8..=255).cycle().take(PQC_PAYLOAD_LEN).collect();
+        let tag = ek_bind_tag(&ek);
+        let hex: String = tag.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, "f60b83cfc93df3d80757ab13f087bdb1");
     }
 }

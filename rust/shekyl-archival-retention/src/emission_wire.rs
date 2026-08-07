@@ -42,8 +42,9 @@ use crate::id::p_canonical_id_from_hybrid_pubkey;
 /// Dense genesis tag scheme (`GENESIS_TX_WIRE_FORMAT.md` §tag registry;
 /// `REWARD_EMISSION_VIN_PLAN.md` :118): `0x04` dense — the next free tag after
 /// `gen 0x00`, `to_key 0x01`, `serve_credit 0x02`, `bond_post 0x03`. The C++
-/// oracle's `VARIANT_TAG` is pinned `0x06` and lands with the C-1 dispatch, not
-/// this codec.
+/// transport shim's `VARIANT_TAG` landed as the same `0x04` (F-C1b: the design
+/// docs' `0x06` was stale after the dense-tag renumbering), so the epee variant
+/// tag and this wire tag agree.
 pub const VIN_TYPE_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 
 /// Per-emission settlement-epoch batch cap (`REWARD_EMISSION_LEG.md` §5.3
@@ -62,11 +63,19 @@ pub const MAX_BACKING_PROOF_BYTES: usize = 65_536;
 
 /// cSHAKE256 customization for the **stake-side** auth (`auth_backing`) binding
 /// message. See [`ArchivalRewardEmissionVin::auth_msg`].
-pub const EMISSION_AUTH_BACKING_CUSTOMIZATION: &[u8] = b"shekyl/archival-emission-auth-backing-v1";
+///
+/// **`-v2` (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` F-E):** the digest binds
+/// the work-claim bytes (field 6), whose per-entry semantics changed from
+/// scarcity-milli to scarcity-micro (D1 fix). The zero-tolerance recompute
+/// already rejects milli-valued entries under micro rules, so no ambiguity
+/// *attack* exists; the separator bump makes "same bytes, different meaning"
+/// non-colliding *structurally* rather than by a reconstructed argument.
+pub const EMISSION_AUTH_BACKING_CUSTOMIZATION: &[u8] = b"shekyl/archival-emission-auth-backing-v2";
 
 /// cSHAKE256 customization for the **claim-side** auth (`auth_claim`) binding
-/// message. See [`ArchivalRewardEmissionVin::auth_msg`].
-pub const EMISSION_AUTH_CLAIM_CUSTOMIZATION: &[u8] = b"shekyl/archival-emission-auth-claim-v1";
+/// message. See [`ArchivalRewardEmissionVin::auth_msg`]. Bumped to `-v2`
+/// alongside the backing separator for the D1 micro change (see there).
+pub const EMISSION_AUTH_CLAIM_CUSTOMIZATION: &[u8] = b"shekyl/archival-emission-auth-claim-v2";
 
 /// Public per-shard work entry (`REWARD_EMISSION_LEG.md` §5.4) — the verifier
 /// recomputes `work_P(E)` from archival state and demands equality with the
@@ -77,8 +86,13 @@ pub struct ShardWorkEntry {
     pub shard_id: u64,
     /// Must match the challenge state at `E`.
     pub serve_credit_bit: bool,
-    /// Fixed-point scarcity × 1000 (integer recompute).
-    pub scarcity_milli: u32,
+    /// Fixed-point scarcity in **micro-units** (`× 1_000_000`) — the per-shard
+    /// term summed in micro and floored to milli once at the aggregate
+    /// (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` F-B, D1 fix). Carried at
+    /// micro precision so the verify body's aggregate compare runs in
+    /// micro-space *before* the single floor. Per-entry max `≈ 3.5×10⁶` (F-C),
+    /// well within `u32`.
+    pub scarcity_micro: u32,
 }
 
 /// Per-epoch public work breakdown (`REWARD_EMISSION_LEG.md` §5.4).
@@ -303,7 +317,7 @@ impl fmt::Display for WireError {
                 write!(f, "shard work entry count {got} exceeds bound")
             }
             Self::InvalidServeCreditBit(b) => write!(f, "invalid serve_credit bit {b}"),
-            Self::ScarcityOverflow(v) => write!(f, "scarcity_milli {v} exceeds u32"),
+            Self::ScarcityOverflow(v) => write!(f, "scarcity_micro {v} exceeds u32"),
             Self::ProofSizeInvalid { got } => {
                 write!(
                     f,
@@ -480,7 +494,7 @@ impl ArchivalRewardEmissionVin {
 
     /// Stream the canonical work-claim section to a sink. Per epoch, in
     /// `settlement_epochs` order: varint entry count, then per entry
-    /// `varint shard_id ‖ u8 serve_credit_bit ‖ varint scarcity_milli`.
+    /// `varint shard_id ‖ u8 serve_credit_bit ‖ varint scarcity_micro`.
     /// `WorkEpochClaim::epoch` is intentionally absent (reconstructed from
     /// `settlement_epochs`).
     fn write_work_claim<W: Write>(&self, w: &mut W) -> io::Result<()> {
@@ -489,7 +503,7 @@ impl ArchivalRewardEmissionVin {
             for entry in &claim.shard_entries {
                 write_varint(&entry.shard_id, w)?;
                 w.write_all(&[u8::from(entry.serve_credit_bit)])?;
-                write_varint(&u64::from(entry.scarcity_milli), w)?;
+                write_varint(&u64::from(entry.scarcity_micro), w)?;
             }
         }
         Ok(())
@@ -579,12 +593,12 @@ impl ArchivalRewardEmissionVin {
                     other => return Err(WireError::InvalidServeCreditBit(other)),
                 };
                 let scarcity: u64 = read_varint(r)?;
-                let scarcity_milli =
+                let scarcity_micro =
                     u32::try_from(scarcity).map_err(|_| WireError::ScarcityOverflow(scarcity))?;
                 shard_entries.push(ShardWorkEntry {
                     shard_id,
                     serve_credit_bit,
-                    scarcity_milli,
+                    scarcity_micro,
                 });
             }
             work_claim.push(WorkEpochClaim {
@@ -765,13 +779,14 @@ pub struct EmissionAuthMsgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bond_wire::ShardSet;
 
     fn sample_vin() -> ArchivalRewardEmissionVin {
         ArchivalRewardEmissionVin {
             p_pubkey: vec![0xA1; SINGLE_KEY_CANONICAL_LEN],
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
-                shard_ids: vec![7, 42],
+                shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
             },
             settlement_epochs: vec![11, 12, 15],
             work_claim: vec![
@@ -781,12 +796,12 @@ mod tests {
                         ShardWorkEntry {
                             shard_id: 7,
                             serve_credit_bit: true,
-                            scarcity_milli: 850,
+                            scarcity_micro: 850,
                         },
                         ShardWorkEntry {
                             shard_id: 42,
                             serve_credit_bit: false,
-                            scarcity_milli: 0,
+                            scarcity_micro: 0,
                         },
                     ],
                 },
@@ -795,7 +810,7 @@ mod tests {
                     shard_entries: vec![ShardWorkEntry {
                         shard_id: 7,
                         serve_credit_bit: true,
-                        scarcity_milli: 1_000,
+                        scarcity_micro: 1_000,
                     }],
                 },
                 WorkEpochClaim {
@@ -837,7 +852,7 @@ mod tests {
         let mut ct = sample_vin();
         ct.holdings = HoldingsDescriptor {
             kind: HoldingsKind::CompleteTree,
-            shard_ids: Vec::new(),
+            shard_ids: ShardSet::empty(),
         };
         let wire = ct.serialize().unwrap();
         let decoded = ArchivalRewardEmissionVin::read(&mut wire.as_slice()).unwrap();
@@ -1071,7 +1086,7 @@ mod tests {
         const GOLDEN_SHARD_SET: [u8; 4] = [0x00, 0x02, 0x07, 0x2A];
         let shard_set = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![7, 42],
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         };
         // In-situ: the fragment sits byte-identical inside a serialized emission
         // vin, at tag + varint(pk_len) + pk_bytes. (The direct-encode assertion
@@ -1108,7 +1123,7 @@ mod tests {
                 shard_entries: vec![ShardWorkEntry {
                     shard_id: 7,
                     serve_credit_bit: true,
-                    scarcity_milli: 1,
+                    scarcity_micro: 1,
                 }],
             })
             .collect();
@@ -1129,9 +1144,9 @@ mod tests {
             Err(WireError::EpochCountOutOfRange { got: 16 })
         ));
 
-        // (c) scarcity_milli at u32::MAX roundtrips losslessly.
+        // (c) scarcity_micro at u32::MAX roundtrips losslessly.
         let mut vin = sample_vin();
-        vin.work_claim[0].shard_entries[0].scarcity_milli = u32::MAX;
+        vin.work_claim[0].shard_entries[0].scarcity_micro = u32::MAX;
         let wire = vin.serialize().unwrap();
         let decoded = ArchivalRewardEmissionVin::read_payload_exact(&mut &wire[1..]).unwrap();
         assert_eq!(decoded, vin, "u32::MAX scarcity must roundtrip");

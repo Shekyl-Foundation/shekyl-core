@@ -33,7 +33,7 @@ import sys
 KEYS_INTEGER = {
     "fcmp_reference_block_min_age": "u64",
     "fcmp_reference_block_max_age": "u64",
-    "rct_type_fcmp_plus_plus_pqc": "u8",
+    "ct_type_fcmp_plus_plus_pqc": "u8",
     # LWMA-1 difficulty adjustment, docs/completed/DAA_LWMA1.md §4.
     # All u64 so the generated header has uniform `UINT64_C(...)`
     # emission shape across the DAA window-shape constants. C++
@@ -60,6 +60,15 @@ KEYS_INTEGER = {
     # in src/. Rust mirror: rust/shekyl-archival-retention/build.rs
     # (SEGMENT_LEAF_COUNT, width-product compile assert).
     "segment_leaf_count": "u64",
+    # Per-shard retention-commitment horizon (gate-4 §4.4;
+    # ARCHIVAL_TIMING_CONSTANTS.md §1). Shape genesis-frozen
+    # (age-scaled-constant); numerics provisional (H2 plateau arm).
+    # Consumer is Rust-only at genesis (bond-FSM verify,
+    # shekyl-archival-retention::bond_duration); mirrored in
+    # rust/shekyl-archival-retention/build.rs. Emitted to the C++ header
+    # for parity, no C++ consumer yet.
+    "bond_duration_base_epochs": "u64",
+    "bond_duration_age_scale": "u64",
 }
 
 # Inclusive [min, max] range for each declared type.
@@ -147,21 +156,21 @@ def main() -> int:
 
 // Values bracketed `SHEKYL_*` to make their generated origin obvious at
 // every consumer; original symbols (`FCMP_REFERENCE_BLOCK_MIN_AGE`,
-// `FCMP_REFERENCE_BLOCK_MAX_AGE`, `RCTTypeFcmpPlusPlusPqc`) are now
+// `FCMP_REFERENCE_BLOCK_MAX_AGE`, `CTTypeFcmpPlusPlusPqc`) are now
 // `static_assert`-pinned to these. The emitted fixed-width literal
 // macros (`UINT8_C` / `UINT64_C`) are validated against the declared
 // type's range at generator time, so a JSON value that overflows
-// (e.g. `rct_type_fcmp_plus_plus_pqc` > 255) fails the build at
+// (e.g. `ct_type_fcmp_plus_plus_pqc` > 255) fails the build at
 // CMake configure rather than truncating silently.
 #define SHEKYL_FCMP_REFERENCE_BLOCK_MIN_AGE \
     {emit("fcmp_reference_block_min_age")}
 #define SHEKYL_FCMP_REFERENCE_BLOCK_MAX_AGE \
     {emit("fcmp_reference_block_max_age")}
-#define SHEKYL_RCT_TYPE_FCMP_PLUS_PLUS_PQC \
-    {emit("rct_type_fcmp_plus_plus_pqc")}
+#define SHEKYL_CT_TYPE_FCMP_PLUS_PLUS_PQC \
+    {emit("ct_type_fcmp_plus_plus_pqc")}
 
 // LWMA-1 difficulty adjustment parameters per docs/completed/DAA_LWMA1.md
-// §4. Generated alongside the FCMP/RCT constants because both subsets
+// §4. Generated alongside the FCMP/CT constants because both subsets
 // share the cross-language-drift threat model (Bug 3 of the 2026-05-05
 // audit). The Rust mirror lives in rust/shekyl-difficulty's build.rs;
 // the Phase 4 C++ cutover replaces inherited `DIFFICULTY_TARGET_V2`,
@@ -208,6 +217,19 @@ def main() -> int:
 // rust/shekyl-archival-retention (segment_freeze.rs).
 #define SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT \
     {emit("segment_leaf_count")}
+
+// Per-shard retention-commitment horizon (gate-4 §4.4;
+// ARCHIVAL_TIMING_CONSTANTS.md §1). Shape genesis-frozen (age-scaled-constant:
+// bond_duration(age) = BASE * (1 + SCALE * age), age = shard_age_milli @ the
+// shard's add-epoch settlement close); numerics provisional (H2 plateau arm,
+// re-pin at testnet within scale band [2,8]). Consumer is Rust-only at genesis
+// (bond-FSM verify, shekyl-archival-retention::bond_duration); mirror in
+// rust/shekyl-archival-retention/build.rs. Emitted for cross-language parity,
+// no C++ consumer yet.
+#define SHEKYL_BOND_DURATION_BASE_EPOCHS \
+    {emit("bond_duration_base_epochs")}
+#define SHEKYL_BOND_DURATION_AGE_SCALE \
+    {emit("bond_duration_age_scale")}
 """
     out_path.write_text(content, encoding="utf-8")
     return 0

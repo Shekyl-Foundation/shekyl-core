@@ -13,6 +13,8 @@ use super::*;
 fn edge_round_trip() {
     assert_eq!(BlockHeight::from_raw(42).to_raw(), 42);
     assert_eq!(GlobalOutputIndex::from_raw(7).to_raw(), 7);
+    assert_eq!(PSlot::from_raw(3).to_raw(), 3);
+    assert_eq!(PSlot::from_raw(3).index(), 3);
     assert!(BlockHeight::ZERO.is_zero());
     assert!(!BlockCount::from_raw(1).is_zero());
 
@@ -100,6 +102,24 @@ fn timestamp_secs_since() {
     let before = Timestamp::from_raw(600);
     assert_eq!(now.checked_secs_since(before), Some(400));
     assert_eq!(before.checked_secs_since(now), None);
+}
+
+/// The two chain facts a [`ChainCount`] carries: the tip is one below the
+/// count (`None` on an empty chain — no laundering a count into a height),
+/// and the next block's height is numerically the count itself.
+#[test]
+fn chain_count_bridges() {
+    let count = ChainCount::from_raw(30_001);
+    assert_eq!(count.tip(), Some(BlockHeight::from_raw(30_000)));
+    assert_eq!(count.next_height(), BlockHeight::from_raw(30_001));
+
+    let empty = ChainCount::ZERO;
+    assert_eq!(empty.tip(), None, "an empty chain has no tip");
+    assert_eq!(
+        empty.next_height(),
+        BlockHeight::from_raw(0),
+        "the next block of an empty chain is genesis"
+    );
 }
 
 #[test]

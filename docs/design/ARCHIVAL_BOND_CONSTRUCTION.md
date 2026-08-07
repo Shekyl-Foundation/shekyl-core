@@ -43,7 +43,7 @@ unbuilt, permanent code.
 JoinMarket is the only kind with a complete verify counterpart today
 ([`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs)
 `verify_join_market_bond_post`;
-[`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_rct_balance.rs)).
+[`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_ct_balance.rs)).
 Rebond / Unbond / HoldingsUpdate have wire types
 ([`bond_wire.rs`](../../rust/shekyl-archival-retention/src/bond_wire.rs)
 `BondPostKind`) but **no verify implementation** ("V3.0 open"). Their
@@ -345,7 +345,7 @@ as `fee` (today: `bond_credit -> extra_outputs`, `bond_debit -> extra_inputs`).
 
 **Single-source the equation (§11.1 Q2, resolved).** The lean shape -- a generic
 term added in `shekyl-tx-builder` (construct) while
-[`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_rct_balance.rs)
+[`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_ct_balance.rs)
 holds the equation (verify) -- is rejected: it is *two* implementations of a
 genesis-frozen consensus equation, the R-3 divergence risk single-sourced
 everywhere else. Instead the term definitions, their fixed sides, and the
@@ -383,6 +383,53 @@ reuses the existing
 [`shekyl-crypto-pq::output::construct_output`](../../rust/shekyl-crypto-pq/src/output.rs)
 path (as `sign_bridge` does for transfers).
 
+**Fee inputs and their source — RATIFIED (2026-07-19, maintainer;
+`V3_WALLET_DECISION_LOG.md` "P-lane fees").** Debit paths (`Unbond`,
+`HoldingsUpdate` drop) carry fee inputs the same way — every bond post pays
+the standard weight-priced floor fee; there is no fee-less class (gate-4
+§3.2 fee note). Three construction rules, all wallet-side:
+
+1. **Typed `P`-space pool.** Fee/funding-input selection on every `P`-lane
+   constructor draws from a typed source set — the JoinMarket **cover**
+   outputs plus **claim (earnings)** outputs, "cover + earnings, as
+   required". A principal output is unrepresentable in the selector's input
+   type (enforced invariant, not policy). FCMP++ hides the membership either
+   way; the type is origin-edge hygiene at the wallet layer, the coin-pool
+   sibling of `P`'s dedicated Arti client (§9's transport split).
+2. **Exit-fee reserve.** Mid-life constructors (claim fee inputs, both
+   `HoldingsUpdate` directions, `Rebond`) never spend the pool below
+   `EXIT_FEE_RESERVE_ATOMIC` — a pessimistically-margined weight-priced
+   `Unbond` fee — so the terminal post is always fundable. Spend-time
+   invariant only; the cover **draw** is never consulted or narrowed by it
+   (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4 stance). ✅ **Dominance assert
+   RE-GROUNDED (2026-07-22, DS-PR-2; maintainer-corrects the 2026-07-21 ⚠️
+   note):** the original premise — a *guaranteed 1-rung* cover floor
+   dominating any fee — was retired with the runway floor
+   (`ARCHIVAL_COVER_DRAW.md`: the draw is now uniform over `(0, bond_floor)`,
+   no floor). The 2026-07-21 note's "working capital is supplied by the user,
+   the cover provides no reserve" framing was a **misunderstanding**
+   (maintainer-corrected): the cover draw is **always protocol-added** to a
+   derived bond amount — spreading every funded bond across a rung, so no tx
+   is identifiable as a bond by amount and the adversary's N is *all*
+   transactions, not those within a deterministic range of `bond_floor` — and
+   a user top-up at funding time is an *optional* addition, not the reserve's
+   source. Re-derived grounding, landed in `shekyl-standoff::reserve`:
+   `0 < EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC` is a **corner-fraction
+   bound** — the protocol-drawn cover alone clears the reserve with
+   probability `1 − reserve/RUNG ≈ 93.3%` (a top-up shrinks the corner
+   further); the assert refuses the inverted sizing (reserve ≥ rung: every
+   fresh draw-only pool starts blocked); the residual corner is non-fatal
+   (earnings accrue; the reserve releases at retirement; the destitute
+   corner below). Destitute corner (pool below
+   reserve): the wallet's `ClaimFeeInputsRequired` refusal relaxes to admit
+   the consensus-admitted Q11 zero-fee-input claim (fee out of the mint),
+   then `Unbond` funds from the claimed output — the exit chain is
+   constructible from zero pool balance whenever anything is claimable.
+3. **No fee knob.** The fee is the canonical per-block floor at construction
+   time — deterministic given (weight, floor params), no estimator
+   multiplier, no user-visible control. A tunable fee on a `P`-attributed
+   transaction is a wallet-fingerprint channel in a cleartext field.
+
 ## 8. Sequenced dependency: real curve-tree (CT-5)
 
 The funding inputs need real membership proofs against the live curve tree. PR
@@ -415,6 +462,73 @@ anything exercises it. Each carries its named verify-side gap:
 | HoldingsUpdate drop | `bond_spend_pk` | absent | provisional (operator-guide footguns live here) |
 | Rebond | `P_pubkey` | absent | provisional |
 | Unbond | `bond_spend_pk` | absent | provisional |
+
+### 9.1 `CompleteTree` is a foundation-only constructor, structurally (naive-optimizer footgun)
+
+**Requirement for the builder author, to design in now rather than retrofit.**
+The standard wallet bond-post path must not be able to produce
+`HoldingsKind::CompleteTree`. This is a construction-side gate only — it does
+**not** touch consensus, which by deliberate design accepts either holdings
+kind from any poster (see below).
+
+**Why.** `CompleteTree` is the whole-corpus holdings kind reserved for
+Foundation serving nodes. It is **economically excluded by design** — a
+`CompleteTree` bond is removed from `R_market` and `Σwork`
+(`consensus_state.rs::market_member_at_epoch`, hard early-return on the
+holdings-kind byte) so that specially-privileged Foundation servers neither
+profit from nor skew the market. That exclusion is intentional and modelled,
+not incidental.
+
+The hazard is therefore **not** an attacker and **not** an informed volunteer
+who source-compiles a non-paying whole-tree server (that is a donated
+full-node-equivalent, strictly good for the network, and needs no gate). The
+hazard is a **naive optimizer**: an ordinary user who sees a "serve
+everything / select all" affordance and reasons "more shards served ⇒ more
+reward," selects it, bonds real capital, and lands in the one kind that pays
+**zero**. It is an inverted footgun — the user believes they are maximizing
+while silently zeroing themselves out, with capital locked.
+
+**The gate is single-point and subtractive.** The client is the *sole
+producer* of the holdings-kind byte; consensus only validates what it
+receives and never originates a kind. The choice is consumed at exactly one
+place — `bond_assembly::wire_holdings` (`bond_assembly.rs`), which maps a
+`HoldingsDescriptor` onto the wire `Holdings` enum. Because there is one
+choke point, the gate cannot be half-applied.
+
+**Required builder shape (make-bad-states-unrepresentable, applied to the
+API):**
+
+1. The **standard** market bond constructor takes **no holdings-kind
+   argument** and yields `ShardSetCompact` by construction. "The normal path
+   produces the safe kind" is enforced by the *type of the API*, not by
+   remembering to default an enum field correctly — a defaulted enum
+   parameter can be overridden by a confused caller or a wrapper script; a
+   type that cannot express the wrong value cannot.
+2. `CompleteTree` is reachable **only** through a **separately-named**
+   constructor (e.g. `build_foundation_complete_tree_bond`) that the GUI
+   never calls and the CLI exposes only behind an **explicit, non-default,
+   documented** foundation flag (e.g. `--complete-tree-foundation`, help text
+   marked foundation-only). Opt-in by intent, never reachable by accident.
+3. There is **no** "select all" / "serve everything" affordance in the
+   standard GUI or CLI staking flow. The fix is *absence*, not an
+   "are you sure?" dialog — the affordance that would produce the value must
+   not exist on the naive path.
+
+**Explicitly out of scope for this gate.** Consensus stays open to
+`CompleteTree` from any poster — it must accept the Foundation's, and it
+cannot distinguish posters by node build. That is safe precisely *because*
+of the economic exclusion above: there is no reward to be tricked out of, so
+an unguarded consensus layer is not a reward-theft surface. A consensus-level
+Foundation-identity gate on `CompleteTree` posting is a **separate** question
+(privilege control, not footgun control) and is **not** required by this
+note; if it is ever wanted, its natural shape is a genesis-pinned Foundation
+key set checked in `bond_post` verify — see
+`FOUNDATION_GENESIS_IDENTITY_SET.md`.
+
+**Status:** construction-side requirement, open — the builder is in flight,
+so this is designed-in, not retrofit. Reopen if a consensus-side
+Foundation-identity gate is later adopted (it would let the CLI foundation
+flag be checked rather than merely conventional).
 
 ## 10. PR 2 -- StakeEngine orchestration + standoff self-cert
 

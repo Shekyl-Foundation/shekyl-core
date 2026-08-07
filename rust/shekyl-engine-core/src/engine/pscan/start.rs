@@ -70,14 +70,14 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use shekyl_engine_state::PendingPostBlock;
-use shekyl_p_transport::TorSocksEndpoint;
 
 use super::block_source::DaemonBlockSource;
 use super::cadence::FixedRateSchedule;
-use super::dispatch::{BondBroadcast, DispatchConfig, DispatchDriver, PendingSealStore};
+use super::dispatch::{
+    BondBroadcast, DispatchConfig, DispatchDriver, PendingPostStore, PendingSealStore,
+};
 use super::task::{run_pscan_task, PScanConfig, PScanStore};
 use crate::engine::bond_assembly::PBoundBytes;
-use crate::engine::posture::BroadcastPosture;
 use crate::engine::signer::EngineSignerKind;
 use crate::engine::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine,
@@ -180,6 +180,26 @@ impl Drop for PScanHandle {
     }
 }
 
+/// GF-7 sealing-run injection (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19.8.1):
+/// the recording observer that stamps receipt instants, plus — for the
+/// §19.8.3 **positive control only** — a [`DispatchConfig`] override
+/// (`dispersal_bound = 0`). Every graded row runs with
+/// `dispatch_config: None`, i.e. the untouched production config.
+///
+/// Gated `test` *and* `gf7-hooks` — one layer stronger than the layer-3
+/// requirement (production control flow byte-identical with the feature
+/// off): even a feature-on **non-test** build carries no sealing seam.
+#[cfg(all(test, feature = "gf7-hooks"))]
+pub(crate) struct SealingRunOverrides {
+    /// The harness-local recording observer (§19.8.1: harness-owned
+    /// timestamping, sim-owned judgment).
+    pub(crate) observer: Box<dyn shekyl_standoff::gf7::BroadcastTimelineObserver>,
+    /// §19.8.3 control 1 only: `Some(config with dispersal_bound = 0)`.
+    /// `None` on every graded row — the §19.1 "non-production config does
+    /// not satisfy" clause binds the graded rows.
+    pub(crate) dispatch_config: Option<DispatchConfig>,
+}
+
 /// The production [`PScanStore`]: reaches the **live** `WalletFile` — held by value
 /// inside the `Engine` (no `Arc`, not `Clone`) — through the `Arc<RwLock<Engine>>`
 /// under a brief read lock, and delegates the seal to
@@ -252,7 +272,7 @@ where
 /// Failures of the file-backed store: either the `WalletFile` seal/open layer, or
 /// postcard (de)serialization of the [`PScanState`] body.
 #[derive(Debug, thiserror::Error)]
-enum WalletFilePScanStoreError {
+pub(crate) enum WalletFilePScanStoreError {
     /// The `.wallet.pscan` seal/open (envelope, atomic write, swap-refusal, I/O).
     #[error("P-scan file: {0}")]
     File(#[from] WalletFileError),
@@ -307,6 +327,51 @@ where
     }
 }
 
+/// Construct an independent [`PendingPostStore`] over the engine's pending
+/// seal + the shared `pending_write_lock` (WI-2 F-1).
+///
+/// Mirrors the `start_pscan_with` construction (`WalletFilePendingSealStore`
+/// plus lock clone into [`PendingPostStore::new`]) so the assemble path
+/// serializes against the dispatch driver **without** hoisting a store handle
+/// onto [`Engine`]. That hoist was rejected (RPITIT / layering / ownership
+/// cycle). Gate-11 stays green: this factory reuses the sole seal impl; a new
+/// `.save_pending_posts(` call site would be a failure.
+#[allow(clippy::type_complexity)]
+pub(crate) fn pending_post_store_for_engine<S, D, L, E, R, P>(
+    engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+    write_lock: Arc<tokio::sync::Mutex<()>>,
+) -> PendingPostStore<WalletFilePendingSealStore<S, D, L, E, R, P>>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
+{
+    PendingPostStore::new(WalletFilePendingSealStore { engine }, write_lock)
+}
+
+/// Load the sealed [`PScanState`] for assemble (funding records), reusing the
+/// same file-backed store as the pscan task. Fail-closed on corrupt / version
+/// mismatch — assemble must not invent an empty funding set over a bad seal.
+#[allow(clippy::type_complexity)]
+pub(crate) async fn load_pscan_state_for_engine<S, D, L, E, R, P>(
+    engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+) -> Result<Option<PScanState>, WalletFilePScanStoreError>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
+{
+    WalletFilePScanStore { engine }.load().await
+}
+
 /// The production [`PendingSealStore`] (WI-3 §3.3 / §5 gate 11): same live-file
 /// reach as [`WalletFilePScanStore`] — through the engine arc under a brief read
 /// lock — delegating the seal to [`WalletFile::save_pending_posts`] /
@@ -314,7 +379,7 @@ where
 /// and the sole `PayloadKind::PendingPostBlockPostcard` encode site. This type
 /// adds no second write path; it only carries bytes to that one.
 #[allow(clippy::type_complexity)] // same self-arc shape as `WalletFilePScanStore`.
-struct WalletFilePendingSealStore<S, D, L, E, R, P>
+pub(crate) struct WalletFilePendingSealStore<S, D, L, E, R, P>
 where
     S: EngineSignerKind,
     D: DaemonEngine,
@@ -331,7 +396,7 @@ where
 /// body (including the fail-closed version refusal — a v1 seal under the v2
 /// binary surfaces here, per the WI-3 schema-v2 discipline).
 #[derive(Debug, thiserror::Error)]
-enum WalletFilePendingStoreError {
+pub(crate) enum WalletFilePendingStoreError {
     /// The `.wallet.pending` seal/open (envelope, atomic write, swap-refusal, I/O).
     #[error("pending-post file: {0}")]
     File(#[from] WalletFileError),
@@ -385,16 +450,33 @@ where
     }
 }
 
-/// Tor's conventional local SOCKS port. A **placeholder** feeding
-/// [`BroadcastSubmitter::for_posture`]'s signature: the hardwired ① `Local`
-/// posture below never dials SOCKS (the ① arm ignores the endpoint entirely),
-/// but construction must stay on the audited posture→submitter choke point
-/// rather than reach around it to a bare submitter.
-const TOR_SOCKS_PLACEHOLDER_PORT: u16 = 9050;
+/// Load the sealed [`PendingPostBlock`] off the engine arc under a brief read
+/// lock — the read-only analog of [`load_pscan_state_for_engine`] for the
+/// `.wallet.pending` seal, reusing the same file-backed store
+/// ([`WalletFilePendingSealStore`]) and guard discipline. `None` when no
+/// pending seal exists (a wallet with no in-flight posts); the caller reads
+/// that as "nothing reserved". Fail-closed on corrupt / version mismatch — a
+/// balance read must not invent an empty reservation set over a bad seal.
+#[allow(clippy::type_complexity)]
+pub(crate) async fn load_pending_posts_for_engine<S, D, L, E, R, P>(
+    engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+) -> Result<Option<PendingPostBlock>, WalletFilePendingStoreError>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
+{
+    WalletFilePendingSealStore { engine }.load().await
+}
 
 /// The production [`BondBroadcast`]: routes every dispatch through the
-/// [`BroadcastSubmitter::for_posture`] choke point (posture→submitter binding)
-/// and its [`submit_bound`](BroadcastSubmitter::submit_bound) pairing check.
+/// [`BroadcastSubmitter::local`] pre-bound ① construction (which is itself
+/// the `for_posture` posture→submitter choke point) and its
+/// [`submit_bound`](BroadcastSubmitter::submit_bound) pairing check.
 ///
 /// **Posture is hardwired ① `Local`** — the privacy default (the loopback
 /// broadcast originates on the operator's own box; exactly what
@@ -415,16 +497,9 @@ impl<D: DaemonEngine> BondBroadcast for LocalBondBroadcast<D> {
     ) -> impl std::future::Future<Output = Result<SubmitSuccess, BroadcastSubmitError>> + Send {
         let daemon = self.daemon.clone();
         async move {
-            let submitter = BroadcastSubmitter::for_posture(
-                BroadcastPosture::Local,
-                *bound.persona(),
-                daemon,
-                &TorSocksEndpoint::loopback(TOR_SOCKS_PLACEHOLDER_PORT),
-            )
-            // The ① arm is infallible (`for_posture` docs): only the ② arm's
-            // SOCKS proxy configuration can be rejected, and ① never builds one.
-            .expect("the Local arm of for_posture is infallible");
-            submitter.submit_bound(bound).await
+            BroadcastSubmitter::local(*bound.persona(), daemon)
+                .submit_bound(bound)
+                .await
         }
     }
 }
@@ -537,6 +612,53 @@ where
         config: PScanConfig,
         cadence: Duration,
     ) -> Result<PScanHandle, PScanStartError> {
+        Self::spawn_pscan(
+            self_arc,
+            config,
+            cadence,
+            #[cfg(all(test, feature = "gf7-hooks"))]
+            None,
+        )
+        .await
+    }
+
+    /// Spawn the P-scan task pinned to the **production posture**
+    /// ([`PScanConfig::production`] + [`DEFAULT_PSCAN_CADENCE`]) with the
+    /// GF-7 sealing-run injection applied — the `ARCHIVAL_BOND_WI4_MEASUREMENT.md`
+    /// §19.8.1 seam. Deliberately takes **no** `config`/`cadence`: the §19.1
+    /// disposition binds the sealing form to the production code path at
+    /// production cadence (a harness that injects ticks or a non-production
+    /// cadence does not satisfy it), so the posture is unmisusable by
+    /// construction here; the only permitted deviation rides
+    /// [`SealingRunOverrides::dispatch_config`] (positive control, §19.8.3).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`start_pscan_with`](Self::start_pscan_with).
+    #[cfg(all(test, feature = "gf7-hooks"))]
+    pub(crate) async fn start_pscan_sealing_run(
+        self_arc: Arc<RwLock<Self>>,
+        overrides: SealingRunOverrides,
+    ) -> Result<PScanHandle, PScanStartError> {
+        Self::spawn_pscan(
+            self_arc,
+            PScanConfig::production(),
+            DEFAULT_PSCAN_CADENCE,
+            Some(overrides),
+        )
+        .await
+    }
+
+    /// The shared spawn body behind [`start_pscan_with`](Self::start_pscan_with)
+    /// and the sealing-run entry: all wiring lives here once, so the sealing
+    /// form exercises byte-for-byte the production construction (the §19.8.1
+    /// requirement) rather than a parallel copy that could drift.
+    async fn spawn_pscan(
+        self_arc: Arc<RwLock<Self>>,
+        config: PScanConfig,
+        cadence: Duration,
+        #[cfg(all(test, feature = "gf7-hooks"))] sealing: Option<SealingRunOverrides>,
+    ) -> Result<PScanHandle, PScanStartError> {
         // Brief read borrow: clone the spawn inputs + claim the single-flight slot.
         // Stake is checked first so a non-staker never claims-then-releases; the
         // slot guard is RAII, so any error below releases it on the early return.
@@ -598,12 +720,31 @@ where
             .await
             .map_err(|e| PScanStartError::LoadFailed(Box::new(e)))?;
 
-        let dispatch = DispatchDriver::new(
-            pending_seal,
-            broadcast,
-            DispatchConfig::production(cadence),
-            pending_write_lock,
-        );
+        let dispatch_config = DispatchConfig::production(cadence);
+        // Sealing-run injection (§19.8.1): split the overrides into the config
+        // (positive control only) and the recording observer. `None` — every
+        // production start and every graded sealing row — leaves both exactly
+        // as constructed above.
+        #[cfg(all(test, feature = "gf7-hooks"))]
+        let (dispatch_config, sealing_observer) = match sealing {
+            Some(o) => (
+                o.dispatch_config.unwrap_or(dispatch_config),
+                Some(o.observer),
+            ),
+            None => (dispatch_config, None),
+        };
+
+        let dispatch =
+            DispatchDriver::new(pending_seal, broadcast, dispatch_config, pending_write_lock);
+        #[cfg(all(test, feature = "gf7-hooks"))]
+        let dispatch = match sealing_observer {
+            Some(observer) => {
+                let mut d = dispatch;
+                d.set_observer(observer);
+                d
+            }
+            None => dispatch,
+        };
 
         let schedule = FixedRateSchedule::new(cadence);
         let cancel_token = CancellationToken::new();
@@ -635,7 +776,7 @@ mod tests {
 
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_engine_state::pscan_cursor::PScanCursor;
-    use shekyl_rpc_transport::SimpleRequestRpc;
+    use shekyl_rpc_transport::HttpRpc;
     use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
     use shekyl_units::AtomicUnits;
     use tempfile::TempDir;
@@ -649,9 +790,9 @@ mod tests {
     fn dummy_daemon() -> DaemonClient {
         let rpc = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(SimpleRequestRpc::new("http://127.0.0.1:1".to_string()))
+                .block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
         })
-        .expect("construct SimpleRequestRpc (no actual connection attempted)");
+        .expect("construct HttpRpc (no actual connection attempted)");
         DaemonClient::new(rpc)
     }
 
@@ -734,6 +875,7 @@ mod tests {
                 },
             ],
             Vec::new(),
+            Vec::new(),
         );
         store.save(&state_a).await.expect("save A");
         assert!(pscan_path.exists(), ".wallet.pscan written by the seal");
@@ -748,6 +890,7 @@ mod tests {
             PScanCursor::at(BlockHeight::from_raw(9_000), [0x2B; 32]),
             accruals(&[(0, 100), (1, 250), (2, 75)]),
             pending(&[(0xAB, 1)]),
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         );
@@ -829,7 +972,7 @@ mod tests {
         // reopen — the open path spawns the StakeEngine for a staker.
         let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create wallet");
         engine
-            .persist_bond_record(PSlot(3))
+            .persist_bond_record(PSlot::from_raw(3))
             .expect("persist bond record");
         engine.close(&creds).expect("close created wallet");
 
@@ -905,7 +1048,7 @@ mod tests {
 
         let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create wallet");
         engine
-            .persist_bond_record(PSlot(0))
+            .persist_bond_record(PSlot::from_raw(0))
             .expect("persist bond record");
         engine.close(&creds).expect("close created wallet");
         let engine = Engine::<SoloSigner>::open_full(

@@ -8,7 +8,6 @@ OPTION(TREZOR_DEBUG "Main trezor debugging switch" OFF)
 OPTION(BUILD_TESTS "Build tests." OFF)
 
 SET(STATIC ON)
-SET(UNBOUND_STATIC ON)
 SET(ARCH "default")
 
 SET(BUILD_TESTS @build_tests@)
@@ -23,9 +22,6 @@ SET(Readline_ROOT_DIR @prefix@)
 SET(Readline_INCLUDE_DIR @prefix@/include)
 SET(Readline_LIBRARY @prefix@/lib/libreadline.a)
 SET(Terminfo_LIBRARY @prefix@/lib/libtinfo.a)
-
-SET(UNBOUND_INCLUDE_DIR @prefix@/include)
-SET(UNBOUND_LIBRARIES @prefix@/lib/libunbound.a)
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
 SET(LIBUNWIND_INCLUDE_DIR @prefix@/include)

@@ -40,8 +40,8 @@ that are *footguns the protocol will not stop you from pulling*, and why.
 
 You are running an archival `P` if you have posted (or intend to post) an
 archival bond, hold shards, and expect to answer challenges over time. A `P` is
-a **long-lived** participant by design: the lock tiers, bond duration, and
-release cooldown all assume you set it up and keep it running, rather than
+a **long-lived** participant by design: the bond commitment and release
+cooldown all assume you set it up and keep it running, rather than
 churning in and out. The safest way to run a `P` is the way most people will
 naturally run one -- **set it up correctly once and leave it alone.** Low churn
 is the safest operating regime; almost every way to hurt yourself below requires

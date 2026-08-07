@@ -239,7 +239,7 @@ namespace test
     make_miner_transaction(cryptonote::account_public_address const& to)
     {
         cryptonote::transaction tx{};
-        if (!cryptonote::construct_miner_tx(0, 0, 5000, 500, 500, to, tx))
+        if (!cryptonote::construct_miner_tx(0, 0, 5000, 500, 500, /*frozen_segment_count=*/0, to, tx))
             throw std::runtime_error{"transaction construction error"};
 
         crypto::hash id{0};
@@ -446,7 +446,7 @@ namespace test
         cryptonote::add_tx_pub_key_to_extra(tx, tx_pk);
 
         // RCT base fields
-        tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+        tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
         tx.rct_signatures.txnFee = fee;
         memcpy(tx.rct_signatures.message.bytes, tx_prefix_hash, 32);
         memcpy(tx.rct_signatures.referenceBlock.data, reference_block, 32);
@@ -553,7 +553,7 @@ namespace test
             }
         }
 
-        // pseudoOuts (prunable section for RCTTypeFcmpPlusPlusPqc)
+        // pseudoOuts (prunable section for CTTypeFcmpPlusPlusPqc)
         {
             tx.rct_signatures.p.pseudoOuts.resize(pseudo_outs_arr.Size());
             for (rapidjson::SizeType i = 0; i < pseudo_outs_arr.Size(); ++i)
@@ -641,7 +641,7 @@ TEST(JsonSerialization, FcmpPlusPlusTransaction)
     EXPECT_EQ(tx.version, 3u) << "DEBUG: version mismatch";
     EXPECT_EQ(tx.vin.size(), 1u) << "DEBUG: input count mismatch";
     EXPECT_EQ(tx.vout.size(), 1u) << "DEBUG: output count mismatch";
-    EXPECT_EQ(tx.rct_signatures.type, rct::RCTTypeFcmpPlusPlusPqc)
+    EXPECT_EQ(tx.rct_signatures.type, rct::CTTypeFcmpPlusPlusPqc)
         << "DEBUG: rct type mismatch, got " << (int)tx.rct_signatures.type;
     EXPECT_FALSE(tx.rct_signatures.p.fcmp_pp_proof.empty())
         << "DEBUG: FCMP++ proof blob is empty";
@@ -666,7 +666,7 @@ TEST(JsonSerialization, FcmpPlusPlusTransaction)
         << " Copy: " << epee::string_tools::pod_to_hex(tx_copy_hash);
 
     EXPECT_EQ(tx_copy.version, 3u);
-    EXPECT_EQ(tx_copy.rct_signatures.type, rct::RCTTypeFcmpPlusPlusPqc);
+    EXPECT_EQ(tx_copy.rct_signatures.type, rct::CTTypeFcmpPlusPlusPqc);
     EXPECT_EQ(tx_copy.rct_signatures.p.fcmp_pp_proof.size(),
               tx.rct_signatures.p.fcmp_pp_proof.size())
         << "DEBUG: FCMP++ proof blob size changed after round-trip: "

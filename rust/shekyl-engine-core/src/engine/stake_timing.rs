@@ -53,7 +53,11 @@ impl GapRng for OsRngGapAdapter {
 /// Canonical session self-cert sample size (S6), **single-sourced** from
 /// [`shekyl_standoff::conformance::CERTIFY_SAMPLE_N`] — the same `n` the reference
 /// conformance KAT grades at, so the `8/√n` tolerance contract cannot fork between
-/// the reference grade and the wallet's `on_start` self-cert. Re-exported here
+/// the reference grade and the wallet's `on_start` self-cert. **The self-cert is
+/// a `conformance`-feature (dev/test) build only — the default shipping binary
+/// compiles it out (`stake_engine.rs` S6 note), so there is no production
+/// self-cert; the grader is a tool an operator runs, not a shipped invariant.**
+/// Re-exported here
 /// (beside [`DEFAULT_ENTRY_GAP`]) for call-site ergonomics, mirroring how
 /// `DEFAULT_ENTRY_GAP` wraps `shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW` (source of
 /// truth down in the lower crate, alias up). Only present under `conformance` —
@@ -136,8 +140,11 @@ pub(crate) struct SebSpan(pub u64);
 /// window for the archival bond request path (S4, `ARCHIVAL_BOND_CONSTRUCTION.md`
 /// §10, `ARCHIVAL_TIMING_CONSTANTS.md` §7).
 ///
-/// Guards: prep-spend / announce / bond-post events within a single
-/// 600-block window ([`DEFAULT_ENTRY_GAP`]).
+/// Guards the bond-post placement within a single 600-block window
+/// ([`DEFAULT_ENTRY_GAP`]). ⚠️ The window was derived as a *multi-event*
+/// (prep-spend / announce / bond-post) horizon; the order-coin retirement
+/// deleted the second (funding-send) event, so that derivation is now stale —
+/// see the F-W3 banner on `shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW`.
 ///
 /// **Not interchangeable with [`EconomicSpacing`]** — the inner type is
 /// `BlockSpan`, not `SebSpan`, so cross-application is a compile error.

@@ -44,6 +44,7 @@
 #include "serialization/binary_archive.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/blockchain.h"
+#include "cryptonote_core/tx_pqc_verify.h"
 
 using namespace std;
 using namespace crypto;
@@ -176,17 +177,21 @@ TEST(fcmp, mul8)
 // FCMP++ / PQC-specific tests (Phase 7)
 // ──────────────────────────────────────────────────────────────────────
 
-TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
+TEST(fcmp, CTTypeFcmpPlusPlusPqc_serialization_roundtrip)
 {
+  // Round-trips the rct base through `serialize_rctsig_base` — the ONLY
+  // encoding of the base (the transaction serializer, the tx-hash paths, the
+  // FCMP++ pre-hash, and the PQC payload binding all call it). A standalone
+  // object serializer used to exist and was round-tripped here instead; it
+  // was caller-less in production, laxer than the real wire (it accepted
+  // states the member serializer rejects), and was deleted in the
+  // dead-serializer cleanup (CT_SURFACE_NAMING_PIN.md §2). The prunable
+  // section's real-path round-trip is covered at the transaction level
+  // (tests/unit_tests/serialization.cpp and the shekyl-wire KATs).
   rct::rctSig rv;
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xAB, sizeof(rv.referenceBlock));
-  rv.message = rct::skGen();
-
-  rct::key pseudo_out;
-  rct::skpkGen(pseudo_out, pseudo_out);
-  rv.p.pseudoOuts.push_back(pseudo_out);
 
   std::array<uint8_t, 9> enc_amt;
   enc_amt.fill(0x42);
@@ -203,15 +208,15 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   outpk.mask = rct::pkGen();
   rv.outPk.push_back(outpk);
 
-  rv.p.curve_trees_tree_depth = 20;
-  rv.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04, 0x05};
+  const size_t inputs = 1;
+  const size_t outputs = 1;
 
-  // Serialize
+  // Serialize (real wire path)
   std::string blob;
   {
     std::ostringstream oss;
     binary_archive<true> ar(oss);
-    ASSERT_TRUE(do_serialize(ar, rv));
+    ASSERT_TRUE(rv.serialize_rctsig_base(ar, inputs, outputs));
     blob = oss.str();
   }
 
@@ -219,15 +224,16 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   rct::rctSig rv2;
   {
     binary_archive<false> ar({reinterpret_cast<const uint8_t*>(blob.data()), blob.size()});
-    ASSERT_TRUE(do_serialize(ar, rv2));
+    ASSERT_TRUE(rv2.serialize_rctsig_base(ar, inputs, outputs));
   }
 
-  ASSERT_EQ(rv2.type, rct::RCTTypeFcmpPlusPlusPqc);
+  ASSERT_EQ(rv2.type, rct::CTTypeFcmpPlusPlusPqc);
   ASSERT_EQ(rv2.txnFee, rv.txnFee);
   ASSERT_EQ(rv2.referenceBlock, rv.referenceBlock);
-  ASSERT_EQ(rv2.p.curve_trees_tree_depth, 20);
-  ASSERT_EQ(rv2.p.fcmp_pp_proof.size(), 5u);
-  ASSERT_EQ(rv2.p.fcmp_pp_proof, rv.p.fcmp_pp_proof);
+  ASSERT_EQ(rv2.enc_amounts, rv.enc_amounts);
+  ASSERT_EQ(rv2.enc_labels, rv.enc_labels);
+  ASSERT_EQ(rv2.outPk.size(), 1u);
+  ASSERT_EQ(rv2.outPk[0].mask, rv.outPk[0].mask);
 }
 
 // enc_label integrity is prehash-bound (no Pedersen commitment backstop).
@@ -235,7 +241,7 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
 TEST(fcmp, enc_label_binds_rctsig_base_prehash)
 {
   rct::rctSig rv;
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xCD, sizeof(rv.referenceBlock));
   rv.enc_amounts.resize(1);
@@ -262,26 +268,33 @@ TEST(fcmp, enc_label_binds_rctsig_base_prehash)
   EXPECT_NE(h0, h_amount_tamper) << "enc_amount byte flip must change rctSigBase prehash component";
 }
 
-TEST(fcmp, RCTTypeNull_serialization)
+TEST(fcmp, CTTypeNull_serialization)
 {
+  // The real coinbase base encoding (`serialize_rctsig_base`, the only
+  // encoding — see the roundtrip test above) for a Null rct with no outputs
+  // is exactly the one type byte: no txnFee, no referenceBlock, no legacy
+  // pseudo-out material. The full-transaction-level pin lives in
+  // tests/unit_tests/serialization.cpp; this is the focused component read.
   rct::rctSig rv;
-  rv.type = rct::RCTTypeNull;
+  rv.type = rct::CTTypeNull;
 
   std::string blob;
   {
     std::ostringstream oss;
     binary_archive<true> ar(oss);
-    ASSERT_TRUE(do_serialize(ar, rv));
+    ASSERT_TRUE(rv.serialize_rctsig_base(ar, 1, 0));
     blob = oss.str();
   }
+  ASSERT_EQ(blob.size(), 1u);
+  ASSERT_EQ(blob[0], static_cast<char>(rct::CTTypeNull));
 
   rct::rctSig rv2;
   {
     binary_archive<false> ar({reinterpret_cast<const uint8_t*>(blob.data()), blob.size()});
-    ASSERT_TRUE(do_serialize(ar, rv2));
+    ASSERT_TRUE(rv2.serialize_rctsig_base(ar, 1, 0));
   }
 
-  ASSERT_EQ(rv2.type, rct::RCTTypeNull);
+  ASSERT_EQ(rv2.type, rct::CTTypeNull);
 }
 
 TEST(fcmp, referenceBlock_staleness_constants)
@@ -302,19 +315,26 @@ TEST(fcmp, key_offsets_empty_for_fcmp_type)
   ASSERT_TRUE(txin.key_offsets.empty());
 }
 
-TEST(fcmp, get_pseudo_outs_uses_prunable_for_fcmp_type)
+TEST(fcmp, get_pseudo_outs_uses_prunable_for_all_types)
 {
+  // The pseudo-out commitments live in the prunable section for every rct
+  // type (the legacy base-side fallback field was removed in the
+  // dead-serializer cleanup): FCMP++ carries one per spend input, and a
+  // coinbase (CTTypeNull) has none, so the accessor returns the empty
+  // prunable vector there.
   rct::rctSig rv;
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
 
   rct::key k1 = rct::skGen();
-  rct::key k2 = rct::skGen();
   rv.p.pseudoOuts.push_back(k1);
-  rv.pseudoOuts.push_back(k2);
 
   const auto &po = rv.get_pseudo_outs();
   ASSERT_EQ(po.size(), 1u);
   ASSERT_EQ(po[0], k1);
+
+  rct::rctSig coinbase;
+  coinbase.type = rct::CTTypeNull;
+  ASSERT_TRUE(coinbase.get_pseudo_outs().empty());
 }
 
 TEST(fcmp, curve_tree_root_in_block_header)
@@ -345,10 +365,13 @@ TEST(fcmp, curve_tree_root_in_block_header)
   ASSERT_EQ(hdr2.curve_tree_root, test_root);
 }
 
+// (The attestation_root default/serialization test lives in
+// archival_credit_wire.cpp — it is credit-wire, not FCMP, coverage.)
+
 TEST(fcmp, fcmp_pp_proof_empty_rejected_by_verifier)
 {
   rct::rctSig rv;
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.p.fcmp_pp_proof.clear();
   rv.p.curve_trees_tree_depth = 20;
 
@@ -374,7 +397,6 @@ TEST(fcmp, multisig_signing_request_json_v2_fields)
   auto& a = doc.GetAllocator();
 
   doc.AddMember("version", 2, a);
-  doc.AddMember("group_id", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", a);
   doc.AddMember("n_total", 3, a);
   doc.AddMember("m_required", 2, a);
   doc.AddMember("payload_hash", "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", a);
@@ -577,6 +599,192 @@ TEST(fcmp, multisig_2of3_sig_container_assembly)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MSW-1: PQC constant cross-language consistency (bound family)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// The C++ `cryptonote_config.h` PQC constants are hand-written twins of
+// shekyl-crypto-pq's canonical values (the FFI header is hand-written — no
+// cbindgen). Each side has its own compile-time guard against internal drift
+// (`static_assert` in C++, `const _` assert in Rust: ceiling >= largest legal
+// container). This test guards the third failure mode — C++ and Rust each
+// internally consistent but disagreeing with each other across the FFI, which
+// is exactly what F-1 was and which no single-language assert can see. It reads
+// both sides and asserts equality.
+TEST(fcmp, msw1_pqc_constants_match_rust)
+{
+  const ShekylPqcCanonicalLens r = shekyl_pqc_canonical_lens();
+  EXPECT_EQ(r.single_key_len, config::PQC_HYBRID_SINGLE_KEY_LEN);
+  EXPECT_EQ(r.single_sig_len, config::PQC_HYBRID_SINGLE_SIG_LEN);
+  EXPECT_EQ(r.spend_auth_pubkey_len, config::PQC_SPEND_AUTH_PUBKEY_LEN);
+  EXPECT_EQ(r.max_multisig_participants,
+            static_cast<size_t>(config::MAX_MULTISIG_PARTICIPANTS));
+  EXPECT_EQ(r.max_public_key_blob, config::PQC_MAX_PUBLIC_KEY_BLOB);
+  EXPECT_EQ(r.max_signature_blob, config::PQC_MAX_SIGNATURE_BLOB);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MSW-6: per-input scheme mixing (tx-wide scheme_id agreement withdrawn)
+// ═══════════════════════════════════════════════════════════════════════════
+
+namespace {
+
+// V3.1 MultisigKeyContainer for an n=3, m=2 group:
+// [version(1) | n(1) | m(1) | pk0..2(1996 each) | sa_pk0..2(32 each)].
+// Same layout the scheme_id=2 path in shekyl_pqc_verify parses (see
+// multisig_2of3_sig_container_assembly above).
+std::vector<uint8_t> msw6_build_multisig_key_container(const ShekylPqcKeypair (&kps)[3])
+{
+  std::vector<uint8_t> key_blob;
+  key_blob.push_back(0x01);  // MULTISIG_CONTAINER_VERSION
+  key_blob.push_back(3);     // n_total
+  key_blob.push_back(2);     // m_required
+  for (int i = 0; i < 3; ++i)
+    key_blob.insert(key_blob.end(),
+        kps[i].public_key.ptr, kps[i].public_key.ptr + kps[i].public_key.len);
+  for (int i = 0; i < 3; ++i)
+  {
+    uint8_t sa_pk[32];
+    memset(sa_pk, 0x20 + i, 32);
+    key_blob.insert(key_blob.end(), sa_pk, sa_pk + 32);
+  }
+  return key_blob;
+}
+
+// 2-of-3 MultisigSigContainer over msg by signers {0,2}:
+// [m(1) | sig0 | sig1 | idx0(1) | idx1(1)].
+std::vector<uint8_t> msw6_sign_multisig_2of3(const ShekylPqcKeypair (&kps)[3],
+                                             const crypto::hash& msg)
+{
+  std::vector<std::pair<uint8_t, std::vector<uint8_t>>> partials;
+  for (int signer : {0, 2})
+  {
+    ShekylPqcSignatureResult sig = shekyl_pqc_sign(
+        kps[signer].secret_key.ptr, kps[signer].secret_key.len,
+        reinterpret_cast<const uint8_t*>(msg.data), 32);
+    CHECK_AND_ASSERT_THROW_MES(sig.success, "multisig partial sign failed");
+    partials.push_back({(uint8_t)signer,
+        std::vector<uint8_t>(sig.signature.ptr, sig.signature.ptr + sig.signature.len)});
+    shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
+  }
+  std::vector<uint8_t> sig_blob;
+  sig_blob.push_back(2);  // m_required
+  for (const auto& p : partials)
+    sig_blob.insert(sig_blob.end(), p.second.begin(), p.second.end());
+  for (const auto& p : partials)
+    sig_blob.push_back(p.first);
+  return sig_blob;
+}
+
+// Minimal 2-spend-input, 0-output v3 tx whose rct base + prunable serialize
+// through get_transaction_signed_payload. 0 outputs ⇒ no Bp+ / outPk needed;
+// two spend inputs ⇒ two pseudoOuts. Not a spendable tx — just enough for the
+// PQC signing-payload binding that verify_transaction_pqc_auth checks.
+cryptonote::transaction msw6_two_spend_skeleton()
+{
+  cryptonote::transaction tx{};
+  tx.version = 3;
+
+  cryptonote::txin_to_key in0;
+  memset(&in0.k_image, 0xB0, 32);
+  in0.amount = 0;
+  cryptonote::txin_to_key in1;
+  memset(&in1.k_image, 0xB1, 32);
+  in1.amount = 0;
+  tx.vin.push_back(in0);
+  tx.vin.push_back(in1);
+
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.txnFee = 0;
+  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+  tx.rct_signatures.p.curve_trees_tree_depth = 1;
+  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04};
+  tx.rct_signatures.p.pseudoOuts.resize(2);  // one per spend input
+
+  tx.pqc_auths.resize(2);
+  return tx;
+}
+
+crypto::hash msw6_input_payload_hash(const cryptonote::transaction& tx, size_t idx)
+{
+  std::string payload;
+  CHECK_AND_ASSERT_THROW_MES(cryptonote::get_transaction_signed_payload(tx, idx, payload),
+                             "get_transaction_signed_payload failed");
+  crypto::hash h;
+  cryptonote::get_blob_hash(payload, h);
+  return h;
+}
+
+} // namespace
+
+// MSW-6: a v3 tx that spends a solo (scheme 1) output AND a multisig (scheme 2)
+// output in ONE tx now verifies. Before MSW-6 the tx-wide scheme_id agreement
+// rejected it at input 1 (scheme 2 != pqc_auths[0].scheme_id == 1) before the
+// signature was ever checked. That is the enabler this withdrawal exists for:
+// scheme-2 funding sharing a tx with a scheme-1 bond vin (PQC_MULTISIG.md §16.3,
+// V3_1_MULTISIG_RUST_ENGINE.md MSW-6). Each input is still bound to its own
+// signature — the negative control pins that the per-input crypto is intact.
+TEST(fcmp, msw6_mixed_scheme_transaction_verifies)
+{
+  ShekylPqcKeypair kp_single = shekyl_pqc_keypair_generate();
+  ASSERT_TRUE(kp_single.success);
+  ShekylPqcKeypair kps[3];
+  for (int i = 0; i < 3; ++i)
+  {
+    kps[i] = shekyl_pqc_keypair_generate();
+    ASSERT_TRUE(kps[i].success);
+  }
+
+  cryptonote::transaction tx = msw6_two_spend_skeleton();
+
+  // Public keys must be final before the payloads are computed — the signing
+  // payload binds every input's key hash (get_transaction_signed_payload), so
+  // the signatures are set afterward (the payload never covers the signature).
+  tx.pqc_auths[0].auth_version = 1;
+  tx.pqc_auths[0].scheme_id = 1;  // solo
+  tx.pqc_auths[0].flags = 0;
+  tx.pqc_auths[0].hybrid_public_key.assign(
+      kp_single.public_key.ptr, kp_single.public_key.ptr + kp_single.public_key.len);
+
+  tx.pqc_auths[1].auth_version = 1;
+  tx.pqc_auths[1].scheme_id = 2;  // multisig
+  tx.pqc_auths[1].flags = 0;
+  tx.pqc_auths[1].hybrid_public_key = msw6_build_multisig_key_container(kps);
+
+  crypto::hash h0 = msw6_input_payload_hash(tx, 0);
+  ShekylPqcSignatureResult sig0 = shekyl_pqc_sign(
+      kp_single.secret_key.ptr, kp_single.secret_key.len,
+      reinterpret_cast<const uint8_t*>(h0.data), 32);
+  ASSERT_TRUE(sig0.success);
+  tx.pqc_auths[0].hybrid_signature.assign(sig0.signature.ptr,
+                                          sig0.signature.ptr + sig0.signature.len);
+  shekyl_buffer_free(sig0.signature.ptr, sig0.signature.len);
+
+  crypto::hash h1 = msw6_input_payload_hash(tx, 1);
+  tx.pqc_auths[1].hybrid_signature = msw6_sign_multisig_2of3(kps, h1);
+
+  // The enabler: the mixed-scheme tx verifies.
+  EXPECT_TRUE(cryptonote::verify_transaction_pqc_auth(tx))
+      << "MSW-6: a solo(1)+multisig(2) transaction must verify";
+
+  // Negative control: the relaxation dropped only the cross-input agreement,
+  // not the per-input signature binding. Corrupt the multisig signature and the
+  // same tx must fail.
+  cryptonote::transaction tampered = tx;
+  ASSERT_GE(tampered.pqc_auths[1].hybrid_signature.size(), 4u);
+  tampered.pqc_auths[1].hybrid_signature[3] ^= 0xFF;
+  EXPECT_FALSE(cryptonote::verify_transaction_pqc_auth(tampered))
+      << "per-input signature binding must still reject a tampered auth";
+
+  shekyl_buffer_free(kp_single.public_key.ptr, kp_single.public_key.len);
+  shekyl_buffer_free(kp_single.secret_key.ptr, kp_single.secret_key.len);
+  for (int i = 0; i < 3; ++i)
+  {
+    shekyl_buffer_free(kps[i].public_key.ptr, kps[i].public_key.len);
+    shekyl_buffer_free(kps[i].secret_key.ptr, kps[i].secret_key.len);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Phase 7: Verification caching tests
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -585,7 +793,7 @@ TEST(fcmp, verification_cache_hash_deterministic)
   // Same transaction produces the same verification hash twice
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
   tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04, 0x05};
   memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
 
@@ -604,7 +812,7 @@ TEST(fcmp, verification_cache_hash_differs_on_proof_change)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
   tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
   memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
 
@@ -625,7 +833,7 @@ TEST(fcmp, verification_cache_hash_differs_on_reference_block_change)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
   tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
   memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
 
@@ -646,7 +854,7 @@ TEST(fcmp, verification_cache_hash_differs_on_key_image_change)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
   tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
   memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
 
@@ -667,7 +875,7 @@ TEST(fcmp, verification_cache_hash_null_for_non_fcmp_type)
 {
   cryptonote::transaction tx{};
   tx.version = 2;
-  tx.rct_signatures.type = rct::RCTTypeNull;
+  tx.rct_signatures.type = rct::CTTypeNull;
 
   crypto::hash h = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
   ASSERT_EQ(h, crypto::null_hash);
@@ -677,7 +885,7 @@ TEST(fcmp, verification_cache_hash_multiple_inputs)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
   tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04};
   memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
 

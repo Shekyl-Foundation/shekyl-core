@@ -1,0 +1,174 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+// All rights reserved. BSD-3-Clause
+
+//! Group Descriptor: single canonical backup file for multisig group state.
+//!
+//! Analogous to Bitcoin's output script descriptors (BIP 380). One file
+//! contains everything needed to reconstruct group state from seeds.
+
+use serde::{Deserialize, Serialize};
+
+/// File format version.
+pub const GROUP_DESCRIPTOR_VERSION: u8 = 1;
+
+/// Group descriptor: everything needed to restore a multisig group.
+///
+/// This is the "descriptor" file — one file, importable into any
+/// conforming wallet, restores the group without scattered persistence.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupDescriptor {
+    pub version: u8,
+    pub m_required: u8,
+    pub n_total: u8,
+    pub spend_auth_version: u8,
+    pub participant_pubkeys: Vec<String>,
+    /// The group's identity: the hex of `shekyl_address::address_fingerprint`
+    /// over the group's `MultisigAddressPayload`. This is the single group
+    /// identifier — it replaces the former opaque `group_id: String`, which was
+    /// carried but never produced by anything (the synthesis: one value, one
+    /// producer, independently derivable by every participant from the address).
+    pub address_fingerprint: String,
+    pub created_at: u64,
+    pub notes: Option<String>,
+}
+
+impl GroupDescriptor {
+    pub fn new(
+        m_required: u8,
+        n_total: u8,
+        spend_auth_version: u8,
+        participant_pubkeys: Vec<String>,
+        address_fingerprint: String,
+    ) -> Self {
+        Self {
+            version: GROUP_DESCRIPTOR_VERSION,
+            m_required,
+            n_total,
+            spend_auth_version,
+            participant_pubkeys,
+            address_fingerprint,
+            created_at: 0,
+            notes: None,
+        }
+    }
+
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    pub fn from_json(json: &str) -> Result<Self, GroupDescriptorError> {
+        let desc: Self = serde_json::from_str(json)
+            .map_err(|e| GroupDescriptorError::ParseFailed(e.to_string()))?;
+
+        if desc.version != GROUP_DESCRIPTOR_VERSION {
+            return Err(GroupDescriptorError::UnsupportedVersion(desc.version));
+        }
+        if desc.m_required == 0 || desc.m_required > desc.n_total {
+            return Err(GroupDescriptorError::InvalidThreshold {
+                m: desc.m_required,
+                n: desc.n_total,
+            });
+        }
+        if desc.participant_pubkeys.len() != desc.n_total as usize {
+            return Err(GroupDescriptorError::PubkeyCountMismatch {
+                expected: desc.n_total,
+                // Diagnostic-only field on an error we are already returning;
+                // saturate rather than widen the error type (house telemetry
+                // idiom). n_total is u8, so any real mismatch is representable.
+                got: u8::try_from(desc.participant_pubkeys.len()).unwrap_or(u8::MAX),
+            });
+        }
+        if desc.address_fingerprint.is_empty() {
+            return Err(GroupDescriptorError::MissingFingerprint);
+        }
+
+        Ok(desc)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum GroupDescriptorError {
+    #[error("unsupported descriptor version: {0}")]
+    UnsupportedVersion(u8),
+    #[error("failed to parse descriptor: {0}")]
+    ParseFailed(String),
+    #[error("invalid threshold: m={m} must be 1..=n={n}")]
+    InvalidThreshold { m: u8, n: u8 },
+    #[error("pubkey count mismatch: expected {expected}, got {got}")]
+    PubkeyCountMismatch { expected: u8, got: u8 },
+    #[error("address_fingerprint is required")]
+    MissingFingerprint,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_descriptor() -> GroupDescriptor {
+        GroupDescriptor {
+            version: GROUP_DESCRIPTOR_VERSION,
+            m_required: 2,
+            n_total: 3,
+            spend_auth_version: 2,
+            participant_pubkeys: vec!["pk1".into(), "pk2".into(), "pk3".into()],
+            address_fingerprint: "deadbeef".into(),
+            created_at: 1713000000,
+            notes: Some("Test group".into()),
+        }
+    }
+
+    #[test]
+    fn json_roundtrip() {
+        let desc = make_test_descriptor();
+        let json = desc.to_json().unwrap();
+        let parsed = GroupDescriptor::from_json(&json).unwrap();
+        assert_eq!(parsed.address_fingerprint, desc.address_fingerprint);
+        assert_eq!(parsed.m_required, 2);
+        assert_eq!(parsed.n_total, 3);
+        assert_eq!(parsed.participant_pubkeys.len(), 3);
+    }
+
+    #[test]
+    fn rejects_wrong_version() {
+        let mut desc = make_test_descriptor();
+        desc.version = 99;
+        let json = serde_json::to_string(&desc).unwrap();
+        assert!(matches!(
+            GroupDescriptor::from_json(&json),
+            Err(GroupDescriptorError::UnsupportedVersion(99))
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_threshold() {
+        let mut desc = make_test_descriptor();
+        desc.m_required = 5;
+        let json = serde_json::to_string(&desc).unwrap();
+        assert!(matches!(
+            GroupDescriptor::from_json(&json),
+            Err(GroupDescriptorError::InvalidThreshold { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_pubkey_count_mismatch() {
+        let mut desc = make_test_descriptor();
+        desc.participant_pubkeys = vec!["pk1".into(), "pk2".into()];
+        let json = serde_json::to_string(&desc).unwrap();
+        assert!(matches!(
+            GroupDescriptor::from_json(&json),
+            Err(GroupDescriptorError::PubkeyCountMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_address_fingerprint() {
+        let mut desc = make_test_descriptor();
+        desc.address_fingerprint = String::new();
+        let json = serde_json::to_string(&desc).unwrap();
+        assert!(matches!(
+            GroupDescriptor::from_json(&json),
+            Err(GroupDescriptorError::MissingFingerprint)
+        ));
+    }
+}

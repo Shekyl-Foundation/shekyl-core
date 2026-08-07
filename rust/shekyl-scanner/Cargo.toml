@@ -43,13 +43,19 @@ shekyl-units = { path = "../shekyl-units" }
 # `TxHash` newtype: the scanner lifts oxide's raw `[u8; 32]` txid into the
 # typed domain at the `from_wallet_output` boundary.
 shekyl-types = { path = "../shekyl-types" }
+# Single owner of the §3 empty-set `attestation_root` the block-header fixtures
+# carry (ARCHIVAL_CREDIT_WIRE.md; never the all-zero null_hash). Optional: only
+# the `test-utils` fixture surface needs it — the production scan path never
+# derives the root. Plain `cargo test` builds get it via [dev-dependencies].
+shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = true }
 
 [features]
 default = ["std"]
 std = ["shekyl-curve-io/std", "shekyl-curve-generators/std", "shekyl-curve-primitives/std", "shekyl-rpc-client/std"]
-test-utils = []
+test-utils = ["dep:shekyl-archival-retention"]
 
 [dev-dependencies]
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
 proptest = "1"
 

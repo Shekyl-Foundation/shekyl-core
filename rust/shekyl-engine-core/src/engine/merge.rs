@@ -221,6 +221,7 @@ impl<
             rewind_matched_payment_requests_after_reorg(
                 &mut state.ledger.bookkeeping.payment_requests,
                 &state.ledger.ledger,
+                state.ledger.ledger.height(),
             );
         }
 
@@ -243,6 +244,13 @@ impl<
             &label_residue,
             &inserted,
         );
+        // WI-RPC-3 retention reconciler (`docs/api/wallet_rpc.yaml`
+        // OUTBOUND PREREQUISITE pins 2–3 + PR-SJ-1 P3-1: after the merge
+        // and the post-passes, retire retention orphans the chain now
+        // references and run the send-journal reorg/confirm/lock
+        // re-derivation. Same write guard so I-2 and I-5 hold atomically
+        // with the scan merge (see `WalletLedger::reconcile_after_scan_merge`).
+        state.ledger.reconcile_after_scan_merge(reorg_fork_height);
         Ok(())
     }
 
@@ -804,8 +812,13 @@ pub(crate) fn apply_scan_result_to_state(
             .push(dt.output);
     }
 
-    let mut key_images_by_height: BTreeMap<u64, Vec<shekyl_crypto_pq::key_image::KeyImage>> =
-        BTreeMap::new();
+    // Each observation pairs the key image with its containing txid so
+    // `detect_spends` can record the spend-quadruple leg (F-9:
+    // `TransferDetails::spending_tx_hash`).
+    let mut key_images_by_height: BTreeMap<
+        u64,
+        Vec<(shekyl_crypto_pq::key_image::KeyImage, shekyl_types::TxHash)>,
+    > = BTreeMap::new();
     for ki in spent_key_images {
         if !processed_height_range.contains(&ki.block_height) {
             return Err(RefreshError::MalformedScanResult {
@@ -815,7 +828,7 @@ pub(crate) fn apply_scan_result_to_state(
         key_images_by_height
             .entry(ki.block_height)
             .or_default()
-            .push(ki.key_image);
+            .push((ki.key_image, ki.containing_tx_hash));
     }
 
     // --- Apply phase ---------------------------------------------------
@@ -1222,6 +1235,7 @@ mod tests {
             spent_key_images: vec![KeyImageObserved {
                 block_height: 3,
                 key_image,
+                containing_tx_hash: shekyl_types::TxHash::from_bytes([0xDD; 32]),
             }],
             reorg_rewind: None,
             block_leaves: Vec::new(),
@@ -1515,6 +1529,7 @@ mod tests {
             spent_key_images: vec![KeyImageObserved {
                 block_height: 9,
                 key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xCC; 32]),
+                containing_tx_hash: shekyl_types::TxHash::from_bytes([0xDD; 32]),
             }],
             reorg_rewind: None,
             block_leaves: Vec::new(),

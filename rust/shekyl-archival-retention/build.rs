@@ -39,40 +39,6 @@ fn main() {
             )
         });
 
-    let plateau_value = map
-        .get("archival_reward_plateau_value_milli")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_else(|| {
-            panic!(
-                "missing archival_reward_plateau_value_milli in {}",
-                config_path.display()
-            )
-        });
-
-    let plateau_work = map
-        .get("archival_reward_plateau_work_milli")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_else(|| {
-            panic!(
-                "missing archival_reward_plateau_work_milli in {}",
-                config_path.display()
-            )
-        });
-
-    let expected_plateau_work = plateau_value.checked_mul(2).unwrap_or_else(|| {
-        panic!(
-            "archival_reward_plateau_value_milli overflow in {}",
-            config_path.display()
-        )
-    });
-    if plateau_work != expected_plateau_work {
-        panic!(
-            "archival_reward_plateau_work_milli ({plateau_work}) must equal \
-             2 * archival_reward_plateau_value_milli ({plateau_value}) in {}",
-            config_path.display()
-        );
-    }
-
     let age_weight = map
         .get("archival_reward_age_weight_milli")
         .and_then(serde_json::Value::as_u64)
@@ -98,53 +64,85 @@ fn main() {
             )
         });
 
-    // M1 reward-gate cover threshold (ARCHIVAL_REWARD_GATE_M1.md §4 sentinel
-    // mechanics). `k_cover_provisional` gates a compile-time refusal in
-    // `src/k_cover.rs`; while provisional, the ONLY permitted value is 0 —
-    // the gate-identity degenerate the G-9 KAT pins executably (pre-seal
-    // behavior is exactly the pre-gate behavior, so the r_market/sigma store
-    // paths stay exercised end-to-end until seal). This makes a
-    // plausible-looking provisional K_COVER unrepresentable, not merely
-    // discouraged; the shipping guard is the compile refusal in
-    // src/k_cover.rs, never the sentinel value.
-    let k_cover = map
-        .get("k_cover")
+    let release_cooldown_epochs = map
+        .get("release_cooldown_epochs")
         .and_then(serde_json::Value::as_u64)
-        .unwrap_or_else(|| panic!("missing k_cover in {}", config_path.display()));
-
-    let k_cover_provisional = map
-        .get("k_cover_provisional")
-        .and_then(serde_json::Value::as_bool)
         .unwrap_or_else(|| {
             panic!(
-                "missing k_cover_provisional (bool) in {}",
+                "missing release_cooldown_epochs in {}",
                 config_path.display()
             )
         });
 
-    if k_cover_provisional && k_cover != 0 {
-        panic!(
-            "k_cover_provisional is true but k_cover ({k_cover}) is not the gate-identity \
-             sentinel 0 in {}. A plausible-looking provisional K_COVER is the silent-ship \
-             class ARCHIVAL_REWARD_GATE_M1.md §4 refuses: either seal the §14.4-derived \
-             value (flip k_cover_provisional to false) or keep the sentinel.",
-            config_path.display()
-        );
-    }
-    if !k_cover_provisional && k_cover == 0 {
-        panic!(
-            "k_cover_provisional is false but k_cover is 0 (the gate never gates — no \
-             cold-start refusal) in {}. Sealing requires the WI-4 §14.4-derived value >= 1, \
-             not the sentinel with the flag flipped.",
-            config_path.display()
-        );
-    }
+    // Per-shard retention-commitment horizon (gate-4 §4.4). Shape genesis-frozen;
+    // numerics provisional (H2 plateau arm). Consumed by
+    // shekyl-archival-retention::bond_duration (Rust-only at genesis); the C++
+    // header emits the same values for parity.
+    let bond_duration_base_epochs = map
+        .get("bond_duration_base_epochs")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing bond_duration_base_epochs in {}",
+                config_path.display()
+            )
+        });
 
-    // Declare the cfg for `-D warnings` (unexpected_cfgs); emit it only while
-    // provisional so the refusal in src/k_cover.rs compiles away entirely at seal.
-    println!("cargo:rustc-check-cfg=cfg(k_cover_provisional)");
-    if k_cover_provisional {
-        println!("cargo:rustc-cfg=k_cover_provisional");
+    let bond_duration_age_scale = map
+        .get("bond_duration_age_scale")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing bond_duration_age_scale in {}",
+                config_path.display()
+            )
+        });
+
+    // Sliding-window m-of-n failure confirmation (ARCHIVAL_FAILURE_CONFIRMATION_PIN
+    // §1). Shape genesis-frozen; numerics provisional at the Round-1 values,
+    // re-pinned at the Round-2 stressnet — the bond_duration precedent.
+    //
+    // Read at the width they are EMITTED and crossed at (`u32`, the
+    // shekyl_archival_failure_window_params accessor), so an out-of-range re-pin
+    // names itself here instead of surfacing as an opaque "literal out of range"
+    // in the generated file. Converting on read rather than bound-checking after
+    // is what makes both values structurally in-range: a check on `n` alone would
+    // bound `m` only transitively through `n >= m` below, so reordering or
+    // dropping that check would silently un-bound `m`.
+    let failure_window_param = |key: &str| -> u32 {
+        let raw = map
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_else(|| panic!("missing {key} in {}", config_path.display()));
+        u32::try_from(raw).unwrap_or_else(|_| {
+            panic!(
+                "{key} ({raw}) exceeds u32 in {} — the failure-window FFI accessor \
+                 is u32-wide",
+                config_path.display()
+            )
+        })
+    };
+    let failure_window_m = failure_window_param("archival_failure_window_m");
+    let failure_window_n = failure_window_param("archival_failure_window_n");
+
+    // Shape invariants, not tunables: `m == 0` would slash a `P` that never
+    // missed, and `n < m` would make the threshold unreachable — a silently
+    // disabled slash. Both are re-pin typos the Round-2 numerics pass could
+    // introduce, so they fail the build here rather than at a stressnet.
+    if failure_window_m == 0 {
+        panic!(
+            "archival_failure_window_m must be >= 1 in {} (m = 0 slashes a P that \
+             never missed a baseline)",
+            config_path.display()
+        );
+    }
+    if failure_window_n < failure_window_m {
+        panic!(
+            "archival_failure_window_n ({failure_window_n}) must be >= \
+             archival_failure_window_m ({failure_window_m}) in {} — an unreachable \
+             threshold disables the slash silently",
+            config_path.display()
+        );
     }
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
@@ -152,21 +150,26 @@ fn main() {
     let output = format!(
         "// @generated by build.rs from config/consensus_constants.json — do not edit.\n\
          pub const ARCHIVAL_BOND_FLOOR_ATOMIC: u64 = {floor};\n\
-         pub const ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI: u64 = {plateau_value};\n\
-         pub const ARCHIVAL_REWARD_PLATEAU_WORK_MILLI: u64 = {plateau_work};\n\
          pub const ARCHIVAL_REWARD_AGE_WEIGHT_MILLI: u64 = {age_weight};\n\
          pub const MAX_CLAIM_AGE_W: u64 = {max_claim_age_w};\n\
-         pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = {archival_reorg_depth_blocks};\n"
+         pub const RELEASE_COOLDOWN_EPOCHS: u64 = {release_cooldown_epochs};\n\
+         pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = {archival_reorg_depth_blocks};\n\
+         pub const BOND_DURATION_BASE_EPOCHS: u64 = {bond_duration_base_epochs};\n\
+         pub const BOND_DURATION_AGE_SCALE: u64 = {bond_duration_age_scale};\n"
     );
-    fs::write(&out_file, output).expect("failed writing archival bond floor constant");
+    fs::write(&out_file, output).expect("failed writing generated archival consensus constants");
 
-    let k_cover_file = out_dir.join("k_cover_generated.rs");
-    let k_cover_output = format!(
+    // Own file, own consumer: src/failure_window.rs includes only these two, so
+    // the failure-window module does not pull the whole bond-floor constant set
+    // into its namespace (the segment_leaf_count precedent).
+    let failure_window_file = out_dir.join("archival_failure_window_generated.rs");
+    let failure_window_output = format!(
         "// @generated by build.rs from config/consensus_constants.json — do not edit.\n\
-         pub const K_COVER: u64 = {k_cover};\n\
-         pub const K_COVER_PROVISIONAL: bool = {k_cover_provisional};\n"
+         pub const ARCHIVAL_FAILURE_WINDOW_M: u32 = {failure_window_m};\n\
+         pub const ARCHIVAL_FAILURE_WINDOW_N: u32 = {failure_window_n};\n"
     );
-    fs::write(&k_cover_file, k_cover_output).expect("failed writing k_cover constants");
+    fs::write(&failure_window_file, failure_window_output)
+        .expect("failed writing generated archival failure-window constants");
 
     // Segment geometry (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2). Derived,
     // not tunable: src/segment_freeze.rs re-asserts the value against the

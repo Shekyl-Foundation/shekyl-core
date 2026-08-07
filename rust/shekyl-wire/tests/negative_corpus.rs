@@ -15,17 +15,26 @@
 use shekyl_wire::transaction::{CT_TYPE_NULL, TAG_INPUT_GEN, TAG_OUTPUT_TAGGED_KEY};
 use shekyl_wire::Block;
 
-/// Build a minimal, fully-controlled coinbase blob (timestamp/nonce/keys zeroed)
-/// so individual fields can be made invalid in isolation.
-fn minimal_coinbase(input_tag: u8, ct_type: u8, include_null_base: bool) -> Vec<u8> {
+/// Serialized zeroed block header — the shared prefix every hand-built blob in
+/// this file starts from, so a header-format change is a single edit here.
+fn zeroed_header_bytes() -> Vec<u8> {
     let mut b = Vec::new();
-    // BlockHeader: major=1, minor=0, timestamp=0, prev[32], nonce[4], root[32].
+    // BlockHeader: major=1, minor=0, timestamp=0, prev[32], nonce[4],
+    // curve_tree_root[32], attestation_root[32].
     b.push(0x01);
     b.push(0x00);
     b.push(0x00);
     b.extend_from_slice(&[0u8; 32]);
     b.extend_from_slice(&[0u8; 4]);
     b.extend_from_slice(&[0u8; 32]);
+    b.extend_from_slice(&[0u8; 32]);
+    b
+}
+
+/// Build a minimal, fully-controlled coinbase blob (timestamp/nonce/keys zeroed)
+/// so individual fields can be made invalid in isolation.
+fn minimal_coinbase(input_tag: u8, ct_type: u8, include_null_base: bool) -> Vec<u8> {
+    let mut b = zeroed_header_bytes();
     // Transaction: version=3, unlock_time=0.
     b.push(0x03);
     b.push(0x00);
@@ -127,10 +136,7 @@ fn rejects_oversized_input_count() {
     // DoS guard: an input count beyond the parse cap (READ_LEN_CAP = 1_000_000)
     // must be rejected before the read loop, not drive unbounded work. Build a
     // header + tx version + unlock_time, then an oversized input-count varint.
-    let mut blob = vec![0x01u8, 0x00, 0x00]; // major, minor, timestamp
-    blob.extend_from_slice(&[0u8; 32]); // prev_id
-    blob.extend_from_slice(&[0u8; 4]); // nonce (u32 LE)
-    blob.extend_from_slice(&[0u8; 32]); // curve_tree_root
+    let mut blob = zeroed_header_bytes();
     blob.push(0x03); // tx version
     blob.push(0x00); // unlock_time
     shekyl_wire::varint::write_varint(2_000_000usize, &mut blob).expect("Vec write is infallible");

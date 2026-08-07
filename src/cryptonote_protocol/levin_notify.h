@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "byte_slice.h"
+#include "crypto/hash.h"
 #include "cryptonote_basic/blobdatatype.h"
 #include "cryptonote_protocol/enums.h"
 #include "cryptonote_protocol/fwd.h"
@@ -108,17 +109,27 @@ namespace levin
     //! Run the logic for the next epoch immediately. Only use in testing.
     void run_epoch();
 
-    //! Run the logic for the next stem timeout imemdiately. Only use in  testing.
-    void run_stems();
+    /*! Advance to the zone's next scheduled event and run it — one poll at
+        `next_wake()`, exactly as the production timer would, then re-arm.
+        Only use in testing.
+
+        Renamed from the inherited `run_stems`, whose name was a dead
+        assumption twice over: it never touched Dandelion++ stems, and after
+        RP-3b its body no longer cancels noise timers either (there are none
+        to cancel — the zone folds every covert deadline into `next_wake()`).
+        The name follows the body (§20.6). */
+    void run_next_wake();
 
     //! Run the logic for flushing all Dandelion++ fluff queued txs. Only use in testing.
     void run_fluff();
 
     /*! Send txs using `cryptonote_protocol_defs.h` payload format wrapped in a
-        levin header. The message will be sent in a "discreet" manner if
-        enabled - if `!noise.empty()` then the `command`/`payload` will be
-        queued to send at the next available noise interval. Otherwise, a
-        Dandelion++ fluff algorithm will be used.
+        levin header. The message will be sent in a "discreet" manner if the
+        zone runs covert channels (`shekyl_relay_zone_covert_enabled` — the
+        zone's fact since §20.4, no longer the payload's emptiness) — then the
+        `command`/`payload` will be queued to send at the next available
+        covert interval. Otherwise, a Dandelion++ fluff algorithm will be
+        used.
 
         \note Eventually Dandelion++ stem sending will be used here when
           enabled.
@@ -130,6 +141,42 @@ namespace levin
 
       \return True iff the notification is queued for sending. */
     bool send_txs(std::vector<blobdata> txs, const boost::uuids::uuid& source, relay_method tx_relay);
+
+    //! §46: resolve pending stem observations for arrived **canonical hashes**
+    //! (any peer, any path — called on every zone, before pool admission).
+    //! Hashes are the join key (F-9); the caller parses once and fans one
+    //! shared vector so multi-zone nodes do not re-parse per zone. Unknown
+    //! hashes are ignored Rust-side.
+    void record_arrival(std::shared_ptr<const std::vector<crypto::hash>> hashes, const boost::uuids::uuid& from);
+
+    //! §55: one published stem-outcome row (peer + raw counts). Layout
+    //! matches the Rust FFI row; kept as a C++ type here so this header does
+    //! not pull in the whole shekyl_ffi surface.
+    struct stem_tally_row
+    {
+      std::uint8_t peer[16];
+      std::uint64_t propagated;
+      std::uint64_t silent;
+      std::uint64_t distinct_sources;
+    };
+
+    //! §55: this zone's published stem-outcome rows. Two-call sizing on row
+    //! count; the write-call return is authoritative when it fits. Reads a
+    //! published snapshot, so it is safe from any thread — same discipline
+    //! as `stem_in_flight` below. Transit for a Rust->Rust readout; see the
+    //! .cpp note.
+    std::vector<stem_tally_row> stem_snapshot() const;
+
+    //! §46: stem observations pending resolution. Reads a published atomic on
+    //! the relay handle (same discipline as `live_stems` / get_status), so it
+    //! is safe from any thread — including the gtest harness after it drains
+    //! the strand.
+    std::size_t stem_in_flight() const;
   };
+
+  //! §46/§48: canonical tx hashes for the stem-observation watch (F-9).
+  //! Parsed once at the fan-out boundary; blob bytes are not a stable identity
+  //! across relay hops.
+  std::vector<crypto::hash> stem_watch_tx_hashes(const std::vector<cryptonote::blobdata>& txs);
 } // levin
-} // net
+} // cryptonote

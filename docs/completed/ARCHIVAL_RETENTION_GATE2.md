@@ -287,7 +287,7 @@ mutation; FCMP++ membership proof (8c feasibility §6.3).
 ### 5.1.1 Byte layout (genesis pin)
 
 Vin type tag **`4`** (`txin_archival_serve_credit_response`). Varint discipline matches
-[`shekyl-oxide` `Input`](../../rust/shekyl-oxide/shekyl-oxide/src/transaction.rs) /
+`shekyl-oxide` `Input` /
 `shekyl-io`. Reference implementation: `shekyl-archival-retention::wire`.
 
 ```text
@@ -394,7 +394,7 @@ chain and may self-respond — delivery is operational, not soundness.
 
 ## 8. `pop_block` revert
 
-Within [`ARCHIVAL_REORG_DEPTH_BLOCKS`](../ARCHIVAL_TIMING_CONSTANTS.md) (720 blocks):
+Within [`ARCHIVAL_REORG_DEPTH_BLOCKS`](../design/ARCHIVAL_TIMING_CONSTANTS.md) (720 blocks):
 
 On disconnect of block `H` that **set** `serve_credit_bit(P,s,E)`: clear bit.
 

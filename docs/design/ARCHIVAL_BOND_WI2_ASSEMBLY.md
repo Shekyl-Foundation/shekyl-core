@@ -139,6 +139,25 @@ sealed `PScanState`:
    on a fakechain-shaped fixture, not daemon admission. Production assembly
    follows the two-output split; the KAT is unchanged.)
 
+**UPDATE 2026-07-08 (GF-4b sweep amendment,
+`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.1):** rule 3's *extent* is amended —
+selection converts to **sweep semantics** (`select_funding_outputs` renamed
+`sweep_funding_outputs`): the assemble path consumes the persona's **entire**
+unreserved **spendable** eligible set, with no early break at
+`sum ≥ floor + fee`. Rule 3's ordering rationale (oldest-first, deterministic,
+no unlinkability pressure) survives as the ordering of the swept input list;
+rule 1 gains a spendability exclusion (`spendable_height ≤` the sweep's
+reference height — GF4b-6) alongside the reserved-exclusion; rules 2 and 4
+are unchanged (the ramp refusal now tests the swept total; the balance rule
+absorbs the larger change remainder). Extent was never load-bearing for
+D-A2's rationale — order was — and GF-4b's structural-emptiness claim
+("nothing raw survives backing-eligible") requires the bond post to consume
+everything spendable. The function is additionally gated on a
+`SpentRecordsDurablyPruned` witness token (GF4b-5): under sweep semantics a
+stale confirmed-spent record poisons *every* subsequent post, so
+"assemble goes live without durable pruning" fails to compile. See the
+GF-4b doc §3.1–§3.2 for the recorded argument and reversion clauses.
+
 ### 3.3 D-A3 — Assembly flow and secret locality
 
 **Decision.** One Engine-side orchestrator + one actor message. The
@@ -327,7 +346,10 @@ holds them.** WI-3 inherits it as its resume-from-restart guarantee.
   the existing no-leak rendering proofs.
 - `PScanState` v4 round-trip; v3 seal fails closed on version.
 - Selection: ramp refusal boundary, reserved-exclusion, oldest-first
-  determinism, exact balance rule.
+  determinism, exact balance rule. (UPDATE 2026-07-08: under the GF-4b
+  sweep amendment the determinism KAT asserts full-set consumption, and
+  spendability-exclusion and no-spendable-remainder KATs join —
+  `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §4 item 2.)
 - P spend-bundle derivation: byte-identical to scanner-derived secrets for
   the same output (the M3b property-test shape, P edition).
 - End-to-end assemble over the real tree (the KAT flow, production path):

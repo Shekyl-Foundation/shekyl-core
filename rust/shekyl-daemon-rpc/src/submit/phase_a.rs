@@ -25,8 +25,9 @@
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::traits::IsIdentity;
+use shekyl_archival_retention::{p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin};
 use shekyl_types::{BlockHash, TxHash};
-use shekyl_wire::transaction::{Ct, Input, Transaction, MAX_TX_SIZE};
+use shekyl_wire::transaction::{BondPost, Ct, Input, Transaction, MAX_TX_SIZE};
 
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 
@@ -46,6 +47,12 @@ pub enum SubmitTxKind {
     /// Fee-only serve-credit: every input is `serve_credit` — non-spending,
     /// no outputs, zero fee by consensus.
     ServeCreditOnly,
+    /// Emission claim: one `reward_emission` input plus ≥ 0 `txin_to_key`
+    /// fee inputs (Q11 — with none, the fee is paid out of the mint).
+    /// Spending-shaped for the reference checks: the membership-only
+    /// backing proof verifies against the reference root even with zero
+    /// fee inputs (§8.7.2 row E3).
+    Emission,
 }
 
 /// A submission that cleared Phase A: parsed, canonical, statically valid,
@@ -73,6 +80,44 @@ pub struct ParsedSubmission {
     pub weight: u64,
     /// Shape class for Phase C's check-set dispatch.
     pub kind: SubmitTxKind,
+    /// The decoded emission vin — `Some` iff `kind == Emission` (§8.7.2
+    /// row E1: parsed **and** `validate()`d once here; the engine derives
+    /// the Phase-B probe key from it and the verifier consumes it whole,
+    /// so the 1 MiB-capped blob is never re-parsed).
+    pub emission_vin: Option<Box<ArchivalRewardEmissionVin>>,
+}
+
+impl ParsedSubmission {
+    /// The bond-post vin and its vin index — `Some` iff the submission is a
+    /// [`SubmitTxKind::BondPost`] (Phase A pinned exactly one bond-post
+    /// input for that kind). The engine keys the Phase-B BP3 record probe
+    /// on the vin's claimed `p_canonical_id` (exactly as the C++ oracle
+    /// does — the claim is pinned to the pubkey by the verifier's BP2 leg),
+    /// and the verifier's bond battery consumes the full vin.
+    /// The emission vin's derived claimant id + claimed epochs — the
+    /// Phase-B probe key for a [`SubmitTxKind::Emission`] submission
+    /// (§8.7.2 row E6; the claim is independently re-derived by the
+    /// verifier's E2 auth-binding leg).
+    pub fn emission_probe(&self) -> Option<([u8; 32], &[u64])> {
+        self.emission_vin.as_ref().map(|vin| {
+            (
+                *p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey).as_bytes(),
+                vin.settlement_epochs.as_slice(),
+            )
+        })
+    }
+
+    pub fn bond_post(&self) -> Option<(usize, &BondPost)> {
+        self.tx
+            .prefix
+            .inputs
+            .iter()
+            .enumerate()
+            .find_map(|(i, input)| match input {
+                Input::BondPost(bp) => Some((i, bp.as_ref())),
+                _ => None,
+            })
+    }
 }
 
 /// A Phase-A refusal: wire verdict `Rejected{Malformed}` plus the
@@ -174,6 +219,7 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
     let mut n_to_key = 0usize;
     let mut n_serve_credit = 0usize;
     let mut n_bond_post = 0usize;
+    let mut n_emission = 0usize;
     let mut key_images: Vec<[u8; 32]> = Vec::new();
     for input in &tx.prefix.inputs {
         match input {
@@ -191,11 +237,16 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
                 // panickable by construction.
                 return Err(PhaseAReject::new("gen input in a non-coinbase submission"));
             }
+            Input::ArchivalRewardEmission { .. } => n_emission += 1,
         }
     }
     let kind = if n_serve_credit > 0 {
         // validate(): serve-credit never mixes; all inputs are serve-credit.
         SubmitTxKind::ServeCreditOnly
+    } else if n_emission == 1 {
+        // validate(): ≤ 1 emission, never mixed with a bond_post (§2.5) —
+        // only ToKey fee inputs can co-reside.
+        SubmitTxKind::Emission
     } else if n_bond_post == 1 {
         SubmitTxKind::BondPost
     } else {
@@ -240,21 +291,86 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
         ));
     }
 
+    // Emission statics (§8.7.2). E1: the opaque vin must decode and
+    // validate under the canonical `emission_wire` codec — the same reader
+    // the C++ oracle reaches through `shekyl_archival_emission_vin_extract`
+    // — parsed once here and carried on the submission. EV3: the loud
+    // reward vout sum must be non-zero (wire validate() already pinned it
+    // overflow-free).
+    let emission_vin = if kind == SubmitTxKind::Emission {
+        let Some(bytes) = tx.prefix.inputs.iter().find_map(|input| match input {
+            Input::ArchivalRewardEmission { canonical_bytes } => Some(canonical_bytes),
+            _ => None,
+        }) else {
+            // Unreachable for the classified kind; loud refusal per §7.6.
+            return Err(PhaseAReject::new("emission kind without an emission input"));
+        };
+        let mut cursor = bytes.as_slice();
+        let vin = ArchivalRewardEmissionVin::read(&mut cursor)
+            .map_err(|e| PhaseAReject::new(format!("emission vin decode failed: {e:?}")))?;
+        // Length-exact, mirroring the C++ oracle's `parse_emission_vin`
+        // (shekyl-ffi): trailing bytes inside the opaque blob are invisible
+        // to the outer tx's byte-canonicality check, and the commit-path
+        // re-extract rejects them — enforce the same bound here so the
+        // divergence class is unrepresentable past Phase A.
+        if !cursor.is_empty() {
+            return Err(PhaseAReject::new(format!(
+                "emission vin carries {} trailing byte(s)",
+                cursor.len()
+            )));
+        }
+        vin.validate()
+            .map_err(|e| PhaseAReject::new(format!("emission vin validation failed: {e:?}")))?;
+        if tx
+            .prefix
+            .outputs
+            .iter()
+            .map(|o| u128::from(o.amount))
+            .sum::<u128>()
+            == 0
+        {
+            return Err(PhaseAReject::new(
+                "emission tx must carry a non-zero loud reward vout sum",
+            ));
+        }
+        Some(Box::new(vin))
+    } else {
+        None
+    };
+
     // Spending shapes must carry a non-empty membership proof (row K11's
     // static leg; `blockchain.cpp:3682-3687` and the regular-path
     // equivalent). validate() guarantees `prunable` is present whenever
     // key images exist; emptiness of the proof bytes is the engine's gate.
-    if matches!(kind, SubmitTxKind::Spend | SubmitTxKind::BondPost) {
-        let proof_empty = match &tx.ct {
-            Ct::Fcmp {
-                prunable: Some(prunable),
-                ..
-            } => prunable.fcmp_proof.is_empty(),
-            _ => true,
-        };
-        if proof_empty {
-            return Err(PhaseAReject::new("spending tx has an empty FCMP++ proof"));
+    // The emission coupling (§8.7.2 row E11) is two-sided: fee inputs ⇒
+    // non-empty, no fee inputs ⇒ EMPTY (the backing proof lives inside the
+    // vin; `blockchain.cpp:4046-4056`).
+    let proof_empty = match &tx.ct {
+        Ct::Fcmp {
+            prunable: Some(prunable),
+            ..
+        } => prunable.fcmp_proof.is_empty(),
+        _ => true,
+    };
+    match kind {
+        SubmitTxKind::Spend | SubmitTxKind::BondPost => {
+            if proof_empty {
+                return Err(PhaseAReject::new("spending tx has an empty FCMP++ proof"));
+            }
         }
+        SubmitTxKind::Emission => {
+            if n_to_key > 0 && proof_empty {
+                return Err(PhaseAReject::new(
+                    "emission tx has fee inputs but an empty FCMP++ proof",
+                ));
+            }
+            if n_to_key == 0 && !proof_empty {
+                return Err(PhaseAReject::new(
+                    "emission tx with no fee inputs must not carry an FCMP++ proof",
+                ));
+            }
+        }
+        SubmitTxKind::ServeCreditOnly => {}
     }
 
     // Key-image domain (row M8 thin-port of
@@ -299,5 +415,6 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
         fee,
         weight,
         kind,
+        emission_vin,
     })
 }

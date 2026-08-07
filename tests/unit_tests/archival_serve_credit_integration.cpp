@@ -7,6 +7,7 @@
 
 #include "gtest/gtest.h"
 
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <limits>
@@ -121,8 +122,14 @@ public:
     m_block_hashes[height] = hash;
   }
 
+  // Every queried height is captured so the seal-committed-guard KAT can assert
+  // that an uncommitted-seal credit is rejected BEFORE this read is attempted
+  // (the guard short-circuits), not by catching a throw from it.
+  mutable std::vector<uint64_t> block_hash_queried_heights;
+
   crypto::hash get_block_hash_from_height(const uint64_t& height) const override
   {
+    block_hash_queried_heights.push_back(height);
     const auto it = m_block_hashes.find(height);
     if (it != m_block_hashes.end())
       return it->second;
@@ -153,12 +160,32 @@ public:
     return !out_pubkey.empty();
   }
 
+  // WS-1 (REWARD_EMISSION_E3_GATING_ROUND.md §5): mirror the production
+  // as-of-height semantics — held at tip, or removed by a recorded event
+  // strictly above at_height (production reconstructs the removal from the
+  // slash log; the mock records it directly). Every queried at_height is
+  // captured so the acceptance-gate KATs can assert the gate asks about the
+  // challenge fire height, not the connect tip.
   bool archival_bond_holds_shard(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t /*at_height*/) const override
+    uint64_t at_height) const override
   {
+    holds_shard_queried_heights.push_back(at_height);
+    const auto rem = m_shard_removed_at.find(shard_id);
+    if (rem != m_shard_removed_at.end())
+      return at_height < rem->second;
     const auto it = m_bonds.find(p_id);
     return it != m_bonds.end() && it->second.holds_shard(shard_id);
   }
+
+  /// Record that the bond's holding of `shard_id` was removed at
+  /// `removal_height`: held at every height strictly below, not held at or
+  /// above (holdings at h are the post-connect state of block h).
+  void set_shard_removed_at(uint64_t shard_id, uint64_t removal_height)
+  {
+    m_shard_removed_at[shard_id] = removal_height;
+  }
+
+  mutable std::vector<uint64_t> holds_shard_queried_heights;
 
   bool archival_bond_good_through(const crypto::hash& p_id,
     uint64_t settlement_epoch) const override
@@ -256,6 +283,7 @@ private:
   std::map<crypto::hash, shekyl::db::ArchivalBondValue, HashLess> m_bonds;
   std::map<uint64_t, shekyl::db::ArchivalShardSegmentValue> m_segments;
   std::map<uint64_t, std::array<uint8_t, 128>> m_tree_leaves;
+  std::map<uint64_t, uint64_t> m_shard_removed_at;
 };
 
 struct BlockchainAndPool
@@ -283,6 +311,7 @@ void seed_substrate(ArchivalServeCreditIntegrationDB& db, const IntegrationKat& 
   bond.hybrid_pubkey = bytes_from_hex(kat.bond_pubkey_hex);
   bond.join_settlement_epoch = kat.join_epoch;
   bond.held_shard_ids = {kat.shard_id};
+  bond.shard_add_epochs.assign(bond.held_shard_ids.size(), kat.join_epoch); // v6: join-time shards carry E_join
   db.put_bond(p_id, std::move(bond));
 
   shekyl::db::ArchivalShardSegmentValue segment{};
@@ -355,6 +384,155 @@ TEST(archival_serve_credit, gate2_integration_rejects_serve_at_join_epoch)
 
   auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
   seed_substrate(*db, kat, resp);
+
+  BlockchainAndPool bap;
+  cryptonote::Blockchain* bc = &bap.bc;
+  const std::pair<uint8_t, uint64_t> hard_forks[] = {
+    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
+    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
+  };
+  const cryptonote::test_options test_options = {hard_forks, 5000};
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+
+  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.current_height));
+}
+
+// The seal-committed guard: a credit whose challenge-seal block is not yet on
+// chain (h_seal >= current_height, i.e. the seal index is at or past the tip) is
+// rejected by the explicit predicate BEFORE the block-hash read is attempted —
+// not by letting get_block_hash_from_height throw BLOCK_DNE and catching it. The
+// accept/reject decision is unchanged (the FFI verifier already rejects any
+// current_height <= H_fire, and H_fire > h_seal); this pins that the rejection
+// happens at the predicate, and at exactly h_seal, via the read counter.
+TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_read)
+{
+  const IntegrationKat kat = load_integration_kat();
+  const txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
+
+  const std::pair<uint8_t, uint64_t> hard_forks[] = {
+    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
+    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
+  };
+  const cryptonote::test_options test_options = {hard_forks, 5000};
+
+  // current_height == h_seal: the seal block's index is one past the tip, so the
+  // guard rejects and the block-hash read is never reached.
+  {
+    auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
+    seed_substrate(*db, kat, resp);
+    ArchivalServeCreditIntegrationDB* db_raw = db.get();
+    BlockchainAndPool bap;
+    cryptonote::Blockchain* bc = &bap.bc;
+    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+
+    db_raw->block_hash_queried_heights.clear(); // ignore any init-time reads
+    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.h_seal));
+    EXPECT_TRUE(db_raw->block_hash_queried_heights.empty());
+  }
+
+  // current_height == h_seal + 1: the seal block is now the committed tip, so the
+  // guard passes and the read IS reached (the credit is still rejected further
+  // downstream on H_fire timing — not what this KAT pins).
+  {
+    auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
+    seed_substrate(*db, kat, resp);
+    ArchivalServeCreditIntegrationDB* db_raw = db.get();
+    BlockchainAndPool bap;
+    cryptonote::Blockchain* bc = &bap.bc;
+    ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+
+    db_raw->block_hash_queried_heights.clear();
+    // Guard passes at h_seal + 1 (the seal is now the committed tip), so the gate
+    // reaches the seal read exactly once, for h_seal. The credit is still
+    // rejected — downstream on H_fire timing (current_height <= H_fire), not by
+    // this guard.
+    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.h_seal + 1));
+    ASSERT_EQ(db_raw->block_hash_queried_heights.size(), 1u);
+    EXPECT_EQ(db_raw->block_hash_queried_heights[0], kat.h_seal);
+  }
+}
+
+namespace {
+
+/// The gate's own h_fire derivation, reproduced from the fixture operands.
+/// blockchain.cpp (check_archival_serve_credit_input) and db_lmdb.cpp
+/// (archival_challenge_failed_at_height) both derive it exactly this way from
+/// the same deterministic inputs — the WS-1 h_fire symmetry the acceptance
+/// KATs pin against.
+uint64_t expected_fire_height(const IntegrationKat& kat)
+{
+  const crypto::hash p_id = hash_from_hex(kat.p_id_hex);
+  const crypto::hash seal_hash = hash_from_hex(kat.seal_hash_hex);
+  const uint64_t h_open = shekyl_archival_epoch_open_height(kat.settlement_epoch);
+  const uint64_t h_close = shekyl_archival_epoch_close_height(kat.settlement_epoch);
+  return shekyl_archival_challenge_fire_height(h_open, h_close,
+    reinterpret_cast<const uint8_t*>(seal_hash.data),
+    reinterpret_cast<const uint8_t*>(p_id.data),
+    kat.shard_id, kat.settlement_epoch);
+}
+
+} // namespace
+
+// ── WS-1 acceptance-gate KATs (REWARD_EMISSION_E3_GATING_ROUND.md §5.6 #2) ──
+//
+// The serve-credit gate must answer "did P hold the shard at the challenge
+// fire height?" — not "does P hold it at the connect tip". These two KATs pin
+// the gate's boundary on both sides of h_fire, and additionally assert the
+// gate queried the accessor at exactly the deterministically derived h_fire
+// (the height a slash-eligibility mirror derives from the same operands).
+// The accessor's own at_height reconstruction against real LMDB state is
+// pinned separately in archival_substrate_lmdb.cpp.
+
+// Drop-after-fire: P held at h_fire, the holding was removed strictly above
+// h_fire, tip no longer holds. The credit is legitimate — a tip read here was
+// the M2-1 drop-after-serve escape (under-count on the reward side, and the
+// symmetric slash-escape on the punishment side).
+TEST(archival_serve_credit, gate2_accepts_credit_when_held_at_fire_but_dropped_by_tip)
+{
+  const IntegrationKat kat = load_integration_kat();
+  const txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
+  const uint64_t h_fire = expected_fire_height(kat);
+  ASSERT_NE(h_fire, 0u);
+
+  auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
+  seed_substrate(*db, kat, resp);
+  // Removal strictly above the fire height: held at h_fire, gone at tip.
+  db->set_shard_removed_at(kat.shard_id, h_fire + 1);
+  ArchivalServeCreditIntegrationDB* db_raw = db.get();
+
+  BlockchainAndPool bap;
+  cryptonote::Blockchain* bc = &bap.bc;
+  const std::pair<uint8_t, uint64_t> hard_forks[] = {
+    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
+    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
+  };
+  const cryptonote::test_options test_options = {hard_forks, 5000};
+  ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
+
+  EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, kat.current_height));
+  // The gate asked the as-of-height question at exactly the derived h_fire.
+  ASSERT_FALSE(db_raw->holds_shard_queried_heights.empty());
+  for (const uint64_t queried : db_raw->holds_shard_queried_heights)
+    EXPECT_EQ(queried, h_fire);
+}
+
+// Inverse boundary: the holding was removed at h_fire itself (holdings at h
+// are the post-connect state of block h), so P did NOT hold at the fire
+// height and the credit is rejected — even though nothing else about the
+// response changed. Unreachable at the current shrink-only substrate without
+// a slash (which the gate's good_through would also catch), but the gate must
+// bottom out in the accessor's as-of-fire answer, not a tip read, for the
+// boundary to hold once HoldingsUpdate makes holdings mutable.
+TEST(archival_serve_credit, gate2_rejects_credit_when_not_held_at_fire)
+{
+  const IntegrationKat kat = load_integration_kat();
+  const txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
+  const uint64_t h_fire = expected_fire_height(kat);
+  ASSERT_NE(h_fire, 0u);
+
+  auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
+  seed_substrate(*db, kat, resp);
+  db->set_shard_removed_at(kat.shard_id, h_fire);
 
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;

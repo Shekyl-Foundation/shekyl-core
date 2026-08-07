@@ -90,26 +90,15 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
 use zeroize::Zeroizing;
 
 use shekyl_crypto_pq::{
-    kem::{HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, ML_KEM_768_CT_LEN},
+    kem::{
+        HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, HYBRID_KEM_CT_LEN,
+        ML_KEM_768_CT_LEN,
+    },
     output::construct_output,
 };
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
-use crate::{
-    extra::{Extra, ExtraField},
-    view_pair::ViewPair,
-    ScannableBlock,
-};
-
-/// Bytes per X25519 ephemeral public key on the wire. Mirrors the
-/// module-private constant in [`crate::scan`] so this module compiles
-/// without coupling to scanner internals.
-const X25519_CT_BYTES: usize = 32;
-
-/// Bytes per per-output hybrid KEM ciphertext on the wire
-/// (`X25519_pubkey || ML-KEM-768_ciphertext`). Mirrors the
-/// module-private constant in [`crate::scan`].
-const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
+use crate::{extra::Extra, view_pair::ViewPair, ScannableBlock};
 
 /// Fixed per-transaction key for deterministic fixture construction.
 /// Real transactions use a fresh random `tx_key`; here we pin a
@@ -281,7 +270,7 @@ fn assemble_scannable_block(
     let mut commitments: Vec<[u8; 32]> = Vec::with_capacity(n_outputs);
     let mut enc_amounts: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
     let mut enc_labels: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
-    let mut kem_ct_blob: Vec<u8> = Vec::with_capacity(n_outputs * HYBRID_KEM_CT_BYTES);
+    let mut per_output_kem_cts: Vec<Vec<u8>> = Vec::with_capacity(n_outputs);
 
     for output_index in 0..n_outputs {
         let out = construct_output(
@@ -306,28 +295,31 @@ fn assemble_scannable_block(
         commitments.push(out.commitment);
         enc_amounts.push(join_enc9(&out.enc_amount, out.amount_tag));
         enc_labels.push(join_enc9(&out.enc_label, out.label_tag));
-        // Per `scan.rs::scan_transaction`, the KEM ciphertext blob
-        // for output `o` is read at offset `o * HYBRID_KEM_CT_BYTES`
-        // and consists of `X25519_CT_BYTES || ML_KEM_768_CT_LEN`.
-        kem_ct_blob.extend_from_slice(&out.kem_ciphertext_x25519);
+        // One `X25519_KEM_CT_LEN || ML_KEM_768_CT_LEN` ciphertext per
+        // output; `Extra::for_hybrid_transfer` below concatenates them
+        // into the single `0x06` field the scanner slices at
+        // `o * HYBRID_KEM_CT_LEN` offsets.
         debug_assert_eq!(
             out.kem_ciphertext_ml_kem.len(),
             ML_KEM_768_CT_LEN,
             "construct_output must produce ML-KEM ciphertexts of exactly ML_KEM_768_CT_LEN bytes"
         );
-        kem_ct_blob.extend_from_slice(&out.kem_ciphertext_ml_kem);
+        let mut kem_ct = Vec::with_capacity(HYBRID_KEM_CT_LEN);
+        kem_ct.extend_from_slice(&out.kem_ciphertext_x25519);
+        kem_ct.extend_from_slice(&out.kem_ciphertext_ml_kem);
+        per_output_kem_cts.push(kem_ct);
     }
 
-    debug_assert_eq!(
-        kem_ct_blob.len(),
-        n_outputs * HYBRID_KEM_CT_BYTES,
-        "KEM ciphertext blob length must match scanner's read-offset arithmetic"
-    );
-
-    // Serialize the extra field as a `Vec<u8>` (the scanner re-parses
-    // the byte slice via `Extra::read` at scan time, mirroring the
-    // production daemon → scanner path).
-    let extra_serialized = Extra(vec![ExtraField::PqcKemCiphertext(kem_ct_blob)]).serialize();
+    // Serialize the extra through the PRODUCTION writer
+    // (`Extra::for_hybrid_transfer`) rather than hand-packing the
+    // `0x06` field, so every fixture-driven scan exercises the
+    // writer↔reader packing contract — the hand-packed shape is how
+    // the per-output-field writer bug (FOLLOWUPS "KEM-ciphertext extra
+    // packing mismatch") stayed invisible to the bench sanity tests.
+    // The scanner re-parses the byte slice via `Extra::read` at scan
+    // time, mirroring the production daemon → scanner path.
+    let tx_pubkey = Scalar::from_bytes_mod_order(BENCH_TX_KEY) * ED25519_BASEPOINT_POINT;
+    let extra_serialized = Extra::for_hybrid_transfer(tx_pubkey, per_output_kem_cts).serialize();
 
     let tx = Transaction {
         prefix: TxPrefix {
@@ -366,6 +358,7 @@ fn assemble_scannable_block(
         previous: [0u8; 32],
         nonce: 0,
         curve_tree_root: [0u8; 32],
+        attestation_root: shekyl_archival_retention::empty_attestation_root(),
     };
 
     // Minimal coinbase miner-tx: a sole `gen` input and a `Null` ct (§2.5),
@@ -514,7 +507,7 @@ mod tests {
 
         // Sanity-check the KEM ciphertext length matches the offset
         // arithmetic in `scan.rs::scan_transaction` (which slices the
-        // extra blob into `[X25519_CT_BYTES..HYBRID_KEM_CT_BYTES]`).
+        // extra blob into `[X25519_KEM_CT_LEN..HYBRID_KEM_CT_LEN]`).
         // A length mismatch here would propagate into the bench as
         // an unrelated parse error rather than a clean fast/slow-
         // path classification.
@@ -557,63 +550,94 @@ mod tests {
         // The on-chain pre-filter tag was derived from the OTHER wallet's
         // ML-KEM SS; after universal decap with the bench wallet's DK the
         // tag compare fails and scan_output_recover returns Err before X25519.
+        // `make_bench_wallet` draws keys from `OsRng`, and the on-chain
+        // view-tag pre-filter is a single byte, so a foreign output's tag
+        // collides with the scanning wallet's derived tag ~1/256 of the time.
+        // On a collision the scan slips PAST the pre-filter and exits later at
+        // the amount-tag stage — a draw that is not the "typical case" this
+        // fixture exists to measure. Resample the foreign output until the
+        // intended view-tag rejection is observed; the probability of needing N
+        // extra draws is 256^-N, so the cap below is never approached. Only the
+        // amount-tag collision is a tolerated resample signal — any other
+        // disposition is real drift and fails hard (below).
         let wallet = make_bench_wallet();
-        let other = make_bench_wallet();
-        let out = first_output_data(&other.wallet_kem_pk);
 
-        let result = scan_output_recover(
-            wallet.view_pair.x25519_sk(),
-            wallet.view_pair.ml_kem_dk(),
-            &out.kem_ciphertext_x25519,
-            &out.kem_ciphertext_ml_kem,
-            &out.output_key,
-            &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
-            out.view_tag_prefilter,
-            /* output_index */ 0,
-        );
+        // Bounded so a genuine regression (the pre-filter path stops firing)
+        // surfaces as a loud failure instead of an infinite loop.
+        const MAX_RESAMPLES: usize = 64;
+        for _ in 0..MAX_RESAMPLES {
+            let other = make_bench_wallet();
+            let out = first_output_data(&other.wallet_kem_pk);
 
-        let err = result.expect_err(
-            "typical-case fixture must produce a fast-path-rejected output \
-             (view-tag mismatch); a success here means the typical-case \
-             bench would silently measure full-slow-path cost",
-        );
-
-        // Pin BOTH the error variant and the inner message: the
-        // variant check catches drift to a non-`DecapsulationFailed`
-        // early-exit (e.g., a `LowOrderPoint` rejection that would
-        // also satisfy `expect_err`), and the inner-message check
-        // catches drift WITHIN `DecapsulationFailed` to a sibling
-        // reason (`scan_output_recover` constructs several
-        // `DecapsulationFailed(String)` instances — "invalid
-        // ML-KEM ciphertext length", "invalid decap key: ...",
-        // ML-KEM decap rejection — all of which would pass the
-        // variant check on their own; only the view-tag-mismatch
-        // path is the typical-case fixture's intended classifier).
-        //
-        // The let-else binds `msg` from the variant's inner
-        // `String` rather than formatting via `format!("{err:?}")`,
-        // which makes the assertion robust to Debug-format
-        // changes (re-derivation, additional context fields,
-        // verbose vs. terse variants) while still pinning the
-        // intended early-exit path. Closes the substring-vs-
-        // structural test discipline question raised on PR #60.
-        let CryptoError::DecapsulationFailed(msg) = &err else {
-            panic!(
-                "typical-case fixture must surface the view-tag-mismatch \
-                 fast-path rejection as CryptoError::DecapsulationFailed; \
-                 got a different variant: {err:?}"
+            let result = scan_output_recover(
+                wallet.view_pair.x25519_sk(),
+                wallet.view_pair.ml_kem_dk(),
+                &out.kem_ciphertext_x25519,
+                &out.kem_ciphertext_ml_kem,
+                &out.output_key,
+                &out.commitment,
+                &out.enc_amount,
+                out.amount_tag,
+                &out.enc_label,
+                out.label_tag,
+                out.view_tag_prefilter,
+                /* output_index */ 0,
             );
-        };
-        assert!(
-            msg.contains("view tag pre-filter mismatch"),
-            "expected pre-filter mismatch in DecapsulationFailed inner message; \
-             got {msg:?} — if this is a sibling DecapsulationFailed reason \
-             (invalid ML-KEM ciphertext length, invalid decap key, ML-KEM \
-             decap rejection) the typical-case fixture is mis-classified"
+
+            let err = result.expect_err(
+                "typical-case fixture must produce a fast-path-rejected output \
+                 (view-tag mismatch); a success here means the typical-case \
+                 bench would silently measure full-slow-path cost",
+            );
+
+            // Pin BOTH the error variant and the inner message: the variant
+            // check catches drift to a non-`DecapsulationFailed` early-exit
+            // (e.g., a `LowOrderPoint` rejection that would also satisfy
+            // `expect_err`), and the inner-message check catches drift WITHIN
+            // `DecapsulationFailed` to a sibling reason (`scan_output_recover`
+            // constructs several `DecapsulationFailed(String)` instances —
+            // "invalid ML-KEM ciphertext length", "invalid decap key: ...",
+            // ML-KEM decap rejection — all of which would pass the variant
+            // check on their own; only the view-tag-mismatch path is the
+            // typical-case fixture's intended classifier).
+            //
+            // The let-else binds `msg` from the variant's inner `String`
+            // rather than formatting via `format!("{err:?}")`, which makes the
+            // assertion robust to Debug-format changes (re-derivation,
+            // additional context fields, verbose vs. terse variants) while
+            // still pinning the intended early-exit path. Closes the
+            // substring-vs-structural test discipline question raised on PR #60.
+            let CryptoError::DecapsulationFailed(msg) = &err else {
+                panic!(
+                    "typical-case fixture must surface the view-tag-mismatch \
+                     fast-path rejection as CryptoError::DecapsulationFailed; \
+                     got a different variant: {err:?}"
+                );
+            };
+
+            if msg.contains("view tag pre-filter mismatch") {
+                return; // intended typical-case classification observed
+            }
+
+            // The one tolerated non-view-tag outcome is the ~1/256 accidental
+            // view-tag collision, which then fails deterministically at the
+            // amount-tag stage (decap uses ML-KEM implicit rejection, so it does
+            // not error). Any OTHER sibling reason is a mis-classified fixture.
+            assert!(
+                msg.contains("amount_tag mismatch"),
+                "expected the view-tag pre-filter mismatch (typical case) or the \
+                 rare amount-tag collision; got {msg:?} — a sibling \
+                 DecapsulationFailed reason (invalid ML-KEM ciphertext length, \
+                 invalid decap key, ML-KEM decap rejection) means the fixture is \
+                 mis-classified"
+            );
+        }
+
+        panic!(
+            "view-tag pre-filter mismatch not observed in {MAX_RESAMPLES} \
+             resamples; a 1-byte view tag should collide only ~1/256 of the \
+             time, so this indicates the fixture no longer exercises the \
+             pre-filter path"
         );
     }
 
@@ -650,5 +674,69 @@ mod tests {
                 "typical-case block's non-miner tx output count must match requested N={n}"
             );
         }
+    }
+
+    /// KEM-packing regression (`FOLLOWUPS.md` "KEM-ciphertext extra
+    /// packing mismatch", 2026-07-24): every output of a multi-output
+    /// transaction whose extra was packed by the PRODUCTION writer
+    /// (`Extra::for_hybrid_transfer`, via the fixture assembly) must be
+    /// recovered by [`crate::scan::Scanner::scan`] — ownership hit and
+    /// key-image computation included, not just view-tag detection.
+    ///
+    /// Pre-fix, the writer emitted one `0x06` field per output while
+    /// every reader consumed only the FIRST field and sliced per-output
+    /// ciphertexts from it, so vout ≥ 1 — including all change — was
+    /// silently unscannable (recovery 1/2 on this exact shape). The
+    /// bench wallets deliberately miss ownership (`2 * G` on-chain
+    /// spend point, non-canonical placeholder spend secret), so this
+    /// test builds its own wallet whose on-chain spend point matches
+    /// the registered one and whose spend scalar is canonical.
+    #[test]
+    fn multi_output_tx_recovers_every_vout_through_scanner_scan() {
+        use crate::scan::Scanner;
+
+        let kem = HybridX25519MlKem;
+        let (kem_pk, kem_sk) = kem
+            .keypair_generate()
+            .expect("HybridX25519MlKem::keypair_generate is infallible under OsRng");
+        let sk_x25519: [u8; 32] = kem_sk.x25519;
+        let sk_ml_kem: Vec<u8> = kem_sk.ml_kem.clone();
+        drop(kem_sk);
+
+        // Canonical spend scalar; the on-chain spend point below is
+        // its public key, so ownership lookup hits and key-image
+        // computation runs with a valid secret.
+        let spend_scalar = Scalar::from_bytes_mod_order([0x0Au8; 32]);
+        let spend_point = spend_scalar * ED25519_BASEPOINT_POINT;
+        let view_scalar = Scalar::from_bytes_mod_order([0x0Bu8; 32]);
+
+        let view_pair = ViewPair::new(
+            spend_point,
+            Zeroizing::new(view_scalar),
+            Zeroizing::new(sk_x25519),
+            Zeroizing::new(sk_ml_kem),
+        )
+        .expect("scalar * basepoint is torsion-free");
+
+        let block = scannable_block_for_recipient(2, &kem_pk, &spend_point.compress().to_bytes());
+
+        let mut scanner = Scanner::new(view_pair, Zeroizing::new(spend_scalar.to_bytes()));
+        let outputs = scanner
+            .scan(block)
+            .expect("scan succeeds on a well-formed fixture block")
+            .into_inner();
+
+        let mut recovered: Vec<u64> = outputs
+            .iter()
+            .map(|o| o.wallet_output().index_in_transaction())
+            .collect();
+        recovered.sort_unstable();
+        assert_eq!(
+            recovered,
+            vec![0, 1],
+            "every vout of a production-packed multi-output tx must be \
+             recovered; missing vout >= 1 is the KEM-packing regression \
+             (one 0x06 field per output instead of one concatenated field)"
+        );
     }
 }

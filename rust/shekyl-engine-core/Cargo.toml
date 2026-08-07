@@ -24,6 +24,10 @@ shekyl-scanner = { path = "../shekyl-scanner" }
 # party Shekyl crate; its third-party edges (`shekyl-crypto-hash`) are already in
 # the workspace lockfile, so no new supply-chain surface (`17-dependency-discipline`).
 shekyl-wire = { path = "../shekyl-wire" }
+# Single-sourced structural tx-weight predictor + bounded I/O counts, hoisted out
+# of this crate (§12.3 D-1) so shekyl-economics-sim shares the same weight model.
+# The fee-rate layer (FeeRate/FeeDirective/convergence) stays here.
+shekyl-tx-weight = { path = "../shekyl-tx-weight" }
 # `SignBond` handler calls `build_join_market_vin` inside the StakeEngine actor
 # (keys never cross the actor boundary — rule 36). Promoted from dev-dep because
 # the production `SignBond` message handler calls it directly. No cycle:
@@ -34,9 +38,8 @@ shekyl-archival-bond-builder = { path = "../shekyl-archival-bond-builder" }
 # it; promoting it to a direct dep makes the type's origin explicit at this
 # crate's boundary. `shekyl-archival-retention` is already a dev-dep here and
 # in the workspace lockfile — no new supply-chain surface.
-# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
 # (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
-shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # `SignBond` handler draws the entry-gap via `draw_entry_gap` / `GapRng`
 # (S4/S5 — conformance-correct, float-free). Default build (no `conformance`
 # feature) is dependency-free; `conformance` is dev/test-only.
@@ -67,6 +70,12 @@ shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# WI-RPC-3 (Phase 2c proofs): DLEQ tx-proof / reserve-proof primitives the
+# proofs workflow orchestrates, and the Bech32m codec for proof strings
+# (`shekyltxproof…` / `shekylreserveproof…`). Both first-party path crates —
+# no new third-party edge (`17-dependency-discipline.mdc`).
+shekyl-proofs = { path = "../shekyl-proofs" }
+shekyl-encoding = { path = "../shekyl-encoding" }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 # SP-T2: the per-P Tor transport primitive (PTorClient). engine-core wraps it in
 # `PRpc` (an `Rpc` impl); it does NOT depend on `ureq` — all agent construction
@@ -106,11 +115,14 @@ multiexp = "0.4"
 rand_core = { version = "0.6", features = ["std"] }
 dalek-ff-group = "0.5"
 ciphersuite = "0.4"
-modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
-chacha20poly1305 = { version = "0.10", optional = true }
-hkdf = { version = "0.12", optional = true }
-sha2 = { version = "0.10", optional = true }
-serde = { version = "1", features = ["derive"], optional = true }
+# The multisig spend ceremony (Option E′) lives in its own crate,
+# `shekyl-multisig` (MS-1(a)): the dependency list *there* is the structural "no
+# transport" ban. This optional edge is all engine-core needs to wire the
+# ceremony to the ledger. The former inline optional deps (modular-frost,
+# chacha20poly1305, hkdf, sha2, serde) moved with the module and are no longer
+# engine-core's — the runtime graph shrinks by five crates under `--features
+# multisig` (hkdf/sha2/serde remain as dev-deps for the `#[cfg(test)]` substrate).
+shekyl-multisig = { path = "../shekyl-multisig", optional = true }
 # The daemon JSON-RPC send path (`DaemonClient::get_fee_estimates` /
 # `submit_transaction`, `engine/daemon.rs`) is always-compiled production
 # code that builds `get_fee_estimate` params and parses the response as
@@ -195,6 +207,11 @@ zeroize = { workspace = true }
 kameo = { workspace = true }
 
 [dev-dependencies]
+# Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
+# for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles
+# the DQ-F fire harness into the lib-under-test on a plain `cargo test`
+# (no silently-skipped `required-features` lane).
+shekyl-engine-core = { path = ".", features = ["test-helpers"] }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 # PR 7 C4 `EconomicsEngine` differential
 # (`engine::economics_differential`): deserialize the sim-recorded
@@ -301,21 +318,13 @@ shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 # (`verify_join_market_bond_post`, `verify_bond_post_ct_balance`). Both
 # crates are non-optional production `[dependencies]` above (promoted when
 # the `SignBond` handler landed), so tests reach them through the single
-# production edge — no duplicate dev-dep entries here. Keeping one edge per
-# crate is what keeps the `provisional-k-cover` acknowledgment
-# (`shekyl-archival-retention/src/k_cover.rs`) grep-complete: every
-# dependency line on that crate carries the feature.
+# production edge — no duplicate dev-dep entries here.
 multiexp = "0.4"
 ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
 ciphersuite = "0.4"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 dalek-ff-group = "0.5"
 rand_core = "0.6"
-
-[[bench]]
-name = "multisig_v31"
-harness = false
-required-features = ["multisig"]
 
 [[bench]]
 name = "refresh_snapshot"
@@ -435,7 +444,7 @@ required-features = ["bench-internals"]
 
 [features]
 default = []
-multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "chacha20poly1305", "hkdf", "sha2"]
+multisig = ["dep:shekyl-multisig"]
 # Internal feature (S6): enables the StakeEngine session RNG self-cert. Wires
 # `shekyl-standoff`'s `conformance` grader (`certify_draw`) into
 # `StakeEngine::on_start` over the production `OsRngGapAdapter`, fail-stopping the
@@ -469,28 +478,27 @@ bench-internals = []
 # gated AT THE DEFINITION SITE; the feature flag is the external
 # half of that gate (the `test` cfg is the internal half).
 #
-# Symmetric with `bench-internals` (above) in name and shape, but
-# NOT in re-export posture: `bench-internals` actually re-exports
-# its `pub(crate)` types under a `__bench_internals` module
-# (`pub use` gated on the feature) so external Criterion harnesses
-# can name them; `test-helpers` does NOT currently re-export
-# anything. These surfaces remain `pub(crate)` even with the
-# feature enabled — downstream crates cannot reach them through
-# the public API regardless of feature posture.
+# Symmetric with `bench-internals` (above) in name and shape: both
+# re-export otherwise-`pub(crate)` surfaces under a `__…internals` /
+# `__test_helpers` module (gated on the feature) so external harnesses
+# can name them. The four failure-injection surfaces (`FaultInjecting*`,
+# `replace_refresh`, `from_test_blocks`) remain `pub(crate)` — no
+# downstream test needs them yet — while the `__test_helpers` module
+# (lib.rs) now re-exports one staker-construction helper for its first
+# consumer.
 #
-# Why no public re-exports yet (`21-reversion-clause-discipline.mdc`):
-# pre-genesis no downstream consumer crate exists; speculative re-
-# exports without a named caller would be the "pre-provisioning
-# for hypothetical consumers" anti-pattern the discipline rejects.
-# The current shape (compile-gate-only) is the minimum surface
-# that lets the test substrate exist; the public-re-export half
-# lands when the first downstream consumer emerges, at which point
-# the disposition is reopened via a focused PR adding
-# `#[cfg(feature = "test-helpers")] pub use ...` re-exports under
-# a `__test_helpers` module (matching the `__bench_internals`
-# precedent), the V3.0-targeted FOLLOWUPS item naming that
-# downstream crate, and an `AUDIT_SCOPE.md` amendment if the
-# crate exposes any production-surface implications.
+# Re-export posture (`21-reversion-clause-discipline.mdc`): the public-
+# re-export half was held back pre-genesis (speculative re-exports
+# without a named caller are the "pre-provisioning for hypothetical
+# consumers" anti-pattern the discipline rejects) and now lands with
+# its first downstream consumer — `shekyl-wallet-rpc`, whose WI-1
+# P-scan lifecycle test needs a *staker* wallet
+# (`__test_helpers::make_staker_for_test` over `persist_bond_record`,
+# the only route to `staking_enabled` while no RPC staking entry
+# exists). The helper is test-only (feature-gated, never in a default
+# production build), so it carries no production-surface implication
+# and needs no `AUDIT_SCOPE.md` amendment; the remaining `pub(crate)`
+# surfaces still wait for their own named callers.
 #
 # Production-build safety property (the load-bearing claim): the
 # `#[cfg(any(test, feature = "test-helpers"))]` gating at the
@@ -502,7 +510,10 @@ bench-internals = []
 #
 # See `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C6α /
 # F-Mock-1 / F-Mock-7.
-test-helpers = []
+# `shekyl-scanner/test-utils` rides along for the SP-R0 arm-#1 DQ-F fire
+# harness (`engine/pscan/arm1_fire.rs`), which builds its funding/spend
+# fixture blocks from the scanner's bench fixtures.
+test-helpers = ["shekyl-scanner/test-utils"]
 
 [lints]
 workspace = true

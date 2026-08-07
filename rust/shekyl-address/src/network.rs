@@ -36,15 +36,25 @@ impl Network {
             _ => None,
         }
     }
+
+    /// Canonical lowercase network name (`"mainnet"` / `"testnet"` / `"stagenet"`).
+    ///
+    /// Used in filenames, recipients-file fields, CLI output, and any other
+    /// place that needs a `'static` string rather than [`Display`]'s
+    /// formatting path.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Network::Mainnet => "mainnet",
+            Network::Testnet => "testnet",
+            Network::Stagenet => "stagenet",
+        }
+    }
 }
 
 impl fmt::Display for Network {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Network::Mainnet => write!(f, "mainnet"),
-            Network::Testnet => write!(f, "testnet"),
-            Network::Stagenet => write!(f, "stagenet"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -153,6 +163,7 @@ mod tests {
     fn display_fromstr_roundtrip() {
         for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
             let s = net.to_string();
+            assert_eq!(s, net.as_str());
             let parsed: Network = s.parse().unwrap();
             assert_eq!(parsed, net);
         }

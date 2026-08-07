@@ -4,7 +4,7 @@
 
 ## Spec anchor
 
-Spec: [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](docs/V3_ENGINE_TRAIT_BOUNDARIES.md), accepted at Round 5 (`e484d5041`, merged to `dev` at `40093ac7a`).
+Spec: [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md), accepted at Round 5 (`e484d5041`, merged to `dev` at `40093ac7a`).
 
 Per §8.1, `DaemonEngine` lands first; subsequent traits (`LedgerEngine`, then `RefreshEngine` + `PendingTxEngine` in parallel) get their own plans informed by what this PR surfaces.
 
@@ -39,8 +39,8 @@ flowchart LR
 
 **Changes:**
 
-- [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md) — add V3.0 entry: *"Stage 1 performance baseline measurement is binding before any Stage 1 trait-extraction PR merges (per `V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1). Closes when the harness PR lands the frozen baseline in `docs/PERFORMANCE_BASELINE.md`."*
-- [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md) — add V3.x entry: *"Stage 4 lifecycle async cutover requires `CHANGELOG.md` flagging per `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.8.7 (the `Engine::create` sync→async signature change at the cutover commit)."*
+- [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) — add V3.0 entry: *"Stage 1 performance baseline measurement is binding before any Stage 1 trait-extraction PR merges (per `V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1). Closes when the harness PR lands the frozen baseline in `docs/PERFORMANCE_BASELINE.md`."*
+- [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) — add V3.x entry: *"Stage 4 lifecycle async cutover requires `CHANGELOG.md` flagging per `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.8.7 (the `Engine::create` sync→async signature change at the cutover commit)."*
 
 **PR description:** normal-PR-quality (clear scope, clear rationale, clear changes); ~one paragraph naming the two FOLLOWUPS entries and that they were deferred during Round 4b. The §8.2 third-bullet discipline is for trait-amendment PRs specifically and does not apply here — borrowing it for a tiny docs cleanup over-applies a discipline meant for a specific case.
 
@@ -63,11 +63,11 @@ Three reasons the split is right and worth pre-committing:
 
 ### Design-doc-vs-spec relationship (framing for the executing agent)
 
-The trait spec ([`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](docs/V3_ENGINE_TRAIT_BOUNDARIES.md)) is a contract; Stage 0's design doc is implementation governance. **Design docs implement the contract; they do not amend it.** If Stage 0's design surfaces a contract issue, that's a Round 6 spec-amendment situation (unlikely but possible per the watchpoint below) — handled in the trait spec, not in `docs/design/STAGE_0_HARNESS.md`. The executing agent must not conflate "design decision in Stage 0 doc" with "spec amendment in trait spec."
+The trait spec ([`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)) is a contract; Stage 0's design doc is implementation governance. **Design docs implement the contract; they do not amend it.** If Stage 0's design surfaces a contract issue, that's a Round 6 spec-amendment situation (unlikely but possible per the watchpoint below) — handled in the trait spec, not in `docs/design/STAGE_0_HARNESS.md`. The executing agent must not conflate "design decision in Stage 0 doc" with "spec amendment in trait spec."
 
 ### Stage 0 internal phasing
 
-**Phase 0a — design doc (Stage 0 PR-1).** Apply the same discipline the spec used: multi-framing gap-check before drafting, rejection-with-reasoning for harness scope decisions. Location pinned: [`docs/design/STAGE_0_HARNESS.md`](docs/design/STAGE_0_HARNESS.md) (new file). If `docs/design/` does not yet exist, this PR creates it; future spec-implementation governance docs (Phase 2b `StakeEngine` design notes, etc.) inherit the location convention. The doc names decisions on:
+**Phase 0a — design doc (Stage 0 PR-1).** Apply the same discipline the spec used: multi-framing gap-check before drafting, rejection-with-reasoning for harness scope decisions. Location pinned: [`docs/design/STAGE_0_HARNESS.md`](../design/STAGE_0_HARNESS.md) (new file). If `docs/design/` does not yet exist, this PR creates it; future spec-implementation governance docs (Phase 2b `StakeEngine` design notes, etc.) inherit the location convention. The doc names decisions on:
 
 1. **Benchmark selection.** The spec lists §3.3.1's hot paths at category-level ("the hot read paths"); the harness pins the specific bench list. Boundary: spec stays at category-level pinning; harness's specific path list is a harness-document concern. If harness work surfaces "we need to bench these specific six methods, not the four §3.3.1 categorically lists," that's a harness refinement — *not* a spec refinement that requires Round 6.
 2. **Baseline statistics.** Median? Mean? p99? Distribution? Pick one or several; commit to which numbers `PERFORMANCE_BASELINE.md` carries.
@@ -92,7 +92,7 @@ The pre-read confirmed `criterion = "0.5"` is already pinned in `shekyl-engine-c
 
 **Phase 0c — baseline capture + CI integration + threshold sanity-check (Stage 0 PR-2, part 2).**
 
-- Run each bench at Stage 0 PR-2's SHA; record numbers in [`docs/PERFORMANCE_BASELINE.md`](docs/PERFORMANCE_BASELINE.md) per §3.3.1 Component 2 (methodology, host conditions, sampling, baseline numbers — post-interior-lock numbers and per-PR deltas remain blank until Stage 1 PRs fill them).
+- Run each bench at Stage 0 PR-2's SHA; record numbers in [`docs/PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md) per §3.3.1 Component 2 (methodology, host conditions, sampling, baseline numbers — post-interior-lock numbers and per-PR deltas remain blank until Stage 1 PRs fill them).
 - Wire the harness into CI per Phase 0a's design decision.
 - **Threshold sanity-check.** Measure run-to-run variance across the five hot-path benches; compare against §3.3.1's 10% and 25% thresholds.
   - **If variance is comfortably below thresholds (likely outcome):** no amendment needed; the §3.3.1 numbers stand verified, Stage 0 ships clean.
@@ -135,20 +135,20 @@ Inherited `Rpc` methods are *not* duplicated on `DaemonEngine`; consumers reach 
 
 **1. Define the trait.** New module `rust/shekyl-engine-core/src/engine/traits/daemon.rs` (or extend an existing `traits` module if one exists; verify in clean chat). Visibility `pub(crate)` per §2 preamble Round 4a Item 13 (the seven traits ship `pub(crate)` until JSON-RPC server cutover at V3.2).
 
-**2. Implement `DaemonEngine` for the existing `DaemonClient`.** [`rust/shekyl-engine-core/src/engine/daemon.rs`](rust/shekyl-engine-core/src/engine/daemon.rs) — add the impl block. The `submit_transaction` and `get_fee_estimates` methods either delegate to existing `DaemonClient` methods (if they exist) or wrap the underlying `SimpleRequestRpc` calls. Verify what's already on `DaemonClient` versus what needs new method bodies.
+**2. Implement `DaemonEngine` for the existing `DaemonClient`.** [`rust/shekyl-engine-core/src/engine/daemon.rs`](../../rust/shekyl-engine-core/src/engine/daemon.rs) — add the impl block. The `submit_transaction` and `get_fee_estimates` methods either delegate to existing `DaemonClient` methods (if they exist) or wrap the underlying `SimpleRequestRpc` calls. Verify what's already on `DaemonClient` versus what needs new method bodies.
 
-**3. Generic-ize `Engine<S>`.** [`rust/shekyl-engine-core/src/engine/mod.rs`](rust/shekyl-engine-core/src/engine/mod.rs):
+**3. Generic-ize `Engine<S>`.** [`rust/shekyl-engine-core/src/engine/mod.rs`](../../rust/shekyl-engine-core/src/engine/mod.rs):
 
 - `pub struct Engine<S: EngineSignerKind>` becomes `pub struct Engine<S: EngineSignerKind, D: DaemonEngine = DaemonClient>`.
 - `daemon: DaemonClient` field becomes `daemon: D`.
 - `Engine::daemon(&self) -> &D` (was `-> &DaemonClient`).
 - The default type parameter `D = DaemonClient` keeps every existing call site that names `Engine<S>` compiling unchanged.
 
-**4. Generic-ize lifecycle entry points.** [`rust/shekyl-engine-core/src/engine/lifecycle.rs`](rust/shekyl-engine-core/src/engine/lifecycle.rs) — `create` and `open*` signatures (~5 sites at lines 381, 501, 602, 621, 639 per the pre-read) become generic over `D`. Default `D = DaemonClient` keeps callers compiling.
+**4. Generic-ize lifecycle entry points.** [`rust/shekyl-engine-core/src/engine/lifecycle.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs) — `create` and `open*` signatures (~5 sites at lines 381, 501, 602, 621, 639 per the pre-read) become generic over `D`. Default `D = DaemonClient` keeps callers compiling.
 
-**5. Refresh: replace `daemon.inner()` with trait-bound calls.** [`rust/shekyl-engine-core/src/engine/refresh.rs`](rust/shekyl-engine-core/src/engine/refresh.rs) — four `inner()` sites (lines ~1460, 1514, 1875, 1892 per pre-read) currently call `&SimpleRequestRpc` methods. Migrate to calling `Rpc` methods directly on `&D` (the `Rpc` supertrait bound makes the methods reachable). One clone site at ~1448 also needs to clone the generic `D` instead of `DaemonClient`.
+**5. Refresh: replace `daemon.inner()` with trait-bound calls.** [`rust/shekyl-engine-core/src/engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs) — four `inner()` sites (lines ~1460, 1514, 1875, 1892 per pre-read) currently call `&SimpleRequestRpc` methods. Migrate to calling `Rpc` methods directly on `&D` (the `Rpc` supertrait bound makes the methods reachable). One clone site at ~1448 also needs to clone the generic `D` instead of `DaemonClient`.
 
-**6. `MockDaemon` per §6.1.** [`rust/shekyl-engine-core/src/engine/test_support.rs`](rust/shekyl-engine-core/src/engine/test_support.rs) — new `pub(crate) struct MockDaemon` with:
+**6. `MockDaemon` per §6.1.** [`rust/shekyl-engine-core/src/engine/test_support.rs`](../../rust/shekyl-engine-core/src/engine/test_support.rs) — new `pub(crate) struct MockDaemon` with:
 
 - `MockDaemon::with_seed(seed: [u8; 32]) -> Self` per §6.2.
 - Full `DaemonEngine` impl that satisfies the §6.1 contract:
@@ -164,7 +164,7 @@ Inherited `Rpc` methods are *not* duplicated on `DaemonEngine`; consumers reach 
 
 **`submitted_hashes` accessor (added per Push 3 of the second adversarial pass to support the first hybrid test's assertion shape):** `MockDaemon::submitted_hashes(&self) -> Vec<TxHash>` returns the ordered list of tx hashes that reached the dedup table (i.e., submissions that were not failure-injected away). Test authors assert against this accessor for "the daemon observed this submission" semantics.
 
-**7. `derive_seed` master-seed helper per §6.2.** [`rust/shekyl-engine-core/src/engine/test_support.rs`](rust/shekyl-engine-core/src/engine/test_support.rs) — new `pub(crate) fn derive_seed(master_seed: &[u8; 32], role_tag: &[u8]) -> [u8; 32]`. Algorithm at the helper's discretion (HKDF-SHA256 or BLAKE2b-keyed are typical; the spec pins the contract, not the algorithm). Document the algorithm in the function's rustdoc so test authors reading test failures can trace the derivation.
+**7. `derive_seed` master-seed helper per §6.2.** [`rust/shekyl-engine-core/src/engine/test_support.rs`](../../rust/shekyl-engine-core/src/engine/test_support.rs) — new `pub(crate) fn derive_seed(master_seed: &[u8; 32], role_tag: &[u8]) -> [u8; 32]`. Algorithm at the helper's discretion (HKDF-SHA256 or BLAKE2b-keyed are typical; the spec pins the contract, not the algorithm). Document the algorithm in the function's rustdoc so test authors reading test failures can trace the derivation.
 
 **8. First hybrid test exercising the master-seed pattern.** New test in `rust/shekyl-engine-core/src/engine/refresh.rs` test module (or a new `tests/` integration target if cleaner) that:
 
@@ -199,7 +199,7 @@ Only checkpoint (c) is committed as the per-PR delta. Checkpoints (a) and (b) ar
 
 Expected outcome: deltas near 0% on `KeyEngine`/`LedgerEngine`/`EconomicsEngine` paths (DaemonEngine extraction doesn't change them); `DaemonEngine`-path benches don't exist yet (those land when `LedgerEngine`/etc. extractions add them via subsequent Stage 1 PRs). [Post-merge: this expectation held. `LedgerEngine`-path bench landed at Stage 1 PR 2 (LedgerEngine PR); `KeyEngine`-path bench landed at the M-series close-out PR (`chore/stage-1-pr3-closeout`, 2026-05-12) following the M3-series KeyEngine PR (PR #40, 2026-05-11); `EconomicsEngine`-path benches remain upstream.]
 
-**11. `CHANGELOG.md` [Unreleased] entry.** [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — add a one-line entry under [Unreleased] / Internal naming `DaemonEngine` trait extraction as the first Stage 1 PR.
+**11. `CHANGELOG.md` [Unreleased] entry.** [`docs/CHANGELOG.md`](../CHANGELOG.md) — add a one-line entry under [Unreleased] / Internal naming `DaemonEngine` trait extraction as the first Stage 1 PR.
 
 ### Watchpoints
 
@@ -209,7 +209,7 @@ Expected outcome: deltas near 0% on `KeyEngine`/`LedgerEngine`/`EconomicsEngine`
 
 - **`refresh.rs` `inner()` → `&D` migration is type-driven.** Each `inner()` call returned `&SimpleRequestRpc`; the replacement calls a `Rpc` method on `&D` directly. The compiler will guide this — do *not* preserve `inner()` as a compatibility shim (per `60-no-monero-legacy.mdc` and `15-deletion-and-debt.mdc` defaults: delete the indirection, don't shim around it).
 
-- **`MockDaemon` failure-injection surface.** API pinned in step 6 above: `MockDaemon::queue_failure(reason: ActorCrashReason)` (per-call queue) + injection-takes-precedence-over-dedup. Pattern after the existing `MockRpc::queue_height_error` / `queue_block_error` in [`rust/shekyl-engine-core/src/engine/test_support.rs`](rust/shekyl-engine-core/src/engine/test_support.rs). The §6.1 contract requires mocks to honor the full trait contract including failure modes; `MockDaemon::with_seed` alone isn't enough.
+- **`MockDaemon` failure-injection surface.** API pinned in step 6 above: `MockDaemon::queue_failure(reason: ActorCrashReason)` (per-call queue) + injection-takes-precedence-over-dedup. Pattern after the existing `MockRpc::queue_height_error` / `queue_block_error` in [`rust/shekyl-engine-core/src/engine/test_support.rs`](../../rust/shekyl-engine-core/src/engine/test_support.rs). The §6.1 contract requires mocks to honor the full trait contract including failure modes; `MockDaemon::with_seed` alone isn't enough.
 
 - **`derive_seed` algorithm choice.** HKDF-SHA256 is the safe default; the project's existing crypto-pq surface uses HKDF for KEM context separation. Reusing HKDF keeps the dependency surface small (already pulled in transitively). Document the algorithm in the helper's rustdoc.
 
@@ -229,7 +229,7 @@ Per §8.2 PR-description third bullet:
 
 ## Branching-policy compliance
 
-Per [`.cursor/rules/06-branching.mdc`](.cursor/rules/06-branching.mdc):
+Per [`.cursor/rules/06-branching.mdc`](../../.cursor/rules/06-branching.mdc):
 
 - All branches branch off `dev`, land on `dev`, never touch `main` directly.
 - Descriptive branch names: `chore/stage-1-prereq-followups-cleanup` (PR-A); `chore/stage-0-harness-design` (Stage 0 PR-1); `chore/stage-0-harness-impl` (Stage 0 PR-2); `feat/stage-1-daemon-engine` (Stage 1 PR 1).
@@ -260,5 +260,5 @@ When ready to execute, the clean-chat prompt should include:
 
 1. This plan in full (it's the comprehensive seed).
 2. The user's authorization to begin (specifically: which phase to start with — PR-A and Stage 0 design can begin in parallel; Stage 1 PR 1 blocks on Stage 0 implementation + baseline).
-3. The expected workflow: the executing agent drafts each PR on its own branch, commits with messages following [`.cursor/rules/90-commits.mdc`](.cursor/rules/90-commits.mdc), surfaces the commits without pushing, and waits for explicit push instruction per branching rule 4.
+3. The expected workflow: the executing agent drafts each PR on its own branch, commits with messages following [`.cursor/rules/90-commits.mdc`](../../.cursor/rules/90-commits.mdc), surfaces the commits without pushing, and waits for explicit push instruction per branching rule 4.
 4. Reference to this plan's commit (the planning conversation's transcript can be cited if needed for audit).

@@ -121,7 +121,7 @@ algorithm replacement also lands with this workstream.
 | File | Inherited role | Notes |
 | --- | --- | --- |
 | [`src/crypto/slow-hash.c`](../src/crypto/slow-hash.c) | CryptoNight slow hash core | 2 MiB scratchpad never zeroized in inherited code (Lens C C-4/C-5 stop-gap-then-deletion context); see also [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) 32-bit-fallback gating |
-| [`src/crypto/pow_cryptonight.cpp`](../src/crypto/pow_cryptonight.cpp) | CryptoNight PoW driver | Routed via the modular PoW schema interface per [`docs/DOCUMENTATION_TODOS_AND_PQC.md`](./DOCUMENTATION_TODOS_AND_PQC.md) §1.10; delete the driver, registration falls out by reference |
+| `src/crypto/pow_cryptonight.cpp` | CryptoNight PoW driver | Routed via the modular PoW schema interface per [`docs/DOCUMENTATION_TODOS_AND_PQC.md`](./DOCUMENTATION_TODOS_AND_PQC.md) §1.10; delete the driver, registration falls out by reference |
 | `src/crypto/aesb.c` | AES block primitives used by CryptoNight slow-hash | Cited only from CryptoNight paths; no consumer outside the deletion set |
 | `src/crypto/oaes_lib.{c,h}`, `src/crypto/oaes_config.h` | OpenSSL AES library port (CryptoNight dependency) | Cited only from CryptoNight paths; the entire OAES surface is CryptoNight-private and deletes with the rest of the set |
 | `src/crypto/CryptonightR_JIT.{c,h}`, `src/crypto/CryptonightR_JIT_stub.c`, `src/crypto/CryptonightR_template.{h,S}` | CryptoNight JIT compiler + code-generation template | Untested 32-bit fallback per [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md); JIT main, stub, and template all delete together |

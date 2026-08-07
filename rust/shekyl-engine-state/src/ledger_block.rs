@@ -68,9 +68,13 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 ///   (FA-8, §5.7.9).
 /// - Version `7` retires the confidential-staking (claim-era) fields
 ///   (PR-3 of the staking sweep).
-/// - Version `8` (this version) adds
-///   `TransferDetails::awaiting_confirmation` — the F14 persisted
-///   awaiting-confirmation lock (`DAEMON_SUBMIT_VERDICT.md` §2.6).
+/// - Version `8` adds `TransferDetails::awaiting_confirmation` — the
+///   F14 persisted awaiting-confirmation lock
+///   (`DAEMON_SUBMIT_VERDICT.md` §2.6).
+/// - Version `9` (this version) adds
+///   `TransferDetails::spending_tx_hash` — the WI-RPC-3 spend-quadruple
+///   leg (F-9): the confirmed spending txid recorded so `tx_meta.tx_keys`
+///   retention stays I-2-live for no-change outbound transactions.
 ///
 /// Any field addition / removal / renaming inside the block, or any
 /// transitive change in a nested type's serialized shape, bumps this;
@@ -78,7 +82,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 8;
+pub const LEDGER_BLOCK_VERSION: u32 = 9;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -182,6 +186,43 @@ pub struct LedgerBlock {
     pub reorg_blocks: ReorgBlocks,
 }
 
+/// C7 (`docs/design/WALLET_SEND_RECORD.md` §2): **`LedgerBlock` holds
+/// only scan-derived types.** `reset_scan_derived_state` reconstructs
+/// this block wholesale on rescan — "a field added to it later is then
+/// reset because it exists" — so a dispatch-authored type placed here is
+/// not a design choice but data loss. This marker makes the
+/// classification compiler-enforced: every field type of [`LedgerBlock`]
+/// must implement [`ScanDerived`], asserted by
+/// the compile-time check below, so adding a
+/// field of an unmarked type fails to compile instead of failing at the
+/// next rescan.
+///
+/// **Known field-level exception (provably vacuous from PR-SJ-1):**
+/// `TransferDetails::awaiting_confirmation` is dispatch-authored state on
+/// a scan-derived row. The trait bounds *types*, not fields, so it
+/// cannot catch this — instead the send-journal equivalence invariant
+/// (`send-journal-lock-equivalence`, [`crate::invariants`]) proves the
+/// field is derivable from `send_journal` rows at all times, and the
+/// pre-committed PR-SJ-1b deletes the field, retiring this note.
+pub trait ScanDerived {}
+
+impl ScanDerived for u32 {} // block_version
+impl ScanDerived for Vec<TransferDetails> {}
+impl ScanDerived for TransferDetails {}
+impl ScanDerived for BlockchainTip {}
+impl ScanDerived for ReorgBlocks {}
+
+/// Compile-time C7 enforcement: one line per [`LedgerBlock`] field, in
+/// declaration order. Extending the struct without extending this list
+/// (with a `ScanDerived` type) fails to compile.
+const _LEDGER_BLOCK_HOLDS_ONLY_SCAN_DERIVED_TYPES: () = {
+    const fn assert_scan_derived<T: ScanDerived>() {}
+    assert_scan_derived::<u32>(); // block_version
+    assert_scan_derived::<Vec<TransferDetails>>(); // transfers
+    assert_scan_derived::<BlockchainTip>(); // tip
+    assert_scan_derived::<ReorgBlocks>(); // reorg_blocks
+};
+
 impl LedgerBlock {
     /// Construct a fresh, empty ledger block at the current version.
     pub fn empty() -> Self {
@@ -239,7 +280,16 @@ impl LedgerBlock {
 
     // -- Read-only queries (moved from RuntimeWalletState) -----------------
 
-    /// The current synced height (== `tip.synced_height`).
+    /// The current synced **tip height** (== `tip.synced_height`) — the
+    /// newest ingested block's own height (an instant, set alongside that
+    /// block's `tip_hash`), NOT a block count. Contrast the `P`-scan
+    /// cursor's same-named `synced_height`, which is a **count** (its last
+    /// verified block is `synced_height − 1`): the two conventions coexist
+    /// in this crate, so consumers anchoring reference heights or
+    /// spendability off this value can use it as the tip directly (the
+    /// transfer path's `chain_tip` does), while count-shaped values belong
+    /// in `shekyl_types::ChainCount`. Audited 2026-07-11 (claim-builder
+    /// PR-3 review follow-through: the count/height unit family).
     pub fn height(&self) -> u64 {
         self.tip.synced_height
     }
@@ -378,6 +428,9 @@ mod tests {
                 tx_hash: shekyl_types::TxHash::from_bytes([seed.wrapping_add(4); 32]),
                 accepted_at_height: 100 + u64::from(seed),
             }),
+            // Exercise the Some leg of the spend-quadruple field in the
+            // round-trip tests as well.
+            spending_tx_hash: Some(shekyl_types::TxHash::from_bytes([seed.wrapping_add(5); 32])),
             // Post-M3d: per-output secrets are no longer persisted on
             // `TransferDetails`; the M3b deterministic-handle pathway
             // (`source_ciphertext`, `output_handle`) carries the
