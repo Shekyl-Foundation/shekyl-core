@@ -6,8 +6,9 @@
 //! Shekyl-native wallet JSON-RPC server (Phase 4).
 //!
 //! Implements the contract in [`docs/api/wallet_rpc.yaml`](../../docs/api/wallet_rpc.yaml).
-//! This crate is Engine-backed and Shekyl-native — it is **not** the transitional
-//! `shekyl-engine-rpc` wallet2 FFI bridge (deleted at Phase 5).
+//! This crate is Engine-backed and Shekyl-native. The transitional
+//! `shekyl-engine-rpc` wallet2 FFI bridge it used to be confused with is
+//! deleted (roadmap B1); this crate is the only Rust wallet RPC server.
 //!
 //! # Phase 4b / 4c
 //!

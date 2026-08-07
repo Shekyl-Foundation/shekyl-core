@@ -164,8 +164,9 @@ impl<
     ///
     /// - [`RefreshError::AlreadyRunning`] — refresh/rescan already in flight.
     /// - [`RefreshError::Io`] — daemon preflight failed; retry when reachable.
-    /// - [`RefreshError::RescanBlocked`] — transactions are in flight whose
-    ///   spend record a chain replay cannot rebuild; see that variant.
+    /// - [`RefreshError::RescanBlocked`] — outstanding pending-tx
+    ///   reservations (consumer-held or in-flight) whose output locks a
+    ///   chain replay cannot rebuild; see that variant.
     /// - [`RefreshError::RescanPersist`] — durable save of the reset failed.
     ///
     /// Scan-path errors surface via [`RefreshHandle::join`], same as refresh.

@@ -13,6 +13,11 @@
 //! > The RPC layer (`shekyl-engine-rpc`) defines a single
 //! > `WalletRpcError` enum that every domain error converts into.
 //!
+//! The quoted lock is verbatim; the crate it names has moved. The RPC layer
+//! is now `shekyl-wallet-rpc` — the transitional `shekyl-engine-rpc`
+//! wallet2-FFI bridge is deleted (roadmap B1). The shape of the lock is
+//! unchanged: one RPC-layer error enum, every domain error converting in.
+//!
 //! Each enum is *closed* — no `Other(String)` catch-all — so a reviewer
 //! can read the variants and know every distinguishable failure mode.
 //! The RPC-layer translation is the single audited site for mapping

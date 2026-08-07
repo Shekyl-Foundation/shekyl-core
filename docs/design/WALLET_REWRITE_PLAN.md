@@ -97,14 +97,14 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 - [shekyl-proofs](../../rust/shekyl-proofs): tx_proof, reserve_proof.
 - [shekyl-staking](rust/shekyl-staking/), [shekyl-economics](../../rust/shekyl-economics): consensus and fee maths.
 - [shekyl-daemon-rpc](../../rust/shekyl-daemon-rpc): client to `shekyld`.
-- [shekyl-cli](../../rust/shekyl-cli), [shekyl-engine-rpc](../../rust/shekyl-engine-rpc): scaffolded crates, not yet binary-complete.
+- [shekyl-cli](../../rust/shekyl-cli), [shekyl-wallet-rpc](../../rust/shekyl-wallet-rpc): the two wallet binaries. (The transitional `shekyl-engine-rpc` wallet2-FFI bridge that sat here is deleted — roadmap B1.)
 - [shekyl-ffi](../../rust/shekyl-ffi) typed wallet-ledger surface ([wallet_ledger_ffi.rs](rust/shekyl-ffi/src/wallet_ledger_ffi.rs)) — kept as the SHKW1 contract; the C++ side that consumed it is deleted in this plan.
 
 ### Gap
 
 - **Wallet domain API:** ~~no orchestrator type composing file + state + prefs + scanner + tx-builder + RPC client~~ — **closed 2026-06-10**: `shekyl-engine-core::Engine<S>` landed with lifecycle, refresh, scan merge, and pending-tx send lifecycle (see Phase 1 closeout banner below and [`PHASE_1_ORCHESTRATOR_STATUS.md`](../completed/PHASE_1_ORCHESTRATOR_STATUS.md)).
 - **CLI feature parity:** `shekyl-cli` exists but does not yet implement the daily-use command set.
-- **RPC feature parity:** `shekyl-engine-rpc` exists but does not yet implement the JSON-RPC method set the GUI/mobile clients will eventually depend on.
+- **RPC feature parity:** ~~`shekyl-engine-rpc` exists but does not yet implement the JSON-RPC method set the GUI/mobile clients will eventually depend on~~ — **re-homed**: the Engine-native `shekyl-wallet-rpc` (contract [`docs/api/wallet_rpc.yaml`](../api/wallet_rpc.yaml)) carries this parity through Phase 4a/4b/4c + WI-RPC-1/2/3; `shekyl-engine-rpc` is deleted (roadmap B1). Remaining gaps are the contract's RESERVED methods, not a missing crate.
 - **Wallet flows:** wallet creation (generate / restore-from-bip39 / restore-from-raw / restore-from-view-key / watch-only / hardware-offload), open with password rotation, lost-state rescan path are partially in [shekyl-engine-file](../../rust/shekyl-engine-file) but not exposed as a clean `Wallet::*` API.
 - **C++ deletion:** `wallet2.cpp` (13,360 LoC; `src/wallet/` totals 28,761 lines across 17 files incl. `CMakeLists.txt` — figures corrected 2026-08-06, the earlier ~6500 was stale), `wallet2_ffi.cpp`, and `wallet_rpc_server*.cpp` are still in tree; `simplewallet/` and `wallet/api/` are already deleted. CMake still builds the remainder.
 - **monero-oxide vendor sync:** verify the vendored tree matches the upstream commit we want for the wallet stack's needs (`shekyl-primitives`, `shekyl-generators`, `shekyl-io`, `shekyl-fcmp-plus-plus`, `shekyl-bulletproofs`, `shekyl-rpc`, `helioselene`, `ec-divisors`, `generalized-bulletproofs`). Don't un-pin in this plan.
@@ -115,7 +115,7 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 flowchart TB
     subgraph Bins[Binaries]
       Cli["shekyl-cli (replaces simplewallet)"]
-      Rpc["shekyl-engine-rpc (replaces wallet_rpc_server)"]
+      Rpc["shekyl-wallet-rpc (replaces wallet_rpc_server)"]
     end
 
     subgraph Api[Domain]

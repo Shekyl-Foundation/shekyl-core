@@ -154,11 +154,13 @@ pub enum WalletRpcError {
     /// Refresh already in flight (single-flight).
     #[error("refresh already running")]
     RefreshInProgress,
-    /// Rescan refused: in-flight transactions whose spend record a chain
-    /// replay cannot rebuild. Transient and client-resolvable — submit or
-    /// discard reservations, wait for confirmations, then retry.
+    /// Rescan refused: outstanding pending-tx reservations (consumer-held
+    /// or in-flight) hold in-memory output locks into transfer rows the
+    /// reset would destroy. Transient and client-resolvable — submit or
+    /// discard the reservations, then retry. Unconfirmed *submitted* txs
+    /// no longer refuse (send-journal re-derivation; PR-SJ-1).
     #[error(
-        "cannot rescan while transactions are in flight: {detail}; \
+        "cannot rescan while pending-tx reservations are held: {detail}; \
          submit or discard pending reservations, then retry"
     )]
     RescanBlocked {

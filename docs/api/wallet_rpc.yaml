@@ -368,15 +368,17 @@ components:
                                           refusal — wallet untouched. A
                                           mid-scan daemon drop after the
                                           reset is durable is -29203)
-          -29202 RESCAN_BLOCKED           rescan: refused — consumer-held
-                                          reservations hold spend records a
+          -29202 RESCAN_BLOCKED           rescan: refused — outstanding
+                                          pending-tx reservations
+                                          (consumer-held or in-flight)
+                                          hold in-memory output locks a
                                           chain replay cannot rebuild
                                           (unconfirmed submitted txs no
                                           longer refuse: the send journal
                                           re-derives their locks). A
                                           resolvable state conflict, NOT a
                                           bad request: submit or discard
-                                          the reservation, retry. Nothing
+                                          the reservations, retry. Nothing
                                           was reset
                                           (data: {"detail": "..."})
           -29203 RESCAN_INCOMPLETE        rescan: reset persisted, then the
@@ -935,12 +937,14 @@ components:
 
         Shares the refresh single-flight slot (-29200). Refuses before
         touching the wallet when the daemon is unreachable (-29201) or when
-        consumer-held reservations hold spend records a replay cannot rebuild
-        (-29202; unconfirmed submitted transactions no longer refuse — the
-        send journal carries their input set across the wipe). Past those refusals the reset is durable before scanning
-        begins: a scan that then fails (any producer failure on join)
-        leaves the wallet emptied and returns -29203 RESCAN_INCOMPLETE
-        (re-runnable; not -29201, and not a generic -32603).
+        outstanding pending-tx reservations (consumer-held or in-flight)
+        hold spend records a replay cannot rebuild (-29202; unconfirmed
+        submitted transactions no longer refuse — the send journal carries
+        their input set across the wipe). Past those refusals the reset is
+        durable before scanning begins: a scan that then fails (any producer
+        failure on join) leaves the wallet emptied and returns -29203
+        RESCAN_INCOMPLETE (re-runnable; not -29201, and not a generic
+        -32603).
 
     RescanBlockchainResult:
       type: object

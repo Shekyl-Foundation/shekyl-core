@@ -5,10 +5,11 @@
 
 //! Standalone `shekyl-wallet-rpc` binary (Phase 4 Engine-native server).
 //!
-//! Distinct from the transitional `shekyl-engine-rpc` (wallet2 FFI) and from
-//! the C++ `wallet_rpc_server` binary still built as `shekyl-wallet-rpc` —
-//! until Phase 5 deletion, operators must not confuse the two. This binary
-//! is the Shekyl-native contract in `docs/api/wallet_rpc.yaml`.
+//! Distinct from the C++ `wallet_rpc_server` binary still built as
+//! `shekyl-wallet-rpc` — until Phase 5 deletion, operators must not confuse
+//! the two. This binary is the Shekyl-native contract in
+//! `docs/api/wallet_rpc.yaml`. (The third name in this space, the
+//! transitional `shekyl-engine-rpc` wallet2-FFI bridge, is deleted.)
 
 use std::path::PathBuf;
 use std::str::FromStr;

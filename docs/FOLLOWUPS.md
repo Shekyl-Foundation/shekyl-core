@@ -5433,8 +5433,9 @@ sustainability is unaffected by the recalibration.
   that the 2026-04-27 actor-architecture decision-log entry pins
   as architectural commitments:
 
-  1. **Idle eviction.** `shekyl-engine-rpc` server (post-rename
-     name) tears down `Engine` instances after a configurable
+  1. **Idle eviction.** The `shekyl-wallet-rpc` server (this work's
+     home since the transitional `shekyl-engine-rpc` was deleted at
+     roadmap B1) tears down `Engine` instances after a configurable
      idle timeout, zeroing secrets via the actor topology
      shutdown. Subsequent requests re-open from the file (paying
      the KDF cost once per idle cycle). Bounds secret residency
@@ -5481,7 +5482,7 @@ sustainability is unaffected by the recalibration.
   Stage 5 in V3.x.
 
   *Definition of done:* idle timeout configurable via
-  `shekyl-engine-rpc` config with documented default-rationale;
+  `shekyl-wallet-rpc` config with documented default-rationale;
   secrets verifiably zeroed on eviction; `engine_lock` JSON-RPC
   method present, documented in OpenAPI spec, tested; multi-engine
   registry implemented with integration tests for multiple
@@ -5909,7 +5910,8 @@ sustainability is unaffected by the recalibration.
   **Cleanup scope.** Design and ship a BIP-39-aware new-wallet
   FFI (provisional name `wallet2_ffi_create_wallet_from_bip39`),
   rewire shekyl-engine-rpc and shekyl-gui-wallet's
-  `wallet_bridge.rs` to the new entry, **delete**
+  `wallet_bridge.rs` to the new entry (neither rewire target still
+  consumes this FFI — see the disposition below), **delete**
   `wallet2_ffi_create_wallet` and `on_create_wallet` in the
   same atomic PR per
   [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
@@ -5957,12 +5959,18 @@ sustainability is unaffected by the recalibration.
   acceptable pre-genesis posture, since production wallet creation is
   the Rust BIP-39 path. **Reopening criteria:** (a) a new consumer
   wires to `wallet2_ffi_create_wallet` / `on_create_wallet` before
-  Phase 5 — the disposition reopens at that PR's review; (b) Phase 5
+  Phase 5 — the disposition reopens at that PR's review; ~~(b) Phase 5
   slips past stressnet start while `shekyl-engine-rpc`'s legacy bridge
   (`rust/shekyl-engine-rpc/src/engine.rs` create-wallet call site) is
   a stressnet-exposed surface — the BIP-39-aware FFI ships then as a
-  bounded stopgap. *Re-evaluation shape:* the introducing PR's review
-  for (a); the stressnet-readiness review for (b). *Target:* closed by
+  bounded stopgap.~~ **Criterion (b) is discharged and can no longer
+  fire (2026-08-06, roadmap B1):** that bridge is deleted with its
+  crate, so the create-wallet call site no longer exists and
+  `wallet2_ffi_create_wallet` has *no* in-tree Rust consumer at all.
+  That strengthens the rejection rather than reopening it — the C++
+  entry point is now unreachable from Rust and simply waits for Phase
+  5. *Re-evaluation shape:* the introducing PR's review
+  for (a). *Target:* closed by
   the Phase 5 deletion commit, or at whichever reopening criterion
   fires first.
 
@@ -5974,8 +5982,9 @@ sustainability is unaffected by the recalibration.
   [`src/cryptonote_basic/account.cpp:443–446`](../src/cryptonote_basic/account.cpp)
   (the raw-seed-on-mainnet restriction that drives the
   brokenness);
-  [`rust/shekyl-engine-rpc/src/ffi.rs`](../rust/shekyl-engine-rpc/src/ffi.rs)
-  (in-tree Rust consumer that needs the new FFI rewire);
+  `rust/shekyl-engine-rpc/src/ffi.rs` (the former in-tree Rust consumer
+  that would have needed the FFI rewire — deleted at roadmap B1, so
+  there is nothing left to rewire);
   [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10 (substrate disposition).
 
@@ -8899,7 +8908,7 @@ sustainability is unaffected by the recalibration.
 
   Pulled transitively via `heapless 0.7.17 → postcard 1.1.3`,
   consumed by `shekyl-ffi` and `shekyl-engine-state` (and through
-  `shekyl-engine-state` by `shekyl-scanner`, `shekyl-engine-rpc`,
+  `shekyl-engine-state` by `shekyl-scanner`,
   `shekyl-engine-file`, `shekyl-engine-core`) for deterministic
   serialization at the FFI / engine-state boundary. The advisory's
   upstream remediation summary is "the crate is unmaintained;
@@ -10084,8 +10093,9 @@ one place to confirm each item's relationship to the wallet stack.
   method strings (`wallet_get_balance`, `wallet_create_address`,
   `change_wallet_password`, ...). Those strings are the externally
   exposed wire surface today, served by the C++
-  `shekyl-wallet-rpc.exe` binary; the Rust `shekyl-engine-rpc`
-  forwards anonymously to the C++ binary via `Wallet2::json_rpc_call`.
+  `shekyl-wallet-rpc.exe` binary. (The Rust `shekyl-engine-rpc` used to
+  forward to it via `Wallet2::json_rpc_call`; that crate is deleted at
+  roadmap B1, so the C++ binary is the only carrier of these strings.)
   Phase 4b of the wallet rewrite plan replaces that binary with a
   Rust-native JSON-RPC server whose method set is redesigned wholesale
   (Shekyl-native JSON shapes, OpenAPI spec) — at which point the
@@ -10097,8 +10107,19 @@ one place to confirm each item's relationship to the wallet stack.
   rename"* (2026-04-27) §"Deferred work" entry 2; CHANGELOG
   `[Unreleased]` BREAKING block.
 
-- **Retire `shekyl-engine-rpc::rust-scanner` Cargo feature (Phase 4b).**
-  The `rust-scanner` feature on `shekyl-engine-rpc` gates a JSON-RPC-side
+- **~~Retire `shekyl-engine-rpc::rust-scanner` Cargo feature (Phase 4b).~~
+  CLOSED 2026-08-06 — retired by deletion, not by cutover (roadmap B1).**
+  The predicted ending below was "Phase 4b cuts the crate over to `Engine<S>`
+  and the feature retires alongside." What happened instead: Phase 4b built
+  the Engine-native `shekyl-wallet-rpc` as a *separate* crate, which never
+  had a side-cache to begin with, leaving `shekyl-engine-rpc` with no
+  consumer — so the whole crate was deleted, taking `scanner_state`, the
+  `scanner_*` handlers, the `LiveLedger` alias, and the `rust-scanner`
+  feature with it. No JSON-RPC read path now goes through a
+  `(LedgerBlock, LedgerIndexes)` side-cache. Original entry, for the
+  record:
+
+  The `rust-scanner` feature on `shekyl-engine-rpc` gated a JSON-RPC-side
   `(LedgerBlock, LedgerIndexes)` cache (`scanner_state::LiveLedger`,
   the `scanner_*` JSON-RPC handlers) that the daemon RPC server reads
   from while the underlying crate is still routed through `wallet2.cpp`
@@ -14346,7 +14367,7 @@ reference.
   serai/`ciphersuite` internals). A CI grep gate in
   `.github/workflows/build.yml` checks all Shekyl crates
   (`shekyl-ffi`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-proofs`,
-  `shekyl-tx-builder`, `shekyl-scanner`, `shekyl-engine-rpc`,
+  `shekyl-tx-builder`, `shekyl-scanner`,
   `shekyl-daemon-rpc`) and asserts that none of their normal dependency
   trees pull in 0.4. Direct `dalek_ff_group` usage in source is printed
   for visibility but does not fail (legitimate 0.5 usage is expected).
