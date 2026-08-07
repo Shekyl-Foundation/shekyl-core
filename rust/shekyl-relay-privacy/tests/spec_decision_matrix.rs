@@ -50,6 +50,9 @@
 use shekyl_relay_privacy::derive::derive_embargo;
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
+use shekyl_relay_privacy::verify_cost::{
+    Provenance, ADOPTED_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH, SPEC_VERIFY_COST,
+};
 
 /// Measured x86 verification cost at depth 2, `n_out = 2`, over the whole
 /// consensus domain (`FCMP_MAX_INPUTS_PER_TX = 8`; asserted against
@@ -61,25 +64,21 @@ const F_X86_MS: [f64; 8] = [
     23.182, 27.513, 38.053, 43.908, 52.316, 67.801, 71.301, 73.481,
 ];
 
-/// Where a row's numbers come from — a **field**, not a comment (§87.2).
-///
-/// The shortcut this arc keeps catching is a value measured on a fast machine
-/// standing in for a value the spec machine owes: `175` (a 2019 laptop
-/// comment), `peers = 8` (a 2015 server graph), `F` (an instrument at degree
-/// 8). Rule 76.4 forbids it in prose. As a field with an assertion on top, the
-/// shortcut stops being a review item and becomes an edit someone has to make
-/// to a thing that names its own purpose.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Provenance {
-    /// Measured **on the spec machine** — Pi 4 Model B Rev 1.4, `performance`
-    /// on all four cores, thermal margin recorded (§73.1, §85.1).
-    MeasuredPi4,
-    /// Measured on the reference machine. Diagnostic only (§84.2).
-    MeasuredX86,
-    /// **Not measured on any machine**: an x86 total multiplied by a factor,
-    /// present only to bracket the decision. Never a spec value (rule 76.4).
-    ScaledFromX86,
-}
+// `Provenance` is a production type now — the table this test prices landed
+// in `verify_cost.rs` with the field and its assertion (§87.2), and this file
+// consumes it rather than keeping a twin (rule 50: test the production code).
+
+/// The spec machine's own cells, read from the production table rather than
+/// restated. A `const` panic here is unreachable while the module tests pin
+/// the modal and tail genesis cells.
+const F_PI4_1IN_MS: f64 = match SPEC_VERIFY_COST.f_ms(1, GENESIS_TREE_DEPTH) {
+    Ok(v) => v,
+    Err(_) => panic!("the modal genesis cell is a pinned §85.3 measurement"),
+};
+const F_PI4_8IN_MS: f64 = match SPEC_VERIFY_COST.f_ms(8, GENESIS_TREE_DEPTH) {
+    Ok(v) => v,
+    Err(_) => panic!("the 8-input genesis cell is a pinned §85.3 measurement"),
+};
 
 /// One candidate minimum spec, priced at the two ends of the legal shape
 /// domain. The chart's questions — what the embargo is, and how far it spreads
@@ -121,8 +120,8 @@ const SPECS: [SpecRow; 5] = [
     },
     SpecRow {
         label: DECIDED_SPEC,
-        f_1in_ms: 124.5,
-        f_8in_ms: 399.2,
+        f_1in_ms: F_PI4_1IN_MS,
+        f_8in_ms: F_PI4_8IN_MS,
         provenance: Provenance::MeasuredPi4,
     },
     SpecRow {
@@ -222,6 +221,14 @@ fn spec_decision_matrix() {
             );
         }
     }
+
+    // The shipped transit assumption must be one of the swept points, or the
+    // sweep prices a decision production does not make (§86.2).
+    assert!(
+        TRANSIT_MS.contains(&ADOPTED_TRANSIT_ASSUMPTION_MS),
+        "the sweep must include the shipped transit assumption \
+         ({ADOPTED_TRANSIT_ASSUMPTION_MS} ms)"
+    );
 
     // The gate: the price list at the decided spec, restated from the
     // derivation rather than from the chart. §80.2 read the sorting cost off
