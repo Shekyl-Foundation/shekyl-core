@@ -355,8 +355,10 @@ pub(super) fn map_wire_error(_err: &WireError) -> u8 {
     SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE
 }
 
-/// Recompute `P_canonical_id` from hybrid pubkey bytes (gate-4 §3.4 / emission §6.1).
+/// Map a `BondPostError` to the stable Rust↔C++ bond-post verdict code.
 ///
+/// Part of the archival FFI contract: C++ classifies failures only by these
+/// `u8` codes; the Rust verify body stays free of C-side string tables.
 pub(super) fn map_bond_post_error(err: BondPostError) -> u8 {
     match err {
         BondPostError::PostKindNotJoinMarket => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND,

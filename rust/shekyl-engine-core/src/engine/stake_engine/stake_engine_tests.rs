@@ -43,6 +43,10 @@ use crate::engine::pscan::scan_step::BlockRange;
 use crate::engine::stake_timing::DEFAULT_ENTRY_GAP;
 use crate::engine::{Network, ShekylAddress};
 #[cfg(feature = "gf7-hooks")]
+use kameo::actor::Spawn;
+#[cfg(feature = "gf7-hooks")]
+use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+#[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
 
 /// The genesis-frozen `hybrid_bond_id` canonical bytes for a slot, computed

@@ -29,7 +29,11 @@ pub fn settlement_epoch_slash_deadline_height(e: u64) -> u64 {
 
 /// Recompute `P_canonical_id` from hybrid pubkey bytes (gate-4 §3.4 / emission §6.1).
 ///
-/// Returns `1` on success and writes 32 bytes to `out_p_id`; `0` on null/short buffer.
+/// Returns `1` on success and writes 32 bytes to `out_p_id`. Returns `0` when
+/// `hybrid_pubkey_ptr` or `out_p_id` is null, or when `hybrid_pubkey_len == 0`.
+/// Non-empty buffers of any length are hashed as-is — this entry does not
+/// enforce a fixed hybrid-pubkey wire length; callers that need that check
+/// must validate before calling.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_p_canonical_id_from_pubkey(
     hybrid_pubkey_ptr: *const u8,

@@ -13,10 +13,10 @@ use kameo::error::SendError;
 use shekyl_archival_retention::HoldingsDescriptor;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_scanner::ScannableBlock;
-use shekyl_tx_builder::TreeContext;
-use shekyl_types::PCanonicalId;
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::NoOpObserver;
+use shekyl_tx_builder::TreeContext;
+use shekyl_types::PCanonicalId;
 
 use super::actor::StakeEngine;
 use super::bond::{AssembleBond, AssembledBondPost};
