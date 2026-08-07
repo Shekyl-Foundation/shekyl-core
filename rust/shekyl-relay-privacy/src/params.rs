@@ -345,6 +345,9 @@ impl DandelionParams {
     ///
     /// This constructor exists to be *measured against*, not to be shipped.
     /// It is the baseline the design round compares its own derivation to.
+    /// Production constructs [`Self::adopted`], which re-anchors the `hop`
+    /// input to measured provenance and inherits the rest of this set with
+    /// its documented dispositions.
     #[must_use]
     pub const fn inherited() -> Self {
         Self {
@@ -387,6 +390,63 @@ impl DandelionParams {
             fluff_return_ms: 3_250,
             // CRYPTONOTE_DANDELIONPP_STEMS = 2.
             graph: StemGraph::QuasiFourRegular,
+        }
+    }
+
+    /// The parameter set production ships — [`Self::inherited`] with the
+    /// `hop` input re-anchored to measured provenance (§80, §85.3).
+    ///
+    /// # What moved, and what deliberately did not
+    ///
+    /// **`time_between_hop_ms` is now derived through
+    /// [`crate::verify_cost::adopted_hop_ms`]** — the spec machine's modal
+    /// verification cell (124.5 ms, Pi 4, genesis tree) plus the labelled
+    /// 50 ms transit assumption — instead of restating the inherited `175`.
+    /// The two are numerically equal, and that is arithmetic rather than
+    /// coincidence: the inherited number was never pure transit (§71.3 — a
+    /// ~80 ms Monero-era verification figure plus one ocean crossing), and
+    /// re-deriving its shape with our verification cost lands on the same
+    /// milliseconds. So the cutover from `inherited()` moved **provenance,
+    /// not behaviour**: the embargo stays 190 s, the wallet timeout 874 s,
+    /// and every pin downstream of them holds.
+    ///
+    /// Every other field carries its own already-recorded disposition:
+    /// `fluff_return_ms` is F-7's measurement (worst-zone p90 at degree 12),
+    /// `fluff_probability_pct` is D-6's retained `q = 20 %`, the epoch pair
+    /// and graph are the inherited values with their §21 ledger entries.
+    ///
+    /// # What this does NOT close (§65.3, §66.3)
+    ///
+    /// The hop value here is the **measured floor** of §66.3's effective
+    /// scalar, not that scalar: verification is inside every hop's critical
+    /// path, so no field measurement can come back below it — but the
+    /// clearnet forward-to-forward *distribution* is still owed, and only it
+    /// can produce the p90-of-the-sum value the policy defines. When that
+    /// measurement lands it replaces this floor; until then the floor with
+    /// stated provenance supersedes a comment about a 2019 laptop.
+    ///
+    /// # Global scalar, modal shape — an interim the doc prices
+    ///
+    /// The embargo draw is a process-wide singleton today, so this uses the
+    /// **modal shape** (1 input, genesis tree). §83.1 prices the choice: the
+    /// modal embargo is effectively constant across the whole depth range
+    /// (~3 s of drift), while the tail rows are where per-shape derivation
+    /// pays (245 s at 8 inputs vs 190 s modal, at the assumed transit).
+    /// Per-shape consumption is the next RP cut and is blocked on
+    /// recovering the full 48-cell surface (`docs/FOLLOWUPS.md`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the modal genesis cell is unpopulated — a build-breaking
+    /// contradiction, since [`crate::verify_cost::SPEC_VERIFY_COST`] pins it
+    /// and the test suite asserts it.
+    #[must_use]
+    pub fn adopted() -> Self {
+        let hop = crate::verify_cost::adopted_hop_ms(1, crate::verify_cost::GENESIS_TREE_DEPTH)
+            .expect("the modal genesis cell is a pinned §85.3 measurement");
+        Self {
+            time_between_hop_ms: hop,
+            ..Self::inherited()
         }
     }
 
@@ -680,6 +740,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The adopted set moved the `hop` input's provenance, not its value:
+    /// the Pi modal verification cell plus the stated transit assumption
+    /// lands on the inherited 175 by arithmetic (§71.3). If this assertion
+    /// ever fails, a table cell or the transit assumption moved — which is
+    /// a legitimate act, but one that re-derives the embargo (the §80.2
+    /// price list moves with it) and owes a CHANGELOG entry saying so.
+    #[test]
+    fn adopted_params_change_provenance_not_behaviour() {
+        assert_eq!(DandelionParams::adopted(), DandelionParams::inherited());
     }
 
     #[test]
