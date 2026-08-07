@@ -98,7 +98,7 @@ where
         // trade (`docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE
         // death rule).
         self.ledger.with_wallet_ledger_mut(|wallet| {
-            submit_watchdog::release_awaiting_confirmation(&mut wallet.ledger, tx_hashes)
+            submit_watchdog::release_awaiting_confirmation(wallet, tx_hashes)
         })
     }
 
@@ -363,5 +363,49 @@ where
     fn outstanding(&self) -> usize {
         let state = self.state.lock().expect("pending-tx state lock poisoned");
         state.consumer_held.len() + state.in_flight.len()
+    }
+
+    #[cfg(test)]
+    fn test_hold_reservation(&self) {
+        use std::time::Instant;
+
+        use shekyl_curve_tree::{BlockHeight, ReferenceBlock};
+        use shekyl_units::AtomicUnits;
+
+        use super::super::pending::SnapshotId;
+        use super::types::{ConsumerHeldEntry, ContentFingerprint};
+
+        let mut state = self.state.lock().expect("pending-tx state lock poisoned");
+        let id = ReservationId::new(state.next_id);
+        state.next_id += 1;
+        state.consumer_held.insert(
+            id,
+            ConsumerHeldEntry {
+                created_at: Instant::now(),
+                snapshot_id: SnapshotId([0u8; 16]),
+                built_at_height: 0,
+                built_at_tip_hash: [0u8; 32],
+                tx_bytes: Vec::new(),
+                request: TxRequest {
+                    recipients: Vec::new(),
+                    priority: super::super::pending::FeePriority::Standard,
+                },
+                reference: ReferenceBlock {
+                    height: BlockHeight(0),
+                    curve_tree_root: [0u8; 32],
+                    block_hash: [0u8; 32],
+                },
+                content_gen: 0,
+                fingerprint: ContentFingerprint::from_build(
+                    AtomicUnits::ZERO,
+                    &[],
+                    AtomicUnits::ZERO,
+                )
+                .expect("empty fingerprint is constructible"),
+                tx_key_secret: shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
+                    [0u8; 32],
+                )),
+            },
+        );
     }
 }

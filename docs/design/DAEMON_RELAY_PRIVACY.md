@@ -5973,6 +5973,13 @@ queue above the shape question.
 | ~~**B. Tor, DEFAULT**~~ | ~~none~~ | ~~no~~ | ~~outbound only~~ | ~~2 channels~~ — **DELETED 2026-08-01, §41** |
 | **C. Tor + `disable_noise`** | Dandelion++ | yes | outbound only | no |
 
+[**Corrected 2026-08-06 per §63: C's "Dandelion++" stem routing was never
+true on the wire** — the D++ dispatch is clearnet-gated
+(`levin_notify.cpp:1222`); C diffuses to its outbound set with the embargo
+armed and no stem. The table is kept unedited above as part of the §41.4
+historical record of B; the shipped-configuration table lives at §41.3,
+which carries the same correction.]
+
 `proxy.noise` defaults **true** ([`net_node.h:76`](../../src/p2p/net_node.h#L76)),
 so a plain `--tx-proxy tor,...` gets **B**. In B the stem→local demotion clears
 `dandelionpp_stem` (§24.1's chain), and with it both halves of the arc's
@@ -8319,8 +8326,17 @@ than clearnet's floor**.
 | | stem routing | embargo armed | fluff reach | covert |
 | --- | --- | --- | --- | --- |
 | **A. clearnet** | Dandelion++ | yes | every peer | no |
-| **C. Tor / I2P (now the only anonymity configuration)** | Dandelion++ | yes | outbound only | no |
+| **C. Tor / I2P (now the only anonymity configuration)** | diffusion — no stem (**corrected per §63**) | yes | outbound only | no |
 | ~~B. Tor + noise~~ | ~~none~~ | ~~no~~ | ~~outbound only~~ | ~~2 channels~~ — **deleted 2026-08-01** |
+
+> **Corrected 2026-08-06 per §63.** As first written, C's stem-routing cell
+> said "Dandelion++" — the same pre-§63 assumption §26.2 and §30.6 already
+> carry corrections for. **No anonymity zone runs a stem and none ever has:**
+> the D++ dispatch is clearnet-gated (`levin_notify.cpp:1222`), so on C every
+> send is a scheduled outbound-only diffusion, marked `dandelionpp_fluff` on
+> the wire while the txpool is told `stem` — the embargo arms without a stem
+> existing. Whether C *should* stem is §64's round, not a fact this table may
+> assume.
 
 **§6 now models what we ship**, which it did not before.
 

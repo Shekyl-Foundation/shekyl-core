@@ -1669,7 +1669,16 @@ sustainability is unaffected by the recalibration.
   keeps refusing until the user runs it. **Design round 0 OPEN
   (2026-08-05):** `docs/design/WALLET_SEND_RECORD.md` — the
   "presumed-dead, keys retained" arm is SJ-DQ-4; the RPC contract is
-  SJ-DQ-8. *Target: V3.0 / Phase 4d.*
+  SJ-DQ-8. **Round RATIFIED + wedge half CLOSED (2026-08-06, PR-SJ-1):**
+  the send journal carries the dispatched input set across the rescan
+  wipe and the merge reconciler re-derives the F14 locks during replay,
+  so `start_rescan` no longer refuses on `pending_tx_hashes` — a
+  never-mined tx cannot wedge rescan anymore (the §7.1 self-link hazard
+  is closed structurally, not by refusal). The *abandon surface itself*
+  is still open — an explicit `Abandoned` edge plus the I-2 reference
+  migration (`pending_tx_hashes` → journal row, keys retained) is
+  PR-SJ-3, which subsumes the re-evaluation shape above minus the
+  now-moot rescan refusal. *Target: V3.0 / Phase 4d.*
 
 - **Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing
   history surface lands** (added 2026-07-09; **Phase 4c disclosure

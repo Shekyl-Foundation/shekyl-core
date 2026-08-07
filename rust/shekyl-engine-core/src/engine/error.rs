@@ -412,40 +412,27 @@ pub enum RefreshError {
         recoverable_by_respawn: bool,
     },
 
-    /// [`Engine::start_rescan`](super::Engine::start_rescan) refused: the
-    /// wallet holds transaction state that a chain replay cannot rebuild,
-    /// and the rescan would erase the only record of it.
+    /// [`Engine::start_rescan`](super::Engine::start_rescan) refused: a
+    /// pending-tx **reservation** (consumer-held or in-flight) is anchored
+    /// to transfer rows the reset clears — its in-memory output locks are
+    /// indices into the very rows the wipe destroys, and no send-journal
+    /// row exists to re-derive from (nothing dispatched yet). Resolution
+    /// is in-session and cheap: submit or discard, then retry.
     ///
-    /// Both counts name the same hazard from two directions. A **reservation**
-    /// (consumer-held or in-flight) is anchored to transfer rows the reset
-    /// clears, so submitting it afterwards would fail against a ledger that
-    /// no longer contains its inputs. An **unconfirmed submitted** tx
-    /// (`sync_state.pending_tx_hashes`) is worse: its inputs' `spent` /
-    /// `awaiting_confirmation` marking lives *only* in the transfer set, and
-    /// replaying confirmed blocks cannot re-derive a spend that is still in
-    /// the mempool — those inputs would come back apparently unspent, be
-    /// re-selected by the next build, and broadcast a second transaction
-    /// spending them. That is a privacy event before it is an accounting
-    /// one: two transactions provably spending the same input self-link the
-    /// wallet's activity (§7.1), which no refusal-avoidance convenience
-    /// outranks.
-    ///
-    /// Resolution is to let the in-flight work settle — submit or discard
-    /// reservations, wait out confirmations — then retry. A wallet stuck
-    /// behind a submitted transaction that never confirms and never gets
-    /// mined needs an explicit abandon surface; that is tracked in
-    /// `docs/FOLLOWUPS.md` with its blocker, not smuggled in here as a
-    /// silently-permissive guard.
+    /// The refusal's former second half — **unconfirmed submitted** txs
+    /// whose spend marking a replay cannot re-derive — retired with
+    /// PR-SJ-1 (`WALLET_SEND_RECORD.md` P3-1): the send journal carries
+    /// each dispatched input set across the wipe, and the merge
+    /// reconciler re-derives the F14 locks as replay re-creates the
+    /// rows, closing the §7.1 self-link hazard structurally rather than
+    /// by refusing. The abandon surface for a never-confirming tx is
+    /// PR-SJ-3 (`docs/FOLLOWUPS.md`).
     #[error(
-        "cannot rescan while transactions are in flight ({reservations} reservation(s), \
-         {unconfirmed} unconfirmed)"
+        "cannot rescan while pending-tx reservations are held ({reservations} reservation(s))"
     )]
     RescanBlocked {
         /// Consumer-held + in-flight pending-tx reservations.
         reservations: usize,
-        /// Submitted txids with no chain reference yet
-        /// (`sync_state.pending_tx_hashes`).
-        unconfirmed: usize,
     },
 
     /// Rescan emptied scan-derived state in memory but failed to persist the

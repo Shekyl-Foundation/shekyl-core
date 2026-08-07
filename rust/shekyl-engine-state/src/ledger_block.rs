@@ -186,6 +186,43 @@ pub struct LedgerBlock {
     pub reorg_blocks: ReorgBlocks,
 }
 
+/// C7 (`docs/design/WALLET_SEND_RECORD.md` §2): **`LedgerBlock` holds
+/// only scan-derived types.** `reset_scan_derived_state` reconstructs
+/// this block wholesale on rescan — "a field added to it later is then
+/// reset because it exists" — so a dispatch-authored type placed here is
+/// not a design choice but data loss. This marker makes the
+/// classification compiler-enforced: every field type of [`LedgerBlock`]
+/// must implement [`ScanDerived`], asserted by
+/// the compile-time check below, so adding a
+/// field of an unmarked type fails to compile instead of failing at the
+/// next rescan.
+///
+/// **Known field-level exception (provably vacuous from PR-SJ-1):**
+/// `TransferDetails::awaiting_confirmation` is dispatch-authored state on
+/// a scan-derived row. The trait bounds *types*, not fields, so it
+/// cannot catch this — instead the send-journal equivalence invariant
+/// (`send-journal-lock-equivalence`, [`crate::invariants`]) proves the
+/// field is derivable from `send_journal` rows at all times, and the
+/// pre-committed PR-SJ-1b deletes the field, retiring this note.
+pub trait ScanDerived {}
+
+impl ScanDerived for u32 {} // block_version
+impl ScanDerived for Vec<TransferDetails> {}
+impl ScanDerived for TransferDetails {}
+impl ScanDerived for BlockchainTip {}
+impl ScanDerived for ReorgBlocks {}
+
+/// Compile-time C7 enforcement: one line per [`LedgerBlock`] field, in
+/// declaration order. Extending the struct without extending this list
+/// (with a `ScanDerived` type) fails to compile.
+const _LEDGER_BLOCK_HOLDS_ONLY_SCAN_DERIVED_TYPES: () = {
+    const fn assert_scan_derived<T: ScanDerived>() {}
+    assert_scan_derived::<u32>(); // block_version
+    assert_scan_derived::<Vec<TransferDetails>>(); // transfers
+    assert_scan_derived::<BlockchainTip>(); // tip
+    assert_scan_derived::<ReorgBlocks>(); // reorg_blocks
+};
+
 impl LedgerBlock {
     /// Construct a fresh, empty ledger block at the current version.
     pub fn empty() -> Self {

@@ -154,12 +154,14 @@ pub enum WalletRpcError {
     /// Refresh already in flight (single-flight).
     #[error("refresh already running")]
     RefreshInProgress,
-    /// Rescan refused: in-flight transactions whose spend record a chain
-    /// replay cannot rebuild. Transient and client-resolvable — submit or
-    /// discard reservations, wait for confirmations, then retry.
+    /// Rescan refused: outstanding pending-tx reservations (consumer-held
+    /// or in-flight) hold in-memory output locks into transfer rows the
+    /// reset would destroy. Transient and client-resolvable — submit or
+    /// discard the reservations, then retry. Unconfirmed *submitted* txs
+    /// no longer refuse (send-journal re-derivation; PR-SJ-1).
     #[error(
-        "cannot rescan while transactions are in flight: {detail}; \
-         submit or discard pending transactions, wait for confirmations, then retry"
+        "cannot rescan while pending-tx reservations are held: {detail}; \
+         submit or discard pending reservations, then retry"
     )]
     RescanBlocked {
         /// Server-side counts (`error.data.detail`) — no amounts, no txids.
@@ -396,13 +398,8 @@ impl From<RefreshError> for WalletRpcError {
             // correct. `-32602` here would tell an automated client its
             // request shape is permanently wrong when the truth is "retry
             // once the in-flight transactions settle".
-            RefreshError::RescanBlocked {
-                reservations,
-                unconfirmed,
-            } => Self::RescanBlocked {
-                detail: format!(
-                    "{reservations} reservation(s), {unconfirmed} unconfirmed transaction(s)"
-                ),
+            RefreshError::RescanBlocked { reservations } => Self::RescanBlocked {
+                detail: format!("{reservations} reservation(s)"),
             },
             // Past the point of no return for the in-memory ledger; durable
             // save may have failed. Category-only message — `detail` can
