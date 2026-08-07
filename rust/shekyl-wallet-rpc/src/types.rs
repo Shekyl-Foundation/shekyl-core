@@ -291,7 +291,8 @@ pub enum TransferState {
 /// Accounting facts only — no key material, offsets, or commitments.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TransferView {
-    /// Stable per-wallet id (`{tx_hash_hex}:{internal_output_index}`).
+    /// Stable per-wallet id: `{tx_hash_hex}:{internal_output_index}` for
+    /// INCOMING; bare `{tx_hash_hex}` for OUTGOING journal rows (SJ-DQ-7).
     pub id: String,
     /// Incoming / outgoing.
     pub direction: TransferDirection,
