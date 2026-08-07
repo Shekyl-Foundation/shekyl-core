@@ -1682,23 +1682,17 @@ sustainability is unaffected by the recalibration.
   now-moot rescan refusal. *Target: V3.0 / Phase 4d.*
 
 - **Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing
-  history surface lands** (added 2026-07-09; **Phase 4c disclosure
-  2026-08-04** — still blocked; reopening criteria unchanged). The Engine ledger holds only
-  receive-side rows; `project::transfer_view` projects every row as
-  `INCOMING` (outgoing sends surface as `SPENT` state on the funding row).
-  A `get_transfers` call with `direction: OUTGOING` therefore matches nothing
-  and returns an empty list — a documented, valid enum value that silently
-  yields a wrong-looking answer (client sees "no sends"). Phase 4b keeps the
-  current behavior rather than either rejecting a spec-valid filter value or
-  faking an outgoing view. **Reopening criterion:** Engine grows a spend-side
-  transfer record (a real outgoing-history surface, tested). **Re-evaluation
-  shape:** project outgoing rows in `transfer_view` and let the existing
-  `get_transfers` filter select them; until then, consider surfacing a
-  distinct "not yet available" signal if clients depend on the filter.
-  **Design round 0 OPEN (2026-08-05):**
-  `docs/design/WALLET_SEND_RECORD.md` — the spend-side record is the
-  SJ-DQ family; projections close this entry via PR-SJ-2.
-  *Target: V3.0 / Phase 4b–4c.*
+  history surface lands** — **CLOSED 2026-08-07 (PR-SJ-2,
+  `feat/wallet-rpc-outgoing-sj2`)**. `get_transfers` / `get_transfer_by_id`
+  project `SendJournalBlock` rows as `direction: OUTGOING` with realized
+  fee and txid-keyed ids (SJ-DQ-7). Every journal state maps to its own
+  wire value — `TerminalRejected` → `FAILED`, `PresumedDead` → `DROPPED`
+  — rather than collapsing into a neighbour, and `block_height` means
+  inclusion height only (absent when never mined), which keeps
+  `since_height` from hiding unsettled sends from a polling client.
+  Engine record landed in PR-SJ-1 (#414).
+  *Previously:* receive-only ledger projection; `direction: OUTGOING`
+  matched nothing.
 
 - **Phase 4b: build concurrency permit stays 1 — raising it is a rule-21
   reopen gated on anonymized segment fetch** (added 2026-08-04, W-B step 1;

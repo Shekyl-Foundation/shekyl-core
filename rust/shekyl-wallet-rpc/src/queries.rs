@@ -8,15 +8,20 @@
 //! `get_balance`, `get_primary_address`, `get_transfers`,
 //! `get_transfer_by_id`, `get_height`, `get_wallet_info`.
 
+use std::cmp::Ordering;
+
 use serde::Deserialize;
 use serde_json::Value;
+use shekyl_engine_state::{SendJournalBlock, TransferDetails};
 use shekyl_rpc_client::Rpc;
 use shekyl_scanner::LedgerBlockExt;
+use shekyl_types::TxHash;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, parse_required_object, require_empty_object};
 use crate::project::{
-    atomic_units_string, attribution_matches, parse_transfer_id, transfer_state, transfer_view,
+    atomic_units_string, attribution_matches, outgoing_block_height, outgoing_transfer_state,
+    outgoing_transfer_view, parse_lookup_id, transfer_state, transfer_view, TransferLookupId,
 };
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
@@ -32,6 +37,139 @@ struct GetTransfersParams {
     state: Option<TransferState>,
     since_height: Option<i64>,
     attribution: Option<ReceiveAttributionFilter>,
+}
+
+/// Deterministic order of the merged INCOMING/OUTGOING history list.
+///
+/// Typed end to end. Ordering on the formatted `id` string instead
+/// would sort a transaction's outputs lexicographically — index 10
+/// before index 2 — because the index is unpadded decimal.
+#[derive(Debug, PartialEq, Eq)]
+struct TransferOrder {
+    /// Inclusion height; `None` (never mined) sorts after every mined
+    /// row, so unsettled sends sit at the tip of the ascending list.
+    block_height: Option<i64>,
+    /// INCOMING before OUTGOING within one height.
+    outgoing: bool,
+    /// Transaction hash, compared as bytes.
+    tx_hash: [u8; 32],
+    /// Output index for INCOMING; `0` for OUTGOING (journal rows are
+    /// txid-keyed and have no output index).
+    output_index: u64,
+}
+
+impl Ord for TransferOrder {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.block_height, other.block_height) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        }
+        .then_with(|| self.outgoing.cmp(&other.outgoing))
+        .then_with(|| self.tx_hash.cmp(&other.tx_hash))
+        .then_with(|| self.output_index.cmp(&other.output_index))
+    }
+}
+
+impl PartialOrd for TransferOrder {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Does `since_height` exclude a row at this inclusion height?
+///
+/// `since_height` bounds *inclusion* height. A row that was never mined
+/// has no height to compare against and is always returned: excluding
+/// it would hide exactly the rows a polling client most needs to see —
+/// unsettled, failed and dropped sends — and hide them *permanently*,
+/// since a never-mined row can never rise above the watermark. It also
+/// keeps the bound monotonic across a reorg, which flips a confirmed
+/// send back to `Dispatched` and would otherwise move its height
+/// backwards (rule 82).
+fn below_since(block_height: Option<u64>, since: Option<u64>) -> bool {
+    matches!((block_height, since), (Some(h), Some(min_h)) if h < min_h)
+}
+
+/// Merge the scan ledger and the send journal into one ordered history.
+///
+/// Split out from the handler so the merge, both filters and the order
+/// are reachable without an open engine (rule 50).
+fn collect_transfers(
+    ledger_rows: &[TransferDetails],
+    journal: &SendJournalBlock,
+    filters: &GetTransfersParams,
+    since: Option<u64>,
+) -> Result<Vec<TransferView>, WalletRpcError> {
+    let want_incoming = filters
+        .direction
+        .is_none_or(|d| d == TransferDirection::Incoming);
+    let want_outgoing = filters
+        .direction
+        .is_none_or(|d| d == TransferDirection::Outgoing);
+
+    let mut rows: Vec<(TransferOrder, TransferView)> = Vec::new();
+
+    if want_incoming {
+        for td in ledger_rows {
+            // Ledger rows are scanner-observed, so always mined.
+            if below_since(Some(td.block_height), since) {
+                continue;
+            }
+            if filters.state.is_some_and(|st| transfer_state(td) != st) {
+                continue;
+            }
+            if filters
+                .attribution
+                .is_some_and(|f| !attribution_matches(&td.receive_attribution, f))
+            {
+                continue;
+            }
+            let view = transfer_view(td);
+            rows.push((
+                TransferOrder {
+                    block_height: view.block_height,
+                    outgoing: false,
+                    tx_hash: td.tx_hash.to_bytes(),
+                    output_index: td.internal_output_index,
+                },
+                view,
+            ));
+        }
+    }
+
+    if want_outgoing {
+        for (txid, row) in &journal.rows {
+            if below_since(outgoing_block_height(row), since) {
+                continue;
+            }
+            if filters
+                .state
+                .is_some_and(|st| outgoing_transfer_state(row) != st)
+            {
+                continue;
+            }
+            // Receive attribution exists on INCOMING rows only (WI-RPC-4):
+            // an attribution filter therefore excludes every send.
+            if filters.attribution.is_some() {
+                continue;
+            }
+            let view = outgoing_transfer_view(&TxHash::from_bytes(*txid), row)?;
+            rows.push((
+                TransferOrder {
+                    block_height: view.block_height,
+                    outgoing: true,
+                    tx_hash: *txid,
+                    output_index: 0,
+                },
+                view,
+            ));
+        }
+    }
+
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(rows.into_iter().map(|(_, view)| view).collect())
 }
 
 /// Params for `get_transfer_by_id`.
@@ -188,41 +326,12 @@ pub(crate) async fn get_transfers(
     let engine = engine.read().await;
     let ledger = engine.ledger();
 
-    // Filter on the domain rows first, then project only the survivors — this
-    // avoids per-row string/hex allocation for filtered-out rows and compares
-    // `since_height` against the true `u64` height (no lossy `i64` round-trip).
-    let transfers: Vec<TransferView> = ledger
-        .ledger
-        .transfers()
-        .iter()
-        .filter(|&td| {
-            if let Some(min_h) = since {
-                if td.block_height < min_h {
-                    return false;
-                }
-            }
-            if let Some(dir) = filters.direction {
-                // Ledger rows are receive-side outputs; every row projects as
-                // INCOMING until a dedicated outgoing-history surface lands
-                // (see `project::transfer_view` / WALLET_SEND_RECORD.md).
-                if dir != TransferDirection::Incoming {
-                    return false;
-                }
-            }
-            if let Some(st) = filters.state {
-                if transfer_state(td) != st {
-                    return false;
-                }
-            }
-            if let Some(attr_f) = filters.attribution {
-                if !attribution_matches(&td.receive_attribution, attr_f) {
-                    return false;
-                }
-            }
-            true
-        })
-        .map(transfer_view)
-        .collect();
+    let transfers = collect_transfers(
+        ledger.ledger.transfers(),
+        &ledger.send_journal,
+        &filters,
+        since,
+    )?;
 
     let result = GetTransfersResult { transfers };
     serde_json::to_value(result)
@@ -234,40 +343,46 @@ pub(crate) async fn get_transfer_by_id(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     let p: GetTransferByIdParams = parse_required_object(params, "get_transfer_by_id")?;
-    if p.id.is_empty() {
-        return Err(WalletRpcError::InvalidParams(
-            "get_transfer_by_id requires non-empty id".into(),
-        ));
-    }
 
-    // Parse the id into its (tx_hash, index) parts once and compare typed
-    // fields, rather than formatting a fresh id string for every ledger row
-    // scanned. A non-canonical id could never match any row's transfer_id
-    // output, so it is the same UnknownTransferId the string compare gave.
-    let Some((tx_hash, out_idx)) = parse_transfer_id(&p.id) else {
-        return Err(WalletRpcError::UnknownTransferId);
-    };
+    // Shape first, before any tenant state: an id this wallet could
+    // never have emitted is a malformed request, and answering it with
+    // "unknown transfer" would tell a user whose send does exist that
+    // it does not (rule 82).
+    let lookup = parse_lookup_id(&p.id).ok_or_else(|| {
+        WalletRpcError::InvalidParams(
+            "id must be `{tx_hash}:{output_index}` for a receive, or a bare 64 \
+             lowercase-hex `{tx_hash}` for a send"
+                .into(),
+        )
+    })?;
 
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
     let ledger = engine.ledger();
 
-    let found = ledger
-        .ledger
-        .transfers()
-        .iter()
-        .find(|td| td.tx_hash == tx_hash && td.internal_output_index == out_idx)
-        .map(transfer_view);
+    let transfer = match lookup {
+        TransferLookupId::Incoming {
+            tx_hash,
+            output_index,
+        } => ledger
+            .ledger
+            .transfers()
+            .iter()
+            .find(|td| td.tx_hash == tx_hash && td.internal_output_index == output_index)
+            .map(transfer_view),
+        TransferLookupId::Outgoing { tx_hash } => ledger
+            .send_journal
+            .rows
+            .get(&tx_hash.to_bytes())
+            .map(|row| outgoing_transfer_view(&tx_hash, row))
+            .transpose()?,
+    };
 
-    match found {
-        Some(transfer) => {
-            let result = GetTransferByIdResult { transfer };
-            serde_json::to_value(result).map_err(|e| {
-                WalletRpcError::InternalError(format!("serialize get_transfer_by_id: {e}"))
-            })
-        }
-        None => Err(WalletRpcError::UnknownTransferId),
-    }
+    let result = GetTransferByIdResult {
+        transfer: transfer.ok_or(WalletRpcError::UnknownTransferId)?,
+    };
+    serde_json::to_value(result)
+        .map_err(|e| WalletRpcError::InternalError(format!("serialize get_transfer_by_id: {e}")))
 }
 
 pub(crate) async fn get_height(
@@ -298,4 +413,249 @@ pub(crate) async fn get_height(
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_height: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shekyl_engine_state::{SendRecipient, SendRecord, SendState};
+
+    fn journal(rows: &[(u8, SendState)]) -> SendJournalBlock {
+        let mut block = SendJournalBlock::empty();
+        for &(seed, state) in rows {
+            block.rows.insert(
+                [seed; 32],
+                SendRecord {
+                    dispatched_at_height: 100,
+                    fee: 700,
+                    recipients: vec![SendRecipient {
+                        address: "shekyl1a".to_owned(),
+                        amount: 3_500,
+                    }],
+                    change_amount: 100,
+                    inputs: vec![],
+                    lock_baseline: None,
+                    state,
+                },
+            );
+        }
+        block
+    }
+
+    fn filters(
+        direction: Option<TransferDirection>,
+        state: Option<TransferState>,
+    ) -> GetTransfersParams {
+        GetTransfersParams {
+            direction,
+            state,
+            since_height: None,
+            attribution: None,
+        }
+    }
+
+    fn ids(views: &[TransferView]) -> Vec<&str> {
+        views.iter().map(|v| v.id.as_str()).collect()
+    }
+
+    /// The `direction` filter selects a *side*, and each side is only
+    /// reachable from its own source. Inverting the two `want_*`
+    /// predicates — the defect that made `direction: OUTGOING` a no-op
+    /// before this projection existed — flips both assertions.
+    #[test]
+    fn direction_filter_selects_the_matching_source() {
+        let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
+
+        let all = collect_transfers(&[], &block, &filters(None, None), None).expect("project");
+        assert_eq!(ids(&all), vec!["ab".repeat(32)]);
+
+        let outgoing = collect_transfers(
+            &[],
+            &block,
+            &filters(Some(TransferDirection::Outgoing), None),
+            None,
+        )
+        .expect("project");
+        assert_eq!(ids(&outgoing), vec!["ab".repeat(32)]);
+
+        // The journal is the OUTGOING source only: asking for INCOMING
+        // must never surface a send.
+        let incoming = collect_transfers(
+            &[],
+            &block,
+            &filters(Some(TransferDirection::Incoming), None),
+            None,
+        )
+        .expect("project");
+        assert!(incoming.is_empty(), "journal rows leaked into INCOMING");
+    }
+
+    /// The `state` filter runs against the journal projection, so the
+    /// four send lifecycle states are each independently selectable.
+    #[test]
+    fn state_filter_applies_to_journal_rows() {
+        let block = journal(&[
+            (0x01, SendState::Dispatched),
+            (0x02, SendState::Confirmed { height: 250 }),
+            (0x03, SendState::TerminalRejected),
+            (0x04, SendState::PresumedDead),
+        ]);
+
+        for (state, expected_seed) in [
+            (TransferState::Pending, "01"),
+            (TransferState::Confirmed, "02"),
+            (TransferState::Failed, "03"),
+            (TransferState::Dropped, "04"),
+        ] {
+            let got =
+                collect_transfers(&[], &block, &filters(None, Some(state)), None).expect("project");
+            assert_eq!(
+                ids(&got),
+                vec![expected_seed.repeat(32)],
+                "state filter {state:?}"
+            );
+        }
+
+        // SPENT is receive-side only; no send ever matches it.
+        let spent = collect_transfers(
+            &[],
+            &block,
+            &filters(None, Some(TransferState::Spent)),
+            None,
+        )
+        .expect("project");
+        assert!(spent.is_empty());
+    }
+
+    /// Receive attribution exists on INCOMING rows only (WI-RPC-4), so
+    /// an `attribution` filter must exclude every send — a journal row
+    /// surviving any attribution filter would claim a receive-side fact
+    /// about a payment this wallet made.
+    #[test]
+    fn attribution_filter_excludes_journal_rows() {
+        let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
+        let mut f = filters(None, None);
+        f.attribution = Some(ReceiveAttributionFilter::Unattributed);
+
+        let got = collect_transfers(&[], &block, &f, None).expect("project");
+        assert!(
+            got.is_empty(),
+            "a send matched a receive-attribution filter"
+        );
+    }
+
+    /// `since_height` bounds inclusion height. A send that was never
+    /// mined has no inclusion height, so it survives every watermark —
+    /// otherwise a polling client would lose pending, failed and
+    /// dropped sends permanently, and lose a confirmed send the moment
+    /// a reorg flipped it back to `Dispatched`.
+    #[test]
+    fn since_height_never_hides_a_send_that_was_never_mined() {
+        let block = journal(&[
+            (0x01, SendState::Dispatched),
+            (0x02, SendState::Confirmed { height: 250 }),
+            (0x03, SendState::TerminalRejected),
+            (0x04, SendState::PresumedDead),
+        ]);
+
+        // Watermark far above the dispatch height: the confirmed row is
+        // below it and drops out; the three unmined rows stay.
+        let got =
+            collect_transfers(&[], &block, &filters(None, None), Some(1_000)).expect("project");
+        assert_eq!(
+            ids(&got),
+            vec!["01".repeat(32), "03".repeat(32), "04".repeat(32)]
+        );
+
+        // At its own height the confirmed row is included (inclusive bound).
+        let at_height =
+            collect_transfers(&[], &block, &filters(None, None), Some(250)).expect("project");
+        assert!(at_height.iter().any(|v| v.id == "02".repeat(32)));
+    }
+
+    /// A row whose recipient amounts do not sum is a corrupt journal
+    /// row, not a display condition: the read path reports it instead
+    /// of panicking (the workspace builds `panic = "abort"`, so a panic
+    /// here would take the whole wallet-rpc process down).
+    #[test]
+    fn unsummable_recipient_amounts_error_instead_of_panicking() {
+        let mut block = journal(&[(0x05, SendState::Dispatched)]);
+        let row = block.rows.get_mut(&[0x05; 32]).expect("row");
+        row.recipients = vec![
+            SendRecipient {
+                address: "shekyl1a".to_owned(),
+                amount: u64::MAX,
+            },
+            SendRecipient {
+                address: "shekyl1b".to_owned(),
+                amount: 1,
+            },
+        ];
+
+        let err = collect_transfers(&[], &block, &filters(None, None), None)
+            .expect_err("overflowing recipient sum must not project");
+        assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
+    }
+
+    /// Ordering is computed from typed fields. Comparing the formatted
+    /// `id` string instead would place output index 10 before index 2,
+    /// because the index is unpadded decimal.
+    #[test]
+    fn order_is_by_output_index_not_id_string() {
+        let key = |output_index| TransferOrder {
+            block_height: Some(100),
+            outgoing: false,
+            tx_hash: [0xab; 32],
+            output_index,
+        };
+        let mut keys = [key(10), key(2), key(1), key(11)];
+        keys.sort();
+        assert_eq!(
+            keys.iter().map(|k| k.output_index).collect::<Vec<_>>(),
+            vec![1, 2, 10, 11]
+        );
+    }
+
+    /// Merge order: ascending inclusion height, INCOMING before
+    /// OUTGOING within a height, and rows that were never mined last —
+    /// they have no height, and belong at the tip of the list rather
+    /// than sorted in among genuinely mined transfers.
+    #[test]
+    fn unmined_rows_sort_after_every_mined_row() {
+        let row = |block_height, outgoing| TransferOrder {
+            block_height,
+            outgoing,
+            tx_hash: [0x01; 32],
+            output_index: 0,
+        };
+        let mut keys = [
+            row(None, true),
+            row(Some(250), true),
+            row(Some(100), true),
+            row(Some(100), false),
+        ];
+        keys.sort();
+        assert_eq!(
+            keys.iter()
+                .map(|k| (k.block_height, k.outgoing))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some(100), false),
+                (Some(100), true),
+                (Some(250), true),
+                (None, true),
+            ]
+        );
+    }
+
+    /// `since_height` compares inclusion heights only; a row with no
+    /// inclusion height is never below the bound.
+    #[test]
+    fn below_since_ignores_rows_with_no_inclusion_height() {
+        assert!(below_since(Some(100), Some(250)));
+        assert!(!below_since(Some(250), Some(250)));
+        assert!(!below_since(Some(100), None));
+        assert!(!below_since(None, Some(250)));
+        assert!(!below_since(None, None));
+    }
 }

@@ -446,7 +446,9 @@ async fn queries_balance_address_transfers_after_create() {
         0
     );
 
-    let missing = rpc(
+    // An id shape this wallet never emits is a malformed request, not a
+    // missing transfer: `deadbeef` is not a 32-byte hash.
+    let malformed = rpc(
         state.clone(),
         json!({
             "jsonrpc": "2.0",
@@ -456,7 +458,33 @@ async fn queries_balance_address_transfers_after_create() {
         }),
     )
     .await;
-    assert_eq!(missing["error"]["code"], -29400);
+    assert_eq!(malformed["error"]["code"], -32602, "{malformed}");
+
+    // A well-formed id that names no row is the unknown-transfer case.
+    let missing = rpc(
+        state.clone(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "get_transfer_by_id",
+            "params": { "id": format!("{}:0", "de".repeat(32)) }
+        }),
+    )
+    .await;
+    assert_eq!(missing["error"]["code"], -29400, "{missing}");
+
+    // The same applies to the bare-txid (OUTGOING) shape.
+    let missing_send = rpc(
+        state.clone(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "get_transfer_by_id",
+            "params": { "id": "de".repeat(32) }
+        }),
+    )
+    .await;
+    assert_eq!(missing_send["error"]["code"], -29400, "{missing_send}");
 
     // Unreachable daemon → get_height still succeeds, returning the local
     // wallet height with daemon_height=null (an offline/syncing node must not
@@ -465,7 +493,7 @@ async fn queries_balance_address_transfers_after_create() {
         state.clone(),
         json!({
             "jsonrpc": "2.0",
-            "id": 6,
+            "id": 8,
             "method": "get_height",
             "params": {}
         }),
@@ -486,7 +514,7 @@ async fn queries_balance_address_transfers_after_create() {
         state.clone(),
         json!({
             "jsonrpc": "2.0",
-            "id": 7,
+            "id": 9,
             "method": "refresh",
             "params": {}
         }),
@@ -499,7 +527,7 @@ async fn queries_balance_address_transfers_after_create() {
         state.clone(),
         json!({
             "jsonrpc": "2.0",
-            "id": 8,
+            "id": 10,
             "method": "discard_pending_tx",
             "params": { "pending_tx_id": "999" }
         }),
@@ -512,7 +540,7 @@ async fn queries_balance_address_transfers_after_create() {
         state,
         json!({
             "jsonrpc": "2.0",
-            "id": 9,
+            "id": 11,
             "method": "build_pending_tx",
             "params": {
                 "recipients": [{ "address": "not-an-address", "amount": "1" }],

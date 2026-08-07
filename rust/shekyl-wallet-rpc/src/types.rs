@@ -268,9 +268,9 @@ pub struct GetHeightResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TransferDirection {
-    /// Received output.
+    /// Received output (ledger / scan-derived row).
     Incoming,
-    /// Spent / sent (reserved for future outgoing projection).
+    /// Sent transfer (send-journal row; SJ-DQ-7 / PR-SJ-2).
     Outgoing,
 }
 
@@ -278,12 +278,26 @@ pub enum TransferDirection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TransferState {
-    /// Network-exposed spend awaiting confirmation.
+    /// Network-exposed spend awaiting confirmation (or still unsettled).
     Pending,
-    /// Confirmed on chain, unspent.
+    /// Confirmed on chain, unspent (receive) or observed spent-on-chain (send).
     Confirmed,
-    /// Spent.
+    /// Spent (receive-side output consumed).
     Spent,
+    /// Terminal failure: daemon refused the dispatch; the tx never mined
+    /// (OUTGOING journal `TerminalRejected` only — rule 82 failed-send history).
+    Failed,
+    /// The network no longer holds the send: the watchdog's
+    /// confirmed-absent horizon released the input locks, so the funds
+    /// are spendable again and the send can be re-made (OUTGOING journal
+    /// `PresumedDead` only).
+    ///
+    /// Distinct from [`Self::Pending`] because the wallet has stopped
+    /// waiting — reporting PENDING would contradict the balance the
+    /// same wallet reports — and distinct from [`Self::Failed`] because
+    /// nothing proved the send was refused: a late confirmation still
+    /// flips this row to CONFIRMED (rule 82).
+    Dropped,
 }
 
 /// Receive-attribution kind for INCOMING transfer rows (FA-8 / WI-RPC-4).
@@ -341,9 +355,19 @@ pub enum ReceiveAttributionFilter {
 /// Client-facing transfer projection (OpenAPI `Transfer`).
 ///
 /// Accounting facts only — no key material, offsets, or commitments.
+/// INCOMING rows project scan ledger outputs; OUTGOING rows project
+/// send-journal records (SJ-DQ-7).
+///
+/// One transaction can produce several rows: its receive-side outputs
+/// (including the change output of the wallet's own send) each project
+/// an INCOMING row, and its journal record projects an OUTGOING row.
+/// So [`Self::tx_hash`] is **not** unique across the result set —
+/// [`Self::id`] is the unique key, and a client grouping history by
+/// transaction must expect both directions under one hash.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TransferView {
-    /// Stable per-wallet id (`{tx_hash_hex}:{internal_output_index}`).
+    /// Stable per-wallet id: `{tx_hash_hex}:{internal_output_index}` for
+    /// INCOMING; bare `{tx_hash_hex}` for OUTGOING journal rows (SJ-DQ-7).
     pub id: String,
     /// Incoming / outgoing.
     pub direction: TransferDirection,
@@ -353,9 +377,17 @@ pub struct TransferView {
     pub amount: AtomicUnitsString,
     /// Fee when known; `"0"` for receive-side ledger rows.
     pub fee: AtomicUnitsString,
-    /// Inclusion height.
-    pub block_height: i64,
-    /// Confirmation / spend state.
+    /// Inclusion height — the height the transaction was mined at.
+    ///
+    /// Absent exactly when the transaction is not on chain: an OUTGOING
+    /// row in `PENDING`, `FAILED` or `DROPPED`. The wallet knows the
+    /// height it dispatched at, but that is not an inclusion height and
+    /// emitting it here would render a plausible block number beside a
+    /// send that was never mined (rule 82). INCOMING rows are always
+    /// mined, so the field is always present for them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_height: Option<i64>,
+    /// Confirmation / spend / failure state.
     pub state: TransferState,
     /// Height at which the output was spent, if any.
     #[serde(skip_serializing_if = "Option::is_none")]

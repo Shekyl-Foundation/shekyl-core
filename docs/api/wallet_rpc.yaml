@@ -437,7 +437,9 @@ components:
                                           request (or embedded in a reserve
                                           proof's locators) is unknown to
                                           the daemon
-          -29400 UNKNOWN_TRANSFER_ID      get_transfer_by_id: no match
+          -29400 UNKNOWN_TRANSFER_ID      get_transfer_by_id: a well-formed
+                                          id naming no row (a malformed id
+                                          is -32602, not this)
           -29500 STAKE_NOT_READY          stake: persona funding not ready
                                           (W1-clean refusal — fund via
                                           stake_in and/or let the persona
@@ -863,15 +865,30 @@ components:
 
     Transfer:
       type: object
-      required: [id, direction, tx_hash, amount, fee, block_height, state]
+      required: [id, direction, tx_hash, amount, fee, state]
       description: >
-        Client-facing projection of `shekyl_engine_state::TransferDetails`.
+        Client-facing transfer history row. INCOMING projects
+        `shekyl_engine_state::TransferDetails` (scan ledger outputs);
+        OUTGOING projects `SendJournalBlock` rows (SJ-DQ-7 / PR-SJ-2).
         Internal fields (key material, key offsets, commitments) never cross
         this boundary — the RPC exposes accounting facts only.
+
+
+        One transaction can produce several rows: each receive-side
+        output the wallet owns (including the change output of the
+        wallet's own send) projects an INCOMING row, and the send's
+        journal record projects an OUTGOING row. `tx_hash` is therefore
+        **not** unique across the result set — `id` is the unique key.
+        A client that groups or totals history by transaction must
+        expect both directions under one hash and must not sum `amount`
+        across them.
       properties:
         id:
           type: string
-          description: Stable per-wallet transfer identifier.
+          description: >
+            Stable per-wallet transfer identifier. INCOMING:
+            `{tx_hash_hex}:{internal_output_index}`. OUTGOING: bare
+            `{tx_hash_hex}` (journal is txid-keyed; no output index).
         direction:
           type: string
           enum: [INCOMING, OUTGOING]
@@ -884,9 +901,33 @@ components:
         block_height:
           type: integer
           format: int64
+          description: >
+            Inclusion height — the height the transaction was mined at.
+            **Absent** exactly when the transaction is not on chain: an
+            OUTGOING row in `PENDING`, `FAILED` or `DROPPED`. The wallet
+            knows the height it dispatched at, but that is a local sync
+            counter, not an inclusion height; emitting it here would put
+            a plausible block number beside a send that was never mined.
+            INCOMING rows are scanner-observed and always carry it.
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT]
+          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED]
+          description: >
+            PENDING = unsettled (receive awaiting confirmation, or send
+            still in flight). CONFIRMED = on-chain. SPENT = receive
+            output consumed. FAILED = OUTGOING only: the daemon refused
+            dispatch (`TerminalRejected`); never mined. DROPPED =
+            OUTGOING only: the confirmed-absent watchdog concluded the
+            network no longer holds the send and released its input
+            locks (`PresumedDead`), so the funds are spendable again and
+            the send can be re-made — a late confirmation still flips
+            such a row to CONFIRMED.
+
+
+            Each value is a distinct situation and none collapses into
+            another: a DROPPED send reported as PENDING would say the
+            wallet is still waiting while the same wallet reports those
+            funds available.
         spent_height:
           type: integer
           format: int64
@@ -908,7 +949,7 @@ components:
           enum: [INCOMING, OUTGOING]
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT]
+          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED]
         since_height:
           type: integer
           format: int64
@@ -924,9 +965,26 @@ components:
             --unattributed` sends `direction: INCOMING` +
             `attribution: UNATTRIBUTED`.
 
+
+            Bounds *inclusion* height only: a row with no `block_height`
+            (an OUTGOING send in `PENDING`, `FAILED` or `DROPPED`) has
+            nothing to compare against and is **always** returned. This
+            is what makes the filter usable as a polling watermark —
+            a never-mined row could never rise above a rising bound, so
+            excluding it would hide unsettled and failed sends
+            permanently, and would hide a confirmed send the moment a
+            reorg flipped it back to unsettled.
+
     GetTransfersResult:
       type: object
       required: [transfers]
+      description: >
+        Ordered: ascending `block_height`, then INCOMING before OUTGOING
+        within a height, then transaction hash, then output index. Rows
+        with no `block_height` (never mined) sort after every mined row.
+        The order is total and stable across calls; it is computed from
+        typed fields, so a transaction's outputs are ordered by index
+        rather than by the lexicographic form of `id`.
       properties:
         transfers:
           type: array
@@ -939,6 +997,19 @@ components:
       properties:
         id:
           type: string
+          description: >
+            A `Transfer.id` as returned by `get_transfers`: for a
+            receive, `{tx_hash_hex}:{internal_output_index}`; for a
+            send, a bare `{tx_hash_hex}`. Both hex forms are exactly 64
+            **lowercase** hex characters and the index is decimal with
+            no leading zeros — the canonical form this server emits.
+
+
+            A string that is not in one of those two forms is rejected
+            with `-32602 InvalidParams`; only a well-formed id naming no
+            row yields `-29400 UNKNOWN_TRANSFER_ID`. The distinction
+            matters: an uppercase txid answered with "unknown transfer"
+            would tell a user their send does not exist.
 
     GetTransferByIdResult:
       type: object
