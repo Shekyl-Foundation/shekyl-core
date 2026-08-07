@@ -166,7 +166,6 @@ pub mod poisson;
 pub mod rng;
 pub mod schedule;
 pub mod stem_map;
-pub mod verify_cost;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
@@ -188,8 +187,3 @@ pub use schedule::{
     PeerDirection, DEFAULT_EMBARGO_TICK_MILLIS,
 };
 pub use stem_map::{ConnectionId, SourceId, StemMap, StemSetChange};
-pub use verify_cost::{
-    adopted_hop_ms, Provenance, SpecVerifyCost, TreeBasis, VerifyCell, VerifyCostRefusal,
-    ADOPTED_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH, MAX_TABLE_DEPTH, MAX_TABLE_INPUTS,
-    SPEC_VERIFY_COST,
-};
