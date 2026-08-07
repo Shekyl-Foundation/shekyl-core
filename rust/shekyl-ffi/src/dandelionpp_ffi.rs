@@ -52,7 +52,12 @@ use crate::secure_relay_rng::SecureRelayRng;
 static EMBARGO: OnceLock<EmbargoTimer> = OnceLock::new();
 
 fn embargo_timer() -> &'static EmbargoTimer {
-    EMBARGO.get_or_init(|| EmbargoTimer::adopted(&DandelionParams::inherited()))
+    // `adopted()` rather than `inherited()`: the hop input carries the spec
+    // machine's measured provenance (§80/§85.3) instead of the 2019-laptop
+    // comment. Value-identical today by the §71.3 arithmetic — the 190 s
+    // pin below is unchanged — so this is a provenance cutover, not a
+    // re-derivation.
+    EMBARGO.get_or_init(|| EmbargoTimer::adopted(&DandelionParams::adopted()))
 }
 
 /// Draw one Dandelion++ embargo duration, in **seconds**.
