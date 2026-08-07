@@ -507,11 +507,11 @@ pub(crate) enum StakeEngineStartError {
 /// fail-stop → `OpenError` path with a degenerate source is the Round-2/`R0-D#`
 /// test). Conformance build only.
 #[cfg(feature = "conformance")]
-fn run_session_self_cert<R: GapRng>(rng: &mut R) -> Result<(), StakeEngineStartError> {
+pub(super) fn run_session_self_cert<R: GapRng>(rng: &mut R) -> Result<(), StakeEngineStartError> {
     let report = shekyl_standoff::conformance::certify_draw(
         rng,
         DEFAULT_ENTRY_GAP.as_blocks(),
-        super::stake_timing::CERTIFY_SAMPLE_N,
+        crate::engine::stake_timing::CERTIFY_SAMPLE_N,
     );
     if report.passed() {
         Ok(())

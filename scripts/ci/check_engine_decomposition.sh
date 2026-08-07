@@ -119,28 +119,18 @@ while IFS= read -r path; do
     note "Carve it, or add a reviewed FILE baseline in engine_decomposition_ratchet.conf."
     fail=1
   fi
-# Top-level engine/*.rs plus workflow extraction dirs (transfer/, stake_engine/).
-# Do NOT recurse into traits/ or pscan/: those reuse basenames (e.g.
-# traits/refresh.rs vs refresh.rs) and are not the monofile-orchestration
-# concern this ratchet polices. FILE/EXCLUDE keys are ENGINE_DIR-relative paths
-# (e.g. `merge.rs`, `transfer/engine.rs`, `stake_engine/actor/bond.rs`), so
-# nested files that share a basename (mod.rs vs transfer/mod.rs) stay distinct
-# keys — a top-level file's key still equals its bare basename, so existing
-# top-level baselines are unaffected.
-done < <({
-  find "${ENGINE_DIR}" -maxdepth 1 -name '*.rs'
-  # Workflow-extraction dirs; scan only when present.
-  # An `if -d` guard (not a bare `find ... 2>/dev/null`) keeps a missing dir a
-  # clean zero-exit "no files" in ANY caller context — a bare find exits
-  # non-zero on a missing dir, which would abort the script under `set -e` the
-  # moment this list is refactored out of the exit-status-swallowing `<(...)`.
-  if [ -d "${ENGINE_DIR}/transfer" ]; then
-    find "${ENGINE_DIR}/transfer" -name '*.rs'
-  fi
-  if [ -d "${ENGINE_DIR}/stake_engine" ]; then
-    find "${ENGINE_DIR}/stake_engine" -name '*.rs'
-  fi
-} | sort)
+# Every engine subdirectory, not a hand-kept list. The old exclusion of
+# traits/ and pscan/ was written when keys were bare basenames and
+# traits/refresh.rs would have collided with refresh.rs; keys are now
+# ENGINE_DIR-relative paths (`merge.rs`, `transfer/engine.rs`,
+# `pscan/scan_step.rs`), so a nested file that shares a basename is simply a
+# distinct key and a top-level file's key still equals its bare basename. With
+# the collision gone the exclusion only bought silence: `pscan/` held four
+# baselines that were never measured, so their ceilings enforced nothing in
+# either direction. A `-name '*.rs'` sweep of ENGINE_DIR keeps the scanned set
+# equal to the tree, so a new subdirectory is baselined-or-capped the day it
+# appears rather than the day someone remembers to add an arm here.
+done < <(find "${ENGINE_DIR}" -name '*.rs' | sort)
 
 # --- 4. stale baseline entries -----------------------------------------------
 # Keys are ENGINE_DIR-relative, so this resolves both top-level (`merge.rs`) and

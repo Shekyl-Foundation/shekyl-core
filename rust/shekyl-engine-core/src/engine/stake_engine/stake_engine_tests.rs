@@ -35,6 +35,16 @@ use shekyl_types::{GlobalOutputIndex, PCanonicalId};
 
 use super::test_fixtures::{constructed_record, derive_bundle, spawn_over};
 use super::*;
+
+// Message families come from the sibling handlers directly, the way `handle.rs`
+// reaches them. Routing them through the `mod.rs` facade instead would put a
+// `cfg(test)` half on a list whose whole job is to state the workflow's
+// out-of-module boundary. Names a feature-gated test needs are imported by that
+// test, not hoisted here behind a `cfg(any(…))` list that grows a term per
+// feature.
+use super::helpers::draw_entry_gap_guarded;
+use super::persona::{ActivatePersona, ActivePersona, MintPersonaHandle};
+use super::types::PersonaIdentity;
 use crate::engine::bond_assembly::FundingInputContext;
 use crate::engine::emission_claim::self_check_claims;
 use crate::engine::error::KeyEngineError;
@@ -42,10 +52,6 @@ use crate::engine::pscan::scan_step::BlockRange;
 #[cfg(feature = "gf7-hooks")]
 use crate::engine::stake_timing::DEFAULT_ENTRY_GAP;
 use crate::engine::{Network, ShekylAddress};
-#[cfg(feature = "gf7-hooks")]
-use kameo::actor::Spawn;
-#[cfg(feature = "gf7-hooks")]
-use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
 
@@ -701,8 +707,11 @@ async fn sign_bond_slot_mismatch_is_rejected() {
 async fn sign_bond_emits_gf7_draw_and_schedule_events() {
     use std::sync::{Arc, Mutex};
 
+    use crate::engine::stake_engine::types::StakeEngineArgs;
     use crate::engine::stake_persist::PersistedBondTicket;
+    use kameo::actor::Spawn;
     use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
+    use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 
     struct Recorder(Arc<Mutex<Vec<TimelineEvent>>>);
     impl BroadcastTimelineObserver for Recorder {
@@ -1059,6 +1068,14 @@ async fn retire_an_unheld_persona_is_notheld() {
 #[cfg(feature = "conformance")]
 mod s6_self_cert {
     use super::*;
+
+    // `actor` is private to `stake_engine`; this module is a descendant, so it
+    // reaches the `pub(super)` decision helper by path rather than widening the
+    // facade for a test-only item.
+    use crate::engine::stake_engine::actor::{run_session_self_cert, StakeEngineStartError};
+    use crate::engine::stake_engine::types::{StakeEngineArgs, TestSelfCert};
+    use kameo::actor::Spawn;
+    use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 
     /// The **decision**: a stuck RNG (constant output) grades non-conformant,
     /// so the extracted self-cert returns the typed start error. Proves

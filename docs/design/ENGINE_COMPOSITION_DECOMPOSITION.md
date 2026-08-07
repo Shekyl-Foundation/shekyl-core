@@ -229,20 +229,22 @@ coverage of the send pipeline.
 
 ## Stake workflow ownership (policy)
 
-**Status:** landed structurally (`engine/stake_engine/` directory module) +
-decomposition ratchet scans `stake_engine/**`. Further message-handler
-file-splits (bond/claim/drain into `actor/` children) remain optional.
+**Status:** landed (`engine/stake_engine/` directory module, per-message-family
+carve included) + the decomposition ratchet scans every `engine/` subdirectory.
 
 | Claim | Detail |
 |-------|--------|
 | **The stake workflow is** | `engine/stake_engine/` — `StakeEngine` actor + handle + types + spend helpers |
 | **Engine's role** | Owns `Option<StakeEngineHandle>`; may expose thin delegates only |
-| **Layout** | `types.rs` domain values; `helpers.rs` shared funding/vout prep + P-secrets; `engine.rs` actor, messages, handle; `test_fixtures` + tests EXCLUDE'd |
-| **Do not** | Re-inflate bond/claim/drain assembly into top-level monofiles or Engine inherent soup |
-| **Mechanical pin** | `check_engine_decomposition.sh` scans `stake_engine/`; `NEW_FILE_CAP` / FILE baselines apply |
+| **Layout** | `types.rs` domain values; `helpers.rs` shared funding/vout prep + P-secrets; `actor.rs` the actor struct, spawn, inherent methods and `Actor` impl; `handle.rs` `StakeEngineHandle`; one file per message family (`persona.rs`, `bond.rs`, `claim.rs`, `drain.rs`, `scan.rs`, `retire.rs`); `test_fixtures` + tests EXCLUDE'd |
+| **Do not** | Re-inflate bond/claim/drain assembly into top-level monofiles or Engine inherent soup — and do **not** add a `stake_engine/engine.rs`: actor, messages and handle are deliberately three concerns, not one file |
+| **Module surface** | `mod.rs` re-exports exactly what `crate::engine::…` consumes. Siblings and the in-tree suite import from siblings directly. No `#[allow(unused_imports)]` on the facade: a re-export that stops being consumed must fail rule 45's gate, which is what keeps the list a true statement |
+| **Mechanical pin** | `check_engine_decomposition.sh` sweeps `engine/**/*.rs`; `NEW_FILE_CAP` / FILE baselines apply |
 
-**Deferred:** `StakeFacade` / `engine.stake()`, renaming to `StakeWorkflow`, full
-per-message-file carve under `actor/` (types/helpers extract already landed).
+**Deferred:** `StakeFacade` / `engine.stake()` and renaming to `StakeWorkflow`.
+Named blocker: both are call-site renames across every `stake_handle()`
+consumer, which is a validation surface of its own (rule 19) and shares nothing
+with the file carve.
 
 ---
 
@@ -257,7 +259,7 @@ per-message-file carve under `actor/` (types/helpers extract already landed).
 4. **Introduce `TransferCtx`** only when a new feature needs it — stop new send-path code from taking `&Engine` as a habit, not as a big-bang rename.
 5. **Façade methods** (`engine.transfer()`, `engine.scan()`) for RPC/CLI when those surfaces want a clean cut.
 6. **`StakeWorkflow` / StakeEngine** as a real subsystem (optional field), not more inherent methods on Engine.
-   **Partial** (`chore/ffi-and-engine-size-debt`): monofile → `engine/stake_engine/{types,helpers,engine}.rs` + tests/fixtures; ratchet scans the dir.
+   **Done** (`chore/ffi-and-engine-size-debt`): monofile → `engine/stake_engine/` as `{types,helpers,actor,handle}.rs` plus one file per message family (`persona`, `bond`, `claim`, `drain`, `scan`, `retire`) + tests/fixtures; the ratchet now sweeps every `engine/` subdirectory rather than a hand-kept list of arms. `StakeFacade` / the `StakeWorkflow` rename stay open (see the ownership section's deferral).
 7. **PScan supervisor** already modular — stop growing it via Engine glue; give it a single start/stop API.
 8. Only then Stage 4 actor swaps per trait, with services already isolated.
 

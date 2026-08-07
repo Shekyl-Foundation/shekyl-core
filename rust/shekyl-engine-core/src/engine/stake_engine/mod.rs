@@ -37,7 +37,11 @@
 // Single copy at the module root — not re-pasted into helpers/types/actor.
 #[cfg(all(feature = "conformance", not(target_arch = "x86_64")))]
 compile_error!(
-    "the StakeEngine session RNG self-cert grader (shekyl-standoff `conformance`)      is `x86_64`-only — its float goodness-of-fit is not bit-identical across      architectures. Build the `conformance` feature on `x86_64` (where the CI      conformance lane runs); do not enable it on other targets (including 32-bit      x86)."
+    "the StakeEngine session RNG self-cert grader (shekyl-standoff `conformance`) \
+     is `x86_64`-only — its float goodness-of-fit is not bit-identical across \
+     architectures. Build the `conformance` feature on `x86_64` (where the CI \
+     conformance lane runs); do not enable it on other targets (including 32-bit \
+     x86)."
 );
 
 mod actor;
@@ -58,31 +62,54 @@ pub(crate) mod test_fixtures;
 #[path = "stake_engine_tests.rs"]
 mod tests;
 
-#[allow(unused_imports)]
-pub(crate) use actor::{persona_canonical_id, StakeEngine, StakeEngineStartError};
-#[allow(unused_imports)]
-pub(crate) use bond::{AssembleBond, AssembledBondPost};
-#[allow(unused_imports)]
+// The out-of-module surface: exactly what `crate::engine::…` consumes. Message
+// types whose only sender is a sibling handler are NOT re-exported — those
+// import from the sibling directly (`handle.rs` does), so this list stays a
+// true statement about the workflow's boundary rather than a mirror of every
+// item the split happened to produce. Nothing here carries
+// `#[allow(unused_imports)]`: a re-export that stops being consumed must fail
+// rule 45's `-D warnings` gate, which is the only thing that keeps the
+// statement true as handlers come and go.
+pub(crate) use actor::persona_canonical_id;
+pub(crate) use bond::AssembledBondPost;
 pub(crate) use claim::{AssembleEmissionClaim, AssembledEmissionClaim};
-#[allow(unused_imports)]
 pub(crate) use handle::StakeEngineHandle;
-#[allow(unused_imports)]
-pub(crate) use helpers::{
-    derive_funding_key_image, derive_p_source_secrets_bundle, draw_entry_gap_guarded,
-    key_image_from_spend_key_x, prepare_funding_inputs,
-};
-#[allow(unused_imports)]
-pub(crate) use persona::{
-    ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, MintPersonaHandle,
-    PersonaIdentityOf, SignBond, SignedBondPost,
-};
-#[allow(unused_imports)]
-pub(crate) use retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
-#[cfg(all(test, feature = "conformance"))]
-pub(crate) use types::TestSelfCert;
-#[allow(unused_imports)]
+pub(crate) use helpers::prepare_funding_inputs;
+
+// `derive_funding_key_image` crosses the boundary for exactly one consumer,
+// `pscan/arm1_fire.rs`, which carries this same gate — so the re-export states
+// the harness-only reach rather than advertising a production one.
+#[cfg(all(feature = "test-helpers", not(test)))]
+pub(crate) use helpers::derive_funding_key_image;
+
+// These two have no *code* consumer outside this module: they are the paths
+// five engine doc comments link to (`lib.rs`, `engine/mod.rs`, `lifecycle.rs`,
+// `pscan/start.rs`, `bond_assembly.rs`), and `unused_imports` does not count
+// intra-doc links. `expect` rather than `allow` so the exemption retires
+// itself: the day either name gains a real caller the attribute becomes an
+// unfulfilled expectation and fails the build until someone deletes it.
+// The `cfg_attr` is load-bearing: the in-tree suite reaches this module with
+// `use super::*`, and a glob import marks every re-export used, so `cfg(test)`
+// compilations can never report either name. Stating the exemption for
+// `not(test)` only keeps it exactly as wide as the target that can actually
+// observe it.
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "rustdoc intra-doc link target; no code consumer outside this module"
+    )
+)]
+pub(crate) use actor::StakeEngine;
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "rustdoc intra-doc link target; no code consumer outside this module"
+    )
+)]
+pub(crate) use helpers::derive_p_source_secrets_bundle;
 pub(crate) use types::{
-    DegenerateDraw, FundedSlots, PSlot, PersonaHandle, PersonaIdentity, RetireOutcome,
-    RetirementWitness, ScanSetupError, StakeEngineArgs, StakeEngineError,
+    FundedSlots, PSlot, PersonaHandle, RetireOutcome, RetirementWitness, StakeEngineError,
     ARCHIVAL_PERSONA_LOOKAHEAD,
 };

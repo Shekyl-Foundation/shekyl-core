@@ -107,6 +107,7 @@ impl StakeEngineHandle {
     pub(crate) async fn wait_for_self_cert(
         &self,
     ) -> Result<(), crate::engine::error::StakeSelfCertFailure> {
+        use super::actor::StakeEngineStartError;
         use crate::engine::error::StakeSelfCertFailure;
         use kameo::error::HookError;
         match self.actor.wait_for_startup_result().await {
