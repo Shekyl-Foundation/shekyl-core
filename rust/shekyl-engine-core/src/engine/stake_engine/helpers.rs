@@ -12,36 +12,16 @@ use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::output::{construct_output, recover_combined_ss};
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
-#[cfg(feature = "gf7-hooks")]
-use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
+use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 use shekyl_tx_builder::{LeafEntry, SpendInput};
 use shekyl_types::GlobalOutputIndex;
 use shekyl_units::AtomicUnits;
 use zeroize::Zeroizing;
 
+use super::types::*;
 use crate::engine::bond_assembly::{BondAssemblyError, FundingInputContext};
 use crate::engine::error::KeyEngineError;
 use crate::engine::traits::key::SourceSecretsBundle;
-
-// S6 / DQ3 — the session RNG self-cert grader (`shekyl-standoff` `conformance`)
-// is gated to **`x86_64` exactly** (the guard below is `target_arch = "x86_64"`,
-// matching the `x86_64`-only CI conformance lane and the standoff conformance
-// lane it mirrors): its goodness-of-fit is float, which is not bit-identical
-// across architectures, and `x86_64` is the only target the diagnostic is built
-// and run on. Rather than silently compile the self-cert out on a non-`x86_64`
-// target (which would let a `--features conformance` diagnostic build report
-// "conformance passed" when the grade never ran — false assurance), fail the
-// build loudly: a diagnostic build that cannot run the diagnostic must say so at
-// compile time, not pretend success at runtime. With this guard, `conformance`
-// implies `x86_64`, so the self-cert call below needs only `cfg(feature)`.
-#[cfg(all(feature = "conformance", not(target_arch = "x86_64")))]
-compile_error!(
-    "the StakeEngine session RNG self-cert grader (shekyl-standoff `conformance`) \
-     is `x86_64`-only — its float goodness-of-fit is not bit-identical across \
-     architectures. Build the `conformance` feature on `x86_64` (where the CI \
-     conformance lane runs); do not enable it on other targets (including 32-bit \
-     x86)."
-);
 
 // ---------------------------------------------------------------------------
 // Shared funding-input preparation (AssembleBond + AssembleEmissionClaim)
@@ -382,4 +362,62 @@ pub(crate) fn key_image_from_spend_key_x(
     Ok((biased_hash_to_point(output_key) * *x_scalar)
         .compress()
         .to_bytes())
+}
+
+/// Draw an entry gap and check for the double-jitter-trap degeneracy pattern
+/// (S5, Round 3 — per-draw guard, float-free, integer-only).
+///
+/// Draws twice from `rng`. If the two `spread` values are equal, the guard
+/// fires and [`DegenerateDraw`] is returned — the caller maps this to
+/// [`StakeEngineError::RngDegeneracy`]. On success, the first draw's `spread`
+/// is returned; the probe draw is consumed and discarded.
+///
+/// **Why two draws?** The double-jitter trap produces a triangular spread
+/// distribution (peaked at 0) by computing `|a - b|`; consecutive draws from
+/// such a source are statistically likely to cluster. Two consecutive equal
+/// spreads from a correct CSPRNG occur with probability ≈ 1/(window+1) ≈
+/// 0.17 % — rare enough to fire on a stuck RNG without triggering excessive
+/// retries on a correct one.
+///
+/// **False-positive handling:** the caller (the `SignBond` handler) surfaces
+/// `RngDegeneracy` and the user retries. A single false positive in 601 bond
+/// requests is acceptable; multiple consecutive false positives signal a
+/// broken entropy source.
+///
+/// **Extracted for testability** (S7(b)): tests feed degenerate `GapRng`
+/// implementations directly into this function without going through the actor
+/// or `OsRng`.
+///
+/// # Precondition: `window > 0`
+///
+/// A zero-width window draws `spread == 0` deterministically on every call, so
+/// the two probe draws are *trivially* equal and the guard would fire — but that
+/// is a **window misconfiguration**, not RNG degeneracy: a zero-width standoff
+/// provides no funding↔bond-post decorrelation, defeating the gate-6 firewall
+/// the draw exists to serve. The operational caller always passes
+/// [`DEFAULT_ENTRY_GAP`] (600), so a zero window is unreachable in
+/// production; the `debug_assert` catches any future misuse loudly in test/debug
+/// builds rather than silently mislabelling it as `RngDegeneracy`. (More
+/// generally the guard is only well-behaved for windows large enough that
+/// `1/(window+1)` is an acceptable false-positive rate — 600 gives ≈ 0.17 %.)
+///
+/// The draw yields a single `spread` — there is no order coin (retired: only the
+/// bond post is chain-attributable, so there is no second event to order,
+/// `ARCHIVAL_FIREWALL_GATE6.md` method note 8).
+pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
+    window: u64,
+    rng: &mut R,
+) -> Result<u64, DegenerateDraw> {
+    debug_assert!(
+        window > 0,
+        "entry-gap window must be > 0: a zero-width standoff provides no \
+         decorrelation and makes the degeneracy guard fire unconditionally; \
+         pass the operational DEFAULT_ENTRY_GAP window"
+    );
+    let spread_draw = draw_entry_gap(window, rng);
+    let spread_probe = draw_entry_gap(window, rng);
+    if spread_draw == spread_probe {
+        return Err(DegenerateDraw);
+    }
+    Ok(spread_draw)
 }

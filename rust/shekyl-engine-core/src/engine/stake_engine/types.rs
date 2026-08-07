@@ -13,7 +13,7 @@ use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_scanner::GuaranteedScanner;
 #[cfg(feature = "gf7-hooks")]
-use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
+use shekyl_standoff::gf7::BroadcastTimelineObserver;
 use shekyl_types::{PCanonicalId, SettlementEpoch};
 
 use crate::engine::bond_assembly::BondAssemblyError;
@@ -21,26 +21,6 @@ use crate::engine::drain_assembly::DrainAssemblyError;
 use crate::engine::emission_claim::EmissionClaimError;
 use crate::engine::pscan::persona_scanner::PersonaScanError;
 use crate::engine::pscan::scan_step::DualExtractError;
-
-// S6 / DQ3 — the session RNG self-cert grader (`shekyl-standoff` `conformance`)
-// is gated to **`x86_64` exactly** (the guard below is `target_arch = "x86_64"`,
-// matching the `x86_64`-only CI conformance lane and the standoff conformance
-// lane it mirrors): its goodness-of-fit is float, which is not bit-identical
-// across architectures, and `x86_64` is the only target the diagnostic is built
-// and run on. Rather than silently compile the self-cert out on a non-`x86_64`
-// target (which would let a `--features conformance` diagnostic build report
-// "conformance passed" when the grade never ran — false assurance), fail the
-// build loudly: a diagnostic build that cannot run the diagnostic must say so at
-// compile time, not pretend success at runtime. With this guard, `conformance`
-// implies `x86_64`, so the self-cert call below needs only `cfg(feature)`.
-#[cfg(all(feature = "conformance", not(target_arch = "x86_64")))]
-compile_error!(
-    "the StakeEngine session RNG self-cert grader (shekyl-standoff `conformance`) \
-     is `x86_64`-only — its float goodness-of-fit is not bit-identical across \
-     architectures. Build the `conformance` feature on `x86_64` (where the CI \
-     conformance lane runs); do not enable it on other targets (including 32-bit \
-     x86)."
-);
 
 // ---------------------------------------------------------------------------
 // Typed domain values
@@ -95,7 +75,7 @@ pub(crate) const ARCHIVAL_PERSONA_LOOKAHEAD: u32 = 2;
 ///
 /// [`ARCHIVAL_BOND_CONSTRUCTION.md`]: ../../../../../docs/design/ARCHIVAL_BOND_CONSTRUCTION.md
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-pub(super) enum HeldPersona {
+pub(crate) enum HeldPersona {
     /// Carries at least one live bond (`consumer_held` or posted). Never wiped
     /// while bonded — its `bond_spend` key must stay reachable to unbond.
     Bonded(BondedPersona),
@@ -108,7 +88,7 @@ pub(super) enum HeldPersona {
 impl HeldPersona {
     /// Borrow the underlying derived bundle (read-only; the secret never
     /// escapes — callers project the public [`PersonaIdentity`] out of it).
-    pub(super) fn keys(&self) -> &ArchivalPKeys {
+    pub(crate) fn keys(&self) -> &ArchivalPKeys {
         match self {
             HeldPersona::Bonded(b) => &b.0,
             HeldPersona::Ephemeral(e) => &e.0,
@@ -120,11 +100,11 @@ impl HeldPersona {
 /// type (typed contract #4), so a bonded persona is never zeroized while a bond
 /// depends on its `bond_spend` key.
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-pub(super) struct BondedPersona(pub(super) ArchivalPKeys);
+pub(crate) struct BondedPersona(pub(crate) ArchivalPKeys);
 
 /// A held persona with no live bond — the only thing [`wipe_ephemeral`] accepts.
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-pub(super) struct EphemeralPersona(pub(super) ArchivalPKeys);
+pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys);
 
 /// Wipe a retired ephemeral persona.
 ///
@@ -134,7 +114,7 @@ pub(super) struct EphemeralPersona(pub(super) ArchivalPKeys);
 /// explicit `drop` makes the wipe a named operation rather than an implicit
 /// scope-end.
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-pub(super) fn wipe_ephemeral(persona: EphemeralPersona) {
+pub(crate) fn wipe_ephemeral(persona: EphemeralPersona) {
     drop(persona);
 }
 
@@ -147,7 +127,7 @@ pub(super) fn wipe_ephemeral(persona: EphemeralPersona) {
 /// positively-confirmed terminal evidence (`Unbond` + `W`-lapse + finality-deep),
 /// never on absence. The bundle's per-field `ZeroizeOnDrop` runs at the drop.
 #[allow(dead_code)] // transient — the SP-5 retire path is the consumer.
-pub(super) fn wipe_bonded(persona: BondedPersona) {
+pub(crate) fn wipe_bonded(persona: BondedPersona) {
     drop(persona);
 }
 
@@ -354,7 +334,7 @@ pub(crate) struct PersonaIdentity {
 #[allow(dead_code)] // inert until PR 2c wiring
 impl PersonaIdentity {
     /// Project the public identity out of a (secret) persona bundle.
-    pub(super) fn from_keys(keys: &ArchivalPKeys) -> Self {
+    pub(crate) fn from_keys(keys: &ArchivalPKeys) -> Self {
         Self {
             p_slot: PSlot::from_raw(keys.p_slot),
             bond_id: keys.hybrid_bond_id().clone(),
@@ -565,7 +545,7 @@ pub(crate) struct StakeEngineArgs {
     pub self_cert: TestSelfCert,
     /// GF-7 measurement-hook observer (`ARCHIVAL_BOND_2C_GF7_HOOKS.md` §3) —
     /// **injected**, `ScanSchedule`-discipline: no hardwired sink. Every
-    /// production construction path injects [`NoOpObserver`]; only the sim
+    /// production construction path injects [`shekyl_standoff::gf7::NoOpObserver`]; only the sim
     /// (via a direct `StakeEngineArgs`, never a production spawn) constructs
     /// a recording one. Exists only under the non-default `gf7-hooks` feature
     /// (the §4 layer-3 no-emit containment); the default build carries no
@@ -587,3 +567,15 @@ pub(crate) enum TestSelfCert {
     /// Grade a degenerate constant source to force fail-stop (the S6 fail test).
     Degenerate,
 }
+
+/// The entry-gap degeneracy guard fired: two consecutive draws produced equal
+/// spreads (the double-jitter-trap signature).
+///
+/// A named zero-sized type rather than `()` so the failure reads at the
+/// signature and the single call site maps it explicitly. It is deliberately
+/// **not** an enum: there is exactly one way this guard fails, and a multi-variant
+/// "in case we add more later" error would be pre-provisioned flexibility
+/// (`21-reversion-clause-discipline.mdc`) — add a variant (or a new error type)
+/// when a second failure mode actually exists.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DegenerateDraw;

@@ -39,7 +39,11 @@ use crate::engine::bond_assembly::FundingInputContext;
 use crate::engine::emission_claim::self_check_claims;
 use crate::engine::error::KeyEngineError;
 use crate::engine::pscan::scan_step::BlockRange;
+#[cfg(feature = "gf7-hooks")]
+use crate::engine::stake_timing::DEFAULT_ENTRY_GAP;
 use crate::engine::{Network, ShekylAddress};
+#[cfg(feature = "gf7-hooks")]
+use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
 
 /// The genesis-frozen `hybrid_bond_id` canonical bytes for a slot, computed
 /// directly via the derivation oracle.
