@@ -834,13 +834,18 @@ components:
       type: object
       required: [id, direction, tx_hash, amount, fee, block_height, state]
       description: >
-        Client-facing projection of `shekyl_engine_state::TransferDetails`.
+        Client-facing transfer history row. INCOMING projects
+        `shekyl_engine_state::TransferDetails` (scan ledger outputs);
+        OUTGOING projects `SendJournalBlock` rows (SJ-DQ-7 / PR-SJ-2).
         Internal fields (key material, key offsets, commitments) never cross
         this boundary — the RPC exposes accounting facts only.
       properties:
         id:
           type: string
-          description: Stable per-wallet transfer identifier.
+          description: >
+            Stable per-wallet transfer identifier. INCOMING:
+            `{tx_hash_hex}:{internal_output_index}`. OUTGOING: bare
+            `{tx_hash_hex}` (journal is txid-keyed; no output index).
         direction:
           type: string
           enum: [INCOMING, OUTGOING]
@@ -855,7 +860,12 @@ components:
           format: int64
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT]
+          enum: [PENDING, CONFIRMED, SPENT, FAILED]
+          description: >
+            PENDING = unsettled (receive awaiting confirmation, or send
+            Dispatched/PresumedDead). CONFIRMED = on-chain. SPENT =
+            receive output consumed. FAILED = OUTGOING only: daemon
+            refused dispatch (`TerminalRejected`); never mined.
         spent_height:
           type: integer
           format: int64
@@ -869,7 +879,7 @@ components:
           enum: [INCOMING, OUTGOING]
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT]
+          enum: [PENDING, CONFIRMED, SPENT, FAILED]
         since_height:
           type: integer
           format: int64

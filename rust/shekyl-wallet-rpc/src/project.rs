@@ -109,32 +109,52 @@ pub fn outgoing_transfer_id(txid: &TxHash) -> String {
     txid.to_string()
 }
 
+/// Height used for `since_height` filters and `TransferView.block_height`.
+///
+/// Confirmed sends use the refresh-observed inclusion height; every other
+/// lifecycle state uses the dispatch-time wallet height (no invented height).
+pub fn outgoing_block_height(row: &SendRecord) -> u64 {
+    match row.state {
+        SendState::Confirmed { height } => height,
+        _ => row.dispatched_at_height,
+    }
+}
+
 /// Map journal lifecycle onto the OpenAPI `TransferState` enum.
+///
+/// - `Dispatched` / `PresumedDead` → `PENDING` (unsettled; late confirm is
+///   still possible for `PresumedDead`).
+/// - `Confirmed` → `CONFIRMED` (refresh observed the spend on chain).
+/// - `TerminalRejected` → `FAILED` (daemon refused; never mined — rule 82;
+///   never collapse into `CONFIRMED`).
 pub fn outgoing_transfer_state(row: &SendRecord) -> TransferState {
     match row.state {
         SendState::Dispatched | SendState::PresumedDead => TransferState::Pending,
-        SendState::Confirmed { .. } | SendState::TerminalRejected => TransferState::Confirmed,
+        SendState::Confirmed { .. } => TransferState::Confirmed,
+        SendState::TerminalRejected => TransferState::Failed,
     }
+}
+
+/// Σ recipient amounts — same overflow invariant as journal write
+/// (`SendJournalBlock::record_dispatched` expects the sum to fit in `u64`).
+fn outgoing_sent_amount(row: &SendRecord) -> u64 {
+    row.recipients
+        .iter()
+        .map(|r| r.amount)
+        .try_fold(0u64, u64::checked_add)
+        .expect("recipient amounts sum without overflow (journal write invariant)")
 }
 
 /// Project a send-journal row as an OUTGOING `TransferView` (PR-SJ-2).
 pub fn outgoing_transfer_view(txid: &TxHash, row: &SendRecord) -> TransferView {
-    let amount_raw = row
-        .recipients
-        .iter()
-        .try_fold(0u64, |acc, r| acc.checked_add(r.amount))
-        .unwrap_or(0);
-    let block_height = match row.state {
-        SendState::Confirmed { height } => height,
-        _ => row.dispatched_at_height,
-    };
     TransferView {
         id: outgoing_transfer_id(txid),
         direction: TransferDirection::Outgoing,
         tx_hash: txid.to_string(),
-        amount: atomic_units_string(AtomicUnits::from_raw(amount_raw)),
+        amount: atomic_units_string(AtomicUnits::from_raw(outgoing_sent_amount(row))),
         fee: atomic_units_string(AtomicUnits::from_raw(row.fee)),
-        block_height: i64::try_from(block_height).unwrap_or(i64::MAX),
+        // Crate-wide height projection idiom: OpenAPI heights are int64.
+        block_height: i64::try_from(outgoing_block_height(row)).unwrap_or(i64::MAX),
         state: outgoing_transfer_state(row),
         spent_height: None,
     }
@@ -323,5 +343,95 @@ mod tests {
         assert_eq!(r.pending, "5");
         assert_eq!(r.staked, "0");
         assert_eq!(r.claimable_rewards, "0");
+    }
+
+    fn sample_send_record(state: SendState) -> SendRecord {
+        use shekyl_engine_state::{SendInputRef, SendRecipient};
+        SendRecord {
+            dispatched_at_height: 100,
+            fee: 700,
+            recipients: vec![
+                SendRecipient {
+                    address: "shekyl1a".to_owned(),
+                    amount: 1_000,
+                },
+                SendRecipient {
+                    address: "shekyl1b".to_owned(),
+                    amount: 2_500,
+                },
+            ],
+            change_amount: 100,
+            inputs: vec![SendInputRef {
+                gindex: 7,
+                amount: 4_300,
+            }],
+            lock_baseline: None,
+            state,
+        }
+    }
+
+    /// Journal lifecycle collapses onto the four OpenAPI states without
+    /// lying: TerminalRejected is FAILED, never CONFIRMED (rule 82).
+    #[test]
+    fn outgoing_state_map_is_honest_for_every_send_state() {
+        assert_eq!(
+            outgoing_transfer_state(&sample_send_record(SendState::Dispatched)),
+            TransferState::Pending
+        );
+        assert_eq!(
+            outgoing_transfer_state(&sample_send_record(SendState::PresumedDead)),
+            TransferState::Pending
+        );
+        assert_eq!(
+            outgoing_transfer_state(&sample_send_record(SendState::Confirmed { height: 200 })),
+            TransferState::Confirmed
+        );
+        assert_eq!(
+            outgoing_transfer_state(&sample_send_record(SendState::TerminalRejected)),
+            TransferState::Failed
+        );
+    }
+
+    #[test]
+    fn outgoing_block_height_uses_confirm_height_when_present() {
+        assert_eq!(
+            outgoing_block_height(&sample_send_record(SendState::Dispatched)),
+            100
+        );
+        assert_eq!(
+            outgoing_block_height(&sample_send_record(SendState::TerminalRejected)),
+            100
+        );
+        assert_eq!(
+            outgoing_block_height(&sample_send_record(SendState::Confirmed { height: 250 })),
+            250
+        );
+    }
+
+    #[test]
+    fn outgoing_view_projects_txid_id_fee_and_recipient_sum() {
+        let txid = TxHash::from_bytes([0xab; 32]);
+        let view = outgoing_transfer_view(
+            &txid,
+            &sample_send_record(SendState::Confirmed { height: 250 }),
+        );
+        assert_eq!(view.id, "ab".repeat(32));
+        assert_eq!(view.tx_hash, view.id);
+        assert_eq!(view.direction, TransferDirection::Outgoing);
+        assert_eq!(view.amount, "3500"); // 1000 + 2500
+        assert_eq!(view.fee, "700");
+        assert_eq!(view.block_height, 250);
+        assert_eq!(view.state, TransferState::Confirmed);
+        assert_eq!(view.spent_height, None);
+
+        let failed =
+            outgoing_transfer_view(&txid, &sample_send_record(SendState::TerminalRejected));
+        assert_eq!(failed.state, TransferState::Failed);
+        assert_eq!(failed.block_height, 100);
+
+        // Wire pin: FAILED is a first-class OpenAPI enum value.
+        let json = serde_json::to_value(&failed).expect("serialize");
+        assert_eq!(json["state"], "FAILED");
+        assert_eq!(json["direction"], "OUTGOING");
     }
 }

@@ -268,9 +268,9 @@ pub struct GetHeightResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TransferDirection {
-    /// Received output.
+    /// Received output (ledger / scan-derived row).
     Incoming,
-    /// Spent / sent (reserved for future outgoing projection).
+    /// Sent transfer (send-journal row; SJ-DQ-7 / PR-SJ-2).
     Outgoing,
 }
 
@@ -278,17 +278,22 @@ pub enum TransferDirection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TransferState {
-    /// Network-exposed spend awaiting confirmation.
+    /// Network-exposed spend awaiting confirmation (or still unsettled).
     Pending,
-    /// Confirmed on chain, unspent.
+    /// Confirmed on chain, unspent (receive) or observed spent-on-chain (send).
     Confirmed,
-    /// Spent.
+    /// Spent (receive-side output consumed).
     Spent,
+    /// Terminal failure: daemon refused the dispatch; the tx never mined
+    /// (OUTGOING journal `TerminalRejected` only — rule 82 failed-send history).
+    Failed,
 }
 
 /// Client-facing transfer projection (OpenAPI `Transfer`).
 ///
 /// Accounting facts only — no key material, offsets, or commitments.
+/// INCOMING rows project scan ledger outputs; OUTGOING rows project
+/// send-journal records (SJ-DQ-7).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TransferView {
     /// Stable per-wallet id: `{tx_hash_hex}:{internal_output_index}` for
@@ -304,7 +309,7 @@ pub struct TransferView {
     pub fee: AtomicUnitsString,
     /// Inclusion height.
     pub block_height: i64,
-    /// Confirmation / spend state.
+    /// Confirmation / spend / failure state.
     pub state: TransferState,
     /// Height at which the output was spent, if any.
     #[serde(skip_serializing_if = "Option::is_none")]

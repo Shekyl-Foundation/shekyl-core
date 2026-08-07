@@ -1705,7 +1705,8 @@ sustainability is unaffected by the recalibration.
   history surface lands** — **CLOSED 2026-08-07 (PR-SJ-2,
   `feat/wallet-rpc-outgoing-sj2`)**. `get_transfers` / `get_transfer_by_id`
   project `SendJournalBlock` rows as `direction: OUTGOING` with realized
-  fee and txid-keyed ids (SJ-DQ-7). Engine record landed in PR-SJ-1 (#414).
+  fee, txid-keyed ids, and `state: FAILED` for `TerminalRejected` (SJ-DQ-7).
+  Engine record landed in PR-SJ-1 (#414).
   *Previously:* receive-only ledger projection; `direction: OUTGOING`
   matched nothing.
 

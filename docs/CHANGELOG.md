@@ -7,7 +7,9 @@
 - **PR-SJ-2 OUTGOING history projection** (`feat/wallet-rpc-outgoing-sj2`):
   `get_transfers` / `get_transfer_by_id` project send-journal rows as
   `direction: OUTGOING` with realized fee and txid-keyed ids (SJ-DQ-7).
-  Closes the Phase 4b W-D FOLLOWUP. Engine journal record: PR-SJ-1 (#414).
+  `Transfer.state` gains `FAILED` for journal `TerminalRejected` (daemon
+  refused; never collapsed into `CONFIRMED` — rule 82). Closes the Phase
+  4b W-D FOLLOWUP. Engine journal record: PR-SJ-1 (#414).
 
 - **The wallet now keeps a durable record of its own sends.** A new
   send-journal ledger block (`docs/design/WALLET_SEND_RECORD.md`,

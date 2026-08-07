@@ -12,12 +12,13 @@ use serde::Deserialize;
 use serde_json::Value;
 use shekyl_rpc_client::Rpc;
 use shekyl_scanner::LedgerBlockExt;
+use shekyl_types::TxHash;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, parse_required_object, require_empty_object};
 use crate::project::{
-    outgoing_transfer_state, outgoing_transfer_view, parse_transfer_id, transfer_state,
-    transfer_view,
+    outgoing_block_height, outgoing_transfer_state, outgoing_transfer_view, parse_transfer_id,
+    transfer_state, transfer_view,
 };
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
@@ -120,12 +121,8 @@ pub(crate) async fn get_transfers(
 
     if want_outgoing {
         transfers.extend(ledger.send_journal.rows.iter().filter_map(|(txid, row)| {
-            let height = match row.state {
-                shekyl_engine_state::SendState::Confirmed { height } => height,
-                _ => row.dispatched_at_height,
-            };
             if let Some(min_h) = since {
-                if height < min_h {
+                if outgoing_block_height(row) < min_h {
                     return None;
                 }
             }
@@ -134,10 +131,7 @@ pub(crate) async fn get_transfers(
                     return None;
                 }
             }
-            Some(outgoing_transfer_view(
-                &shekyl_types::TxHash::from_bytes(*txid),
-                row,
-            ))
+            Some(outgoing_transfer_view(&TxHash::from_bytes(*txid), row))
         }));
     }
 
@@ -193,7 +187,7 @@ pub(crate) async fn get_transfer_by_id(
     if let Some(bytes) = crate::params::parse_hex32(&p.id) {
         if let Some(row) = ledger.send_journal.rows.get(&bytes) {
             let result = GetTransferByIdResult {
-                transfer: outgoing_transfer_view(&shekyl_types::TxHash::from_bytes(bytes), row),
+                transfer: outgoing_transfer_view(&TxHash::from_bytes(bytes), row),
             };
             return serde_json::to_value(result).map_err(|e| {
                 WalletRpcError::InternalError(format!("serialize get_transfer_by_id: {e}"))
