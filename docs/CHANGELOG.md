@@ -30,6 +30,28 @@
   outstanding pending-tx reservations (consumer-held or in-flight),
   whose in-memory output locks index rows the wipe would destroy.
 
+- **The relay `hop` parameter now carries measured provenance: the adopted
+  verification-cost table lands.** `shekyl-relay-privacy` gains
+  `verify_cost.rs` — the `DAEMON_RELAY_PRIVACY.md` §80 decision as code: a
+  per-shape `f(n_in, tree_depth)` lookup over two closed axes, populated
+  with the spec machine's (Raspberry Pi 4, rule 76) pinned measurements,
+  refusing — never clamping — past its edge or at an unpopulated cell, with
+  cell provenance as an asserted field so a spec value can never again be
+  filled by scaling a fast machine's number. `DandelionParams::adopted()`
+  derives `hop` through the table (124.5 ms modal verification + a 50 ms
+  transit assumption recorded as such), and both FFI construction sites
+  (embargo timer, relay zone) now build from it.
+
+  **No behavior change:** the derived hop equals the inherited 175 ms by
+  arithmetic — the old constant was Monero-era processing plus an ocean
+  crossing; ours is FCMP++ verification plus the same crossing — so the
+  embargo stays 190 s and the wallet propagation timeout 874 s, both
+  test-pinned. What changed is that the number's justification is now a
+  measurement with a named assumption instead of a 2019 laptop comment.
+  Remaining, tracked in `FOLLOWUPS.md`: recovering the other 44 measured
+  table cells from the bench-host artifacts, per-shape embargo consumption,
+  and the clearnet hop-distribution measurement (§65.3).
+
 ### Removed
 
 - **The transitional `rust/shekyl-engine-rpc` crate is deleted** (C++-retirement

@@ -9132,6 +9132,37 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
+- **Relay: populate the 48-cell Pi verification surface, then consume it
+  per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first
+  (`shekyl-relay-privacy/src/verify_cost.rs`, 2026-08-06) carrying the four
+  in-tree §85.3 pins (1-in/8-in at genesis and depth 7); the other 44
+  measured cells exist only in the §85 sweep's capture artifacts on the
+  bench hosts (`scripts/remote-bench.sh` logs + criterion `estimates.json`
+  on the Pi and x86 arms). Until populated, those cells refuse per §83.3 —
+  a posture production never hits, since the embargo consumes the modal
+  cell only. Two halves, ordered:
+
+  - **Data recovery (target V3.0).** Transcribe the Pi columns into
+    `SPEC_VERIFY_COST` with `Provenance::MeasuredPi4` and depth-above-genesis cells
+    labelled `SynthesizedProjection` (§81.2); x86 columns stay diagnostic
+    in `spec_decision_matrix.rs` (§84.2). Named blocker: the artifacts are
+    on the bench hosts, not in-tree. If they are gone, this degrades to a
+    re-run of `scripts/remote-bench.sh <pi-host> relay_admission_verify`
+    (~14 min build + sweep) — a re-measurement, not a redesign. The §87.2
+    provenance test and rule 76.4 forbid filling any cell by scaling.
+  - **Per-shape embargo consumption (the next RP cut, target V3.0).** The
+    embargo draw is a process-wide singleton at the modal shape; consuming
+    `f` per shape needs `n_in` and the tree depth at the draw site
+    (`tx_pool.cpp` `set_relayed` →
+    `shekyl_dandelionpp_embargo_draw_seconds`), i.e. an FFI signature
+    change plus a per-shape timer cache keyed on the populated table.
+    §83.1 prices the payoff: the modal row is effectively constant (~3 s
+    drift across the whole depth range) while the tail rows are where the
+    sorting lives (245 s at 8-in vs 190 s modal at the assumed transit,
+    widening with chain age per §82.3). Reopen shape: the first relay
+    design round after the table is populated; blocked behind data
+    recovery by construction, independent of Q-10.
+
 - **Levin p2p migration — LV-2 payload codec and LV-3 connection-path
   cutover.** LV-1 (the `rust/shekyl-levin` framing crate: bucket header,
   builders, noise/fragmentation, zstd flag path, incremental reader, KAT'd

@@ -13244,3 +13244,42 @@ convicts is a worry, not an instrument** — the first thing anyone asks of a ne
 test is whether it can come back clean. Transit is the evidence that this one
 discriminates rather than flags, and it belongs recorded next to the test
 itself rather than only in the round that found it.
+
+## 88. The adopted set lands — structure first, cells as measured
+
+**2026-08-06.** §87's spec, built (`feat/rp-adopted-hop-params`). What ships,
+and the two honesty lines that bound it:
+
+- **`shekyl-relay-privacy/src/verify_cost.rs`** — `f(n_in, depth)` as a table
+  over the two closed axes, refusing past its edge and at unpopulated cells
+  (§83.3); `Provenance` as a field with the §87.2 spec-path assertion;
+  `TreeBasis` projection labels (§81.2); the 50 ms transit assumption
+  recorded at the site with §86.1's acquittal beside it (§86.2, §87.4); and
+  §87.1's negative control under its harm-stating name,
+  `clamping_would_underprovision_the_tail`.
+- **`DandelionParams::adopted()`** — production's parameter set, `hop`
+  derived *through* the table (modal genesis cell + transit assumption)
+  rather than restated. Both FFI construction sites (embargo singleton, zone
+  constructor) cut over. **The value is 175 ms — numerically the inherited
+  constant, by §71.3's own arithmetic** (the inherited number was never pure
+  transit: Monero-era processing + one ocean crossing; re-deriving the shape
+  with our verification cost lands on the same milliseconds). So the embargo
+  stays 190 s, the wallet timeout 874 s, and the cutover is **provenance,
+  not behaviour** — pinned as `adopted_params_change_provenance_not_behaviour`.
+
+**Honesty line 1: the table carries four cells, not 48.** The §85 sweep
+measured the full surface on both arms, but only the §85.3 endpoint pins are
+in-tree; the grids live in the bench hosts' capture artifacts. Unpopulated
+cells refuse — production consumes the modal cell only, so nothing live hits
+a refusal — and the recovery + per-shape-consumption work is a FOLLOWUPS
+entry with the artifact location named ("Relay: populate the 48-cell Pi
+verification surface").
+
+**Honesty line 2: this is §66.3's floor, not its scalar.** The adopted hop is
+the measured verification floor plus a stated transit assumption. The
+effective-scalar policy needs the clearnet forward-to-forward *distribution*,
+which is still owed (§65.3) and which no landing of measured floors can
+substitute for. What changed is that the shipped number's provenance is now a
+spec-machine measurement plus a labelled assumption instead of a 2019 laptop
+comment — the §21 ledger's `hop` row moves from "provenance" toward "derived,
+distribution owed."
