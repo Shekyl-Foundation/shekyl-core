@@ -184,7 +184,10 @@ fn exactly_uniform_sample_scores_zero_despite_unequal_bin_widths() {
     assert!(report.uniform_ok, "uniform grade failed");
 
     let chi = chi_square_uniform(&exact, window, 60);
-    assert!(chi.abs() < 1e-9, "chi_square_uniform must be ~0 for exact uniform");
+    assert!(
+        chi.abs() < 1e-9,
+        "chi_square_uniform must be ~0 for exact uniform"
+    );
 }
 
 #[test]
@@ -222,7 +225,10 @@ fn self_cert_rejects_trap_and_correlated_samples() {
         !corr_report.serial_independent,
         "correlated should fail serial"
     );
-    assert!(!corr_report.passed(), "correlated should not pass self-cert");
+    assert!(
+        !corr_report.passed(),
+        "correlated should not pass self-cert"
+    );
 }
 
 #[test]
