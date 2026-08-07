@@ -1,0 +1,98 @@
+---
+description: A stated minimum supported device, because privacy constants derived from hardware sort anonymity by what the operator could afford. Names the floor, the reason it is a decision rather than a measurement, and what must happen before it moves.
+alwaysApply: false
+globs:
+  - rust/shekyl-relay-privacy/**
+  - rust/shekyl-relay/**
+  - docs/design/DAEMON_RELAY_PRIVACY.md
+---
+
+# Device Provisioning Floor
+
+**The minimum supported device is `Raspberry Pi 4 Model B` (Cortex-A72,
+aarch64, 64-bit userland).**
+
+Anonymity guarantees are provisioned so that a node at or above this device
+receives them in full.
+
+## Why this is a rule and not a benchmark note
+
+Some privacy constants are derived from **how long work takes**, and that
+varies with the operator's hardware. Derive such a constant from a *central*
+estimate and the result is **anonymity that correlates with what the operator
+could afford** — slower nodes miss timing windows more often, silently.
+
+That is a two-tier privacy outcome arriving through **a constant** rather than
+a feature, a setting, or a fee, which is why it survives review: nobody
+proposes it, it falls out of picking a statistic. It contradicts
+[`00-mission`](00-mission.mdc) §2 — *"Every user gets the same anonymity
+guarantees by default — privacy is never a setting"* — because it **is** a
+setting, whose value the user did not choose, cannot see, and cannot measure.
+
+**A stated floor converts that from invisible-and-unchosen to
+visible-and-chosen.** At or above spec, uniform guarantee. Below it, the
+operator knows they are outside it. *"Same guarantees by default"* is satisfied
+by a **stated** default; it is not satisfied by an unstated one that tracks
+hardware budgets.
+
+**It is an entry statement, not an exclusion.** Naming the floor tells someone
+their existing hardware qualifies.
+
+## Rules
+
+1. **Any constant derived from measured work time is provisioned at the floor
+   device**, not at the machine that happened to be available. Record which
+   machine produced the number, beside the number.
+2. **The floor names a machine, not a millisecond figure.** Costs drift as the
+   system grows, so a figure fixes nothing; the machine is what later
+   re-measurements re-measure *on*.
+3. **Cross-machine ratios are measured, never assumed.** A ratio established on
+   one axis does not transfer to another — different axes stress different
+   parts of the memory hierarchy.
+4. **Values AND INCREMENTS for the floor device are measured ON it, never
+   scaled to it.** A measurement on a faster machine multiplied by a known
+   ratio is a *diagnostic*, not a spec value — and this covers deltas, not just
+   absolutes. *Measured instance: cross-machine ratios on totals sat in a
+   5.36–5.75 band while the per-layer **marginal** ratio was 5.98× — so scaling
+   an increment by the totals' ratio under-provisions by ~7.5 %, on the tail
+   rows, invisibly. **A flat total is exactly what makes the increment shortcut
+   look safe.*** Faster machines exist in the harness to
+   detect workload changes; the moment one is used to *derive* a provisioned
+   number, a convenient measurement has been substituted for the decision — the
+   shape that produced every inherited constant this project has had to
+   re-derive.
+5. **Synthesized future conditions are labelled as projections at the value.**
+   A number produced by simulating conditions that do not exist yet is a prior,
+   not a measurement, and must say so or a later reader will skip the
+   re-measurement it stands in for.
+
+## Moving the floor
+
+The floor is **freeze-coupled**: constants derived from it are network-wide, so
+raising it shortens them for everyone — a coordinated change to a privacy
+constant, which [`75-system-autonomy`](75-system-autonomy.mdc) exists to
+minimise. The two errors are **not symmetric**:
+
+- **Floor set too low** → constants are generous → everyone sees the cost,
+  uniformly, and someone complains. **The error has a feedback channel.**
+- **Floor set too high** → below-spec nodes lose anonymity silently → no
+  operator can tell, so nothing generates the signal that would prompt a
+  revision. **The error persists because nothing reports it.**
+
+**Therefore: err toward the slower device, because that is the error the system
+can notice.**
+
+Moving the floor requires re-deriving every constant provisioned against it and
+saying so in the same change. **Expect the argument for raising it to be an
+efficiency one** — *"devices that slow are rare now"* — and note that such a
+proposal buys latency by reintroducing hardware-sorted anonymity. Price both
+sides before taking it.
+
+*(The floor is expected to move as the device landscape changes. It is a rule
+so that moving it is a deliberate, reviewable act with a named consequence —
+not so that it never moves.)*
+
+## Where this came from
+
+`docs/design/DAEMON_RELAY_PRIVACY.md` §75 (the principle), §78 (the floor as a
+bounded decision), §80 (the decision taken, and its price list).

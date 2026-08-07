@@ -97,16 +97,16 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 - [shekyl-proofs](../../rust/shekyl-proofs): tx_proof, reserve_proof.
 - [shekyl-staking](rust/shekyl-staking/), [shekyl-economics](../../rust/shekyl-economics): consensus and fee maths.
 - [shekyl-daemon-rpc](../../rust/shekyl-daemon-rpc): client to `shekyld`.
-- [shekyl-cli](../../rust/shekyl-cli), [shekyl-engine-rpc](../../rust/shekyl-engine-rpc): scaffolded crates, not yet binary-complete.
+- [shekyl-cli](../../rust/shekyl-cli), [shekyl-wallet-rpc](../../rust/shekyl-wallet-rpc): the two wallet binaries. (The transitional `shekyl-engine-rpc` wallet2-FFI bridge that sat here is deleted — roadmap B1.)
 - [shekyl-ffi](../../rust/shekyl-ffi) typed wallet-ledger surface ([wallet_ledger_ffi.rs](rust/shekyl-ffi/src/wallet_ledger_ffi.rs)) — kept as the SHKW1 contract; the C++ side that consumed it is deleted in this plan.
 
 ### Gap
 
 - **Wallet domain API:** ~~no orchestrator type composing file + state + prefs + scanner + tx-builder + RPC client~~ — **closed 2026-06-10**: `shekyl-engine-core::Engine<S>` landed with lifecycle, refresh, scan merge, and pending-tx send lifecycle (see Phase 1 closeout banner below and [`PHASE_1_ORCHESTRATOR_STATUS.md`](../completed/PHASE_1_ORCHESTRATOR_STATUS.md)).
 - **CLI feature parity:** `shekyl-cli` exists but does not yet implement the daily-use command set.
-- **RPC feature parity:** `shekyl-engine-rpc` exists but does not yet implement the JSON-RPC method set the GUI/mobile clients will eventually depend on.
+- **RPC feature parity:** ~~`shekyl-engine-rpc` exists but does not yet implement the JSON-RPC method set the GUI/mobile clients will eventually depend on~~ — **re-homed**: the Engine-native `shekyl-wallet-rpc` (contract [`docs/api/wallet_rpc.yaml`](../api/wallet_rpc.yaml)) carries this parity through Phase 4a/4b/4c + WI-RPC-1/2/3; `shekyl-engine-rpc` is deleted (roadmap B1). Remaining gaps are the contract's RESERVED methods, not a missing crate.
 - **Wallet flows:** wallet creation (generate / restore-from-bip39 / restore-from-raw / restore-from-view-key / watch-only / hardware-offload), open with password rotation, lost-state rescan path are partially in [shekyl-engine-file](../../rust/shekyl-engine-file) but not exposed as a clean `Wallet::*` API.
-- **C++ deletion:** `wallet2.cpp` (~6500 LoC), `wallet2_ffi.cpp`, `wallet/api/` (Qt-API surface used by GUI today), `simplewallet/` (~10 kLoC), `wallet_rpc_server*.cpp` are still in tree. CMake still builds them.
+- **C++ deletion:** `wallet2.cpp` (13,360 LoC; `src/wallet/` totals 28,761 lines across 17 files incl. `CMakeLists.txt` — figures corrected 2026-08-06, the earlier ~6500 was stale), `wallet2_ffi.cpp`, and `wallet_rpc_server*.cpp` are still in tree; `simplewallet/` and `wallet/api/` are already deleted. CMake still builds the remainder.
 - **monero-oxide vendor sync:** verify the vendored tree matches the upstream commit we want for the wallet stack's needs (`shekyl-primitives`, `shekyl-generators`, `shekyl-io`, `shekyl-fcmp-plus-plus`, `shekyl-bulletproofs`, `shekyl-rpc`, `helioselene`, `ec-divisors`, `generalized-bulletproofs`). Don't un-pin in this plan.
 
 ## Architecture target
@@ -115,7 +115,7 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 flowchart TB
     subgraph Bins[Binaries]
       Cli["shekyl-cli (replaces simplewallet)"]
-      Rpc["shekyl-engine-rpc (replaces wallet_rpc_server)"]
+      Rpc["shekyl-wallet-rpc (replaces wallet_rpc_server)"]
     end
 
     subgraph Api[Domain]
@@ -396,6 +396,8 @@ Default lean: option 3 unless the audit surfaces a behavioral distinction. Which
   - **Air-gapped flow** (view-only on a network-connected machine; signing on a separate offline machine via file-based unsigned/signed-tx handoff) is a separate feature. Required for high-value users who don't trust hardware vendors.
 
   Decision: keep air-gapped flow, **reshape cleaner than wallet2**. Replace wallet2's separate `export_outputs` / `import_outputs` / `export_key_images` / `import_key_images` with two typed bundle types: `UnsignedTxBundle` (network-connected machine produces; offline machine consumes) and `SignedTxBundle` (offline machine produces; network-connected machine consumes). Each bundle is a single file containing everything needed for the next stage. Phase 2d implements both bundle types end-to-end. The four wallet2 file-format dance methods do not survive.
+
+  **UPDATE 2026-08-06 (roadmap A4 DECIDED): descoped from V3.0.** The capability is kept — and the FCMP++ separability investigation confirmed it is *tractable* (SA/L is a standalone proof over the prefix hash; membership re-proves hot at submit with no reference-age fingerprint; PQC auths are view-tier re-signable) — but the shippable form's two largest pieces (verified display on the offline device; the envelope-sealed bundle) are unstarted product work, and a half-form is worse than none: cold signing without verified display protects the key and not the payment, and a plaintext bundle contradicts the envelope rule. V3.0 posture: cold *storage* ships (seed custody complete); cold *signing* does not. Full clause with the two pinned items (SA/L-split form is load-bearing — shortcut carried-proof forms foreclosed; `ExportedUnsigned` additive to the send-record machine, verified at PR-SJ-1) in `docs/FOLLOWUPS.md` "A4 DECIDED". *Target: V3.1+.*
 - **Multisig type-system shape:** add `Wallet<S: WalletSignerKind>` where `S = SoloSigner | MultisigSigner<N, K>`. V3.0 only constructs `Wallet<SoloSigner>`; V3.1 enables the multisig path without changing call sites.
 
 ### Phase 1 deliverables
@@ -717,12 +719,38 @@ After Phase 4 lands and the binaries pass acceptance tests. Single commit, separ
 
 ### C++ source
 
-- Delete `src/wallet/wallet2.{h,cpp}` (~6500 LoC).
+- Delete `src/wallet/wallet2.{h,cpp}` (13,360 LoC in `wallet2.cpp` alone — figure corrected 2026-08-06).
 - Delete `src/wallet/wallet2_ffi.{h,cpp}`.
 - Delete `src/wallet/wallet2_handle_views.{h,cpp}` (the per-block RAII wrappers introduced for 2l.b — never landed, but if they did, they go).
 - Delete `src/wallet/api/` (Qt-API surface).
 - Delete `src/simplewallet/`.
 - Delete `src/wallet/wallet_rpc_server.{h,cpp}`, `wallet_rpc_server_commands_defs.h`, `wallet_rpc_server_error_codes.h`.
+- Delete `src/device_trezor/` (23 files, 6,348 lines) + `tests/trezor/` (7
+  files, 2,932 lines) + `cmake/CheckTrezor.cmake` and the `src/CMakeLists.txt`
+  / `src/wallet/CMakeLists.txt` wiring — **B2 DECIDED 2026-08-06: delete, not
+  re-home.** Verified: `device_trezor`'s only consumers outside itself are
+  `wallet2.cpp` and build wiring — no daemon code touches it — and re-homing
+  would keep wallet2's type surface alive purely to serve a device driver,
+  breaking this phase's single-commit principle. This is not deferred hardware
+  support but currently *impossible* hardware support: no vendor firmware
+  signs the ML-DSA-65+Ed25519 hybrid or speaks FCMP++ (rules 15/16).
+  **Reversion clause (rule 21):** reopen when a hardware vendor ships hybrid
+  PQ signing — implemented as a Rust `Signer` impl against the engine's
+  signer seam, never as a resurrected C++ driver. **Boundary note:** the
+  *base* `src/device/` abstraction (13 files, 3,818 lines) is NOT B2 — it is
+  threaded through `cryptonote_basic`/`cryptonote_core`/`fcmp` by lineage
+  (default-device parameters in tx construction) and its retirement is
+  daemon-side surgery scoped separately.
+- **V3.0 custody posture (A4, 2026-08-06): V3.0 ships cold *storage*, not
+  cold *signing*.** Seed custody is complete — generate, write the phrase,
+  receive, hold — and nothing is missing for the storage case; the gap is
+  that spending requires the seed to enter a networked machine at restore
+  (A4 descoped cold bundles with the rule-21 clause in `FOLLOWUPS.md`).
+  Named here as a decision so the posture is deliberate, not an emergent
+  gap discovered at release review. *(An earlier same-day framing coupled
+  this jointly with B2 as "no offline-key capability" — withdrawn: B2
+  deletes a signing device that cannot function anyway, and custody was
+  never on the device; the decisions are independent.)*
 - Delete `src/wallet/CMakeLists.txt` entries; `src/wallet/` may shrink to a stub or be removed entirely.
 
 ### Transitional C++ helpers (introduced for `wallet2.cpp` rewires)

@@ -106,10 +106,16 @@
 // leak; the occupancy defence lives in peer selection (g_max), not the count.
 // Derivation and guard: docs/design/DAEMON_RELAY_PRIVACY.md sec 12.7.
 #define CRYPTONOTE_DANDELIONPP_STEMS              2 // number of outgoing stem connections per epoch
-#define CRYPTONOTE_DANDELIONPP_FLUFF_PROBABILITY 20 // out of 100
 #define CRYPTONOTE_DANDELIONPP_MIN_EPOCH         10 // minutes
 #define CRYPTONOTE_DANDELIONPP_EPOCH_RANGE       30 // seconds
-#define CRYPTONOTE_DANDELIONPP_FLUSH_AVERAGE      5 // seconds average for poisson distributed fluff flush
+// The fluff probability (20 %) and the fluff-flush delay are Rust-owned and
+// must not become macros here again: both live in shekyl-relay-privacy's
+// DandelionParams / FluffScheduler, constructed inside shekyl_relay_zone_new
+// (only STEMS and the epoch pair above cross the FFI). The inherited
+// FLUFF_PROBABILITY / FLUSH_AVERAGE macros were deleted as dead — no C++
+// read either — and the flush comment was wrong besides: production fluff
+// delay is memoryless geometric, not Poisson.
+// Derivation and ownership: docs/design/DAEMON_RELAY_PRIVACY.md sec 10.5, 16.
 // The stem embargo is NOT a constant here any more, and must not become one
 // again. The inherited `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE = 39` did not
 // follow from the derivation printed beside it (the formula it cited gives

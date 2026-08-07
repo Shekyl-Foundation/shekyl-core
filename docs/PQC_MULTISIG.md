@@ -2073,7 +2073,8 @@ rust/shekyl-crypto-pq/src/multisig_receiving.rs
 **Status: planned sketch — these flags are not in any `Cargo.toml`
 today.** Do not copy-paste the block below into a crate; it names the
 intended gate axes for Track B / Option E′. Live today: `multisig`
-scaffolding feature on engine-core / engine-rpc / ffi (F-6 CI lane).
+scaffolding feature on engine-core / ffi (F-6 CI lane; the lane's former
+third package, the transitional `shekyl-engine-rpc`, is deleted).
 `frost-sal-v4` and `unsafe-testing-only` land when E′ / simple-mode
 fixtures are implemented (after Option A orchestration DELETE).
 

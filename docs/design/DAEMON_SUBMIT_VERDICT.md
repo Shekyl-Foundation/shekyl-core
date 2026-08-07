@@ -1166,6 +1166,18 @@ privacy-neutral ones (resubmit-same-bytes). Everything linkage-bearing
 
 ### 7.5 Anonymity-network black-hole — the embargo's deployment boundary (F35)
 
+> **Status note 2026-08-06** (`DAEMON_RELAY_PRIVACY.md` §41 / §63): this
+> section describes the pre-2026-08-01 noise-zone design and is kept as the
+> record of why the boundary was drawn. Two facts have since moved.
+> **Configuration B (Tor + noise) is deleted** — `proxy::noise` is gone and no
+> shipped configuration disables the embargo. And on the surviving anonymity
+> configuration the **embargo does arm** (the txpool is told `stem`) while the
+> wire runs an outbound-only diffusion with no stem (§63). The wargame below
+> survives with one repair: under anon-peer eclipse the embargo now fires a
+> forced fluff into the same eclipsed outbound set rather than not existing —
+> so the conclusion is unchanged: the wallet watchdog's operator-alarm rung
+> remains the sole effective backstop there, and obligations 1–2 stand.
+
 The F20 resolution rests on the Dandelion++ embargo being *the* mechanism no
 wallet policy can substitute (§5.2 item 2). That mechanism **does not run
 for the deployment a privacy-maximalist coin most expects**: noise zones

@@ -85,11 +85,11 @@ members = [
     "shekyl-levin",
 
     "shekyl-archival-retention",
-    "shekyl-engine-rpc",
 
     # Phase 4 Engine-native wallet RPC (docs/api/wallet_rpc.yaml). Replaces
-    # C++ wallet_rpc_server; distinct from transitional shekyl-engine-rpc
-    # (wallet2 FFI bridge, deleted at Phase 5).
+    # C++ wallet_rpc_server. The transitional `shekyl-engine-rpc` wallet2-FFI
+    # bridge that used to sit beside it is deleted (roadmap B1); the C++
+    # `wallet2_ffi` surface it wrapped is Phase 5's to remove.
     "shekyl-wallet-rpc",
 
     "shekyl-tx-builder",

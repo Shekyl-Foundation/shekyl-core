@@ -1620,14 +1620,27 @@ sustainability is unaffected by the recalibration.
   (REST + json_rpc, unrestricted only). Caps flow from `core_rpc_server::init`
   through `shekyl_daemon_rpc_start` (0 = unlimited). See `DAEMON_RPC_RUST.md`.
 
-- **Trezor test harness: migrate `mock_rpc_daemon` off epee HTTP map**
-  (added 2026-07-10, epee HTTP listener deletion). `tests/trezor/daemon.h`
-  subclasses `core_rpc_server` and drives it via the epee
-  `CHAIN_HTTP_TO_MAP2` / `handle_http_request_map` request map, which was
-  removed with the listener. The harness only builds under `TREZOR_DEBUG`
-  (off in CI), so this does not gate the default build, but it must be
-  ported to exercise the Axum surface (or the in-process handler calls)
-  before `TREZOR_DEBUG` runs are restored. *Target: V3.1.*
+- **Hardware-device C++ surface: B2 DECIDED — delete with Phase 5, not
+  re-home** (decided 2026-08-06, roadmap review; supersedes the
+  2026-07-10 "Trezor test harness: migrate `mock_rpc_daemon` off epee
+  HTTP map" entry — the harness dies with the driver, so the migration
+  is moot). Scope: `src/device_trezor/` (23 files, 6,348 lines),
+  `tests/trezor/` (7 files, 2,932 lines), `cmake/CheckTrezor.cmake` +
+  CMake wiring. Verified at `b66718afe`: outside itself the driver is
+  consumed only by `wallet2.cpp` and build wiring — no daemon code —
+  so deletion costs nothing beyond deleting, while re-homing would
+  keep wallet2's type surface alive to serve a device driver and break
+  the Phase-5 single-commit principle. Decisive: this is currently
+  *impossible* hardware support — no vendor firmware signs the
+  ML-DSA-65+Ed25519 hybrid or speaks FCMP++ (rules 15/16).
+  **Reversion clause (rule 21):** reopen when a hardware vendor ships
+  hybrid PQ signing, implemented as a Rust `Signer` impl against the
+  engine signer seam — never a resurrected C++ driver. **Boundary:**
+  the base `src/device/` abstraction (3,818 lines) is NOT this entry —
+  `cryptonote_basic`/`cryptonote_core`/`fcmp` thread it by lineage;
+  its retirement is separate daemon-side scope. Execution rides the
+  Phase-5 deletion commit (`WALLET_REWRITE_PLAN.md` §Phase 5).
+  *Target: V3.0 / Phase 5.*
 
 - **Daemon RPC: restricted-method dual-list single-source** (added
   2026-07-10). Axum `RESTRICTED_METHODS` and any remaining C++ notions
@@ -1725,6 +1738,58 @@ sustainability is unaffected by the recalibration.
   `consumer_held` insert** (the check→insert gap was a bugbot finding
   on PR #403, closed by widening the guard) rather than deferred.
   *Target: V3.0 disposition stable; reopen substrate-anchored per above.*
+
+- **A4 DECIDED (2026-08-06): air-gapped cold bundles DESCOPED from V3.0
+  — the reason changed, and the clause carries the reason** (roadmap
+  A4; grounded in the FCMP++ separability investigation at
+  `fa92f55f1`). NOT "cryptographically blocked" and NOT
+  "privacy-fatal": membership and spend authorization are separable
+  **by construction** — `SpendAuthAndLinkability` is a standalone
+  per-input proof over the prefix hash only (`shekyl-fcmp/src/
+  proof.rs`; `FcmpPlusPlus::new(sal_pairs, fcmp)` composes at
+  assembly, bound by the shared rerandomized openings;
+  `FcmpMembershipOnly` and `frost_sal` already exercise the halves
+  independently), and the PQC auths — which DO bind the anchor and
+  the proof bytes (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1) — are
+  view-tier re-signable, so a cold flow re-anchors membership hot at
+  submit (canonical `tip − REF_ANCHOR_AGE`, no reference-age
+  fingerprint). The descope reason: the shippable form is bounded and
+  KNOWN, and its two largest pieces — **verified display**
+  (recompute-and-display; without it the air gap protects the key,
+  not the payment) and the **envelope-sealed bundle** (a plaintext
+  bundle contradicts the ratified envelope rule,
+  `WALLET_SEND_RECORD.md` C1) — are unstarted product work that would
+  join a critical path already carrying A1–A3, C, and D. A half-form
+  is worse than none. **The accurate posture statement: V3.0 ships
+  cold *storage*, not cold *signing*** — seed custody is complete
+  (generate, write the phrase, receive, hold; nothing is missing for
+  the storage case); the gap is that *spending* requires the seed to
+  enter a networked machine at restore. Decline reason, stated
+  honestly: bounded engineering not scheduled for V3.0, with cold
+  storage already covered by seed custody — not cryptographically
+  blocked, not privacy-fatal. *(Supersession note, 2026-08-06: an
+  earlier same-day form of this entry coupled the posture jointly
+  with B2 as "no offline-key capability" — withdrawn on review: B2
+  removes a signing device that cannot function anyway, and custody
+  was never on the device; the two decisions are independent.)*
+  **Clause (rule 21), two pinned items:**
+  **(1)** the separated SA/L-split form is LOAD-BEARING, not an
+  optimization — the carried-proof form re-creates the reference-age
+  anonymity partition (`shekyl-curve-tree/src/reference.rs`
+  privacy-canonical sentinel; the naive form's usable window is
+  ~94 blocks × 120 s ≈ 3.1 h), so any future shortcut form is
+  FORECLOSED now, while the reasoning is fresh; **(2)**
+  `ExportedUnsigned` is ADDITIVE to the send-record state machine
+  (SJ-DQ-3) — a new variant and a field, never a schema break —
+  **verified at PR-SJ-1** while cheap (the persisted encoding must
+  admit the variant without a version break). **Reopening shape:** the two-phase
+  prove API (SA/L cold over the completed prefix incl. key images;
+  membership re-proven hot at submit; rerandomization blinds retained
+  hot under rules 35/36; PQC auths re-signed hot), the
+  `ExportedUnsigned` state with expiry/reclaim (the R8 TTL emitter
+  gap stands), and the envelope-sealed bundle format — designed as
+  one unit, never piecemeal. *Target: V3.1+ (decision stable for
+  V3.0).*
 
 - **GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in`
   single-structured-output funding must land before genesis** (added
@@ -2848,6 +2913,42 @@ sustainability is unaffected by the recalibration.
   the fetch to the anonymity transport in the same PR. See
   [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md) §7.4 /
   §8 #11.
+
+- **Shard serving on `P`: zstd compression REJECTED by measurement
+  (Z-1, 2026-08-06) — rule-21 reopen recorded.** Posed as a new design
+  question (Z-1..Z-6, roadmap-review thread) rather than an extension
+  of the shekyl-levin transport work (different threat model, same
+  library). Z-1 ran first, alone, on real wire bytes at dev
+  `660cee668` — three freshly built FCMP++ spend txs (13,039 B each,
+  1-in/2-out) plus the three network genesis coinbases (6,263 B,
+  5-output): byte entropy 7.97–7.995 bits/B; zstd levels 1/3/9
+  EXPAND every corpus (ratio 1.000–1.001); level 19 reaches only
+  0.996 aggregate and is a net LOSS on single-response units
+  (1.001–1.002). Wire content is cryptographic output end to end
+  (KEM ciphertexts, curve points, proofs, ML-DSA auths, hashes); the
+  compressible minority (varints, framing) is noise against it. The
+  answer is **don't**, per the pre-registered kill line (≥0.97 ⇒
+  drop). Standing hazards recorded so any reopen re-prices them, not
+  just the ratio: Z-2 — compressed length is a stable per-shard
+  content oracle directly opposed to `P`'s length-uniformity goal
+  (padding a compressed stream discards the saving); Z-3 — zstd
+  output is non-canonical (version/level/window/threading), so any
+  attestation or countersignature must bind canonical uncompressed
+  content, never the transport encoding (the F-9 rule; structural
+  gate before any design); Z-4 — decompression caps must derive from
+  the known shard size, not a global constant (adversarial
+  challenger, asymmetric cost); Z-5 — `links = "zstd"` graph
+  collision + vendored-C growth against rule 20 (the LV-3 hazard);
+  Z-6 — content-dependent compression timing stacks on graded
+  serving latency (compress-once-at-write would be the only
+  defensible form). **Reopening criterion:** a wire-format change
+  introducing substantial compressible structure, demonstrated by
+  re-running the Z-1 measurement on real shard bytes at ≥10%
+  saving — and Z-3 answered structurally before any design work.
+  Corpus caveats, stated: no block headers (hash/varint-dominated,
+  ~100–200 B/block) and a small unique-tx sample — immaterial at
+  7.99 bits/B entropy (a larger window cannot find structure that is
+  not there). *Target: V3.0 disposition stable (closed).*
 
 - **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11
   single-image amendment).** The per-binary Rust-image selection in
@@ -4986,6 +5087,21 @@ sustainability is unaffected by the recalibration.
   `FA-6_VIEW_TAG_ML_KEM.md` §3.2, §5.1. **Target:** V3.0 pre-genesis before
   multisig receive path is production-load-bearing (or explicit waiver).
 
+- **`tx_extra` `0x02` Nonce: shed from the genesis grammar — FA-10 is
+  the sanctioned tagging channel** (added 2026-08-06, roadmap-review
+  thread; scope-routed to the credit-wire / tx_extra canonical-form
+  lane rather than the send-record round). With FA-10 labels adopted
+  (uniform 8-byte per-output `enc_label`, sentinel-indistinguishable
+  on wire — grounding in `docs/design/WALLET_SEND_RECORD.md` §1), the
+  `0x02` Nonce field is a second, non-uniform tagging channel that
+  partitions users exactly the way FA-10 was designed to prevent:
+  presence-vs-absence and length are cleartext observables. Shedding
+  follows the `0x03`/`0xDE` precedent. The padding-length,
+  field-ordering, and duplicate-tag canonical-form channels are
+  separate items in that lane, not this entry. Genesis-frozen wire
+  grammar ⇒ lands pre-genesis. *Target: V3.0 (with the tx_extra
+  canonical-form pass).*
+
 - **Phase 2a send path — engine substrate (closed 2026-06).** `LocalPendingTx`
   build/sign/wire/submit on `Engine<S>` with production daemon fee snapshot +
   submitter, reservation-before-async-sign, and `TestDaemon` integration tests
@@ -5308,8 +5424,9 @@ sustainability is unaffected by the recalibration.
   that the 2026-04-27 actor-architecture decision-log entry pins
   as architectural commitments:
 
-  1. **Idle eviction.** `shekyl-engine-rpc` server (post-rename
-     name) tears down `Engine` instances after a configurable
+  1. **Idle eviction.** The `shekyl-wallet-rpc` server (this work's
+     home since the transitional `shekyl-engine-rpc` was deleted at
+     roadmap B1) tears down `Engine` instances after a configurable
      idle timeout, zeroing secrets via the actor topology
      shutdown. Subsequent requests re-open from the file (paying
      the KDF cost once per idle cycle). Bounds secret residency
@@ -5356,7 +5473,7 @@ sustainability is unaffected by the recalibration.
   Stage 5 in V3.x.
 
   *Definition of done:* idle timeout configurable via
-  `shekyl-engine-rpc` config with documented default-rationale;
+  `shekyl-wallet-rpc` config with documented default-rationale;
   secrets verifiably zeroed on eviction; `engine_lock` JSON-RPC
   method present, documented in OpenAPI spec, tested; multi-engine
   registry implemented with integration tests for multiple
@@ -5784,7 +5901,8 @@ sustainability is unaffected by the recalibration.
   **Cleanup scope.** Design and ship a BIP-39-aware new-wallet
   FFI (provisional name `wallet2_ffi_create_wallet_from_bip39`),
   rewire shekyl-engine-rpc and shekyl-gui-wallet's
-  `wallet_bridge.rs` to the new entry, **delete**
+  `wallet_bridge.rs` to the new entry (neither rewire target still
+  consumes this FFI — see the disposition below), **delete**
   `wallet2_ffi_create_wallet` and `on_create_wallet` in the
   same atomic PR per
   [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
@@ -5832,12 +5950,18 @@ sustainability is unaffected by the recalibration.
   acceptable pre-genesis posture, since production wallet creation is
   the Rust BIP-39 path. **Reopening criteria:** (a) a new consumer
   wires to `wallet2_ffi_create_wallet` / `on_create_wallet` before
-  Phase 5 — the disposition reopens at that PR's review; (b) Phase 5
+  Phase 5 — the disposition reopens at that PR's review; ~~(b) Phase 5
   slips past stressnet start while `shekyl-engine-rpc`'s legacy bridge
   (`rust/shekyl-engine-rpc/src/engine.rs` create-wallet call site) is
   a stressnet-exposed surface — the BIP-39-aware FFI ships then as a
-  bounded stopgap. *Re-evaluation shape:* the introducing PR's review
-  for (a); the stressnet-readiness review for (b). *Target:* closed by
+  bounded stopgap.~~ **Criterion (b) is discharged and can no longer
+  fire (2026-08-06, roadmap B1):** that bridge is deleted with its
+  crate, so the create-wallet call site no longer exists and
+  `wallet2_ffi_create_wallet` has *no* in-tree Rust consumer at all.
+  That strengthens the rejection rather than reopening it — the C++
+  entry point is now unreachable from Rust and simply waits for Phase
+  5. *Re-evaluation shape:* the introducing PR's review
+  for (a). *Target:* closed by
   the Phase 5 deletion commit, or at whichever reopening criterion
   fires first.
 
@@ -5849,8 +5973,9 @@ sustainability is unaffected by the recalibration.
   [`src/cryptonote_basic/account.cpp:443–446`](../src/cryptonote_basic/account.cpp)
   (the raw-seed-on-mainnet restriction that drives the
   brokenness);
-  [`rust/shekyl-engine-rpc/src/ffi.rs`](../rust/shekyl-engine-rpc/src/ffi.rs)
-  (in-tree Rust consumer that needs the new FFI rewire);
+  `rust/shekyl-engine-rpc/src/ffi.rs` (the former in-tree Rust consumer
+  that would have needed the FFI rewire — deleted at roadmap B1, so
+  there is nothing left to rewire);
   [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10 (substrate disposition).
 
@@ -8774,7 +8899,7 @@ sustainability is unaffected by the recalibration.
 
   Pulled transitively via `heapless 0.7.17 → postcard 1.1.3`,
   consumed by `shekyl-ffi` and `shekyl-engine-state` (and through
-  `shekyl-engine-state` by `shekyl-scanner`, `shekyl-engine-rpc`,
+  `shekyl-engine-state` by `shekyl-scanner`,
   `shekyl-engine-file`, `shekyl-engine-core`) for deterministic
   serialization at the FFI / engine-state boundary. The advisory's
   upstream remediation summary is "the crate is unmaintained;
@@ -10064,8 +10189,9 @@ one place to confirm each item's relationship to the wallet stack.
   method strings (`wallet_get_balance`, `wallet_create_address`,
   `change_wallet_password`, ...). Those strings are the externally
   exposed wire surface today, served by the C++
-  `shekyl-wallet-rpc.exe` binary; the Rust `shekyl-engine-rpc`
-  forwards anonymously to the C++ binary via `Wallet2::json_rpc_call`.
+  `shekyl-wallet-rpc.exe` binary. (The Rust `shekyl-engine-rpc` used to
+  forward to it via `Wallet2::json_rpc_call`; that crate is deleted at
+  roadmap B1, so the C++ binary is the only carrier of these strings.)
   Phase 4b of the wallet rewrite plan replaces that binary with a
   Rust-native JSON-RPC server whose method set is redesigned wholesale
   (Shekyl-native JSON shapes, OpenAPI spec) — at which point the
@@ -10077,8 +10203,19 @@ one place to confirm each item's relationship to the wallet stack.
   rename"* (2026-04-27) §"Deferred work" entry 2; CHANGELOG
   `[Unreleased]` BREAKING block.
 
-- **Retire `shekyl-engine-rpc::rust-scanner` Cargo feature (Phase 4b).**
-  The `rust-scanner` feature on `shekyl-engine-rpc` gates a JSON-RPC-side
+- **~~Retire `shekyl-engine-rpc::rust-scanner` Cargo feature (Phase 4b).~~
+  CLOSED 2026-08-06 — retired by deletion, not by cutover (roadmap B1).**
+  The predicted ending below was "Phase 4b cuts the crate over to `Engine<S>`
+  and the feature retires alongside." What happened instead: Phase 4b built
+  the Engine-native `shekyl-wallet-rpc` as a *separate* crate, which never
+  had a side-cache to begin with, leaving `shekyl-engine-rpc` with no
+  consumer — so the whole crate was deleted, taking `scanner_state`, the
+  `scanner_*` handlers, the `LiveLedger` alias, and the `rust-scanner`
+  feature with it. No JSON-RPC read path now goes through a
+  `(LedgerBlock, LedgerIndexes)` side-cache. Original entry, for the
+  record:
+
+  The `rust-scanner` feature on `shekyl-engine-rpc` gated a JSON-RPC-side
   `(LedgerBlock, LedgerIndexes)` cache (`scanner_state::LiveLedger`,
   the `scanner_*` JSON-RPC handlers) that the daemon RPC server reads
   from while the underlying crate is still routed through `wallet2.cpp`
@@ -14326,7 +14463,7 @@ reference.
   serai/`ciphersuite` internals). A CI grep gate in
   `.github/workflows/build.yml` checks all Shekyl crates
   (`shekyl-ffi`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-proofs`,
-  `shekyl-tx-builder`, `shekyl-scanner`, `shekyl-engine-rpc`,
+  `shekyl-tx-builder`, `shekyl-scanner`,
   `shekyl-daemon-rpc`) and asserts that none of their normal dependency
   trees pull in 0.4. Direct `dalek_ff_group` usage in source is printed
   for visibility but does not fail (legitimate 0.5 usage is expected).

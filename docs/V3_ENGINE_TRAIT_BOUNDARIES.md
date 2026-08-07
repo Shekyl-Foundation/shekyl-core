@@ -240,7 +240,7 @@ preservation. The two are complementary disciplines.
 | Mailbox sizing, backpressure policy, supervision strategy | Stage 2 onwards, per actor |
 | Message-type definitions (`enum KeyEngineMsg { ... }`) | Stage 2 onwards, per actor |
 | `ActorRef` wiring on `Engine<S>` | Stage 4 (replaces concrete fields) |
-| Removal of the outer `Arc<RwLock<Engine<S>>>` at the binary boundary | Stage 4 (Path B decision; coordinated with `shekyl-engine-rpc` cutover) |
+| Removal of the outer `Arc<RwLock<Engine<S>>>` at the binary boundary | Stage 4 (Path B decision; coordinated with the `shekyl-wallet-rpc` cutover) |
 | `RefreshSummary::stake_events` going non-zero | Phase 2b (`StakeEngine`; consumes `EconomicsEngine` per §2.7) |
 | `StakeEngine` trait surface (per-stake state, FSM, claim/unstake) | Phase 2b — separate trait that *consumes* `EconomicsEngine` for parameters and derived values; not a sub-trait of it (per §2.7's dependency-not-subsumption framing) |
 | `ArchivalEngine` trait surface (per-shard state, archival operations) | V3.x — separate trait that consumes `EconomicsEngine` |
@@ -639,7 +639,7 @@ preserve:
 **`pub(crate)` until JSON-RPC server cutover** (V3.2 per
 `docs/FOLLOWUPS.md`'s `wallet_rpc_server` Rust migration
 target). The traits are internal contracts of `shekyl-engine-core`
-that consumers (the wallet binaries, the `shekyl-engine-rpc`
+that consumers (the wallet binaries, the `shekyl-wallet-rpc`
 JSON-RPC server) reach via `Engine<S>`'s inherent methods, not
 via direct trait dispatch. `pub(crate)` keeps the trait surfaces
 *internally* reviewable while the implementations stabilize and
@@ -1081,7 +1081,10 @@ surface.** Three independent grounds:
    which returns a borrowed view rather than an owned `Vec`:
    `shekyl-engine-rpc`'s `scanner_get_transfers` /
    `scanner_incoming_transfers` (gated on the `rust-scanner`
-   feature) call `ledger.transfers().iter().filter().map().collect()`
+   feature; that crate is deleted at roadmap B1, but it was the
+   motivating caller when this was decided and the conclusion is
+   unchanged for its successors) called
+   `ledger.transfers().iter().filter().map().collect()`
    into `Vec<Value>`; without `rust-scanner` the same RPCs route
    through C++ `wallet2_ffi_get_transfers`. Either way no caller
    asks for owned `Vec<TransferDetails>` from the trait — the
