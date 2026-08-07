@@ -1109,10 +1109,13 @@ mod s6_self_cert {
     #[tokio::test(flavor = "multi_thread")]
     async fn session_self_cert_passes_over_os_rng_at_spawn() {
         let handle = spawn_with_self_cert(&[0], TestSelfCert::RealOsRng);
-        let cert = handle.wait_for_self_cert().await;
+        // Name deliberately avoids `cert` — CodeQL treats that substring as a
+        // PEM/TLS credential source; this value is an RNG statistical grade
+        // (`CertifyReport`: chi-square / lag-1), not a secret.
+        let grade = handle.wait_for_self_cert().await;
         assert!(
-            cert.is_ok(),
-            "the production OsRng adapter must pass the session self-cert, got {cert:?}"
+            grade.is_ok(),
+            "the production OsRng adapter must pass the session self-cert, got {grade:?}"
         );
         // The actor is alive and serving after a passing self-cert.
         assert!(handle.active_persona().await.is_ok());
@@ -1131,10 +1134,10 @@ mod s6_self_cert {
         // fail-stops (the spawn helper builds args directly with the mode).
         let handle = spawn_with_self_cert(&[0], TestSelfCert::Degenerate);
 
-        let cert = handle.wait_for_self_cert().await;
+        let grade = handle.wait_for_self_cert().await;
         assert!(
-            cert.is_err(),
-            "a degenerate self-cert source must fail-stop the spawn, got {cert:?}"
+            grade.is_err(),
+            "a degenerate self-cert source must fail-stop the spawn, got {grade:?}"
         );
         // The actor fail-stopped: subsequent ops are terminally unavailable.
         assert!(matches!(

@@ -4,6 +4,21 @@
 // BSD-3-Clause
 
 //! FROST/SAL threshold signing FFI.
+//!
+//! Entire surface is gated on `feature = "multisig"`. Imports sit under the
+//! same cfg so the default (no-multisig) build has no unused-import debt.
+
+#[cfg(feature = "multisig")]
+use super::legacy_fcmp::parse_prove_witness;
+#[cfg(feature = "multisig")]
+use super::legacy_types::*;
+#[cfg(feature = "multisig")]
+use super::legacy_util::*;
+
+#[cfg(feature = "multisig")]
+/// Opaque handle for a FROST SAL session (one per input).
+/// Created by `shekyl_frost_sal_session_new`, freed by `_session_free`.
+pub struct ShekylFrostSalSession(shekyl_fcmp::frost_sal::FrostSalSession);
 
 #[cfg(feature = "multisig")]
 /// Create a new FROST SAL session for one input.
