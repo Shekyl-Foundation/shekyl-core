@@ -22,10 +22,10 @@ use dalek_ff_group::{EdwardsPoint, Scalar};
 use ec_divisors::DivisorCurve;
 use helioselene::Selene;
 use multiexp::multiexp_vartime;
-use rand_core::OsRng;
+use rand_core::{CryptoRng, RngCore};
 use shekyl_curve_generators::{SELENE_HASH_INIT, T};
 use shekyl_fcmp::leaf::PqcLeafScalar;
-use shekyl_fcmp::proof::{prove, BranchLayer, ProveInput};
+use shekyl_fcmp::proof::{prove_with_rng, BranchLayer, ProveInput};
 use shekyl_fcmp::tree::{
     hash_grow_helios, hash_grow_selene, helios_hash_init, helios_point_to_selene_scalar,
     selene_hash_init, selene_point_to_helios_scalar,
@@ -104,7 +104,13 @@ pub enum ChunkLayout {
 /// rather than tree depth, a second axis that would otherwise ride along and
 /// produce F-7's confound (§69.2). [`ChunkLayout::Spread`] is the production
 /// topology; see the enum.
-pub fn build_fixture(
+///
+/// All randomness — the fixture inputs **and** the FCMP++ proof (via
+/// [`prove_with_rng`]) — is drawn from `rng`. The wall-clock bench passes
+/// `OsRng`; the instruction-count bench passes a seeded RNG so the fixture is
+/// byte-identical run-to-run and the drift gate's Callgrind counts are stable.
+pub fn build_fixture<R: RngCore + CryptoRng>(
+    rng: &mut R,
     n_in: usize,
     n_out: usize,
     tree_depth: u8,
@@ -137,12 +143,12 @@ pub fn build_fixture(
     let mut h_pqcs = Vec::with_capacity(n_in);
 
     for _ in 0..n_in {
-        let x = Scalar::random(&mut OsRng);
-        let y = Scalar::random(&mut OsRng);
+        let x = Scalar::random(&mut *rng);
+        let y = Scalar::random(&mut *rng);
         let o = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
-        let i = EdwardsPoint::random(&mut OsRng);
-        let c = EdwardsPoint::random(&mut OsRng);
-        let h = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let i = EdwardsPoint::random(&mut *rng);
+        let c = EdwardsPoint::random(&mut *rng);
+        let h = <Selene as Ciphersuite>::F::random(&mut *rng);
         xs.push(x);
         ys.push(y);
         os.push(o);
@@ -275,8 +281,8 @@ pub fn build_fixture(
             h_pqc: PqcLeafScalar(all_h_pqc[i]),
             spend_key_x: xs[i].to_repr(),
             spend_key_y: ys[i].to_repr(),
-            commitment_mask: Scalar::random(&mut OsRng).to_repr(),
-            pseudo_out_blind: Scalar::random(&mut OsRng).to_repr(),
+            commitment_mask: Scalar::random(&mut *rng).to_repr(),
+            pseudo_out_blind: Scalar::random(&mut *rng).to_repr(),
             leaf_chunk_outputs: per_input_chunk[i]
                 .iter()
                 .map(|&j| (os[j].to_bytes(), is[j].to_bytes(), cs[j].to_bytes()))
@@ -287,8 +293,8 @@ pub fn build_fixture(
         })
         .collect();
 
-    let result =
-        prove(&inputs, &tree_root, tree_depth, signable_tx_hash).expect("fixture proof must build");
+    let result = prove_with_rng(&mut *rng, &inputs, &tree_root, tree_depth, signable_tx_hash)
+        .expect("fixture proof must build");
 
     let mut key_images_flat = Vec::with_capacity(32 * n_in);
     for i in 0..n_in {
@@ -309,7 +315,7 @@ pub fn build_fixture(
     // `check_commitment_masks` is paid to confirm.
     let mut masks_flat = Vec::with_capacity(32 * n_out);
     for _ in 0..n_out {
-        masks_flat.extend_from_slice(&EdwardsPoint::random(&mut OsRng).to_bytes());
+        masks_flat.extend_from_slice(&EdwardsPoint::random(&mut *rng).to_bytes());
     }
 
     AdmissionFixture {

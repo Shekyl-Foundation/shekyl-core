@@ -79,6 +79,7 @@
 //! `hop`.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use rand_core::OsRng;
 
 #[path = "relay_admission_fixture.rs"]
 mod relay_admission_fixture;
@@ -126,7 +127,11 @@ fn bench_admission(c: &mut Criterion) {
         // the domain has EIGHT points, and measuring all of them makes the
         // surface itself the specification (§80).
         for n_in in 1usize..=8 {
-            let fixture = build_fixture(n_in, n_out, tree_depth, layout);
+            // Wall-clock timing averages over many samples, so a fresh random
+            // fixture each build is fine (and closer to production variety). The
+            // instruction-count sibling (`relay_admission_verify_iai`) pins a
+            // seed instead, because Callgrind counts must be byte-reproducible.
+            let fixture = build_fixture(&mut OsRng, n_in, n_out, tree_depth, layout);
 
             // Self-witnessing: a fixture that does not verify would make every
             // timing below a measurement of the rejection path. The status
