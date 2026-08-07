@@ -18,10 +18,28 @@
 //! The same oracle is rerun to confirm the actor projects the genesis-frozen
 //! identity bytes.
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use curve25519_dalek::Scalar;
+use kameo::message::{Context, Message};
+use shekyl_archival_bond_builder::build_join_market_vin;
+use shekyl_archival_retention::{
+    emission_vin_verify_auth, emission_vin_verify_backing, p_canonical_id_from_hybrid_pubkey,
+    ArchivalRewardEmissionVin, RewardCommit, ShardSet, MAX_CLAIM_AGE_W,
+};
+use shekyl_crypto_pq::kem::HybridCiphertext;
+use shekyl_scanner::ScannableBlock;
+use shekyl_standoff::draw::GapRng;
+use shekyl_tx_builder::TreeContext;
+use shekyl_types::{GlobalOutputIndex, PCanonicalId};
+
 use super::test_fixtures::{constructed_record, derive_bundle, spawn_over};
 use super::*;
-
-use shekyl_archival_retention::{ShardSet, MAX_CLAIM_AGE_W};
+use crate::engine::bond_assembly::FundingInputContext;
+use crate::engine::emission_claim::self_check_claims;
+use crate::engine::error::KeyEngineError;
+use crate::engine::pscan::scan_step::BlockRange;
+use crate::engine::{Network, ShekylAddress};
 
 /// The genesis-frozen `hybrid_bond_id` canonical bytes for a slot, computed
 /// directly via the derivation oracle.

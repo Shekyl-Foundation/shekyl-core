@@ -1,128 +1,9 @@
-// Copyright (c) 2026, The Shekyl Foundation
+// Copyright (c) 2025-2026, The Shekyl Foundation
 //
 // All rights reserved.
 // BSD-3-Clause
 
-//! [`StakeEngine`]: the `kameo` actor that owns the wallet's **pre-derived
-//! archival personas** (`P`) — the derive-forward set, *not* the master seed —
-//! plus [`StakeEngineHandle`], the `Clone` handle held in place of the actor.
-//!
-//! Per [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`] §10/§10.1, the StakeEngine
-//! actor *is* the gate-6 firewall realized as actor isolation: it is the sole
-//! owner of `P`'s secret key material, structurally disjoint from the
-//! `LedgerEngine` transfer pipeline. The properties below are what make that
-//! isolation hold rather than merely declare it.
-//!
-//! # Model D — derived bundles, no session-long seed
-//!
-//! The seed is **not** held session-long anywhere. At `assemble()` the
-//! orchestrator borrows the master seed (`&[u8; 64]`), derives the
-//! **derive-forward set** — `{personas with live bonds} ∪ {p_slot ..= p_slot+k}`
-//! — and hands those [`ArchivalPKeys`] bundles to this actor, then drops the
-//! seed at function end (the same lifetime the `KeyActor` already imposes on the
-//! seed it derives `AllKeysBlob` from). The actor therefore holds only **derived
-//! material** (same `!Clone` + per-field `ZeroizeOnDrop` class as `AllKeysBlob`),
-//! never the root. Activation switches the active bundle and wipes the retired one
-//! — it never re-acquires the seed. Lookahead-exhaustion and first-stake-mid-
-//! session collapse onto **reopen** (re-runs `assemble()` with the transient
-//! seed); there is no re-auth/KEK machinery.
-//!
-//! ## Why the *bonded union*, not a clean lookahead window
-//!
-//! The archival model moves the active slot *while bonded*: a retired persona's bonds sit
-//! on-chain as dormant balances (no simultaneous wire activity → the firewall
-//! permits it), and unbonding one later needs that persona's `bond_spend` key.
-//! Because the seed is gone after `assemble()`, a persona absent from the
-//! pre-derived set is unreachable for the wallet's life — so a retired-but-
-//! bonded persona under a bare `{p_slot ..= p_slot+k}` window would brick
-//! unbonding. The held set is therefore the **bonded union plus the lookahead**,
-//! and activation-wipe wipes **only personas with no live bond** (typed contract
-//! #4, [`HeldPersona`]). The live-bond slot set arrives from the persisted
-//! [`StakingBlock`](shekyl_engine_state::StakingBlock) `bonded_slots` hint.
-//!
-//! # Secret-locality (`36-secret-locality.mdc`, `16-architectural-inheritance.mdc`)
-//!
-//! The actor owns the held bundles privately. The message protocol is
-//! **operation-shaped, never key-shaped**: requests name an operation ("mint a
-//! handle for slot N", "activate this handle", and in 2c-2b "sign this bond
-//! preimage"), and replies carry **public** results ([`PersonaIdentity`] holds
-//! the typed [`HybridPublicKey`] that rides the wire as `P_pubkey` — a type with
-//! no secret field). Nothing in the protocol can request a bundle and nothing
-//! can `Clone` one out, so the secret cannot escape the actor (§10.1 #1).
-//!
-//! # `PersonaHandle` — held-only, operation-scoped (typed contract #2)
-//!
-//! Activation (and, in 2c-2b, signing) take a [`PersonaHandle`] minted only for
-//! a persona in the held set, never a raw [`PSlot`] validated per use. "Use an
-//! unheld persona" then has no expressible form: the membership check collapses
-//! to the single slot→handle minting boundary ([`MintPersonaHandle`]). The
-//! handle is **operation-scoped** — it carries the actor's activation
-//! `generation`, and every activation that wipes a persona advances it, so a
-//! handle retained across an activation is rejected ([`StakeEngineError::StaleHandle`])
-//! rather than signing against zeroized memory. [`StakeEngineError::LookaheadExhausted`]
-//! stays a *real* domain error (the budget is consumed → reopen), distinct from
-//! the typed-away can't-happen state.
-//!
-//! # Atomic activation (§10.1 robustness #2 / §10.9)
-//!
-//! Activating a held slot is a **single state transition**: a single assignment
-//! installs the new active slot, then the retired slot is wiped iff it is
-//! *ephemeral* (no live bond). There is never a window with two active personas
-//! and never a gap with none. Bonded retired personas stay resident so
-//! unbonding remains reachable. The bundles are **not** persisted; reopen
-//! re-derives the derive-forward set from the seed (`assemble()`).
-//!
-//! # Fail-stop, not supervised
-//!
-//! Like [`KeyActor`](super::key_actor::KeyActor), the StakeEngine is the
-//! wallet's secret owner and is **not** restart-supervised: a handler panic
-//! runs [`Actor::on_panic`] returning [`ControlFlow::Break`], so the actor
-//! stops rather than restarts. After a stop, every handle call collapses to the
-//! terminal [`StakeEngineError::StakeActorUnavailable`]; recovery is a full
-//! wallet close + re-open, which re-derives the derive-forward set.
-//!
-//! # Status: inert (PR 2c-2a)
-//!
-//! The actor is reworked to Model D here; the live spawn (`assemble()` deriving
-//! the union and spawning the handle, `Engine.stake`) lands in this same PR's
-//! `assemble()` wiring. 2c-2b wires the block-timed placement offset into the
-//! [`SignBond`] reply ([`SignedBondPost`] pairs the signed vin with its
-//! bond-post offset) and the GF-7 measurement seam (`gf7-hooks`,
-//! `docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md`). The first live caller (the
-//! JoinMarket bond request that consumes a [`PersistedBondTicket`] +
-//! [`PersonaHandle`] and dispatches at the planned offsets) lands with the
-//! 2c-2a assemble / 2d broadcast wiring. Items not yet wired carry their own
-//! `#[allow(dead_code)]` so the dead-code check stays effective and the
-//! allows fall away as wiring lands.
-//!
-//! # No behavioral delta across `gf7-hooks` (hooks-spec §6.5)
-//!
-//! Feature-on and feature-off builds of this actor are **behaviorally
-//! identical** — the §4 layer-3 consequence, held by construction rather
-//! than by test:
-//!
-//! - Every `#[cfg(feature = "gf7-hooks")]` site in this file (grep the
-//!   attribute; the set is: the trait imports, one `StakeEngineArgs` field,
-//!   one `StakeEngine` field, the `on_start` field forward, the spawn-path
-//!   no-op injection, the emission block in the [`SignBond`] handler, and
-//!   test code) is either **state that only the emission block reads** or
-//!   **the emission block itself**.
-//! - The emission block's only statements call
-//!   [`BroadcastTimelineObserver::record`], whose return type is `()` — it
-//!   cannot feed a value back into the handler. The draw, the degeneracy
-//!   guard, the offset computation, the vin signing, and the
-//!   [`SignedBondPost`] reply all sit **outside** the `cfg`, unconditioned.
-//! - The production observer is the no-op even when the feature is on;
-//!   recording observers exist only in `shekyl-staking-sim` (CI-asserted by
-//!   the `gf7-no-emit-guard` dependency-graph check).
-//!
-//! Feature-off therefore removes only code whose effect was already `()`.
-//! Empirically corroborated by the test suite running under both feature
-//! configurations in CI.
-//!
-//! [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`]: ../../../../../docs/design/ARCHIVAL_BOND_CONSTRUCTION.md
-//! [`ArchivalPKeys`]: shekyl_crypto_pq::archival_p::ArchivalPKeys
-//! [`PersistedBondTicket`]: super::stake_persist::PersistedBondTicket
+//! StakeEngine actor, messages, and handle.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
@@ -135,56 +16,48 @@ use kameo::message::{Context, Message};
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::Scalar;
 use rand_core::RngCore as _;
-use shekyl_archival_bond_builder::{build_join_market_vin, BondBuildError, JoinMarketVin};
+use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_archival_retention::{
-    bond_floor, emission_vin_verify_auth, emission_vin_verify_backing, epoch_is_claim_expired,
-    ArchivalRewardEmissionVin, HoldingsDescriptor, MembershipOnlyBacking, RewardCommit,
+    bond_floor, emission_vin_verify_auth, emission_vin_verify_backing, ArchivalRewardEmissionVin,
+    HoldingsDescriptor, MembershipOnlyBacking, RewardCommit,
 };
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
-use shekyl_crypto_pq::derivation::{
-    derive_output_secrets, derive_pqc_public_key, hash_pqc_public_key,
-};
-use shekyl_crypto_pq::kem::HybridCiphertext;
+use shekyl_crypto_pq::derivation::hash_pqc_public_key;
 use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
-use shekyl_crypto_pq::output::{construct_output, recover_combined_ss, sign_pqc_auth_for_output};
-use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme as _};
-use shekyl_curve_generators::biased_hash_to_point;
-use shekyl_engine_state::pscan_state::PFundingOutputRecord;
+use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
+use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_scanner::extra::Extra;
-use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
+use shekyl_scanner::ScannableBlock;
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
 use shekyl_tx_builder::{
     phase1_payload_hashes, prove_backing_membership, sign_pqc_auths, sign_transaction_with_terms,
-    tx_prefix_hash_from_parts_with_extra, InputTerm, LeafEntry, PqcAuth, SpendInput, TreeContext,
-    WireEncodeInput,
+    tx_prefix_hash_from_parts_with_extra, InputTerm, PqcAuth, TreeContext, WireEncodeInput,
 };
-use shekyl_types::{GlobalOutputIndex, PCanonicalId, SettlementEpoch};
+use shekyl_types::{GlobalOutputIndex, PCanonicalId};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
 use zeroize::Zeroizing;
 
-use super::backing_set::ClaimOperands;
-use super::bond_assembly::{
+use crate::engine::backing_set::ClaimOperands;
+use crate::engine::bond_assembly::{
     finalize_bond_tx, wire_bond_post_input, BondAssemblyError, FundingInputContext, PBoundBytes,
 };
-use super::drain_assembly::{assemble_drain_tx, AssembleDrain, AssembledDrain, DrainAssemblyError};
-use super::emission_claim::{
+use crate::engine::drain_assembly::{assemble_drain_tx, AssembleDrain, AssembledDrain};
+use crate::engine::emission_claim::{
     assemble_claims, derive_claimable_epochs, self_check_claims, EmissionClaimError,
     EMISSION_CLAIMS_SIZE_BUDGET,
 };
-use super::error::KeyEngineError;
-use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanError};
-use super::pscan::scan_step::{
-    run_dual_extractor, BlockRange, DualExtractError, DualExtractOutput, FundingOutputMatch,
-    KeyImageWatchSet, ScanStep, ScanStepResult, SpentFundingMatch,
+use crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona;
+use crate::engine::pscan::scan_step::{
+    run_dual_extractor, BlockRange, DualExtractOutput, FundingOutputMatch, KeyImageWatchSet,
+    ScanStep, ScanStepResult, SpentFundingMatch,
 };
-use super::stake_timing::{OsRngGapAdapter, DEFAULT_ENTRY_GAP};
-use super::traits::key::SourceSecretsBundle;
-use super::{Network, ShekylAddress};
+use crate::engine::stake_timing::{OsRngGapAdapter, DEFAULT_ENTRY_GAP};
+use crate::engine::{Network, ShekylAddress};
 
 // S6 / DQ3 — the session RNG self-cert grader (`shekyl-standoff` `conformance`)
 // is gated to **`x86_64` exactly** (the guard below is `target_arch = "x86_64"`,
@@ -206,551 +79,11 @@ compile_error!(
      x86)."
 );
 
-// ---------------------------------------------------------------------------
-// Typed domain values
-// ---------------------------------------------------------------------------
-
-/// Archival persona slot index.
-///
-/// Persona-slot ordinal — re-exported from [`shekyl_types::PSlot`] so the
-/// stake-engine surface and the persisted pscan funding records share one
-/// domain type (WI-2 domain-newtype carrier).
-pub(crate) use shekyl_types::PSlot;
-
-/// How many slots past the current cursor `assemble()` pre-derives into the
-/// held set (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, Model D).
-///
-/// # Rationale and bounds (`75-system-autonomy.mdc`)
-///
-/// `k` is the one tuning knob of Model D. The derive-forward set at open is
-/// `{persisted bonded slots} ∪ {cursor ..= cursor + k}`: the bonded slots are
-/// reachable for unbonding, and the `k`-slot window covers activations that
-/// happen *during* the session without re-acquiring the seed. Activation is
-/// sequential (`i → i+1`), so a window of `k` future slots covers `k` in-session
-/// activations before the lookahead is exhausted and the wallet must be reopened
-/// (the root-free recovery path) to derive further.
-///
-/// - **Lower bound.** `k = 0` degenerates to "reopen to activate" — still
-///   correct and root-free, but every activation costs a reopen.
-/// - **Upper bound.** Each unit of `k` is one extra PQ keygen at open and one
-///   extra resident `ArchivalPKeys` bundle; the cost is linear in `k` and paid
-///   only by stakers. Large `k` widens the memory blast radius (held derived
-///   personas) without benefit, since most sessions move the active slot at most once.
-/// - **Chosen value `2`.** Most sessions use one persona and move the active slot at most
-///   once; `k = 2` covers the common case (current + two in-session activations)
-///   with a two-bundle resident cost. Raising it is a one-line change reviewed
-///   against this rationale.
-pub(crate) const ARCHIVAL_PERSONA_LOOKAHEAD: u32 = 2;
-
-/// A held persona bundle tagged by whether it carries a **live bond**.
-///
-/// This is **typed contract #4** ([`ARCHIVAL_BOND_CONSTRUCTION.md`] §10.2):
-/// activation-wipe must wipe only personas with *no* live bond, because a
-/// retired-but-bonded persona's `bond_spend` key is needed to unbond it later
-/// and — under Model D, with the seed gone after `assemble()` — a wiped persona
-/// is unreachable for the wallet's life. Rather than guard that with a runtime
-/// check, the wipe path ([`wipe_ephemeral`]) accepts only an [`EphemeralPersona`]
-/// *by value*: a [`BondedPersona`] cannot be passed to it, so "wipe a persona
-/// with a live bond" does not compile.
-///
-/// The bonded/ephemeral tag is assigned once at construction from the persisted
-/// `bonded_slots` hint (see [`StakeEngineArgs::bonded`]); it is a reconcilable
-/// hint, not consensus truth (2d reconciles it against actual bond state).
-///
-/// [`ARCHIVAL_BOND_CONSTRUCTION.md`]: ../../../../../docs/design/ARCHIVAL_BOND_CONSTRUCTION.md
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-enum HeldPersona {
-    /// Carries at least one live bond (`consumer_held` or posted). Never wiped
-    /// while bonded — its `bond_spend` key must stay reachable to unbond.
-    Bonded(BondedPersona),
-    /// A pre-derived lookahead persona with no live bond. The *only* variant
-    /// the activation-wipe path accepts.
-    Ephemeral(EphemeralPersona),
-}
-
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-impl HeldPersona {
-    /// Borrow the underlying derived bundle (read-only; the secret never
-    /// escapes — callers project the public [`PersonaIdentity`] out of it).
-    fn keys(&self) -> &ArchivalPKeys {
-        match self {
-            HeldPersona::Bonded(b) => &b.0,
-            HeldPersona::Ephemeral(e) => &e.0,
-        }
-    }
-}
-
-/// A held persona that carries a live bond. The wipe path cannot accept this
-/// type (typed contract #4), so a bonded persona is never zeroized while a bond
-/// depends on its `bond_spend` key.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-struct BondedPersona(ArchivalPKeys);
-
-/// A held persona with no live bond — the only thing [`wipe_ephemeral`] accepts.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-struct EphemeralPersona(ArchivalPKeys);
-
-/// Wipe a retired ephemeral persona.
-///
-/// Takes ownership of an [`EphemeralPersona`] by value — a [`BondedPersona`]
-/// cannot be passed (typed contract #4), so wiping a persona with a live bond is
-/// uncallable. The bundle's per-field `ZeroizeOnDrop` runs at the drop here; the
-/// explicit `drop` makes the wipe a named operation rather than an implicit
-/// scope-end.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-fn wipe_ephemeral(persona: EphemeralPersona) {
-    drop(persona);
-}
-
-/// Wipe a **retired** (terminal) bonded persona — the DQ8 exception to typed
-/// contract #4.
-///
-/// Takes a [`BondedPersona`] by value. It is the *only* path that wipes a bonded
-/// persona, and it is reached only through the witness-gated retire handler
-/// ([`RetireBondedPersona`]) — so a bonded persona is wiped **only** on
-/// positively-confirmed terminal evidence (`Unbond` + `W`-lapse + finality-deep),
-/// never on absence. The bundle's per-field `ZeroizeOnDrop` runs at the drop.
-#[allow(dead_code)] // transient — the SP-5 retire path is the consumer.
-fn wipe_bonded(persona: BondedPersona) {
-    drop(persona);
-}
-
-/// Positive-confirmation evidence that a bonded persona is **terminal** and may
-/// leave the scan union (2d-1 DQ8).
-///
-/// Constructible only when the retirement predicate holds, so a witness *existing*
-/// is proof the persona is retire-eligible — and since the actor has no chain to
-/// re-verify against, the witness **is** the guard. Mirrors the
-/// [`PersistedBondTicket`](super::stake_persist::PersistedBondTicket) /
-/// [`PersonaHandle`] evidence-typestate pattern. The discipline is the same
-/// positive-confirmation, never-absence rule as SP-6's GC and SP-7's
-/// `AbsentVerified`: a *wrong* retire wipes a still-live persona's `bond_spend`
-/// key → can't unbond → **stuck funds**, the exact mirror of a wrongful GC, which
-/// the conservative predicate guards against.
-#[allow(dead_code)] // transient — the SP-5 scan task builds it; the retire handler consumes it.
-pub(crate) struct RetirementWitness {
-    /// The cleartext canonical id of the persona to retire (from its confirmed
-    /// `Unbond` bond-post). The actor matches it against the bonded union.
-    p_canonical_id: PCanonicalId,
-}
-
-#[allow(dead_code)] // transient — the SP-5 scan task is the lib consumer.
-impl RetirementWitness {
-    /// Build a witness **iff** the persona is retire-eligible: a *confirmed*
-    /// `Unbond` whose **last creditable epoch has fallen out of the consensus
-    /// claim window**. Returns `None` otherwise — never retire a persona that can
-    /// still claim, which would wipe its `bond_spend` key while live reward
-    /// collateral remains (stuck funds).
-    ///
-    /// The boundary is the consensus claim window itself, not a hand-computed
-    /// `current − U ≥ W`: it calls [`epoch_is_claim_expired`], the **same**
-    /// predicate the claim check uses — so an off-by-one (which would wipe a
-    /// still-claimable persona) is structurally impossible, and the in-progress
-    /// epoch can't be used by accident (`settled_epoch` is a *finalized* epoch).
-    ///
-    /// `e_last` is the persona's last creditable epoch; the scan passes the
-    /// **conservative** `e_last = unbond_epoch` (a late retire only wastes a little
-    /// scan work, an early one is stuck funds, so round toward later). **Finality**
-    /// is guaranteed upstream — the scan surfaces bond-posts only from behind the
-    /// cursor's reorg horizon, so a witnessed `Unbond` is already finality-deep.
-    pub(crate) fn from_confirmed_unbond(
-        p_canonical_id: PCanonicalId,
-        e_last: SettlementEpoch,
-        settled_epoch: SettlementEpoch,
-    ) -> Option<Self> {
-        epoch_is_claim_expired(e_last.to_raw(), settled_epoch.to_raw())
-            .then_some(Self { p_canonical_id })
-    }
-}
-
-/// What the witness-gated retire ([`RetireBondedPersona`]) did. All outcomes are
-/// valid (no error): the retire is **idempotent** — re-handing the same witness
-/// after the persona is gone is a no-op ([`Self::NotHeld`]).
-#[allow(dead_code)] // transient — the SP-5 scan task is the lib consumer.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum RetireOutcome {
-    /// The bonded persona was found and wiped from the union.
-    Retired { slot: PSlot },
-    /// No bonded persona matched the witness — already retired this session, or
-    /// never held (idempotent no-op).
-    NotHeld,
-    /// The matching persona is the **active** slot; left in place. A terminal
-    /// persona should not be active, but if it is we do not wipe it mid-use — the
-    /// next activation moves `active` away and the retire re-fires.
-    SkippedActive { slot: PSlot },
-    /// The matching persona's slot still holds **unspent funding outputs**; left
-    /// in place (the **funded-gate**). Wiping it would strand spendable `P`
-    /// funds: the wipe is irreversible and the open path stops deriving a retired
-    /// slot, so the funds behind the slot's keys become unrecoverable. The retire
-    /// re-fires on a later sweep once the funding is drained (arm #1 prunes the
-    /// last funding output on its spend).
-    SkippedFunded { slot: PSlot },
-}
-
-/// The set of `P` slots that still hold **unspent** funding outputs — the
-/// operand of the retire handler's funded-gate.
-///
-/// A persona whose slot is in this set is **not truly terminal**: spendable
-/// value remains behind its keys, so the witness-gated retire must never wipe
-/// it (the wipe is irreversible and the open path stops deriving a retired
-/// slot). The claim-window witness guards the *reward-collateral* stuck-funds
-/// dimension; this set guards the complementary *funding-output* dimension.
-///
-/// Redacting `Debug` and no `Serialize` (the `funding_outputs` discipline): the
-/// membership — which of `P`'s slots hold live value — is persona-correlating
-/// funding history and must not reach a clear log or a wire.
-#[derive(Clone, Default, PartialEq, Eq)]
-pub(crate) struct FundedSlots(BTreeSet<PSlot>);
-
-impl FundedSlots {
-    /// Build the set from the slots of the accrual's unspent funding outputs.
-    pub(crate) fn from_slots(slots: impl IntoIterator<Item = PSlot>) -> Self {
-        Self(slots.into_iter().collect())
-    }
-
-    /// True if `slot` still holds unspent funding (retire must be deferred).
-    pub(crate) fn contains(&self, slot: PSlot) -> bool {
-        self.0.contains(&slot)
-    }
-}
-
-impl std::fmt::Debug for FundedSlots {
-    /// Redacted — the funded-slot set is `P` funding history (see the type docs).
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("FundedSlots(<redacted funding-history>)")
-    }
-}
-
-/// An operation-scoped capability to **activate** a held persona (typed
-/// contract #2).
-///
-/// Minted only by [`MintPersonaHandle`] for a slot actually in the held set, so
-/// "activate an unheld persona" has no expressible form — the membership check
-/// lives at the single slot→handle boundary, not at every use site. The handle
-/// carries the actor's activation [`generation`](StakeEngine::generation) at mint
-/// time, and [`ActivatePersona`] consumes it **by value**: a handle authorizes
-/// exactly one activation.
-///
-/// **Operation-scoped, two ways.** An activation (an activation that changes the
-/// active slot) advances the generation, so any handle minted before it is
-/// stale ([`StakeEngineError::StaleHandle`]); and the activation removes the wiped
-/// ephemeral persona from the held set, so even a same-generation handle to it
-/// fails the membership check. A handle therefore cannot outlive the operation
-/// that minted it, which is what makes "sign against wiped memory" unexpressible.
-///
-/// Signing (2c-2b) does **not** retain a handle across the activation: it targets
-/// the persona that activation made *active*, so the handle's single-activation
-/// scope is sufficient. Deliberately **not** `Clone` — there is no caller that
-/// needs to retain or duplicate a handle (mirrors the `AllKeysBlob` Not-Clone
-/// discipline, `21-reversion-clause-discipline.mdc`); reopen this if a 2c-2b
-/// caller emerges that provably needs to drive two actor operations from one
-/// mint, with documented justification.
-#[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-pub(crate) struct PersonaHandle {
-    p_slot: PSlot,
-    generation: u64,
-}
-
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-impl PersonaHandle {
-    /// The slot this handle authorizes.
-    #[must_use]
-    pub(crate) fn p_slot(&self) -> PSlot {
-        self.p_slot
-    }
-}
-
-/// Always-on compile-time guard: the two operation capability tokens
-/// ([`PersonaHandle`], [`PersistedBondTicket`]) must remain **single-use** —
-/// neither `Clone` nor `Copy`. Their single-use-ness is what makes "use an
-/// unheld persona" (typed contract #2) and "sign before persist" (typed
-/// contract #1) unrepresentable: a token is consumed *by value* by `sign_bond`
-/// and cannot be duplicated to bypass the consumption.
-///
-/// This replaces the originally-planned `trybuild` compile-fail tests for S7(c)
-/// (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §4 R0-D# finding): `trybuild` compiles
-/// each case as an **external** crate, which cannot name these `pub(crate)`
-/// firewall types without a re-export that would itself re-expose the internals
-/// the firewall exists to encapsulate. The enforcement is the type system —
-/// module-private fields + `!Clone` + by-value consumption — which holds for
-/// **all** code unconditionally, a stronger guarantee than any external
-/// snapshot. This `const _` block is the regression guard that the `!Clone`
-/// half of that guarantee is never silently weakened by a careless
-/// `#[derive(Clone)]`. It is a zero-cost compile-time check (no runtime, no
-/// dependency); it is the inlined equivalent of
-/// `static_assertions::assert_not_impl_all!`.
-///
-/// If either token gains a `Clone`/`Copy` impl, the `AmbiguousIfImpl`
-/// resolution below becomes ambiguous and the crate fails to compile.
-const _: fn() = || {
-    trait AmbiguousIfImpl<A> {
-        fn token_must_stay_single_use() {}
-    }
-    impl<T> AmbiguousIfImpl<()> for T {}
-    #[allow(dead_code)]
-    struct Invalid;
-    impl<T: Clone> AmbiguousIfImpl<Invalid> for T {}
-
-    // Resolves uniquely iff the type is NOT `Clone`; ambiguous (compile error)
-    // if a `Clone` impl is ever added.
-    let _ = <PersonaHandle as AmbiguousIfImpl<_>>::token_must_stay_single_use;
-    let _ = <super::stake_persist::PersistedBondTicket as AmbiguousIfImpl<_>>::token_must_stay_single_use;
+use super::helpers::{
+    construct_vouts_to_base, derive_funding_key_image, derive_spend_parts, prepare_funding_inputs,
+    ConstructedVouts,
 };
-
-/// The public identity of an activated persona `P`.
-///
-/// Carries **only public material** — the typed [`HybridPublicKey`] that rides
-/// the wire as `P_pubkey`, plus the slot it was derived for. Returning the
-/// typed key (rather than raw bytes, and never the secret bundle) makes "no
-/// secret crosses the actor boundary" a property the type system checks:
-/// `HybridPublicKey` has no secret field. `Clone + Debug` is sound for the same
-/// reason.
-#[derive(Clone, Debug)]
-#[allow(dead_code)] // inert until PR 2c wiring
-pub(crate) struct PersonaIdentity {
-    /// The slot this persona was derived for.
-    pub p_slot: PSlot,
-    /// The persona's public bond identity key (= `hybrid_bond_id`, `P_pubkey`).
-    pub bond_id: HybridPublicKey,
-}
-
-#[allow(dead_code)] // inert until PR 2c wiring
-impl PersonaIdentity {
-    /// Project the public identity out of a (secret) persona bundle.
-    fn from_keys(keys: &ArchivalPKeys) -> Self {
-        Self {
-            p_slot: PSlot::from_raw(keys.p_slot),
-            bond_id: keys.hybrid_bond_id().clone(),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
-/// Errors surfaced by the StakeEngine handle.
-#[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-pub(crate) enum StakeEngineError {
-    /// The StakeEngine actor has stopped (fail-stop after a handler panic, or a
-    /// clean stop). Terminal and non-retryable — the persona secrets went with
-    /// the task. Recovery is a full wallet close + re-open, which re-derives the
-    /// derive-forward set. The message is user-facing: it names the recovery
-    /// action.
-    #[error(
-        "stake engine unavailable: the staking actor has stopped; \
-         close and reopen the wallet to recover"
-    )]
-    StakeActorUnavailable,
-
-    /// The requested slot is **not in the held derive-forward set** — the
-    /// lookahead budget `{p_slot ..= p_slot+k}` is consumed (moved past the
-    /// pre-derived window). A *real* domain state, not a can't-happen: under
-    /// Model D the seed is gone after `assemble()`, so reaching a fresh slot
-    /// requires re-deriving the union, i.e. **reopen the wallet**. Held distinct
-    /// from [`Self::StaleHandle`] precisely because the recovery differs (reopen
-    /// vs. re-mint).
-    #[error(
-        "archival lookahead exhausted: slot {requested:?} is not in the held \
-         persona set; close and reopen the wallet to extend the lookahead"
-    )]
-    LookaheadExhausted { requested: PSlot },
-
-    /// A [`PersonaHandle`] was presented after an activation advanced the actor's
-    /// generation — i.e. it was retained across the activation that is its own
-    /// separate operation (typed contract #2: handles are operation-scoped). The
-    /// persona it named may have been wiped; using it would risk a use-after-
-    /// wipe, so it is rejected. Non-terminal: mint a fresh handle and retry.
-    #[error("stale persona handle: re-mint a handle (an activation occurred since it was issued)")]
-    StaleHandle,
-
-    /// The OS entropy source failed to supply bytes for the entry-gap timing draw
-    /// (`SignBond`, S5 / Round 3). A bond-timing draw requires a functional CSPRNG;
-    /// a source failure is fail-loud and terminal for this request — no silent
-    /// fallback to a weaker source. The cause may be **transient** (very early
-    /// boot, before the entropy pool is seeded) or **persistent** (a sandbox /
-    /// seccomp policy or permission restriction blocking the `getrandom` syscall);
-    /// the underlying `rand_core::Error` is retained as the error `source()` so an
-    /// operator can tell which — the prior message presumed a transient cause and
-    /// wrongly implied a retry would always help.
-    #[error(
-        "entry-gap draw failed: the OS entropy source is unavailable ({0}); \
-         cause may be transient (early boot) or persistent (sandbox/seccomp or \
-         permission restriction) — a retry helps only in the transient case"
-    )]
-    RngSourceFailed(#[source] rand_core::Error),
-
-    /// The entry-gap timing draw was statistically degenerate (`SignBond`, S5 /
-    /// Round 3 — double-jitter-trap detection). Two consecutive draws from the
-    /// same RNG produced identical spreads, which is the signature of a stuck
-    /// or non-random source. The draw is rejected; a correct CSPRNG produces
-    /// consecutive equal spreads with probability ≈ 1/601 — a single retry
-    /// resolves an unlucky-but-correct draw. Multiple consecutive `RngDegeneracy`
-    /// errors indicate a broken entropy source.
-    #[error(
-        "entry-gap draw degenerate: consecutive spreads were equal (stuck-RNG guard); \
-         retry the bond request"
-    )]
-    RngDegeneracy,
-
-    /// The [`PersonaHandle`] and [`PersistedBondTicket`] passed to [`SignBond`]
-    /// name different persona slots. A ticket witnesses the durable persist for a
-    /// *specific* slot; it cannot authorize signing for any other slot.
-    /// Non-terminal: ensure both are obtained for the same `p_slot`.
-    #[error(
-        "sign-bond slot mismatch: handle names slot {handle_slot:?}, \
-         ticket names slot {ticket_slot:?}; both must name the same persona slot"
-    )]
-    SlotMismatch {
-        handle_slot: PSlot,
-        ticket_slot: PSlot,
-    },
-
-    /// Bond construction failed after the actor validated the handle and ticket
-    /// (`SignBond`, S2). The persona bundle was available but
-    /// [`build_join_market_vin`] returned an error — see the wrapped
-    /// [`BondBuildError`] for the specific cause (`BondFloorZero`,
-    /// `IdentityEncode`, or `Sign`).
-    #[error("bond construction failed: {0}")]
-    BondBuild(#[from] BondBuildError),
-
-    /// A WI-2 [`AssembleBond`] pipeline step failed — funding arithmetic,
-    /// spend-bundle derivation, output construction, proving, PQC auth
-    /// signing, wire encoding, or the A-1 prefix↔vin invariant. The wrapped
-    /// [`BondAssemblyError`] names the §3.6 failure mode; in every arm
-    /// nothing was persisted and no funding was reserved.
-    #[error("bond assembly failed: {0}")]
-    Assembly(#[from] BondAssemblyError),
-
-    /// Building the bonded union's transient scanners for a [`ScanStep`] failed —
-    /// a resident persona key was malformed (corrupted in-memory state). Fail
-    /// closed and loud rather than scan with a silently-weakened key (DQ7). The
-    /// concrete cause (scanner build vs canonical-id encode) is preserved in the
-    /// wrapped [`ScanSetupError`], including its `source()` chain.
-    #[error("persona scan setup failed: {0}")]
-    ScanSetup(#[from] ScanSetupError),
-
-    /// The offloaded dual extraction itself failed (oversized step, range/block
-    /// mismatch, a scan error, or a funding-inflow overflow). The privacy
-    /// parameter `C_min` rides on this scan, so a corrupted step fails closed,
-    /// never silently.
-    #[error("scan-step extraction failed: {0}")]
-    ScanStep(#[from] DualExtractError),
-
-    /// The `spawn_blocking` task running the dual extractor failed to join (it
-    /// panicked — `spawn_blocking` tasks are not cancellable). The structured
-    /// [`JoinError`](tokio::task::JoinError) is kept (panic payload + `source()`),
-    /// not stringified, so the failure is fully diagnosable.
-    #[error("scan-step task failed to join: {0}")]
-    ScanJoin(#[from] tokio::task::JoinError),
-
-    /// An [`AssembleEmissionClaim`] claim-side step refused or failed —
-    /// derivation boundaries, size bounding, or the step-7 self-check. The
-    /// wrapped [`EmissionClaimError`] keeps the CB-5 taxonomy (including the
-    /// cause-blind `SelfCheckFailed` arm). Nothing was persisted and no
-    /// funding was reserved.
-    #[error("emission claim: {0}")]
-    EmissionClaim(#[from] EmissionClaimError),
-
-    /// An [`AssembleDrain`] (F-D2 DS-PR-1) pipeline step refused or failed —
-    /// payment-parameter validation, funding arithmetic, output construction,
-    /// proving, PQC auth signing, or wire encoding. The wrapped
-    /// [`DrainAssemblyError`] names the failure; the drain path owns its own
-    /// taxonomy (not the bond's) so a value-out failure never mis-reports as
-    /// "bond assembly". Nothing was persisted and no funding was reserved.
-    #[error("drain assembly: {0}")]
-    DrainAssembly(#[from] DrainAssemblyError),
-}
-
-/// The bonded union's transient scan inputs (SP-3 dual extractor): one
-/// slot-tagged [`GuaranteedScanner`] per bonded persona plus their cleartext
-/// `p_canonical_id` → slot map (the id half drives the bond-post match; the
-/// slot half attributes a matched `BondPost` to the recovered output's own
-/// persona for GF-4b lineage classification,
-/// `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3). Built per [`ScanStep`] and
-/// dropped with it (DQ5).
-pub(crate) type BondedScanInputs = (Vec<(u32, GuaranteedScanner)>, BTreeMap<PCanonicalId, u32>);
-
-/// Why building a [`ScanStep`]'s bonded-union scan inputs failed. Both arms are a
-/// **malformed resident persona key** (corrupted in-memory state) — fail closed,
-/// concrete cause preserved (vs a stringified loss). Wrapped by
-/// [`StakeEngineError::ScanSetup`].
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum ScanSetupError {
-    /// Building a persona's guaranteed scanner failed (SP-1 fail-closed rejection
-    /// of malformed key material).
-    #[error("building a persona's guaranteed scanner failed: {0}")]
-    Scanner(#[source] PersonaScanError),
-    /// Deriving a persona's canonical id failed — its hybrid public key did not
-    /// canonically encode.
-    #[error("deriving a persona's canonical id failed: {0}")]
-    CanonicalId(#[source] shekyl_crypto_pq::CryptoError),
-}
-
-// ---------------------------------------------------------------------------
-// Actor
-// ---------------------------------------------------------------------------
-
-/// Construction arguments moved into the actor task at spawn.
-///
-/// Under Model D the actor receives **pre-derived** bundles (the orchestrator
-/// derived them at `assemble()` while the seed was transiently borrowed, then
-/// dropped the seed). The actor never sees the seed.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
-pub(crate) struct StakeEngineArgs {
-    /// The derive-forward set — pre-derived `ArchivalPKeys` keyed by slot:
-    /// `{personas with live bonds} ∪ {p_slot ..= p_slot+k}`. Each is `!Clone` +
-    /// per-field `ZeroizeOnDrop`. Wiped at actor stop.
-    pub bundles: BTreeMap<PSlot, ArchivalPKeys>,
-    /// Slots that carry a live bond (`consumer_held` or posted), from the
-    /// persisted `bonded_slots` hint. Bundles in this set are tagged
-    /// [`HeldPersona::Bonded`] so activation never wipes them; the rest are
-    /// [`HeldPersona::Ephemeral`]. A reconcilable hint, not consensus truth.
-    pub bonded: BTreeSet<PSlot>,
-    /// The initially-active slot (the scan-reconciled monotone current slot), or
-    /// `None` when the wallet is staker-flagged but has not activated a persona.
-    /// Must be present in `bundles` when `Some` (the orchestrator guarantees the
-    /// current slot is in the derive-forward set).
-    pub active: Option<PSlot>,
-    /// **Test + conformance only.** Selects the `on_start` session self-cert (S6)
-    /// behavior. Defaults to [`TestSelfCert::Skip`] so the bulk of the stake
-    /// tests — which are **not** about the self-cert — do not run a real ~15 ms
-    /// statistical grade in every spawn: that is both slow and, because the
-    /// uniformity chi-square has a nonzero false-positive rate at α=1e-6, an
-    /// occasional-flake source (a stray false-fail kills the actor and cascades
-    /// into unrelated assertions). The dedicated S6 tests opt in explicitly. The
-    /// field exists only in `test + conformance` builds. In a **non-test
-    /// `conformance`** build the self-cert always runs (the real `OsRng` grade,
-    /// no selector); in the **default** build the self-cert is compiled out
-    /// entirely and there is no grade.
-    #[cfg(all(test, feature = "conformance"))]
-    pub self_cert: TestSelfCert,
-    /// GF-7 measurement-hook observer (`ARCHIVAL_BOND_2C_GF7_HOOKS.md` §3) —
-    /// **injected**, `ScanSchedule`-discipline: no hardwired sink. Every
-    /// production construction path injects [`NoOpObserver`]; only the sim
-    /// (via a direct `StakeEngineArgs`, never a production spawn) constructs
-    /// a recording one. Exists only under the non-default `gf7-hooks` feature
-    /// (the §4 layer-3 no-emit containment); the default build carries no
-    /// field, no calls, no vocabulary.
-    #[cfg(feature = "gf7-hooks")]
-    pub observer: Box<dyn BroadcastTimelineObserver>,
-}
-
-/// Test-only selector for the S6 session self-cert (see [`StakeEngineArgs`]).
-#[cfg(all(test, feature = "conformance"))]
-#[derive(Clone, Copy, Default)]
-pub(crate) enum TestSelfCert {
-    /// Skip the self-cert entirely (default — every stake test that is not about
-    /// the self-cert, so the real grade's α=1e-6 false-positive cannot flake them).
-    #[default]
-    Skip,
-    /// Grade the real `OsRng` adapter (the S6 pass-path test).
-    RealOsRng,
-    /// Grade a degenerate constant source to force fail-stop (the S6 fail test).
-    Degenerate,
-}
+use super::types::*;
 
 /// The `kameo` actor owning the held archival personas (the derive-forward
 /// set), **not** the master seed.
@@ -1535,7 +868,7 @@ pub(crate) struct SignBond {
     pub handle: PersonaHandle,
     /// Proof that the live-bond record was durably persisted for this slot
     /// before signing (typed contract #1). Must match `handle.p_slot()`.
-    pub ticket: super::stake_persist::PersistedBondTicket,
+    pub ticket: crate::engine::stake_persist::PersistedBondTicket,
     /// Holdings to compute `bond_floor` from. Passed to
     /// [`build_join_market_vin`] inside the actor.
     pub holdings: HoldingsDescriptor,
@@ -1644,7 +977,7 @@ pub(crate) struct AssembleBond {
     pub handle: PersonaHandle,
     /// Proof that the live-bond record was durably persisted for this slot
     /// before assembly (typed contract #1). Must match `handle.p_slot()`.
-    pub ticket: super::stake_persist::PersistedBondTicket,
+    pub ticket: crate::engine::stake_persist::PersistedBondTicket,
     /// Holdings to bond; `bond_floor(holdings)` is recomputed inside.
     pub holdings: HoldingsDescriptor,
     /// The selected funding inputs (§3.2) with their assembled membership
@@ -1983,227 +1316,6 @@ impl Message<AssembleDrain> for StakeEngine {
 }
 
 // ---------------------------------------------------------------------------
-// Shared funding-input preparation (AssembleBond + AssembleEmissionClaim)
-// ---------------------------------------------------------------------------
-
-/// One prepared spend input: the tx-builder [`SpendInput`] (owned secrets)
-/// plus the public companions the wire needs (key image, PQC slot pubkey,
-/// reservation gindex).
-pub(super) struct PreparedInput {
-    pub(super) spend: SpendInput,
-    pub(super) key_image: [u8; 32],
-    pub(super) pqc_pubkey: Vec<u8>,
-    pub(super) gindex: GlobalOutputIndex,
-}
-
-/// One constructed vout batch to `P`'s base address — the shared
-/// output-construction loop of [`AssembleBond`] (two confidential change
-/// vouts) and [`AssembleEmissionClaim`] (loud reward + two change vouts):
-/// per output, `construct_output` → KEM blob layout → leaf-hash blob →
-/// `[u8; 9]` enc-amount/enc-label packing → tx-builder `OutputInfo`. Both
-/// change vouts return to `P`'s base spend key (the pscan
-/// `GuaranteedScanner` claims against `spend_pk` directly), so change
-/// re-enters the funding set on the next sweep.
-struct ConstructedVouts {
-    output_infos: Vec<shekyl_tx_builder::OutputInfo>,
-    output_keys: Vec<[u8; 32]>,
-    view_tags: Vec<Option<u8>>,
-    kem_blobs: Vec<Vec<u8>>,
-    leaf_hash_blob: Vec<u8>,
-}
-
-/// Construct `amounts` as vouts to `P`'s base address. `capture` sees each
-/// constructed output `(index, &OutputData)` before its fields are packed,
-/// so the emission path lifts its reward commit without a second loop or a
-/// parallel construction site.
-fn construct_vouts_to_base(
-    keys: &ArchivalPKeys,
-    tx_key_secret: &Zeroizing<[u8; 32]>,
-    amounts: &[u64],
-    error_site: &'static str,
-    mut capture: impl FnMut(usize, &shekyl_crypto_pq::output::OutputData),
-) -> Result<ConstructedVouts, BondAssemblyError> {
-    let mut vouts = ConstructedVouts {
-        output_infos: Vec::with_capacity(amounts.len()),
-        output_keys: Vec::with_capacity(amounts.len()),
-        view_tags: Vec::with_capacity(amounts.len()),
-        kem_blobs: Vec::with_capacity(amounts.len()),
-        leaf_hash_blob: Vec::with_capacity(32 * amounts.len()),
-    };
-    for (idx, &amount) in amounts.iter().enumerate() {
-        let constructed = construct_output(
-            tx_key_secret,
-            &keys.x25519_pk,
-            &keys.ml_kem_ek,
-            keys.spend_pk.as_canonical_bytes(),
-            amount,
-            idx as u64,
-        )
-        .map_err(|e| BondAssemblyError::build(error_site, e))?;
-        capture(idx, &constructed);
-        let mut kem_blob = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
-        kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
-        kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
-        vouts.kem_blobs.push(kem_blob);
-        vouts.leaf_hash_blob.extend_from_slice(&constructed.h_pqc);
-        vouts.output_keys.push(constructed.output_key);
-        vouts.view_tags.push(Some(constructed.view_tag_prefilter));
-        vouts.output_infos.push(shekyl_tx_builder::OutputInfo {
-            dest_key: constructed.output_key,
-            amount: AtomicUnits::from_raw(amount),
-            commitment_mask: constructed.z,
-            enc_amount: {
-                let mut enc = [0u8; 9];
-                enc[..8].copy_from_slice(&constructed.enc_amount);
-                enc[8] = constructed.amount_tag;
-                enc
-            },
-            enc_label: {
-                let mut enc = [0u8; 9];
-                enc[..8].copy_from_slice(&constructed.enc_label);
-                enc[8] = constructed.label_tag;
-                enc
-            },
-        });
-    }
-    Ok(vouts)
-}
-
-/// One record's re-derived spend-side parts — the shared per-record body of
-/// [`prepare_funding_inputs`] (bond + emission fee spends) and the emission
-/// handler's **backing** leg, which is the same derivation minus the key
-/// image (membership-only). One definition: a correction to the bundle
-/// derivation, the leaf-chunk `h_pqc` lookup, or the `combined_ss` handling
-/// lands once, or the backing proof's secrets silently diverge from the fee
-/// path's and every claim fails its own leaf gate.
-struct DerivedSpendParts {
-    bundle: SourceSecretsBundle,
-    /// The first 64 bytes of the bundle's combined secret — the
-    /// per-output-PQC derivation operand (the backing leg retains it for
-    /// Auth-B signing).
-    combined64: Zeroizing<[u8; 64]>,
-    /// The record's leaf hash, read back from its own leaf chunk (`h_pqc`
-    /// is not persisted on the record — public identity only).
-    h_pqc: [u8; 32],
-    /// The per-output PQC public key derived from `combined64`.
-    pqc_pubkey: Vec<u8>,
-}
-
-/// Re-derive one funding record's spend-side parts (rule 36: secrets are
-/// re-derived from the record's `(ciphertext, index)` inside the actor,
-/// never carried in the message).
-fn derive_spend_parts(
-    keys: &ArchivalPKeys,
-    rec: &PFundingOutputRecord,
-    leaf_chunk: &[LeafEntry],
-) -> Result<DerivedSpendParts, BondAssemblyError> {
-    let ciphertext = HybridCiphertext {
-        x25519: rec.ciphertext_x25519,
-        ml_kem: rec.ciphertext_ml_kem.clone(),
-    };
-    let bundle = derive_p_source_secrets_bundle(keys, &ciphertext, rec.index_in_transaction)
-        .map_err(|e| BondAssemblyError::build("spend-bundle derivation", e))?;
-
-    let h_pqc = leaf_chunk
-        .iter()
-        .find(|leaf| leaf.output_key == rec.output_key)
-        .map(|leaf| leaf.h_pqc)
-        .ok_or_else(|| {
-            BondAssemblyError::build(
-                "leaf-chunk lookup",
-                "funding output missing from its own leaf chunk",
-            )
-        })?;
-
-    let combined64: Zeroizing<[u8; 64]> =
-        Zeroizing::new(bundle.combined_ss[..64].try_into().map_err(|_| {
-            BondAssemblyError::build("spend-bundle derivation", "combined_ss wrong length")
-        })?);
-    let pqc_pubkey = derive_pqc_public_key(&combined64, rec.index_in_transaction)
-        .map_err(|e| BondAssemblyError::build("pqc public-key derivation", e))?;
-
-    Ok(DerivedSpendParts {
-        bundle,
-        combined64,
-        h_pqc,
-        pqc_pubkey,
-    })
-}
-
-impl DerivedSpendParts {
-    /// The tx-builder [`SpendInput`] over these parts, moving the
-    /// membership vecs in (never deep-copying them).
-    fn into_spend_input(
-        self,
-        rec: &PFundingOutputRecord,
-        leaf_chunk: Vec<LeafEntry>,
-        c1_layers: Vec<Vec<[u8; 32]>>,
-        c2_layers: Vec<Vec<[u8; 32]>>,
-    ) -> SpendInput {
-        SpendInput {
-            output_key: rec.output_key,
-            commitment: rec.commitment,
-            amount: rec.amount,
-            spend_key_x: *self.bundle.spend_key_x,
-            spend_key_y: *self.bundle.spend_key_y,
-            commitment_mask: *self.bundle.commitment_mask,
-            h_pqc: self.h_pqc,
-            combined_ss: self.bundle.combined_ss.to_vec(),
-            output_index: rec.index_in_transaction,
-            leaf_chunk,
-            c1_layers,
-            c2_layers,
-        }
-    }
-}
-
-/// Re-derive spend bundles for the selected funding inputs, compute key
-/// images, and build the tx-builder [`SpendInput`]s — the shared spend-side
-/// leg of [`AssembleBond`] and [`AssembleEmissionClaim`] (rule 36: secrets are
-/// re-derived from each record's `(ciphertext, index)` inside the actor,
-/// never carried in the message).
-///
-/// Consumes `funding` by value: the curve-tree membership vecs (`leaf_chunk`,
-/// `c1_layers`, `c2_layers` — many 32-byte node vecs per tree layer) MOVE into
-/// each `SpendInput` rather than deep-copy. The returned set is sorted
-/// strictly DESCENDING by key image — the consensus order shared by the
-/// proof, the wire key-image list, and the pqc_auths slots (same rule as the
-/// transfer path).
-// `pub(super)`: the F-D2 drain assembly (`drain_assembly.rs`) reuses this exact
-// persona-keyed spend-side leg — the drain spends `P`-funding inputs identically
-// to a bond/claim fee sweep (same key-image derivation, same descending order),
-// so there is one definition of "turn selected P-funding records into signed
-// spend inputs," never a drain-specific fork (rule 36 + composition discipline).
-pub(super) fn prepare_funding_inputs(
-    keys: &ArchivalPKeys,
-    funding: Vec<FundingInputContext>,
-) -> Result<Vec<PreparedInput>, BondAssemblyError> {
-    let mut prepared = Vec::with_capacity(funding.len());
-    for ctx in funding {
-        let rec = &ctx.record;
-        let mut parts = derive_spend_parts(keys, rec, &ctx.leaf_chunk)?;
-
-        // KI = x·Hp(O) — the single shared definition (see
-        // `key_image_from_spend_key_x`; the watch path derives through the
-        // same leg, so watch and sweep cannot diverge). The full-path-only
-        // leg (the backing's membership-only leg has none).
-        let key_image = key_image_from_spend_key_x(&parts.bundle.spend_key_x, rec.output_key)
-            .map_err(|e| BondAssemblyError::build("key-image derivation", e))?;
-
-        let pqc_pubkey = std::mem::take(&mut parts.pqc_pubkey);
-        let gindex = rec.gindex;
-        prepared.push(PreparedInput {
-            spend: parts.into_spend_input(rec, ctx.leaf_chunk, ctx.c1_layers, ctx.c2_layers),
-            key_image,
-            pqc_pubkey,
-            gindex,
-        });
-    }
-    prepared.sort_by(|a, b| b.key_image.cmp(&a.key_image));
-    Ok(prepared)
-}
-
-// ---------------------------------------------------------------------------
 // PR-3 commit 4 — AssembleEmissionClaim: the emission-claim assembly message
 // ---------------------------------------------------------------------------
 
@@ -2211,7 +1323,7 @@ pub(super) fn prepare_funding_inputs(
 /// the actor (`REWARD_EMISSION_VIN_PLAN.md` §8.0.2/§8.0.3, PR-3 commit 4) —
 /// the emission sibling of [`AssembleBond`].
 ///
-/// No [`PersistedBondTicket`](super::stake_persist::PersistedBondTicket) and
+/// No [`PersistedBondTicket`](crate::engine::stake_persist::PersistedBondTicket) and
 /// no entry-seam plan: the claim consumes no funding-entry seam (the bond is
 /// already on-chain), and claim-broadcast timing is the GF-4 dispatch seam,
 /// deliberately outside this builder (same return-bytes-only posture as the
@@ -2679,125 +1791,6 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
 }
 
 // ---------------------------------------------------------------------------
-// WI-2 D-A3 step 1 — P-side per-output spend-bundle derivation
-// ---------------------------------------------------------------------------
-
-/// Re-derive the per-output spend-secrets bundle for a **P-owned** funding
-/// output — the persona analog of
-/// [`LocalKeys::derive_primary_source_secrets_bundle`]
-/// (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3 actor step 1), over the same
-/// pipeline with `P`'s keys substituted for the principal's:
-///
-/// 1. `combined_ss` ← [`recover_combined_ss`]`(P.view_sk, P.ml_kem_dk,
-///    ciphertext)` — hybrid X25519 + ML-KEM-768 re-decap and HKDF-SHA-512
-///    combination.
-/// 2. Per-output secrets ← [`derive_output_secrets`]`(combined_ss,
-///    output_index)`.
-/// 3. Spend scalar `x = ho + b` with `b` = `P.spend_sk`. **No claim offset**,
-///    for the same reason as the principal path: `P`'s funding outputs are
-///    paid to the *base* spend key `b·G` (the scan's `GuaranteedScanner`
-///    claims against `spend_pk` directly), so `O = x·G + y·T` and
-///    `KI = x·Hp(O)` both bind to `b`.
-///
-/// This is exactly the WI-2 D-A1 re-derivation contract: the persisted
-/// `PFundingOutputRecord` carries only `(ciphertext, index_in_transaction)`
-/// public identity; the secrets drop in the scan's offload closure (rule 16,
-/// the M3d discipline) and are recomputed here, inside the actor, at
-/// assemble time. Every intermediate is `Zeroizing`; only the bundle's own
-/// wiped-on-drop fields leave the frame — and the bundle itself never leaves
-/// the actor (rule 36).
-///
-/// A free function rather than a `StakeEngine` method: it needs only the
-/// borrowed [`ArchivalPKeys`], and the `AssembleBond` handler calls it per
-/// selected funding record before entering the proving offload.
-///
-/// [`LocalKeys::derive_primary_source_secrets_bundle`]: super::local_keys::LocalKeys
-/// [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
-/// [`derive_output_secrets`]: shekyl_crypto_pq::derivation::derive_output_secrets
-#[allow(dead_code)] // transient — consumed by the WI-2 `AssembleBond` handler as it lands.
-pub(crate) fn derive_p_source_secrets_bundle(
-    keys: &ArchivalPKeys,
-    source_ciphertext: &HybridCiphertext,
-    output_index: u64,
-) -> Result<SourceSecretsBundle, KeyEngineError> {
-    let combined_ss = recover_combined_ss(
-        keys.view_sk.as_canonical_bytes(),
-        keys.ml_kem_dk.as_canonical_bytes(),
-        &source_ciphertext.x25519,
-        &source_ciphertext.ml_kem,
-    )?;
-
-    let secrets = derive_output_secrets(&combined_ss.0, output_index);
-
-    // `x = ho + b` — see the principal-path comment in `local_keys.rs` for
-    // why there is no claim-offset term. Each intermediate `Scalar` is
-    // `Zeroizing` so the canonical-byte materializations wipe on drop.
-    let ho_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.ho))
-            .expect("ho from wide_reduce is always canonical (per derive_output_secrets)"),
-    );
-    let b_scalar: Zeroizing<Scalar> = Zeroizing::new(Scalar::from_bytes_mod_order(
-        *keys.spend_sk.as_canonical_bytes(),
-    ));
-    let x_scalar: Zeroizing<Scalar> = Zeroizing::new(*ho_scalar + *b_scalar);
-    let spend_key_x = Zeroizing::new(x_scalar.to_bytes());
-
-    Ok(SourceSecretsBundle {
-        spend_key_x,
-        spend_key_y: Zeroizing::new(secrets.y),
-        commitment_mask: Zeroizing::new(secrets.z),
-        combined_ss: Zeroizing::new(combined_ss.0.to_vec()),
-        output_index,
-    })
-}
-
-/// `KI = x·Hp(O)` for one funding record, from its public
-/// `(ciphertext, index, output_key)` identity and the owning persona's
-/// vaulted keys — **the** single definition of the funding key image
-/// (SP-R0 arm #1). Every consumer — the actor's watch derive-on-add, the
-/// assemble path ([`prepare_funding_inputs`] via
-/// [`key_image_from_spend_key_x`], sharing the leg after its own bundle
-/// derivation), and the DQ-F fire harness — derives through here, so the
-/// construction cannot diverge between the watch and the sweep. A divergence
-/// would mean derived watch key images stop matching on-chain spends, prunes
-/// never fire, and the stale-record poison [`SpentRecordsDurablyPruned`]
-/// precludes returns — which is why this is one function, not three copies.
-///
-/// The derived intermediates are `Zeroizing`; only the key image leaves.
-/// Errors are public reason text, never key material.
-pub(crate) fn derive_funding_key_image(
-    keys: &ArchivalPKeys,
-    ciphertext_x25519: [u8; 32],
-    ciphertext_ml_kem: &[u8],
-    index_in_transaction: u64,
-    output_key: [u8; 32],
-) -> Result<[u8; 32], String> {
-    let ciphertext = HybridCiphertext {
-        x25519: ciphertext_x25519,
-        ml_kem: ciphertext_ml_kem.to_vec(),
-    };
-    let bundle = derive_p_source_secrets_bundle(keys, &ciphertext, index_in_transaction)
-        .map_err(|e| format!("spend-bundle derivation: {e}"))?;
-    key_image_from_spend_key_x(&bundle.spend_key_x, output_key)
-}
-
-/// The key-image leg of [`derive_funding_key_image`] alone — for the
-/// assemble path, which already holds the derived bundle (it needs the
-/// bundle's other secrets too) and must compute the same `KI = x·Hp(O)` the
-/// FCMP++ verifier checks.
-pub(crate) fn key_image_from_spend_key_x(
-    spend_key_x: &[u8; 32],
-    output_key: [u8; 32],
-) -> Result<[u8; 32], String> {
-    let x_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(*spend_key_x))
-            .ok_or_else(|| "non-canonical x".to_owned())?,
-    );
-    Ok((biased_hash_to_point(output_key) * *x_scalar)
-        .compress()
-        .to_bytes())
-}
-
 // SP-5 — the actor performs the per-batch scan-step; `view_sk` never crosses the
 // boundary. The handler builds the bonded union's transient scanners from the
 // resident bundles and **offloads** the CPU+secret dual extraction to
@@ -3019,7 +2012,7 @@ pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct StakeEngineHandle {
     /// Strong reference to the stake actor's mailbox.
-    actor: ActorRef<StakeEngine>,
+    pub(crate) actor: ActorRef<StakeEngine>,
 }
 
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
@@ -3203,7 +2196,7 @@ impl StakeEngineHandle {
     pub(crate) async fn sign_bond(
         &self,
         handle: PersonaHandle,
-        ticket: super::stake_persist::PersistedBondTicket,
+        ticket: crate::engine::stake_persist::PersistedBondTicket,
         holdings: HoldingsDescriptor,
         tx_prefix_hash: [u8; 32],
     ) -> Result<SignedBondPost, StakeEngineError> {
@@ -3226,7 +2219,7 @@ impl StakeEngineHandle {
     pub(crate) async fn assemble_bond(
         &self,
         handle: PersonaHandle,
-        ticket: super::stake_persist::PersistedBondTicket,
+        ticket: crate::engine::stake_persist::PersistedBondTicket,
         holdings: HoldingsDescriptor,
         funding: Vec<FundingInputContext>,
         tree_ctx: TreeContext,
@@ -3348,105 +2341,3 @@ fn collapse_send_error<M>(err: SendError<M, StakeEngineError>) -> StakeEngineErr
         | SendError::Timeout(_) => StakeEngineError::StakeActorUnavailable,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-/// Shared C-4 fixtures — one fixture family across the actor's own KATs and
-/// the `claim_orchestrator` end-to-end KAT (the `emission_claim::test_fixtures`
-/// precedent: promote rather than grow a second source shape that can drift).
-#[cfg(test)]
-pub(crate) mod test_fixtures {
-    use std::collections::{BTreeMap, BTreeSet};
-
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
-    use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
-    use shekyl_crypto_pq::output::construct_output;
-    use shekyl_curve_generators::biased_hash_to_point;
-    use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
-    use shekyl_tx_builder::LeafEntry;
-
-    use super::{PSlot, StakeEngineHandle};
-    use crate::engine::test_support::funding_record;
-
-    /// Deterministic test seed (matches the `archival_p` module's KAT fixture).
-    const TEST_SEED: [u8; MASTER_SEED_BYTES] = [0x33u8; MASTER_SEED_BYTES];
-
-    /// One tx-key for every fixture output (outputs differ by index).
-    pub(crate) const FIXTURE_TX_KEY: [u8; 32] = [0x5Au8; 32];
-
-    /// Derive a persona bundle for `p_slot` on mainnet/bip39 (a permitted pair).
-    /// Re-derivable on demand because `ArchivalPKeys` is `!Clone` and derivation
-    /// is deterministic — each spawn gets its own freshly-derived bundle.
-    pub(crate) fn derive_bundle(p_slot: u32) -> ArchivalPKeys {
-        derive_archival_p_keys(
-            &TEST_SEED,
-            DerivationNetwork::Mainnet,
-            SeedFormat::Bip39,
-            p_slot,
-        )
-        .expect("oracle derivation succeeds for mainnet/bip39")
-    }
-
-    /// Spawn a handle over a pre-derived derive-forward set: `held` slots, of
-    /// which `bonded` carry a live bond, with optional initial `active` slot.
-    pub(crate) fn spawn_over(
-        held: &[u32],
-        bonded: &[u32],
-        active: Option<u32>,
-    ) -> StakeEngineHandle {
-        let bundles: BTreeMap<PSlot, ArchivalPKeys> = held
-            .iter()
-            .map(|&s| (PSlot::from_raw(s), derive_bundle(s)))
-            .collect();
-        let bonded: BTreeSet<PSlot> = bonded.iter().map(|&s| PSlot::from_raw(s)).collect();
-        StakeEngineHandle::spawn(bundles, bonded, active.map(PSlot::from_raw))
-    }
-
-    /// A REAL P-paid output for `keys`: a funding record carrying the
-    /// exact public identity `construct_output` emitted (so the actor's
-    /// re-derivation chain — combined-ss recovery, spend/mask scalars,
-    /// per-output PQC keypair — reproduces the construction) plus the
-    /// matching curve-tree leaf with the REAL `h_pqc`. The real hash is
-    /// load-bearing: the handler's pre-flight leaf gate and the
-    /// verify-side C-1 gate both demand `hash(backing_pubkey) ==
-    /// leaf.h_pqc`, so a synthetic value refuses assembly.
-    pub(crate) fn constructed_record(
-        keys: &ArchivalPKeys,
-        gindex: u64,
-        height: u64,
-        amount: u64,
-        index_in_transaction: u64,
-        lineage: MintLineageOutput,
-    ) -> (PFundingOutputRecord, LeafEntry) {
-        let constructed = construct_output(
-            &FIXTURE_TX_KEY,
-            &keys.x25519_pk,
-            &keys.ml_kem_ek,
-            keys.spend_pk.as_canonical_bytes(),
-            amount,
-            index_in_transaction,
-        )
-        .expect("fixture output constructs");
-        let mut record = funding_record(0, gindex, height, amount, lineage);
-        record.index_in_transaction = index_in_transaction;
-        record.output_key = constructed.output_key;
-        record.commitment = constructed.commitment;
-        record.ciphertext_x25519 = constructed.kem_ciphertext_x25519;
-        record.ciphertext_ml_kem = constructed.kem_ciphertext_ml_kem.clone();
-        let leaf = LeafEntry {
-            output_key: constructed.output_key,
-            key_image_gen: biased_hash_to_point(constructed.output_key)
-                .compress()
-                .to_bytes(),
-            commitment: constructed.commitment,
-            h_pqc: constructed.h_pqc,
-        };
-        (record, leaf)
-    }
-}
-
-#[cfg(test)]
-#[path = "stake_engine_tests.rs"]
-mod tests;

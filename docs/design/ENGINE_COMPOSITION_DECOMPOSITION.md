@@ -227,6 +227,25 @@ coverage of the send pipeline.
 
 ---
 
+## Stake workflow ownership (policy)
+
+**Status:** landed structurally (`engine/stake_engine/` directory module) +
+decomposition ratchet scans `stake_engine/**`. Further message-handler
+file-splits (bond/claim/drain into `actor/` children) remain optional.
+
+| Claim | Detail |
+|-------|--------|
+| **The stake workflow is** | `engine/stake_engine/` — `StakeEngine` actor + handle + types + spend helpers |
+| **Engine's role** | Owns `Option<StakeEngineHandle>`; may expose thin delegates only |
+| **Layout** | `types.rs` domain values; `helpers.rs` shared funding/vout prep + P-secrets; `engine.rs` actor, messages, handle; `test_fixtures` + tests EXCLUDE'd |
+| **Do not** | Re-inflate bond/claim/drain assembly into top-level monofiles or Engine inherent soup |
+| **Mechanical pin** | `check_engine_decomposition.sh` scans `stake_engine/`; `NEW_FILE_CAP` / FILE baselines apply |
+
+**Deferred:** `StakeFacade` / `engine.stake()`, renaming to `StakeWorkflow`, full
+per-message-file carve under `actor/` (types/helpers extract already landed).
+
+---
+
 ## Suggested sequence (practical)
 
 1. **Type alias the production engine** so most of the tree never writes the 7-param form.
@@ -238,6 +257,7 @@ coverage of the send pipeline.
 4. **Introduce `TransferCtx`** only when a new feature needs it — stop new send-path code from taking `&Engine` as a habit, not as a big-bang rename.
 5. **Façade methods** (`engine.transfer()`, `engine.scan()`) for RPC/CLI when those surfaces want a clean cut.
 6. **`StakeWorkflow` / StakeEngine** as a real subsystem (optional field), not more inherent methods on Engine.
+   **Partial** (`chore/ffi-and-engine-size-debt`): monofile → `engine/stake_engine/{types,helpers,engine}.rs` + tests/fixtures; ratchet scans the dir.
 7. **PScan supervisor** already modular — stop growing it via Engine glue; give it a single start/stop API.
 8. Only then Stage 4 actor swaps per trait, with services already isolated.
 
