@@ -1506,27 +1506,6 @@ sustainability is unaffected by the recalibration.
   **Target: V3.1 (decision; delete this row as "won't fix" if no consumer
   by then).**
 
-- **`stake_engine.rs` decomposition — ratchet the god-file back down**
-  (added 2026-07-21; DS-PR-1 / PR #347; carrier for the
-  `engine_decomposition_ratchet.conf` `stake_engine.rs 4749 → 5253` raise).
-  DS-PR-1 (F-D2 drain-send) raised the ratchet ceiling under the conf's
-  reviewed-raise clause. Of the +504 lines, only ~82 are genuine
-  orchestration (the `AssembleDrain` thin validate-and-delegate handler +
-  handle method, which must stay in the actor because they borrow
-  `self.held`'s persona keys — rule 36 secret-locality); the other ~422 are
-  the **inline** `drain_assembly_shape` test module — exactly the "growing
-  test harness is not a re-forming god-object" category the ratchet's
-  `EXCLUDE` list names, counted only because it is inline rather than a
-  separately-named file (as the bond/claim tests in this same file also are).
-  The decomposition designs a coherent split — the near-term mechanical win
-  is extracting the inline test modules (drain, and ideally bond/claim) into
-  an `EXCLUDE`'d sibling test file so the ceiling ratchets **down**, but the
-  PR should also weigh a workflow-shaped carve of the actor body per
-  `ENGINE_COMPOSITION_DECOMPOSITION.md` rather than a rushed test-only move.
-  **Reopen when** the decomposition PR is scoped. **Target: V3.0 pre-genesis
-  (bounded, mechanical for the test-extraction floor; the god-file only
-  shrinks from here).**
-
 - **Drain dispatch driver — confirmation-observe / terminal-reject prune /
   byte-identical resubmit** (added 2026-07-21; DS-PR-2 / F-D2 drain-send).
   DS-PR-2 landed the `submit_drain` dispatch seam with persist-`PendingDrain`-
@@ -15191,3 +15170,13 @@ Retained for citation in review; each links to the canonical record.
   unmangled grep could never match a mangled C++ symbol — corrected),
   `shekyl_pow_randomx_v2_hash` + `_ZN3aes` present (falsifiability
   anchors; empirically verified against a Release static build).
+
+- **RESOLVED (PR #416, 2026-08-06): `stake_engine` god-file mechanical floor.**
+  Test suite extracted to EXCLUDE'd `stake_engine_tests.rs`; monofile carved
+  into `engine/stake_engine/{types,helpers,actor,persona,bond,drain,claim,scan,
+  retire,handle}.rs` (message-family split, `pub(crate)` fields). Decomposition
+  ratchet scans `stake_engine/**`, dropped the 5253-line monofile ceiling, and
+  lowered `NEW_FILE_CAP` 2000→1200. StakeWorkflow ownership pinned in
+  `ENGINE_COMPOSITION_DECOMPOSITION.md`. Optional remaining polish: `engine.stake()`
+  façade (same class as transfer façades — not a god-file regression).
+
