@@ -31,6 +31,7 @@
 #include "byte_slice.h"
 #include "byte_stream.h"
 #include "int-util.h"
+#include "misc_language.h"
 #include "misc_log_ex.h"
 #include "shekyl/shekyl_ffi.h"
 
@@ -93,10 +94,16 @@ namespace levin
     if (shekyl_levin_compress_message(data.data(), data.size(), &buf) != 0)
       return input;
 
+    // The Rust allocation must be freed on *every* exit from here on —
+    // reserve/write below can throw (std::bad_alloc), and the connection
+    // machinery catches and survives handler exceptions, so a throw would
+    // otherwise leak the buffer rather than end the process.
+    const auto buf_guard = misc_utils::create_scope_leave_handler(
+        [&buf] { shekyl_buffer_free(buf.ptr, buf.len); });
+
     byte_stream out;
     out.reserve(buf.len);
     out.write(buf.ptr, buf.len);
-    shekyl_buffer_free(buf.ptr, buf.len);
     return byte_slice{std::move(out)};
   }
 
