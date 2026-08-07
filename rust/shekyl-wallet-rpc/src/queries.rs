@@ -233,13 +233,25 @@ pub(crate) async fn get_wallet_info(
 
     let (identity, balance, staking, wallet_height, restore_height, daemon) = {
         let engine = shared.read().await;
-        let wallet = engine.ledger();
-        let height = wallet.ledger.height();
-        let summary = wallet.ledger.balance(height);
-        let balance = GetBalanceResult::from(&summary);
-        let restore_height =
-            i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
-        let wallet_height = i64::try_from(height).unwrap_or(i64::MAX);
+
+        // Snapshot ledger fields, then drop the ledger guard before the
+        // sealed-file staking read. `staking_read_view` takes its own brief
+        // `ledger.read()` for `staking_enabled`; nesting that under a live
+        // `LedgerReadGuard` deadlocks on non-reentrant `std::sync::RwLock`.
+        // Pass the already-observed flag so the balance/enabled half of this
+        // aggregate stays coherent with the ledger snapshot above.
+        let (balance, wallet_height, restore_height, staking_enabled) = {
+            let wallet = engine.ledger();
+            let height = wallet.ledger.height();
+            let summary = wallet.ledger.balance(height);
+            let balance = GetBalanceResult::from(&summary);
+            let restore_height =
+                i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
+            let wallet_height = i64::try_from(height).unwrap_or(i64::MAX);
+            let staking_enabled = wallet.staking.staking_enabled;
+            (balance, wallet_height, restore_height, staking_enabled)
+        };
+
         let address = engine
             .primary_address()
             .encode()
@@ -252,10 +264,7 @@ pub(crate) async fn get_wallet_info(
         }
         .to_owned();
 
-        // Read staking under the guard this snapshot already holds, via the
-        // crate's single `staking_read_view` call site (which owns the
-        // off-the-worker discipline and the detail-free error mapping).
-        let staking_view = crate::staking::read_view_under_guard(&engine)?;
+        let staking_view = crate::staking::read_view_with_enabled(&engine, staking_enabled)?;
         let staking = StakingInfoResult {
             staking_enabled: staking_view.staking_enabled,
             balance: GetStakedBalanceResult {
@@ -276,7 +285,6 @@ pub(crate) async fn get_wallet_info(
         };
 
         let daemon = engine.daemon().clone();
-        drop(wallet);
 
         (
             (name, capability, network, address),

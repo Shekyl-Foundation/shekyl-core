@@ -10,6 +10,10 @@
 //! `bonded_slots` hint. All three methods are read-only (`&self` under the
 //! engine read guard). Staking *actions* (unstake, claim) are out of scope:
 //! they need Engine surfacing first.
+//!
+//! `get_wallet_info` uses [`read_view_with_enabled`] after dropping its
+//! ledger guard — nested `ledger.read()` under a live
+//! [`shekyl_engine_core::LedgerReadGuard`] deadlocks.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -75,13 +79,17 @@ pub(crate) async fn staking_info(
 
 /// Compute the authoritative view from an already-held engine read guard.
 ///
-/// The single call site of `Engine::staking_read_view` in this crate, so the
-/// off-the-worker discipline and the error mapping below have one home rather
-/// than a copy per caller. `get_wallet_info` (`queries.rs`) calls this while
-/// holding its own guard: it must read staking within the *same* guard as the
-/// rest of its snapshot, both for coherence and because re-acquiring a read
-/// while one is held can deadlock against a queued writer on a write-preferring
-/// `RwLock`.
+/// The staking RPC methods' single call site of
+/// [`Engine::staking_read_view`](shekyl_engine_core::Engine::staking_read_view),
+/// so the off-the-worker discipline and the error mapping below have one home
+/// rather than a copy per caller.
+///
+/// **Do not call this while a [`shekyl_engine_core::LedgerReadGuard`] is
+/// live.** `staking_read_view` takes its own brief `ledger.read()` for
+/// `staking_enabled`; nesting that under a held guard deadlocks on
+/// non-reentrant `std::sync::RwLock`. Callers that already observed the flag
+/// under a ledger guard must drop that guard and use
+/// [`read_view_with_enabled`] instead (`get_wallet_info` is the exemplar).
 ///
 /// `staking_read_view` opens and decrypts the sealed `.wallet.pscan` /
 /// `.wallet.pending` files inline (envelope KDF + AEAD + postcard decode), so
@@ -101,7 +109,28 @@ pub(crate) async fn staking_info(
 pub(crate) fn read_view_under_guard(
     engine: &Engine<SoloSigner>,
 ) -> Result<StakingReadView, WalletRpcError> {
-    tokio::task::block_in_place(|| engine.staking_read_view()).map_err(|e| {
+    map_staking_read(tokio::task::block_in_place(|| engine.staking_read_view()))
+}
+
+/// Like [`read_view_under_guard`], but uses a caller-supplied
+/// `staking_enabled` so the sealed-file path never re-enters the ledger lock.
+///
+/// `get_wallet_info` snapshots the flag under its ledger guard, drops that
+/// guard, then calls this — keeping the enabled bit coherent with the rest of
+/// the aggregate without nesting `RwLock` reads.
+pub(crate) fn read_view_with_enabled(
+    engine: &Engine<SoloSigner>,
+    staking_enabled: bool,
+) -> Result<StakingReadView, WalletRpcError> {
+    map_staking_read(tokio::task::block_in_place(|| {
+        engine.staking_read_view_with_enabled(staking_enabled)
+    }))
+}
+
+fn map_staking_read(
+    result: Result<StakingReadView, shekyl_engine_core::StakingReadError>,
+) -> Result<StakingReadView, WalletRpcError> {
+    result.map_err(|e| {
         tracing::warn!(error = %e, "staking read view failed");
         WalletRpcError::InternalError("staking state failed to load".into())
     })

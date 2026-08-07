@@ -301,6 +301,12 @@ impl<
     /// [`StakingReadError`] — the caller must not render "nothing staked"
     /// over a bad seal.
     ///
+    /// Callers that already hold a [`crate::engine::LedgerReadGuard`] must
+    /// **not** call this method while that guard is live: `std::sync::RwLock`
+    /// is not re-entrant, and the nested `ledger.read()` deadlocks the
+    /// worker. Snapshot `staking_enabled` from the held guard, drop it, then
+    /// call [`Self::staking_read_view_with_enabled`].
+    ///
     /// Small synchronous file I/O (the same class as
     /// [`WalletFile::open_pscan_state`]'s other callers); async callers on a
     /// multi-threaded runtime should treat it like the other sealed-file
@@ -312,7 +318,25 @@ impl<
     /// money-sum overflow.
     pub fn staking_read_view(&self) -> Result<StakingReadView, StakingReadError> {
         let staking_enabled = self.ledger.read().ledger.staking.staking_enabled;
+        self.staking_read_view_with_enabled(staking_enabled)
+    }
 
+    /// Like [`Self::staking_read_view`], but uses a caller-supplied
+    /// `staking_enabled` instead of taking the ledger lock.
+    ///
+    /// Use this when the caller already observed the flag under a
+    /// [`crate::engine::LedgerReadGuard`] and has dropped that guard —
+    /// the sealed-file opens do not need the ledger lock, and nesting a
+    /// second `ledger.read()` under a live guard deadlocks.
+    ///
+    /// # Errors
+    ///
+    /// [`StakingReadError`] on seal-open failure, codec/version refusal, or
+    /// money-sum overflow.
+    pub fn staking_read_view_with_enabled(
+        &self,
+        staking_enabled: bool,
+    ) -> Result<StakingReadView, StakingReadError> {
         // No key copy: the region-2 wrap key is borrowed straight from its
         // owner for the two seal opens (same shape as `pscan/start.rs`'s
         // `with_persistence_read`).

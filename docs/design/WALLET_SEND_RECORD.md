@@ -340,10 +340,16 @@ story, not the read path.
   versus keeps.
   **P3-1 RATIFIED (2026-08-06).**
   *Re-application:* after `reset_scan_derived_state` + replay, for
-  every journal row in a non-terminal state, for each input in its
-  carried set: if replay already marked the funding row spent
-  (key-image observed — confirmed evidence supersedes), skip; else
-  re-derive the awaiting-confirmation lock from the journal facts.
+  every journal row in a **non-terminal or `Abandoned` state**, for
+  each input in its carried set: if replay already marked the funding
+  row spent (key-image observed — confirmed evidence supersedes),
+  skip; else re-derive the awaiting-confirmation lock from the journal
+  facts. `Abandoned` is terminal for the display machine, but
+  late-confirmation still flips `Abandoned → Confirmed` (P3-4); the
+  wipe must re-lock those inputs or SJ-DQ-4's self-link defence fails
+  for abandoned-but-still-landable sends. The re-application set
+  therefore matches P3-4's I-2 reference list
+  ("non-terminal-or-abandoned"), not "non-terminal" alone.
   Set-union semantics — deterministic and idempotent by construction;
   pinned by a test that runs re-application twice and diffs nothing.
   *Crash ordering:* every journal edge is written inside the same

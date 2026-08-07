@@ -294,8 +294,8 @@ pub fn cmd_history_incoming_unattributed(rpc: &RpcSession) {
                 return;
             };
             println!(
-                "{:<10} {:<10} {:>18} {:>10}  TxID",
-                "Direction", "State", "Amount (SKL)", "Height"
+                "{:<10} {:<10} {:>18} {:>14} {:>10}  TxID",
+                "Direction", "State", "Amount (SKL)", "Fee (SKL)", "Height"
             );
             for t in transfers {
                 print_transfer_row(t);
