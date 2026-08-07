@@ -79,8 +79,7 @@ target_link_libraries(epee
     ${OPENSSL_LIBRARIES}
     ${SHEKYL_FFI_LINK_LIBS}
   PRIVATE
-    ${EXTRA_LIBRARIES}
-    $<$<BOOL:${ZSTD_FOUND}>:${ZSTD_LINK_TARGET}>)
+    ${EXTRA_LIBRARIES})
 
 if (USE_READLINE AND (GNU_READLINE_FOUND OR (DEPENDS AND NOT MINGW)))
   target_link_libraries(epee_readline
