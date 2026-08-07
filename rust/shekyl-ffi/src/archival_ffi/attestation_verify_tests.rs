@@ -4,6 +4,12 @@
 // BSD-3-Clause
 
 //! Attestation-admission FFI pins (extracted from the former monofile).
+//!
+//! Whole-file test module: `#![cfg(test)]` self-declares so the production
+//! debug-macro lint (and similar scanners) treat KAT `println!` as test-only,
+//! matching the monofile's pre-split `#[cfg(test)]` gate.
+
+#![cfg(test)]
 
 use super::*;
 use shekyl_archival_retention::{
