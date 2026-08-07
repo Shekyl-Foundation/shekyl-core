@@ -385,7 +385,9 @@ pub extern "C" fn shekyl_relay_zone_new(
     let params = DandelionParams {
         min_epoch_secs,
         epoch_jitter_secs,
-        ..DandelionParams::inherited()
+        // `adopted()`: hop re-anchored to measured provenance (§80); the
+        // epoch pair stays C++-owned and crosses as the arguments above.
+        ..DandelionParams::adopted()
     };
     let reach = if outbound_fluff_only {
         FluffReach::OutboundOnly

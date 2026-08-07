@@ -27,12 +27,13 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "net/levin_base.h"
-#include "net/levin_compression.h"
 
 #include "byte_slice.h"
 #include "byte_stream.h"
 #include "int-util.h"
+#include "misc_language.h"
 #include "misc_log_ex.h"
+#include "shekyl/shekyl_ffi.h"
 
 #include <cstring>
 
@@ -72,37 +73,37 @@ namespace levin
     return head;
   }
 
+  // Forwarding shim over shekyl_levin_compress_message (rule 20). Every
+  // decision — is this already compressed, is it exactly one message, is it
+  // the noise/fragment class whose constant on-wire size is the point of
+  // it, is the payload worth compressing, is the result actually smaller —
+  // and the header rewrite itself live in rust/shekyl-levin. This function
+  // holds no policy; it converts buffers.
+  //
+  // The seam moved up from compress_payload to the whole message because
+  // most of those questions are about the bucket header, and a
+  // payload-level seam left them stranded here as a second, weaker copy:
+  // the C++ this replaces checked neither the signature, nor that the
+  // header accounted for every byte after it, nor the noise class.
   byte_slice try_compress_message(byte_slice input)
   {
-    if (!is_compression_available())
-      return input;
-
     const auto data = to_span(input);
-    if (data.size() <= sizeof(bucket_head2))
+    ShekylBuffer buf{};
+    // Declined (rc == 1) is the ordinary outcome and means "send it as it
+    // is"; the caller keeps ownership of `input` either way.
+    if (shekyl_levin_compress_message(data.data(), data.size(), &buf) != 0)
       return input;
 
-    bucket_head2 existing_head;
-    std::memcpy(&existing_head, data.data(), sizeof(existing_head));
-    if (SWAP32LE(existing_head.m_flags) & LEVIN_PACKET_COMPRESSED)
-      return input;
-
-    const span<const uint8_t> payload{data.data() + sizeof(bucket_head2), data.size() - sizeof(bucket_head2)};
-    if (payload.size() < COMPRESSION_MIN_PAYLOAD)
-      return input;
-
-    std::string compressed;
-    if (!compress_payload(payload, compressed))
-      return input;
-
-    bucket_head2 head;
-    std::memcpy(&head, data.data(), sizeof(head));
-    head.m_flags = SWAP32LE(SWAP32LE(head.m_flags) | LEVIN_PACKET_COMPRESSED);
-    head.m_cb = SWAP64LE(static_cast<uint64_t>(compressed.size()));
+    // The Rust allocation must be freed on *every* exit from here on —
+    // reserve/write below can throw (std::bad_alloc), and the connection
+    // machinery catches and survives handler exceptions, so a throw would
+    // otherwise leak the buffer rather than end the process.
+    const auto buf_guard = misc_utils::create_scope_leave_handler(
+        [&buf] { shekyl_buffer_free(buf.ptr, buf.len); });
 
     byte_stream out;
-    out.reserve(sizeof(head) + compressed.size());
-    out.write(reinterpret_cast<const uint8_t*>(&head), sizeof(head));
-    out.write(reinterpret_cast<const uint8_t*>(compressed.data()), compressed.size());
+    out.reserve(buf.len);
+    out.write(buf.ptr, buf.len);
     return byte_slice{std::move(out)};
   }
 

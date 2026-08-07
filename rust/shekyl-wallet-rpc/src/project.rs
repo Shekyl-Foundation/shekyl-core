@@ -8,7 +8,9 @@
 use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
 use shekyl_engine_core::SubmitOutcome;
-use shekyl_engine_state::{SendRecord, SendState, TransferDetails};
+use shekyl_engine_state::{
+    DisputeReason, ReceiveAttribution, SendRecord, SendState, TransferDetails,
+};
 use shekyl_scanner::BalanceSummary;
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
@@ -16,8 +18,9 @@ use shekyl_units::AtomicUnits;
 use crate::error::WalletRpcError;
 use crate::params::parse_hex32;
 use crate::types::{
-    BuildPendingTxResult, GetBalanceResult, RefreshResult, RescanBlockchainResult,
-    SubmitPendingTxResult, SubmitVerdictView, TransferDirection, TransferState, TransferView,
+    BuildPendingTxResult, GetBalanceResult, ReceiveAttributionKind, ReceiveAttributionView,
+    RefreshResult, RescanBlockchainResult, SubmitPendingTxResult, SubmitVerdictView,
+    TransferDirection, TransferState, TransferView,
 };
 
 /// Decimal string for OpenAPI `AtomicUnits`.
@@ -129,10 +132,73 @@ pub fn transfer_state(td: &TransferDetails) -> TransferState {
     }
 }
 
+/// Project ledger receive-attribution to the RPC view (no cleartext labels).
+pub fn attribution_view(attr: &ReceiveAttribution) -> ReceiveAttributionView {
+    match attr {
+        ReceiveAttribution::Unattributed => ReceiveAttributionView {
+            kind: ReceiveAttributionKind::Unattributed,
+            request_id: None,
+            echoed_label_hash: None,
+            dispute_reason: None,
+        },
+        ReceiveAttribution::Matched(id) => ReceiveAttributionView {
+            kind: ReceiveAttributionKind::Matched,
+            request_id: Some(id.as_u64().to_string()),
+            echoed_label_hash: None,
+            dispute_reason: None,
+        },
+        ReceiveAttribution::LabelUnknown { echoed_label_hash } => ReceiveAttributionView {
+            kind: ReceiveAttributionKind::LabelUnknown,
+            request_id: None,
+            echoed_label_hash: Some(hex::encode(echoed_label_hash)),
+            dispute_reason: None,
+        },
+        ReceiveAttribution::ManualMatch(id) => ReceiveAttributionView {
+            kind: ReceiveAttributionKind::ManualMatch,
+            request_id: Some(id.as_u64().to_string()),
+            echoed_label_hash: None,
+            dispute_reason: None,
+        },
+        ReceiveAttribution::Disputed { reason } => ReceiveAttributionView {
+            kind: ReceiveAttributionKind::Disputed,
+            request_id: None,
+            echoed_label_hash: None,
+            dispute_reason: Some(dispute_reason_string(reason)),
+        },
+    }
+}
+
+fn dispute_reason_string(reason: &DisputeReason) -> String {
+    match reason {
+        DisputeReason::WrongLabel => "WrongLabel".to_owned(),
+        DisputeReason::WrongAmount => "WrongAmount".to_owned(),
+        DisputeReason::Other(s) => format!("Other({s})"),
+    }
+}
+
+/// Whether a ledger row matches an optional attribution filter.
+pub fn attribution_matches(
+    attr: &ReceiveAttribution,
+    filter: crate::types::ReceiveAttributionFilter,
+) -> bool {
+    use crate::types::ReceiveAttributionFilter as F;
+    matches!(
+        (filter, attr),
+        (F::Unattributed, ReceiveAttribution::Unattributed)
+            | (F::Matched, ReceiveAttribution::Matched(_))
+            | (F::LabelUnknown, ReceiveAttribution::LabelUnknown { .. })
+            | (F::ManualMatch, ReceiveAttribution::ManualMatch(_))
+            | (F::Disputed, ReceiveAttribution::Disputed { .. })
+    )
+}
+
 /// Project a ledger transfer to the RPC view (no key material).
 pub fn transfer_view(td: &TransferDetails) -> TransferView {
     TransferView {
         id: transfer_id(td),
+        // Ledger rows are receive-side outputs, so this projection is
+        // always INCOMING; outgoing history is projected from the send
+        // journal (`outgoing_transfer_view`).
         direction: TransferDirection::Incoming,
         tx_hash: td.tx_hash.to_string(),
         amount: atomic_units_string(td.amount()),
@@ -143,6 +209,8 @@ pub fn transfer_view(td: &TransferDetails) -> TransferView {
         spent_height: td
             .spent_height
             .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
+        // Receive-side row, so attribution is always meaningful here.
+        attribution: Some(attribution_view(&td.receive_attribution)),
     }
 }
 
@@ -213,6 +281,9 @@ pub fn outgoing_transfer_view(
         block_height: outgoing_block_height(row).map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
         state: outgoing_transfer_state(row),
         spent_height: None,
+        // Receive attribution is documented "Present on INCOMING rows
+        // only" — a send has no receive side to attribute.
+        attribution: None,
     })
 }
 
@@ -287,6 +358,101 @@ pub fn pending_tx_result(tx: &PendingTx) -> BuildPendingTxResult {
 mod tests {
     use super::*;
     use shekyl_units::AtomicUnits;
+
+    #[test]
+    fn attribution_view_and_filter_cover_fa8_kinds() {
+        use shekyl_engine_state::PaymentRequestId;
+
+        assert_eq!(
+            attribution_view(&ReceiveAttribution::Unattributed).kind,
+            ReceiveAttributionKind::Unattributed
+        );
+        assert!(attribution_matches(
+            &ReceiveAttribution::Unattributed,
+            crate::types::ReceiveAttributionFilter::Unattributed
+        ));
+        assert!(!attribution_matches(
+            &ReceiveAttribution::Unattributed,
+            crate::types::ReceiveAttributionFilter::Matched
+        ));
+
+        let matched = ReceiveAttribution::Matched(PaymentRequestId(42));
+        let view = attribution_view(&matched);
+        assert_eq!(view.kind, ReceiveAttributionKind::Matched);
+        assert_eq!(view.request_id.as_deref(), Some("42"));
+        assert!(attribution_matches(
+            &matched,
+            crate::types::ReceiveAttributionFilter::Matched
+        ));
+
+        let unknown = ReceiveAttribution::LabelUnknown {
+            echoed_label_hash: [0xab; 32],
+        };
+        let view = attribution_view(&unknown);
+        assert_eq!(view.kind, ReceiveAttributionKind::LabelUnknown);
+        let expected_hash = "ab".repeat(32);
+        assert_eq!(
+            view.echoed_label_hash.as_deref(),
+            Some(expected_hash.as_str())
+        );
+        assert!(attribution_matches(
+            &unknown,
+            crate::types::ReceiveAttributionFilter::LabelUnknown
+        ));
+
+        // ManualMatch carries the rid like Matched, but under its own kind:
+        // a user-authored link must stay distinguishable from a cooperative
+        // label match, because only one of them is evidence from the sender.
+        let manual = ReceiveAttribution::ManualMatch(PaymentRequestId(7));
+        let view = attribution_view(&manual);
+        assert_eq!(view.kind, ReceiveAttributionKind::ManualMatch);
+        assert_eq!(view.request_id.as_deref(), Some("7"));
+        assert_eq!(view.echoed_label_hash, None);
+        assert_eq!(view.dispute_reason, None);
+        assert!(attribution_matches(
+            &manual,
+            crate::types::ReceiveAttributionFilter::ManualMatch
+        ));
+        assert!(!attribution_matches(
+            &manual,
+            crate::types::ReceiveAttributionFilter::Matched
+        ));
+
+        // Disputed renders every DisputeReason arm, including the free-form
+        // one whose payload reaches the wire.
+        for (reason, expected) in [
+            (DisputeReason::WrongLabel, "WrongLabel"),
+            (DisputeReason::WrongAmount, "WrongAmount"),
+            (
+                DisputeReason::Other("paid twice".to_owned()),
+                "Other(paid twice)",
+            ),
+        ] {
+            let disputed = ReceiveAttribution::Disputed { reason };
+            let view = attribution_view(&disputed);
+            assert_eq!(view.kind, ReceiveAttributionKind::Disputed);
+            assert_eq!(view.dispute_reason.as_deref(), Some(expected));
+            assert_eq!(view.request_id, None);
+            assert!(attribution_matches(
+                &disputed,
+                crate::types::ReceiveAttributionFilter::Disputed
+            ));
+            assert!(!attribution_matches(
+                &disputed,
+                crate::types::ReceiveAttributionFilter::Unattributed
+            ));
+        }
+
+        // Wire pins for the two kinds the filter newly distinguishes.
+        let json = serde_json::to_value(attribution_view(&manual)).expect("serialize");
+        assert_eq!(json["kind"], "MANUAL_MATCH");
+        let json = serde_json::to_value(attribution_view(&ReceiveAttribution::Disputed {
+            reason: DisputeReason::WrongAmount,
+        }))
+        .expect("serialize");
+        assert_eq!(json["kind"], "DISPUTED");
+        assert_eq!(json["dispute_reason"], "WrongAmount");
+    }
 
     #[test]
     fn parse_transfer_id_roundtrips_canonical_form() {

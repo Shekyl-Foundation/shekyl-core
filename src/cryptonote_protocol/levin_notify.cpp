@@ -312,7 +312,21 @@ namespace levin
     bool make_payload_send_txs(connections& p2p, std::vector<blobdata>&& txs, const boost::uuids::uuid& destination, const bool pad, const bool fluff)
     {
       epee::byte_slice blob = make_tx_message(std::move(txs), pad, fluff).finalize_notify(NOTIFY_NEW_TRANSACTIONS::ID);
-      blob = epee::levin::try_compress_message(std::move(blob));
+      // A padded message must reach the wire padded. `make_tx_message`
+      // quantizes the blob to a 1024-byte boundary with a run of spaces
+      // precisely so an observer cannot read transaction volume off the
+      // frame size; zstd erases that run almost perfectly, which would put
+      // the frame size back in step with the real payload and hand the
+      // observer the signal the operator paid bandwidth to hide.
+      //
+      // Nothing on the wire marks a message as deliberately sized, so the
+      // compressor cannot make this call — only this layer knows. Privacy
+      // beats bandwidth here (mission priority 2: privacy is the product),
+      // and the cost is bounded: padding is opt-in via --pad-transactions.
+      //
+      // Pinned by the levin_notify.padding_survives_the_emit_path gtest.
+      if (!pad)
+        blob = epee::levin::try_compress_message(std::move(blob));
       return p2p.send(std::move(blob), destination);
     }
 

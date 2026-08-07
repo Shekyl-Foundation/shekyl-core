@@ -3323,6 +3323,65 @@ void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms
 void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    const std::uint8_t* outbound, std::size_t n);
 
+// ── Levin payload compression (IMPLEMENTATION_INDEX.md LV row) ─────────────
+//
+// The epee::levin compression path is a marshaling shim over these exports
+// (emit: contrib/epee/src/levin_base.cpp try_compress_message; receive:
+// contrib/epee/src/levin_compression.cpp), so the Rust-pinned libzstd is the
+// single zstd implementation in the binary — the system-libzstd link and the
+// HAVE_ZSTD build gate are gone. The C++ carries no compression policy: what
+// may be compressed, at what level, above what size, and the COMPRESSED
+// header rewrite are all in rust/shekyl-levin.
+//
+// Emit is message-level and receive is frame-level, because the questions
+// differ: on the way out, whether a buffer may be compressed at all is a
+// property of its bucket header; on the way in, the handler has already
+// parsed and range-checked that header and holds one opaque zstd frame.
+//
+// Return codes (rule 40): 0 = ok (output parameter set); 1 = compression
+// declined, send uncompressed (not an error; out is nulled); -3 = malformed
+// or size-less frame; -4 = null pointer / undersized output buffer;
+// -6 = the Rust image was built without the zstd feature (production always
+// has it on; pure-Rust feature-off builds only); -7 = a size limit was
+// exceeded.
+//
+// -3 and -7 are separate because they call for opposite operator responses
+// — a corrupt or hostile peer versus an honest peer whose batch outgrew the
+// per-command cap — and the receive path closes the connection on both.
+//
+// Decompression writes into CALLER storage: size it with
+// shekyl_levin_inflated_size, then inflate with shekyl_levin_decompress_into.
+// Nothing is allocated on the Rust side and nothing is copied across the
+// boundary, which matters during IBD where these are multi-megabyte block
+// batches once per packet per connection. Only compression returns a
+// Rust-allocated ShekylBuffer (its output size is not knowable in advance),
+// and that buffer MUST be freed with shekyl_buffer_free.
+
+//! Compress one finalized Levin message — header and payload together.
+//! 0 = out holds the re-framed COMPRESSED message (free with
+//! shekyl_buffer_free); 1 = declined, send the input unchanged. Decline
+//! covers every refusal: below the 256-byte payload minimum, not smaller
+//! compressed, already compressed, not exactly one message, or the
+//! noise/fragment class whose constant on-wire size must not move. The
+//! caller keeps its input in both cases.
+int32_t shekyl_levin_compress_message(const uint8_t* input, size_t input_len,
+                                      ShekylBuffer* out);
+//! Read a COMPRESSED payload's frame header and report the exact inflated
+//! size. The frame must declare its content size, and that size is checked
+//! against min(max_output, 128 MiB) before the caller sizes anything from
+//! it — pass the packet-size limit the bucket header was checked against,
+//! which makes the bound on an inflated payload identical to the bound the
+//! same connection enforces on an uncompressed one.
+int32_t shekyl_levin_inflated_size(const uint8_t* input, size_t input_len,
+                                   uint64_t max_output, size_t* out_size);
+//! Inflate a COMPRESSED payload directly into caller-owned storage. `out`
+//! must be `out_cap` writable bytes sized from shekyl_levin_inflated_size on
+//! the same input; a frame that does not deliver exactly `out_cap` bytes is
+//! rejected rather than partially written.
+int32_t shekyl_levin_decompress_into(const uint8_t* input, size_t input_len,
+                                     uint8_t* out, size_t out_cap,
+                                     size_t* out_written);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and

@@ -606,10 +606,12 @@ fn compressed_payload_cannot_exceed_the_limit_in_force() {
 
     let mut reader = BucketReader::new();
     reader.feed(&compressed).unwrap();
-    let err = reader.next_message().unwrap_err();
-    assert!(
-        matches!(err, Error::Decompress { ref reason } if reason.contains("exceeds the limit")),
-        "unexpected error: {err:?}"
+    assert_eq!(
+        reader.next_message().unwrap_err(),
+        Error::OversizeInflate {
+            declared: inflated_len,
+            limit: INITIAL_MAX_PACKET_SIZE
+        }
     );
 
     // The same bucket is fine once the handshake has raised the limit.

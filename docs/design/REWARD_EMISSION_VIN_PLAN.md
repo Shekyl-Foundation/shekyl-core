@@ -917,7 +917,7 @@ Q1's two-auth answer.
 
 | Item | Built (verified `dev`) | Open — the lean to ratify |
 |------|------------------------|---------------------------|
-| **Q7** FFI seam | `shekyl_archival_verify_*` **snapshot-by-value** pattern ([`archival_ffi.rs:346`](../../rust/shekyl-ffi/src/archival_ffi.rs) — C++ reads LMDB, marshals scalars/arrays by value, Rust verify pure) | **resolved by house pattern** — emission verify follows it; work = enumerate the field set |
+| **Q7** FFI seam | `shekyl_archival_verify_*` **snapshot-by-value** pattern ([`archival_ffi/`](../../rust/shekyl-ffi/src/archival_ffi/) — C++ reads LMDB, marshals scalars/arrays by value, Rust verify pure; see `codes::ShekylArchivalVerifyCtx`) | **resolved by house pattern** — emission verify follows it; work = enumerate the field set |
 | **M-2** numerator as-of-E | `r_market_count` / `sigma_work_milli` / `scarcity` / `curve_milli` + `EpochCloseOutputs` (`consensus_state.rs`); schema implemented 2026-06-12; invariant-2 finalized-immutable-at-E-close | pin the **as-of-E snapshot field set** = the Q7 struct; every field from the frozen E-close materialization, never live |
 | **Q10 `held(P,E)`** | *(two-condition pin below)* | the one genuine design piece |
 | **Q9** dedup atomicity | `claimed_epochs_check_and_set` ([`claimed_epochs.rs:99`](../../rust/shekyl-archival-retention/src/claimed_epochs.rs)) | **PINNED** (§8.0.1) — check/set **fused in tx-connect scope**, mark rolls back with the tx |

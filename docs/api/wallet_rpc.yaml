@@ -71,6 +71,13 @@
 #                                                   check_* is wallet-less)
 #     get_reserve_proof, check_reserve_proof       (DLEQ reserve proofs;
 #                                                   check_* is wallet-less)
+#   SPECIFIED (WI-RPC-4 — thin CLI surfaces):
+#     get_wallet_info                              (one-round-trip aggregate
+#                                                   of live reads; CLI
+#                                                   engine_info)
+#     get_transfers.attribution filter +           (FA-8 unattributed
+#       Transfer.attribution                        receives; CLI history
+#                                                   incoming --unattributed)
 #   RESERVED (prerequisite in parentheses):
 #     unstake, claim, get_stakes                   (Stage 3 StakeEngine +
 #                                                   Phase 2b orchestrator;
@@ -231,6 +238,7 @@ components:
             - discard_pending_tx
             - get_transfers
             - get_transfer_by_id
+            - get_wallet_info
             - refresh
             - rescan_blockchain
             - get_height
@@ -832,6 +840,29 @@ components:
         (cross-cutting lock 4).
 
     # ── History ──────────────────────────────────────────────────────
+    ReceiveAttributionKind:
+      type: string
+      enum: [UNATTRIBUTED, MATCHED, LABEL_UNKNOWN, MANUAL_MATCH, DISPUTED]
+      description: >
+        FA-8 receive-attribution kind on an INCOMING transfer row. Cleartext
+        request labels never appear here — they stay on `list_payment_requests`.
+
+    ReceiveAttribution:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          $ref: "#/components/schemas/ReceiveAttributionKind"
+        request_id:
+          type: string
+          description: Decimal payment-request id when MATCHED / MANUAL_MATCH.
+        echoed_label_hash:
+          type: string
+          description: 64-char lowercase hex of the echoed label hash (LABEL_UNKNOWN).
+        dispute_reason:
+          type: string
+          description: WrongLabel / WrongAmount / Other(...) when DISPUTED.
+
     Transfer:
       type: object
       required: [id, direction, tx_hash, amount, fee, state]
@@ -900,6 +931,14 @@ components:
         spent_height:
           type: integer
           format: int64
+        attribution:
+          allOf:
+            - $ref: "#/components/schemas/ReceiveAttribution"
+          description: >
+            Present on INCOMING rows only. Receive attribution answers
+            which payment request a receive arrived against, which has no
+            meaning for a row the wallet sent, so an OUTGOING row omits
+            the field rather than carrying an invented `UNATTRIBUTED`.
 
     GetTransfersParams:
       type: object
@@ -918,6 +957,13 @@ components:
           description: >
             Inclusive lower bound on transfer `block_height`. Negative values
             are rejected with `-32602 InvalidParams`.
+        attribution:
+          type: string
+          enum: [UNATTRIBUTED, MATCHED, LABEL_UNKNOWN, MANUAL_MATCH, DISPUTED]
+          description: >
+            Filter by FA-8 receive attribution. CLI `history incoming
+            --unattributed` sends `direction: INCOMING` +
+            `attribution: UNATTRIBUTED`.
 
 
             Bounds *inclusion* height only: a row with no `block_height`
@@ -971,6 +1017,51 @@ components:
       properties:
         transfer:
           $ref: "#/components/schemas/Transfer"
+
+    GetWalletInfoParams:
+      type: object
+      description: No parameters. Aggregate of already-live read surfaces.
+
+    GetWalletInfoResult:
+      type: object
+      required:
+        - name
+        - capability
+        - network
+        - address
+        - wallet_height
+        - balance
+        - staking
+        - restore_height
+      description: >
+        One-round-trip wallet summary for CLI `engine_info` (WI-RPC-4).
+        Composes `get_balance` / height / address / staking_info; no new
+        Engine API.
+      properties:
+        name:
+          type: string
+        capability:
+          $ref: "#/components/schemas/CapabilityMode"
+        network:
+          type: string
+          enum: [MAINNET, TESTNET, STAGENET]
+        address:
+          type: string
+        wallet_height:
+          type: integer
+          format: int64
+        daemon_height:
+          type: integer
+          format: int64
+          nullable: true
+        restore_height:
+          type: integer
+          format: int64
+          description: Wallet scan floor (`restore_from_height`).
+        balance:
+          $ref: "#/components/schemas/GetBalanceResult"
+        staking:
+          $ref: "#/components/schemas/StakingInfoResult"
 
     # ── Refresh / rescan ─────────────────────────────────────────────
     RefreshParams:

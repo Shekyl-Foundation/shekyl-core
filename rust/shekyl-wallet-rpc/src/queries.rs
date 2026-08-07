@@ -3,10 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Read-only wallet JSON-RPC methods (Phase 4b).
+//! Read-only wallet JSON-RPC methods (Phase 4b / WI-RPC-4).
 //!
 //! `get_balance`, `get_primary_address`, `get_transfers`,
-//! `get_transfer_by_id`, `get_height`.
+//! `get_transfer_by_id`, `get_height`, `get_wallet_info`.
 
 use std::cmp::Ordering;
 
@@ -20,13 +20,14 @@ use shekyl_types::TxHash;
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, parse_required_object, require_empty_object};
 use crate::project::{
-    outgoing_block_height, outgoing_transfer_state, outgoing_transfer_view, parse_lookup_id,
-    transfer_state, transfer_view, TransferLookupId,
+    atomic_units_string, attribution_matches, outgoing_block_height, outgoing_transfer_state,
+    outgoing_transfer_view, parse_lookup_id, transfer_state, transfer_view, TransferLookupId,
 };
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
-    GetBalanceResult, GetHeightResult, GetPrimaryAddressResult, GetTransferByIdResult,
-    GetTransfersResult, TransferDirection, TransferState, TransferView,
+    capability_mode_str, GetBalanceResult, GetHeightResult, GetPrimaryAddressResult,
+    GetStakedBalanceResult, GetTransferByIdResult, GetTransfersResult, GetWalletInfoResult,
+    ReceiveAttributionFilter, StakingInfoResult, TransferDirection, TransferState, TransferView,
 };
 
 /// Optional filters for `get_transfers`.
@@ -35,6 +36,7 @@ struct GetTransfersParams {
     direction: Option<TransferDirection>,
     state: Option<TransferState>,
     since_height: Option<i64>,
+    attribution: Option<ReceiveAttributionFilter>,
 }
 
 /// Deterministic order of the merged INCOMING/OUTGOING history list.
@@ -118,6 +120,12 @@ fn collect_transfers(
             if filters.state.is_some_and(|st| transfer_state(td) != st) {
                 continue;
             }
+            if filters
+                .attribution
+                .is_some_and(|f| !attribution_matches(&td.receive_attribution, f))
+            {
+                continue;
+            }
             let view = transfer_view(td);
             rows.push((
                 TransferOrder {
@@ -140,6 +148,11 @@ fn collect_transfers(
                 .state
                 .is_some_and(|st| outgoing_transfer_state(row) != st)
             {
+                continue;
+            }
+            // Receive attribution exists on INCOMING rows only (WI-RPC-4):
+            // an attribution filter therefore excludes every send.
+            if filters.attribution.is_some() {
                 continue;
             }
             let view = outgoing_transfer_view(&TxHash::from_bytes(*txid), row)?;
@@ -194,6 +207,107 @@ pub(crate) async fn get_primary_address(
     let result = GetPrimaryAddressResult { address };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_primary_address: {e}")))
+}
+
+/// One-round-trip aggregate of live wallet reads (WI-RPC-4).
+///
+/// CLI `engine_info` is the sole production consumer at land time. No new
+/// Engine API — composes balance / height / address / staking_info under
+/// one engine hold (+ one daemon height probe).
+pub(crate) async fn get_wallet_info(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    require_empty_object(params, "get_wallet_info")?;
+
+    let (name, shared) = {
+        let state = tenants.lock().await;
+        let name = state
+            .tenant
+            .open_name()
+            .ok_or(WalletRpcError::WalletNotOpen)?
+            .to_owned();
+        let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
+        (name, engine)
+    };
+
+    let (identity, balance, staking, wallet_height, restore_height, daemon) = {
+        let engine = shared.read().await;
+        let wallet = engine.ledger();
+        let height = wallet.ledger.height();
+        let summary = wallet.ledger.balance(height);
+        let balance = GetBalanceResult::from(&summary);
+        let restore_height =
+            i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
+        let wallet_height = i64::try_from(height).unwrap_or(i64::MAX);
+        let address = engine
+            .primary_address()
+            .encode()
+            .map_err(|e| WalletRpcError::InternalError(format!("encode address: {e}")))?;
+        let capability = capability_mode_str(engine.capability()).to_owned();
+        let network = match engine.network() {
+            shekyl_engine_core::Network::Mainnet => "MAINNET",
+            shekyl_engine_core::Network::Testnet => "TESTNET",
+            shekyl_engine_core::Network::Stagenet => "STAGENET",
+        }
+        .to_owned();
+
+        // Read staking under the guard this snapshot already holds, via the
+        // crate's single `staking_read_view` call site (which owns the
+        // off-the-worker discipline and the detail-free error mapping).
+        let staking_view = crate::staking::read_view_under_guard(&engine)?;
+        let staking = StakingInfoResult {
+            staking_enabled: staking_view.staking_enabled,
+            balance: GetStakedBalanceResult {
+                bonded_principal_confirmed: atomic_units_string(
+                    staking_view.balance.bonded_principal_confirmed,
+                ),
+                bonded_principal_pending: atomic_units_string(
+                    staking_view.balance.bonded_principal_pending,
+                ),
+                rewards_received_unspent: atomic_units_string(
+                    staking_view.balance.rewards_received_unspent,
+                ),
+            },
+            staked_output_count: i64::try_from(staking_view.outputs.len()).unwrap_or(i64::MAX),
+            pscan_synced_height: staking_view
+                .pscan_synced_height
+                .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
+        };
+
+        let daemon = engine.daemon().clone();
+        drop(wallet);
+
+        (
+            (name, capability, network, address),
+            balance,
+            staking,
+            wallet_height,
+            restore_height,
+            daemon,
+        )
+    };
+
+    let daemon_height = daemon
+        .get_height()
+        .await
+        .ok()
+        .map(|h| i64::try_from(h).unwrap_or(i64::MAX));
+
+    let (name, capability, network, address) = identity;
+    let result = GetWalletInfoResult {
+        name,
+        capability,
+        network,
+        address,
+        wallet_height,
+        daemon_height,
+        restore_height,
+        balance,
+        staking,
+    };
+    serde_json::to_value(result)
+        .map_err(|e| WalletRpcError::InternalError(format!("serialize get_wallet_info: {e}")))
 }
 
 pub(crate) async fn get_transfers(
@@ -336,6 +450,7 @@ mod tests {
             direction,
             state,
             since_height: None,
+            attribution: None,
         }
     }
 
@@ -410,6 +525,23 @@ mod tests {
         )
         .expect("project");
         assert!(spent.is_empty());
+    }
+
+    /// Receive attribution exists on INCOMING rows only (WI-RPC-4), so
+    /// an `attribution` filter must exclude every send — a journal row
+    /// surviving any attribution filter would claim a receive-side fact
+    /// about a payment this wallet made.
+    #[test]
+    fn attribution_filter_excludes_journal_rows() {
+        let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
+        let mut f = filters(None, None);
+        f.attribution = Some(ReceiveAttributionFilter::Unattributed);
+
+        let got = collect_transfers(&[], &block, &f, None).expect("project");
+        assert!(
+            got.is_empty(),
+            "a send matched a receive-attribution filter"
+        );
     }
 
     /// `since_height` bounds inclusion height. A send that was never

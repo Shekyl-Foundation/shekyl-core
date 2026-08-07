@@ -1478,12 +1478,13 @@ sustainability is unaffected by the recalibration.
   - **Offline cold-signing** (`describe_transfer`, `sign_transfer`,
     `submit_transfer`, `transfer --do-not-relay`) — blocked on Phase 2d
     (`UnsignedTxBundle`/`SignedTxBundle` air-gapped bundles).
-  - **`engine_info` wallet-info display** — blocked on a native
-    wallet-info RPC method (the wallet2 `engine_info` aggregate has no
-    contract equivalent yet).
-  - **`history incoming` unattributed receives** — blocked on the FA-8
-    unattributed-receives RPC projection (the payment-request surface
-    landed in WI-RPC-1; the unattributed-view read did not).
+  - **`engine_info` wallet-info display** — **CLOSED 2026-08-07 (WI-RPC-4,
+    `feat/wallet-rpc-wi-rpc-4-thin`)**. Native `get_wallet_info` aggregates
+    live reads; CLI `engine_info` un-stubbed in the same PR.
+  - **`history incoming` unattributed receives** — **CLOSED 2026-08-07
+    (WI-RPC-4, `feat/wallet-rpc-wi-rpc-4-thin`)**. `get_transfers` gains an
+    `attribution` filter + `Transfer.attribution` projection; CLI
+    `history incoming --unattributed` un-stubbed in the same PR.
   **Reopen when** the named gating surface lands in `wallet_rpc.yaml` +
   `shekyl-wallet-rpc`; the re-evaluation shape is the landing PR wiring the
   CLI command in the same change (un-stubbing is part of the surface PR's
@@ -1505,27 +1506,6 @@ sustainability is unaffected by the recalibration.
   `wallet_rpc.yaml` first — not a CLI-side loop over `build_pending_tx`.
   **Target: V3.1 (decision; delete this row as "won't fix" if no consumer
   by then).**
-
-- **`stake_engine.rs` decomposition — ratchet the god-file back down**
-  (added 2026-07-21; DS-PR-1 / PR #347; carrier for the
-  `engine_decomposition_ratchet.conf` `stake_engine.rs 4749 → 5253` raise).
-  DS-PR-1 (F-D2 drain-send) raised the ratchet ceiling under the conf's
-  reviewed-raise clause. Of the +504 lines, only ~82 are genuine
-  orchestration (the `AssembleDrain` thin validate-and-delegate handler +
-  handle method, which must stay in the actor because they borrow
-  `self.held`'s persona keys — rule 36 secret-locality); the other ~422 are
-  the **inline** `drain_assembly_shape` test module — exactly the "growing
-  test harness is not a re-forming god-object" category the ratchet's
-  `EXCLUDE` list names, counted only because it is inline rather than a
-  separately-named file (as the bond/claim tests in this same file also are).
-  The decomposition designs a coherent split — the near-term mechanical win
-  is extracting the inline test modules (drain, and ideally bond/claim) into
-  an `EXCLUDE`'d sibling test file so the ceiling ratchets **down**, but the
-  PR should also weigh a workflow-shaped carve of the actor body per
-  `ENGINE_COMPOSITION_DECOMPOSITION.md` rather than a rushed test-only move.
-  **Reopen when** the decomposition PR is scoped. **Target: V3.0 pre-genesis
-  (bounded, mechanical for the test-extraction floor; the god-file only
-  shrinks from here).**
 
 - **Drain dispatch driver — confirmation-observe / terminal-reject prune /
   byte-identical resubmit** (added 2026-07-21; DS-PR-2 / F-D2 drain-send).
@@ -9147,14 +9127,50 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
+- **Relay: populate the 48-cell Pi verification surface, then consume it
+  per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first
+  (`shekyl-relay-privacy/src/verify_cost.rs`, 2026-08-06) carrying the four
+  in-tree §85.3 pins (1-in/8-in at genesis and depth 7); the other 44
+  measured cells exist only in the §85 sweep's capture artifacts on the
+  bench hosts (`scripts/remote-bench.sh` logs + criterion `estimates.json`
+  on the Pi and x86 arms). Until populated, those cells refuse per §83.3 —
+  a posture production never hits, since the embargo consumes the modal
+  cell only. Two halves, ordered:
+
+  - **Data recovery (target V3.0).** Transcribe the Pi columns into
+    `SPEC_VERIFY_COST` with `Provenance::MeasuredPi4` and depth-above-genesis cells
+    labelled `SynthesizedProjection` (§81.2); x86 columns stay diagnostic
+    in `spec_decision_matrix.rs` (§84.2). Named blocker: the artifacts are
+    on the bench hosts, not in-tree. If they are gone, this degrades to a
+    re-run of `scripts/remote-bench.sh <pi-host> relay_admission_verify`
+    (~14 min build + sweep) — a re-measurement, not a redesign. The §87.2
+    provenance test and rule 76.4 forbid filling any cell by scaling.
+  - **Per-shape embargo consumption (the next RP cut, target V3.0).** The
+    embargo draw is a process-wide singleton at the modal shape; consuming
+    `f` per shape needs `n_in` and the tree depth at the draw site
+    (`tx_pool.cpp` `set_relayed` →
+    `shekyl_dandelionpp_embargo_draw_seconds`), i.e. an FFI signature
+    change plus a per-shape timer cache keyed on the populated table.
+    §83.1 prices the payoff: the modal row is effectively constant (~3 s
+    drift across the whole depth range) while the tail rows are where the
+    sorting lives (245 s at 8-in vs 190 s modal at the assumed transit,
+    widening with chain age per §82.3). Reopen shape: the first relay
+    design round after the table is populated; blocked behind data
+    recovery by construction, independent of Q-10.
+
 - **Levin p2p migration — LV-2 payload codec and LV-3 connection-path
   cutover.** LV-1 (the `rust/shekyl-levin` framing crate: bucket header,
   builders, noise/fragmentation, zstd flag path, incremental reader, KAT'd
   byte-identical against the C++ gtests) landed 2026-08-05, deliberately
   inert — the scoping decision was "exact, fully-tested skeleton now;
   cutover scheduled for the future" (shekyl-levin plan, 2026-08-05; index
-  row `LV-1…LV-N`). The remaining work is **rejected-now with named
-  reopening criteria** (rule 21):
+  row `LV-1…LV-N`). UPDATE 2026-08-06: the crate's **compression half is
+  production-live** — the C++ `epee::levin` compression path is a
+  marshaling shim over the `shekyl_levin_*` FFI and the system-libzstd
+  dependency is deleted (single-owner libzstd; zstd decision 2026-08-06).
+  The framing half (builders, `BucketReader`) stays inert until LV-3. The
+  remaining work is **rejected-now with named reopening criteria**
+  (rule 21):
 
   - **LV-2 — epee portable_storage payload codec + command schemas.** The
     framing crate carries payloads as opaque bytes; speaking live
@@ -9175,37 +9191,137 @@ its wake.
     cycle, own PR) — reopens only when that track is opened; the
     re-evaluation shape is a design round against the inventory.
 
-    Two decisions are **named here rather than deferred silently**, because
-    both are undecidable until LV-3 creates the thing they are about:
+    Decisions once named here, and their dispositions:
 
-    - **libzstd link strategy.** `zstd-sys` `cc`-compiles a vendored
-      libzstd unless its non-default `pkg-config` feature is enabled; the
-      C++ build links the system library (`CMakeLists.txt`
-      `pkg_check_modules` / `find_library`, then `-DHAVE_ZSTD`). The moment
-      `shekyl-levin` is folded into a staticlib the daemon links, that
-      binary carries two libzstd implementations with colliding `ZSTD_*`
-      symbols, and `zstd-sys`'s `links = "zstd"` key conflicts with any
-      other crate claiming it. Blocker: `shekyl-levin` is in no staticlib
-      today, so there is no link graph to decide against — enabling
-      `pkg-config` now would add a system-libzstd build requirement to
-      every Rust CI job for a crate that is inert. Recorded in
-      `rust/shekyl-levin/Cargo.toml` at the dependency itself.
-    - **Post-inflate limit interop window.** `BucketReader` bounds a
-      decompressed payload by `min(packet limit, per-command limit)`, which
-      the C++ declares but never re-checks after inflating. `COMPRESSED` is
-      only ever set on `NOTIFY_NEW_TRANSACTIONS`, whose effective limit is
-      100 MB, while `DECOMPRESSED_MAX_SIZE` is 128 MiB — so a relay batch
-      inflating into that ~34 MB gap is accepted by a C++ receiver and
-      rejected by the Rust one. Nothing bounds the uncompressed batch on the
-      sender side, so it is reachable in principle (order 670 weight-limit
-      transactions in one batch), though not observed. Blocker: deciding
-      between "confirm unreachable in real traffic" and "widen the bound to
-      `DECOMPRESSED_MAX_SIZE` for this one command" needs a mixed C++/Rust
-      network to measure against, which cannot exist while the crate is
-      unwired. Enforcing the declared limit is the pre-cutover default
-      because the alternative is an unbounded memory-exhaustion surface (a
-      few KB of frame forcing a 128 MiB allocation per connection). Stated
-      in full in the crate's divergence census, entry 4.
+    - **libzstd link strategy — RESOLVED 2026-08-06** (compression-shim
+      cut, this branch). The C++ `epee::levin` compression path became a
+      marshaling shim over the `shekyl_levin_*` FFI, the system-libzstd
+      detection/link and the `HAVE_ZSTD` gate were deleted, and the
+      vendored `zstd-sys` copy pinned by the workspace became the binary's
+      single zstd. There is no dual-libzstd fold left for LV-3 to
+      encounter, and `links = "zstd"` is claimed exactly once. Recorded at
+      the dependency in `rust/shekyl-levin/Cargo.toml`.
+
+      The fold was **not free**, and the earlier phrasing here ("the
+      question dissolved rather than being decided") was written before the
+      cost showed up. Folding `shekyl-levin` into `shekyl-ffi` put zstd's C
+      objects into `libshekyl_ffi.a` for the first time, and the Win64
+      mingw cross-build failed at link: the crate's default `zdict_builder`
+      feature compiles `zstd/lib/dictBuilder/cover.c`, which calls POSIX
+      `qsort_r`, and mingw-w64 has no such symbol. The fix is a narrowed
+      pin — `zstd = { version = "0.13", default-features = false }` — which
+      also drops `legacy` (decoders for frame formats v0.1–v0.7 that we
+      never emit, so keeping them only widened the attacker-reachable C
+      surface on the p2p receive path). The general lesson for LV-3: a
+      vendored C dependency entering the daemon's Rust image inherits every
+      target that image is cross-compiled for, and the crate's defaults are
+      chosen for hosted Linux development, not for our target matrix.
+    - **Post-inflate limit interop window — RESOLVED 2026-08-06** (same
+      cut). The C++ decompress site now enforces the identical
+      `min(packet limit, per-command limit)` bound the Rust
+      `BucketReader` does (`levin_protocol_handler_async.h`,
+      `max_decompressed`), closing the ~34 MB `NOTIFY_NEW_TRANSACTIONS`
+      accept-window and the 128 MiB-allocation-per-connection exhaustion
+      surface with it. Both implementations agree; divergence census
+      entry 4 records the resolution.
+
+      One consequence, stated rather than discovered later. The bound is
+      now symmetric — it is the *same* `min(max_packet_size,
+      get_max_bytes(command))` expression the bucket header itself is
+      checked against at both header sites — so a compressed message can
+      deliver exactly what an uncompressed one could, and no more. Before
+      the cut, compression could smuggle a payload past the packet limit
+      the connection was enforcing; that was the bypass, not a feature.
+      What follows is that a `NOTIFY_RESPONSE_GET_OBJECTS` batch whose
+      *serialized* size exceeded 100 MB used to sync (compressed under the
+      limit, inflated under the flat 128 MiB cap) and now does not.
+      Reachability is bounded but not zero: `handle_request_get_objects`
+      caps a request at `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT` = 100
+      blocks and nothing caps the *bytes*, so it needs 1 MB average blocks
+      across a 100-block batch.
+
+      **Reversion clause (rule 21).** Reopen if a real network produces a
+      get-objects response over the packet limit. The fix then is
+      **send-side batch splitting** — bound the response by serialized
+      bytes as well as block count — and explicitly *not* relaxing the
+      inflate bound back, which would restore an unbounded
+      allocation-per-connection surface to buy an IBD path that the
+      uncompressed case never had either.
+    - **Should the tx-relay path compress at all? — REJECTED NOW, with
+      reopening criteria (rule 21).** Registered 2026-08-06, at the cut
+      that made compression unconditional.
+
+      Before this branch, a build without system libzstd silently did not
+      compress; deleting the `HAVE_ZSTD` gate makes compression happen in
+      every build, on every relay path, including
+      `NOTIFY_NEW_TRANSACTIONS`. That is the correct default for bandwidth
+      and it is what the gate deletion bought — but compressed *size* is
+      itself an observable, and on a privacy chain the tx-relay path is
+      the one where an observable is most expensive. The immediate
+      instance is closed in code: `make_payload_send_txs` does not
+      compress a `--pad-transactions` message, because zstd erases the
+      padding run and hands back the volume signal the padding was bought
+      to hide (pinned by `levin_notify.padding_survives_the_emit_path`,
+      negative-controlled).
+
+      What is *not* closed is the general question: a compression **ratio**
+      is a function of payload entropy, so the on-wire size of an unpadded
+      relay message leaks something about its contents that a fixed-size
+      encoding would not — the hazard recorded as **Z-2** in the shard
+      entry above ("compressed length is a stable content oracle").
+
+      **Z-1 measured the input this question turns on**, on the same day
+      and against the same wire bytes: FCMP++ spend transactions and
+      genesis coinbases run **7.97–7.995 bits/B** of entropy, and zstd
+      levels 1/3/9 *expand* every corpus (ratio 1.000–1.001). Level 1 is
+      what this path uses. It splits the question in two, and the two
+      answers point opposite ways:
+
+      - **Unpadded** relay messages are essentially never compressed.
+        Bodies that expand under level 1 fail the only-if-smaller rule, so
+        the `COMPRESSED` flag rarely gets set and there is little ratio
+        left to leak. The corollary is uncomfortable rather than
+        reassuring: "compression on tx relay earns its keep" is now an
+        unsupported claim. It is not worthless everywhere —
+        `NOTIFY_RESPONSE_GET_OBJECTS` carries block data with real
+        structure, and that is where bandwidth actually matters — but on
+        this path it is close to nothing.
+      - **Padded** messages compress anyway, and the guard is therefore
+        load-bearing rather than defence in depth. Entropy of the bodies
+        is beside the point: padding is by construction a long run of one
+        character, so the padded case is *systematically* compressible no
+        matter how random the transactions are. Measured on the branch,
+        with pseudorandom 4 KiB bodies matching the Z-1 entropy — a
+        message padded to **9216** payload bytes goes on the wire at
+        **8237** with the guard removed. The ~979-byte space run collapses
+        to a couple of dozen bytes, which more than pays for the ~0.1% the
+        incompressible bodies expand by, and the 1024-quantization is
+        gone. `levin_notify.padding_survives_the_emit_path` is that
+        measurement, kept as a test.
+
+      Rejected now rather than acted on, because deleting the path is a
+      wire-behaviour change that wants its own measurement (per-command
+      ratios on a live-ish corpus) and this branch is a plumbing cut.
+      **Two separate reopening criteria, because one does not license the
+      other:**
+
+      - *Does the path earn its keep?* Measure per-command ratios on
+        unpadded traffic. If `NOTIFY_NEW_TRANSACTIONS` shows no saving,
+        skip compression for that command outright — which would retire
+        the padding guard as a side effect, since there would be no
+        compressor left to guard against.
+      - *May the guard be deleted on its own?* Only a measurement on
+        **padded** messages could license that, and the number above says
+        it will not: a no-saving result on unpadded traffic says nothing
+        about the padded case. Do not read the first criterion as
+        permission for this one.
+
+      Also reopen if `--pad-transactions` is proposed as default-on, or if
+      a relay-privacy round takes up wire-size observables generally,
+      alongside the Q-11 Unit 2 wire-observer work. Z-3 (zstd output is
+      non-canonical, so nothing may attest over it) was checked here and
+      does not bite: Levin compression is transport-only and nothing signs
+      or commits to the compressed bytes.
     - **Handshake coupling of the packet-size limit.** The framing crate
       cannot detect handshake completion — it does not decode command
       bodies — so `BucketReader::complete_handshake` is the caller's
@@ -15194,3 +15310,13 @@ Retained for citation in review; each links to the canonical record.
   unmangled grep could never match a mangled C++ symbol — corrected),
   `shekyl_pow_randomx_v2_hash` + `_ZN3aes` present (falsifiability
   anchors; empirically verified against a Release static build).
+
+- **RESOLVED (PR #416, 2026-08-06): `stake_engine` god-file mechanical floor.**
+  Test suite extracted to EXCLUDE'd `stake_engine_tests.rs`; monofile carved
+  into `engine/stake_engine/{types,helpers,actor,persona,bond,drain,claim,scan,
+  retire,handle}.rs` (message-family split, `pub(crate)` fields). Decomposition
+  ratchet scans `stake_engine/**`, dropped the 5253-line monofile ceiling, and
+  lowered `NEW_FILE_CAP` 2000→1200. StakeWorkflow ownership pinned in
+  `ENGINE_COMPOSITION_DECOMPOSITION.md`. Optional remaining polish: `engine.stake()`
+  façade (same class as transfer façades — not a god-file regression).
+

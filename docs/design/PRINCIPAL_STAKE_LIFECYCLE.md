@@ -56,7 +56,7 @@ so Round 1 designs against what exists, not against the scoping doc's caution:
 
 | Round-0 claim | Substrate finding (`dev`) | Correction |
 |---------------|---------------------------|------------|
-| "None of [the method surface] exists today (only three `StakeInstance` future-work comments)" | `StakeEngine` actor is substantially built: `StakeEngineHandle::spawn` + `impl Message` for `MintPersonaHandle` / `ActivatePersona` / `ActivePersona` / `SignBond`→`JoinMarketVin` / `ScanStep` / `RetireBondedPersona` ([`stake_engine.rs`](../../rust/shekyl-engine-core/src/engine/stake_engine.rs) L915–L1169) | The **`P` persona/bond substrate is landed**; what is missing is only the **principal orchestrator surface** (`stake_in` … `drain` / queries) |
+| "None of [the method surface] exists today (only three `StakeInstance` future-work comments)" | `StakeEngine` actor is substantially built: `StakeEngineHandle::spawn` + `impl Message` for `MintPersonaHandle` / `ActivatePersona` / `ActivePersona` / `SignBond`→`JoinMarketVin` / `ScanStep` / `RetireBondedPersona` ([`stake_engine/`](../../rust/shekyl-engine-core/src/engine/stake_engine/) — actor + message handlers) | The **`P` persona/bond substrate is landed**; what is missing is only the **principal orchestrator surface** (`stake_in` … `drain` / queries) |
 | `P` HKDF derivation is a gate-6 Round-1 lone carry ("not yet built") | `ArchivalPKeys` + derivation **built** in [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (23 KB); `bond_spend_sk` present; `BondPostKind::JoinMarket { bond_spend_pk }` serializer in [`shekyl-wire`](../../rust/shekyl-wire/src/transaction.rs) | `P` derivation + the bond-post **wire serializer** are not a blocker; the gap is the non-JoinMarket **connect-path** verify + the principal driving methods (§5 gate 2) |
 | Secret-locality of `P` keys is a forward requirement on the retool | `StakeEngine` already **owns** `spend_sk`/`view_sk`/`ml_kem_dk`/`hybrid_sign_sk`/`bond_spend_sk` (ArchivalPKeys, never `Clone`, `ZeroizeOnDrop`); emits `JoinMarketVin` / `ScanStepResult`, never keys | DQ2 is **confirmed by the built actor**, not a design still to make |
 
@@ -78,8 +78,8 @@ when `P` is `Exited` post-cooldown; `drain()` reads `P`'s non-escrowed outputs;
 **constructible only from a `P`-FSM-state token that permits it**, so "unbond a still-`Bonded`
 `P`" is *unrepresentable*, not runtime-checked. This is **already the built actor's
 discipline**, not a new invention: `RetireBondedPersona` is constructible only with a
-`RetirementWitness` ([`stake_engine.rs`](../../rust/shekyl-engine-core/src/engine/stake_engine.rs)
-L274 / L1151), and `SignBond` consumes a **single-use** `PersistedBondTicket` (L400 / L1040).
+`RetirementWitness` ([`stake_engine/`](../../rust/shekyl-engine-core/src/engine/stake_engine/) —
+types + actor handlers), and `SignBond` consumes a **single-use** `PersistedBondTicket`.
 Round 1 extends the same pattern to the principal surface — e.g. `unbond()` takes an
 `ExitedConfirmed` witness minted from the scan-observed FSM, the sibling of
 `RetirementWitness`. This principle sharpens **DQ2** (orchestrator = read-model + gate;
@@ -757,7 +757,7 @@ wiring + DQ4's steady-state funding sources named in the Correction.
   2026-06-16, zero param change).
 - [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) / [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md)
   (the emission the drain is downstream of; ML-DSA hard gate).
-- Code reality (verified `dev`, Round-1 open): [`stake_engine.rs`](../../rust/shekyl-engine-core/src/engine/stake_engine.rs),
+- Code reality (verified `dev`, Round-1 open): [`stake_engine/`](../../rust/shekyl-engine-core/src/engine/stake_engine/),
   [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs),
   [`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs),
   [`engine/mod.rs`](../../rust/shekyl-engine-core/src/engine/mod.rs),

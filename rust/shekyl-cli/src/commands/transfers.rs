@@ -265,8 +265,43 @@ pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) {
             if let Some(spent) = t.get("spent_height").and_then(|v| v.as_i64()) {
                 println!("  Spent at:  {spent}");
             }
+            if let Some(attr) = t.get("attribution") {
+                let kind = attr.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
+                println!("  Attribution: {kind}");
+            }
         }
         Err(e) => rpc.report("Failed to get transfer", &e),
+    }
+}
+
+/// FA-8 unattributed receives — `get_transfers` with INCOMING + UNATTRIBUTED
+/// (WI-RPC-4; closes the WI-RPC-2b `history incoming --unattributed` deferral).
+pub fn cmd_history_incoming_unattributed(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call(
+        "get_transfers",
+        json!({
+            "direction": "INCOMING",
+            "attribution": "UNATTRIBUTED",
+        }),
+    ) {
+        Ok(val) => {
+            let transfers = val.get("transfers").and_then(|v| v.as_array());
+            let Some(transfers) = transfers.filter(|a| !a.is_empty()) else {
+                println!("No unattributed receives.");
+                return;
+            };
+            println!(
+                "{:<10} {:<10} {:>18} {:>10}  TxID",
+                "Direction", "State", "Amount (SKL)", "Height"
+            );
+            for t in transfers {
+                print_transfer_row(t);
+            }
+        }
+        Err(e) => rpc.report("Failed to list unattributed receives", &e),
     }
 }
 

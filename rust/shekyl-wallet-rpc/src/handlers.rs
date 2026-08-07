@@ -5,7 +5,7 @@
 
 //! JSON-RPC method dispatch.
 //!
-//! Phase 4b + WI-RPC-1/2a/3 + Phase 4c `rescan_blockchain`.
+//! Phase 4b + WI-RPC-1/2a/3/4 + Phase 4c `rescan_blockchain`.
 
 use serde_json::Value;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
@@ -42,6 +42,7 @@ pub async fn dispatch(
         "change_password" => lifecycle::change_password(tenants, params).await,
         "get_balance" => queries::get_balance(tenants, params).await,
         "get_primary_address" => queries::get_primary_address(tenants, params).await,
+        "get_wallet_info" => queries::get_wallet_info(tenants, params).await,
         "get_transfers" => queries::get_transfers(tenants, params).await,
         "get_transfer_by_id" => queries::get_transfer_by_id(tenants, params).await,
         "get_height" => queries::get_height(tenants, params).await,
