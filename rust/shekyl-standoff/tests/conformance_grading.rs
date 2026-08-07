@@ -170,14 +170,21 @@ fn exactly_uniform_sample_scores_zero_despite_unequal_bin_widths() {
     let reps = 333usize;
     let exact: Vec<u64> = (0..reps).flat_map(|_| 0..=window).collect();
     let report = grade_sample(&exact, window);
+    // Assert messages intentionally omit report Debug / field formatting:
+    // CodeQL's `rust/cleartext-logging` treats assert-format sinks as log
+    // writes and taints `CertifyReport` / grading returns via the
+    // `certify_*` name heuristic. The values are public grading stats, not
+    // secrets — but formatting them trips the PR code-scanning gate on
+    // large release PRs. On failure, re-run under a debugger or temporarily
+    // restore field prints locally.
     assert!(
         report.chi_square.abs() < 1e-9,
-        "exactly uniform sample must score ~0, got {report:?}"
+        "exactly uniform sample must score ~0"
     );
-    assert!(report.uniform_ok, "uniform grade failed: {report:?}");
+    assert!(report.uniform_ok, "uniform grade failed");
 
     let chi = chi_square_uniform(&exact, window, 60);
-    assert!(chi.abs() < 1e-9, "chi_square_uniform reports {chi}");
+    assert!(chi.abs() < 1e-9, "chi_square_uniform must be ~0 for exact uniform");
 }
 
 #[test]
@@ -186,9 +193,11 @@ fn self_cert_passes_reference_rng() {
     // the reference stream passes all three property grades.
     let mut rng = SplitMix64(0x90DE_4242_7777_0001);
     let report = certify_draw(&mut rng, 600, CERTIFY_SAMPLE_N);
-    assert!(report.uniform_ok, "uniform grade failed: {report:?}");
-    assert!(report.serial_independent, "serial grade failed: {report:?}");
-    assert!(report.passed(), "overall self-cert failed: {report:?}");
+    // No report formatting in assert messages — see comment in
+    // `exactly_uniform_sample_scores_zero_despite_unequal_bin_widths`.
+    assert!(report.uniform_ok, "uniform grade failed");
+    assert!(report.serial_independent, "serial grade failed");
+    assert!(report.passed(), "overall self-cert failed");
 }
 
 #[test]
@@ -203,26 +212,17 @@ fn self_cert_rejects_trap_and_correlated_samples() {
         .map(|_| draw_entry_gap_double_jitter_trap(window, &mut rng))
         .collect();
     let trap_report = grade_sample(&trap, window);
-    assert!(
-        !trap_report.uniform_ok,
-        "trap should fail uniformity: {trap_report:?}"
-    );
-    assert!(
-        !trap_report.passed(),
-        "trap should not pass self-cert: {trap_report:?}"
-    );
+    assert!(!trap_report.uniform_ok, "trap should fail uniformity");
+    assert!(!trap_report.passed(), "trap should not pass self-cert");
 
     // Correlated walk: marginal ~uniform, serial-dependent.
     let correlated = correlated_walk(&mut rng, window, 20_000);
     let corr_report = grade_sample(&correlated, window);
     assert!(
         !corr_report.serial_independent,
-        "correlated should fail serial: {corr_report:?}"
+        "correlated should fail serial"
     );
-    assert!(
-        !corr_report.passed(),
-        "correlated should not pass self-cert: {corr_report:?}"
-    );
+    assert!(!corr_report.passed(), "correlated should not pass self-cert");
 }
 
 #[test]

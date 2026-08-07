@@ -587,9 +587,10 @@ mod tests {
         // `shekyl-standoff/tests/conformance_grading.rs`.
         let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
         let report = shekyl_standoff::conformance::certify_draw(&mut rng, 600, 200_000);
-        assert!(
-            report.passed(),
-            "sim RNG failed standoff self-cert: {report:?}"
-        );
+        // No report formatting in the assert message: CodeQL
+        // `rust/cleartext-logging` treats assert-format sinks as log writes
+        // and taints `CertifyReport` via the `certify_*` name heuristic.
+        // Report fields are public grading stats only.
+        assert!(report.passed(), "sim RNG failed standoff self-cert");
     }
 }
