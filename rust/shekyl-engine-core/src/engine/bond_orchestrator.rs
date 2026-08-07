@@ -395,7 +395,7 @@ where
         let funding: Vec<FundingInputContext> = selection
             .records
             .into_iter()
-            .zip(paths.into_iter())
+            .zip(paths)
             .map(|(record, path)| FundingInputContext {
                 record,
                 leaf_chunk: path
