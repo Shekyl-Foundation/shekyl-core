@@ -176,6 +176,41 @@ const fn pi4(millis: f64, basis: TreeBasis) -> VerifyCell {
     }
 }
 
+/// A populated cell must be a plausible per-hop verification cost: positive,
+/// finite, and under ten seconds. `millis > 0.0` is `false` for NaN, and the
+/// upper bound excludes `+inf` along with any figure that could not be a
+/// verification measurement (the deepest measured cell is 791.9 ms; ten
+/// seconds is two orders of headroom, not a tuning bound).
+const fn cell_is_plausible(millis: f64) -> bool {
+    millis > 0.0 && millis < 10_000.0
+}
+
+// The cells are authored at compile time, so the malformed-constant guard
+// runs then too: a NaN, infinite, negative, or absurd cell is a **compile
+// error**, never a value that flows out of `f_ms` and saturates in a cast
+// downstream. A runtime refusal variant for this was considered and
+// rejected — no runtime path can produce the state, so the variant would be
+// permanent error surface with no producer (rule 21), where this guard is
+// the same §83.3 device the table already uses: the mistake requires a
+// visible edit, and here it cannot even build.
+const _: () = {
+    let mut n = 0;
+    while n < MAX_TABLE_INPUTS {
+        let mut d = 0;
+        while d < DEPTH_TIERS {
+            if let Some(cell) = SPEC_VERIFY_COST.cells[n][d] {
+                assert!(
+                    cell_is_plausible(cell.millis),
+                    "a populated verification-cost cell is not a plausible \
+                     measurement (NaN, non-positive, infinite, or >= 10 s)"
+                );
+            }
+            d += 1;
+        }
+        n += 1;
+    }
+};
+
 /// The adopted table (§80), populated with the spec machine's pinned cells.
 ///
 /// Values are §85.3's measurements: Pi 4 Model B, `performance` on all four
@@ -221,10 +256,12 @@ impl SpecVerifyCost {
     /// instruments that report the surface. Order: `n_in` major, depth minor.
     pub fn populated(&self) -> impl Iterator<Item = (usize, u32, VerifyCell)> + '_ {
         self.cells.iter().enumerate().flat_map(|(i, row)| {
-            row.iter().enumerate().filter_map(move |(d, cell)| {
-                let depth = GENESIS_TREE_DEPTH + u32::try_from(d).expect("DEPTH_TIERS is 6; d < 6");
-                cell.map(|c| (i + 1, depth, c))
-            })
+            // Rows are DEPTH_TIERS long and DEPTH_TIERS is derived from this
+            // exact range, so the zip is total by construction — no index
+            // arithmetic, no cast.
+            (GENESIS_TREE_DEPTH..=MAX_TABLE_DEPTH)
+                .zip(row.iter())
+                .filter_map(move |(depth, cell)| cell.map(|c| (i + 1, depth, c)))
         })
     }
 }
@@ -273,7 +310,10 @@ pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 /// must not silently become a hop value (§83.3).
 pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<u32, VerifyCostRefusal> {
     let f = SPEC_VERIFY_COST.f_ms(n_in, depth)?;
-    // Exact for every populated value: f + 50.0 is a few hundred ms.
+    // CLIPPY: exact — every populated cell is const-asserted plausible
+    // (positive, finite, < 10 s), so `f + transit` lies in (50, 10_050) and
+    // the rounded value fits u32 with neither truncation nor sign loss. A
+    // NaN cannot reach this cast; it cannot build (see the const guard).
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     Ok((f + ADOPTED_TRANSIT_ASSUMPTION_MS).round() as u32)
 }
