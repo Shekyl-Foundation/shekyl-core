@@ -258,6 +258,10 @@ impl<
         state
             .ledger
             .reconcile_tx_key_retention(reorg_fork_height.is_some());
+        // PR-SJ-1 P3-1: after replay, re-apply F14 locks from non-terminal
+        // journal rows (idempotent; no-op when transfers don't yet carry
+        // the matching key images).
+        state.ledger.reapply_send_journal_locks();
         Ok(())
     }
 

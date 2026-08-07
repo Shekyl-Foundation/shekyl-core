@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Send journal + OUTGOING history (PR-SJ-1 / PR-SJ-2 projection,
+  `feat/wallet-send-journal-sj1`)**: new `SendJournalBlock` on
+  `WalletLedger` (`WALLET_LEDGER_FORMAT_VERSION` 13) records dispatched
+  sends (recipients, realized fee, input key images, append-only state
+  enum) beside `record_retained_tx_key`. Refresh confirmation flips
+  rows to `Confirmed`; rescan no longer refuses on `pending_tx_hashes`
+  alone (P3-1) and re-applies F14 locks from the journal after replay.
+  `get_transfers` projects journal rows as `direction: OUTGOING` with
+  fee populated (txid-keyed ids). Closes the Phase 4b W-D FOLLOWUP.
+  Design: `docs/design/WALLET_SEND_RECORD.md`.
+
 ### Removed
 
 - **The transitional `rust/shekyl-engine-rpc` crate is deleted** (C++-retirement

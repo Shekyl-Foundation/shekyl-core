@@ -1693,23 +1693,13 @@ sustainability is unaffected by the recalibration.
   SJ-DQ-8. *Target: V3.0 / Phase 4d.*
 
 - **Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing
-  history surface lands** (added 2026-07-09; **Phase 4c disclosure
-  2026-08-04** — still blocked; reopening criteria unchanged). The Engine ledger holds only
-  receive-side rows; `project::transfer_view` projects every row as
-  `INCOMING` (outgoing sends surface as `SPENT` state on the funding row).
-  A `get_transfers` call with `direction: OUTGOING` therefore matches nothing
-  and returns an empty list — a documented, valid enum value that silently
-  yields a wrong-looking answer (client sees "no sends"). Phase 4b keeps the
-  current behavior rather than either rejecting a spec-valid filter value or
-  faking an outgoing view. **Reopening criterion:** Engine grows a spend-side
-  transfer record (a real outgoing-history surface, tested). **Re-evaluation
-  shape:** project outgoing rows in `transfer_view` and let the existing
-  `get_transfers` filter select them; until then, consider surfacing a
-  distinct "not yet available" signal if clients depend on the filter.
-  **Design round 0 OPEN (2026-08-05):**
-  `docs/design/WALLET_SEND_RECORD.md` — the spend-side record is the
-  SJ-DQ family; projections close this entry via PR-SJ-2.
-  *Target: V3.0 / Phase 4b–4c.*
+  history surface lands** — **CLOSED 2026-08-07 (PR-SJ-1+2,
+  `feat/wallet-send-journal-sj1`)**. `SendJournalBlock` (`SEND_JOURNAL_BLOCK_VERSION`
+  1, `WALLET_LEDGER_FORMAT_VERSION` 13) records dispatch-authored sends;
+  `project::outgoing_transfer_view` projects them as `OUTGOING` with
+  realized fee; `get_transfers` interleaves journal rows with receive
+  rows. Design: `docs/design/WALLET_SEND_RECORD.md` (P3 ratified).
+  *Previously:* The Engine ledger held only receive-side rows…
 
 - **Phase 4b: build concurrency permit stays 1 — raising it is a rule-21
   reopen gated on anonymized segment fetch** (added 2026-08-04, W-B step 1;

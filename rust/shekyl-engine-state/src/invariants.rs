@@ -349,6 +349,7 @@ mod tests {
     use crate::{
         bookkeeping_block::BookkeepingBlock,
         ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks},
+        send_journal_block::SendJournalBlock,
         staking_block::StakingBlock,
         sync_state_block::SyncStateBlock,
         transfer::{TransferDetails, SPENDABLE_AGE},
@@ -419,6 +420,7 @@ mod tests {
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         w.check_invariants().expect("populated-consistent bundle");
     }
@@ -437,6 +439,7 @@ mod tests {
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         assert_invariant(
             w.check_invariants().unwrap_err(),
@@ -461,6 +464,7 @@ mod tests {
             tx_meta,
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         assert_invariant(w.check_invariants().unwrap_err(), INV_TX_KEYS_NO_ORPHANS);
     }
@@ -484,6 +488,7 @@ mod tests {
             tx_meta,
             sync,
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         w.check_invariants().expect("pending ref satisfies I-2");
     }
@@ -507,6 +512,7 @@ mod tests {
             tx_meta,
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         w.check_invariants().expect("pool ref satisfies I-2");
     }
@@ -546,6 +552,7 @@ mod tests {
             tx_meta,
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         w.check_invariants()
             .expect("spending_tx_hash ref satisfies I-2");
@@ -581,6 +588,7 @@ mod tests {
             tx_meta,
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         w.check_invariants()
             .expect("awaiting_confirmation ref satisfies I-2");
@@ -601,6 +609,7 @@ mod tests {
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         assert_invariant(w.check_invariants().unwrap_err(), INV_REORG_TRAIL_MONOTONIC);
     }
@@ -620,6 +629,7 @@ mod tests {
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         assert_invariant(w.check_invariants().unwrap_err(), INV_REORG_TRAIL_MONOTONIC);
     }
@@ -639,6 +649,7 @@ mod tests {
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         assert_invariant(w.check_invariants().unwrap_err(), INV_REORG_TRAIL_MONOTONIC);
     }
@@ -663,6 +674,7 @@ mod tests {
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         assert!(
             w.check_invariants().is_ok(),
@@ -689,6 +701,7 @@ mod tests {
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         assert_invariant(
             w.check_invariants().unwrap_err(),
@@ -713,6 +726,7 @@ mod tests {
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         assert_invariant(
             w.check_invariants().unwrap_err(),
@@ -736,6 +750,7 @@ mod tests {
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         assert_invariant(
             w.check_invariants().unwrap_err(),
@@ -764,6 +779,7 @@ mod tests {
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         assert_invariant(
             w.check_invariants().unwrap_err(),
@@ -789,6 +805,7 @@ mod tests {
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
             StakingBlock::empty(),
+            SendJournalBlock::empty(),
         );
         // preflight_save runs debug_assert! in debug builds; skip the
         // assertion there to keep the test identical across profiles.

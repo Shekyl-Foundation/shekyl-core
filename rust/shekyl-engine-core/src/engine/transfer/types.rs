@@ -64,6 +64,16 @@ pub(crate) struct ContentFingerprint {
 }
 
 impl ContentFingerprint {
+    /// Fee in atomic units.
+    pub(crate) fn fee(&self) -> u64 {
+        self.fee
+    }
+
+    /// Change amount in atomic units.
+    pub(crate) fn change(&self) -> u64 {
+        self.change
+    }
+
     /// Build the canonical fingerprint from the realized `(fee, recipients,
     /// change)`. Sorts the destinations so the result is permutation-invariant.
     pub(super) fn from_parts(

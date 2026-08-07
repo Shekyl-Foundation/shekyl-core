@@ -342,10 +342,12 @@ where
             // refusal — the daemon did not relay (single-egress), so
             // exposure never began. Retire the dispatch-persisted
             // record; a refused build leaves no residue (pin 1's
-            // discard side).
+            // discard side). Journal flips to TerminalRejected so the
+            // attempt remains in OUTGOING history (PR-SJ-1).
             let txid = canonical_tx_id(&flight.entry.tx_bytes);
             self.ledger.with_wallet_ledger_mut(|wallet| {
                 wallet.retire_retained_tx_key(&txid.to_bytes());
+                wallet.reject_send_journal(&txid);
             });
         }
         release_output_locks_for(state, id);
@@ -404,6 +406,10 @@ where
             let txid = canonical_tx_id(&flight.entry.tx_bytes);
             self.ledger.with_wallet_ledger_mut(|wallet| {
                 wallet.retire_retained_tx_key(&txid.to_bytes());
+                // Retryable rolls the entry back to consumer_held; the
+                // next dispatch writes a fresh journal row (possibly a
+                // new txid after re-anchor). Drop this provisional row.
+                wallet.send_journal.rows.remove(&txid.to_bytes());
             });
             state.consumer_held.insert(id, flight.entry);
         }

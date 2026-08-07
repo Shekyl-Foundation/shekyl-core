@@ -5,8 +5,9 @@
 
 //! `.wallet`-side ledger aggregator.
 //!
-//! Bundles the five typed blocks — [`LedgerBlock`], [`BookkeepingBlock`],
-//! [`TxMetaBlock`], [`SyncStateBlock`], and [`StakingBlock`] — into a
+//! Bundles the six typed blocks — [`LedgerBlock`], [`BookkeepingBlock`],
+//! [`TxMetaBlock`], [`SyncStateBlock`], [`StakingBlock`], and
+//! [`SendJournalBlock`] — into a
 //! single postcard-serialized payload that the wallet-file orchestrator
 //! (commit 2h) stores as Region 2 of the `.wallet` file.
 //!
@@ -47,6 +48,7 @@
 //! [`TxMetaBlock`]: crate::tx_meta_block::TxMetaBlock
 //! [`SyncStateBlock`]: crate::sync_state_block::SyncStateBlock
 //! [`StakingBlock`]: crate::staking_block::StakingBlock
+//! [`SendJournalBlock`]: crate::send_journal_block::SendJournalBlock
 
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +56,7 @@ use crate::{
     bookkeeping_block::BookkeepingBlock,
     error::WalletLedgerError,
     ledger_block::LedgerBlock,
+    send_journal_block::{SendJournalBlock, SendJournalRow, SendJournalState, SendRecipient},
     staking_block::StakingBlock,
     sync_state_block::SyncStateBlock,
     tx_meta_block::{TxMetaBlock, TxSecretKey, TxSecretKeys},
@@ -96,6 +99,10 @@ use crate::{
 /// (`LEDGER_BLOCK_VERSION` 9, WI-RPC-3 F-9 spend-quadruple leg:
 /// confirmed spending txid so `tx_meta.tx_keys` retention stays
 /// I-2-live for no-change outbound txs).
+/// Version `13` adds the dispatch-authored [`SendJournalBlock`] as a
+/// sixth top-level block (`SEND_JOURNAL_BLOCK_VERSION` 1; PR-SJ-1 /
+/// `WALLET_SEND_RECORD.md` P3-3) — outgoing history that survives
+/// rescan by living outside [`LedgerBlock`].
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -107,7 +114,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 12;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 13;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.
@@ -142,6 +149,10 @@ pub struct WalletLedger {
     /// Archival-staking persona bookkeeping: cursor + enabled flag +
     /// the reconcilable live-bond hint.
     pub staking: StakingBlock,
+
+    /// Dispatch-authored outgoing send journal (PR-SJ-1). Outside
+    /// [`LedgerBlock`] so rescan never wipes it (C7 / P3-3).
+    pub send_journal: SendJournalBlock,
 }
 
 impl WalletLedger {
@@ -155,10 +166,11 @@ impl WalletLedger {
             tx_meta: TxMetaBlock::empty(),
             sync_state: SyncStateBlock::empty(),
             staking: StakingBlock::empty(),
+            send_journal: SendJournalBlock::empty(),
         }
     }
 
-    /// Assemble a wallet ledger from its four component blocks, pinning
+    /// Assemble a wallet ledger from its component blocks, pinning
     /// the bundle `format_version`. Caller-supplied blocks keep their
     /// own `block_version` values (already current by construction
     /// through each block's `new` / `empty` constructor).
@@ -168,6 +180,7 @@ impl WalletLedger {
         tx_meta: TxMetaBlock,
         sync_state: SyncStateBlock,
         staking: StakingBlock,
+        send_journal: SendJournalBlock,
     ) -> Self {
         Self {
             format_version: WALLET_LEDGER_FORMAT_VERSION,
@@ -176,6 +189,7 @@ impl WalletLedger {
             tx_meta,
             sync_state,
             staking,
+            send_journal,
         }
     }
 
@@ -211,14 +225,15 @@ impl WalletLedger {
     }
 
     /// Fan out per-block version checks. Ordered ledger → bookkeeping
-    /// → tx_meta → sync_state → staking so failure diagnostics are
-    /// predictable.
+    /// → tx_meta → sync_state → staking → send_journal so failure
+    /// diagnostics are predictable.
     pub fn check_all_block_versions(&self) -> Result<(), WalletLedgerError> {
         self.ledger.check_version()?;
         self.bookkeeping.check_version()?;
         self.tx_meta.check_version()?;
         self.sync_state.check_version()?;
         self.staking.check_version()?;
+        self.send_journal.check_version()?;
         Ok(())
     }
 
@@ -234,6 +249,122 @@ impl WalletLedger {
             .insert(txid, TxSecretKeys { primary: secret });
         if !self.sync_state.pending_tx_hashes.contains(&txid) {
             self.sync_state.pending_tx_hashes.push(txid);
+        }
+    }
+
+    /// Record a dispatched send in the journal (PR-SJ-1 / SJ-DQ-2).
+    ///
+    /// Call under the same wallet-ledger mut guard as
+    /// [`Self::record_retained_tx_key`] so the journal row and the
+    /// retention record share one atomic envelope write.
+    pub fn record_dispatched_send(
+        &mut self,
+        txid: shekyl_types::TxHash,
+        recipients: Vec<SendRecipient>,
+        fee: shekyl_units::AtomicUnits,
+        change: shekyl_units::AtomicUnits,
+        input_key_images: Vec<[u8; 32]>,
+        echoed_request_rid: Option<u64>,
+    ) {
+        let dispatched_at_height = self.ledger.height();
+        self.send_journal.upsert(SendJournalRow {
+            txid,
+            state: SendJournalState::Dispatched,
+            recipients,
+            fee,
+            change,
+            input_key_images,
+            dispatched_at_height,
+            echoed_request_rid,
+        });
+    }
+
+    /// Flip a journal row to [`SendJournalState::Confirmed`] when refresh
+    /// observes the spending tx on-chain (PR-SJ-1 confirmation edge).
+    ///
+    /// Idempotent: a already-Confirmed row at the same or any height is
+    /// left alone; unknown txids are a no-op (receive-side spends have
+    /// no journal row).
+    pub fn confirm_send_journal(&mut self, txid: &shekyl_types::TxHash, height: u64) {
+        let key = txid.to_bytes();
+        if let Some(row) = self.send_journal.get_mut(&key) {
+            if matches!(
+                row.state,
+                SendJournalState::Dispatched | SendJournalState::PresumedDead
+            ) {
+                row.state = SendJournalState::Confirmed { height };
+            }
+        }
+    }
+
+    /// Mark a journal row terminal-rejected (definite daemon refusal).
+    pub fn reject_send_journal(&mut self, txid: &shekyl_types::TxHash) {
+        let key = txid.to_bytes();
+        if let Some(row) = self.send_journal.get_mut(&key) {
+            if matches!(row.state, SendJournalState::Dispatched) {
+                row.state = SendJournalState::TerminalRejected;
+            }
+        }
+    }
+
+    /// Mark a journal row presumed-dead (watchdog confirmed-absent).
+    pub fn presume_dead_send_journal(&mut self, txid: &shekyl_types::TxHash) {
+        let key = txid.to_bytes();
+        if let Some(row) = self.send_journal.get_mut(&key) {
+            if matches!(row.state, SendJournalState::Dispatched) {
+                row.state = SendJournalState::PresumedDead;
+            }
+        }
+    }
+
+    /// Re-apply F14 awaiting-confirmation locks from non-terminal journal
+    /// rows onto funding outputs identified by key image (P3-1).
+    ///
+    /// Idempotent set-union: if replay already marked the funding row
+    /// spent, skip; else place the lock when absent. Call after a rescan
+    /// replay (or any merge) — never immediately after
+    /// [`crate`] reset while transfers are empty.
+    pub fn reapply_send_journal_locks(&mut self) {
+        use crate::transfer::AwaitingConfirmation;
+        use shekyl_crypto_pq::key_image::KeyImage;
+
+        let tip = self.ledger.height();
+        // Collect (key_image, txid, accepted_at) then apply — avoid
+        // borrowing rows while mutating transfers.
+        let work: Vec<([u8; 32], shekyl_types::TxHash, u64)> = self
+            .send_journal
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.state,
+                    SendJournalState::Dispatched | SendJournalState::PresumedDead
+                )
+            })
+            .flat_map(|r| {
+                r.input_key_images
+                    .iter()
+                    .copied()
+                    .map(move |ki| (ki, r.txid, r.dispatched_at_height.min(tip)))
+            })
+            .collect();
+
+        for (ki_bytes, tx_hash, accepted_at_height) in work {
+            let ki = KeyImage::from_canonical_bytes(ki_bytes);
+            for td in &mut self.ledger.transfers {
+                if td.key_image.as_ref() != Some(&ki) {
+                    continue;
+                }
+                if td.spent {
+                    break;
+                }
+                if td.awaiting_confirmation.is_none() {
+                    td.awaiting_confirmation = Some(AwaitingConfirmation {
+                        tx_hash,
+                        accepted_at_height,
+                    });
+                }
+                break;
+            }
         }
     }
 
@@ -306,12 +437,40 @@ impl WalletLedger {
             }
         }
 
-        // Direction 1: confirmed txids leave the pending list.
+        // Direction 1: confirmed txids leave the pending list — and flip
+        // matching send-journal rows to Confirmed (PR-SJ-1 confirmation
+        // edge). Height comes from the funding row's spent_height when
+        // the journal txid is the spending tx, else the receive height
+        // when our change (or any output) is the same txid, else tip.
+        let tip_height = self.ledger.height();
         let before = self.sync_state.pending_tx_hashes.len();
-        self.sync_state
-            .pending_tx_hashes
-            .retain(|h| !chain_referenced.contains(h));
+        let mut confirmed_pending: Vec<[u8; 32]> = Vec::new();
+        self.sync_state.pending_tx_hashes.retain(|h| {
+            if chain_referenced.contains(h) {
+                confirmed_pending.push(*h);
+                false
+            } else {
+                true
+            }
+        });
         let pending_confirmed = before - self.sync_state.pending_tx_hashes.len();
+        for h in &confirmed_pending {
+            let height = self
+                .ledger
+                .transfers
+                .iter()
+                .find_map(|t| {
+                    if t.spending_tx_hash.as_ref().map(|s| s.to_bytes()) == Some(*h) {
+                        t.spent_height
+                    } else if t.tx_hash.to_bytes() == *h {
+                        Some(t.block_height)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(tip_height);
+            self.confirm_send_journal(&shekyl_types::TxHash::from_bytes(*h), height);
+        }
 
         // Direction 2: the live set mirrors I-2's exactly
         // (invariants::check_tx_keys_no_orphans).
@@ -365,8 +524,8 @@ mod tests {
     use super::*;
     use crate::{
         bookkeeping_block::BOOKKEEPING_BLOCK_VERSION, ledger_block::LEDGER_BLOCK_VERSION,
-        staking_block::STAKING_BLOCK_VERSION, sync_state_block::SYNC_STATE_BLOCK_VERSION,
-        tx_meta_block::TX_META_BLOCK_VERSION,
+        send_journal_block::SEND_JOURNAL_BLOCK_VERSION, staking_block::STAKING_BLOCK_VERSION,
+        sync_state_block::SYNC_STATE_BLOCK_VERSION, tx_meta_block::TX_META_BLOCK_VERSION,
     };
 
     #[test]
@@ -378,6 +537,7 @@ mod tests {
         assert_eq!(w.tx_meta.block_version, TX_META_BLOCK_VERSION);
         assert_eq!(w.sync_state.block_version, SYNC_STATE_BLOCK_VERSION);
         assert_eq!(w.staking.block_version, STAKING_BLOCK_VERSION);
+        assert_eq!(w.send_journal.block_version, SEND_JOURNAL_BLOCK_VERSION);
 
         let bytes = w.to_postcard_bytes().expect("serialize");
         let back = WalletLedger::from_postcard_bytes(&bytes).expect("deserialize");
@@ -387,6 +547,7 @@ mod tests {
         assert_eq!(back.tx_meta.block_version, TX_META_BLOCK_VERSION);
         assert_eq!(back.sync_state.block_version, SYNC_STATE_BLOCK_VERSION);
         assert_eq!(back.staking.block_version, STAKING_BLOCK_VERSION);
+        assert_eq!(back.send_journal.block_version, SEND_JOURNAL_BLOCK_VERSION);
     }
 
     #[test]

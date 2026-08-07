@@ -35,9 +35,10 @@ methods (`unstake` / `claim` / `sign` / `verify` / air-gapped bundles)
 remain Engine-gated — see the OpenAPI header registry and
 `docs/FOLLOWUPS.md`.
 
-One Phase 4b quality FOLLOWUP is still open (Engine-gated): honest
-`OUTGOING` transfer history. The other two closed with the send-lifecycle
-PR: `build_pending_tx` runs under a read lock (serialized by the
-engine-owned build permit), and `submit_pending_tx` reports the real
-daemon verdict (`ACCEPTED` / `ALREADY_IN_POOL` / `ALREADY_IN_CHAIN` with
-verdict-scoped `confirmed_height`).
+One Phase 4b quality FOLLOWUP remains design-gated: `abandon_tx`
+(PR-SJ-3). Honest `OUTGOING` transfer history landed with the send
+journal (`SendJournalBlock` / PR-SJ-1+2). The other two quality items
+closed earlier: `build_pending_tx` runs under a read lock (serialized
+by the engine-owned build permit), and `submit_pending_tx` reports the
+real daemon verdict (`ACCEPTED` / `ALREADY_IN_POOL` /
+`ALREADY_IN_CHAIN` with verdict-scoped `confirmed_height`).

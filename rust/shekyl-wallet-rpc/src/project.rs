@@ -8,7 +8,7 @@
 use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
 use shekyl_engine_core::SubmitOutcome;
-use shekyl_engine_state::TransferDetails;
+use shekyl_engine_state::{SendJournalRow, SendJournalState, TransferDetails};
 use shekyl_scanner::BalanceSummary;
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
@@ -92,9 +92,6 @@ pub fn transfer_state(td: &TransferDetails) -> TransferState {
 pub fn transfer_view(td: &TransferDetails) -> TransferView {
     TransferView {
         id: transfer_id(td),
-        // Ledger rows are receive-side outputs; outgoing spends are
-        // reflected as Spent state on the same row until a dedicated
-        // outgoing history surface lands.
         direction: TransferDirection::Incoming,
         tx_hash: td.tx_hash.to_string(),
         amount: atomic_units_string(td.amount()),
@@ -104,6 +101,42 @@ pub fn transfer_view(td: &TransferDetails) -> TransferView {
         spent_height: td
             .spent_height
             .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
+    }
+}
+
+/// Txid-keyed id for an OUTGOING journal row (SJ-DQ-7).
+pub fn outgoing_transfer_id(row: &SendJournalRow) -> String {
+    row.txid.to_string()
+}
+
+/// Map journal lifecycle onto the OpenAPI `TransferState` enum.
+pub fn outgoing_transfer_state(row: &SendJournalRow) -> TransferState {
+    match row.state {
+        SendJournalState::Dispatched | SendJournalState::PresumedDead => TransferState::Pending,
+        SendJournalState::Confirmed { .. }
+        | SendJournalState::TerminalRejected
+        | SendJournalState::Abandoned => TransferState::Confirmed,
+    }
+}
+
+/// Project a send-journal row as an OUTGOING `TransferView` (PR-SJ-2).
+pub fn outgoing_transfer_view(row: &SendJournalRow) -> TransferView {
+    let amount = row.recipients.iter().fold(AtomicUnits::ZERO, |acc, r| {
+        acc.checked_add(r.amount).unwrap_or(acc)
+    });
+    let block_height = match row.state {
+        SendJournalState::Confirmed { height } => height,
+        _ => row.dispatched_at_height,
+    };
+    TransferView {
+        id: outgoing_transfer_id(row),
+        direction: TransferDirection::Outgoing,
+        tx_hash: row.txid.to_string(),
+        amount: atomic_units_string(amount),
+        fee: atomic_units_string(row.fee),
+        block_height: i64::try_from(block_height).unwrap_or(i64::MAX),
+        state: outgoing_transfer_state(row),
+        spent_height: None,
     }
 }
 

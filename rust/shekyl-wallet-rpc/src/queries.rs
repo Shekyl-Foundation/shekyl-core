@@ -15,7 +15,10 @@ use shekyl_scanner::LedgerBlockExt;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, parse_required_object, require_empty_object};
-use crate::project::{parse_transfer_id, transfer_state, transfer_view};
+use crate::project::{
+    outgoing_transfer_state, outgoing_transfer_view, parse_transfer_id, transfer_state,
+    transfer_view,
+};
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
     GetBalanceResult, GetHeightResult, GetPrimaryAddressResult, GetTransferByIdResult,
@@ -83,36 +86,75 @@ pub(crate) async fn get_transfers(
     let engine = engine.read().await;
     let ledger = engine.ledger();
 
-    // Filter on the domain rows first, then project only the survivors — this
-    // avoids per-row string/hex allocation for filtered-out rows and compares
-    // `since_height` against the true `u64` height (no lossy `i64` round-trip).
-    let transfers: Vec<TransferView> = ledger
-        .ledger
-        .transfers()
-        .iter()
-        .filter(|&td| {
-            if let Some(min_h) = since {
-                if td.block_height < min_h {
-                    return false;
-                }
-            }
-            if let Some(dir) = filters.direction {
-                // Ledger rows are receive-side outputs; every row projects as
-                // INCOMING until a dedicated outgoing-history surface lands
-                // (see `project::transfer_view`).
-                if dir != TransferDirection::Incoming {
-                    return false;
-                }
-            }
-            if let Some(st) = filters.state {
-                if transfer_state(td) != st {
-                    return false;
-                }
-            }
-            true
-        })
-        .map(transfer_view)
-        .collect();
+    let want_incoming = filters
+        .direction
+        .is_none_or(|d| d == TransferDirection::Incoming);
+    let want_outgoing = filters
+        .direction
+        .is_none_or(|d| d == TransferDirection::Outgoing);
+
+    let mut transfers: Vec<TransferView> = Vec::new();
+
+    if want_incoming {
+        transfers.extend(
+            ledger
+                .ledger
+                .transfers()
+                .iter()
+                .filter(|&td| {
+                    if let Some(min_h) = since {
+                        if td.block_height < min_h {
+                            return false;
+                        }
+                    }
+                    if let Some(st) = filters.state {
+                        if transfer_state(td) != st {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .map(transfer_view),
+        );
+    }
+
+    if want_outgoing {
+        transfers.extend(
+            ledger
+                .send_journal
+                .iter()
+                .filter(|&row| {
+                    let height = match row.state {
+                        shekyl_engine_state::SendJournalState::Confirmed { height } => height,
+                        _ => row.dispatched_at_height,
+                    };
+                    if let Some(min_h) = since {
+                        if height < min_h {
+                            return false;
+                        }
+                    }
+                    if let Some(st) = filters.state {
+                        if outgoing_transfer_state(row) != st {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .map(outgoing_transfer_view),
+        );
+    }
+
+    // Stable interleave: height ascending, then INCOMING before OUTGOING,
+    // then id — so the list is deterministic without inventing timestamps.
+    transfers.sort_by(|a, b| {
+        a.block_height
+            .cmp(&b.block_height)
+            .then_with(|| {
+                (a.direction == TransferDirection::Outgoing)
+                    .cmp(&(b.direction == TransferDirection::Outgoing))
+            })
+            .then_with(|| a.id.cmp(&b.id))
+    });
 
     let result = GetTransfersResult { transfers };
     serde_json::to_value(result)
@@ -130,34 +172,39 @@ pub(crate) async fn get_transfer_by_id(
         ));
     }
 
-    // Parse the id into its (tx_hash, index) parts once and compare typed
-    // fields, rather than formatting a fresh id string for every ledger row
-    // scanned. A non-canonical id could never match any row's transfer_id
-    // output, so it is the same UnknownTransferId the string compare gave.
-    let Some((tx_hash, out_idx)) = parse_transfer_id(&p.id) else {
-        return Err(WalletRpcError::UnknownTransferId);
-    };
-
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
     let ledger = engine.ledger();
 
-    let found = ledger
-        .ledger
-        .transfers()
-        .iter()
-        .find(|td| td.tx_hash == tx_hash && td.internal_output_index == out_idx)
-        .map(transfer_view);
-
-    match found {
-        Some(transfer) => {
+    // OUTGOING ids are bare txid hex (SJ-DQ-7); INCOMING keep `txid:index`.
+    if let Some((tx_hash, out_idx)) = parse_transfer_id(&p.id) {
+        let found = ledger
+            .ledger
+            .transfers()
+            .iter()
+            .find(|td| td.tx_hash == tx_hash && td.internal_output_index == out_idx)
+            .map(transfer_view);
+        if let Some(transfer) = found {
             let result = GetTransferByIdResult { transfer };
-            serde_json::to_value(result).map_err(|e| {
+            return serde_json::to_value(result).map_err(|e| {
                 WalletRpcError::InternalError(format!("serialize get_transfer_by_id: {e}"))
-            })
+            });
         }
-        None => Err(WalletRpcError::UnknownTransferId),
+        return Err(WalletRpcError::UnknownTransferId);
     }
+
+    if let Some(bytes) = crate::params::parse_hex32(&p.id) {
+        if let Some(row) = ledger.send_journal.get(&bytes) {
+            let result = GetTransferByIdResult {
+                transfer: outgoing_transfer_view(row),
+            };
+            return serde_json::to_value(result).map_err(|e| {
+                WalletRpcError::InternalError(format!("serialize get_transfer_by_id: {e}"))
+            });
+        }
+    }
+
+    Err(WalletRpcError::UnknownTransferId)
 }
 
 pub(crate) async fn get_height(

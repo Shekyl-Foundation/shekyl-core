@@ -1505,8 +1505,44 @@ where
             let retained = shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
                 *held.tx_key_secret.as_bytes(),
             ));
+            // PR-SJ-1 / SJ-DQ-2: journal row beside retention under the same
+            // wallet-ledger mut guard — one atomic envelope write.
+            let recipients: Vec<shekyl_engine_state::SendRecipient> = held
+                .request
+                .recipients
+                .iter()
+                .map(|r| shekyl_engine_state::SendRecipient {
+                    address: r.address.clone(),
+                    amount: r.amount_atomic_units,
+                })
+                .collect();
+            let fee = shekyl_units::AtomicUnits::from_raw(held.fingerprint.fee());
+            let change = shekyl_units::AtomicUnits::from_raw(held.fingerprint.change());
+            let input_indices: Vec<usize> = state
+                .output_locks
+                .iter()
+                .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
+                .collect();
             self.ledger.with_wallet_ledger_mut(|wallet| {
+                let key_images: Vec<[u8; 32]> = input_indices
+                    .iter()
+                    .filter_map(|&idx| {
+                        wallet
+                            .ledger
+                            .transfers()
+                            .get(idx)
+                            .and_then(|td| td.key_image.as_ref().map(|ki| *ki.as_bytes()))
+                    })
+                    .collect();
                 wallet.record_retained_tx_key(dispatch_txid.to_bytes(), retained);
+                wallet.record_dispatched_send(
+                    dispatch_txid,
+                    recipients,
+                    fee,
+                    change,
+                    key_images,
+                    None,
+                );
             });
 
             let submitted_at = Instant::now();
