@@ -245,26 +245,12 @@ impl<
             &inserted,
         );
         // WI-RPC-3 retention reconciler (`docs/api/wallet_rpc.yaml`
-        // OUTBOUND PREREQUISITE pins 2–3): after the merge and the
-        // post-passes, retire `pending_tx_hashes` entries the chain
-        // now references (a `TransferDetails.tx_hash` or
-        // `spending_tx_hash` observed by this scan). A merge that
-        // performed a reorg rewind re-pends entries the rewind
-        // unreferenced instead of collecting them — the references
-        // died with the orphaned blocks, not with the tx, and the
-        // common outcome is re-confirmation on the new chain, which
-        // a deleted secret could never serve. Runs under the same
-        // write guard as the merge, so I-2 holds atomically.
-        state
-            .ledger
-            .reconcile_tx_key_retention(reorg_fork_height.is_some());
-        // PR-SJ-1 (`WALLET_SEND_RECORD.md` P3-1): the send-journal
-        // reconciler — reorg back-edges, refresh-authoritative confirm
-        // edges, and F14 lock re-derivation from journal facts (the
-        // mechanism that makes rescan re-application free). Same write
-        // guard as the merge: a trigger and its journal edge persist
-        // atomically.
-        state.ledger.reconcile_send_journal(reorg_fork_height);
+        // OUTBOUND PREREQUISITE pins 2–3 + PR-SJ-1 P3-1: after the merge
+        // and the post-passes, retire retention orphans the chain now
+        // references and run the send-journal reorg/confirm/lock
+        // re-derivation. Same write guard so I-2 and I-5 hold atomically
+        // with the scan merge (see `WalletLedger::reconcile_after_scan_merge`).
+        state.ledger.reconcile_after_scan_merge(reorg_fork_height);
         Ok(())
     }
 

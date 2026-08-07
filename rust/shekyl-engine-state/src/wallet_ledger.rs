@@ -290,6 +290,17 @@ impl WalletLedger {
         self.reconcile_send_journal(None);
     }
 
+    /// Merge post-passes that must share the scan-merge write guard
+    /// (crash-ordering: a trigger and its edges persist together):
+    /// WI-RPC-3 retention reconciliation (I-2) and the send-journal
+    /// reorg/confirm/lock re-derivation (I-5 / P3-1). Called once from
+    /// the engine merge path so `merge.rs` does not grow a second
+    /// post-pass call site for every new ledger edge.
+    pub fn reconcile_after_scan_merge(&mut self, reorg_fork_height: Option<u64>) {
+        self.reconcile_tx_key_retention(reorg_fork_height.is_some());
+        self.reconcile_send_journal(reorg_fork_height);
+    }
+
     /// Send-journal reconciler (`WALLET_SEND_RECORD.md` P3-1) — the
     /// merge post-pass that keeps the journal and the F14 derived
     /// cache agreeing, and the mechanism that makes rescan
