@@ -240,7 +240,7 @@ pub(crate) fn prepare_funding_inputs(
             gindex,
         });
     }
-    prepared.sort_by(|a, b| b.key_image.cmp(&a.key_image));
+    prepared.sort_by_key(|b| std::cmp::Reverse(b.key_image));
     Ok(prepared)
 }
 

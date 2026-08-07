@@ -11,17 +11,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 
-use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
+use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
-use kameo::message::Message;
 
 use rand_core::RngCore as _;
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
-use shekyl_crypto_pq::signature::SignatureScheme as _;
+#[cfg(feature = "conformance")]
 use shekyl_standoff::draw::GapRng;
 #[cfg(feature = "gf7-hooks")]
-use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
+use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
 use shekyl_types::PCanonicalId;
 
 use crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona;
