@@ -78,8 +78,10 @@ members = [
     # Levin p2p framing layer (bucket header, fragments, noise, zstd flag
     # path) — the byte-exact Rust skeleton of docs/LEVIN_PROTOCOL.md, KAT'd
     # against the C++ epee::levin oracle. Framing only: no portable_storage,
-    # no sockets, no daemon wiring; inert until the scheduled p2p cutover
-    # (IMPLEMENTATION_INDEX.md LV row).
+    # no sockets. The compression half is production-live (the C++
+    # epee::levin compression path shims through shekyl-ffi's
+    # shekyl_levin_* exports — single-owner libzstd); the framing half is
+    # inert until the scheduled p2p cutover (IMPLEMENTATION_INDEX.md LV row).
     "shekyl-levin",
 
     "shekyl-archival-retention",
@@ -256,6 +258,46 @@ repository = "https://github.com/radawson/Shekyl"
 
 [workspace.dependencies]
 thiserror = "2"
+# Single-source zstd pin (decision 2026-08-06). One consumer today:
+# `shekyl-levin`'s COMPRESSED path, which production reaches via the
+# shekyl_levin_* FFI.
+#
+# The original justification — "shard serving is the anticipated second
+# consumer" — was **falsified the same day** by the Z-1 measurement
+# (FOLLOWUPS, "Shard serving on `P`: zstd compression REJECTED by
+# measurement"): Shekyl wire bytes run 7.97–7.995 bits/B of entropy and
+# zstd levels 1/3/9 *expand* every corpus. So this entry is not holding a
+# place for a second consumer, and it is not here for frame
+# interoperability either.
+#
+# It stays because the **feature set below is load-bearing** and must not
+# be re-litigated per crate. A second crate that added `zstd = "0.13"` with
+# defaults would silently re-break the Win64 cross build and re-widen the
+# receive-path C surface, and `links = "zstd"` makes the graph collision a
+# hard error rather than a quiet one (Z-5 records that hazard). Centralising
+# the decision is what makes those failure modes unreachable.
+#
+# `default-features = false` drops all three of the crate's defaults, and
+# each is dropped for a reason — they are not incidental trimming:
+#
+# - `zdict_builder` compiles `zstd/lib/dictBuilder` (`cover.c`), which calls
+#   POSIX `qsort_r`. mingw-w64 has no `qsort_r`, so the Win64 cross build
+#   fails at link with an undefined reference the moment `libshekyl_ffi.a`
+#   carries those objects — which it does since the compression-shim cut
+#   folded `shekyl-levin` into the daemon's Rust image. We train no
+#   dictionaries; the builder is dead weight that breaks a supported target.
+# - `legacy` compiles the decoders for zstd frame formats v0.1–v0.7. Every
+#   frame we inflate came from this same pinned encoder, so a legacy frame
+#   on the wire is by definition non-conforming — keeping those decoders
+#   would only widen the attacker-reachable C surface on the p2p receive
+#   path for a format we never emit.
+# - `arrays` adds a `WriteBuf` impl for `[u8; N]` only. We write into
+#   `Vec<u8>` and `&mut [u8]`, both of which are impl'd unconditionally.
+#
+# What remains is what `shekyl-levin` actually calls: `zstd::bulk` and
+# `zstd::zstd_safe::{get_frame_content_size, decompress}`, over the
+# `std`-enabled `zstd-safe` that the crate pins internally.
+zstd = { version = "0.13", default-features = false }
 serde = { version = "1", features = ["derive"] }
 # Single source of truth for the secret-wiping crate, replacing the
 # per-crate pins that had drifted across two version floors (`1` / `^1.5`)

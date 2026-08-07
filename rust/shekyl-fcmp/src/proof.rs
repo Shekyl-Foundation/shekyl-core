@@ -23,7 +23,7 @@ use ciphersuite::{
 use dalek_ff_group::{Ed25519, EdwardsPoint, Scalar};
 use ec_divisors::ScalarDecomposition;
 use helioselene::{Helios, Selene};
-use rand_core::OsRng;
+use rand_core::{CryptoRng, OsRng, RngCore};
 
 use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
 use shekyl_fcmp_proofs::{
@@ -206,13 +206,23 @@ pub struct ProveResult {
     pub pseudo_outs: Vec<[u8; 32]>,
 }
 
-/// Construct an FCMP++ proof for a set of inputs.
+/// Construct an FCMP++ proof for a set of inputs, drawing all randomness from
+/// `rng`.
 ///
 /// Performs full rerandomization and SAL (spend-auth-and-linkability) proof
 /// generation. Returns the proof blob and the per-input pseudo-outs
 /// (rerandomized commitments).
+///
+/// Production uses [`prove`], which supplies a fresh [`OsRng`]. This
+/// RNG-parameterized form exists so instruction-count benches can pin a seeded
+/// RNG and get a byte-identical proof run-to-run (the drift gate depends on it);
+/// it matches the `R: RngCore + CryptoRng` shape every primitive below already
+/// takes (`Fcmp::prove`, `SpendAuthAndLinkability::prove`,
+/// `RerandomizedOutput::with_commitment_blind`). A caller passing a non-crypto
+/// RNG is rejected by the bound, so it cannot weaken production.
 #[allow(non_snake_case)]
-pub fn prove(
+pub fn prove_with_rng<R: RngCore + CryptoRng>(
+    rng: &mut R,
     inputs: &[ProveInput],
     _tree_root: &[u8; 32],
     tree_depth: u8,
@@ -272,7 +282,7 @@ pub fn prove(
 
         let r_c = a - z;
 
-        let rerand = RerandomizedOutput::with_commitment_blind(&mut OsRng, output, r_c);
+        let rerand = RerandomizedOutput::with_commitment_blind(&mut *rng, output, r_c);
         let crate_input = rerand.input();
         let c_tilde_bytes: [u8; 32] = crate_input.C_tilde().to_bytes();
 
@@ -281,7 +291,7 @@ pub fn prove(
         let opening = OpenedInputTuple::open(&rerand, &x, &y).ok_or(ProveError::UpstreamError(
             format!("OpenedInputTuple::open failed at input {idx}"),
         ))?;
-        let (_, sal) = SpendAuthAndLinkability::prove(&mut OsRng, signable_tx_hash, &opening);
+        let (_, sal) = SpendAuthAndLinkability::prove(&mut *rng, signable_tx_hash, &opening);
         sal_pairs.push((crate_input, sal));
 
         // Build OutputBlinds from rerandomization
@@ -421,7 +431,7 @@ pub fn prove(
         .map(|_| {
             Ok(BranchBlind::<<Selene as Ciphersuite>::G>::new(
                 c1_h,
-                ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng))
+                ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut *rng))
                     .ok_or(ProveError::ScalarDecompositionFailed)?,
             ))
         })
@@ -430,7 +440,7 @@ pub fn prove(
         .map(|_| {
             Ok(BranchBlind::<<Helios as Ciphersuite>::G>::new(
                 c2_h,
-                ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng))
+                ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut *rng))
                     .ok_or(ProveError::ScalarDecompositionFailed)?,
             ))
         })
@@ -440,7 +450,7 @@ pub fn prove(
         .blind(output_blinds_list, c1_blinds, c2_blinds)
         .map_err(|e| ProveError::UpstreamError(format!("blind: {e:?}")))?;
 
-    let fcmp = Fcmp::prove(&mut OsRng, &*FCMP_PARAMS, blinded)
+    let fcmp = Fcmp::prove(&mut *rng, &*FCMP_PARAMS, blinded)
         .map_err(|e| ProveError::UpstreamError(format!("Fcmp::prove: {e:?}")))?;
 
     let fcmp_pp = FcmpPlusPlus::new(sal_pairs, fcmp);
@@ -460,6 +470,21 @@ pub fn prove(
         },
         pseudo_outs,
     })
+}
+
+/// Construct an FCMP++ proof for a set of inputs, drawing all randomness from a
+/// fresh [`OsRng`]. This is the production entry point (`shekyl-ffi`'s prove FFI).
+///
+/// A thin wrapper over [`prove_with_rng`]; see there for why the RNG is
+/// parameterized (deterministic instruction-count benches).
+#[allow(non_snake_case)]
+pub fn prove(
+    inputs: &[ProveInput],
+    tree_root: &[u8; 32],
+    tree_depth: u8,
+    signable_tx_hash: [u8; 32],
+) -> Result<ProveResult, ProveError> {
+    prove_with_rng(&mut OsRng, inputs, tree_root, tree_depth, signable_tx_hash)
 }
 
 /// Prove a **membership-only** FCMP++ backing proof (reward-emission; **no key image**).

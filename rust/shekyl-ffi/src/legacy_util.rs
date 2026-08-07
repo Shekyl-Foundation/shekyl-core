@@ -50,13 +50,30 @@ pub(crate) unsafe fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'
 // ─── Generic Buffer Helpers ──────────────────────────────────────────────────
 
 impl ShekylBuffer {
-    pub(crate) fn from_vec(mut data: Vec<u8>) -> Self {
-        let buffer = ShekylBuffer {
+    /// Leak `data` as a raw `(ptr, len)` pair for C++ to take ownership of.
+    ///
+    /// The boxed-slice conversion is **load-bearing, not stylistic**. A
+    /// `ShekylBuffer` carries no capacity field, so its only possible free
+    /// path — [`shekyl_buffer_free`] — must reconstruct the allocation as
+    /// `Vec::from_raw_parts(ptr, len, len)`. That is sound *only* when the
+    /// leaked allocation was exactly `len` bytes wide, and a `Vec` is under
+    /// no obligation to be: `zstd::bulk::compress`, for one, returns a
+    /// `Vec` sized at `compress_bound(input)` with `len` set to the (always
+    /// strictly smaller) compressed size. Freeing that through a
+    /// `len`-capacity `Vec` hands the allocator a `Layout` that never
+    /// matched the allocation — benign under glibc `free()`, which ignores
+    /// the size, and heap corruption under any size-aware allocator.
+    ///
+    /// `into_boxed_slice()` shrinks the allocation to exactly `len` first,
+    /// which makes `capacity == len` an invariant of every buffer that
+    /// crosses this boundary rather than a property each caller has to
+    /// remember to establish.
+    pub(crate) fn from_vec(data: Vec<u8>) -> Self {
+        let data = Box::leak(data.into_boxed_slice());
+        ShekylBuffer {
             ptr: data.as_mut_ptr(),
             len: data.len(),
-        };
-        std::mem::forget(data);
-        buffer
+        }
     }
 
     pub(crate) fn null() -> Self {
@@ -70,10 +87,11 @@ impl ShekylBuffer {
 /// Free a buffer originally allocated by a Rust FFI export.
 ///
 /// # Safety
-/// `len` **must** equal the buffer length from the paired Rust export (i.e.,
-/// the `len` field of the `ShekylBuffer` that was returned). Passing a
-/// different `len` is undefined behavior — it reconstructs a `Vec` with
-/// mismatched capacity.
+/// `ptr`/`len` **must** be exactly the pair from the paired Rust export
+/// (i.e. the fields of the [`ShekylBuffer`] that was returned), which
+/// [`ShekylBuffer::from_vec`] guarantees was allocated exactly `len` bytes
+/// wide. Passing a different `len` is undefined behavior — it reconstructs
+/// a `Vec` whose capacity does not match the allocation.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_buffer_free(ptr: *mut u8, len: usize) {
     if !ptr.is_null() && len > 0 {

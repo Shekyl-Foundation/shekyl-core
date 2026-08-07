@@ -29,7 +29,6 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
 
 #include "span.h"
 
@@ -37,13 +36,34 @@ namespace epee
 {
 namespace levin
 {
-  constexpr std::size_t COMPRESSION_MIN_PAYLOAD = 256;
-  constexpr std::size_t DECOMPRESSED_MAX_SIZE = 128 * 1024 * 1024; // 128 MiB safety cap
-  constexpr int ZSTD_COMPRESSION_LEVEL = 1; // fast mode: best speed, still ~2:1 on structured data
+  // Marshaling shim over the `shekyl_levin_*` FFI (src/shekyl/shekyl_ffi.h,
+  // rust/shekyl-ffi/src/levin_ffi.rs): the Rust-pinned libzstd is the single
+  // zstd implementation in the binary, and the compression policy constants
+  // (256-byte minimum payload, level 1, 128 MiB decompression cap) are
+  // single-sourced in rust/shekyl-levin/src/compress.rs. No system libzstd
+  // is linked and there is no HAVE_ZSTD build gate; availability is a
+  // property of the linked Rust image.
+  //
+  // Only the receive half lives here. The emit half is whole-message and is
+  // `epee::levin::try_compress_message` in levin_base.h, itself a shim over
+  // `shekyl_levin_compress_message` — there is no C++ payload-level compress
+  // entry point, because every question that decides whether a buffer may be
+  // compressed is about its bucket header.
 
-  bool compress_payload(epee::span<const uint8_t> input, std::string& output);
-  bool decompress_payload(epee::span<const uint8_t> input, std::string& output);
-  bool is_compression_available() noexcept;
+  //! Decompress one Levin COMPRESSED payload. `max_output` bounds the
+  //! declared content size *before any allocation*; pass the packet-size
+  //! limit the bucket header was checked against — the same
+  //! min(packet limit, per-command cap) the bucket header itself is checked
+  //! against, which is what makes the bound on an inflated payload
+  //! identical to the bound on an uncompressed one. Returns false on a
+  //! malformed, size-less, or oversized frame (connection-fatal for the
+  //! caller), logging which of those it was. On false, `output` is cleared
+  //! (safe for callers that reuse the string).
+  //!
+  //! Inflation writes directly into `output` — no intermediate buffer, no
+  //! copy across the FFI boundary.
+  bool decompress_payload(epee::span<const uint8_t> input, std::string& output,
+                          uint64_t max_output);
 
 } // levin
 } // epee

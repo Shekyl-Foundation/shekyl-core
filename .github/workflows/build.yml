@@ -174,7 +174,10 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost hidapi openssl libpgm miniupnpc libunwind-headers protobuf abseil ccache zstd
+          # No system zstd: Levin compression is the Rust-pinned vendored
+          # libzstd inside the linked shekyl image (PR #411). Installing a
+          # host libzstd would reintroduce the dual-lib story we deleted.
+          brew install --quiet cmake boost hidapi openssl libpgm miniupnpc libunwind-headers protobuf abseil ccache
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0

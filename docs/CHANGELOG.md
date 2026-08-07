@@ -160,6 +160,82 @@
 
 ### Added
 
+- **Levin p2p compression routed through Rust; system libzstd dropped.**
+  The C++ `epee::levin` compression path is now a marshaling shim over the
+  new `shekyl_levin_*` FFI (`rust/shekyl-ffi/src/levin_ffi.rs`, backed by
+  `shekyl-levin`), making the workspace-pinned vendored libzstd the
+  binary's **single** zstd implementation: the root-CMake zstd detection,
+  the `HAVE_ZSTD` gate (and its silently-degraded "compression disabled"
+  fallback), the epee system-libzstd link, and the C++ compression
+  constants are all deleted. Receive-side hardening rode the cut: the C++
+  handler now bounds decompression by `min(packet limit, per-command cap)`
+  — the same bound the Rust `BucketReader` enforces — closing a ~34 MB
+  inflation accept-window on `NOTIFY_NEW_TRANSACTIONS` and a
+  128-MiB-allocation-per-connection exhaustion surface — the bound is the
+  *same* expression the bucket header is checked against, so a compressed
+  message can deliver exactly what an uncompressed one could and no more.
+  The emit seam is **whole-message** (`shekyl_levin_compress_message`), not
+  payload-level: whether a buffer may be compressed at all is a property of
+  its bucket header, so a payload-level seam left those questions stranded
+  in C++ as a second, weaker copy of the policy — one that checked neither
+  the signature, nor that the header accounted for every byte after it, nor
+  the noise/fragment class whose constant on-wire size is the entire
+  property the white-noise feature buys. `epee::levin::try_compress_message`
+  is now a forwarding shim and `epee::levin::compress_payload` is gone; the
+  C++ carries no compression policy at all. Five new `levin_compression`
+  gtests cover the seam (the C++ tree previously had zero compression
+  coverage), including `cover_traffic_is_returned_unchanged` —
+  negative-controlled, a 4 KiB dummy compresses to 52 bytes without the
+  guard. The Levin constant-parity CI gate drops its three compression rows
+  (single-sourced in Rust now, nothing left to drift). `zstd` is promoted to
+  `[workspace.dependencies]` (decision 2026-08-06) — not to hold a place
+  for the anticipated shard-serving consumer, which the same day's Z-1
+  measurement ruled out, but because the feature set is load-bearing and
+  must not be re-litigated per crate — pinned `default-features = false`:
+  the
+  default `zdict_builder` compiles dictionary-builder C that calls POSIX
+  `qsort_r` and breaks the Win64 mingw link once zstd objects enter
+  `libshekyl_ffi.a`, and the default `legacy` compiles decoders for frame
+  formats v0.1–v0.7 we never emit, which would only widen the
+  attacker-reachable C surface on the p2p receive path.
+
+  Four hardening items rode the same cut:
+
+  - **Padding is no longer compressed away.** `--pad-transactions`
+    quantizes a relayed tx blob to a 1024-byte boundary so an observer
+    cannot read transaction volume off the frame size; zstd erases that
+    run almost perfectly. Since the `HAVE_ZSTD` gate is gone, compression
+    is now unconditional, so `make_payload_send_txs` skips the compressor
+    when `pad` is set — privacy over bandwidth, at the only layer that
+    knows the size was deliberate. Pinned on the *wire* bytes by
+    `levin_notify.padding_survives_the_emit_path` (the existing padding
+    tests inspect the decoded message, which carries its padding either
+    way and so cannot see this), with
+    `levin_notify.unpadded_messages_still_compress` as the control that
+    the guard did not simply switch compression off. The test uses
+    pseudorandom bodies matching the Z-1 entropy measurement, because the
+    hazard does not depend on compressible transactions: padding is a long
+    run of one character, so a padded message compresses however random
+    its transactions are. Measured — 9216 payload bytes padded, 8237 on
+    the wire with the guard removed, quantization gone.
+  - **Decompression writes into caller storage.** `shekyl_levin_
+    inflated_size` + `shekyl_levin_decompress_into` replace the
+    buffer-returning decompress export, so the C++ shim inflates straight
+    into its `std::string`: one allocation instead of two, no copy across
+    the FFI, no wipe of public wire data, and no heap ownership crossing
+    the boundary on the IBD receive path.
+  - **Failure causes are distinguishable.** A frame that is malformed
+    (`-3`) and one whose declared size exceeds the cap (`-7`) are separate
+    codes with separate log lines. Both close the connection, but they
+    call for opposite operator responses, and a single code cannot say
+    which.
+  - **`ShekylBuffer::from_vec` shrinks to fit.** A `ShekylBuffer` has no
+    capacity field, so `shekyl_buffer_free` must free through
+    `Vec::from_raw_parts(ptr, len, len)` — sound only if the allocation
+    was exactly `len` wide, which `zstd::bulk::compress` (sized at
+    `compress_bound`) is not. Now an invariant of the boundary rather than
+    a per-caller obligation.
+
 - **`shekyl-levin` — Rust Levin framing crate (LV-1), inert until wired.**
   The byte-exact Rust skeleton of `docs/LEVIN_PROTOCOL.md`: the 33-byte
   bucket header, notification/request/response builders, noise and

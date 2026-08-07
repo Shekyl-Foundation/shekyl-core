@@ -62,6 +62,8 @@
 use std::hint::black_box;
 
 use gungraun::{library_benchmark, library_benchmark_group, main};
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 
 #[path = "relay_admission_fixture.rs"]
 mod relay_admission_fixture;
@@ -70,10 +72,42 @@ use relay_admission_fixture::{
     admission_verify, build_fixture, AdmissionFixture, AdmissionStatus, ChunkLayout, ADMISSION_OK,
 };
 
+/// Fixed seed for the gate fixture's derivation. Its value has no cryptographic
+/// meaning; it is pinned so the fixture — the FCMP++ proof included, which
+/// `prove` would otherwise draw from `OsRng` — is **byte-identical** every run.
+/// Callgrind instruction counts are deterministic only for identical inputs, so
+/// without this the gate carried the proof's run-to-run variance (~0.19%,
+/// measured on `dev` — #405 Finding C) as noise against its ±5%/±15% thresholds.
+/// Mirrors the pinned-seed convention of
+/// `shekyl-tx-builder/benches/transfer_e2e_iai.rs`.
+///
+/// This pins the **proof**, not the whole count. `verify` itself draws from
+/// `OsRng` to weight its `BatchVerifier` (`shekyl-fcmp` `proof.rs`), and that
+/// variable-time multiexp is inside the measured region, so a **~0.02% residual
+/// remains** (measured: 352,470,032 vs 352,397,600 — 10× below the un-seeded
+/// noise, 250× under the ±5% gate). Pinning it too would need a seedable verify
+/// FFI; not worth an ABI change for 0.02%, and the batch randomness is a
+/// soundness feature of verification, not a defect.
+const BENCH_SEED: [u8; 32] = [
+    0xBE, 0xEF, 0xF0, 0x0D, 0xCA, 0xFE, 0xBA, 0xBE, //
+    0xBE, 0xEF, 0xF0, 0x0D, 0xCA, 0xFE, 0xBA, 0xBE, //
+    0xBE, 0xEF, 0xF0, 0x0D, 0xCA, 0xFE, 0xBA, 0xBE, //
+    0xBE, 0xEF, 0xF0, 0x0D, 0xCA, 0xFE, 0xBA, 0xBE, //
+];
+
 // The gate's fixed shape: one input, two outputs.
 fn modal_shape() -> AdmissionFixture {
     // Depth 2: the gate must sit at a shape production actually presents.
-    let fixture = build_fixture(1, 2, 2, ChunkLayout::Shared);
+    // Seeded (`BENCH_SEED`) so the fixture — proof included — is identical
+    // run-to-run; the instruction count must be reproducible for the drift gate
+    // to mean anything (the wall-clock sibling stays on `OsRng`).
+    let fixture = build_fixture(
+        &mut StdRng::from_seed(BENCH_SEED),
+        1,
+        2,
+        2,
+        ChunkLayout::Shared,
+    );
     // Self-witness, asserted HERE because setup is outside the measured region.
     // Without it, a fixture that stopped verifying would still produce a
     // plausible instruction count -- the early-return reject path, an order of
