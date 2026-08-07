@@ -120,6 +120,36 @@ pub struct SendRecord {
     pub state: SendState,
 }
 
+impl SendRecord {
+    /// Σ recipient amounts — the row's sent total, excluding fee and
+    /// change.
+    ///
+    /// The single owner of that definition: [`SendJournalBlock::record_dispatched`]
+    /// enforces it at write time and read-side projections
+    /// (`shekyl-wallet-rpc`'s OUTGOING `TransferView`) call it rather
+    /// than re-implementing the fold, so the journal's sent total
+    /// cannot acquire a second meaning.
+    ///
+    /// Returns `None` on overflow. A row written by `record_dispatched`
+    /// can never overflow, so `None` means a row that did not come from
+    /// the write path — a read side must surface that as an error, not
+    /// panic on it (the wallet-rpc process is `panic = "abort"`).
+    #[must_use]
+    pub fn sent_amount(&self) -> Option<u64> {
+        sum_recipient_amounts(&self.recipients)
+    }
+}
+
+/// The one implementation of "Σ recipient amounts", shared by
+/// [`SendRecord::sent_amount`] and the write path below so the sent
+/// total cannot drift between writer and reader.
+fn sum_recipient_amounts(recipients: &[SendRecipient]) -> Option<u64> {
+    recipients
+        .iter()
+        .map(|r| r.amount)
+        .try_fold(0u64, u64::checked_add)
+}
+
 /// The send-journal block: dispatch-authored send records keyed by
 /// canonical txid.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
@@ -166,11 +196,8 @@ impl SendJournalBlock {
         recipients: Vec<SendRecipient>,
         inputs: Vec<SendInputRef>,
     ) {
-        let sent = recipients
-            .iter()
-            .map(|r| r.amount)
-            .try_fold(0u64, u64::checked_add)
-            .expect("recipient amounts sum without overflow");
+        let sent =
+            sum_recipient_amounts(&recipients).expect("recipient amounts sum without overflow");
         let input_total = inputs
             .iter()
             .map(|i| i.amount)

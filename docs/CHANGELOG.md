@@ -4,12 +4,39 @@
 
 ### Added
 
-- **PR-SJ-2 OUTGOING history projection** (`feat/wallet-rpc-outgoing-sj2`):
-  `get_transfers` / `get_transfer_by_id` project send-journal rows as
-  `direction: OUTGOING` with realized fee and txid-keyed ids (SJ-DQ-7).
-  `Transfer.state` gains `FAILED` for journal `TerminalRejected` (daemon
-  refused; never collapsed into `CONFIRMED` — rule 82). Closes the Phase
-  4b W-D FOLLOWUP. Engine journal record: PR-SJ-1 (#414).
+- **Your sent transactions now appear in your transfer history, and they
+  say what actually happened to them.** `get_transfers` /
+  `get_transfer_by_id` project send-journal rows as `direction: OUTGOING`
+  with the realized fee and txid-keyed ids (SJ-DQ-7, PR-SJ-2,
+  `feat/wallet-rpc-outgoing-sj2`). Closes the Phase 4b W-D FOLLOWUP;
+  Engine journal record landed in PR-SJ-1 (#414).
+
+  Each outcome is its own state rather than being folded into a
+  neighbouring one, because every such fold is a different lie to the
+  person reading their history (rule 82):
+
+  - `FAILED` — the daemon refused the send; it was never mined. Never
+    reported as `CONFIRMED`.
+  - `DROPPED` — the wallet's watchdog established that the network no
+    longer holds the send and released the funds for re-spending. Never
+    reported as `PENDING`: the wallet has stopped waiting, and saying
+    otherwise would contradict the balance the same wallet reports.
+
+  `Transfer.block_height` is now optional and means *inclusion height*
+  only. A send that was never mined carries no height instead of the
+  height it was dispatched at, so no client renders a plausible block
+  number beside a payment that does not exist on chain. `since_height`
+  bounds inclusion height and therefore never hides a row that has none
+  — unsettled, failed and dropped sends survive any polling watermark,
+  including across a reorg that returns a confirmed send to unsettled.
+
+  `get_transfer_by_id` now distinguishes a malformed id (`-32602`) from
+  a well-formed id naming no row (`-29400`): an uppercase txid pasted
+  from a block explorer is answered as a formatting problem, not as
+  "that transfer does not exist".
+
+  `shekyl-cli wallet transfers` shows the fee alongside the amount, and
+  prints `—` where a row has no inclusion height.
 
 - **The wallet now keeps a durable record of its own sends.** A new
   send-journal ledger block (`docs/design/WALLET_SEND_RECORD.md`,

@@ -1705,7 +1705,11 @@ sustainability is unaffected by the recalibration.
   history surface lands** — **CLOSED 2026-08-07 (PR-SJ-2,
   `feat/wallet-rpc-outgoing-sj2`)**. `get_transfers` / `get_transfer_by_id`
   project `SendJournalBlock` rows as `direction: OUTGOING` with realized
-  fee, txid-keyed ids, and `state: FAILED` for `TerminalRejected` (SJ-DQ-7).
+  fee and txid-keyed ids (SJ-DQ-7). Every journal state maps to its own
+  wire value — `TerminalRejected` → `FAILED`, `PresumedDead` → `DROPPED`
+  — rather than collapsing into a neighbour, and `block_height` means
+  inclusion height only (absent when never mined), which keeps
+  `since_height` from hiding unsettled sends from a polling client.
   Engine record landed in PR-SJ-1 (#414).
   *Previously:* receive-only ledger projection; `direction: OUTGOING`
   matched nothing.

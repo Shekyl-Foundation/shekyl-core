@@ -202,8 +202,8 @@ pub fn cmd_transfers(rpc: &RpcSession) {
                 return;
             };
             println!(
-                "{:<10} {:<10} {:>18} {:>10}  TxID",
-                "Direction", "State", "Amount (SKL)", "Height"
+                "{:<10} {:<10} {:>18} {:>14} {:>10}  TxID",
+                "Direction", "State", "Amount (SKL)", "Fee (SKL)", "Height"
             );
             for t in transfers {
                 print_transfer_row(t);
@@ -213,14 +213,35 @@ pub fn cmd_transfers(rpc: &RpcSession) {
     }
 }
 
+/// One history row.
+///
+/// A single send produces several rows sharing one TxID — the OUTGOING
+/// journal row plus the receive-side rows for its change and for the
+/// inputs it consumed — so the fee is rendered per row rather than
+/// folded into the amount: a user reconciling the table needs the
+/// amount and the cost to be separately visible, not summed for them.
+/// A row that was never mined has no height, and prints `—` rather than
+/// a block number it does not have.
 fn print_transfer_row(t: &Value) {
     let s = |name: &str| t.get(name).and_then(|v| v.as_str()).unwrap_or("?");
     let direction = s("direction");
     let state = s("state");
     let amount = format_amount_str(s("amount"));
-    let height = t.get("block_height").and_then(|v| v.as_i64()).unwrap_or(0);
+    let fee = format_amount_str(s("fee"));
+    let height = format_height(t);
     let tx_hash = s("tx_hash");
-    println!("{direction:<10} {state:<10} {amount:>18} {height:>10}  {tx_hash}");
+    println!("{direction:<10} {state:<10} {amount:>18} {fee:>14} {height:>10}  {tx_hash}");
+}
+
+/// Inclusion height, or `—` when the transaction is not on chain.
+///
+/// `block_height` is absent for a send that was never mined (PENDING /
+/// FAILED / DROPPED). Printing `0` there would render a plausible block
+/// number beside a send that does not exist on chain.
+fn format_height(t: &Value) -> String {
+    t.get("block_height")
+        .and_then(serde_json::Value::as_i64)
+        .map_or_else(|| "—".to_owned(), |h| h.to_string())
 }
 
 pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) {
@@ -240,10 +261,7 @@ pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) {
             println!("  TxID:      {}", s("tx_hash"));
             println!("  Amount:    {} SKL", format_amount_str(s("amount")));
             println!("  Fee:       {} SKL", format_amount_str(s("fee")));
-            println!(
-                "  Height:    {}",
-                t.get("block_height").and_then(|v| v.as_i64()).unwrap_or(0)
-            );
+            println!("  Height:    {}", format_height(t));
             if let Some(spent) = t.get("spent_height").and_then(|v| v.as_i64()) {
                 println!("  Spent at:  {spent}");
             }

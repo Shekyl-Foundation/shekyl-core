@@ -13,6 +13,7 @@ use shekyl_scanner::BalanceSummary;
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 
+use crate::error::WalletRpcError;
 use crate::params::parse_hex32;
 use crate::types::{
     BuildPendingTxResult, GetBalanceResult, RefreshResult, RescanBlockchainResult,
@@ -74,6 +75,46 @@ pub fn parse_transfer_id(id: &str) -> Option<(TxHash, u64)> {
     Some((TxHash::from_bytes(bytes), idx))
 }
 
+/// Which side of the history a `get_transfer_by_id` id names.
+///
+/// The two id grammars are disjoint — INCOMING ids carry a `:`
+/// separator, OUTGOING ids are bare 64-char hex — so a well-formed id
+/// resolves to exactly one lookup with no ambiguity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferLookupId {
+    /// `{tx_hash_hex}:{internal_output_index}` — a scan-ledger output.
+    Incoming {
+        /// Transaction the output belongs to.
+        tx_hash: TxHash,
+        /// Index of the output within that transaction.
+        output_index: u64,
+    },
+    /// Bare `{tx_hash_hex}` — a send-journal row (txid-keyed, SJ-DQ-7).
+    Outgoing {
+        /// Transaction the send record is keyed by.
+        tx_hash: TxHash,
+    },
+}
+
+/// Parse a client-supplied `get_transfer_by_id` id.
+///
+/// `None` means the string is not an id this wallet ever emits, which
+/// is a malformed *request* — the caller reports invalid params rather
+/// than "unknown transfer". The distinction is user-visible: a person
+/// who pastes an uppercase txid must be told the id is not in canonical
+/// form, not that the send they are looking at does not exist (rule 82).
+pub fn parse_lookup_id(id: &str) -> Option<TransferLookupId> {
+    if let Some((tx_hash, output_index)) = parse_transfer_id(id) {
+        return Some(TransferLookupId::Incoming {
+            tx_hash,
+            output_index,
+        });
+    }
+    parse_hex32(id).map(|bytes| TransferLookupId::Outgoing {
+        tx_hash: TxHash::from_bytes(bytes),
+    })
+}
+
 /// Confirmation / spend state of a ledger row.
 ///
 /// Shared by [`transfer_view`] and the `get_transfers` filter so both agree on
@@ -96,7 +137,8 @@ pub fn transfer_view(td: &TransferDetails) -> TransferView {
         tx_hash: td.tx_hash.to_string(),
         amount: atomic_units_string(td.amount()),
         fee: "0".to_owned(),
-        block_height: i64::try_from(td.block_height).unwrap_or(i64::MAX),
+        // Ledger rows are scanner-observed, so they are always mined.
+        block_height: Some(i64::try_from(td.block_height).unwrap_or(i64::MAX)),
         state: transfer_state(td),
         spent_height: td
             .spent_height
@@ -109,55 +151,69 @@ pub fn outgoing_transfer_id(txid: &TxHash) -> String {
     txid.to_string()
 }
 
-/// Height used for `since_height` filters and `TransferView.block_height`.
+/// Inclusion height of a send, or `None` when it is not on chain.
 ///
-/// Confirmed sends use the refresh-observed inclusion height; every other
-/// lifecycle state uses the dispatch-time wallet height (no invented height).
-pub fn outgoing_block_height(row: &SendRecord) -> u64 {
+/// Only a refresh-observed `Confirmed { height }` yields a height. The
+/// journal also records `dispatched_at_height`, but that is a local
+/// sync counter, not an inclusion height: projecting it would put a
+/// plausible block number beside a send that was never mined, and would
+/// make the projected height move *backwards* when a reorg flips a
+/// confirmed row back to `Dispatched` (rule 82).
+pub fn outgoing_block_height(row: &SendRecord) -> Option<u64> {
     match row.state {
-        SendState::Confirmed { height } => height,
-        _ => row.dispatched_at_height,
+        SendState::Confirmed { height } => Some(height),
+        SendState::Dispatched | SendState::TerminalRejected | SendState::PresumedDead => None,
     }
 }
 
 /// Map journal lifecycle onto the OpenAPI `TransferState` enum.
 ///
-/// - `Dispatched` / `PresumedDead` → `PENDING` (unsettled; late confirm is
-///   still possible for `PresumedDead`).
+/// Every arm is a distinct user-facing situation; none collapses into
+/// another, because each collapse is a different lie (rule 82):
+///
+/// - `Dispatched` → `PENDING` (in flight; the wallet is still waiting).
 /// - `Confirmed` → `CONFIRMED` (refresh observed the spend on chain).
-/// - `TerminalRejected` → `FAILED` (daemon refused; never mined — rule 82;
-///   never collapse into `CONFIRMED`).
+/// - `TerminalRejected` → `FAILED` (daemon refused; never mined — never
+///   collapse into `CONFIRMED`).
+/// - `PresumedDead` → `DROPPED` (the confirmed-absent watchdog released
+///   the input locks — never collapse into `PENDING`, which would say
+///   the wallet is still waiting while the same wallet reports those
+///   funds spendable again).
 pub fn outgoing_transfer_state(row: &SendRecord) -> TransferState {
     match row.state {
-        SendState::Dispatched | SendState::PresumedDead => TransferState::Pending,
+        SendState::Dispatched => TransferState::Pending,
         SendState::Confirmed { .. } => TransferState::Confirmed,
         SendState::TerminalRejected => TransferState::Failed,
+        SendState::PresumedDead => TransferState::Dropped,
     }
-}
-
-/// Σ recipient amounts — same overflow invariant as journal write
-/// (`SendJournalBlock::record_dispatched` expects the sum to fit in `u64`).
-fn outgoing_sent_amount(row: &SendRecord) -> u64 {
-    row.recipients
-        .iter()
-        .map(|r| r.amount)
-        .try_fold(0u64, u64::checked_add)
-        .expect("recipient amounts sum without overflow (journal write invariant)")
 }
 
 /// Project a send-journal row as an OUTGOING `TransferView` (PR-SJ-2).
-pub fn outgoing_transfer_view(txid: &TxHash, row: &SendRecord) -> TransferView {
-    TransferView {
+///
+/// Fails rather than panics when the row's recipient amounts do not sum
+/// (`SendRecord::sent_amount`): this runs on the read path, and the
+/// workspace builds with `panic = "abort"`, so a panic here would take
+/// the wallet-rpc process down on a history query.
+pub fn outgoing_transfer_view(
+    txid: &TxHash,
+    row: &SendRecord,
+) -> Result<TransferView, WalletRpcError> {
+    let sent = row.sent_amount().ok_or_else(|| {
+        WalletRpcError::InternalError(format!(
+            "send journal row {txid} has recipient amounts that do not sum"
+        ))
+    })?;
+    Ok(TransferView {
         id: outgoing_transfer_id(txid),
         direction: TransferDirection::Outgoing,
         tx_hash: txid.to_string(),
-        amount: atomic_units_string(AtomicUnits::from_raw(outgoing_sent_amount(row))),
+        amount: atomic_units_string(AtomicUnits::from_raw(sent)),
         fee: atomic_units_string(AtomicUnits::from_raw(row.fee)),
         // Crate-wide height projection idiom: OpenAPI heights are int64.
-        block_height: i64::try_from(outgoing_block_height(row)).unwrap_or(i64::MAX),
+        block_height: outgoing_block_height(row).map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
         state: outgoing_transfer_state(row),
         spent_height: None,
-    }
+    })
 }
 
 /// Project [`RefreshSummary`] + post-refresh ledger tip to OpenAPI.
@@ -370,8 +426,12 @@ mod tests {
         }
     }
 
-    /// Journal lifecycle collapses onto the four OpenAPI states without
-    /// lying: TerminalRejected is FAILED, never CONFIRMED (rule 82).
+    /// Every journal lifecycle state gets its own wire value. The two
+    /// collapses that rule 82 forbids are pinned negatively: a refused
+    /// send must never read CONFIRMED, and a send the watchdog already
+    /// gave up on must never read PENDING — the wallet has stopped
+    /// waiting and has released those funds for re-spending, so PENDING
+    /// would contradict the balance the same wallet reports.
     #[test]
     fn outgoing_state_map_is_honest_for_every_send_state() {
         assert_eq!(
@@ -380,7 +440,7 @@ mod tests {
         );
         assert_eq!(
             outgoing_transfer_state(&sample_send_record(SendState::PresumedDead)),
-            TransferState::Pending
+            TransferState::Dropped
         );
         assert_eq!(
             outgoing_transfer_state(&sample_send_record(SendState::Confirmed { height: 200 })),
@@ -392,20 +452,28 @@ mod tests {
         );
     }
 
+    /// Only a refresh-observed confirmation yields a height. The
+    /// journal's `dispatched_at_height` is a local sync counter, and
+    /// projecting it would both invent a block number for a tx that was
+    /// never mined and make the projected height move backwards when a
+    /// reorg flips a confirmed row back to `Dispatched`.
     #[test]
-    fn outgoing_block_height_uses_confirm_height_when_present() {
-        assert_eq!(
-            outgoing_block_height(&sample_send_record(SendState::Dispatched)),
-            100
-        );
-        assert_eq!(
-            outgoing_block_height(&sample_send_record(SendState::TerminalRejected)),
-            100
-        );
+    fn only_confirmed_sends_have_an_inclusion_height() {
         assert_eq!(
             outgoing_block_height(&sample_send_record(SendState::Confirmed { height: 250 })),
-            250
+            Some(250)
         );
+        for unmined in [
+            SendState::Dispatched,
+            SendState::TerminalRejected,
+            SendState::PresumedDead,
+        ] {
+            assert_eq!(
+                outgoing_block_height(&sample_send_record(unmined)),
+                None,
+                "{unmined:?} must not report an inclusion height"
+            );
+        }
     }
 
     #[test]
@@ -414,24 +482,90 @@ mod tests {
         let view = outgoing_transfer_view(
             &txid,
             &sample_send_record(SendState::Confirmed { height: 250 }),
-        );
+        )
+        .expect("project");
         assert_eq!(view.id, "ab".repeat(32));
         assert_eq!(view.tx_hash, view.id);
         assert_eq!(view.direction, TransferDirection::Outgoing);
         assert_eq!(view.amount, "3500"); // 1000 + 2500
         assert_eq!(view.fee, "700");
-        assert_eq!(view.block_height, 250);
+        assert_eq!(view.block_height, Some(250));
         assert_eq!(view.state, TransferState::Confirmed);
         assert_eq!(view.spent_height, None);
 
         let failed =
-            outgoing_transfer_view(&txid, &sample_send_record(SendState::TerminalRejected));
+            outgoing_transfer_view(&txid, &sample_send_record(SendState::TerminalRejected))
+                .expect("project");
         assert_eq!(failed.state, TransferState::Failed);
-        assert_eq!(failed.block_height, 100);
+        assert_eq!(failed.block_height, None);
 
-        // Wire pin: FAILED is a first-class OpenAPI enum value.
+        // Wire pins: FAILED is a first-class OpenAPI enum value, and a
+        // send that was never mined serializes no `block_height` key at
+        // all rather than a plausible-looking height (rule 82).
         let json = serde_json::to_value(&failed).expect("serialize");
         assert_eq!(json["state"], "FAILED");
         assert_eq!(json["direction"], "OUTGOING");
+        assert!(
+            json.get("block_height").is_none(),
+            "unmined send must not carry a block_height: {json}"
+        );
+
+        let dropped = outgoing_transfer_view(&txid, &sample_send_record(SendState::PresumedDead))
+            .expect("project");
+        let json = serde_json::to_value(&dropped).expect("serialize");
+        assert_eq!(json["state"], "DROPPED");
+    }
+
+    /// A row whose recipient amounts do not sum cannot have come from
+    /// the journal write path, so the read side reports it rather than
+    /// panicking — the workspace builds `panic = "abort"`, which would
+    /// turn a history query into a daemon outage.
+    #[test]
+    fn unsummable_recipient_amounts_do_not_panic_the_read_path() {
+        let mut row = sample_send_record(SendState::Dispatched);
+        row.recipients[0].amount = u64::MAX;
+        let err = outgoing_transfer_view(&TxHash::from_bytes([0xab; 32]), &row)
+            .expect_err("overflowing recipient sum must not project");
+        assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
+    }
+
+    /// The two id grammars are disjoint, so a well-formed id names
+    /// exactly one side of the history.
+    #[test]
+    fn lookup_id_routes_each_shape_to_its_own_side() {
+        let hash_hex = "0a".repeat(32);
+        assert_eq!(
+            parse_lookup_id(&format!("{hash_hex}:7")),
+            Some(TransferLookupId::Incoming {
+                tx_hash: TxHash::from_bytes([0x0a; 32]),
+                output_index: 7,
+            })
+        );
+        assert_eq!(
+            parse_lookup_id(&hash_hex),
+            Some(TransferLookupId::Outgoing {
+                tx_hash: TxHash::from_bytes([0x0a; 32]),
+            })
+        );
+    }
+
+    /// Ids this wallet never emits are rejected as malformed rather
+    /// than answered with "unknown transfer" — including the uppercase
+    /// txid a user gets by pasting from a block explorer, where saying
+    /// "no such transfer" would be an outright wrong answer about a
+    /// send that does exist (rule 82).
+    #[test]
+    fn lookup_id_rejects_ids_this_wallet_never_emits() {
+        for bad in [
+            String::new(),
+            "no-colon-not-hex".to_owned(),
+            "0A".repeat(32),                   // uppercase txid
+            "0a".repeat(31),                   // short
+            "0a".repeat(33),                   // long
+            format!("{}:07", "0a".repeat(32)), // leading zero in index
+            format!("{}:", "0a".repeat(32)),   // empty index
+        ] {
+            assert!(parse_lookup_id(&bad).is_none(), "accepted {bad:?}");
+        }
     }
 }
