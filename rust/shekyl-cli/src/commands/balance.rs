@@ -54,7 +54,15 @@ pub fn cmd_engine_info(rpc: &RpcSession) {
     match rpc.call("get_wallet_info", json!({})) {
         Ok(val) => {
             let s = |name: &str| val.get(name).and_then(|v| v.as_str()).unwrap_or("?");
-            let i = |name: &str| val.get(name).and_then(|v| v.as_i64()).unwrap_or(0);
+            // A missing required field is a malformed response, not a zero.
+            // Height 0 is a real, plausible value — rendering it for an
+            // absent field would report a fully unsynced wallet to a user
+            // whose wallet may be fully synced.
+            let i = |name: &str| {
+                val.get(name)
+                    .and_then(serde_json::Value::as_i64)
+                    .map_or_else(|| "?".to_owned(), |h| h.to_string())
+            };
             println!("Wallet: {}", s("name"));
             println!("  Network:         {}", s("network"));
             println!("  Capability:      {}", s("capability"));

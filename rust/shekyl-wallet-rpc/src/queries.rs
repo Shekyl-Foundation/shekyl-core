@@ -114,11 +114,10 @@ pub(crate) async fn get_wallet_info(
         }
         .to_owned();
 
-        let staking_view =
-            tokio::task::block_in_place(|| engine.staking_read_view()).map_err(|e| {
-                tracing::warn!(error = %e, "staking read view failed");
-                WalletRpcError::InternalError("staking state failed to load".into())
-            })?;
+        // Read staking under the guard this snapshot already holds, via the
+        // crate's single `staking_read_view` call site (which owns the
+        // off-the-worker discipline and the detail-free error mapping).
+        let staking_view = crate::staking::read_view_under_guard(&engine)?;
         let staking = StakingInfoResult {
             staking_enabled: staking_view.staking_enabled,
             balance: GetStakedBalanceResult {

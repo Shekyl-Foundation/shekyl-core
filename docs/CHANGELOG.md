@@ -8,10 +8,14 @@
   `get_wallet_info` aggregates wallet height, daemon height, balances,
   primary address, capability/network, restore floor, and staking summary
   in one round-trip (no new Engine API). `Transfer` gains FA-8
-  `attribution`; `get_transfers` accepts an optional `attribution` filter.
-  CLI un-stubs `engine_info` and `history incoming --unattributed`. Closes
-  the WI-RPC-2b deferrals for those commands; parity matrix rows 33/39
-  updated. Contract: `docs/api/wallet_rpc.yaml`.
+  `attribution` — present on INCOMING rows only, since "which payment
+  request did this arrive against" has no meaning for a row the wallet
+  sent; `get_transfers` accepts an optional `attribution` filter.
+  CLI un-stubs `engine_info` and `history incoming --unattributed`, and
+  reports `?` rather than `0` for a height the server did not send (0 is
+  a real height, so defaulting would show a synced wallet as unsynced).
+  Closes the WI-RPC-2b deferrals for those commands; parity matrix rows
+  33/39 updated. Contract: `docs/api/wallet_rpc.yaml`.
 
 - **The wallet now keeps a durable record of its own sends.** A new
   send-journal ledger block (`docs/design/WALLET_SEND_RECORD.md`,

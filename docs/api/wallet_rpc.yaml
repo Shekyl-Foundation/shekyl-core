@@ -863,7 +863,7 @@ components:
 
     Transfer:
       type: object
-      required: [id, direction, tx_hash, amount, fee, block_height, state, attribution]
+      required: [id, direction, tx_hash, amount, fee, block_height, state]
       description: >
         Client-facing projection of `shekyl_engine_state::TransferDetails`.
         Internal fields (key material, key offsets, commitments) never cross
@@ -891,7 +891,13 @@ components:
           type: integer
           format: int64
         attribution:
-          $ref: "#/components/schemas/ReceiveAttribution"
+          allOf:
+            - $ref: "#/components/schemas/ReceiveAttribution"
+          description: >
+            Present on INCOMING rows only. Receive attribution answers
+            which payment request a receive arrived against, which has no
+            meaning for a row the wallet sent, so an OUTGOING row omits
+            the field rather than carrying an invented `UNATTRIBUTED`.
 
     GetTransfersParams:
       type: object

@@ -165,7 +165,8 @@ pub fn transfer_view(td: &TransferDetails) -> TransferView {
         spent_height: td
             .spent_height
             .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
-        attribution: attribution_view(&td.receive_attribution),
+        // Receive-side row, so attribution is always meaningful here.
+        attribution: Some(attribution_view(&td.receive_attribution)),
     }
 }
 
@@ -281,6 +282,59 @@ mod tests {
             &unknown,
             crate::types::ReceiveAttributionFilter::LabelUnknown
         ));
+
+        // ManualMatch carries the rid like Matched, but under its own kind:
+        // a user-authored link must stay distinguishable from a cooperative
+        // label match, because only one of them is evidence from the sender.
+        let manual = ReceiveAttribution::ManualMatch(PaymentRequestId(7));
+        let view = attribution_view(&manual);
+        assert_eq!(view.kind, ReceiveAttributionKind::ManualMatch);
+        assert_eq!(view.request_id.as_deref(), Some("7"));
+        assert_eq!(view.echoed_label_hash, None);
+        assert_eq!(view.dispute_reason, None);
+        assert!(attribution_matches(
+            &manual,
+            crate::types::ReceiveAttributionFilter::ManualMatch
+        ));
+        assert!(!attribution_matches(
+            &manual,
+            crate::types::ReceiveAttributionFilter::Matched
+        ));
+
+        // Disputed renders every DisputeReason arm, including the free-form
+        // one whose payload reaches the wire.
+        for (reason, expected) in [
+            (DisputeReason::WrongLabel, "WrongLabel"),
+            (DisputeReason::WrongAmount, "WrongAmount"),
+            (
+                DisputeReason::Other("paid twice".to_owned()),
+                "Other(paid twice)",
+            ),
+        ] {
+            let disputed = ReceiveAttribution::Disputed { reason };
+            let view = attribution_view(&disputed);
+            assert_eq!(view.kind, ReceiveAttributionKind::Disputed);
+            assert_eq!(view.dispute_reason.as_deref(), Some(expected));
+            assert_eq!(view.request_id, None);
+            assert!(attribution_matches(
+                &disputed,
+                crate::types::ReceiveAttributionFilter::Disputed
+            ));
+            assert!(!attribution_matches(
+                &disputed,
+                crate::types::ReceiveAttributionFilter::Unattributed
+            ));
+        }
+
+        // Wire pins for the two kinds the filter newly distinguishes.
+        let json = serde_json::to_value(attribution_view(&manual)).expect("serialize");
+        assert_eq!(json["kind"], "MANUAL_MATCH");
+        let json = serde_json::to_value(attribution_view(&ReceiveAttribution::Disputed {
+            reason: DisputeReason::WrongAmount,
+        }))
+        .expect("serialize");
+        assert_eq!(json["kind"], "DISPUTED");
+        assert_eq!(json["dispute_reason"], "WrongAmount");
     }
 
     #[test]

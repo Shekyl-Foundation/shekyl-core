@@ -360,8 +360,14 @@ pub struct TransferView {
     /// Height at which the output was spent, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spent_height: Option<i64>,
-    /// Receive attribution (present on INCOMING rows; WI-RPC-4).
-    pub attribution: ReceiveAttributionView,
+    /// Receive attribution (WI-RPC-4).
+    ///
+    /// Present on INCOMING rows only. Receive attribution answers "which
+    /// payment request did this arrive against", which has no meaning for
+    /// a row the wallet sent, so an OUTGOING row omits the field rather
+    /// than carrying an invented `UNATTRIBUTED`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<ReceiveAttributionView>,
 }
 
 /// `get_wallet_info` result — one-round-trip aggregate of live read surfaces
