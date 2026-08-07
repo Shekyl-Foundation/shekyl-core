@@ -75,13 +75,13 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 30 | `refresh` | `refresh` | Covered | Native `refresh` |
 | 31 | `save` | `save` | Covered | Informative: state persists crash-atomically after every operation; nothing to save |
 | 32 | `status` | `status` | Covered | Native wallet + daemon sync heights |
-| 33 | `wallet_info` | RESERVED (`engine_info`) | Planned | Gated on a native wallet-info RPC method |
+| 33 | `wallet_info` | `engine_info` | Covered | Native `get_wallet_info` aggregate (WI-RPC-4) |
 | 34 | `version` | `version` | Covered | CLI version + `get_version` from the connected server |
 | 35 | `help` | `help` | Covered | Categorized; names the RESERVED set and its gates |
 | 36 | `bc_height` | `status` | Covered | Height shown in status |
 | 37 | `fee` | `fee` | Covered | Native `get_default_fee_priority` tier quotes + `estimate_tx_size_and_weight` (WI-RPC-1). Principal lane only — P-lane fees are canonical, never user-facing |
 | 38 | `set_daemon` | `--daemon-address` | Covered | CLI flag, not runtime change; `--rpc-url` selects an external wallet-RPC |
-| 39 | `incoming_transfers` | `transfers` | Covered | `transfers` shows all directions; the unattributed-receives view (`history incoming`) is RESERVED on the FA-8 projection |
+| 39 | `incoming_transfers` | `transfers` / `history incoming --unattributed` | Covered | `transfers` lists ledger rows; unattributed receives via `get_transfers` attribution filter (WI-RPC-4) |
 | 40 | `restore_height` | `restore` | Covered | Native `restore_wallet` (BIP-39 + optional `restore_height`) |
 | 41 | `address_book` | N/A | Out of scope | Monero feature, not used in Shekyl |
 | 42 | `apropos` | N/A | Out of scope | Help search, low value |

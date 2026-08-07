@@ -286,6 +286,58 @@ pub enum TransferState {
     Spent,
 }
 
+/// Receive-attribution kind for INCOMING transfer rows (FA-8 / WI-RPC-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ReceiveAttributionKind {
+    /// No cooperative label echo.
+    Unattributed,
+    /// Matched a payment-request rid exactly.
+    Matched,
+    /// Label echoed but no unambiguous request match.
+    LabelUnknown,
+    /// User manually linked the transfer to a request.
+    ManualMatch,
+    /// User flagged the receive as disputed.
+    Disputed,
+}
+
+/// Client-facing attribution projection (OpenAPI `ReceiveAttribution`).
+///
+/// Never carries cleartext request labels — those stay on
+/// `list_payment_requests`. `request_id` is the decimal rid when known.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReceiveAttributionView {
+    /// Attribution kind.
+    pub kind: ReceiveAttributionKind,
+    /// Decimal payment-request id when `MATCHED` / `MANUAL_MATCH`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// 64-char lowercase hex of the echoed label hash when `LABEL_UNKNOWN`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub echoed_label_hash: Option<String>,
+    /// Dispute reason string when `DISPUTED` (`WrongLabel` / `WrongAmount` /
+    /// `Other(...)`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dispute_reason: Option<String>,
+}
+
+/// Optional `get_transfers` filter on receive attribution (WI-RPC-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ReceiveAttributionFilter {
+    /// `ReceiveAttribution::Unattributed` only.
+    Unattributed,
+    /// Any `Matched(...)` row.
+    Matched,
+    /// `LabelUnknown { .. }`.
+    LabelUnknown,
+    /// `ManualMatch(...)`.
+    ManualMatch,
+    /// `Disputed { .. }`.
+    Disputed,
+}
+
 /// Client-facing transfer projection (OpenAPI `Transfer`).
 ///
 /// Accounting facts only — no key material, offsets, or commitments.
@@ -308,6 +360,38 @@ pub struct TransferView {
     /// Height at which the output was spent, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spent_height: Option<i64>,
+    /// Receive attribution (WI-RPC-4).
+    ///
+    /// Present on INCOMING rows only. Receive attribution answers "which
+    /// payment request did this arrive against", which has no meaning for
+    /// a row the wallet sent, so an OUTGOING row omits the field rather
+    /// than carrying an invented `UNATTRIBUTED`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<ReceiveAttributionView>,
+}
+
+/// `get_wallet_info` result — one-round-trip aggregate of live read surfaces
+/// (WI-RPC-4). CLI `engine_info` projects this.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetWalletInfoResult {
+    /// Wallet file stem within the served wallet directory.
+    pub name: String,
+    /// Capability mode (`FULL` / `VIEW_ONLY` / `HARDWARE_OFFLOAD`).
+    pub capability: String,
+    /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
+    pub network: String,
+    /// Primary address.
+    pub address: String,
+    /// Wallet synced height.
+    pub wallet_height: i64,
+    /// Daemon height, or `null` when unreachable.
+    pub daemon_height: Option<i64>,
+    /// Scan floor (`restore_from_height`) for this wallet.
+    pub restore_height: i64,
+    /// Balance projection (same shape as `get_balance`).
+    pub balance: GetBalanceResult,
+    /// Staking read projection (same shape as `staking_info`).
+    pub staking: StakingInfoResult,
 }
 
 /// `get_transfers` result.

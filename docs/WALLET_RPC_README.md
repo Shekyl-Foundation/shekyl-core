@@ -29,15 +29,17 @@ requests + URIs (no subaddresses).
 ## Status
 
 Phase 4b SPECIFIED methods, WI-RPC-1 (receiving / fees / staking reads),
-WI-RPC-2a (`restore_wallet`), WI-RPC-3 (proofs), and Phase 4c
-(`rescan_blockchain` via `Engine::start_rescan`) are live. RESERVED
-methods (`unstake` / `claim` / `sign` / `verify` / air-gapped bundles)
-remain Engine-gated — see the OpenAPI header registry and
-`docs/FOLLOWUPS.md`.
+WI-RPC-2a (`restore_wallet`), WI-RPC-3 (proofs), Phase 4c
+(`rescan_blockchain` via `Engine::start_rescan`), and WI-RPC-4
+(`get_wallet_info` + `Transfer.attribution` / `get_transfers.attribution`
+filter) are live. RESERVED methods (`unstake` / `claim` / `sign` /
+`verify` / air-gapped bundles / `match_transfer_to_request`) remain
+Engine-gated — see the OpenAPI header registry and `docs/FOLLOWUPS.md`.
 
 One Phase 4b quality FOLLOWUP is still open (Engine-gated): honest
-`OUTGOING` transfer history. The other two closed with the send-lifecycle
-PR: `build_pending_tx` runs under a read lock (serialized by the
-engine-owned build permit), and `submit_pending_tx` reports the real
-daemon verdict (`ACCEPTED` / `ALREADY_IN_POOL` / `ALREADY_IN_CHAIN` with
-verdict-scoped `confirmed_height`).
+`OUTGOING` transfer history (PR-SJ-1/2 per `WALLET_SEND_RECORD.md`). The
+other two closed with the send-lifecycle PR: `build_pending_tx` runs
+under a read lock (serialized by the engine-owned build permit), and
+`submit_pending_tx` reports the real daemon verdict (`ACCEPTED` /
+`ALREADY_IN_POOL` / `ALREADY_IN_CHAIN` with verdict-scoped
+`confirmed_height`).

@@ -82,7 +82,12 @@ supply the identical string — repeated spaces are collapsed to one):
                                       Verify a reserve proof (no wallet
                                       needed)
 
+Receiving history:
+  history incoming --unattributed     List receives with no payment-request
+                                      match (FA-8 UNATTRIBUTED)
+
 Meta:
+  engine_info                         Wallet summary (height, balance, address)
   version                             Show CLI and wallet-RPC versions
   help                                Show this help
   exit / quit                         Exit shekyl-cli
@@ -200,10 +205,7 @@ pub fn repl(
                         receiving::cmd_requests_list(&rpc, filter.as_deref());
                     }
                     ResolvedCommand::HistoryIncomingUnattributed => {
-                        reserved(
-                            "history incoming",
-                            "an unattributed-receives RPC surface (FA-8)",
-                        );
+                        transfers::cmd_history_incoming_unattributed(&rpc);
                     }
                     ResolvedCommand::MakeUri {
                         address,
@@ -278,7 +280,7 @@ pub fn repl(
                     // Meta
                     ResolvedCommand::Version => cmd_version(&rpc),
                     ResolvedCommand::EngineInfo => {
-                        reserved("engine_info", "a native wallet-info RPC surface");
+                        balance::cmd_engine_info(&rpc);
                     }
 
                     ResolvedCommand::Unknown { cmd } => {

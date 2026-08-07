@@ -13,7 +13,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_engine_core::{StakedOutput, StakingReadView};
+use shekyl_engine_core::{Engine, SoloSigner, StakedOutput, StakingReadView};
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, require_empty_object};
@@ -73,29 +73,47 @@ pub(crate) async fn staking_info(
         .map_err(|e| WalletRpcError::InternalError(format!("serialize staking_info: {e}")))
 }
 
-/// Compute the authoritative view under the engine read guard.
+/// Compute the authoritative view from an already-held engine read guard.
+///
+/// The single call site of `Engine::staking_read_view` in this crate, so the
+/// off-the-worker discipline and the error mapping below have one home rather
+/// than a copy per caller. `get_wallet_info` (`queries.rs`) calls this while
+/// holding its own guard: it must read staking within the *same* guard as the
+/// rest of its snapshot, both for coherence and because re-acquiring a read
+/// while one is held can deadlock against a queued writer on a write-preferring
+/// `RwLock`.
 ///
 /// `staking_read_view` opens and decrypts the sealed `.wallet.pscan` /
 /// `.wallet.pending` files inline (envelope KDF + AEAD + postcard decode), so
 /// it is run through [`tokio::task::block_in_place`] — the same off-the-worker
 /// discipline `lifecycle.rs` uses for its synchronous engine calls, so a large
 /// seal cannot stall the tokio worker (and any tenant scheduled on it) for the
-/// decrypt. The engine runtime is always multi-threaded (`#[tokio::main]`), so
-/// `block_in_place` never hits its `current_thread` panic.
+/// decrypt. Every runtime that hosts this server is multi-threaded — the
+/// `#[tokio::main]` binary and the CLI's in-process
+/// `Builder::new_multi_thread` spawn — so `block_in_place` never hits its
+/// `current_thread` panic. A future single-threaded host would have to move
+/// this to `spawn_blocking`, which is why the call is not scattered.
 ///
 /// A corrupt or version-mismatched seal fails closed as `InternalError` with
 /// a stable, detail-free client message (the cause can carry filesystem
 /// paths; it is logged server-side only — same discipline as the
 /// `PScanStartError::LoadFailed` mapping).
+pub(crate) fn read_view_under_guard(
+    engine: &Engine<SoloSigner>,
+) -> Result<StakingReadView, WalletRpcError> {
+    tokio::task::block_in_place(|| engine.staking_read_view()).map_err(|e| {
+        tracing::warn!(error = %e, "staking read view failed");
+        WalletRpcError::InternalError("staking state failed to load".into())
+    })
+}
+
+/// Acquire the engine read guard and compute the authoritative view.
 async fn read_view(
     tenants: &tokio::sync::Mutex<TenantState>,
 ) -> Result<StakingReadView, WalletRpcError> {
     let shared = require_open_engine(tenants).await?;
     let engine = shared.read().await;
-    tokio::task::block_in_place(|| engine.staking_read_view()).map_err(|e| {
-        tracing::warn!(error = %e, "staking read view failed");
-        WalletRpcError::InternalError("staking state failed to load".into())
-    })
+    read_view_under_guard(&engine)
 }
 
 fn balance_result(view: &StakingReadView) -> GetStakedBalanceResult {
