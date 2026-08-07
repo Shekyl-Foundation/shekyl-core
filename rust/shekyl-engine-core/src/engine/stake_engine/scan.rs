@@ -7,9 +7,6 @@
 
 use kameo::message::{Context, Message};
 
-#[cfg(feature = "gf7-hooks")]
-use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
-
 use crate::engine::pscan::scan_step::{
     run_dual_extractor, DualExtractOutput, ScanStep, ScanStepResult, SpentFundingMatch,
 };

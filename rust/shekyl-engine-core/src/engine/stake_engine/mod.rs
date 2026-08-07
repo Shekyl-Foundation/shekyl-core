@@ -23,6 +23,23 @@
 //!
 //! Call sites keep `crate::engine::stake_engine::{…}`.
 
+// S6 / DQ3 — the session RNG self-cert grader (`shekyl-standoff` `conformance`)
+// is gated to **`x86_64` exactly** (the guard below is `target_arch = "x86_64"`,
+// matching the `x86_64`-only CI conformance lane and the standoff conformance
+// lane it mirrors): its goodness-of-fit is float, which is not bit-identical
+// across architectures, and `x86_64` is the only target the diagnostic is built
+// and run on. Rather than silently compile the self-cert out on a non-`x86_64`
+// target (which would let a `--features conformance` diagnostic build report
+// "conformance passed" when the grade never ran — false assurance), fail the
+// build loudly: a diagnostic build that cannot run the diagnostic must say so at
+// compile time, not pretend success at runtime. With this guard, `conformance`
+// implies `x86_64`, so the self-cert call sites need only `cfg(feature)`.
+// Single copy at the module root — not re-pasted into helpers/types/actor.
+#[cfg(all(feature = "conformance", not(target_arch = "x86_64")))]
+compile_error!(
+    "the StakeEngine session RNG self-cert grader (shekyl-standoff `conformance`)      is `x86_64`-only — its float goodness-of-fit is not bit-identical across      architectures. Build the `conformance` feature on `x86_64` (where the CI      conformance lane runs); do not enable it on other targets (including 32-bit      x86)."
+);
+
 mod actor;
 mod bond;
 mod claim;

@@ -9,8 +9,6 @@ use kameo::message::{Context, Message};
 
 use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
 use shekyl_archival_retention::HoldingsDescriptor;
-#[cfg(feature = "gf7-hooks")]
-use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
 
 use crate::engine::{Network, ShekylAddress};
 

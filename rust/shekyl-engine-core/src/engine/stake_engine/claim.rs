@@ -21,8 +21,6 @@ use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_scanner::extra::Extra;
-#[cfg(feature = "gf7-hooks")]
-use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
 use shekyl_tx_builder::{
     phase1_payload_hashes, prove_backing_membership, sign_pqc_auths, sign_transaction_with_terms,
     tx_prefix_hash_from_parts_with_extra, InputTerm, PqcAuth, TreeContext, WireEncodeInput,

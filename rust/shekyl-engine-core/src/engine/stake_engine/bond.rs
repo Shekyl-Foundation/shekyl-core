@@ -16,8 +16,6 @@ use shekyl_archival_retention::{bond_floor, HoldingsDescriptor};
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_scanner::extra::Extra;
-#[cfg(feature = "gf7-hooks")]
-use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction_with_terms,
     tx_prefix_hash_from_parts_with_extra, PqcAuth, TreeContext, WireEncodeInput,

@@ -7,8 +7,6 @@
 
 use kameo::message::{Context, Message};
 
-#[cfg(feature = "gf7-hooks")]
-use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
 use shekyl_types::PCanonicalId;
 
 use super::actor::StakeEngine;
