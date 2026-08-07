@@ -188,3 +188,11 @@ rust/shekyl-engine-state/src/tx_meta_block.rs|struct TxSecretKeySchema(Vec<u8>);
 rust/shekyl-engine-state/src/tx_meta_block.rs|pub tx_keys: BTreeMap<[u8; 32], TxSecretKeys>
 rust/shekyl-engine-state/src/tx_meta_block.rs|pub tx_notes: BTreeMap<[u8; 32], String>
 rust/shekyl-engine-state/src/tx_meta_block.rs|pub scanned_pool_txs: BTreeMap<[u8; 32], ScannedPoolTx>
+
+# ── send_journal_block.rs ─────────────────────────────────────────────
+#
+# Rows are keyed by canonical txid — the public 32-byte transaction
+# hash (same class as `tx_keys` / `pending_tx_hashes`). Values are
+# dispatch-authored non-secret history (addresses, amounts, gindexes,
+# lifecycle state); no wipe-on-drop material lives on a `SendRecord`.
+rust/shekyl-engine-state/src/send_journal_block.rs|pub rows: BTreeMap<[u8; 32], SendRecord>

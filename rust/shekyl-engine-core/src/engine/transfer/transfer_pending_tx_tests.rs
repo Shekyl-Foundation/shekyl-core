@@ -1400,10 +1400,21 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
     );
     assert_eq!(pending.outstanding(), 0, "reservation released");
 
-    // The F14 lock is placed on the selected inputs, baselined at the
-    // claimed confirming height; `spent` stays refresh-written.
+    // The F14 lock is re-derived from the journal baseline (clamped claim);
+    // `spent` stays refresh-written. Journal and field must agree (I-5).
     {
         let guard = pending.ledger.read();
+        let row = guard
+            .ledger
+            .send_journal
+            .rows
+            .get(&expected_hash.to_bytes())
+            .expect("dispatch birthed the journal row; AlreadyInChain stamps its baseline");
+        assert_eq!(
+            row.lock_baseline,
+            Some(20),
+            "AlreadyInChain mirrors the clamped baseline into the journal (F40)"
+        );
         let locked: Vec<_> = guard
             .ledger
             .ledger
@@ -1425,11 +1436,20 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                  the claimed 25 clamped to the synced 20, so the watchdog \
                  horizon stays measurable"
             );
+            assert_eq!(
+                row.lock_baseline,
+                Some(lock.accepted_at_height),
+                "I-5: journal baseline equals the derived F14 lock"
+            );
             assert!(
                 !td.is_spendable(u64::MAX),
                 "locked output must be excluded from selection"
             );
         }
+        guard
+            .ledger
+            .check_invariants()
+            .expect("I-5 holds after AlreadyInChain");
     }
 
     let events = sink.recorded_pending();
@@ -1955,6 +1975,126 @@ async fn concurrent_builds_serialize_on_the_build_permit() {
     let built_b = b.await.expect("build B succeeds after the permit frees");
     assert_ne!(built_a.id, built_b.id, "two distinct reservations");
     assert_eq!(pending.outstanding(), 2);
+}
+
+/// PR-SJ-1: dispatch writes the send-journal row in the same guard as
+/// the retention record — realized fee from the wire bytes (R-4),
+/// recipients as requested, the carried input set with wipe-stable
+/// gindexes, change as the exact remainder, and (after the accept
+/// verdict) a lock_baseline equal to the F14 lock's baseline (the I-5
+/// equivalence, spot-checked here end to end).
+#[tokio::test]
+async fn dispatch_writes_the_send_journal_row() {
+    use crate::engine::transaction_submitter::wire_fee;
+
+    let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    let expected_fee = wire_fee(&built.tx_bytes);
+    let outcome = pending
+        .submit(built.id, built.content_gen)
+        .await
+        .expect("submit ok");
+    let txid = outcome.hash();
+
+    let guard = pending.ledger.read();
+    let row = guard
+        .ledger
+        .send_journal
+        .rows
+        .get(&txid.to_bytes())
+        .expect("dispatch writes the journal row keyed by canonical txid");
+    assert_eq!(
+        row.fee, expected_fee,
+        "realized wire fee, never an estimate"
+    );
+    assert_eq!(row.recipients.len(), 1);
+    assert_eq!(row.recipients[0].amount, 7_000);
+    assert!(!row.inputs.is_empty(), "the carried input set is recorded");
+    let input_total: u64 = row.inputs.iter().map(|i| i.amount).sum();
+    assert_eq!(
+        row.change_amount,
+        input_total - 7_000 - expected_fee,
+        "change is the exact remainder"
+    );
+    assert_eq!(row.state, shekyl_engine_state::SendState::Dispatched);
+
+    // I-5 spot check: the journal baseline equals the F14 lock's.
+    let lock = guard
+        .ledger
+        .ledger
+        .transfers()
+        .iter()
+        .find_map(|td| td.awaiting_confirmation.as_ref())
+        .expect("accept placed the F14 lock");
+    assert_eq!(row.lock_baseline, Some(lock.accepted_at_height));
+    assert_eq!(lock.tx_hash, txid);
+    guard
+        .ledger
+        .check_invariants()
+        .expect("I-5 equivalence holds after dispatch+accept");
+}
+
+/// PR-SJ-1: a terminal refusal keeps the row as failed-send history
+/// (SJ-DQ-3, rule 82) while the retention secret retires; a retryable
+/// refusal removes the row entirely — the dispatch is undone and the
+/// row is re-born at the next dispatch (mirroring the retention
+/// record's lifecycle).
+#[tokio::test]
+async fn terminal_keeps_the_journal_row_retryable_removes_it() {
+    // Terminal: row survives in TerminalRejected.
+    let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    let txid = canonical_tx_id(&built.tx_bytes);
+    pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedTerminal {
+        kind: TerminalErrorKind::FeeTooLow,
+    }));
+    pending
+        .submit(built.id, built.content_gen)
+        .await
+        .expect_err("terminal refusal");
+    {
+        let guard = pending.ledger.read();
+        let row = &guard.ledger.send_journal.rows[&txid.to_bytes()];
+        assert_eq!(
+            row.state,
+            shekyl_engine_state::SendState::TerminalRejected,
+            "failed-send history survives the secret's retirement"
+        );
+        assert!(
+            !guard.ledger.tx_meta.tx_keys.contains_key(&txid.to_bytes()),
+            "the retention secret retired"
+        );
+    }
+
+    // Retryable: row removed with the retention record.
+    let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    let txid = canonical_tx_id(&built.tx_bytes);
+    pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedRetryable {
+        cause: RetryableRejectCause::StaleRoot,
+    }));
+    pending
+        .submit(built.id, built.content_gen)
+        .await
+        .expect_err("retryable refusal");
+    let guard = pending.ledger.read();
+    assert!(
+        !guard
+            .ledger
+            .send_journal
+            .rows
+            .contains_key(&txid.to_bytes()),
+        "a retryable refusal undoes the dispatch: the row is removed"
+    );
 }
 
 /// PR 2c-1 — the real-tree closing milestone for archival bond-post

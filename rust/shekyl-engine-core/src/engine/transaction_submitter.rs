@@ -159,6 +159,22 @@ pub(crate) fn canonical_tx_id_opt(tx_bytes: &[u8]) -> Option<TxHash> {
         .map(|tx| TxHash::from_bytes(tx.hash()))
 }
 
+/// Realized fee of the wallet's own built bytes — the wire tx's
+/// cleartext `Ct::Fcmp` fee field, the same value the chain sees
+/// (`WALLET_SEND_RECORD.md` R-4: the journal records what happened,
+/// never what an estimator predicted). Same known-valid-blob contract
+/// as [`canonical_tx_id`].
+pub(crate) fn wire_fee(tx_bytes: &[u8]) -> u64 {
+    let tx = Transaction::from_bytes(tx_bytes)
+        .expect("wallet-built tx_bytes parse as canonical shekyl-wire");
+    match tx.ct {
+        shekyl_wire::Ct::Fcmp { fee, .. } => fee,
+        // The transfer dispatch path never builds a Null-ct shape; a
+        // fee-less shape honestly has fee 0.
+        shekyl_wire::Ct::Null(_) => 0,
+    }
+}
+
 /// [`canonical_tx_id_opt`] for the wallet's own built bytes, which are canonical wire by
 /// construction; a parse failure is a build-path defect (panics), not a runtime
 /// condition. Used wherever a *known-valid* tx blob needs its id.

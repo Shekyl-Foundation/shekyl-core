@@ -125,6 +125,7 @@ jobs:
             "pscan_cursor|rust/shekyl-engine-state/src/pscan_cursor.rs|PSCAN_CURSOR_VERSION"
             "pscan_state|rust/shekyl-engine-state/src/pscan_state.rs|PSCAN_STATE_VERSION"
             "pending_post_block|rust/shekyl-engine-state/src/pending_post_block.rs|PENDING_POST_VERSION"
+            "send_journal_block|rust/shekyl-engine-state/src/send_journal_block.rs|SEND_JOURNAL_BLOCK_VERSION"
           )
 
           # The PR's full diff, source-relative. `git diff --name-only

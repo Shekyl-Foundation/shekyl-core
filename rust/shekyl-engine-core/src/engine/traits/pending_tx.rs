@@ -417,4 +417,11 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// poisoning to a domain error instead. The asymmetry is
     /// deliberate; see the module-level rustdoc.
     fn outstanding(&self) -> usize;
+
+    /// Test-only: mint a dummy consumer-held reservation so tests can
+    /// exercise reservation-gated refusals (the `-29202` reservations
+    /// half) without a funded build harness. Default no-op; the Stage 1
+    /// implementor overrides.
+    #[cfg(test)]
+    fn test_hold_reservation(&self) {}
 }

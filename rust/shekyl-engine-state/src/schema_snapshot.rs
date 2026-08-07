@@ -10,6 +10,7 @@
 //! described in `docs/MID_REWIRE_HARDENING.md` §3.4 (hardening-pass commit
 //! 3.4). Every type that lands on disk — [`WalletLedger`] and the five inner
 //! blocks [`LedgerBlock`], [`BookkeepingBlock`], [`TxMetaBlock`],
+//! [`SendJournalBlock`],
 //! [`SyncStateBlock`], and [`StakingBlock`], plus the `P`-isolated
 //! [`PScanCursor`], [`PScanState`], and [`PendingPostBlock`] (separate sealed
 //! records, not wallet-ledger sub-blocks) —
@@ -99,8 +100,8 @@ mod tests {
     use crate::{
         bookkeeping_block::BookkeepingBlock, ledger_block::LedgerBlock,
         pending_post_block::PendingPostBlock, pscan_cursor::PScanCursor, pscan_state::PScanState,
-        staking_block::StakingBlock, sync_state_block::SyncStateBlock, tx_meta_block::TxMetaBlock,
-        wallet_ledger::WalletLedger,
+        send_journal_block::SendJournalBlock, staking_block::StakingBlock,
+        sync_state_block::SyncStateBlock, tx_meta_block::TxMetaBlock, wallet_ledger::WalletLedger,
     };
 
     /// Snapshot directory, relative to the `shekyl-engine-state` crate root.
@@ -241,6 +242,11 @@ mod tests {
     #[test]
     fn staking_block_schema_matches_snapshot() {
         check_or_update_snapshot("staking_block", <StakingBlock as Schema>::SCHEMA);
+    }
+
+    #[test]
+    fn send_journal_block_schema_snapshot() {
+        check_or_update_snapshot("send_journal_block", <SendJournalBlock as Schema>::SCHEMA);
     }
 
     #[test]

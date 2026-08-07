@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Added
+
+- **The wallet now keeps a durable record of its own sends.** A new
+  send-journal ledger block (`docs/design/WALLET_SEND_RECORD.md`,
+  PR-SJ-1) records, at dispatch, what a chain replay can never rebuild:
+  the realized recipients and per-recipient amounts (cryptographically
+  unrecoverable under CT), the realized wire fee, the selected input
+  set, and the change amount. Rows follow the tx through the daemon
+  verdict (accepted → lock baseline; terminal refusal → kept as
+  failed-send history; retryable refusal → dispatch undone) and through
+  refresh (confirmed at height; reorg returns the row to dispatched;
+  watchdog release marks it presumed-dead — a display state, keys
+  retained). The journal lives outside the scan-derived state, so it
+  survives `rescan_blockchain` by construction, and a new merge
+  post-pass re-derives the awaiting-confirmation locks from it during
+  replay.
+
+### Changed
+
+- **`rescan_blockchain` no longer refuses while a submitted transaction
+  is unconfirmed.** The `-29202 RESCAN_BLOCKED` refusal previously
+  covered two hazards; the unconfirmed-submitted-tx half is retired —
+  the send journal carries the dispatched input set across the wipe and
+  the locks re-derive during replay, so a never-mined transaction can
+  no longer wedge rescan permanently. The refusal remains for
+  outstanding pending-tx reservations (consumer-held or in-flight),
+  whose in-memory output locks index rows the wipe would destroy.
+
 ### Removed
 
 - **The transitional `rust/shekyl-engine-rpc` crate is deleted** (C++-retirement
