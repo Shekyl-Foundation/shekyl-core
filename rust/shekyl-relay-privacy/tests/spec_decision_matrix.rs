@@ -51,7 +51,8 @@ use shekyl_relay_privacy::derive::derive_embargo;
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
 use shekyl_relay_privacy::verify_cost::{
-    Provenance, ADOPTED_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH, SPEC_VERIFY_COST,
+    Provenance, TreeBasis, ADOPTED_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH, MAX_TABLE_INPUTS,
+    SPEC_VERIFY_COST,
 };
 
 /// Measured x86 verification cost at depth 2, `n_out = 2`, over the whole
@@ -300,10 +301,67 @@ fn scaling_the_spec_row_from_x86_would_underprovision_the_tail() {
 #[test]
 fn the_measured_surface_covers_the_whole_consensus_domain() {
     assert_eq!(
+        MAX_TABLE_INPUTS,
+        shekyl_fcmp::MAX_INPUTS,
+        "the production table's input domain must be the consensus domain; if \
+         the cap moves, `MAX_TABLE_INPUTS` moves with it and the new cells are \
+         measured on the spec machine, never extrapolated (§84.2) — otherwise \
+         `f_ms` refuses consensus-legal shapes as `InputCountOutsideDomain`, \
+         which reads as designed behaviour rather than a stale cap"
+    );
+    assert_eq!(
         F_X86_MS.len(),
         shekyl_fcmp::MAX_INPUTS,
         "the measured surface must cover the whole consensus domain; if the \
          cap moves, re-measure the new cells rather than extrapolating into \
          them — the tail is where §75's sorting lives"
+    );
+}
+
+/// §85.3 restated: every cell the production table publishes, with the value
+/// the spec machine actually produced.
+///
+/// This is the gate `verify_cost.rs` delegates to when it says its own
+/// structural tests do "NOT check the numbers are *correct* Pi measurements —
+/// that is what pinning them against §85.3 in the price-list gate is for".
+/// Nothing else pins the values: `adopted_hop_ms` adds 50 ms and rounds to
+/// `u32`, so `Ok(175)` holds for anything in `[124.5, 125.5)` and `Ok(449)`
+/// for anything in `[398.5, 399.5)` — a cell mis-transcribed as `125.4` would
+/// enter the shipped `DandelionParams` with every test still green.
+///
+/// The comparison is set-exhaustive rather than cell-by-cell so the 44 owed
+/// cells cannot land unpinned: a populated cell with no row here fails, and a
+/// row here with no populated cell fails.
+const SPEC_85_3_CELLS: [(usize, u32, f64, TreeBasis); 4] = [
+    (1, 2, 124.5, TreeBasis::Genesis),
+    (1, 7, 143.3, TreeBasis::SynthesizedProjection),
+    (8, 2, 399.2, TreeBasis::Genesis),
+    (8, 7, 791.9, TreeBasis::SynthesizedProjection),
+];
+
+#[test]
+fn every_published_cell_is_its_pinned_85_3_measurement() {
+    let published: Vec<(usize, u32, f64, TreeBasis)> = SPEC_VERIFY_COST
+        .populated()
+        .map(|(n_in, depth, cell)| {
+            assert_eq!(
+                cell.provenance,
+                Provenance::MeasuredPi4,
+                "a published cell ({n_in}-in, depth {depth}) is not a spec-machine \
+                 measurement; rule 76.4 forbids a scaled or reference-machine \
+                 number standing in the spec table"
+            );
+            (n_in, depth, cell.millis, cell.basis)
+        })
+        .collect();
+
+    assert_eq!(
+        published.as_slice(),
+        SPEC_85_3_CELLS.as_slice(),
+        "the production verification-cost table no longer matches §85.3. If a \
+         cell moved, it is a re-measurement: update §85.3 and this pin \
+         together. If a cell appeared, transcribe its measured value here — \
+         an unpinned cell is a number nobody checked feeding the shipped \
+         `hop`."
     );
 }

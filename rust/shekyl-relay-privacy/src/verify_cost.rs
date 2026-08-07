@@ -118,9 +118,14 @@ pub const MAX_TABLE_DEPTH: u32 = 7;
 /// `8` is consensus-enforced at three layers (`cryptonote_config.h`'s
 /// `FCMP_MAX_INPUTS_PER_TX`, the verify FFI, and `proof::verify` itself —
 /// §80.1), so the surface over `1..=8` **is** the specification, not a
-/// sample of it. The cross-crate pin against `shekyl_fcmp::MAX_INPUTS` lives
-/// in `tests/spec_decision_matrix.rs` (this crate does not depend on
-/// `shekyl-fcmp`; the dev-dependency does). If the cap moves: new cells are
+/// sample of it. The cross-crate pin lives in `tests/spec_decision_matrix.rs`
+/// (this crate does not depend on `shekyl-fcmp`; the dev-dependency does):
+/// `the_measured_surface_covers_the_whole_consensus_domain` asserts **this
+/// constant** against `shekyl_fcmp::MAX_INPUTS`, not just the diagnostic x86
+/// array beside it — a cap rise that moved only the array would leave
+/// `f_ms` refusing consensus-legal shapes as `InputCountOutsideDomain`, a
+/// refusal this module documents as *correct* and which would therefore read
+/// as design rather than a stale cap. If the cap moves: new cells are
 /// **measured** on the spec machine, never extrapolated (§84.2) — and until
 /// they are, the table refuses them, which is the correct interim.
 pub const MAX_TABLE_INPUTS: usize = 8;
