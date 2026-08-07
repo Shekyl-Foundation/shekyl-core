@@ -68,6 +68,10 @@ shekyl-logging = { path = "../shekyl-logging" }
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 # Live relay zone (RP-3a). The scheduling logic; this crate only marshals.
 shekyl-relay = { path = "../shekyl-relay" }
+# Levin payload compression (`levin_ffi.rs`): the C++ epee::levin compression
+# shim reaches the Rust-pinned libzstd through these exports, making it the
+# single zstd in the binary (system-libzstd link dropped).
+shekyl-levin = { path = "../shekyl-levin" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is

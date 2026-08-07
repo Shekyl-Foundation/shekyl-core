@@ -13,8 +13,8 @@ implementation:
 - whole-message builders for the notification / request / response flows;
 - dummy ("noise") messages and noise-shaped fragmentation for the white-noise
   feature over i2p/Tor;
-- the zstd `COMPRESSED` path (cargo feature `zstd`, default on — feature off
-  mirrors a C++ build without `HAVE_ZSTD`);
+- the zstd `COMPRESSED` path (cargo feature `zstd`, default on — this crate
+  owns the policy; feature off is only for pure-Rust unavailability tests);
 - an incremental stream reader (`BucketReader`) mirroring the
   `async_protocol_handler::handle_recv` state machine: partial reads,
   signature early-reject, packet-size limits (256 KiB pre-handshake / 100 MB
@@ -40,10 +40,15 @@ chunk boundaries, and noise sizes.
   separate, tracked work item.
 - **Not the connection stack.** No sockets, timeouts, invoke/response
   correlation, or peer management.
-- **Not wired.** The daemon's live path stays C++ (`contrib/epee`,
-  `src/p2p/`, `src/cryptonote_protocol/levin_notify.*`) until the scheduled
-  p2p cutover. This crate is the verified foundation that cutover starts
-  from.
+- **Framing not wired; compression is.** Since 2026-08-06 the daemon's
+  compression path runs through this crate: `contrib/epee`'s
+  `levin_compression.cpp` is a marshaling shim over the `shekyl_levin_*`
+  FFI (`rust/shekyl-ffi/src/levin_ffi.rs`), and the vendored libzstd here
+  is the binary's single zstd (no system libzstd, no `HAVE_ZSTD` gate).
+  The framing path — builders, `BucketReader` — stays C++
+  (`contrib/epee`, `src/p2p/`, `src/cryptonote_protocol/levin_notify.*`)
+  until the scheduled p2p cutover. This crate is the verified foundation
+  that cutover starts from.
 
 ## Documented divergences from the C++ oracle
 
@@ -60,8 +65,16 @@ decompressed payload by the packet limit in force, one latching the reader
 after a fatal error); one is emit-side, where `try_compress_message` returns
 malformed input unchanged rather than re-framing it.
 
-All but one are unreachable for a conforming sender. The exception is the
-post-inflate bound, which has a stated ~34 MB interop window against a C++
-peer; the crate docs give the numbers and the reasoning. Do not summarise
-that away — "no conforming sender trips any of them" is exactly the sort of
-unchecked blanket claim the single-location census exists to prevent.
+All are unreachable for a conforming sender, and **two stopped being
+divergences at all** at the 2026-08-06 compression cut — kept in the census
+as the record of how they closed, not deleted, because "the difference went
+away" is exactly the claim that rots into folklore once the entry is gone.
+The post-inflate bound was the one reachable exception (a ~34 MB interop
+window against a C++ peer) until the cut brought the C++ receiver onto the
+same `min(packet limit, per-command cap)` bound (entry 4); the emit-side
+strictness stopped being a difference when `epee::levin::
+try_compress_message` became a forwarding shim over this crate, so its
+guards — signature, one-message, and the noise class whose constant on-wire
+size cover traffic depends on — are now simply the emit path (entry 6). Do
+not summarise the census into blanket claims — checking
+each entry is exactly what the single-location census exists to force.

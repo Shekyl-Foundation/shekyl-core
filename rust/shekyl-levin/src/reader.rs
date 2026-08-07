@@ -51,7 +51,7 @@
 //!   becomes the message; reassembled inner messages are never recursively
 //!   reassembled;
 //! - a `COMPRESSED` payload is inflated before delivery and the flag
-//!   cleared (an error without the `zstd` feature — `HAVE_ZSTD`-off parity);
+//!   cleared (an error without the `zstd` feature — feature-off path);
 //! - classification: `S` + protocol version 1 → [`Received::Response`];
 //!   otherwise `Expect Response` non-zero → [`Received::Request`], zero →
 //!   [`Received::Notification`]. The version checked is the **logical
