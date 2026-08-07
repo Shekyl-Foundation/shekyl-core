@@ -1478,12 +1478,13 @@ sustainability is unaffected by the recalibration.
   - **Offline cold-signing** (`describe_transfer`, `sign_transfer`,
     `submit_transfer`, `transfer --do-not-relay`) — blocked on Phase 2d
     (`UnsignedTxBundle`/`SignedTxBundle` air-gapped bundles).
-  - **`engine_info` wallet-info display** — blocked on a native
-    wallet-info RPC method (the wallet2 `engine_info` aggregate has no
-    contract equivalent yet).
-  - **`history incoming` unattributed receives** — blocked on the FA-8
-    unattributed-receives RPC projection (the payment-request surface
-    landed in WI-RPC-1; the unattributed-view read did not).
+  - **`engine_info` wallet-info display** — **CLOSED 2026-08-07 (WI-RPC-4,
+    `feat/wallet-rpc-wi-rpc-4-thin`)**. Native `get_wallet_info` aggregates
+    live reads; CLI `engine_info` un-stubbed in the same PR.
+  - **`history incoming` unattributed receives** — **CLOSED 2026-08-07
+    (WI-RPC-4, `feat/wallet-rpc-wi-rpc-4-thin`)**. `get_transfers` gains an
+    `attribution` filter + `Transfer.attribution` projection; CLI
+    `history incoming --unattributed` un-stubbed in the same PR.
   **Reopen when** the named gating surface lands in `wallet_rpc.yaml` +
   `shekyl-wallet-rpc`; the re-evaluation shape is the landing PR wiring the
   CLI command in the same change (un-stubbing is part of the surface PR's

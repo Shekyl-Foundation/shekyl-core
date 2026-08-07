@@ -45,3 +45,44 @@ pub fn cmd_address(rpc: &RpcSession) {
         Err(e) => rpc.report("Failed to get address", &e),
     }
 }
+
+/// One-round-trip wallet summary over `get_wallet_info` (WI-RPC-4).
+pub fn cmd_engine_info(rpc: &RpcSession) {
+    if !require_open(rpc) {
+        return;
+    }
+    match rpc.call("get_wallet_info", json!({})) {
+        Ok(val) => {
+            let s = |name: &str| val.get(name).and_then(|v| v.as_str()).unwrap_or("?");
+            let i = |name: &str| val.get(name).and_then(|v| v.as_i64()).unwrap_or(0);
+            println!("Wallet: {}", s("name"));
+            println!("  Network:         {}", s("network"));
+            println!("  Capability:      {}", s("capability"));
+            println!("  Address:         {}", s("address"));
+            println!("  Wallet height:   {}", i("wallet_height"));
+            match val.get("daemon_height").and_then(|v| v.as_i64()) {
+                Some(h) => println!("  Daemon height:   {h}"),
+                None => println!("  Daemon height:   unavailable"),
+            }
+            println!("  Restore height:  {}", i("restore_height"));
+            if let Some(bal) = val.get("balance") {
+                let field = |name: &str| {
+                    bal.get(name)
+                        .and_then(|v| v.as_str())
+                        .map(format_amount_str)
+                        .unwrap_or_else(|| "?".to_owned())
+                };
+                println!("  Balance unlocked: {} SKL", field("unlocked"));
+                println!("  Balance liquid:   {} SKL", field("liquid"));
+            }
+            if let Some(staking) = val.get("staking") {
+                let enabled = staking
+                    .get("staking_enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                println!("  Staking enabled:  {enabled}");
+            }
+        }
+        Err(e) => rpc.report("Failed to get wallet info", &e),
+    }
+}

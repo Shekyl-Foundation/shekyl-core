@@ -3,10 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Read-only wallet JSON-RPC methods (Phase 4b).
+//! Read-only wallet JSON-RPC methods (Phase 4b / WI-RPC-4).
 //!
 //! `get_balance`, `get_primary_address`, `get_transfers`,
-//! `get_transfer_by_id`, `get_height`.
+//! `get_transfer_by_id`, `get_height`, `get_wallet_info`.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -15,11 +15,14 @@ use shekyl_scanner::LedgerBlockExt;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, parse_required_object, require_empty_object};
-use crate::project::{parse_transfer_id, transfer_state, transfer_view};
+use crate::project::{
+    atomic_units_string, attribution_matches, parse_transfer_id, transfer_state, transfer_view,
+};
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
-    GetBalanceResult, GetHeightResult, GetPrimaryAddressResult, GetTransferByIdResult,
-    GetTransfersResult, TransferDirection, TransferState, TransferView,
+    capability_mode_str, GetBalanceResult, GetHeightResult, GetPrimaryAddressResult,
+    GetStakedBalanceResult, GetTransferByIdResult, GetTransfersResult, GetWalletInfoResult,
+    ReceiveAttributionFilter, StakingInfoResult, TransferDirection, TransferState, TransferView,
 };
 
 /// Optional filters for `get_transfers`.
@@ -28,6 +31,7 @@ struct GetTransfersParams {
     direction: Option<TransferDirection>,
     state: Option<TransferState>,
     since_height: Option<i64>,
+    attribution: Option<ReceiveAttributionFilter>,
 }
 
 /// Params for `get_transfer_by_id`.
@@ -67,6 +71,108 @@ pub(crate) async fn get_primary_address(
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_primary_address: {e}")))
 }
 
+/// One-round-trip aggregate of live wallet reads (WI-RPC-4).
+///
+/// CLI `engine_info` is the sole production consumer at land time. No new
+/// Engine API — composes balance / height / address / staking_info under
+/// one engine hold (+ one daemon height probe).
+pub(crate) async fn get_wallet_info(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    require_empty_object(params, "get_wallet_info")?;
+
+    let (name, shared) = {
+        let state = tenants.lock().await;
+        let name = state
+            .tenant
+            .open_name()
+            .ok_or(WalletRpcError::WalletNotOpen)?
+            .to_owned();
+        let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
+        (name, engine)
+    };
+
+    let (identity, balance, staking, wallet_height, restore_height, daemon) = {
+        let engine = shared.read().await;
+        let wallet = engine.ledger();
+        let height = wallet.ledger.height();
+        let summary = wallet.ledger.balance(height);
+        let balance = GetBalanceResult::from(&summary);
+        let restore_height =
+            i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
+        let wallet_height = i64::try_from(height).unwrap_or(i64::MAX);
+        let address = engine
+            .primary_address()
+            .encode()
+            .map_err(|e| WalletRpcError::InternalError(format!("encode address: {e}")))?;
+        let capability = capability_mode_str(engine.capability()).to_owned();
+        let network = match engine.network() {
+            shekyl_engine_core::Network::Mainnet => "MAINNET",
+            shekyl_engine_core::Network::Testnet => "TESTNET",
+            shekyl_engine_core::Network::Stagenet => "STAGENET",
+        }
+        .to_owned();
+
+        let staking_view =
+            tokio::task::block_in_place(|| engine.staking_read_view()).map_err(|e| {
+                tracing::warn!(error = %e, "staking read view failed");
+                WalletRpcError::InternalError("staking state failed to load".into())
+            })?;
+        let staking = StakingInfoResult {
+            staking_enabled: staking_view.staking_enabled,
+            balance: GetStakedBalanceResult {
+                bonded_principal_confirmed: atomic_units_string(
+                    staking_view.balance.bonded_principal_confirmed,
+                ),
+                bonded_principal_pending: atomic_units_string(
+                    staking_view.balance.bonded_principal_pending,
+                ),
+                rewards_received_unspent: atomic_units_string(
+                    staking_view.balance.rewards_received_unspent,
+                ),
+            },
+            staked_output_count: i64::try_from(staking_view.outputs.len()).unwrap_or(i64::MAX),
+            pscan_synced_height: staking_view
+                .pscan_synced_height
+                .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
+        };
+
+        let daemon = engine.daemon().clone();
+        drop(wallet);
+
+        (
+            (name, capability, network, address),
+            balance,
+            staking,
+            wallet_height,
+            restore_height,
+            daemon,
+        )
+    };
+
+    let daemon_height = daemon
+        .get_height()
+        .await
+        .ok()
+        .map(|h| i64::try_from(h).unwrap_or(i64::MAX));
+
+    let (name, capability, network, address) = identity;
+    let result = GetWalletInfoResult {
+        name,
+        capability,
+        network,
+        address,
+        wallet_height,
+        daemon_height,
+        restore_height,
+        balance,
+        staking,
+    };
+    serde_json::to_value(result)
+        .map_err(|e| WalletRpcError::InternalError(format!("serialize get_wallet_info: {e}")))
+}
+
 pub(crate) async fn get_transfers(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
@@ -99,13 +205,18 @@ pub(crate) async fn get_transfers(
             if let Some(dir) = filters.direction {
                 // Ledger rows are receive-side outputs; every row projects as
                 // INCOMING until a dedicated outgoing-history surface lands
-                // (see `project::transfer_view`).
+                // (see `project::transfer_view` / WALLET_SEND_RECORD.md).
                 if dir != TransferDirection::Incoming {
                     return false;
                 }
             }
             if let Some(st) = filters.state {
                 if transfer_state(td) != st {
+                    return false;
+                }
+            }
+            if let Some(attr_f) = filters.attribution {
+                if !attribution_matches(&td.receive_attribution, attr_f) {
                     return false;
                 }
             }

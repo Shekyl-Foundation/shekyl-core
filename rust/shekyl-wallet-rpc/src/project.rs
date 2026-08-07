@@ -8,15 +8,16 @@
 use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
 use shekyl_engine_core::SubmitOutcome;
-use shekyl_engine_state::TransferDetails;
+use shekyl_engine_state::{DisputeReason, ReceiveAttribution, TransferDetails};
 use shekyl_scanner::BalanceSummary;
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 
 use crate::params::parse_hex32;
 use crate::types::{
-    BuildPendingTxResult, GetBalanceResult, RefreshResult, RescanBlockchainResult,
-    SubmitPendingTxResult, SubmitVerdictView, TransferDirection, TransferState, TransferView,
+    BuildPendingTxResult, GetBalanceResult, ReceiveAttributionKind, ReceiveAttributionView,
+    RefreshResult, RescanBlockchainResult, SubmitPendingTxResult, SubmitVerdictView,
+    TransferDirection, TransferState, TransferView,
 };
 
 /// Decimal string for OpenAPI `AtomicUnits`.
@@ -88,13 +89,73 @@ pub fn transfer_state(td: &TransferDetails) -> TransferState {
     }
 }
 
+/// Project ledger receive-attribution to the RPC view (no cleartext labels).
+pub fn attribution_view(attr: &ReceiveAttribution) -> ReceiveAttributionView {
+    match attr {
+        ReceiveAttribution::Unattributed => ReceiveAttributionView {
+            kind: ReceiveAttributionKind::Unattributed,
+            request_id: None,
+            echoed_label_hash: None,
+            dispute_reason: None,
+        },
+        ReceiveAttribution::Matched(id) => ReceiveAttributionView {
+            kind: ReceiveAttributionKind::Matched,
+            request_id: Some(id.as_u64().to_string()),
+            echoed_label_hash: None,
+            dispute_reason: None,
+        },
+        ReceiveAttribution::LabelUnknown { echoed_label_hash } => ReceiveAttributionView {
+            kind: ReceiveAttributionKind::LabelUnknown,
+            request_id: None,
+            echoed_label_hash: Some(hex::encode(echoed_label_hash)),
+            dispute_reason: None,
+        },
+        ReceiveAttribution::ManualMatch(id) => ReceiveAttributionView {
+            kind: ReceiveAttributionKind::ManualMatch,
+            request_id: Some(id.as_u64().to_string()),
+            echoed_label_hash: None,
+            dispute_reason: None,
+        },
+        ReceiveAttribution::Disputed { reason } => ReceiveAttributionView {
+            kind: ReceiveAttributionKind::Disputed,
+            request_id: None,
+            echoed_label_hash: None,
+            dispute_reason: Some(dispute_reason_string(reason)),
+        },
+    }
+}
+
+fn dispute_reason_string(reason: &DisputeReason) -> String {
+    match reason {
+        DisputeReason::WrongLabel => "WrongLabel".to_owned(),
+        DisputeReason::WrongAmount => "WrongAmount".to_owned(),
+        DisputeReason::Other(s) => format!("Other({s})"),
+    }
+}
+
+/// Whether a ledger row matches an optional attribution filter.
+pub fn attribution_matches(
+    attr: &ReceiveAttribution,
+    filter: crate::types::ReceiveAttributionFilter,
+) -> bool {
+    use crate::types::ReceiveAttributionFilter as F;
+    matches!(
+        (filter, attr),
+        (F::Unattributed, ReceiveAttribution::Unattributed)
+            | (F::Matched, ReceiveAttribution::Matched(_))
+            | (F::LabelUnknown, ReceiveAttribution::LabelUnknown { .. })
+            | (F::ManualMatch, ReceiveAttribution::ManualMatch(_))
+            | (F::Disputed, ReceiveAttribution::Disputed { .. })
+    )
+}
+
 /// Project a ledger transfer to the RPC view (no key material).
 pub fn transfer_view(td: &TransferDetails) -> TransferView {
     TransferView {
         id: transfer_id(td),
         // Ledger rows are receive-side outputs; outgoing spends are
         // reflected as Spent state on the same row until a dedicated
-        // outgoing history surface lands.
+        // outgoing history surface lands (WALLET_SEND_RECORD.md / PR-SJ-2).
         direction: TransferDirection::Incoming,
         tx_hash: td.tx_hash.to_string(),
         amount: atomic_units_string(td.amount()),
@@ -104,6 +165,7 @@ pub fn transfer_view(td: &TransferDetails) -> TransferView {
         spent_height: td
             .spent_height
             .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
+        attribution: attribution_view(&td.receive_attribution),
     }
 }
 
@@ -178,6 +240,48 @@ pub fn pending_tx_result(tx: &PendingTx) -> BuildPendingTxResult {
 mod tests {
     use super::*;
     use shekyl_units::AtomicUnits;
+
+    #[test]
+    fn attribution_view_and_filter_cover_fa8_kinds() {
+        use shekyl_engine_state::PaymentRequestId;
+
+        assert_eq!(
+            attribution_view(&ReceiveAttribution::Unattributed).kind,
+            ReceiveAttributionKind::Unattributed
+        );
+        assert!(attribution_matches(
+            &ReceiveAttribution::Unattributed,
+            crate::types::ReceiveAttributionFilter::Unattributed
+        ));
+        assert!(!attribution_matches(
+            &ReceiveAttribution::Unattributed,
+            crate::types::ReceiveAttributionFilter::Matched
+        ));
+
+        let matched = ReceiveAttribution::Matched(PaymentRequestId(42));
+        let view = attribution_view(&matched);
+        assert_eq!(view.kind, ReceiveAttributionKind::Matched);
+        assert_eq!(view.request_id.as_deref(), Some("42"));
+        assert!(attribution_matches(
+            &matched,
+            crate::types::ReceiveAttributionFilter::Matched
+        ));
+
+        let unknown = ReceiveAttribution::LabelUnknown {
+            echoed_label_hash: [0xab; 32],
+        };
+        let view = attribution_view(&unknown);
+        assert_eq!(view.kind, ReceiveAttributionKind::LabelUnknown);
+        let expected_hash = "ab".repeat(32);
+        assert_eq!(
+            view.echoed_label_hash.as_deref(),
+            Some(expected_hash.as_str())
+        );
+        assert!(attribution_matches(
+            &unknown,
+            crate::types::ReceiveAttributionFilter::LabelUnknown
+        ));
+    }
 
     #[test]
     fn parse_transfer_id_roundtrips_canonical_form() {
