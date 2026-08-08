@@ -1178,21 +1178,18 @@ TEST(archival_substrate_lmdb, epoch_prune_retires_witness_and_accrual_on_the_sam
 }
 
 // reset() is enumeration-based: it empties every named table in the
-// environment except the txpool keep-list, so a table added tomorrow
-// cannot silently survive a chain wipe (FOLLOWUPS "BlockchainLMDB::reset()
-// drops an INCOMPLETE table set" — 25 Shekyl tables survived the old
-// hand-written drop list, and a surviving row at a re-used height/hash
-// reads as the re-added block's state). The oracle here is the
-// environment itself (`get_table_entry_counts`, an mdb_stat walk of the
-// unnamed main DB), NOT the drop list — so this test also covers tables
-// that do not exist yet.
+// environment except the keep-list (table_survives_chain_reset), so a
+// table added tomorrow cannot silently survive a chain wipe (FOLLOWUPS
+// "BlockchainLMDB::reset() drops an INCOMPLETE table set"). The oracle
+// is the environment itself (get_table_entry_counts), not a drop list.
 TEST(archival_substrate_lmdb, reset_leaves_every_table_fresh)
 {
   TempLMDB fixture;
   // Overrides are private on the concrete class: populate through the
   // interface, and use the concrete `fixture.db` only for the
-  // LMDB-specific counts oracle.
+  // LMDB-specific counts oracle / keep-list predicate.
   BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
 
   // Populate a representative row in tables the 2026-08-07 audit found
   // surviving the old list: archival bond / segment / budget-accrual /
@@ -1212,31 +1209,56 @@ TEST(archival_substrate_lmdb, reset_leaves_every_table_fresh)
     shekyl::db::OutputIndex{7}, leaf.data());
   db.add_pending_tree_drain_entry(shekyl::db::BlockHeight{100},
     shekyl::db::OutputIndex{8}, shekyl::db::MaturityHeight{60}, leaf.data());
+
+  // Keep-list pin: populate both txpool tables so "survive" is observable.
+  // Without this, empty keep-list tables pass whether or not the keep
+  // predicate is wired.
+  {
+    const crypto::hash txid = make_hash(0x74);
+    cryptonote::txpool_tx_meta_t meta{};
+    meta.weight = 100;
+    meta.fee = 1;
+    meta.receive_time = 1;
+    const cryptonote::blobdata blob("\x02\x03", 2);
+    db.add_txpool_tx(txid, cryptonote::blobdata_ref{blob.data(), blob.size()}, meta);
+  }
   fixture.db.batch_stop();
 
   // Negative control: the oracle must SEE the populated rows, otherwise
   // the all-empty assertion below would pass vacuously on a broken walk.
-  const auto pre = fixture.db.get_table_entry_counts();
+  const auto pre = lmdb.get_table_entry_counts();
   size_t populated = 0;
+  size_t keep_populated = 0;
   for (const auto& entry : pre)
+  {
     if (entry.second > 0)
       ++populated;
+    if (BlockchainLMDB::table_survives_chain_reset(entry.first) && entry.second > 0)
+      ++keep_populated;
+  }
   EXPECT_GE(populated, 10u)
     << "oracle saw almost nothing before reset — populate or walk broken";
+  EXPECT_GE(keep_populated, 2u)
+    << "txpool keep-list tables must be populated before reset";
 
   // reset() runs its own top-level txn, so it must be called outside an
   // open batch.
   db.reset();
 
   // Fresh-database state: every table empty, except the version row in
-  // properties and the deliberately-kept txpool tables.
-  const auto post = fixture.db.get_table_entry_counts();
+  // properties and the deliberately-kept txpool tables (same counts).
+  const auto post = lmdb.get_table_entry_counts();
   EXPECT_EQ(post.size(), pre.size()) << "reset dropped a table handle";
   for (const auto& entry : post)
   {
     const std::string& name = entry.first;
-    if (name == "txpool_meta" || name == "txpool_blob")
+    if (BlockchainLMDB::table_survives_chain_reset(name))
+    {
+      ASSERT_TRUE(pre.count(name)) << "keep-list table missing pre-reset: " << name;
+      EXPECT_EQ(entry.second, pre.at(name))
+        << "keep-list table was wiped or altered: " << name;
       continue;
+    }
     if (name == "properties")
     {
       EXPECT_EQ(entry.second, 1u) << "properties must hold exactly the version row";
@@ -1247,10 +1269,10 @@ TEST(archival_substrate_lmdb, reset_leaves_every_table_fresh)
   fixture.db.batch_start();
 }
 
-// Credit-wire (credit-wire CW-2): reset_and_set_genesis_block wipes the chain in place (BlockchainLMDB::reset
-// drops the block tables, keeps the env). Both witness tables MUST be dropped there — reset re-uses
-// heights and block hashes, so a surviving witness row at a re-used key would be read by a
-// re-added block. (The height-keyed table from credit-wire CW-1b-ii was omitted from reset() until this fix.)
+// Credit-wire (credit-wire CW-2): reset() wipes chain state in place via
+// table enumeration (env kept). Both witness tables MUST be emptied —
+// reset re-uses heights and block hashes, so a surviving witness row at
+// a re-used key would be read by a re-added block.
 TEST(archival_substrate_lmdb, reset_drops_both_attestation_witness_tables)
 {
   TempLMDB fixture;

@@ -217,12 +217,19 @@ public:
 
   virtual void reset();
 
-  //! Row count of every named table in the environment, keyed by table
-  //! name (the unnamed main DB's keys). LMDB-concrete diagnostic — not
-  //! part of the `BlockchainDB` interface — that gives the reset test an
-  //! environment-level oracle instead of a hand-written table list.
-  //! Opens its own read snapshot: call with no batch active (or after
-  //! `batch_stop`) to see committed state.
+  //! True for named tables that `reset()` deliberately leaves alone.
+  //! The sole hand-maintained residual of the enumeration-based wipe
+  //! (txpool tables: mempool lifecycle is `tx_memory_pool`'s). Shared
+  //! with the reset test so the keep-list cannot drift from production.
+  static bool table_survives_chain_reset(const std::string& name);
+
+  //! `mdb_stat.ms_entries` of every named table, keyed by table name
+  //! (unnamed main DB keys). Counts data items, including each
+  //! key/value pair on `MDB_DUPSORT` tables — not unique keys only.
+  //! LMDB-concrete diagnostic, not part of `BlockchainDB`; gives the
+  //! reset test an environment-level oracle instead of a hand-written
+  //! table list. Opens its own read snapshot: call with no batch active
+  //! (or after `batch_stop`) to see committed state.
   std::map<std::string, uint64_t> get_table_entry_counts() const;
 
   virtual std::vector<std::string> get_filenames() const;

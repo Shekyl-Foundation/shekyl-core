@@ -346,6 +346,33 @@ inline void lmdb_db_open(MDB_txn* txn, const char* name, int flags, MDB_dbi& dbi
     throw0(cryptonote::DB_OPEN_FAILURE((lmdb_error(error_string + " : ", res) + std::string(" - you may want to start with --db-salvage")).c_str()));
 }
 
+//! Named tables that chain-reset deliberately leaves alone (mempool lifecycle).
+bool is_chain_reset_keep_table(const std::string& name)
+{
+  return name == LMDB_TXPOOL_META || name == LMDB_TXPOOL_BLOB;
+}
+
+//! Keys of the unnamed main DB are the environment's named-table names.
+std::vector<std::string> named_table_names(MDB_txn* txn)
+{
+  MDB_dbi main_dbi;
+  if (auto result = mdb_dbi_open(txn, NULL, 0, &main_dbi))
+    throw0(cryptonote::DB_ERROR(lmdb_error("Failed to open the unnamed main db: ", result).c_str()));
+
+  MDB_cursor *cur = nullptr;
+  if (auto result = mdb_cursor_open(txn, main_dbi, &cur))
+    throw0(cryptonote::DB_ERROR(lmdb_error("Failed to open a cursor over table names: ", result).c_str()));
+
+  std::vector<std::string> names;
+  MDB_val k, v;
+  int result;
+  while ((result = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) == 0)
+    names.emplace_back(static_cast<const char*>(k.mv_data), k.mv_size);
+  mdb_cursor_close(cur);
+  if (result != MDB_NOTFOUND)
+    throw0(cryptonote::DB_ERROR(lmdb_error("Failed to enumerate table names: ", result).c_str()));
+  return names;
+}
 
 }  // anonymous namespace
 
@@ -1883,48 +1910,22 @@ void BlockchainLMDB::reset()
   if (auto result = lmdb_txn_begin(m_env, NULL, 0, txn))
     throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
 
-  // reset()'s contract is fresh-database state: on an empty DB, open()
-  // seeds nothing but the version row, and every reader treats an empty
-  // table as "no state" (e.g. the curve-tree meta `leaf_count` read
-  // handles MDB_NOTFOUND as 0). The wipe therefore enumerates every
-  // named table in the environment — the unnamed main DB's keys ARE the
-  // table names — and empties each one, instead of maintaining a
-  // hand-written drop list. A hand-written list silently goes stale
-  // when a table is added: the 2026-08-07 audit (docs/FOLLOWUPS.md,
-  // "BlockchainLMDB::reset() drops an INCOMPLETE table set") found 25
-  // Shekyl tables surviving reset, and because reset re-uses heights
-  // and hashes, a surviving row at a re-used key reads as the re-added
-  // block's state — a stale curve_tree_root is consensus-wrong and
-  // silent. Enumeration forecloses that failure mode; a future table
-  // that must SURVIVE reset must be added to the keep-list below,
-  // consciously.
-  //
-  // Keep-list: the txpool tables only. The mempool has its own
-  // lifecycle (tx_memory_pool owns it end to end) and reset() has never
-  // touched it; wiping it here would change mempool behavior beyond
-  // this call's chain-state contract.
-  MDB_dbi main_dbi;
-  if (auto result = mdb_dbi_open(txn, NULL, 0, &main_dbi))
-    throw0(DB_ERROR(lmdb_error("Failed to open the unnamed main db: ", result).c_str()));
-  std::vector<std::string> table_names;
+  // Fresh-database state: enumerate every named table (main-DB keys ARE
+  // table names) and empty it, then re-seed the version row — the only
+  // thing open() writes on an empty DB. Readers treat empty tables as
+  // "no state" (e.g. curve-tree leaf_count: MDB_NOTFOUND → 0). A
+  // hand-written drop list goes stale when tables are added; the
+  // 2026-08-07 audit found 25 Shekyl tables surviving reset, and
+  // re-used heights/hashes made stale rows consensus-wrong and silent.
+  // Tables that must SURVIVE go through table_survives_chain_reset —
+  // the sole remaining hand-maintained residual (txpool only: mempool
+  // lifecycle is tx_memory_pool's; reset has never touched it).
+  for (const std::string &name : named_table_names(txn))
   {
-    MDB_cursor *cur;
-    if (auto result = mdb_cursor_open(txn, main_dbi, &cur))
-      throw0(DB_ERROR(lmdb_error("Failed to open a cursor over table names: ", result).c_str()));
-    MDB_val k, v;
-    int result;
-    while ((result = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) == 0)
-      table_names.emplace_back(static_cast<const char*>(k.mv_data), k.mv_size);
-    mdb_cursor_close(cur);
-    if (result != MDB_NOTFOUND)
-      throw0(DB_ERROR(lmdb_error("Failed to enumerate table names: ", result).c_str()));
-  }
-  for (const std::string &name : table_names)
-  {
-    if (name == LMDB_TXPOOL_META || name == LMDB_TXPOOL_BLOB)
+    if (is_chain_reset_keep_table(name))
       continue;
-    // For a name open() already opened, LMDB returns the existing
-    // handle, so the member DBI handles stay valid across the wipe.
+    // open() already opened each name; LMDB returns the existing DBI
+    // slot, so member handles stay valid across the wipe.
     MDB_dbi dbi;
     if (auto result = mdb_dbi_open(txn, name.c_str(), 0, &dbi))
       throw0(DB_ERROR(lmdb_error("Failed to open table " + name + " for reset: ", result).c_str()));
@@ -1943,6 +1944,11 @@ void BlockchainLMDB::reset()
   m_cum_count = 0;
 }
 
+bool BlockchainLMDB::table_survives_chain_reset(const std::string& name)
+{
+  return is_chain_reset_keep_table(name);
+}
+
 std::map<std::string, uint64_t> BlockchainLMDB::get_table_entry_counts() const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -1952,30 +1958,19 @@ std::map<std::string, uint64_t> BlockchainLMDB::get_table_entry_counts() const
   if (auto result = lmdb_txn_begin(m_env, NULL, MDB_RDONLY, txn))
     throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
 
-  MDB_dbi main_dbi;
-  if (auto result = mdb_dbi_open(txn, NULL, 0, &main_dbi))
-    throw0(DB_ERROR(lmdb_error("Failed to open the unnamed main db: ", result).c_str()));
   std::map<std::string, uint64_t> counts;
+  for (const std::string &name : named_table_names(txn))
   {
-    MDB_cursor *cur;
-    if (auto result = mdb_cursor_open(txn, main_dbi, &cur))
-      throw0(DB_ERROR(lmdb_error("Failed to open a cursor over table names: ", result).c_str()));
-    MDB_val k, v;
-    int result;
-    while ((result = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) == 0)
-    {
-      const std::string name(static_cast<const char*>(k.mv_data), k.mv_size);
-      MDB_dbi dbi;
-      if (auto open_result = mdb_dbi_open(txn, name.c_str(), 0, &dbi))
-        throw0(DB_ERROR(lmdb_error("Failed to open table " + name + ": ", open_result).c_str()));
-      MDB_stat stat;
-      if (auto stat_result = mdb_stat(txn, dbi, &stat))
-        throw0(DB_ERROR(lmdb_error("Failed to stat table " + name + ": ", stat_result).c_str()));
-      counts[name] = stat.ms_entries;
-    }
-    mdb_cursor_close(cur);
-    if (result != MDB_NOTFOUND)
-      throw0(DB_ERROR(lmdb_error("Failed to enumerate table names: ", result).c_str()));
+    MDB_dbi dbi;
+    if (auto open_result = mdb_dbi_open(txn, name.c_str(), 0, &dbi))
+      throw0(DB_ERROR(lmdb_error("Failed to open table " + name + ": ", open_result).c_str()));
+    MDB_stat stat;
+    if (auto stat_result = mdb_stat(txn, dbi, &stat))
+      throw0(DB_ERROR(lmdb_error("Failed to stat table " + name + ": ", stat_result).c_str()));
+    // mdb_stat.ms_entries: total data items (lmdb.h). For MDB_DUPSORT
+    // tables each key/value pair is one item — md_entries is incremented
+    // per successful data insert (see mdb_cursor_put), not unique keys.
+    counts[name] = stat.ms_entries;
   }
 
   txn.commit();
