@@ -1236,6 +1236,47 @@ sustainability is unaffected by the recalibration.
   deliberately separate (opposed threat models). No shared redb-helpers
   crate. **Target: V3.0** (with DRS-E3 / curve client).
 
+- **`BlockchainLMDB::reset()` drops an INCOMPLETE table set — stale Shekyl
+  state under an in-place wipe (added 2026-08-04 from credit-wire PR-B2
+  3dee50259; corrected + deduplicated 2026-08-07 after a full drop-list
+  audit).** `reset()` (`src/blockchain_db/lmdb/db_lmdb.cpp`), reached only
+  through `Blockchain::reset_and_set_genesis_block`, wipes in place (drops
+  tables, keeps the env) but its `mdb_drop` list covers only the core
+  block/tx/output tables plus the two credit-wire witness tables PR-B2
+  added. Audited against `db_lmdb.h` (2026-08-07): **29 of 48 tables are
+  not dropped, 25 of them Shekyl-owned** — the whole curve-tree family
+  (`m_curve_tree_roots`/`leaves`/`layers`/`meta`/`checkpoints`,
+  `m_output_to_leaf`, `m_leaf_to_output`, `m_pending_tree_leaves`,
+  `m_pending_tree_drain`), the whole archival family (`m_archival_bond`
+  with its holdings-update/rebond/unbond logs, `m_archival_budget` and
+  `m_archival_budget_accrual`, `m_archival_emission_claim_log`,
+  `m_archival_epoch_close_log`, `m_archival_r_market`,
+  `m_archival_serve_credit`, `m_archival_shard_segment`,
+  `m_archival_sigma_work`, `m_archival_slash_applied`,
+  `m_archival_slash_log`), and `m_block_burn` with
+  `m_block_pending_additions`. The remaining four absentees are
+  inherited-by-design: `m_alt_blocks` is dropped by the caller
+  (`drop_alt_blocks()`), the two txpool tables have their own lifecycle,
+  and `m_txs` is the legacy monolith table. Because reset re-uses heights
+  and hashes, a surviving row at a re-used key reads as *that* block's
+  state: a stale `curve_tree_root` is consensus-wrong and **silent** (no
+  divergence detector exists for the curve-tree family), while the
+  segment-counter family at least fails loudly (#264's O(1) reader
+  divergence abort fires on the next epoch close). Reachability
+  (verified 2026-08-07): **no production or CLI flow calls
+  `reset_and_set_genesis_block`** — the only callers are the core-tests
+  harness (`tests/core_tests/chaingen.h`, fresh per-test DBs) and the
+  CW-2 unit test driving `db.reset()` directly — so the hazard is latent
+  until any tool adopts in-place reset, and must be closed before one
+  does. Fix shape: per-table reset semantics (blanket-drop vs. re-seed —
+  `m_properties` already re-seeds its version row, and `m_curve_tree_meta`
+  likely needs re-init, which is why this is not a mechanical 25-line
+  diff), extending the CW-2 test seat (`archival_substrate_lmdb.cpp`
+  `reset_drops_both_attestation_witness_tables`). Supersedes the #264
+  "follow-on surfaced by the counter" paragraph (single owner). Its own
+  unit. **Target: V3.0** (pre-genesis: consensus-state correctness on
+  chain reset).
+
 - **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with
   reopen (d).** The sliding-window m-of-n itself is **BUILT** (PR #368,
   `shekyl-archival-retention/src/failure_window.rs`; `FAILURE_WINDOW_M/N`
@@ -11012,16 +11053,14 @@ one place to confirm each item's relationship to the wallet stack.
   freeze/pop/re-apply. Tripwire: cursor accounting 4→5, new invariant 6 pins the
   counter's mutation surface. Spec: `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4,
   M1 §11.11.
-  **Follow-on surfaced by the counter (target: V3.0 pre-genesis):**
-  `BlockchainLMDB::reset()` predates the FCMP/archival substrate — it drops the
-  legacy tables (including `m_properties`, so the counter resets to absent ⇒ 0)
-  but none of the curve-tree or archival tables (`m_archival_shard_segment`,
-  `m_curve_tree_*`, close-log, sigma-work, …). A `reset()` on a chain with frozen
-  segments leaves orphaned rows that the counter no longer accounts for — the
-  O(1) reader's divergence abort would fire on the next close (loud, so the gap
-  cannot corrupt silently, but the fix belongs in `reset()`: drop every live
-  table). Out of #264's scope (`reset()` is not on the connect/pop/close path);
-  fix as its own small PR.
+  **Follow-on surfaced by the counter:** `BlockchainLMDB::reset()` does not
+  drop the curve-tree/archival tables, so a reset chain leaves rows the
+  counter no longer accounts for — the O(1) reader's divergence abort fires
+  on the next close (loud for this family; the curve-tree family has no
+  such detector). Tracked since 2026-08-07 as its own entry — see
+  "**`BlockchainLMDB::reset()` drops an INCOMPLETE table set**" above
+  (single owner; the full 29-table audit and reachability answer live
+  there).
   **IMPLEMENTED (2026-07-06, `feat/segment-freeze-pipeline`, steps 1–7 of doc §7):**
   constants + Rust helpers, FFI exports, connect/pop hooks in `db_lmdb`,
   `archival_shard_leaf` deletion with challenge-path rewire to `m_curve_tree_leaves`,
