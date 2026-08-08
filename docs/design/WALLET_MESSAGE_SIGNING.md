@@ -746,40 +746,73 @@ corruption from mismatch in the error detail. Signing is **hedged**
 (fips204/205 default; side-channel margin; signature-byte
 reproducibility is not a contract anyone needs).
 
-**SM-R-8 (rules SM-DQ-8) — the algorithm: LEAD = (B-s)
-SLH-DSA-192s, pk-inline.** The reasoning, stated for ratification
-rather than assumed:
+**SM-R-8 (rules SM-DQ-8) — the algorithm: SLH-DSA-192s, pk-inline,
+fork (ii). RATIFIED 2026-08-08**, subject to three pins, all
+discharged below. The reasoning as ratified:
 
-- *Assumption diversity is the mission-hierarchy argument.* The chain
-  is already triple-exposed to structured lattices (ML-KEM-768
-  addresses, ML-DSA-65 tx auth, ML-DSA-65 archival identities). The
-  one new frozen surface where we can buy hash-only conservatism —
-  the assumption class NIST's own diversification onramp exists to
-  hedge toward — is this one, and it costs no block space.
-- *The measured floor costs are acceptable for this surface.* ~4.3 s
-  per signing session on a Pi 4 for a deliberate, low-frequency,
-  human-initiated operation, disclosed in the UX; verification —
-  the side third parties run — is 3.4 ms. If UX testing before the
-  freeze finds 4 s intolerable, **192f is the pre-priced fallback**
-  (171 ms floor signing at 35.7 KB): flipping s→f before freeze is a
-  parameter-set change, not a redesign.
-- *16.3 KB vs 5.3 KB does not change the interface class.* Both are
-  paste-a-blob, neither is read-over-the-phone; size stopped being
-  the discriminator when the classical-only option died in pass 1.
+- *The lattice exposures are correlated, and this is the last
+  uncorrelated surface* (sharpened at ratification). ML-KEM-768 and
+  ML-DSA-65 are both Module-LWE/Module-SIS: a structural break in
+  module lattices plausibly hits addresses, tx auth, and archival
+  identities *simultaneously*. Message signing is the only remaining
+  frozen surface where that correlation can be broken — and after
+  genesis it cannot be. This is not "adding diversity"; it is
+  **declining to put the last remaining uncorrelated surface into
+  the same basket**.
+- *The measured floor costs are acceptable, and the asymmetry is the
+  number that justifies `s`.* ~4.3 s per signing session on the Pi 4
+  floor (derive + keygen + sign — **pin 1 discharged:** the bench
+  timed keygen 415 ms and sign 3.83 s as separate phases; the
+  session figure is their composition, and the HKDF derive adds
+  microseconds) against **3.4 ms verification — a ~1,265×
+  asymmetry**. Signing happens once, by a motivated user, with a
+  spinner; verification is unbounded, by third parties, on hardware
+  we do not control, and 3.4 ms on a Pi 4 is free everywhere that
+  matters. The blob size (21.7 KB armored) is a settled consequence
+  of SM-R-5's single-line armoring, not independent support for this
+  ruling.
 - *pk-inline (fork ii) deletes permanent machinery.* No `alg_id`
   registry to govern forever, no tag-strength argument, no
   key-in-blob — the smallest possible genesis-frozen surface, which
   is the right direction for a format that must outlast the team.
-- *The dependency terms are pre-audited.* `fips205` exact-pin with
-  the fips203 DummyRng rationale; KATs pin `keygen_with_seeds`
-  end-to-end (§SM-DQ-8 pass-2 audit note).
+- *The dependency terms are pre-audited, and the implementation risk
+  is stated separately from the algorithm's* (**pin 3 discharged**).
+  The algorithm is FIPS 205 final. The implementation is
+  `fips205 0.4.1`: young, same authorship and vintage as the
+  `fips203` crate whose `DummyRng` hazard forced our exact-pin;
+  **no external audit is known**; constant-time assurance is
+  source-level only (manual review + `dudect` per its README, which
+  itself says "should be considered experimental"); it does ship
+  NIST ACVP vector tests in-tree. Adoption terms: exact-pin with the
+  fips203 rationale, and PR-SM-1's KATs **independently cross-check
+  `keygen_with_seeds` and sign/verify against NIST ACVP vectors
+  imported into our own `test_vectors/`** — not by trusting the
+  crate's copies. That pre-freeze conformance check forecloses the
+  one implementation-defect branch that could not be fixed later: a
+  nonconforming keygen would commit nonconforming public keys into
+  frozen addresses, and a corrected crate could never re-derive
+  them. Post-genesis sign/verify defects, by contrast, are patchable
+  without format impact (the surface is off-chain and conforming
+  keys are unaffected) — which is why the reopen clause below covers
+  cryptanalysis and not implementation defects: a defect never
+  requires reopening the *algorithm*, only fixing the code, once
+  the committed keys are proven conforming before the freeze.
+- **Pin 2 discharged — the 192f fallback has a dated owner.** "If UX
+  testing finds 4 s intolerable" is now a `RELEASE_CHECKLIST.md` row
+  (owner: R. Dawson, release owner) that must close **before the
+  genesis format-freeze row it sits beside**: post-freeze, s→f
+  changes the meaning of the frozen pk field (same 48-byte length,
+  different scheme definition) — a format change even at equal
+  length. An undated trigger would have recreated exactly the rushed
+  call the pre-pricing was done to avoid.
 
-Rule-21 clause if ratified: reopen the algorithm (as a new address
+Rule-21 clause as ratified: reopen the algorithm (as a new address
 version, accepted cost of fork (ii)) only on cryptanalytic weakening
 of SHA-2/SHAKE at the SLH-DSA security argument level, or a NIST
 onramp standard offering ≥4× signature-size reduction at equal
 assumption conservatism — not on lattice-scheme improvements, which
-this choice deliberately declines to track.
+this choice deliberately declines to track, and not on implementation
+defects, which are handled above without reopening the format.
 
 **Ratification order.** SM-R-2..6 are independent of the genesis
 lane. SM-R-8 and the genesis lane's fork are coupled: ratifying

@@ -93,14 +93,20 @@ sustainability is unaffected by the recalibration.
     the interactive surface ships a coin with no PQ ownership proof of
     any kind, permanently. This is a precondition on the fork, not a
     follow-up.
-  The round's own algorithm proposal (SM-DQ-8, pending ratification)
-  leads with SLH-DSA-192s, which couples to fork (ii); if the
-  ratification instead lands ML-DSA-65, the lane decides fork (i).
-  **Named blocker for message-signing implementation:** PR-SM-1 cannot
-  freeze a preimage that binds the classical segment until this rules,
-  because the segment's byte layout is the decision. Carrier row in
-  `RELEASE_CHECKLIST.md` (pre-launch format freeze). *Target: V3.0,
-  before the genesis format freeze.*
+  **COLLAPSED 2026-08-08 — SM-R-8 RATIFIED (SLH-DSA-192s, pk-inline):
+  fork (ii) is selected.** The lane's decision reduces from "ratify a
+  commitment scheme" to a **freeze-window sign-off on a 48-byte
+  fourth field** in the classical segment — no commitment scheme, no
+  `alg_id` registry, no tag-strength question. Fork (i) is moot
+  unless SM-R-8's rule-21 clause reopens; fork (iii) is moot, its
+  SM-R-2 precondition retained above for the record. Remaining lane
+  work: the v2 layout sign-off + `ADDRESS_DERIVATION_V1`-successor
+  test vectors, with the 192f UX gate (dated, owned — see
+  `RELEASE_CHECKLIST.md`) closing first. **Named blocker for
+  message-signing implementation:** PR-SM-1 cannot freeze the
+  preimage until the layout sign-off lands, because the bound
+  classical-segment byte layout is the remaining decision. *Target:
+  V3.0, before the genesis format freeze.*
 
 - **FFI *signature* drift has no remedy, unlike FFI *constant* drift
   (added 2026-07-29, from RP-3b step 2; measurement attached).**
