@@ -1,0 +1,13 @@
+{
+ "description": "NIST ACVP demo vectors for SLH-DSA-SHA2-192s \u2014 the conformance subset PR-SM-1 pins keygen_with_seeds and sign/verify against (WALLET_MESSAGE_SIGNING.md SM-R-8 adoption terms).",
+ "source_repository": "https://github.com/usnistgov/ACVP-Server",
+ "source_commit": "a7f283cdc87d2d6dd93c1bac59e5622c5f9f8324",
+ "source_files": {
+  "SLH-DSA-keyGen-FIPS205/internalProjection.json": "d7c53a1b6450087047b57aae83a5a51a0ac89ecdb23ebe071e83fbb69ae9d920",
+  "SLH-DSA-sigGen-FIPS205/internalProjection.json": "62b42e7c27fda5de8a94aba2943ae413b59b6ea08141f3bc035b1eceae235dba",
+  "SLH-DSA-sigVer-FIPS205/internalProjection.json": "a013fc2104f4ed4799d96d51141f65b965969b2cf10646626a021b6d456ce792"
+ },
+ "retrieved": "2026-08-08",
+ "selection": "parameterSet=SLH-DSA-SHA2-192s only; keygen: all 10 AFT cases; siggen: external/pure/deterministic group, one empty-context + one non-empty-context case; sigver: external/pure group, one passing case + three failing cases with distinct reasons.",
+ "consumed_by": "rust/shekyl-crypto-pq/tests/acvp_slh_dsa_192s.rs"
+}
