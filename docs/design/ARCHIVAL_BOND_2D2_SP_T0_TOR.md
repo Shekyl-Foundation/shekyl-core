@@ -209,18 +209,68 @@ evaporates), so SP-T0c's definition of done — "the bundle **and** the checklis
 (Per-target Guix coverage for macOS/Windows is a packaging detail to work; reuse-don't-own
 bounds the cost regardless.)
 
-**Current pin (bumped 2026-07-01, SP-T0c):** verified
-`tor-expert-bundle-linux-x86_64-15.0.17.tar.gz` (Tor `0.4.9.11`) — tarball SHA256
-`4621e1573dbd6d5d6f4bb4121b37652a8b7204ae5abea600fb6b9e05e5695696`, GPG-signed by the **Tor Browser
+**Current pin (bumped 2026-08-06):** verified
+`tor-expert-bundle-linux-x86_64-15.0.19.tar.gz` (Tor `0.4.9.11`) — tarball SHA256
+`5a8f19f5f119b5fa2a8fd799a3a532e3236ad36164241800d6302e32f0e1c2a9`, GPG-signed by the **Tor Browser
 Developers** key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (signing subkey
 `CAAE408AEBE2288E96FC5D5E157432CF78A65729`). The durable pin is *that signing key*, not just this one
 hash — a version bump re-verifies the new bundle's signature against the same fingerprint, then records
 the new binary hash. The **runtime gate is the extracted binary's** SHA256
 `660a8c54d0c9341f85f0a7f827b6bde640e7db14dfde44d3856979d4ee6d16fb` (a bare binary carries no signature),
-recorded in `rust/shekyl-tor/src/binary.rs::CURRENT_PIN`. (Superseded pin, recorded 2026-06-29: bundle
-`15.0.16` / Tor `0.4.9.9`, tarball SHA256
-`71c838387ec0019a7c7f9f60a5538f7fcae0521a29924c992b84189c9ec4d7f1` — kept so the earlier verification
-claim stays independently checkable.) Dev/CI integration KATs are `#[ignore]`-gated off the unit lane
+recorded in `rust/shekyl-tor/src/binary.rs::CURRENT_PIN` — and it is **unchanged across this bump**:
+15.0.17 and 15.0.19 both ship Tor `0.4.9.11` and the extracted binary is byte identical, so two stable
+bundle releases moved the label and not the gate. That is this paragraph's own claim observed in
+practice — the bundle version and the binary digest are independent facts, and reading a stale label as
+a stale gate would be the second-source-of-truth error the design avoids. (Superseded pins, kept so the
+earlier verification claims stay independently checkable: **15.0.17** recorded 2026-07-01, tarball SHA256
+`4621e1573dbd6d5d6f4bb4121b37652a8b7204ae5abea600fb6b9e05e5695696`, same extracted-binary digest;
+**15.0.16** recorded 2026-06-29 / Tor `0.4.9.9`, tarball SHA256
+`71c838387ec0019a7c7f9f60a5538f7fcae0521a29924c992b84189c9ec4d7f1`.)
+
+**No `linux-aarch64` pin exists, and the reason is upstream.** The Tor Project does **not** publish a
+`linux-aarch64` Expert Bundle on the stable line: enumerated at 15.0.17 and at 15.0.19, the Linux
+targets are `linux-i686` and `linux-x86_64` only, and the aarch64 builds are `android-aarch64` (Bionic)
+and `macos-aarch64` (Mach-O) — neither of which runs on a 64-bit Linux ARM host. `linux-aarch64`
+appears first in the **16.0a1 alpha** (`tor-expert-bundle-linux-aarch64-16.0a1.tar.gz`, 2025-12-15),
+which verifies Good under the same signing key but is an alpha, and the checklist pins from *stable*.
+
+Consequence, recorded because it is load-bearing elsewhere:
+[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc) names a Pi 4 as
+the minimum supported device, and that device **cannot currently obtain a `VerifiedTorBinary`** —
+`CURRENT_PIN` is `None` off x86_64 and `discover_and_verify` fails closed with `Unpinned`, which is the
+correct behaviour. **This is a fact about Tor's release matrix, not a defect in either decision**, and
+it resolves when 16.0 goes stable. Until then an aarch64 host may be given the alpha binary through
+`SHEKYL_TEST_PINNED_TOR_BINARY` for **measurement only**; it must not be promoted into `CURRENT_PIN`,
+because pinning an alpha on a mission-#1 security precondition is a different decision from bumping a
+stable pin.
+
+### Tor binaries used for the transit measurement (not shipped)
+
+The Tor-transit arm of `DAEMON_RELAY_PRIVACY.md`'s `hop` work compares an x86_64 host against the rule-76
+floor device. **Both arms run the same Tor build**, because a cross-arm comparison must hold everything
+but the manipulated variable — the `peers`-pin discipline (`DAEMON_RELAY_PRIVACY.md` §69.2) applied to
+the transport instead of the model.
+
+| arm | bundle | tor | extracted-binary SHA256 |
+| --- | --- | --- | --- |
+| x86_64 | `tor-expert-bundle-linux-x86_64-16.0a1.tar.gz` | `0.4.9.3-alpha` (`git-1ee22f8f9a98719d`) | `fa6351c81220648e5fc4c02b8e7bddd1b4f545c7077c5fe3448d87da16e660d9` |
+| aarch64 (Pi 4) | `tor-expert-bundle-linux-aarch64-16.0a1.tar.gz` | `0.4.9.3-alpha` (`git-1ee22f8f9a98719d`) | `1a84311bc52504489d63620581905ea8d924737096d1772bcea97fc82f421aa1` |
+
+Both GPG-verified **Good** against `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` before extraction; the
+aarch64 binary's digest was re-checked **on the Pi** after transfer, so the thing measured is the thing
+verified.
+
+**Why the alpha, and why on both arms.** `linux-aarch64` exists only in the 16.0a1 line, so the floor
+device has no stable build to run. Using the alpha there and stable on x86 would have measured
+**hardware plus Tor version** — and the confound is not academic: **16.0a1 ships tor `0.4.9.3-alpha`,
+which is OLDER than the stable line's `0.4.9.11`**, so the mismatch runs backwards from what "alpha"
+suggests. Matching both arms to 16.0a1 removes it.
+
+**What this costs, stated so the result is not over-read:** the measurement is taken on a Tor version
+Shekyl does **not** ship. It is therefore valid for the question it was built to answer — *does
+`transit_tor` contain a hardware-dependent term?*, which is a comparison **between the arms** — and not
+as an absolute transit figure for the shipped configuration. Production remains pinned to the stable
+`15.0.19` binary on x86_64; nothing here changes `CURRENT_PIN`. Dev/CI integration KATs are `#[ignore]`-gated off the unit lane
 and **hard-fail** (never silently skip) when run without their binary: the lifecycle tests take **any**
 tor via `SHEKYL_TEST_TOR_BINARY`; the pin-match KAT takes **the pinned** tor via the deliberately
 distinct `SHEKYL_TEST_PINNED_TOR_BINARY`, so the two contracts cannot collide. The unit gate and
