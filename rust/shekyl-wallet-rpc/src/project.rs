@@ -623,6 +623,16 @@ mod tests {
             outgoing_transfer_state(&sample_send_record(SendState::TerminalRejected)),
             TransferState::Failed
         );
+        // ABANDONED is its own value: collapsing it into DROPPED would
+        // claim confirmed-absent evidence the wallet never observed.
+        assert_eq!(
+            outgoing_transfer_state(&sample_send_record(SendState::Abandoned)),
+            TransferState::Abandoned
+        );
+        assert_eq!(
+            serde_json::to_value(TransferState::Abandoned).expect("serialize"),
+            serde_json::json!("ABANDONED")
+        );
     }
 
     /// Only a refresh-observed confirmation yields a height. The
@@ -640,6 +650,7 @@ mod tests {
             SendState::Dispatched,
             SendState::TerminalRejected,
             SendState::PresumedDead,
+            SendState::Abandoned,
         ] {
             assert_eq!(
                 outgoing_block_height(&sample_send_record(unmined)),

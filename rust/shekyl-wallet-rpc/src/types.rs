@@ -537,6 +537,15 @@ pub struct SubmitPendingTxResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DiscardPendingTxResult {}
 
+/// `abandon_tx` result (PR-SJ-3): the row's resulting state — always
+/// `ABANDONED` on success (fresh abandon and idempotent re-abandon
+/// answer identically, SJ-DQ-8).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AbandonTxResult {
+    /// Resulting journal state, in `get_transfers` vocabulary.
+    pub state: TransferState,
+}
+
 /// Payment-request lifecycle state (WI-RPC-1 receiving).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

@@ -62,6 +62,10 @@ pub enum WalletRpcErrorCode {
     SubmitRejected = -29106,
     /// Submit: transport-level ambiguity.
     SubmitAmbiguous = -29107,
+    /// `abandon_tx`: the send's state forbids abandoning (`CONFIRMED`
+    /// is on chain; `FAILED` was never relayed). A state conflict, not
+    /// a bad request — refresh the view and re-decide.
+    AbandonStateForbids = -29108,
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200,
     /// Refresh / rescan / proofs: daemon RPC failed.
@@ -204,6 +208,14 @@ pub enum WalletRpcError {
     /// Submit: transport-level ambiguity.
     #[error("submit ambiguous")]
     SubmitAmbiguous,
+    /// `abandon_tx`: the send's current state forbids abandoning.
+    /// `state` is the projected `TransferState` string so the client
+    /// hears the same vocabulary `get_transfers` speaks.
+    #[error("cannot abandon: the send is {state}")]
+    AbandonStateForbids {
+        /// Projected `TransferState` of the refusing row.
+        state: &'static str,
+    },
     /// `check_*`: proof string failed Bech32m decode, carried the wrong
     /// HRP, its wire framing did not parse, or it exceeds the section's
     /// size caps. The client message is deliberately stable and
@@ -273,6 +285,7 @@ impl WalletRpcError {
             Self::ContentGenMismatch { .. } => WalletRpcErrorCode::ContentGenMismatch,
             Self::SubmitRejected { .. } => WalletRpcErrorCode::SubmitRejected,
             Self::SubmitAmbiguous => WalletRpcErrorCode::SubmitAmbiguous,
+            Self::AbandonStateForbids { .. } => WalletRpcErrorCode::AbandonStateForbids,
             Self::ProofMalformed => WalletRpcErrorCode::ProofMalformed,
             Self::ProofTxSecretUnavailable => WalletRpcErrorCode::ProofTxSecretUnavailable,
             Self::ProofNoProvableOutputs => WalletRpcErrorCode::ProofNoProvableOutputs,
@@ -294,6 +307,7 @@ impl WalletRpcError {
     pub fn data(&self) -> Option<Value> {
         match self {
             Self::CapabilityForbids { capability } => Some(json!({ "capability": capability })),
+            Self::AbandonStateForbids { state } => Some(json!({ "state": state })),
             Self::ContentGenMismatch { content_gen } => Some(json!({ "content_gen": content_gen })),
             Self::SubmitRejected { data } => Some(data.clone()),
             Self::StakeNotReady { detail } | Self::RescanBlocked { detail } => {
@@ -540,6 +554,33 @@ fn retryable_to_reject_cause(cause: RetryableRejectCause) -> RejectCause {
     }
 }
 
+impl From<shekyl_engine_core::AbandonTxError> for WalletRpcError {
+    fn from(err: shekyl_engine_core::AbandonTxError) -> Self {
+        use shekyl_engine_core::AbandonTxError as E;
+        use shekyl_engine_state::SendState;
+        match err {
+            // Same answer shape as `get_transfer_by_id` for an id the
+            // wallet does not know (rule 82: "no send record" is the
+            // truth, not an internal error).
+            E::NotFound => Self::UnknownTransferId,
+            E::StateForbids { state } => Self::AbandonStateForbids {
+                // Project through the `get_transfers` vocabulary so the
+                // refusal names the state the client already sees.
+                state: match state {
+                    SendState::Dispatched => "PENDING",
+                    SendState::Confirmed { .. } => "CONFIRMED",
+                    SendState::TerminalRejected => "FAILED",
+                    SendState::PresumedDead => "DROPPED",
+                    SendState::Abandoned => "ABANDONED",
+                },
+            },
+            // Fail-closed rollback already ran; category-only message
+            // (the detail can carry a filesystem path).
+            E::Persistence(e) => internal_detail("abandon persistence failed", e),
+        }
+    }
+}
+
 impl From<PendingTxError> for WalletRpcError {
     fn from(err: PendingTxError) -> Self {
         match err {
@@ -680,6 +721,38 @@ mod tests {
             !err.message().contains("/home"),
             "persist failure must not leak filesystem paths"
         );
+    }
+
+    /// `abandon_tx` mapping (PR-SJ-3): unknown txid answers with the
+    /// same shape `get_transfer_by_id` uses; a state refusal carries
+    /// `-29108` with the refusing state in `get_transfers` vocabulary;
+    /// a persistence failure is category-only (rolled back engine-side).
+    #[test]
+    fn abandon_errors_map_to_their_own_shapes() {
+        use shekyl_engine_core::AbandonTxError;
+        use shekyl_engine_state::SendState;
+
+        let err: WalletRpcError = AbandonTxError::NotFound.into();
+        assert_eq!(err.code(), WalletRpcErrorCode::UnknownTransferId);
+
+        let err: WalletRpcError = AbandonTxError::StateForbids {
+            state: SendState::Confirmed { height: 42 },
+        }
+        .into();
+        assert_eq!(err.code(), WalletRpcErrorCode::AbandonStateForbids);
+        assert_eq!(err.code().as_i32(), -29108);
+        assert_eq!(err.data().expect("data")["state"], "CONFIRMED");
+        assert!(
+            !err.message().contains("42"),
+            "the refusal names the state, not chain detail: {}",
+            err.message()
+        );
+
+        let err: WalletRpcError = AbandonTxError::StateForbids {
+            state: SendState::TerminalRejected,
+        }
+        .into();
+        assert_eq!(err.data().expect("data")["state"], "FAILED");
     }
 
     #[test]
