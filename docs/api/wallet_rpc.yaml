@@ -42,6 +42,8 @@
 #     create_wallet, open_wallet, close_wallet, change_password,
 #     get_balance, get_primary_address,
 #     build_pending_tx, submit_pending_tx, discard_pending_tx,
+#     abandon_tx                                   (PR-SJ-3 — the P3-4
+#                                                   user-authored abandon)
 #     get_transfers, get_transfer_by_id,
 #     refresh, rescan_blockchain,
 #     get_height, get_version,
@@ -236,6 +238,7 @@ components:
             - build_pending_tx
             - submit_pending_tx
             - discard_pending_tx
+            - abandon_tx
             - get_transfers
             - get_transfer_by_id
             - get_wallet_info
@@ -326,6 +329,7 @@ components:
         - -29105   # CONTENT_GEN_MISMATCH
         - -29106   # SUBMIT_REJECTED
         - -29107   # SUBMIT_AMBIGUOUS
+        - -29108   # ABANDON_STATE_FORBIDS
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
@@ -367,6 +371,12 @@ components:
           -29107 SUBMIT_AMBIGUOUS         submit: transport-level RpcError;
                                           resubmit-of-held-bytes is the
                                           status query
+          -29108 ABANDON_STATE_FORBIDS    abandon_tx: the send's state
+                                          forbids abandoning (CONFIRMED is
+                                          on chain; FAILED never relayed).
+                                          data: {"state": "..."} in
+                                          get_transfers vocabulary. There
+                                          is no force override (P3-4)
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs: daemon RPC
                                           failed (proof methods dial the
@@ -839,6 +849,35 @@ components:
         Empty object. Idempotent — discarding an unknown handle succeeds
         (cross-cutting lock 4).
 
+    AbandonTxParams:
+      type: object
+      required: [tx_hash]
+      description: >
+        `abandon_tx` (WALLET_SEND_RECORD.md P3-4 / SJ-DQ-8): give up on a
+        dispatched send. The send record moves to ABANDONED and its
+        retention reference migrates off the live pending set; the
+        retained per-tx secret is kept, so `get_tx_proof` OUTBOUND still
+        works for the abandoned txid. Input locks are NOT released by
+        intent: an abandoned-but-still-landable send keeps its spent-input
+        locks until the watchdog's confirmed-absent evidence releases them
+        (the self-link defence), and a late confirmation flips the row to
+        CONFIRMED loudly. Idempotent: re-abandoning an ABANDONED row
+        succeeds with the same result. Refusals: unknown txid -29400;
+        CONFIRMED / FAILED rows -29108 (no force override — deleting a row
+        from view is the deletion surface's job, not abandon's).
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+
+    AbandonTxResult:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [ABANDONED]
+          description: The row's resulting state (always ABANDONED).
+
     # ── History ──────────────────────────────────────────────────────
     ReceiveAttributionKind:
       type: string
@@ -904,14 +943,15 @@ components:
           description: >
             Inclusion height — the height the transaction was mined at.
             **Absent** exactly when the transaction is not on chain: an
-            OUTGOING row in `PENDING`, `FAILED` or `DROPPED`. The wallet
+            OUTGOING row in `PENDING`, `FAILED`, `DROPPED` or
+            `ABANDONED`. The wallet
             knows the height it dispatched at, but that is a local sync
             counter, not an inclusion height; emitting it here would put
             a plausible block number beside a send that was never mined.
             INCOMING rows are scanner-observed and always carry it.
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED]
+          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED, ABANDONED]
           description: >
             PENDING = unsettled (receive awaiting confirmation, or send
             still in flight). CONFIRMED = on-chain. SPENT = receive
@@ -921,13 +961,18 @@ components:
             network no longer holds the send and released its input
             locks (`PresumedDead`), so the funds are spendable again and
             the send can be re-made — a late confirmation still flips
-            such a row to CONFIRMED.
+            such a row to CONFIRMED. ABANDONED = OUTGOING only: the user
+            gave up on the send (`abandon_tx`); unlike DROPPED the
+            release claim is intent, not evidence, so the input locks
+            may still be held until the watchdog resolves — and a late
+            confirmation still flips such a row to CONFIRMED.
 
 
             Each value is a distinct situation and none collapses into
             another: a DROPPED send reported as PENDING would say the
             wallet is still waiting while the same wallet reports those
-            funds available.
+            funds available; an ABANDONED send reported as DROPPED would
+            claim evidence the wallet never observed.
         spent_height:
           type: integer
           format: int64
@@ -949,7 +994,7 @@ components:
           enum: [INCOMING, OUTGOING]
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED]
+          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED, ABANDONED]
         since_height:
           type: integer
           format: int64
@@ -967,7 +1012,8 @@ components:
 
 
             Bounds *inclusion* height only: a row with no `block_height`
-            (an OUTGOING send in `PENDING`, `FAILED` or `DROPPED`) has
+            (an OUTGOING send in `PENDING`, `FAILED`, `DROPPED` or
+            `ABANDONED`) has
             nothing to compare against and is **always** returned. This
             is what makes the filter usable as a polling watermark —
             a never-mined row could never rise above a rising bound, so

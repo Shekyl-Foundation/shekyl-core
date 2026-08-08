@@ -30,18 +30,25 @@
 //! # State machine (append-only)
 //!
 //! [`SendState`] is **append-only**: variants are never removed, renamed,
-//! or reordered — new states (the A4 clause-(2) `ExportedUnsigned`, the
-//! PR-SJ-3 `Abandoned`) are appended after the last variant, so old files
-//! read forward with no version break and no migration. The
-//! discriminant-stability KAT below pins this; treat a KAT failure as a
-//! broken promise, not a snapshot to refresh.
+//! or reordered — new states (the A4 clause-(2) `ExportedUnsigned`) are
+//! appended after the last variant, so old files read forward with no
+//! encoding migration. The discriminant-stability KAT below pins this;
+//! treat a KAT failure as a broken promise, not a snapshot to refresh.
+//! (`Abandoned` was the first such append, PR-SJ-3.)
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
 /// Current send-journal block schema version.
-pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 1;
+///
+/// Version `2` appends [`SendState::Abandoned`] (PR-SJ-3). The append is
+/// wire-additive (the discriminant KAT pins every pre-existing encoding),
+/// so the bump follows rule 42's snapshot pairing, not a byte-layout
+/// break: pre-genesis, strict-equality gating stays the cheapest honest
+/// policy, and the additive-read-forward load path is the A4 reopen's
+/// concern (`docs/FOLLOWUPS.md` "A4 DECIDED").
+pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 2;
 
 /// One recipient of a recorded send, exactly as realized in the built
 /// transaction (SJ-DQ-1: full row, addresses stored, no knob — settled by
@@ -68,8 +75,8 @@ pub struct SendInputRef {
 
 /// Lifecycle state of a recorded send.
 ///
-/// **Append-only** (see module docs): `Abandoned` (PR-SJ-3) and
-/// `ExportedUnsigned` (A4 reopen) append after the current tail.
+/// **Append-only** (see module docs): `ExportedUnsigned` (A4 reopen)
+/// appends after the current tail.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub enum SendState {
     /// Dispatched to the daemon; not yet observed on chain. The F14
@@ -90,6 +97,79 @@ pub enum SendState {
     /// the I-2 reference are retained; a late confirmation flips this
     /// to [`Self::Confirmed`] loudly.
     PresumedDead,
+    /// The user abandoned the send (`abandon_tx`, P3-4). Terminal for
+    /// the display machine, with two deliberate non-terminal edges:
+    /// a late confirmation still flips this to [`Self::Confirmed`]
+    /// loudly (the reconciler's confirm edge — un-abandoned rather
+    /// than staying wrong), and carried input locks stay re-derivable
+    /// across a rescan wipe while [`SendRecord::lock_baseline`] is
+    /// `Some` (P3-1: an abandoned-but-still-landable send keeps its
+    /// self-link defence). Keys are retained (C2); after
+    /// [`crate::WalletLedger::abandon_send`] migrates the
+    /// `pending_tx_hashes` entry, this row **is** the I-2 live
+    /// reference for the retained tx secret.
+    Abandoned,
+}
+
+impl SendState {
+    /// Whether a journal row in this state is itself an I-2 live
+    /// reference for a retained `tx_keys` entry (P3-4): after
+    /// `abandon_send` migrates the pending set, the journal row is what
+    /// keeps the secret from being collected as an orphan.
+    ///
+    /// Distinct from [`Self::reapplies_f14_locks`]: `PresumedDead` still
+    /// holds retention (keys / I-2) but never re-places F14 locks
+    /// (baseline is cleared on the confirmed-absent release).
+    #[must_use]
+    pub const fn holds_tx_key_retention(self) -> bool {
+        matches!(
+            self,
+            Self::Dispatched | Self::PresumedDead | Self::Abandoned
+        )
+    }
+
+    /// Whether a journal row in this state re-derives carried-input F14
+    /// locks when `lock_baseline` is `Some` (P3-1 re-application set:
+    /// non-terminal-or-abandoned, minus states that have deliberately
+    /// released).
+    #[must_use]
+    pub const fn reapplies_f14_locks(self) -> bool {
+        matches!(self, Self::Dispatched | Self::Abandoned)
+    }
+
+    /// Whether the user-authored abandon edge may fire from this state
+    /// (`Dispatched | PresumedDead → Abandoned`).
+    #[must_use]
+    pub const fn is_abandonable(self) -> bool {
+        matches!(self, Self::Dispatched | Self::PresumedDead)
+    }
+}
+
+/// Result of the user-authored abandon edge (`WALLET_SEND_RECORD.md`
+/// P3-4 / SJ-DQ-8) on one journal row.
+///
+/// The edge is `Dispatched | PresumedDead → Abandoned`; everything else
+/// is named rather than collapsed, because each shape is a different
+/// user-facing answer (rule 82).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbandonEdge {
+    /// The edge applied. `previous` is what a fail-closed rollback
+    /// restores when the durable save of the abandon fails.
+    Applied {
+        /// State the row held before the edge.
+        previous: SendState,
+    },
+    /// The row is already `Abandoned` — idempotent no-op (SJ-DQ-8).
+    AlreadyAbandoned,
+    /// No journal row exists for this txid.
+    NotFound,
+    /// The row's state forbids abandoning: `Confirmed` is on chain and
+    /// `TerminalRejected` was never relayed — neither has anything left
+    /// to give up on.
+    Forbidden {
+        /// The state that refused the edge.
+        state: SendState,
+    },
 }
 
 /// One recorded send, keyed by canonical txid in
@@ -246,13 +326,53 @@ impl SendJournalBlock {
 
     /// Watchdog confirmed-absent release: display-state flip and clear
     /// the baseline so re-derivation never re-locks a deliberately
-    /// released tx. No-op for non-`Dispatched` rows.
+    /// released tx.
+    ///
+    /// An `Abandoned` row keeps its user-authored state but the baseline
+    /// clears the same way — the watchdog's confirmed-absent evidence is
+    /// what releases an abandoned-from-`Dispatched` row's carried input
+    /// locks, and without this arm the reconciler's re-derivation
+    /// (P3-1's non-terminal-or-abandoned set) would re-place locks the
+    /// release just cleared. No-op for every other state.
     pub fn mark_presumed_dead(&mut self, txid: &[u8; 32]) {
         if let Some(row) = self.rows.get_mut(txid) {
-            if row.state == SendState::Dispatched {
-                row.state = SendState::PresumedDead;
-                row.lock_baseline = None;
+            match row.state {
+                SendState::Dispatched => {
+                    row.state = SendState::PresumedDead;
+                    row.lock_baseline = None;
+                }
+                SendState::Abandoned => {
+                    row.lock_baseline = None;
+                }
+                _ => {}
             }
+        }
+    }
+
+    /// The user-authored abandon edge (`abandon_tx`, P3-4):
+    /// `Dispatched | PresumedDead → Abandoned`, idempotent on an
+    /// already-`Abandoned` row, refused from terminal states.
+    ///
+    /// State-edge only — the I-2 reference migration that pairs with it
+    /// lives in [`crate::WalletLedger::abandon_send`], which is the
+    /// production entry point. `lock_baseline` is deliberately
+    /// **retained**: an abandoned-but-still-landable send keeps its
+    /// carried-input locks (and their rescan re-derivation) until the
+    /// watchdog's confirmed-absent evidence releases them
+    /// ([`Self::mark_presumed_dead`]'s `Abandoned` arm) or a late
+    /// confirmation supersedes them.
+    pub fn mark_abandoned(&mut self, txid: &[u8; 32]) -> AbandonEdge {
+        let Some(row) = self.rows.get_mut(txid) else {
+            return AbandonEdge::NotFound;
+        };
+        if row.state.is_abandonable() {
+            let previous = row.state;
+            row.state = SendState::Abandoned;
+            AbandonEdge::Applied { previous }
+        } else if matches!(row.state, SendState::Abandoned) {
+            AbandonEdge::AlreadyAbandoned
+        } else {
+            AbandonEdge::Forbidden { state: row.state }
         }
     }
 }
@@ -285,6 +405,32 @@ mod tests {
         }
     }
 
+    /// State-set predicates are the single owner of retention / lock /
+    /// abandonability membership — keep them aligned with the design
+    /// tables (I-2 vs I-5 vs P3-4 edge sources).
+    #[test]
+    fn send_state_set_predicates() {
+        assert!(SendState::Dispatched.holds_tx_key_retention());
+        assert!(SendState::PresumedDead.holds_tx_key_retention());
+        assert!(SendState::Abandoned.holds_tx_key_retention());
+        assert!(!SendState::Confirmed { height: 1 }.holds_tx_key_retention());
+        assert!(!SendState::TerminalRejected.holds_tx_key_retention());
+
+        assert!(SendState::Dispatched.reapplies_f14_locks());
+        assert!(SendState::Abandoned.reapplies_f14_locks());
+        assert!(
+            !SendState::PresumedDead.reapplies_f14_locks(),
+            "PresumedDead holds retention but never re-places locks"
+        );
+        assert!(!SendState::Confirmed { height: 1 }.reapplies_f14_locks());
+
+        assert!(SendState::Dispatched.is_abandonable());
+        assert!(SendState::PresumedDead.is_abandonable());
+        assert!(!SendState::Abandoned.is_abandonable());
+        assert!(!SendState::Confirmed { height: 1 }.is_abandonable());
+        assert!(!SendState::TerminalRejected.is_abandonable());
+    }
+
     /// Round-trip through postcard preserves every field of every state.
     #[test]
     fn postcard_round_trips_all_states() {
@@ -293,11 +439,12 @@ mod tests {
             SendState::Confirmed { height: 99 },
             SendState::TerminalRejected,
             SendState::PresumedDead,
+            SendState::Abandoned,
         ]
         .into_iter()
         .enumerate()
         {
-            let key = u8::try_from(i).expect("four variants fit in u8");
+            let key = u8::try_from(i).expect("five variants fit in u8");
             let mut block = SendJournalBlock::empty();
             block.rows.insert([key; 32], sample_record(state, Some(43)));
             let bytes = postcard::to_allocvec(&block).expect("serialize");
@@ -315,12 +462,16 @@ mod tests {
     /// to refresh.
     #[test]
     fn send_state_discriminants_are_pinned() {
-        let pins: [(SendState, &[u8]); 4] = [
+        let pins: [(SendState, &[u8]); 5] = [
             (SendState::Dispatched, &[0]),
             // variant index 1, then height 99 as a varint
             (SendState::Confirmed { height: 99 }, &[1, 99]),
             (SendState::TerminalRejected, &[2]),
             (SendState::PresumedDead, &[3]),
+            // PR-SJ-3: appended after the v1 tail — the four pins above
+            // are byte-identical to their v1 encodings, which is the
+            // append-only promise this KAT exists to keep.
+            (SendState::Abandoned, &[4]),
         ];
         for (state, expected) in pins {
             let bytes = postcard::to_allocvec(&state).expect("serialize");
@@ -383,6 +534,91 @@ mod tests {
         block.undo_dispatch(&txid);
         assert!(!block.rows.contains_key(&txid));
         assert!(!block.stamp_lock_baseline(&txid, 1));
+    }
+
+    /// The P3-4 abandon edge: applies from `Dispatched` and
+    /// `PresumedDead`, is idempotent on `Abandoned`, refuses terminal
+    /// states, and **retains** the lock baseline (the carried-input
+    /// locks outlive the user's abandon until confirmed-absent evidence
+    /// releases them).
+    #[test]
+    fn mark_abandoned_edges_and_idempotency() {
+        let mut block = SendJournalBlock::empty();
+        assert_eq!(block.mark_abandoned(&[9u8; 32]), AbandonEdge::NotFound);
+
+        // From Dispatched, baseline retained.
+        let dispatched = [1u8; 32];
+        block
+            .rows
+            .insert(dispatched, sample_record(SendState::Dispatched, Some(43)));
+        assert_eq!(
+            block.mark_abandoned(&dispatched),
+            AbandonEdge::Applied {
+                previous: SendState::Dispatched
+            }
+        );
+        assert_eq!(block.rows[&dispatched].state, SendState::Abandoned);
+        assert_eq!(
+            block.rows[&dispatched].lock_baseline,
+            Some(43),
+            "abandon retains the baseline — locks release on evidence, not intent"
+        );
+        assert_eq!(
+            block.mark_abandoned(&dispatched),
+            AbandonEdge::AlreadyAbandoned,
+            "second abandon is an idempotent no-op (SJ-DQ-8)"
+        );
+
+        // From PresumedDead (the watchdog already cleared the baseline).
+        let dead = [2u8; 32];
+        block
+            .rows
+            .insert(dead, sample_record(SendState::PresumedDead, None));
+        assert_eq!(
+            block.mark_abandoned(&dead),
+            AbandonEdge::Applied {
+                previous: SendState::PresumedDead
+            }
+        );
+        assert_eq!(block.rows[&dead].state, SendState::Abandoned);
+
+        // Terminal states refuse.
+        let confirmed = [3u8; 32];
+        block.rows.insert(
+            confirmed,
+            sample_record(SendState::Confirmed { height: 99 }, None),
+        );
+        assert_eq!(
+            block.mark_abandoned(&confirmed),
+            AbandonEdge::Forbidden {
+                state: SendState::Confirmed { height: 99 }
+            }
+        );
+        let rejected = [4u8; 32];
+        block
+            .rows
+            .insert(rejected, sample_record(SendState::TerminalRejected, None));
+        assert_eq!(
+            block.mark_abandoned(&rejected),
+            AbandonEdge::Forbidden {
+                state: SendState::TerminalRejected
+            }
+        );
+    }
+
+    /// The watchdog's confirmed-absent release on an `Abandoned` row
+    /// clears the baseline (so the reconciler never re-locks released
+    /// inputs) but never overwrites the user-authored display state.
+    #[test]
+    fn presumed_dead_release_clears_abandoned_baseline_keeps_state() {
+        let mut block = SendJournalBlock::empty();
+        let txid = [5u8; 32];
+        block
+            .rows
+            .insert(txid, sample_record(SendState::Abandoned, Some(43)));
+        block.mark_presumed_dead(&txid);
+        assert_eq!(block.rows[&txid].state, SendState::Abandoned);
+        assert_eq!(block.rows[&txid].lock_baseline, None);
     }
 
     #[test]

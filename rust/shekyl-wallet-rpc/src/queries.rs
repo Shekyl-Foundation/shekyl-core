@@ -499,7 +499,7 @@ mod tests {
     }
 
     /// The `state` filter runs against the journal projection, so the
-    /// four send lifecycle states are each independently selectable.
+    /// five send lifecycle states are each independently selectable.
     #[test]
     fn state_filter_applies_to_journal_rows() {
         let block = journal(&[
@@ -507,6 +507,7 @@ mod tests {
             (0x02, SendState::Confirmed { height: 250 }),
             (0x03, SendState::TerminalRejected),
             (0x04, SendState::PresumedDead),
+            (0x05, SendState::Abandoned),
         ]);
 
         for (state, expected_seed) in [
@@ -514,6 +515,7 @@ mod tests {
             (TransferState::Confirmed, "02"),
             (TransferState::Failed, "03"),
             (TransferState::Dropped, "04"),
+            (TransferState::Abandoned, "05"),
         ] {
             let got =
                 collect_transfers(&[], &block, &filters(None, Some(state)), None).expect("project");
@@ -564,15 +566,21 @@ mod tests {
             (0x02, SendState::Confirmed { height: 250 }),
             (0x03, SendState::TerminalRejected),
             (0x04, SendState::PresumedDead),
+            (0x05, SendState::Abandoned),
         ]);
 
         // Watermark far above the dispatch height: the confirmed row is
-        // below it and drops out; the three unmined rows stay.
+        // below it and drops out; the four unmined rows stay.
         let got =
             collect_transfers(&[], &block, &filters(None, None), Some(1_000)).expect("project");
         assert_eq!(
             ids(&got),
-            vec!["01".repeat(32), "03".repeat(32), "04".repeat(32)]
+            vec![
+                "01".repeat(32),
+                "03".repeat(32),
+                "04".repeat(32),
+                "05".repeat(32)
+            ]
         );
 
         // At its own height the confirmed row is included (inclusive bound).

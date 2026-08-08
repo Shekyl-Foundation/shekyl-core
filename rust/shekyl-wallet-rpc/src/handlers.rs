@@ -52,6 +52,7 @@ pub async fn dispatch(
         "stake" => lifecycle::stake(tenants, params).await,
         "submit_pending_tx" => send::submit_pending_tx(tenants, params).await,
         "discard_pending_tx" => send::discard_pending_tx(tenants, params).await,
+        "abandon_tx" => send::abandon_tx(tenants, params).await,
         // WI-RPC-1 receiving (FA-8d projection; `rid` on the URI — no
         // subaddress/account model exists in Shekyl).
         "create_payment_request" => receiving::create_payment_request(tenants, params).await,

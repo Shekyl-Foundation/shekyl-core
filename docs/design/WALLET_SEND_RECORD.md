@@ -521,6 +521,16 @@ reopen criteria at ratification. Then:
    FOLLOWUP.
 3. **PR-SJ-3** — `PresumedDead` entry + `abandon_tx` Engine API + RPC +
    crash-ordering test. Closes the abandon FOLLOWUP.
+   **LANDED 2026-08-07 (`feat/wallet-abandon-sj3`)** — the
+   `PresumedDead` entry had landed with PR-SJ-1's confirmed-absent
+   release; this PR appended `SendState::Abandoned` (append-only pin
+   held: v1 discriminants byte-identical), `WalletLedger::abandon_send`
+   (edge + I-2 reference migration, journal leg added to I-2 and the
+   retention reconcile), the P3-1 re-application extension to Abandoned
+   rows, `Engine::abandon_tx_persisted`, RPC `abandon_tx` (`-29108`,
+   idempotent, no force path per P3-4), and the drop-then-confirm
+   crash-ordering test (`Abandoned → Confirmed` flips loudly, keys
+   intact).
 
 Rounds run standard (not rule-26 opt-in): no consensus surface, no FFI
 widening, single-team.
