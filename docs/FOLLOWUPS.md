@@ -1275,7 +1275,21 @@ sustainability is unaffected by the recalibration.
   `reset_drops_both_attestation_witness_tables`). Supersedes the #264
   "follow-on surfaced by the counter" paragraph (single owner). Its own
   unit. **Target: V3.0** (pre-genesis: consensus-state correctness on
-  chain reset).
+  chain reset). **IMPLEMENTED (2026-08-07, `chore/lmdb-reset-full-drop`):**
+  `reset()` is now enumeration-based — it walks the unnamed main DB
+  (whose keys are the table names) and empties every named table except
+  a conscious keep-list (the two txpool tables: mempool lifecycle is
+  `tx_memory_pool`'s, and reset never touched it), then re-seeds exactly
+  what `open()` writes on an empty DB (the version row; the curve-tree
+  meta needs no re-seed — its `leaf_count` read treats MDB_NOTFOUND as
+  0, the fresh path). A hand-written drop list cannot come back and a
+  future table cannot be missed by construction. Test seat:
+  `archival_substrate_lmdb.cpp` `reset_leaves_every_table_fresh` — the
+  oracle is the environment itself (`get_table_entry_counts`, an
+  `mdb_stat` walk, LMDB-concrete so no `BlockchainDB` mock fallout),
+  with a ≥10-populated-tables negative control so the all-empty
+  assertion cannot pass vacuously; the CW-2 witness pin stays green
+  beside it.
 
 - **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with
   reopen (d).** The sliding-window m-of-n itself is **BUILT** (PR #368,

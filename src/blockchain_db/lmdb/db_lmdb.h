@@ -28,6 +28,7 @@
 
 #include <atomic>
 #include <functional>
+#include <map>
 #include <unordered_map>
 
 #include "blockchain_db/blockchain_db.h"
@@ -215,6 +216,14 @@ public:
   virtual void safesyncmode(const bool onoff);
 
   virtual void reset();
+
+  //! Row count of every named table in the environment, keyed by table
+  //! name (the unnamed main DB's keys). LMDB-concrete diagnostic — not
+  //! part of the `BlockchainDB` interface — that gives the reset test an
+  //! environment-level oracle instead of a hand-written table list.
+  //! Opens its own read snapshot: call with no batch active (or after
+  //! `batch_stop`) to see committed state.
+  std::map<std::string, uint64_t> get_table_entry_counts() const;
 
   virtual std::vector<std::string> get_filenames() const;
 

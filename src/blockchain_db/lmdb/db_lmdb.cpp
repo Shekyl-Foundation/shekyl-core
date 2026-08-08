@@ -1883,50 +1883,56 @@ void BlockchainLMDB::reset()
   if (auto result = lmdb_txn_begin(m_env, NULL, 0, txn))
     throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
 
-  if (auto result = mdb_drop(txn, m_blocks, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_blocks: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_block_info, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_block_info: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_block_heights, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_block_heights: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_txs_pruned, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_txs_pruned: ", result).c_str()));
-  (void)mdb_drop(txn, m_txs_pqc_auths, 0);
-  if (auto result = mdb_drop(txn, m_txs_prunable, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_txs_prunable: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_txs_prunable_hash, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_txs_prunable_hash: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_txs_prunable_tip, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_txs_prunable_tip: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_tx_indices, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_tx_indices: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_tx_outputs, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_tx_outputs: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_output_txs, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_output_txs: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_output_amounts, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_output_amounts: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_spent_keys, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_spent_keys: ", result).c_str()));
-  (void)mdb_drop(txn, m_hf_starting_heights, 0); // this one is dropped in new code
-  if (auto result = mdb_drop(txn, m_hf_versions, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_hf_versions: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_properties, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_properties: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_output_metadata, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_output_metadata: ", result).c_str()));
-  // Credit-wire (credit-wire CW-2): the prunable attestation-witness side tables are per-block state keyed by
-  // height / block-hash. reset() re-uses heights and hashes, so a stale witness row at a re-used
-  // key is actively WRONG (a re-added block would read a pre-reset witness). Drop both alongside
-  // the block tables — the height-keyed one (credit-wire CW-1b-ii) was omitted here, this closes that gap too.
-  // NB: the curve-tree and other archival tables (bond/segment/budget/...) are still NOT dropped
-  // by reset() — a broader pre-existing gap, out of credit-wire CW-2 scope and tracked separately.
-  if (auto result = mdb_drop(txn, m_archival_attestation_witness, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_archival_attestation_witness: ", result).c_str()));
-  if (auto result = mdb_drop(txn, m_archival_alt_attestation_witness, 0))
-    throw0(DB_ERROR(lmdb_error("Failed to drop m_archival_alt_attestation_witness: ", result).c_str()));
+  // reset()'s contract is fresh-database state: on an empty DB, open()
+  // seeds nothing but the version row, and every reader treats an empty
+  // table as "no state" (e.g. the curve-tree meta `leaf_count` read
+  // handles MDB_NOTFOUND as 0). The wipe therefore enumerates every
+  // named table in the environment — the unnamed main DB's keys ARE the
+  // table names — and empties each one, instead of maintaining a
+  // hand-written drop list. A hand-written list silently goes stale
+  // when a table is added: the 2026-08-07 audit (docs/FOLLOWUPS.md,
+  // "BlockchainLMDB::reset() drops an INCOMPLETE table set") found 25
+  // Shekyl tables surviving reset, and because reset re-uses heights
+  // and hashes, a surviving row at a re-used key reads as the re-added
+  // block's state — a stale curve_tree_root is consensus-wrong and
+  // silent. Enumeration forecloses that failure mode; a future table
+  // that must SURVIVE reset must be added to the keep-list below,
+  // consciously.
+  //
+  // Keep-list: the txpool tables only. The mempool has its own
+  // lifecycle (tx_memory_pool owns it end to end) and reset() has never
+  // touched it; wiping it here would change mempool behavior beyond
+  // this call's chain-state contract.
+  MDB_dbi main_dbi;
+  if (auto result = mdb_dbi_open(txn, NULL, 0, &main_dbi))
+    throw0(DB_ERROR(lmdb_error("Failed to open the unnamed main db: ", result).c_str()));
+  std::vector<std::string> table_names;
+  {
+    MDB_cursor *cur;
+    if (auto result = mdb_cursor_open(txn, main_dbi, &cur))
+      throw0(DB_ERROR(lmdb_error("Failed to open a cursor over table names: ", result).c_str()));
+    MDB_val k, v;
+    int result;
+    while ((result = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) == 0)
+      table_names.emplace_back(static_cast<const char*>(k.mv_data), k.mv_size);
+    mdb_cursor_close(cur);
+    if (result != MDB_NOTFOUND)
+      throw0(DB_ERROR(lmdb_error("Failed to enumerate table names: ", result).c_str()));
+  }
+  for (const std::string &name : table_names)
+  {
+    if (name == LMDB_TXPOOL_META || name == LMDB_TXPOOL_BLOB)
+      continue;
+    // For a name open() already opened, LMDB returns the existing
+    // handle, so the member DBI handles stay valid across the wipe.
+    MDB_dbi dbi;
+    if (auto result = mdb_dbi_open(txn, name.c_str(), 0, &dbi))
+      throw0(DB_ERROR(lmdb_error("Failed to open table " + name + " for reset: ", result).c_str()));
+    if (auto result = mdb_drop(txn, dbi, 0))
+      throw0(DB_ERROR(lmdb_error("Failed to drop table " + name + ": ", result).c_str()));
+  }
 
-  // init with current version
+  // Re-seed exactly what open() writes on an empty database: the version.
   MDB_val_str(k, "version");
   MDB_val_copy<uint32_t> v(VERSION);
   if (auto result = mdb_put(txn, m_properties, &k, &v, 0))
@@ -1935,6 +1941,45 @@ void BlockchainLMDB::reset()
   txn.commit();
   m_cum_size = 0;
   m_cum_count = 0;
+}
+
+std::map<std::string, uint64_t> BlockchainLMDB::get_table_entry_counts() const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  mdb_txn_safe txn;
+  if (auto result = lmdb_txn_begin(m_env, NULL, MDB_RDONLY, txn))
+    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
+
+  MDB_dbi main_dbi;
+  if (auto result = mdb_dbi_open(txn, NULL, 0, &main_dbi))
+    throw0(DB_ERROR(lmdb_error("Failed to open the unnamed main db: ", result).c_str()));
+  std::map<std::string, uint64_t> counts;
+  {
+    MDB_cursor *cur;
+    if (auto result = mdb_cursor_open(txn, main_dbi, &cur))
+      throw0(DB_ERROR(lmdb_error("Failed to open a cursor over table names: ", result).c_str()));
+    MDB_val k, v;
+    int result;
+    while ((result = mdb_cursor_get(cur, &k, &v, MDB_NEXT)) == 0)
+    {
+      const std::string name(static_cast<const char*>(k.mv_data), k.mv_size);
+      MDB_dbi dbi;
+      if (auto open_result = mdb_dbi_open(txn, name.c_str(), 0, &dbi))
+        throw0(DB_ERROR(lmdb_error("Failed to open table " + name + ": ", open_result).c_str()));
+      MDB_stat stat;
+      if (auto stat_result = mdb_stat(txn, dbi, &stat))
+        throw0(DB_ERROR(lmdb_error("Failed to stat table " + name + ": ", stat_result).c_str()));
+      counts[name] = stat.ms_entries;
+    }
+    mdb_cursor_close(cur);
+    if (result != MDB_NOTFOUND)
+      throw0(DB_ERROR(lmdb_error("Failed to enumerate table names: ", result).c_str()));
+  }
+
+  txn.commit();
+  return counts;
 }
 
 std::vector<std::string> BlockchainLMDB::get_filenames() const
