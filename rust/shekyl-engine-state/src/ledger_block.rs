@@ -82,7 +82,11 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 9;
+/// Version `10` removes `TransferDetails::awaiting_confirmation`
+/// (PR-SJ-1b, `WALLET_SEND_RECORD.md` P3-1a): the F14 lock is a
+/// journal-derived fact (`SendJournalBlock::derive_f14_locks`), no
+/// longer persisted on the scan-derived row.
+pub const LEDGER_BLOCK_VERSION: u32 = 10;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -436,12 +440,6 @@ mod tests {
             key_image: Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                 [seed ^ 0xFF; 32],
             )),
-            // Exercise the Some leg of the F14 lock in the round-trip
-            // tests; the None leg is covered by every other fixture.
-            awaiting_confirmation: Some(crate::transfer::AwaitingConfirmation {
-                tx_hash: shekyl_types::TxHash::from_bytes([seed.wrapping_add(4); 32]),
-                accepted_at_height: 100 + u64::from(seed),
-            }),
             // Exercise the Some leg of the spend-quadruple field in the
             // round-trip tests as well.
             spending_tx_hash: Some(shekyl_types::TxHash::from_bytes([seed.wrapping_add(5); 32])),
@@ -526,10 +524,6 @@ mod tests {
                     t.key_image,
                     t.source_ciphertext.clone(),
                     t.output_handle,
-                    // F14 (§2.6): the awaiting-confirmation lock is
-                    // persisted — a restart between accept and
-                    // confirmation must not resurrect spendability.
-                    t.awaiting_confirmation.clone(),
                 )
             })
             .collect();
@@ -544,14 +538,6 @@ mod tests {
             assert_eq!(t.global_output_index, orig.2);
             assert_eq!(t.amount(), orig.3);
             assert_eq!(t.key_image, orig.4);
-            assert_eq!(
-                t.awaiting_confirmation, orig.7,
-                "F14 lock must survive the persistence round-trip"
-            );
-            assert!(
-                t.awaiting_confirmation.is_some(),
-                "fixture exercises the Some leg"
-            );
             assert_eq!(
                 t.source_ciphertext.as_ref().map(|c| &c.x25519),
                 orig.5.as_ref().map(|c| &c.x25519)

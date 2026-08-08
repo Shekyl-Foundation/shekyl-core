@@ -79,7 +79,6 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         key_image: Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
             [lo ^ 0xFF; 32],
         )),
-        awaiting_confirmation: None,
         spending_tx_hash: None,
         source_ciphertext: Some(HybridCiphertext {
             x25519: [lo.wrapping_add(1); 32],

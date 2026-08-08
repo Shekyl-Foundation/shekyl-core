@@ -190,13 +190,12 @@ pub struct TransferDetails {
     /// `#[serde(transparent)]` over `[u8; 32]` so the on-disk wire
     /// format is unchanged from `Option<[u8; 32]>`.
     pub key_image: Option<KeyImage>,
-    /// F14 awaiting-confirmation lock (`DAEMON_SUBMIT_VERDICT.md` §2.6):
-    /// a network-exposed spend of this output awaits chain confirmation.
-    /// Excludes the output from selection while present; cleared by
-    /// refresh-authoritative confirmation (confirmed-present) or the
-    /// watchdog horizon (confirmed-absent). See [`AwaitingConfirmation`].
-    #[serde(default)]
-    pub awaiting_confirmation: Option<AwaitingConfirmation>,
+    // The F14 awaiting-confirmation lock (`DAEMON_SUBMIT_VERDICT.md`
+    // §2.6) formerly lived here as a persisted field. PR-SJ-1b retired
+    // it (`WALLET_SEND_RECORD.md` C2 / P3-1a): the journal owns the
+    // dispatch facts, and consumers derive the lock set on demand via
+    // `SendJournalBlock::derive_f14_locks`. `AwaitingConfirmation` is
+    // now a runtime-only derived value, never persisted.
     /// Canonical txid of the **confirmed** transaction that spent this
     /// output — the WI-RPC-3 spend-quadruple leg (F-9,
     /// `docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE).
@@ -332,16 +331,6 @@ impl TransferDetails {
 // upstream `Schema` impl and is wire-identical to `serde_bytes::Bytes` in
 // postcard (both emit `varint(len) || bytes`).
 
-/// Wire mirror of [`AwaitingConfirmation`] for the schema snapshot; the
-/// same rename delegation as the enclosing mirror keeps the snapshot's
-/// type name matching the real struct.
-#[derive(postcard_schema::Schema)]
-#[allow(dead_code)]
-struct AwaitingConfirmationSchema {
-    tx_hash: [u8; 32],
-    accepted_at_height: u64,
-}
-
 #[derive(postcard_schema::Schema)]
 #[allow(dead_code)]
 struct TransferDetailsSchema {
@@ -359,9 +348,6 @@ struct TransferDetailsSchema {
     spent: bool,
     spent_height: Option<u64>,
     key_image: Option<[u8; 32]>,
-    // `AwaitingConfirmation` mirrored field-for-field: `TxHash` is a
-    // transparent 32-byte-array newtype on the wire.
-    awaiting_confirmation: Option<AwaitingConfirmationSchema>,
     // `TxHash` is a transparent 32-byte-array newtype on the wire.
     spending_tx_hash: Option<[u8; 32]>,
     // Non-secret on-chain payloads; reference the workspace types
@@ -398,11 +384,6 @@ impl Zeroize for TransferDetails {
         self.spent.zeroize();
         self.spent_height.zeroize();
         self.key_image.zeroize();
-        // `Option<AwaitingConfirmation>::zeroize` wipes the inner fields AND
-        // resets the tag to `None` (matching the sibling `Option` fields);
-        // the hand-rolled `if let Some` left it `Some(all-zero)`, and would
-        // have silently skipped any future secret field on the inner struct.
-        self.awaiting_confirmation.zeroize();
         // `Option<TxHash>::zeroize` wipes the inner hash and resets the
         // tag to `None`, matching the sibling `Option` fields.
         self.spending_tx_hash.zeroize();
@@ -442,10 +423,6 @@ impl std::fmt::Debug for TransferDetails {
             .field("block_height", &self.block_height)
             .field("amount", &self.amount())
             .field("spent", &self.spent)
-            .field(
-                "awaiting_confirmation",
-                &self.awaiting_confirmation.is_some(),
-            )
             .field("eligible_height", &self.eligible_height)
             .field("frozen", &self.frozen)
             .finish_non_exhaustive()
@@ -510,7 +487,6 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
-            awaiting_confirmation: None,
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,

@@ -182,10 +182,10 @@ impl LedgerIndexes {
                 td.spent = true;
                 td.spent_height = Some(spent_height);
                 td.spending_tx_hash = Some(spending_tx);
-                // F14 confirmed-present release (§2.6): the observed
-                // on-chain spend supersedes the awaiting-confirmation
-                // lock — refresh is the settlement authority.
-                td.awaiting_confirmation = None;
+                // F14 confirmed-present release (§2.6) needs no write
+                // since PR-SJ-1b: the derived lock view is superseded by
+                // `spent` at every consumer — refresh stays the
+                // settlement authority, structurally.
                 debug_assert!(
                     self.check_invariants(ledger).is_ok(),
                     "invariant violated after mark_spent: {}",
@@ -537,7 +537,6 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image,
-            awaiting_confirmation: None,
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
@@ -571,39 +570,12 @@ mod tests {
             .expect("rebuilt indexes are consistent");
     }
 
-    /// F14 confirmed-present release (`DAEMON_SUBMIT_VERDICT.md` §2.6):
-    /// the refresh-observed on-chain spend supersedes the persisted
-    /// awaiting-confirmation lock — `mark_spent` clears it in the same
-    /// transition that sets the refresh-authoritative `spent` state.
-    #[test]
-    fn mark_spent_releases_awaiting_confirmation_lock() {
-        let mut transfer = mk_transfer(1, 100, Some(ki(0xAA)));
-        transfer.awaiting_confirmation = Some(crate::transfer::AwaitingConfirmation {
-            tx_hash: shekyl_types::TxHash::from_bytes([0xBB; 32]),
-            accepted_at_height: 150,
-        });
-        let ledger_init = LedgerBlock::new(
-            vec![transfer],
-            BlockchainTip::new(150, [0; 32]),
-            ReorgBlocks::default(),
-        );
-        let mut ledger = ledger_init;
-        let indexes = LedgerIndexes::rebuild_from_ledger(&ledger);
-
-        assert!(indexes.mark_spent(
-            &mut ledger,
-            &ki(0xAA),
-            160,
-            shekyl_types::TxHash::from_bytes([0xEE; 32])
-        ));
-        let td = &ledger.transfers[0];
-        assert!(td.spent);
-        assert_eq!(td.spent_height, Some(160));
-        assert!(
-            td.awaiting_confirmation.is_none(),
-            "confirmed-present release clears the F14 lock"
-        );
-    }
+    // (The former `mark_spent_releases_awaiting_confirmation_lock` test
+    // retired with the field at PR-SJ-1b: the confirmed-present release
+    // is structural — every derived-lock consumer checks `spent` first,
+    // pinned by `shekyl-scanner`'s
+    // `spent_row_supersedes_its_journal_lock` and the `is_spendable`
+    // signature itself.)
 
     #[test]
     fn ingest_block_advances_tip_and_indexes() {

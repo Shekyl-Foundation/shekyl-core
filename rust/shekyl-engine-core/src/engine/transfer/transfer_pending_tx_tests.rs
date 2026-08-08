@@ -1092,10 +1092,9 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
         let f14_locks = guard.ledger.send_journal.derive_f14_locks();
         let td = guard.ledger.ledger.transfers().first().expect("output 0");
         assert!(!td.spent, "spent stays refresh-authoritative");
-        let lock = td
-            .awaiting_confirmation
-            .as_ref()
-            .expect("submit-accept places the F14 lock");
+        let lock = f14_locks
+            .get(&td.global_output_index)
+            .expect("submit-accept arms the journal-derived F14 lock");
         assert_eq!(lock.tx_hash, tx_hash);
         assert!(
             !td.is_spendable(u64::MAX, f14_locks.contains_key(&td.global_output_index)),
@@ -1239,13 +1238,8 @@ async fn confirmed_absent_release_keeps_retention_record() {
         "the pending record stays as the secret's I-2 live reference"
     );
     assert!(
-        guard
-            .ledger
-            .ledger
-            .transfers()
-            .iter()
-            .all(|td| td.awaiting_confirmation.is_none()),
-        "all F14 locks for the confirmed-absent tx are cleared"
+        guard.ledger.send_journal.derive_f14_locks().is_empty(),
+        "all derived F14 locks for the confirmed-absent tx are cleared"
     );
     guard.ledger.check_invariants().expect("I-2 after release");
 }
@@ -1416,20 +1410,21 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
             Some(20),
             "AlreadyInChain mirrors the clamped baseline into the journal (F40)"
         );
+        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
             .transfers()
             .iter()
-            .filter(|td| td.awaiting_confirmation.is_some())
+            .filter(|td| f14_locks.contains_key(&td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
-            "AlreadyInChain must place the F14 lock (F40: no selectable window)"
+            "AlreadyInChain must arm the F14 lock (F40: no selectable window)"
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
+            let lock = &f14_locks[&td.global_output_index];
             assert_eq!(lock.tx_hash, expected_hash);
             assert_eq!(
                 lock.accepted_at_height, 20,
@@ -1440,24 +1435,17 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
             assert_eq!(
                 row.lock_baseline,
                 Some(lock.accepted_at_height),
-                "I-5: journal baseline equals the derived F14 lock"
+                "the derived lock carries exactly the journal baseline"
             );
             assert!(
-                !td.is_spendable(
-                    u64::MAX,
-                    guard
-                        .ledger
-                        .send_journal
-                        .derive_f14_locks()
-                        .contains_key(&td.global_output_index)
-                ),
+                !td.is_spendable(u64::MAX, true),
                 "journal-locked output must be excluded from selection"
             );
         }
         guard
             .ledger
             .check_invariants()
-            .expect("I-5 holds after AlreadyInChain");
+            .expect("invariants hold after AlreadyInChain");
     }
 
     let events = sink.recorded_pending();
@@ -1521,12 +1509,13 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
     // stands, baselined at the claimed height.
     {
         let guard = pending.ledger.read();
+        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
             .transfers()
             .iter()
-            .filter(|td| td.awaiting_confirmation.is_some())
+            .filter(|td| f14_locks.contains_key(&td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
@@ -1534,7 +1523,7 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
+            let lock = &f14_locks[&td.global_output_index];
             assert_eq!(lock.tx_hash, expected_hash);
             assert_eq!(lock.accepted_at_height, 15);
         }
@@ -1602,30 +1591,24 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
     // `spent` untouched — the kind rode through as data, not dispatch.
     {
         let guard = pending.ledger.read();
+        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
             .transfers()
             .iter()
-            .filter(|td| td.awaiting_confirmation.is_some())
+            .filter(|td| f14_locks.contains_key(&td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
-            "AlreadyInPool must place the F14 lock exactly as a fresh accept"
+            "AlreadyInPool must arm the F14 lock exactly as a fresh accept"
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
+            let lock = &f14_locks[&td.global_output_index];
             assert_eq!(lock.tx_hash, expected_hash);
             assert!(
-                !td.is_spendable(
-                    u64::MAX,
-                    guard
-                        .ledger
-                        .send_journal
-                        .derive_f14_locks()
-                        .contains_key(&td.global_output_index)
-                ),
+                !td.is_spendable(u64::MAX, true),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -2036,20 +2019,19 @@ async fn dispatch_writes_the_send_journal_row() {
     );
     assert_eq!(row.state, shekyl_engine_state::SendState::Dispatched);
 
-    // I-5 spot check: the journal baseline equals the F14 lock's.
-    let lock = guard
-        .ledger
-        .ledger
-        .transfers()
-        .iter()
-        .find_map(|td| td.awaiting_confirmation.as_ref())
-        .expect("accept placed the F14 lock");
+    // Derived-view spot check: the accept armed the journal baseline
+    // and the derived lock map carries the row's inputs under it.
+    let f14_locks = guard.ledger.send_journal.derive_f14_locks();
+    let lock = f14_locks
+        .values()
+        .next()
+        .expect("accept armed the journal-derived F14 lock");
     assert_eq!(row.lock_baseline, Some(lock.accepted_at_height));
     assert_eq!(lock.tx_hash, txid);
     guard
         .ledger
         .check_invariants()
-        .expect("I-5 equivalence holds after dispatch+accept");
+        .expect("invariants hold after dispatch+accept");
 }
 
 /// PR-SJ-1: a terminal refusal keeps the row as failed-send history
@@ -3505,16 +3487,17 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
     assert_eq!(daemon.submitted_count(), 1);
 
-    // F14 (§2.6): accept places the awaiting-confirmation lock, not a
-    // durable `spent` write.
+    // F14 (§2.6): accept arms the journal-derived lock, not a durable
+    // `spent` write.
     {
         let guard = pending.ledger.read();
+        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
         let td = guard.ledger.ledger.transfers().first().expect("output 0");
         assert!(!td.spent, "spent stays refresh-authoritative");
         assert_eq!(
-            td.awaiting_confirmation
-                .as_ref()
-                .expect("submit-accept places the F14 lock")
+            f14_locks
+                .get(&td.global_output_index)
+                .expect("submit-accept arms the journal-derived F14 lock")
                 .tx_hash,
             tx_hash
         );

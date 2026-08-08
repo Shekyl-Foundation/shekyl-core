@@ -406,17 +406,24 @@ pub(crate) fn apply_probe_outcome(
 /// Release the F14 awaiting-confirmation locks held under any txid in
 /// `tx_hashes` (the confirmed-absent leg of §2.6: the tx provably never
 /// confirmed — definite terminal verdict on the probe, or operator-directed
-/// release after the alarm rung), in a **single** ledger scan regardless of
-/// how many txids a cadence tick resolves. Returns the number of locks
-/// released.
+/// release after the alarm rung). Returns the number of carried-input
+/// locks the release cleared from the derived view.
 ///
-/// The confirmed-**present** leg lives in
-/// `shekyl_engine_state::LedgerIndexes::mark_spent` (refresh observes
-/// the spend on-chain and supersedes the lock); this function must
-/// never run for a tx that might still confirm — the caller owns that
-/// proof (§2.6 invariant 2's "definite verdict or observed absence").
-/// Release makes the outputs selectable again; it does **not**
-/// authorize an automatic rebuild (§2.6 invariant 3 / §7.4).
+/// Since PR-SJ-1b the release is journal-only: `mark_presumed_dead`
+/// flips the display state (`Dispatched → PresumedDead`; an `Abandoned`
+/// row keeps its user-authored state) and clears `lock_baseline`, which
+/// removes the row's carried inputs from
+/// `SendJournalBlock::derive_f14_locks` — there is no per-transfer
+/// field left to clear. A late confirmation flips the row to
+/// `Confirmed` through the merge reconciler, loudly un-presuming it.
+///
+/// The confirmed-**present** leg needs no code at all: every derived-
+/// view consumer checks `spent` first, so refresh-observed confirmation
+/// supersedes structurally. This function must never run for a tx that
+/// might still confirm — the caller owns that proof (§2.6 invariant 2's
+/// "definite verdict or observed absence"). Release makes the outputs
+/// selectable again; it does **not** authorize an automatic rebuild
+/// (§2.6 invariant 3 / §7.4).
 pub(crate) fn release_awaiting_confirmation(
     wallet: &mut shekyl_engine_state::WalletLedger,
     tx_hashes: &HashSet<TxHash>,
@@ -425,24 +432,16 @@ pub(crate) fn release_awaiting_confirmation(
         return 0;
     }
     let mut released = 0;
-    for td in &mut wallet.ledger.transfers {
-        if td
-            .awaiting_confirmation
-            .as_ref()
-            .is_some_and(|a| tx_hashes.contains(&a.tx_hash))
-        {
-            td.awaiting_confirmation = None;
-            released += 1;
-        }
-    }
-    // PR-SJ-1: the confirmed-absent release is the `PresumedDead` entry
-    // (SJ-DQ-4 / P3-4 — a display state; keys and the I-2 reference are
-    // retained). `lock_baseline` clears so the merge reconciler's lock
-    // re-derivation never re-creates a lock the watchdog deliberately
-    // released; a late confirmation flips the row to `Confirmed` through
-    // the same reconciler, loudly un-presuming it.
     for txid in tx_hashes {
-        wallet.send_journal.mark_presumed_dead(&txid.to_bytes());
+        let key = txid.to_bytes();
+        let held_inputs = wallet
+            .send_journal
+            .rows
+            .get(&key)
+            .filter(|row| row.state.reapplies_f14_locks() && row.lock_baseline.is_some())
+            .map_or(0, |row| row.inputs.len());
+        wallet.send_journal.mark_presumed_dead(&key);
+        released += held_inputs;
     }
     released
 }
@@ -450,14 +449,15 @@ pub(crate) fn release_awaiting_confirmation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_engine_state::{AwaitingConfirmation, TransferDetails, SPENDABLE_AGE};
+    use shekyl_engine_state::{TransferDetails, SPENDABLE_AGE};
 
     const CFG: WatchdogConfig = WatchdogConfig {
         escape_horizon_blocks: 540,
     };
 
-    /// Minimal transfer fixture carrying an optional F14 lock.
-    fn transfer_with_lock(seed: u8, lock: Option<AwaitingConfirmation>) -> TransferDetails {
+    /// Minimal unspent transfer fixture at `gindex = seed` (locks are
+    /// journal-derived since PR-SJ-1b, so the row itself carries none).
+    fn transfer_at(seed: u8) -> TransferDetails {
         use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
         TransferDetails {
             tx_hash: TxHash::from_bytes([seed; 32]),
@@ -471,7 +471,6 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
-            awaiting_confirmation: lock,
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
@@ -563,21 +562,10 @@ mod tests {
     fn release_confirmed_absent_clears_only_the_named_tx() {
         let gone = TxHash::from_bytes([0xCC; 32]);
         let still_held = TxHash::from_bytes([0xDD; 32]);
-        let lock = |h| {
-            Some(AwaitingConfirmation {
-                tx_hash: h,
-                accepted_at_height: 4_000,
-            })
-        };
         let mut wallet = shekyl_engine_state::WalletLedger::empty();
-        wallet.ledger = ledger_with(vec![
-            transfer_with_lock(1, lock(gone)),
-            transfer_with_lock(2, lock(gone)),
-            transfer_with_lock(3, lock(still_held)),
-        ]);
-        // PR-SJ-1: seed the owning journal rows so the release's
-        // PresumedDead edge is observable (and the fixture stays
-        // invariant-honest: locks derive from dispatch facts).
+        wallet.ledger = ledger_with(vec![transfer_at(1), transfer_at(2), transfer_at(3)]);
+        // The owning journal rows are the locks (PR-SJ-1b): `gone`
+        // carries gindexes 1 and 2, `still_held` carries 3.
         for (txid, gindexes) in [(gone, vec![1u64, 2]), (still_held, vec![3u64])] {
             wallet.send_journal.rows.insert(
                 txid.to_bytes(),
