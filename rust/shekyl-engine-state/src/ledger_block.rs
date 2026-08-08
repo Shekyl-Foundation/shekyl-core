@@ -201,13 +201,10 @@ pub struct LedgerBlock {
 /// field of an unmarked type fails to compile instead of failing at the
 /// next rescan.
 ///
-/// **Known field-level exception (provably vacuous from PR-SJ-1):**
-/// `TransferDetails::awaiting_confirmation` is dispatch-authored state on
-/// a scan-derived row. The trait bounds *types*, not fields, so it
-/// cannot catch this — instead the send-journal equivalence invariant
-/// (`send-journal-lock-equivalence`, [`crate::invariants`]) proves the
-/// field is derivable from `send_journal` rows at all times, and the
-/// pre-committed PR-SJ-1b deletes the field, retiring this note.
+/// PR-SJ-1b retired the only known field-level exception
+/// (`TransferDetails::awaiting_confirmation`): F14 locks are derived
+/// from the sibling send-journal block, so every field of
+/// [`LedgerBlock`] is scan-derived again.
 pub trait ScanDerived {}
 
 impl ScanDerived for u32 {} // block_version
@@ -358,10 +355,7 @@ impl LedgerBlock {
             .iter()
             .enumerate()
             .filter(|(_, td)| {
-                if !td.is_spendable(
-                    current_height,
-                    f14_locks.contains_key(&td.global_output_index),
-                ) {
+                if !td.is_spendable(current_height, f14_locks) {
                     return false;
                 }
                 if let Some(min) = min_amount {

@@ -675,9 +675,6 @@ pub(crate) fn build_pending_tx_in_state(
         .flat_map(|r| r.selected_transfer_indices.iter().copied())
         .collect();
 
-    // Test-only helper on a bare LedgerBlock: no journal in scope, so no
-    // derived locks (PR-SJ-1b) — the production path derives them in
-    // `transfer/engine.rs` under the shared guard.
     let mut candidates: Vec<(usize, AtomicUnits)> = ledger
         .spendable_outputs(synced, None, &Default::default())
         .into_iter()

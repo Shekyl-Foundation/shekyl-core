@@ -200,6 +200,27 @@ impl LedgerBlockExt for LedgerBlock {
     }
 }
 
+/// Whole-wallet balance projection: journal-derived F14 locks applied
+/// with the scan-derived ledger under one type (PR-SJ-1b). Prefer this
+/// over hand-threading `f14_locks` into [`LedgerBlockExt::balance`].
+pub trait WalletLedgerExt {
+    /// Balance at the wallet's current synced height.
+    fn balance(&self) -> BalanceSummary;
+
+    /// Balance at an explicit chain height (tests / historical views).
+    fn balance_at(&self, current_height: u64) -> BalanceSummary;
+}
+
+impl WalletLedgerExt for shekyl_engine_state::WalletLedger {
+    fn balance(&self) -> BalanceSummary {
+        self.balance_at(self.ledger.height())
+    }
+
+    fn balance_at(&self, current_height: u64) -> BalanceSummary {
+        self.ledger.balance(current_height, &self.f14_locks())
+    }
+}
+
 #[cfg(test)]
 mod x5_eligible_height_tests {
     use super::*;

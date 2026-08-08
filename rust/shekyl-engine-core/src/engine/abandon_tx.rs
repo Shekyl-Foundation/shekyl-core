@@ -421,14 +421,14 @@ mod tests {
         // PR-SJ-1b: the lock is journal-derived, so it survives the wipe
         // by construction — the journal outlives the ledger reset and the
         // derivation reads it directly.
-        let locks = wallet.send_journal.derive_f14_locks();
+        let locks = wallet.f14_locks();
         let lock = locks
             .get(&7)
             .expect("the abandoned row's carried input stays locked across the wipe");
         assert_eq!(lock.tx_hash.to_bytes(), txid);
         assert_eq!(lock.accepted_at_height, 25);
         assert!(
-            !wallet.ledger.transfers[0].is_spendable(u64::MAX, locks.contains_key(&7)),
+            !wallet.ledger.transfers[0].is_spendable(u64::MAX, &locks),
             "the replayed funding row is excluded from selection"
         );
         assert_eq!(

@@ -162,13 +162,14 @@ fn check_tip_not_below_transfer(ledger: &LedgerBlock) -> Result<(), WalletLedger
 /// by *something* the wallet actively tracks: a live
 /// [`TransferDetails`] (the scanner observed it — as the receiving
 /// txid, as a confirmed `spending_tx_hash` (WI-RPC-3 F-9
-/// spend-quadruple), or as an in-flight `awaiting_confirmation`
-/// lock), a scanned pool entry (we saw it in mempool), the
+/// spend-quadruple), a scanned pool entry (we saw it in mempool), the
 /// user-submitted pending list (we originated it and it has not yet
 /// been mined), or a send-journal row in a non-terminal-or-`Abandoned`
 /// state (`WALLET_SEND_RECORD.md` P3-4 — after `abandon_send` migrates
 /// the pending entry, the journal row is the reference the retained
-/// secret lives by). A tx-hash in `tx_keys` with no live reference is
+/// secret lives by; PR-SJ-1b also covers the broadcast-accept →
+/// confirmation window that the retired F14 field once pinned). A
+/// tx-hash in `tx_keys` with no live reference is
 /// an orphan — the secret scalar for a transaction the wallet has
 /// forgotten exists, which is both a secret-handling leak and a sign
 /// that the garbage-collection logic is broken.
@@ -233,7 +234,7 @@ fn check_tx_keys_no_orphans(
             INV_TX_KEYS_NO_ORPHANS,
             format!(
                 "tx_meta.tx_keys contains an entry for tx_hash = {} that does not appear in \
-                 ledger.transfers (tx_hash / spending_tx_hash / awaiting_confirmation), \
+                 ledger.transfers (tx_hash / spending_tx_hash), \
                  tx_meta.scanned_pool_txs, sync_state.pending_tx_hashes, or a send-journal \
                  row in a non-terminal-or-abandoned state",
                 hex::encode(orphan)

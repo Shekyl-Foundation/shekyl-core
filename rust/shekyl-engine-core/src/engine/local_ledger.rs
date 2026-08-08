@@ -82,7 +82,7 @@
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use shekyl_engine_state::{LedgerIndexes, WalletLedger};
-use shekyl_scanner::{BalanceSummary, LedgerBlockExt};
+use shekyl_scanner::{BalanceSummary, WalletLedgerExt};
 
 use super::{error::LedgerError, refresh::LedgerSnapshot, traits::LedgerEngine};
 
@@ -289,9 +289,9 @@ impl LocalLedger {
     /// The bench measures per-call cost over a fixed transfer count;
     /// the indexes are not consulted on the `balance` read path
     /// (per `local_ledger.rs`'s implementor — the read body
-    /// projects `ledger.balance(ledger.height())` directly), so
-    /// resetting them to empty keeps the fixture aligned with the
-    /// `balance` workload alone.
+    /// projects balance through the journal-derived lock map under
+    /// one guard), so resetting them to empty keeps the fixture
+    /// aligned with the `balance` workload alone.
     ///
     /// Bench fixtures that exercise index-touching paths (e.g., a
     /// future `claimable_rewards` bench) populate indexes through
@@ -340,11 +340,8 @@ impl LedgerEngine for LocalLedger {
 
     fn balance(&self) -> BalanceSummary {
         let guard = self.read();
-        // PR-SJ-1b: F14 locks are journal-derived; one guard covers the
-        // derivation and the summary it feeds.
-        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
-        let ledger = &guard.ledger.ledger;
-        ledger.balance(ledger.height(), &f14_locks)
+        // One guard: journal-derived F14 locks + ledger summary (PR-SJ-1b).
+        guard.ledger.balance()
     }
 }
 

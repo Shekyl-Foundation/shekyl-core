@@ -59,6 +59,7 @@ use crate::{
     send_journal_block::{AbandonEdge, SendInputRef, SendJournalBlock, SendRecipient, SendState},
     staking_block::StakingBlock,
     sync_state_block::SyncStateBlock,
+    transfer::TransferDetails,
     tx_meta_block::{TxMetaBlock, TxSecretKey, TxSecretKeys},
 };
 
@@ -201,6 +202,37 @@ impl WalletLedger {
             staking,
             send_journal: SendJournalBlock::empty(),
         }
+    }
+
+    /// Journal-derived F14 awaiting-confirmation lock map (PR-SJ-1b).
+    ///
+    /// The composed entry point for consumers that hold a whole
+    /// [`WalletLedger`]: derive once under the caller's guard, then
+    /// pass into balance / spendability / projection. Prefer
+    /// [`Self::spendable_outputs`] / [`Self::unspent_transfers`] when
+    /// those are the only uses.
+    #[must_use]
+    pub fn f14_locks(&self) -> crate::send_journal_block::F14Locks {
+        self.send_journal.derive_f14_locks()
+    }
+
+    /// Unspent, unfrozen transfers not under an F14 lock — journal and
+    /// ledger consulted together (C7: locks live on the journal).
+    #[must_use]
+    pub fn unspent_transfers(&self) -> Vec<&TransferDetails> {
+        self.ledger.unspent_transfers(&self.f14_locks())
+    }
+
+    /// Spendable outputs at `current_height`, with journal-derived F14
+    /// locks applied. Prefer this over threading `f14_locks` by hand.
+    #[must_use]
+    pub fn spendable_outputs(
+        &self,
+        current_height: u64,
+        min_amount: Option<shekyl_units::AtomicUnits>,
+    ) -> Vec<(usize, &TransferDetails)> {
+        self.ledger
+            .spendable_outputs(current_height, min_amount, &self.f14_locks())
     }
 
     /// Serialize the full bundle to postcard bytes.
@@ -970,18 +1002,18 @@ mod tests {
             }],
         );
         assert!(
-            w.send_journal.derive_f14_locks().is_empty(),
+            w.f14_locks().is_empty(),
             "dispatch does not arm the lock — only an accepting verdict does"
         );
 
         w.stamp_send_lock_baseline(&txid, 25);
-        let locks = w.send_journal.derive_f14_locks();
+        let locks = w.f14_locks();
         let lock = locks.get(&300).expect("stamp arms the derived F14 lock");
         assert_eq!(lock.tx_hash.to_bytes(), txid);
         assert_eq!(lock.accepted_at_height, 25);
         assert_eq!(w.send_journal.rows[&txid].lock_baseline, Some(25));
         assert!(
-            !w.ledger.transfers[0].is_spendable(30, locks.contains_key(&300)),
+            !w.ledger.transfers[0].is_spendable(30, &locks),
             "the armed lock excludes the carried input from selection"
         );
         w.check_invariants().expect("invariants hold after stamp");
@@ -1037,25 +1069,21 @@ mod tests {
             },
         );
 
-        let locks = w.send_journal.derive_f14_locks();
+        let locks = w.f14_locks();
         assert_eq!(
             locks.keys().copied().collect::<Vec<_>>(),
             vec![100, 101, 999],
             "the derivation carries every journal input, replayed or not"
         );
         assert!(
-            !w.ledger.transfers[0].is_spendable(30, locks.contains_key(&100)),
+            !w.ledger.transfers[0].is_spendable(30, &locks),
             "unspent carried input is excluded from selection"
         );
         assert!(
-            !w.ledger.transfers[1].is_spendable(30, locks.contains_key(&101)),
+            !w.ledger.transfers[1].is_spendable(30, &locks),
             "spent input stays unspendable via `spent`, not the lock"
         );
-        assert_eq!(
-            locks,
-            w.send_journal.derive_f14_locks(),
-            "derivation is pure"
-        );
+        assert_eq!(locks, w.f14_locks(), "derivation is pure");
         w.check_invariants().expect("invariants hold");
     }
 
@@ -1230,7 +1258,7 @@ mod tests {
             );
         }
 
-        let locks = w.send_journal.derive_f14_locks();
+        let locks = w.f14_locks();
         let lock = locks
             .get(&400)
             .expect("abandoned-with-baseline derives its lock");
@@ -1241,11 +1269,11 @@ mod tests {
             "a released abandoned row (baseline None) derives no lock"
         );
         assert!(
-            !w.ledger.transfers[0].is_spendable(30, locks.contains_key(&400)),
+            !w.ledger.transfers[0].is_spendable(30, &locks),
             "the armed abandoned row's input stays excluded from selection"
         );
         assert!(
-            w.ledger.transfers[1].is_spendable(30, locks.contains_key(&401)),
+            w.ledger.transfers[1].is_spendable(30, &locks),
             "the released row's input is selectable again"
         );
         w.check_invariants().expect("invariants hold");

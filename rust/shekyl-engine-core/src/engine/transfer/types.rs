@@ -227,7 +227,7 @@ pub(super) trait Stage1LedgerSpendableAccess: LedgerEngine {
 
     /// Whole-`WalletLedger` mutable access, for writes that span blocks
     /// (WI-RPC-3 retention: `tx_meta.tx_keys` + `sync_state.
-    /// pending_tx_hashes` + the ledger-block F14 locks in one guard,
+    /// pending_tx_hashes` + journal F14 baseline edges in one guard,
     /// so the I-2 invariant holds atomically under the write lock).
     ///
     /// Replaced the former ledger-block-only mutable accessor

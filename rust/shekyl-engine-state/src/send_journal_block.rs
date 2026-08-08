@@ -20,12 +20,10 @@
 //! The journal **owns** the dispatch facts: the selected input set, the
 //! realized recipients, the realized fee (the wire tx's cleartext fee —
 //! never an estimator output, roadmap R-4), and the lock baseline. The F14
-//! awaiting-confirmation state on
-//! [`TransferDetails`](crate::transfer::TransferDetails) is a **derived
-//! cache** of these facts (the `LedgerIndexes` precedent): PR-SJ-1 keeps
-//! the live field and proves equivalence
-//! ([`crate::invariants`] `send-journal-lock-equivalence`); PR-SJ-1b
-//! (pre-committed) retires the field.
+//! awaiting-confirmation lock set is a **derived view** of those facts
+//! ([`SendJournalBlock::derive_f14_locks`], PR-SJ-1b) — never a second
+//! persisted representation on
+//! [`TransferDetails`](crate::transfer::TransferDetails).
 //!
 //! # State machine (append-only)
 //!

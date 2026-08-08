@@ -1089,7 +1089,7 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
     // refresh is the settlement authority for `spent`.
     {
         let guard = pending.ledger.read();
-        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
+        let f14_locks = guard.ledger.f14_locks();
         let td = guard.ledger.ledger.transfers().first().expect("output 0");
         assert!(!td.spent, "spent stays refresh-authoritative");
         let lock = f14_locks
@@ -1097,7 +1097,7 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
             .expect("submit-accept arms the journal-derived F14 lock");
         assert_eq!(lock.tx_hash, tx_hash);
         assert!(
-            !td.is_spendable(u64::MAX, f14_locks.contains_key(&td.global_output_index)),
+            !td.is_spendable(u64::MAX, &f14_locks),
             "journal-locked output must be excluded from selection"
         );
     }
@@ -1238,7 +1238,7 @@ async fn confirmed_absent_release_keeps_retention_record() {
         "the pending record stays as the secret's I-2 live reference"
     );
     assert!(
-        guard.ledger.send_journal.derive_f14_locks().is_empty(),
+        guard.ledger.f14_locks().is_empty(),
         "all derived F14 locks for the confirmed-absent tx are cleared"
     );
     guard.ledger.check_invariants().expect("I-2 after release");
@@ -1410,7 +1410,7 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
             Some(20),
             "AlreadyInChain mirrors the clamped baseline into the journal (F40)"
         );
-        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
+        let f14_locks = guard.ledger.f14_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
@@ -1438,7 +1438,7 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                 "the derived lock carries exactly the journal baseline"
             );
             assert!(
-                !td.is_spendable(u64::MAX, true),
+                !td.is_spendable(u64::MAX, &f14_locks),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -1509,7 +1509,7 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
     // stands, baselined at the claimed height.
     {
         let guard = pending.ledger.read();
-        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
+        let f14_locks = guard.ledger.f14_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
@@ -1591,7 +1591,7 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
     // `spent` untouched — the kind rode through as data, not dispatch.
     {
         let guard = pending.ledger.read();
-        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
+        let f14_locks = guard.ledger.f14_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
@@ -1608,7 +1608,7 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
             let lock = &f14_locks[&td.global_output_index];
             assert_eq!(lock.tx_hash, expected_hash);
             assert!(
-                !td.is_spendable(u64::MAX, true),
+                !td.is_spendable(u64::MAX, &f14_locks),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -2021,7 +2021,7 @@ async fn dispatch_writes_the_send_journal_row() {
 
     // Derived-view spot check: the accept armed the journal baseline
     // and the derived lock map carries the row's inputs under it.
-    let f14_locks = guard.ledger.send_journal.derive_f14_locks();
+    let f14_locks = guard.ledger.f14_locks();
     let lock = f14_locks
         .values()
         .next()
@@ -3491,7 +3491,7 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     // `spent` write.
     {
         let guard = pending.ledger.read();
-        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
+        let f14_locks = guard.ledger.f14_locks();
         let td = guard.ledger.ledger.transfers().first().expect("output 0");
         assert!(!td.spent, "spent stays refresh-authoritative");
         assert_eq!(

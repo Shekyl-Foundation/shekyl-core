@@ -69,30 +69,23 @@ pub fn eligible_height(block_height: BlockHeight, additional_timelock: Timelock)
     }
 }
 
-/// The F14 awaiting-confirmation lock state
-/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.6).
+/// Runtime view of one F14 awaiting-confirmation lock
+/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.6; PR-SJ-1b).
 ///
-/// Set on an output when a transaction spending it is **network-exposed**
-/// (daemon verdict `Accepted` / `AlreadyInPool`); replaces the old durable
-/// `spent = true` write at submit-accept. While present, the output is
-/// excluded from selection ([`TransferDetails::is_spendable`]) — a wallet
-/// restart between accept and confirmation must not make the output
-/// selectable again, or the wallet builds a second tx over the same input
-/// with the **same key image** (a self-inflicted broadcast-linkage
-/// artifact, §7.1). Persisted in the AEAD-sealed ledger for exactly that
-/// reason (§2.6 invariant 1).
+/// **Not persisted.** Values are produced only by
+/// [`crate::SendJournalBlock::derive_f14_locks`] from journal facts
+/// (baseline-stamped rows in a `reapplies_f14_locks` state). Consumers
+/// consult the map by `global_output_index` so a network-exposed spend
+/// cannot be selected again for a second same-key-image tx (§7.1).
 ///
-/// Two release paths, both required (§2.6 invariant 2):
+/// Release is structural on the derived view:
 ///
-/// - **Confirmed-present:** refresh observes the spend on-chain →
-///   [`crate::ledger_indexes::LedgerIndexes::mark_spent`] transitions the
-///   output to refresh-authoritative `spent` and clears this state.
-/// - **Confirmed-absent:** the tx never confirms (evicted, never landed) →
-///   the wallet's watchdog horizon releases the lock after converting
-///   absence into a definite verdict where reachable (resubmit-same-bytes
-///   probe) or on observed absence otherwise. Release is not rebuild
-///   authorization (§2.6 invariant 3).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// - **Confirmed-present:** refresh marks the transfer `spent`; every
+///   consumer checks `spent` before the lock map.
+/// - **Confirmed-absent:** the watchdog clears the journal row's
+///   `lock_baseline` (via `mark_presumed_dead`); derivation drops the
+///   inputs. Release is not rebuild authorization (§2.6 invariant 3).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AwaitingConfirmation {
     /// Canonical txid of the network-exposed transaction spending this
     /// output — the watchdog's chain-confirmation key.
@@ -292,14 +285,19 @@ impl TransferDetails {
     /// Outputs below `eligible_height` are immature (no curve-tree path yet)
     /// and cannot be spent. Outputs with a network-exposed spend awaiting
     /// chain confirmation (the F14 lock, §2.6) are excluded: selecting one
-    /// would build a second tx bearing the same key image. The lock is a
-    /// journal-derived fact (PR-SJ-1b —
-    /// `SendJournalBlock::derive_f14_locks`), so the caller supplies it:
-    /// `f14_locked` is whether the derived lock map contains this row's
-    /// `global_output_index`. Taking the bool forces every call site to
-    /// consult the journal rather than silently dropping the check.
-    pub fn is_spendable(&self, current_height: u64, f14_locked: bool) -> bool {
-        !self.spent && !self.frozen && !f14_locked && current_height >= self.eligible_height
+    /// would build a second tx bearing the same key image. The lock map is
+    /// journal-derived (PR-SJ-1b — `SendJournalBlock::derive_f14_locks` /
+    /// [`crate::WalletLedger::f14_locks`]); taking `&F14Locks` (not a free
+    /// `bool`) keeps the §7.1 self-link check typed to the derivation.
+    pub fn is_spendable(
+        &self,
+        current_height: u64,
+        f14_locks: &std::collections::BTreeMap<u64, AwaitingConfirmation>,
+    ) -> bool {
+        !self.spent
+            && !self.frozen
+            && !f14_locks.contains_key(&self.global_output_index)
+            && current_height >= self.eligible_height
     }
 
     /// The amount held in this output.

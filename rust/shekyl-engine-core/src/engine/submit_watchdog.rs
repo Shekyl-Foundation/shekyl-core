@@ -606,13 +606,13 @@ mod tests {
         // PR-SJ-1b: spendability consults the journal-derived lock map.
         // The released row cleared its baseline, so only `still_held`'s
         // carried input (gindex 3) stays locked.
-        let locks = wallet.send_journal.derive_f14_locks();
+        let locks = wallet.f14_locks();
         assert_eq!(locks.keys().copied().collect::<Vec<_>>(), vec![3]);
         let ledger = &wallet.ledger;
         for td in ledger.transfers() {
             let locked = locks.contains_key(&td.global_output_index);
             assert_eq!(
-                td.is_spendable(u64::MAX, locked),
+                td.is_spendable(u64::MAX, &locks),
                 !locked,
                 "gindex {} spendability must mirror the derived lock",
                 td.global_output_index

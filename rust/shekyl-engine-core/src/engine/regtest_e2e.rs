@@ -592,7 +592,7 @@ async fn e2e_get_curve_tree_path_returns_valid_path() {
 async fn e2e_refresh_scans_coinbase_balance() {
     use super::refresh::RefreshOptions;
     use super::{DaemonClient, Engine, SoloSigner};
-    use shekyl_scanner::LedgerBlockExt;
+    use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
     let daemon = RegtestDaemon::start().await;
@@ -648,10 +648,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
             let g = arc.read().await;
             let ledger = g.ledger();
             total_height = ledger.ledger.height();
-            unlocked = ledger
-                .ledger
-                .balance(total_height, &ledger.send_journal.derive_f14_locks())
-                .unlocked;
+            unlocked = ledger.balance_at(total_height).unlocked;
         }
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -688,7 +685,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     use super::pending::{FeePriority, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::{DaemonClient, Engine, SoloSigner};
-    use shekyl_scanner::LedgerBlockExt;
+    use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
     let daemon = RegtestDaemon::start().await;
@@ -742,13 +739,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
         unlocked = {
             let g = arc.read().await;
             let ledger = g.ledger();
-            ledger
-                .ledger
-                .balance(
-                    ledger.ledger.height(),
-                    &ledger.send_journal.derive_f14_locks(),
-                )
-                .unlocked
+            ledger.balance().unlocked
         };
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -917,7 +908,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     use super::pending::{FeePriority, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::Engine;
-    use shekyl_scanner::LedgerBlockExt;
+    use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
     // The daemon's `get_curve_tree_depth` reports `fcmp_layers − 1`
@@ -978,13 +969,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     let unlocked = {
         let g = arc.read().await;
         let ledger = g.ledger();
-        ledger
-            .ledger
-            .balance(
-                ledger.ledger.height(),
-                &ledger.send_journal.derive_f14_locks(),
-            )
-            .unlocked
+        ledger.balance().unlocked
     };
     assert!(
         unlocked > AtomicUnits::ZERO,
@@ -1370,14 +1355,10 @@ async fn refresh(arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>) {
 async fn unlocked_balance(
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
 ) -> shekyl_units::AtomicUnits {
-    use shekyl_scanner::LedgerBlockExt;
+    use shekyl_scanner::WalletLedgerExt;
     let g = arc.read().await;
     let ledger = g.ledger();
-    let f14_locks = ledger.send_journal.derive_f14_locks();
-    ledger
-        .ledger
-        .balance(ledger.ledger.height(), &f14_locks)
-        .unlocked
+    ledger.balance().unlocked
 }
 
 // ---------------------------------------------------------------------------

@@ -29,13 +29,17 @@
 //! trait to be in scope at the call site:
 //!
 //! ```ignore
-//! use shekyl_scanner::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
-//! use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
+//! use shekyl_scanner::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt, WalletLedgerExt};
+//! use shekyl_engine_state::{LedgerBlock, LedgerIndexes, WalletLedger};
 //!
 //! let mut ledger = LedgerBlock::empty();
 //! let mut indexes = LedgerIndexes::empty();
 //! indexes.process_scanned_outputs(&mut ledger, h, block_hash, outputs);
-//! let balance = ledger.balance(ledger.height());
+//! // Bare LedgerBlock: empty F14 locks (no journal in scope).
+//! let balance = ledger.balance(ledger.height(), &Default::default());
+//! // Whole wallet: journal-derived locks applied once.
+//! let wallet = WalletLedger::empty();
+//! let _ = wallet.balance();
 //! ```
 //!
 //! The pair `(LedgerBlock, LedgerIndexes)` replaces the `RuntimeWalletState`
@@ -66,7 +70,7 @@ pub(crate) mod tests;
 
 pub use balance::BalanceSummary;
 pub use extra::{Extra, ExtraField};
-pub use ledger_ext::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
+pub use ledger_ext::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt, WalletLedgerExt};
 pub use output::WalletOutput;
 pub use scan::{
     GuaranteedScanner, RecoveredWalletOutput, ScanError, ScanOutcome, ScannableBlock, Scanner,

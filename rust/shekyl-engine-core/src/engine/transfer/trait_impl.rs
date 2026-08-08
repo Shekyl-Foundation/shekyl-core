@@ -39,9 +39,10 @@ use super::types::{RescanRequest, Stage1LedgerSpendableAccess};
 /// `LocalPendingTx` generic (`DAEMON_SUBMIT_VERDICT.md` §5.3). The ledger
 /// reads bridge the driver's `synced_height` / `block_hash_at` /
 /// `held_submits` / `release_awaiting_confirmation` to the guarded
-/// `LedgerBlock` via the same [`Stage1LedgerSpendableAccess`] path the
-/// build path uses; the byte / queue accessors delegate to the inherent
-/// methods; `emit` routes through the diagnostic sink.
+/// [`WalletLedger`](shekyl_engine_state::WalletLedger) via the same
+/// [`Stage1LedgerSpendableAccess`] path the build path uses; the byte /
+/// queue accessors delegate to the inherent methods; `emit` routes
+/// through the diagnostic sink.
 ///
 /// `#[allow(private_bounds)]`: [`Stage1LedgerSpendableAccess`] is a
 /// private trait (crate-internal ledger-access seam); the public
