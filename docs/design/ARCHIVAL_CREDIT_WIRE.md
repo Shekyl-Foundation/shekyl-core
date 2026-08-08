@@ -4,6 +4,19 @@
 byte-layout is pinned yet; the gating decision (record format + field residence,
 §3) is posed, not resolved.
 
+> **SUPERSEDED IN PART (2026-08-07)** by
+> `ARCHIVAL_CHALLENGE_MECHANISM.md`. That round ruled **derived assignment**
+> (no commitment record; the block is the commitment) and a **2-of-3
+> per-epoch majority** replacing pass-priority, which supersedes: the
+> "Miner-chosen set, coinbase-revealed — no schedule, no beacon" and "Miss
+> fact — pass/miss discriminant" authority rows below (a miss is now
+> commitment-expiry, off-wire); §4's pass-priority fold; and the
+> Phase-4 old-vin-vs-settlement **equivalence KAT** (the two paths are now
+> *supposed* to disagree — the cutover proof obligation moves to KATs
+> against the new mechanism's own spec). The admission surface (CW-1..CW-3,
+> PR #410) and the prunable-residence / nonce-recompute rulings are
+> unaffected. Read the successor doc first.
+
 **Scope.** The consensus wire that replaces the leaf-opening serve-credit vin
 with the miner-attested, `P`-countersigned whole-shard read ruled across the TJ
 round (`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`; rulings summarised in
