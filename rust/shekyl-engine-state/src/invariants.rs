@@ -224,10 +224,10 @@ fn check_tx_keys_no_orphans(
     for h in &sync_state.pending_tx_hashes {
         live.insert(*h);
     }
-    // P3-4 journal leg: a non-terminal-or-`Abandoned` row is itself a
-    // live reference (mirrored by `reconcile_tx_key_retention`).
+    // P3-4 journal leg: a retention-holding row is itself a live
+    // reference (mirrored by `reconcile_tx_key_retention`).
     for (h, row) in &send_journal.rows {
-        if crate::wallet_ledger::journal_row_holds_retention(row.state) {
+        if row.state.holds_tx_key_retention() {
             live.insert(*h);
         }
     }
@@ -384,8 +384,6 @@ fn check_send_journal_lock_equivalence(
     ledger: &LedgerBlock,
     journal: &crate::send_journal_block::SendJournalBlock,
 ) -> Result<(), WalletLedgerError> {
-    use crate::send_journal_block::SendState;
-
     for (idx, td) in ledger.transfers.iter().enumerate() {
         let Some(lock) = &td.awaiting_confirmation else {
             continue;
@@ -397,12 +395,12 @@ fn check_send_journal_lock_equivalence(
                 format!("transfers[{idx}] holds an F14 lock for a tx with no send-journal row"),
             ));
         };
-        if !matches!(row.state, SendState::Dispatched | SendState::Abandoned) {
+        if !row.state.reapplies_f14_locks() {
             return Err(invariant_error(
                 INV_SEND_JOURNAL_LOCK_EQUIVALENCE,
                 format!(
                     "transfers[{idx}] holds an F14 lock but the journal row is {:?}, not \
-                     Dispatched or Abandoned",
+                     a lock-reapplying state (Dispatched or Abandoned)",
                     row.state
                 ),
             ));
@@ -432,7 +430,7 @@ fn check_send_journal_lock_equivalence(
     }
 
     for (txid, row) in &journal.rows {
-        if !matches!(row.state, SendState::Dispatched | SendState::Abandoned) {
+        if !row.state.reapplies_f14_locks() {
             continue;
         }
         let Some(base) = row.lock_baseline else {

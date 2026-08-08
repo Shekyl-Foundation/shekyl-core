@@ -309,6 +309,29 @@ pub enum TransferState {
     Abandoned,
 }
 
+impl TransferState {
+    /// OpenAPI / JSON-RPC wire string (`SCREAMING_SNAKE_CASE`). Single
+    /// owner of that vocabulary so error data and `get_transfers` never
+    /// diverge.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "PENDING",
+            Self::Confirmed => "CONFIRMED",
+            Self::Spent => "SPENT",
+            Self::Failed => "FAILED",
+            Self::Dropped => "DROPPED",
+            Self::Abandoned => "ABANDONED",
+        }
+    }
+}
+
+impl std::fmt::Display for TransferState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Receive-attribution kind for INCOMING transfer rows (FA-8 / WI-RPC-4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

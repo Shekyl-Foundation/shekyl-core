@@ -111,6 +111,40 @@ pub enum SendState {
     Abandoned,
 }
 
+impl SendState {
+    /// Whether a journal row in this state is itself an I-2 live
+    /// reference for a retained `tx_keys` entry (P3-4): after
+    /// `abandon_send` migrates the pending set, the journal row is what
+    /// keeps the secret from being collected as an orphan.
+    ///
+    /// Distinct from [`Self::reapplies_f14_locks`]: `PresumedDead` still
+    /// holds retention (keys / I-2) but never re-places F14 locks
+    /// (baseline is cleared on the confirmed-absent release).
+    #[must_use]
+    pub const fn holds_tx_key_retention(self) -> bool {
+        matches!(
+            self,
+            Self::Dispatched | Self::PresumedDead | Self::Abandoned
+        )
+    }
+
+    /// Whether a journal row in this state re-derives carried-input F14
+    /// locks when `lock_baseline` is `Some` (P3-1 re-application set:
+    /// non-terminal-or-abandoned, minus states that have deliberately
+    /// released).
+    #[must_use]
+    pub const fn reapplies_f14_locks(self) -> bool {
+        matches!(self, Self::Dispatched | Self::Abandoned)
+    }
+
+    /// Whether the user-authored abandon edge may fire from this state
+    /// (`Dispatched | PresumedDead → Abandoned`).
+    #[must_use]
+    pub const fn is_abandonable(self) -> bool {
+        matches!(self, Self::Dispatched | Self::PresumedDead)
+    }
+}
+
 /// Result of the user-authored abandon edge (`WALLET_SEND_RECORD.md`
 /// P3-4 / SJ-DQ-8) on one journal row.
 ///
@@ -331,16 +365,14 @@ impl SendJournalBlock {
         let Some(row) = self.rows.get_mut(txid) else {
             return AbandonEdge::NotFound;
         };
-        match row.state {
-            SendState::Dispatched | SendState::PresumedDead => {
-                let previous = row.state;
-                row.state = SendState::Abandoned;
-                AbandonEdge::Applied { previous }
-            }
-            SendState::Abandoned => AbandonEdge::AlreadyAbandoned,
-            state @ (SendState::Confirmed { .. } | SendState::TerminalRejected) => {
-                AbandonEdge::Forbidden { state }
-            }
+        if row.state.is_abandonable() {
+            let previous = row.state;
+            row.state = SendState::Abandoned;
+            AbandonEdge::Applied { previous }
+        } else if matches!(row.state, SendState::Abandoned) {
+            AbandonEdge::AlreadyAbandoned
+        } else {
+            AbandonEdge::Forbidden { state: row.state }
         }
     }
 }
@@ -371,6 +403,32 @@ mod tests {
             lock_baseline,
             state,
         }
+    }
+
+    /// State-set predicates are the single owner of retention / lock /
+    /// abandonability membership — keep them aligned with the design
+    /// tables (I-2 vs I-5 vs P3-4 edge sources).
+    #[test]
+    fn send_state_set_predicates() {
+        assert!(SendState::Dispatched.holds_tx_key_retention());
+        assert!(SendState::PresumedDead.holds_tx_key_retention());
+        assert!(SendState::Abandoned.holds_tx_key_retention());
+        assert!(!SendState::Confirmed { height: 1 }.holds_tx_key_retention());
+        assert!(!SendState::TerminalRejected.holds_tx_key_retention());
+
+        assert!(SendState::Dispatched.reapplies_f14_locks());
+        assert!(SendState::Abandoned.reapplies_f14_locks());
+        assert!(
+            !SendState::PresumedDead.reapplies_f14_locks(),
+            "PresumedDead holds retention but never re-places locks"
+        );
+        assert!(!SendState::Confirmed { height: 1 }.reapplies_f14_locks());
+
+        assert!(SendState::Dispatched.is_abandonable());
+        assert!(SendState::PresumedDead.is_abandonable());
+        assert!(!SendState::Abandoned.is_abandonable());
+        assert!(!SendState::Confirmed { height: 1 }.is_abandonable());
+        assert!(!SendState::TerminalRejected.is_abandonable());
     }
 
     /// Round-trip through postcard preserves every field of every state.

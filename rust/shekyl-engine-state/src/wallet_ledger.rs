@@ -62,18 +62,6 @@ use crate::{
     tx_meta_block::{TxMetaBlock, TxSecretKey, TxSecretKeys},
 };
 
-/// A tx-key retention reference that the send journal itself carries:
-/// any row in a **non-terminal or `Abandoned`** state (P3-4's I-2
-/// reference list). `Confirmed` rows are chain-referenced and
-/// `TerminalRejected` rows retired their secret at the verdict, so
-/// neither needs the journal leg.
-pub(crate) fn journal_row_holds_retention(state: SendState) -> bool {
-    matches!(
-        state,
-        SendState::Dispatched | SendState::PresumedDead | SendState::Abandoned
-    )
-}
-
 /// Bundle-level `format_version`.
 ///
 /// At V3.0 genesis the bundle shipped as version `3`; FA-8 ships
@@ -313,9 +301,10 @@ impl WalletLedger {
     /// `sync_state.pending_tx_hashes` (the pending set stays a true
     /// live-work set) and the journal row itself becomes the retained
     /// tx secret's live reference
-    /// ([`journal_row_holds_retention`]). `tx_meta.tx_keys` is never
-    /// touched (C2: proof material has its own lifecycle — the named
-    /// hazard is deleting proof material for a tx that later confirms).
+    /// ([`SendState::holds_tx_key_retention`]). `tx_meta.tx_keys` is
+    /// never touched (C2: proof material has its own lifecycle — the
+    /// named hazard is deleting proof material for a tx that later
+    /// confirms).
     ///
     /// Both writes happen under the caller's single ledger guard, so a
     /// crash never splits the edge from the migration (the same
@@ -325,7 +314,10 @@ impl WalletLedger {
     ///
     /// Returns the edge outcome plus `was_pending` so a fail-closed
     /// caller can roll back via [`Self::unabandon_send`] when the
-    /// durable save fails.
+    /// durable save fails. Callers that pair this with a durable save
+    /// **must** hold the same write guard across edge + save + optional
+    /// rollback — abandon does not touch baseline or F14 locks, but a
+    /// concurrent refresh/watchdog under a released guard could.
     pub fn abandon_send(&mut self, txid: &[u8; 32]) -> (AbandonEdge, bool) {
         let edge = self.send_journal.mark_abandoned(txid);
         match edge {
@@ -341,14 +333,31 @@ impl WalletLedger {
 
     /// Fail-closed rollback of [`Self::abandon_send`] for a caller whose
     /// durable save failed: restore the previous row state and, when the
-    /// abandon removed the pending reference, re-add it. Leaves the
-    /// ledger exactly as it was before the abandon, so an unsaved edge
-    /// never survives in memory to diverge from disk.
+    /// abandon removed the pending reference, re-add it.
+    ///
+    /// **Exclusive-guard contract:** must run under the same write guard
+    /// that applied `abandon_send` and attempted the save. Under that
+    /// contract no concurrent merge/watchdog can have advanced the row
+    /// (confirm) or cleared its baseline, so restoring `state` + pending
+    /// is a full pre-abandon restore — abandon itself never mutates
+    /// `lock_baseline` or F14 locks.
+    ///
+    /// Defense in depth: if the row is no longer `Abandoned` (a caller
+    /// released the guard and a concurrent path advanced it), this is a
+    /// no-op rather than clobbering a confirm or re-adding a stale
+    /// pending reference.
     pub fn unabandon_send(&mut self, txid: &[u8; 32], previous: SendState, was_pending: bool) {
-        if let Some(row) = self.send_journal.rows.get_mut(txid) {
-            row.state = previous;
-        }
-        if was_pending && !self.sync_state.pending_tx_hashes.contains(txid) {
+        let restored = if let Some(row) = self.send_journal.rows.get_mut(txid) {
+            if matches!(row.state, SendState::Abandoned) {
+                row.state = previous;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if restored && was_pending && !self.sync_state.pending_tx_hashes.contains(txid) {
             self.sync_state.pending_tx_hashes.push(*txid);
         }
     }
@@ -428,7 +437,7 @@ impl WalletLedger {
         }
 
         for (txid, row) in &send_journal.rows {
-            if !matches!(row.state, SendState::Dispatched | SendState::Abandoned) {
+            if !row.state.reapplies_f14_locks() {
                 continue;
             }
             let Some(base) = row.lock_baseline else {
@@ -544,12 +553,12 @@ impl WalletLedger {
         for h in &self.sync_state.pending_tx_hashes {
             live.insert(*h);
         }
-        // Journal leg (P3-4): a row in a non-terminal-or-abandoned state
-        // is itself a live reference — after `abandon_send` migrates the
-        // pending entry, this leg is what keeps the retained secret from
-        // being collected as an orphan.
+        // Journal leg (P3-4): a row that holds tx-key retention is itself
+        // a live reference — after `abandon_send` migrates the pending
+        // entry, this leg keeps the retained secret from being collected
+        // as an orphan.
         for (h, row) in &self.send_journal.rows {
-            if journal_row_holds_retention(row.state) {
+            if row.state.holds_tx_key_retention() {
                 live.insert(*h);
             }
         }
@@ -1181,6 +1190,45 @@ mod tests {
         assert_eq!(w.send_journal.rows[&txid].state, SendState::Dispatched);
         assert_eq!(w.sync_state.pending_tx_hashes, vec![txid]);
         w.check_invariants().expect("rollback restores I-2");
+    }
+
+    /// Defense in depth: if a concurrent path advanced the row past
+    /// `Abandoned` before rollback, `unabandon_send` must not clobber
+    /// the confirm or re-introduce a stale pending reference.
+    #[test]
+    fn unabandon_send_is_noop_when_row_already_advanced() {
+        use crate::send_journal_block::{SendInputRef, SendRecord, SendState};
+
+        let txid = [0x68; 32];
+        let mut w = WalletLedger::empty();
+        insert_secret(&mut w, txid);
+        w.send_journal.rows.insert(
+            txid,
+            SendRecord {
+                dispatched_at_height: 20,
+                fee: 5,
+                recipients: Vec::new(),
+                change_amount: 0,
+                inputs: vec![SendInputRef {
+                    gindex: 7,
+                    amount: 1,
+                }],
+                lock_baseline: None,
+                state: SendState::Confirmed { height: 30 },
+            },
+        );
+
+        w.unabandon_send(&txid, SendState::Dispatched, true);
+
+        assert_eq!(
+            w.send_journal.rows[&txid].state,
+            SendState::Confirmed { height: 30 },
+            "confirm must not be clobbered by a late unabandon"
+        );
+        assert!(
+            w.sync_state.pending_tx_hashes.is_empty(),
+            "stale pending must not be re-added over a confirmed row"
+        );
     }
 
     /// P3-1's re-application set is non-terminal-or-abandoned: an

@@ -26,13 +26,19 @@
 //!
 //! # Crash ordering
 //!
-//! The edge and the migration are applied under one ledger write guard
-//! and persisted as a single atomic envelope replace
-//! ([`drive_persistence`] → `save_state`), the same crash-ordering
-//! contract every other journal edge rides: a crash never splits the
-//! edge from the migration, and a failed save rolls both back
-//! (fail closed — an unsaved abandon never survives in memory to
-//! diverge from disk).
+//! Edge, I-2 migration, and the durable save all run under **one** ledger
+//! write guard and persist as a single atomic envelope replace
+//! ([`drive_persistence`] → `save_state`). Holding the write across the
+//! save is deliberate and differs from the payment-request pattern
+//! (mutate → drop write → read-save): abandon is concurrent with refresh
+//! merge and the confirmed-absent watchdog, either of which can
+//! legitimately advance the same row (`Abandoned → Confirmed`, baseline
+//! clear). Releasing the guard before save would let those edges
+//! interleave, so a failed-save rollback could clobber a confirm or
+//! leave a `Dispatched` row without its locks. Under exclusive write:
+//! a crash never splits the edge from the migration, a failed save rolls
+//! both back against the pre-abandon shape, and the success outcome
+//! matches what was written.
 
 use shekyl_engine_state::{AbandonEdge, SendState};
 use shekyl_types::TxHash;
@@ -90,9 +96,10 @@ impl<
 {
     /// Abandon a dispatched send **and durably commit it** (P3-4).
     ///
-    /// Applies the journal edge and the I-2 reference migration under
-    /// one ledger write guard, then saves via the normal crash-atomic
-    /// path. Idempotent: abandoning an already-`Abandoned` row returns
+    /// Applies the journal edge, the I-2 reference migration, and the
+    /// crash-atomic save under one ledger write guard so concurrent
+    /// refresh/watchdog cannot interleave. Idempotent: abandoning an
+    /// already-`Abandoned` row returns
     /// [`AbandonTxOutcome::AlreadyAbandoned`] without touching disk.
     ///
     /// # Errors
@@ -106,47 +113,33 @@ impl<
     pub fn abandon_tx_persisted(&self, txid: TxHash) -> Result<AbandonTxOutcome, AbandonTxError> {
         let key = txid.to_bytes();
 
-        // Edge + migration under one write guard (crash ordering:
-        // nothing observable between them), captured for rollback.
-        let (previous, was_pending) = {
-            let mut guard = self.ledger.write();
-            match guard.ledger.abandon_send(&key) {
-                (AbandonEdge::Applied { previous }, was_pending) => (previous, was_pending),
-                (AbandonEdge::AlreadyAbandoned, _) => {
-                    // A row can only be Abandoned in memory because a
-                    // previous abandon_tx_persisted committed it (the
-                    // failure path rolls back), so there is nothing to
-                    // save.
-                    return Ok(AbandonTxOutcome::AlreadyAbandoned);
-                }
-                (AbandonEdge::NotFound, _) => return Err(AbandonTxError::NotFound),
-                (AbandonEdge::Forbidden { state }, _) => {
-                    return Err(AbandonTxError::StateForbids { state })
-                }
+        // One write guard for edge + migration + save (+ optional
+        // rollback). `save_state` takes `&WalletLedger` — no second
+        // lock — so concurrent merge/watchdog block until we finish.
+        let mut guard = self.ledger.write();
+        match guard.ledger.abandon_send(&key) {
+            (AbandonEdge::AlreadyAbandoned, _) => {
+                // Committed by a prior successful abandon_tx_persisted
+                // (failure paths roll back), so disk already matches.
+                Ok(AbandonTxOutcome::AlreadyAbandoned)
             }
-        };
-
-        // Same-lock discipline as `create_payment_request_persisted`:
-        // the write guard is dropped before the read-guarded save.
-        let save_result = {
-            let ledger_guard = self.ledger.read();
-            drive_persistence(
-                self.persistence
-                    .save_state(self.state_wrap_key(), &ledger_guard.ledger),
-            )
-        };
-
-        if let Err(e) = save_result {
-            // Fail closed: restore the pre-abandon shape so memory
-            // never diverges from disk across a failed save.
-            let mut guard = self.ledger.write();
-            guard.ledger.unabandon_send(&key, previous, was_pending);
-            // `PersistenceEngine::Error: Into<PersistenceError>` — the
-            // trait's own conversion, as on every other save path.
-            return Err(AbandonTxError::Persistence(e.into()));
+            (AbandonEdge::NotFound, _) => Err(AbandonTxError::NotFound),
+            (AbandonEdge::Forbidden { state }, _) => Err(AbandonTxError::StateForbids { state }),
+            (AbandonEdge::Applied { previous }, was_pending) => {
+                let save_result = drive_persistence(
+                    self.persistence
+                        .save_state(self.state_wrap_key(), &guard.ledger),
+                );
+                if let Err(e) = save_result {
+                    // Fail closed under the same exclusive guard: restore
+                    // the pre-abandon shape. Abandon never touched
+                    // baseline/locks, so state + pending is a full undo.
+                    guard.ledger.unabandon_send(&key, previous, was_pending);
+                    return Err(AbandonTxError::Persistence(e.into()));
+                }
+                Ok(AbandonTxOutcome::Abandoned)
+            }
         }
-
-        Ok(AbandonTxOutcome::Abandoned)
     }
 }
 

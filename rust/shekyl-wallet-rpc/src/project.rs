@@ -253,14 +253,25 @@ pub fn outgoing_block_height(row: &SendRecord) -> Option<u64> {
 /// - `Abandoned` → `ABANDONED` (user-authored give-up, P3-4 — never
 ///   collapse into `DROPPED`, whose release claim is evidence-backed;
 ///   an abandoned send's input locks may still be held).
-pub fn outgoing_transfer_state(row: &SendRecord) -> TransferState {
-    match row.state {
+///
+/// This is the **single owner** of the journal → wire state map; error
+/// mapping and filters call here (or [`outgoing_transfer_state`]) rather
+/// than re-listing the arms.
+#[must_use]
+pub fn outgoing_transfer_state_of(state: SendState) -> TransferState {
+    match state {
         SendState::Dispatched => TransferState::Pending,
         SendState::Confirmed { .. } => TransferState::Confirmed,
         SendState::TerminalRejected => TransferState::Failed,
         SendState::PresumedDead => TransferState::Dropped,
         SendState::Abandoned => TransferState::Abandoned,
     }
+}
+
+/// Convenience: [`outgoing_transfer_state_of`] for a full journal row.
+#[must_use]
+pub fn outgoing_transfer_state(row: &SendRecord) -> TransferState {
+    outgoing_transfer_state_of(row.state)
 }
 
 /// Project a send-journal row as an OUTGOING `TransferView` (PR-SJ-2).
@@ -630,9 +641,15 @@ mod tests {
             TransferState::Abandoned
         );
         assert_eq!(
+            outgoing_transfer_state_of(SendState::Abandoned),
+            TransferState::Abandoned
+        );
+        assert_eq!(
             serde_json::to_value(TransferState::Abandoned).expect("serialize"),
             serde_json::json!("ABANDONED")
         );
+        assert_eq!(TransferState::Abandoned.as_str(), "ABANDONED");
+        assert_eq!(TransferState::Dropped.as_str(), "DROPPED");
     }
 
     /// Only a refresh-observed confirmation yields a height. The

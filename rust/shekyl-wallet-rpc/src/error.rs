@@ -209,12 +209,12 @@ pub enum WalletRpcError {
     #[error("submit ambiguous")]
     SubmitAmbiguous,
     /// `abandon_tx`: the send's current state forbids abandoning.
-    /// `state` is the projected `TransferState` string so the client
-    /// hears the same vocabulary `get_transfers` speaks.
+    /// `state` is the projected [`TransferState`] so the client hears
+    /// the same vocabulary `get_transfers` speaks.
     #[error("cannot abandon: the send is {state}")]
     AbandonStateForbids {
-        /// Projected `TransferState` of the refusing row.
-        state: &'static str,
+        /// Projected [`TransferState`] of the refusing row.
+        state: crate::types::TransferState,
     },
     /// `check_*`: proof string failed Bech32m decode, carried the wrong
     /// HRP, its wire framing did not parse, or it exceeds the section's
@@ -307,7 +307,7 @@ impl WalletRpcError {
     pub fn data(&self) -> Option<Value> {
         match self {
             Self::CapabilityForbids { capability } => Some(json!({ "capability": capability })),
-            Self::AbandonStateForbids { state } => Some(json!({ "state": state })),
+            Self::AbandonStateForbids { state } => Some(json!({ "state": state.as_str() })),
             Self::ContentGenMismatch { content_gen } => Some(json!({ "content_gen": content_gen })),
             Self::SubmitRejected { data } => Some(data.clone()),
             Self::StakeNotReady { detail } | Self::RescanBlocked { detail } => {
@@ -557,22 +557,14 @@ fn retryable_to_reject_cause(cause: RetryableRejectCause) -> RejectCause {
 impl From<shekyl_engine_core::AbandonTxError> for WalletRpcError {
     fn from(err: shekyl_engine_core::AbandonTxError) -> Self {
         use shekyl_engine_core::AbandonTxError as E;
-        use shekyl_engine_state::SendState;
         match err {
             // Same answer shape as `get_transfer_by_id` for an id the
             // wallet does not know (rule 82: "no send record" is the
             // truth, not an internal error).
             E::NotFound => Self::UnknownTransferId,
             E::StateForbids { state } => Self::AbandonStateForbids {
-                // Project through the `get_transfers` vocabulary so the
-                // refusal names the state the client already sees.
-                state: match state {
-                    SendState::Dispatched => "PENDING",
-                    SendState::Confirmed { .. } => "CONFIRMED",
-                    SendState::TerminalRejected => "FAILED",
-                    SendState::PresumedDead => "DROPPED",
-                    SendState::Abandoned => "ABANDONED",
-                },
+                // Single owner of the journal → wire map (`project`).
+                state: crate::project::outgoing_transfer_state_of(state),
             },
             // Fail-closed rollback already ran; category-only message
             // (the detail can carry a filesystem path).
@@ -725,12 +717,15 @@ mod tests {
 
     /// `abandon_tx` mapping (PR-SJ-3): unknown txid answers with the
     /// same shape `get_transfer_by_id` uses; a state refusal carries
-    /// `-29108` with the refusing state in `get_transfers` vocabulary;
+    /// `-29108` with the refusing state in `get_transfers` vocabulary
+    /// (via `outgoing_transfer_state_of`, not a parallel string table);
     /// a persistence failure is category-only (rolled back engine-side).
     #[test]
     fn abandon_errors_map_to_their_own_shapes() {
         use shekyl_engine_core::AbandonTxError;
         use shekyl_engine_state::SendState;
+
+        use crate::types::TransferState;
 
         let err: WalletRpcError = AbandonTxError::NotFound.into();
         assert_eq!(err.code(), WalletRpcErrorCode::UnknownTransferId);
@@ -743,6 +738,15 @@ mod tests {
         assert_eq!(err.code().as_i32(), -29108);
         assert_eq!(err.data().expect("data")["state"], "CONFIRMED");
         assert!(
+            matches!(
+                err,
+                WalletRpcError::AbandonStateForbids {
+                    state: TransferState::Confirmed
+                }
+            ),
+            "refusal carries the typed TransferState, not a parallel string"
+        );
+        assert!(
             !err.message().contains("42"),
             "the refusal names the state, not chain detail: {}",
             err.message()
@@ -753,6 +757,11 @@ mod tests {
         }
         .into();
         assert_eq!(err.data().expect("data")["state"], "FAILED");
+        assert_eq!(
+            err.message(),
+            "cannot abandon: the send is FAILED",
+            "Display uses TransferState::as_str"
+        );
     }
 
     #[test]
