@@ -636,13 +636,50 @@ rationale strengthened.**
   beside `shekyl/ek-bind-v1`, collision-checked by test. *(Ratified
   as drafted.)*
 
-**SM-R-4 (rules SM-DQ-4) — the signing identity.** Ratify as posed,
-algorithm-generic: HKDF arm from the master seed under an
-alg-parameterized domain (`"shekyl/msg-sign-seed-<alg>-v1"`), fed to
-the winning scheme's deterministic keygen (`keygen_with_seeds` for
-SLH; the seeded-ChaCha20 shim for ML-DSA). Mnemonic-recoverable; never
-reused by any other surface; derived on demand and zeroized (rules
-35/36); **no wallet-file schema change**.
+**SM-R-4 (rules SM-DQ-4) — the signing identity. RATIFIED
+2026-08-08, with the algorithm-generic framing dropped and two pins
+added.**
+
+- **The literal domain, not the template.** The draft's
+  `"shekyl/msg-sign-seed-<alg>-v1"` was written before SM-R-8
+  ratified; the scheme has won, and a parameterized domain is a
+  template, not a domain — rule 30's inventory collision-checks
+  literals. Pinned: **`"shekyl/msg-sign-seed-slh-dsa-192s-v1"`**. The
+  ML-DSA arm (the seeded-ChaCha20 shim) is dropped rather than kept as
+  a live branch nothing reaches; if ML-DSA ever returns it is a new
+  domain string and a new address version anyway, since the address
+  commits to the key.
+- **R4-a — the split is 72 bytes, written as a literal because the
+  reflex is wrong.** SLH-DSA-192s has `n = 24` (not the 32 a
+  category-3 reflex suggests), so the derivation is one HKDF expand of
+  **72 bytes, sliced in order into `SK.seed ‖ SK.prf ‖ PK.seed` at 24
+  bytes each** — a single expand sliced into thirds, ruled explicitly
+  because three separate expands with distinct info strings would
+  produce different (equally valid-looking) keys and only one layout
+  can be the spec. A wrong split silently produces a
+  valid-but-different keypair; the pin is a KAT from a fixed master
+  seed to a fixed public key.
+- **R4-b — derive-on-demand's costs, stated rather than discovered.**
+  (1) Keygen runs on every signing call (the top-layer XMSS tree
+  build, unamortized by design). The measurement already covers this:
+  the Pi 4 bench timed keygen (415 ms) and sign (3.83 s) as separate
+  phases, and the ruling's "~4.3 s per signing session" figure is
+  their composition — sign-only is 3.83 s, and the HKDF derive adds
+  microseconds. The UX argument rests on the composed figure and
+  said so. (2) Zeroization of an SLH key is not scalar-shaped:
+  `SK.seed`/`SK.prf` are the secrets, `PK.seed`/`PK.root` public.
+  **Verified at the crate (2026-08-08): `fips205-0.4.1` derives
+  `Zeroize + ZeroizeOnDrop` on `PrivateKey` and its inner types**
+  (`src/types.rs`, `zeroize_derive` feature), so the key type wipes
+  on drop; whether intermediate WOTS+ state inside keygen/sign is
+  wiped is a crate-internals property the caller cannot control —
+  carried as a named item of the rule-17 dependency audit, to be
+  answered before PR-SM-1, not assumed.
+- Ratified as drafted: mnemonic-recoverable with no new backup
+  material (the A4 seed-custody story holds for this surface); never
+  reused by any other surface (per-output and multisig identities
+  stay theirs — the property that makes the domain inventory
+  meaningful); **no wallet-file schema change**.
 
 **SM-R-5 (rules SM-DQ-5) — armoring.** Single-line
 `shekylmsgsig1.<base64url(canonical bytes)>`; canonical bytes are the
