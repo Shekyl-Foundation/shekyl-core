@@ -180,6 +180,13 @@ Not a blocker for SM-DQ-1; recorded so the round shows it was seen.
 
 ### SM-DQ-3 — Preimage and domain separation
 
+> **SUPERSEDED — the normative form is §7 SM-R-3.** This section is
+> the round-0 *question* preserved as history; the sketch below
+> predates the ratification and differs from it (generic `H` instead
+> of pinned cSHAKE256, `version` instead of `sig_format_version`, no
+> length prefix, v1-only segment). Implementers build from SM-R-3,
+> never from this sketch.
+
 Proposed preimage (rule 30 — no naked hashes, no cross-surface reuse):
 
 ```
@@ -712,12 +719,19 @@ three amendments folded and the padding pinned.** Single-line
   and preimage — so a layout bump changes what signatures attest,
   correctly, while an armoring bump does not). A future reader bumps
   the one whose thing changed; the doc now says which is which.
-- **Checksum:** 4-byte cSHAKE256 trailer — **not security**
-  (verification is the integrity check) but rule-82 error honesty:
-  decode distinguishes "this paste is corrupted" from "this signature
-  is not from that address". Ratified as drafted, and the non-security
-  framing is deliberate: it stops a later "strengthening" of the
-  checksum into something load-bearing.
+- **Checksum, pinned exactly** (post-ratification precision fix — the
+  trailer was ruled but its construction was not spelled, and
+  independent implementations could have disagreed):
+  `checksum = cSHAKE256("shekyl/msg-sig-ck-v1", layout_version ‖
+  scheme ‖ mode ‖ σ_pq ‖ σ_cl)[..4]` — the customization string is
+  the registered checksum domain, the hashed payload is the entire
+  canonical byte string that precedes the trailer, and the trailer is
+  the first four bytes of the digest. **Not security** (verification
+  is the integrity check) but rule-82 error honesty: decode
+  distinguishes "this paste is corrupted" from "this signature is not
+  from that address". The non-security framing is deliberate: it
+  stops a later "strengthening" of the checksum into something
+  load-bearing.
 - **R5-b — ceiling re-justified against the ratified scheme, and
   enforced pre-decode.** The real 192s blob is
   `3 + 16,224 + 64 + 4 = 16,295 B` ≈ **21.7 KB encoded**; the 192f
