@@ -14,6 +14,10 @@
   - [ ] Audit artifact links recorded in release notes (report URL or digest, remediation PRs)
 - [ ] Security audit
 - [ ] Code audit
+- [ ] Genesis address format: PQ signing anchor decision (address v2)
+  - [ ] Fork ruled — agile `sig_bind_tag` commitment (+32 B) vs SLH pk-inline (+48 B) vs no anchor (see `docs/FOLLOWUPS.md` §V3.0 "GENESIS ADDRESS FORMAT" and `docs/design/WALLET_MESSAGE_SIGNING.md` SM-DQ-7/8)
+  - [ ] Address v2 layout + test vectors landed (`ADDRESS_DERIVATION_V1` successor) if an anchor is added
+  - [ ] Message-signing round unblocked (PR-SM-1 preimage freezes against the ruled layout)
 - [ ] PQC specification frozen
   - [x] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation
   - [x] canonical transaction/signature serialization documented
