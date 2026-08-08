@@ -681,20 +681,58 @@ added.**
   stay theirs — the property that makes the domain inventory
   meaningful); **no wallet-file schema change**.
 
-**SM-R-5 (rules SM-DQ-5) — armoring.** Single-line
-`shekylmsgsig1.<base64url(canonical bytes)>`; canonical bytes are the
-length-checked house layout (version ‖ scheme ‖ mode ‖ [alg_id ‖ pk —
-present iff the genesis lane rules fork (i)] ‖ σ_pq ‖ σ_ed) with a
-**4-byte cSHAKE256 checksum trailer** — not for security (verification
-is the integrity check) but for rule-82 error honesty: decode
-distinguishes "this paste is corrupted" from "this signature is not
-from that address". Hard decode ceiling 64 KB (covers B-f's 35.7 KB
-with margin; attacker-supplied input via `verify_message`).
-**Multi-segment Bech32m REJECTED** with the reason recorded: BIP-350
-checksum guarantees end at 1023 chars, our address code enforces that
-bound, and a 16–36 KB blob would need ~26–56 segments — an interface
-nobody can paste correctly. Reopen only if a transport emerges that
-requires Bech32m framing end-to-end.
+**SM-R-5 (rules SM-DQ-5) — armoring. RATIFIED 2026-08-08, with
+three amendments folded and the padding pinned.** Single-line
+`shekylmsgsig1.<base64url(canonical bytes)>`.
+
+- **R5-a — the `[alg_id ‖ pk]` conditional is DELETED.** It was
+  written before SM-R-8; fork (ii) is selected, the 48-byte key lives
+  in the address, and there is nothing to carry. An optional field
+  whose condition can never be true invites a future implementer to
+  support both shapes — a parsing fork in a format that must outlast
+  us (the same fix as SM-R-4's `<alg>` template). The layout that
+  ships:
+
+  `layout_version ‖ scheme ‖ mode ‖ σ_pq ‖ σ_ed ‖ checksum`
+
+  `scheme` earns its place as the append-only forward-compat byte —
+  one byte, not a conditional branch.
+- **R5-c — two version numbers, disambiguated by ruling.** The
+  prefix's `1` (`shekylmsgsig1.`) is the **envelope/armoring
+  version**: it changes only if the string encoding changes, and it
+  does **not** feed the preimage. The canonical first byte is the
+  **payload `layout_version`** — the same single value bound into the
+  preimage as `sig_format_version` (one value, two appearances: wire
+  and preimage — so a layout bump changes what signatures attest,
+  correctly, while an armoring bump does not). A future reader bumps
+  the one whose thing changed; the doc now says which is which.
+- **Checksum:** 4-byte cSHAKE256 trailer — **not security**
+  (verification is the integrity check) but rule-82 error honesty:
+  decode distinguishes "this paste is corrupted" from "this signature
+  is not from that address". Ratified as drafted, and the non-security
+  framing is deliberate: it stops a later "strengthening" of the
+  checksum into something load-bearing.
+- **R5-b — ceiling re-justified against the ratified scheme, and
+  enforced pre-decode.** The real 192s blob is
+  `3 + 16,224 + 64 + 4 = 16,295 B` ≈ **21.7 KB encoded**; the 192f
+  fallback encodes to ~47.7 KB. The **64 KB ceiling is kept and
+  re-justified as covering either parameter set**, so a pre-freeze
+  s→f UX flip does not reopen it — it is headroom over both, not a
+  number sized for a scheme that wasn't chosen. Enforcement is on the
+  **encoded input length, before decoding** — bounding decoded output
+  after decode would allocate an attacker's 64 KB from a shorter
+  input; same pre-allocation discipline `decompress_payload` applies
+  in `shekyl-levin`.
+- **base64url is PINNED UNPADDED, canonical-form-strict.** Decoders
+  reject `=` padding, non-alphabet characters, and non-zero trailing
+  bits in the final character — one signature has exactly one
+  spelling, which is what anything that hashes, logs, or deduplicates
+  the string needs.
+- **Multi-segment Bech32m REJECTED** with the reason recorded: BIP-350
+  checksum guarantees end at 1023 chars, our address code enforces
+  that bound, and a 16–48 KB encoding would need dozens of segments —
+  an interface nobody can paste correctly. Reopen only if a transport
+  emerges that requires Bech32m framing end-to-end.
 
 **SM-R-6 (rules SM-DQ-6) — API contract.** `verify_message` is
 **session-less** (pure function in the crypto crate; RPC method
@@ -746,6 +784,6 @@ this choice deliberately declines to track.
 **Ratification order.** SM-R-2..6 are independent of the genesis
 lane. SM-R-8 and the genesis lane's fork are coupled: ratifying
 SM-R-8 (B-s) selects fork (ii); rejecting it in favor of (A) selects
-fork (i) and re-poses SM-R-5's `alg_id ‖ pk` blob fields as
-mandatory.
+fork (i) and would re-pose blob-carried `alg_id ‖ pk` fields (deleted
+from SM-R-5 at its ratification, which post-dates SM-R-8's).
 
