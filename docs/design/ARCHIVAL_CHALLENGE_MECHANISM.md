@@ -88,6 +88,18 @@ pass recorded within W₂. No miss record exists on the wire; no party attests
 failure; there is no 49-byte fabrication path. To manufacture a miss you must
 suppress a pass for W₂ blocks — a censorship capability, not a write.
 
+**Drain-on-satisfaction, and the redraw floor (ratified phrasing):** pairs
+whose epoch requirement is already satisfied leave the draw set for the
+remainder of E, concentrating remaining draws on unresolved pairs. The
+scheduling property this must deliver — in the form the maintainer ratified —
+is: **a pair that fails its first challenge must be re-drawn before the epoch
+closes, with high probability.** That is what makes the epoch's settlement an
+observation rather than a coin flip, and it is the floor any §7.1 variant is
+measured against. It also gives the anti-evasion exponent: a colluding
+witness must intercept *every* draw a pair receives, succeeding with
+probability q^k rather than q — at q = 0.1, one draw per epoch is a 10 %
+shield, two is 1 %.
+
 **Anti-DDoS scope property (part of the ruling):** deriving from the
 *previous block's hash* strictly limits how far ahead challenge windows are
 knowable, so an attacker cannot precompute P's obligated-to-serve schedule.
@@ -237,6 +249,12 @@ Writing a Missed cell there corrupts vin-dedup and emission simultaneously.
 - `EpochSettlement::to_observation` **deletes** (not re-documents): its
   "sole bridge to the m-of-n machinery" role belonged to the superseded
   design.
+- `CHALLENGES_PER_EPOCH = 1` (`constants.rs:11`) retires **as a
+  guarantee**: it is the rate the TJ deliverable-2 measurement assumed and
+  it is consumed by the economics sim's bandwidth arithmetic
+  (`shekyl-economics-sim/src/proxy.rs`). Moving to 3 changes the *meaning*
+  of the window's input, not a tuning value — re-derive alongside (m, n)
+  and re-run the sim arithmetic that scales with it.
 - `archival_baseline_observed_at_epoch` retires per §4.1 — on the Half-B
   deletion surface, after drawability lands.
 - **The Phase-4 equivalence KAT is superseded with them.** The prior plan's
@@ -290,14 +308,29 @@ two derivations**. Add one when this lands.
   regardless). Penalty sizing target: exceed (position value × attacker
   hashrate share) ÷ (interceptions needed), floored by honest tolerance of
   genuine read failures. Bond-sized and reward-sized are both wrong (former
-  deters all honest witnessing; latter ~3 orders above target).
+  deters all honest witnessing; latter ~3 orders above target). The property
+  that keeps the number tractable is drain-on-satisfaction (§2): a pair that
+  never serves never leaves the pool, so evasion must hold across every draw
+  for months — the attacker pays per interception, repeatedly, against a
+  one-time avoided loss. The penalty need not be punitive alone; it must
+  make the **accumulated** cost cross the position value before the window
+  closes. Both terms are estimable from landed constants: position value
+  from `reward_share_floor` and the budget schedule; draw count from pool
+  size, `SETTLEMENT_EPOCH_BLOCKS`, and the (m, n) window. The floor on the
+  other side — the penalty at which an honest miner stops committing, given
+  a genuine read-failure rate it cannot control — needs **measurement, not
+  derivation**.
 - **DDoS on P:** the derived window is the targeting surface; §2's
   limited-scope property plus 2-of-3 redundancy plus long-W₂ (a *defense*
   here — more completion chances) are the mitigations. Converting DDoS to a
   slash requires sustained suppression across m of n epochs.
 - **Foundation CompleteTree nodes** are outside this economy by design
   (`market_member_at_epoch` returns false). Do not design incentives for
-  them.
+  them — and do not exempt them from the slash side either (examined and
+  closed 2026-08-07): a Foundation node down long enough to cross the
+  window is not serving, and a backstop that is not serving is not a
+  backstop; clearing its holdings is an accurate statement of reality, and
+  Rebond is the re-entry path for an operator who fixes the box.
 
 ## 7. Open forks — resolve on this record, never implicitly in code
 
@@ -309,7 +342,23 @@ two derivations**. Add one when this lands.
    synthesis: per-block seed selecting among the *least-covered* drawable
    pairs (a deterministic urn) — coverage converges to exactly 3, targeting
    window stays one block, at the cost of pending/complete bookkeeping in
-   the derivation. **Choose explicitly.**
+   the derivation. **Choose explicitly.** Coupled sub-decision, decided with
+   this fork: **is a pair drawable while a challenge on it is outstanding?**
+   If not, the clock-burn attack works: a dangling challenge occupies the
+   pair for W₂ blocks, so a colluding witness commits and sits — each
+   abandonment buys W₂ blocks of immunity for one penalty, draws per epoch
+   are bounded by (blocks remaining)/W₂, and the attacker shifts from
+   intercepting draws to consuming the epoch's clock. If yes, concurrency
+   must be capped — unbounded is §7.2(c)'s thundering herd in miniature —
+   but at a small cap the wasted work is bounded and occurs only when P is
+   actually serving, and an outstanding challenge superseded by the epoch
+   requirement being met resolves with **no penalty** (the challenger did
+   nothing wrong) and **no payment** (no credit is owed twice). Candidate:
+   **cap of 2 concurrent plus redraw-on-expiry**, which makes clock-burn
+   cost scale with the cap instead of buying blanket immunity. (Translation
+   note: the concurrency analysis was first run under pass-priority, where
+   the *first* pass settles the epoch; under 2-of-3 the supersession point
+   is the requirement — the second pass — not the first.)
 2. **Who reads — witness selection and obligation.** The decision the rest
    of the stack prices against: W₂, the abandonment penalty, the reward
    question, and the nonce anchor are all functions of who performs the
