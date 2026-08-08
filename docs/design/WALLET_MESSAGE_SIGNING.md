@@ -1,11 +1,17 @@
 # Wallet Message Signing (A2 / rewrite-plan 2c residue) — Design Round
 
-**Status: ROUND 0 OPEN (2026-08-08); PASSES 1–2 FOLDED (2026-08-08).** Poses
-SM-DQ-1…SM-DQ-8. Nothing here is ratified; the signature format freezes
-the moment it ships (a signature issued on day one must verify forever),
-so every fork below resolves before implementation starts. Pass 1
-superseded the round-0 SM-DQ-1 lead (see the pass record, §6) and
-escalated the address-version half to the genesis lane (SM-DQ-7).
+**Status: ROUND CLOSED — ALL RULINGS RATIFIED (2026-08-08).**
+SM-R-2..6 and SM-R-8 are ratified with their amendments folded (§7);
+SM-DQ-1's nested combiner and dual-duty label are binding via SM-R-3;
+SM-DQ-7's escalation **collapsed** with SM-R-8's ratification to a
+genesis-lane freeze-window sign-off on the 48-byte SLH-DSA-192s
+public-key field. **Outstanding before PR-SM-1:** (1) the genesis
+lane's layout sign-off — the only external dependency; (2) the 192f
+UX gate (dated, owned — `RELEASE_CHECKLIST.md`) before the freeze.
+Everything else is implementation. History: round 0 opened
+2026-08-08; passes 1–2 folded same day (pass 1 superseded the round-0
+SM-DQ-1 lead and escalated the address question; pass 2 corrected the
+category, measured both hosts, and audited the dependency).
 
 **Scope.** The last unwired 2c method pair:
 `Engine::sign_message(msg)` / `Engine::verify_message(msg, sig, address)`
@@ -734,17 +740,32 @@ three amendments folded and the padding pinned.** Single-line
   an interface nobody can paste correctly. Reopen only if a transport
   emerges that requires Bech32m framing end-to-end.
 
-**SM-R-6 (rules SM-DQ-6) — API contract.** `verify_message` is
+**SM-R-6 (rules SM-DQ-6) — API contract. RATIFIED 2026-08-08, with
+one fail-safe recorded and one pin added.** `verify_message` is
 **session-less** (pure function in the crypto crate; RPC method
 callable with no wallet open; CLI `verify` works offline) — refusing a
-public operation for lack of a wallet session is a rule-82 lie.
-`sign_message` requires the open wallet. Errors: malformed signature
-string / bad address = `-32602` (shape-first, the `get_transfer_by_id`
-precedent); well-formed signature that does not verify = its own
-honest code in the `-29800` band, with the checksum separating
-corruption from mismatch in the error detail. Signing is **hedged**
-(fips204/205 default; side-channel margin; signature-byte
-reproducibility is not a contract anyone needs).
+public operation for lack of a wallet session is a rule-82 lie, not a
+security measure: message, signature, and address are all public and
+all caller-supplied, and gating a pure function behind unrelated state
+would make the CLI useless for the case it exists to serve — checking
+someone else's signature. `sign_message` requires the open wallet (it
+needs the master seed). Errors: malformed signature string / bad
+address = `-32602` (shape-first, the `get_transfer_by_id` precedent);
+well-formed signature that does not verify = its own honest code in
+the `-29800` band, with the checksum separating corruption from
+mismatch in the error detail — a shape error is the caller's bug, a
+verification failure is an *answer*, and conflating them would make
+"not from that address" indistinguishable from "you passed garbage".
+Signing is **hedged** (fips204/205 default; side-channel margin;
+signature-byte reproducibility is not a contract anyone needs).
+**Fail-safe recorded at ratification:** SLH-DSA's hedged mode feeds
+`opt_rand` *on top of* `SK.prf`, so a bad RNG degrades to the
+deterministic construction rather than to catastrophe — worth having
+on the record given this crate family's RNG history (the fips203
+`DummyRng` hazard). **Constant-time pin:** verification is
+constant-time with respect to **nothing** — every input is public.
+Stated so nobody later adds timing hardening to a verify path where
+it buys nothing and costs clarity.
 
 **SM-R-8 (rules SM-DQ-8) — the algorithm: SLH-DSA-192s, pk-inline,
 fork (ii). RATIFIED 2026-08-08**, subject to three pins, all
