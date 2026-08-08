@@ -318,6 +318,60 @@ two derivations**. Add one when this lands.
   survives premise deletion is an **on-record reopening question** — argue
   it against the sealed 2026-08-02 text, not past it — and fork §7.2's
   abandonment penalty cannot be sized until it is answered.
+- **Resolution candidate (2026-08-08): routine duty, no payment, penalty on
+  demonstrated abandonment.** The duty case: challenge cost scales with
+  hashrate exactly as the block reward does — a 1 % miner performs 1 % of
+  challenges for 1 % of the reward, no cross-subsidy, nothing to arbitrage —
+  the signature of a duty already priced into the block reward, like
+  validation, relay, and chain storage; and consensus penalizes invalid
+  blocks rather than paying for valid ones, while explicit payment creates
+  the discretionary market whose conditionings the lemma catalogued. The
+  honest disanalogy, stated so the duty framing doesn't overclaim:
+  validation is self-enforcing (skip it and you build on garbage);
+  challenging is not — a block ignoring its derived assignment is valid —
+  which is why 2026-08-02 landed on norm-borne. **What is new under 2-of-3
+  is a discriminator requiring no assertion:** three witnesses read the
+  same pair in the same epoch, so two passes plus one silence is evidence
+  of the silent witness's inaction, not P's failure. The lemma's dilemma
+  was conditioning on *outcome* versus not conditioning at all;
+  peer-contrast conditions on neither — the witness cannot manufacture its
+  peers' passes, and P cannot frame the third without serving two and
+  thereby earning its own credit. If the checks below hold, the lemma
+  resolves **without being overturned**: its premise was single-witness
+  observation, which 2-of-3 replaced. Checks gating the ruling:
+  1. **§9.4 license — VERIFIED at source, and it constrains the shape.**
+     TJ-A5(i): adjudication is "statistical, over repetition, not forensic
+     over a single disputed event." A penalty firing on one epoch's
+     contradiction is forensic and unlicensed; firing on a cross-epoch
+     pattern is licensed — converging with what check 2 independently
+     forces.
+  2. **Correlated timing / path flakiness:** P dying mid-epoch, or Tor
+     flakiness, produces the same two-passes-one-silence signature as
+     abandonment — so the penalty must fire on a pattern across epochs,
+     never a single contradiction.
+  3. **Framing:** a colluding P serving exactly two witnesses to frame the
+     third gains nothing (the epoch settles Served either way) —
+     self-defeating as evasion but available as griefing; price it, don't
+     assume it away.
+  4. **The aggregation-subject problem (found verifying check 1; gates the
+     licensed form):** a cross-epoch pattern needs a persistent subject,
+     and miners are pseudonymous by design — coinbase keys are unlinkable
+     across blocks, and linking them is the cross-identity purchase the
+     privacy architecture forbids (G-1). So under §7.2(a)/(b) the witness
+     has no cross-epoch identity: the licensed pattern form has no
+     subject, while the implementable per-event form (natural vehicle: the
+     assignment block's own coinbase, still inside its lock window at
+     settlement) is exactly the forensic shape check 1 forbids and check 2
+     breaks. Candidate escapes — a bonded witness set (reopens §8.2's
+     population analysis and loses PoW-as-liveness) or per-event penalties
+     with a tolerance calibrated to measured failure rates (a priced risk
+     premium on honest miners) — are design work, not footnotes.
+  One boundary holds regardless of how the checks land: **the
+  discriminator must never feed P's settlement.** "Expiry-with-peer-pass ⇒
+  uncounted" would let one friendly witness per epoch shield a dark P
+  (one pass + two uncounted = Served) — resurrecting the single-draw
+  shield 2-of-3 exists to kill. Witness enforcement and P settlement stay
+  separate channels.
 - **Abandonment:** an assigned witness that never resolves burns the slot
   for W₂ blocks (phrasing contingent on §7.1: exact under per-block/urn
   variants; under epoch-seed exact coverage the three assignments are fixed
@@ -391,7 +445,9 @@ two derivations**. Add one when this lands.
      answer on the record is the 2026-08-02 ruling: coverage is
      **norm-borne** (default-client behaviour), `λ_eff` its tripwire — an
      accepted residual with an instrument, not an oversight. Choosing (a)
-     means re-accepting that residual under the new fold, knowingly.
+     means re-accepting that residual under the new fold, knowingly — but
+     see §6's routine-duty resolution candidate, which adds enforcement to
+     the norm if its four checks hold.
    - **(b) Derived nominee, single servicer:** the draw names the pair
      *and* who must service it. This is TJ-A1's anticipated shape — recent
      block producers are consensus-enumerable from headers — and §8.2's two
