@@ -90,7 +90,12 @@ impl WalletLedger {
     /// ledger they assembled in-process can invoke it directly.
     pub fn check_invariants(&self) -> Result<(), WalletLedgerError> {
         check_tip_not_below_transfer(&self.ledger)?;
-        check_tx_keys_no_orphans(&self.ledger, &self.tx_meta, &self.sync_state)?;
+        check_tx_keys_no_orphans(
+            &self.ledger,
+            &self.tx_meta,
+            &self.sync_state,
+            &self.send_journal,
+        )?;
         check_reorg_trail_monotonic(&self.ledger)?;
         check_spent_state_consistent(&self.ledger)?;
         check_send_journal_lock_equivalence(&self.ledger, &self.send_journal)?;
@@ -160,10 +165,13 @@ fn check_tip_not_below_transfer(ledger: &LedgerBlock) -> Result<(), WalletLedger
 /// [`TransferDetails`] (the scanner observed it — as the receiving
 /// txid, as a confirmed `spending_tx_hash` (WI-RPC-3 F-9
 /// spend-quadruple), or as an in-flight `awaiting_confirmation`
-/// lock), a scanned pool entry (we saw it in mempool), or the
+/// lock), a scanned pool entry (we saw it in mempool), the
 /// user-submitted pending list (we originated it and it has not yet
-/// been mined). A tx-hash in `tx_keys` with no live reference is an
-/// orphan — the secret scalar for a transaction the wallet has
+/// been mined), or a send-journal row in a non-terminal-or-`Abandoned`
+/// state (`WALLET_SEND_RECORD.md` P3-4 — after `abandon_send` migrates
+/// the pending entry, the journal row is the reference the retained
+/// secret lives by). A tx-hash in `tx_keys` with no live reference is
+/// an orphan — the secret scalar for a transaction the wallet has
 /// forgotten exists, which is both a secret-handling leak and a sign
 /// that the garbage-collection logic is broken.
 ///
@@ -181,6 +189,7 @@ fn check_tx_keys_no_orphans(
     ledger: &LedgerBlock,
     tx_meta: &TxMetaBlock,
     sync_state: &SyncStateBlock,
+    send_journal: &crate::send_journal_block::SendJournalBlock,
 ) -> Result<(), WalletLedgerError> {
     if tx_meta.tx_keys.is_empty() {
         return Ok(());
@@ -189,7 +198,8 @@ fn check_tx_keys_no_orphans(
     let mut live: HashSet<[u8; 32]> = HashSet::with_capacity(
         ledger.transfers.len()
             + tx_meta.scanned_pool_txs.len()
-            + sync_state.pending_tx_hashes.len(),
+            + sync_state.pending_tx_hashes.len()
+            + send_journal.rows.len(),
     );
     for t in &ledger.transfers {
         // `live` unifies typed transfer hashes with the still-raw `tx_meta` /
@@ -214,6 +224,13 @@ fn check_tx_keys_no_orphans(
     for h in &sync_state.pending_tx_hashes {
         live.insert(*h);
     }
+    // P3-4 journal leg: a retention-holding row is itself a live
+    // reference (mirrored by `reconcile_tx_key_retention`).
+    for (h, row) in &send_journal.rows {
+        if row.state.holds_tx_key_retention() {
+            live.insert(*h);
+        }
+    }
 
     if let Some(orphan) = tx_meta.tx_keys.keys().find(|k| !live.contains(*k)) {
         return Err(invariant_error(
@@ -221,7 +238,8 @@ fn check_tx_keys_no_orphans(
             format!(
                 "tx_meta.tx_keys contains an entry for tx_hash = {} that does not appear in \
                  ledger.transfers (tx_hash / spending_tx_hash / awaiting_confirmation), \
-                 tx_meta.scanned_pool_txs, or sync_state.pending_tx_hashes",
+                 tx_meta.scanned_pool_txs, sync_state.pending_tx_hashes, or a send-journal \
+                 row in a non-terminal-or-abandoned state",
                 hex::encode(orphan)
             ),
         ));
@@ -353,19 +371,19 @@ fn check_spend_triple(idx: usize, t: &TransferDetails) -> Result<(), WalletLedge
 /// facts (`WALLET_SEND_RECORD.md` C2 / P3-1a): until PR-SJ-1b deletes
 /// the field, both representations must agree.
 ///
-/// Forward: every locked transfer has a journal row in `Dispatched`
-/// state whose `lock_baseline` equals the lock's baseline and whose
+/// Forward: every locked transfer has a journal row in `Dispatched` or
+/// `Abandoned` state (P3-1's re-application set — an abandon retains
+/// the carried-input locks until confirmed-absent evidence releases
+/// them) whose `lock_baseline` equals the lock's baseline and whose
 /// carried input set contains the transfer's gindex. Reverse: every
-/// `Dispatched` row with a baseline has each carried input — **when
-/// present in the ledger** (a mid-rescan ledger may not have replayed
-/// the row yet) — either spent (confirmed evidence supersedes) or
-/// locked by exactly this tx at exactly this baseline.
+/// `Dispatched` / `Abandoned` row with a baseline has each carried
+/// input — **when present in the ledger** (a mid-rescan ledger may not
+/// have replayed the row yet) — either spent (confirmed evidence
+/// supersedes) or locked by exactly this tx at exactly this baseline.
 fn check_send_journal_lock_equivalence(
     ledger: &LedgerBlock,
     journal: &crate::send_journal_block::SendJournalBlock,
 ) -> Result<(), WalletLedgerError> {
-    use crate::send_journal_block::SendState;
-
     for (idx, td) in ledger.transfers.iter().enumerate() {
         let Some(lock) = &td.awaiting_confirmation else {
             continue;
@@ -377,11 +395,12 @@ fn check_send_journal_lock_equivalence(
                 format!("transfers[{idx}] holds an F14 lock for a tx with no send-journal row"),
             ));
         };
-        if row.state != SendState::Dispatched {
+        if !row.state.reapplies_f14_locks() {
             return Err(invariant_error(
                 INV_SEND_JOURNAL_LOCK_EQUIVALENCE,
                 format!(
-                    "transfers[{idx}] holds an F14 lock but the journal row is {:?}, not Dispatched",
+                    "transfers[{idx}] holds an F14 lock but the journal row is {:?}, not \
+                     a lock-reapplying state (Dispatched or Abandoned)",
                     row.state
                 ),
             ));
@@ -411,7 +430,7 @@ fn check_send_journal_lock_equivalence(
     }
 
     for (txid, row) in &journal.rows {
-        if row.state != SendState::Dispatched {
+        if !row.state.reapplies_f14_locks() {
             continue;
         }
         let Some(base) = row.lock_baseline else {
@@ -595,6 +614,49 @@ mod tests {
             StakingBlock::empty(),
         );
         w.check_invariants().expect("pending ref satisfies I-2");
+    }
+
+    /// P3-4 journal leg: after `abandon_send` migrates the pending
+    /// entry, a tx key whose *only* reference is an `Abandoned` journal
+    /// row satisfies I-2 — while a terminal (`TerminalRejected`) row
+    /// does not carry retention.
+    #[test]
+    fn tx_key_referenced_by_abandoned_journal_row_is_accepted() {
+        use crate::send_journal_block::{SendRecord, SendState};
+
+        let txid = [0x77; 32];
+        let mut tx_keys = BTreeMap::new();
+        tx_keys.insert(
+            txid,
+            TxSecretKeys {
+                primary: TxSecretKey::new(Zeroizing::new([0; 32])),
+            },
+        );
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let mut w = WalletLedger::new(
+            LedgerBlock::empty(),
+            BookkeepingBlock::empty(),
+            tx_meta,
+            SyncStateBlock::empty(),
+            StakingBlock::empty(),
+        );
+        let row = |state| SendRecord {
+            dispatched_at_height: 20,
+            fee: 5,
+            recipients: Vec::new(),
+            change_amount: 0,
+            inputs: Vec::new(),
+            lock_baseline: None,
+            state,
+        };
+        w.send_journal.rows.insert(txid, row(SendState::Abandoned));
+        w.check_invariants()
+            .expect("abandoned journal row satisfies I-2");
+
+        w.send_journal
+            .rows
+            .insert(txid, row(SendState::TerminalRejected));
+        assert_invariant(w.check_invariants().unwrap_err(), INV_TX_KEYS_NO_ORPHANS);
     }
 
     #[test]
