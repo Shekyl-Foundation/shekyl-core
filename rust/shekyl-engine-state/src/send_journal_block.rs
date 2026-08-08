@@ -375,6 +375,46 @@ impl SendJournalBlock {
             AbandonEdge::Forbidden { state: row.state }
         }
     }
+
+    /// Derive the F14 awaiting-confirmation lock set from journal facts
+    /// — the **single owner** of the lock-derivation rule (PR-SJ-1b,
+    /// `WALLET_SEND_RECORD.md` C2/P3-1a): a carried input of any row in
+    /// a [`SendState::reapplies_f14_locks`] state with a stamped
+    /// `lock_baseline` is locked, keyed by the input's
+    /// `global_output_index`.
+    ///
+    /// The map says nothing about spent-ness: confirmed evidence
+    /// supersedes a lock, and every consumer checks `spent` first (the
+    /// same precedence the merge reconciler applied when the field
+    /// existed). Cost is `O(live sends × their inputs)` — in-flight
+    /// sends are few, so consumers derive on demand rather than
+    /// maintaining a second cache (the cache *was* the retired field).
+    ///
+    /// Determinism: rows iterate in `BTreeMap` txid order and the first
+    /// claim on a gindex wins. Two live rows carrying the same input
+    /// cannot arise from the build path (locked inputs are never
+    /// selected — the SJ-DQ-4 self-link defence this map implements),
+    /// so the tie-break is a determinism guarantee, not a policy.
+    pub fn derive_f14_locks(&self) -> BTreeMap<u64, crate::transfer::AwaitingConfirmation> {
+        let mut locks = BTreeMap::new();
+        for (txid, row) in &self.rows {
+            if !row.state.reapplies_f14_locks() {
+                continue;
+            }
+            let Some(accepted_at_height) = row.lock_baseline else {
+                continue;
+            };
+            for inp in &row.inputs {
+                locks
+                    .entry(inp.gindex)
+                    .or_insert(crate::transfer::AwaitingConfirmation {
+                        tx_hash: shekyl_types::TxHash::from_bytes(*txid),
+                        accepted_at_height,
+                    });
+            }
+        }
+        locks
+    }
 }
 
 impl Default for SendJournalBlock {
@@ -604,6 +644,77 @@ mod tests {
                 state: SendState::TerminalRejected
             }
         );
+    }
+
+    /// The derived F14 lock set contains exactly the carried inputs of
+    /// baseline-stamped rows in re-application states: `Dispatched` and
+    /// `Abandoned` lock; `PresumedDead` (released — baseline `None` by
+    /// construction, planted here to prove the state predicate alone
+    /// also excludes), `Confirmed`, `TerminalRejected`, and un-stamped
+    /// rows do not.
+    #[test]
+    fn derive_f14_locks_covers_exactly_the_reapplication_set() {
+        let mut block = SendJournalBlock::empty();
+        let dispatched = [1u8; 32];
+        let abandoned = [2u8; 32];
+        for (txid, state, baseline, gindex) in [
+            (dispatched, SendState::Dispatched, Some(25), 100),
+            (abandoned, SendState::Abandoned, Some(30), 101),
+            ([3u8; 32], SendState::PresumedDead, Some(35), 102),
+            (
+                [4u8; 32],
+                SendState::Confirmed { height: 40 },
+                Some(20),
+                103,
+            ),
+            ([5u8; 32], SendState::TerminalRejected, Some(20), 104),
+            ([6u8; 32], SendState::Dispatched, None, 105), // pre-verdict
+        ] {
+            let mut record = sample_record(state, baseline);
+            record.inputs = vec![SendInputRef { gindex, amount: 1 }];
+            block.rows.insert(txid, record);
+        }
+
+        let locks = block.derive_f14_locks();
+        assert_eq!(
+            locks.keys().copied().collect::<Vec<_>>(),
+            vec![100, 101],
+            "exactly the baseline-stamped re-application rows lock"
+        );
+        assert_eq!(locks[&100].tx_hash.to_bytes(), dispatched);
+        assert_eq!(locks[&100].accepted_at_height, 25);
+        assert_eq!(locks[&101].tx_hash.to_bytes(), abandoned);
+        assert_eq!(locks[&101].accepted_at_height, 30);
+    }
+
+    /// Derivation is deterministic and pure: two calls over the same
+    /// block yield identical maps, and a multi-input row locks each of
+    /// its carried inputs under its own txid.
+    #[test]
+    fn derive_f14_locks_is_deterministic_and_covers_all_inputs() {
+        let mut block = SendJournalBlock::empty();
+        let txid = [7u8; 32];
+        let mut record = sample_record(SendState::Dispatched, Some(50));
+        record.inputs = vec![
+            SendInputRef {
+                gindex: 200,
+                amount: 1,
+            },
+            SendInputRef {
+                gindex: 201,
+                amount: 2,
+            },
+        ];
+        block.rows.insert(txid, record);
+
+        let a = block.derive_f14_locks();
+        let b = block.derive_f14_locks();
+        assert_eq!(a, b, "derivation is pure");
+        assert_eq!(a.len(), 2);
+        for g in [200, 201] {
+            assert_eq!(a[&g].tx_hash.to_bytes(), txid);
+            assert_eq!(a[&g].accepted_at_height, 50);
+        }
     }
 
     /// The watchdog's confirmed-absent release on an `Abandoned` row
