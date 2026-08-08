@@ -1559,12 +1559,15 @@ sustainability is unaffected by the recalibration.
     that verifiably cannot use the proof surface).
   - **`sign`/`verify` message signing** — blocked on the same Phase 2c
     surface decision (domain-separated message signing under hybrid keys).
-    **Design round 0 OPEN (2026-08-08, A2):**
-    `docs/design/WALLET_MESSAGE_SIGNING.md` — the blocking decision is
-    SM-DQ-1 (signature composition: address v1 anchors Ed25519 only, the
-    PQC segments are ML-KEM *encryption* keys, so a transferable
-    signature has no PQ anchor to bind to; hybrid vk-certified is the
-    round's lead). Un-stub in PR-SM-2 per the round's decomposition.
+    **Design round CLOSED — all rulings ratified (2026-08-08, A2):**
+    `docs/design/WALLET_MESSAGE_SIGNING.md` — the blocking decision
+    resolved as SM-R-8: SLH-DSA-192s + spend-key classical half,
+    nested, with the 48-byte public key inline in the address (fork
+    (ii); the round-0 hybrid-vk-certified lead was superseded on the
+    record in pass 1). Implementation is in flight as PR-SM-1
+    (crypto + engine + ACVP conformance); the CLI/RPC un-stub is
+    PR-SM-2 per the round's decomposition, gated only on the genesis
+    lane's v2-field sign-off for the address-integrated verify.
   - **Offline cold-signing** (`describe_transfer`, `sign_transfer`,
     `submit_transfer`, `transfer --do-not-relay`) — blocked on Phase 2d
     (`UnsignedTxBundle`/`SignedTxBundle` air-gapped bundles).
