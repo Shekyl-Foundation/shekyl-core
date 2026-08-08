@@ -1238,44 +1238,26 @@ sustainability is unaffected by the recalibration.
 
 - **`BlockchainLMDB::reset()` drops an INCOMPLETE table set — stale Shekyl
   state under an in-place wipe (added 2026-08-04 from credit-wire PR-B2
-  3dee50259; corrected + deduplicated 2026-08-07 after a full drop-list
-  audit).** `reset()` (`src/blockchain_db/lmdb/db_lmdb.cpp`), reached only
-  through `Blockchain::reset_and_set_genesis_block`, wipes in place (drops
-  tables, keeps the env) but its `mdb_drop` list covers only the core
-  block/tx/output tables plus the two credit-wire witness tables PR-B2
-  added. Audited against `db_lmdb.h` (2026-08-07): **29 of 48 tables are
-  not dropped, 25 of them Shekyl-owned** — the whole curve-tree family
-  (`m_curve_tree_roots`/`leaves`/`layers`/`meta`/`checkpoints`,
-  `m_output_to_leaf`, `m_leaf_to_output`, `m_pending_tree_leaves`,
-  `m_pending_tree_drain`), the whole archival family (`m_archival_bond`
-  with its holdings-update/rebond/unbond logs, `m_archival_budget` and
-  `m_archival_budget_accrual`, `m_archival_emission_claim_log`,
-  `m_archival_epoch_close_log`, `m_archival_r_market`,
-  `m_archival_serve_credit`, `m_archival_shard_segment`,
-  `m_archival_sigma_work`, `m_archival_slash_applied`,
-  `m_archival_slash_log`), and `m_block_burn` with
-  `m_block_pending_additions`. The remaining four absentees are
-  inherited-by-design: `m_alt_blocks` is dropped by the caller
-  (`drop_alt_blocks()`), the two txpool tables have their own lifecycle,
-  and `m_txs` is the legacy monolith table. Because reset re-uses heights
-  and hashes, a surviving row at a re-used key reads as *that* block's
-  state: a stale `curve_tree_root` is consensus-wrong and **silent** (no
-  divergence detector exists for the curve-tree family), while the
-  segment-counter family at least fails loudly (#264's O(1) reader
-  divergence abort fires on the next epoch close). Reachability
-  (verified 2026-08-07): **no production or CLI flow calls
-  `reset_and_set_genesis_block`** — the only callers are the core-tests
-  harness (`tests/core_tests/chaingen.h`, fresh per-test DBs) and the
-  CW-2 unit test driving `db.reset()` directly — so the hazard is latent
-  until any tool adopts in-place reset, and must be closed before one
-  does. Fix shape: per-table reset semantics (blanket-drop vs. re-seed —
-  `m_properties` already re-seeds its version row, and `m_curve_tree_meta`
-  likely needs re-init, which is why this is not a mechanical 25-line
-  diff), extending the CW-2 test seat (`archival_substrate_lmdb.cpp`
-  `reset_drops_both_attestation_witness_tables`). Supersedes the #264
-  "follow-on surfaced by the counter" paragraph (single owner). Its own
-  unit. **Target: V3.0** (pre-genesis: consensus-state correctness on
-  chain reset).
+  3dee50259; full drop-list audit 2026-08-07).** Pre-fix: hand-written
+  `mdb_drop` list left **29 of 48 tables** (25 Shekyl-owned: whole
+  curve-tree + archival families, `m_block_burn`,
+  `m_block_pending_additions`). Reset re-uses heights/hashes, so a
+  surviving row at a re-used key was read as that block's state — stale
+  `curve_tree_root` was consensus-wrong and silent. Reachability
+  (2026-08-07): no production/CLI caller of `reset_and_set_genesis_block`
+  (core-tests + unit tests only). **Target: V3.0.** **IMPLEMENTED
+  (2026-08-07, `chore/lmdb-reset-full-drop` / PR #421):** `reset()`
+  enumerates named tables (unnamed main-DB keys) and empties each one
+  except the keep-list (`table_survives_chain_reset` — txpool only;
+  mempool lifecycle is `tx_memory_pool`'s), then re-seeds the version
+  row (exactly what `open()` writes on an empty DB). No other re-seed is
+  required: empty-table readers treat `MDB_NOTFOUND` as fresh (e.g.
+  curve-tree `leaf_count` → 0). A future table cannot be missed by
+  construction. Test seat: `archival_substrate_lmdb.cpp`
+  `reset_leaves_every_table_fresh` — environment oracle via
+  `get_table_entry_counts`, ≥10 populated-tables negative control, and
+  a populated-txpool pin that keep-list tables survive with unchanged
+  counts; CW-2 witness pin stays green beside it.
 
 - **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with
   reopen (d).** The sliding-window m-of-n itself is **BUILT** (PR #368,

@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`BlockchainLMDB::reset()` now wipes every table, so an in-place chain
+  reset can no longer resurrect stale consensus state.** The old
+  hand-written drop list omitted 25 Shekyl-added tables (the whole
+  curve-tree and archival families plus block-burn and
+  pending-additions); because a reset chain re-uses heights and hashes, a
+  surviving row at a re-used key was read as the re-added block's state —
+  an actively wrong `curve_tree_root`, silently. `reset()` now enumerates
+  the environment's named tables and empties each one except the
+  keep-list (`table_survives_chain_reset` — txpool only; mempool
+  lifecycle is separate), then re-seeds the version row — the
+  fresh-database state `open()` produces. A future table cannot be missed
+  by construction. `reset_leaves_every_table_fresh` asserts every-table
+  empty against the environment oracle and pins that populated txpool
+  tables survive. No production flow currently reaches `reset()` (test
+  harnesses only); this closes the hazard before any tool adopts in-place
+  reset.
+
 ### Added
 
 - **Your sent transactions now appear in your transfer history, and they
