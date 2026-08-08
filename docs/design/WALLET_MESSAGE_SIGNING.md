@@ -31,7 +31,7 @@ It is user-facing surface (rules 80/81 apply to its errors and its size).
 
 ---
 
-## §1 Grounded inventory (verified at source, 2026-08-08, dev 2ea0710a1)
+## §1 Grounded inventory (verified at source, 2026-08-08, dev 2ea0710a1; re-verified pre-PR-SM-1 at dev 2dc1eb645 — the four load-bearing `address.rs` anchors (`CLASSICAL_BOUND_SEGMENT_LEN`, `EK_BIND_TAG_LEN`, the 1023-char compile-time asserts, the `version‖spend‖view‖ek_bind_tag` segment layout) are byte-identical; `shekyl-address` untouched between the two SHAs)
 
 1. **Address v1 carries no post-quantum *signature* anchor.** The
    classical segment is `version || spend_pk || view_pk || ek_bind_tag`
