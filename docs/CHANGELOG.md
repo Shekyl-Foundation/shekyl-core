@@ -4,6 +4,26 @@
 
 ### Added
 
+- **You can now give up on a stuck send.** The new wallet-RPC method
+  `abandon_tx` marks a dispatched-but-unconfirmed send `ABANDONED` in
+  your history (`WALLET_SEND_RECORD.md` P3-4 / SJ-DQ-8, PR-SJ-3,
+  `feat/wallet-abandon-sj3`). Closes the Phase 4c abandon FOLLOWUP.
+
+  Abandoning is honest about what it does and does not do:
+
+  - The record is kept, not hidden — and if the transaction confirms
+    later anyway, the row flips to `CONFIRMED` loudly rather than
+    staying wrong.
+  - The retained per-transaction secret is kept, so a payment proof
+    (`get_tx_proof`) still works for an abandoned send.
+  - The spent-input locks are **not** released by intent: they release
+    when the wallet's watchdog establishes the network no longer holds
+    the send — the protection that stops two transactions provably
+    spending the same input from linking your wallet.
+  - A `CONFIRMED` or `FAILED` send refuses with `-29108` naming its
+    state; there is deliberately no force override. Re-abandoning is a
+    harmless no-op.
+
 - **Your sent transactions now appear in your transfer history, and they
   say what actually happened to them.** `get_transfers` /
   `get_transfer_by_id` project send-journal rows as `direction: OUTGOING`

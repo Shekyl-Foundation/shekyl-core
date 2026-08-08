@@ -1720,7 +1720,28 @@ sustainability is unaffected by the recalibration.
   is still open — an explicit `Abandoned` edge plus the I-2 reference
   migration (`pending_tx_hashes` → journal row, keys retained) is
   PR-SJ-3, which subsumes the re-evaluation shape above minus the
-  now-moot rescan refusal. *Target: V3.0 / Phase 4d.*
+  now-moot rescan refusal. **Abandon surface CLOSED 2026-08-07
+  (PR-SJ-3, `feat/wallet-abandon-sj3`)**, in the ratified P3-4 shape:
+  `SendState::Abandoned` appended (discriminant KAT pins the v1
+  encodings; `SEND_JOURNAL_BLOCK_VERSION` 2 /
+  `WALLET_LEDGER_FORMAT_VERSION` 14 per rule-42 pairing);
+  `WalletLedger::abandon_send` performs the journal edge
+  `Dispatched | PresumedDead → Abandoned` plus the reference migration
+  under one guard, and I-2 (invariant + retention reconcile) gains the
+  journal leg — a row in a non-terminal-or-abandoned state is itself a
+  live reference, so the retained `TxSecretKey` survives the migration
+  (the entry's named hazard). Locks release on *evidence*, never
+  intent: an abandoned row keeps its baseline, the P3-1 re-application
+  set covers Abandoned (self-link defence across the wipe), and the
+  watchdog's confirmed-absent release clears the baseline without
+  overwriting the user's state. Engine
+  `abandon_tx_persisted` (fail-closed rollback on a failed save) +
+  RPC `abandon_tx` (`-29108 ABANDON_STATE_FORBIDS`; unknown txid
+  `-29400`; idempotent; **no force path** — P3-4 reopen: a blocked
+  flow that discard cannot clear) + the named crash-ordering test
+  (drop-then-confirm: `Abandoned → Confirmed` flips loudly with keys
+  intact). `get_transfers` projects `ABANDONED` as its own wire value.
+  *Was target: V3.0 / Phase 4d.*
 
 - **Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing
   history surface lands** — **CLOSED 2026-08-07 (PR-SJ-2,
