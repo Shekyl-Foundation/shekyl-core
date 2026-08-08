@@ -85,7 +85,14 @@ sustainability is unaffected by the recalibration.
   - **(iii) No anchor (status quo):** message signing ships
     classical-tier-anchored hybrid (or not at all) — rejects the
     round's premise; recorded for completeness, not recommended by the
-    round.
+    round. **Named cost (SM-R-2 ratification, 2026-08-08): (iii) is
+    admissible only if the interactive ML-KEM ownership proof is
+    simultaneously committed to** — without an anchor, a frozen v1
+    address can never prove ownership post-quantum via any
+    transferable artifact, so declining the anchor without committing
+    the interactive surface ships a coin with no PQ ownership proof of
+    any kind, permanently. This is a precondition on the fork, not a
+    follow-up.
   The round's own algorithm proposal (SM-DQ-8, pending ratification)
   leads with SLH-DSA-192s, which couples to fork (ii); if the
   ratification instead lands ML-DSA-65, the lane decides fork (i).

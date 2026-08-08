@@ -545,12 +545,22 @@ label) and SM-DQ-7's escalation are already binding-shaped above and
 are not re-proposed here.
 
 **SM-R-2 (rules SM-DQ-2) — interactive KEM ownership proof: REJECT
-now.** Reopen when either (a) a named consumer surface requires *live*
-PQ-secure ownership proof against v1-era addresses (e.g. an exchange
-integration spec that cannot accept a transferable signature), or (b)
-the genesis lane rules fork (iii) — no PQ signing anchor — in which
-case the interactive proof becomes the only PQ ownership mechanism and
-this rejection must be re-evaluated rather than inherited.
+now. RATIFIED 2026-08-08, with two amendments folded.** Reopen when a
+named consumer surface requires **liveness / non-transferability** —
+the criterion is the freshness requirement itself, not any particular
+consumer class (exchange integration specs, proof-of-reserves
+attestations, custody audits, and challenge-response login are
+illustrations, not the boundary). **Conditionality amendment (the
+ratification's substantive change):** this rejection is recorded as
+**conditional on the genesis lane not ruling fork (iii)**. Under
+fork (iii) — no PQ signing anchor, address frozen without one —
+Shekyl would have no PQ ownership proof of any kind, permanently, and
+no later round could fix it; that is not a reopening trigger for
+R-2, it is a **precondition on fork (iii) itself**: (iii) is
+admissible only if the interactive proof is simultaneously committed
+to. The cost is priced where the decision is made — the genesis-lane
+item's fork (iii) carries it — rather than referenced forward from a
+document the lane may not read.
 
 **SM-R-3 (rules SM-DQ-3) — preimage, domain, and nesting order.**
 - Hash: **cSHAKE256 throughout** — this is a binding job, and the
