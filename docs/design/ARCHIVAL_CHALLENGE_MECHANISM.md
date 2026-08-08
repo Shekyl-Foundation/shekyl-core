@@ -88,17 +88,26 @@ pass recorded within W₂. No miss record exists on the wire; no party attests
 failure; there is no 49-byte fabrication path. To manufacture a miss you must
 suppress a pass for W₂ blocks — a censorship capability, not a write.
 
-**Drain-on-satisfaction, and the redraw floor (ratified phrasing):** pairs
-whose epoch requirement is already satisfied leave the draw set for the
-remainder of E, concentrating remaining draws on unresolved pairs. The
-scheduling property this must deliver — in the form the maintainer ratified —
-is: **a pair that fails its first challenge must be re-drawn before the epoch
-closes, with high probability.** That is what makes the epoch's settlement an
-observation rather than a coin flip, and it is the floor any §7.1 variant is
-measured against. It also gives the anti-evasion exponent: a colluding
-witness must intercept *every* draw a pair receives, succeeding with
-probability q^k rather than q — at q = 0.1, one draw per epoch is a 10 %
-shield, two is 1 %.
+**Satisfaction does not drain the pool, and the redraw floor (both
+ratified):** a pair whose epoch requirement is already met (two passes)
+**remains drawable** and can receive its third test — it doesn't have to,
+but it can (maintainer, 2026-08-07: "this is not an OR"). Settlement is
+monotone, so a post-satisfaction result cannot change a settled epoch. What
+continued drawability buys: P stays obligated and indistinguishable for the
+whole epoch (it can never infer "done for E; further reads are organic"),
+and — structurally — the draw derivation **never reads outcomes**:
+concentration onto under-covered pairs keys on challenges *issued* (itself
+derived), never on pass records, so the drawable set stays the epoch-open
+snapshot all epoch and mid-epoch records never feed the draw function
+(which is also what keeps the set reorg-stable, per the note below). The
+scheduling floor, in the form the maintainer ratified: **a pair that fails
+its first challenge must be re-drawn before the epoch closes, with high
+probability.** That is what makes the epoch's settlement an observation
+rather than a coin flip, and it is the floor any §7.1 variant is measured
+against. It also gives the anti-evasion exponent: a colluding witness must
+intercept *every* draw a pair receives, succeeding with probability q^k
+rather than q — at q = 0.1, one draw per epoch is a 10 % shield, two is
+1 %.
 
 **Anti-DDoS scope property (part of the ruling):** deriving from the
 *previous block's hash* strictly limits how far ahead challenge windows are
@@ -351,14 +360,18 @@ two derivations**. Add one when this lands.
    intercepting draws to consuming the epoch's clock. If yes, concurrency
    must be capped — unbounded is §7.2(c)'s thundering herd in miniature —
    but at a small cap the wasted work is bounded and occurs only when P is
-   actually serving, and an outstanding challenge superseded by the epoch
-   requirement being met resolves with **no penalty** (the challenger did
-   nothing wrong) and **no payment** (no credit is owed twice). Candidate:
-   **cap of 2 concurrent plus redraw-on-expiry**, which makes clock-burn
-   cost scale with the cap instead of buying blanket immunity. (Translation
-   note: the concurrency analysis was first run under pass-priority, where
-   the *first* pass settles the epoch; under 2-of-3 the supersession point
-   is the requirement — the second pass — not the first.)
+   actually serving — and there is **no supersession state at all** (ruled
+   2026-08-07): a challenge, once issued, runs to pass or expiry regardless
+   of whether the epoch requirement is already met. Settlement is monotone,
+   so a post-satisfaction result changes nothing, and no credit is ever
+   owed twice. Whether the abandonment penalty (§6) still attaches to a
+   post-satisfaction challenge is decided with this fork. Candidate: **cap
+   of 2 concurrent plus redraw-on-expiry**, which makes clock-burn cost
+   scale with the cap instead of buying blanket immunity. (The concurrency
+   analysis was first run under pass-priority, where the first pass settled
+   the epoch and later challenges needed a supersession rule; under 2-of-3
+   with monotone settlement and satisfaction-does-not-drain, the
+   supersession machinery dissolves.)
 2. **Who reads — witness selection and obligation.** The decision the rest
    of the stack prices against: W₂, the abandonment penalty, the reward
    question, and the nonce anchor are all functions of who performs the
