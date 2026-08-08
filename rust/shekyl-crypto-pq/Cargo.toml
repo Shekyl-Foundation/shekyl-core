@@ -25,10 +25,18 @@ curve25519-dalek = { version = "4", features = ["zeroize"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 fips204 = "0.4.6"
+# Pinned exact: fips205's deterministic-keygen path (KeyGen::keygen_with_seeds)
+# is built on the same DummyRng pattern that bit fips203 below —
+# fill_bytes = unimplemented!(), seeds served via try_fill_bytes, loud panic on
+# over-draw. An upstream refactor that starts calling fill_bytes is a runtime
+# panic, so the version moves only by deliberate bump with the KAT battery
+# re-run (WALLET_MESSAGE_SIGNING.md SM-R-8 adoption terms).
+fips205 = "=0.4.1"
 # Pinned exact: fips203 uses DummyRng::fill_bytes = unimplemented!() internally;
 # a minor-version bump could panic at runtime. Exact pin + KEM_DERIVE_V1_KAT.json
 # tripwire + Cargo.lock = three layers of defense against silent behavior changes.
 fips203 = "=0.4.3"
+base64 = "0.22"
 hkdf = "0.12"
 sha2 = "0.10"
 blake2 = "0.10"

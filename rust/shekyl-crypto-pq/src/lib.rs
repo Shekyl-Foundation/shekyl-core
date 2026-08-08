@@ -59,6 +59,7 @@ pub mod kem;
 pub mod key_image;
 pub mod keys;
 pub mod label;
+pub mod message_signing;
 pub mod montgomery;
 pub mod multisig;
 pub mod multisig_receiving;
