@@ -99,7 +99,14 @@ and — structurally — the draw derivation **never reads outcomes**:
 concentration onto under-covered pairs keys on challenges *issued* (itself
 derived), never on pass records, so the drawable set stays the epoch-open
 snapshot all epoch and mid-epoch records never feed the draw function
-(which is also what keeps the set reorg-stable, per the note below). The
+(which is also what keeps the set reorg-stable, per the note below).
+*Ledger note (trade knowingly made, 2026-08-07):* the earlier
+drain-on-pass shape concentrated remaining draws onto non-servers as
+servers exited — an incentive nicety this refinement gives up (everyone
+converges to 3 issued regardless of outcomes). It was never load-bearing,
+and extending indistinguishability through the epoch tail is worth
+strictly more: a P that can detect "done for E" can de-provision for the
+tail. The
 scheduling floor, in the form the maintainer ratified: **a pair that fails
 its first challenge must be re-drawn before the epoch closes, with high
 probability.** That is what makes the epoch's settlement an observation
