@@ -1,6 +1,6 @@
 # Wallet Message Signing (A2 / rewrite-plan 2c residue) — Design Round
 
-**Status: ROUND 0 OPEN (2026-08-08); PASS 1 FOLDED (2026-08-08).** Poses
+**Status: ROUND 0 OPEN (2026-08-08); PASSES 1–2 FOLDED (2026-08-08).** Poses
 SM-DQ-1…SM-DQ-8. Nothing here is ratified; the signature format freezes
 the moment it ships (a signature issued on day one must verify forever),
 so every fork below resolves before implementation starts. Pass 1
@@ -204,7 +204,7 @@ preimage = H(domain || version || network_id || mode ||
   hash per rule 30 alignment (Blake2b-512 is the derivation-side
   precedent, cSHAKE256 the binding-side; pick one and pin it).
 
-### SM-DQ-4 — The wallet-level ML-DSA identity
+### SM-DQ-4 — The wallet-level PQ signing identity
 
 New domain-separated derivation from the wallet seed (fresh domain
 string, reserved index) via §1.3's `keygen_from_seed`. Pins to ratify:
@@ -212,6 +212,32 @@ mnemonic-recoverable (no new backup material); never reused by any
 other surface (per-output keys stay per-output; multisig identities
 stay theirs); derived on demand and zeroized (rules 35/36) rather than
 persisted — the wallet file schema does not change.
+
+**Pass-2 amendment — derivability holds for either SM-DQ-8 algorithm,
+and statelessness is load-bearing, not a footnote.**
+
+- *Derivability.* SLH-DSA keygen is fully deterministic from seed
+  material: FIPS 205 separates randomized `slh_keygen` from pure
+  `slh_keygen_internal(SK.seed, SK.prf, PK.seed)` (Algorithm 18), and
+  the `fips205` crate **exports** that shape as
+  `KeyGen::keygen_with_seeds(sk_seed, sk_prf, pk_seed)` (verified in
+  crate source, `traits.rs`). The wallet branch is one more HKDF arm:
+  `master seed ──HKDF("shekyl/slh-dsa-seed-v1")──▶ 3n bytes ──▶
+  keygen_with_seeds`. This is *purer* than the in-tree ML-DSA
+  precedent, which routes a seed through a ChaCha20 RNG shim into
+  `try_keygen_with_rng` (`derivation.rs:40-52`, verified) — the SLH
+  path has no sampling loop and no RNG indirection in the caller.
+- *Statelessness.* SLH-DSA carries no signing state. The stateful
+  hash-based schemes (XMSS/LMS, SP 800-208) are **excluded by
+  construction, recorded here**: their security requires never reusing
+  a one-time key index, and that state lives outside the seed — a
+  wallet restored from its mnemonic cannot know which indices were
+  consumed, so restore-from-seed becomes a key-disclosure event on the
+  next signature. Shekyl just ratified seed-phrase custody as the
+  entire cold-storage story (A4 decision); any signing scheme whose
+  safety does not survive seed-restore contradicts it. SLH-DSA
+  restores completely from the seed, which is exactly the property the
+  rest of the wallet already guarantees.
 
 ### SM-DQ-5 — Wire format
 
@@ -277,6 +303,25 @@ Proposed for ratification, algorithm-independent:
   resistance against a grindable target — not a margin. The precedent's
   *mechanism* transfers; its *length* must not, and this paragraph is
   the recorded reason.
+- **Pass-2 amendment — the pk-inline variant, and the tension it
+  creates.** At category parity SLH-DSA-192s's public key is **48
+  bytes** — small enough to go in the address *literally*, as a fourth
+  field. That eliminates the commitment machinery entirely: no
+  key-carried-in-signature, no tag-strength question, no `alg_id`
+  registry to get right — verification takes the address at face
+  value. But it must be priced against pass 1's own BIP-360 lesson:
+  an inline pk **freezes the algorithm** into the genesis address,
+  which is exactly what the commitment shape exists to avoid — a
+  future scheme becomes an address-version bump instead of a new
+  `alg_id`. Two counterweights, on the record: (i) the address
+  already freezes algorithms literally (Ed25519 keys, an ML-KEM-768
+  ek) — algorithm-freezing per se is not novel for this format; (ii)
+  SLH-DSA is the conservative *endpoint* of the diversification
+  argument — the scheme one flees TO under lattice cryptanalysis, not
+  FROM — so the agility being given up is agility we are least likely
+  to need. Neither counterweight is decisive; the fork is now
+  explicitly coupled to SM-DQ-8: **(A) requires the commitment shape;
+  (B) makes it optional.**
 - **Escalation: A2 surfaced the address-version decision; it does not
   own it.** A v2 address format touches the GUI, URI handling, the
   address book, multisig address exchange, and every future exchange
@@ -285,20 +330,41 @@ Proposed for ratification, algorithm-independent:
   The commitment *shape* above is
   what this round sends to the genesis lane for ratification; SM-DQ-8
   (algorithm) deliberately does not travel with it. Until the genesis
-  lane rules, no implementation PR freezes anything.
+  lane rules, no implementation PR freezes anything. **Pass-2 note:**
+  if SM-DQ-8 lands on (B) pk-inline, the genesis-lane item simplifies
+  from "ratify a commitment scheme" to "ratify a fourth address field"
+  — a smaller thing to get wrong permanently — but it remains an
+  address-format decision and the escalation stands either way. The
+  Pi 4 measurement (SM-DQ-8's prerequisite) should therefore land
+  before the genesis-lane item is drafted, so the lane rules on the
+  real fork, not both hypotheticals.
 
 ### SM-DQ-8 — The algorithm, chosen second (pass 1)
 
-Constructions priced (sizes from the pinned `fips204` crate where it
-exists; SLH-DSA figures are FIPS 205 nominal pending a crate pin —
-`fips205` is **not** in the workspace, so choosing (B) opens a rule-17
-dependency round):
+Constructions priced. **Pass-2 category correction:** the stack is NIST
+category 3 throughout (ML-KEM-768, ML-DSA-65), so the SLH comparison at
+matched security is **SLH-DSA-192s**, not the 128s the pass-1 table
+carried. All non-Ed25519 sizes below are read from crate constants and
+confirmed by execution (scratch bench, 2026-08-08 — see the measured
+row):
 
 | | Address cost | Signature blob | Assumption | Status |
 |---|---|---|---|---|
 | (A) ML-DSA-65 + Ed25519, key committed | +32 B tag | pk 1952 + σ 3309 + 64 ≈ 5.3 KB | module lattice + EC | FIPS 204 final; `fips204 0.4.6` pinned, sizes verified |
-| (B) SLH-DSA-128s + Ed25519 | +32 B tag (pk itself is 32 B) | σ ≈ 7856 + 64 ≈ 7.9 KB | hash functions only | FIPS 205 final; no crate pinned |
-| (C) Agile commitment, algorithm deferred | +32 B tag | scheme-dependent | — | the SM-DQ-7 shape; composes with (A) or (B) |
+| (B) SLH-DSA-192s + Ed25519, pk inline | +48 B (the pk itself) | σ 16224 + 64 ≈ 16.3 KB | hash functions only | FIPS 205 final; `fips205` NOT pinned (resolves 0.4.1) |
+| (C) Agile commitment, algorithm deferred | +32 B tag | scheme-dependent | — | the SM-DQ-7 shape; composes with (A); (B) can bypass it (see SM-DQ-7 pass-2 amendment) |
+
+**Measured (dev box, i9-11950H single-thread, release; stable over 5
+iterations):** SLH-DSA-SHA2-192s keygen ≈ 50 ms, **sign ≈ 519 ms**,
+verify ≈ 0.45 ms; ML-DSA-65 keygen ≈ 0.21 ms, sign ≈ 0.27 ms, verify ≈
+0.11 ms. SLH signing costs ~1900× ML-DSA's on x86. **Named prerequisite
+before SM-DQ-8 rules:** the same numbers on the Pi 4 provisioning floor
+(rule 76 forbids deciding on a scaled projection; the naive scaling
+says seconds-per-signature, which may still be acceptable for a
+human-initiated, low-frequency operation — but it gets measured, not
+assumed). The `f` parameter sets invert the trade (faster signing,
+larger signatures) if Pi latency turns out to matter more than blob
+size.
 
 Two pulls, both real and both satisfied by (C)'s shape:
 
@@ -314,13 +380,26 @@ Two pulls, both real and both satisfied by (C)'s shape:
   low-frequency, off-chain, human-initiated, and consumes no block
   space. SLH-DSA rests on hash assumptions alone — immune to the
   lattice-cryptanalysis risk that motivated NIST's diversification
-  onramp — at the cost of a 7.9 KB signature and slow signing. It
-  would be a mistake to inherit ML-DSA here *merely because* the tx
-  path uses it; that reasoning does not transfer.
+  onramp — at the cost of a 16 KB signature and measurably slow
+  signing (~0.5 s x86, Pi 4 pending). It would be a mistake to inherit
+  ML-DSA here *merely because* the tx path uses it; that reasoning
+  does not transfer.
 
-No lead is declared for SM-DQ-8 in this pass: the point of SM-DQ-7's
-shape is that this decision can stay open without blocking anything,
-and the honest price of (B) includes a dependency round.
+**Dependency (pass 2, audited at source).** Choosing (B) adds
+`fips205` — a rule-17 decision, and the audit already has its first
+finding: the crate's deterministic-keygen path
+(`KeyGen::keygen_with_seeds`) is implemented over the **same
+`DummyRng` pattern that forced the `fips203` exact-pin**
+(`fill_bytes = unimplemented!()`; seeds served via `try_fill_bytes`,
+loud panic on over-draw or length mismatch — verified in
+`fips205-0.4.1/src/traits.rs`). Same maintainer (integritychain) as
+the pinned `fips203`/`fips204`. If adopted: exact-pin with the same
+comment rationale, and the KAT battery pins `keygen_with_seeds`
+end-to-end so an upstream RNG-path refactor cannot move underneath us.
+
+No lead is declared for SM-DQ-8 in this pass: what blocks ruling is
+the Pi 4 measurement, and the honest price of (B) includes the
+dependency round above.
 
 ## §4 Pre-committed test obligations (whatever SM-DQ-1 resolves to)
 
@@ -392,4 +471,34 @@ crypto+engine against the ratified shape with the algorithm behind
   (detection vs binding — SM-DQ-7).
 - Escalation recorded: the address-v2 / commitment-shape decision goes
   to the genesis lane; A2 implements against its ruling.
+
+**PASS 2 (2026-08-08).** Review pass folded with source verification
+and a measurement:
+
+- Category correction (reviewer's own): the pass-1 table quoted
+  SLH-DSA-**128s**; the stack is category 3 throughout, so the honest
+  comparison is **192s** — pk 48 B, σ 16224 B, both read from crate
+  constants and confirmed by execution.
+- Derivability verified *stronger than claimed*: the reviewer expected
+  `slh_keygen_internal` purity from the spec; the `fips205` crate
+  **exports** the 3n-seed shape (`KeyGen::keygen_with_seeds`), so the
+  wallet branch is one HKDF arm plus a library call — purer than the
+  in-tree ML-DSA seeded-RNG shim (`derivation.rs:40-52`).
+- Statelessness folded as load-bearing: XMSS/LMS (SP 800-208) excluded
+  by construction — restore-from-seed cannot recover one-time-key
+  state, so a stateful scheme makes mnemonic restore a key-disclosure
+  event, contradicting the ratified seed-custody cold-storage story.
+- Measured on the dev box (i9, release): SLH-192s sign ≈ 519 ms /
+  verify ≈ 0.45 ms vs ML-DSA-65 sign ≈ 0.27 ms / verify ≈ 0.11 ms.
+  **Pi 4 floor measurement is the named prerequisite** before SM-DQ-8
+  rules (rule 76: no deciding on scaled projections).
+- Dependency audit opened early: `fips205`'s deterministic keygen uses
+  the same `DummyRng` pattern that forced the `fips203` exact-pin
+  (verified in `fips205-0.4.1/src/traits.rs`); adoption terms recorded
+  in SM-DQ-8.
+- SM-DQ-7 gains the pk-inline variant and its recorded tension with
+  the pass-1 BIP-360 lesson; the SM-DQ-7/SM-DQ-8 coupling is now
+  explicit ((A) requires the commitment shape, (B) makes it optional),
+  and the genesis-lane item waits for the Pi measurement so the lane
+  rules on the real fork.
 
