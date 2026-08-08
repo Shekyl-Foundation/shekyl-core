@@ -187,6 +187,36 @@ fn ek_bind_tag(ml_kem_encap_key: &[u8]) -> [u8; EK_BIND_TAG_LEN] {
     tag
 }
 
+/// The full bound classical segment — `version ‖ spend ‖ view ‖
+/// ek_bind_tag` — assembled from the 65-byte classical address bytes and
+/// the ML-KEM encapsulation key. This is the byte string the
+/// message-signing preimage binds (`WALLET_MESSAGE_SIGNING.md` SM-R-3);
+/// it lives here so the `ek_bind` domain and tag length keep a single
+/// owner.
+pub fn classical_bound_segment_from_parts(
+    classical_address_bytes: &[u8],
+    ml_kem_encap_key: &[u8],
+) -> Result<Vec<u8>, AddressError> {
+    if classical_address_bytes.len() != CLASSICAL_SEGMENT_LEN {
+        return Err(AddressError::BadLength {
+            segment: "classical address bytes",
+            expected: CLASSICAL_SEGMENT_LEN,
+            got: classical_address_bytes.len(),
+        });
+    }
+    if ml_kem_encap_key.len() != PQC_PAYLOAD_LEN {
+        return Err(AddressError::BadLength {
+            segment: "ML-KEM encap key",
+            expected: PQC_PAYLOAD_LEN,
+            got: ml_kem_encap_key.len(),
+        });
+    }
+    let mut out = Vec::with_capacity(CLASSICAL_BOUND_SEGMENT_LEN);
+    out.extend_from_slice(classical_address_bytes);
+    out.extend_from_slice(&ek_bind_tag(ml_kem_encap_key));
+    Ok(out)
+}
+
 impl ShekylAddress {
     /// Create a new address for the given network.
     pub fn new(

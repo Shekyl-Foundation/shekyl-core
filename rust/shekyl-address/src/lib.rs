@@ -36,8 +36,8 @@ pub mod network;
 pub mod payment_uri;
 
 pub use address::{
-    AddressError, ShekylAddress, ADDRESS_VERSION_V1, CLASSICAL_PAYLOAD_LEN, PQC_PAYLOAD_LEN,
-    SEGMENT_SEPARATOR,
+    classical_bound_segment_from_parts, AddressError, ShekylAddress, ADDRESS_VERSION_V1,
+    CLASSICAL_PAYLOAD_LEN, PQC_PAYLOAD_LEN, SEGMENT_SEPARATOR,
 };
 pub use multisig_address::{
     address_fingerprint, fingerprint_badge, fingerprint_hex, AddressProvenance,

@@ -240,6 +240,44 @@ impl Message<SignTransaction> for KeyActor {
     }
 }
 
+/// Actor message for the classical half of a wallet message signature
+/// (PR-SM-1). `outer` is `preimage ‖ σ_pq` — **public bytes** — so
+/// nothing secret crosses into or out of the mailbox: the master seed
+/// stays at the engine (its transient borrow never reaches the actor,
+/// the same posture the stake personas pin), and the spend scalar never
+/// leaves the actor. The handler length-gates the outer bytes so this
+/// message cannot serve as a general signing oracle for arbitrary
+/// engine-supplied payloads.
+pub(crate) struct SignMessageOuter {
+    pub outer: Vec<u8>,
+}
+
+impl Message<SignMessageOuter> for KeyActor {
+    type Reply = Result<[u8; shekyl_crypto_pq::message_signing::CLASSICAL_SIG_LEN], KeyEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: SignMessageOuter,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        use shekyl_crypto_pq::message_signing::{self, SLH_192S_SIG_LEN};
+        // Exactly preimage(32) ‖ σ_pq — any other shape is a programmer
+        // bug upstream, refused rather than signed.
+        if msg.outer.len() != 32 + SLH_192S_SIG_LEN {
+            return Err(KeyEngineError::Primitive {
+                detail: "message-signing outer bytes have the wrong shape",
+            });
+        }
+        message_signing::sign_outer_with_spend_scalar(
+            self.local.keys.spend_sk.as_canonical_bytes(),
+            &msg.outer,
+        )
+        .map_err(|_| KeyEngineError::Primitive {
+            detail: "spend-scalar Schnorr signing failed",
+        })
+    }
+}
+
 /// Actor message for INBOUND tx-proof generation (WI-RPC-3). The request
 /// carries public data only (stored ciphertexts, vout indices, address
 /// bytes, challenge message); the actor signs with its view secret and
@@ -448,6 +486,19 @@ impl KeyEngineHandle {
     ) -> Result<Vec<u8>, KeyEngineError> {
         self.actor
             .ask(GenerateReserveProof { req })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Sign the classical half of a wallet message signature (PR-SM-1).
+    /// Same inherent-method disposition as the proof methods above: one
+    /// production caller, no `LocalKeys` equivalence oracle to abstract.
+    pub(crate) async fn sign_message_outer(
+        &self,
+        outer: Vec<u8>,
+    ) -> Result<[u8; shekyl_crypto_pq::message_signing::CLASSICAL_SIG_LEN], KeyEngineError> {
+        self.actor
+            .ask(SignMessageOuter { outer })
             .await
             .map_err(collapse_send_error)
     }
@@ -1027,5 +1078,53 @@ mod tests {
             std::slice::from_ref(&on_chain),
         )
         .expect_err("tampered challenge message is rejected");
+    }
+
+    /// PR-SM-1 end-to-end minus the wallet-file borrow: real derived
+    /// keys, real bound segment, PQ half outside the actor, classical
+    /// half inside it, armored assembly, session-less verify. Proves
+    /// the seed→blob spend-scalar consistency the crypto module's
+    /// self-contained tests cannot see (they derive both sides from
+    /// the same synthetic scalar).
+    #[tokio::test]
+    async fn sign_message_outer_end_to_end() {
+        use shekyl_crypto_pq::message_signing as ms;
+
+        let (master_seed, blob) =
+            generate_account_from_raw_seed(&TEST_SEED, DerivationNetwork::Testnet)
+                .expect("test rederivation succeeds");
+        let spend_pk = *blob.spend_pk.as_canonical_bytes();
+        let classical = blob.classical_address_bytes;
+        let ml_kem_ek = blob.ml_kem_ek;
+        let handle = KeyEngineHandle::spawn(blob);
+
+        let segment = shekyl_address::classical_bound_segment_from_parts(&classical, &ml_kem_ek)
+            .expect("segment assembles");
+        let network_id = 1u8; // testnet discriminant
+
+        let (preimage, sig_pq) =
+            ms::sign_message_pq_half(&master_seed[..], network_id, &segment, b"actor end to end")
+                .expect("pq half");
+        let sig_cl = handle
+            .sign_message_outer(ms::outer_bytes(&preimage, &sig_pq))
+            .await
+            .expect("actor signs the outer bytes");
+        let armored = ms::assemble_armored(&sig_pq, &sig_cl);
+
+        let slh_pk = ms::derive_message_signing_public_key(&master_seed[..]).expect("slh pk");
+        ms::verify_message(
+            &spend_pk,
+            &slh_pk,
+            network_id,
+            &segment,
+            b"actor end to end",
+            &armored,
+        )
+        .expect("full nested hybrid verifies against the wallet's real keys");
+
+        // Wrong-shape outer bytes are refused, not signed — the message
+        // is not a general signing oracle.
+        let refused = handle.sign_message_outer(vec![0u8; 32]).await;
+        assert!(refused.is_err(), "short outer bytes must be refused");
     }
 }

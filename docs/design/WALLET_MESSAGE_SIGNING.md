@@ -619,8 +619,23 @@ rationale strengthened.**
   signatures that fail against one passing `""`, silently forking the
   format. A KAT pins it: the vector must fail if any non-empty
   context is supplied (same discipline as the label-tag KATs).
-- Nesting order: **PQ inner, Ed25519 outer** —
-  `σ_pq = PQ.Sign(preimage)`, `σ_ed = Ed25519.Sign(preimage ‖ σ_pq)`.
+- Nesting order: **PQ inner, classical outer** —
+  `σ_pq = PQ.Sign(preimage)`, `σ_cl = Classical.Sign(preimage ‖ σ_pq)`.
+  **Implementation note (PR-SM-1, 2026-08-08):** the classical half is
+  realized as the **house domain-separated Schnorr over the spend
+  scalar**, not RFC 8032 — the wallet's spend secret is a raw Ed25519
+  scalar (`spend_pk = b·G`, `rederive_account`), and RFC 8032 signing
+  is structurally impossible for a raw-scalar key (`ed25519_dalek`
+  derives its scalar by hashing a seed). The in-tree precedent is the
+  reserve proof, which signs with `b` via exactly this Schnorr; the
+  message-signing copy lives under its own challenge domain
+  (`shekyl/msg-sign-outer-v1`, registered), the accepted per-domain
+  copy pattern. Same 64-byte `R ‖ s` wire slot the ruling priced; the
+  fails-closed separability argument is unchanged. The Schnorr nonce
+  is hedged (`k = H(domain ‖ sk ‖ outer ‖ 32 fresh random bytes)`):
+  nonce reuse leaks the scalar, so a dead RNG degrades to a
+  deterministic RFC-6979-style nonce, never to key disclosure — the
+  same fail-safe shape SM-R-6 records for SLH's opt_rand.
   **Rationale strengthened at ratification — the complete argument,
   not the half the draft gave:** unforgeability is order-independent
   (a forger needs both halves over the new preimage either way; the

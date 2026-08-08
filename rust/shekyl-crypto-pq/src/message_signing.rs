@@ -13,13 +13,30 @@
 //!
 //! # Nesting order is load-bearing (SM-R-3)
 //!
-//! `σ_pq = SLH.Sign(preimage)`, `σ_ed = Ed25519.Sign(preimage ‖ σ_pq)`.
+//! `σ_pq = SLH.Sign(preimage)`, `σ_cl = SpendSchnorr.Sign(preimage ‖ σ_pq)`.
 //! Unforgeability is order-independent; separability is not: the inner
 //! component remains a standalone-verifiable artifact, the outer does not.
-//! With PQ inner, an Ed25519-only verifier **cannot verify at all** — the
+//! With PQ inner, a classical-only verifier **cannot verify at all** — the
 //! degenerate implementation fails closed instead of silently verifying
 //! classical-only. Do not flip this order; the ruling exists to foreclose
 //! exactly that.
+//!
+//! # The classical half is the house Schnorr, not RFC 8032 (SM-R-3
+//! implementation note)
+//!
+//! The wallet's spend secret is a **raw Ed25519 scalar**
+//! (`spend_pk = b·G`, `rederive_account`), and RFC 8032 signing is
+//! structurally impossible for a raw-scalar key (`ed25519_dalek` derives
+//! its scalar by hashing a seed). The in-tree precedent for signing with
+//! the spend scalar is the domain-separated Schnorr the reserve proof
+//! uses (`shekyl-proofs/src/reserve_proof.rs` signs with `b` exactly
+//! this way); this module carries its own copy under its own challenge
+//! domain, the same accepted two-copy pattern as tx-proof vs
+//! reserve-proof. Same 64-byte `R ‖ s` wire slot the ruling priced. The
+//! nonce is **hedged**: `k = H(spend_sk ‖ outer ‖ 32 fresh random bytes)`
+//! — Schnorr nonce reuse leaks the scalar, so a bad RNG degrades to a
+//! deterministic RFC-6979-style nonce instead of to key disclosure
+//! (the same fail-safe shape SM-R-6 records for SLH's opt_rand).
 //!
 //! # The signing identity (SM-R-4)
 //!
@@ -52,15 +69,14 @@
 //! on both halves (SM-R-3 R3-a); all domain separation lives in the
 //! cSHAKE customization strings below.
 
-use ed25519_dalek::{
-    Signature as Ed25519Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey,
-    SIGNATURE_LENGTH as ED25519_SIGNATURE_LENGTH,
-};
+use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
+use curve25519_dalek::scalar::Scalar;
 use fips205::slh_dsa_sha2_192s;
 use fips205::traits::{KeyGen as _, SerDes as _, Signer as _, Verifier as _};
 use hkdf::Hkdf;
-use sha2::Sha512;
-use zeroize::Zeroizing;
+use sha2::{Digest as _, Sha512};
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::CryptoError;
 
@@ -114,10 +130,17 @@ pub const SLH_192S_PK_LEN: usize = slh_dsa_sha2_192s::PK_LEN;
 /// SLH-DSA-SHA2-192s signature length.
 pub const SLH_192S_SIG_LEN: usize = slh_dsa_sha2_192s::SIG_LEN;
 
+/// Classical (spend-Schnorr) signature length: `R ‖ s`.
+pub const CLASSICAL_SIG_LEN: usize = 64;
+
+/// Schnorr challenge domain for the classical half (registered beside
+/// the other four domains; distinct from every proof domain).
+pub const MSG_SIGN_OUTER_DOMAIN: &[u8] = b"shekyl/msg-sign-outer-v1";
+
 /// Canonical payload length: fixed by construction (SM-R-5 — every field
 /// is fixed-width; reject-don't-truncate means exact-length or refuse).
 pub const MSG_SIG_CANONICAL_LEN: usize =
-    3 + SLH_192S_SIG_LEN + ED25519_SIGNATURE_LENGTH + MSG_SIG_CHECKSUM_LEN;
+    3 + SLH_192S_SIG_LEN + CLASSICAL_SIG_LEN + MSG_SIG_CHECKSUM_LEN;
 
 /// Checksum trailer length.
 pub const MSG_SIG_CHECKSUM_LEN: usize = 4;
@@ -222,20 +245,92 @@ pub fn message_preimage(network_id: u8, classical_segment: &[u8], message: &[u8]
     shekyl_crypto_hash::cshake256_32(MSG_SIGN_DOMAIN, &buf)
 }
 
-/// Sign a message (SM-R-3/R-6): nested hybrid, hedged, `ctx` empty.
-///
-/// The caller supplies the master seed (the SLH identity derives on
-/// demand and its secret half drops-and-wipes before return), the
-/// Ed25519 spend secret, and the wallet's own bound classical segment.
-pub fn sign_message(
-    master_seed: &[u8],
+/// Schnorr challenge: `H(domain ‖ pk ‖ R ‖ msg) mod L` — the reserve-proof
+/// pattern under this surface's own domain.
+fn schnorr_challenge(public_key: &EdwardsPoint, r_point: &EdwardsPoint, msg: &[u8]) -> Scalar {
+    let mut hasher = Sha512::new();
+    hasher.update(MSG_SIGN_OUTER_DOMAIN);
+    hasher.update(public_key.compress().as_bytes());
+    hasher.update(r_point.compress().as_bytes());
+    hasher.update(msg);
+    Scalar::from_hash(hasher)
+}
+
+/// Sign the outer bytes with the spend **scalar** (see the module-docs
+/// implementation note: raw-scalar key ⇒ house Schnorr, not RFC 8032).
+/// Hedged nonce: `k = H(domain ‖ sk ‖ msg ‖ fresh_random)` — a dead RNG
+/// degrades to a deterministic nonce, never to nonce reuse across
+/// distinct messages.
+pub fn sign_outer_with_spend_scalar(
     spend_sk: &[u8; 32],
+    outer_msg: &[u8],
+) -> Result<[u8; CLASSICAL_SIG_LEN], MessageSigError> {
+    let secret: Scalar =
+        Option::from(Scalar::from_canonical_bytes(*spend_sk)).ok_or(MessageSigError::InvalidKey)?;
+    let public = ED25519_BASEPOINT_TABLE * &secret;
+
+    let mut rand32 = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut rand32);
+    let mut hasher = Sha512::new();
+    hasher.update(MSG_SIGN_OUTER_DOMAIN);
+    hasher.update(b"nonce");
+    hasher.update(spend_sk);
+    hasher.update(outer_msg);
+    hasher.update(rand32);
+    let mut k = Scalar::from_hash(hasher);
+
+    let r_point = ED25519_BASEPOINT_TABLE * &k;
+    let c = schnorr_challenge(&public, &r_point, outer_msg);
+    let s = k - c * secret;
+    k.zeroize();
+
+    let mut sig = [0u8; CLASSICAL_SIG_LEN];
+    sig[..32].copy_from_slice(r_point.compress().as_bytes());
+    sig[32..].copy_from_slice(&s.to_bytes());
+    Ok(sig)
+}
+
+/// Verify the outer Schnorr against the address's spend public key.
+fn verify_outer(spend_pk: &[u8; 32], outer_msg: &[u8], sig: &[u8]) -> bool {
+    let Some(public) = CompressedEdwardsY(*spend_pk).decompress() else {
+        return false;
+    };
+    let Ok(r_bytes) = <[u8; 32]>::try_from(&sig[..32]) else {
+        return false;
+    };
+    let Some(r_point) = CompressedEdwardsY(r_bytes).decompress() else {
+        return false;
+    };
+    let mut s_arr = [0u8; 32];
+    s_arr.copy_from_slice(&sig[32..]);
+    let s: Scalar = match Option::from(Scalar::from_canonical_bytes(s_arr)) {
+        Some(s) => s,
+        None => return false,
+    };
+    let c = schnorr_challenge(&public, &r_point, outer_msg);
+    ED25519_BASEPOINT_TABLE * &s + c * public == r_point
+}
+
+/// The outer message the classical half signs: `preimage ‖ σ_pq` — the
+/// covering that makes stripping the PQ half structurally invalidating.
+pub fn outer_bytes(preimage: &[u8; 32], sig_pq: &[u8]) -> Vec<u8> {
+    let mut outer = Vec::with_capacity(32 + sig_pq.len());
+    outer.extend_from_slice(preimage);
+    outer.extend_from_slice(sig_pq);
+    outer
+}
+
+/// The PQ half of a signature: preimage + hedged SLH-DSA signature with
+/// `ctx = ""`. Split out so the engine can derive this half with the
+/// transiently-borrowed master seed while the spend scalar stays inside
+/// the key actor (both secret-locality postures preserved).
+pub fn sign_message_pq_half(
+    master_seed: &[u8],
     network_id: u8,
     classical_segment: &[u8],
     message: &[u8],
-) -> Result<String, MessageSigError> {
+) -> Result<([u8; 32], Vec<u8>), MessageSigError> {
     let preimage = message_preimage(network_id, classical_segment, message);
-
     let (_pk, slh_sk) =
         derive_message_signing_identity(master_seed).map_err(|_| MessageSigError::InvalidKey)?;
     // Hedged (`true`): fips205 feeds opt_rand on top of SK.prf, so a bad
@@ -244,26 +339,42 @@ pub fn sign_message(
     let sig_pq = slh_sk
         .try_sign(&preimage, b"", true)
         .map_err(|_| MessageSigError::InvalidKey)?;
+    Ok((preimage, sig_pq.to_vec()))
+}
 
-    let ed_signing = SigningKey::from_bytes(spend_sk);
-    let mut outer = Vec::with_capacity(32 + SLH_192S_SIG_LEN);
-    outer.extend_from_slice(&preimage);
-    outer.extend_from_slice(&sig_pq);
-    let sig_ed: Ed25519Signature = ed_signing.sign(&outer);
-
+/// Assemble the armored string from the two halves (SM-R-5 layout).
+pub fn assemble_armored(sig_pq: &[u8], sig_cl: &[u8; CLASSICAL_SIG_LEN]) -> String {
     let mut canonical = Vec::with_capacity(MSG_SIG_CANONICAL_LEN);
     canonical.push(MSG_SIG_LAYOUT_VERSION);
     canonical.push(MSG_SIG_SCHEME_SLH_192S_ED25519);
     canonical.push(MSG_SIG_MODE_SPEND);
-    canonical.extend_from_slice(&sig_pq);
-    canonical.extend_from_slice(&sig_ed.to_bytes());
+    canonical.extend_from_slice(sig_pq);
+    canonical.extend_from_slice(sig_cl);
     let ck = shekyl_crypto_hash::cshake256_32(MSG_SIG_CHECKSUM_DOMAIN, &canonical);
     canonical.extend_from_slice(&ck[..MSG_SIG_CHECKSUM_LEN]);
     debug_assert_eq!(canonical.len(), MSG_SIG_CANONICAL_LEN);
 
     use base64::Engine as _;
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&canonical);
-    Ok(format!("{MSG_SIG_PREFIX}{encoded}"))
+    format!("{MSG_SIG_PREFIX}{encoded}")
+}
+
+/// Sign a message (SM-R-3/R-6): nested hybrid, hedged, `ctx` empty.
+///
+/// One-call form for callers holding both secrets; the engine uses the
+/// split halves above so each secret stays where it lives.
+pub fn sign_message(
+    master_seed: &[u8],
+    spend_sk: &[u8; 32],
+    network_id: u8,
+    classical_segment: &[u8],
+    message: &[u8],
+) -> Result<String, MessageSigError> {
+    let (preimage, sig_pq) =
+        sign_message_pq_half(master_seed, network_id, classical_segment, message)?;
+    let outer = outer_bytes(&preimage, &sig_pq);
+    let sig_cl = sign_outer_with_spend_scalar(spend_sk, &outer)?;
+    Ok(assemble_armored(&sig_pq, &sig_cl))
 }
 
 /// Decode and shape-check an armored signature string. Ceiling first
@@ -322,8 +433,7 @@ pub fn verify_message(
         return Err(MessageSigError::Malformed("unknown mode"));
     }
     let sig_pq: &[u8] = &canonical[3..3 + SLH_192S_SIG_LEN];
-    let sig_ed: &[u8] =
-        &canonical[3 + SLH_192S_SIG_LEN..3 + SLH_192S_SIG_LEN + ED25519_SIGNATURE_LENGTH];
+    let sig_cl: &[u8] = &canonical[3 + SLH_192S_SIG_LEN..3 + SLH_192S_SIG_LEN + CLASSICAL_SIG_LEN];
 
     let preimage = message_preimage(network_id, classical_segment, message);
 
@@ -337,18 +447,10 @@ pub fn verify_message(
         return Err(MessageSigError::VerifyFailed);
     }
 
-    // Outer half: Ed25519 over preimage ‖ σ_pq — stripping the PQ half
-    // structurally invalidates this one.
-    let ed_public = VerifyingKey::from_bytes(spend_pk).map_err(|_| MessageSigError::InvalidKey)?;
-    let sig_ed_arr: [u8; ED25519_SIGNATURE_LENGTH] =
-        sig_ed.try_into().expect("length fixed by canonical split");
-    let mut outer = Vec::with_capacity(32 + SLH_192S_SIG_LEN);
-    outer.extend_from_slice(&preimage);
-    outer.extend_from_slice(sig_pq);
-    if ed_public
-        .verify(&outer, &Ed25519Signature::from_bytes(&sig_ed_arr))
-        .is_err()
-    {
+    // Outer half: the spend-scalar Schnorr over preimage ‖ σ_pq —
+    // stripping the PQ half structurally invalidates this one.
+    let outer = outer_bytes(&preimage, sig_pq);
+    if !verify_outer(spend_pk, &outer, sig_cl) {
         return Err(MessageSigError::VerifyFailed);
     }
     Ok(())
@@ -357,15 +459,23 @@ pub fn verify_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::SigningKey;
+
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    use curve25519_dalek::scalar::Scalar;
 
     const SEED: [u8; 64] = [0x42u8; 64];
-    const SPEND_SK: [u8; 32] = [0x24u8; 32];
     const NETWORK: u8 = 1; // testnet discriminant
     const SEGMENT: &[u8] = &[0x01; 81]; // v1-shaped bound segment stand-in
 
+    /// A canonical spend scalar (the wallet's spend secret is a raw
+    /// scalar, `spend_pk = b·G` — the module-docs implementation note).
+    fn spend_sk() -> [u8; 32] {
+        Scalar::from_bytes_mod_order([0x24u8; 32]).to_bytes()
+    }
+
     fn spend_pk() -> [u8; 32] {
-        SigningKey::from_bytes(&SPEND_SK).verifying_key().to_bytes()
+        let b: Scalar = Option::from(Scalar::from_canonical_bytes(spend_sk())).unwrap();
+        (ED25519_BASEPOINT_TABLE * &b).compress().to_bytes()
     }
 
     fn slh_pk() -> [u8; SLH_192S_PK_LEN] {
@@ -392,7 +502,7 @@ mod tests {
     #[test]
     fn sign_verify_round_trips() {
         let armored =
-            sign_message(&SEED, &SPEND_SK, NETWORK, SEGMENT, b"hello shekyl").expect("sign");
+            sign_message(&SEED, &spend_sk(), NETWORK, SEGMENT, b"hello shekyl").expect("sign");
         assert!(armored.starts_with(MSG_SIG_PREFIX));
         assert!(!armored.contains('='), "unpadded is pinned");
         verify_message(
@@ -410,7 +520,7 @@ mod tests {
     /// keys. (The §4 tamper battery, binding half.)
     #[test]
     fn verification_binds_every_input() {
-        let armored = sign_message(&SEED, &SPEND_SK, NETWORK, SEGMENT, b"msg").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NETWORK, SEGMENT, b"msg").expect("sign");
         let ok = |m: &[u8], n: u8, seg: &[u8]| {
             verify_message(&spend_pk(), &slh_pk(), n, seg, m, &armored)
         };
@@ -424,9 +534,8 @@ mod tests {
             ok(b"msg", NETWORK, &[0x02; 81]),
             Err(MessageSigError::VerifyFailed)
         );
-        let other_spend = SigningKey::from_bytes(&[9u8; 32])
-            .verifying_key()
-            .to_bytes();
+        let other_b = Scalar::from_bytes_mod_order([9u8; 32]);
+        let other_spend = (ED25519_BASEPOINT_TABLE * &other_b).compress().to_bytes();
         assert_eq!(
             verify_message(&other_spend, &slh_pk(), NETWORK, SEGMENT, b"msg", &armored),
             Err(MessageSigError::VerifyFailed)
@@ -445,7 +554,7 @@ mod tests {
     #[test]
     fn armored_tamper_battery() {
         use base64::Engine as _;
-        let armored = sign_message(&SEED, &SPEND_SK, NETWORK, SEGMENT, b"m").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NETWORK, SEGMENT, b"m").expect("sign");
         let verify = |s: &str| verify_message(&spend_pk(), &slh_pk(), NETWORK, SEGMENT, b"m", s);
 
         // Prefix and padding shapes.
@@ -502,7 +611,7 @@ mod tests {
     fn cross_half_and_never_or() {
         use base64::Engine as _;
         let engine = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        let armored = sign_message(&SEED, &SPEND_SK, NETWORK, SEGMENT, b"m").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NETWORK, SEGMENT, b"m").expect("sign");
         let mut canonical = engine
             .decode(armored.strip_prefix(MSG_SIG_PREFIX).unwrap())
             .unwrap();
@@ -537,29 +646,15 @@ mod tests {
     /// `ctx = ""` and that the pin is load-bearing, not decorative.
     #[test]
     fn nonempty_ctx_signature_is_rejected() {
-        use base64::Engine as _;
-        let engine = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
         let preimage = message_preimage(NETWORK, SEGMENT, b"m");
         let (_pk, sk) = derive_message_signing_identity(&SEED).unwrap();
         let sig_pq_bad_ctx = sk
             .try_sign(&preimage, MSG_SIGN_DOMAIN, true)
             .expect("sign with wrong ctx");
 
-        let ed = SigningKey::from_bytes(&SPEND_SK);
-        let mut outer = Vec::new();
-        outer.extend_from_slice(&preimage);
-        outer.extend_from_slice(&sig_pq_bad_ctx);
-        let sig_ed = ed.sign(&outer);
-
-        let mut canonical = Vec::with_capacity(MSG_SIG_CANONICAL_LEN);
-        canonical.push(MSG_SIG_LAYOUT_VERSION);
-        canonical.push(MSG_SIG_SCHEME_SLH_192S_ED25519);
-        canonical.push(MSG_SIG_MODE_SPEND);
-        canonical.extend_from_slice(&sig_pq_bad_ctx);
-        canonical.extend_from_slice(&sig_ed.to_bytes());
-        let ck = shekyl_crypto_hash::cshake256_32(MSG_SIG_CHECKSUM_DOMAIN, &canonical);
-        canonical.extend_from_slice(&ck[..MSG_SIG_CHECKSUM_LEN]);
-        let s = format!("{}{}", MSG_SIG_PREFIX, engine.encode(&canonical));
+        let outer = outer_bytes(&preimage, &sig_pq_bad_ctx);
+        let sig_cl = sign_outer_with_spend_scalar(&spend_sk(), &outer).unwrap();
+        let s = assemble_armored(&sig_pq_bad_ctx, &sig_cl);
 
         assert_eq!(
             verify_message(&spend_pk(), &slh_pk(), NETWORK, SEGMENT, b"m", &s),

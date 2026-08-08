@@ -320,6 +320,7 @@ pub mod local_pending_tx;
 pub(crate) mod local_persistence;
 pub(crate) mod local_refresh;
 pub mod merge;
+pub mod message_signing;
 pub mod network;
 pub mod output_selector;
 pub mod payment_requests;
