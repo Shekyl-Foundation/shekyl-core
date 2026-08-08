@@ -337,7 +337,8 @@ Proposed for ratification, algorithm-independent:
   address-format decision and the escalation stands either way. The
   Pi 4 measurement (SM-DQ-8's prerequisite) should therefore land
   before the genesis-lane item is drafted, so the lane rules on the
-  real fork, not both hypotheticals.
+  real fork, not both hypotheticals. **Measurement landed 2026-08-08
+  (SM-DQ-8 table): the genesis-lane item is now draftable.**
 
 ### SM-DQ-8 — The algorithm, chosen second (pass 1)
 
@@ -354,17 +355,39 @@ row):
 | (B) SLH-DSA-192s + Ed25519, pk inline | +48 B (the pk itself) | σ 16224 + 64 ≈ 16.3 KB | hash functions only | FIPS 205 final; `fips205` NOT pinned (resolves 0.4.1) |
 | (C) Agile commitment, algorithm deferred | +32 B tag | scheme-dependent | — | the SM-DQ-7 shape; composes with (A); (B) can bypass it (see SM-DQ-7 pass-2 amendment) |
 
-**Measured (dev box, i9-11950H single-thread, release; stable over 5
-iterations):** SLH-DSA-SHA2-192s keygen ≈ 50 ms, **sign ≈ 519 ms**,
-verify ≈ 0.45 ms; ML-DSA-65 keygen ≈ 0.21 ms, sign ≈ 0.27 ms, verify ≈
-0.11 ms. SLH signing costs ~1900× ML-DSA's on x86. **Named prerequisite
-before SM-DQ-8 rules:** the same numbers on the Pi 4 provisioning floor
-(rule 76 forbids deciding on a scaled projection; the naive scaling
-says seconds-per-signature, which may still be acceptable for a
-human-initiated, low-frequency operation — but it gets measured, not
-assumed). The `f` parameter sets invert the trade (faster signing,
-larger signatures) if Pi latency turns out to matter more than blob
-size.
+**Measured — including on the Pi 4 provisioning floor (prerequisite
+DISCHARGED 2026-08-08).** Same binary both hosts (release, hedged
+signing; averages over 3 sign / 3 keygen / 20 verify iterations; Pi =
+Raspberry Pi 4 Model B Rev 1.4, aarch64, the rule-76 floor):
+
+| | keygen | sign | verify | sig bytes |
+|---|---|---|---|---|
+| SLH-192s — Pi 4 | 415 ms | **3.83 s** | 3.4 ms | 16,224 |
+| SLH-192f — Pi 4 | 6.5 ms | **171 ms** | 9.4 ms | 35,664 |
+| ML-DSA-65 — Pi 4 | 0.69 ms | 1.77 ms | 0.45 ms | 3,309 |
+| SLH-192s — x86 i9 | 47 ms | 517 ms | 0.47 ms | 16,224 |
+| SLH-192f — x86 i9 | 0.73 ms | 21.9 ms | 1.2 ms | 35,664 |
+| ML-DSA-65 — x86 i9 | 0.18 ms | 0.40 ms | 0.11 ms | 3,309 |
+
+What the floor numbers say, without deciding for the round:
+
+- **192s on the floor is ~4.3 s per signing session** (derive-on-demand
+  keygen 415 ms + sign 3.83 s) — human-noticeable, plausibly
+  acceptable for a low-frequency, deliberate operation, and honest to
+  disclose in the UX rather than hide.
+- **192f inverts the trade decisively on latency**: 171 ms sign +
+  6.5 ms keygen is imperceptible even on the floor — at the cost of a
+  **35.7 KB** signature (2.2× the s-variant, ~6.7× construction (A)).
+  The x86→Pi scaling factor measured ~7.4×, not the 10–20× a
+  projection would have guessed — which is why rule 76 forbids
+  guessing.
+- Verification is trivial everywhere (≤ 9.4 ms worst case), so the
+  verifier side constrains nothing.
+
+SM-DQ-8's decision inputs are now complete: (A) 5.3 KB / sub-ms,
+(B-s) 16.3 KB / ~4 s-on-floor, (B-f) 35.7 KB / ~0.2 s-on-floor, all
+under the same hash-only-vs-lattice assumption split and the same
+dependency terms.
 
 Two pulls, both real and both satisfied by (C)'s shape:
 
@@ -501,4 +524,13 @@ and a measurement:
   explicit ((A) requires the commitment shape, (B) makes it optional),
   and the genesis-lane item waits for the Pi measurement so the lane
   rules on the real fork.
+
+**PASS 2 ADDENDUM (2026-08-08) — the Pi 4 floor measurement, run and
+folded.** Cross-compiled the scratch bench (aarch64, same binary both
+hosts) and ran it on the floor hardware (Pi 4 Model B Rev 1.4):
+SLH-192s sign **3.83 s** / keygen 415 ms; SLH-192f sign **171 ms** /
+sig 35,664 B; ML-DSA-65 sign 1.77 ms. Measured x86→Pi scaling ≈ 7.4×
+(a projection would have guessed 10–20× — rule 76 vindicated in both
+directions). The named prerequisite is DISCHARGED; SM-DQ-8's decision
+inputs are complete and the genesis-lane item is draftable.
 
