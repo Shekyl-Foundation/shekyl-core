@@ -298,6 +298,38 @@ pub enum TransferState {
     /// nothing proved the send was refused: a late confirmation still
     /// flips this row to CONFIRMED (rule 82).
     Dropped,
+    /// The user abandoned the send (`abandon_tx`; OUTGOING journal
+    /// `Abandoned` only).
+    ///
+    /// Distinct from [`Self::Dropped`] because the release came from
+    /// user intent, not confirmed-absent evidence — the carried input
+    /// locks may still be held until the watchdog resolves — and, as
+    /// with DROPPED, a late confirmation still flips this row to
+    /// CONFIRMED loudly rather than staying wrong (rule 82 / P3-4).
+    Abandoned,
+}
+
+impl TransferState {
+    /// OpenAPI / JSON-RPC wire string (`SCREAMING_SNAKE_CASE`). Single
+    /// owner of that vocabulary so error data and `get_transfers` never
+    /// diverge.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "PENDING",
+            Self::Confirmed => "CONFIRMED",
+            Self::Spent => "SPENT",
+            Self::Failed => "FAILED",
+            Self::Dropped => "DROPPED",
+            Self::Abandoned => "ABANDONED",
+        }
+    }
+}
+
+impl std::fmt::Display for TransferState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Receive-attribution kind for INCOMING transfer rows (FA-8 / WI-RPC-4).
@@ -527,6 +559,15 @@ pub struct SubmitPendingTxResult {
 /// `discard_pending_tx` result (empty object).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DiscardPendingTxResult {}
+
+/// `abandon_tx` result (PR-SJ-3): the row's resulting state — always
+/// `ABANDONED` on success (fresh abandon and idempotent re-abandon
+/// answer identically, SJ-DQ-8).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AbandonTxResult {
+    /// Resulting journal state, in `get_transfers` vocabulary.
+    pub state: TransferState,
+}
 
 /// Payment-request lifecycle state (WI-RPC-1 receiving).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
