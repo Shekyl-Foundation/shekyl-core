@@ -377,17 +377,17 @@ impl WalletLedger {
     }
 
     /// Send-journal reconciler (`WALLET_SEND_RECORD.md` P3-1) — the
-    /// merge post-pass that keeps the journal and the F14 derived
-    /// cache agreeing, and the mechanism that makes rescan
-    /// re-application free. Runs under the same write guard as the
-    /// scan merge (crash-ordering: a trigger and its edge persist
+    /// merge post-pass that keeps the journal's lifecycle states
+    /// agreeing with chain evidence. Runs under the same write guard as
+    /// the scan merge (crash-ordering: a trigger and its edge persist
     /// together), every merge, idempotently:
     ///
     /// 1. **Reorg back-edges**: a `Confirmed { height ≥ fork }` row
     ///    returns to `Dispatched` — the confirming block is gone;
     ///    refresh re-observes or the watchdog resolves. The row keeps
-    ///    its `lock_baseline` so step 3 can re-place the F14 locks
-    ///    (baseline is cleared only by a deliberate watchdog release).
+    ///    its `lock_baseline` so the derived lock view keeps covering
+    ///    its inputs (baseline is cleared only by a deliberate
+    ///    watchdog release).
     /// 2. **Confirm edges** (refresh-authoritative, C3): a transfer
     ///    whose observed `spending_tx_hash` matches a journal row
     ///    moves the row to `Confirmed { spent_height }`. A
@@ -395,13 +395,14 @@ impl WalletLedger {
     ///    confirmation (`PresumedDead` was only ever display). First
     ///    observed height wins; baseline is retained for a later reorg
     ///    re-derivation.
-    /// (The former step 3 — per-row lock re-derivation writes — retired
+    ///
+    /// The former step 3 — per-row lock re-derivation writes — retired
     /// with the `awaiting_confirmation` field at PR-SJ-1b: consumers
     /// derive the lock set on demand from exactly the facts this
-    /// reconciler maintains, `SendJournalBlock::derive_f14_locks`, so
-    /// there is no cache left to re-apply. The SJ-DQ-4 self-link
-    /// defence across a rescan wipe now holds by construction: the
-    /// journal survives the wipe and the derivation reads it directly.)
+    /// reconciler maintains (`SendJournalBlock::derive_f14_locks`), so
+    /// there is no cache left to re-apply, and the SJ-DQ-4 self-link
+    /// defence across a rescan wipe holds by construction — the
+    /// journal survives the wipe and the derivation reads it directly.
     pub fn reconcile_send_journal(&mut self, reorg_fork_height: Option<u64>) {
         let Self {
             ledger,
