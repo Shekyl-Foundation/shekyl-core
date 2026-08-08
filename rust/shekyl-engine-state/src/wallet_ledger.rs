@@ -56,11 +56,23 @@ use crate::{
     bookkeeping_block::BookkeepingBlock,
     error::WalletLedgerError,
     ledger_block::LedgerBlock,
-    send_journal_block::{SendInputRef, SendJournalBlock, SendRecipient},
+    send_journal_block::{AbandonEdge, SendInputRef, SendJournalBlock, SendRecipient, SendState},
     staking_block::StakingBlock,
     sync_state_block::SyncStateBlock,
     tx_meta_block::{TxMetaBlock, TxSecretKey, TxSecretKeys},
 };
+
+/// A tx-key retention reference that the send journal itself carries:
+/// any row in a **non-terminal or `Abandoned`** state (P3-4's I-2
+/// reference list). `Confirmed` rows are chain-referenced and
+/// `TerminalRejected` rows retired their secret at the verdict, so
+/// neither needs the journal leg.
+pub(crate) fn journal_row_holds_retention(state: SendState) -> bool {
+    matches!(
+        state,
+        SendState::Dispatched | SendState::PresumedDead | SendState::Abandoned
+    )
+}
 
 /// Bundle-level `format_version`.
 ///
@@ -103,6 +115,10 @@ use crate::{
 /// sixth top-level block (`SEND_JOURNAL_BLOCK_VERSION` 1,
 /// `WALLET_SEND_RECORD.md` PR-SJ-1); the aggregator layout grew a
 /// block, so the bundle bytes shift and the format version bumps.
+/// Version `14` appends `SendState::Abandoned`
+/// (`SEND_JOURNAL_BLOCK_VERSION` 2, `WALLET_SEND_RECORD.md` PR-SJ-3);
+/// the append is encoding-additive (discriminant KAT), the bump is
+/// rule-42 snapshot pairing.
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -114,7 +130,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 13;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 14;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.
@@ -290,6 +306,53 @@ impl WalletLedger {
         self.reconcile_send_journal(None);
     }
 
+    /// The user-authored abandon operation (`WALLET_SEND_RECORD.md`
+    /// P3-4 / SJ-DQ-8): the journal edge
+    /// `Dispatched | PresumedDead → Abandoned` **plus** the I-2
+    /// reference migration — the txid leaves
+    /// `sync_state.pending_tx_hashes` (the pending set stays a true
+    /// live-work set) and the journal row itself becomes the retained
+    /// tx secret's live reference
+    /// ([`journal_row_holds_retention`]). `tx_meta.tx_keys` is never
+    /// touched (C2: proof material has its own lifecycle — the named
+    /// hazard is deleting proof material for a tx that later confirms).
+    ///
+    /// Both writes happen under the caller's single ledger guard, so a
+    /// crash never splits the edge from the migration (the same
+    /// crash-ordering contract every other journal edge rides).
+    /// Idempotent: re-abandoning an `Abandoned` row re-runs only the
+    /// (idempotent) pending removal.
+    ///
+    /// Returns the edge outcome plus `was_pending` so a fail-closed
+    /// caller can roll back via [`Self::unabandon_send`] when the
+    /// durable save fails.
+    pub fn abandon_send(&mut self, txid: &[u8; 32]) -> (AbandonEdge, bool) {
+        let edge = self.send_journal.mark_abandoned(txid);
+        match edge {
+            AbandonEdge::Applied { .. } | AbandonEdge::AlreadyAbandoned => {
+                let before = self.sync_state.pending_tx_hashes.len();
+                self.sync_state.pending_tx_hashes.retain(|h| h != txid);
+                let was_pending = self.sync_state.pending_tx_hashes.len() != before;
+                (edge, was_pending)
+            }
+            AbandonEdge::NotFound | AbandonEdge::Forbidden { .. } => (edge, false),
+        }
+    }
+
+    /// Fail-closed rollback of [`Self::abandon_send`] for a caller whose
+    /// durable save failed: restore the previous row state and, when the
+    /// abandon removed the pending reference, re-add it. Leaves the
+    /// ledger exactly as it was before the abandon, so an unsaved edge
+    /// never survives in memory to diverge from disk.
+    pub fn unabandon_send(&mut self, txid: &[u8; 32], previous: SendState, was_pending: bool) {
+        if let Some(row) = self.send_journal.rows.get_mut(txid) {
+            row.state = previous;
+        }
+        if was_pending && !self.sync_state.pending_tx_hashes.contains(txid) {
+            self.sync_state.pending_tx_hashes.push(*txid);
+        }
+    }
+
     /// Merge post-passes that must share the scan-merge write guard
     /// (crash-ordering: a trigger and its edges persist together):
     /// WI-RPC-3 retention reconciliation (I-2) and the send-journal
@@ -321,15 +384,20 @@ impl WalletLedger {
     ///    observed height wins; baseline is retained for a later reorg
     ///    re-derivation.
     /// 3. **Lock re-derivation** (the SJ-DQ-4 inversion): for every
-    ///    `Dispatched` row with a `lock_baseline`, any carried input
-    ///    present in the ledger, unspent, and unlocked gets its F14
-    ///    lock re-derived from the journal facts. After a rescan wipe
-    ///    this incrementally restores the locks as replay re-creates
-    ///    the rows; after an accepting verdict it is the *only* lock
-    ///    placement site (journal owns the baseline; the field is the
-    ///    derived cache).
+    ///    `Dispatched` **or `Abandoned`** row with a `lock_baseline`,
+    ///    any carried input present in the ledger, unspent, and
+    ///    unlocked gets its F14 lock re-derived from the journal
+    ///    facts. The re-application set is P3-1's
+    ///    non-terminal-or-abandoned list: an
+    ///    abandoned-but-still-landable send must re-lock across a
+    ///    wipe or the SJ-DQ-4 self-link defence fails exactly there
+    ///    (`PresumedDead` and released-`Abandoned` rows carry no
+    ///    baseline, so the deliberate watchdog release is never
+    ///    undone). After a rescan wipe this incrementally restores
+    ///    the locks as replay re-creates the rows; after an accepting
+    ///    verdict it is the *only* lock placement site (journal owns
+    ///    the baseline; the field is the derived cache).
     pub fn reconcile_send_journal(&mut self, reorg_fork_height: Option<u64>) {
-        use crate::send_journal_block::SendState;
         use crate::transfer::AwaitingConfirmation;
 
         let Self {
@@ -360,7 +428,7 @@ impl WalletLedger {
         }
 
         for (txid, row) in &send_journal.rows {
-            if row.state != SendState::Dispatched {
+            if !matches!(row.state, SendState::Dispatched | SendState::Abandoned) {
                 continue;
             }
             let Some(base) = row.lock_baseline else {
@@ -414,7 +482,9 @@ impl WalletLedger {
     /// 2. **Orphan handling.** A `tx_meta.tx_keys` entry with *no*
     ///    remaining live reference — not chain-referenced, not locked
     ///    (`awaiting_confirmation`), not in the scanned pool, not
-    ///    pending. On a **rewind** merge such an entry is *not* dead:
+    ///    pending, and not held by a journal row in a
+    ///    non-terminal-or-abandoned state (the P3-4 leg). On a
+    ///    **rewind** merge such an entry is *not* dead:
     ///    the rewind itself removed its chain references (rows at or
     ///    above the fork, spend un-marking), and the common outcome is
     ///    re-confirmation on the new chain a few blocks later — so the
@@ -473,6 +543,15 @@ impl WalletLedger {
         }
         for h in &self.sync_state.pending_tx_hashes {
             live.insert(*h);
+        }
+        // Journal leg (P3-4): a row in a non-terminal-or-abandoned state
+        // is itself a live reference — after `abandon_send` migrates the
+        // pending entry, this leg is what keeps the retained secret from
+        // being collected as an orphan.
+        for (h, row) in &self.send_journal.rows {
+            if journal_row_holds_retention(row.state) {
+                live.insert(*h);
+            }
         }
 
         if reorg_rewound {
@@ -1005,6 +1084,191 @@ mod tests {
             "reconcile is idempotent"
         );
         w.check_invariants().expect("I-5 holds after re-derivation");
+    }
+
+    /// P3-4: `abandon_send` is the journal edge plus the I-2 reference
+    /// migration in one guard-atomic operation — pending entry removed,
+    /// `tx_keys` untouched, the journal row now the live reference
+    /// (retention reconcile does not collect), idempotent on re-call.
+    #[test]
+    fn abandon_send_migrates_the_retention_reference() {
+        use crate::send_journal_block::{AbandonEdge, SendInputRef, SendRecord, SendState};
+
+        let txid = [0x66; 32];
+        let mut w = WalletLedger::empty();
+        insert_secret(&mut w, txid);
+        w.sync_state.pending_tx_hashes.push(txid);
+        w.send_journal.rows.insert(
+            txid,
+            SendRecord {
+                dispatched_at_height: 20,
+                fee: 5,
+                recipients: Vec::new(),
+                change_amount: 0,
+                inputs: vec![SendInputRef {
+                    gindex: 7,
+                    amount: 1,
+                }],
+                lock_baseline: None,
+                state: SendState::PresumedDead,
+            },
+        );
+        w.check_invariants().expect("pre-abandon shape is valid");
+
+        let (edge, was_pending) = w.abandon_send(&txid);
+        assert_eq!(
+            edge,
+            AbandonEdge::Applied {
+                previous: SendState::PresumedDead
+            }
+        );
+        assert!(was_pending, "the pending entry was migrated");
+        assert!(w.sync_state.pending_tx_hashes.is_empty());
+        assert_eq!(w.send_journal.rows[&txid].state, SendState::Abandoned);
+        assert!(
+            w.tx_meta.tx_keys.contains_key(&txid),
+            "keys retained (C2) — abandon never touches proof material"
+        );
+        w.check_invariants()
+            .expect("the journal row is the I-2 reference after migration");
+
+        // The merge reconciler must not collect the journal-held secret.
+        let (confirmed, collected) = w.reconcile_tx_key_retention(false);
+        assert_eq!((confirmed, collected), (0, 0));
+        assert!(w.tx_meta.tx_keys.contains_key(&txid));
+
+        // Idempotent re-call: no edge, nothing else changes.
+        let (edge, was_pending) = w.abandon_send(&txid);
+        assert_eq!(edge, AbandonEdge::AlreadyAbandoned);
+        assert!(!was_pending);
+
+        // Unknown txid is named, not collapsed.
+        assert_eq!(w.abandon_send(&[0xEE; 32]), (AbandonEdge::NotFound, false));
+    }
+
+    /// The fail-closed rollback restores exactly the pre-abandon shape:
+    /// previous state back on the row, pending reference re-added.
+    #[test]
+    fn unabandon_send_restores_the_pre_abandon_shape() {
+        use crate::send_journal_block::{AbandonEdge, SendInputRef, SendRecord, SendState};
+
+        let txid = [0x67; 32];
+        let mut w = WalletLedger::empty();
+        insert_secret(&mut w, txid);
+        w.sync_state.pending_tx_hashes.push(txid);
+        w.send_journal.rows.insert(
+            txid,
+            SendRecord {
+                dispatched_at_height: 20,
+                fee: 5,
+                recipients: Vec::new(),
+                change_amount: 0,
+                inputs: vec![SendInputRef {
+                    gindex: 7,
+                    amount: 1,
+                }],
+                lock_baseline: None,
+                state: SendState::Dispatched,
+            },
+        );
+
+        let (edge, was_pending) = w.abandon_send(&txid);
+        let AbandonEdge::Applied { previous } = edge else {
+            panic!("expected Applied, got {edge:?}");
+        };
+        w.unabandon_send(&txid, previous, was_pending);
+
+        assert_eq!(w.send_journal.rows[&txid].state, SendState::Dispatched);
+        assert_eq!(w.sync_state.pending_tx_hashes, vec![txid]);
+        w.check_invariants().expect("rollback restores I-2");
+    }
+
+    /// P3-1's re-application set is non-terminal-or-abandoned: an
+    /// `Abandoned` row with a retained baseline re-derives its carried
+    /// input locks after a wipe (the self-link defence for an
+    /// abandoned-but-still-landable send), while a released row
+    /// (baseline `None`) stays released.
+    #[test]
+    fn reconcile_send_journal_relocks_abandoned_rows_with_baseline() {
+        use crate::send_journal_block::{SendInputRef, SendRecord, SendState};
+
+        let armed = [0x51; 32];
+        let released = [0x52; 32];
+        let mut w = WalletLedger::empty();
+        let mut a = mk_transfer(0x21, 10);
+        a.global_output_index = 400;
+        let mut b = mk_transfer(0x22, 10);
+        b.global_output_index = 401;
+        w.ledger.transfers.push(a);
+        w.ledger.transfers.push(b);
+        w.ledger.tip.synced_height = 30;
+        for (txid, gindex, baseline) in [(armed, 400, Some(25)), (released, 401, None)] {
+            w.send_journal.rows.insert(
+                txid,
+                SendRecord {
+                    dispatched_at_height: 20,
+                    fee: 5,
+                    recipients: Vec::new(),
+                    change_amount: 0,
+                    inputs: vec![SendInputRef { gindex, amount: 1 }],
+                    lock_baseline: baseline,
+                    state: SendState::Abandoned,
+                },
+            );
+        }
+
+        w.reconcile_send_journal(None);
+        let lock = w.ledger.transfers[0]
+            .awaiting_confirmation
+            .as_ref()
+            .expect("abandoned-with-baseline re-derives its lock");
+        assert_eq!(lock.tx_hash.to_bytes(), armed);
+        assert_eq!(lock.accepted_at_height, 25);
+        assert!(
+            w.ledger.transfers[1].awaiting_confirmation.is_none(),
+            "a released abandoned row (baseline None) is never re-locked"
+        );
+        w.check_invariants()
+            .expect("I-5 admits the abandoned row's lock");
+    }
+
+    /// P3-4: a late confirmation un-abandons loudly — the confirm edge
+    /// flips `Abandoned → Confirmed` rather than staying wrong.
+    #[test]
+    fn reconcile_send_journal_unabandons_on_late_confirmation() {
+        use crate::send_journal_block::{SendRecord, SendState};
+
+        let txid = [0x53; 32];
+        let mut w = WalletLedger::empty();
+        let mut spent = mk_transfer(0x31, 10);
+        spent.global_output_index = 500;
+        spent.spent = true;
+        spent.key_image = Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+            [7u8; 32],
+        ));
+        spent.spent_height = Some(19);
+        spent.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
+        w.ledger.transfers.push(spent);
+        w.ledger.tip.synced_height = 30;
+        w.send_journal.rows.insert(
+            txid,
+            SendRecord {
+                dispatched_at_height: 15,
+                fee: 5,
+                recipients: Vec::new(),
+                change_amount: 0,
+                inputs: Vec::new(),
+                lock_baseline: None,
+                state: SendState::Abandoned,
+            },
+        );
+
+        w.reconcile_send_journal(None);
+        assert_eq!(
+            w.send_journal.rows[&txid].state,
+            SendState::Confirmed { height: 19 },
+            "late confirmation un-abandons the row"
+        );
     }
 
     /// P3-1: confirm edges are refresh-authoritative (observed

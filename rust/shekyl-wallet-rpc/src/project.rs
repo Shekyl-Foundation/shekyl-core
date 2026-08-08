@@ -230,7 +230,10 @@ pub fn outgoing_transfer_id(txid: &TxHash) -> String {
 pub fn outgoing_block_height(row: &SendRecord) -> Option<u64> {
     match row.state {
         SendState::Confirmed { height } => Some(height),
-        SendState::Dispatched | SendState::TerminalRejected | SendState::PresumedDead => None,
+        SendState::Dispatched
+        | SendState::TerminalRejected
+        | SendState::PresumedDead
+        | SendState::Abandoned => None,
     }
 }
 
@@ -247,12 +250,16 @@ pub fn outgoing_block_height(row: &SendRecord) -> Option<u64> {
 ///   the input locks — never collapse into `PENDING`, which would say
 ///   the wallet is still waiting while the same wallet reports those
 ///   funds spendable again).
+/// - `Abandoned` → `ABANDONED` (user-authored give-up, P3-4 — never
+///   collapse into `DROPPED`, whose release claim is evidence-backed;
+///   an abandoned send's input locks may still be held).
 pub fn outgoing_transfer_state(row: &SendRecord) -> TransferState {
     match row.state {
         SendState::Dispatched => TransferState::Pending,
         SendState::Confirmed { .. } => TransferState::Confirmed,
         SendState::TerminalRejected => TransferState::Failed,
         SendState::PresumedDead => TransferState::Dropped,
+        SendState::Abandoned => TransferState::Abandoned,
     }
 }
 

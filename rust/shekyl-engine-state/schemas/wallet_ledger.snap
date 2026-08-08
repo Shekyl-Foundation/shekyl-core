@@ -3264,6 +3264,10 @@
                                     {
                                       "name": "PresumedDead",
                                       "ty": "UnitVariant"
+                                    },
+                                    {
+                                      "name": "Abandoned",
+                                      "ty": "UnitVariant"
                                     }
                                   ]
                                 }

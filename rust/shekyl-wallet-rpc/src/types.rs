@@ -298,6 +298,15 @@ pub enum TransferState {
     /// nothing proved the send was refused: a late confirmation still
     /// flips this row to CONFIRMED (rule 82).
     Dropped,
+    /// The user abandoned the send (`abandon_tx`; OUTGOING journal
+    /// `Abandoned` only).
+    ///
+    /// Distinct from [`Self::Dropped`] because the release came from
+    /// user intent, not confirmed-absent evidence — the carried input
+    /// locks may still be held until the watchdog resolves — and, as
+    /// with DROPPED, a late confirmation still flips this row to
+    /// CONFIRMED loudly rather than staying wrong (rule 82 / P3-4).
+    Abandoned,
 }
 
 /// Receive-attribution kind for INCOMING transfer rows (FA-8 / WI-RPC-4).
