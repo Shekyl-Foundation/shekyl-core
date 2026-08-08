@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Wallet internals: the in-flight-spend lock is now derived from the
+  send journal instead of being stored on each output row**
+  (`WALLET_SEND_RECORD.md` PR-SJ-1b, `feat/wallet-sj1b-field-retirement`).
+  No user-visible behavior changes; balance computation got measurably
+  faster (~14% fewer instructions on the hot path), and a wallet
+  mid-rescan can no longer lose track of an in-flight send — the
+  journal survives the wipe the old per-row lock did not. Wallet files
+  written by earlier builds need a re-create (pre-genesis posture:
+  `rm -rf` and restore from seed).
+
 ### Fixed
 
 - **`BlockchainLMDB::reset()` now wipes every table, so an in-place chain

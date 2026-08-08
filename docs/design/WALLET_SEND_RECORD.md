@@ -514,6 +514,18 @@ reopen criteria at ratification. Then:
    invariant land here; field retirement is **PR-SJ-1b**
    (pre-committed; PR-SJ-2 does not land before it)
    (engine-core + engine-state; closes nothing yet, enables both).
+   **PR-SJ-1b LANDED 2026-08-08 (`feat/wallet-sj1b-field-retirement`)**
+   — out of the pre-committed order (PR-SJ-2 and PR-SJ-3 landed first;
+   the I-5 both-agree invariant held the equivalence in the interim,
+   exactly the job it was built for). The retirement shape:
+   `derive_f14_locks` on the journal is the single owner of the
+   derivation, consumers derive on demand (a maintained cache would
+   re-create the deleted field), `held_submits` projects from the
+   journal, and I-5 + I-2's F14-lock leg retired with the field.
+   Graded on its own per this split's rationale: the balance hot
+   path *improved* (instructions −14.5%, estimated cycles −19.5% at
+   10k rows) — the per-row `Option` load cost more than the
+   empty-map lookup that replaced it.
 2. **PR-SJ-2** — projections: `transfer_view` OUTGOING + fee, CLI, GUI
    list; the annotation exposure (`set_tx_note` + note on
    `TransferView`, both directions); the `attributes` deletion (if
