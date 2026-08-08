@@ -192,7 +192,9 @@ preimage = H(domain || version || network_id || mode ||
   requirement and the combiner's binding requirement. Register it
   once, in the crypto crate, next to the §1 domain inventory.
 - `mode`: 1 byte — `0x01` spend-tier (this round's only mode);
-  view-tier and future modes append, never renumber.
+  future modes append, never renumber. *(A view-tier mode was named
+  here through pass 2 and deleted at SM-R-3 ratification — see the
+  ruling: naming it implied a plan that does not exist.)*
 - Address binding: the **full classical segment** (version + spend +
   view + ek_bind_tag) so a signature cannot be transplanted between
   addresses sharing a spend key, and the ek binding rides the preimage.
@@ -432,7 +434,8 @@ dependency round above.
 - Pinned KATs for preimage construction and full sign/verify vectors
   (rule 30: fixed seed → fixed vk → pinned signature bytes under
   deterministic test mode, plus verify-side vectors that must never
-  rot).
+  rot). **Including the R3-a `ctx` pin:** a vector that fails if any
+  non-empty FIPS 204/205 context string is supplied on either half.
 - Tamper battery: every field of the armored format flipped
   independently → reject (version, scheme, mode, vk, each half,
   network, address binding, message).
@@ -562,24 +565,76 @@ to. The cost is priced where the decision is made — the genesis-lane
 item's fork (iii) carries it — rather than referenced forward from a
 document the lane may not read.
 
-**SM-R-3 (rules SM-DQ-3) — preimage, domain, and nesting order.**
+**SM-R-3 (rules SM-DQ-3) — preimage, domain, and nesting order.
+RATIFIED 2026-08-08, with three findings folded and the nesting
+rationale strengthened.**
 - Hash: **cSHAKE256 throughout** — this is a binding job, and the
   binding-side house precedent is cSHAKE (`ek_bind`, and the tag in
   the SM-DQ-7 shape); the derivation-side Blake2b precedent does not
-  apply.
-- `preimage = cSHAKE256("shekyl/msg-sign-v1", version ‖ network_id ‖
-  mode ‖ classical_segment ‖ cSHAKE256("shekyl/msg-hash-v1",
-  message))` — `classical_segment` is the **full bound form as ruled
-  by the genesis lane** (the byte layout is exactly what SM-DQ-7
-  freezes; this is why PR-SM-1 blocks on that ruling), `mode = 0x01`
-  spend-tier, modes append.
+  apply. *(Ratified as drafted.)*
+- `preimage = cSHAKE256("shekyl/msg-sign-v1", sig_format_version ‖
+  network_id ‖ mode ‖ len(classical_segment) ‖ classical_segment ‖
+  cSHAKE256("shekyl/msg-hash-v1", message))`, where:
+  - **`sig_format_version`, renamed from `version` (R3-b):** the
+    classical segment already *contains* the address version
+    (`SPEND_OFFSET = VERSION_LEN`, `address.rs`), so the draft had two
+    fields both spelled "version" — the outer one is the
+    message-signing format version and now says so.
+  - **`len(classical_segment)` length prefix (R3-b, second half):**
+    with fork (ii) the segment is variable-length across address
+    versions (v1 vs v2 with an inline SLH key). Concatenation would
+    stay unambiguous anyway — the in-segment address version
+    determines the length, and the message-hash tail is fixed-width —
+    but both of those are load-bearing-by-accident properties.
+    A two-byte LE length prefix makes the framing unambiguous by
+    construction instead of by coincidence.
+  - `classical_segment` is the **full bound form as ruled by the
+    genesis lane** (the byte layout is exactly what SM-DQ-7 freezes;
+    this is why PR-SM-1 blocks on that ruling); `mode = 0x01`
+    spend-tier, future modes append, never renumber.
+- **R3-c — the view-tier forward reference is DELETED, not
+  softened.** The mode byte's append-only discipline is kept — that
+  is cheap, real forward compatibility. But naming view-tier implied
+  a plan, and there isn't one: under the ratified design the address
+  commits to one master-seed-derived key and a view-only wallet has
+  no master seed, so view-tier is structurally unbuildable without an
+  address-format change — reserving a name for that *inside the
+  freeze window* is worse than not reserving it, and it wore the
+  shape of a deferral with no rule-21 criteria, which this project
+  forbids. If a view-tier consumer ever materializes, the honest form
+  is a second signing key committed in the address — decided while
+  v2's layout is open, or never.
+- **R3-a — the FIPS 204/205 `ctx` parameter is PINNED EMPTY
+  (`ctx = ""`), by ruling, not by convention.** All domain separation
+  lives inside the preimage's cSHAKE customization strings; the
+  signing interfaces' context parameter must therefore be the empty
+  string on both halves. "Should be empty" is not enough — an
+  implementation passing the domain string as `ctx` would produce
+  signatures that fail against one passing `""`, silently forking the
+  format. A KAT pins it: the vector must fail if any non-empty
+  context is supplied (same discipline as the label-tag KATs).
 - Nesting order: **PQ inner, Ed25519 outer** —
   `σ_pq = PQ.Sign(preimage)`, `σ_ed = Ed25519.Sign(preimage ‖ σ_pq)`.
-  The outer classical signature attests the PQ material's presence, so
-  stripping `σ_pq` invalidates `σ_ed` structurally; verifiers require
-  both (AND, never OR).
+  **Rationale strengthened at ratification — the complete argument,
+  not the half the draft gave:** unforgeability is order-independent
+  (a forger needs both halves over the new preimage either way; the
+  either-component property matches ePrint 2026/1086 in both orders).
+  **Separability is where order matters, and it is asymmetric: the
+  inner component remains a standalone-verifiable artifact; the outer
+  does not.** With PQ inner, stripping to one signature leaves
+  σ_pq — degrading to hash-based security, the *strong* half — and an
+  Ed25519-only lazy verifier **cannot verify at all**, because σ_ed
+  does not check out over the preimage alone: the lazy path is forced
+  through the PQ dependency. With Ed inner, the lazy path silently
+  yields a *working classical-only verifier* — passes every
+  happy-path test, provides no post-quantum protection, the worst
+  outcome available. **We chose the order whose degenerate
+  implementation fails to verify over the one whose degenerate
+  implementation verifies insecurely.** This paragraph exists to
+  foreclose flipping the order later for convenience.
 - Both domain strings register in the crypto crate's domain inventory
-  beside `shekyl/ek-bind-v1`, collision-checked by test.
+  beside `shekyl/ek-bind-v1`, collision-checked by test. *(Ratified
+  as drafted.)*
 
 **SM-R-4 (rules SM-DQ-4) — the signing identity.** Ratify as posed,
 algorithm-generic: HKDF arm from the master seed under an
