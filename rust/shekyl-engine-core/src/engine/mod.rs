@@ -177,6 +177,10 @@
 //! signature before the Phase 2 filtered-query design settles, so the
 //! pattern is documented instead (reopen at Phase 2 ops).
 
+// PR-SJ-3 (`WALLET_SEND_RECORD.md` P3-4): the user-authored abandon of a
+// dispatched send — journal edge + I-2 reference migration, durably
+// committed.
+pub mod abandon_tx;
 pub mod capability;
 // CT-5 curve-tree actor + handle (`docs/design/CT5_ENGINE_WIRING.md` §3.1).
 // Mirrors `key_actor`: a `kameo` actor owns the wallet's `CurveTreeClient`
