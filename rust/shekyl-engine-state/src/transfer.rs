@@ -292,14 +292,15 @@ impl TransferDetails {
     ///
     /// Outputs below `eligible_height` are immature (no curve-tree path yet)
     /// and cannot be spent. Outputs with a network-exposed spend awaiting
-    /// chain confirmation ([`Self::awaiting_confirmation`], F14 §2.6) are
-    /// excluded: selecting one would build a second tx bearing the same
-    /// key image.
-    pub fn is_spendable(&self, current_height: u64) -> bool {
-        !self.spent
-            && !self.frozen
-            && self.awaiting_confirmation.is_none()
-            && current_height >= self.eligible_height
+    /// chain confirmation (the F14 lock, §2.6) are excluded: selecting one
+    /// would build a second tx bearing the same key image. The lock is a
+    /// journal-derived fact (PR-SJ-1b —
+    /// `SendJournalBlock::derive_f14_locks`), so the caller supplies it:
+    /// `f14_locked` is whether the derived lock map contains this row's
+    /// `global_output_index`. Taking the bool forces every call site to
+    /// consult the journal rather than silently dropping the check.
+    pub fn is_spendable(&self, current_height: u64, f14_locked: bool) -> bool {
+        !self.spent && !self.frozen && !f14_locked && current_height >= self.eligible_height
     }
 
     /// The amount held in this output.

@@ -179,12 +179,25 @@ impl LedgerIndexesExt for LedgerIndexes {
 /// Extension methods for [`LedgerBlock`] that depend on scanner-only types.
 pub trait LedgerBlockExt {
     /// Compute a balance summary at the given chain height.
-    fn balance(&self, current_height: u64) -> BalanceSummary;
+    ///
+    /// `f14_locks` is the journal-derived awaiting-confirmation lock map
+    /// (`SendJournalBlock::derive_f14_locks`, PR-SJ-1b) — the sibling
+    /// block's facts this scan-derived block cannot see (C7), so the
+    /// caller supplies them.
+    fn balance(
+        &self,
+        current_height: u64,
+        f14_locks: &shekyl_engine_state::F14Locks,
+    ) -> BalanceSummary;
 }
 
 impl LedgerBlockExt for LedgerBlock {
-    fn balance(&self, current_height: u64) -> BalanceSummary {
-        BalanceSummary::compute(self.transfers(), current_height)
+    fn balance(
+        &self,
+        current_height: u64,
+        f14_locks: &shekyl_engine_state::F14Locks,
+    ) -> BalanceSummary {
+        BalanceSummary::compute(self.transfers(), current_height, f14_locks)
     }
 }
 

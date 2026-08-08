@@ -57,9 +57,8 @@
 // lifecycle. The former `#![allow(dead_code)]` (landed-inert scaffolding) is
 // lifted now that the driver makes every kernel surface live.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-use shekyl_engine_state::LedgerBlock;
 use shekyl_types::TxHash;
 
 // ---------------------------------------------------------------------------
@@ -157,38 +156,38 @@ pub(crate) struct HeldSubmit {
     pub probed_this_epoch: bool,
 }
 
-/// Project the held-submit set from the ledger's F14 locks, one entry
-/// per distinct awaited txid (a tx spending several inputs places one
-/// lock per input; the earliest accepted height is the conservative
-/// horizon baseline).
+/// Project the held-submit set from the send journal — one entry per
+/// row in a lock-bearing state (`SendState::reapplies_f14_locks`) with
+/// a stamped `lock_baseline` (PR-SJ-1b: the journal owns the dispatch
+/// facts; the per-input F14 locks the old projection grouped are now
+/// derived from exactly these rows, so projecting the rows directly is
+/// the same set minus the grouping).
+///
+/// The success condition is unchanged in substance: refresh observes
+/// the spend and the merge reconciler flips the row to `Confirmed`,
+/// dropping it from this projection — the same refresh-authoritative
+/// event that used to clear the locks (`mark_spent`). One deliberate
+/// strengthening: mid-rescan, a wiped ledger no longer blinds the
+/// watchdog — the journal rows survive the wipe, so tracking continues
+/// across it.
 ///
 /// Fresh projections carry `probed_this_epoch: false`; the driving
 /// actor overlays its in-memory probe state across refresh cycles.
-pub(crate) fn held_submits(ledger: &LedgerBlock) -> Vec<HeldSubmit> {
-    // Single pass: a txid → slot index keeps the grouping O(transfers)
-    // instead of O(transfers × distinct-held-txids), while first-seen Vec
-    // order is preserved (deterministic projection).
-    let mut held: Vec<HeldSubmit> = Vec::new();
-    let mut slot: HashMap<TxHash, usize> = HashMap::new();
-    for td in ledger.transfers() {
-        let Some(awaiting) = &td.awaiting_confirmation else {
-            continue;
-        };
-        match slot.get(&awaiting.tx_hash) {
-            Some(&i) => {
-                held[i].baseline_height = held[i].baseline_height.min(awaiting.accepted_at_height);
-            }
-            None => {
-                slot.insert(awaiting.tx_hash, held.len());
-                held.push(HeldSubmit {
-                    tx_hash: awaiting.tx_hash,
-                    baseline_height: awaiting.accepted_at_height,
-                    probed_this_epoch: false,
-                });
-            }
-        }
-    }
-    held
+/// `BTreeMap` row order makes the projection deterministic.
+pub(crate) fn held_submits(wallet: &shekyl_engine_state::WalletLedger) -> Vec<HeldSubmit> {
+    wallet
+        .send_journal
+        .rows
+        .iter()
+        .filter(|(_, row)| row.state.reapplies_f14_locks())
+        .filter_map(|(txid, row)| {
+            row.lock_baseline.map(|baseline_height| HeldSubmit {
+                tx_hash: TxHash::from_bytes(*txid),
+                baseline_height,
+                probed_this_epoch: false,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -483,47 +482,79 @@ mod tests {
         }
     }
 
-    fn ledger_with(transfers: Vec<TransferDetails>) -> LedgerBlock {
-        LedgerBlock::new(
+    fn ledger_with(transfers: Vec<TransferDetails>) -> shekyl_engine_state::LedgerBlock {
+        shekyl_engine_state::LedgerBlock::new(
             transfers,
             shekyl_engine_state::BlockchainTip::new(5_000, [0xAA; 32]),
             shekyl_engine_state::ReorgBlocks::default(),
         )
     }
 
-    /// Held tracking projects one entry per awaited txid, keyed on the
-    /// F14 locks, with the earliest accepted height as the baseline.
-    #[test]
-    fn held_submits_projects_locks_grouped_by_txid() {
-        let awaited = TxHash::from_bytes([0xBB; 32]);
-        let ledger = ledger_with(vec![
-            // Two inputs of the same awaited tx, different accept heights.
-            transfer_with_lock(
-                1,
-                Some(AwaitingConfirmation {
-                    tx_hash: awaited,
-                    accepted_at_height: 4_000,
-                }),
-            ),
-            transfer_with_lock(
-                2,
-                Some(AwaitingConfirmation {
-                    tx_hash: awaited,
-                    accepted_at_height: 3_900,
-                }),
-            ),
-            // Unrelated unlocked output.
-            transfer_with_lock(3, None),
-        ]);
-
-        let held = held_submits(&ledger);
-        assert_eq!(held.len(), 1, "one entry per awaited txid");
-        assert_eq!(held[0].tx_hash, awaited);
-        assert_eq!(
-            held[0].baseline_height, 3_900,
-            "earliest accept height is the conservative baseline"
+    /// Journal fixture row: `state` + optional baseline over one input.
+    fn journal_row(
+        wallet: &mut shekyl_engine_state::WalletLedger,
+        txid: [u8; 32],
+        state: shekyl_engine_state::SendState,
+        lock_baseline: Option<u64>,
+        gindexes: Vec<u64>,
+    ) {
+        wallet.send_journal.rows.insert(
+            txid,
+            shekyl_engine_state::SendRecord {
+                dispatched_at_height: 3_999,
+                fee: 1,
+                recipients: Vec::new(),
+                change_amount: 0,
+                inputs: gindexes
+                    .into_iter()
+                    .map(|gindex| shekyl_engine_state::SendInputRef { gindex, amount: 1 })
+                    .collect(),
+                lock_baseline,
+                state,
+            },
         );
-        assert!(!held[0].probed_this_epoch);
+    }
+
+    /// Held tracking projects one entry per journal row that carries
+    /// locks (PR-SJ-1b): baseline-stamped `Dispatched` and `Abandoned`
+    /// rows project; released (`PresumedDead` / no-baseline) and
+    /// settled (`Confirmed` / `TerminalRejected`) rows do not — and a
+    /// multi-input send is one entry by construction, no grouping.
+    #[test]
+    fn held_submits_projects_lock_bearing_journal_rows() {
+        use shekyl_engine_state::SendState;
+        let mut wallet = shekyl_engine_state::WalletLedger::empty();
+        journal_row(
+            &mut wallet,
+            [1; 32],
+            SendState::Dispatched,
+            Some(3_900),
+            vec![1, 2],
+        );
+        journal_row(
+            &mut wallet,
+            [2; 32],
+            SendState::Abandoned,
+            Some(4_000),
+            vec![3],
+        );
+        journal_row(&mut wallet, [3; 32], SendState::PresumedDead, None, vec![4]);
+        journal_row(
+            &mut wallet,
+            [4; 32],
+            SendState::Confirmed { height: 9 },
+            Some(3_800),
+            vec![5],
+        );
+        journal_row(&mut wallet, [5; 32], SendState::Dispatched, None, vec![6]); // pre-verdict
+
+        let held = held_submits(&wallet);
+        assert_eq!(held.len(), 2, "one entry per lock-bearing row");
+        assert_eq!(held[0].tx_hash, TxHash::from_bytes([1; 32]));
+        assert_eq!(held[0].baseline_height, 3_900);
+        assert_eq!(held[1].tx_hash, TxHash::from_bytes([2; 32]));
+        assert_eq!(held[1].baseline_height, 4_000);
+        assert!(held.iter().all(|h| !h.probed_this_epoch));
     }
 
     /// §2.6 confirmed-absent release: locks under the named txid are
@@ -584,14 +615,22 @@ mod tests {
             shekyl_engine_state::SendState::Dispatched,
             "unrelated row untouched"
         );
+        // PR-SJ-1b: spendability consults the journal-derived lock map.
+        // The released row cleared its baseline, so only `still_held`'s
+        // carried input (gindex 3) stays locked.
+        let locks = wallet.send_journal.derive_f14_locks();
+        assert_eq!(locks.keys().copied().collect::<Vec<_>>(), vec![3]);
         let ledger = &wallet.ledger;
-        assert!(ledger.transfers()[0].is_spendable(u64::MAX));
-        assert!(ledger.transfers()[1].is_spendable(u64::MAX));
-        assert!(
-            !ledger.transfers()[2].is_spendable(u64::MAX),
-            "unrelated lock survives"
-        );
-        assert_eq!(held_submits(ledger).len(), 1);
+        for td in ledger.transfers() {
+            let locked = locks.contains_key(&td.global_output_index);
+            assert_eq!(
+                td.is_spendable(u64::MAX, locked),
+                !locked,
+                "gindex {} spendability must mirror the derived lock",
+                td.global_output_index
+            );
+        }
+        assert_eq!(held_submits(&wallet).len(), 1);
     }
 
     fn healthy() -> DaemonHealthContext {

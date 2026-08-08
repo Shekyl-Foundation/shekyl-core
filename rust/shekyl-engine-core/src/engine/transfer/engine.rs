@@ -411,7 +411,12 @@ where
             pending_rebuild_total,
             not_yet_spendable_total,
             not_yet_spendable,
-        ) = self.ledger.with_ledger_block(|ledger| {
+        ) = self.ledger.with_wallet_ledger(|wallet| {
+            // PR-SJ-1b: the F14 locks are journal-derived; one guard
+            // covers both blocks so a merge cannot slide between the
+            // lock derivation and the enumeration it filters.
+            let f14_locks = wallet.send_journal.derive_f14_locks();
+            let ledger = &wallet.ledger;
             let synced = ledger.height();
             // Gate against the height the *bound* reference anchors to (computed
             // in `build` before the cursor-read `.await`), so the C2 spendability
@@ -447,7 +452,7 @@ where
             // shortfall* rather than just the soonest output (which alone may
             // not suffice — that would underestimate the wait).
             let mut not_yet_spendable: Vec<(u64, u64)> = Vec::new();
-            for (idx, td) in ledger.spendable_outputs(synced, None) {
+            for (idx, td) in ledger.spendable_outputs(synced, None, &f14_locks) {
                 if locked.contains(&idx) {
                     continue;
                 }

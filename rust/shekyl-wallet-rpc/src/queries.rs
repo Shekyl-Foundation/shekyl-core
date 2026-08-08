@@ -111,13 +111,20 @@ fn collect_transfers(
 
     let mut rows: Vec<(TransferOrder, TransferView)> = Vec::new();
 
+    // PR-SJ-1b: the F14 lock is a journal-derived fact; derive once for
+    // the whole projection.
+    let f14_locks = journal.derive_f14_locks();
+
     if want_incoming {
         for td in ledger_rows {
             // Ledger rows are scanner-observed, so always mined.
             if below_since(Some(td.block_height), since) {
                 continue;
             }
-            if filters.state.is_some_and(|st| transfer_state(td) != st) {
+            if filters
+                .state
+                .is_some_and(|st| transfer_state(td, &f14_locks) != st)
+            {
                 continue;
             }
             if filters
@@ -126,7 +133,7 @@ fn collect_transfers(
             {
                 continue;
             }
-            let view = transfer_view(td);
+            let view = transfer_view(td, &f14_locks);
             rows.push((
                 TransferOrder {
                     block_height: view.block_height,
@@ -187,7 +194,9 @@ pub(crate) async fn get_balance(
     let engine = engine.read().await;
     let ledger = engine.ledger();
     let height = ledger.ledger.height();
-    let summary = ledger.ledger.balance(height);
+    let summary = ledger
+        .ledger
+        .balance(height, &ledger.send_journal.derive_f14_locks());
     let result = GetBalanceResult::from(&summary);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_balance: {e}")))
@@ -243,7 +252,9 @@ pub(crate) async fn get_wallet_info(
         let (balance, wallet_height, restore_height, staking_enabled) = {
             let wallet = engine.ledger();
             let height = wallet.ledger.height();
-            let summary = wallet.ledger.balance(height);
+            let summary = wallet
+                .ledger
+                .balance(height, &wallet.send_journal.derive_f14_locks());
             let balance = GetBalanceResult::from(&summary);
             let restore_height =
                 i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
@@ -377,7 +388,7 @@ pub(crate) async fn get_transfer_by_id(
             .transfers()
             .iter()
             .find(|td| td.tx_hash == tx_hash && td.internal_output_index == output_index)
-            .map(transfer_view),
+            .map(|td| transfer_view(td, &ledger.send_journal.derive_f14_locks())),
         TransferLookupId::Outgoing { tx_hash } => ledger
             .send_journal
             .rows

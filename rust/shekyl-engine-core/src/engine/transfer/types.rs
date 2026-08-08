@@ -218,6 +218,13 @@ impl ConsumerHeldEntry {
 pub(super) trait Stage1LedgerSpendableAccess: LedgerEngine {
     fn with_ledger_block<R>(&self, f: impl FnOnce(&LedgerBlock) -> R) -> R;
 
+    /// Whole-`WalletLedger` **read** access, for reads that span blocks
+    /// (PR-SJ-1b): spendable-output enumeration and the held-submit
+    /// projection consume journal-derived F14 locks beside the
+    /// scan-derived ledger block, and the two must come from one guard
+    /// so a merge cannot slide between them.
+    fn with_wallet_ledger<R>(&self, f: impl FnOnce(&WalletLedger) -> R) -> R;
+
     /// Whole-`WalletLedger` mutable access, for writes that span blocks
     /// (WI-RPC-3 retention: `tx_meta.tx_keys` + `sync_state.
     /// pending_tx_hashes` + the ledger-block F14 locks in one guard,
@@ -236,6 +243,11 @@ impl Stage1LedgerSpendableAccess for LocalLedger {
         f(&guard.ledger.ledger)
     }
 
+    fn with_wallet_ledger<R>(&self, f: impl FnOnce(&WalletLedger) -> R) -> R {
+        let guard = self.read();
+        f(&guard.ledger)
+    }
+
     fn with_wallet_ledger_mut<R>(&self, f: impl FnOnce(&mut WalletLedger) -> R) -> R {
         let mut guard = self.write();
         f(&mut guard.ledger)
@@ -248,6 +260,10 @@ where
 {
     fn with_ledger_block<R>(&self, f: impl FnOnce(&LedgerBlock) -> R) -> R {
         self.as_ref().with_ledger_block(f)
+    }
+
+    fn with_wallet_ledger<R>(&self, f: impl FnOnce(&WalletLedger) -> R) -> R {
+        self.as_ref().with_wallet_ledger(f)
     }
 
     fn with_wallet_ledger_mut<R>(&self, f: impl FnOnce(&mut WalletLedger) -> R) -> R {

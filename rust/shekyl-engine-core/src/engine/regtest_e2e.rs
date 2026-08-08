@@ -648,7 +648,10 @@ async fn e2e_refresh_scans_coinbase_balance() {
             let g = arc.read().await;
             let ledger = g.ledger();
             total_height = ledger.ledger.height();
-            unlocked = ledger.ledger.balance(total_height).unlocked;
+            unlocked = ledger
+                .ledger
+                .balance(total_height, &ledger.send_journal.derive_f14_locks())
+                .unlocked;
         }
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -739,7 +742,13 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
         unlocked = {
             let g = arc.read().await;
             let ledger = g.ledger();
-            ledger.ledger.balance(ledger.ledger.height()).unlocked
+            ledger
+                .ledger
+                .balance(
+                    ledger.ledger.height(),
+                    &ledger.send_journal.derive_f14_locks(),
+                )
+                .unlocked
         };
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -969,7 +978,13 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     let unlocked = {
         let g = arc.read().await;
         let ledger = g.ledger();
-        ledger.ledger.balance(ledger.ledger.height()).unlocked
+        ledger
+            .ledger
+            .balance(
+                ledger.ledger.height(),
+                &ledger.send_journal.derive_f14_locks(),
+            )
+            .unlocked
     };
     assert!(
         unlocked > AtomicUnits::ZERO,
@@ -1358,7 +1373,11 @@ async fn unlocked_balance(
     use shekyl_scanner::LedgerBlockExt;
     let g = arc.read().await;
     let ledger = g.ledger();
-    ledger.ledger.balance(ledger.ledger.height()).unlocked
+    let f14_locks = ledger.send_journal.derive_f14_locks();
+    ledger
+        .ledger
+        .balance(ledger.ledger.height(), &f14_locks)
+        .unlocked
 }
 
 // ---------------------------------------------------------------------------

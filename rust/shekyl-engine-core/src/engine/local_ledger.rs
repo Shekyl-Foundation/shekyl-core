@@ -340,8 +340,11 @@ impl LedgerEngine for LocalLedger {
 
     fn balance(&self) -> BalanceSummary {
         let guard = self.read();
+        // PR-SJ-1b: F14 locks are journal-derived; one guard covers the
+        // derivation and the summary it feeds.
+        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
         let ledger = &guard.ledger.ledger;
-        ledger.balance(ledger.height())
+        ledger.balance(ledger.height(), &f14_locks)
     }
 }
 

@@ -82,10 +82,16 @@ fn hot_path_bench_balance_compute(c: &mut Criterion) {
             BenchmarkId::from_parameter(n),
             &transfers,
             |b, transfers| {
+                // PR-SJ-1b: locks are journal-derived and caller-supplied.
+                // Empty map = the baseline-comparable workload (the retired
+                // field was `None` on every fixture row); derivation cost is
+                // O(live sends), measured at its consumer, not per-row here.
+                let f14_locks = shekyl_engine_state::F14Locks::new();
                 b.iter(|| {
                     black_box(BalanceSummary::compute(
                         black_box(transfers),
                         current_height,
+                        black_box(&f14_locks),
                     ))
                 });
             },

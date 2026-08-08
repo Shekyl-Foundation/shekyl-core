@@ -548,10 +548,13 @@ pub(crate) async fn get_reserve_proof<D: Rpc>(
     // Project candidates under a short read guard.
     let candidates: Vec<ReserveCandidate> = {
         let state = ctx.ledger.read();
+        // PR-SJ-1b: F14 locks are journal-derived; same guard as the
+        // enumeration they filter.
+        let f14_locks = state.ledger.send_journal.derive_f14_locks();
         let ledger_block = &state.ledger.ledger;
         let height = ledger_block.tip.synced_height;
         ledger_block
-            .spendable_outputs(height, None)
+            .spendable_outputs(height, None, &f14_locks)
             .into_iter()
             .filter_map(|(_, td)| {
                 // key_image and source_ciphertext are populated on every

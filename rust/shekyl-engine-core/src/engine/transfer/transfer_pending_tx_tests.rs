@@ -1089,6 +1089,7 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
     // refresh is the settlement authority for `spent`.
     {
         let guard = pending.ledger.read();
+        let f14_locks = guard.ledger.send_journal.derive_f14_locks();
         let td = guard.ledger.ledger.transfers().first().expect("output 0");
         assert!(!td.spent, "spent stays refresh-authoritative");
         let lock = td
@@ -1097,8 +1098,8 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
             .expect("submit-accept places the F14 lock");
         assert_eq!(lock.tx_hash, tx_hash);
         assert!(
-            !td.is_spendable(u64::MAX),
-            "locked output must be excluded from selection"
+            !td.is_spendable(u64::MAX, f14_locks.contains_key(&td.global_output_index)),
+            "journal-locked output must be excluded from selection"
         );
     }
 }
@@ -1442,8 +1443,15 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                 "I-5: journal baseline equals the derived F14 lock"
             );
             assert!(
-                !td.is_spendable(u64::MAX),
-                "locked output must be excluded from selection"
+                !td.is_spendable(
+                    u64::MAX,
+                    guard
+                        .ledger
+                        .send_journal
+                        .derive_f14_locks()
+                        .contains_key(&td.global_output_index)
+                ),
+                "journal-locked output must be excluded from selection"
             );
         }
         guard
@@ -1610,8 +1618,15 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
             let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
             assert_eq!(lock.tx_hash, expected_hash);
             assert!(
-                !td.is_spendable(u64::MAX),
-                "locked output must be excluded from selection"
+                !td.is_spendable(
+                    u64::MAX,
+                    guard
+                        .ledger
+                        .send_journal
+                        .derive_f14_locks()
+                        .contains_key(&td.global_output_index)
+                ),
+                "journal-locked output must be excluded from selection"
             );
         }
     }
@@ -1663,7 +1678,7 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
 
     let held = {
         let guard = pending.ledger.read();
-        held_submits(&guard.ledger.ledger)
+        held_submits(&guard.ledger)
     };
     let held = held.first().expect("the F14 lock is placed (F40)");
     assert_eq!(

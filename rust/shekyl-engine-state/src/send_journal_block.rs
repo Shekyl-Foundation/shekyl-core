@@ -50,6 +50,14 @@ use serde::{Deserialize, Serialize};
 /// concern (`docs/FOLLOWUPS.md` "A4 DECIDED").
 pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 2;
 
+/// Journal-derived F14 awaiting-confirmation lock map:
+/// `global_output_index → lock`. Produced only by
+/// [`SendJournalBlock::derive_f14_locks`] (PR-SJ-1b — the single owner
+/// of the derivation rule); consumed by balance, spendability, and
+/// selection surfaces in place of the retired
+/// `TransferDetails::awaiting_confirmation` field.
+pub type F14Locks = BTreeMap<u64, crate::transfer::AwaitingConfirmation>;
+
 /// One recipient of a recorded send, exactly as realized in the built
 /// transaction (SJ-DQ-1: full row, addresses stored, no knob — settled by
 /// the envelope frame, C1).
@@ -395,7 +403,7 @@ impl SendJournalBlock {
     /// cannot arise from the build path (locked inputs are never
     /// selected — the SJ-DQ-4 self-link defence this map implements),
     /// so the tie-break is a determinism guarantee, not a policy.
-    pub fn derive_f14_locks(&self) -> BTreeMap<u64, crate::transfer::AwaitingConfirmation> {
+    pub fn derive_f14_locks(&self) -> F14Locks {
         let mut locks = BTreeMap::new();
         for (txid, row) in &self.rows {
             if !row.state.reapplies_f14_locks() {

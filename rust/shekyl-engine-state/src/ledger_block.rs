@@ -322,10 +322,18 @@ impl LedgerBlock {
     /// matching [`TransferDetails::is_spendable`]: their spend is already
     /// broadcast, so treating them as unspent/available would invite a second
     /// tx bearing the same key image (the §7.1 self-linkage the lock prevents).
-    pub fn unspent_transfers(&self) -> Vec<&TransferDetails> {
+    /// The lock set is journal-derived (PR-SJ-1b) and caller-supplied —
+    /// `SendJournalBlock::derive_f14_locks` on the sibling block this
+    /// scan-derived block cannot see (C7).
+    pub fn unspent_transfers(
+        &self,
+        f14_locks: &crate::send_journal_block::F14Locks,
+    ) -> Vec<&TransferDetails> {
         self.transfers
             .iter()
-            .filter(|td| !td.spent && !td.frozen && td.awaiting_confirmation.is_none())
+            .filter(|td| {
+                !td.spent && !td.frozen && !f14_locks.contains_key(&td.global_output_index)
+            })
             .collect()
     }
 
@@ -334,16 +342,22 @@ impl LedgerBlock {
     /// Only returns outputs where `current_height >= eligible_height`
     /// — the daemon has no curve-tree path for immature outputs, so
     /// attempting to spend them would fail at FCMP++ proof generation.
+    /// `f14_locks` is the journal-derived lock map (see
+    /// [`Self::unspent_transfers`]).
     pub fn spendable_outputs(
         &self,
         current_height: u64,
         min_amount: Option<AtomicUnits>,
+        f14_locks: &crate::send_journal_block::F14Locks,
     ) -> Vec<(usize, &TransferDetails)> {
         self.transfers
             .iter()
             .enumerate()
             .filter(|(_, td)| {
-                if !td.is_spendable(current_height) {
+                if !td.is_spendable(
+                    current_height,
+                    f14_locks.contains_key(&td.global_output_index),
+                ) {
                     return false;
                 }
                 if let Some(min) = min_amount {
