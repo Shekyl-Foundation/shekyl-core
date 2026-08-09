@@ -47,6 +47,67 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) —
+  REQUIRED BEFORE THE FORMAT FREEZE (added 2026-08-08, escalated from
+  the message-signing round, SM-DQ-7).** Address v1 anchors signatures
+  with Ed25519 only; its PQC segments carry an ML-KEM *encryption* key,
+  so no transferable signature can be post-quantum against a v1
+  address. The message-signing round
+  ([`design/WALLET_MESSAGE_SIGNING.md`](./design/WALLET_MESSAGE_SIGNING.md))
+  surfaced the decision but does not own it: an address-format change
+  touches the GUI, URI handling, the address book, multisig address
+  exchange, and every future exchange integration — and it is
+  genesis-frozen wire, the class ranked first by freeze proximity.
+  **The lane rules on one fork, all inputs measured** (round §SM-DQ-8
+  table, Pi-4-floor benchmarks landed 2026-08-08):
+  - **(i) Agile commitment (+32 B):**
+    `sig_bind_tag = cSHAKE256("shekyl/sig-bind-v1", alg_id ‖ pk)[..32]`
+    as a new classical-segment field; the signature blob carries
+    `alg_id ‖ pk ‖ …`, a future scheme is a new `alg_id`, never an
+    address version bump (the BIP-360 lesson: freeze a commitment
+    structure, not an algorithm — three algorithm churns in a year
+    inside that proposal before it converged on a 32-byte root).
+    32 bytes deliberately, not `ek_bind_tag`'s 16: the ek tag does a
+    detection job, this tag does a *binding security* job (any found
+    preimage signs as the address holder; 16 B is ~64-bit under
+    Grover against a grindable target). Required if the round's
+    algorithm ruling lands on ML-DSA-65 (1952-B pk cannot inline).
+  - **(ii) pk-inline fourth field (+48 B):** SLH-DSA-192s's public key
+    is 48 bytes — small enough to sit in the address literally. No
+    commitment machinery at all (no `alg_id` registry, no
+    tag-strength question, no key-carried-in-signature); verification
+    takes the address at face value. Cost: freezes the *algorithm*
+    into the genesis address — priced against the BIP-360 lesson with
+    two recorded counterweights (the address already freezes Ed25519
+    and ML-KEM-768 literally; SLH-DSA is the conservative endpoint one
+    flees TO under lattice cryptanalysis, not FROM). Only available if
+    the algorithm ruling lands on SLH-DSA.
+  - **(iii) No anchor (status quo):** message signing ships
+    classical-tier-anchored hybrid (or not at all) — rejects the
+    round's premise; recorded for completeness, not recommended by the
+    round. **Named cost (SM-R-2 ratification, 2026-08-08): (iii) is
+    admissible only if the interactive ML-KEM ownership proof is
+    simultaneously committed to** — without an anchor, a frozen v1
+    address can never prove ownership post-quantum via any
+    transferable artifact, so declining the anchor without committing
+    the interactive surface ships a coin with no PQ ownership proof of
+    any kind, permanently. This is a precondition on the fork, not a
+    follow-up.
+  **COLLAPSED 2026-08-08 — SM-R-8 RATIFIED (SLH-DSA-192s, pk-inline):
+  fork (ii) is selected.** The lane's decision reduces from "ratify a
+  commitment scheme" to a **freeze-window sign-off on a 48-byte
+  fourth field** in the classical segment — no commitment scheme, no
+  `alg_id` registry, no tag-strength question. Fork (i) is moot
+  unless SM-R-8's rule-21 clause reopens; fork (iii) is moot, its
+  SM-R-2 precondition retained above for the record. Remaining lane
+  work: the v2 layout sign-off + `ADDRESS_DERIVATION_V1`-successor
+  test vectors, with the 192f UX gate (dated, owned — see
+  `RELEASE_CHECKLIST.md`) closing first. **Named blocker for
+  message-signing implementation:** PR-SM-1 cannot freeze the
+  preimage until the layout sign-off lands, because the bound
+  classical-segment byte layout is the remaining decision. *Target:
+  V3.0, before the genesis format freeze.*
+
 - **FFI *signature* drift has no remedy, unlike FFI *constant* drift
   (added 2026-07-29, from RP-3b step 2; measurement attached).**
   `src/shekyl/shekyl_ffi.h` is hand-written — **sanctioned**, not an oversight
@@ -1498,6 +1559,15 @@ sustainability is unaffected by the recalibration.
     that verifiably cannot use the proof surface).
   - **`sign`/`verify` message signing** — blocked on the same Phase 2c
     surface decision (domain-separated message signing under hybrid keys).
+    **Design round CLOSED — all rulings ratified (2026-08-08, A2):**
+    `docs/design/WALLET_MESSAGE_SIGNING.md` — the blocking decision
+    resolved as SM-R-8: SLH-DSA-192s + spend-key classical half,
+    nested, with the 48-byte public key inline in the address (fork
+    (ii); the round-0 hybrid-vk-certified lead was superseded on the
+    record in pass 1). Implementation is in flight as PR-SM-1
+    (crypto + engine + ACVP conformance); the CLI/RPC un-stub is
+    PR-SM-2 per the round's decomposition, gated only on the genesis
+    lane's v2-field sign-off for the address-integrated verify.
   - **Offline cold-signing** (`describe_transfer`, `sign_transfer`,
     `submit_transfer`, `transfer --do-not-relay`) — blocked on Phase 2d
     (`UnsignedTxBundle`/`SignedTxBundle` air-gapped bundles).
