@@ -14,6 +14,11 @@
   - [ ] Audit artifact links recorded in release notes (report URL or digest, remediation PRs)
 - [ ] Security audit
 - [ ] Code audit
+- [ ] Genesis address format: PQ signing anchor (address v2) — **fork (ii) SELECTED by SM-R-8 ratification 2026-08-08**: a 48-byte SLH-DSA-192s public-key fourth field in the classical segment; no commitment scheme, no alg_id registry (see `docs/FOLLOWUPS.md` §V3.0 "GENESIS ADDRESS FORMAT" and `docs/design/WALLET_MESSAGE_SIGNING.md` SM-R-8)
+  - [ ] **192f UX gate (owner: R. Dawson, release owner) — FIRST, the ordering is load-bearing:** floor-hardware signing-latency UX test of the ~4.3 s session figure; must close before the sign-off below, because post-freeze s→f changes the meaning of the frozen pk field (same length, different scheme) — a format change no later round can make. Fallback pre-priced: 192f = 171 ms floor signing at ~47.7 KB armored.
+  - [ ] Genesis-lane freeze-window sign-off on the v2 layout (the collapsed remainder of the fork decision; only after the gate above closes)
+  - [ ] Address v2 layout + test vectors landed (`ADDRESS_DERIVATION_V1` successor)
+  - [ ] Message-signing round unblocked (PR-SM-2's address-integrated verify freezes against the signed-off layout)
 - [ ] PQC specification frozen
   - [x] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation
   - [x] canonical transaction/signature serialization documented
