@@ -900,11 +900,37 @@ mod tests {
                 "over the encoded-length ceiling"
             ))
         );
-        // A clipped paste usually breaks the base64 alphabet framing
-        // first — that is what the user actually sees, so pin it.
-        let clipped = &armored[..armored.len() - 8];
+        // A clipped paste — the commonest real-world damage. Which
+        // refusal it earns depends on WHERE the cut lands, and both
+        // cases are pinned separately because a cut that leaves a
+        // partial 4-character group lands on a data-dependent
+        // trailing-bit check. (Signatures are hedged, so σ_pq and σ_cl
+        // differ every run: asserting one discriminant for an arbitrary
+        // clip is a coin flip, not a test.)
+        //
+        // Cut to a whole number of base64 groups: always decodes
+        // cleanly, always the wrong number of bytes.
+        let encoded_len = armored.len() - MSG_SIG_PREFIX.len();
         assert_eq!(
-            verify(clipped),
+            (encoded_len - 3) % 4,
+            0,
+            "this case is only deterministic while cutting 3 leaves whole \
+             base64 groups — re-derive it if the canonical length moves"
+        );
+        let group_aligned = &armored[..armored.len() - 3];
+        assert_eq!(
+            verify(group_aligned),
+            Err(MessageSigError::Malformed("wrong canonical length"))
+        );
+        // Force non-zero trailing bits in the final symbol: the encoded
+        // form ends in a 3-character group carrying 16 significant bits
+        // of 18, so a last character whose alphabet index is not a
+        // multiple of 4 is non-canonical for ANY payload. 'B' is index 1.
+        let mut non_canonical = armored.clone();
+        non_canonical.pop();
+        non_canonical.push('B');
+        assert_eq!(
+            verify(&non_canonical),
             Err(MessageSigError::Malformed("non-canonical base64url"))
         );
 
