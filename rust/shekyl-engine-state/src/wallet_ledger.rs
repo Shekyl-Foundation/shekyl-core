@@ -703,6 +703,21 @@ fn refuted_sends(ledger: &LedgerBlock, send_journal: &SendJournalBlock) -> Vec<[
             }
             // Unwitnessable. The height guard is what keeps a rescan
             // that is still replaying from reading as "gone."
+            //
+            // `!any_input_present` is deliberately all-or-nothing, not
+            // per-input. Spend detection is per key image
+            // (`LedgerIndexes::mark_spent`), and step 2's confirm edge
+            // accepts *any* transfer whose `spending_tx_hash` matches
+            // the row — so one surviving input is a complete witness,
+            // and releasing on "some input is gone" would drop a live
+            // §7.1 defence. With one input still present the row always
+            // resolves: our tx confirms and that key image matches; or
+            // it never confirms and the watchdog horizon releases it;
+            // or a foreign tx takes the input and the superseded leg
+            // above fires. The "confirmed below the scan floor" hole
+            // does not exist — a replayed input was funded at or above
+            // the floor, and its spend is necessarily later still, so
+            // the spending block is always inside the scanned range.
             !any_input_present && ledger.height() >= row.dispatched_at_height
         })
         .map(|(txid, _)| *txid)
@@ -1250,6 +1265,55 @@ mod tests {
             w.f14_locks().contains(0x11),
             "the §7.1 self-link defence stays up while the send can still land"
         );
+    }
+
+    /// One surviving carried input is a complete witness, so a
+    /// partially-replayed row is **not** released — even though some of
+    /// its inputs are permanently out of view.
+    ///
+    /// This is the control for the tempting per-input rewrite of the
+    /// unwitnessable predicate ("some input is gone ⇒ release"). Spend
+    /// detection is per key image, and the confirm edge accepts any
+    /// transfer carrying the row's txid, so the surviving input still
+    /// reports the confirmation. Releasing here would drop a live §7.1
+    /// self-link defence on a send that can still land.
+    #[test]
+    fn reconcile_holds_a_send_with_one_input_still_in_view() {
+        let txid = [0x7B; 32];
+        let mut w = WalletLedger::empty();
+        // gindex 0x11 replayed after the rescan; 0x12 did not.
+        w.ledger.transfers.push(mk_transfer(0x11, 10));
+        w.ledger.tip.synced_height = 30;
+        {
+            use crate::send_journal_block::{SendInputRef, SendRecord};
+            w.send_journal.rows.insert(
+                txid,
+                SendRecord {
+                    dispatched_at_height: 20,
+                    fee: 5,
+                    recipients: Vec::new(),
+                    change_amount: 0,
+                    inputs: vec![
+                        SendInputRef {
+                            gindex: 0x11,
+                            amount: 1,
+                        },
+                        SendInputRef {
+                            gindex: 0x12,
+                            amount: 1,
+                        },
+                    ],
+                    lock_baseline: Some(25),
+                    state: SendState::Dispatched,
+                },
+            );
+        }
+
+        w.reconcile_send_journal(None);
+
+        assert_eq!(w.send_journal.rows[&txid].state, SendState::Dispatched);
+        let locks = w.f14_locks();
+        assert!(locks.contains(0x11) && locks.contains(0x12));
     }
 
     /// An `Abandoned` row loses its lock to the same evidence but keeps
