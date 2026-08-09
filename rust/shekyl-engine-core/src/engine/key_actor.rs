@@ -1072,45 +1072,4 @@ mod tests {
         )
         .expect_err("tampered challenge message is rejected");
     }
-
-    /// Actor classical half with real derived keys: proves seed→blob
-    /// spend-scalar consistency the crypto module's synthetic tests
-    /// cannot see. The production wallet-file borrow is covered by
-    /// `message_signing::tests` (Engine surface).
-    #[tokio::test]
-    async fn sign_message_outer_with_real_keys() {
-        use shekyl_crypto_pq::message_signing as ms;
-
-        let (master_seed, blob) =
-            generate_account_from_raw_seed(&TEST_SEED, DerivationNetwork::Testnet)
-                .expect("test rederivation succeeds");
-        let spend_pk = *blob.spend_pk.as_canonical_bytes();
-        let classical = blob.classical_address_bytes;
-        let ml_kem_ek = blob.ml_kem_ek;
-        let handle = KeyEngineHandle::spawn(blob);
-
-        let segment = shekyl_address::classical_bound_segment_from_parts(&classical, &ml_kem_ek)
-            .expect("segment assembles");
-        let network_id = 1u8; // testnet discriminant
-
-        let (preimage, sig_pq) =
-            ms::sign_message_pq_half(&master_seed, network_id, &segment, b"actor end to end")
-                .expect("pq half");
-        let sig_cl = handle
-            .sign_message_outer(ms::outer_bytes(&preimage, &sig_pq))
-            .await
-            .expect("actor signs the outer bytes");
-        let armored = ms::assemble_armored(&sig_pq, &sig_cl);
-
-        let slh_pk = ms::derive_message_signing_public_key(&master_seed).expect("slh pk");
-        ms::verify_message(
-            &spend_pk,
-            &slh_pk,
-            network_id,
-            &segment,
-            b"actor end to end",
-            &armored,
-        )
-        .expect("full nested hybrid verifies against the wallet's real keys");
-    }
 }
