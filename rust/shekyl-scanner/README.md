@@ -35,7 +35,7 @@ shekyl-scanner
 ├── transfer.rs      # Re-export shim for shekyl_engine_state::TransferDetails
 │                    # (canonical type, with staking + PQC + FCMP++ fields)
 ├── ledger_ext.rs    # Scanner-side extension traits for LedgerBlock + LedgerIndexes
-│                    # (TransferDetailsExt, LedgerIndexesExt, LedgerBlockExt). The
+│                    # (TransferDetailsExt, LedgerIndexesExt, WalletLedgerExt). The
 │                    # canonical persisted/runtime split lives in shekyl-engine-state.
 ├── balance.rs       # Balance computation with staking categories
 ├── coin_select.rs   # Coin selection for transaction building
@@ -64,7 +64,7 @@ by end users.
 
 ```rust
 use shekyl_scanner::{
-    LedgerBlock, LedgerBlockExt, LedgerIndexes, LedgerIndexesExt,
+    LedgerBlock, LedgerIndexes, LedgerIndexesExt, WalletLedgerExt,
     Scanner, ViewPair,
 };
 

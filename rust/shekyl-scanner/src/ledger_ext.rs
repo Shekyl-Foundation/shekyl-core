@@ -18,14 +18,14 @@
 //! - [`LedgerIndexesExt::process_scanned_outputs`] — ingest a scanned block's
 //!   `Timelocked<RecoveredWalletOutput>` into a `(LedgerBlock, LedgerIndexes)`
 //!   pair atomically.
-//! - [`LedgerBlockExt::balance`] — compute a [`BalanceSummary`] from the
-//!   tracked transfers at a chain height.
+//! - [`WalletLedgerExt::balance`] — compute a [`BalanceSummary`] for the
+//!   whole wallet, journal-derived F14 locks included.
 //!
 //! Call sites must have these traits **in scope** for the
-//! `TransferDetails::from_…` and `ledger.balance(…)` /
+//! `TransferDetails::from_…` and `wallet.balance()` /
 //! `indexes.process_scanned_outputs(&mut ledger, …)` call syntax to resolve.
 //! The crate re-exports all three traits from `lib.rs` so
-//! `use shekyl_scanner::{TransferDetailsExt, LedgerBlockExt, LedgerIndexesExt};`
+//! `use shekyl_scanner::{TransferDetailsExt, WalletLedgerExt, LedgerIndexesExt};`
 //! is the canonical import.
 
 use std::ops::Range;
@@ -175,34 +175,17 @@ impl LedgerIndexesExt for LedgerIndexes {
     }
 }
 
-/// Extension methods for [`LedgerBlock`] that depend on scanner-only types.
-pub trait LedgerBlockExt {
-    /// Compute a balance summary at the given chain height.
-    ///
-    /// `f14_locks` is the journal-derived awaiting-confirmation lock map
-    /// (`SendJournalBlock::derive_f14_locks`, PR-SJ-1b) — the sibling
-    /// block's facts this scan-derived block cannot see (C7), so the
-    /// caller supplies them.
-    fn balance(
-        &self,
-        current_height: u64,
-        f14_locks: &shekyl_engine_state::F14Locks,
-    ) -> BalanceSummary;
-}
-
-impl LedgerBlockExt for LedgerBlock {
-    fn balance(
-        &self,
-        current_height: u64,
-        f14_locks: &shekyl_engine_state::F14Locks,
-    ) -> BalanceSummary {
-        BalanceSummary::compute(self.transfers(), current_height, f14_locks)
-    }
-}
-
-/// Whole-wallet balance projection: journal-derived F14 locks applied
-/// with the scan-derived ledger under one type (PR-SJ-1b). Prefer this
-/// over hand-threading `f14_locks` into [`LedgerBlockExt::balance`].
+/// Whole-wallet balance projection: the scan-derived ledger and the
+/// journal-derived F14 locks read under one type (PR-SJ-1b).
+///
+/// **The only balance API.** A sibling `LedgerBlockExt::balance` over a
+/// bare [`LedgerBlock`] existed until the PR-SJ-1b review and was
+/// deleted rather than documented-around: a scan-derived block cannot
+/// see the dispatch-authored lock facts (C7), so every caller had to
+/// hand-thread a lock map it had no way to obtain honestly. Anything
+/// that genuinely needs a transfer-slice balance calls
+/// [`BalanceSummary::compute`] and passes a derived
+/// [`F14Locks`](shekyl_engine_state::F14Locks) explicitly.
 pub trait WalletLedgerExt {
     /// Balance at the wallet's current synced height.
     fn balance(&self) -> BalanceSummary;
@@ -217,7 +200,7 @@ impl WalletLedgerExt for shekyl_engine_state::WalletLedger {
     }
 
     fn balance_at(&self, current_height: u64) -> BalanceSummary {
-        self.ledger.balance(current_height, &self.f14_locks())
+        BalanceSummary::compute(self.ledger.transfers(), current_height, &self.f14_locks())
     }
 }
 

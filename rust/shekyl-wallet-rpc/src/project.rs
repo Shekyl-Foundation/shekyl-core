@@ -130,7 +130,7 @@ pub fn transfer_state(
 ) -> TransferState {
     if td.spent {
         TransferState::Spent
-    } else if f14_locks.contains_key(&td.global_output_index) {
+    } else if f14_locks.contains(td.global_output_index) {
         TransferState::Pending
     } else {
         TransferState::Confirmed

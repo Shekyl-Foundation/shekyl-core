@@ -82,9 +82,17 @@ pub fn eligible_height(block_height: BlockHeight, additional_timelock: Timelock)
 ///
 /// - **Confirmed-present:** refresh marks the transfer `spent`; every
 ///   consumer checks `spent` before the lock map.
-/// - **Confirmed-absent:** the watchdog clears the journal row's
-///   `lock_baseline` (via `mark_presumed_dead`); derivation drops the
-///   inputs. Release is not rebuild authorization (§2.6 invariant 3).
+/// - **Confirmed-absent:** the journal row's `lock_baseline` is cleared
+///   (via `mark_presumed_dead` — the watchdog's horizon, or the
+///   reconciler's evidence-bound release); derivation drops the inputs.
+///   Release is not rebuild authorization (§2.6 invariant 3).
+///
+/// **No [`Zeroize`] impl, deliberately** (rule 35): both fields are
+/// public chain facts (a canonical txid and a block height), and the
+/// derived map is a plain runtime `BTreeMap` nothing wipes. A wiping
+/// impl here would be an unowned promise — it had exactly one caller,
+/// which retired with the persisted field. Adding a secret-bearing
+/// field to this type means giving it a real owner first.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AwaitingConfirmation {
     /// Canonical txid of the network-exposed transaction spending this
@@ -93,13 +101,6 @@ pub struct AwaitingConfirmation {
     /// Wallet synced height when the accepting verdict was observed; the
     /// baseline for the watchdog's escape horizon.
     pub accepted_at_height: u64,
-}
-
-impl Zeroize for AwaitingConfirmation {
-    fn zeroize(&mut self) {
-        self.tx_hash.zeroize();
-        self.accepted_at_height.zeroize();
-    }
 }
 
 /// A precomputed FCMP++ curve-tree path for an output.
@@ -286,17 +287,19 @@ impl TransferDetails {
     /// and cannot be spent. Outputs with a network-exposed spend awaiting
     /// chain confirmation (the F14 lock, §2.6) are excluded: selecting one
     /// would build a second tx bearing the same key image. The lock map is
-    /// journal-derived (PR-SJ-1b — `SendJournalBlock::derive_f14_locks` /
-    /// [`crate::WalletLedger::f14_locks`]); taking `&F14Locks` (not a free
-    /// `bool`) keeps the §7.1 self-link check typed to the derivation.
+    /// journal-derived (PR-SJ-1b — [`crate::SendJournalBlock::derive_f14_locks`]
+    /// / [`crate::WalletLedger::f14_locks`]); taking [`F14Locks`] — a
+    /// type only that derivation can produce, not a free `bool` and not
+    /// a bare map — keeps the §7.1 self-link check tied to the
+    /// derivation at compile time.
     pub fn is_spendable(
         &self,
         current_height: u64,
-        f14_locks: &std::collections::BTreeMap<u64, AwaitingConfirmation>,
+        f14_locks: &crate::send_journal_block::F14Locks,
     ) -> bool {
         !self.spent
             && !self.frozen
-            && !f14_locks.contains_key(&self.global_output_index)
+            && !f14_locks.contains(self.global_output_index)
             && current_height >= self.eligible_height
     }
 

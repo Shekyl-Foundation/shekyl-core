@@ -154,14 +154,15 @@
 //! - **Address** — [`Engine::primary_address`] returns the wallet's
 //!   one reusable [`ShekylAddress`] (End-state 5; no subaddresses).
 //!   Render with `.encode()` / `.encode_classical_display()`.
-//! - **Balance** — borrow the ledger and project the scanner-derived
-//!   [`LedgerBlock`](shekyl_engine_state::LedgerBlock) through the
-//!   scanner's extension trait:
+//! - **Balance** — borrow the wallet and project it through the
+//!   scanner's extension trait. Whole-wallet by design: balance needs
+//!   the send journal's F14 locks as well as the scan-derived ledger,
+//!   so the query takes the aggregate that owns both (PR-SJ-1b).
 //!
 //!   ```ignore
-//!   use shekyl_scanner::LedgerBlockExt;
+//!   use shekyl_scanner::WalletLedgerExt;
 //!   let guard = engine.ledger(); // derefs to &WalletLedger
-//!   let balance = guard.ledger.balance(guard.ledger.height());
+//!   let balance = guard.balance();
 //!   drop(guard);
 //!   ```
 //!

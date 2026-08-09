@@ -65,7 +65,7 @@ impl BalanceSummary {
             let amount = td.amount();
             summary.total = accumulate(summary.total, amount);
 
-            if f14_locks.contains_key(&td.global_output_index) {
+            if f14_locks.contains(td.global_output_index) {
                 summary.awaiting_confirmation = accumulate(summary.awaiting_confirmation, amount);
                 continue;
             }
@@ -119,9 +119,30 @@ mod tests {
         }
     }
 
-    /// No live sends: the derived lock map is empty.
+    /// A journal with one in-flight send carrying `gindex`, derived into
+    /// the lock set the consumer sees. Building the *journal* rather than
+    /// the map is the point: `F14Locks` has one constructor, so a test
+    /// fixture and production read the same derivation rule.
+    fn locks_over(gindex: u64, txid: [u8; 32]) -> shekyl_engine_state::F14Locks {
+        use shekyl_engine_state::{SendInputRef, SendJournalBlock};
+
+        let mut journal = SendJournalBlock::empty();
+        journal.record_dispatched(
+            txid,
+            90,
+            0,
+            Vec::new(),
+            vec![SendInputRef { gindex, amount: 0 }],
+        );
+        assert!(journal.stamp_lock_baseline(&txid, 90));
+        journal.derive_f14_locks()
+    }
+
+    /// No live sends: an empty journal derives an empty lock set.
+    /// Spelled through the derivation because `F14Locks` has no other
+    /// constructor — see its type docs for why.
     fn no_locks() -> shekyl_engine_state::F14Locks {
-        shekyl_engine_state::F14Locks::new()
+        shekyl_engine_state::SendJournalBlock::empty().derive_f14_locks()
     }
 
     #[test]
@@ -163,14 +184,7 @@ mod tests {
     fn awaiting_confirmation_excluded_from_unlocked() {
         let mut td = make_td(1000, 50);
         td.global_output_index = 77;
-        let mut locks = no_locks();
-        locks.insert(
-            77,
-            shekyl_engine_state::AwaitingConfirmation {
-                tx_hash: shekyl_types::TxHash::from_bytes([7u8; 32]),
-                accepted_at_height: 90,
-            },
-        );
+        let locks = locks_over(77, [7u8; 32]);
         let transfers = vec![td];
         let summary = BalanceSummary::compute(&transfers, 100, &locks);
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
@@ -186,14 +200,7 @@ mod tests {
         let mut td = make_td(1000, 50);
         td.global_output_index = 78;
         td.spent = true;
-        let mut locks = no_locks();
-        locks.insert(
-            78,
-            shekyl_engine_state::AwaitingConfirmation {
-                tx_hash: shekyl_types::TxHash::from_bytes([8u8; 32]),
-                accepted_at_height: 90,
-            },
-        );
+        let locks = locks_over(78, [8u8; 32]);
         let summary = BalanceSummary::compute(&[td], 100, &locks);
         assert_eq!(summary.total, AtomicUnits::ZERO);
         assert_eq!(summary.awaiting_confirmation, AtomicUnits::ZERO);

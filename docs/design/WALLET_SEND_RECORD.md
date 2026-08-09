@@ -526,6 +526,40 @@ reopen criteria at ratification. Then:
    path *improved* (instructions −14.5%, estimated cycles −19.5% at
    10k rows) — the per-row `Option` load cost more than the
    empty-map lookup that replaced it.
+
+   **Review round (same PR).** Moving the lock from the row to a
+   parameter dropped two properties the field had carried implicitly,
+   both restored here rather than deferred:
+
+   - *The projection lost its ledger-evidence bound.* `held_submits`
+     became journal-only, and the merge reconciler's confirm edge is
+     its only other exit — so a send the ledger can never witness sat
+     in the held set forever (a permanent escape-horizon alarm plus a
+     permanently pinned copy of the network-exposed tx bytes). Two
+     shapes reach that state: a carried input observed spent by a
+     *foreign* txid (a same-seed sibling instance), and a rescan floor
+     raised above the funding blocks, which puts every carried input
+     permanently out of view. `reconcile_send_journal` gained a
+     numbered **step 3, evidence-bound release**, covering both: it
+     `mark_presumed_dead`s a row the ledger refutes. Conservative by
+     construction — the unwitnessable leg is gated on
+     `ledger.height() >= dispatched_at_height`, so a wiped-but-still-
+     replaying ledger never reads as "gone," and a row it cannot
+     refute keeps both its lock and its watchdog tracking.
+   - *The §7.1 self-link defence became opt-in.* A `BTreeMap` type
+     alias let any caller satisfy the parameter with
+     `&Default::default()`. `F14Locks` is now a newtype with no
+     `Default` and no public constructor but `derive_f14_locks`, so a
+     lock-blind call does not compile; the bare `LedgerBlockExt::balance`
+     that made such a call natural was deleted, leaving
+     `WalletLedgerExt::balance` — which derives the locks itself — as
+     the only balance API.
+
+   Also in the round: the bundle `format_version` gate moved *ahead of*
+   the postcard body decode, so a wallet file written by an earlier
+   build fails with `UnsupportedFormatVersion` (which names the remedy)
+   instead of an opaque framing error — the version bump this PR makes
+   was, until then, unable to fire on exactly the files it exists for.
 2. **PR-SJ-2** — projections: `transfer_view` OUTGOING + fee, CLI, GUI
    list; the annotation exposure (`set_tx_note` + note on
    `TransferView`, both directions); the `attributes` deletion (if

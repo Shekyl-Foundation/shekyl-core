@@ -1093,7 +1093,7 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
         let td = guard.ledger.ledger.transfers().first().expect("output 0");
         assert!(!td.spent, "spent stays refresh-authoritative");
         let lock = f14_locks
-            .get(&td.global_output_index)
+            .get(td.global_output_index)
             .expect("submit-accept arms the journal-derived F14 lock");
         assert_eq!(lock.tx_hash, tx_hash);
         assert!(
@@ -1395,8 +1395,8 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
     );
     assert_eq!(pending.outstanding(), 0, "reservation released");
 
-    // The F14 lock is re-derived from the journal baseline (clamped claim);
-    // `spent` stays refresh-written. Journal and field must agree (I-5).
+    // The F14 lock is a view of the journal baseline (clamped claim);
+    // `spent` stays refresh-written and takes precedence over the view.
     {
         let guard = pending.ledger.read();
         let row = guard
@@ -1416,7 +1416,7 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
             .ledger
             .transfers()
             .iter()
-            .filter(|td| f14_locks.contains_key(&td.global_output_index))
+            .filter(|td| f14_locks.contains(td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
@@ -1424,7 +1424,9 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = &f14_locks[&td.global_output_index];
+            let lock = f14_locks
+                .get(td.global_output_index)
+                .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert_eq!(
                 lock.accepted_at_height, 20,
@@ -1515,7 +1517,7 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
             .ledger
             .transfers()
             .iter()
-            .filter(|td| f14_locks.contains_key(&td.global_output_index))
+            .filter(|td| f14_locks.contains(td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
@@ -1523,7 +1525,9 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = &f14_locks[&td.global_output_index];
+            let lock = f14_locks
+                .get(td.global_output_index)
+                .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert_eq!(lock.accepted_at_height, 15);
         }
@@ -1597,7 +1601,7 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
             .ledger
             .transfers()
             .iter()
-            .filter(|td| f14_locks.contains_key(&td.global_output_index))
+            .filter(|td| f14_locks.contains(td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
@@ -1605,7 +1609,9 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = &f14_locks[&td.global_output_index];
+            let lock = f14_locks
+                .get(td.global_output_index)
+                .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert!(
                 !td.is_spendable(u64::MAX, &f14_locks),
@@ -1979,8 +1985,8 @@ async fn concurrent_builds_serialize_on_the_build_permit() {
 /// the retention record — realized fee from the wire bytes (R-4),
 /// recipients as requested, the carried input set with wipe-stable
 /// gindexes, change as the exact remainder, and (after the accept
-/// verdict) a lock_baseline equal to the F14 lock's baseline (the I-5
-/// equivalence, spot-checked here end to end).
+/// verdict) the `lock_baseline` the derived F14 lock reads its baseline
+/// from (spot-checked here end to end).
 #[tokio::test]
 async fn dispatch_writes_the_send_journal_row() {
     use crate::engine::transaction_submitter::wire_fee;
@@ -2023,9 +2029,8 @@ async fn dispatch_writes_the_send_journal_row() {
     // and the derived lock map carries the row's inputs under it.
     let f14_locks = guard.ledger.f14_locks();
     let lock = f14_locks
-        .values()
-        .next()
-        .expect("accept armed the journal-derived F14 lock");
+        .get(row.inputs[0].gindex)
+        .expect("accept armed the journal-derived F14 lock over the carried input");
     assert_eq!(row.lock_baseline, Some(lock.accepted_at_height));
     assert_eq!(lock.tx_hash, txid);
     guard
@@ -3496,7 +3501,7 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
         assert!(!td.spent, "spent stays refresh-authoritative");
         assert_eq!(
             f14_locks
-                .get(&td.global_output_index)
+                .get(td.global_output_index)
                 .expect("submit-accept arms the journal-derived F14 lock")
                 .tx_hash,
             tx_hash

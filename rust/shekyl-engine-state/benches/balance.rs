@@ -85,7 +85,7 @@ fn hot_path_bench_balance_compute(c: &mut Criterion) {
                 // Empty map = the baseline-comparable workload (the retired
                 // field was `None` on every fixture row); derivation cost is
                 // O(live sends), measured at its consumer, not per-row here.
-                let f14_locks = shekyl_engine_state::F14Locks::new();
+                let f14_locks = shekyl_engine_state::SendJournalBlock::empty().derive_f14_locks();
                 b.iter(|| {
                     black_box(BalanceSummary::compute(
                         black_box(transfers),

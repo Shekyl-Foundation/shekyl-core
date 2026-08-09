@@ -14,12 +14,29 @@ pub(crate) mod ledger_ops {
     use zeroize::Zeroizing;
 
     use crate::{
-        ledger_ext::{LedgerBlockExt, LedgerIndexesExt},
+        balance::BalanceSummary,
+        ledger_ext::LedgerIndexesExt,
         output::*,
         scan::{RecoveredWalletOutput, Timelocked},
     };
-    use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
+    use shekyl_engine_state::{F14Locks, LedgerBlock, LedgerIndexes, SendJournalBlock};
     use shekyl_units::AtomicUnits;
+
+    /// These tests drive a bare [`LedgerBlock`] with no send journal, so
+    /// nothing is in flight and the derived lock set is empty. Spelled
+    /// through the derivation because that is `F14Locks`'s only
+    /// constructor — the point of the newtype is that "no locks" cannot
+    /// be typed by accident.
+    fn no_locks() -> F14Locks {
+        SendJournalBlock::empty().derive_f14_locks()
+    }
+
+    /// Balance over a bare ledger block: the whole-wallet
+    /// `WalletLedgerExt::balance` needs a `WalletLedger`, which these
+    /// ingestion tests deliberately do not build.
+    fn balance_of(ledger: &LedgerBlock, current_height: u64) -> BalanceSummary {
+        BalanceSummary::compute(ledger.transfers(), current_height, &no_locks())
+    }
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -132,7 +149,7 @@ pub(crate) mod ledger_ops {
         assert!(ledger.transfers()[0].spent);
         assert!(ledger.transfers()[1].spent);
 
-        let balance_before = ledger.balance(1000, &Default::default());
+        let balance_before = balance_of(&ledger, 1000);
         assert_eq!(
             balance_before.total,
             AtomicUnits::ZERO,
@@ -146,7 +163,7 @@ pub(crate) mod ledger_ops {
         assert!(ledger.transfers()[0].spent_height.is_none());
         assert!(ledger.transfers()[1].spent_height.is_none());
 
-        let balance_after = ledger.balance(1000, &Default::default());
+        let balance_after = balance_of(&ledger, 1000);
         assert_eq!(balance_after.total, AtomicUnits::from_raw(3_000_000_000));
         assert_eq!(balance_after.unlocked, AtomicUnits::from_raw(3_000_000_000));
     }
@@ -228,7 +245,7 @@ pub(crate) mod ledger_ops {
         assert!(!ledger.transfers()[1].spent);
         assert!(ledger.transfers()[2].spent);
 
-        let balance = ledger.balance(1000, &Default::default());
+        let balance = balance_of(&ledger, 1000);
         assert_eq!(balance.total, AtomicUnits::from_raw(2_000_000_000));
         assert_eq!(balance.unlocked, AtomicUnits::from_raw(2_000_000_000));
     }
@@ -273,7 +290,7 @@ pub(crate) mod ledger_ops {
             .expect("invariants after unmark_spent");
 
         assert_eq!(
-            ledger.balance(1000, &Default::default()).total,
+            balance_of(&ledger, 1000).total,
             AtomicUnits::from_raw(1_500_000_000)
         );
     }
@@ -289,13 +306,13 @@ pub(crate) mod ledger_ops {
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA5; 32], make_timelocked(outputs));
 
-        let spendable = ledger.spendable_outputs(105, None, &Default::default());
+        let spendable = ledger.spendable_outputs(105, None, &no_locks());
         assert!(
             spendable.is_empty(),
             "output mined at 100 should NOT be spendable at 105"
         );
 
-        let spendable = ledger.spendable_outputs(110, None, &Default::default());
+        let spendable = ledger.spendable_outputs(110, None, &no_locks());
         assert_eq!(
             spendable.len(),
             1,
@@ -604,12 +621,29 @@ mod sync_bookkeeping {
     use zeroize::Zeroizing;
 
     use crate::{
-        ledger_ext::{LedgerBlockExt, LedgerIndexesExt},
+        balance::BalanceSummary,
+        ledger_ext::LedgerIndexesExt,
         output::*,
         scan::{RecoveredWalletOutput, Timelocked},
     };
-    use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
+    use shekyl_engine_state::{F14Locks, LedgerBlock, LedgerIndexes, SendJournalBlock};
     use shekyl_units::AtomicUnits;
+
+    /// These tests drive a bare [`LedgerBlock`] with no send journal, so
+    /// nothing is in flight and the derived lock set is empty. Spelled
+    /// through the derivation because that is `F14Locks`'s only
+    /// constructor — the point of the newtype is that "no locks" cannot
+    /// be typed by accident.
+    fn no_locks() -> F14Locks {
+        SendJournalBlock::empty().derive_f14_locks()
+    }
+
+    /// Balance over a bare ledger block: the whole-wallet
+    /// `WalletLedgerExt::balance` needs a `WalletLedger`, which these
+    /// ingestion tests deliberately do not build.
+    fn balance_of(ledger: &LedgerBlock, current_height: u64) -> BalanceSummary {
+        BalanceSummary::compute(ledger.transfers(), current_height, &no_locks())
+    }
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -749,10 +783,7 @@ mod sync_bookkeeping {
         indexes.process_scanned_outputs(&mut ledger, 10, block_hash(10), Timelocked(vec![o1, o2]));
 
         assert_eq!(ledger.transfers().len(), 2);
-        assert_eq!(
-            ledger.balance(100, &Default::default()).total,
-            AtomicUnits::from_raw(8000)
-        );
+        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(8000));
 
         indexes.detect_spends(
             &mut ledger,
@@ -761,10 +792,7 @@ mod sync_bookkeeping {
         );
         assert!(ledger.transfers()[0].spent);
         assert!(!ledger.transfers()[1].spent);
-        assert_eq!(
-            ledger.balance(100, &Default::default()).total,
-            AtomicUnits::from_raw(3000)
-        );
+        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(3000));
         indexes
             .check_invariants(&ledger)
             .expect("after spend detection");
@@ -795,19 +823,13 @@ mod sync_bookkeeping {
         );
 
         assert_eq!(ledger.transfers().len(), 3);
-        assert_eq!(
-            ledger.balance(100, &Default::default()).total,
-            AtomicUnits::from_raw(6000)
-        );
+        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(6000));
 
         indexes.handle_reorg(&mut ledger, 20);
 
         assert_eq!(ledger.transfers().len(), 1);
         assert_eq!(ledger.height(), 10);
-        assert_eq!(
-            ledger.balance(100, &Default::default()).total,
-            AtomicUnits::from_raw(1000)
-        );
+        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(1000));
         indexes.check_invariants(&ledger).expect("after reorg");
 
         indexes.process_scanned_outputs(
@@ -818,10 +840,7 @@ mod sync_bookkeeping {
         );
 
         assert_eq!(ledger.transfers().len(), 2);
-        assert_eq!(
-            ledger.balance(100, &Default::default()).total,
-            AtomicUnits::from_raw(8000)
-        );
+        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(8000));
         indexes
             .check_invariants(&ledger)
             .expect("after re-scan post-reorg");
@@ -858,15 +877,12 @@ mod sync_bookkeeping {
             &[(ki, shekyl_types::TxHash::from_bytes([0xEE; 32]))],
         );
         assert_eq!(spent, 1);
-        assert_eq!(
-            ledger.balance(100, &Default::default()).total,
-            AtomicUnits::ZERO
-        );
+        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::ZERO);
 
         let unmarked = indexes.unmark_spent(&mut ledger, &[ki]);
         assert_eq!(unmarked, 1);
         assert_eq!(
-            ledger.balance(100, &Default::default()).total,
+            balance_of(&ledger, 100).total,
             AtomicUnits::from_raw(10_000)
         );
 

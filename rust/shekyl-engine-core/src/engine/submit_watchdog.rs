@@ -556,6 +556,57 @@ mod tests {
         assert!(held.iter().all(|h| !h.probed_this_epoch));
     }
 
+    /// …and rows **leave** it. The projection is journal-only, so the
+    /// escape ladder's exits are exactly the journal's exits: the merge
+    /// reconciler's confirm edge, its evidence-bound release, and the
+    /// watchdog's own `mark_presumed_dead`. Pinning entry alone would
+    /// pass for a projection nothing can ever clear — which is precisely
+    /// how a permanent "your transaction has not confirmed" alarm, and a
+    /// permanently pinned copy of the network-exposed tx bytes, would
+    /// look to a green suite.
+    #[test]
+    fn held_submits_drops_rows_the_ledger_refutes() {
+        use shekyl_engine_state::SendState;
+
+        for (name, arrange) in [
+            (
+                "superseded: a foreign tx consumed the carried input",
+                (|wallet: &mut shekyl_engine_state::WalletLedger| {
+                    let mut td = transfer_at(1);
+                    td.spent = true;
+                    td.spent_height = Some(4_100);
+                    td.spending_tx_hash = Some(TxHash::from_bytes([0xEE; 32]));
+                    wallet.ledger = ledger_with(vec![td]);
+                }) as fn(&mut shekyl_engine_state::WalletLedger),
+            ),
+            (
+                "unwitnessable: the scan floor put the input out of view",
+                |wallet: &mut shekyl_engine_state::WalletLedger| {
+                    wallet.ledger = ledger_with(Vec::new());
+                },
+            ),
+        ] {
+            let mut wallet = shekyl_engine_state::WalletLedger::empty();
+            wallet.ledger = ledger_with(vec![transfer_at(1)]);
+            journal_row(
+                &mut wallet,
+                [1; 32],
+                SendState::Dispatched,
+                Some(4_000),
+                vec![1],
+            );
+            assert_eq!(held_submits(&wallet).len(), 1, "{name}: held before");
+
+            arrange(&mut wallet);
+            wallet.reconcile_send_journal(None);
+
+            assert!(
+                held_submits(&wallet).is_empty(),
+                "{name}: the row must leave the held projection"
+            );
+        }
+    }
+
     /// §2.6 confirmed-absent release: locks under the named txid are
     /// released (outputs selectable again); other locks untouched.
     #[test]
@@ -607,10 +658,11 @@ mod tests {
         // The released row cleared its baseline, so only `still_held`'s
         // carried input (gindex 3) stays locked.
         let locks = wallet.f14_locks();
-        assert_eq!(locks.keys().copied().collect::<Vec<_>>(), vec![3]);
+        assert_eq!(locks.len(), 1);
+        assert!(locks.contains(3));
         let ledger = &wallet.ledger;
         for td in ledger.transfers() {
-            let locked = locks.contains_key(&td.global_output_index);
+            let locked = locks.contains(td.global_output_index);
             assert_eq!(
                 td.is_spendable(u64::MAX, &locks),
                 !locked,

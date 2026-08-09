@@ -29,8 +29,13 @@
 //! there is no reason to take a `&mut LedgerIndexes` borrow when the
 //! indexes are never read.
 //!
-//! Read-only queries that touch only the ledger (`unspent_transfers`,
-//! `spendable_outputs`, etc.) likewise live on [`LedgerBlock`].
+//! Read-only queries that need no index likewise live on
+//! [`LedgerBlock`] (`unspent_transfers`, `spendable_outputs`). They are
+//! not ledger-*only*: since PR-SJ-1b both take the journal-derived
+//! [`F14Locks`](crate::F14Locks) the sibling block owns, because a
+//! scan-derived block cannot see dispatch-authored facts (C7). Prefer
+//! the [`WalletLedger`](crate::WalletLedger) façade, which supplies
+//! them.
 
 use std::collections::HashMap;
 use std::ops::Range;

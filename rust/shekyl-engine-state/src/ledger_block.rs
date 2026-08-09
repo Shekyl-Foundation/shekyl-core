@@ -332,9 +332,7 @@ impl LedgerBlock {
     ) -> Vec<&TransferDetails> {
         self.transfers
             .iter()
-            .filter(|td| {
-                !td.spent && !td.frozen && !f14_locks.contains_key(&td.global_output_index)
-            })
+            .filter(|td| !td.spent && !td.frozen && !f14_locks.contains(td.global_output_index))
             .collect()
     }
 

@@ -423,7 +423,7 @@ mod tests {
         // derivation reads it directly.
         let locks = wallet.f14_locks();
         let lock = locks
-            .get(&7)
+            .get(7)
             .expect("the abandoned row's carried input stays locked across the wipe");
         assert_eq!(lock.tx_hash.to_bytes(), txid);
         assert_eq!(lock.accepted_at_height, 25);

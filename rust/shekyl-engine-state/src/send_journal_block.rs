@@ -48,13 +48,51 @@ use serde::{Deserialize, Serialize};
 /// concern (`docs/FOLLOWUPS.md` "A4 DECIDED").
 pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 2;
 
-/// Journal-derived F14 awaiting-confirmation lock map:
-/// `global_output_index → lock`. Produced only by
-/// [`SendJournalBlock::derive_f14_locks`] (PR-SJ-1b — the single owner
-/// of the derivation rule); consumed by balance, spendability, and
+/// Journal-derived F14 awaiting-confirmation lock set, keyed by
+/// `global_output_index`. Consumed by balance, spendability, and
 /// selection surfaces in place of the retired
 /// `TransferDetails::awaiting_confirmation` field.
-pub type F14Locks = BTreeMap<u64, crate::transfer::AwaitingConfirmation>;
+///
+/// **A newtype, deliberately, and with no `Default`** (PR-SJ-1b
+/// review): while the lock rode on [`crate::TransferDetails`] every
+/// consumer got the §7.1 self-link defence for free. Once it became a
+/// parameter, a plain `BTreeMap` alias would have let any caller
+/// satisfy the type with `&Default::default()` — a lock-blind map that
+/// compiles, reads as innocuous, and silently re-offers an output whose
+/// spend is already on the wire. Sealing the field so that
+/// [`SendJournalBlock::derive_f14_locks`] is the *only* way to obtain a
+/// value makes "I forgot the locks" unrepresentable instead of merely
+/// discouraged; a caller with no journal in scope must write
+/// `SendJournalBlock::empty().derive_f14_locks()` and say so out loud.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct F14Locks(BTreeMap<u64, crate::transfer::AwaitingConfirmation>);
+
+impl F14Locks {
+    /// Whether the output at `gindex` has a network-exposed spend
+    /// awaiting confirmation — the §7.1 self-link check.
+    #[must_use]
+    pub fn contains(&self, gindex: u64) -> bool {
+        self.0.contains_key(&gindex)
+    }
+
+    /// The lock covering `gindex`, if any.
+    #[must_use]
+    pub fn get(&self, gindex: u64) -> Option<&crate::transfer::AwaitingConfirmation> {
+        self.0.get(&gindex)
+    }
+
+    /// How many outputs are locked.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether no output is locked.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 
 /// One recipient of a recorded send, exactly as realized in the built
 /// transaction (SJ-DQ-1: full row, addresses stored, no knob — settled by
@@ -98,10 +136,15 @@ pub enum SendState {
     /// the tx never relayed (single-egress). Kept as failed-send
     /// history (rule 82).
     TerminalRejected,
-    /// The watchdog's confirmed-absent horizon released the F14 locks:
-    /// the tx is presumed dead. **Display state** (P3-1/P3-4): keys and
-    /// the I-2 reference are retained; a late confirmation flips this
-    /// to [`Self::Confirmed`] loudly.
+    /// The F14 locks were released without a confirmation: the tx is
+    /// presumed dead. Two entry points, both via
+    /// [`SendJournalBlock::mark_presumed_dead`] — the watchdog's
+    /// confirmed-absent horizon, and the reconciler's evidence-bound
+    /// release when the ledger refutes the send outright
+    /// ([`crate::WalletLedger::reconcile_send_journal`] step 3).
+    /// **Display state** (P3-1/P3-4): keys and the I-2 reference are
+    /// retained; a late confirmation flips this to [`Self::Confirmed`]
+    /// loudly.
     PresumedDead,
     /// The user abandoned the send (`abandon_tx`, P3-4). Terminal for
     /// the display machine, with two deliberate non-terminal edges:
@@ -330,15 +373,23 @@ impl SendJournalBlock {
         self.rows.remove(txid);
     }
 
-    /// Watchdog confirmed-absent release: display-state flip and clear
-    /// the baseline so re-derivation never re-locks a deliberately
-    /// released tx.
+    /// Release a send that will never confirm: display-state flip and
+    /// clear the baseline, which drops the row's carried inputs from
+    /// [`Self::derive_f14_locks`] and from the watchdog's held
+    /// projection.
+    ///
+    /// Two callers, one meaning — "the wait is over without a
+    /// confirmation." The watchdog reaches here from its confirmed-absent
+    /// horizon (`DAEMON_SUBMIT_VERDICT.md` §2.6 invariant 2); the merge
+    /// reconciler reaches here when the ledger *refutes* the send
+    /// ([`crate::WalletLedger::reconcile_send_journal`] step 3). Neither
+    /// authorizes a rebuild (§2.6 invariant 3).
     ///
     /// An `Abandoned` row keeps its user-authored state but the baseline
-    /// clears the same way — the watchdog's confirmed-absent evidence is
-    /// what releases an abandoned-from-`Dispatched` row's carried input
-    /// locks, and without this arm the reconciler's re-derivation
-    /// (P3-1's non-terminal-or-abandoned set) would re-place locks the
+    /// clears the same way: releasing evidence is what ends an
+    /// abandoned-from-`Dispatched` row's carried input locks, and
+    /// without this arm the derivation (P3-1's
+    /// non-terminal-or-abandoned set) would keep re-placing locks the
     /// release just cleared. No-op for every other state.
     pub fn mark_presumed_dead(&mut self, txid: &[u8; 32]) {
         if let Some(row) = self.rows.get_mut(txid) {
@@ -389,6 +440,11 @@ impl SendJournalBlock {
     /// `lock_baseline` is locked, keyed by the input's
     /// `global_output_index`.
     ///
+    /// Also the **only constructor** of [`F14Locks`] — sole ownership of
+    /// the rule is enforced by the type, not by convention (see the
+    /// [`F14Locks`] docs for why an empty map must be spelled
+    /// `SendJournalBlock::empty().derive_f14_locks()`).
+    ///
     /// The map says nothing about spent-ness: confirmed evidence
     /// supersedes a lock, and every consumer checks `spent` first (the
     /// same precedence the merge reconciler applied when the field
@@ -402,7 +458,7 @@ impl SendJournalBlock {
     /// selected — the SJ-DQ-4 self-link defence this map implements),
     /// so the tie-break is a determinism guarantee, not a policy.
     pub fn derive_f14_locks(&self) -> F14Locks {
-        let mut locks = BTreeMap::new();
+        let mut locks: BTreeMap<u64, crate::transfer::AwaitingConfirmation> = BTreeMap::new();
         for (txid, row) in &self.rows {
             if !row.state.reapplies_f14_locks() {
                 continue;
@@ -419,7 +475,7 @@ impl SendJournalBlock {
                     });
             }
         }
-        locks
+        F14Locks(locks)
     }
 }
 
@@ -453,7 +509,8 @@ mod tests {
 
     /// State-set predicates are the single owner of retention / lock /
     /// abandonability membership — keep them aligned with the design
-    /// tables (I-2 vs I-5 vs P3-4 edge sources).
+    /// tables (I-2 retention vs F14 lock re-application vs P3-4 edge
+    /// sources).
     #[test]
     fn send_state_set_predicates() {
         assert!(SendState::Dispatched.holds_tx_key_retention());
@@ -683,14 +740,17 @@ mod tests {
 
         let locks = block.derive_f14_locks();
         assert_eq!(
-            locks.keys().copied().collect::<Vec<_>>(),
-            vec![100, 101],
+            locks.len(),
+            2,
             "exactly the baseline-stamped re-application rows lock"
         );
-        assert_eq!(locks[&100].tx_hash.to_bytes(), dispatched);
-        assert_eq!(locks[&100].accepted_at_height, 25);
-        assert_eq!(locks[&101].tx_hash.to_bytes(), abandoned);
-        assert_eq!(locks[&101].accepted_at_height, 30);
+        for (gindex, txid, baseline) in [(100, dispatched, 25), (101, abandoned, 30)] {
+            let lock = locks
+                .get(gindex)
+                .unwrap_or_else(|| panic!("gindex {gindex} must be locked"));
+            assert_eq!(lock.tx_hash.to_bytes(), txid);
+            assert_eq!(lock.accepted_at_height, baseline);
+        }
     }
 
     /// Derivation is deterministic and pure: two calls over the same
@@ -718,8 +778,11 @@ mod tests {
         assert_eq!(a, b, "derivation is pure");
         assert_eq!(a.len(), 2);
         for g in [200, 201] {
-            assert_eq!(a[&g].tx_hash.to_bytes(), txid);
-            assert_eq!(a[&g].accepted_at_height, 50);
+            let lock = a
+                .get(g)
+                .unwrap_or_else(|| panic!("gindex {g} must be locked"));
+            assert_eq!(lock.tx_hash.to_bytes(), txid);
+            assert_eq!(lock.accepted_at_height, 50);
         }
     }
 

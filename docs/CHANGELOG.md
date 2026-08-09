@@ -15,6 +15,21 @@
   written by earlier builds need a re-create (`rm -rf` and restore
   from seed).
 
+  Two user-facing consequences of the same change:
+
+  - **A send that provably can never confirm now says so.** If a
+    transaction's input turns up spent by a *different* transaction
+    (another device restored from the same seed got there first), or a
+    rescan from a higher block puts the input permanently out of the
+    wallet's view, the send moves to presumed-dead in your history
+    instead of sitting "pending" forever. Its input locks release with
+    it. A late confirmation still flips the row back, loudly.
+  - **Opening a wallet file from an older build gives the right
+    error.** The version check now runs before the file body is parsed,
+    so you get "unsupported wallet format version" — which tells you to
+    re-create from your seed — rather than a parse error that reads
+    like corruption on a wallet whose keys and seed are perfectly fine.
+
 ### Fixed
 
 - **`BlockchainLMDB::reset()` now wipes every table, so an in-place chain
