@@ -13419,9 +13419,23 @@ comment — *"private mode always uses fluff but marked as stem"* — becomes fa
 **this is the one of the 33 that changes its expectation**, and it changes
 because the posture changed, not because the port drifted.
 `tests/hop_sensitivity.rs::anonymity_zone_origin_is_over_provisioned_not_under`
-is the other: it was written as a tripwire naming this exact event — *"a failure
-here means the anonymity zone started stemming… either of which reopens §63"* —
-and it has now fired by decision rather than by regression.
+is the other, and it is the more instructive of the two. It was written as a
+tripwire naming this exact event — *"a failure here means the anonymity zone
+started stemming… either of which reopens §63"* — **and it did not fire. It
+still passes, and it always would have.**
+
+> **The tripwire is vacuous by input on the precise axis it advertised.** It
+> sets `p.fluff_probability_pct = 100` as a *literal*, so it measures the
+> retired posture by construction: the stemming-vs-diffusing fact is asserted
+> in the test body rather than read from the code, and no change to the code
+> can move it. A guard whose subject is hard-coded cannot detect a change in
+> its subject.
+
+Checked rather than assumed, which is the only reason this is in the record:
+the test was cited a paragraph earlier as having fired by decision, and it had
+not. **The rewrite must derive the posture from the dispatch site instead of
+restating it** — otherwise the replacement inherits the same defect with a
+newer date on it.
 
 ### 89.5 Sequencing — the gates carry the zone field, they do not precede it
 
