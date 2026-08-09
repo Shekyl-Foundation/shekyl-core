@@ -57,9 +57,8 @@
 // lifecycle. The former `#![allow(dead_code)]` (landed-inert scaffolding) is
 // lifted now that the driver makes every kernel surface live.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-use shekyl_engine_state::LedgerBlock;
 use shekyl_types::TxHash;
 
 // ---------------------------------------------------------------------------
@@ -157,38 +156,38 @@ pub(crate) struct HeldSubmit {
     pub probed_this_epoch: bool,
 }
 
-/// Project the held-submit set from the ledger's F14 locks, one entry
-/// per distinct awaited txid (a tx spending several inputs places one
-/// lock per input; the earliest accepted height is the conservative
-/// horizon baseline).
+/// Project the held-submit set from the send journal — one entry per
+/// row in a lock-bearing state (`SendState::locks_carried_inputs`) with
+/// a stamped `lock_baseline` (PR-SJ-1b: the journal owns the dispatch
+/// facts; the per-input F14 locks the old projection grouped are now
+/// derived from exactly these rows, so projecting the rows directly is
+/// the same set minus the grouping).
+///
+/// The success condition is unchanged in substance: refresh observes
+/// the spend and the merge reconciler flips the row to `Confirmed`,
+/// dropping it from this projection — the same refresh-authoritative
+/// event that used to clear the locks (`mark_spent`). One deliberate
+/// strengthening: mid-rescan, a wiped ledger no longer blinds the
+/// watchdog — the journal rows survive the wipe, so tracking continues
+/// across it.
 ///
 /// Fresh projections carry `probed_this_epoch: false`; the driving
 /// actor overlays its in-memory probe state across refresh cycles.
-pub(crate) fn held_submits(ledger: &LedgerBlock) -> Vec<HeldSubmit> {
-    // Single pass: a txid → slot index keeps the grouping O(transfers)
-    // instead of O(transfers × distinct-held-txids), while first-seen Vec
-    // order is preserved (deterministic projection).
-    let mut held: Vec<HeldSubmit> = Vec::new();
-    let mut slot: HashMap<TxHash, usize> = HashMap::new();
-    for td in ledger.transfers() {
-        let Some(awaiting) = &td.awaiting_confirmation else {
-            continue;
-        };
-        match slot.get(&awaiting.tx_hash) {
-            Some(&i) => {
-                held[i].baseline_height = held[i].baseline_height.min(awaiting.accepted_at_height);
-            }
-            None => {
-                slot.insert(awaiting.tx_hash, held.len());
-                held.push(HeldSubmit {
-                    tx_hash: awaiting.tx_hash,
-                    baseline_height: awaiting.accepted_at_height,
-                    probed_this_epoch: false,
-                });
-            }
-        }
-    }
-    held
+/// `BTreeMap` row order makes the projection deterministic.
+pub(crate) fn held_submits(wallet: &shekyl_engine_state::WalletLedger) -> Vec<HeldSubmit> {
+    wallet
+        .send_journal
+        .rows
+        .iter()
+        .filter(|(_, row)| row.state.locks_carried_inputs())
+        .filter_map(|(txid, row)| {
+            row.lock_baseline.map(|baseline_height| HeldSubmit {
+                tx_hash: TxHash::from_bytes(*txid),
+                baseline_height,
+                probed_this_epoch: false,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -407,17 +406,24 @@ pub(crate) fn apply_probe_outcome(
 /// Release the F14 awaiting-confirmation locks held under any txid in
 /// `tx_hashes` (the confirmed-absent leg of §2.6: the tx provably never
 /// confirmed — definite terminal verdict on the probe, or operator-directed
-/// release after the alarm rung), in a **single** ledger scan regardless of
-/// how many txids a cadence tick resolves. Returns the number of locks
-/// released.
+/// release after the alarm rung). Returns the number of carried-input
+/// locks the release cleared from the derived view.
 ///
-/// The confirmed-**present** leg lives in
-/// `shekyl_engine_state::LedgerIndexes::mark_spent` (refresh observes
-/// the spend on-chain and supersedes the lock); this function must
-/// never run for a tx that might still confirm — the caller owns that
-/// proof (§2.6 invariant 2's "definite verdict or observed absence").
-/// Release makes the outputs selectable again; it does **not**
-/// authorize an automatic rebuild (§2.6 invariant 3 / §7.4).
+/// Since PR-SJ-1b the release is journal-only: `mark_presumed_dead`
+/// flips the display state (`Dispatched → PresumedDead`; an `Abandoned`
+/// row keeps its user-authored state) and clears `lock_baseline`, which
+/// removes the row's carried inputs from
+/// `SendJournalBlock::spend_locks` — there is no per-transfer
+/// field left to clear. A late confirmation flips the row to
+/// `Confirmed` through the merge reconciler, loudly un-presuming it.
+///
+/// The confirmed-**present** leg needs no code at all: every derived-
+/// view consumer checks `spent` first, so refresh-observed confirmation
+/// supersedes structurally. This function must never run for a tx that
+/// might still confirm — the caller owns that proof (§2.6 invariant 2's
+/// "definite verdict or observed absence"). Release makes the outputs
+/// selectable again; it does **not** authorize an automatic rebuild
+/// (§2.6 invariant 3 / §7.4).
 pub(crate) fn release_awaiting_confirmation(
     wallet: &mut shekyl_engine_state::WalletLedger,
     tx_hashes: &HashSet<TxHash>,
@@ -426,24 +432,16 @@ pub(crate) fn release_awaiting_confirmation(
         return 0;
     }
     let mut released = 0;
-    for td in &mut wallet.ledger.transfers {
-        if td
-            .awaiting_confirmation
-            .as_ref()
-            .is_some_and(|a| tx_hashes.contains(&a.tx_hash))
-        {
-            td.awaiting_confirmation = None;
-            released += 1;
-        }
-    }
-    // PR-SJ-1: the confirmed-absent release is the `PresumedDead` entry
-    // (SJ-DQ-4 / P3-4 — a display state; keys and the I-2 reference are
-    // retained). `lock_baseline` clears so the merge reconciler's lock
-    // re-derivation never re-creates a lock the watchdog deliberately
-    // released; a late confirmation flips the row to `Confirmed` through
-    // the same reconciler, loudly un-presuming it.
     for txid in tx_hashes {
-        wallet.send_journal.mark_presumed_dead(&txid.to_bytes());
+        let key = txid.to_bytes();
+        let held_inputs = wallet
+            .send_journal
+            .rows
+            .get(&key)
+            .filter(|row| row.state.locks_carried_inputs() && row.lock_baseline.is_some())
+            .map_or(0, |row| row.inputs.len());
+        wallet.send_journal.mark_presumed_dead(&key);
+        released += held_inputs;
     }
     released
 }
@@ -451,14 +449,15 @@ pub(crate) fn release_awaiting_confirmation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_engine_state::{AwaitingConfirmation, TransferDetails, SPENDABLE_AGE};
+    use shekyl_engine_state::{TransferDetails, SPENDABLE_AGE};
 
     const CFG: WatchdogConfig = WatchdogConfig {
         escape_horizon_blocks: 540,
     };
 
-    /// Minimal transfer fixture carrying an optional F14 lock.
-    fn transfer_with_lock(seed: u8, lock: Option<AwaitingConfirmation>) -> TransferDetails {
+    /// Minimal unspent transfer fixture at `gindex = seed` (locks are
+    /// journal-derived since PR-SJ-1b, so the row itself carries none).
+    fn transfer_at(seed: u8) -> TransferDetails {
         use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
         TransferDetails {
             tx_hash: TxHash::from_bytes([seed; 32]),
@@ -472,7 +471,6 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
-            awaiting_confirmation: lock,
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
@@ -483,47 +481,130 @@ mod tests {
         }
     }
 
-    fn ledger_with(transfers: Vec<TransferDetails>) -> LedgerBlock {
-        LedgerBlock::new(
+    fn ledger_with(transfers: Vec<TransferDetails>) -> shekyl_engine_state::LedgerBlock {
+        shekyl_engine_state::LedgerBlock::new(
             transfers,
             shekyl_engine_state::BlockchainTip::new(5_000, [0xAA; 32]),
             shekyl_engine_state::ReorgBlocks::default(),
         )
     }
 
-    /// Held tracking projects one entry per awaited txid, keyed on the
-    /// F14 locks, with the earliest accepted height as the baseline.
-    #[test]
-    fn held_submits_projects_locks_grouped_by_txid() {
-        let awaited = TxHash::from_bytes([0xBB; 32]);
-        let ledger = ledger_with(vec![
-            // Two inputs of the same awaited tx, different accept heights.
-            transfer_with_lock(
-                1,
-                Some(AwaitingConfirmation {
-                    tx_hash: awaited,
-                    accepted_at_height: 4_000,
-                }),
-            ),
-            transfer_with_lock(
-                2,
-                Some(AwaitingConfirmation {
-                    tx_hash: awaited,
-                    accepted_at_height: 3_900,
-                }),
-            ),
-            // Unrelated unlocked output.
-            transfer_with_lock(3, None),
-        ]);
-
-        let held = held_submits(&ledger);
-        assert_eq!(held.len(), 1, "one entry per awaited txid");
-        assert_eq!(held[0].tx_hash, awaited);
-        assert_eq!(
-            held[0].baseline_height, 3_900,
-            "earliest accept height is the conservative baseline"
+    /// Journal fixture row: `state` + optional baseline over one input.
+    fn journal_row(
+        wallet: &mut shekyl_engine_state::WalletLedger,
+        txid: [u8; 32],
+        state: shekyl_engine_state::SendState,
+        lock_baseline: Option<u64>,
+        gindexes: Vec<u64>,
+    ) {
+        wallet.send_journal.rows.insert(
+            txid,
+            shekyl_engine_state::SendRecord {
+                dispatched_at_height: 3_999,
+                fee: 1,
+                recipients: Vec::new(),
+                change_amount: 0,
+                inputs: gindexes
+                    .into_iter()
+                    .map(|gindex| shekyl_engine_state::SendInputRef { gindex, amount: 1 })
+                    .collect(),
+                lock_baseline,
+                state,
+            },
         );
-        assert!(!held[0].probed_this_epoch);
+    }
+
+    /// Held tracking projects one entry per journal row that carries
+    /// locks (PR-SJ-1b): baseline-stamped `Dispatched` and `Abandoned`
+    /// rows project; released (`PresumedDead` / no-baseline) and
+    /// settled (`Confirmed` / `TerminalRejected`) rows do not — and a
+    /// multi-input send is one entry by construction, no grouping.
+    #[test]
+    fn held_submits_projects_lock_bearing_journal_rows() {
+        use shekyl_engine_state::SendState;
+        let mut wallet = shekyl_engine_state::WalletLedger::empty();
+        journal_row(
+            &mut wallet,
+            [1; 32],
+            SendState::Dispatched,
+            Some(3_900),
+            vec![1, 2],
+        );
+        journal_row(
+            &mut wallet,
+            [2; 32],
+            SendState::Abandoned,
+            Some(4_000),
+            vec![3],
+        );
+        journal_row(&mut wallet, [3; 32], SendState::PresumedDead, None, vec![4]);
+        journal_row(
+            &mut wallet,
+            [4; 32],
+            SendState::Confirmed { height: 9 },
+            Some(3_800),
+            vec![5],
+        );
+        journal_row(&mut wallet, [5; 32], SendState::Dispatched, None, vec![6]); // pre-verdict
+
+        let held = held_submits(&wallet);
+        assert_eq!(held.len(), 2, "one entry per lock-bearing row");
+        assert_eq!(held[0].tx_hash, TxHash::from_bytes([1; 32]));
+        assert_eq!(held[0].baseline_height, 3_900);
+        assert_eq!(held[1].tx_hash, TxHash::from_bytes([2; 32]));
+        assert_eq!(held[1].baseline_height, 4_000);
+        assert!(held.iter().all(|h| !h.probed_this_epoch));
+    }
+
+    /// …and rows **leave** it. The projection is journal-only, so the
+    /// escape ladder's exits are exactly the journal's exits: the merge
+    /// reconciler's confirm edge, its evidence-bound release, and the
+    /// watchdog's own `mark_presumed_dead`. Pinning entry alone would
+    /// pass for a projection nothing can ever clear — which is precisely
+    /// how a permanent "your transaction has not confirmed" alarm, and a
+    /// permanently pinned copy of the network-exposed tx bytes, would
+    /// look to a green suite.
+    #[test]
+    fn held_submits_drops_rows_the_ledger_refutes() {
+        use shekyl_engine_state::SendState;
+
+        for (name, arrange) in [
+            (
+                "superseded: a foreign tx consumed the carried input",
+                (|wallet: &mut shekyl_engine_state::WalletLedger| {
+                    let mut td = transfer_at(1);
+                    td.spent = true;
+                    td.spent_height = Some(4_100);
+                    td.spending_tx_hash = Some(TxHash::from_bytes([0xEE; 32]));
+                    wallet.ledger = ledger_with(vec![td]);
+                }) as fn(&mut shekyl_engine_state::WalletLedger),
+            ),
+            (
+                "unwitnessable: the scan floor put the input out of view",
+                |wallet: &mut shekyl_engine_state::WalletLedger| {
+                    wallet.ledger = ledger_with(Vec::new());
+                },
+            ),
+        ] {
+            let mut wallet = shekyl_engine_state::WalletLedger::empty();
+            wallet.ledger = ledger_with(vec![transfer_at(1)]);
+            journal_row(
+                &mut wallet,
+                [1; 32],
+                SendState::Dispatched,
+                Some(4_000),
+                vec![1],
+            );
+            assert_eq!(held_submits(&wallet).len(), 1, "{name}: held before");
+
+            arrange(&mut wallet);
+            wallet.reconcile_send_journal(None);
+
+            assert!(
+                held_submits(&wallet).is_empty(),
+                "{name}: the row must leave the held projection"
+            );
+        }
     }
 
     /// §2.6 confirmed-absent release: locks under the named txid are
@@ -532,21 +613,10 @@ mod tests {
     fn release_confirmed_absent_clears_only_the_named_tx() {
         let gone = TxHash::from_bytes([0xCC; 32]);
         let still_held = TxHash::from_bytes([0xDD; 32]);
-        let lock = |h| {
-            Some(AwaitingConfirmation {
-                tx_hash: h,
-                accepted_at_height: 4_000,
-            })
-        };
         let mut wallet = shekyl_engine_state::WalletLedger::empty();
-        wallet.ledger = ledger_with(vec![
-            transfer_with_lock(1, lock(gone)),
-            transfer_with_lock(2, lock(gone)),
-            transfer_with_lock(3, lock(still_held)),
-        ]);
-        // PR-SJ-1: seed the owning journal rows so the release's
-        // PresumedDead edge is observable (and the fixture stays
-        // invariant-honest: locks derive from dispatch facts).
+        wallet.ledger = ledger_with(vec![transfer_at(1), transfer_at(2), transfer_at(3)]);
+        // The owning journal rows are the locks (PR-SJ-1b): `gone`
+        // carries gindexes 1 and 2, `still_held` carries 3.
         for (txid, gindexes) in [(gone, vec![1u64, 2]), (still_held, vec![3u64])] {
             wallet.send_journal.rows.insert(
                 txid.to_bytes(),
@@ -584,14 +654,23 @@ mod tests {
             shekyl_engine_state::SendState::Dispatched,
             "unrelated row untouched"
         );
+        // PR-SJ-1b: spendability consults the journal-derived lock map.
+        // The released row cleared its baseline, so only `still_held`'s
+        // carried input (gindex 3) stays locked.
+        let locks = wallet.spend_locks();
+        assert_eq!(locks.len(), 1);
+        assert!(locks.contains(3));
         let ledger = &wallet.ledger;
-        assert!(ledger.transfers()[0].is_spendable(u64::MAX));
-        assert!(ledger.transfers()[1].is_spendable(u64::MAX));
-        assert!(
-            !ledger.transfers()[2].is_spendable(u64::MAX),
-            "unrelated lock survives"
-        );
-        assert_eq!(held_submits(ledger).len(), 1);
+        for td in ledger.transfers() {
+            let locked = locks.contains(td.global_output_index);
+            assert_eq!(
+                td.is_spendable(u64::MAX, &locks),
+                !locked,
+                "gindex {} spendability must mirror the derived lock",
+                td.global_output_index
+            );
+        }
+        assert_eq!(held_submits(&wallet).len(), 1);
     }
 
     fn healthy() -> DaemonHealthContext {

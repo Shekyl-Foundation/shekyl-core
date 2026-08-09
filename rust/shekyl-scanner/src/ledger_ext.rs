@@ -18,14 +18,14 @@
 //! - [`LedgerIndexesExt::process_scanned_outputs`] — ingest a scanned block's
 //!   `Timelocked<RecoveredWalletOutput>` into a `(LedgerBlock, LedgerIndexes)`
 //!   pair atomically.
-//! - [`LedgerBlockExt::balance`] — compute a [`BalanceSummary`] from the
-//!   tracked transfers at a chain height.
+//! - [`WalletLedgerExt::balance`] — compute a [`BalanceSummary`] for the
+//!   whole wallet, journal-derived F14 locks included.
 //!
 //! Call sites must have these traits **in scope** for the
-//! `TransferDetails::from_…` and `ledger.balance(…)` /
+//! `TransferDetails::from_…` and `wallet.balance()` /
 //! `indexes.process_scanned_outputs(&mut ledger, …)` call syntax to resolve.
 //! The crate re-exports all three traits from `lib.rs` so
-//! `use shekyl_scanner::{TransferDetailsExt, LedgerBlockExt, LedgerIndexesExt};`
+//! `use shekyl_scanner::{TransferDetailsExt, WalletLedgerExt, LedgerIndexesExt};`
 //! is the canonical import.
 
 use std::ops::Range;
@@ -63,7 +63,6 @@ impl TransferDetailsExt for TransferDetails {
             spent: false,
             spent_height: None,
             key_image: None,
-            awaiting_confirmation: None,
             spending_tx_hash: None,
             // M3b deterministic-handle pathway: populated by the
             // orchestrator-side post-pass in
@@ -176,15 +175,32 @@ impl LedgerIndexesExt for LedgerIndexes {
     }
 }
 
-/// Extension methods for [`LedgerBlock`] that depend on scanner-only types.
-pub trait LedgerBlockExt {
-    /// Compute a balance summary at the given chain height.
-    fn balance(&self, current_height: u64) -> BalanceSummary;
+/// Whole-wallet balance projection: the scan-derived ledger and the
+/// journal-derived F14 locks read under one type (PR-SJ-1b).
+///
+/// **The only balance API.** A sibling `LedgerBlockExt::balance` over a
+/// bare [`LedgerBlock`] existed until the PR-SJ-1b review and was
+/// deleted rather than documented-around: a scan-derived block cannot
+/// see the dispatch-authored lock facts (C7), so every caller had to
+/// hand-thread a lock map it had no way to obtain honestly. Anything
+/// that genuinely needs a transfer-slice balance calls
+/// [`BalanceSummary::compute`] and passes a derived
+/// [`InFlightSpendLocks`](shekyl_engine_state::InFlightSpendLocks) explicitly.
+pub trait WalletLedgerExt {
+    /// Balance at the wallet's current synced height.
+    fn balance(&self) -> BalanceSummary;
+
+    /// Balance at an explicit chain height (tests / historical views).
+    fn balance_at(&self, current_height: u64) -> BalanceSummary;
 }
 
-impl LedgerBlockExt for LedgerBlock {
-    fn balance(&self, current_height: u64) -> BalanceSummary {
-        BalanceSummary::compute(self.transfers(), current_height)
+impl WalletLedgerExt for shekyl_engine_state::WalletLedger {
+    fn balance(&self) -> BalanceSummary {
+        self.balance_at(self.ledger.height())
+    }
+
+    fn balance_at(&self, current_height: u64) -> BalanceSummary {
+        BalanceSummary::compute(self.ledger.transfers(), current_height, &self.spend_locks())
     }
 }
 

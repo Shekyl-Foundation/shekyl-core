@@ -247,9 +247,10 @@ impl<
         // WI-RPC-3 retention reconciler (`docs/api/wallet_rpc.yaml`
         // OUTBOUND PREREQUISITE pins 2–3 + PR-SJ-1 P3-1: after the merge
         // and the post-passes, retire retention orphans the chain now
-        // references and run the send-journal reorg/confirm/lock
-        // re-derivation. Same write guard so I-2 and I-5 hold atomically
-        // with the scan merge (see `WalletLedger::reconcile_after_scan_merge`).
+        // references and run the send-journal reorg / confirm /
+        // evidence-bound-release edges. Same write guard so I-2 and the
+        // journal's lifecycle states hold atomically with the scan merge
+        // (see `WalletLedger::reconcile_after_scan_merge`).
         state.ledger.reconcile_after_scan_merge(reorg_fork_height);
         Ok(())
     }
