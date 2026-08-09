@@ -155,9 +155,8 @@
 //!   one reusable [`ShekylAddress`] (End-state 5; no subaddresses).
 //!   Render with `.encode()` / `.encode_classical_display()`.
 //! - **Balance** — borrow the wallet and project it through the
-//!   scanner's extension trait. Whole-wallet by design: balance needs
-//!   the send journal's F14 locks as well as the scan-derived ledger,
-//!   so the query takes the aggregate that owns both (PR-SJ-1b).
+//!   scanner's extension trait — whole-wallet by design (PR-SJ-1b),
+//!   because balance needs the journal's F14 locks too:
 //!
 //!   ```ignore
 //!   use shekyl_scanner::WalletLedgerExt;

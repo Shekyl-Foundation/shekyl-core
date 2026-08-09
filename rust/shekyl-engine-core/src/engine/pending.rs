@@ -94,7 +94,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use shekyl_address::Network;
 #[cfg(test)]
-use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants};
+use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SendJournalBlock};
 use shekyl_units::AtomicUnits;
 
 use crate::engine::{
@@ -676,11 +676,7 @@ pub(crate) fn build_pending_tx_in_state(
         .collect();
 
     let mut candidates: Vec<(usize, AtomicUnits)> = ledger
-        .spendable_outputs(
-            synced,
-            None,
-            &shekyl_engine_state::SendJournalBlock::empty().derive_f14_locks(),
-        )
+        .spendable_outputs(synced, None, &SendJournalBlock::empty().derive_f14_locks())
         .into_iter()
         .filter(|(idx, _)| !reserved.contains(idx))
         .map(|(idx, td)| (idx, td.amount()))
