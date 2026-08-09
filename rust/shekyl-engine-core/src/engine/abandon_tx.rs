@@ -183,7 +183,6 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
-            awaiting_confirmation: None,
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
@@ -419,17 +418,26 @@ mod tests {
 
         wallet.reconcile_after_scan_merge(None);
 
-        let lock = wallet.ledger.transfers[0]
-            .awaiting_confirmation
-            .as_ref()
-            .expect("the abandoned row's carried input re-locked after the wipe");
+        // PR-SJ-1b: the lock is journal-derived, so it survives the wipe
+        // by construction — the journal outlives the ledger reset and the
+        // derivation reads it directly.
+        let locks = wallet.spend_locks();
+        let lock = locks
+            .get(7)
+            .expect("the abandoned row's carried input stays locked across the wipe");
         assert_eq!(lock.tx_hash.to_bytes(), txid);
         assert_eq!(lock.accepted_at_height, 25);
+        assert!(
+            !wallet.ledger.transfers[0].is_spendable(u64::MAX, &locks),
+            "the replayed funding row is excluded from selection"
+        );
         assert_eq!(
             wallet.send_journal.rows[&txid].state,
             SendState::Abandoned,
             "the user's abandon survives the wipe"
         );
-        wallet.check_invariants().expect("I-5 holds after re-lock");
+        wallet
+            .check_invariants()
+            .expect("invariants hold after the wipe and replay");
     }
 }

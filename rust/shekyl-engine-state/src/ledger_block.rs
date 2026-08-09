@@ -82,7 +82,11 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 9;
+/// Version `10` removes `TransferDetails::awaiting_confirmation`
+/// (PR-SJ-1b, `WALLET_SEND_RECORD.md` P3-1a): the F14 lock is a
+/// journal-derived fact (`SendJournalBlock::spend_locks`), no
+/// longer persisted on the scan-derived row.
+pub const LEDGER_BLOCK_VERSION: u32 = 10;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -197,13 +201,10 @@ pub struct LedgerBlock {
 /// field of an unmarked type fails to compile instead of failing at the
 /// next rescan.
 ///
-/// **Known field-level exception (provably vacuous from PR-SJ-1):**
-/// `TransferDetails::awaiting_confirmation` is dispatch-authored state on
-/// a scan-derived row. The trait bounds *types*, not fields, so it
-/// cannot catch this — instead the send-journal equivalence invariant
-/// (`send-journal-lock-equivalence`, [`crate::invariants`]) proves the
-/// field is derivable from `send_journal` rows at all times, and the
-/// pre-committed PR-SJ-1b deletes the field, retiring this note.
+/// PR-SJ-1b retired the only known field-level exception
+/// (`TransferDetails::awaiting_confirmation`): F14 locks are derived
+/// from the sibling send-journal block, so every field of
+/// [`LedgerBlock`] is scan-derived again.
 pub trait ScanDerived {}
 
 impl ScanDerived for u32 {} // block_version
@@ -322,10 +323,16 @@ impl LedgerBlock {
     /// matching [`TransferDetails::is_spendable`]: their spend is already
     /// broadcast, so treating them as unspent/available would invite a second
     /// tx bearing the same key image (the §7.1 self-linkage the lock prevents).
-    pub fn unspent_transfers(&self) -> Vec<&TransferDetails> {
+    /// The lock set is journal-derived (PR-SJ-1b) and caller-supplied —
+    /// `SendJournalBlock::spend_locks` on the sibling block this
+    /// scan-derived block cannot see (C7).
+    pub fn unspent_transfers(
+        &self,
+        spend_locks: &crate::send_journal_block::InFlightSpendLocks,
+    ) -> Vec<&TransferDetails> {
         self.transfers
             .iter()
-            .filter(|td| !td.spent && !td.frozen && td.awaiting_confirmation.is_none())
+            .filter(|td| !td.spent && !td.frozen && !spend_locks.contains(td.global_output_index))
             .collect()
     }
 
@@ -334,16 +341,19 @@ impl LedgerBlock {
     /// Only returns outputs where `current_height >= eligible_height`
     /// — the daemon has no curve-tree path for immature outputs, so
     /// attempting to spend them would fail at FCMP++ proof generation.
+    /// `spend_locks` is the journal-derived lock map (see
+    /// [`Self::unspent_transfers`]).
     pub fn spendable_outputs(
         &self,
         current_height: u64,
         min_amount: Option<AtomicUnits>,
+        spend_locks: &crate::send_journal_block::InFlightSpendLocks,
     ) -> Vec<(usize, &TransferDetails)> {
         self.transfers
             .iter()
             .enumerate()
             .filter(|(_, td)| {
-                if !td.is_spendable(current_height) {
+                if !td.is_spendable(current_height, spend_locks) {
                     return false;
                 }
                 if let Some(min) = min_amount {
@@ -422,12 +432,6 @@ mod tests {
             key_image: Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                 [seed ^ 0xFF; 32],
             )),
-            // Exercise the Some leg of the F14 lock in the round-trip
-            // tests; the None leg is covered by every other fixture.
-            awaiting_confirmation: Some(crate::transfer::AwaitingConfirmation {
-                tx_hash: shekyl_types::TxHash::from_bytes([seed.wrapping_add(4); 32]),
-                accepted_at_height: 100 + u64::from(seed),
-            }),
             // Exercise the Some leg of the spend-quadruple field in the
             // round-trip tests as well.
             spending_tx_hash: Some(shekyl_types::TxHash::from_bytes([seed.wrapping_add(5); 32])),
@@ -512,10 +516,6 @@ mod tests {
                     t.key_image,
                     t.source_ciphertext.clone(),
                     t.output_handle,
-                    // F14 (§2.6): the awaiting-confirmation lock is
-                    // persisted — a restart between accept and
-                    // confirmation must not resurrect spendability.
-                    t.awaiting_confirmation.clone(),
                 )
             })
             .collect();
@@ -530,14 +530,6 @@ mod tests {
             assert_eq!(t.global_output_index, orig.2);
             assert_eq!(t.amount(), orig.3);
             assert_eq!(t.key_image, orig.4);
-            assert_eq!(
-                t.awaiting_confirmation, orig.7,
-                "F14 lock must survive the persistence round-trip"
-            );
-            assert!(
-                t.awaiting_confirmation.is_some(),
-                "fixture exercises the Some leg"
-            );
             assert_eq!(
                 t.source_ciphertext.as_ref().map(|c| &c.x25519),
                 orig.5.as_ref().map(|c| &c.x25519)

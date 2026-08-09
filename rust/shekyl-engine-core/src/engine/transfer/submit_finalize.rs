@@ -188,9 +188,10 @@ where
             // still rides the verdict to the consumer; only the persisted
             // baseline is bounded.
             //
-            // Journal owns the baseline (C2); F14 locks re-derive from
-            // it — the same accepting-verdict site as fresh accept, so
-            // the two paths cannot diverge on I-5.
+            // Journal owns the baseline (C2), and since PR-SJ-1b the F14
+            // lock set *is* a view of it — the same accepting-verdict
+            // site as fresh accept, so there is one write and the two
+            // paths have nothing to diverge on.
             let baseline_height = height.min(synced_height);
             wallet.stamp_send_lock_baseline(&tx_hash.to_bytes(), baseline_height);
             synced_height

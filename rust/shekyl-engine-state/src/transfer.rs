@@ -69,30 +69,31 @@ pub fn eligible_height(block_height: BlockHeight, additional_timelock: Timelock)
     }
 }
 
-/// The F14 awaiting-confirmation lock state
-/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.6).
+/// Runtime view of one F14 awaiting-confirmation lock
+/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.6; PR-SJ-1b).
 ///
-/// Set on an output when a transaction spending it is **network-exposed**
-/// (daemon verdict `Accepted` / `AlreadyInPool`); replaces the old durable
-/// `spent = true` write at submit-accept. While present, the output is
-/// excluded from selection ([`TransferDetails::is_spendable`]) — a wallet
-/// restart between accept and confirmation must not make the output
-/// selectable again, or the wallet builds a second tx over the same input
-/// with the **same key image** (a self-inflicted broadcast-linkage
-/// artifact, §7.1). Persisted in the AEAD-sealed ledger for exactly that
-/// reason (§2.6 invariant 1).
+/// **Not persisted.** Values are produced only by
+/// [`crate::SendJournalBlock::spend_locks`] from journal facts
+/// (baseline-stamped rows in a `locks_carried_inputs` state). Consumers
+/// consult the map by `global_output_index` so a network-exposed spend
+/// cannot be selected again for a second same-key-image tx (§7.1).
 ///
-/// Two release paths, both required (§2.6 invariant 2):
+/// Release is structural on the derived view:
 ///
-/// - **Confirmed-present:** refresh observes the spend on-chain →
-///   [`crate::ledger_indexes::LedgerIndexes::mark_spent`] transitions the
-///   output to refresh-authoritative `spent` and clears this state.
-/// - **Confirmed-absent:** the tx never confirms (evicted, never landed) →
-///   the wallet's watchdog horizon releases the lock after converting
-///   absence into a definite verdict where reachable (resubmit-same-bytes
-///   probe) or on observed absence otherwise. Release is not rebuild
-///   authorization (§2.6 invariant 3).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// - **Confirmed-present:** refresh marks the transfer `spent`; every
+///   consumer checks `spent` before the lock map.
+/// - **Confirmed-absent:** the journal row's `lock_baseline` is cleared
+///   (via `mark_presumed_dead` — the watchdog's horizon, or the
+///   reconciler's evidence-bound release); derivation drops the inputs.
+///   Release is not rebuild authorization (§2.6 invariant 3).
+///
+/// **No [`Zeroize`] impl, deliberately** (rule 35): both fields are
+/// public chain facts (a canonical txid and a block height), and the
+/// derived map is a plain runtime `BTreeMap` nothing wipes. A wiping
+/// impl here would be an unowned promise — it had exactly one caller,
+/// which retired with the persisted field. Adding a secret-bearing
+/// field to this type means giving it a real owner first.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AwaitingConfirmation {
     /// Canonical txid of the network-exposed transaction spending this
     /// output — the watchdog's chain-confirmation key.
@@ -100,13 +101,6 @@ pub struct AwaitingConfirmation {
     /// Wallet synced height when the accepting verdict was observed; the
     /// baseline for the watchdog's escape horizon.
     pub accepted_at_height: u64,
-}
-
-impl Zeroize for AwaitingConfirmation {
-    fn zeroize(&mut self) {
-        self.tx_hash.zeroize();
-        self.accepted_at_height.zeroize();
-    }
 }
 
 /// A precomputed FCMP++ curve-tree path for an output.
@@ -190,13 +184,12 @@ pub struct TransferDetails {
     /// `#[serde(transparent)]` over `[u8; 32]` so the on-disk wire
     /// format is unchanged from `Option<[u8; 32]>`.
     pub key_image: Option<KeyImage>,
-    /// F14 awaiting-confirmation lock (`DAEMON_SUBMIT_VERDICT.md` §2.6):
-    /// a network-exposed spend of this output awaits chain confirmation.
-    /// Excludes the output from selection while present; cleared by
-    /// refresh-authoritative confirmation (confirmed-present) or the
-    /// watchdog horizon (confirmed-absent). See [`AwaitingConfirmation`].
-    #[serde(default)]
-    pub awaiting_confirmation: Option<AwaitingConfirmation>,
+    // The F14 awaiting-confirmation lock (`DAEMON_SUBMIT_VERDICT.md`
+    // §2.6) formerly lived here as a persisted field. PR-SJ-1b retired
+    // it (`WALLET_SEND_RECORD.md` C2 / P3-1a): the journal owns the
+    // dispatch facts, and consumers derive the lock set on demand via
+    // `SendJournalBlock::spend_locks`. `AwaitingConfirmation` is
+    // now a runtime-only derived value, never persisted.
     /// Canonical txid of the **confirmed** transaction that spent this
     /// output — the WI-RPC-3 spend-quadruple leg (F-9,
     /// `docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE).
@@ -292,13 +285,21 @@ impl TransferDetails {
     ///
     /// Outputs below `eligible_height` are immature (no curve-tree path yet)
     /// and cannot be spent. Outputs with a network-exposed spend awaiting
-    /// chain confirmation ([`Self::awaiting_confirmation`], F14 §2.6) are
-    /// excluded: selecting one would build a second tx bearing the same
-    /// key image.
-    pub fn is_spendable(&self, current_height: u64) -> bool {
+    /// chain confirmation (the F14 lock, §2.6) are excluded: selecting one
+    /// would build a second tx bearing the same key image. The lock map is
+    /// journal-derived (PR-SJ-1b — [`crate::SendJournalBlock::spend_locks`]
+    /// / [`crate::WalletLedger::spend_locks`]); taking [`InFlightSpendLocks`] — a
+    /// type only that derivation can produce, not a free `bool` and not
+    /// a bare map — keeps the §7.1 self-link check tied to the
+    /// derivation at compile time.
+    pub fn is_spendable(
+        &self,
+        current_height: u64,
+        spend_locks: &crate::send_journal_block::InFlightSpendLocks,
+    ) -> bool {
         !self.spent
             && !self.frozen
-            && self.awaiting_confirmation.is_none()
+            && !spend_locks.contains(self.global_output_index)
             && current_height >= self.eligible_height
     }
 
@@ -331,16 +332,6 @@ impl TransferDetails {
 // upstream `Schema` impl and is wire-identical to `serde_bytes::Bytes` in
 // postcard (both emit `varint(len) || bytes`).
 
-/// Wire mirror of [`AwaitingConfirmation`] for the schema snapshot; the
-/// same rename delegation as the enclosing mirror keeps the snapshot's
-/// type name matching the real struct.
-#[derive(postcard_schema::Schema)]
-#[allow(dead_code)]
-struct AwaitingConfirmationSchema {
-    tx_hash: [u8; 32],
-    accepted_at_height: u64,
-}
-
 #[derive(postcard_schema::Schema)]
 #[allow(dead_code)]
 struct TransferDetailsSchema {
@@ -358,9 +349,6 @@ struct TransferDetailsSchema {
     spent: bool,
     spent_height: Option<u64>,
     key_image: Option<[u8; 32]>,
-    // `AwaitingConfirmation` mirrored field-for-field: `TxHash` is a
-    // transparent 32-byte-array newtype on the wire.
-    awaiting_confirmation: Option<AwaitingConfirmationSchema>,
     // `TxHash` is a transparent 32-byte-array newtype on the wire.
     spending_tx_hash: Option<[u8; 32]>,
     // Non-secret on-chain payloads; reference the workspace types
@@ -397,11 +385,6 @@ impl Zeroize for TransferDetails {
         self.spent.zeroize();
         self.spent_height.zeroize();
         self.key_image.zeroize();
-        // `Option<AwaitingConfirmation>::zeroize` wipes the inner fields AND
-        // resets the tag to `None` (matching the sibling `Option` fields);
-        // the hand-rolled `if let Some` left it `Some(all-zero)`, and would
-        // have silently skipped any future secret field on the inner struct.
-        self.awaiting_confirmation.zeroize();
         // `Option<TxHash>::zeroize` wipes the inner hash and resets the
         // tag to `None`, matching the sibling `Option` fields.
         self.spending_tx_hash.zeroize();
@@ -441,10 +424,6 @@ impl std::fmt::Debug for TransferDetails {
             .field("block_height", &self.block_height)
             .field("amount", &self.amount())
             .field("spent", &self.spent)
-            .field(
-                "awaiting_confirmation",
-                &self.awaiting_confirmation.is_some(),
-            )
             .field("eligible_height", &self.eligible_height)
             .field("frozen", &self.frozen)
             .finish_non_exhaustive()
@@ -509,7 +488,6 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
-            awaiting_confirmation: None,
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,

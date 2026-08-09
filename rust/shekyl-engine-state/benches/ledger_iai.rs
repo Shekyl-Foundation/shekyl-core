@@ -52,7 +52,6 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         spent: false,
         spent_height: None,
         key_image: None,
-        awaiting_confirmation: None,
         spending_tx_hash: None,
         source_ciphertext: None,
         output_handle: None,
