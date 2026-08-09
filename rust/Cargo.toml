@@ -439,6 +439,11 @@ shekyl-curve-generators = { opt-level = 3 }
 shekyl-curve-primitives = { opt-level = 3 }
 shekyl-bulletproofs = { opt-level = 3 }
 shekyl-fcmp-proofs = { opt-level = 3 }
+# SLH-DSA-192s is hash-bound: an unoptimized `fips205` (and the `sha2` it
+# leans on) turns the message-signing and ACVP suites from ~3 s into ~85 s
+# of every debug `cargo test` run, here and in CI.
+fips205 = { opt-level = 3 }
+sha2 = { opt-level = 3 }
 
 [profile.dev]
 panic = "abort"

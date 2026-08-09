@@ -103,10 +103,28 @@ pub(crate) const VIEW_TAG_BYTES: usize = 1;
 #[derive(Clone, Debug)]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct AccountPublicAddress {
-    /// ML-KEM-768 public key (1216 bytes per FIPS 203).
+    /// The wallet's PQC public material: `x25519_pk(32) ‖ ml_kem_ek(1184)`.
+    /// Read the halves through the accessors below rather than slicing —
+    /// the split point is this type's business, not its callers'.
     pub pqc_public_key: Vec<u8>,
     /// Encoded classical address bytes.
     pub classical_address_bytes: Vec<u8>,
+}
+
+/// Byte length of the X25519 public key that prefixes
+/// [`AccountPublicAddress::pqc_public_key`].
+pub(crate) const X25519_PK_LEN: usize = 32;
+
+impl AccountPublicAddress {
+    /// The ML-KEM-768 encapsulation key — everything after the X25519
+    /// prefix. `None` if the field is too short to hold the prefix,
+    /// which is wallet-state corruption rather than a normal outcome.
+    ///
+    /// Single owner of that split: three call sites used to re-slice
+    /// `pqc_public_key[32..]` with a bare literal.
+    pub(crate) fn ml_kem_encap_key(&self) -> Option<&[u8]> {
+        self.pqc_public_key.get(X25519_PK_LEN..)
+    }
 }
 
 /// View tag bytes from a hybrid ciphertext.

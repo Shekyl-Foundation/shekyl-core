@@ -339,7 +339,8 @@ pub(crate) mod refresh_slot;
 /// all tests are `#[ignore]`d and require `SHEKYLD_BIN`.
 #[cfg(test)]
 mod regtest_e2e;
-pub(crate) mod rescan; // Phase 4c: reset scan-derived ledger state
+/// Full-wallet rescan: reset scan-derived ledger state (Phase 4c).
+pub(crate) mod rescan;
 pub(crate) mod scan_floor;
 pub(crate) mod sealing_keys;
 pub(crate) mod sign_bridge;
@@ -1039,7 +1040,10 @@ impl<
         spend_key.copy_from_slice(&addr.classical_address_bytes[1..33]);
         let mut view_key = [0u8; 32];
         view_key.copy_from_slice(&addr.classical_address_bytes[33..65]);
-        let ml_kem_encap_key = addr.pqc_public_key[32..].to_vec();
+        let ml_kem_encap_key = addr
+            .ml_kem_encap_key()
+            .expect("key-actor projection always carries the x25519 prefix")
+            .to_vec();
 
         ShekylAddress::new(self.network, spend_key, view_key, ml_kem_encap_key)
     }

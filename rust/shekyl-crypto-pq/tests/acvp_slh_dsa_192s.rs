@@ -25,12 +25,10 @@ const KEYGEN: &str = include_str!("../../../docs/test_vectors/SLH_DSA_192S_ACVP/
 const SIGGEN: &str = include_str!("../../../docs/test_vectors/SLH_DSA_192S_ACVP/siggen.json");
 const SIGVER: &str = include_str!("../../../docs/test_vectors/SLH_DSA_192S_ACVP/sigver.json");
 
+/// NIST's vectors are hex strings; `hex` is already a dev-dependency of
+/// this crate, so decoding them needs no hand-rolled parser.
 fn unhex(s: &str) -> Vec<u8> {
-    assert!(s.len().is_multiple_of(2), "odd hex length");
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
-        .collect()
+    hex::decode(s).expect("ACVP vector is valid hex")
 }
 
 fn unhex_n<const N: usize>(s: &str) -> [u8; N] {

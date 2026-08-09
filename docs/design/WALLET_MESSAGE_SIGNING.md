@@ -5,10 +5,17 @@ SM-R-2..6 and SM-R-8 are ratified with their amendments folded (§7);
 SM-DQ-1's nested combiner and dual-duty label are binding via SM-R-3;
 SM-DQ-7's escalation **collapsed** with SM-R-8's ratification to a
 genesis-lane freeze-window sign-off on the 48-byte SLH-DSA-192s
-public-key field. **Outstanding before PR-SM-1:** (1) the genesis
-lane's layout sign-off — the only external dependency; (2) the 192f
-UX gate (dated, owned — `RELEASE_CHECKLIST.md`) before the freeze.
-Everything else is implementation. History: round 0 opened
+public-key field. **Outstanding (2026-08-08, after PR-SM-1):** (1) the
+genesis lane's layout sign-off — the only external dependency, and now
+the gate on *verification only*: PR-SM-1 landed the construction with
+its verify surface type-gated on that layout (SM-R-6 R6-a), so signing
+ships and verification cannot be reached until the v2 address exists;
+(2) the 192f UX gate (dated, owned — `RELEASE_CHECKLIST.md`) before the
+freeze. Note the ordering constraint SM-R-4 R4-c records: the
+`(network, seed_format)` scoping amendment changes the derived
+public-key bytes and therefore had to land **before** any sign-off on
+the field that carries them. Everything else is implementation.
+History: round 0 opened
 2026-08-08; passes 1–2 folded same day (pass 1 superseded the round-0
 SM-DQ-1 lead and escalated the address question; pass 2 corrected the
 category, measured both hosts, and audited the dependency).
@@ -653,10 +660,11 @@ rationale strengthened.**
   **Separability is where order matters, and it is asymmetric: the
   inner component remains a standalone-verifiable artifact; the outer
   does not.** With PQ inner, stripping to one signature leaves
-  σ_pq — degrading to hash-based security, the *strong* half — and an
-  Ed25519-only lazy verifier **cannot verify at all**, because σ_ed
+  σ_pq — degrading to hash-based security, the *strong* half — and a
+  classical-only lazy verifier **cannot verify at all**, because σ_cl
   does not check out over the preimage alone: the lazy path is forced
-  through the PQ dependency. With Ed inner, the lazy path silently
+  through the PQ dependency. With the classical half inner, the lazy
+  path silently
   yields a *working classical-only verifier* — passes every
   happy-path test, provides no post-quantum protection, the worst
   outcome available. **We chose the order whose degenerate
@@ -711,6 +719,37 @@ added.**
   reused by any other surface (per-output and multisig identities
   stay theirs — the property that makes the domain inventory
   meaningful); **no wallet-file schema change**.
+- **R4-c — AMENDED 2026-08-08 (PR-SM-1): the expand is scoped by
+  `(network, seed_format)`.** The ruling as drafted put the literal
+  domain in the HKDF **salt** and took no network and no seed format,
+  which every other wallet key does take (`account::salt_for(net, fmt)`
+  → `hkdf_expand_64`, pinned by
+  `same_seed_different_networks_produce_different_scalars` and its
+  seed-format sibling). As drafted, one seed produced **one 48-byte
+  message-signing public key across mainnet, testnet and stagenet**.
+  That is not a replay question — binding `network_id` into the
+  preimage already stops cross-network replay — it is a **linkage**
+  question: the public key is published with every attestation and,
+  under fork (ii), inlined into the address, so a third party holding
+  one mainnet and one testnet attestation from the same human links two
+  addresses whose spend / view / ML-KEM keys were deliberately made
+  unlinkable. Two properties, two mechanisms, both required. Amended
+  shape: **salt = `account::salt_for(network, seed_format)`, info =
+  `"shekyl/msg-sign-seed-slh-dsa-192s-v1"`** — the literal is preserved
+  (rule 30 collision-checks literals) and simply occupies the `info`
+  position every other purpose label does, so this surface now derives
+  under the identical scoping as the rest of the wallet rather than
+  under a shape of its own.
+  - **The 72-byte single-expand slice order is unchanged**, and so is
+    the R4-a rationale for it. Only the salt and info positions move.
+  - **The R4-a KAT is re-pinned**, necessarily: the amendment changes
+    the derived bytes. Its replacement pins `(Testnet, Raw32)` and is
+    joined by an exhaustive `(network × seed_format)` distinctness
+    test — a KAT catches drift, but only the cross-product test states
+    the property the amendment exists for.
+  - **Sequencing:** this lands **before** any genesis-lane sign-off,
+    not after. The bytes it changes are precisely the 48-byte public
+    key field that sign-off is being asked to freeze.
 
 **SM-R-5 (rules SM-DQ-5) — armoring. RATIFIED 2026-08-08, with
 three amendments folded and the padding pinned.** Single-line
@@ -724,10 +763,36 @@ three amendments folded and the padding pinned.** Single-line
   us (the same fix as SM-R-4's `<alg>` template). The layout that
   ships:
 
-  `layout_version ‖ scheme ‖ mode ‖ σ_pq ‖ σ_ed ‖ checksum`
+  `layout_version ‖ scheme ‖ mode ‖ σ_pq ‖ σ_cl ‖ checksum`
 
   `scheme` earns its place as the append-only forward-compat byte —
   one byte, not a conditional branch.
+- **R5-d — the scheme byte's name, and when it is read (PR-SM-1
+  implementation note).** The frozen fact is the **value** `0x01`; the
+  Rust constant is named `MSG_SIG_SCHEME_SLH_192S_SPEND_SCHNORR`, not
+  `…_ED25519`. An independent implementer reading "Ed25519" off the
+  spec reaches for RFC 8032, which rejects **every** signature this
+  wallet produces (RFC 8032 computes `c = H(R ‖ A ‖ M)` with no domain
+  string and checks `s·G == R + c·A`); they would report every honest
+  attestation as a forgery. Renaming a constant is free, and after the
+  freeze it would not be.
+  An unknown scheme is also its own error ("unsupported scheme", not
+  "malformed"), and decode's ordering is conditional on length —
+  deliberately, because the two rule-82 sentences it must keep apart
+  compete:
+  - **At our canonical length the checksum runs first.** The trailer is
+    locatable, so a damaged paste that happened to hit a header byte
+    reads as "your copy is damaged", not as "unknown layout version" or
+    — worse — "this wallet is too old to check it", which would send a
+    user to upgrade over a truncated clipboard. Damage is both the
+    likelier cause of a wrong header byte and the one we can detect.
+  - **At any other length the scheme byte decides.** The trailer cannot
+    be located, and a future scheme carries its own signature size;
+    reporting it as a corrupt paste would spend the forward
+    compatibility this byte exists to buy.
+  Pinned by a test on each side, including the negative control that
+  flips header bytes **without** recomputing the checksum — the
+  assertion that fails if the two branches are ever reordered.
 - **R5-c — two version numbers, disambiguated by ruling.** The
   prefix's `1` (`shekylmsgsig1.`) is the **envelope/armoring
   version**: it changes only if the string encoding changes, and it
@@ -798,6 +863,33 @@ on the record given this crate family's RNG history (the fips203
 constant-time with respect to **nothing** — every input is public.
 Stated so nobody later adds timing hardening to a verify path where
 it buys nothing and costs clarity.
+
+- **R6-a — the verify surface ships gated, not ungated (PR-SM-1
+  implementation note, 2026-08-08).** Verification needs two public
+  keys: the address's Ed25519 spend key and the 48-byte SLH-DSA key.
+  Under fork (ii) **both live in the address** — that is why SM-R-5
+  R5-a could delete the in-blob `[alg_id ‖ pk]` field. But no in-tree
+  address version carries the SLH key: the v2 layout is this round's
+  one outstanding external dependency (§1). Taking the two keys as
+  independent parameters in the meantime would have been the worst
+  available outcome, and specifically the one the nesting order was
+  chosen to foreclose: an adversary who recovered the spend scalar
+  `b` — precisely the adversary the PQ half exists to stop — could
+  generate their own SLH keypair, sign the preimage with it, sign
+  `preimage ‖ σ_pq` with the recovered scalar, and present their own
+  48-byte key alongside the armored string. It would verify. The PQ
+  half would be decoration, and the "degenerate verifier fails closed"
+  property would be false in the shipped code while true in the doc.
+  PR-SM-1 therefore makes the provenance a **type**: `verify_message`
+  takes a `SignerIdentity`, whose only constructor extracts both keys
+  from the address's bound classical segment and today returns
+  `UnboundIdentity` for every segment that exists. Signing ships and is
+  exercised end to end; verification is unreachable in production until
+  the v2 layout lands, at which point that one constructor starts
+  succeeding and every call site works unchanged. **This is what let
+  PR-SM-1 land ahead of the genesis-lane sign-off rather than blocking
+  on it** — the dependency is enforced by the compiler instead of by a
+  sentence in a design doc.
 
 **SM-R-8 (rules SM-DQ-8) — the algorithm: SLH-DSA-192s, pk-inline,
 fork (ii). RATIFIED 2026-08-08**, subject to three pins, all
