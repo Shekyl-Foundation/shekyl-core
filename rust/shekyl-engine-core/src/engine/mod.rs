@@ -320,6 +320,7 @@ pub mod local_pending_tx;
 pub(crate) mod local_persistence;
 pub(crate) mod local_refresh;
 pub mod merge;
+pub mod message_signing;
 pub mod network;
 pub mod output_selector;
 pub mod payment_requests;
@@ -1039,7 +1040,10 @@ impl<
         spend_key.copy_from_slice(&addr.classical_address_bytes[1..33]);
         let mut view_key = [0u8; 32];
         view_key.copy_from_slice(&addr.classical_address_bytes[33..65]);
-        let ml_kem_encap_key = addr.pqc_public_key[32..].to_vec();
+        let ml_kem_encap_key = addr
+            .ml_kem_encap_key()
+            .expect("key-actor projection always carries the x25519 prefix")
+            .to_vec();
 
         ShekylAddress::new(self.network, spend_key, view_key, ml_kem_encap_key)
     }

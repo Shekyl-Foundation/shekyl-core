@@ -69,9 +69,13 @@ const SPEND_OFFSET: usize = VERSION_LEN;
 const VIEW_OFFSET: usize = SPEND_OFFSET + PUBKEY_LEN;
 /// Length of the display/view-only classical segment (`version || spend ||
 /// view`); also the offset at which the `ek_bind_tag` begins in the full form.
+/// Private: [`BoundClassicalSegment`] is the layout's only owner, so no
+/// caller outside this module needs to know where the fields sit.
 const CLASSICAL_SEGMENT_LEN: usize = VIEW_OFFSET + PUBKEY_LEN;
 /// Length of the full-address classical segment (adds the `ek_bind_tag`).
-const CLASSICAL_BOUND_SEGMENT_LEN: usize = CLASSICAL_SEGMENT_LEN + EK_BIND_TAG_LEN;
+/// Fixed-width by construction — the message-signing preimage binds this
+/// exact byte string (SM-R-3).
+pub const CLASSICAL_BOUND_SEGMENT_LEN: usize = CLASSICAL_SEGMENT_LEN + EK_BIND_TAG_LEN;
 /// The offset-derived layout must agree with the exported payload length.
 const _: () = assert!(CLASSICAL_SEGMENT_LEN == VERSION_LEN + CLASSICAL_PAYLOAD_LEN);
 
@@ -187,6 +191,101 @@ fn ek_bind_tag(ml_kem_encap_key: &[u8]) -> [u8; EK_BIND_TAG_LEN] {
     tag
 }
 
+/// The full bound classical segment: `version ‖ spend ‖ view ‖
+/// ek_bind_tag`.
+///
+/// # Single owner
+///
+/// This type owns that byte layout for the whole tree. Encoding an
+/// address goes through it ([`ShekylAddress::encode_classical_bound`]),
+/// and so does the byte string the message-signing preimage binds
+/// (`WALLET_MESSAGE_SIGNING.md` SM-R-3). The two must never be assembled
+/// independently: SM-R-3 anticipates a v2 layout under fork (ii), and a
+/// second copy would keep emitting v1 bytes after the encoder moved,
+/// producing signatures no verifier reconstructing from the user's
+/// address string could reproduce.
+///
+/// Fixed-width today because the v1 layout is compile-time fixed; when
+/// v2 lands, this type is the one place that changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundClassicalSegment([u8; CLASSICAL_BOUND_SEGMENT_LEN]);
+
+impl BoundClassicalSegment {
+    /// Assemble from already-validated field values. Private: the layout
+    /// is written here exactly once.
+    fn assemble(
+        version: u8,
+        spend_key: &[u8; PUBKEY_LEN],
+        view_key: &[u8; PUBKEY_LEN],
+        ml_kem_encap_key: &[u8],
+    ) -> Self {
+        let mut out = [0u8; CLASSICAL_BOUND_SEGMENT_LEN];
+        out[0] = version;
+        out[SPEND_OFFSET..VIEW_OFFSET].copy_from_slice(spend_key);
+        out[VIEW_OFFSET..CLASSICAL_SEGMENT_LEN].copy_from_slice(view_key);
+        out[CLASSICAL_SEGMENT_LEN..].copy_from_slice(&ek_bind_tag(ml_kem_encap_key));
+        Self(out)
+    }
+
+    /// Rebuild from the 65-byte classical address payload and the ML-KEM
+    /// encapsulation key — the shape the wallet holds at signing time.
+    ///
+    /// # Errors
+    ///
+    /// [`AddressError::BadLength`] if either input is the wrong size,
+    /// [`AddressError::UnsupportedVersion`] if the payload does not lead
+    /// with a version this build understands. The version check matters:
+    /// it is what stops a future v2 payload from being silently
+    /// reassembled into a v1-shaped segment here.
+    pub fn from_address_parts(
+        classical_address_bytes: &[u8],
+        ml_kem_encap_key: &[u8],
+    ) -> Result<Self, AddressError> {
+        if classical_address_bytes.len() != CLASSICAL_SEGMENT_LEN {
+            return Err(AddressError::BadLength {
+                segment: "classical address bytes",
+                expected: CLASSICAL_SEGMENT_LEN,
+                got: classical_address_bytes.len(),
+            });
+        }
+        if ml_kem_encap_key.len() != PQC_PAYLOAD_LEN {
+            return Err(AddressError::BadLength {
+                segment: "ML-KEM encap key",
+                expected: PQC_PAYLOAD_LEN,
+                got: ml_kem_encap_key.len(),
+            });
+        }
+        let version = classical_address_bytes[0];
+        if version != ADDRESS_VERSION_V1 {
+            return Err(AddressError::UnsupportedVersion { version });
+        }
+        let spend: &[u8; PUBKEY_LEN] = classical_address_bytes[SPEND_OFFSET..VIEW_OFFSET]
+            .try_into()
+            .expect("length checked above");
+        let view: &[u8; PUBKEY_LEN] = classical_address_bytes[VIEW_OFFSET..CLASSICAL_SEGMENT_LEN]
+            .try_into()
+            .expect("length checked above");
+        Ok(Self::assemble(version, spend, view, ml_kem_encap_key))
+    }
+
+    /// The segment bytes — what the message-signing preimage binds.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; CLASSICAL_BOUND_SEGMENT_LEN] {
+        &self.0
+    }
+
+    /// The address's Ed25519 spend key, read out of the segment rather
+    /// than carried alongside it. Verifiers need the spend key *and* the
+    /// segment; taking them as independent inputs is what lets a caller
+    /// check a signature against one address while naming another.
+    #[must_use]
+    pub fn spend_key(&self) -> &[u8; PUBKEY_LEN] {
+        self.0[SPEND_OFFSET..VIEW_OFFSET]
+            .try_into()
+            .expect("fixed-width layout")
+    }
+}
+
 impl ShekylAddress {
     /// Create a new address for the given network.
     pub fn new(
@@ -247,14 +346,26 @@ impl ShekylAddress {
 
     /// Encode the full-address classical segment: `version || spend || view ||
     /// ek_bind_tag`. Caller must have validated `ml_kem_encap_key`'s length.
+    /// The bound classical segment this address encodes — the byte
+    /// string a message signature over this address binds (SM-R-3).
+    /// Infallible: every field was validated when the address was built
+    /// or parsed.
+    #[must_use]
+    pub fn bound_classical_segment(&self) -> BoundClassicalSegment {
+        BoundClassicalSegment::assemble(
+            self.version,
+            &self.spend_key,
+            &self.view_key,
+            &self.ml_kem_encap_key,
+        )
+    }
+
     fn encode_classical_bound(&self) -> Result<String, AddressError> {
         let hrp = parse_hrp(network::classical_hrp(self.network))?;
-        let mut payload = Vec::with_capacity(CLASSICAL_BOUND_SEGMENT_LEN);
-        payload.push(self.version);
-        payload.extend_from_slice(&self.spend_key);
-        payload.extend_from_slice(&self.view_key);
-        payload.extend_from_slice(&ek_bind_tag(&self.ml_kem_encap_key));
-        Ok(bech32m_encode(&hrp, &payload))
+        Ok(bech32m_encode(
+            &hrp,
+            self.bound_classical_segment().as_bytes(),
+        ))
     }
 
     /// Decode a Shekyl address from its encoded form.
@@ -634,5 +745,44 @@ mod tests {
         let tag = ek_bind_tag(&ek);
         let hex: String = tag.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(hex, "f60b83cfc93df3d80757ab13f087bdb1");
+    }
+
+    /// The signing-side segment and the encoding-side segment are the
+    /// same bytes — checked against the *encoder's* output decoded back
+    /// from bech32m, not against a second hand-assembly. If the layout
+    /// ever moves (fork (ii)'s v2), this fails instead of silently
+    /// letting the wallet sign over bytes no verifier can reconstruct
+    /// from the address string.
+    #[test]
+    fn signing_segment_matches_the_encoded_address_segment() {
+        let addr = make_test_address(Network::Mainnet);
+        let encoded = addr.encode().unwrap();
+        let classical = encoded.split(SEGMENT_SEPARATOR).next().unwrap();
+        let (_hrp, from_encoder) = bech32m_decode(classical).unwrap();
+
+        let mut payload = Vec::with_capacity(CLASSICAL_SEGMENT_LEN);
+        payload.push(addr.version);
+        payload.extend_from_slice(&addr.spend_key);
+        payload.extend_from_slice(&addr.view_key);
+        let from_signer =
+            BoundClassicalSegment::from_address_parts(&payload, &addr.ml_kem_encap_key).unwrap();
+
+        assert_eq!(from_encoder, from_signer.as_bytes());
+        assert_eq!(from_signer.spend_key(), &addr.spend_key);
+    }
+
+    /// A payload whose version byte this build does not know is refused,
+    /// not silently reassembled into a v1-shaped segment.
+    #[test]
+    fn signing_segment_refuses_unknown_address_version() {
+        let addr = make_test_address(Network::Mainnet);
+        let mut payload = Vec::with_capacity(CLASSICAL_SEGMENT_LEN);
+        payload.push(0x02);
+        payload.extend_from_slice(&addr.spend_key);
+        payload.extend_from_slice(&addr.view_key);
+        assert!(matches!(
+            BoundClassicalSegment::from_address_parts(&payload, &addr.ml_kem_encap_key),
+            Err(AddressError::UnsupportedVersion { version: 0x02 })
+        ));
     }
 }
