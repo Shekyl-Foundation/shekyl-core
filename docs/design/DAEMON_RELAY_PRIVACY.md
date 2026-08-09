@@ -13410,14 +13410,25 @@ held pending and are now landable:
 | §64.1 eligibility decision, posture-conditional | **landable**, and the exit (a)/(b) ranking **inverts** |
 | §26.2 / §30.6, reopened at §63.3 as half-true | the stem half becomes **right** — closes the §63.3 reopening |
 
-**Two test artifacts assert the retiring behaviour and must be rewritten, not
-patched.** `tests/unit_tests/levin.cpp:1536-1582`
-(`private_stem_without_padding`) asserts a stem send on a private zone reaches
-*every* outbound peer with `dandelionpp_fluff == true`, and `:1588`'s inherited
-comment — *"private mode always uses fluff but marked as stem"* — becomes false.
-§18 counted the 33-gtest suite as a free regression oracle across the RP-3 cut;
-**this is the one of the 33 that changes its expectation**, and it changes
-because the posture changed, not because the port drifted.
+**Seven test artifacts assert the retiring behaviour and must be rewritten, not
+patched.** Six are the private-zone family in `tests/unit_tests/levin.cpp` —
+`private_stem`, `private_forward` and `private_local`, each in a
+`_without_padding` and a `_with_padding` variant. All six send on a private
+zone and assert `dandelionpp_fluff == true` on the wire, which is exactly
+§63.1's fallthrough and exactly what the decision retires. `private_fluff_*` is
+**not** affected: it asserts fluff for a fluff send, which is correct under
+both postures.
+
+`private_stem_without_padding` sits at **`levin.cpp:1806`**, its inherited
+comment — *"private mode always uses fluff but marked as stem"* — at **`:1808`**.
+**§63.1 cites them as `:1536-1582` and `:1588`, and both citations are stale**;
+that range now lands mid-body of an unrelated test. Corrected here rather than
+edited into §63.1, per this arc's practice of reopening on the record.
+
+§18 counted the 33-gtest suite as a free regression oracle across the RP-3 cut.
+**Six of the 33 change expectation** — not one, as this section claimed on
+first writing — and they change because the posture changed, not because the
+port drifted.
 `tests/hop_sensitivity.rs::anonymity_zone_origin_is_over_provisioned_not_under`
 is the other, and it is the more instructive of the two. It was written as a
 tripwire naming this exact event — *"a failure here means the anonymity zone
@@ -13431,11 +13442,13 @@ still passes, and it always would have.**
 > can move it. A guard whose subject is hard-coded cannot detect a change in
 > its subject.
 
-Checked rather than assumed, which is the only reason this is in the record:
-the test was cited a paragraph earlier as having fired by decision, and it had
-not. **The rewrite must derive the posture from the dispatch site instead of
-restating it** — otherwise the replacement inherits the same defect with a
-newer date on it.
+Checked rather than assumed, and worth the space because **this section was
+wrong the same way twice on first writing**: the tripwire was described as
+having fired before anyone ran it, and the `levin.cpp` count was given as one
+before anyone counted. Both were checkable in seconds, and neither check was
+prompted by suspicion — only by running them. **The rewrite must derive the
+posture from `dandelionpp_notify`'s gate instead of restating it**, or the
+replacement inherits the same defect with a newer date on it.
 
 ### 89.5 Sequencing — the gates carry the zone field, they do not precede it
 
