@@ -84,7 +84,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the migration path).
 /// Version `10` removes `TransferDetails::awaiting_confirmation`
 /// (PR-SJ-1b, `WALLET_SEND_RECORD.md` P3-1a): the F14 lock is a
-/// journal-derived fact (`SendJournalBlock::derive_f14_locks`), no
+/// journal-derived fact (`SendJournalBlock::spend_locks`), no
 /// longer persisted on the scan-derived row.
 pub const LEDGER_BLOCK_VERSION: u32 = 10;
 
@@ -324,15 +324,15 @@ impl LedgerBlock {
     /// broadcast, so treating them as unspent/available would invite a second
     /// tx bearing the same key image (the §7.1 self-linkage the lock prevents).
     /// The lock set is journal-derived (PR-SJ-1b) and caller-supplied —
-    /// `SendJournalBlock::derive_f14_locks` on the sibling block this
+    /// `SendJournalBlock::spend_locks` on the sibling block this
     /// scan-derived block cannot see (C7).
     pub fn unspent_transfers(
         &self,
-        f14_locks: &crate::send_journal_block::F14Locks,
+        spend_locks: &crate::send_journal_block::InFlightSpendLocks,
     ) -> Vec<&TransferDetails> {
         self.transfers
             .iter()
-            .filter(|td| !td.spent && !td.frozen && !f14_locks.contains(td.global_output_index))
+            .filter(|td| !td.spent && !td.frozen && !spend_locks.contains(td.global_output_index))
             .collect()
     }
 
@@ -341,19 +341,19 @@ impl LedgerBlock {
     /// Only returns outputs where `current_height >= eligible_height`
     /// — the daemon has no curve-tree path for immature outputs, so
     /// attempting to spend them would fail at FCMP++ proof generation.
-    /// `f14_locks` is the journal-derived lock map (see
+    /// `spend_locks` is the journal-derived lock map (see
     /// [`Self::unspent_transfers`]).
     pub fn spendable_outputs(
         &self,
         current_height: u64,
         min_amount: Option<AtomicUnits>,
-        f14_locks: &crate::send_journal_block::F14Locks,
+        spend_locks: &crate::send_journal_block::InFlightSpendLocks,
     ) -> Vec<(usize, &TransferDetails)> {
         self.transfers
             .iter()
             .enumerate()
             .filter(|(_, td)| {
-                if !td.is_spendable(current_height, f14_locks) {
+                if !td.is_spendable(current_height, spend_locks) {
                     return false;
                 }
                 if let Some(min) = min_amount {

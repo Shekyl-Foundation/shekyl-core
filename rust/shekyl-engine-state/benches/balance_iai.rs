@@ -82,11 +82,11 @@ fn hot_path_bench_balance_compute(
     // every fixture row); the per-row cost under measurement is the
     // `contains_key` lookup that replaced the field read. Derivation cost
     // is O(live sends), measured at its consumer, not per-row here.
-    let f14_locks = shekyl_engine_state::SendJournalBlock::empty().derive_f14_locks();
+    let spend_locks = shekyl_engine_state::SendJournalBlock::empty().spend_locks();
     let summary = black_box(BalanceSummary::compute(
         &transfers,
         h,
-        black_box(&f14_locks),
+        black_box(&spend_locks),
     ));
     // Return the fixture: its zeroize-on-drop teardown must be charged to the
     // harness, not the measured region (see the module comment).

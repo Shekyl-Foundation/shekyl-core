@@ -43,8 +43,8 @@ fn accumulate(bucket: AtomicUnits, amount: AtomicUnits) -> AtomicUnits {
 impl BalanceSummary {
     /// Compute balance from a set of transfer details at the given height.
     ///
-    /// `f14_locks` is the journal-derived awaiting-confirmation lock map
-    /// (`SendJournalBlock::derive_f14_locks`, PR-SJ-1b): a row whose
+    /// `spend_locks` is the journal-derived awaiting-confirmation lock map
+    /// (`SendJournalBlock::spend_locks`, PR-SJ-1b): a row whose
     /// `global_output_index` is locked is committed to a network-exposed
     /// spend, so it counts in `total` but never `unlocked`. Spent rows
     /// are excluded before the lock is consulted — confirmed evidence
@@ -53,7 +53,7 @@ impl BalanceSummary {
     pub fn compute(
         transfers: &[TransferDetails],
         current_height: u64,
-        f14_locks: &shekyl_engine_state::F14Locks,
+        spend_locks: &shekyl_engine_state::InFlightSpendLocks,
     ) -> Self {
         let mut summary = BalanceSummary::default();
 
@@ -65,7 +65,7 @@ impl BalanceSummary {
             let amount = td.amount();
             summary.total = accumulate(summary.total, amount);
 
-            if f14_locks.contains(td.global_output_index) {
+            if spend_locks.contains(td.global_output_index) {
                 summary.awaiting_confirmation = accumulate(summary.awaiting_confirmation, amount);
                 continue;
             }
@@ -121,9 +121,9 @@ mod tests {
 
     /// A journal with one in-flight send carrying `gindex`, derived into
     /// the lock set the consumer sees. Building the *journal* rather than
-    /// the map is the point: `F14Locks` has one constructor, so a test
+    /// the map is the point: `InFlightSpendLocks` has one constructor, so a test
     /// fixture and production read the same derivation rule.
-    fn locks_over(gindex: u64, txid: [u8; 32]) -> shekyl_engine_state::F14Locks {
+    fn locks_over(gindex: u64, txid: [u8; 32]) -> shekyl_engine_state::InFlightSpendLocks {
         use shekyl_engine_state::{SendInputRef, SendJournalBlock};
 
         let mut journal = SendJournalBlock::empty();
@@ -135,14 +135,14 @@ mod tests {
             vec![SendInputRef { gindex, amount: 0 }],
         );
         assert!(journal.stamp_lock_baseline(&txid, 90));
-        journal.derive_f14_locks()
+        journal.spend_locks()
     }
 
     /// No live sends: an empty journal derives an empty lock set.
-    /// Spelled through the derivation because `F14Locks` has no other
+    /// Spelled through the derivation because `InFlightSpendLocks` has no other
     /// constructor — see its type docs for why.
-    fn no_locks() -> shekyl_engine_state::F14Locks {
-        shekyl_engine_state::SendJournalBlock::empty().derive_f14_locks()
+    fn no_locks() -> shekyl_engine_state::InFlightSpendLocks {
+        shekyl_engine_state::SendJournalBlock::empty().spend_locks()
     }
 
     #[test]

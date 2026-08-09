@@ -185,7 +185,7 @@ impl LedgerIndexesExt for LedgerIndexes {
 /// hand-thread a lock map it had no way to obtain honestly. Anything
 /// that genuinely needs a transfer-slice balance calls
 /// [`BalanceSummary::compute`] and passes a derived
-/// [`F14Locks`](shekyl_engine_state::F14Locks) explicitly.
+/// [`InFlightSpendLocks`](shekyl_engine_state::InFlightSpendLocks) explicitly.
 pub trait WalletLedgerExt {
     /// Balance at the wallet's current synced height.
     fn balance(&self) -> BalanceSummary;
@@ -200,7 +200,7 @@ impl WalletLedgerExt for shekyl_engine_state::WalletLedger {
     }
 
     fn balance_at(&self, current_height: u64) -> BalanceSummary {
-        BalanceSummary::compute(self.ledger.transfers(), current_height, &self.f14_locks())
+        BalanceSummary::compute(self.ledger.transfers(), current_height, &self.spend_locks())
     }
 }
 

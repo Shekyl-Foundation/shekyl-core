@@ -19,16 +19,16 @@ pub(crate) mod ledger_ops {
         output::*,
         scan::{RecoveredWalletOutput, Timelocked},
     };
-    use shekyl_engine_state::{F14Locks, LedgerBlock, LedgerIndexes, SendJournalBlock};
+    use shekyl_engine_state::{InFlightSpendLocks, LedgerBlock, LedgerIndexes, SendJournalBlock};
     use shekyl_units::AtomicUnits;
 
     /// These tests drive a bare [`LedgerBlock`] with no send journal, so
     /// nothing is in flight and the derived lock set is empty. Spelled
-    /// through the derivation because that is `F14Locks`'s only
+    /// through the derivation because that is `InFlightSpendLocks`'s only
     /// constructor — the point of the newtype is that "no locks" cannot
     /// be typed by accident.
-    fn no_locks() -> F14Locks {
-        SendJournalBlock::empty().derive_f14_locks()
+    fn no_locks() -> InFlightSpendLocks {
+        SendJournalBlock::empty().spend_locks()
     }
 
     /// Balance over a bare ledger block: the whole-wallet
@@ -626,16 +626,16 @@ mod sync_bookkeeping {
         output::*,
         scan::{RecoveredWalletOutput, Timelocked},
     };
-    use shekyl_engine_state::{F14Locks, LedgerBlock, LedgerIndexes, SendJournalBlock};
+    use shekyl_engine_state::{InFlightSpendLocks, LedgerBlock, LedgerIndexes, SendJournalBlock};
     use shekyl_units::AtomicUnits;
 
     /// These tests drive a bare [`LedgerBlock`] with no send journal, so
     /// nothing is in flight and the derived lock set is empty. Spelled
-    /// through the derivation because that is `F14Locks`'s only
+    /// through the derivation because that is `InFlightSpendLocks`'s only
     /// constructor — the point of the newtype is that "no locks" cannot
     /// be typed by accident.
-    fn no_locks() -> F14Locks {
-        SendJournalBlock::empty().derive_f14_locks()
+    fn no_locks() -> InFlightSpendLocks {
+        SendJournalBlock::empty().spend_locks()
     }
 
     /// Balance over a bare ledger block: the whole-wallet

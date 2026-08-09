@@ -157,7 +157,7 @@ pub(crate) struct HeldSubmit {
 }
 
 /// Project the held-submit set from the send journal — one entry per
-/// row in a lock-bearing state (`SendState::reapplies_f14_locks`) with
+/// row in a lock-bearing state (`SendState::locks_carried_inputs`) with
 /// a stamped `lock_baseline` (PR-SJ-1b: the journal owns the dispatch
 /// facts; the per-input F14 locks the old projection grouped are now
 /// derived from exactly these rows, so projecting the rows directly is
@@ -179,7 +179,7 @@ pub(crate) fn held_submits(wallet: &shekyl_engine_state::WalletLedger) -> Vec<He
         .send_journal
         .rows
         .iter()
-        .filter(|(_, row)| row.state.reapplies_f14_locks())
+        .filter(|(_, row)| row.state.locks_carried_inputs())
         .filter_map(|(txid, row)| {
             row.lock_baseline.map(|baseline_height| HeldSubmit {
                 tx_hash: TxHash::from_bytes(*txid),
@@ -413,7 +413,7 @@ pub(crate) fn apply_probe_outcome(
 /// flips the display state (`Dispatched → PresumedDead`; an `Abandoned`
 /// row keeps its user-authored state) and clears `lock_baseline`, which
 /// removes the row's carried inputs from
-/// `SendJournalBlock::derive_f14_locks` — there is no per-transfer
+/// `SendJournalBlock::spend_locks` — there is no per-transfer
 /// field left to clear. A late confirmation flips the row to
 /// `Confirmed` through the merge reconciler, loudly un-presuming it.
 ///
@@ -438,7 +438,7 @@ pub(crate) fn release_awaiting_confirmation(
             .send_journal
             .rows
             .get(&key)
-            .filter(|row| row.state.reapplies_f14_locks() && row.lock_baseline.is_some())
+            .filter(|row| row.state.locks_carried_inputs() && row.lock_baseline.is_some())
             .map_or(0, |row| row.inputs.len());
         wallet.send_journal.mark_presumed_dead(&key);
         released += held_inputs;
@@ -657,7 +657,7 @@ mod tests {
         // PR-SJ-1b: spendability consults the journal-derived lock map.
         // The released row cleared its baseline, so only `still_held`'s
         // carried input (gindex 3) stays locked.
-        let locks = wallet.f14_locks();
+        let locks = wallet.spend_locks();
         assert_eq!(locks.len(), 1);
         assert!(locks.contains(3));
         let ledger = &wallet.ledger;

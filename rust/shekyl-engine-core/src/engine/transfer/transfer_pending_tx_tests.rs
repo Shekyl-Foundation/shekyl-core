@@ -1089,15 +1089,15 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
     // refresh is the settlement authority for `spent`.
     {
         let guard = pending.ledger.read();
-        let f14_locks = guard.ledger.f14_locks();
+        let spend_locks = guard.ledger.spend_locks();
         let td = guard.ledger.ledger.transfers().first().expect("output 0");
         assert!(!td.spent, "spent stays refresh-authoritative");
-        let lock = f14_locks
+        let lock = spend_locks
             .get(td.global_output_index)
             .expect("submit-accept arms the journal-derived F14 lock");
         assert_eq!(lock.tx_hash, tx_hash);
         assert!(
-            !td.is_spendable(u64::MAX, &f14_locks),
+            !td.is_spendable(u64::MAX, &spend_locks),
             "journal-locked output must be excluded from selection"
         );
     }
@@ -1238,7 +1238,7 @@ async fn confirmed_absent_release_keeps_retention_record() {
         "the pending record stays as the secret's I-2 live reference"
     );
     assert!(
-        guard.ledger.f14_locks().is_empty(),
+        guard.ledger.spend_locks().is_empty(),
         "all derived F14 locks for the confirmed-absent tx are cleared"
     );
     guard.ledger.check_invariants().expect("I-2 after release");
@@ -1410,13 +1410,13 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
             Some(20),
             "AlreadyInChain mirrors the clamped baseline into the journal (F40)"
         );
-        let f14_locks = guard.ledger.f14_locks();
+        let spend_locks = guard.ledger.spend_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
             .transfers()
             .iter()
-            .filter(|td| f14_locks.contains(td.global_output_index))
+            .filter(|td| spend_locks.contains(td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
@@ -1424,7 +1424,7 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = f14_locks
+            let lock = spend_locks
                 .get(td.global_output_index)
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
@@ -1440,7 +1440,7 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                 "the derived lock carries exactly the journal baseline"
             );
             assert!(
-                !td.is_spendable(u64::MAX, &f14_locks),
+                !td.is_spendable(u64::MAX, &spend_locks),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -1511,13 +1511,13 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
     // stands, baselined at the claimed height.
     {
         let guard = pending.ledger.read();
-        let f14_locks = guard.ledger.f14_locks();
+        let spend_locks = guard.ledger.spend_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
             .transfers()
             .iter()
-            .filter(|td| f14_locks.contains(td.global_output_index))
+            .filter(|td| spend_locks.contains(td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
@@ -1525,7 +1525,7 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = f14_locks
+            let lock = spend_locks
                 .get(td.global_output_index)
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
@@ -1595,13 +1595,13 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
     // `spent` untouched — the kind rode through as data, not dispatch.
     {
         let guard = pending.ledger.read();
-        let f14_locks = guard.ledger.f14_locks();
+        let spend_locks = guard.ledger.spend_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
             .transfers()
             .iter()
-            .filter(|td| f14_locks.contains(td.global_output_index))
+            .filter(|td| spend_locks.contains(td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
@@ -1609,12 +1609,12 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = f14_locks
+            let lock = spend_locks
                 .get(td.global_output_index)
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert!(
-                !td.is_spendable(u64::MAX, &f14_locks),
+                !td.is_spendable(u64::MAX, &spend_locks),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -2027,8 +2027,8 @@ async fn dispatch_writes_the_send_journal_row() {
 
     // Derived-view spot check: the accept armed the journal baseline
     // and the derived lock map carries the row's inputs under it.
-    let f14_locks = guard.ledger.f14_locks();
-    let lock = f14_locks
+    let spend_locks = guard.ledger.spend_locks();
+    let lock = spend_locks
         .get(row.inputs[0].gindex)
         .expect("accept armed the journal-derived F14 lock over the carried input");
     assert_eq!(row.lock_baseline, Some(lock.accepted_at_height));
@@ -3496,11 +3496,11 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     // `spent` write.
     {
         let guard = pending.ledger.read();
-        let f14_locks = guard.ledger.f14_locks();
+        let spend_locks = guard.ledger.spend_locks();
         let td = guard.ledger.ledger.transfers().first().expect("output 0");
         assert!(!td.spent, "spent stays refresh-authoritative");
         assert_eq!(
-            f14_locks
+            spend_locks
                 .get(td.global_output_index)
                 .expect("submit-accept arms the journal-derived F14 lock")
                 .tx_hash,

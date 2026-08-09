@@ -518,7 +518,7 @@ reopen criteria at ratification. Then:
    — out of the pre-committed order (PR-SJ-2 and PR-SJ-3 landed first;
    the I-5 both-agree invariant held the equivalence in the interim,
    exactly the job it was built for). The retirement shape:
-   `derive_f14_locks` on the journal is the single owner of the
+   `SendJournalBlock::spend_locks` is the single owner of the
    derivation, consumers derive on demand (a maintained cache would
    re-create the deleted field), `held_submits` projects from the
    journal, and I-5 + I-2's F14-lock leg retired with the field.
@@ -548,8 +548,9 @@ reopen criteria at ratification. Then:
      refute keeps both its lock and its watchdog tracking.
    - *The §7.1 self-link defence became opt-in.* A `BTreeMap` type
      alias let any caller satisfy the parameter with
-     `&Default::default()`. `F14Locks` is now a newtype with no
-     `Default` and no public constructor but `derive_f14_locks`, so a
+     `&Default::default()`. `InFlightSpendLocks` is now a newtype with
+     no `Default` and no public constructor but
+     `SendJournalBlock::spend_locks`, so a
      lock-blind call does not compile; the bare `LedgerBlockExt::balance`
      that made such a call natural was deleted, leaving
      `WalletLedgerExt::balance` — which derives the locks itself — as

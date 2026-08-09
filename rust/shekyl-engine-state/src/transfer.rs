@@ -73,8 +73,8 @@ pub fn eligible_height(block_height: BlockHeight, additional_timelock: Timelock)
 /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.6; PR-SJ-1b).
 ///
 /// **Not persisted.** Values are produced only by
-/// [`crate::SendJournalBlock::derive_f14_locks`] from journal facts
-/// (baseline-stamped rows in a `reapplies_f14_locks` state). Consumers
+/// [`crate::SendJournalBlock::spend_locks`] from journal facts
+/// (baseline-stamped rows in a `locks_carried_inputs` state). Consumers
 /// consult the map by `global_output_index` so a network-exposed spend
 /// cannot be selected again for a second same-key-image tx (§7.1).
 ///
@@ -188,7 +188,7 @@ pub struct TransferDetails {
     // §2.6) formerly lived here as a persisted field. PR-SJ-1b retired
     // it (`WALLET_SEND_RECORD.md` C2 / P3-1a): the journal owns the
     // dispatch facts, and consumers derive the lock set on demand via
-    // `SendJournalBlock::derive_f14_locks`. `AwaitingConfirmation` is
+    // `SendJournalBlock::spend_locks`. `AwaitingConfirmation` is
     // now a runtime-only derived value, never persisted.
     /// Canonical txid of the **confirmed** transaction that spent this
     /// output — the WI-RPC-3 spend-quadruple leg (F-9,
@@ -287,19 +287,19 @@ impl TransferDetails {
     /// and cannot be spent. Outputs with a network-exposed spend awaiting
     /// chain confirmation (the F14 lock, §2.6) are excluded: selecting one
     /// would build a second tx bearing the same key image. The lock map is
-    /// journal-derived (PR-SJ-1b — [`crate::SendJournalBlock::derive_f14_locks`]
-    /// / [`crate::WalletLedger::f14_locks`]); taking [`F14Locks`] — a
+    /// journal-derived (PR-SJ-1b — [`crate::SendJournalBlock::spend_locks`]
+    /// / [`crate::WalletLedger::spend_locks`]); taking [`InFlightSpendLocks`] — a
     /// type only that derivation can produce, not a free `bool` and not
     /// a bare map — keeps the §7.1 self-link check tied to the
     /// derivation at compile time.
     pub fn is_spendable(
         &self,
         current_height: u64,
-        f14_locks: &crate::send_journal_block::F14Locks,
+        spend_locks: &crate::send_journal_block::InFlightSpendLocks,
     ) -> bool {
         !self.spent
             && !self.frozen
-            && !f14_locks.contains(self.global_output_index)
+            && !spend_locks.contains(self.global_output_index)
             && current_height >= self.eligible_height
     }
 

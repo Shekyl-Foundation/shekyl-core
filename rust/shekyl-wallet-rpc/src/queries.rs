@@ -112,7 +112,7 @@ fn collect_transfers(
     let mut rows: Vec<(TransferOrder, TransferView)> = Vec::new();
 
     // Derive once for the whole projection (PR-SJ-1b).
-    let f14_locks = journal.derive_f14_locks();
+    let spend_locks = journal.spend_locks();
 
     if want_incoming {
         for td in ledger_rows {
@@ -122,7 +122,7 @@ fn collect_transfers(
             }
             if filters
                 .state
-                .is_some_and(|st| transfer_state(td, &f14_locks) != st)
+                .is_some_and(|st| transfer_state(td, &spend_locks) != st)
             {
                 continue;
             }
@@ -132,7 +132,7 @@ fn collect_transfers(
             {
                 continue;
             }
-            let view = transfer_view(td, &f14_locks);
+            let view = transfer_view(td, &spend_locks);
             rows.push((
                 TransferOrder {
                     block_height: view.block_height,
@@ -381,7 +381,7 @@ pub(crate) async fn get_transfer_by_id(
             .transfers()
             .iter()
             .find(|td| td.tx_hash == tx_hash && td.internal_output_index == output_index)
-            .map(|td| transfer_view(td, &ledger.f14_locks())),
+            .map(|td| transfer_view(td, &ledger.spend_locks())),
         TransferLookupId::Outgoing { tx_hash } => ledger
             .send_journal
             .rows

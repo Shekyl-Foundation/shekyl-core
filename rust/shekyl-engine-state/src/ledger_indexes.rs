@@ -32,7 +32,7 @@
 //! Read-only queries that need no index likewise live on
 //! [`LedgerBlock`] (`unspent_transfers`, `spendable_outputs`). They are
 //! not ledger-*only*: since PR-SJ-1b both take the journal-derived
-//! [`F14Locks`](crate::F14Locks) the sibling block owns, because a
+//! [`InFlightSpendLocks`](crate::InFlightSpendLocks) the sibling block owns, because a
 //! scan-derived block cannot see dispatch-authored facts (C7). Prefer
 //! the [`WalletLedger`](crate::WalletLedger) façade, which supplies
 //! them.

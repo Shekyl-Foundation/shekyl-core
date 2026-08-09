@@ -421,7 +421,7 @@ mod tests {
         // PR-SJ-1b: the lock is journal-derived, so it survives the wipe
         // by construction — the journal outlives the ledger reset and the
         // derivation reads it directly.
-        let locks = wallet.f14_locks();
+        let locks = wallet.spend_locks();
         let lock = locks
             .get(7)
             .expect("the abandoned row's carried input stays locked across the wipe");

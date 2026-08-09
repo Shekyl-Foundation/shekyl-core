@@ -122,15 +122,15 @@ pub fn parse_lookup_id(id: &str) -> Option<TransferLookupId> {
 ///
 /// Shared by [`transfer_view`] and the `get_transfers` filter so both agree on
 /// how a row maps to [`TransferState`] without re-projecting the whole row.
-/// `f14_locks` is the journal-derived lock map (PR-SJ-1b): a locked,
+/// `spend_locks` is the journal-derived lock map (PR-SJ-1b): a locked,
 /// unspent receive row is a spend in flight, so it reads `PENDING`.
 pub fn transfer_state(
     td: &TransferDetails,
-    f14_locks: &shekyl_engine_state::F14Locks,
+    spend_locks: &shekyl_engine_state::InFlightSpendLocks,
 ) -> TransferState {
     if td.spent {
         TransferState::Spent
-    } else if f14_locks.contains(td.global_output_index) {
+    } else if spend_locks.contains(td.global_output_index) {
         TransferState::Pending
     } else {
         TransferState::Confirmed
@@ -198,10 +198,10 @@ pub fn attribution_matches(
 }
 
 /// Project a ledger transfer to the RPC view (no key material).
-/// `f14_locks` is the journal-derived lock map (PR-SJ-1b).
+/// `spend_locks` is the journal-derived lock map (PR-SJ-1b).
 pub fn transfer_view(
     td: &TransferDetails,
-    f14_locks: &shekyl_engine_state::F14Locks,
+    spend_locks: &shekyl_engine_state::InFlightSpendLocks,
 ) -> TransferView {
     TransferView {
         id: transfer_id(td),
@@ -214,7 +214,7 @@ pub fn transfer_view(
         fee: "0".to_owned(),
         // Ledger rows are scanner-observed, so they are always mined.
         block_height: Some(i64::try_from(td.block_height).unwrap_or(i64::MAX)),
-        state: transfer_state(td, f14_locks),
+        state: transfer_state(td, spend_locks),
         spent_height: td
             .spent_height
             .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),

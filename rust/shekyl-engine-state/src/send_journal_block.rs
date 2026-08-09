@@ -21,7 +21,7 @@
 //! realized recipients, the realized fee (the wire tx's cleartext fee —
 //! never an estimator output, roadmap R-4), and the lock baseline. The F14
 //! awaiting-confirmation lock set is a **derived view** of those facts
-//! ([`SendJournalBlock::derive_f14_locks`], PR-SJ-1b) — never a second
+//! ([`SendJournalBlock::spend_locks`], PR-SJ-1b) — never a second
 //! persisted representation on
 //! [`TransferDetails`](crate::transfer::TransferDetails).
 //!
@@ -48,46 +48,76 @@ use serde::{Deserialize, Serialize};
 /// concern (`docs/FOLLOWUPS.md` "A4 DECIDED").
 pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 2;
 
-/// Journal-derived F14 awaiting-confirmation lock set, keyed by
-/// `global_output_index`. Consumed by balance, spendability, and
-/// selection surfaces in place of the retired
+/// The wallet's own outputs that must not be spent again yet, keyed by
+/// `global_output_index`: for each, a transaction spending it is already
+/// on the wire and has not confirmed. Consumed by balance, spendability,
+/// and selection in place of the retired
 /// `TransferDetails::awaiting_confirmation` field.
+///
+/// Selecting a locked output would build a second transaction bearing
+/// the same key image. Both would be publicly linkable as coming from
+/// one wallet — the §7.1 self-link artifact — and only one could ever be
+/// mined. This set is what stops that.
+///
+/// The design spec calls this the *F14 awaiting-confirmation lock*
+/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.6). That tag is a
+/// cross-reference and stays in prose; it is deliberately not the type
+/// name, which has to say what is locked and why to a reader who has
+/// never opened the spec — and which would start lying if the spec ever
+/// renumbers.
 ///
 /// **A newtype, deliberately, and with no `Default`** (PR-SJ-1b
 /// review): while the lock rode on [`crate::TransferDetails`] every
-/// consumer got the §7.1 self-link defence for free. Once it became a
-/// parameter, a plain `BTreeMap` alias would have let any caller
-/// satisfy the type with `&Default::default()` — a lock-blind map that
-/// compiles, reads as innocuous, and silently re-offers an output whose
-/// spend is already on the wire. Sealing the field so that
-/// [`SendJournalBlock::derive_f14_locks`] is the *only* way to obtain a
-/// value makes "I forgot the locks" unrepresentable instead of merely
-/// discouraged; a caller with no journal in scope must write
-/// `SendJournalBlock::empty().derive_f14_locks()` and say so out loud.
+/// consumer got the defence for free. Once it became a parameter, a
+/// plain `BTreeMap` alias would have let any caller satisfy the type
+/// with `&Default::default()` — a lock-blind map that compiles, reads as
+/// innocuous, and silently re-offers an output whose spend is already on
+/// the wire. Sealing the field so that
+/// [`SendJournalBlock::spend_locks`] is the *only* way
+/// to obtain a value makes "I forgot the locks" unrepresentable instead
+/// of merely discouraged; a caller with no journal in scope must write
+/// `SendJournalBlock::empty().spend_locks()` and say so
+/// out loud.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct F14Locks(BTreeMap<u64, crate::transfer::AwaitingConfirmation>);
+pub struct InFlightSpendLocks(BTreeMap<u64, crate::transfer::AwaitingConfirmation>);
 
-impl F14Locks {
+/// Every accessor is `#[inline]`, and that is load-bearing rather than
+/// decorative. [`crate::WalletLedger::spendable_outputs`] and the
+/// scanner's `BalanceSummary::compute` call [`InFlightSpendLocks::contains`]
+/// **once per transfer row**, from a different crate. The `BTreeMap`
+/// alias these replaced was generic, so its `contains_key` instantiated
+/// in — and inlined into — the caller. A bare inherent method on a
+/// concrete newtype does not: without the attribute each row pays a
+/// real cross-crate call, and `hot_path_bench_balance_compute` measured
+/// that at **+65% instructions** at every fixture size (the sizes scale,
+/// so a constant setup cost cannot explain it). Sealing the type must
+/// not cost anything at runtime; if a new accessor lands on the
+/// per-row path, it is `#[inline]` too.
+impl InFlightSpendLocks {
     /// Whether the output at `gindex` has a network-exposed spend
     /// awaiting confirmation — the §7.1 self-link check.
+    #[inline]
     #[must_use]
     pub fn contains(&self, gindex: u64) -> bool {
         self.0.contains_key(&gindex)
     }
 
     /// The lock covering `gindex`, if any.
+    #[inline]
     #[must_use]
     pub fn get(&self, gindex: u64) -> Option<&crate::transfer::AwaitingConfirmation> {
         self.0.get(&gindex)
     }
 
     /// How many outputs are locked.
+    #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Whether no output is locked.
+    #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -166,9 +196,9 @@ impl SendState {
     /// `abandon_send` migrates the pending set, the journal row is what
     /// keeps the secret from being collected as an orphan.
     ///
-    /// Distinct from [`Self::reapplies_f14_locks`]: `PresumedDead` still
-    /// holds retention (keys / I-2) but never re-places F14 locks
-    /// (baseline is cleared on the confirmed-absent release).
+    /// Distinct from [`Self::locks_carried_inputs`]: `PresumedDead` still
+    /// holds retention (keys / I-2) but never locks inputs — its
+    /// baseline was cleared by the release.
     #[must_use]
     pub const fn holds_tx_key_retention(self) -> bool {
         matches!(
@@ -177,12 +207,14 @@ impl SendState {
         )
     }
 
-    /// Whether a journal row in this state re-derives carried-input F14
-    /// locks when `lock_baseline` is `Some` (P3-1 re-application set:
-    /// non-terminal-or-abandoned, minus states that have deliberately
-    /// released).
+    /// Whether a row in this state locks the inputs it carried, given a
+    /// stamped `lock_baseline` — i.e. whether its spend is still on the
+    /// wire and unsettled, so re-selecting those inputs would build a
+    /// same-key-image second transaction
+    /// ([`InFlightSpendLocks`]). P3-1's set: non-terminal-or-abandoned,
+    /// minus states that have deliberately released.
     #[must_use]
-    pub const fn reapplies_f14_locks(self) -> bool {
+    pub const fn locks_carried_inputs(self) -> bool {
         matches!(self, Self::Dispatched | Self::Abandoned)
     }
 
@@ -375,7 +407,7 @@ impl SendJournalBlock {
 
     /// Release a send that will never confirm: display-state flip and
     /// clear the baseline, which drops the row's carried inputs from
-    /// [`Self::derive_f14_locks`] and from the watchdog's held
+    /// [`Self::spend_locks`] and from the watchdog's held
     /// projection.
     ///
     /// Two callers, one meaning — "the wait is over without a
@@ -436,14 +468,14 @@ impl SendJournalBlock {
     /// Derive the F14 awaiting-confirmation lock set from journal facts
     /// — the **single owner** of the lock-derivation rule (PR-SJ-1b,
     /// `WALLET_SEND_RECORD.md` C2/P3-1a): a carried input of any row in
-    /// a [`SendState::reapplies_f14_locks`] state with a stamped
+    /// a [`SendState::locks_carried_inputs`] state with a stamped
     /// `lock_baseline` is locked, keyed by the input's
     /// `global_output_index`.
     ///
-    /// Also the **only constructor** of [`F14Locks`] — sole ownership of
+    /// Also the **only constructor** of [`InFlightSpendLocks`] — sole ownership of
     /// the rule is enforced by the type, not by convention (see the
-    /// [`F14Locks`] docs for why an empty map must be spelled
-    /// `SendJournalBlock::empty().derive_f14_locks()`).
+    /// [`InFlightSpendLocks`] docs for why an empty map must be spelled
+    /// `SendJournalBlock::empty().spend_locks()`).
     ///
     /// The map says nothing about spent-ness: confirmed evidence
     /// supersedes a lock, and every consumer checks `spent` first (the
@@ -457,10 +489,10 @@ impl SendJournalBlock {
     /// cannot arise from the build path (locked inputs are never
     /// selected — the SJ-DQ-4 self-link defence this map implements),
     /// so the tie-break is a determinism guarantee, not a policy.
-    pub fn derive_f14_locks(&self) -> F14Locks {
+    pub fn spend_locks(&self) -> InFlightSpendLocks {
         let mut locks: BTreeMap<u64, crate::transfer::AwaitingConfirmation> = BTreeMap::new();
         for (txid, row) in &self.rows {
-            if !row.state.reapplies_f14_locks() {
+            if !row.state.locks_carried_inputs() {
                 continue;
             }
             let Some(accepted_at_height) = row.lock_baseline else {
@@ -475,7 +507,7 @@ impl SendJournalBlock {
                     });
             }
         }
-        F14Locks(locks)
+        InFlightSpendLocks(locks)
     }
 }
 
@@ -519,13 +551,13 @@ mod tests {
         assert!(!SendState::Confirmed { height: 1 }.holds_tx_key_retention());
         assert!(!SendState::TerminalRejected.holds_tx_key_retention());
 
-        assert!(SendState::Dispatched.reapplies_f14_locks());
-        assert!(SendState::Abandoned.reapplies_f14_locks());
+        assert!(SendState::Dispatched.locks_carried_inputs());
+        assert!(SendState::Abandoned.locks_carried_inputs());
         assert!(
-            !SendState::PresumedDead.reapplies_f14_locks(),
+            !SendState::PresumedDead.locks_carried_inputs(),
             "PresumedDead holds retention but never re-places locks"
         );
-        assert!(!SendState::Confirmed { height: 1 }.reapplies_f14_locks());
+        assert!(!SendState::Confirmed { height: 1 }.locks_carried_inputs());
 
         assert!(SendState::Dispatched.is_abandonable());
         assert!(SendState::PresumedDead.is_abandonable());
@@ -716,7 +748,7 @@ mod tests {
     /// also excludes), `Confirmed`, `TerminalRejected`, and un-stamped
     /// rows do not.
     #[test]
-    fn derive_f14_locks_covers_exactly_the_reapplication_set() {
+    fn derive_in_flight_spend_locks_covers_exactly_the_locking_set() {
         let mut block = SendJournalBlock::empty();
         let dispatched = [1u8; 32];
         let abandoned = [2u8; 32];
@@ -738,7 +770,7 @@ mod tests {
             block.rows.insert(txid, record);
         }
 
-        let locks = block.derive_f14_locks();
+        let locks = block.spend_locks();
         assert_eq!(
             locks.len(),
             2,
@@ -757,7 +789,7 @@ mod tests {
     /// block yield identical maps, and a multi-input row locks each of
     /// its carried inputs under its own txid.
     #[test]
-    fn derive_f14_locks_is_deterministic_and_covers_all_inputs() {
+    fn derive_in_flight_spend_locks_is_deterministic_and_covers_all_inputs() {
         let mut block = SendJournalBlock::empty();
         let txid = [7u8; 32];
         let mut record = sample_record(SendState::Dispatched, Some(50));
@@ -773,8 +805,8 @@ mod tests {
         ];
         block.rows.insert(txid, record);
 
-        let a = block.derive_f14_locks();
-        let b = block.derive_f14_locks();
+        let a = block.spend_locks();
+        let b = block.spend_locks();
         assert_eq!(a, b, "derivation is pure");
         assert_eq!(a.len(), 2);
         for g in [200, 201] {

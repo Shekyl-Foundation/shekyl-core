@@ -212,19 +212,19 @@ impl WalletLedger {
     /// [`Self::spendable_outputs`] / [`Self::unspent_transfers`] when
     /// those are the only uses.
     #[must_use]
-    pub fn f14_locks(&self) -> crate::send_journal_block::F14Locks {
-        self.send_journal.derive_f14_locks()
+    pub fn spend_locks(&self) -> crate::send_journal_block::InFlightSpendLocks {
+        self.send_journal.spend_locks()
     }
 
     /// Unspent, unfrozen transfers not under an F14 lock — journal and
     /// ledger consulted together (C7: locks live on the journal).
     #[must_use]
     pub fn unspent_transfers(&self) -> Vec<&TransferDetails> {
-        self.ledger.unspent_transfers(&self.f14_locks())
+        self.ledger.unspent_transfers(&self.spend_locks())
     }
 
     /// Spendable outputs at `current_height`, with journal-derived F14
-    /// locks applied. Prefer this over threading `f14_locks` by hand.
+    /// locks applied. Prefer this over threading `spend_locks` by hand.
     #[must_use]
     pub fn spendable_outputs(
         &self,
@@ -232,7 +232,7 @@ impl WalletLedger {
         min_amount: Option<shekyl_units::AtomicUnits>,
     ) -> Vec<(usize, &TransferDetails)> {
         self.ledger
-            .spendable_outputs(current_height, min_amount, &self.f14_locks())
+            .spendable_outputs(current_height, min_amount, &self.spend_locks())
     }
 
     /// Serialize the full bundle to postcard bytes.
@@ -454,7 +454,7 @@ impl WalletLedger {
     /// 3. **Evidence-bound release** (refresh-authoritative, C3): a
     ///    lock-bearing row the ledger says can *never* confirm is
     ///    released — [`SendJournalBlock::mark_presumed_dead`], so the
-    ///    row drops out of `derive_f14_locks` and out of the watchdog's
+    ///    row drops out of `spend_locks` and out of the watchdog's
     ///    held projection. Two evidence shapes, both read off the same
     ///    scan-derived facts:
     ///    - **Superseded**: a carried input is observed spent by a
@@ -485,7 +485,7 @@ impl WalletLedger {
     /// The former step 3 — per-row lock re-derivation *writes* — retired
     /// with the `awaiting_confirmation` field at PR-SJ-1b: consumers
     /// derive the lock set on demand from exactly the facts this
-    /// reconciler maintains (`SendJournalBlock::derive_f14_locks`), so
+    /// reconciler maintains (`SendJournalBlock::spend_locks`), so
     /// there is no cache left to re-apply, and the SJ-DQ-4 self-link
     /// defence across a rescan wipe holds by construction — the
     /// journal survives the wipe and the derivation reads it directly.
@@ -665,7 +665,7 @@ fn refuted_sends(ledger: &LedgerBlock, send_journal: &SendJournalBlock) -> Vec<[
     let candidates: Vec<(&[u8; 32], &crate::send_journal_block::SendRecord)> = send_journal
         .rows
         .iter()
-        .filter(|(_, row)| row.state.reapplies_f14_locks() && row.lock_baseline.is_some())
+        .filter(|(_, row)| row.state.locks_carried_inputs() && row.lock_baseline.is_some())
         .collect();
     if candidates.is_empty() {
         return Vec::new();
@@ -1196,7 +1196,7 @@ mod tests {
         dispatched_row(&mut w, txid, 0x11);
 
         assert!(
-            w.f14_locks().contains(0x11),
+            w.spend_locks().contains(0x11),
             "negative control: the input is locked before the evidence lands"
         );
 
@@ -1214,7 +1214,7 @@ mod tests {
             "a send whose input a foreign tx consumed can never confirm"
         );
         assert_eq!(w.send_journal.rows[&txid].lock_baseline, None);
-        assert!(w.f14_locks().is_empty(), "the lock is released with it");
+        assert!(w.spend_locks().is_empty(), "the lock is released with it");
     }
 
     /// Unwitnessable: a rescan floor raised above the funding blocks put
@@ -1238,13 +1238,13 @@ mod tests {
             SendState::Dispatched,
             "a still-replaying ledger must not read as 'gone'"
         );
-        assert!(w.f14_locks().contains(0x11));
+        assert!(w.spend_locks().contains(0x11));
 
         // Past it, with nothing replayed: the inputs are not coming back.
         w.ledger.tip.synced_height = 30;
         w.reconcile_send_journal(None);
         assert_eq!(w.send_journal.rows[&txid].state, SendState::PresumedDead);
-        assert!(w.f14_locks().is_empty());
+        assert!(w.spend_locks().is_empty());
     }
 
     /// A live in-flight send is untouched: its input is present and
@@ -1262,7 +1262,7 @@ mod tests {
 
         assert_eq!(w.send_journal.rows[&txid].state, SendState::Dispatched);
         assert!(
-            w.f14_locks().contains(0x11),
+            w.spend_locks().contains(0x11),
             "the §7.1 self-link defence stays up while the send can still land"
         );
     }
@@ -1312,7 +1312,7 @@ mod tests {
         w.reconcile_send_journal(None);
 
         assert_eq!(w.send_journal.rows[&txid].state, SendState::Dispatched);
-        let locks = w.f14_locks();
+        let locks = w.spend_locks();
         assert!(locks.contains(0x11) && locks.contains(0x12));
     }
 
@@ -1331,7 +1331,7 @@ mod tests {
 
         assert_eq!(w.send_journal.rows[&txid].state, SendState::Abandoned);
         assert_eq!(w.send_journal.rows[&txid].lock_baseline, None);
-        assert!(w.f14_locks().is_empty());
+        assert!(w.spend_locks().is_empty());
     }
 
     /// Accepting-verdict path: stamping the journal baseline is the
@@ -1361,12 +1361,12 @@ mod tests {
             }],
         );
         assert!(
-            w.f14_locks().is_empty(),
+            w.spend_locks().is_empty(),
             "dispatch does not arm the lock — only an accepting verdict does"
         );
 
         w.stamp_send_lock_baseline(&txid, 25);
-        let locks = w.f14_locks();
+        let locks = w.spend_locks();
         let lock = locks.get(300).expect("stamp arms the derived F14 lock");
         assert_eq!(lock.tx_hash.to_bytes(), txid);
         assert_eq!(lock.accepted_at_height, 25);
@@ -1428,7 +1428,7 @@ mod tests {
             },
         );
 
-        let locks = w.f14_locks();
+        let locks = w.spend_locks();
         assert_eq!(locks.len(), 3);
         for gindex in [100, 101, 999] {
             assert!(
@@ -1444,7 +1444,7 @@ mod tests {
             !w.ledger.transfers[1].is_spendable(30, &locks),
             "spent input stays unspendable via `spent`, not the lock"
         );
-        assert_eq!(locks, w.f14_locks(), "derivation is pure");
+        assert_eq!(locks, w.spend_locks(), "derivation is pure");
         w.check_invariants().expect("invariants hold");
     }
 
@@ -1619,7 +1619,7 @@ mod tests {
             );
         }
 
-        let locks = w.f14_locks();
+        let locks = w.spend_locks();
         let lock = locks
             .get(400)
             .expect("abandoned-with-baseline derives its lock");
