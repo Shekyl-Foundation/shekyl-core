@@ -69,9 +69,11 @@ const SPEND_OFFSET: usize = VERSION_LEN;
 const VIEW_OFFSET: usize = SPEND_OFFSET + PUBKEY_LEN;
 /// Length of the display/view-only classical segment (`version || spend ||
 /// view`); also the offset at which the `ek_bind_tag` begins in the full form.
-const CLASSICAL_SEGMENT_LEN: usize = VIEW_OFFSET + PUBKEY_LEN;
+pub const CLASSICAL_SEGMENT_LEN: usize = VIEW_OFFSET + PUBKEY_LEN;
 /// Length of the full-address classical segment (adds the `ek_bind_tag`).
-const CLASSICAL_BOUND_SEGMENT_LEN: usize = CLASSICAL_SEGMENT_LEN + EK_BIND_TAG_LEN;
+/// Fixed-width by construction — the message-signing preimage binds this
+/// exact byte string (SM-R-3).
+pub const CLASSICAL_BOUND_SEGMENT_LEN: usize = CLASSICAL_SEGMENT_LEN + EK_BIND_TAG_LEN;
 /// The offset-derived layout must agree with the exported payload length.
 const _: () = assert!(CLASSICAL_SEGMENT_LEN == VERSION_LEN + CLASSICAL_PAYLOAD_LEN);
 
@@ -192,11 +194,11 @@ fn ek_bind_tag(ml_kem_encap_key: &[u8]) -> [u8; EK_BIND_TAG_LEN] {
 /// the ML-KEM encapsulation key. This is the byte string the
 /// message-signing preimage binds (`WALLET_MESSAGE_SIGNING.md` SM-R-3);
 /// it lives here so the `ek_bind` domain and tag length keep a single
-/// owner.
+/// owner. Return type is fixed-width: the layout is compile-time fixed.
 pub fn classical_bound_segment_from_parts(
     classical_address_bytes: &[u8],
     ml_kem_encap_key: &[u8],
-) -> Result<Vec<u8>, AddressError> {
+) -> Result<[u8; CLASSICAL_BOUND_SEGMENT_LEN], AddressError> {
     if classical_address_bytes.len() != CLASSICAL_SEGMENT_LEN {
         return Err(AddressError::BadLength {
             segment: "classical address bytes",
@@ -211,9 +213,9 @@ pub fn classical_bound_segment_from_parts(
             got: ml_kem_encap_key.len(),
         });
     }
-    let mut out = Vec::with_capacity(CLASSICAL_BOUND_SEGMENT_LEN);
-    out.extend_from_slice(classical_address_bytes);
-    out.extend_from_slice(&ek_bind_tag(ml_kem_encap_key));
+    let mut out = [0u8; CLASSICAL_BOUND_SEGMENT_LEN];
+    out[..CLASSICAL_SEGMENT_LEN].copy_from_slice(classical_address_bytes);
+    out[CLASSICAL_SEGMENT_LEN..].copy_from_slice(&ek_bind_tag(ml_kem_encap_key));
     Ok(out)
 }
 

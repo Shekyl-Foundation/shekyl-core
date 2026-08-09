@@ -639,10 +639,13 @@ rationale strengthened.**
   (`shekyl/msg-sign-outer-v1`, registered), the accepted per-domain
   copy pattern. Same 64-byte `R ‖ s` wire slot the ruling priced; the
   fails-closed separability argument is unchanged. The Schnorr nonce
-  is hedged (`k = H(domain ‖ sk ‖ outer ‖ 32 fresh random bytes)`):
-  nonce reuse leaks the scalar, so a dead RNG degrades to a
-  deterministic RFC-6979-style nonce, never to key disclosure — the
-  same fail-safe shape SM-R-6 records for SLH's opt_rand.
+  is hedged
+  (`k = H(domain ‖ "nonce" ‖ sk ‖ outer ‖ 32 fresh random bytes)`):
+  the `"nonce"` sub-label separates nonce derivation from the challenge
+  hash under the same domain string. Nonce reuse leaks the scalar, so
+  a dead RNG degrades to a deterministic RFC-6979-style nonce, never
+  to key disclosure — the same fail-safe shape SM-R-6 records for
+  SLH's opt_rand.
   **Rationale strengthened at ratification — the complete argument,
   not the half the draft gave:** unforgeability is order-independent
   (a forger needs both halves over the new preimage either way; the

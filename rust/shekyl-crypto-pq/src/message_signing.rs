@@ -33,10 +33,13 @@
 //! this way); this module carries its own copy under its own challenge
 //! domain, the same accepted two-copy pattern as tx-proof vs
 //! reserve-proof. Same 64-byte `R ‖ s` wire slot the ruling priced. The
-//! nonce is **hedged**: `k = H(spend_sk ‖ outer ‖ 32 fresh random bytes)`
-//! — Schnorr nonce reuse leaks the scalar, so a bad RNG degrades to a
-//! deterministic RFC-6979-style nonce instead of to key disclosure
-//! (the same fail-safe shape SM-R-6 records for SLH's opt_rand).
+//! nonce is **hedged**:
+//! `k = H(domain ‖ "nonce" ‖ spend_sk ‖ outer ‖ 32 fresh random bytes)` —
+//! the `"nonce"` sub-label separates nonce derivation from the challenge
+//! hash under the same domain string. Schnorr nonce reuse leaks the
+//! scalar, so a bad RNG degrades to a deterministic RFC-6979-style
+//! nonce instead of to key disclosure (the same fail-safe shape SM-R-6
+//! records for SLH's opt_rand).
 //!
 //! # The signing identity (SM-R-4)
 //!
@@ -78,6 +81,7 @@ use hkdf::Hkdf;
 use sha2::{Digest as _, Sha512};
 use zeroize::{Zeroize as _, Zeroizing};
 
+use crate::account::MASTER_SEED_BYTES;
 use crate::CryptoError;
 
 /// Preimage domain (SM-R-3): the cSHAKE customization string over the
@@ -98,6 +102,12 @@ pub const MSG_SIGN_SEED_DOMAIN: &[u8] = b"shekyl/msg-sign-seed-slh-dsa-192s-v1";
 /// Armored-checksum domain (SM-R-5): the 4-byte trailer that lets decode
 /// distinguish corruption from mismatch. Not security.
 pub const MSG_SIG_CHECKSUM_DOMAIN: &[u8] = b"shekyl/msg-sig-ck-v1";
+
+/// Schnorr challenge domain for the classical half (registered beside
+/// the other domains; distinct from every proof domain). Also the salt
+/// for the hedged-nonce derivation, with a `"nonce"` sub-label so the
+/// two uses under this domain cannot collide.
+pub const MSG_SIGN_OUTER_DOMAIN: &[u8] = b"shekyl/msg-sign-outer-v1";
 
 /// Payload layout version — the same single value appears as the leading
 /// canonical byte and inside the preimage as `sig_format_version`
@@ -133,9 +143,11 @@ pub const SLH_192S_SIG_LEN: usize = slh_dsa_sha2_192s::SIG_LEN;
 /// Classical (spend-Schnorr) signature length: `R ‖ s`.
 pub const CLASSICAL_SIG_LEN: usize = 64;
 
-/// Schnorr challenge domain for the classical half (registered beside
-/// the other four domains; distinct from every proof domain).
-pub const MSG_SIGN_OUTER_DOMAIN: &[u8] = b"shekyl/msg-sign-outer-v1";
+/// Length of the signing preimage (cSHAKE256-32 output).
+pub const MSG_PREIMAGE_LEN: usize = 32;
+
+/// Outer message the classical half signs: `preimage ‖ σ_pq`.
+pub const OUTER_MSG_LEN: usize = MSG_PREIMAGE_LEN + SLH_192S_SIG_LEN;
 
 /// Canonical payload length: fixed by construction (SM-R-5 — every field
 /// is fixed-width; reject-don't-truncate means exact-length or refuse).
@@ -157,6 +169,8 @@ const _: () = assert!(SLH_192S_PK_LEN == 2 * SLH_192S_N);
 const _: () = assert!(slh_dsa_sha2_192s::N == SLH_192S_N);
 // 3 + 16224 + 64 + 4 — the ~21.7 KB-encoded blob the round priced.
 const _: () = assert!(MSG_SIG_CANONICAL_LEN == 16_295);
+const _: () = assert!(OUTER_MSG_LEN == MSG_PREIMAGE_LEN + SLH_192S_SIG_LEN);
+const _: () = assert!(MSG_PREIMAGE_LEN == 32);
 
 /// Message-signing errors, split on the SM-R-6 boundary: a *shape* error
 /// is the caller's bug; a *verification failure* is an answer.
@@ -188,7 +202,7 @@ pub enum MessageSigError {
 /// info strings produce different (equally valid-looking) keys and only
 /// one layout can be the spec.
 pub fn derive_message_signing_identity(
-    master_seed: &[u8],
+    master_seed: &[u8; MASTER_SEED_BYTES],
 ) -> Result<(slh_dsa_sha2_192s::PublicKey, slh_dsa_sha2_192s::PrivateKey), CryptoError> {
     let hk = Hkdf::<Sha512>::new(Some(MSG_SIGN_SEED_DOMAIN), master_seed);
     let mut okm = Zeroizing::new([0u8; MSG_SIGN_IDENTITY_SEED_LEN]);
@@ -213,7 +227,7 @@ pub fn derive_message_signing_identity(
 /// The 48-byte public half of the signing identity — what the v2 address
 /// carries inline (fork (ii)).
 pub fn derive_message_signing_public_key(
-    master_seed: &[u8],
+    master_seed: &[u8; MASTER_SEED_BYTES],
 ) -> Result<[u8; SLH_192S_PK_LEN], CryptoError> {
     let (pk, _sk) = derive_message_signing_identity(master_seed)?;
     Ok(pk.into_bytes())
@@ -231,7 +245,11 @@ pub fn derive_message_signing_public_key(
 /// The length prefix makes the framing unambiguous by construction
 /// (R3-b): under fork (ii) the segment is variable-length across address
 /// versions, and unambiguity must not rest on accidental properties.
-pub fn message_preimage(network_id: u8, classical_segment: &[u8], message: &[u8]) -> [u8; 32] {
+pub fn message_preimage(
+    network_id: u8,
+    classical_segment: &[u8],
+    message: &[u8],
+) -> [u8; MSG_PREIMAGE_LEN] {
     let msg_hash = shekyl_crypto_hash::cshake256_32(MSG_HASH_DOMAIN, message);
     let mut buf = Vec::with_capacity(3 + 2 + classical_segment.len() + 32);
     buf.push(MSG_SIG_LAYOUT_VERSION);
@@ -258,14 +276,14 @@ fn schnorr_challenge(public_key: &EdwardsPoint, r_point: &EdwardsPoint, msg: &[u
 
 /// Sign the outer bytes with the spend **scalar** (see the module-docs
 /// implementation note: raw-scalar key ⇒ house Schnorr, not RFC 8032).
-/// Hedged nonce: `k = H(domain ‖ sk ‖ msg ‖ fresh_random)` — a dead RNG
-/// degrades to a deterministic nonce, never to nonce reuse across
-/// distinct messages.
+/// Hedged nonce: `k = H(domain ‖ "nonce" ‖ sk ‖ msg ‖ fresh_random)` — a
+/// dead RNG degrades to a deterministic nonce, never to nonce reuse
+/// across distinct messages.
 pub fn sign_outer_with_spend_scalar(
     spend_sk: &[u8; 32],
     outer_msg: &[u8],
 ) -> Result<[u8; CLASSICAL_SIG_LEN], MessageSigError> {
-    let secret: Scalar =
+    let mut secret: Scalar =
         Option::from(Scalar::from_canonical_bytes(*spend_sk)).ok_or(MessageSigError::InvalidKey)?;
     let public = ED25519_BASEPOINT_TABLE * &secret;
 
@@ -277,12 +295,14 @@ pub fn sign_outer_with_spend_scalar(
     hasher.update(spend_sk);
     hasher.update(outer_msg);
     hasher.update(rand32);
+    rand32.zeroize();
     let mut k = Scalar::from_hash(hasher);
 
     let r_point = ED25519_BASEPOINT_TABLE * &k;
     let c = schnorr_challenge(&public, &r_point, outer_msg);
     let s = k - c * secret;
     k.zeroize();
+    secret.zeroize();
 
     let mut sig = [0u8; CLASSICAL_SIG_LEN];
     sig[..32].copy_from_slice(r_point.compress().as_bytes());
@@ -291,21 +311,19 @@ pub fn sign_outer_with_spend_scalar(
 }
 
 /// Verify the outer Schnorr against the address's spend public key.
-fn verify_outer(spend_pk: &[u8; 32], outer_msg: &[u8], sig: &[u8]) -> bool {
+fn verify_outer(spend_pk: &[u8; 32], outer_msg: &[u8], sig: &[u8; CLASSICAL_SIG_LEN]) -> bool {
     let Some(public) = CompressedEdwardsY(*spend_pk).decompress() else {
         return false;
     };
-    let Ok(r_bytes) = <[u8; 32]>::try_from(&sig[..32]) else {
-        return false;
-    };
+    let mut r_bytes = [0u8; 32];
+    r_bytes.copy_from_slice(&sig[..32]);
     let Some(r_point) = CompressedEdwardsY(r_bytes).decompress() else {
         return false;
     };
     let mut s_arr = [0u8; 32];
     s_arr.copy_from_slice(&sig[32..]);
-    let s: Scalar = match Option::from(Scalar::from_canonical_bytes(s_arr)) {
-        Some(s) => s,
-        None => return false,
+    let Some(s) = Option::<Scalar>::from(Scalar::from_canonical_bytes(s_arr)) else {
+        return false;
     };
     let c = schnorr_challenge(&public, &r_point, outer_msg);
     ED25519_BASEPOINT_TABLE * &s + c * public == r_point
@@ -313,10 +331,15 @@ fn verify_outer(spend_pk: &[u8; 32], outer_msg: &[u8], sig: &[u8]) -> bool {
 
 /// The outer message the classical half signs: `preimage ‖ σ_pq` — the
 /// covering that makes stripping the PQ half structurally invalidating.
-pub fn outer_bytes(preimage: &[u8; 32], sig_pq: &[u8]) -> Vec<u8> {
-    let mut outer = Vec::with_capacity(32 + sig_pq.len());
-    outer.extend_from_slice(preimage);
-    outer.extend_from_slice(sig_pq);
+/// Length is compile-time fixed ([`OUTER_MSG_LEN`]); heap-allocated so the
+/// ~16 KB blob does not ride the stack through async boundaries.
+pub fn outer_bytes(
+    preimage: &[u8; MSG_PREIMAGE_LEN],
+    sig_pq: &[u8; SLH_192S_SIG_LEN],
+) -> Box<[u8; OUTER_MSG_LEN]> {
+    let mut outer = Box::new([0u8; OUTER_MSG_LEN]);
+    outer[..MSG_PREIMAGE_LEN].copy_from_slice(preimage);
+    outer[MSG_PREIMAGE_LEN..].copy_from_slice(sig_pq);
     outer
 }
 
@@ -325,11 +348,11 @@ pub fn outer_bytes(preimage: &[u8; 32], sig_pq: &[u8]) -> Vec<u8> {
 /// transiently-borrowed master seed while the spend scalar stays inside
 /// the key actor (both secret-locality postures preserved).
 pub fn sign_message_pq_half(
-    master_seed: &[u8],
+    master_seed: &[u8; MASTER_SEED_BYTES],
     network_id: u8,
     classical_segment: &[u8],
     message: &[u8],
-) -> Result<([u8; 32], Vec<u8>), MessageSigError> {
+) -> Result<([u8; MSG_PREIMAGE_LEN], [u8; SLH_192S_SIG_LEN]), MessageSigError> {
     let preimage = message_preimage(network_id, classical_segment, message);
     let (_pk, slh_sk) =
         derive_message_signing_identity(master_seed).map_err(|_| MessageSigError::InvalidKey)?;
@@ -339,11 +362,15 @@ pub fn sign_message_pq_half(
     let sig_pq = slh_sk
         .try_sign(&preimage, b"", true)
         .map_err(|_| MessageSigError::InvalidKey)?;
-    Ok((preimage, sig_pq.to_vec()))
+    Ok((preimage, sig_pq))
 }
 
 /// Assemble the armored string from the two halves (SM-R-5 layout).
-pub fn assemble_armored(sig_pq: &[u8], sig_cl: &[u8; CLASSICAL_SIG_LEN]) -> String {
+/// Both halves are fixed-width by type — wrong lengths cannot compile.
+pub fn assemble_armored(
+    sig_pq: &[u8; SLH_192S_SIG_LEN],
+    sig_cl: &[u8; CLASSICAL_SIG_LEN],
+) -> String {
     let mut canonical = Vec::with_capacity(MSG_SIG_CANONICAL_LEN);
     canonical.push(MSG_SIG_LAYOUT_VERSION);
     canonical.push(MSG_SIG_SCHEME_SLH_192S_ED25519);
@@ -364,7 +391,7 @@ pub fn assemble_armored(sig_pq: &[u8], sig_cl: &[u8; CLASSICAL_SIG_LEN]) -> Stri
 /// One-call form for callers holding both secrets; the engine uses the
 /// split halves above so each secret stays where it lives.
 pub fn sign_message(
-    master_seed: &[u8],
+    master_seed: &[u8; MASTER_SEED_BYTES],
     spend_sk: &[u8; 32],
     network_id: u8,
     classical_segment: &[u8],
@@ -373,7 +400,7 @@ pub fn sign_message(
     let (preimage, sig_pq) =
         sign_message_pq_half(master_seed, network_id, classical_segment, message)?;
     let outer = outer_bytes(&preimage, &sig_pq);
-    let sig_cl = sign_outer_with_spend_scalar(spend_sk, &outer)?;
+    let sig_cl = sign_outer_with_spend_scalar(spend_sk, outer.as_ref())?;
     Ok(assemble_armored(&sig_pq, &sig_cl))
 }
 
@@ -432,8 +459,13 @@ pub fn verify_message(
     if canonical[2] != MSG_SIG_MODE_SPEND {
         return Err(MessageSigError::Malformed("unknown mode"));
     }
-    let sig_pq: &[u8] = &canonical[3..3 + SLH_192S_SIG_LEN];
-    let sig_cl: &[u8] = &canonical[3 + SLH_192S_SIG_LEN..3 + SLH_192S_SIG_LEN + CLASSICAL_SIG_LEN];
+    let sig_pq: &[u8; SLH_192S_SIG_LEN] = canonical[3..3 + SLH_192S_SIG_LEN]
+        .try_into()
+        .expect("length fixed by canonical split");
+    let sig_cl: &[u8; CLASSICAL_SIG_LEN] = canonical
+        [3 + SLH_192S_SIG_LEN..3 + SLH_192S_SIG_LEN + CLASSICAL_SIG_LEN]
+        .try_into()
+        .expect("length fixed by canonical split");
 
     let preimage = message_preimage(network_id, classical_segment, message);
 
@@ -441,16 +473,14 @@ pub fn verify_message(
     // structural — a verifier without this dependency cannot get here.
     let slh_public = slh_dsa_sha2_192s::PublicKey::try_from_bytes(slh_pk)
         .map_err(|_| MessageSigError::InvalidKey)?;
-    let sig_pq_arr: &[u8; SLH_192S_SIG_LEN] =
-        sig_pq.try_into().expect("length fixed by canonical split");
-    if !slh_public.verify(&preimage, sig_pq_arr, b"") {
+    if !slh_public.verify(&preimage, sig_pq, b"") {
         return Err(MessageSigError::VerifyFailed);
     }
 
     // Outer half: the spend-scalar Schnorr over preimage ‖ σ_pq —
     // stripping the PQ half structurally invalidates this one.
     let outer = outer_bytes(&preimage, sig_pq);
-    if !verify_outer(spend_pk, &outer, sig_cl) {
+    if !verify_outer(spend_pk, outer.as_ref(), sig_cl) {
         return Err(MessageSigError::VerifyFailed);
     }
     Ok(())
@@ -463,7 +493,7 @@ mod tests {
     use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
     use curve25519_dalek::scalar::Scalar;
 
-    const SEED: [u8; 64] = [0x42u8; 64];
+    const SEED: [u8; MASTER_SEED_BYTES] = [0x42u8; MASTER_SEED_BYTES];
     const NETWORK: u8 = 1; // testnet discriminant
     const SEGMENT: &[u8] = &[0x01; 81]; // v1-shaped bound segment stand-in
 
@@ -540,7 +570,7 @@ mod tests {
             verify_message(&other_spend, &slh_pk(), NETWORK, SEGMENT, b"msg", &armored),
             Err(MessageSigError::VerifyFailed)
         );
-        let other_slh = derive_message_signing_public_key(&[7u8; 64]).unwrap();
+        let other_slh = derive_message_signing_public_key(&[7u8; MASTER_SEED_BYTES]).unwrap();
         assert_eq!(
             verify_message(&spend_pk(), &other_slh, NETWORK, SEGMENT, b"msg", &armored),
             Err(MessageSigError::VerifyFailed)
@@ -619,7 +649,7 @@ mod tests {
         // Replace σ_pq with a valid signature from a DIFFERENT SLH
         // identity over the same preimage; keep the honest σ_ed.
         let preimage = message_preimage(NETWORK, SEGMENT, b"m");
-        let (_pk2, sk2) = derive_message_signing_identity(&[9u8; 64]).unwrap();
+        let (_pk2, sk2) = derive_message_signing_identity(&[9u8; MASTER_SEED_BYTES]).unwrap();
         let sig_pq2 = sk2.try_sign(&preimage, b"", true).unwrap();
         canonical[3..3 + SLH_192S_SIG_LEN].copy_from_slice(&sig_pq2);
         let body_len = MSG_SIG_CANONICAL_LEN - MSG_SIG_CHECKSUM_LEN;
@@ -634,7 +664,7 @@ mod tests {
             verify_message(&spend_pk(), &slh_pk(), NETWORK, SEGMENT, b"m", &spliced),
             Err(MessageSigError::VerifyFailed)
         );
-        let pk2 = derive_message_signing_public_key(&[9u8; 64]).unwrap();
+        let pk2 = derive_message_signing_public_key(&[9u8; MASTER_SEED_BYTES]).unwrap();
         assert_eq!(
             verify_message(&spend_pk(), &pk2, NETWORK, SEGMENT, b"m", &spliced),
             Err(MessageSigError::VerifyFailed)
@@ -653,7 +683,7 @@ mod tests {
             .expect("sign with wrong ctx");
 
         let outer = outer_bytes(&preimage, &sig_pq_bad_ctx);
-        let sig_cl = sign_outer_with_spend_scalar(&spend_sk(), &outer).unwrap();
+        let sig_cl = sign_outer_with_spend_scalar(&spend_sk(), outer.as_ref()).unwrap();
         let s = assemble_armored(&sig_pq_bad_ctx, &sig_cl);
 
         assert_eq!(
@@ -667,11 +697,12 @@ mod tests {
     /// relies on) and the preimage is length-prefix framed.
     #[test]
     fn domains_distinct_and_framing_unambiguous() {
-        let domains: [&[u8]; 4] = [
+        let domains: [&[u8]; 5] = [
             MSG_SIGN_DOMAIN,
             MSG_HASH_DOMAIN,
             MSG_SIGN_SEED_DOMAIN,
             MSG_SIG_CHECKSUM_DOMAIN,
+            MSG_SIGN_OUTER_DOMAIN,
         ];
         for (i, a) in domains.iter().enumerate() {
             for b in domains.iter().skip(i + 1) {
@@ -683,5 +714,17 @@ mod tests {
         let p1 = message_preimage(0, &[0xAA, 0xBB], b"x");
         let p2 = message_preimage(0, &[0xAA], b"x");
         assert_ne!(p1, p2);
+    }
+
+    /// Outer-message construction is exactly preimage ‖ σ_pq at the
+    /// compile-time length the actor gate / type boundary relies on.
+    #[test]
+    fn outer_bytes_length_is_compile_time_fixed() {
+        let preimage = [0xABu8; MSG_PREIMAGE_LEN];
+        let sig_pq = [0xCDu8; SLH_192S_SIG_LEN];
+        let outer = outer_bytes(&preimage, &sig_pq);
+        assert_eq!(outer.len(), OUTER_MSG_LEN);
+        assert_eq!(&outer[..MSG_PREIMAGE_LEN], &preimage);
+        assert_eq!(&outer[MSG_PREIMAGE_LEN..], &sig_pq[..]);
     }
 }
