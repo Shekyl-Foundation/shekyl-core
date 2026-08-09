@@ -13283,3 +13283,176 @@ substitute for. What changed is that the shipped number's provenance is now a
 spec-machine measurement plus a labelled assumption instead of a 2019 laptop
 comment — the §21 ledger's `hop` row moves from "provenance" toward "derived,
 distribution owed."
+
+## 89. Decided — the anonymity zone stems, and the embargo goes per-zone
+
+**2026-08-08, maintainer ruling.** §64's question is answered: **yes.**
+
+> **Tor is a transport, like the clear internet. Changing the transport does
+> not change the graph.**
+
+That is §18 restated, and it is why this is a *correction* rather than a new
+posture. §18 cut the relay loop to Rust and made `levin_notify` a transport
+shim; §64.2 then found three C++ sites still branching on the transport fact.
+A shim that decides differently per network is the thing §18 said should not
+exist. The three-week road to yes is not re-litigated here.
+
+### 89.1 The price, recomputed — the headroom is gone, and the sign is wrong
+
+§63.2's comfort came from a posture that is now retired. It swept `hop` to ten
+times clearnet and found the anonymity path needed a quarter of the shipped
+embargo — but only because the zone fluffed at the first node, so **stem length
+was 1 with certainty** (`fluff_probability_pct = 100` in the derivation).
+Stemming restores the full geometric stem, and
+`S(h) = Σ_{k=1..h} ceil((k·hop + F)/τ)` is monotone in **both** `h` and `hop`.
+The decision raises both at once.
+
+Recomputed at `q = 20` — the anon zone's value, verified unchanged:
+`relay_zone_params` carries stems and epoch only, and nothing zone-parameterises
+`fluff_probability_pct`.
+
+| anon-zone `hop` | required embargo | vs shipped 190 s | covered? |
+| --- | --- | --- | --- |
+| 175 ms (clearnet parity) | **190 s** | **+0 %** | exactly, with nothing spare |
+| 300 ms | 216 s | +14 % | no |
+| 500 ms | 250 s | +32 % | no |
+| 1050 ms | 366 s | +93 % | no |
+| 1750 ms | 499 s | +163 % | no |
+
+> **Zero headroom lands exactly at clearnet parity, and the anonymity zone
+> cannot be at parity.** A rendezvous path is six relays where clearnet is one
+> direct connection, and `hop` also carries verification — 127 ms modal, 792 ms
+> at the §85 tail cell. So the shipped 190 s **under-provisions** a stemming
+> anonymity zone, which is §65/§66's privacy-losing direction.
+
+The decision stands. What changes is that it arrives with a bill §64 had not
+priced, because §63.2's margin was computed on the posture being retired.
+
+### 89.2 The embargo is per-zone — and F-7's precedent does not transfer
+
+The tempting move is F-7's: provision one global at the worst zone, as
+`fluff_return_ms = 3250` already does. **It does not apply here, by this arc's
+own distinction** — §63.2's keeper, kept for exactly this moment:
+
+> *"`fluff_return_ms` crosses transports because a fluff wave returns over
+> whatever network the node is on. `time_between_hop_ms` cannot, because the
+> stem it spaces only ever runs on one."*
+
+`F` is worst-zone because it genuinely is **not** a per-zone quantity: a
+dual-stack node's fluff returns over both networks, so there is no per-zone
+value to pick. `hop` is transport-bound by nature, and **§59's coherence
+guarantees the well-definedness**: a transaction that enters the anonymity
+zone's stem stays there until it fluffs, so every remaining hop in `S(h)` runs
+on one transport. The quantity is defined per zone in a way `F` never was.
+
+**§75's test picks the same answer independently.** A global at the worst zone
+would give clearnet transactions a 366 s embargo sized for a rendezvous path
+they never touch — roughly doubling black-hole recovery latency for the
+overwhelming majority of traffic to cover a minority's real cost. That is
+scalar-at-8 one axis over: over-provisioning the common case against a tail
+that does not apply to it. **Per-zone is matched provisioning.**
+
+The mechanism is already designed: §65.4's **two reserved bits** on the txpool
+entry, with `zone::invalid == 0` static-asserted so pre-upgrade records decode
+to the correct *"origin unknown"* sentinel and fall back to the global embargo
+with no migration step.
+
+### 89.3 The disclosure check — measured, and it closes on vantage, not on weakness
+
+Per-zone means the two zones draw from different means, and a different mean is
+in principle an observable. This is the mirror of the `vin.size()` question D
+answered, so it got the same treatment rather than an argument:
+`tests/zone_embargo_disclosure.rs`, granting the adversary both things the
+observable requires — the arming time (the origin's send) and a black-hole, since
+in normal operation a transaction fluffs because its stem reached a fluff node,
+not because an embargo fired.
+
+Controls first, so a pass cannot be vacuous: identical zones give `TV = 0.000000`,
+accuracy 0.5000; a 4098 s zone gives accuracy 0.9108, so the instrument does see
+disclosure when it exists.
+
+| anon `hop` | embargo | single-observation accuracy | self-fluffs for 95 % |
+| --- | --- | --- | --- |
+| 500 ms | 250 s | 0.5506 | 72 |
+| 1050 ms | 366 s | 0.6185 | 11 |
+| 1750 ms | 499 s | 0.6712 | 5 |
+| 3500 ms | 845 s | 0.7516 | 2 |
+
+**The a-priori read was that a single observation barely discriminates two
+exponentials. That holds at 500 ms and fails at the top of the range** — five
+self-fluffs suffice at 1750 ms, two at 3500 ms. So the ruling must not rest
+there.
+
+> **The closure is vantage, and it is price-independent.** To collect
+> self-fluffs *with arming times* an adversary must be a peer on that zone —
+> and a peer on the anonymity zone already knows the transaction arrived over
+> Tor. The embargo duration discloses nothing that observer does not hold. The
+> same premise correction as `vin.size()`.
+>
+> **The signal-strength leg is recorded as NOT load-bearing**, because it
+> depends on the rendezvous number, which is unmeasured. Anyone leaning on it
+> loses it exactly when the measurement lands high. The test asserts
+> discrimination *rises* with the hop gap and stays clear of a coin flip, so a
+> future edit cannot quietly recruit it as the closure.
+
+### 89.4 What flips — §64.1's table, now live
+
+Four §63 conclusions were consequences of the no-stem posture, not facts about
+the design, and the decision reverses all four (§64.1). Two more items were
+held pending and are now landable:
+
+| item | status under the decision |
+| --- | --- |
+| §63.7 exit (b) not dominated | stem sends pass `fluff = false` — **the flag varies again, §61.1's partition argument revives verbatim** |
+| §63.5 stem shortening rules out exit (a) | a diverted transaction **continues** stemming; the 64 % cost disappears |
+| §63.8 coherence dormant | receiver takes the `forward` default, `still_stemming` holds, **coherence fires** |
+| §62 F-12 retracted | the change **creates** Tor-latency hops — un-retracts forward-looking |
+| §64.1 eligibility decision, posture-conditional | **landable**, and the exit (a)/(b) ranking **inverts** |
+| §26.2 / §30.6, reopened at §63.3 as half-true | the stem half becomes **right** — closes the §63.3 reopening |
+
+**Two test artifacts assert the retiring behaviour and must be rewritten, not
+patched.** `tests/unit_tests/levin.cpp:1536-1582`
+(`private_stem_without_padding`) asserts a stem send on a private zone reaches
+*every* outbound peer with `dandelionpp_fluff == true`, and `:1588`'s inherited
+comment — *"private mode always uses fluff but marked as stem"* — becomes false.
+§18 counted the 33-gtest suite as a free regression oracle across the RP-3 cut;
+**this is the one of the 33 that changes its expectation**, and it changes
+because the posture changed, not because the port drifted.
+`tests/hop_sensitivity.rs::anonymity_zone_origin_is_over_provisioned_not_under`
+is the other: it was written as a tripwire naming this exact event — *"a failure
+here means the anonymity zone started stemming… either of which reopens §63"* —
+and it has now fired by decision rather than by regression.
+
+### 89.5 Sequencing — the gates carry the zone field, they do not precede it
+
+§65.5's ordering holds, with one amendment. **The three gates and the txpool
+zone field land together.** The gates are what make anonymity zones stem; from
+the moment they do, the embargo is under-provisioned for those zones until the
+field exists. Landing them separately ships a known privacy-losing window on
+purpose, which no amount of sequencing convenience justifies.
+
+All three gates land in one change — §64.2 already priced sites 1 and 2 as
+under-maintenance with no blocker, so splitting them out is deferral without a
+named blocker (§22). The shape of the fix is **deleting a transport branch**,
+not adding Rust: §18's architecture already puts the decision Rust-side, so
+removing the C++ branch advances the boundary rather than thickening it.
+
+**The interface change carries `(shape, zone)` together.** Phase 1 needs shape
+plumbed to the embargo draw; §64 needs zone. Both extend the same FFI signature
+and both add a fact to the txpool entry. Their arriving together is a better
+position than either alone — one interface change through three layers instead
+of two.
+
+**The rendezvous measurement gates the constant, not the decision.** §86
+declassified transit as "a refinement, not a gate" — explicitly under the
+no-stem posture, and that conditional has now expired: under stemming, the anon
+zone's `hop` is the input deciding whether its embargo is adequate at all. So
+the gates and the field land with a **worst-zone interim value** and narrow when
+the number arrives — over-provisioning in the safe direction while it is
+unknown, the same posture `F` took.
+
+**The measurement itself is onion-to-onion.** The anonymity zone addresses peers
+by `.onion` (`src/net/tor_address.h`), so a stemming zone's hops are Shekyl node
+to Shekyl node over a rendezvous path. **No exit relay appears anywhere in the
+topology the design uses**, and a clearnet-vs-exit delta measures a path that
+will never carry a stem.
