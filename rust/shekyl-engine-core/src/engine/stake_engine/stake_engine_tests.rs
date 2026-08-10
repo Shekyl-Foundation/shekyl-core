@@ -619,7 +619,7 @@ fn verify_credit_funding_rejects_wrong_total() {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let vin = build_join_market_vin(&bundle, holdings)
+    let vin = build_join_market_vin(bundle.hybrid_bond_id(), &bundle.bond_spend_pk, holdings)
         .expect("build_join_market_vin succeeds for valid inputs");
 
     let fee = AtomicUnits::from_raw(100);
@@ -677,7 +677,7 @@ async fn sign_bond_slot_mismatch_is_rejected() {
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
     let err = handle
-        .sign_bond(h0, ticket_for_slot_1, holdings, [0u8; 32])
+        .sign_bond(h0, ticket_for_slot_1, holdings)
         .await
         .expect_err("slot mismatch must fail");
 
@@ -744,7 +744,7 @@ async fn sign_bond_emits_gf7_draw_and_schedule_events() {
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
     let post = handle
-        .sign_bond(h0, ticket, holdings, [0u8; 32])
+        .sign_bond(h0, ticket, holdings)
         .await
         .expect("sign_bond succeeds for a held, matching slot");
 

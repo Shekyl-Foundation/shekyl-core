@@ -22,8 +22,8 @@ use super::actor::StakeEngine;
 use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
-    ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, MintPersonaHandle,
-    PersonaIdentityOf, SignBond, SignedBondPost,
+    ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
+    MintPersonaHandle, PersonaIdentityOf, SignBond,
 };
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
 use super::types::*;
@@ -202,13 +202,15 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
-    /// Build and sign a JoinMarket archival bond post for the persona named by
-    /// `handle` (Bond-PR 2c-2b, S1/S2), returning the signed vin **paired
-    /// with** its block-timed placement plan ([`SignedBondPost`]).
+    /// Construct a JoinMarket archival bond-post vin for the persona named by
+    /// `handle` (Bond-PR 2c-2b), returning the constructed vin **paired with**
+    /// its block-timed placement plan ([`BondPostPlacement`]). No on-vin
+    /// signature (SA-2b); surface-A signing is the assemble path.
     ///
     /// Consumes both `handle` (operation-scoped capability, typed contract #2)
     /// and `ticket` (persist-before-use witness, typed contract #1) by value,
-    /// so "sign before persist" and "sign for an unheld persona" are uncallable.
+    /// so "construct before persist" and "construct for an unheld persona" are
+    /// uncallable.
     ///
     /// See [`SignBond`] for the full caller workflow.
     ///
@@ -220,7 +222,7 @@ impl StakeEngineHandle {
     ///   `StaleHandle` in `validate_handle` (a wipe advances the generation, so a
     ///   stale-generation handle and a no-longer-held slot are the same failure).
     ///   `LookaheadExhausted` is *not* reachable here — it is a `mint_handle`
-    ///   error; signing only validates an already-minted handle.
+    ///   error; construction only validates an already-minted handle.
     /// - [`StakeEngineError::SlotMismatch`] — `handle.p_slot != ticket.p_slot`.
     /// - [`StakeEngineError::RngSourceFailed`] — OS entropy source unavailable.
     /// - [`StakeEngineError::RngDegeneracy`] — timing draw degenerate; retry.
@@ -231,14 +233,12 @@ impl StakeEngineHandle {
         handle: PersonaHandle,
         ticket: crate::engine::stake_persist::PersistedBondTicket,
         holdings: HoldingsDescriptor,
-        tx_prefix_hash: [u8; 32],
-    ) -> Result<SignedBondPost, StakeEngineError> {
+    ) -> Result<BondPostPlacement, StakeEngineError> {
         self.actor
             .ask(SignBond {
                 handle,
                 ticket,
                 holdings,
-                tx_prefix_hash,
             })
             .await
             .map_err(collapse_send_error)

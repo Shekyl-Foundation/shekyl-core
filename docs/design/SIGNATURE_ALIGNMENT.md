@@ -30,7 +30,7 @@ as a security property.
 
 | Site | Op | Signed input | Structural domain? |
 |---|---|---|---|
-| `shekyl-archival-bond-builder/src/lib.rs:152` | sign | `vin.signature_preimage(tx_prefix_hash)` | ~~yes — `shekyl/archival-bond-post-v1`~~ — **site deleted in SA-2b** (§2.2 ruling: the bond vin rides the generic surface-A slot), so the live census is eight |
+| ~~`shekyl-archival-bond-builder` S1 on-vin sign~~ | — | — | **Deleted in SA-2b** (§2.2): bond vin rides generic surface-A `pqc_auths` (see `stake_engine/bond.rs` bond-slot row). Live census = eight sites below |
 | `shekyl-archival-retention/src/attestation_wire.rs:488` | verify | `record.nonce(r, cb_out_key)` | yes — `shekyl/archival-attestation-nonce-v1` |
 | `shekyl-crypto-pq/src/output.rs:991` | sign | caller's `message` (`sign_pqc_auth_for_output`) | **no** — bare |
 | `shekyl-engine-core/…/stake_engine/bond.rs:343` | sign | `bond_payload_hash` | **no** — bare hash |

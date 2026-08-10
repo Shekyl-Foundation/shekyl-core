@@ -2430,7 +2430,12 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     }];
 
     // ── Build the bond vin + the change output ───────────────────────
-    let built = build_join_market_vin(&p_keys, holdings.clone()).expect("build JoinMarket vin");
+    let built = build_join_market_vin(
+        p_keys.hybrid_bond_id(),
+        &p_keys.bond_spend_pk,
+        holdings.clone(),
+    )
+    .expect("build JoinMarket vin");
     assert_eq!(built.vin().bond_credit, floor);
     assert_eq!(built.vin().bond_debit, 0);
 

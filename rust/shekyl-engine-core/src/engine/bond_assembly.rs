@@ -201,12 +201,12 @@ pub(crate) enum BondAssemblyError {
         gindex: u64,
     },
 
-    /// Invariant A-1 (§3.3 step 4, fail closed): the signed vin's
+    /// Invariant A-1 (§3.3 step 4, fail closed): the constructed vin's
     /// wire-encoded `BondPost` fields differ from the prefix's `BondPost`
     /// input. The signature binds a different post than the prefix hash
     /// covered — a build defect, never a recoverable state.
     #[error(
-        "bond-post input mismatch: the signed vin does not match the prefix's BondPost \
+        "bond-post input mismatch: the constructed vin does not match the prefix's BondPost \
          input (invariant A-1) — build defect, nothing was persisted"
     )]
     BondPostMismatch,

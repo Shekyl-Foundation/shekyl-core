@@ -7,11 +7,11 @@
 //!
 //! This crate is the **construct** side of the archival bond, the mirror of the
 //! `shekyl-archival-retention` **verify** side. It is deterministic, holds no
-//! async runtime, and runs no actor: it builds the bond-post `vin`, signs it
-//! with the `P` identity hybrid key, and supplies the single-sourced
-//! [`OutputTerm`] for the CT balance. Funding selection, standoff timing, and
-//! broadcast live in the `StakeEngine` (PR 2);
-//! `docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §5 / §7.
+//! async runtime, and runs no actor: it builds the bond-post `vin` (no on-vin
+//! signature — SA-2b) and supplies the single-sourced [`OutputTerm`] for the
+//! CT balance. Surface-A signing of the whole-tx payload happens later in the
+//! assemble path. Funding selection, standoff timing, and broadcast live in
+//! the `StakeEngine` (PR 2); `docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §5 / §7.
 //!
 //! ## What this crate produces (PR 1)
 //!
@@ -46,7 +46,7 @@ use shekyl_archival_retention::{
     bond_floor, p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, BondPostKind,
     HoldingsDescriptor,
 };
-use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_ct_balance::OutputTerm;
 use shekyl_units::AtomicUnits;
 
@@ -88,19 +88,22 @@ impl JoinMarketVin {
 /// Build a JoinMarket bond-post `vin` for persona `P` over the holdings being
 /// bonded (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.1).
 ///
+/// `identity_pk` is P's public identity (`hybrid_bond_id` / `hybrid_sign_pk`).
+/// `bond_spend_pk` is the GF-1 debit authorizer. Neither secret is required —
+/// this constructor does not sign (surface-A signing is the assemble path).
+///
 /// The constructed `vin` is accepted by
 /// [`shekyl_archival_retention::verify_join_market_bond_post`] with
-/// `record_exists == false` by construction. The vin carries no signature: its
-/// on-chain authorization is the transaction-level `pqc_auths` slot the caller
-/// signs with P's identity key over the whole-tx payload (surface A, SA-2b), so
-/// this builder does not take the tx prefix hash.
+/// `record_exists == false` by construction. On-chain authorization is the
+/// caller's surface-A `pqc_auths` slot over the whole-tx payload (SA-2b).
 ///
 /// # Errors
 ///
 /// - [`BondBuildError::BondFloorZero`] if `holdings` are structurally invalid.
-/// - [`BondBuildError::IdentityEncode`] if the identity key fails to serialize.
+/// - [`BondBuildError::IdentityEncode`] if a public key fails to serialize.
 pub fn build_join_market_vin(
-    keys: &ArchivalPKeys,
+    identity_pk: &HybridPublicKey,
+    bond_spend_pk: &HybridPublicKey,
     holdings: HoldingsDescriptor,
 ) -> Result<JoinMarketVin, BondBuildError> {
     let floor = bond_floor(&holdings);
@@ -110,9 +113,9 @@ pub fn build_join_market_vin(
 
     // Identity = P_pubkey; the canonical id is derived from it, never carried
     // independently (`ARCHIVAL_FIREWALL_GATE6.md` §9.4 / id::* over the same
-    // canonical bytes the verify side recomputes).
-    let hybrid_public_key = keys
-        .hybrid_bond_id()
+    // canonical bytes the verify side recomputes). Public keys only — this
+    // constructor does not sign (SA-2b / rule 36).
+    let hybrid_public_key = identity_pk
         .to_canonical_bytes()
         .map_err(BondBuildError::IdentityEncode)?;
     // The producer returns the `PCanonicalId` domain newtype; the wire vin stores
@@ -122,8 +125,7 @@ pub fn build_join_market_vin(
     // The GF-1 debit authorizer, JoinMarket-coupled on the wire (§9.11) and
     // committed into the record at connect. It rides the signed tx prefix, so
     // P's surface-A `pqc_auths` signature binds it (SA-2b).
-    let bond_spend_pk = keys
-        .bond_spend_pk
+    let bond_spend_pk = bond_spend_pk
         .to_canonical_bytes()
         .map_err(BondBuildError::IdentityEncode)?;
 

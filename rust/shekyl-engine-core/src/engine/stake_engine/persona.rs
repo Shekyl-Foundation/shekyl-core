@@ -190,12 +190,14 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
 ///
 /// The `ArchivalPKeys` bundle is borrowed inside the actor and never crosses
 /// the actor boundary (rule 36-secret-locality). `build_join_market_vin` is
-/// called here; the reply is a [`SignedBondPost`] carrying the signed
-/// `JoinMarketVin` **and** the bond-post placement offset derived from this
-/// request's entry-gap draw — the caller receives the placement offset with the
-/// bytes it places, so the draw cannot be lost between signing and scheduling.
+/// called here with **public** key halves only; the reply is a
+/// [`BondPostPlacement`] carrying the constructed `JoinMarketVin` **and** the
+/// bond-post placement offset from this request's entry-gap draw — the caller
+/// receives the placement offset with the bytes it places, so the draw cannot
+/// be lost between construction and scheduling. On-vin signing is gone (SA-2b);
+/// surface-A `pqc_auths` signing happens later in assemble.
 ///
-/// Does **not** advance the activation generation — signing does not change
+/// Does **not** advance the activation generation — this path does not change
 /// the active slot or wipe any persona.
 ///
 /// # Caller workflow
@@ -205,7 +207,7 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
 /// stake.activate_persona(handle1)           (sets active slot; handle1 consumed)
 /// engine.persist_bond_record(slot) → ticket (durable; Engine, not actor)
 /// stake.mint_handle(slot)      → handle2
-/// stake.sign_bond(handle2, ticket, holdings, tx_prefix_hash) → SignedBondPost
+/// stake.sign_bond(handle2, ticket, holdings) → BondPostPlacement
 /// ```
 #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
 pub(crate) struct SignBond {
@@ -213,28 +215,26 @@ pub(crate) struct SignBond {
     /// contract #2). Must match `ticket.p_slot()`.
     pub handle: PersonaHandle,
     /// Proof that the live-bond record was durably persisted for this slot
-    /// before signing (typed contract #1). Must match `handle.p_slot()`.
+    /// before construction (typed contract #1). Must match `handle.p_slot()`.
     pub ticket: crate::engine::stake_persist::PersistedBondTicket,
     /// Holdings to compute `bond_floor` from. Passed to
     /// [`build_join_market_vin`] inside the actor.
     pub holdings: HoldingsDescriptor,
-    /// 32-byte prefix hash of the transaction the bond post rides in.
-    /// Binds the signature to this specific transaction.
-    pub tx_prefix_hash: [u8; 32],
 }
 
-/// Reply of [`SignBond`]: the signed bond vin **and** the block-timed
+/// Reply of [`SignBond`]: the constructed bond vin **and** the block-timed
 /// placement offset derived from the same request's entry-gap draw.
 ///
 /// Pairing them in one reply is the seam discipline: the caller that receives
 /// the bytes to place also receives *where to place them* (blocks from its
 /// private intent anchor `t0`), so the placement offset cannot be lost between
-/// signing and scheduling. The offset is relative; the anchor itself never
-/// leaves the caller.
+/// construction and scheduling. The offset is relative; the anchor itself never
+/// leaves the caller. The vin carries no on-vin signature (SA-2b).
 #[allow(dead_code)] // inert until the 2c-2a assemble / 2d dispatch consumer lands
 #[derive(Debug)]
-pub(crate) struct SignedBondPost {
-    /// The signed JoinMarket bond vin, ready for transaction assembly.
+pub(crate) struct BondPostPlacement {
+    /// The constructed JoinMarket bond vin, ready for transaction assembly.
+    /// Authorization is the later surface-A `pqc_auths` slot, not an on-vin blob.
     pub vin: JoinMarketVin,
     /// Blocks from the private-intent anchor `t0` to the bond-post broadcast —
     /// the drawn entry-gap spread. (No entry offset: only the bond post is
@@ -243,7 +243,7 @@ pub(crate) struct SignedBondPost {
 }
 
 impl Message<SignBond> for StakeEngine {
-    type Reply = Result<SignedBondPost, StakeEngineError>;
+    type Reply = Result<BondPostPlacement, StakeEngineError>;
 
     async fn handle(
         &mut self,
@@ -267,7 +267,7 @@ impl Message<SignBond> for StakeEngine {
         // `PTransactionSubmitter` (per-`P` CX-2) + `BroadcastPosture`
         // (no-③-by-type) in `transaction_submitter.rs` / `posture.rs` (SP-T4a).
         // The remaining CONSUMER wiring is the 2c-2a assemble / 2d dispatch path
-        // (see `AssembleBond`); this handler plans + signs the vin, it does not
+        // (see `AssembleBond`); this handler plans + constructs the vin, it does not
         // broadcast.
         let (handle_slot, bond_post_offset_blocks) =
             self.validate_and_draw_bond_offset(&msg.handle, msg.ticket.p_slot())?;
@@ -279,12 +279,14 @@ impl Message<SignBond> for StakeEngine {
             .expect("validate_handle confirmed slot is held")
             .keys();
 
-        // 7. Build and sign the JoinMarket vin inside the actor.
-        //    `ArchivalPKeys` is borrowed here and never returned to the caller
-        //    (rule 36-secret-locality): only the signed `JoinMarketVin` (paired
-        //    with its placement offset) crosses the actor boundary.
-        let vin = build_join_market_vin(keys, msg.holdings).map_err(StakeEngineError::BondBuild)?;
-        Ok(SignedBondPost {
+        // 7. Construct the JoinMarket vin inside the actor (public keys only;
+        //    SA-2b — no on-vin signature). `ArchivalPKeys` is borrowed here and
+        //    never returned to the caller (rule 36-secret-locality): only the
+        //    constructed `JoinMarketVin` (paired with its placement offset)
+        //    crosses the actor boundary.
+        let vin = build_join_market_vin(keys.hybrid_bond_id(), &keys.bond_spend_pk, msg.holdings)
+            .map_err(StakeEngineError::BondBuild)?;
+        Ok(BondPostPlacement {
             vin,
             bond_post_offset_blocks,
         })

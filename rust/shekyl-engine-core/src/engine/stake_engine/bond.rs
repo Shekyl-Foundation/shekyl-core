@@ -38,7 +38,7 @@ use super::types::*;
 
 /// Assemble the **full, broadcast-ready** JoinMarket bond transaction inside
 /// the actor (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3) — the production superset
-/// of [`SignBond`] (which signs the vin only and remains for the composition
+/// of [`SignBond`] (which constructs the vin only and remains for the composition
 /// KAT).
 ///
 /// Carries the same handle + ticket typed contracts as [`SignBond`], plus the
@@ -50,7 +50,7 @@ use super::types::*;
 ///
 /// The reply pairs the minted [`PBoundBytes`] with the bond-post placement
 /// offset from this request's entry-gap draw — the same seam discipline as
-/// [`SignedBondPost`]: the caller that receives the bytes to place receives
+/// [`BondPostPlacement`]: the caller that receives the constructed vin receives
 /// where to place them.
 ///
 /// Dead_code allow: the Engine orchestrator is wired; go-live still needs
@@ -219,17 +219,22 @@ impl Message<AssembleBond> for StakeEngine {
         )
         .map_err(|e| BondAssemblyError::build("prefix hash", e))?;
 
-        // ── Step 13 (§3.3 actor step 3): build + sign the vin over the now-
-        // fixed prefix hash.
-        let built = build_join_market_vin(keys, msg.holdings.clone())
-            .map_err(StakeEngineError::BondBuild)?;
+        // ── Step 13 (§3.3 actor step 3): construct the bond vin (public keys
+        // only; SA-2b — no on-vin signature). Prefix hash above is for prove /
+        // surface-A auth later, not for this constructor.
+        let built = build_join_market_vin(
+            keys.hybrid_bond_id(),
+            &keys.bond_spend_pk,
+            msg.holdings.clone(),
+        )
+        .map_err(StakeEngineError::BondBuild)?;
 
-        // ── Step 14 — invariant A-1 (fail closed): the signed vin's post
+        // ── Step 14 — invariant A-1 (fail closed): the constructed vin's post
         // fields must equal the prefix's BondPost input. Typed equality on
         // `ArchivalBondPostVin` implies byte-identity (its wire write is a
-        // deterministic function of the value). A mismatch means the
-        // signature binds a different post than the hash covered — a build
-        // defect, never recoverable.
+        // deterministic function of the value). A mismatch means the later
+        // surface-A signature would cover a different post than the prefix —
+        // a build defect, never recoverable.
         if built.vin() != &expected_vin {
             // Loud in debug (a build defect, never a recoverable state), fail
             // closed in release. `debug_assert!(false, …)` — not
@@ -238,7 +243,7 @@ impl Message<AssembleBond> for StakeEngine {
             // inequality (it reads as a conditional check but can only panic).
             debug_assert!(
                 false,
-                "A-1: signed vin diverged from the prefix BondPost input"
+                "A-1: constructed vin diverged from the prefix BondPost input"
             );
             return Err(BondAssemblyError::BondPostMismatch.into());
         }

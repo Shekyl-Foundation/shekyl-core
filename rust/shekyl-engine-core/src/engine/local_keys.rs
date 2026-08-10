@@ -1693,7 +1693,12 @@ mod tests {
         let fee: u64 = 1_000;
 
         // ── Construct + sign the bond vin ────────────────────────────────
-        let built = build_join_market_vin(&p_keys, holdings.clone()).expect("build JoinMarket vin");
+        let built = build_join_market_vin(
+            p_keys.hybrid_bond_id(),
+            &p_keys.bond_spend_pk,
+            holdings.clone(),
+        )
+        .expect("build JoinMarket vin");
         assert_eq!(built.vin().bond_credit, floor);
         assert_eq!(built.vin().bond_debit, 0);
 
