@@ -24,9 +24,13 @@ scheme specified, mitigation moved to the Tor layer (full vanguards +
 Bandguards re-derive + fetch rate-limiting); guard-holding active
 confirmation recorded as accepted residual; the circuit-construction
 oracle named as the real exposure. TJ-H no longer gates the round.
-**Live remainder, in order: fork 1 (granularity — decides the settlement
-writer's shape), fork 2's selection + nonce anchor (with TJ-B's format
-spec), W₂, (m, n).**
+**Revised 2026-08-10: fork 1 RULED — exact-min urn**, tail accepted with
+the arithmetic on the record (both curves at 10⁻⁷ and below against the
+outer window); band and adaptive band not built; prunability merits
+answered at source; the capped-regime figure (72 % unobservable)
+relocated to §8 as the tx-carrier justification. **Live remainder:
+fork 2's selection + nonce anchor (with TJ-B's format spec), W₂, (m, n)
+re-pin.**
 
 **Lineage.** Successor to the Phase 3 (settlement writer) scope of
 `ARCHIVAL_CREDIT_WIRE.md` (TJ-B step 3). The credit-wire admission surface
@@ -657,6 +661,35 @@ the round kept trying to add forensics underneath it.
      when it thins below m*. Keeps exact-3 for most pairs and buys tail
      anonymity only where the exposure lives; m* becomes the knob that
      trades the two curves above against each other.
+   **RULED (2026-08-10): exact-min urn. The tail is accepted, with the
+   arithmetic on the record.** Both curves live at 10⁻⁷ and below:
+   - *Exposure buys the adversary nothing.* For guard discovery, zero —
+     shard pulls are open and unauthenticated, so the circuit-
+     construction oracle is available 24/7 on demand; knowing when a
+     *challenge* lands adds no capability to the attack this round
+     identified as the serious one. For availability attacks, almost
+     nothing — moving one epoch needs 2 of the pair's 3 draws killed:
+     at 3 % exposure per draw, P(≥ 2 of 3 exposed) ≈ 0.26 % per epoch,
+     and reaching a slash needs that in 11 of 13 epochs — order 10⁻²⁷
+     (τ = 200: ~10⁻²⁰). An adversary who can sustain a DDoS for a full
+     13.9-day epoch needs no lookahead at all; the tail only helps an
+     attacker who can strike for hours but not weeks, and that attacker
+     needs ~22 precisely-timed strikes across six months.
+   - *The band's cost was equally absorbed* (23.3 % at issued-2 → ~2.5
+     expected misses vs a threshold of 11, slash probability ~6×10⁻⁷) —
+     but it buys 1.8 percentage points on an attack path already
+     dominated by three orders of magnitude, and pays with a knob
+     needing its own derivation, tests, and reorg reasoning.
+   - **The adaptive band is NOT built**: a real mechanism with real
+     complexity solving a problem measurement showed isn't there; a
+     tuning knob in a consensus derivation is not a cheap thing to
+     carry.
+   - *Correction owned on the record:* the lookahead-as-dominant-term
+     argument was right that the axis survived expiry⇒miss and
+     guard-discovery, wrong that it dominated fork 1 — exposure is
+     scale-invariant and thin, and the open-pull oracle means the
+     guard-discovery leg gains nothing from timing. The measurement
+     corrected the argument, which is what it was for.
 2. **Who reads — witness selection and obligation.** The decision the rest
    of the stack prices against: W₂, the abandonment penalty, the reward
    question, and the nonce anchor are all functions of who performs the
@@ -850,7 +883,14 @@ the round kept trying to add forensics underneath it.
   by default. Carrier-specific check to carry there: the old coinbase
   finding (`prunable_hash` hardcoded null under `CTTypeNull`) was
   coinbase-specific — the tx carrier needs its own
-  commitment-of-the-prunable-region check.
+  commitment-of-the-prunable-region check. **The number that justifies
+  this work (measured, fork §7.1's capped run):** at maturity D = 324 k
+  under the chain-growth-bound k_cap = 30, issued counts are
+  {0: 35 %, 1: 37 %, 2: 28 %} — **72 % of pairs unobservable per
+  epoch**. That is not a tail; it is the system failing, and it is the
+  only figure in the fork-1 measurement set operating at system scale.
+  Without the carrier ruling there are not enough challenges to
+  schedule, and no scheduling choice matters.
 
 **Standing-record reconciliation** — 2026-08-02 FOLLOWUPS rulings (credit-wire
 round) whose premises this round changes; each must be revisited on the
