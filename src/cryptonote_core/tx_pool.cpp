@@ -51,7 +51,6 @@
 #include "warnings.h"
 #include "common/perf_timer.h"
 #include "crypto/hash.h"
-#include "crypto/duration.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "txpool"
@@ -89,7 +88,6 @@ namespace cryptonote
     //! Max DB check interval for relayable txes
     constexpr const std::chrono::minutes max_relayable_check{2};
 
-    constexpr const std::chrono::seconds forward_delay_average{CRYPTONOTE_FORWARD_DELAY_AVERAGE};
 
     // a kind of increasing backoff within min/max bounds
     uint64_t get_relay_delay(time_t last_relay, time_t received)
@@ -309,7 +307,16 @@ namespace cryptonote
           auto last_relayed_time = std::numeric_limits<decltype(meta.last_relayed_time)>::max();
           if (tx_relay == relay_method::forward)
           {
-            last_relayed_time = clock::to_time_t(clock::now() + crypto::random_poisson_seconds{forward_delay_average}());
+            /* Memoryless, not Poisson (Q-12's family half; the mean is
+               unchanged and stays Q-12's to derive). The inherited
+               `random_poisson_seconds{22s}` was F-2/F-4's signature sitting on
+               the tor->clearnet bridge — the moment an anonymity-arrived tx
+               becomes clearnet-visible, so the moment arrival-time inference
+               pays most. Measured on F-4's instrument: 2.01x more invertible
+               at phase 0, and 0.72 vs 0.12 late in the window, because only a
+               memoryless family has residual == full. */
+            last_relayed_time = clock::to_time_t(
+              clock::now() + std::chrono::seconds{shekyl_dandelionpp_forward_delay_seconds()});
             set_if_less(m_next_check, time_t(last_relayed_time));
           }
           // else the `set_relayed` function will adjust the time accordingly later
