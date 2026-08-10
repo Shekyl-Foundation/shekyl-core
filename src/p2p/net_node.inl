@@ -2371,42 +2371,27 @@ namespace nodetool
        traffic (below) still fails closed when anonymity cannot take it —
        leaking an origin over clearnet is the first-spy case this arc exists
        to prevent (§30.5). */
-    const bool still_stemming =
-      tx_relay == cryptonote::relay_method::stem ||
-      tx_relay == cryptonote::relay_method::forward ||
-      tx_relay == cryptonote::relay_method::local;
+    /* Pre-fluff = stem | forward | local. Shared with the pure R-1
+       predicate (`cryptonote::is_pre_fluff_relay` / `r1_coherence_keeps_origin`)
+       so the production branch and its unit witness cannot drift. Fluff is the
+       exit — must not cohere (§59.1). */
+    const bool still_stemming = cryptonote::is_pre_fluff_relay(tx_relay);
 
     if (origin != enet::zone::invalid)
     {
       /* LIVE since §89 — this branch was dormant and is not any more.
 
-         §63.8 recorded it as unreachable on a four-link chain, and §89 breaks
-         the first link. It read: every anonymity-zone release sets
-         `dandelionpp_fluff`, so a receiver overrides its `forward` default to
-         `fluff` (`cryptonote_protocol_handler.inl`), `upgrade_relay_method` is
-         monotone upward and never walks it back, so an anonymity-origin
-         transaction always arrived here as `fluff` with `still_stemming`
-         false.
+         §63.8 recorded it as unreachable on a four-link chain; §89 breaks
+         link 1 (anonymity stem clears `dandelionpp_fluff`). Coherence fires
+         in the default configuration.
 
-         The anonymity zone stems now, and a stem send passes `fluff = false`
-         (`dandelionpp_notify`, unlike the fluff arm which still sets it). So
-         the receiver keeps its `forward` default, `still_stemming` holds, and
-         coherence fires — no longer only in the covert-on world §63.8
-         described, but in the default one.
-
-         **Witness status, stated because it is uneven.** That the anonymity
-         zone emits a stem with the flag clear is pinned by
-         `tests/unit_tests/levin.cpp`'s six `private_*` cases. The remaining
-         links and this branch itself are NOT covered end-to-end: driving an
-         arrival through `handle_notify_new_transactions` on a non-public
-         context needs a `t_core` mock the suite does not have. See
-         DAEMON_RELAY_PRIVACY.md §89.7.
-
-         §59.1's warning applies to this branch now rather than later: `tx_relay`
-         is the exit, and swallowing the fluff case into coherence would strand
-         anonymity-originated transactions in the anonymity subgraph — a
-         liveness break that would read as correct. */
-      if (still_stemming && origin != enet::zone::public_ && m_network_zones.count(origin))
+         **Witness.** Link 1 is pinned by `levin.cpp`'s `private_*` cases.
+         The pure gate (`r1_coherence_keeps_origin`) is pinned by
+         `r1_coherence_predicate`. End-to-end arrival through
+         `handle_notify_new_transactions` on a non-public context still needs
+         a `t_core` mock the suite lacks — see §89.7 / FOLLOWUPS. */
+      if (cryptonote::r1_coherence_keeps_origin(tx_relay, origin) &&
+          m_network_zones.count(origin))
         return send(*m_network_zones.find(origin)); // coherence: no re-roll
 
       /* The roll fires only on a genuine ARRIVAL — `source` is a real peer.

@@ -175,6 +175,9 @@ namespace
 
             std::vector<cryptonote::blobdata> out{std::move(elems->second)};
             relayed_.erase(elems);
+            /* Zone rides with the relay event; drop it with the blobs so
+               `relayed_zone` cannot return a stale attribution after consume. */
+            zones_.erase(relay);
             return out;
         }
     };
@@ -525,12 +528,141 @@ namespace
             return is_stem;
         }
 
+        /*! Build a private (i2p) notifier with ten alternating in/out peers
+            and two fixed txs — shared setup for the stemming cases. */
+        std::shared_ptr<cryptonote::levin::notify> make_private_stem_fixture(const bool padded)
+        {
+            auto notifier_ptr = make_notifier(0, false, padded);
+            auto& notifier = *notifier_ptr;
+            for (unsigned count = 0; count < 10; ++count)
+                add_connection(count % 2 == 0);
+            {
+                const auto status = notifier.get_status();
+                EXPECT_FALSE(status.has_noise);
+                EXPECT_FALSE(status.connections_filled);
+                EXPECT_TRUE(status.has_outgoing);
+            }
+            notifier.new_out_connection();
+            io_service_.poll();
+            return notifier_ptr;
+        }
+
+        static std::vector<cryptonote::blobdata> private_stem_txs()
+        {
+            std::vector<cryptonote::blobdata> txs(2);
+            txs[0].resize(100, 'e');
+            txs[1].resize(200, 'f');
+            return txs;
+        }
+
+        /*! Drive stem/forward until both epoch roles appear, or pin local as
+            always-stem. One shell so the six cases cannot drift. */
+        void run_private_stemming_case(const cryptonote::relay_method method,
+                                       const bool padded)
+        {
+            auto notifier_ptr = make_private_stem_fixture(padded);
+            auto& notifier = *notifier_ptr;
+            const auto txs = private_stem_txs();
+            ASSERT_EQ(10u, contexts_.size());
+
+            if (method == cryptonote::relay_method::local)
+            {
+                /* D++ §4.4: origin always stems, independent of epoch role.
+                   Waiting for fluff would hang. Four rounds on freshly drawn
+                   epochs so a role-dependent regression cannot hide. */
+                for (unsigned round = 0; round < 4; ++round)
+                {
+                    EXPECT_TRUE(run_private_round(notifier, txs, method, padded))
+                      << "local must stem on every epoch role; round " << round;
+                    notifier.run_epoch();
+                }
+                return;
+            }
+
+            /* stem and forward are role-dependent — observe both outcomes.
+               (forward is NOT exempt the way local is; an earlier draft pinned
+               always-stem and failed only when full-suite run order moved RNG.) */
+            bool has_stemmed = false;
+            bool has_fluffed = false;
+            while (!has_stemmed || !has_fluffed)
+            {
+                const bool is_stem = run_private_round(notifier, txs, method, padded);
+                has_stemmed |= is_stem;
+                has_fluffed |= !is_stem;
+                notifier.run_epoch();
+            }
+        }
+
         boost::uuids::random_generator random_generator_;
         boost::asio::io_context io_service_;
         test_receiver receiver_;
         std::deque<test_connection> contexts_;
         test_core_events events_;
     };
+}
+
+/* Pure R-1 coherence gate — pins the production predicate without needing a
+   full non-public `handle_notify_new_transactions` mock (§89.7). Fluff must
+   never cohere (liveness exit); anonymity stem/forward/local must. */
+TEST(r1_coherence_predicate, table)
+{
+    using cryptonote::relay_method;
+    using epee::net_utils::zone;
+
+    // Fluff is the exit on every origin — coherence would strand txs.
+    for (const auto origin : {zone::public_, zone::i2p, zone::tor, zone::invalid})
+        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(relay_method::fluff, origin));
+
+    // Clearnet / invalid never cohere via this path.
+    for (const auto method : {relay_method::stem, relay_method::forward, relay_method::local})
+    {
+        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(method, zone::public_));
+        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(method, zone::invalid));
+        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(relay_method::none, zone::tor));
+        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(relay_method::block, zone::tor));
+    }
+
+    // Pre-fluff on a real anonymity zone — the live §89 path.
+    for (const auto method : {relay_method::stem, relay_method::forward, relay_method::local})
+    {
+        EXPECT_TRUE(cryptonote::r1_coherence_keeps_origin(method, zone::i2p));
+        EXPECT_TRUE(cryptonote::r1_coherence_keeps_origin(method, zone::tor));
+        EXPECT_TRUE(cryptonote::is_pre_fluff_relay(method));
+    }
+    EXPECT_FALSE(cryptonote::is_pre_fluff_relay(relay_method::fluff));
+}
+
+/* §89 private stemming posture: the anonymity zone STEMS. Outbound-only fluff
+   reach is asserted every round inside `run_private_round`. Cases differ only
+   by method and padding. */
+TEST_F(levin_notify, private_stem_without_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::stem, false);
+}
+
+TEST_F(levin_notify, private_local_without_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::local, false);
+}
+
+TEST_F(levin_notify, private_forward_without_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::forward, false);
+}
+
+TEST_F(levin_notify, private_stem_with_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::stem, true);
+}
+
+TEST_F(levin_notify, private_local_with_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::local, true);
+}
+
+TEST_F(levin_notify, private_forward_with_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::forward, true);
 }
 
 TEST(make_header, no_expect_return)
@@ -1896,175 +2028,6 @@ TEST_F(levin_notify, private_fluff_without_padding)
     }
 }
 
-TEST_F(levin_notify, private_stem_without_padding)
-{
-    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
-       expectation ("private mode always uses fluff but marked as stem") is
-       false by decision now, and the three §63 facts this case used to pin
-       have each reversed:
-
-         - a stem send reaches ONE successor, not every outbound peer, because
-           the zone runs Dandelion++ (was §63.4's diffusion);
-         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
-           which is what revives §61.1's partition argument (was §63.7);
-         - the txpool is still told `stem`, so the embargo still arms. That
-           half was always right (§63.3).
-
-       What did NOT change, and is asserted every round in `run_private_round`:
-       fluff reach stays outbound-only. */
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-
-    /* The epoch role is drawn, so both outcomes must be observed rather than
-       assumed — the same shape the public `stem_without_padding` case uses. */
-    bool has_stemmed = false;
-    bool has_fluffed = false;
-    while (!has_stemmed || !has_fluffed)
-    {
-        const bool is_stem =
-          run_private_round(notifier, txs, cryptonote::relay_method::stem, false);
-        has_stemmed |= is_stem;
-        has_fluffed |= !is_stem;
-        /* Re-roll the epoch role. Without this the role is fixed for the
-           epoch's whole 10 minutes and the loop above never terminates —
-           the public `stem_without_padding` case has always ended its
-           iteration this way. */
-        notifier.run_epoch();
-    }
-}
-
-TEST_F(levin_notify, private_local_without_padding)
-{
-    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
-       expectation ("private mode always uses fluff but marked as stem") is
-       false by decision now, and the three §63 facts this case used to pin
-       have each reversed:
-
-         - a stem send reaches ONE successor, not every outbound peer, because
-           the zone runs Dandelion++ (was §63.4's diffusion);
-         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
-           which is what revives §61.1's partition argument (was §63.7);
-         - the txpool is still told `stem`, so the embargo still arms. That
-           half was always right (§63.3).
-
-       What did NOT change, and is asserted every round in `run_private_round`:
-       fluff reach stays outbound-only. */
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-
-    /* No loop waiting on a fluff here, and that absence IS the assertion.
-       `local` is pre-fluff traffic the node introduces itself, and
-       Dandelion++ §4.4 has the origin stem its own transaction regardless of
-       its epoch fluff role (RD-4; the public `local_without_padding` case
-       says "must always be stem"). Waiting for a fluff outcome would wait
-       forever — which is what the first draft of this case did.
-
-       What this pins: that invariant now holds on the ANONYMITY zone too.
-       Before §89 this method fell through to a diffusion here. Four rounds,
-       each on a freshly drawn epoch, so a role-dependent regression cannot
-       hide behind one lucky draw. */
-    for (unsigned round = 0; round < 4; ++round)
-    {
-        EXPECT_TRUE(run_private_round(notifier, txs, cryptonote::relay_method::local, false))
-          << "local must stem on every epoch role; round " << round;
-        notifier.run_epoch();
-    }
-}
-
-TEST_F(levin_notify, private_forward_without_padding)
-{
-    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
-       expectation ("private mode always uses fluff but marked as stem") is
-       false by decision now, and the three §63 facts this case used to pin
-       have each reversed:
-
-         - a stem send reaches ONE successor, not every outbound peer, because
-           the zone runs Dandelion++ (was §63.4's diffusion);
-         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
-           which is what revives §61.1's partition argument (was §63.7);
-         - the txpool is still told `stem`, so the embargo still arms. That
-           half was always right (§63.3).
-
-       What did NOT change, and is asserted every round in `run_private_round`:
-       fluff reach stays outbound-only. */
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-
-    /* Role-dependent, so both outcomes must be observed rather than assumed —
-       the shape the public `forward_without_padding` case uses.
-
-       `forward` is NOT exempt from the epoch role the way `local` is. Only a
-       node's OWN transaction always stems (D++ §4.4); a forwarded one belongs
-       to someone else and takes whatever role the epoch drew. An earlier draft
-       asserted always-stem here by over-generalising from the `local` case —
-       it passed under a `levin_notify.*` filter and failed in the full suite,
-       because the run order moves the RNG and with it the drawn role. */
-    bool has_stemmed = false;
-    bool has_fluffed = false;
-    while (!has_stemmed || !has_fluffed)
-    {
-        const bool is_stem =
-          run_private_round(notifier, txs, cryptonote::relay_method::forward, false);
-        has_stemmed |= is_stem;
-        has_fluffed |= !is_stem;
-        notifier.run_epoch();
-    }
-}
-
 TEST_F(levin_notify, private_block_without_padding)
 {
     /* `block` and `none` never reach the relay path on any zone — `send_txs`
@@ -2186,175 +2149,6 @@ TEST_F(levin_notify, private_fluff_with_padding)
             EXPECT_FALSE(notification._.empty());
             EXPECT_TRUE(notification.dandelionpp_fluff);
         }
-    }
-}
-
-TEST_F(levin_notify, private_stem_with_padding)
-{
-    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
-       expectation ("private mode always uses fluff but marked as stem") is
-       false by decision now, and the three §63 facts this case used to pin
-       have each reversed:
-
-         - a stem send reaches ONE successor, not every outbound peer, because
-           the zone runs Dandelion++ (was §63.4's diffusion);
-         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
-           which is what revives §61.1's partition argument (was §63.7);
-         - the txpool is still told `stem`, so the embargo still arms. That
-           half was always right (§63.3).
-
-       What did NOT change, and is asserted every round in `run_private_round`:
-       fluff reach stays outbound-only. */
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-
-    /* The epoch role is drawn, so both outcomes must be observed rather than
-       assumed — the same shape the public `stem_without_padding` case uses. */
-    bool has_stemmed = false;
-    bool has_fluffed = false;
-    while (!has_stemmed || !has_fluffed)
-    {
-        const bool is_stem =
-          run_private_round(notifier, txs, cryptonote::relay_method::stem, true);
-        has_stemmed |= is_stem;
-        has_fluffed |= !is_stem;
-        /* Re-roll the epoch role. Without this the role is fixed for the
-           epoch's whole 10 minutes and the loop above never terminates —
-           the public `stem_without_padding` case has always ended its
-           iteration this way. */
-        notifier.run_epoch();
-    }
-}
-
-TEST_F(levin_notify, private_local_with_padding)
-{
-    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
-       expectation ("private mode always uses fluff but marked as stem") is
-       false by decision now, and the three §63 facts this case used to pin
-       have each reversed:
-
-         - a stem send reaches ONE successor, not every outbound peer, because
-           the zone runs Dandelion++ (was §63.4's diffusion);
-         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
-           which is what revives §61.1's partition argument (was §63.7);
-         - the txpool is still told `stem`, so the embargo still arms. That
-           half was always right (§63.3).
-
-       What did NOT change, and is asserted every round in `run_private_round`:
-       fluff reach stays outbound-only. */
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-
-    /* No loop waiting on a fluff here, and that absence IS the assertion.
-       `local` is pre-fluff traffic the node introduces itself, and
-       Dandelion++ §4.4 has the origin stem its own transaction regardless of
-       its epoch fluff role (RD-4; the public `local_without_padding` case
-       says "must always be stem"). Waiting for a fluff outcome would wait
-       forever — which is what the first draft of this case did.
-
-       What this pins: that invariant now holds on the ANONYMITY zone too.
-       Before §89 this method fell through to a diffusion here. Four rounds,
-       each on a freshly drawn epoch, so a role-dependent regression cannot
-       hide behind one lucky draw. */
-    for (unsigned round = 0; round < 4; ++round)
-    {
-        EXPECT_TRUE(run_private_round(notifier, txs, cryptonote::relay_method::local, true))
-          << "local must stem on every epoch role; round " << round;
-        notifier.run_epoch();
-    }
-}
-
-TEST_F(levin_notify, private_forward_with_padding)
-{
-    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
-       expectation ("private mode always uses fluff but marked as stem") is
-       false by decision now, and the three §63 facts this case used to pin
-       have each reversed:
-
-         - a stem send reaches ONE successor, not every outbound peer, because
-           the zone runs Dandelion++ (was §63.4's diffusion);
-         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
-           which is what revives §61.1's partition argument (was §63.7);
-         - the txpool is still told `stem`, so the embargo still arms. That
-           half was always right (§63.3).
-
-       What did NOT change, and is asserted every round in `run_private_round`:
-       fluff reach stays outbound-only. */
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-
-    /* Role-dependent, so both outcomes must be observed rather than assumed —
-       the shape the public `forward_without_padding` case uses.
-
-       `forward` is NOT exempt from the epoch role the way `local` is. Only a
-       node's OWN transaction always stems (D++ §4.4); a forwarded one belongs
-       to someone else and takes whatever role the epoch drew. An earlier draft
-       asserted always-stem here by over-generalising from the `local` case —
-       it passed under a `levin_notify.*` filter and failed in the full suite,
-       because the run order moves the RNG and with it the drawn role. */
-    bool has_stemmed = false;
-    bool has_fluffed = false;
-    while (!has_stemmed || !has_fluffed)
-    {
-        const bool is_stem =
-          run_private_round(notifier, txs, cryptonote::relay_method::forward, true);
-        has_stemmed |= is_stem;
-        has_fluffed |= !is_stem;
-        notifier.run_epoch();
     }
 }
 

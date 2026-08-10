@@ -9245,21 +9245,23 @@ its wake.
   live.** §89 woke the branch §63.8 recorded as dormant: the anonymity zone
   stems, a stem send clears `dandelionpp_fluff`, so a receiver keeps its
   `forward` default, `still_stemming` holds, and
-  `net_node.inl`'s `still_stemming && origin != public_` fires — in the
+  `net_node.inl`'s `r1_coherence_keeps_origin` path fires — in the
   **default** configuration, not only with covert enabled as §63.8 predicted.
-  **Witnessed:** link 1 only (`tests/unit_tests/levin.cpp`'s six `private_*`
-  cases pin that a stem emits the flag clear and a fluff sets it).
-  **Not witnessed:** the receiver's relay-method assignment, the monotone
-  `upgrade_relay_method`, and the branch itself.
-  **Blocker (rule 22):** driving an arrival through
-  `handle_notify_new_transactions` on a non-public connection context needs a
-  `t_core` mock the unit suite does not have — the one protocol-handler test
-  that stands up real sockets is `GTEST_SKIP`ped as flaky. Building that
-  harness is its own unit.
+  **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s six `private_*`
+  cases pin that a stem emits the flag clear and a fluff sets it;
+  (2) the pure gate — `r1_coherence_predicate` pins
+  `cryptonote::r1_coherence_keeps_origin` / `is_pre_fluff_relay` (fluff never
+  coheres; anonymity stem/forward/local does; clearnet/invalid never), shared
+  with the production branch so the predicate cannot drift.
+  **Not witnessed end-to-end:** the receiver's relay-method assignment, the
+  monotone `upgrade_relay_method`, and the full send path through
+  `handle_notify_new_transactions` on a non-public context.
+  **Blocker (rule 22):** that arrival path needs a `t_core` mock the unit
+  suite does not have — the one protocol-handler test that stands up real
+  sockets is `GTEST_SKIP`ped as flaky. Building that harness is its own unit.
   **Why it matters more than its size suggests:** §59.1 gated coherence
   because swallowing the fluff case strands anonymity-originated transactions
   in the anonymity subgraph — "a liveness break that would read as correct."
-  The full 1051-test suite passes with this branch live and never executes it.
   It is also load-bearing for §89.2: the per-zone embargo is well-defined only
   because a transaction entering the anonymity stem stays there, which is this
   branch. See `DAEMON_RELAY_PRIVACY.md` §89.7.

@@ -40,6 +40,10 @@
 //! with `1/2` being a coin flip. KL divergence gives the repeat-observation
 //! cost: distinguishing at 95 % confidence needs about `ln(20)/KL` independent
 //! self-fluffs of the *same* transaction population.
+//!
+//! Both distances use a single-pass geometric recurrence (multiply by
+//! `1-p` each tick) rather than `powi` per term — exact for the same horizon,
+//! O(horizon) arithmetic, no per-term exponentiation.
 use shekyl_relay_privacy::derive::derive_embargo;
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
@@ -61,29 +65,46 @@ fn embargo_of(hop_ms: u32) -> (u32, u64) {
     (d.mean_ticks, u64::from(d.mean_secs()))
 }
 
-/// `P(fire at tick k)` for a geometric embargo with the given mean, k >= 1.
-fn pmf(mean_ticks: u32, k: u32) -> f64 {
-    let p = 1.0 / (f64::from(mean_ticks) + 1.0);
-    (1.0 - p).powi(i32::try_from(k - 1).expect("horizon fits i32")) * p
+/// Success probability of a geometric embargo with the given mean (`k >= 1`).
+fn geometric_p(mean_ticks: u32) -> f64 {
+    1.0 / (f64::from(mean_ticks) + 1.0)
 }
 
 /// Total variation distance between two geometric embargo timers.
+///
+/// Recurrence: mass at tick 1 is `p`; each later tick multiplies the previous
+/// mass by `(1-p)`. Sums `|p_a - p_b|` over the shared horizon.
 fn total_variation(mean_a: u32, mean_b: u32) -> f64 {
+    let (pa, pb) = (geometric_p(mean_a), geometric_p(mean_b));
+    let (sa, sb) = (1.0 - pa, 1.0 - pb);
+    let mut mass_a = pa;
+    let mut mass_b = pb;
     let mut tv = 0.0_f64;
-    for k in 1..=TAIL_HORIZON_TICKS {
-        tv += (pmf(mean_a, k) - pmf(mean_b, k)).abs();
+    for _ in 1..=TAIL_HORIZON_TICKS {
+        tv += (mass_a - mass_b).abs();
+        mass_a *= sa;
+        mass_b *= sb;
     }
     tv / 2.0
 }
 
 /// `KL(A || B)` in nats, for the repeat-observation cost.
+///
+/// Same recurrence as TV. Geometric KL also has a closed form, but the
+/// recurrence keeps the instrument identical to the TV path and makes the
+/// shared finite-horizon truncation explicit.
 fn kl_divergence(mean_a: u32, mean_b: u32) -> f64 {
+    let (pa, pb) = (geometric_p(mean_a), geometric_p(mean_b));
+    let (sa, sb) = (1.0 - pa, 1.0 - pb);
+    let mut mass_a = pa;
+    let mut mass_b = pb;
     let mut kl = 0.0_f64;
-    for k in 1..=TAIL_HORIZON_TICKS {
-        let (pa, pb) = (pmf(mean_a, k), pmf(mean_b, k));
-        if pa > 0.0 && pb > 0.0 {
-            kl += pa * (pa / pb).ln();
+    for _ in 1..=TAIL_HORIZON_TICKS {
+        if mass_a > 0.0 && mass_b > 0.0 {
+            kl += mass_a * (mass_a / mass_b).ln();
         }
+        mass_a *= sa;
+        mass_b *= sb;
     }
     kl
 }

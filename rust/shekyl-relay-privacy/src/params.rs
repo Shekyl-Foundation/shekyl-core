@@ -66,23 +66,16 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// origin oracle (§29), and it is the half configuration B's deletion did
 /// **not** close (§58.3).
 ///
-/// > **OVERTAKEN BY §89 — the anonymity zone stems.** The paragraph below is
-/// > kept because its *shape* still explains where this constant came from,
-/// > but its premise is retired: `dandelionpp_notify` no longer gates on
-/// > `nzone == public_`, so the zone runs Dandelion++ like any other.
-/// > Two consequences land directly on this constant and neither is
-/// > re-derived here: a diverted transaction now **continues stemming**
-/// > rather than terminating in a diffusion, so §63.5's stem-shortening cost
-/// > (7.4 % at `p = 2 %`, 64 % at `p ≈ 45 %`) **disappears** — which was the
-/// > measured reason for ruling the higher `p` out. Re-deriving `p` is
-/// > §64.1's eligibility decision, now landable and owed its own round.
-/// > **Until it runs, 2 % is the conservative value, not the justified one.**
+/// # Current posture (§89)
 ///
-/// *"Onto the anonymity zone", not "onto its stem": the zone has no stem.
-/// `dandelionpp_notify` dispatches only when `nzone == public_`, so an
-/// anonymity zone **diffuses** to its outbound set instead — which is why
-/// F-6's oracle reached every outbound peer rather than one slot-holder, and
-/// why diverting costs a stem hop (§63).*
+/// The anonymity zone **stems**. A diverted transaction continues on a stem
+/// rather than terminating in a diffusion. Consequently §63.5's stem-shortening
+/// cost (the measured reason for rejecting higher `p`) no longer applies, so
+/// **2 % is the conservative value, not the justified one**. Re-deriving `p`
+/// is §64.1's eligibility decision. Design history (pre-§89 diffusion premise,
+/// precision figures, retraction chain) lives in
+/// `docs/design/DAEMON_RELAY_PRIVACY.md` §59–§64 / §89 — not restated here so
+/// present-tense source does not re-teach a retired posture.
 ///
 /// # Per-hop, and the distinction is not cosmetic
 ///
@@ -100,63 +93,11 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// overstates diversion fivefold; reading the network rate as this one
 /// understates it the same way.
 ///
-/// # Why 2 %, and what it does NOT achieve
-///
-/// **Re-graded at §60 after R-1 landed; the original justification quoted
-/// precision figures that do not describe what ships.** Those figures
-/// (~2.4 % at a network-level 1 %, ~0.5 % at 5 %) were computed against
-/// *all relayed traffic* as the eligible set. What ships diverts
-/// **pre-fluff traffic only** — the `still_stemming` test at the routing
-/// site — which is ~20 transactions per node per day against ~20 000. Three
-/// orders of magnitude.
-///
-/// **Against the shipped eligible set, `p = 2 %` gives ~71 % precision,
-/// uniformly across the zone's outbound set.** Pre-R-1 it was 100 %. So this
-/// constant buys a real reduction and **not** the `C1 ≈ f` floor §58.3
-/// predicted.
-///
-/// *(§60.2 originally quoted a worse ~83 % on the `in_mapping_[nil]` slot.
-/// **Retracted at §63.4:** `in_mapping_` is Dandelion++ state and the
-/// anonymity zone does not run D++ — it diffuses to its whole outbound set —
-/// so there is no such slot and precision does not vary across peers. The
-/// unfavourable half of that correction belongs to F-6 rather than here: the
-/// pre-R-1 oracle was the entire outbound set, ~12 peers, not one
-/// slot-holder.)*
-///
-/// > **§63.4's retraction is itself overtaken by §89 — un-retracted, not
-/// > reinstated.** The zone runs Dandelion++ now, so per-successor stem state
-/// > exists on it again and precision *does* vary across peers. That revives
-/// > the question §60.2 asked; it does **not** revive its ~83 % answer, which
-/// > was computed against the pre-R-1 eligible set and the diffusing
-/// > topology. The number is unknown until §64.1's round measures it, and
-/// > recording it as unknown is the point — a retracted figure that comes
-/// > back when its premise does is how a wrong number survives two
-/// > reversals.
-///
-/// Reaching ~10 % against the pre-fluff set needs `p ≈ 45 %`, which is a
-/// different regime rather than a tweak — and **§63.5 prices it**: because a
-/// diverted transaction is diffused rather than stemmed, raising `p` shortens
-/// the D++ stem by `(1−q)p / (q + (1−q)p)`, which is 7.4 % here but **64 % at
-/// `p ≈ 45 %`** (mean stem 5.00 → 1.79). On present evidence that rules the
-/// raise out.
-///
-/// The alternative is widening eligibility to fluff-phase relays — what the
-/// original figures assumed. §61.1 called it dominated because an adversary
-/// could partition on `dandelionpp_fluff`; **§63.7 reverses that** — the flag
-/// does not vary on this zone, so the added traffic dilutes the same bucket.
-/// It remains a design change owed a bandwidth and F-7 review, not a constant
-/// change. **§60.3 leaves the choice to the constants round; this value is
-/// the conservative one until it is made.**
-///
-/// **State the eligible population's SIZE beside any rate that reads from
-/// it.** "2 % of relayed transactions" and "2 % of pre-fluff forwards" look
-/// alike and differ by 1000× — the same failure this comment already
-/// documents once for per-hop versus network-level, one level down.
-///
-/// **Set against an origination rate of one transaction per node per day**
-/// (§34's Monero-like envelope). If that assumption moves, this moves with
-/// it — the quantity that matters is diverted-relayed volume *relative to*
-/// originated volume on the zone, and only the numerator is set here.
+/// What ships diverts **pre-fluff traffic only** (`still_stemming` at the
+/// routing site) — ~20 transactions per node per day against ~20 000 fluff
+/// relays. **State the eligible population's SIZE beside any rate that reads
+/// from it.** Set against an origination rate of one transaction per node per
+/// day (§34's Monero-like envelope).
 pub const MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS: u32 = 200;
 
 /// Should this *relayed* transaction be diverted onto the anonymity zone's
@@ -266,87 +207,7 @@ impl StemGraph {
     }
 }
 
-/// The network a relay zone runs on — the Rust mirror of
-/// `epee::net_utils::zone` (`contrib/epee/include/net/enums.h`).
-///
-/// Discriminants match the C++ enum exactly, because the value crosses the
-/// FFI as a `u8` and is persisted in `txpool_tx_meta_t`'s two reserved bits
-/// (§65.4). `Invalid == 0` is load-bearing on both sides: a pre-upgrade
-/// record's spare bits are zero, so it decodes to the sentinel rather than to
-/// a wrong network.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum RelayZone {
-    /// `zone::invalid` — origin unknown. Reached by pre-upgrade txpool
-    /// records and by nothing a current binary writes.
-    Invalid = 0,
-    /// `zone::public_` — clearnet.
-    Public = 1,
-    /// `zone::i2p`.
-    I2p = 2,
-    /// `zone::tor`.
-    Tor = 3,
-}
-
-impl RelayZone {
-    /// Decode the two-bit persisted form.
-    ///
-    /// Total by construction: two bits cannot express a value outside the
-    /// enum, which is the reason the field is two bits and not a `u8`. The
-    /// C++ side `static_assert`s the same fact against the epee enum, so a
-    /// future zone would fail to build rather than silently alias.
-    #[must_use]
-    pub const fn from_bits(bits: u8) -> Self {
-        match bits & 0b11 {
-            1 => Self::Public,
-            2 => Self::I2p,
-            3 => Self::Tor,
-            _ => Self::Invalid,
-        }
-    }
-
-    /// The two-bit persisted form.
-    #[must_use]
-    pub const fn to_bits(self) -> u8 {
-        self as u8
-    }
-
-    /// Whether this zone is the clearnet.
-    ///
-    /// Deliberately **not** the negation of an `is_anonymity_network` helper:
-    /// `Invalid` is neither, and the embargo choice must not treat an unknown
-    /// origin as clearnet — that is the shorter embargo and so the
-    /// privacy-losing direction (see
-    /// [`DandelionParams::adopted_for`]).
-    #[must_use]
-    pub const fn is_clearnet(self) -> bool {
-        matches!(self, Self::Public)
-    }
-
-    /// Decode a zone arriving across the FFI as a whole byte.
-    ///
-    /// # Why this is not [`Self::from_bits`]
-    ///
-    /// `from_bits` is total *by width* — it decodes a two-bit persisted field,
-    /// where no out-of-domain value can exist, so masking is exact. A byte
-    /// crossing the FFI has no such guarantee, and **masking it would be
-    /// actively unsafe**: `5 & 0b11 == 1`, so a corrupt or miscast `5` would
-    /// decode to `Public` and draw the *shortest* embargo — the privacy-losing
-    /// direction, arrived at silently.
-    ///
-    /// So anything outside the enum resolves to [`Self::Invalid`], which
-    /// [`DandelionParams::adopted_for`] provisions as the worst case. A caller
-    /// bug then costs recovery latency instead of privacy.
-    #[must_use]
-    pub const fn from_ffi_u8(raw: u8) -> Self {
-        match raw {
-            1 => Self::Public,
-            2 => Self::I2p,
-            3 => Self::Tor,
-            _ => Self::Invalid,
-        }
-    }
-}
+pub use crate::zone::RelayZone;
 
 /// The complete Dandelion++ parameter set, expressed as design inputs.
 ///
@@ -481,16 +342,15 @@ impl DandelionParams {
             // measure 2500 vs 2250 ms — the direction constraint costs
             // nothing; halving the usable degree is what costs (§40.1).
             //
-            // One process-wide value serves both zones because the embargo
-            // draw is a singleton, and it is set to the WORST zone's F. §44.3
-            // prices what that costs the over-provisioned zone: this constant's
-            // only production consumer is the embargo derivation, so
-            // over-estimating F *lengthens* the embargo — which *reduces* the
-            // §6.7 prefix-fire leak (measured) and pays only in black-hole
-            // recovery latency (p90 ~439 s vs ~331 s on clearnet). Privacy-safe
-            // on both axes; per-zone F would buy recovery latency, not privacy.
-            // Under the *inherited* Poisson delay the same instrument gives
-            // ~13.75 s — see F-5.
+            // One process-wide F for every zone: a fluff wave returns over
+            // whatever network the *node* is on, so there is no per-zone F to
+            // pick (§63.2's keeper; restated at §89.2). Set to the WORST zone's
+            // p90. §44.3 prices the over-provisioned zone: this constant's only
+            // production consumer is the embargo derivation, so over-estimating
+            // F *lengthens* the embargo — which *reduces* the §6.7 prefix-fire
+            // leak and pays only in black-hole recovery latency. Privacy-safe
+            // on both axes. Under the *inherited* Poisson delay the same
+            // instrument gives ~13.75 s — see F-5.
             fluff_return_ms: 3_250,
             // CRYPTONOTE_DANDELIONPP_STEMS = 2.
             graph: StemGraph::QuasiFourRegular,
@@ -511,8 +371,11 @@ impl DandelionParams {
     /// ~80 ms Monero-era verification figure plus one ocean crossing), and
     /// re-deriving its shape with our verification cost lands on the same
     /// milliseconds. So the cutover from `inherited()` moved **provenance,
-    /// not behaviour**: the embargo stays 190 s, the wallet timeout 874 s,
-    /// and every pin downstream of them holds.
+    /// not behaviour on clearnet**: the clearnet embargo stays 190 s.
+    /// (Anonymity zones take a longer hop — see [`Self::adopted_for`]. The
+    /// wallet failed-send wait is a separate interim at the *worst* zone's
+    /// quantile, currently 2297 s — `ADOPTED_PROPAGATION_TIMEOUT_SECS` —
+    /// and is a deletion target per §89.6.)
     ///
     /// Every other field carries its own already-recorded disposition:
     /// `fluff_return_ms` is F-7's measurement (worst-zone p90 at degree 12),
@@ -529,15 +392,14 @@ impl DandelionParams {
     /// measurement lands it replaces this floor; until then the floor with
     /// stated provenance supersedes a comment about a 2019 laptop.
     ///
-    /// # Global scalar, modal shape — an interim the doc prices
+    /// # Modal shape — an interim the doc prices
     ///
-    /// The embargo draw is a process-wide singleton today, so this uses the
-    /// **modal shape** (1 input, genesis tree). §83.1 prices the choice: the
-    /// modal embargo is effectively constant across the whole depth range
-    /// (~3 s of drift), while the tail rows are where per-shape derivation
-    /// pays (245 s at 8 inputs vs 190 s modal, at the assumed transit).
-    /// Per-shape consumption is the next RP cut and is blocked on
-    /// recovering the full 48-cell surface (`docs/FOLLOWUPS.md`).
+    /// Per-zone embargo timers still use the **modal shape** (1 input, genesis
+    /// tree) for each zone's hop. §83.1 prices the choice: the modal embargo
+    /// is effectively constant across the whole depth range (~3 s of drift),
+    /// while the tail rows are where per-shape derivation pays. Per-shape
+    /// consumption is the next RP cut and is blocked on recovering the full
+    /// 48-cell surface (`docs/FOLLOWUPS.md`).
     ///
     /// # Panics
     ///
@@ -568,16 +430,10 @@ impl DandelionParams {
     ///
     /// # `Invalid` takes the longest embargo, not the shortest
     ///
-    /// §65.4 reserved `zone::invalid == 0` as the *"origin unknown"* sentinel
-    /// so pre-upgrade txpool records decode correctly with no migration step,
-    /// and said such records fall back to "the global embargo". That phrase
-    /// was written when there was one embargo; there are now two, so the
-    /// fallback has to be chosen rather than inherited. **It resolves to the
-    /// anonymity set — the longer one.** Under-estimating shortens the
-    /// embargo, which is the privacy-losing direction (§65, §66), and the
-    /// alternative would hand an unknown-origin record the clearnet value on
-    /// the chance that it is clearnet. The cost is recovery latency on records
-    /// that cannot be created after the upgrade.
+    /// Out-of-domain FFI bytes and unknown-origin cases resolve to
+    /// [`RelayZone::Invalid`], which is provisioned as the anonymity hop.
+    /// Under-estimating shortens the embargo (privacy-losing); the cost of
+    /// the longer wait is recovery latency only.
     #[must_use]
     pub fn adopted_for(zone: RelayZone) -> Self {
         let transit = if zone.is_clearnet() {
@@ -939,59 +795,14 @@ mod tests {
 
     #[test]
     fn an_unknown_origin_takes_the_longer_embargo_not_the_shorter() {
-        // §65.4's "fall back to the global embargo" was written when there was
-        // one. There are now two, so the fallback is a choice — and it must be
-        // the longer, because under-estimating shortens the embargo (§65,
-        // §66). A pre-upgrade record could have been Tor-originated; giving it
-        // the clearnet value bets that it was not.
+        // Invalid/out-of-domain must be the longer hop — under-estimating
+        // shortens the embargo (§65, §66).
         assert_eq!(
             DandelionParams::adopted_for(RelayZone::Invalid).time_between_hop_ms,
             DandelionParams::adopted_for(RelayZone::Tor).time_between_hop_ms,
             "an unknown origin must be provisioned as the worst case it could be"
         );
         assert!(!RelayZone::Invalid.is_clearnet());
-    }
-
-    #[test]
-    fn the_two_bit_persisted_form_round_trips_every_zone() {
-        for zone in [
-            RelayZone::Invalid,
-            RelayZone::Public,
-            RelayZone::I2p,
-            RelayZone::Tor,
-        ] {
-            assert_eq!(RelayZone::from_bits(zone.to_bits()), zone);
-            assert!(zone.to_bits() <= 0b11, "a zone escaped the two-bit field");
-        }
-        // Two bits cannot express anything else, which is why the field is two
-        // bits: the decode is total rather than fallible.
-        for bits in 0_u8..=0b11 {
-            assert_eq!(RelayZone::from_bits(bits).to_bits(), bits);
-        }
-    }
-
-    #[test]
-    fn an_out_of_domain_ffi_byte_never_decodes_to_a_shorter_embargo() {
-        // The whole reason `from_ffi_u8` exists rather than reusing the mask.
-        // Masking sends 5 to Public — the SHORTEST embargo — so a corrupt byte
-        // would silently buy the privacy-losing direction.
-        assert_eq!(RelayZone::from_bits(5), RelayZone::Public, "the hazard");
-        assert_eq!(RelayZone::from_ffi_u8(5), RelayZone::Invalid, "the fix");
-
-        let clearnet_hop = DandelionParams::adopted_for(RelayZone::Public).time_between_hop_ms;
-        for raw in 4_u8..=255 {
-            let zone = RelayZone::from_ffi_u8(raw);
-            assert_eq!(zone, RelayZone::Invalid, "raw {raw} escaped the domain");
-            assert!(
-                DandelionParams::adopted_for(zone).time_between_hop_ms > clearnet_hop,
-                "raw {raw} decoded to something provisioned no better than clearnet"
-            );
-        }
-        // In-domain bytes still decode to themselves — otherwise the guard
-        // above would pass by rejecting everything.
-        for raw in 0_u8..=3 {
-            assert_eq!(RelayZone::from_ffi_u8(raw).to_bits(), raw);
-        }
     }
 
     #[test]

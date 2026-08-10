@@ -941,7 +941,7 @@ mod tests {
 
     #[test]
     fn propagation_timeout_follows_from_the_shipped_table() {
-        let t = EmbargoTimer::adopted(&DandelionParams::adopted_for(crate::params::RelayZone::Tor));
+        let t = EmbargoTimer::adopted(&DandelionParams::adopted_for(crate::zone::RelayZone::Tor));
         let secs = t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
 
         // Exact pin: the number and the table must not drift apart. A loose
@@ -976,10 +976,10 @@ mod tests {
         // outlasts it. A wait that clears only the zone it was derived from is
         // how 874 s came to be wrong for the anonymity path.
         for zone in [
-            crate::params::RelayZone::Public,
-            crate::params::RelayZone::I2p,
-            crate::params::RelayZone::Tor,
-            crate::params::RelayZone::Invalid,
+            crate::zone::RelayZone::Public,
+            crate::zone::RelayZone::I2p,
+            crate::zone::RelayZone::Tor,
+            crate::zone::RelayZone::Invalid,
         ] {
             let t = EmbargoTimer::adopted(&DandelionParams::adopted_for(zone));
             assert!(

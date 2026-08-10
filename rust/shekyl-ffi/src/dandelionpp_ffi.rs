@@ -34,8 +34,9 @@
 //! `an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index` (the
 //! marshalling, including peer bytes).
 
-use shekyl_relay_privacy::params::{DandelionParams, RelayZone};
+use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::{EmbargoTimer, PROPAGATION_FALSE_FAIL_ONE_IN};
+use shekyl_relay_privacy::RelayZone;
 use std::sync::OnceLock;
 
 use crate::secure_relay_rng::SecureRelayRng;
@@ -64,7 +65,7 @@ static EMBARGO: OnceLock<[EmbargoTimer; 4]> = OnceLock::new();
 /// zone — and a single global would either under-provision the anonymity path
 /// or charge clearnet a wait sized for a rendezvous it never touches.
 ///
-/// Indexed by [`RelayZone::to_bits`], which is `0..=3` and matches the array
+/// Indexed by [`RelayZone::as_u8`], which is `0..=3` and matches the array
 /// order, so the lookup is total with no bounds branch.
 fn embargo_timer(zone: RelayZone) -> &'static EmbargoTimer {
     // `adopted_for` rather than `inherited()`: the hop input carries the spec
@@ -80,7 +81,7 @@ fn embargo_timer(zone: RelayZone) -> &'static EmbargoTimer {
             EmbargoTimer::adopted(&DandelionParams::adopted_for(RelayZone::Tor)),
         ]
     });
-    &timers[zone.to_bits() as usize]
+    &timers[usize::from(zone.as_u8())]
 }
 
 /// Draw one Dandelion++ embargo duration, in **seconds**.
@@ -263,7 +264,7 @@ mod tests {
         let mut total = 0_u64;
         let mut seen = std::collections::BTreeSet::new();
         for _ in 0..N {
-            let s = shekyl_dandelionpp_embargo_draw_seconds(RelayZone::Public.to_bits());
+            let s = shekyl_dandelionpp_embargo_draw_seconds(RelayZone::Public.as_u8());
             total += s;
             seen.insert(s);
         }

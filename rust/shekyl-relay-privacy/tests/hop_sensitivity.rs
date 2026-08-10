@@ -29,8 +29,9 @@
 //! it, the privacy-losing direction. That is why the second test below is now
 //! about *separateness* rather than headroom.
 use shekyl_relay_privacy::derive::derive_embargo;
-use shekyl_relay_privacy::params::{DandelionParams, RelayZone, EMBARGO_FULL_TRAVEL_PROBABILITY};
+use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
+use shekyl_relay_privacy::RelayZone;
 
 /// The adopted embargo, in whole seconds, for a given parameter set.
 ///
