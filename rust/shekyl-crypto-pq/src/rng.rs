@@ -55,8 +55,11 @@ pub fn hedged_fresh32() -> [u8; 32] {
 mod tests {
     use super::*;
 
-    /// The healthy path returns distinct draws — the property that would
-    /// silently vanish if a refactor wired the fallback arm unconditionally.
+    /// The healthy path returns distinct non-zero draws — the property that
+    /// would silently vanish if a refactor wired the fallback arm
+    /// unconditionally. Collision of two honest 32-byte CSPRNG draws is
+    /// ~2^-256; not worth an inject-`RngCore` seam that would exist only to
+    /// de-probabilize this assertion.
     #[test]
     fn healthy_draws_are_distinct() {
         let a = hedged_fresh32();

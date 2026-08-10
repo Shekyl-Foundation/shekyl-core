@@ -20,7 +20,8 @@
 //! module previously drew its nonce bare from the OS RNG while the
 //! sibling Schnorr signature in the same reserve-proof flow was hedged).
 //!
-//! The nonce hashes **every input the challenge hashes**, and that is
+//! The nonce hashes **every statement input the challenge hashes**
+//! (`G`, `base2`, `pub1`, `pub2`, `msg` — plus the secret `x`). That is
 //! load-bearing, not thoroughness: under a failed RNG the construction
 //! degrades to its deterministic form, and a deterministic `k` bound to
 //! fewer inputs than the challenge repeats across distinct statements
@@ -28,6 +29,10 @@
 //! linear equations in `x` — the secret falls out. Same statement twice
 //! → same proof (harmless); any input differs → `k` differs. Do not
 //! "simplify" the nonce hash to fewer inputs.
+//!
+//! `R1`/`R2` are **not** in the nonce hash: they are `k·G` / `k·base2`,
+//! so including them would be circular. The challenge still binds them
+//! after `k` is fixed.
 
 #![deny(unsafe_code)]
 
@@ -128,7 +133,7 @@ pub fn prove_dleq(
     }
 }
 
-/// Hedged nonce — see the module docs for why it binds every challenge
+/// Hedged nonce — see the module docs for why it binds every statement
 /// input and why RNG failure is fail-safe rather than fail-stop.
 fn hedged_nonce(
     x: &Scalar,
@@ -138,6 +143,23 @@ fn hedged_nonce(
     msg: &[u8],
 ) -> Scalar {
     let mut fresh = shekyl_crypto_pq::rng::hedged_fresh32();
+    let k = nonce_from_fresh(x, base2, pub1, pub2, msg, &fresh);
+    fresh.zeroize();
+    k
+}
+
+/// Pure half of the hedged nonce: statement + secret + caller-supplied
+/// fresh block. Separated so tests can pin the fail-safe (zero-fresh)
+/// form without controlling the OS RNG — the full-statement binding is
+/// load-bearing only on that path (module docs).
+fn nonce_from_fresh(
+    x: &Scalar,
+    base2: &EdwardsPoint,
+    pub1: &EdwardsPoint,
+    pub2: &EdwardsPoint,
+    msg: &[u8],
+    fresh: &[u8; 32],
+) -> Scalar {
     let mut hasher = Sha512::new();
     hasher.update(DOMAIN_SEPARATOR);
     hasher.update(NONCE_LABEL);
@@ -148,7 +170,6 @@ fn hedged_nonce(
     hasher.update(pub2.compress().as_bytes());
     hasher.update(msg);
     hasher.update(fresh);
-    fresh.zeroize();
     Scalar::from_hash(hasher)
 }
 
@@ -225,6 +246,54 @@ mod tests {
         assert_ne!(a.c, b.c, "challenge must differ — nonce is hedged");
         assert!(verify_dleq(&base2, &pub1, &pub2, msg, &a));
         assert!(verify_dleq(&base2, &pub1, &pub2, msg, &b));
+    }
+
+    /// Under fixed (zero) fresh entropy the nonce is deterministic and
+    /// must still differ when any statement input differs — the property
+    /// that keeps the fail-safe path from repeating `k` across statements
+    /// (and thereby leaking `x`). Healthy-path tests cannot see this;
+    /// pin it here so a "simplify the nonce hash" edit fails CI.
+    #[test]
+    fn zero_fresh_nonce_binds_full_statement() {
+        let zero = [0u8; 32];
+        let x = Scalar::from(7u64);
+        let base2 = Scalar::from(11u64) * G;
+        let base2_alt = Scalar::from(13u64) * G;
+        let pub1 = x * G;
+        let pub2 = x * base2;
+        let pub2_alt = x * base2_alt;
+        let msg = b"ctx-a";
+        let msg_alt = b"ctx-b";
+
+        let base = nonce_from_fresh(&x, &base2, &pub1, &pub2, msg, &zero);
+        // Same statement → same k (stable deterministic form).
+        assert_eq!(
+            base,
+            nonce_from_fresh(&x, &base2, &pub1, &pub2, msg, &zero),
+            "identical inputs under zero fresh must yield the same nonce"
+        );
+        // Each statement input that the challenge also binds must move k.
+        assert_ne!(
+            base,
+            nonce_from_fresh(&x, &base2, &pub1, &pub2, msg_alt, &zero),
+            "msg must enter the nonce"
+        );
+        assert_ne!(
+            base,
+            nonce_from_fresh(&x, &base2_alt, &pub1, &pub2_alt, msg, &zero),
+            "base2 must enter the nonce"
+        );
+        assert_ne!(
+            base,
+            nonce_from_fresh(&x, &base2, &pub1, &pub2_alt, msg, &zero),
+            "pub2 must enter the nonce"
+        );
+        let x_alt = Scalar::from(17u64);
+        assert_ne!(
+            base,
+            nonce_from_fresh(&x_alt, &base2, &(x_alt * G), &(x_alt * base2), msg, &zero),
+            "secret x must enter the nonce"
+        );
     }
 
     #[test]
