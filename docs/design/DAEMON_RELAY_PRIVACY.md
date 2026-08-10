@@ -13352,10 +13352,27 @@ overwhelming majority of traffic to cover a minority's real cost. That is
 scalar-at-8 one axis over: over-provisioning the common case against a tail
 that does not apply to it. **Per-zone is matched provisioning.**
 
-The mechanism is already designed: §65.4's **two reserved bits** on the txpool
-entry, with `zone::invalid == 0` static-asserted so pre-upgrade records decode
-to the correct *"origin unknown"* sentinel and fall back to the global embargo
-with no migration step.
+**§65.4's two reserved bits are not needed, and the scoping that reserved them
+was wrong.** It framed this as a data-model gap — *"the mempool/stempool needs
+to know the zone a tx originated from"* — and scoped two bits on the txpool
+entry with `zone::invalid == 0` as the migration-free default. Checked at
+source when the field was about to be added: **the txpool does not need to
+remember the zone, only to be told it.**
+
+The embargo has exactly one draw site, `tx_memory_pool::set_relayed`
+(`tx_pool.cpp`), and every path to it is synchronous with a relay event. Each
+`core::on_transactions_relayed` call site lives *inside* `levin_notify.cpp`
+(`:818`, `:851`, `:1204`, `:1252`), where `zone_->nzone` is in scope. So the
+zone travels as a **parameter beside `tx_relay`**, which both signatures
+already carry — no persisted field, no LMDB record change, no bit-width
+`static_assert`, no pre-upgrade decode question, and nothing for a future
+zone to alias onto.
+
+> **The field was added and then backed out in the same round**, which is worth
+> recording rather than tidying away: the design had a reserved slot waiting,
+> and having a slot is a reason to fill it. The check that dissolved it was
+> asking where the value is *consumed* before asking where it should be
+> *stored*.
 
 ### 89.3 The disclosure check — measured, and it closes on vantage, not on weakness
 
