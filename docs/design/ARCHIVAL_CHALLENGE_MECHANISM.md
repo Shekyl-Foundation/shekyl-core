@@ -493,8 +493,55 @@ the round kept trying to add forensics underneath it.
    direction (deliberate abandonment manufacturing misses against an
    honest P), which is the flood-to-slash channel: quadratically contained
    by 2-of-3 (moving an epoch needs 2 of its 3 draws) and priced by the
-   outer window. The outstanding-challenge drawability sub-decision is
-   therefore pure scheduling now, no longer adversarial.
+   outer window. The outstanding-challenge drawability *sub-decision* is
+   therefore pure scheduling now — but that claim is scoped to the
+   sub-decision alone; see the correction below.
+   **The fork's dominant term (correction, 2026-08-08): lookahead
+   survives as an adversarial axis, and two later rulings made it
+   heavier.** What died with expiry⇒miss was the clock-burn *shield*; the
+   DDoS targeting window did not die, and it is the axis the three
+   variants differ most on — epoch-seed publishes every assignment
+   ~10,000 blocks (~14 days) ahead; per-block gives one block; the urn
+   sits between, by how much of its state is predictable. Two rulings
+   now load this leg: under **expiry⇒miss**, a successful availability
+   attack converts directly into a miss with no attribution possible —
+   the very property that made expiry⇒miss safe at the window level makes
+   the per-epoch cost of unreachability unambiguous; and the **TJ-H
+   guard-discovery finding** makes P's reachability window the thing an
+   adversary most wants to know, since forced circuit builds during a
+   known window beat random probing. The epoch-seed variant's
+   coverage-by-construction is genuinely attractive and must not win on
+   the coverage argument alone without the lookahead cost priced against
+   this threat picture.
+   **Acceptance test, stated identically for all three variants — the
+   redraw floor:** a pair that fails its first challenge must be re-drawn
+   before the epoch closes, with high probability. Epoch-seed satisfies
+   it deterministically. The urn satisfies it by construction *if* the
+   draw is uniform over the least-covered set. Per-block satisfies it
+   only probabilistically: P(redraw | first challenge failed at block b)
+   ≈ 1 − e^(−λ_eff·(1 − b/SEB)), where λ_eff = k·SEB/D for k draws per
+   block over a drawable set of size D — and that number, not an
+   argument, decides whether per-block survives.
+   **Pool-size regimes (the input λ_eff is a function of):** D = bonded
+   (P, s) pairs. Genesis-era: ~10³–4×10³ (fee-era-thin/lean `N_P` 17–79
+   with partial holdings; the FOLLOWUPS small case ran at 4,096 pairs).
+   Maturity: ~10⁵–3.2×10⁵ (the FOLLOWUPS stress case at 100 k; the TJ
+   extreme at lean `N_P` ≈ 79 × `MAX_HOLDINGS_SHARDS` = 4,096 ≈ 324 k).
+   The coupling that decides per-block at maturity: k is chain-growth-
+   bound (`k_cap` — each pass record ≈ 3.43 KB, FOLLOWUPS), so
+   λ_eff = min(λ_target, k_cap·SEB/D) falls below the redraw floor as D
+   grows unless records ride the prunable side; at D ≈ 324 k and
+   k_cap = 30, λ_eff ≈ 0.93 — under one expected draw, floor dead.
+   **Urn bookkeeping — priced now so the variant is comparable:** the
+   urn's pending/complete state must live **in the derivation, not a
+   table** — it is a pure function of (epoch-open snapshot, block hashes
+   h_open..h−1), so it is recomputable, and the standing derive-don't-
+   store principle (`ARCHIVAL_CREDIT_WIRE.md` §3, maintainer 2026-08-03)
+   plus the `ArchivalSealHashCache` precedent (memoize per height;
+   recompute-on-reorg is behaviour-identical) already rule the shape. A
+   persisted table would inherit `pop_block` revert obligations the other
+   two variants do not have — a cost the urn must carry on its face if
+   anyone proposes the table form.
 2. **Who reads — witness selection and obligation.** The decision the rest
    of the stack prices against: W₂, the abandonment penalty, the reward
    question, and the nonce anchor are all functions of who performs the
