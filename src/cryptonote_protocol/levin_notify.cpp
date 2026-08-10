@@ -262,7 +262,7 @@ namespace levin
         flags |= SHEKYL_RELAY_ZONE_COVERT_ENABLED;
 
       return shekyl_relay_zone_new(
-        now_ms(), params.stems,
+        now_ms(), std::uint8_t(nzone), params.stems,
         std::uint32_t(params.min_epoch.count()), std::uint32_t(params.epoch_range.count()),
         flags
       );
@@ -567,11 +567,23 @@ namespace levin
              order transactions were received in is an observable, and forwarding
              it would hand it to every peer downstream. */
 
-          /* Always send with `fluff` flag, even over i2p/tor. The hidden service
-             will disable the forwarding delay and immediately fluff. The i2p/tor
-             network is therefore replacing the sybil protection of Dandelion++.
-             Dandelion++ stem phase over i2p/tor is also worth investigating
-             (with/without "noise"?). */
+          /* A FLUFF over i2p/tor sends with the `fluff` flag — this arm only,
+             and that is now a distinction rather than a blanket rule.
+
+             The inherited comment here said the flag went on *every* i2p/tor
+             release, on the reasoning that "the i2p/tor network is therefore
+             replacing the sybil protection of Dandelion++", and closed by
+             noting that "Dandelion++ stem phase over i2p/tor is also worth
+             investigating". §89 answers that: the zone stems, because a
+             transport is a parameter and changing it does not change the
+             graph. The sybil-substitution reasoning is retired with it — §64
+             priced it, and minting onion addresses is free, so it was the
+             outbound-only reach rule doing that work, never the network.
+
+             A stem send on this zone now clears the flag (`dandelionpp_notify`).
+             Which arm set it is load-bearing downstream: a receiver keeps its
+             `forward` default when the flag is clear, so `still_stemming`
+             holds and R-1's coherence branch fires (`net_node.inl`, §89.7). */
           make_payload_send_txs(*z.p2p, std::move(txs), destination, z.pad_txs, true);
         }
         catch (const std::exception& e)
@@ -807,6 +819,20 @@ namespace levin
         const bool local_origin = (tx_relay == relay_method::local);
         std::vector<boost::uuids::uuid> outs = get_out_connections(*zone_->p2p, core_);
 
+        /* What the wire does and what the txpool is told are the same thing on
+           clearnet and deliberately not the same for an origin on an anonymity
+           zone. §89 opened the stem gates here; the pool class is what keeps
+           the *backstop* in-zone, and §30.5 forbids that backstop reaching
+           clearnet. So an originated transaction keeps its `local` record
+           whatever the transport did — it still stems on the wire below. */
+        const auto record_relayed = [this](const relay_method method) {
+          core_->on_transactions_relayed(
+            epee::to_span(txs_),
+            cryptonote::originated_stays_in_zone(tx_relay, zone_->nzone) ? relay_method::local : method,
+            zone_->nzone
+          );
+        };
+
         std::int32_t plan = shekyl_relay_zone_plan_relay_with_refresh(
           zone_->relay.get(), uuid_bytes(source_), local_origin,
           uuid_bytes(outs), outs.size(),
@@ -815,7 +841,7 @@ namespace levin
 
         if (plan != SHEKYL_RELAY_PLAN_FLUFF_EPOCH)
         {
-          core_->on_transactions_relayed(epee::to_span(txs_), relay_method::stem);
+          record_relayed(relay_method::stem);
 
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
               make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
@@ -848,7 +874,7 @@ namespace levin
           MERROR("Unable to send transaction(s) via Dandelion++ stem");
         }
 
-        core_->on_transactions_relayed(epee::to_span(txs_), relay_method::fluff);
+        record_relayed(relay_method::fluff);
         relay_fluff::run(std::move(zone_), epee::to_span(txs_), source_, core_);
       }
     };
@@ -946,23 +972,23 @@ namespace levin
     if (!zone_->relay)
       throw std::logic_error{"cryptonote::levin::notify could not open its relay zone"};
 
-    const bool covert_enabled = shekyl_relay_zone_covert_enabled(zone_->relay.get());
-    if (covert_enabled || zone == epee::net_utils::zone::public_)
-    {
-      const auto now = std::chrono::steady_clock::now();
+    /* GATE 1 of 3, deleted at §89.5. This was
+       `if (covert_enabled || zone == public_)`, so a non-covert anonymity zone
+       got neither its initial stem map nor an armed wake timer. Every zone
+       stems now, and `make_relay_zone` has always been unconditional, so there
+       is no transport question left to ask here.
 
-      /* The zone drew its first epoch when it was constructed, matching the
-         inherited `start_epoch` running once here. All that is left is to offer
-         it the connections that already exist and arm the timer on the deadline
-         it chose. */
-      boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
-        relay_update_stems(z, get_out_connections(*z->p2p, core));
-        relay_wake::arm(z, core);
-      });
+       The zone drew its first epoch when it was constructed, matching the
+       inherited `start_epoch` running once here. All that is left is to offer
+       it the connections that already exist and arm the timer on the deadline
+       it chose. */
+    boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
+      relay_update_stems(z, get_out_connections(*z->p2p, core));
+      relay_wake::arm(z, core);
+    });
 
-      /* No per-channel timer to start: the zone armed every covert deadline at
-         construction and the single `wake` timer serves them (§20.2a). */
-    }
+    /* No per-channel timer to start: the zone armed every covert deadline at
+       construction and the single `wake` timer serves them (§20.2a). */
   }
 
   notify::~notify() noexcept
@@ -987,8 +1013,24 @@ namespace levin
 
   void notify::new_out_connection()
   {
-    if (!zone_ || !shekyl_relay_zone_covert_enabled(zone_->relay.get()) ||
-        CRYPTONOTE_NOISE_CHANNELS <= shekyl_relay_zone_live_stems(zone_->relay.get()))
+    /* GATE 2 of 3, deleted at §89.5 — and the predicate went with it rather
+       than being rewritten.
+
+       This read `!covert_enabled || CRYPTONOTE_NOISE_CHANNELS <= live_stems`,
+       so a new peer triggered a stem-map refresh only on a covert zone. That
+       under-maintained every other zone including the public one: the map
+       self-populates on `NoRoute` and on send failure, so what was lost was
+       the *proactive* refresh, not liveness.
+
+       The obvious repair was to swap the covert throttle for the zone's own
+       stem width. That would have left C++ deciding a relay question, which
+       §18 gives to Rust. Instead the decision moves down: `update_stems` is
+       already a no-op when nothing needs doing — `StemMap::update` returns
+       `Unchanged` when every slot is live at full width, and a bound slot is
+       taken out of the candidate pool rather than re-drawn, so an
+       unconditional call cannot re-point an existing stem. The throttle was
+       C++ guessing at a condition Rust already evaluates exactly. */
+    if (!zone_)
       return;
 
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
@@ -1183,10 +1225,16 @@ namespace levin
        networks provide protection against sybil attacks (we only send to
        outgoing connections).
 
-       If noise is disabled, Dandelion++ is used for public networks only.
-       Dandelion++ over I2P/Tor should be an interesting case to investigate,
-       but the mempool/stempool needs to know the zone a tx originated from to
-       work properly. */
+       If noise is disabled, Dandelion++ runs on **every** zone (§89). The
+       inherited comment here said "public networks only", and named the
+       blocker as the mempool/stempool needing to know a tx's originating zone.
+       Both are retired: Tor is a transport like the clear internet, and
+       changing the transport does not change the graph; and the zone travels
+       as a parameter beside `tx_relay` into `set_relayed`, so nothing has to
+       be remembered to draw the embargo per zone (§89.2).
+
+       What is *not* symmetric is the txpool class an origin keeps — see
+       `originated_stays_in_zone` at the record sites in `dandelionpp_notify`. */
 
     if (shekyl_relay_zone_covert_enabled(zone_->relay.get()) && !zone_->channels.empty())
     {
@@ -1201,7 +1249,7 @@ namespace levin
         tx_relay = relay_method::local; // do not put into stempool embargo (hopefully not there already!).
       }
 
-      core_->on_transactions_relayed(epee::to_span(txs), tx_relay);
+      core_->on_transactions_relayed(epee::to_span(txs), tx_relay, zone_->nzone);
 
       // Padding is not useful when using noise mode. Send as stem so receiver
       // forwards in Dandelion++ mode.
@@ -1233,23 +1281,24 @@ namespace levin
         case relay_method::stem:
         case relay_method::forward:
         case relay_method::local:
-          if (zone_->nzone == epee::net_utils::zone::public_)
-          {
-            // this will change a local/forward tx to stem or fluff ...
-            boost::asio::dispatch(
-              zone_->strand,
-              dandelionpp_notify{zone_, core_, std::move(txs), source, tx_relay}
-            );
-            break;
-          }
-          /* fallthrough */
+          /* GATE 3 of 3, deleted at §89.5. This was gated on
+             `zone_->nzone == public_`, so stem/forward/local on i2p/tor fell
+             through into the fluff arm and the anonymity zone diffused where
+             the design said it stemmed (§63). Tor is a transport like the
+             clear internet; changing the transport does not change the graph.
+
+             The outbound-only fluff rule is unaffected and still applies when
+             this stem later fluffs — it travels with the zone's `reach`
+             (`FluffReach::OutboundOnly`, set from `nzone != public_` in
+             `make_relay_zone`), which no stemming decision touches. */
+          // this will change a local/forward tx to stem or fluff ...
+          boost::asio::dispatch(
+            zone_->strand,
+            dandelionpp_notify{zone_, core_, std::move(txs), source, tx_relay}
+          );
+          break;
         case relay_method::fluff:
-          /* If sending stem/forward/local txes over non public networks,
-             continue to claim that relay mode even though it used the "fluff"
-             routine. A "fluff" over i2p/tor is not the same as a "fluff" over
-             ipv4/6. Marking it as "fluff" here will make the tx immediately
-             visible externally from this node, which is not desired. */
-          core_->on_transactions_relayed(epee::to_span(txs), tx_relay);
+          core_->on_transactions_relayed(epee::to_span(txs), tx_relay, zone_->nzone);
           boost::asio::dispatch(zone_->strand, relay_fluff{zone_, std::move(txs), source, core_});
           break;
       }

@@ -49,6 +49,7 @@
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_basic/verification_context.h"
 #include "cryptonote_protocol/enums.h"
+#include "net/enums.h"
 #include "blockchain_db/blockchain_db.h"
 #include "crypto/hash.h"
 #include "rpc/core_rpc_server_commands_defs.h"
@@ -454,7 +455,7 @@ namespace cryptonote
      * @param just_broadcasted true if a tx was just broadcasted
      *
      */
-    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, std::vector<bool> &just_broadcasted);
+    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, epee::net_utils::zone zone, std::vector<bool> &just_broadcasted);
 
     /**
      * @brief get the total number of transactions in the pool

@@ -59,6 +59,7 @@ use shekyl_relay::{Driver, Effect, FluffReach, RelayPlan, StemTallySnapshot, TxB
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::stem_map::ConnectionId;
+use shekyl_relay_privacy::zone::RelayZone;
 
 use crate::secure_relay_rng::SecureRelayRng;
 
@@ -365,6 +366,14 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// it is passed rather than derived from the epoch parameters. See
 /// [`FluffReach::OutboundOnly`].
 ///
+/// `zone` is the `epee::net_utils::zone` discriminant this handle serves. It
+/// selects the transport-bound half of [`DandelionParams`] (§89.2) and is
+/// therefore NOT redundant with `outbound_fluff_only`: fluff reach is a
+/// property of the network, transit latency is a property of the transport,
+/// and outbound-only fluff on clearnet is still an open item (§25.5). An
+/// out-of-domain byte decodes to `Invalid`, which draws the longer (anonymity)
+/// parameters — the fail-safe direction.
+///
 /// Returns null on input a zone cannot be built from: a `stems` that would
 /// overflow the slot arithmetic, or a zero epoch — which is not merely useless
 /// but harmful, since every wake would find the epoch expired and the daemon's
@@ -372,6 +381,7 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 #[no_mangle]
 pub extern "C" fn shekyl_relay_zone_new(
     now_ms: u64,
+    zone: u8,
     stems: usize,
     min_epoch_secs: u32,
     epoch_jitter_secs: u32,
@@ -385,9 +395,15 @@ pub extern "C" fn shekyl_relay_zone_new(
     let params = DandelionParams {
         min_epoch_secs,
         epoch_jitter_secs,
-        // `adopted()`: hop re-anchored to measured provenance (§80); the
-        // epoch pair stays C++-owned and crosses as the arguments above.
-        ..DandelionParams::adopted()
+        // `adopted_for`, not `adopted`: `hop` is transport-bound (§89.2), and
+        // this zone's stem-observation window must be drawn from the SAME
+        // parameters as the embargo its successor draws for the same
+        // transaction. A clearnet-provisioned window on an anonymity zone
+        // expires as `silent` long before an honest successor is even allowed
+        // to re-relay, so `stem_tallies` would report the whole anonymity peer
+        // set as withholding. The epoch pair stays C++-owned and crosses as
+        // the arguments above.
+        ..DandelionParams::adopted_for(RelayZone::from_ffi_u8(zone))
     };
     let reach = if outbound_fluff_only {
         FluffReach::OutboundOnly
