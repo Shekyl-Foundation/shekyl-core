@@ -53,9 +53,15 @@ use crate::secure_relay_rng::SecureRelayRng;
 ///
 /// It became an array rather than a single timer at §89.2. That is the only
 /// structural change: the *distribution* is still policy, still frozen, and
-/// still has no per-connection component — what varies is which of four frozen
-/// parameter sets applies, and the zone selects it.
-static EMBARGO: OnceLock<[EmbargoTimer; 4]> = OnceLock::new();
+/// still has no per-connection component — what varies is which frozen
+/// parameter set applies, and the zone selects it.
+///
+/// One entry per *parameter class*, not per zone. Only `time_between_hop_ms`
+/// varies and it takes two values, so a per-zone array would build and hold
+/// three byte-identical ~443 KB anonymity tables for the life of the process.
+/// [`DandelionParams::adopted_class`] owns the partition, so this cannot fall
+/// out of step with the parameters it is caching.
+static EMBARGO: OnceLock<[EmbargoTimer; DandelionParams::ADOPTED_CLASSES]> = OnceLock::new();
 
 /// The embargo timer for one relay zone.
 ///
@@ -65,8 +71,8 @@ static EMBARGO: OnceLock<[EmbargoTimer; 4]> = OnceLock::new();
 /// zone — and a single global would either under-provision the anonymity path
 /// or charge clearnet a wait sized for a rendezvous it never touches.
 ///
-/// Indexed by [`RelayZone::as_u8`], which is `0..=3` and matches the array
-/// order, so the lookup is total with no bounds branch.
+/// Indexed by [`DandelionParams::adopted_class`], which is total over
+/// `RelayZone` — every byte the boundary can decode selects a built timer.
 fn embargo_timer(zone: RelayZone) -> &'static EmbargoTimer {
     // `adopted_for` rather than `inherited()`: the hop input carries the spec
     // machine's measured provenance (§80/§85.3) instead of the 2019-laptop
@@ -74,14 +80,10 @@ fn embargo_timer(zone: RelayZone) -> &'static EmbargoTimer {
     // pin below is unchanged — so clearnet sees a provenance cutover and
     // nothing else.
     let timers = EMBARGO.get_or_init(|| {
-        [
-            EmbargoTimer::adopted(&DandelionParams::adopted_for(RelayZone::Invalid)),
-            EmbargoTimer::adopted(&DandelionParams::adopted_for(RelayZone::Public)),
-            EmbargoTimer::adopted(&DandelionParams::adopted_for(RelayZone::I2p)),
-            EmbargoTimer::adopted(&DandelionParams::adopted_for(RelayZone::Tor)),
-        ]
+        DandelionParams::CLASS_REPRESENTATIVES
+            .map(|class| EmbargoTimer::adopted(&DandelionParams::adopted_for(class)))
     });
-    &timers[usize::from(zone.as_u8())]
+    &timers[DandelionParams::adopted_class(zone)]
 }
 
 /// Draw one Dandelion++ embargo duration, in **seconds**.

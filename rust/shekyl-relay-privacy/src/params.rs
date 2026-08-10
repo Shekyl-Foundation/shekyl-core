@@ -411,6 +411,47 @@ impl DandelionParams {
         Self::adopted_for(RelayZone::Public)
     }
 
+    /// How many *distinct* adopted parameter sets exist across all zones.
+    ///
+    /// Only `time_between_hop_ms` varies by zone, and it takes exactly two
+    /// values — the clearnet transit assumption and the anonymity one — so the
+    /// four `RelayZone`s partition into two classes. Callers that cache a built
+    /// artefact per parameter set size on this rather than on the zone count:
+    /// the process-wide embargo tables are ~443 KB each, and one table per zone
+    /// would build and hold three byte-identical anonymity copies for the life
+    /// of the daemon, on a floor rule 76 pins at a Raspberry Pi 4.
+    pub const ADOPTED_CLASSES: usize = 2;
+
+    /// Transit assumption per adopted class, in class order.
+    const TRANSIT_BY_CLASS: [f64; Self::ADOPTED_CLASSES] = [
+        crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS,
+        crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+    ];
+
+    /// One representative zone per adopted class, in class order.
+    ///
+    /// Lets a caller build exactly one artefact per class without naming the
+    /// partition a second time. `zone_classes_partition_the_parameter_sets`
+    /// pins that these are in class order and that every zone agrees with its
+    /// representative.
+    pub const CLASS_REPRESENTATIVES: [RelayZone; Self::ADOPTED_CLASSES] =
+        [RelayZone::Public, RelayZone::Tor];
+
+    /// Which of [`Self::ADOPTED_CLASSES`] parameter sets `zone` draws.
+    ///
+    /// The single owner of the zone→parameters partition: [`Self::adopted_for`]
+    /// is defined in terms of it, so a cache indexed by this value cannot fall
+    /// out of step with the parameters it caches. Adding a third class is one
+    /// edit here plus two compile-visible array lengths.
+    #[must_use]
+    pub const fn adopted_class(zone: RelayZone) -> usize {
+        if zone.is_clearnet() {
+            0
+        } else {
+            1
+        }
+    }
+
     /// The adopted parameter set **for one relay zone** (§89.2).
     ///
     /// §89 ruled the embargo per-zone rather than one global provisioned at
@@ -436,11 +477,7 @@ impl DandelionParams {
     /// the longer wait is recovery latency only.
     #[must_use]
     pub fn adopted_for(zone: RelayZone) -> Self {
-        let transit = if zone.is_clearnet() {
-            crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS
-        } else {
-            crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS
-        };
+        let transit = Self::TRANSIT_BY_CLASS[Self::adopted_class(zone)];
         let hop = crate::verify_cost::adopted_hop_ms_with_transit(
             1,
             crate::verify_cost::GENESIS_TREE_DEPTH,
@@ -803,6 +840,56 @@ mod tests {
             "an unknown origin must be provisioned as the worst case it could be"
         );
         assert!(!RelayZone::Invalid.is_clearnet());
+    }
+
+    /// The class partition is the single owner of "which zones share a
+    /// parameter set", and a cache sized on it must be able to trust three
+    /// things: the representatives are in class order, every zone agrees with
+    /// its own representative, and the classes are genuinely distinct.
+    ///
+    /// Without the last one a collapsed partition (both representatives
+    /// clearnet, say) would still satisfy the first two and quietly hand every
+    /// anonymity zone the clearnet embargo — the §89.2 regression this
+    /// partition exists to make impossible.
+    #[test]
+    fn zone_classes_partition_the_parameter_sets() {
+        for (class, zone) in DandelionParams::CLASS_REPRESENTATIVES.iter().enumerate() {
+            assert_eq!(
+                DandelionParams::adopted_class(*zone),
+                class,
+                "representatives must be listed in class order"
+            );
+        }
+
+        for zone in [
+            RelayZone::Invalid,
+            RelayZone::Public,
+            RelayZone::I2p,
+            RelayZone::Tor,
+        ] {
+            let representative =
+                DandelionParams::CLASS_REPRESENTATIVES[DandelionParams::adopted_class(zone)];
+            assert_eq!(
+                DandelionParams::adopted_for(zone).time_between_hop_ms,
+                DandelionParams::adopted_for(representative).time_between_hop_ms,
+                "{zone:?} must draw exactly its class representative's parameters, \
+                 or a per-class cache hands it the wrong embargo"
+            );
+        }
+
+        let hops: Vec<_> = DandelionParams::CLASS_REPRESENTATIVES
+            .iter()
+            .map(|zone| DandelionParams::adopted_for(*zone).time_between_hop_ms)
+            .collect();
+        assert_eq!(
+            hops.len(),
+            DandelionParams::ADOPTED_CLASSES,
+            "one representative per class"
+        );
+        assert!(
+            hops[0] < hops[1],
+            "the classes must stay distinct and clearnet-first: {hops:?}"
+        );
     }
 
     #[test]
