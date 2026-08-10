@@ -32,6 +32,25 @@
 
 ### Fixed
 
+- **The RandomX v2 differential's daily cron is green again: the T8
+  RSS ceiling is re-derived for Arc reach-through residency, and the
+  weekly cargo-mutants gate got its trigger back.** The T8 gate
+  (`--mode=concurrent` RSS bound) had failed every daily cron since
+  its first CI execution (2026-07-08): its 640 MiB ceiling modeled
+  only `CacheStore`'s two slot holdings, but the workload's
+  free-running workers legitimately keep displaced caches resident
+  via their in-flight `Arc` holds — a flat ~1035 MiB drift plateau
+  on the committed runner class, not a leak. The ceiling is now
+  worker-count-derived (`(workers + 1) × 256 MiB + 128 MiB`, R1-D9
+  F4 Round-3 amendment in `RANDOMX_V2_PHASE2G_PLAN.md`); leak
+  detection is preserved (a persistent per-rotation leak still trips
+  the bound within four of the run's 32 rotations). Separately, a
+  prior cleanup commit had accidentally severed the weekly
+  `cargo-mutants` job's header, orphaning its steps into the
+  runtime-modes job — leaving the T18 mutation gate with no trigger
+  at all. The job is restored verbatim with its weekly cadence and
+  360-minute budget.
+
 - **`BlockchainLMDB::reset()` now wipes every table, so an in-place chain
   reset can no longer resurrect stale consensus state.** The old
   hand-written drop list omitted 25 Shekyl-added tables (the whole
