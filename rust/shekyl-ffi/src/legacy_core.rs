@@ -129,7 +129,48 @@ pub extern "C" fn shekyl_pqc_keypair_generate() -> ShekylPqcKeypair {
     }
 }
 
-/// Sign a message using a canonical-encoded hybrid secret key.
+/// One FFI sign body for every hybrid sign export: pointer validation, secret
+/// key parse, nested sign under the export's Rust-owned domain (SA-R-2), and
+/// canonical encoding. The exports differ **only** in the domain constant they
+/// bind — keeping the body single-sourced means a hardening fix (zeroization,
+/// slice validation) cannot land in one export and silently miss the other.
+fn pqc_sign_with_domain(
+    domain: &[u8],
+    secret_key_ptr: *const u8,
+    secret_key_len: usize,
+    message_ptr: *const u8,
+    message_len: usize,
+) -> ShekylPqcSignatureResult {
+    let fail = ShekylPqcSignatureResult {
+        signature: ShekylBuffer::null(),
+        success: false,
+    };
+    let Some(secret_key_bytes) = (unsafe { slice_from_ptr(secret_key_ptr, secret_key_len) }) else {
+        return fail;
+    };
+    let Some(message) = (unsafe { slice_from_ptr(message_ptr, message_len) }) else {
+        return fail;
+    };
+    let Ok(secret_key) = HybridSecretKey::from_canonical_bytes(secret_key_bytes) else {
+        return fail;
+    };
+    match HybridEd25519MlDsa
+        .sign(&secret_key, domain, message)
+        .and_then(|sig| sig.to_canonical_bytes())
+    {
+        Ok(signature) => ShekylPqcSignatureResult {
+            signature: ShekylBuffer::from_vec(signature),
+            success: true,
+        },
+        Err(_) => fail,
+    }
+}
+
+/// Sign a message using a canonical-encoded hybrid secret key, under the
+/// **tx per-input PQC auth** surface (`SCHEME_DOMAIN_PQC_AUTH_TX`, SA-R-2 —
+/// the domain is Rust-owned; C++ never carries a domain string). Signatures
+/// from this export verify only on that surface; use the surface-specific
+/// export for any other context.
 ///
 /// Returns a canonical-encoded hybrid signature buffer. Caller owns the buffer
 /// and must release it via `shekyl_buffer_free`.
@@ -140,42 +181,13 @@ pub extern "C" fn shekyl_pqc_sign(
     message_ptr: *const u8,
     message_len: usize,
 ) -> ShekylPqcSignatureResult {
-    let Some(secret_key_bytes) = (unsafe { slice_from_ptr(secret_key_ptr, secret_key_len) }) else {
-        return ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        };
-    };
-    let Some(message) = (unsafe { slice_from_ptr(message_ptr, message_len) }) else {
-        return ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        };
-    };
-
-    let scheme = HybridEd25519MlDsa;
-    let Ok(secret_key) = HybridSecretKey::from_canonical_bytes(secret_key_bytes) else {
-        return ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        };
-    };
-
-    // The scheme-level domain is Rust-owned (SA-R-2): this export serves the
-    // tx per-input PQC auth surface, so C++ never carries a domain string.
-    match scheme
-        .sign(&secret_key, SCHEME_DOMAIN_PQC_AUTH_TX, message)
-        .and_then(|sig| sig.to_canonical_bytes())
-    {
-        Ok(signature) => ShekylPqcSignatureResult {
-            signature: ShekylBuffer::from_vec(signature),
-            success: true,
-        },
-        Err(_) => ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        },
-    }
+    pqc_sign_with_domain(
+        SCHEME_DOMAIN_PQC_AUTH_TX,
+        secret_key_ptr,
+        secret_key_len,
+        message_ptr,
+        message_len,
+    )
 }
 
 /// Sign a message as a **multisig participant** (scheme 2), under the
@@ -196,30 +208,13 @@ pub extern "C" fn shekyl_pqc_sign_multisig_participant(
     message_ptr: *const u8,
     message_len: usize,
 ) -> ShekylPqcSignatureResult {
-    let fail = ShekylPqcSignatureResult {
-        signature: ShekylBuffer::null(),
-        success: false,
-    };
-    let Some(secret_key_bytes) = (unsafe { slice_from_ptr(secret_key_ptr, secret_key_len) }) else {
-        return fail;
-    };
-    let Some(message) = (unsafe { slice_from_ptr(message_ptr, message_len) }) else {
-        return fail;
-    };
-    let scheme = HybridEd25519MlDsa;
-    let Ok(secret_key) = HybridSecretKey::from_canonical_bytes(secret_key_bytes) else {
-        return fail;
-    };
-    match scheme
-        .sign(&secret_key, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG, message)
-        .and_then(|sig| sig.to_canonical_bytes())
-    {
-        Ok(signature) => ShekylPqcSignatureResult {
-            signature: ShekylBuffer::from_vec(signature),
-            success: true,
-        },
-        Err(_) => fail,
-    }
+    pqc_sign_with_domain(
+        SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+        secret_key_ptr,
+        secret_key_len,
+        message_ptr,
+        message_len,
+    )
 }
 
 /// Return the canonical PQC multisig wire lengths (see `ShekylPqcCanonicalLens`).
@@ -293,8 +288,7 @@ pub extern "C" fn shekyl_pqc_verify(
         2 => {
             use shekyl_crypto_pq::multisig::verify_multisig;
             match verify_multisig(scheme_id, pk_bytes, sig_bytes, msg) {
-                Ok(true) => 0,
-                Ok(false) => 10, // CryptoVerifyFailed
+                Ok(()) => 0,
                 Err(e) => e as u8,
             }
         }

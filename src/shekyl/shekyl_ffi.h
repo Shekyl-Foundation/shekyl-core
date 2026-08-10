@@ -148,8 +148,16 @@ ShekylPqcCanonicalLens shekyl_pqc_canonical_lens();
 /// production code. Free both buffers with shekyl_buffer_free; wipe secret_key.
 ShekylPqcKeypair shekyl_pqc_keypair_generate();
 
-/// Sign a message with a hybrid ML-DSA secret key.
-/// secret_key_ptr/len: secret key bytes from shekyl_pqc_keypair_generate.
+/// Sign a message with a canonical-encoded hybrid (Ed25519 + ML-DSA-65) secret
+/// key on the **tx per-input PQC auth surface**: the Rust side binds the
+/// surface domain (SCHEME_DOMAIN_PQC_AUTH_TX, SA-R-2) internally — C++ never
+/// carries a domain string — so signatures from this export verify ONLY as tx
+/// per-input auth (shekyl_pqc_verify scheme 1). Do not reach for it from any
+/// other signing surface; each surface gets its own export with its own
+/// Rust-owned domain (see shekyl_pqc_sign_multisig_participant).
+/// secret_key_ptr/len: canonical hybrid secret key bytes. Production keys are
+/// wallet-derived and Rust-held (rule 36) — production C++ never holds one;
+/// tests source keys from the TEST-SUPPORT shekyl_pqc_keypair_generate.
 /// Returns signature blob. Caller frees with shekyl_buffer_free.
 ShekylPqcSignatureResult shekyl_pqc_sign(
     const uint8_t* secret_key_ptr,
@@ -170,7 +178,11 @@ ShekylPqcSignatureResult shekyl_pqc_sign_multisig_participant(
     const uint8_t* message_ptr,
     size_t message_len);
 
-/// Verify a hybrid PQC signature.
+/// Verify a hybrid PQC signature. The scheme-level domain is Rust-owned
+/// (SA-R-2): scheme_id 1 verifies under the tx per-input auth surface
+/// (SCHEME_DOMAIN_PQC_AUTH_TX — the shekyl_pqc_sign twin), scheme_id 2 under
+/// the multisig participant domain (the shekyl_pqc_sign_multisig_participant
+/// twin). C++ passes no domain string.
 ///
 /// Returns 0 on success, or a nonzero PqcVerifyError discriminant on failure:
 ///   1  = SchemeMismatch         5  = ThresholdMismatch     (9 retired — see below)
@@ -191,7 +203,6 @@ uint8_t shekyl_pqc_verify(
     const uint8_t* message,
     size_t message_len);
 
-/// Verify a hybrid PQC signature with optional group ID binding.
 /// Compute Keccak-256 hash of data_ptr[0..data_len].
 /// out_ptr: 32 writable bytes for the hash output.
 bool shekyl_cn_fast_hash(

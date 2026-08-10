@@ -322,12 +322,16 @@ pub const SPEND_AUTH_VERSION_ED25519: u8 = 0x02;
 /// leaf `h_pqc = H(blob)` already binds, so it was a self-referential tautology.
 /// The consensus caller (the `shekyl-daemon-rpc` submit verifier) and every other
 /// caller already passed `None`; the parameter is gone.
+///
+/// Returns `Ok(())` on success and `Err` on any failure — `Result<()>`, **not**
+/// `Result<bool>` (SA-R-1): there is no `Ok(false)` for a caller to mishandle.
+/// Do not restore a boolean return.
 pub fn verify_multisig(
     scheme_id: u8,
     key_blob: &[u8],
     sig_blob: &[u8],
     message: &[u8],
-) -> Result<bool, PqcVerifyError> {
+) -> Result<(), PqcVerifyError> {
     // Check 1: scheme match
     if scheme_id != HYBRID_SCHEME_ID_MULTISIG {
         return Err(PqcVerifyError::SchemeMismatch);
@@ -386,7 +390,7 @@ pub fn verify_multisig(
             .map_err(|_| PqcVerifyError::CryptoVerifyFailed)?;
     }
 
-    Ok(true)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -512,8 +516,7 @@ mod tests {
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
-        let result = verify_multisig(2, &key_blob, &sig_blob, msg);
-        assert!(result.unwrap());
+        verify_multisig(2, &key_blob, &sig_blob, msg).unwrap();
     }
 
     #[test]
@@ -525,7 +528,7 @@ mod tests {
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
-        assert!(verify_multisig(2, &key_blob, &sig_blob, msg).unwrap());
+        verify_multisig(2, &key_blob, &sig_blob, msg).unwrap();
     }
 
     /// SA-R-5 cross-domain separation (the negative control): a signature made
@@ -564,7 +567,7 @@ mod tests {
         // And the converse: a correct multisig-domain container still verifies.
         let good = sign_multisig(&pairs, &[0], msg);
         let good_blob = good.to_canonical_bytes().unwrap();
-        assert!(verify_multisig(2, &key_blob, &good_blob, msg).unwrap());
+        verify_multisig(2, &key_blob, &good_blob, msg).unwrap();
     }
 
     #[test]
@@ -577,7 +580,7 @@ mod tests {
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
-        assert!(verify_multisig(2, &key_blob, &sig_blob, msg).unwrap());
+        verify_multisig(2, &key_blob, &sig_blob, msg).unwrap();
     }
 
     // MSW-1 cross-seam length KAT. The absence of a test that crossed the
@@ -919,7 +922,7 @@ mod tests {
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
-        assert!(verify_multisig(2, &key_blob, &sig_blob, msg).unwrap());
+        verify_multisig(2, &key_blob, &sig_blob, msg).unwrap();
     }
 
     #[test]
@@ -931,7 +934,7 @@ mod tests {
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
-        assert!(verify_multisig(2, &key_blob, &sig_blob, msg).unwrap());
+        verify_multisig(2, &key_blob, &sig_blob, msg).unwrap();
     }
 
     #[test]
@@ -946,11 +949,8 @@ mod tests {
         for subset in subsets {
             let sc = sign_multisig(&pairs, subset, msg);
             let sig_blob = sc.to_canonical_bytes().unwrap();
-            let result = verify_multisig(2, &key_blob, &sig_blob, msg);
-            assert!(
-                result.unwrap(),
-                "subset {subset:?} should verify successfully",
-            );
+            verify_multisig(2, &key_blob, &sig_blob, msg)
+                .unwrap_or_else(|e| panic!("subset {subset:?} should verify successfully: {e:?}"));
         }
     }
 
