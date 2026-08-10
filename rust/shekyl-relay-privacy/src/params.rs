@@ -66,6 +66,18 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// origin oracle (§29), and it is the half configuration B's deletion did
 /// **not** close (§58.3).
 ///
+/// > **OVERTAKEN BY §89 — the anonymity zone stems.** The paragraph below is
+/// > kept because its *shape* still explains where this constant came from,
+/// > but its premise is retired: `dandelionpp_notify` no longer gates on
+/// > `nzone == public_`, so the zone runs Dandelion++ like any other.
+/// > Two consequences land directly on this constant and neither is
+/// > re-derived here: a diverted transaction now **continues stemming**
+/// > rather than terminating in a diffusion, so §63.5's stem-shortening cost
+/// > (7.4 % at `p = 2 %`, 64 % at `p ≈ 45 %`) **disappears** — which was the
+/// > measured reason for ruling the higher `p` out. Re-deriving `p` is
+/// > §64.1's eligibility decision, now landable and owed its own round.
+/// > **Until it runs, 2 % is the conservative value, not the justified one.**
+///
 /// *"Onto the anonymity zone", not "onto its stem": the zone has no stem.
 /// `dandelionpp_notify` dispatches only when `nzone == public_`, so an
 /// anonymity zone **diffuses** to its outbound set instead — which is why
@@ -110,6 +122,16 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// unfavourable half of that correction belongs to F-6 rather than here: the
 /// pre-R-1 oracle was the entire outbound set, ~12 peers, not one
 /// slot-holder.)*
+///
+/// > **§63.4's retraction is itself overtaken by §89 — un-retracted, not
+/// > reinstated.** The zone runs Dandelion++ now, so per-successor stem state
+/// > exists on it again and precision *does* vary across peers. That revives
+/// > the question §60.2 asked; it does **not** revive its ~83 % answer, which
+/// > was computed against the pre-R-1 eligible set and the diffusing
+/// > topology. The number is unknown until §64.1's round measures it, and
+/// > recording it as unknown is the point — a retracted figure that comes
+/// > back when its premise does is how a wrong number survives two
+/// > reversals.
 ///
 /// Reaching ~10 % against the pre-fluff set needs `p ≈ 45 %`, which is a
 /// different regime rather than a tweak — and **§63.5 prices it**: because a
