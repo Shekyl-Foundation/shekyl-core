@@ -3195,10 +3195,17 @@ typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel, const st
 #define SHEKYL_RELAY_ZONE_COVERT_ENABLED 2u
 
 //! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
+//! `zone` is the `epee::net_utils::zone` discriminant; it selects the
+//! transport-bound parameters (§89.2) so this zone's stem-observation window
+//! matches the embargo its successors draw. It is NOT a restatement of
+//! `SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY` — fluff reach follows the network,
+//! transit latency follows the transport, and outbound-only fluff on clearnet
+//! is still open (§25.5).
 //! `flags` is a mask of the `SHEKYL_RELAY_ZONE_*` bits above.
 //! Null when a zone cannot be built: SIZE_MAX stems, or a zero epoch — which
 //! would expire at every wake and spin the relay timer. Treat null as fatal.
-RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems,
+RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::uint8_t zone,
+                                       std::size_t stems,
                                        std::uint32_t min_epoch_secs,
                                        std::uint32_t epoch_jitter_secs,
                                        std::uint32_t flags);

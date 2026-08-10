@@ -262,7 +262,7 @@ namespace levin
         flags |= SHEKYL_RELAY_ZONE_COVERT_ENABLED;
 
       return shekyl_relay_zone_new(
-        now_ms(), params.stems,
+        now_ms(), std::uint8_t(nzone), params.stems,
         std::uint32_t(params.min_epoch.count()), std::uint32_t(params.epoch_range.count()),
         flags
       );
