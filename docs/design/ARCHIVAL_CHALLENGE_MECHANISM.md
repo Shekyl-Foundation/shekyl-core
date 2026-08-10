@@ -36,8 +36,21 @@ cannot be compelled post-impossibility), anchor = that block's
 identity, three-tier custody, cold-authorized `EndpointUpdate`).
 **Live remainder: ONE consolidated format round** (response wire,
 pass-record tx carrier + prunable residence, bond-wire fields, binding
-artifact, key tiers, `r`-residence) **then the three derivations**
-(W₂; (m, n); k/λ_target + tripwire definition).
+artifact, key tiers; nonce re-pinned as
+`H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` — `r` deleted) **then the
+three derivations** (W₂; (m, n); k/λ_target). The `λ_eff` *statistic*
+is already ruled (FOLLOWUPS: measured directly as records per pair per
+epoch, robust quantile not mean, `β̂` as a correction term never a
+divisor — the indirect `λ_nom·(1−β_lazy)` estimator is blind to a lazy
+witness that signs and never reads); the genuine remainder is narrower
+than "define the tripwire": **the response** — what the network does
+when the measurement says the norm has decayed (`β_lazy → 1`,
+`λ_eff → 0` is stated in the sealed record with no defined
+consequence, and a measured statistic with no consequence is a
+dashboard). Post-impossibility the honest candidate set is small:
+client-side defaults, release-gating, possibly a consensus-visible
+coverage floor. Read FOLLOWUPS' loop-check section in full before that
+round.
 
 **Lineage.** Successor to the Phase 3 (settlement writer) scope of
 `ARCHIVAL_CREDIT_WIRE.md` (TJ-B step 3). The credit-wire admission surface
@@ -771,9 +784,35 @@ the round kept trying to add forensics underneath it.
    separate decision: block h's `cb_out_key` is on chain, controlled by
    exactly the party that did the read, and it makes the
    countersignature non-transferable — nobody can use a signature bound
-   to a coinbase key they don't hold. The landed nonce construction
-   (`H(r ‖ cb_out_key ‖ P ‖ s ‖ E)`) survives with only `r`'s residence
-   to re-home (the format round).
+   to a coinbase key they don't hold.
+   **The nonce's `r` term DELETES; `block_hash(h−1)` substitutes
+   (checked at source, 2026-08-10).** `attestation_wire.rs:191-195`
+   assigns the roles: `cb_out_key` is "the copy-freeride bind; kept,"
+   `r` is "the producer's revealed randomness" — its only job is nonce
+   unpredictability, stopping P from pre-signing a countersignature it
+   hands out without ever being contacted. It cannot do that job: both
+   `r` and `cb_out_key` are chosen by the same party, so a producer
+   willing to leak one is equally willing to leak the other — a second
+   producer-chosen random term does not strengthen a property that
+   fails exactly when the producer defects. And the attack is *worse*
+   under this round's design: under miner-chosen challenges P did not
+   know whether it would be challenged; under exhaustive coverage P
+   knows with certainty it gets exactly three, so pre-signing is
+   strictly more attractive now. `block_hash(h−1)` closes it at zero
+   cost: unpredictable to everyone before it exists, not choosable by
+   block h's producer, on chain, and already fetched for the assignment
+   derivation. Stated at its honest strength: the substituted nonce
+   **cannot exist before block h−1 does**, regardless of any party's
+   behaviour — collusive pre-signing narrows from unbounded lead time
+   to one block, while fully-collusive passes remain possible (P can
+   countersign whatever a colluding producer shows it at block time —
+   nothing prevents that) and stay priced where they always were, by
+   the 2-of-3 quadratic and the outer window. `cb_out_key` distinctness
+   is enforced independently by the epoch-windowed uniqueness consensus
+   rule (`ARCHIVAL_CREDIT_WIRE.md` authority row). Format-round ruling:
+   nonce = `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)`, and the
+   property bought is **pre-signing resistance against a colluding
+   producer — which `r` never provided**.
    **The residue this ruling does not settle, on its face so item 12
    does not rediscover it:** challenge servicing is available only to
    parties that win blocks, so the coverage rate is bounded by **how
@@ -1092,9 +1131,11 @@ record, none silently:
   compelled nonce-commitment has nothing left to compel — the mandate
   becomes structural rather than enforced. Consistent, no conflict.
 - **Step-1 plaintext-`r` residence** ("`r` rides in the winning block's
-  coinbase extra alongside the records") → needs rework: there is no
-  commitment carrier anymore. Where `r` (or its successor) lives is part of
-  fork §7.2's anchor question.
+  coinbase extra alongside the records") → **RESOLVED by deletion
+  (2026-08-10, fork §7.2's closure): `r` is removed from the nonce
+  entirely and `block_hash(h−1)` substitutes.** No residence question
+  remains — the term is on chain by construction, and the prunable side
+  table sheds its `r` entry.
 - **Secret-set estimators** (`β̂` from pass/miss conflicts; "sets are
   secret, so a padder cannot steer") → moot: with no miss records there is
   nothing to conflict, and sets are public by design. `λ_eff` as the
