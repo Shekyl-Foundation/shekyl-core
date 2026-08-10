@@ -598,15 +598,30 @@ namespace
             /* stem and forward are role-dependent — observe both outcomes.
                (forward is NOT exempt the way local is; an earlier draft pinned
                always-stem and failed only when full-suite run order moved RNG.) */
+            /* Bounded, and it has to be: the regression these six cases exist
+               to catch — the transport gate coming back — pins the outcome to
+               one value, and an unbounded wait for the other one turns a red
+               assertion into a CI job timeout with no failing test named.
+               P(role never varies | correct) = 0.8^64 ≈ 6e-7 at the zone's
+               20 % fluff probability, so the bound cannot flake in practice. */
+            constexpr unsigned max_rounds = 64;
             bool has_stemmed = false;
             bool has_fluffed = false;
-            while (!has_stemmed || !has_fluffed)
+            for (unsigned round = 0; round < max_rounds; ++round)
             {
                 const bool is_stem = run_private_round(notifier, txs, method, padded);
                 has_stemmed |= is_stem;
                 has_fluffed |= !is_stem;
+                if (has_stemmed && has_fluffed)
+                    return;
                 notifier.run_epoch();
             }
+
+            ADD_FAILURE() << "epoch role never varied over " << max_rounds
+                          << " rounds (stemmed=" << has_stemmed
+                          << " fluffed=" << has_fluffed
+                          << ") — the anonymity zone is pinned to one outcome, "
+                             "which is what a restored transport gate looks like (§89)";
         }
 
         boost::uuids::random_generator random_generator_;
