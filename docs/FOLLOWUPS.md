@@ -64,19 +64,6 @@ sustainability is unaffected by the recalibration.
   production C++ caller could wire a non-derived keypair — or a multisig
   participant signature — into an unintended path. **Target: V3.0 pre-genesis.**
 
-- **serve-credit equivalence fixture needs a regen writer (added 2026-08-10,
-  PR-SA-2).** `serve_credit_equivalence_kat_v1.json`'s `base` mirrors the gate-2
-  integration substrate (p_id, heights, per-persona keys), but unlike
-  `gate4_lifecycle_kat` — which has an `#[ignore]` writer that re-derives from
-  gate-2 — the equivalence fixture is hand-synced. When SA-2 regenerated gate-2
-  with a fresh keypair, the mirrored values desynced and the C++ cross-check
-  (`archival_serve_credit_equivalence.cpp:527`) caught it; the re-sync was
-  manual. Give it a regen writer that re-derives the p_id-mirrored fields from
-  gate-2 (preserving the hand-authored verdict/reason columns), matching the
-  gate-4 pattern, so the sync is mechanical. Bonus: making the gate-2 integration
-  keypair deterministic (seeded, not `OsRng`) would make the whole fixture chain
-  reproducible and kill this desync class entirely. **Target: V3.0 pre-genesis.**
-
 - **T18 weekly cargo-mutants gate no longer fits its 360-minute budget
   (surfaced 2026-08-10, dispatch run 31346130482 — the job's first
   execution after the severed-header restore).** `cargo mutants` found
