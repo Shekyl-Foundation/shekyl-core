@@ -68,10 +68,14 @@ fn join_market_construct_verifies_against_retention() {
 
     // The hybrid signature is valid under P_pubkey over the post preimage.
     let preimage = built.vin().signature_preimage(&TX_PREFIX_HASH);
-    let sig_ok = HybridEd25519MlDsa
-        .verify(keys.hybrid_bond_id(), &preimage, built.signature())
-        .expect("verify hybrid signature");
-    assert!(sig_ok, "JoinMarket signature must verify under P_pubkey");
+    HybridEd25519MlDsa
+        .verify(
+            keys.hybrid_bond_id(),
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_BOND_POST,
+            &preimage,
+            built.signature(),
+        )
+        .expect("JoinMarket signature must verify under P_pubkey");
 
     // --- construct the synthetic RCT credit witness ---
     // One funding input committing F = change + fee + floor; one change output.

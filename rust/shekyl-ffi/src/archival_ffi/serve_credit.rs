@@ -114,8 +114,16 @@ pub unsafe extern "C" fn shekyl_archival_verify_serve_credit_vin(
         Ok(pk) => pk,
         Err(_) => return SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_DESER,
     };
+    // F1 fixed by SA-R-1: under `verify -> Result<()>` there is no `Ok(false)`,
+    // so `.is_err()` now correctly rejects a well-formed wrong-key signature
+    // (it previously let `Ok(false)` fall through to VERIFY_OK). Surface F domain.
     if HybridEd25519MlDsa
-        .verify(&pk, &preimage, &response.hybrid_signature)
+        .verify(
+            &pk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+            &preimage,
+            &response.hybrid_signature,
+        )
         .is_err()
     {
         return SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_VERIFY;

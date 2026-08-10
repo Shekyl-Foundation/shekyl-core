@@ -1820,12 +1820,14 @@ mod tests {
 
         // ── Verify 2/4: hybrid signature under P_pubkey over the preimage ─
         let preimage = built.vin().signature_preimage(&signable_tx_hash);
-        assert!(
-            HybridEd25519MlDsa
-                .verify(p_keys.hybrid_bond_id(), &preimage, built.signature())
-                .expect("verify hybrid signature"),
-            "JoinMarket signature must verify under P_pubkey"
-        );
+        HybridEd25519MlDsa
+            .verify(
+                p_keys.hybrid_bond_id(),
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_BOND_POST,
+                &preimage,
+                built.signature(),
+            )
+            .expect("JoinMarket signature must verify under P_pubkey");
 
         // ── Verify 3/4: Bulletproof+ over the un-cofactored change commitment ─
         let bp_commitments: Vec<CompressedPoint> = outputs
@@ -1931,9 +1933,14 @@ mod tests {
         let mut wrong_preimage = preimage;
         wrong_preimage[0] ^= 0x01;
         assert!(
-            !HybridEd25519MlDsa
-                .verify(p_keys.hybrid_bond_id(), &wrong_preimage, built.signature())
-                .expect("verify hybrid signature against tampered preimage"),
+            HybridEd25519MlDsa
+                .verify(
+                    p_keys.hybrid_bond_id(),
+                    shekyl_crypto_pq::signature::SCHEME_DOMAIN_BOND_POST,
+                    &wrong_preimage,
+                    built.signature()
+                )
+                .is_err(),
             "the bond signature must not verify against a tampered preimage"
         );
 

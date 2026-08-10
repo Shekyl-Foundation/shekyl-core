@@ -265,9 +265,14 @@ fn gate4_lifecycle_kat_vectors() {
         .expect("sig bytes");
     let sig = shekyl_crypto_pq::signature::HybridSignature::from_canonical_bytes(&sig_bytes)
         .expect("sig");
-    assert!(HybridEd25519MlDsa
-        .verify(&int_pk, &parsed.signature_preimage(), &sig)
-        .expect("hybrid verify"));
+    HybridEd25519MlDsa
+        .verify(
+            &int_pk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+            &parsed.signature_preimage(),
+            &sig,
+        )
+        .expect("hybrid verify");
 
     let segment_leaf_count = serve["segment_leaf_count"].as_u64().expect("segment count");
     verify_leaf_index(

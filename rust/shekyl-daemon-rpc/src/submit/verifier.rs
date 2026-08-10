@@ -881,10 +881,15 @@ fn verify_pqc_auths(parsed: &ParsedSubmission, pqc_auths: &[PqcAuth]) -> Result<
                 else {
                     return Err(VerifyFailure::Malformed);
                 };
-                if !matches!(
-                    HybridEd25519MlDsa.verify(&public_key, payload_hash, &signature),
-                    Ok(true)
-                ) {
+                if HybridEd25519MlDsa
+                    .verify(
+                        &public_key,
+                        shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                        payload_hash,
+                        &signature,
+                    )
+                    .is_err()
+                {
                     return Err(VerifyFailure::Malformed);
                 }
             }

@@ -117,7 +117,7 @@ fn integration_keypair(
         return (pk, sk);
     }
     HybridEd25519MlDsa
-        .keypair_generate()
+        .generate_ephemeral_keypair_for_tests()
         .expect("integration keypair")
 }
 
@@ -184,7 +184,11 @@ fn build_integration_substrate(pinned_pk_hex: Option<&str>, pinned_sk_hex: Optio
     };
     let preimage = response.signature_preimage();
     response.hybrid_signature = scheme
-        .sign(&hybrid_sk, &preimage)
+        .sign(
+            &hybrid_sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+            &preimage,
+        )
         .expect("integration sign");
 
     verify_leaf_index(
@@ -235,9 +239,15 @@ fn kat_hybrid_signature(pinned_hex: Option<&str>) -> shekyl_crypto_pq::signature
         .expect("pinned hybrid signature");
     }
     let scheme = HybridEd25519MlDsa;
-    let (_pk, sk) = scheme.keypair_generate().expect("keypair");
+    let (_pk, sk) = scheme
+        .generate_ephemeral_keypair_for_tests()
+        .expect("keypair");
     scheme
-        .sign(&sk, b"gate2-serve-credit-kat-v1-hybrid-sig-anchor")
+        .sign(
+            &sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+            b"gate2-serve-credit-kat-v1-hybrid-sig-anchor",
+        )
         .expect("sign")
 }
 
@@ -473,11 +483,10 @@ fn regenerate_gate2_kat_fixture() {
     let existing: Option<Value> = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok());
-    let pinned_sig = existing.as_ref().and_then(|v| {
-        v["wire"]["hybrid_signature_hex"]
-            .as_str()
-            .map(str::to_owned)
-    });
+    // Do NOT reuse the existing wire anchor: the pre-SA-2 fixture pins a v1
+    // (parallel) signature that `from_canonical_bytes` now rejects. Regenerate
+    // it fresh under the v2 nested construction.
+    let pinned_sig: Option<String> = None;
     let integration_pk = existing.as_ref().and_then(|v| {
         v["integration"]["bond_hybrid_pubkey_hex"]
             .as_str()
@@ -602,9 +611,14 @@ fn gate2_serve_credit_kat_vectors() {
         .to_canonical_bytes()
         .expect("integration sig bytes");
     let int_sig = HybridSignature::from_canonical_bytes(&int_sig).expect("integration sig parse");
-    assert!(HybridEd25519MlDsa
-        .verify(&int_pk, &parsed.signature_preimage(), &int_sig)
-        .expect("integration hybrid verify"));
+    HybridEd25519MlDsa
+        .verify(
+            &int_pk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+            &parsed.signature_preimage(),
+            &int_sig,
+        )
+        .expect("integration hybrid verify");
     assert_eq!(
         challenge_leaf_index(
             &parsed.p_canonical_id,

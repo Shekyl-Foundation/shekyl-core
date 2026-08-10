@@ -874,7 +874,12 @@ pub unsafe extern "C" fn shekyl_sign_pqc_auth(
     };
 
     use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
-    match sign_pqc_auth_for_output(&ss, output_index, msg) {
+    match sign_pqc_auth_for_output(
+        &ss,
+        output_index,
+        shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+        msg,
+    ) {
         Ok(auth) => ShekylPqcAuthResult {
             hybrid_public_key: ShekylBuffer::from_vec(auth.hybrid_public_key),
             signature: ShekylBuffer::from_vec(auth.signature),

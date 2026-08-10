@@ -148,9 +148,22 @@ pub fn build_join_market_vin(
         bond_debit: 0,
     };
 
+    // PARKED — rule-21 reopen (SIGNATURE_ALIGNMENT.md §2.2, bond-preimage
+    // reconciliation round). This surface-B signature over the domain-separated
+    // `signature_preimage` is signed-and-discarded today: the bond vin's on-chain
+    // authorization rides the generic surface-A `pqc_auths` slot
+    // (`SCHEME_DOMAIN_PQC_AUTH_TX`), which already binds `bond_spend_pk` via the
+    // signed prefix. The reconciliation round decides whether this slot should
+    // instead sign this preimage (activate) or whether S1 is dead (delete).
+    // Until then it passes the parked bond-post domain so it compiles under the
+    // mandatory-domain trait. DO NOT wire this into a verifier without that round.
     let preimage = vin.signature_preimage(tx_prefix_hash);
     let signature = HybridEd25519MlDsa
-        .sign(&keys.hybrid_sign_sk, &preimage)
+        .sign(
+            &keys.hybrid_sign_sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_BOND_POST,
+            &preimage,
+        )
         .map_err(BondBuildError::Sign)?;
 
     Ok(JoinMarketVin { vin, signature })

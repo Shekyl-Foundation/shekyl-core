@@ -312,9 +312,15 @@ mod tests {
     fn dummy_hybrid_signature() -> HybridSignature {
         use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
         let scheme = HybridEd25519MlDsa;
-        let (_pk, sk) = scheme.keypair_generate().expect("keypair");
+        let (_pk, sk) = scheme
+            .generate_ephemeral_keypair_for_tests()
+            .expect("keypair");
         scheme
-            .sign(&sk, b"archival-serve-credit-wire-roundtrip")
+            .sign(
+                &sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+                b"archival-serve-credit-wire-roundtrip",
+            )
             .expect("sign")
     }
 

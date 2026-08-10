@@ -761,12 +761,15 @@ fn verify_hybrid_auth(
     let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
         return Err(EmissionVerifyError::AuthMalformed { role });
     };
-    match HybridEd25519MlDsa.verify(&pubkey, msg, &sig) {
-        Ok(true) => Ok(()),
-        // Ok(false) and Err collapse to one rejection: the split is a
-        // library-reporting detail, not a consensus distinction.
-        _ => Err(EmissionVerifyError::AuthRejected { role }),
-    }
+    // The scheme-level domain is the role's surface (SA-R-2): a claim-role
+    // signature is not a valid backing-role signature and vice versa.
+    let domain: &[u8] = match role {
+        EmissionAuthRole::Claim => shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
+        EmissionAuthRole::Backing => shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+    };
+    HybridEd25519MlDsa
+        .verify(&pubkey, domain, msg, &sig)
+        .map_err(|_| EmissionVerifyError::AuthRejected { role })
 }
 
 /// The fail-closed assembly: all three witnesses, or no verdict.

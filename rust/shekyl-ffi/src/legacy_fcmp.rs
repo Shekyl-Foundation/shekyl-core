@@ -730,10 +730,17 @@ pub unsafe extern "C" fn shekyl_emission_hybrid_auth_verify(
         return SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER;
     };
 
-    // (2) Hybrid verify (Ed25519 && ML-DSA-65).
-    match SignatureScheme::verify(&HybridEd25519MlDsa, &pubkey, msg, &sig) {
-        Ok(true) => SHEKYL_EMISSION_HYBRID_AUTH_OK,
-        _ => SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY,
+    // (2) Hybrid verify (Ed25519 && ML-DSA-65). The leaf-hash gate above is
+    // the backing-role check, so this uses the backing surface domain (SA-R-2).
+    match SignatureScheme::verify(
+        &HybridEd25519MlDsa,
+        &pubkey,
+        shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+        msg,
+        &sig,
+    ) {
+        Ok(()) => SHEKYL_EMISSION_HYBRID_AUTH_OK,
+        Err(_) => SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY,
     }
 }
 

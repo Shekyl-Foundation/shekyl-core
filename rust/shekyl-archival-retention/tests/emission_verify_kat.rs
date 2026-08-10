@@ -637,8 +637,12 @@ fn authed_vin(
     tx_hash: &[u8; 32],
 ) -> (ArchivalRewardEmissionVin, HybridSecretKey, HybridSecretKey) {
     let scheme = HybridEd25519MlDsa;
-    let (p_pk, p_sk) = scheme.keypair_generate().expect("P keypair");
-    let (b_pk, b_sk) = scheme.keypair_generate().expect("backing keypair");
+    let (p_pk, p_sk) = scheme
+        .generate_ephemeral_keypair_for_tests()
+        .expect("P keypair");
+    let (b_pk, b_sk) = scheme
+        .generate_ephemeral_keypair_for_tests()
+        .expect("backing keypair");
 
     let mut vin = honest_vin(fx);
     vin.p_pubkey = p_pk.to_canonical_bytes().expect("canonical P pubkey");
@@ -651,12 +655,20 @@ fn authed_vin(
     // computed, exactly as the wallet builder sequences it.
     let msgs = vin.auth_msgs(commits, tx_hash).expect("role messages");
     vin.auth_backing = scheme
-        .sign(&b_sk, &msgs.backing)
+        .sign(
+            &b_sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+            &msgs.backing,
+        )
         .expect("backing sign")
         .to_canonical_bytes()
         .expect("canonical backing sig");
     vin.auth_claim = scheme
-        .sign(&p_sk, &msgs.claim)
+        .sign(
+            &p_sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
+            &msgs.claim,
+        )
         .expect("claim sign")
         .to_canonical_bytes()
         .expect("canonical claim sig");
@@ -718,7 +730,11 @@ fn auth_rejects_claim_signed_by_wrong_key() {
 
     let msgs = vin.auth_msgs(&commits, &tx_hash).expect("role messages");
     vin.auth_claim = HybridEd25519MlDsa
-        .sign(&b_sk, &msgs.claim)
+        .sign(
+            &b_sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
+            &msgs.claim,
+        )
         .expect("cross sign")
         .to_canonical_bytes()
         .expect("canonical sig");
@@ -784,12 +800,20 @@ fn auth_rejects_malformed_hybrid_encodings() {
     let msgs = vin.auth_msgs(&commits, &tx_hash).expect("role messages");
     let scheme = HybridEd25519MlDsa;
     vin.auth_backing = scheme
-        .sign(&b_sk, &msgs.backing)
+        .sign(
+            &b_sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+            &msgs.backing,
+        )
         .expect("backing sign")
         .to_canonical_bytes()
         .expect("canonical sig");
     vin.auth_claim = scheme
-        .sign(&p_sk, &msgs.claim)
+        .sign(
+            &p_sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
+            &msgs.claim,
+        )
         .expect("claim sign")
         .to_canonical_bytes()
         .expect("canonical sig");

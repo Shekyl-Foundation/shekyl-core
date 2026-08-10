@@ -341,7 +341,11 @@ impl Message<AssembleBond> for StakeEngine {
             .map_err(|e| BondAssemblyError::build("pqc auth signing", e))?;
         let bond_payload_hash = payload_hashes[spend_inputs.len()];
         let bond_sig = HybridEd25519MlDsa
-            .sign(&keys.hybrid_sign_sk, &bond_payload_hash)
+            .sign(
+                &keys.hybrid_sign_sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                &bond_payload_hash,
+            )
             .map_err(|e| BondAssemblyError::build("bond pqc auth signing", e))?;
         pqc_auths.push(PqcAuth {
             auth_version: 1,

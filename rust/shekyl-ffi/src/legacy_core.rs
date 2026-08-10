@@ -7,6 +7,7 @@
 
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme as _,
+    SCHEME_DOMAIN_PQC_AUTH_TX,
 };
 use std::os::raw::c_char;
 use std::sync::Mutex;
@@ -94,10 +95,16 @@ pub unsafe extern "C" fn xchacha20(
 ///
 /// Returns canonical-encoded public and secret key buffers. Caller owns the
 /// buffers and must release them via `shekyl_buffer_free`.
+/// **Test-support only** (F-7): generates a fresh, *non-derived* hybrid keypair.
+/// Real wallets derive their keys (`generate_pqc_key_material`); this export
+/// exists solely for the C++ FFI test suite (`fcmp.cpp`) and has no production
+/// caller. It is not gated out of the shared archive because the C++ tests link
+/// the same archive as production; the structural gate (a separate test-only
+/// Rust archive) is tracked in FOLLOWUPS. Do not call from production C++.
 #[no_mangle]
 pub extern "C" fn shekyl_pqc_keypair_generate() -> ShekylPqcKeypair {
     let scheme = HybridEd25519MlDsa;
-    match scheme.keypair_generate() {
+    match scheme.generate_ephemeral_keypair_for_tests() {
         Ok((pk, sk)) => {
             let public_key = pk.to_canonical_bytes().map(ShekylBuffer::from_vec);
             let secret_key = sk.to_canonical_bytes().map(ShekylBuffer::from_vec);
@@ -154,8 +161,10 @@ pub extern "C" fn shekyl_pqc_sign(
         };
     };
 
+    // The scheme-level domain is Rust-owned (SA-R-2): this export serves the
+    // tx per-input PQC auth surface, so C++ never carries a domain string.
     match scheme
-        .sign(&secret_key, message)
+        .sign(&secret_key, SCHEME_DOMAIN_PQC_AUTH_TX, message)
         .and_then(|sig| sig.to_canonical_bytes())
     {
         Ok(signature) => ShekylPqcSignatureResult {
@@ -231,9 +240,10 @@ pub extern "C" fn shekyl_pqc_verify(
             let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
                 return 11;
             };
-            match scheme.verify(&pk, msg, &sig) {
-                Ok(true) => 0,
-                Ok(false) | Err(_) => 10, // CryptoVerifyFailed
+            // Rust-owned tx-auth domain (SA-R-2); C++ passes no domain.
+            match scheme.verify(&pk, SCHEME_DOMAIN_PQC_AUTH_TX, msg, &sig) {
+                Ok(()) => 0,
+                Err(_) => 10, // CryptoVerifyFailed
             }
         }
         2 => {

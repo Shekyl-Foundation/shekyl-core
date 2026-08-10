@@ -22,7 +22,11 @@ multisig = ["shekyl-fcmp/multisig", "modular-frost"]
 
 [dependencies]
 shekyl-chacha = { path = "../shekyl-chacha" }
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# `test-utils` enables the test-support `generate_ephemeral_keypair_for_tests`
+# reached only via the `shekyl_pqc_keypair_generate` FFI export (F-7; C++ test
+# suite). FOLLOWUPS: move to a separate test-only archive to gate it out of
+# production.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-encoding = { path = "../shekyl-encoding" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }

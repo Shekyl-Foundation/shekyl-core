@@ -251,11 +251,15 @@ pub fn sign_pqc_auths(
         let mut ss = [0u8; 64];
         ss.copy_from_slice(&inp.combined_ss);
 
-        let auth_sig = sign_pqc_auth_for_output(&ss, inp.output_index, hash).map_err(|e| {
-            TxBuilderError::PqcSignError {
-                index: i,
-                reason: format!("sign_pqc_auth_for_output failed: {e}"),
-            }
+        let auth_sig = sign_pqc_auth_for_output(
+            &ss,
+            inp.output_index,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+            hash,
+        )
+        .map_err(|e| TxBuilderError::PqcSignError {
+            index: i,
+            reason: format!("sign_pqc_auth_for_output failed: {e}"),
         })?;
 
         auths.push(PqcAuth {
