@@ -828,19 +828,72 @@ the round kept trying to add forensics underneath it.
    at post/update (rotation-free; the PoP is the binding) — a
    TJ-B-adjacent format decision landing on the **bond wire**, hence
    (ii) a persisted-wire change ⇒ version-constant bump (rule 42) when
-   built. (iii) **The authorization tier for `EndpointUpdate`, checked
-   against the compromise-window residual it interacts with:**
-   hot-key-authorized rotation means the attacker in that window can
-   also *rotate* — hijacking the endpoint persistently rather than
-   impersonating transiently (both parties hold the hot key; a
-   rotation war resolves only by operator vigilance) — while
-   cold-authorized rotation is hijack-proof at the cost of touching
-   cold custody for a routine operation. Coupled to it: whether
-   emission-claim authorization (the bond `hybrid_public_key` the
-   PR-E3 auth gate verifies) sits hot or cold decides whether
-   "impersonate, never drain" covers the *earnings stream* as well as
-   the bond principal. Pose both tiers explicitly in the spec; do not
-   let the hot key inherit them by default.
+   built. (iii) Whether **emission-claim authorization** (the bond
+   `hybrid_public_key` the PR-E3 auth gate verifies) sits hot or cold —
+   this decides whether "impersonate, never drain" covers the *earnings
+   stream* as well as the bond principal. Pose the tier explicitly in
+   the spec; do not let the hot key inherit it by default.
+   **Carrier — RULED (2026-08-10): `EndpointUpdate` rides the bond-post
+   vin as `BondPostKind::EndpointUpdate = 4`, same family as
+   `HoldingsUpdate`, deliberately different mutation class.** The
+   four-way decomposition on the record:
+   1. *Economics:* `HoldingsUpdate` is defined by its amount arms
+      (exactly ±FLOOR, one shard, `bonded_total` recomputed,
+      retention-horizon gate on drop). `EndpointUpdate` has **zero
+      credit, zero debit, `bonded_total` untouched** — nonzero amounts
+      on it are made unrepresentable on the wire, the same enforcement
+      idiom as the `bond_spend_pk` iff-`JoinMarket` coupling. The
+      endpoint field itself is present iff `JoinMarket` (born at post —
+      a bond without an endpoint was the discovery gap) or
+      `EndpointUpdate` (rotation).
+   2. *Standing effects — the two variants are opposites:*
+      `HoldingsUpdate` legitimately mutates what the market and window
+      read; `EndpointUpdate` touches nothing they read. Stated at
+      family level precisely because a maintainer seeing two siblings
+      in one enum will reach for the shared record-update path — and
+      the sibling's path *does* carry standing-mutation code.
+   3. *Authorization — COLD, and the family precedent is explicitly
+      BROKEN (ruled 2026-08-10).* The family splits debit vs non-debit,
+      but that split is a **proxy**: debit arms touch value, so they
+      get the cold key. `EndpointUpdate` touches no value, so the proxy
+      routes it hot — and the proxy is wrong here, because the thing
+      being protected is not value but **the persona's ability to
+      escape a compromised host**. Hot authorization gives the escape
+      hatch to exactly the key the host attacker already holds: the
+      attacker rotates to an address it controls, the operator rotates
+      back with the *identical* derived key — an unbounded flapping
+      contest between parties with equal authority, decided by whoever
+      posts last. Not a hijack window; a **permanent stalemate**, in
+      exactly the case the mutation exists for — so it cannot be filed
+      as a residual. Two of the three burn cases (compromise,
+      deanonymization) mean the hot key is in enemy hands, so
+      `EndpointUpdate` needs authority the compromised host does not
+      have: **the cold tier, despite being a non-debit post.** The cost,
+      stated honestly in the operator-facing text: rotation requires
+      reaching for the same custody used for unbonding — the escape is
+      not automatable from the serving box. That is the correct
+      trade — an escape hatch a compromised host can operate isn't
+      one — but it is a real burden. It also cleans up the funding
+      residual: with cold authority the principal is already involved,
+      so fee-from-earnings becomes a nicety and the pre-first-claim
+      gap stops being a hard corner. Spec detail to resolve: which
+      cold key a non-`JoinMarket`-posted record verifies against
+      (`bond_spend_pk` is present iff `JoinMarket` on the wire).
+   4. *Timing — one family-level rule:* `EndpointUpdate` is ruled
+      effective at epoch boundary, and Pin-5 quantization already
+      lands `HoldingsUpdate`'s *drawable* effect at epoch open
+      regardless of when the record mutates — so both variants share
+      one statement: **record-effect at connect, mechanism-effect at
+      epoch open.** Neither carries its own timing rule.
+   **The laundering invariant is a TEST, not a sentence (ruled
+   2026-08-10):** prose will not stop the shared-path mistake, because
+   the sibling legitimately carries standing-mutation code. Two KATs
+   land with the implementation: (a) a record's
+   `join_settlement_epoch`, bad-interval list, `bonded_total`, and
+   holdings are **byte-identical** across an `EndpointUpdate`; (b) a
+   failure-window vector in which a persona at 10 accumulated misses
+   **still slashes after rotating** — the attack stated as a test, the
+   one that fails loudly if rotation is wired into the wrong branch.
 3. **Expiry semantics — CLOSED (2026-08-08): expiry ⇒ miss.** The
    temptation under unattributable expiry is to discard it
    (expiry⇒uncounted); that is precisely wrong — a durably dark P
