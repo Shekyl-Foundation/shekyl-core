@@ -4,6 +4,7 @@ mod budget_scenarios;
 mod burden;
 mod calibration;
 mod cartel;
+mod challenge_coverage;
 mod distribution;
 mod engine;
 mod escalation;
@@ -49,6 +50,13 @@ fn main() {
 
     if std::env::args().any(|a| a == "--fb1c-c2") {
         run_fb1c_c2(&params);
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--challenge-coverage") {
+        // Fork-1 evidence set (ARCHIVAL_CHALLENGE_MECHANISM.md §7.1/§8):
+        // urn wave-tail exposure, issued-count histograms, capped regime.
+        challenge_coverage::run_and_print();
         return;
     }
 
