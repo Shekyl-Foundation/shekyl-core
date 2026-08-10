@@ -178,6 +178,37 @@ fluff and relays it publicly under R-1's exit rule. Answering it settles
 whether `forward` survives (Q12-Q3), what Q-12 derives if anything
 (Q12-Q4, Q12-Q5), and whether `FORWARD_DELAY_*` dies (Q12-Q7).
 
+> **The delay's OBJECTIVE changes under this question, and it should be settled
+> before anyone derives against the old one.**
+>
+> *Today:* one bridger holds the transaction, and the delay makes *"2+ incoming
+> connections could have sent it"* plausible. An anonymity-set argument about
+> **one node's uncertainty**.
+>
+> *After the field:* an anonymity fluff reaches many peers and each can bridge.
+> With **no** delay, first-to-clearnet is decided by network latency — which
+> leaks the fluff source's neighbourhood. That is a **topology** leak, not a
+> timing one, and it is a different failure than the one the current delay
+> defends against. With a delay at each candidate, first-to-clearnet becomes a
+> race among independent draws, decoupled from topology.
+>
+> **So the objective becomes: decouple the first bridger from network
+> distance.** The sufficient condition is a delay spread large relative to
+> *inter-node latency spread* — plausibly **hundreds of milliseconds, not tens
+> of seconds**, because it only has to dominate propagation jitter rather than
+> manufacture an anonymity set single-handedly.
+>
+> **This disposes of Q12-Q5 favourably.** "2+ connections" being one bit stops
+> being the target at all, because the set is now the **fluff reach** rather
+> than one node's inbound.
+>
+> **And it sharpens Q12-D1a.** That section says the structure improves; the
+> stronger statement is that the **requirement weakens** — a race among many
+> needs less randomisation than a single node manufacturing plausibility alone.
+> A derivation against the old objective would therefore over-provision by
+> roughly two orders of magnitude, which is the concrete cost of Q12-D1's
+> rejected option.
+
 **Q12-Q1 — Where does the origin zone live, and how wide?**
 §65.4 scoped two reserved bits on `txpool_tx_meta_t` with `zone::invalid == 0`
 as the migration-free default, which the epee enum still fits
@@ -186,12 +217,25 @@ as the migration-free default, which the epee enum still fits
 `rust/shekyl-engine-{state,file}/**`); re-verify at pre-flight rather than
 inherit.
 
-**Q12-Q2 — What does the pool loop do with it?**
+**Q12-Q2 — What does the pool loop do with it? — ANSWER EARLY**
 Route `forward` entries back to their origin zone instead of `public_`. Open:
 what happens when the origin zone is no longer usable? §59.7's fail-closed rule
 governs *originated* traffic (§30.5 — never fall out to clearnet). Relayed
 traffic's home was always clearnet. **An anonymity-arrived transaction is
 neither**, and this round must say which rule it inherits.
+
+> **Flagged for early answer, not because it is hard but because it is the one
+> with a fail-closed hazard.** The two candidate rules differ in exactly the
+> direction that matters: originated **fails closed**, relayed **falls through
+> to clearnet**. Inheriting the wrong one silently sends anonymity-arrived
+> traffic public — which is the precise defect the field exists to fix, so the
+> round would ship its own subject as a bug.
+>
+> It also fails quietly: the transaction propagates, nothing errors, and the
+> only symptom is that a class of traffic is on the wrong network. Answer it
+> at design time, where the two rules can be compared, rather than at
+> implementation time where whichever branch is written first becomes the
+> default.
 
 **Q12-Q3 — Does `forward` survive as a class?**
 If anonymity-arrived traffic stays in-zone, `forward` no longer means "about to
@@ -213,11 +257,21 @@ An anonymity set of two is one bit. Before deriving a mean that satisfies it,
 this round should say whether the objective itself is adequate — deriving
 precisely against a weak target is how a number acquires unearned authority.
 
-**Q12-Q6 — Which memoryless mean, and measured how?**
-The family fix is not merely swapping the draw: a Poisson at mean 22 s and an
-exponential at mean 22 s have different tails, and the objective is a
-tail property. The F-4 instrument (inversion 0.4236 → 0.2165) applies directly
-and is the measurement path.
+**Q12-Q6 — Which mean, and measured how? — NARROWED, the family half is landed**
+The family half is **done and no longer part of this round**: the forward delay
+draws memoryless at the unchanged 22 s, and `crypto::random_poisson_duration`
+is deleted with its header. Measured on F-4's own instrument — **2.38×**
+phase-averaged (2.01× at phase 0, the floor), and the inherited draw reaching
+**0.9184** at its worst supported arrival phase against a flat 0.1248, which
+reproduces F-4's *"up to 93 % invertible late in the window"* independently on
+this delay's parameters.
+
+**What remains is the mean alone**, and it is downstream of Q12-Q8 rather than
+of measurement technique: if the objective becomes *decouple the first bridger
+from network distance*, the quantity to derive is a delay spread against
+inter-node latency spread, not an anonymity-set size. The 22 s carried forward
+is the inherited value held constant so the family could move without moving
+two things at once — **not** a derived answer, and not evidence for itself.
 
 **Q12-Q7 — Does `FORWARD_DELAY_BASE` die?**
 Only if the round concludes `AVERAGE` alone is the parameter (§22.2's own
@@ -242,6 +296,20 @@ regardless of how Q12-Q8 resolves.
 > That is certain **now**, so it is scheduled as its own change rather than
 > carried as a rider on a round that may take a while. A deletion whose
 > justification is already complete should not inherit an open round's latency.
+
+**Delivered by PR #431** (`fix/forward-delay-memoryless`) — and rescoped on the
+way, because "deletion" was the wrong frame. The call site cannot be deleted
+without either deleting `forward` (this round's fork) or having a replacement,
+so as a deletion it was *not* independent. As **F-4's move one call site later
+— fix the family at the unchanged mean** — it is independent, because the mean
+is Q-12's and the family was settled by F-2/F-4.
+
+That also makes it a **fix rather than a cleanup**: the Poisson was live on the
+tor→clearnet bridge, the one boundary where arrival-time inference pays most.
+`duration.h` is deleted in full, since it held nothing but the template and its
+two aliases.
+
+**This round keeps the mean** (Q12-Q6), which is downstream of Q12-Q8.
 
 `CRYPTONOTE_FORWARD_DELAY_BASE` is **not** split out and stays pending
 correctly: its fate is the same question as `forward`'s (Q12-Q3, Q12-Q7).
