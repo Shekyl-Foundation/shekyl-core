@@ -65,9 +65,19 @@
 //! # Usage
 //!
 //! ```text
-//! transit_probe --target <host:port> --socks <127.0.0.1:9050> \
-//!               [--samples 200] [--payload 4096] [--label x86|pi]
+//! # on the endpoint host (one of the seeds -- same box for both arms):
+//! transit_probe --listen 0.0.0.0:9777 --payload 4096
+//!
+//! # on each arm, same target and same payload:
+//! transit_probe --target <host:9777> --socks 127.0.0.1:9050 \
+//!               --samples 200 --payload 4096 --label x86|pi
 //! ```
+//!
+//! **The echo server is this same binary.** Both ends share one artifact so the
+//! frame contract cannot drift between them, and the server holds the
+//! connection open across every sample -- an echo that closed per frame would
+//! force a reconnect and silently reintroduce the setup cost this probe exists
+//! to exclude.
 //!
 //! The endpoint is a **parameter, not a default**: it must be reachable
 //! identically from both arms and must echo. Recording which endpoint produced
@@ -79,7 +89,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 /// One transport's samples, in microseconds.
@@ -193,6 +203,33 @@ fn sample(stream: &mut TcpStream, payload: &[u8], samples: usize) -> std::io::Re
     Ok(out)
 }
 
+/// Echo server, so both ends of the measurement are the SAME artifact.
+///
+/// Not `nc`: netcat's `-e`/`-k` behaviour varies by implementation, and an
+/// echo that closes per connection would force a reconnect between samples —
+/// silently reintroducing the connection setup this probe exists to exclude.
+/// Reading exactly what was sent and writing it straight back keeps the
+/// server's contribution a constant that cancels in the delta.
+fn listen(bind: &str, payload_len: usize) -> std::io::Result<()> {
+    let l = TcpListener::bind(bind)?;
+    eprintln!("transit_probe --listen on {bind}, echoing {payload_len} B frames");
+    for conn in l.incoming() {
+        let mut c = conn?;
+        c.set_nodelay(true)?;
+        let peer = c.peer_addr().ok();
+        let mut buf = vec![0u8; payload_len];
+        // One connection, many frames — the client reuses it across every
+        // sample, so this loop must not exit until the client hangs up.
+        while c.read_exact(&mut buf).is_ok() {
+            if c.write_all(&buf).and_then(|()| c.flush()).is_err() {
+                break;
+            }
+        }
+        eprintln!("  peer {peer:?} closed");
+    }
+    Ok(())
+}
+
 fn arg(name: &str) -> Option<String> {
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -204,6 +241,11 @@ fn arg(name: &str) -> Option<String> {
 }
 
 fn main() -> std::io::Result<()> {
+    let payload_len_early: usize = arg("--payload").map_or(4096, |v| v.parse().expect("--payload"));
+    if let Some(bind) = arg("--listen") {
+        return listen(&bind, payload_len_early);
+    }
+
     let target =
         arg("--target").expect("--target <host:port> is required and is part of the result");
     let socks = arg("--socks").unwrap_or_else(|| "127.0.0.1:9050".into());
