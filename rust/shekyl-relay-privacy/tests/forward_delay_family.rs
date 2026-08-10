@@ -2,6 +2,16 @@
 //
 // All rights reserved.
 // BSD-3-Clause
+#![allow(clippy::cast_precision_loss)]
+// ^ Quantized masses partition 2^64, so — unlike this crate's other sweeps —
+//   they are NOT "far below 2^53" and the cast genuinely loses low bits. It is
+//   harmless *here* and the reason is specific rather than inherited: every
+//   masses-to-f64 cast below feeds a RATIO of sums (a survival weight, or a
+//   weighted mean divided by its own weight sum), so the ~1e-16 relative error
+//   cancels to first order and cannot move a comparison whose smallest
+//   separation is six orders of magnitude (1e-7 drift against a 1e-6
+//   tolerance). Copying the other files' "far below 2^53" note would have been
+//   a false justification for a true allow.
 //! The forward delay's family fix, measured on F-4's own instrument.
 //!
 //! The inherited i2p/tor → clearnet delay draws
