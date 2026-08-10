@@ -65,6 +65,7 @@ pub mod multisig;
 pub mod multisig_receiving;
 pub mod output;
 pub mod output_claim;
+pub mod rng;
 pub mod schnorr;
 pub mod signature;
 pub mod wallet_envelope;

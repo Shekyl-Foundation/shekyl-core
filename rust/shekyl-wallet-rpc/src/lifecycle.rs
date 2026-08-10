@@ -133,11 +133,14 @@ pub(crate) async fn create_wallet(
 
     let mut result = json!({ "wallet": handle });
     match backup {
-        SeedBackup::Mnemonic(m) => {
-            result["mnemonic"] = Value::String(m);
+        // Move the String out (leave empty behind for Zeroizing to wipe):
+        // no intermediate twin of the seed-backup material in memory.
+        // zeroize 1.x has no into_inner; mem::take is the house pattern.
+        SeedBackup::Mnemonic(mut m) => {
+            result["mnemonic"] = Value::String(std::mem::take(&mut *m));
         }
-        SeedBackup::RawHex(h) => {
-            result["raw_seed_hex"] = Value::String(h);
+        SeedBackup::RawHex(mut h) => {
+            result["raw_seed_hex"] = Value::String(std::mem::take(&mut *h));
         }
     }
     Ok(result)
@@ -516,9 +519,14 @@ pub(crate) async fn change_password(
     Ok(json!({}))
 }
 
+// `Zeroizing` so seed-backup material is wiped on drop if create fails or
+// is abandoned before the RPC response is built. The value is held across
+// `wrap_and_start_pscan` (an await) until export — not a long-lived wallet
+// field; matching `shekyl-genesis-tool`'s wrap-at-birth of the same values.
+// The export path moves the String into the JSON response (caller's to protect).
 enum SeedBackup {
-    Mnemonic(String),
-    RawHex(String),
+    Mnemonic(Zeroizing<String>),
+    RawHex(Zeroizing<String>),
 }
 
 fn generate_seed_material(
@@ -529,9 +537,11 @@ fn generate_seed_material(
         Network::Mainnet | Network::Stagenet => {
             let mut entropy = [0u8; SHEKYL_BIP39_ENTROPY_BYTES];
             OsRng.fill_bytes(&mut entropy);
-            let mnemonic = mnemonic_from_entropy(&entropy).map_err(|e| {
+            // Wrap at birth (genesis-tool order) so the mnemonic is never a
+            // bare String through account generation.
+            let mnemonic = Zeroizing::new(mnemonic_from_entropy(&entropy).map_err(|e| {
                 WalletRpcError::InternalError(format!("mnemonic_from_entropy: {e}"))
-            })?;
+            })?);
             entropy.zeroize();
             let (master, _blob) = generate_account_from_bip39(&mnemonic, "", derivation)
                 .map_err(|e| WalletRpcError::InternalError(format!("bip39 account: {e}")))?;
@@ -540,7 +550,7 @@ fn generate_seed_material(
         Network::Testnet => {
             let mut raw = [0u8; RAW_SEED_BYTES];
             OsRng.fill_bytes(&mut raw);
-            let seed_hex = hex::encode(raw);
+            let seed_hex = Zeroizing::new(hex::encode(raw));
             let (master, _blob) = generate_account_from_raw_seed(&raw, derivation)
                 .map_err(|e| WalletRpcError::InternalError(format!("raw account: {e}")))?;
             raw.zeroize();
