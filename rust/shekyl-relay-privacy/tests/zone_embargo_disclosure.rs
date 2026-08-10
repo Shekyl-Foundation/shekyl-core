@@ -41,17 +41,15 @@
 //! cost: distinguishing at 95 % confidence needs about `ln(20)/KL` independent
 //! self-fluffs of the *same* transaction population.
 //!
-//! Both distances use a single-pass geometric recurrence (multiply by
-//! `1-p` each tick) rather than `powi` per term — exact for the same horizon,
-//! O(horizon) arithmetic, no per-term exponentiation.
+//! Both distances are evaluated in **closed form**. Two geometrics differ by
+//! one sign change, so total variation collapses to a difference of two
+//! survival terms, and geometric KL is exact in `p_a`/`p_b` and the mean. The
+//! instrument therefore carries no truncation horizon to justify and no
+//! underflow to reason about — earlier drafts summed two million terms per
+//! call, which is both slower and weaker evidence.
 use shekyl_relay_privacy::derive::derive_embargo;
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
-
-/// Ticks below which the geometric tail cannot move either sum at `f64`
-/// resolution. Both distributions are summed to the same horizon so the
-/// comparison is not itself a truncation artifact.
-const TAIL_HORIZON_TICKS: u32 = 2_000_000;
 
 fn embargo_of(hop_ms: u32) -> (u32, u64) {
     let mut p = DandelionParams::inherited();
@@ -70,43 +68,40 @@ fn geometric_p(mean_ticks: u32) -> f64 {
     1.0 / (f64::from(mean_ticks) + 1.0)
 }
 
-/// Total variation distance between two geometric embargo timers.
+/// Total variation distance between two geometric embargo timers, in closed
+/// form.
 ///
-/// Recurrence: mass at tick 1 is `p`; each later tick multiplies the previous
-/// mass by `(1-p)`. Sums `|p_a - p_b|` over the shared horizon.
+/// With `pmf_a(k) - pmf_b(k) = p_a·s_a^(k-1) - p_b·s_b^(k-1)` and `p_a > p_b`,
+/// the difference is positive at `k = 1` and negative in the tail (the smaller
+/// survival decays faster), crossing exactly once — at
+/// `m = ln(p_b/p_a) / ln(s_a/s_b)`. Splitting the sum there and using the
+/// geometric CDF, both halves equal `s_b^K - s_a^K` with `K = floor(m) + 1`,
+/// so `TV = s_b^K - s_a^K`.
 fn total_variation(mean_a: u32, mean_b: u32) -> f64 {
-    let (pa, pb) = (geometric_p(mean_a), geometric_p(mean_b));
-    let (sa, sb) = (1.0 - pa, 1.0 - pb);
-    let mut mass_a = pa;
-    let mut mass_b = pb;
-    let mut tv = 0.0_f64;
-    for _ in 1..=TAIL_HORIZON_TICKS {
-        tv += (mass_a - mass_b).abs();
-        mass_a *= sa;
-        mass_b *= sb;
+    // Equality is decided on the integer means, not the derived floats:
+    // `geometric_p` is injective, and identical means are the negative
+    // control's exact case rather than a near-miss to be tolerated.
+    if mean_a == mean_b {
+        return 0.0;
     }
-    tv / 2.0
+    let (pa, pb) = (geometric_p(mean_a), geometric_p(mean_b));
+    // Orient so `hi` is the sharper distribution; TV is symmetric.
+    let (hi, lo) = if pa > pb { (pa, pb) } else { (pb, pa) };
+    let (s_hi, s_lo) = (1.0 - hi, 1.0 - lo);
+    let crossing = (lo / hi).ln() / (s_hi / s_lo).ln();
+    let k = crossing.floor() + 1.0;
+    s_lo.powf(k) - s_hi.powf(k)
 }
 
-/// `KL(A || B)` in nats, for the repeat-observation cost.
+/// `KL(A || B)` in nats, for the repeat-observation cost — closed form.
 ///
-/// Same recurrence as TV. Geometric KL also has a closed form, but the
-/// recurrence keeps the instrument identical to the TV path and makes the
-/// shared finite-horizon truncation explicit.
+/// `ln(pmf_a(k)/pmf_b(k)) = ln(p_a/p_b) + (k-1)·ln(s_a/s_b)` is affine in `k`,
+/// so the expectation is exact once `E[k-1] = s_a/p_a` is substituted:
+/// `KL = ln(p_a/p_b) + (s_a/p_a)·ln(s_a/s_b)`.
 fn kl_divergence(mean_a: u32, mean_b: u32) -> f64 {
     let (pa, pb) = (geometric_p(mean_a), geometric_p(mean_b));
     let (sa, sb) = (1.0 - pa, 1.0 - pb);
-    let mut mass_a = pa;
-    let mut mass_b = pb;
-    let mut kl = 0.0_f64;
-    for _ in 1..=TAIL_HORIZON_TICKS {
-        if mass_a > 0.0 && mass_b > 0.0 {
-            kl += mass_a * (mass_a / mass_b).ln();
-        }
-        mass_a *= sa;
-        mass_b *= sb;
-    }
-    kl
+    (pa / pb).ln() + (sa / pa) * (sa / sb).ln()
 }
 
 /// Best single-observation classifier accuracy under equal priors.
