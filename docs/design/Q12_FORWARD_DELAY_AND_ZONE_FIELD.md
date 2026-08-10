@@ -1,4 +1,4 @@
-# Q-12 — the forward delay, and the txpool origin-zone field
+# The txpool origin-zone field — with Q-12's disposition as one of its outputs
 
 **Design round, opened 2026-08-10.** Scoped per
 [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
@@ -13,6 +13,9 @@ than derived, it says so.
 
 ## 1. Charter
 
+**The round is the origin-zone field. Q-12's disposition is one of its
+outputs, not its second half.**
+
 Q-12 was registered at §22.2 of [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md)
 and has been live — not deferred — since its reopen criterion (a) fired at
 Q-11 Unit 0. It owes three things:
@@ -22,10 +25,15 @@ Q-11 Unit 0. It owes three things:
    derivation wants memoryless (the F-2/F-4 signature).
 3. **Retire the last `random_poisson_seconds` caller**, and the primitive with it.
 
-§89.8.7 added a fourth, and made it the opening unit rather than a rider:
+§89.8.7 first framed the origin-zone field as a fourth deliverable riding
+alongside. **That framing was too weak, and Q12-D1 corrects it**: after the
+field, `relay_method::forward` may have **no producers at all**, so items 1 and
+2 may have no subject. A round cannot open by deriving a constant for a class
+whose existence it is about to decide.
 
-4. **The txpool origin-zone field** — without it, coherence cannot work at all,
-   and `forward`'s population is not what the anonymity-set objective assumes.
+**So this round settles the field, and Q-12 closes in one of three ways as a
+consequence** (Q12-D1). Item 3 is the exception and is **split out** — it is
+certain in every branch (§5.1).
 
 ---
 
@@ -83,25 +91,57 @@ real-arrival callers are the immediate-relay sites, so it never sees these.
 
 ## 3. Decisions taken at opening
 
-### Q12-D1 — Derive against the post-zone-field population. RULED.
+### Q12-D1 — Q-12 is a consequence of this round, not a half of it. RULED.
 
-The anonymity-set objective is a claim about *who could have sent this*, which
-is a claim about the population of `forward` traffic. That population is about
-to change.
+The first framing was *"derive against the post-zone-field population, because
+the population changes."* **That understates it, and the stronger reason
+changes the round's scope rather than its ordering.**
 
-**Rejected:** deriving against today's bridge, where every anonymity arrival
-crosses to clearnet. It is derivable immediately and wrong the day the field
-lands — and this arc has already paid for a constant derived against a posture
-that then moved (§63.2's margin, retired at §89.1 as an artifact of the
-diffusing posture).
+**The mechanism's structure changes, not only its inputs.** After the field,
+anonymity-arrived traffic stays in-zone: it stems there, fluffs there under
+`OutboundOnly`, and **the bridge moves to the next node** — whichever peer
+receives that anonymity fluff and relays it publicly under R-1's exit rule.
 
-**Consequence, accepted:** Q-12's derivation cannot start until the zone
-field's shape is settled. That makes the field the round's **opening unit**,
-not its second half.
+`relay_method::forward` is assigned at arrival purely on `zone != public_`
+([`cryptonote_protocol_handler.inl`](../../src/cryptonote_protocol/cryptonote_protocol_handler.inl),
+the `zone == public_ ? stem : forward` line). **If that assignment stops, the
+class has no producers and is unreachable.**
 
-**Reopening criteria:** if the zone field is abandoned or deferred past this
-round, Q12-D1 reopens and the derivation proceeds against the bridge population
-with an explicit banner saying so.
+> **So rejecting (a) is not "derivable now, wrong later." It is refusing to
+> derive a constant for a class that may not exist** — §63.2's failure in its
+> purest form, an analysis written against a mechanism that is not there.
+
+**Q-12 therefore closes in one of three ways, all downstream of this round:**
+
+| closure | Q-12's outcome |
+| --- | --- |
+| `forward` is deleted | closes **by deletion** — no derivation, no constant |
+| `forward` survives with a new population | derive **then**, against a defined bridge point |
+| a bridge delay is wanted at the new site under a different name | a new derivation carrying the old rationale — a cleaner start than patching the old one |
+
+**Scope consequence, accepted:** this round is **the zone field**, and is
+smaller than "the field plus Q-12". It commits to no derivation before knowing
+whether there is anything to derive.
+
+**Reopening criteria:** if the field is abandoned or deferred past this round,
+Q12-D1 reopens and Q-12 proceeds against the bridge population as it stands,
+with an explicit banner saying the derivation is against a mechanism scheduled
+for replacement.
+
+### Q12-D1a — The anonymity-set rationale survives the move, and improves
+
+Worth stating because the deletion of a class can read as the deletion of its
+purpose. **It is not.** A node bridging an anonymity fluff to clearnet still
+leaks timing about which anonymity peer fed it, so the objective the forward
+delay was written for still has a subject.
+
+**What changes is favourable, and it is an argument for the field beyond fixing
+coherence.** Today a transaction has *one* bridger, holding it under a delay.
+After the field, an anonymity fluff reaches **many** peers, so many nodes can
+bridge the same transaction — and a delay at each randomises which one goes
+first. That is a better structure than single-bridger-with-a-delay: the
+anonymity set stops depending on one node's timing draw and starts depending on
+a race among several.
 
 ### Q12-D2 — The field is reinstated, and §89.2's back-out is not reversed. RULED.
 
@@ -123,6 +163,20 @@ The distinguishing question is cheap and belongs in the reviewer's hand:
 ---
 
 ## 4. Open design questions
+
+> **Q12-Q8 is the round's first question. Everything else falls out of it.**
+> The numbering records the order the questions were *raised*, not the order
+> they are *answered* — Q12-Q8 was added when Q12-D1 rescoped the round, and
+> renumbering registered identifiers to flatter the reading order would be
+> worse than a note.
+
+**Q12-Q8 — After anonymity-arrived traffic stays in-zone, where does the
+clearnet bridge happen, and does it need a delay?**
+The round's opening question, and the one the rest are downstream of. The
+bridge does not disappear — it moves to whichever peer receives an anonymity
+fluff and relays it publicly under R-1's exit rule. Answering it settles
+whether `forward` survives (Q12-Q3), what Q-12 derives if anything
+(Q12-Q4, Q12-Q5), and whether `FORWARD_DELAY_*` dies (Q12-Q7).
 
 **Q12-Q1 — Where does the origin zone live, and how wide?**
 §65.4 scoped two reserved bits on `txpool_tx_meta_t` with `zone::invalid == 0`
@@ -171,7 +225,28 @@ condition).
 
 ---
 
-## 5. Not in scope
+## 5. Split out, and not in scope
+
+### 5.1 SPLIT OUT — the Poisson primitive dies in every branch
+
+**Deliverable 3 does not wait for the fork, because no branch keeps it.**
+
+- If `forward` is deleted, the call site goes with it.
+- If `forward` survives, F-2/F-4 already settled that the family must be
+  memoryless, so the draw is not Poisson either.
+
+`crypto::random_poisson_subseconds` is **already caller-free**, so the whole
+`random_poisson_duration` template sits **one call site** from deletion
+regardless of how Q12-Q8 resolves.
+
+> That is certain **now**, so it is scheduled as its own change rather than
+> carried as a rider on a round that may take a while. A deletion whose
+> justification is already complete should not inherit an open round's latency.
+
+`CRYPTONOTE_FORWARD_DELAY_BASE` is **not** split out and stays pending
+correctly: its fate is the same question as `forward`'s (Q12-Q3, Q12-Q7).
+
+### 5.2 Not in scope
 
 - **The coherence end-to-end witness.** Still blocked on a `t_core` mock the
   unit suite lacks (§89.7). The tripwire landed in #427 pins the gap in its
@@ -187,12 +262,18 @@ condition).
 
 ## 6. Round structure
 
-| unit | subject | gates on |
-| --- | --- | --- |
-| **Q12-U1** | the origin-zone field + pool-loop routing | Q12-Q1, Q12-Q2 |
-| **Q12-U2** | `forward`'s class definition after Q12-U1 | Q12-Q3 |
-| **Q12-U3** | the derivation: objective, `λ`/`N`, mean | Q12-Q4, Q12-Q5 |
-| **Q12-U4** | the family fix and the primitive's retirement | Q12-Q6, Q12-Q7 |
+**The round is Q12-U1.** The rest are its consequences, and two of them may
+turn out to be empty.
 
-Q12-U1 is the opening unit by Q12-D1. Q12-U3 cannot start before Q12-U2 settles, because a
-derivation needs its population defined.
+| unit | subject | gates on | may be empty? |
+| --- | --- | --- | --- |
+| **Q12-U1** | the origin-zone field, pool-loop routing, and where the bridge lands | Q12-Q8, Q12-Q1, Q12-Q2 | no — this is the round |
+| **Q12-U2** | `forward`'s disposition: survives, narrows, or is deleted | Q12-Q3 | no, but its answer may be "deleted" |
+| **Q12-U3** | a derivation, **if there is a subject for one** | Q12-Q4, Q12-Q5 | **yes** — empty if `forward` is deleted |
+| **Q12-U4** | `FORWARD_DELAY_*`'s disposition | Q12-Q7 | **yes** — empty if the constants die with the class |
+
+The Poisson primitive's retirement is **not** a unit here; it is split out per
+§5.1 and proceeds independently.
+
+Q12-U3 cannot start before Q12-U2 settles — a derivation needs its population
+defined, and per Q12-D1 it may have none.
