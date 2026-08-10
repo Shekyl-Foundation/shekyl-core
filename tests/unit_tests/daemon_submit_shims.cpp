@@ -1012,10 +1012,12 @@ TEST(daemon_submit_shims, embargo_arms_future_deadline_and_expiry_routes_to_rela
 
   // Public-zone stem dispatch calls on_transactions_relayed(stem) before
   // the send (levin_notify.cpp:562); pool-level that is set_relayed(stem).
+  // The zone rides with it since §89.2 — the embargo is drawn per zone, and
+  // this case is the public one, so it draws the clearnet distribution.
   const time_t before = time(nullptr);
   std::vector<bool> just_broadcasted;
   fx.bap.txpool.set_relayed(epee::span<const crypto::hash>(&s.txid, 1),
-    relay_method::stem, just_broadcasted);
+    relay_method::stem, epee::net_utils::zone::public_, just_broadcasted);
 
   ASSERT_EQ(just_broadcasted.size(), 1u);
   EXPECT_FALSE(just_broadcasted[0]) << "stem arming is not a broadcast";
