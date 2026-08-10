@@ -88,11 +88,21 @@ pub struct TorPin {
 /// relaxing the gate.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const CURRENT_PIN: Option<TorPin> = Some(TorPin {
-    bundle_version: "15.0.17",
+    bundle_version: "15.0.19",
     tor_version: "0.4.9.11",
-    // Recorded 2026-07-01 via the RELEASE_CHECKLIST "Bundled Tor pin" procedure
-    // (download → GPG-verify → extract → hash); the checklist step is the
-    // provenance record, this constant is the runtime gate.
+    // Re-pinned 2026-08-06 to the then-current stable bundle, via the
+    // RELEASE_CHECKLIST "Bundled Tor pin" procedure (download → GPG-verify →
+    // extract → hash); the checklist step is the provenance record, this
+    // constant is the runtime gate.
+    //
+    // The digest below is UNCHANGED from the 15.0.17 pin recorded 2026-07-01:
+    // both bundles ship tor 0.4.9.11 and the extracted binary is byte
+    // identical, so advancing two stable bundle releases moved the label and
+    // not the gate. That is the checklist's own point that "the durable pin is
+    // *this key*, not any single hash" observed in practice — a bundle version
+    // and a binary digest are independent facts, and reading a stale label as
+    // a stale gate would have been the second-source-of-truth error this pin
+    // design exists to avoid.
     sha256: hex_literal::hex!("660a8c54d0c9341f85f0a7f827b6bde640e7db14dfde44d3856979d4ee6d16fb"),
 });
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
