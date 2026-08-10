@@ -744,6 +744,67 @@ the round kept trying to add forensics underneath it.
    penalizable nominee, which the impossibility deletes, leaving (a) the
    natural default unless selection has some other reason to name a
    non-producer.
+   **P-side anchor + endpoint discovery — resolution shape (2026-08-10).**
+   A prior gap, verified at source, that had to be answered regardless of
+   key choice: `ArchivalBondPostVin` (`bond_wire.rs:205-222`) carries
+   `hybrid_public_key`, `p_canonical_id`, `post_kind`, `bond_spend_pk`,
+   holdings, and three amounts — **no reachability field. Nothing on
+   chain tells a witness where to connect; discovery was unspecified.**
+   The shape that answers discovery and binding at once: **publish the
+   persona's v3 onion address in the bond record** — the address *is* its
+   Ed25519 verification key, so one field publishes both the endpoint and
+   a verification key — while the countersignature **stays hybrid**
+   (Ed25519-only would be the one classical-only signature on a consensus
+   path; forging it forges attestations — an integrity failure
+   hybrid-from-genesis exists to stop). What this buys that neither key
+   alone does: the hybrid key proves "I am P," the onion key proves "I am
+   the service you just connected to," and bound together they prove
+   those are the same entity — **today nothing does** (a persona could
+   publish someone else's onion address undetectably).
+   **Key hierarchy — ruled shape, three tiers, written for operators
+   because the blast radius of a compromised serving box is exactly what
+   they need told:**
+   - **Cold — bond authority.** `bond_spend_pk` (the immutable debit
+     authorizer every later `bond_debit` verifies against,
+     `bond_wire.rs:217`) lives under a **separate root, cold custody,
+     never in the serving tree** — compromising a serving host must yield
+     impersonation of the serving function, never a bond drain.
+   - **Hot — per-persona serving root** (one entropy draw per persona) →
+     **siblings by labeled derivation** (rule 30: distinct labels +
+     version suffixes): the onion Ed25519 identity, the
+     `HybridEd25519MlDsa` attestation keypair, and the SOCKS username
+     (already built exactly this way — cSHAKE256/SP 800-185 over the full
+     `p_canonical_id` in `shekyl-p-transport`; `keygen_from_seed`,
+     `derivation.rs:40`, deterministic ChaCha20 expansion, is the
+     established seeded pattern). **Root → siblings, not
+     onion-key-as-parent:** siblings rotate independently; deriving the
+     signing key from the Tor key couples the consensus signing identity
+     to service re-keying.
+   - Hot-tree exposure is accepted and stated: P signs every request, so
+     the attestation key is necessarily hot on the internet-facing host,
+     and host compromise already yields serve-and-sign-as-P. Custody
+     note: `shekyl-tor` generates the onion keypair and hands it via
+     `ADD_ONION` — our process holds it, a different exposure than
+     Tor-native key handling, stated and accepted.
+   Correlation risk, sized honestly: properly generated independent keys
+   do not correlate — the exposure is generation-side (shared RNG state,
+   batch generation, weak KDF), which the single root removes as defence
+   in depth. The dominant cross-persona linkage is **operational** —
+   co-residency and correlated uptime remain unaddressed (the circuit
+   axis is already unrepresentable via `shekyl-p-transport`) and are
+   worth more to an adversary than key-material statistics.
+   **Open checks before this is ruled:** (i) **onion-address mutability**
+   in the bond record — operators re-key services and replace hosts; if
+   the address is immutable like `bond_spend_pk`, losing the onion key
+   bricks the persona (rebond-or-brick — decide now, not when the first
+   operator hits it; under labeled derivation, rotation = a new label
+   index plus a record update). (ii) **The same-entity binding artifact**:
+   whether the attestation Ed25519 leg *is* the onion key
+   (endpoint-binding per-signature, but rotation-coupled) or a sibling
+   with an onion-key proof-of-possession over the bond record at
+   post/update (rotation-free; the PoP is the binding) — a TJ-B-adjacent
+   format decision, landing on the **bond wire**, which also means (iii)
+   a persisted-wire change ⇒ version-constant bump (rule 42) when built.
 3. **Expiry semantics — CLOSED (2026-08-08): expiry ⇒ miss.** The
    temptation under unattributable expiry is to discard it
    (expiry⇒uncounted); that is precisely wrong — a durably dark P
