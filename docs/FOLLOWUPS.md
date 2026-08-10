@@ -47,6 +47,29 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **T18 weekly cargo-mutants gate no longer fits its 360-minute budget
+  (surfaced 2026-08-10, dispatch run 31346130482 — the job's first
+  execution after the severed-header restore).** `cargo mutants` found
+  1322 mutants against a debug-mode baseline suite that now takes
+  ~22 min (1334 s test + auto-set 6673 s per-mutant timeout); the job
+  timed out having completed zero mutants in 5.5 h. The suite outgrew
+  the budget while the gate had no trigger (2026-07 severance,
+  restored 477a448b1): T2 un-ignored, the correctness-pins tests, and
+  the harness's growth all multiply through debug-mode interpreted
+  RandomX. The gate's premise (T18, `RANDOMX_V2_PHASE2G_PLAN.md`
+  §5.5.6 + §4.6 M2: survival bounded by the skip-list) is unchanged;
+  its execution shape needs a re-design with real trade-offs, e.g.
+  release-mode per-mutant test runs (`cargo mutants -- --release`:
+  ~40× faster tests, slower per-mutant rebuilds), `--shard` across a
+  runner matrix (weekly runner-cost multiplier), `--in-diff` scoping
+  (loses the whole-crate weekly sweep), and/or additional slow-test
+  skips (each requires a §5.5.6-row plan-doc amendment). Until this
+  lands, the weekly Monday cron will red on the mutants job timeout —
+  a loud, honest red (preferable to the silent no-trigger state it
+  replaced). Target: **V3.0** (the differential test regime is a
+  pre-genesis assurance gate; an inoperative mutation leg weakens the
+  §4.6 M2 mitigation the harness's threat table relies on).
+
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) —
   REQUIRED BEFORE THE FORMAT FREEZE (added 2026-08-08, escalated from
   the message-signing round, SM-DQ-7).** Address v1 anchors signatures
