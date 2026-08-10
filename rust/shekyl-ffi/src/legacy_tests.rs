@@ -111,12 +111,18 @@ fn emission_hybrid_auth_verify_positive_and_negatives() {
     use shekyl_crypto_pq::derivation::hash_pqc_public_key;
     use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 
-    let (pk, sk) = HybridEd25519MlDsa.keypair_generate().unwrap();
+    let (pk, sk) = HybridEd25519MlDsa
+        .generate_ephemeral_keypair_for_tests()
+        .unwrap();
     let pk_bytes = pk.to_canonical_bytes().unwrap();
     let leaf = hash_pqc_public_key(&pk_bytes);
     let msg = b"shekyl-emission-auth-msg: payout + epoch binding".to_vec();
     let sig_bytes = HybridEd25519MlDsa
-        .sign(&sk, &msg)
+        .sign(
+            &sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+            &msg,
+        )
         .unwrap()
         .to_canonical_bytes()
         .unwrap();

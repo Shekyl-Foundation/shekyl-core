@@ -24,6 +24,8 @@
   - [x] canonical transaction/signature serialization documented
   - [x] signed payload definition documented
   - [x] V4 PQC Privacy Roadmap published
+  - [ ] **Hybrid signature construction frozen (SA-2, `SIGNATURE_ALIGNMENT.md`):** the nested combiner (`HYBRID_SIG_VERSION = 2`, PQ-inner / Ed25519-outer over a domain-separated preimage) and the per-surface `SCHEME_DOMAIN_*` strings are consensus-visible on bonded/settlement surfaces (bond-post auth, attestation witness, emission auth). After genesis a change here is a hard fork; the version byte is the security boundary. Landed pre-genesis in PR-SA-2.
+  - [ ] **Bond-preimage reconciliation closed (SA-2b, `SIGNATURE_ALIGNMENT.md` §2.2):** rule the bond vin's `pqc_auths` slot preimage — generic surface-A hash (delete S1) vs the design-specified domain-separated `signature_preimage` (activate S1) — by the P-role replay analysis. Genesis-frozen: it is the consensus authorization preimage for bond posts, so it must be decided before the format freeze.
 - [ ] PQC crypto review
   - [ ] hybrid sign/verify implementation reviewed (external audit pending)
   - [ ] FFI ownership / zeroization reviewed (external audit pending)

@@ -143,8 +143,9 @@ struct ShekylPqcCanonicalLens {
 /// Return the canonical PQC multisig wire lengths (see ShekylPqcCanonicalLens).
 ShekylPqcCanonicalLens shekyl_pqc_canonical_lens();
 
-/// Generate a hybrid ML-DSA + Ed25519 keypair.
-/// Free both buffers with shekyl_buffer_free. Wipe secret_key after use.
+/// TEST-SUPPORT ONLY (F-7): generates a fresh, NON-derived hybrid keypair for
+/// the FFI test suite. Real wallets derive their keys — do NOT call from
+/// production code. Free both buffers with shekyl_buffer_free; wipe secret_key.
 ShekylPqcKeypair shekyl_pqc_keypair_generate();
 
 /// Sign a message with a hybrid ML-DSA secret key.

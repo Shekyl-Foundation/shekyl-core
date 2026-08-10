@@ -350,6 +350,51 @@ impl HybridEd25519MlDsa {
 
         Ok((public_key, secret_key))
     }
+
+    /// Deterministic nested sign for iai benches / KATs. Identical to
+    /// [`SignatureScheme::sign`] — same `preimage`, same nesting order — except
+    /// the ML-DSA half uses a fixed `ml_dsa_seed` (stable instruction count for
+    /// iai) instead of the hedged `OsRng` path. Single-sourced through
+    /// `preimage`, so a bench measures the real combiner, never a hand-rolled
+    /// shim that could drift from production.
+    pub fn sign_with_ml_dsa_seed(
+        &self,
+        secret_key: &HybridSecretKey,
+        domain: &[u8],
+        message: &[u8],
+        ml_dsa_seed: &[u8; 32],
+    ) -> Result<HybridSignature, CryptoError> {
+        secret_key.validate()?;
+        let ed25519_secret: Zeroizing<[u8; ED25519_SECRET_KEY_LENGTH]> = Zeroizing::new(
+            secret_key
+                .ed25519
+                .clone()
+                .try_into()
+                .map_err(|_| CryptoError::InvalidKeyMaterial)?,
+        );
+        let ml_dsa_secret: Zeroizing<[u8; ML_DSA_65_SECRET_KEY_LENGTH]> = Zeroizing::new(
+            secret_key
+                .ml_dsa
+                .clone()
+                .try_into()
+                .map_err(|_| CryptoError::InvalidKeyMaterial)?,
+        );
+        let signing_key = SigningKey::from_bytes(&ed25519_secret);
+        let ml_dsa_private = ml_dsa_65::PrivateKey::try_from_bytes(*ml_dsa_secret)
+            .map_err(|e| CryptoError::SerializationError(e.into()))?;
+        let inner = Self::preimage(domain, message);
+        let ml_dsa_signature = ml_dsa_private
+            .try_sign_with_seed(ml_dsa_seed, &inner, &[])
+            .map_err(|e| CryptoError::SerializationError(e.into()))?;
+        let mut outer = Vec::with_capacity(inner.len() + ml_dsa_signature.len());
+        outer.extend_from_slice(&inner);
+        outer.extend_from_slice(&ml_dsa_signature);
+        let ed25519_signature = signing_key.sign(&outer);
+        Ok(HybridSignature {
+            ed25519: ed25519_signature.to_bytes().to_vec(),
+            ml_dsa: ml_dsa_signature.to_vec(),
+        })
+    }
 }
 
 impl SignatureScheme for HybridEd25519MlDsa {
