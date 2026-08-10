@@ -14,6 +14,13 @@ grounding):** §3 quantitative case; §4.2 under-coverage collapse into expiry;
 §4.4 Phase-4 equivalence-KAT supersession; §6 no-pay-lemma recast; §7 fork 2
 restructured to witness selection with standing-record statuses (open-witness
 struck); §8 standing-record reconciliation; §9 order-statistic W₂ target.
+**Revised 2026-08-08:** attribution impossibility ruled (§7 preamble) —
+forks 3 (expiry⇒miss) and 6 (no pay, forced) and the obligation half of
+fork 2 (routine duty, norm-borne) are CLOSED; the peer-contrast penalty is
+withdrawn; the (m, n) re-pin is promoted to sole surviving enforcement
+instrument, carrying the common-mode-β constraint. Live remainder: TJ-H,
+fork 1 (granularity, now pure scheduling), fork 2's selection + nonce
+anchor, W₂, (m, n).
 
 **Lineage.** Successor to the Phase 3 (settlement writer) scope of
 `ARCHIVAL_CREDIT_WIRE.md` (TJ-B step 3). The credit-wire admission surface
@@ -372,6 +379,15 @@ two derivations**. Add one when this lands.
   (one pass + two uncounted = Served) — resurrecting the single-draw
   shield 2-of-3 exists to kill. Witness enforcement and P settlement stay
   separate channels.
+  **OUTCOME (2026-08-08, same round): the penalty arm is WITHDRAWN by its
+  proposer — the attribution impossibility (§7 preamble) reaches it.**
+  Peer contrast shifts a prior; it cannot found a penalty (P can
+  selectively refuse one witness, die between reads, or one Tor path can
+  fail — and check 4's missing aggregation subject stands independently).
+  The duty framing survives as the ruling: **routine duty, norm-borne,
+  `λ_eff` the tripwire — the only reachable answer.** The four checks stay
+  on the record as the wreckage map: any future enforcement proposal must
+  first state which check it escapes and where its attribution comes from.
 - **Abandonment:** an assigned witness that never resolves burns the slot
   for W₂ blocks (phrasing contingent on §7.1: exact under per-block/urn
   variants; under epoch-seed exact coverage the three assignments are fixed
@@ -389,7 +405,12 @@ two derivations**. Add one when this lands.
   size, `SETTLEMENT_EPOCH_BLOCKS`, and the (m, n) window. The floor on the
   other side — the penalty at which an honest miner stops committing, given
   a genuine read-failure rate it cannot control — needs **measurement, not
-  derivation**.
+  derivation**. **CLOSED (2026-08-08): no penalty is derivable** — the
+  attribution impossibility (§7 preamble) deletes the "demonstrated"
+  any penalty needs. The sizing arithmetic above is retained as the record
+  of what a penalty would have had to achieve, not as pending work; the
+  attack it targeted is contained instead by the 2-of-3 quadratic plus the
+  outer window (fork 1's update).
 - **DDoS on P:** the derived window is the targeting surface; §2's
   limited-scope property plus 2-of-3 redundancy plus long-W₂ (a *defense*
   here — more completion chances) are the mitigations. Converting DDoS to a
@@ -403,6 +424,33 @@ two derivations**. Add one when this lands.
   Rebond is the re-entry path for an operator who fixes the box.
 
 ## 7. Open forks — resolve on this record, never implicitly in code
+
+**The attribution impossibility (ruled 2026-08-08) — the result that closes
+forks 3 and 6 and the obligation half of fork 2.** A miner cannot prove P
+didn't serve, and nobody can prove a miner didn't try. A positive proof
+works because it needs the counterparty's cooperation — P's countersignature
+exists only if P participated, so a pass is self-proving. A negative has no
+such anchor: the only evidence of "didn't serve" is absence of evidence of
+serving, and absence is consistent with refusal, darkness, never-asked,
+dropped request, dropped response, or received-and-discarded. Every artifact
+a witness could offer is unilaterally producible by a witness sitting in the
+dark doing nothing — which is the definition of not being evidence. This is
+the unreliable-failure-detector result; no cryptography moves it, because
+the missing thing is a signature from a party that, by hypothesis, isn't
+signing. Every enforcement mechanism this round considered — the abandonment
+penalty, contradiction-pricing, peer-contrast (withdrawn by its proposer) —
+covertly assumed such a proof exists; each produced a new abuse when it
+fixed the last, because all were deriving attribution from artifacts that
+cannot carry it. Two consequences. First, the 2026-08-02 no-pay lemma is
+**forced, not chosen** — pay must condition on something, every
+discriminator reduces to attribution that does not exist, and the identical
+argument kills every penalty. Second, **the window is the attribution
+mechanism**: one expiry proves nothing about anyone; eleven of thirteen
+epochs, each settled 2-of-3 over independently derived witnesses, is a
+pattern no honest P produces — not because any event was proven, but
+because the conjunction has negligible probability under the honest
+hypothesis. §9.4 said this from the start ("statistical, not forensic");
+the round kept trying to add forensics underneath it.
 
 1. **Derivation granularity** (coverage vs targeting window). Epoch-seed
    permutation gives denominator = 3 by construction but publishes every
@@ -432,7 +480,15 @@ two derivations**. Add one when this lands.
    analysis was first run under pass-priority, where the first pass settled
    the epoch and later challenges needed a supersession rule; under 2-of-3
    with monotone settlement and satisfaction-does-not-drain, the
-   supersession machinery dissolves.)
+   supersession machinery dissolves.) **Update under fork 3's closure
+   (expiry⇒miss): the clock-burn's *shield* direction is dead** — an
+   unresolved challenge trends to a miss, which hurts P, so sitting on an
+   assignment cannot protect a dark P. What remains is the griefing
+   direction (deliberate abandonment manufacturing misses against an
+   honest P), which is the flood-to-slash channel: quadratically contained
+   by 2-of-3 (moving an epoch needs 2 of its 3 draws) and priced by the
+   outer window. The outstanding-challenge drawability sub-decision is
+   therefore pure scheduling now, no longer adversarial.
 2. **Who reads — witness selection and obligation.** The decision the rest
    of the stack prices against: W₂, the abandonment penalty, the reward
    question, and the nonce anchor are all functions of who performs the
@@ -478,28 +534,38 @@ two derivations**. Add one when this lands.
    The **nonce anchor** (what replaces `cb_out_key` when the reader is not
    the including block's producer) is subordinate to this fork and touches
    the frozen response wire — decide with TJ-H (§7.4).
-3. **Expiry semantics** — the irreducible residue of "a miss is never
-   asserted," and (per §4.2) the under-covered epoch collapses into it.
-   On-chain, "witness abandoned" and "P failed to serve" are the same
-   absence, and with no miss record the per-challenge outcome space is only
-   {pass, expired}. The 2026-08-02 record bears on both branches:
-   **expiry⇒miss re-creates laziness-poisons** — the failure mode whose
-   analysis killed the record-mandate ("the mandate converts laziness from
-   silence into noise"), now without even a fabrication step: mere witness
-   inaction damages P, coupling honest P's slash risk to non-witnessing
-   hashrate (2-of-3 tolerates one abandonment; beyond ~⅓ non-witnessing,
-   honest archivers start failing epochs). **Expiry⇒uncounted inherits
-   laziness-empties** plus corner 2's documented cost: a durably dark P is
-   never observed, never misses, never slashes — "retention teeth die
-   (already ruled unacceptable)" — though a colluding P now shields itself
-   only at visible, penalized abandonments per epoch, forever. The sealed
-   precedent "a committed-but-unfiled nonce is a non-observation the
-   three-valued settlement already absorbs" was ruled for the
-   mandate-on-the-challenge design and must be re-examined under 2-of-3
-   rather than assumed. Either branch leaves evasion priced, partial, and
-   auditable (vs the superseded design's free/total/invisible). Choose
-   together with the §6 penalty and the (m,n) re-pin — the outer window is
-   where either branch's failure probability is actually priced.
+   **Obligation half CLOSED (2026-08-08, impossibility):** no pay and no
+   penalty are both forced, so coverage is **routine duty, norm-borne,
+   `λ_eff` the tripwire** — now as the *only reachable answer*, not the
+   preferred one. What stays open in this fork is selection ((a) vs (b))
+   and the nonce anchor — noting that (b)'s distinguishing feature was the
+   penalizable nominee, which the impossibility deletes, leaving (a) the
+   natural default unless selection has some other reason to name a
+   non-producer.
+3. **Expiry semantics — CLOSED (2026-08-08): expiry ⇒ miss.** The
+   temptation under unattributable expiry is to discard it
+   (expiry⇒uncounted); that is precisely wrong — a durably dark P
+   generates *only* unattributable events, so discarding them means it
+   never misses, never slashes, and retention teeth die (corner 2's cost,
+   already ruled unacceptable). Expiry⇒miss is safe **not because a miss
+   attributes fault but because the two nested aggregations convert
+   unattributable events into an attributable pattern**: witness laziness
+   is absorbed at the inner layer (one lazy witness of three does not move
+   the epoch), and residual noise is priced at the outer layer — which is
+   what the (m,n) re-pin is for. One derivation constraint carried to
+   fork 7, because "priced at the outer layer" has a boundary: the honest
+   failure rate splits into an **idiosyncratic** component (Tor weather —
+   roughly independent across epochs, which the window prices) and a
+   **common-mode** component (the persistent non-witnessing fraction β —
+   common across every epoch in the window, which the window does NOT
+   launder: at β persistently near ½, per-epoch miss ≈ 0.5 and the
+   13-epoch tail is ~1 % per window position, no longer negligible). The
+   window prices the first; the `λ_eff` tripwire guards the second. The
+   under-coverage question collapsed here (§4.2) and closes with this.
+   The sealed precedent "a committed-but-unfiled nonce is a
+   non-observation the settlement absorbs" is superseded by this closure:
+   it was ruled for the mandate design, and under 2-of-3 its logic would
+   discard exactly the events a dark P produces.
 4. **TJ-H (genesis-frozen — decide FIRST):** fixed shard payload size is a
    guard→persona traffic-confirmation oracle; variable-length padding is a
    wire-format property of the frozen response format
@@ -511,10 +577,22 @@ two derivations**. Add one when this lands.
    and what happens when they fail — none of which exists before forks 1–3
    settle). Deriving W₂ first would be picking a number and back-filling
    the justification.
-6. **Witness reward residence** — gated on the §6 lemma reopening; not a
-   simple emission-split question.
-7. **(m, n) re-pin** under the nested measurement (§3), jointly with fork 3
-   (the outer window prices whichever expiry branch is chosen).
+6. **Witness reward residence — CLOSED (2026-08-08, impossibility): no
+   pay, forced.** Pay must condition on something, and every discriminator
+   reduces to attribution that does not exist. The §6 reopening question
+   resolves in the lemma's favour on deeper grounds than the lemma gave:
+   the premise deletion (miss record, secret sets) did not matter, because
+   the impossibility never depended on either — it is the negative-proof
+   problem itself.
+7. **(m, n) re-pin — now THE instrument: the sole surviving enforcement
+   layer.** Size the outer window against the 2-of-3 tail probabilities
+   and the *measured* honest failure rate, under fork 3's constraint:
+   treat the persistent non-witnessing fraction β as **common-mode across
+   epochs**, never as i.i.d. noise the window launders — the window prices
+   idiosyncratic failure; the `λ_eff` tripwire guards common-mode drift.
+   Everything now hangs on this derivation. It is a measurement-and-
+   derivation problem, which is the right place for a design round to
+   end.
 
 ## 8. Preconditions
 
