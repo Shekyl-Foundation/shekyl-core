@@ -8,9 +8,14 @@ license.workspace = true
 autoexamples = false
 
 [features]
-# Exposes `HybridEd25519MlDsa::generate_ephemeral_keypair_for_tests` (F-7) to
-# downstream test/bench code. NOT for production — a non-derived keypair must
-# never reach a wallet. Enable only under `[dev-dependencies]`.
+# Exposes test-support helpers (F-7): `generate_ephemeral_keypair_for_tests`,
+# `sign_with_ml_dsa_seed`. Names announce test-only intent; a non-derived
+# keypair must never reach a wallet. Prefer enabling under `[dev-dependencies]`
+# (benches, integration tests). **Exception:** `shekyl-ffi` enables this in its
+# normal dependency graph so the C++ unit tests can link the same archive as
+# production — cargo feature unification keeps the symbols in that artifact.
+# That is comment-gated only; the structural gate (separate test-only archive
+# or cmake feature) is FOLLOWUPS F-7, not this feature flag.
 test-utils = []
 
 [dependencies]

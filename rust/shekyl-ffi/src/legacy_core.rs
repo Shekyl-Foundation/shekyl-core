@@ -98,9 +98,9 @@ pub unsafe extern "C" fn xchacha20(
 /// **Test-support only** (F-7): generates a fresh, *non-derived* hybrid keypair.
 /// Real wallets derive their keys (`generate_pqc_key_material`); this export
 /// exists solely for the C++ FFI test suite (`fcmp.cpp`) and has no production
-/// caller. It is not gated out of the shared archive because the C++ tests link
-/// the same archive as production; the structural gate (a separate test-only
-/// Rust archive) is tracked in FOLLOWUPS. Do not call from production C++.
+/// caller. Comment-gated only: the C++ tests link the same `shekyl-ffi`
+/// archive as production, so this symbol is present in production builds
+/// (FOLLOWUPS F-7 tracks the structural gate). Do not call from production C++.
 #[no_mangle]
 pub extern "C" fn shekyl_pqc_keypair_generate() -> ShekylPqcKeypair {
     let scheme = HybridEd25519MlDsa;

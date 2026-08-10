@@ -22,10 +22,13 @@ multisig = ["shekyl-fcmp/multisig", "modular-frost"]
 
 [dependencies]
 shekyl-chacha = { path = "../shekyl-chacha" }
-# `test-utils` enables the test-support `generate_ephemeral_keypair_for_tests`
-# reached only via the `shekyl_pqc_keypair_generate` FFI export (F-7; C++ test
-# suite). FOLLOWUPS: move to a separate test-only archive to gate it out of
-# production.
+# `test-utils` is required here so the C++ unit-test suite can call
+# `shekyl_pqc_keypair_generate` / `shekyl_pqc_sign_multisig_participant`
+# against the same `shekyl-ffi` archive production links (cmake builds one
+# `-p shekyl-ffi`). This is **not** production isolation — feature unification
+# ships those symbols in the production archive. Header + Rust docs mark the
+# exports; structural gate = FOLLOWUPS F-7 (separate test-only archive or
+# cmake feature). Do not treat this feature flag as the gate.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-encoding = { path = "../shekyl-encoding" }

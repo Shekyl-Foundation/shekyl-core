@@ -506,6 +506,18 @@ mod tests {
             .expect("keypair generates")
     }
 
+    /// Sign under the attestation surface domain (SA-R-2) — one place so
+    /// the domain cannot drift across the many structural tests below.
+    fn att_sign(sk: &HybridSecretKey, msg: &[u8]) -> HybridSignature {
+        HybridEd25519MlDsa
+            .sign(
+                sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
+                msg,
+            )
+            .expect("attestation sign")
+    }
+
     /// This pubkey's canonical id — the value the record's `p_id` must equal.
     fn p_id_of(pubkey: &HybridPublicKey) -> [u8; 32] {
         let bytes = pubkey.to_canonical_bytes().expect("canonical pubkey");
@@ -562,13 +574,7 @@ mod tests {
     fn pass_record_to_header_is_always_pass() {
         // Structural seam: PassRecord cannot carry Miss; wire kind is Pass.
         let (_pk, sk) = keypair();
-        let sig = HybridEd25519MlDsa
-            .sign(
-                &sk,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-                b"x",
-            )
-            .unwrap();
+        let sig = att_sign(&sk, b"x");
         let rec = pass_record([1u8; 32], 2, 3, sig);
         assert_eq!(rec.to_header().kind, AttestationKind::Pass);
     }
@@ -588,13 +594,7 @@ mod tests {
     #[test]
     fn pass_record_nonce_matches_free_function() {
         let (_pk, sk) = keypair();
-        let sig = HybridEd25519MlDsa
-            .sign(
-                &sk,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-                b"n",
-            )
-            .unwrap();
+        let sig = att_sign(&sk, b"n");
         let rec = pass_record([3u8; 32], 4, 5, sig);
         let (r, cb) = ([1u8; 32], [2u8; 32]);
         assert_eq!(
@@ -609,13 +609,7 @@ mod tests {
         let (r, cb) = ([11u8; 32], [22u8; 32]);
         let p_id = p_id_of(&pubkey);
         let nonce = attestation_nonce(&r, &cb, &p_id, 42, 1000);
-        let sig = HybridEd25519MlDsa
-            .sign(
-                &secret,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-                &nonce,
-            )
-            .expect("P signs the nonce");
+        let sig = att_sign(&secret, &nonce);
         let rec = pass_record(p_id, 42, 1000, sig);
 
         assert!(verify_pass_countersignature(&r, &cb, &pubkey, &rec));
@@ -634,13 +628,7 @@ mod tests {
         // even when the signature covers that record's own nonce.
         let foreign_id = [0xABu8; 32];
         let foreign_nonce = attestation_nonce(&r, &cb, &foreign_id, 42, 1000);
-        let sig_over_foreign = HybridEd25519MlDsa
-            .sign(
-                &secret,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-                &foreign_nonce,
-            )
-            .expect("sign foreign nonce");
+        let sig_over_foreign = att_sign(&secret, &foreign_nonce);
         let foreign = pass_record(foreign_id, 42, 1000, sig_over_foreign);
         assert!(!verify_pass_countersignature(&r, &cb, &pubkey, &foreign));
     }
@@ -653,20 +641,8 @@ mod tests {
         assert_eq!(empty, attestation_root(&[]).unwrap());
 
         let (_pk, sk) = keypair();
-        let s1 = HybridEd25519MlDsa
-            .sign(
-                &sk,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-                b"a",
-            )
-            .unwrap();
-        let s2 = HybridEd25519MlDsa
-            .sign(
-                &sk,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-                b"b",
-            )
-            .unwrap();
+        let s1 = att_sign(&sk, b"a");
+        let s2 = att_sign(&sk, b"b");
         let r1 = pass_record([7u8; 32], 42, 1000, s1.clone());
         let r2 = pass_record([7u8; 32], 43, 1000, s2.clone());
 
@@ -691,20 +667,8 @@ mod tests {
     #[test]
     fn witness_roundtrips_including_empty() {
         let (_pk, sk) = keypair();
-        let s0 = HybridEd25519MlDsa
-            .sign(
-                &sk,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-                b"w0",
-            )
-            .unwrap();
-        let s1 = HybridEd25519MlDsa
-            .sign(
-                &sk,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-                b"w1",
-            )
-            .unwrap();
+        let s0 = att_sign(&sk, b"w0");
+        let s1 = att_sign(&sk, b"w1");
         let w = BlockAttestationWitness {
             r: [0x5A; 32],
             pass_signatures: vec![s0, s1],
@@ -741,13 +705,7 @@ mod tests {
     #[test]
     fn witness_decode_rejects_malformed() {
         let (_pk, sk) = keypair();
-        let s0 = HybridEd25519MlDsa
-            .sign(
-                &sk,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-                b"w",
-            )
-            .unwrap();
+        let s0 = att_sign(&sk, b"w");
         let good = BlockAttestationWitness {
             r: [7; 32],
             pass_signatures: vec![s0],
@@ -796,13 +754,7 @@ mod tests {
     #[test]
     fn witness_encode_rejects_over_cap() {
         let (_pk, sk) = keypair();
-        let sig = HybridEd25519MlDsa
-            .sign(
-                &sk,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-                b"x",
-            )
-            .unwrap();
+        let sig = att_sign(&sk, b"x");
         let over = BlockAttestationWitness {
             r: [0; 32],
             pass_signatures: vec![sig; MAX_ATTESTATION_RECORDS + 1],
@@ -822,13 +774,7 @@ mod tests {
         let (r, cb) = ([3u8; 32], [4u8; 32]);
         let sig_for = |shard: u64, epoch: u64| {
             let nonce = attestation_nonce(&r, &cb, &p_id, shard, epoch);
-            HybridEd25519MlDsa
-                .sign(
-                    &sk,
-                    shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-                    &nonce,
-                )
-                .unwrap()
+            att_sign(&sk, &nonce)
         };
         let s_a = sig_for(10, 1000);
         let s_b = sig_for(20, 1000);

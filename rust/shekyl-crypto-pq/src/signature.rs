@@ -1,8 +1,35 @@
-//! Hybrid signature scheme: Ed25519 + ML-DSA (CRYSTALS-Dilithium).
+//! Hybrid Ed25519 + ML-DSA-65 signatures — the nested combiner (SA-R-1).
 //!
-//! During the post-quantum transition, both signatures must verify for a
-//! transaction to be considered valid. This provides security against both
-//! classical and quantum adversaries.
+//! # Construction
+//!
+//! ```text
+//! preimage  = cSHAKE256(customization = domain, input = scheme_id ‖ message)
+//! σ_pq      = MLDSA.Sign(preimage, ctx = "")          // PQ-inner
+//! σ_ed      = Ed25519.Sign(preimage ‖ σ_pq)           // classical-outer
+//! wire      = HybridSignature { ed25519: σ_ed, ml_dsa: σ_pq }  // v2
+//! ```
+//!
+//! Nesting is **fails-closed**: a verifier that skips the PQ half cannot
+//! reconstruct the classical outer message, so a degenerate implementation
+//! fails to verify rather than verifying insecurely. Do not flip the order.
+//!
+//! # Domain separation (SA-R-2)
+//!
+//! `sign` / `verify` take a required non-empty `domain` — there is no bare-
+//! message path. Each signing surface has a named `SCHEME_DOMAIN_*` constant
+//! below. FFI exports apply the surface's constant in Rust so C++ never
+//! carries a domain string. Full surface table: `docs/design/SIGNATURE_ALIGNMENT.md`.
+//!
+//! # Version byte is the security boundary (SA-R-4)
+//!
+//! Wire length does not move between the legacy *parallel* construction (v1)
+//! and this nested one (v2). [`HYBRID_SIG_VERSION`] = 2; parse rejects any
+//! other version before the combiner runs. A frozen v1 fixture pins that
+//! gate; a hand-built parallel signature also fails nested verify.
+//!
+//! # Verify is `Result<()>` (not `Result<bool>`)
+//!
+//! There is no `Ok(false)` for a caller to mishandle. Fail-closed.
 
 use crate::CryptoError;
 use ed25519_dalek::{
@@ -324,17 +351,78 @@ impl HybridEd25519MlDsa {
     /// confusion the round found (a signature's input no longer depends only
     /// on the message); the `domain` customization separates surfaces. The PQ
     /// half signs this digest; the classical half signs `digest ‖ σ_pq`.
-    fn preimage(domain: &[u8], message: &[u8]) -> [u8; 32] {
+    ///
+    /// Empty `domain` is refused: the underlying cSHAKE helper would assert,
+    /// and a consensus API must fail closed with `Err`, not abort.
+    fn preimage(domain: &[u8], message: &[u8]) -> Result<[u8; 32], CryptoError> {
+        if domain.is_empty() {
+            return Err(CryptoError::InvalidInput(
+                "scheme domain must be non-empty".into(),
+            ));
+        }
         let mut framed = Vec::with_capacity(1 + message.len());
         framed.push(HYBRID_SCHEME_ID_ED25519_ML_DSA_65);
         framed.extend_from_slice(message);
-        shekyl_crypto_hash::cshake256_32(domain, &framed)
+        Ok(shekyl_crypto_hash::cshake256_32(domain, &framed))
+    }
+
+    /// Single nested-sign body (SA-R-1). Production [`SignatureScheme::sign`]
+    /// and the deterministic bench path both call this — the only free
+    /// parameter is how the PQ half is drawn (hedged OsRng vs fixed seed).
+    /// Nesting order, preimage, and outer framing therefore cannot drift.
+    fn sign_nested(
+        secret_key: &HybridSecretKey,
+        domain: &[u8],
+        message: &[u8],
+        sign_pq: impl FnOnce(
+            &ml_dsa_65::PrivateKey,
+            &[u8; 32],
+        ) -> Result<[u8; ML_DSA_65_SIGNATURE_LENGTH], CryptoError>,
+    ) -> Result<HybridSignature, CryptoError> {
+        secret_key.validate()?;
+
+        let ed25519_secret: Zeroizing<[u8; ED25519_SECRET_KEY_LENGTH]> = Zeroizing::new(
+            secret_key
+                .ed25519
+                .clone()
+                .try_into()
+                .map_err(|_| CryptoError::InvalidKeyMaterial)?,
+        );
+        let ml_dsa_secret: Zeroizing<[u8; ML_DSA_65_SECRET_KEY_LENGTH]> = Zeroizing::new(
+            secret_key
+                .ml_dsa
+                .clone()
+                .try_into()
+                .map_err(|_| CryptoError::InvalidKeyMaterial)?,
+        );
+
+        let signing_key = SigningKey::from_bytes(&ed25519_secret);
+        let ml_dsa_private = ml_dsa_65::PrivateKey::try_from_bytes(*ml_dsa_secret)
+            .map_err(|e| CryptoError::SerializationError(e.into()))?;
+
+        // Nested combiner: PQ-inner, Ed25519-outer. Load-bearing — do not flip.
+        let inner = Self::preimage(domain, message)?;
+        let ml_dsa_signature = sign_pq(&ml_dsa_private, &inner)?;
+        // Classical half signs `inner ‖ σ_pq`. A verifier that skips the PQ
+        // half cannot reconstruct this outer message (fails-closed).
+        let mut outer = Vec::with_capacity(inner.len() + ml_dsa_signature.len());
+        outer.extend_from_slice(&inner);
+        outer.extend_from_slice(&ml_dsa_signature);
+        let ed25519_signature = signing_key.sign(&outer);
+
+        Ok(HybridSignature {
+            ed25519: ed25519_signature.to_bytes().to_vec(),
+            ml_dsa: ml_dsa_signature.to_vec(),
+        })
     }
 }
 
-// `keypair_generate` is test-support only (F-7): the old trait method read as a
-// production API and risked a non-derived keypair reaching a wallet. Renamed so
-// the name announces itself and gated so it cannot be called from production.
+// Test-support surface (F-7). Behind `test-utils` (or `cfg(test)` in-crate).
+// **Not** a production isolation gate: `shekyl-ffi` enables `test-utils` so the
+// C++ unit tests can link the same archive as production — cargo feature
+// unification keeps these symbols in that artifact. The structural gate
+// (separate test-only archive / cmake feature) is tracked in FOLLOWUPS F-7.
+// Names announce test-only intent; do not call from production paths.
 #[cfg(any(test, feature = "test-utils"))]
 impl HybridEd25519MlDsa {
     pub fn generate_ephemeral_keypair_for_tests(
@@ -357,12 +445,9 @@ impl HybridEd25519MlDsa {
         Ok((public_key, secret_key))
     }
 
-    /// Deterministic nested sign for iai benches / KATs. Identical to
-    /// [`SignatureScheme::sign`] — same `preimage`, same nesting order — except
-    /// the ML-DSA half uses a fixed `ml_dsa_seed` (stable instruction count for
-    /// iai) instead of the hedged `OsRng` path. Single-sourced through
-    /// `preimage`, so a bench measures the real combiner, never a hand-rolled
-    /// shim that could drift from production.
+    /// Deterministic nested sign for iai benches / KATs. Same nesting as
+    /// [`SignatureScheme::sign`] via [`Self::sign_nested`]; only the PQ half
+    /// uses a fixed seed (stable instruction counts).
     pub fn sign_with_ml_dsa_seed(
         &self,
         secret_key: &HybridSecretKey,
@@ -370,35 +455,9 @@ impl HybridEd25519MlDsa {
         message: &[u8],
         ml_dsa_seed: &[u8; 32],
     ) -> Result<HybridSignature, CryptoError> {
-        secret_key.validate()?;
-        let ed25519_secret: Zeroizing<[u8; ED25519_SECRET_KEY_LENGTH]> = Zeroizing::new(
-            secret_key
-                .ed25519
-                .clone()
-                .try_into()
-                .map_err(|_| CryptoError::InvalidKeyMaterial)?,
-        );
-        let ml_dsa_secret: Zeroizing<[u8; ML_DSA_65_SECRET_KEY_LENGTH]> = Zeroizing::new(
-            secret_key
-                .ml_dsa
-                .clone()
-                .try_into()
-                .map_err(|_| CryptoError::InvalidKeyMaterial)?,
-        );
-        let signing_key = SigningKey::from_bytes(&ed25519_secret);
-        let ml_dsa_private = ml_dsa_65::PrivateKey::try_from_bytes(*ml_dsa_secret)
-            .map_err(|e| CryptoError::SerializationError(e.into()))?;
-        let inner = Self::preimage(domain, message);
-        let ml_dsa_signature = ml_dsa_private
-            .try_sign_with_seed(ml_dsa_seed, &inner, &[])
-            .map_err(|e| CryptoError::SerializationError(e.into()))?;
-        let mut outer = Vec::with_capacity(inner.len() + ml_dsa_signature.len());
-        outer.extend_from_slice(&inner);
-        outer.extend_from_slice(&ml_dsa_signature);
-        let ed25519_signature = signing_key.sign(&outer);
-        Ok(HybridSignature {
-            ed25519: ed25519_signature.to_bytes().to_vec(),
-            ml_dsa: ml_dsa_signature.to_vec(),
+        Self::sign_nested(secret_key, domain, message, |pk, inner| {
+            pk.try_sign_with_seed(ml_dsa_seed, inner, &[])
+                .map_err(|e| CryptoError::SerializationError(e.into()))
         })
     }
 }
@@ -410,45 +469,10 @@ impl SignatureScheme for HybridEd25519MlDsa {
         domain: &[u8],
         message: &[u8],
     ) -> Result<HybridSignature, CryptoError> {
-        secret_key.validate()?;
-
-        let ed25519_secret: Zeroizing<[u8; ED25519_SECRET_KEY_LENGTH]> = Zeroizing::new(
-            secret_key
-                .ed25519
-                .clone()
-                .try_into()
-                .map_err(|_| CryptoError::InvalidKeyMaterial)?,
-        );
-        let ml_dsa_secret: Zeroizing<[u8; ML_DSA_65_SECRET_KEY_LENGTH]> = Zeroizing::new(
-            secret_key
-                .ml_dsa
-                .clone()
-                .try_into()
-                .map_err(|_| CryptoError::InvalidKeyMaterial)?,
-        );
-
-        let signing_key = SigningKey::from_bytes(&ed25519_secret);
-        let ml_dsa_private = ml_dsa_65::PrivateKey::try_from_bytes(*ml_dsa_secret)
-            .map_err(|e| CryptoError::SerializationError(e.into()))?;
-
-        // Nested combiner (SA-R-1): PQ-inner, Ed25519-outer.
-        let inner = Self::preimage(domain, message);
-        // PQ half signs the domained digest, empty ML-DSA ctx (SA-R-3, KAT-pinned).
-        let ml_dsa_signature = ml_dsa_private
-            .try_sign(&inner, &[])
-            .map_err(|e| CryptoError::SerializationError(e.into()))?;
-        // Classical half signs `inner ‖ σ_pq`. A verifier that skips the PQ
-        // half cannot reconstruct this outer message, so a degenerate
-        // implementation fails to verify rather than verifying insecurely
-        // (fails-closed). The nesting order is load-bearing — do not flip it.
-        let mut outer = Vec::with_capacity(inner.len() + ml_dsa_signature.len());
-        outer.extend_from_slice(&inner);
-        outer.extend_from_slice(&ml_dsa_signature);
-        let ed25519_signature = signing_key.sign(&outer);
-
-        Ok(HybridSignature {
-            ed25519: ed25519_signature.to_bytes().to_vec(),
-            ml_dsa: ml_dsa_signature.to_vec(),
+        // PQ half: hedged OsRng, empty ML-DSA ctx (SA-R-3, KAT-pinned).
+        Self::sign_nested(secret_key, domain, message, |pk, inner| {
+            pk.try_sign(inner, &[])
+                .map_err(|e| CryptoError::SerializationError(e.into()))
         })
     }
 
@@ -481,7 +505,7 @@ impl SignatureScheme for HybridEd25519MlDsa {
         let ml_dsa_public_key = ml_dsa_65::PublicKey::try_from_bytes(ml_dsa_public)
             .map_err(|e| CryptoError::SerializationError(e.into()))?;
 
-        let inner = Self::preimage(domain, message);
+        let inner = Self::preimage(domain, message)?;
         // Verify the PQ inner first (fails-closed order): the classical outer
         // is meaningless if the PQ half it wraps is not itself valid.
         if !ml_dsa_public_key.verify(&inner, &ml_dsa_signature, &[]) {
@@ -650,7 +674,7 @@ mod tests {
 
         // Recompute the inner preimage the PQ half signed and check the ML-DSA
         // component directly: empty ctx verifies, a non-empty ctx does not.
-        let inner = HybridEd25519MlDsa::preimage(D, msg);
+        let inner = HybridEd25519MlDsa::preimage(D, msg).unwrap();
         let ml_pk_bytes: [u8; ML_DSA_65_PUBLIC_KEY_LENGTH] = pk.ml_dsa.clone().try_into().unwrap();
         let ml_sig: [u8; ML_DSA_65_SIGNATURE_LENGTH] = sig.ml_dsa.clone().try_into().unwrap();
         let ml_pk = ml_dsa_65::PublicKey::try_from_bytes(ml_pk_bytes).unwrap();
@@ -661,6 +685,29 @@ mod tests {
         assert!(
             !ml_pk.verify(&inner, &ml_sig, b"x"),
             "the PQ half must NOT verify under a non-empty ctx — empty ctx is load-bearing"
+        );
+    }
+
+    /// Empty scheme domain is refuse-not-abort: cSHAKE would assert on empty
+    /// customization; the consensus API maps that to `InvalidInput`.
+    #[test]
+    fn empty_domain_is_refused() {
+        let (pk, sk) = kp();
+        let msg = b"no-domain";
+        assert!(
+            matches!(
+                scheme().sign(&sk, b"", msg),
+                Err(CryptoError::InvalidInput(_))
+            ),
+            "sign must refuse an empty domain"
+        );
+        let sig = scheme().sign(&sk, D, msg).unwrap();
+        assert!(
+            matches!(
+                scheme().verify(&pk, b"", msg, &sig),
+                Err(CryptoError::InvalidInput(_))
+            ),
+            "verify must refuse an empty domain"
         );
     }
 
