@@ -300,6 +300,30 @@ impl RelayZone {
     pub const fn is_clearnet(self) -> bool {
         matches!(self, Self::Public)
     }
+
+    /// Decode a zone arriving across the FFI as a whole byte.
+    ///
+    /// # Why this is not [`Self::from_bits`]
+    ///
+    /// `from_bits` is total *by width* — it decodes a two-bit persisted field,
+    /// where no out-of-domain value can exist, so masking is exact. A byte
+    /// crossing the FFI has no such guarantee, and **masking it would be
+    /// actively unsafe**: `5 & 0b11 == 1`, so a corrupt or miscast `5` would
+    /// decode to `Public` and draw the *shortest* embargo — the privacy-losing
+    /// direction, arrived at silently.
+    ///
+    /// So anything outside the enum resolves to [`Self::Invalid`], which
+    /// [`DandelionParams::adopted_for`] provisions as the worst case. A caller
+    /// bug then costs recovery latency instead of privacy.
+    #[must_use]
+    pub const fn from_ffi_u8(raw: u8) -> Self {
+        match raw {
+            1 => Self::Public,
+            2 => Self::I2p,
+            3 => Self::Tor,
+            _ => Self::Invalid,
+        }
+    }
 }
 
 /// The complete Dandelion++ parameter set, expressed as design inputs.
@@ -921,6 +945,30 @@ mod tests {
         // bits: the decode is total rather than fallible.
         for bits in 0_u8..=0b11 {
             assert_eq!(RelayZone::from_bits(bits).to_bits(), bits);
+        }
+    }
+
+    #[test]
+    fn an_out_of_domain_ffi_byte_never_decodes_to_a_shorter_embargo() {
+        // The whole reason `from_ffi_u8` exists rather than reusing the mask.
+        // Masking sends 5 to Public — the SHORTEST embargo — so a corrupt byte
+        // would silently buy the privacy-losing direction.
+        assert_eq!(RelayZone::from_bits(5), RelayZone::Public, "the hazard");
+        assert_eq!(RelayZone::from_ffi_u8(5), RelayZone::Invalid, "the fix");
+
+        let clearnet_hop = DandelionParams::adopted_for(RelayZone::Public).time_between_hop_ms;
+        for raw in 4_u8..=255 {
+            let zone = RelayZone::from_ffi_u8(raw);
+            assert_eq!(zone, RelayZone::Invalid, "raw {raw} escaped the domain");
+            assert!(
+                DandelionParams::adopted_for(zone).time_between_hop_ms > clearnet_hop,
+                "raw {raw} decoded to something provisioned no better than clearnet"
+            );
+        }
+        // In-domain bytes still decode to themselves — otherwise the guard
+        // above would pass by rejecting everything.
+        for raw in 0_u8..=3 {
+            assert_eq!(RelayZone::from_ffi_u8(raw).to_bits(), raw);
         }
     }
 

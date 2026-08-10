@@ -42,6 +42,7 @@
 #include "cryptonote_basic/difficulty.h"
 #include "cryptonote_basic/hardfork.h"
 #include "cryptonote_protocol/enums.h"
+#include "net/enums.h"
 #include "blockchain_db/shekyl_types.h"
 #include "shekyl/shekyl_ffi.h" // epoch-close FFI row structs for ArchivalEmissionEpochSnapshot::to_ffi_*
 
@@ -208,7 +209,19 @@ struct txpool_tx_meta_t
   uint8_t dandelionpp_stem : 1;
   uint8_t is_forwarding: 1;
   uint8_t fcmp_verified: 1;  // set when fcmp_verification_hash is valid
-  uint8_t bf_padding: 2;
+  //! Relay zone this tx entered on, as `epee::net_utils::zone` (§89.2).
+  //
+  // The embargo went per-zone when the anonymity zone started stemming: `hop`
+  // is transport-bound, so a stem on a rendezvous path needs a longer embargo
+  // than one on clearnet, and a single global either under-provisions the
+  // anonymity path or charges clearnet a wait it does not need.
+  //
+  // Two bits, taken from `bf_padding` — no struct growth, no record migration.
+  // `zone::invalid == 0` is what makes that free: a pre-upgrade record's spare
+  // bits are zero, so it decodes to the "origin unknown" sentinel rather than
+  // to a wrong network, and the Rust side provisions that sentinel as the
+  // worst case (the shorter embargo is the privacy-losing direction).
+  uint8_t origin_zone : 2;
 
   // FCMP++ verification cache: hash(proof || tree_root || key_images).
   // When fcmp_verified == 1, the proof was previously verified against
@@ -230,6 +243,22 @@ struct txpool_tx_meta_t
     return matches_category(get_relay_method(), category);
   }
 };
+
+/* `origin_zone` is two bits, so every zone must fit in two bits. Adding a
+   fourth network would silently alias onto an existing one and hand its
+   transactions another zone's embargo — so this fails the BUILD rather than a
+   test. The zone that would alias is `invalid`, whose whole job is to be the
+   value a pre-upgrade record decodes to, which is why the aliasing would be
+   invisible at runtime: the wrong answer is also the plausible one. */
+static_assert(
+  static_cast<std::uint8_t>(epee::net_utils::zone::tor) <= 0x3,
+  "epee::net_utils::zone no longer fits txpool_tx_meta_t::origin_zone's two bits"
+);
+static_assert(
+  static_cast<std::uint8_t>(epee::net_utils::zone::invalid) == 0,
+  "zone::invalid must be 0: a pre-upgrade txpool record's spare bits are zero, "
+  "and they must decode to the origin-unknown sentinel rather than to a network"
+);
 
 
 #define DBF_SAFE       1
