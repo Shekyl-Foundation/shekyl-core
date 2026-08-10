@@ -160,6 +160,69 @@ correct answers:
 The distinguishing question is cheap and belongs in the reviewer's hand:
 ***does this consumer run while something still knows?***
 
+### Q12-D3 — Zone is a routing choice with a cost, not a property a transaction inherits. RULED.
+
+**Both directions, one mechanism.** Going clearnet→Tor and Tor→clearnet are the
+same kind of thing: a selectable path with a latency price. Neither is a special
+case of the other, and neither should be special-cased.
+
+> **The rule, entire:** at entry, pick a zone with some probability; coherence
+> holds the transaction there; the zone's `hop` prices the path.
+
+**This deletes rather than decides.** Three items on this round's list stop
+being questions:
+
+| item | disposition under Q12-D3 |
+| --- | --- |
+| `relay_method::forward` as a class | **deleted.** It exists only to mean *"arrived somewhere other than clearnet"* — a fact about **provenance**. Under one rule, provenance stops being a routing input, so the class has nothing left to express. This answers Q12-Q3. |
+| the fall-through branch | **deleted.** An unusable zone is simply not selectable, exactly like an unavailable peer. No failure *reason* is inspected because none is consulted — which is already `select_anonymity(require_usable=true)`'s existing semantics. |
+| Q12-Q2 (what an arrival inherits when its zone is unusable) | **dissolved.** There is no special case left to give a rule to. |
+
+### Q12-D3a — The exit already exists, and it is not at the stem
+
+The structural fact that makes this cheap, **verified at source**
+(`net_node.inl`, `send_txs`): `still_stemming` is false for
+`relay_method::fluff`, so a fluffed transaction bypasses coherence and reaches
+clearnet regardless of origin. A peer receiving an anonymity fluff classes it
+`fluff` — the `dandelionpp_fluff` flag overrides its `forward` default — and
+relays it publicly on its next hop. **That is R-1's `tx_relay` exit, and
+Tor→clearnet bridging already runs through it today, with no stem-phase divert
+involved.**
+
+> **So `p_out = 0` is a legitimate setting and still buys the whole
+> unification.** Transactions stay on their entry zone until they fluff, then
+> leave by the existing rule. The special case dies either way.
+>
+> Worth stating explicitly, because *"bridge both directions"* reads as
+> requiring a nonzero second probability and it does not. Whether stem-phase
+> divert-*out* is worth turning on is a **separate and smaller** question, which
+> this round can answer on its own evidence rather than as a precondition.
+
+### Q12-D3b — Symmetric mechanism, asymmetric parameters
+
+`p_in` and `p_out` share a mechanism and share nothing else. **They must not be
+set equal for symmetry's sake**, and the round should derive them against
+separate objectives:
+
+- **`p_in`** is sized for **dilution** — swamping the origin signal on the
+  anonymity zone. Clearnet relay volume dwarfs anonymity volume, so R-1's 2 %
+  is a *large absolute inflow into a small zone*, which is precisely what makes
+  that zone's traffic mixed (§59, §60).
+- **`p_out`** is sized for whatever this round decides it is for, if anything.
+  The reverse at 2 % is a **negligible outflow** — the same numeral doing an
+  entirely different amount of work.
+
+### Q12-D3c — The latency is already priced
+
+A relay on the anonymity zone costs onion-rendezvous latency against clearnet's
+direct hop, and **that is exactly what the per-zone `hop` now carries**: 1750 ms
+interim against 175 ms (§89.2, and the banner at
+`ANON_ZONE_TRANSIT_ASSUMPTION_MS`).
+
+So the unification **adds no new cost axis**. It makes zone selection the thing
+that *reads* the existing one — which is why the mechanism can be symmetric
+while the prices are not.
+
 ---
 
 ## 4. Open design questions
@@ -170,13 +233,22 @@ The distinguishing question is cheap and belongs in the reviewer's hand:
 > renumbering registered identifiers to flatter the reading order would be
 > worse than a note.
 
-**Q12-Q8 — After anonymity-arrived traffic stays in-zone, where does the
-clearnet bridge happen, and does it need a delay?**
-The round's opening question, and the one the rest are downstream of. The
-bridge does not disappear — it moves to whichever peer receives an anonymity
-fluff and relays it publicly under R-1's exit rule. Answering it settles
-whether `forward` survives (Q12-Q3), what Q-12 derives if anything
-(Q12-Q4, Q12-Q5), and whether `FORWARD_DELAY_*` dies (Q12-Q7).
+**Q12-Q8 — ~~Where does the clearnet bridge happen~~, and does it need a delay?
+— HALF ANSWERED by Q12-D3a**
+
+**The "where" is settled and needed no new mechanism:** the bridge is the
+existing `tx_relay` exit at the **fluff boundary**, verified at source. A
+fluffed transaction has `still_stemming == false`, so it bypasses coherence and
+reaches clearnet regardless of origin; a peer receiving an anonymity fluff
+classes it `fluff` and relays it publicly on its next hop. Tor→clearnet
+bridging runs through that today.
+
+**What remains open is only whether a delay is wanted there**, and — separately
+— whether stem-phase divert-*out* (`p_out > 0`) is worth turning on at all.
+Q12-D3a makes `p_out = 0` a legitimate setting that still buys the whole
+unification, so this is a smaller question than it was when it opened, and it
+is answerable on its own evidence rather than as a precondition for anything
+else.
 
 > **The delay's OBJECTIVE changes under this question, and it should be settled
 > before anyone derives against the old one.**
@@ -217,7 +289,15 @@ as the migration-free default, which the epee enum still fits
 `rust/shekyl-engine-{state,file}/**`); re-verify at pre-flight rather than
 inherit.
 
-**Q12-Q2 — What does the pool loop do with it? — ANSWER EARLY**
+**Q12-Q2 — ~~What does the pool loop do with it?~~ DISSOLVED by Q12-D3**
+There is no special case left to give a rule to: an unusable zone is simply not
+selectable, like an unavailable peer, and no failure reason is consulted. The
+fail-closed hazard below is **retained as the reason the question was dangerous**,
+not as an open item — it is what a provenance-inheriting design would have had
+to get right, and Q12-D3 removes the need to.
+
+*Superseded text follows.*
+
 Route `forward` entries back to their origin zone instead of `public_`. Open:
 what happens when the origin zone is no longer usable? §59.7's fail-closed rule
 governs *originated* traffic (§30.5 — never fall out to clearnet). Relayed
@@ -237,7 +317,15 @@ neither**, and this round must say which rule it inherits.
 > implementation time where whichever branch is written first becomes the
 > default.
 
-**Q12-Q3 — Does `forward` survive as a class?**
+**Q12-Q3 — ~~Does `forward` survive as a class?~~ ANSWERED by Q12-D3: no**
+It is deleted. The class exists only to mean *"arrived somewhere other than
+clearnet"* — provenance — and Q12-D3 makes provenance stop being a routing
+input. Q-12 therefore closes by the **deletion** branch of Q12-D1's table for
+the class itself; what remains open is only whether a delay is wanted at the
+bridge (Q12-Q8), which is a different question about a different site.
+
+*Superseded text follows.*
+
 If anonymity-arrived traffic stays in-zone, `forward` no longer means "about to
 bridge". Either the class narrows to genuine bridging, or the bridge becomes
 explicit and `forward` is retired. This decides whether Q-12 derives a delay
@@ -335,13 +423,16 @@ turn out to be empty.
 
 | unit | subject | gates on | may be empty? |
 | --- | --- | --- | --- |
-| **Q12-U1** | the origin-zone field, pool-loop routing, and where the bridge lands | Q12-Q8, Q12-Q1, Q12-Q2 | no — this is the round |
-| **Q12-U2** | `forward`'s disposition: survives, narrows, or is deleted | Q12-Q3 | no, but its answer may be "deleted" |
-| **Q12-U3** | a derivation, **if there is a subject for one** | Q12-Q4, Q12-Q5 | **yes** — empty if `forward` is deleted |
-| **Q12-U4** | `FORWARD_DELAY_*`'s disposition | Q12-Q7 | **yes** — empty if the constants die with the class |
+| **Q12-U1** | one entry rule both directions: `p_in`/`p_out` selection, coherence, per-zone `hop` as the price | Q12-Q1, Q12-D3 | no — this is the round |
+| **Q12-U2** | delete `relay_method::forward` and the fall-through branch | — (answered by Q12-D3) | no — mechanical, once Q12-U1 lands |
+| **Q12-U3** | `p_in` derived for **dilution**; `p_out` only if the round wants it nonzero | Q12-Q4, Q12-Q5, Q12-Q8 | **partly** — `p_out = 0` is a legitimate close |
+| **Q12-U4** | `FORWARD_DELAY_*`'s disposition | Q12-Q7 | **likely empty** — the constants die with the class |
 
 The Poisson primitive's retirement is **not** a unit here; it is split out per
 §5.1 and proceeds independently.
 
-Q12-U3 cannot start before Q12-U2 settles — a derivation needs its population
-defined, and per Q12-D1 it may have none.
+**Q12-D3 collapsed the middle of this round.** Q12-U2 stopped being a decision
+and became mechanical, and Q12-U3's subject narrowed from "derive a bridge
+delay" to "derive `p_in` for dilution, and decide whether `p_out` is nonzero at
+all". The units that remain are smaller and fewer than when the round opened,
+which is what a unifying rule is supposed to do.
