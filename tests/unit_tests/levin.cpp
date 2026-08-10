@@ -447,6 +447,84 @@ namespace
             }
         }
 
+        /*! One round of anonymity-zone relay under §89's stemming posture.
+
+            Shared by the six `private_*` cases, which differ only in the method
+            handed to `send_txs` and whether padding is on. The assertions are
+            written once because six copies is how one of them quietly stops
+            checking what it claims to — and one of the things it checks here is
+            a rule a port has already broken once.
+
+            \param sent_as method handed to `send_txs` (stem, local or forward)
+            \param padded  whether the notifier was built with `pad_txs`
+            \return true if this round stemmed rather than fluffed */
+        bool run_private_round(cryptonote::levin::notify& notifier,
+                               const std::vector<cryptonote::blobdata>& txs,
+                               const cryptonote::relay_method sent_as,
+                               const bool padded)
+        {
+            std::vector<cryptonote::blobdata> sorted_txs = txs;
+            std::sort(sorted_txs.begin(), sorted_txs.end());
+
+            auto context = contexts_.begin();
+            EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), sent_as));
+
+            io_service_.restart();
+            EXPECT_LT(0u, io_service_.poll());
+
+            const bool is_stem = events_.has_stem_txes();
+            const auto method =
+              is_stem ? cryptonote::relay_method::stem : cryptonote::relay_method::fluff;
+
+            /* §89.2 draws the embargo per zone, and the zone reaches the draw
+               with the relay rather than off the txpool entry. Asserting the
+               METHOD alone would pass whichever zone the dispatch attributed
+               it to, which is the axis this round changed. */
+            EXPECT_EQ(epee::net_utils::zone::i2p, events_.relayed_zone(method));
+            EXPECT_EQ(txs, events_.take_relayed(method));
+
+            if (!is_stem)
+            {
+                notifier.run_fluff();
+                io_service_.restart();
+                EXPECT_LT(0u, io_service_.poll());
+            }
+
+            std::size_t send_count = 0;
+            EXPECT_EQ(0u, context->process_send_queue());
+            for (++context; context != contexts_.end(); ++context)
+            {
+                const std::size_t sent = context->process_send_queue();
+                /* OUTBOUND ONLY — stemming or fluffing, and this is the
+                   assertion to protect. On a hidden service an inbound peer is
+                   a stranger who dialled us; RP-3a dropped that rule in the
+                   port and these `private_*` cases are what caught it. Opening
+                   the stem gates must not cost the catcher. */
+                if (sent)
+                    EXPECT_EQ(1u, (context - contexts_.begin()) % 2);
+                send_count += sent;
+            }
+
+            /* One successor when stemming; the outbound half of ten when
+               fluffing — never nine, which would mean the outbound-only reach
+               was lost. */
+            const std::size_t expected = is_stem ? 1u : 5u;
+            EXPECT_EQ(expected, send_count);
+            EXPECT_EQ(expected, receiver_.notified_size());
+            for (std::size_t count = 0; count < expected; ++count)
+            {
+                auto notification =
+                  receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
+                EXPECT_EQ(is_stem ? txs : sorted_txs, notification.txs);
+                EXPECT_EQ(padded, !notification._.empty());
+                /* The flag varies on this zone again (§64.1 reviving §61.1's
+                   partition argument): false on a stem send, true on a fluff.
+                   Before §89 it was true unconditionally here. */
+                EXPECT_EQ(!is_stem, notification.dandelionpp_fluff);
+            }
+            return is_stem;
+        }
+
         boost::uuids::random_generator random_generator_;
         boost::asio::io_context io_service_;
         test_receiver receiver_;
@@ -1820,23 +1898,20 @@ TEST_F(levin_notify, private_fluff_without_padding)
 
 TEST_F(levin_notify, private_stem_without_padding)
 {
-    // private mode always uses fluff but marked as stem
-    //
-    // Load-bearing beyond its inherited scope (§63 of
-    // docs/design/DAEMON_RELAY_PRIVACY.md). Three assertions below pin facts
-    // four sections of relay-privacy analysis were written against the
-    // opposite of, and each is the tripwire for a different claim:
-    //
-    //   - every outbound peer is notified (not one successor): the anonymity
-    //     zone DIFFUSES, so there is no stem slot on it (§63.4);
-    //   - `dandelionpp_fluff` is true on the wire: the flag does not vary on
-    //     this zone, which is why exit (b) is not dominated (§63.7);
-    //   - the txpool is told `stem`: the embargo still arms, which is the
-    //     half of "stem and embargo present" that was right (§63.3).
-    //
-    // If a future change makes this zone run Dandelion++ — the design
-    // question §63.6 leaves open — this test SHOULD fail, and §63 is what to
-    // re-read before adjusting it.
+    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
+       expectation ("private mode always uses fluff but marked as stem") is
+       false by decision now, and the three §63 facts this case used to pin
+       have each reversed:
+
+         - a stem send reaches ONE successor, not every outbound peer, because
+           the zone runs Dandelion++ (was §63.4's diffusion);
+         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
+           which is what revives §61.1's partition argument (was §63.7);
+         - the txpool is still told `stem`, so the embargo still arms. That
+           half was always right (§63.3).
+
+       What did NOT change, and is asserted every round in `run_private_round`:
+       fluff reach stays outbound-only. */
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
     auto &notifier = *notifier_ptr;
 
@@ -1857,39 +1932,36 @@ TEST_F(levin_notify, private_stem_without_padding)
     txs[1].resize(200, 'f');
 
     ASSERT_EQ(10u, contexts_.size());
+
+    /* The epoch role is drawn, so both outcomes must be observed rather than
+       assumed — the same shape the public `stem_without_padding` case uses. */
+    bool has_stemmed = false;
+    bool has_fluffed = false;
+    while (!has_stemmed || !has_fluffed)
     {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::stem));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_TRUE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
+        const bool is_stem =
+          run_private_round(notifier, txs, cryptonote::relay_method::stem, false);
+        has_stemmed |= is_stem;
+        has_fluffed |= !is_stem;
     }
 }
 
 TEST_F(levin_notify, private_local_without_padding)
 {
-    // private mode always uses fluff but marked as stem
+    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
+       expectation ("private mode always uses fluff but marked as stem") is
+       false by decision now, and the three §63 facts this case used to pin
+       have each reversed:
+
+         - a stem send reaches ONE successor, not every outbound peer, because
+           the zone runs Dandelion++ (was §63.4's diffusion);
+         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
+           which is what revives §61.1's partition argument (was §63.7);
+         - the txpool is still told `stem`, so the embargo still arms. That
+           half was always right (§63.3).
+
+       What did NOT change, and is asserted every round in `run_private_round`:
+       fluff reach stays outbound-only. */
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
     auto &notifier = *notifier_ptr;
 
@@ -1910,39 +1982,36 @@ TEST_F(levin_notify, private_local_without_padding)
     txs[1].resize(200, 'f');
 
     ASSERT_EQ(10u, contexts_.size());
+
+    /* The epoch role is drawn, so both outcomes must be observed rather than
+       assumed — the same shape the public `stem_without_padding` case uses. */
+    bool has_stemmed = false;
+    bool has_fluffed = false;
+    while (!has_stemmed || !has_fluffed)
     {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::local));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_TRUE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
+        const bool is_stem =
+          run_private_round(notifier, txs, cryptonote::relay_method::local, false);
+        has_stemmed |= is_stem;
+        has_fluffed |= !is_stem;
     }
 }
 
 TEST_F(levin_notify, private_forward_without_padding)
 {
-    // private mode always uses fluff but marked as stem
+    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
+       expectation ("private mode always uses fluff but marked as stem") is
+       false by decision now, and the three §63 facts this case used to pin
+       have each reversed:
+
+         - a stem send reaches ONE successor, not every outbound peer, because
+           the zone runs Dandelion++ (was §63.4's diffusion);
+         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
+           which is what revives §61.1's partition argument (was §63.7);
+         - the txpool is still told `stem`, so the embargo still arms. That
+           half was always right (§63.3).
+
+       What did NOT change, and is asserted every round in `run_private_round`:
+       fluff reach stays outbound-only. */
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
     auto &notifier = *notifier_ptr;
 
@@ -1963,39 +2032,27 @@ TEST_F(levin_notify, private_forward_without_padding)
     txs[1].resize(200, 'f');
 
     ASSERT_EQ(10u, contexts_.size());
+
+    /* The epoch role is drawn, so both outcomes must be observed rather than
+       assumed — the same shape the public `stem_without_padding` case uses. */
+    bool has_stemmed = false;
+    bool has_fluffed = false;
+    while (!has_stemmed || !has_fluffed)
     {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::forward));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::forward));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_TRUE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
+        const bool is_stem =
+          run_private_round(notifier, txs, cryptonote::relay_method::forward, false);
+        has_stemmed |= is_stem;
+        has_fluffed |= !is_stem;
     }
 }
 
 TEST_F(levin_notify, private_block_without_padding)
 {
-    // private mode always uses fluff but marked as stem
+    /* `block` and `none` never reach the relay path on any zone — `send_txs`
+       returns false for both before the transport question is asked — so §89's
+       stemming ruling does not touch this case. The inherited comment here
+       said "private mode always uses fluff but marked as stem"; that is false
+       since §89 and was never what this case tested. */
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
     auto &notifier = *notifier_ptr;
 
@@ -2027,7 +2084,11 @@ TEST_F(levin_notify, private_block_without_padding)
 
 TEST_F(levin_notify, private_none_without_padding)
 {
-    // private mode always uses fluff but marked as stem
+    /* `block` and `none` never reach the relay path on any zone — `send_txs`
+       returns false for both before the transport question is asked — so §89's
+       stemming ruling does not touch this case. The inherited comment here
+       said "private mode always uses fluff but marked as stem"; that is false
+       since §89 and was never what this case tested. */
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
     auto &notifier = *notifier_ptr;
 
@@ -2111,6 +2172,20 @@ TEST_F(levin_notify, private_fluff_with_padding)
 
 TEST_F(levin_notify, private_stem_with_padding)
 {
+    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
+       expectation ("private mode always uses fluff but marked as stem") is
+       false by decision now, and the three §63 facts this case used to pin
+       have each reversed:
+
+         - a stem send reaches ONE successor, not every outbound peer, because
+           the zone runs Dandelion++ (was §63.4's diffusion);
+         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
+           which is what revives §61.1's partition argument (was §63.7);
+         - the txpool is still told `stem`, so the embargo still arms. That
+           half was always right (§63.3).
+
+       What did NOT change, and is asserted every round in `run_private_round`:
+       fluff reach stays outbound-only. */
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
     auto &notifier = *notifier_ptr;
 
@@ -2131,38 +2206,36 @@ TEST_F(levin_notify, private_stem_with_padding)
     txs[1].resize(200, 'f');
 
     ASSERT_EQ(10u, contexts_.size());
+
+    /* The epoch role is drawn, so both outcomes must be observed rather than
+       assumed — the same shape the public `stem_without_padding` case uses. */
+    bool has_stemmed = false;
+    bool has_fluffed = false;
+    while (!has_stemmed || !has_fluffed)
     {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::stem));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_FALSE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
+        const bool is_stem =
+          run_private_round(notifier, txs, cryptonote::relay_method::stem, true);
+        has_stemmed |= is_stem;
+        has_fluffed |= !is_stem;
     }
 }
 
 TEST_F(levin_notify, private_local_with_padding)
 {
+    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
+       expectation ("private mode always uses fluff but marked as stem") is
+       false by decision now, and the three §63 facts this case used to pin
+       have each reversed:
+
+         - a stem send reaches ONE successor, not every outbound peer, because
+           the zone runs Dandelion++ (was §63.4's diffusion);
+         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
+           which is what revives §61.1's partition argument (was §63.7);
+         - the txpool is still told `stem`, so the embargo still arms. That
+           half was always right (§63.3).
+
+       What did NOT change, and is asserted every round in `run_private_round`:
+       fluff reach stays outbound-only. */
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
     auto &notifier = *notifier_ptr;
 
@@ -2183,38 +2256,36 @@ TEST_F(levin_notify, private_local_with_padding)
     txs[1].resize(200, 'f');
 
     ASSERT_EQ(10u, contexts_.size());
+
+    /* The epoch role is drawn, so both outcomes must be observed rather than
+       assumed — the same shape the public `stem_without_padding` case uses. */
+    bool has_stemmed = false;
+    bool has_fluffed = false;
+    while (!has_stemmed || !has_fluffed)
     {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::local));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_FALSE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
+        const bool is_stem =
+          run_private_round(notifier, txs, cryptonote::relay_method::local, true);
+        has_stemmed |= is_stem;
+        has_fluffed |= !is_stem;
     }
 }
 
 TEST_F(levin_notify, private_forward_with_padding)
 {
+    /* §89: the anonymity zone STEMS. Rewritten, not adjusted — the inherited
+       expectation ("private mode always uses fluff but marked as stem") is
+       false by decision now, and the three §63 facts this case used to pin
+       have each reversed:
+
+         - a stem send reaches ONE successor, not every outbound peer, because
+           the zone runs Dandelion++ (was §63.4's diffusion);
+         - `dandelionpp_fluff` VARIES again — false stemming, true fluffing —
+           which is what revives §61.1's partition argument (was §63.7);
+         - the txpool is still told `stem`, so the embargo still arms. That
+           half was always right (§63.3).
+
+       What did NOT change, and is asserted every round in `run_private_round`:
+       fluff reach stays outbound-only. */
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
     auto &notifier = *notifier_ptr;
 
@@ -2235,33 +2306,17 @@ TEST_F(levin_notify, private_forward_with_padding)
     txs[1].resize(200, 'f');
 
     ASSERT_EQ(10u, contexts_.size());
+
+    /* The epoch role is drawn, so both outcomes must be observed rather than
+       assumed — the same shape the public `stem_without_padding` case uses. */
+    bool has_stemmed = false;
+    bool has_fluffed = false;
+    while (!has_stemmed || !has_fluffed)
     {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::forward));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::forward));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_FALSE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
+        const bool is_stem =
+          run_private_round(notifier, txs, cryptonote::relay_method::forward, true);
+        has_stemmed |= is_stem;
+        has_fluffed |= !is_stem;
     }
 }
 
