@@ -998,6 +998,78 @@ TEST(daemon_submit_shims, legacy_add_tx_double_spend_pin)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// §89.8.5: the coherence gap, pinned in its CURRENT (broken) state
+// ─────────────────────────────────────────────────────────────────────────
+
+/* This test asserts behaviour we intend to CHANGE, and that is its purpose.
+
+   §89.8.5: an anonymity-zone arrival is classed `forward`, and `add_tx` refuses
+   to propagate `forward` into `tvc.m_relay` (`tx_pool.cpp`, the
+   `tx_relay != relay_method::forward` conjunct). So the transaction is not
+   relayed at arrival, the coherence branch — whose only real-origin callers are
+   the immediate-relay sites — never sees it, and the periodic pool loop later
+   ships it to `zone::public_` because nothing stored an origin zone.
+
+   §89.2's per-zone `hop` is derived on the premise that a transaction entering
+   an anonymity stem completes it there. That premise is not shipped, and the
+   constant is inert because of it. **The day someone makes an anonymity arrival
+   propagate, this test fails** — which is the point. A recorded note is a hope;
+   a failing test is a deadline. Whoever greens it must go re-read §89.2's
+   premise and §89.8.7 (the zone field, which rides with Q-12), not just delete
+   the assertion. */
+TEST(daemon_submit_shims, an_anonymity_classed_entry_arms_nothing_and_leaves_as_forward)
+{
+  ShimFixture fx;
+  SubmitTx s = fx.make_tx(0, 0);
+
+  shekyl_submit_facts_ffi fresh;
+  uint8_t fresh_ki = 0;
+  ASSERT_EQ(fx.commit(s, fresh, fresh_ki), SHEKYL_SUBMIT_OK);
+
+  /* `forward` is the class a receiver assigns a non-public arrival. Record it
+     on the anonymity zone — the zone argument is real, and irrelevant to the
+     outcome, which is the point. */
+  std::vector<bool> just_broadcasted;
+  fx.bap.txpool.set_relayed(epee::span<const crypto::hash>(&s.txid, 1),
+    relay_method::forward, epee::net_utils::zone::tor, just_broadcasted);
+
+  txpool_tx_meta_t meta;
+  ASSERT_TRUE(fx.db->get_txpool_tx_meta(s.txid, meta));
+  EXPECT_EQ(meta.get_relay_method(), relay_method::forward);
+
+  // Half one of §89.8.4: no embargo arms for this class, on ANY zone. The
+  // per-zone timer is correct and never consulted here.
+  EXPECT_EQ(meta.dandelionpp_stem, 0)
+    << "a forward entry must arm no embargo — if it does, §89.8.4's "
+       "'unreachable on the anonymity zone' has changed";
+
+  /* Half two, and the tripwire: the entry is handed to the periodic relay
+     loop still classed `forward`, and `core::relay_txpool_transactions` routes
+     `forward` into `stem_req`, which it sends with `zone::public_` as a
+     literal. So this is the moment an anonymity-arrived transaction is put on
+     the path to clearnet, and nothing here can stop it — the pool stored no
+     origin zone to route back to (§89.8.5).
+
+     **This asserts behaviour we intend to change.** When the zone field lands
+     (§89.8.7, riding with Q-12), a forward entry must stop being offered as a
+     class that routes to public, and this fails. Whoever greens it should
+     re-derive §89.2's per-zone `hop` — it is sized for a stem that completes
+     in-zone, which is exactly the premise this test shows is not shipped —
+     rather than delete the assertion. */
+  std::vector<std::tuple<crypto::hash, cryptonote::blobdata, relay_method>> relayable;
+  fx.bap.txpool.get_relayable_transactions(relayable);
+
+  const auto found = std::find_if(relayable.begin(), relayable.end(),
+    [&s](const auto& t) { return std::get<0>(t) == s.txid; });
+  ASSERT_NE(found, relayable.end())
+    << "the entry must reach the relay loop at all, or the assertion below is "
+       "vacuous by absence rather than true by class";
+  EXPECT_EQ(std::get<2>(*found), relay_method::forward)
+    << "still offered as `forward`, the class relay_txpool_transactions sends "
+       "to zone::public_ — the coherence gap, at the site it happens";
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // §10 item 4: Dandelion++ embargo arming, pool-level
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -1012,10 +1084,12 @@ TEST(daemon_submit_shims, embargo_arms_future_deadline_and_expiry_routes_to_rela
 
   // Public-zone stem dispatch calls on_transactions_relayed(stem) before
   // the send (levin_notify.cpp:562); pool-level that is set_relayed(stem).
+  // The zone rides with it since §89.2 — the embargo is drawn per zone, and
+  // this case is the public one, so it draws the clearnet distribution.
   const time_t before = time(nullptr);
   std::vector<bool> just_broadcasted;
   fx.bap.txpool.set_relayed(epee::span<const crypto::hash>(&s.txid, 1),
-    relay_method::stem, just_broadcasted);
+    relay_method::stem, epee::net_utils::zone::public_, just_broadcasted);
 
   ASSERT_EQ(just_broadcasted.size(), 1u);
   EXPECT_FALSE(just_broadcasted[0]) << "stem arming is not a broadcast";

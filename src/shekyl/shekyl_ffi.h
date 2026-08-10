@@ -3094,16 +3094,28 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 /// cryptonote::detail::embargo_deadline). Rounding it down instead would put the
 /// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
 /// embargo is the privacy-losing direction at every draw value including zero.
-uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
+///
+/// \param zone The relay zone the transaction is embargoed on, as
+/// `epee::net_utils::zone` cast to a byte. The embargo is per-zone since §89.2:
+/// the anonymity zone stems, and a rendezvous hop needs a longer embargo than a
+/// clearnet one. Anything outside 0..=3 resolves to `zone::invalid`, which is
+/// provisioned as the worst case — a corrupt byte costs recovery latency rather
+/// than embargo length. (Masking would send 5 to `public_`, the shortest.)
+uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
 
 /// How long to wait before judging a still-unseen transaction failed, in
 /// seconds — a quantile of the embargo distribution (at most 1 in 100 embargoes
 /// still running), not a multiple of its mean. On the adopted table that is
-/// exactly 874 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
+/// exactly 2297 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
 /// pinned so the wait cannot drift from the distribution. A stem transaction is
 /// invisible to its sender until it fluffs, so a shorter deadline declares
 /// healthy transactions dead while their backstop is still running, and the
 /// sender then releases the inputs it had reserved.
+///
+/// Deliberately takes no zone, though the draw above does: this is a wallet
+/// decision, and the wallet cannot know which zone its transaction took. It
+/// gets the worst zone's wait. The whole export is a deletion target — see
+/// DAEMON_RELAY_PRIVACY.md §89.6.
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
 
@@ -3197,10 +3209,17 @@ typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel, const st
 #define SHEKYL_RELAY_ZONE_COVERT_ENABLED 2u
 
 //! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
+//! `zone` is the `epee::net_utils::zone` discriminant; it selects the
+//! transport-bound parameters (§89.2) so this zone's stem-observation window
+//! matches the embargo its successors draw. It is NOT a restatement of
+//! `SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY` — fluff reach follows the network,
+//! transit latency follows the transport, and outbound-only fluff on clearnet
+//! is still open (§25.5).
 //! `flags` is a mask of the `SHEKYL_RELAY_ZONE_*` bits above.
 //! Null when a zone cannot be built: SIZE_MAX stems, or a zero epoch — which
 //! would expire at every wake and spin the relay timer. Treat null as fatal.
-RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems,
+RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::uint8_t zone,
+                                       std::size_t stems,
                                        std::uint32_t min_epoch_secs,
                                        std::uint32_t epoch_jitter_secs,
                                        std::uint32_t flags);

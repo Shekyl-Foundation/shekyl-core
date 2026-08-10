@@ -1029,7 +1029,7 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------------------------
-  void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, std::vector<bool> &just_broadcasted)
+  void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, const epee::net_utils::zone zone, std::vector<bool> &just_broadcasted)
   {
     just_broadcasted.clear();
 
@@ -1055,7 +1055,7 @@ namespace cryptonote
           if (meta.dandelionpp_stem)
           {
             meta.last_relayed_time =
-              detail::embargo_deadline(now, shekyl_dandelionpp_embargo_draw_seconds());
+              detail::embargo_deadline(now, shekyl_dandelionpp_embargo_draw_seconds(static_cast<std::uint8_t>(zone)));
             next_relay = std::min(next_relay, meta.last_relayed_time);
           }
           else

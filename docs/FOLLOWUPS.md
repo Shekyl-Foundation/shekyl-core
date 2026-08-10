@@ -77,6 +77,29 @@ sustainability is unaffected by the recalibration.
   keypair deterministic (seeded, not `OsRng`) would make the whole fixture chain
   reproducible and kill this desync class entirely. **Target: V3.0 pre-genesis.**
 
+- **T18 weekly cargo-mutants gate no longer fits its 360-minute budget
+  (surfaced 2026-08-10, dispatch run 31346130482 — the job's first
+  execution after the severed-header restore).** `cargo mutants` found
+  1322 mutants against a debug-mode baseline suite that now takes
+  ~22 min (1334 s test + auto-set 6673 s per-mutant timeout); the job
+  timed out having completed zero mutants in 5.5 h. The suite outgrew
+  the budget while the gate had no trigger (2026-07 severance,
+  restored 477a448b1): T2 un-ignored, the correctness-pins tests, and
+  the harness's growth all multiply through debug-mode interpreted
+  RandomX. The gate's premise (T18, `RANDOMX_V2_PHASE2G_PLAN.md`
+  §5.5.6 + §4.6 M2: survival bounded by the skip-list) is unchanged;
+  its execution shape needs a re-design with real trade-offs, e.g.
+  release-mode per-mutant test runs (`cargo mutants -- --release`:
+  ~40× faster tests, slower per-mutant rebuilds), `--shard` across a
+  runner matrix (weekly runner-cost multiplier), `--in-diff` scoping
+  (loses the whole-crate weekly sweep), and/or additional slow-test
+  skips (each requires a §5.5.6-row plan-doc amendment). Until this
+  lands, the weekly Monday cron will red on the mutants job timeout —
+  a loud, honest red (preferable to the silent no-trigger state it
+  replaced). Target: **V3.0** (the differential test regime is a
+  pre-genesis assurance gate; an inoperative mutation leg weakens the
+  §4.6 M2 mitigation the harness's threat table relies on).
+
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) —
   REQUIRED BEFORE THE FORMAT FREEZE (added 2026-08-08, escalated from
   the message-signing round, SM-DQ-7).** Address v1 anchors signatures
@@ -9270,6 +9293,72 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 `wallet2.cpp` wholesale at its Phase 5 — these items name the
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
+
+- **Relay: make an anonymity arrival relay at arrival — the receive-side half
+  of §89.** *(Rewritten 2026-08-10 by §89.8.1: the original entry was filed as
+  "end-to-end witness for R-1's coherence branch, now that it is live". The
+  branch is **not** live, and the missing witness is what hid that.)* §89 broke
+  link 1 of §63.8's dormancy chain — the anonymity zone stems, a stem send
+  clears `dandelionpp_fluff`, so a receiver keeps its `forward` default — but a
+  fifth link §63.8 never recorded still binds: `tx_pool.cpp:360` refuses to
+  propagate `forward` into `tvc.m_relay`, the batching switch in
+  `handle_notify_new_transactions` drops it, and `relay_transactions` is never
+  called at arrival with an anonymity origin. The transaction pools as
+  `forward` and re-emerges at `zone::public_` (`cryptonote_core.cpp:1069,1091`),
+  so its remaining stem hops run on **clearnet**.
+  **Two things ride on closing this**, and both are stated in §89.8: R-1's
+  coherence branch starts firing, and §89.2's "every remaining hop runs on one
+  transport" becomes true rather than assumed — today the anonymity embargo is
+  drawn for a path the transaction leaves after one hop, and no anonymity-zone
+  embargo is armed at all (§89.8.4).
+  **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s six `private_*`
+  cases pin that a stem emits the flag clear and a fluff sets it;
+  (2) the pure gate — `r1_coherence_predicate` pins
+  `cryptonote::r1_coherence_keeps_origin` / `is_pre_fluff_relay` (fluff never
+  coheres; anonymity stem/forward/local does; clearnet/invalid never), shared
+  with the production branch so the predicate cannot drift.
+  **Not witnessed end-to-end:** the receiver's relay-method assignment, the
+  monotone `upgrade_relay_method`, and the full send path through
+  `handle_notify_new_transactions` on a non-public context.
+  **Blocker (rule 22):** that arrival path needs a `t_core` mock the unit
+  suite does not have — the one protocol-handler test that stands up real
+  sockets is `GTEST_SKIP`ped as flaky. Building that harness is its own unit,
+  and it is now the *first* task rather than the verification of a landed one:
+  §89.7 asserted live-ness across this exact gap and was wrong.
+  **Why it matters more than its size suggests:** §59.1 gated coherence
+  because swallowing the fluff case strands anonymity-originated transactions
+  in the anonymity subgraph — "a liveness break that would read as correct."
+  It is also load-bearing for §89.2: the per-zone embargo is well-defined only
+  because a transaction entering the anonymity stem stays there, which is this
+  branch. See `DAEMON_RELAY_PRIVACY.md` §89.8 (and §89.7 for the superseded
+  reading).
+
+- **Wallet: stop holding a relay constant — ask the daemon whether a
+  transaction is still in flight.** `wallet2.cpp` derives its
+  "still unseen → failed" wait from `shekyl_dandelionpp_propagation_timeout_seconds`,
+  which makes a **wallet** safety invariant (do not un-reserve inputs while a
+  spend might still land) a function of a **relay-privacy** constant (the
+  embargo mean). Q11-A's shape — one numeral, two mechanisms, different owners
+  — sitting across a process boundary, which is why it survived Unit 0's
+  `FORWARD_DELAY_*`/`NOISE_*` decoupling.
+  **The concrete failure is remote nodes:** the wallet compiles in its own
+  build's constant and applies it to whatever daemon it is connected to, which
+  may be a different version and may or may not have an anonymity zone. The
+  value was never a constant — it depends on the daemon's *runtime*
+  configuration — so this is wrong in a way nobody can detect, and the failure
+  mode is un-reserving inputs and inviting a re-spend.
+  **The fix is not a per-zone constant** (that synchronises a duplicate that
+  should not exist) but the layered status in §89.6.3: the daemon already holds
+  `dandelionpp_stem`, the embargo deadline in `last_relayed_time`, and
+  StemWatch, so *"in flight / delayed / failed"* needs no constant to cross the
+  boundary at all — and the middle tier ("this may last up to N minutes") is
+  what makes erring long cost nothing.
+  **Interim shipped:** one worst-zone global, `ADOPTED_PROPAGATION_TIMEOUT_SECS
+  = 2297`, deliberately with no zone parameter — chosen because it needs no
+  machinery and is therefore the cheapest thing to delete here. Cost: a
+  clearnet send reports failure at ~38 min instead of ~15.
+  Owned by the wallet rewrite (this constant dies with `wallet2.cpp`); recorded
+  now because the reason is visible now. See `DAEMON_RELAY_PRIVACY.md` §89.6.
 
 - **Relay: populate the 48-cell Pi verification surface, then consume it
   per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first

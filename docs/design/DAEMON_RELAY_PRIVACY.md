@@ -3471,12 +3471,18 @@ distribution, and the derivation all come from one place.
 **The seam is smaller than RP-2a's — no handle.** The map needed one because it
 holds per-epoch, per-connection state; the embargo distribution is node-local
 **policy** (not consensus), fixed for a given parameter set. Two exports share a
-process-wide `OnceLock<EmbargoTimer>` (the table is immutable once built) and
-the same `OsRng` the map FFI uses:
+process-wide `OnceLock` (the tables are immutable once built) and the same
+`OsRng` the map FFI uses:
+
+> **Signature updated 2026-08-08 (§89.2).** The draw takes a zone byte, and the
+> `OnceLock` holds one timer per *parameter class* rather than one for the
+> process — `DandelionParams::adopted_class` owns that partition. This row is
+> the live inventory for the seam; §64.4's "takes no arguments" is the
+> superseded state.
 
 | C++ call site | FFI |
 | --- | --- |
-| `embargo_duration()` per stem tx ([tx_pool.cpp](../../src/cryptonote_core/tx_pool.cpp)) | `shekyl_dandelionpp_embargo_draw_seconds() -> u64` |
+| `embargo_duration()` per stem tx ([tx_pool.cpp](../../src/cryptonote_core/tx_pool.cpp)) | `shekyl_dandelionpp_embargo_draw_seconds(zone: u8) -> u64` |
 | `tx_propagation_timeout` in `wallet2` ([wallet2.cpp](../../src/wallet/wallet2.cpp)) | `shekyl_dandelionpp_propagation_timeout_seconds() -> u64` |
 
 `crypto::random_poisson_seconds embargo_duration{…}` and the
@@ -10961,6 +10967,14 @@ Recorded here so a later round does not re-derive it and file it as new.
 
 ### 64.4 The real blocker is the one §63.6 already named, now concrete
 
+> **CLEARED 2026-08-08 by §89.2 — read this section as the statement of a
+> blocker that has since been removed, not as current state.** The export now
+> takes a zone byte, `set_relayed` carries the zone as a parameter beside
+> `tx_relay`, and no origin-zone bookkeeping was added to the txpool entry:
+> every `on_transactions_relayed` call site is inside `levin_notify.cpp`, where
+> `zone_->nzone` is already in scope. The signature below is superseded; §17.2's
+> inventory table carries the live one.
+
 Splitting `hop` per zone means splitting the embargo per zone, and **the
 embargo cannot currently be per-zone**:
 
@@ -13283,3 +13297,583 @@ substitute for. What changed is that the shipped number's provenance is now a
 spec-machine measurement plus a labelled assumption instead of a 2019 laptop
 comment — the §21 ledger's `hop` row moves from "provenance" toward "derived,
 distribution owed."
+
+## 89. Decided — the anonymity zone stems, and the embargo goes per-zone
+
+**2026-08-08, maintainer ruling.** §64's question is answered: **yes.**
+
+> **Tor is a transport, like the clear internet. Changing the transport does
+> not change the graph.**
+
+That is §18 restated, and it is why this is a *correction* rather than a new
+posture. §18 cut the relay loop to Rust and made `levin_notify` a transport
+shim; §64.2 then found three C++ sites still branching on the transport fact.
+A shim that decides differently per network is the thing §18 said should not
+exist. The three-week road to yes is not re-litigated here.
+
+### 89.1 The price, recomputed — the headroom is gone, and the sign is wrong
+
+§63.2's comfort came from a posture that is now retired. It swept `hop` to ten
+times clearnet and found the anonymity path needed a quarter of the shipped
+embargo — but only because the zone fluffed at the first node, so **stem length
+was 1 with certainty** (`fluff_probability_pct = 100` in the derivation).
+Stemming restores the full geometric stem, and
+`S(h) = Σ_{k=1..h} ceil((k·hop + F)/τ)` is monotone in **both** `h` and `hop`.
+The decision raises both at once.
+
+Recomputed at `q = 20` — the anon zone's value, verified unchanged:
+`relay_zone_params` carries stems and epoch only, and nothing zone-parameterises
+`fluff_probability_pct`.
+
+| anon-zone `hop` | required embargo | vs shipped 190 s | covered? |
+| --- | --- | --- | --- |
+| 175 ms (clearnet parity) | **190 s** | **+0 %** | exactly, with nothing spare |
+| 300 ms | 216 s | +14 % | no |
+| 500 ms | 250 s | +32 % | no |
+| 1050 ms | 366 s | +93 % | no |
+| 1750 ms | 499 s | +163 % | no |
+
+> **Zero headroom lands exactly at clearnet parity, and the anonymity zone
+> cannot be at parity.** A rendezvous path is six relays where clearnet is one
+> direct connection, and `hop` also carries verification — 127 ms modal, 792 ms
+> at the §85 tail cell. So the shipped 190 s **under-provisions** a stemming
+> anonymity zone, which is §65/§66's privacy-losing direction.
+
+The decision stands. What changes is that it arrives with a bill §64 had not
+priced, because §63.2's margin was computed on the posture being retired.
+
+### 89.2 The embargo is per-zone — and F-7's precedent does not transfer
+
+> **Two amendments from §89.8, neither retracting the decision.** (a) The
+> well-definedness argument below leans on coherence keeping a stem on one
+> transport; §89.8.2 shows the shipped receive path re-relays an anonymity
+> arrival at `zone::public_`, so the premise is false today and the anonymity
+> embargo over-provisions a stem that leaves after one hop. (b) The mechanism
+> is landed but **inert on i2p/tor** until the receive path relays at arrival
+> (§89.8.4). Clearnet draws through it on every stem. The back-out of the
+> persisted zone field stands and is reconfirmed by §89.8.3.
+
+The tempting move is F-7's: provision one global at the worst zone, as
+`fluff_return_ms = 3250` already does. **It does not apply here, by this arc's
+own distinction** — §63.2's keeper, kept for exactly this moment:
+
+> *"`fluff_return_ms` crosses transports because a fluff wave returns over
+> whatever network the node is on. `time_between_hop_ms` cannot, because the
+> stem it spaces only ever runs on one."*
+
+`F` is worst-zone because it genuinely is **not** a per-zone quantity: a
+dual-stack node's fluff returns over both networks, so there is no per-zone
+value to pick. `hop` is transport-bound by nature, and **§59's coherence
+guarantees the well-definedness**: a transaction that enters the anonymity
+zone's stem stays there until it fluffs, so every remaining hop in `S(h)` runs
+on one transport. The quantity is defined per zone in a way `F` never was.
+
+**§75's test picks the same answer independently.** A global at the worst zone
+would give clearnet transactions a 366 s embargo sized for a rendezvous path
+they never touch — roughly doubling black-hole recovery latency for the
+overwhelming majority of traffic to cover a minority's real cost. That is
+scalar-at-8 one axis over: over-provisioning the common case against a tail
+that does not apply to it. **Per-zone is matched provisioning.**
+
+**§65.4's two reserved bits are not needed, and the scoping that reserved them
+was wrong.** It framed this as a data-model gap — *"the mempool/stempool needs
+to know the zone a tx originated from"* — and scoped two bits on the txpool
+entry with `zone::invalid == 0` as the migration-free default. Checked at
+source when the field was about to be added: **the txpool does not need to
+remember the zone, only to be told it.**
+
+The embargo has exactly one draw site, `tx_memory_pool::set_relayed`
+(`tx_pool.cpp`), and every path to it is synchronous with a relay event. Each
+`core::on_transactions_relayed` call site lives *inside* `levin_notify.cpp`
+(`:818`, `:851`, `:1204`, `:1252`), where `zone_->nzone` is in scope. So the
+zone travels as a **parameter beside `tx_relay`**, which both signatures
+already carry — no persisted field, no LMDB record change, no bit-width
+`static_assert`, no pre-upgrade decode question, and nothing for a future
+zone to alias onto.
+
+> **The field was added and then backed out in the same round**, which is worth
+> recording rather than tidying away: the design had a reserved slot waiting,
+> and having a slot is a reason to fill it. The check that dissolved it was
+> asking where the value is *consumed* before asking where it should be
+> *stored*.
+
+### 89.3 The disclosure check — measured, and it closes on vantage, not on weakness
+
+Per-zone means the two zones draw from different means, and a different mean is
+in principle an observable. This is the mirror of the `vin.size()` question D
+answered, so it got the same treatment rather than an argument:
+`tests/zone_embargo_disclosure.rs`, granting the adversary both things the
+observable requires — the arming time (the origin's send) and a black-hole, since
+in normal operation a transaction fluffs because its stem reached a fluff node,
+not because an embargo fired.
+
+Controls first, so a pass cannot be vacuous: identical zones give `TV = 0.000000`,
+accuracy 0.5000; a 4098 s zone gives accuracy 0.9108, so the instrument does see
+disclosure when it exists.
+
+| anon `hop` | embargo | single-observation accuracy | self-fluffs for 95 % |
+| --- | --- | --- | --- |
+| 500 ms | 250 s | 0.5506 | 72 |
+| 1050 ms | 366 s | 0.6185 | 11 |
+| 1750 ms | 499 s | 0.6712 | 5 |
+| 3500 ms | 845 s | 0.7516 | 2 |
+
+**The a-priori read was that a single observation barely discriminates two
+exponentials. That holds at 500 ms and fails at the top of the range** — five
+self-fluffs suffice at 1750 ms, two at 3500 ms. So the ruling must not rest
+there.
+
+> **The closure is vantage, and it is price-independent.** To collect
+> self-fluffs *with arming times* an adversary must be a peer on that zone —
+> and a peer on the anonymity zone already knows the transaction arrived over
+> Tor. The embargo duration discloses nothing that observer does not hold. The
+> same premise correction as `vin.size()`.
+>
+> **The signal-strength leg is recorded as NOT load-bearing**, because it
+> depends on the rendezvous number, which is unmeasured. Anyone leaning on it
+> loses it exactly when the measurement lands high. The test asserts
+> discrimination *rises* with the hop gap and stays clear of a coin flip, so a
+> future edit cannot quietly recruit it as the closure.
+
+### 89.4 What flips — §64.1's table, now live
+
+Four §63 conclusions were consequences of the no-stem posture, not facts about
+the design, and the decision reverses all four (§64.1). Two more items were
+held pending and are now landable:
+
+| item | status under the decision |
+| --- | --- |
+| §63.7 exit (b) not dominated | stem sends pass `fluff = false` — **the flag varies again, §61.1's partition argument revives verbatim** |
+| §63.5 stem shortening rules out exit (a) | a diverted transaction **continues** stemming; the 64 % cost disappears |
+| §63.8 coherence dormant | receiver takes the `forward` default, `still_stemming` holds, **coherence fires** |
+| §62 F-12 retracted | the change **creates** Tor-latency hops — un-retracts forward-looking |
+| §64.1 eligibility decision, posture-conditional | **landable**, and the exit (a)/(b) ranking **inverts** |
+| §26.2 / §30.6, reopened at §63.3 as half-true | the stem half becomes **right** — closes the §63.3 reopening |
+
+**Seven test artifacts assert the retiring behaviour and must be rewritten, not
+patched.** Six are the private-zone family in `tests/unit_tests/levin.cpp` —
+`private_stem`, `private_forward` and `private_local`, each in a
+`_without_padding` and a `_with_padding` variant. All six send on a private
+zone and assert `dandelionpp_fluff == true` on the wire, which is exactly
+§63.1's fallthrough and exactly what the decision retires. `private_fluff_*` is
+**not** affected: it asserts fluff for a fluff send, which is correct under
+both postures.
+
+`private_stem_without_padding` sits at **`levin.cpp:1806`**, its inherited
+comment — *"private mode always uses fluff but marked as stem"* — at **`:1808`**.
+**§63.1 cites them as `:1536-1582` and `:1588`, and both citations are stale**;
+that range now lands mid-body of an unrelated test. Corrected here rather than
+edited into §63.1, per this arc's practice of reopening on the record.
+
+§18 counted the 33-gtest suite as a free regression oracle across the RP-3 cut.
+**Six of the 33 change expectation** — not one, as this section claimed on
+first writing — and they change because the posture changed, not because the
+port drifted.
+`tests/hop_sensitivity.rs::anonymity_zone_origin_is_over_provisioned_not_under`
+is the other, and it is the more instructive of the two. It was written as a
+tripwire naming this exact event — *"a failure here means the anonymity zone
+started stemming… either of which reopens §63"* — **and it did not fire. It
+still passes, and it always would have.**
+
+> **The tripwire is vacuous by input on the precise axis it advertised.** It
+> sets `p.fluff_probability_pct = 100` as a *literal*, so it measures the
+> retired posture by construction: the stemming-vs-diffusing fact is asserted
+> in the test body rather than read from the code, and no change to the code
+> can move it. A guard whose subject is hard-coded cannot detect a change in
+> its subject.
+
+Checked rather than assumed, and worth the space because **this section was
+wrong the same way twice on first writing**: the tripwire was described as
+having fired before anyone ran it, and the `levin.cpp` count was given as one
+before anyone counted. Both were checkable in seconds, and neither check was
+prompted by suspicion — only by running them. **The rewrite must derive the
+posture from `dandelionpp_notify`'s gate instead of restating it**, or the
+replacement inherits the same defect with a newer date on it.
+
+### 89.5 Sequencing — the gates carry the zone field, they do not precede it
+
+§65.5's ordering holds, with one amendment. **The three gates and the txpool
+zone field land together.** The gates are what make anonymity zones stem; from
+the moment they do, the embargo is under-provisioned for those zones until the
+field exists. Landing them separately ships a known privacy-losing window on
+purpose, which no amount of sequencing convenience justifies.
+
+All three gates land in one change — §64.2 already priced sites 1 and 2 as
+under-maintenance with no blocker, so splitting them out is deferral without a
+named blocker (§22). The shape of the fix is **deleting a transport branch**,
+not adding Rust: §18's architecture already puts the decision Rust-side, so
+removing the C++ branch advances the boundary rather than thickening it.
+
+**The interface change carries `(shape, zone)` together.** Phase 1 needs shape
+plumbed to the embargo draw; §64 needs zone. Both extend the same FFI signature
+and both add a fact to the txpool entry. Their arriving together is a better
+position than either alone — one interface change through three layers instead
+of two.
+
+**The rendezvous measurement gates the constant, not the decision.** §86
+declassified transit as "a refinement, not a gate" — explicitly under the
+no-stem posture, and that conditional has now expired: under stemming, the anon
+zone's `hop` is the input deciding whether its embargo is adequate at all. So
+the gates and the field land with a **worst-zone interim value** and narrow when
+the number arrives — over-provisioning in the safe direction while it is
+unknown, the same posture `F` took.
+
+**The measurement itself is onion-to-onion.** The anonymity zone addresses peers
+by `.onion` (`src/net/tor_address.h`), so a stemming zone's hops are Shekyl node
+to Shekyl node over a rendezvous path. **No exit relay appears anywhere in the
+topology the design uses**, and a clearnet-vs-exit delta measures a path that
+will never carry a stem.
+
+## 89.6 The wallet holds a relay constant — that is the defect, and per-zone was downstream of it
+
+**2026-08-08, maintainer ruling, correcting the two subsections above.** §89.2
+made the embargo per-zone and this round then spent a full turn on *"how does
+the wallet learn which zone its transaction took?"* — evaluating an RPC field,
+a cached node property, and a worst-case fallback. **All three were answers to a
+question that should not be asked.**
+
+### 89.6.1 The coupling, stated precisely
+
+`shekyl_dandelionpp_propagation_timeout_seconds` makes a **wallet safety
+invariant** — do not un-reserve inputs while a spend might still land — a
+function of a **relay-privacy constant**, the embargo mean. Change the embargo
+for privacy reasons and the wallet's re-spend behaviour changes with it.
+
+> **That is Q11-A's shape: one numeral, two mechanisms, different owners.** Unit
+> 0 spent its length decoupling `FORWARD_DELAY_*` from `NOISE_*` for exactly
+> this reason (§22). The same shape here sits **across a process boundary**,
+> which is why it survived: the duplicate is not two constants in one file, it
+> is one constant compiled into two programs.
+
+### 89.6.2 The concrete failure is remote nodes, and it is undetectable
+
+The wallet compiles in **its own build's** derived constant and applies it to
+whatever daemon it is connected to. That daemon may be a different version, may
+have no anonymity zone, may have one when the wallet assumes not. **The wallet
+is reasoning about relay timing it has no knowledge of and no way to verify.**
+
+This is not a style objection. It is wrong in a way nobody can detect, and the
+failure mode is un-reserving inputs and inviting a re-spend — the exact defect
+the 874 s derivation exists to remove, reintroduced one layer up.
+
+Note what this says about the per-zone question: the value was **never a
+constant**, and not because of version skew. Same binary, same version, still
+wrong, because it depends on the daemon's *runtime configuration*. Per-zone
+provisioning of the wallet's copy would have been better synchronisation of a
+duplicate that should not exist (cf. *delete the duplicate, don't synchronize
+it*).
+
+### 89.6.3 The decomposition — the wallet should be asking, not timing
+
+The wallet already polls `seen_in_pool`. The ambiguous case is *"not in pool"*,
+which means either **never relayed** or **relayed and gone** — and **the daemon
+knows which**. It holds `dandelionpp_stem`, the embargo deadline in
+`last_relayed_time`, and now StemWatch (§§38, 47–48, 55). A wallet-facing
+*"is this transaction still in flight"* answer needs **no constant to cross the
+boundary at all**, and it fixes the remote-node case for free: the answer comes
+from the daemon actually doing the relaying rather than from the wallet's
+compiled guess about it.
+
+**The status should be layered rather than binary.** A single failed/not-failed
+verdict is what forces the timeout to be a guess in the first place. The shape
+the maintainer specified:
+
+| tier | wallet says | inputs |
+| --- | --- | --- |
+| in flight | normal pending | stay reserved |
+| delayed | *"Transaction is delayed; this may last up to N minutes"* | stay reserved |
+| failed | failed | released |
+
+The middle tier is what makes a long wait cheap: the user learns their send is
+still alive instead of watching a silent spinner, so erring long stops being a
+usability cost (rules 80, 82) and becomes an honest disclosure.
+
+### 89.6.4 Interim, and who owns the fix
+
+**The interim is the worst-zone global — 2297 s, one value, no zone parameter.**
+Chosen *because* it requires no machinery: it is the cheapest thing to delete
+when the wallet stops holding a relay constant. The per-zone accessor and the
+per-zone FFI argument added earlier in this round were **removed rather than
+left unused**, since the export has exactly one caller and adding structure to a
+deletion target is investment in the wrong direction.
+
+**Cost of the interim, stated rather than buried:** a clearnet send reports
+failure at ~38 minutes instead of ~15. That is the price of not knowing, and
+89.6.3's middle tier is what repays it.
+
+**Ownership: the wallet-rewrite track, not this round.** The decoupling is
+wallet-side work and belongs where wallet work is happening. It is recorded here
+because the *reason* is visible now and will not be later.
+
+> **The diagnostic, which is the round's real output.** Before plumbing a value
+> across a boundary, ask whether the value should cross it at all. This round
+> went straight to *"how does the wallet learn the zone"* without asking why the
+> wallet holds a relay constant — the same failure as the transit harness
+> earlier in the session, which verified how to measure a quantity without
+> re-checking whether it was owed (*re-ground the whether, not just the how*).
+
+## 89.7 Coherence woke up, and its witness is uneven — stated rather than assumed
+
+> **CORRECTED 2026-08-10 by §89.8.1: it did not wake.** §63.8's chain has a
+> fifth link this section did not know about — `tx_pool.cpp:360-361` refuses to
+> propagate `forward` into `tvc.m_relay`, so an anonymity arrival never reaches
+> `relay_transactions` at all — and §89 did not move it. Link 1 did break
+> exactly as described below; the conclusion drawn from it did not follow. The
+> section is kept in place per the standing rule that a retraction is recorded
+> rather than deleted, and its witness-gap reasoning (§89.7.2) is what §89.8
+> vindicates rather than overturns.
+
+**2026-08-08.** §63.8 recorded R-1's coherence branch (`net_node.inl`,
+`still_stemming && origin != public_`) as **dormant**, on a four-link chain.
+§89 breaks the first link, so the branch is **live** — and this section exists
+because a passing suite is exactly what would hide that.
+
+### 89.7.1 The chain, and which link moved
+
+| link | §63.8's shipped state | under §89 |
+| --- | --- | --- |
+| 1. every anonymity release sets `dandelionpp_fluff` | true — one blanket rule | **false**: the fluff arm sets it, a stem send clears it |
+| 2. receiver overrides its `forward` default to `fluff` when the flag is set | fires every time | fires only on a fluff arrival |
+| 3. `upgrade_relay_method` is monotone upward | unchanged | unchanged |
+| 4. ⇒ anonymity-origin arrivals are always `fluff`, `still_stemming` false | held | **broken** — `forward` survives, `still_stemming` holds |
+
+§63.8 predicted the wake-up and named the wrong trigger, for a good reason: it
+expected covert's return to clear the flag (`levin_notify.cpp`'s covert send
+passes `false`). The posture decision clears it on the ordinary path instead,
+so coherence wakes **in the default configuration** rather than only with
+covert enabled.
+
+### 89.7.2 What is witnessed, and what is not
+
+> **Link 1 is pinned. Links 2–4 and the branch itself are not.**
+
+`tests/unit_tests/levin.cpp`'s six `private_*` cases assert that an anonymity
+zone emits a stem with `dandelionpp_fluff == false` and a fluff with it set —
+that is link 1, and it is the link §89 moved.
+
+**No end-to-end witness exists, and the blocker is named:** driving an arrival
+through `handle_notify_new_transactions` on a non-public connection context
+needs a `t_core` mock the unit suite does not have (the one protocol-handler
+test that stands up real sockets, `cryptonote_protocol_handler.race_condition`,
+is `GTEST_SKIP`ped as flaky). Building that harness is its own unit of work,
+not a rider on this one.
+
+**Why this is recorded loudly rather than filed quietly.** §59.1 gated
+coherence on `stem | forward | local` precisely because swallowing the fluff
+case would *"strand those transactions in the anonymity subgraph — a liveness
+break that would read as correct."* That failure mode does not announce itself:
+transactions stop leaving the zone, and every test that never drives the branch
+keeps passing. The full 1051-test suite passed with this branch newly live and
+never once executed it. **Passing by not being reached is the state this
+section is warning about.**
+
+### 89.7.3 It is also load-bearing for §89.2
+
+Coherence is what makes the per-zone embargo *well-defined*: §89.2's argument
+that `hop` is a per-zone quantity rests on a transaction entering the anonymity
+zone's stem **staying** there until it fluffs. That is this branch. So the
+witness gap is not cosmetic — it is an untested premise underneath a shipped
+constant, and the honest reading is that §89.2's mechanism is verified by
+argument and by link 1, not by execution.
+
+## 89.8 Correction — coherence did not wake, and the origin was leaking to clearnet
+
+**2026-08-10, review round on #427.** Three findings, all in §89's own
+territory, and the first two are the same mistake §63.9 named: reasoning from
+the design document instead of from the dispatch.
+
+### 89.8.1 §89.7 asserted a live branch that is still dormant — there is a fifth link
+
+§63.8 closed R-1's coherence branch on a **four**-link chain and §89.7.1 broke
+link 1, concluding the branch fires in the default configuration. Link 1 did
+move. The conclusion does not follow, because the chain has a fifth link
+§63.8 never recorded, and §89 did not touch it:
+
+| link | state under §89 |
+| --- | --- |
+| 1. every anonymity release sets `dandelionpp_fluff` | **broken** — a stem send clears it (as §89.7.1 says) |
+| 2. receiver overrides its `forward` default to `fluff` | fires only on a fluff arrival |
+| **5. `tx_pool` refuses to hand `forward` back to the caller** | **holds — unrecorded, and it is the one that binds** |
+| 3. `upgrade_relay_method` is monotone upward | unchanged |
+| 4. ⇒ the branch is skipped | **still holds, by link 5 rather than by link 1** |
+
+Link 5, verified at HEAD by exhausting the call sites:
+
+1. A non-public arrival takes `relay_method::forward`
+   (`cryptonote_protocol_handler.inl:969-970`).
+2. `tx_pool.cpp:360-361` — `if(meta.fee > 0 && tx_relay != relay_method::forward)
+   tvc.m_relay = tx_relay;` — **refuses to propagate `forward`**, so `tvc.m_relay`
+   stays `relay_method::none`.
+3. The batching switch (`:992`) pushes `none`/`forward` into neither
+   `stem_txs` nor `fluff_txs` — the arm is literally
+   `case relay_method::forward: // not supposed to happen here`.
+4. So `relay_transactions` is **never called at arrival** with an anonymity
+   origin. `send_txs` never sees `(anon origin, pre-fluff method)`, and
+   `r1_coherence_keeps_origin` cannot fire whatever link 1 does.
+
+§89.7.1's table says link 4 breaks because *"`forward` survives,
+`still_stemming` holds"*. `forward` does survive as the handler's local
+`tx_relay` — but it never reaches `send_txs`, so `still_stemming` is moot.
+
+**This is §89.7.2's own warning arriving.** That section correctly named the
+witness gap — no end-to-end arrival test exists — and then asserted live-ness
+across it anyway. *"Passing by not being reached"* was the right diagnosis of
+the wrong subject: the branch is not passing untested, it is **not running**.
+
+### 89.8.2 The consequence for §89.2: the stem does not stay on one transport
+
+§89.2 grounds a per-zone `hop` on §59's coherence: *"a transaction entering the
+anonymity zone's stem stays there until it fluffs, so every remaining hop in
+`S(h)` runs on one transport."* §89.7.3 already calls that premise
+load-bearing. On the shipped path it is **false**, and not merely untested:
+
+The `forward` transaction from §89.8.1 waits out its delay in the pool and
+re-emerges through `core::relay_txpool_transactions`, which maps
+`case relay_method::forward: stem_req` (`cryptonote_core.cpp:1069-1071`) and
+dispatches `stem_req` at **`epee::net_utils::zone::public_`** with a nil source
+(`:1091`). Origin `public_` cannot cohere and a nil source cannot re-roll, so
+the remaining hops of that stem run on **clearnet**.
+
+So the anonymity embargo (499 s at `hop = 1750 ms`) is drawn for a rendezvous
+path the transaction stops using after one hop. The direction is
+over-provisioning, which is the safe side (§65/§66) — but it is precisely the
+trade §89.2 used §75's test to *reject* for clearnet, now applied to the
+anonymity zone by accident rather than by decision.
+
+**Not repaired here.** Repairing it means making an anonymity arrival relay at
+arrival, which is a change to the receive path with its own review surface. It
+is recorded as the reopening criterion for §89.2's derivation, and it is
+`FOLLOWUPS.md`'s witness item that would have caught it.
+
+### 89.8.3 §30.5 was live: the origin's own transaction reached clearnet
+
+**This one is a defect, and it is fixed in this PR.** §89.5 deleted gate 3, and
+with it the inherited rule that a stem/forward/local send over i2p/tor keeps
+claiming its original relay method. The stem/forward half of that deletion is
+correct and is what §89.2 needs. **The `local` half was load-bearing for §30.5.**
+
+`local` is the class that keeps originated traffic in-zone:
+`relay_txpool_transactions` routes `local` to `private_req` at `zone::invalid`
+(`cryptonote_core.cpp:1089`), which `select_anonymity(require_usable=false)`
+resolves back to the anonymity zone and never to clearnet — originated traffic
+fails closed (§59.7). Every other class routes to `public_req`. And
+`upgrade_relay_method` is monotone, so **one** record of `stem` or `fluff`
+moves the entry out of `local` permanently.
+
+After §89.5, `dandelionpp_notify` recorded exactly that, on both arms:
+
+| path | recorded | effect on a Tor-originated tx |
+| --- | --- | --- |
+| stem planned (`:830`) | `stem` | `local → stem`; embargo fires; backstop re-relays at `public_` |
+| stem send failed (`:863`) | `fluff` | `local → fluff` with **zero bytes sent**; backstop broadcasts on clearnet |
+
+Both end at §30.5's forbidden path verbatim — *"the backstop must never fall
+out to the public zone… that publishes the transaction to clearnet from the
+origin's own IP"* — and the first one is the **normal** path, not an error path.
+
+**The fix is the surviving half of the deleted rule, and nothing else.** A new
+`cryptonote::originated_stays_in_zone(tx_relay, nzone)` predicate
+(`enums.h`, beside `r1_coherence_keeps_origin`) pins the record for an origin
+on a non-public zone at `local`, whatever the transport did. Relayed traffic is
+untouched: `stem`/`forward` still record `stem` so the per-zone embargo is drawn,
+and clearnet origins still record `stem` because clearnet *is* their home. The
+wire is untouched — the anonymity zone still stems. Only the pool class differs,
+which is the only thing that decides where the backstop sends.
+
+**No persisted zone field.** §89.2's back-out stands: `local` already encodes
+"this is ours and it belongs in the anonymity zone", so nothing needs to be
+remembered. That was checked before reaching for the reserved bits a second
+time.
+
+**Witness.** `run_private_round` now asserts the pool class per round *and*
+that exactly one class was recorded — the negative control, because asserting
+only that `local` is present would pass with a monotone upgrade sitting beside
+it. The `private_*` shell's outcome loop is also bounded now: the regression
+these six cases exist to catch pins the epoch role to one value, and the
+unbounded wait turned a red assertion into a CI job timeout with no test named.
+
+### 89.8.4 The embargo is landed and, on the anonymity zone, unreachable
+
+Stating the composite plainly, because each of the three findings above hides it
+and the review round is where it should be visible:
+
+- Originated anonymity traffic keeps `local` (§89.8.3), and `local` sets
+  `dandelionpp_stem = 0` (`blockchain_db.cpp:82-110`), so `set_relayed` takes
+  the `else` arm and **draws no embargo**.
+- Relayed anonymity traffic cannot reach an anonymity record site at all
+  (§89.8.1).
+
+So in the shipped configuration **nothing arms an anonymity-zone embargo**. The
+per-zone mechanism is correct, tested at the boundary
+(`the_zone_byte_selects_the_observation_window`, and the timers are one per
+parameter class rather than one per zone), and *inert on i2p/tor until the
+receive path relays at arrival*. It is not dead code — clearnet draws through
+the same path on every stem — but §89.2's headline should be read as "the
+mechanism is in place", not "the anonymity zone is now embargoed".
+
+**This is the honest state, and it is a smaller claim than §89 made.** The
+posture decision stands: the anonymity zone stems, on the wire, today. What has
+not happened is the receive-side half.
+
+### 89.8.5 Coherence cannot be fixed by the receive path alone — the pool must remember
+
+**2026-08-10, third review round.** §89.7 and §89.8.1–4 both name the receive
+path as the missing half, and both understate it. Fixing arrival would buy a
+witness, not the behaviour.
+
+**The pool loop is a second consumer, and nobody is there to tell it.**
+Coherence keys on the `origin` argument to `send_txs`, and the only callers
+passing a real arrival zone are the immediate-relay sites at
+`cryptonote_protocol_handler.inl:1014` / `:1021`. The periodic re-relay
+(`core::relay_txpool_transactions`) routes `forward` entries into `stem_req` and
+sends them with **`zone::public_` as a literal** (`cryptonote_core.cpp:1091`) —
+not as a policy choice, but because the txpool stores no origin zone and the
+loop runs long after the moment that knew it.
+
+> **So an anonymity-arrived transaction reaches clearnet on the pool's own
+> cycle, and the coherence branch never sees it.** The `origin` it would test is
+> already gone.
+
+**This is pre-existing and not a regression of this round.** Before §89, an
+anonymity arrival was classed `fluff` and went to `public_req` — same
+destination, different class. What §89 did was *assume* the path was closed.
+
+### 89.8.6 §89.2's back-out was scoped too broadly, not wrong
+
+§89.2 removed §65.4's reserved bits, arguing the txpool does not need to
+remember the zone, only to be told it. **That finding is correct and stands** —
+the embargo *arming* site has the zone in hand, which is why it takes a
+parameter beside `tx_relay` and needs no persisted field.
+
+**What was over-generalised is the conclusion, not the finding.** One consumer
+was checked and the answer read as a property of the txpool rather than of that
+consumer. Two consumers, two correct answers:
+
+| consumer | when it acts | needs |
+| --- | --- | --- |
+| embargo draw (`set_relayed`) | synchronously with the relay event | to be **told** — parameter, no field |
+| pool re-relay (`relay_txpool_transactions`) | after that moment has passed | to **remember** — a stored origin zone |
+
+§65.4's framing — *"the mempool/stempool needs to know the zone a tx originated
+from"* — was right for the consumer nobody looked at. The honest record is
+**scoped too broadly**, not wrong, and the distinguishing question is cheap:
+*does this consumer run while something still knows?*
+
+### 89.8.7 The field is owed, and it does not go alone
+
+**Not in this round.** The defect is pre-existing, this PR already carries an
+intra-PR reversal, and a receive-path plus pool-loop plus FFI change on top of
+that surface is how a correction gets buried. It also changes network behaviour
+and is owed its own analysis rather than riding a merge fix.
+
+**And it cannot land alone.** Keeping anonymity-arrived traffic in-zone changes
+what `relay_method::forward` is *for*. The bridge survives — a fluff on the
+anonymity zone exits public at the next hop — but the forward path's population
+changes, and `CRYPTONOTE_FORWARD_DELAY_AVERAGE`'s stated rationale ("2+ incoming
+connections could have sent the tx") is an **anonymity-set argument written
+against the current immediate-bridge behaviour**. Change the population and the
+argument no longer describes what it justifies.
+
+That is **Q-12**, registered since Q-11 Unit 0 and still untouched. **The zone
+field and Q-12 are one round**, or the forward delay is left justifying a bridge
+that no longer works the way its comment describes.
