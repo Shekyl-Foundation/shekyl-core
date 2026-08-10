@@ -2378,19 +2378,34 @@ namespace nodetool
 
     if (origin != enet::zone::invalid)
     {
-      /* Dormant today, and for the same reason as the two paths below (§63.8).
-         Every anonymity-zone release sets `dandelionpp_fluff`
-         (`levin_notify.cpp:561`, "always send with fluff flag, even over
-         i2p/tor"), so a receiver overrides its `forward` default to `fluff`
-         (`cryptonote_protocol_handler.inl:946`) and `upgrade_relay_method` is
-         monotone upward, never walking it back. A transaction whose `origin`
-         is an anonymity zone therefore always arrives here as `fluff` and
-         `still_stemming` is false.
+      /* LIVE since §89 — this branch was dormant and is not any more.
 
-         Correct for the world it wakes into: with covert on, the covert send
-         clears the flag (`levin_notify.cpp:1195`), the receiver keeps
-         `forward`, and coherence starts firing. Until then R-1 is the entry
-         roll alone. */
+         §63.8 recorded it as unreachable on a four-link chain, and §89 breaks
+         the first link. It read: every anonymity-zone release sets
+         `dandelionpp_fluff`, so a receiver overrides its `forward` default to
+         `fluff` (`cryptonote_protocol_handler.inl`), `upgrade_relay_method` is
+         monotone upward and never walks it back, so an anonymity-origin
+         transaction always arrived here as `fluff` with `still_stemming`
+         false.
+
+         The anonymity zone stems now, and a stem send passes `fluff = false`
+         (`dandelionpp_notify`, unlike the fluff arm which still sets it). So
+         the receiver keeps its `forward` default, `still_stemming` holds, and
+         coherence fires — no longer only in the covert-on world §63.8
+         described, but in the default one.
+
+         **Witness status, stated because it is uneven.** That the anonymity
+         zone emits a stem with the flag clear is pinned by
+         `tests/unit_tests/levin.cpp`'s six `private_*` cases. The remaining
+         links and this branch itself are NOT covered end-to-end: driving an
+         arrival through `handle_notify_new_transactions` on a non-public
+         context needs a `t_core` mock the suite does not have. See
+         DAEMON_RELAY_PRIVACY.md §89.7.
+
+         §59.1's warning applies to this branch now rather than later: `tx_relay`
+         is the exit, and swallowing the fluff case into coherence would strand
+         anonymity-originated transactions in the anonymity subgraph — a
+         liveness break that would read as correct. */
       if (still_stemming && origin != enet::zone::public_ && m_network_zones.count(origin))
         return send(*m_network_zones.find(origin)); // coherence: no re-roll
 

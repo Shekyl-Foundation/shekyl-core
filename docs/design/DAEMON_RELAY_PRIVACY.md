@@ -13588,3 +13588,58 @@ because the *reason* is visible now and will not be later.
 > wallet holds a relay constant — the same failure as the transit harness
 > earlier in the session, which verified how to measure a quantity without
 > re-checking whether it was owed (*re-ground the whether, not just the how*).
+
+## 89.7 Coherence woke up, and its witness is uneven — stated rather than assumed
+
+**2026-08-08.** §63.8 recorded R-1's coherence branch (`net_node.inl`,
+`still_stemming && origin != public_`) as **dormant**, on a four-link chain.
+§89 breaks the first link, so the branch is **live** — and this section exists
+because a passing suite is exactly what would hide that.
+
+### 89.7.1 The chain, and which link moved
+
+| link | §63.8's shipped state | under §89 |
+| --- | --- | --- |
+| 1. every anonymity release sets `dandelionpp_fluff` | true — one blanket rule | **false**: the fluff arm sets it, a stem send clears it |
+| 2. receiver overrides its `forward` default to `fluff` when the flag is set | fires every time | fires only on a fluff arrival |
+| 3. `upgrade_relay_method` is monotone upward | unchanged | unchanged |
+| 4. ⇒ anonymity-origin arrivals are always `fluff`, `still_stemming` false | held | **broken** — `forward` survives, `still_stemming` holds |
+
+§63.8 predicted the wake-up and named the wrong trigger, for a good reason: it
+expected covert's return to clear the flag (`levin_notify.cpp`'s covert send
+passes `false`). The posture decision clears it on the ordinary path instead,
+so coherence wakes **in the default configuration** rather than only with
+covert enabled.
+
+### 89.7.2 What is witnessed, and what is not
+
+> **Link 1 is pinned. Links 2–4 and the branch itself are not.**
+
+`tests/unit_tests/levin.cpp`'s six `private_*` cases assert that an anonymity
+zone emits a stem with `dandelionpp_fluff == false` and a fluff with it set —
+that is link 1, and it is the link §89 moved.
+
+**No end-to-end witness exists, and the blocker is named:** driving an arrival
+through `handle_notify_new_transactions` on a non-public connection context
+needs a `t_core` mock the unit suite does not have (the one protocol-handler
+test that stands up real sockets, `cryptonote_protocol_handler.race_condition`,
+is `GTEST_SKIP`ped as flaky). Building that harness is its own unit of work,
+not a rider on this one.
+
+**Why this is recorded loudly rather than filed quietly.** §59.1 gated
+coherence on `stem | forward | local` precisely because swallowing the fluff
+case would *"strand those transactions in the anonymity subgraph — a liveness
+break that would read as correct."* That failure mode does not announce itself:
+transactions stop leaving the zone, and every test that never drives the branch
+keeps passing. The full 1051-test suite passed with this branch newly live and
+never once executed it. **Passing by not being reached is the state this
+section is warning about.**
+
+### 89.7.3 It is also load-bearing for §89.2
+
+Coherence is what makes the per-zone embargo *well-defined*: §89.2's argument
+that `hop` is a per-zone quantity rests on a transaction entering the anonymity
+zone's stem **staying** there until it fluffs. That is this branch. So the
+witness gap is not cosmetic — it is an untested premise underneath a shipped
+constant, and the honest reading is that §89.2's mechanism is verified by
+argument and by link 1, not by execution.

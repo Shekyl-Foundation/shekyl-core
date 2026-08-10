@@ -567,11 +567,23 @@ namespace levin
              order transactions were received in is an observable, and forwarding
              it would hand it to every peer downstream. */
 
-          /* Always send with `fluff` flag, even over i2p/tor. The hidden service
-             will disable the forwarding delay and immediately fluff. The i2p/tor
-             network is therefore replacing the sybil protection of Dandelion++.
-             Dandelion++ stem phase over i2p/tor is also worth investigating
-             (with/without "noise"?). */
+          /* A FLUFF over i2p/tor sends with the `fluff` flag — this arm only,
+             and that is now a distinction rather than a blanket rule.
+
+             The inherited comment here said the flag went on *every* i2p/tor
+             release, on the reasoning that "the i2p/tor network is therefore
+             replacing the sybil protection of Dandelion++", and closed by
+             noting that "Dandelion++ stem phase over i2p/tor is also worth
+             investigating". §89 answers that: the zone stems, because a
+             transport is a parameter and changing it does not change the
+             graph. The sybil-substitution reasoning is retired with it — §64
+             priced it, and minting onion addresses is free, so it was the
+             outbound-only reach rule doing that work, never the network.
+
+             A stem send on this zone now clears the flag (`dandelionpp_notify`).
+             Which arm set it is load-bearing downstream: a receiver keeps its
+             `forward` default when the flag is clear, so `still_stemming`
+             holds and R-1's coherence branch fires (`net_node.inl`, §89.7). */
           make_payload_send_txs(*z.p2p, std::move(txs), destination, z.pad_txs, true);
         }
         catch (const std::exception& e)
