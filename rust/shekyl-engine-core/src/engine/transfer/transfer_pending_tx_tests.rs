@@ -2147,18 +2147,18 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
 /// # Accept *and* reject
 ///
 /// Mirrors 2a: the verify side must reject a wrong `bond_credit`, a tampered
-/// commitment, a signature that does not cover the post preimage, and a
-/// replayed post. A round-trip that only asserts "valid accepts" can pass
-/// against a verify that accepts everything.
+/// commitment, and a replayed post. A round-trip that only asserts "valid
+/// accepts" can pass against a verify that accepts everything. (The bond vin
+/// carries no on-chain signature of its own — P's authorization rides the
+/// surface-A `pqc_auths` slot, tested there; SA-2b, SIGNATURE_ALIGNMENT.md §2.2.)
 #[tokio::test]
-async fn join_market_bond_post_signs_and_verifies_over_real_tree() {
+async fn join_market_bond_post_verifies_over_real_tree() {
     use rand_core::OsRng;
     use shekyl_archival_retention::{
         verify_bond_post_ct_balance, verify_join_market_bond_post, BondCtBalanceError,
         BondPostError, BondTerm,
     };
     use shekyl_bulletproofs::Bulletproof;
-    use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
     use shekyl_curve_io::CompressedPoint;
     use shekyl_curve_primitives::Commitment;
     use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
@@ -2172,29 +2172,21 @@ async fn join_market_bond_post_signs_and_verifies_over_real_tree() {
         signed,
         outputs,
         built,
-        p_keys,
         fee,
         floor,
-        signable_tx_hash,
         ..
     } = real_tree_bond_post_proofs().await;
 
-    // ── Verify 1/4: vin semantics, record does not yet exist ─────────
+    // ── Verify 1/3: vin semantics, record does not yet exist ─────────
+    //
+    // The vin carries no on-chain signature of its own: P's authorization
+    // rides the transaction-level `pqc_auths` slot (surface A) over the
+    // whole-tx payload hash, exercised in the surface-A tests, not here
+    // (SA-2b; SIGNATURE_ALIGNMENT.md §2.2).
     verify_join_market_bond_post(built.vin(), false)
         .expect("verify accepts a fresh JoinMarket post");
 
-    // ── Verify 2/4: hybrid signature under P_pubkey over the preimage ─
-    let preimage = built.vin().signature_preimage(&signable_tx_hash);
-    HybridEd25519MlDsa
-        .verify(
-            p_keys.hybrid_bond_id(),
-            shekyl_crypto_pq::signature::SCHEME_DOMAIN_BOND_POST,
-            &preimage,
-            built.signature(),
-        )
-        .expect("JoinMarket signature must verify under P_pubkey");
-
-    // ── Verify 3/4: BP+ over the un-cofactored change commitment ─────
+    // ── Verify 2/3: BP+ over the un-cofactored change commitment ─────
     let bp_commitments: Vec<CompressedPoint> = outputs
         .iter()
         .map(|out| {
@@ -2212,7 +2204,7 @@ async fn join_market_bond_post_signs_and_verifies_over_real_tree() {
         "BP+ verifier must accept the bond-post range proof"
     );
 
-    // ── Verify 4/4 (FCMP++ membership over the REAL root) is deferred ─
+    // ── Verify 3/3 (FCMP++ membership over the REAL root) is deferred ─
     // The construct→prove half already ran in the shared setup:
     // `sign_transaction_with_terms` assembled and proved over genuine
     // depth-2 branch layers from the production `CurveTreeClient`. The
@@ -2267,22 +2259,7 @@ async fn join_market_bond_post_signs_and_verifies_over_real_tree() {
         "a tampered commitment must not satisfy the balance"
     );
 
-    // ── Reject 3: a signature that does not cover the post is rejected ─
-    let mut wrong_preimage = preimage;
-    wrong_preimage[0] ^= 0x01;
-    assert!(
-        HybridEd25519MlDsa
-            .verify(
-                p_keys.hybrid_bond_id(),
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_BOND_POST,
-                &wrong_preimage,
-                built.signature()
-            )
-            .is_err(),
-        "the bond signature must not verify against a tampered preimage"
-    );
-
-    // ── Reject 4: a replayed post (record already exists) is rejected ─
+    // ── Reject 3: a replayed post (record already exists) is rejected ─
     assert_eq!(
         verify_join_market_bond_post(built.vin(), true),
         Err(BondPostError::RecordExists),
@@ -2303,7 +2280,6 @@ struct RealTreeBondProofs {
     tree_ctx: shekyl_tx_builder::TreeContext,
     outputs: Vec<shekyl_tx_builder::types::OutputInfo>,
     built: shekyl_archival_bond_builder::JoinMarketVin,
-    p_keys: shekyl_crypto_pq::archival_p::ArchivalPKeys,
     output_key: [u8; 32],
     h_pqc: [u8; 32],
     spend_key_x: [u8; 32],
@@ -2454,8 +2430,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     }];
 
     // ── Build the bond vin + the change output ───────────────────────
-    let built = build_join_market_vin(&p_keys, holdings.clone(), &signable_tx_hash)
-        .expect("build JoinMarket vin");
+    let built = build_join_market_vin(&p_keys, holdings.clone()).expect("build JoinMarket vin");
     assert_eq!(built.vin().bond_credit, floor);
     assert_eq!(built.vin().bond_debit, 0);
 
@@ -2517,7 +2492,6 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         tree_ctx,
         outputs,
         built,
-        p_keys,
         output_key: constructed.output_key,
         h_pqc: constructed.h_pqc,
         spend_key_x: *bundle.spend_key_x,

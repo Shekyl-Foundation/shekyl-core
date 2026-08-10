@@ -96,14 +96,11 @@ pub const SCHEME_DOMAIN_EMISSION_BACKING: &[u8] = b"shekyl/archival-emission-bac
 pub const SCHEME_DOMAIN_ATTESTATION: &[u8] = b"shekyl/archival-attestation-scheme-v1";
 /// Serve-credit response (surface F).
 pub const SCHEME_DOMAIN_SERVE_CREDIT: &[u8] = b"shekyl/archival-serve-credit-scheme-v1";
-/// Bond-post vin (surface B) — **parked pending the §2.2 bond-preimage
-/// reconciliation round** (rule-21 reopen). The discarded S1 signer
-/// (`shekyl-archival-bond-builder`) passes this so it compiles under the
-/// mandatory-domain trait; whether it is deleted (generic wins) or activated
-/// (design-aligned wins) is that round's decision. Not consumed by any
-/// production verifier today — the bond vin's on-chain auth rides
-/// [`SCHEME_DOMAIN_PQC_AUTH_TX`] as an ordinary surface-A slot.
-pub const SCHEME_DOMAIN_BOND_POST: &[u8] = b"shekyl/archival-bond-post-scheme-v1";
+// Surface B (bond-post vin) has no scheme domain: the SA-2b reconciliation
+// (SIGNATURE_ALIGNMENT.md §2.2) ruled the bond vin's on-chain auth rides the
+// generic surface-A `pqc_auths` slot (SCHEME_DOMAIN_PQC_AUTH_TX), which binds a
+// strict superset of any bond-specific preimage. The parked domain-separated
+// signer was deleted.
 pub const ML_DSA_65_PUBLIC_KEY_LENGTH: usize = ml_dsa_65::PK_LEN;
 pub const ML_DSA_65_SECRET_KEY_LENGTH: usize = ml_dsa_65::SK_LEN;
 pub const ML_DSA_65_SIGNATURE_LENGTH: usize = ml_dsa_65::SIG_LEN;

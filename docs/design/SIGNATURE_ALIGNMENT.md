@@ -30,7 +30,7 @@ as a security property.
 
 | Site | Op | Signed input | Structural domain? |
 |---|---|---|---|
-| `shekyl-archival-bond-builder/src/lib.rs:152` | sign | `vin.signature_preimage(tx_prefix_hash)` | yes — `shekyl/archival-bond-post-v1` |
+| `shekyl-archival-bond-builder/src/lib.rs:152` | sign | `vin.signature_preimage(tx_prefix_hash)` | ~~yes — `shekyl/archival-bond-post-v1`~~ — **site deleted in SA-2b** (§2.2 ruling: the bond vin rides the generic surface-A slot), so the live census is eight |
 | `shekyl-archival-retention/src/attestation_wire.rs:488` | verify | `record.nonce(r, cb_out_key)` | yes — `shekyl/archival-attestation-nonce-v1` |
 | `shekyl-crypto-pq/src/output.rs:991` | sign | caller's `message` (`sign_pqc_auth_for_output`) | **no** — bare |
 | `shekyl-engine-core/…/stake_engine/bond.rs:343` | sign | `bond_payload_hash` | **no** — bare hash |
@@ -239,44 +239,65 @@ property that makes SA-2 reviewable as one consensus change.
 
 **In SA-2:** the bond slot rides surface A's new `shekyl/pqc-auth-tx-v1` tx-domain
 like every other auth (no bond-specific behavior). S1 and `signature_preimage`
-are **retained, inert, under a named rule-21 reopen** (§2.2) — S1 compiles by
-passing a bond-post scheme constant to the mandatory-domain trait; its fate is
-the reconciliation round's to decide. The marker is mandatory: an inert domained
-signer with no consumer is the dead-field class this round deletes, and without
+were **retained, inert, under a named rule-21 reopen** (§2.2) — S1 compiled by
+passing a bond-post scheme constant to the mandatory-domain trait; its fate was
+the reconciliation round's to decide. The marker was mandatory: an inert domained
+signer with no consumer is the dead-field class the round deletes, and without
 the reopen the next audit re-runs the Pin-1 mistake — sees a discarded domained
 signature and argues to wire it.
 
-## 2.2 Bond-preimage reconciliation — deferred round (rule-21 reopen)
+**Resolved in SA-2b (see §2.2):** the replay analysis found the generic surface-A
+slot forecloses the cross-role replay, so **generic won** and S1 +
+`signature_preimage` + `SCHEME_DOMAIN_BOND_POST` were **deleted**. The rule-21
+reopen is discharged.
 
-**Parked, not dropped.** S1 (`shekyl-archival-bond-builder/src/lib.rs`) and
+## 2.2 Bond-preimage reconciliation — RESOLVED in SA-2b: generic wins, S1 deleted
+
+**Ruling (PR-SA-2b).** The bond vin's `pqc_auths` slot signs the **generic
+surface-A whole-tx payload hash**. S1 (`shekyl-archival-bond-builder`),
 `ArchivalBondPostVin::signature_preimage` (`bond_wire.rs`, domain
-`shekyl/archival-bond-post-v1`) are retained inert through SA-2 with this reopen
-criterion, marked at both sites and here:
+`shekyl/archival-bond-post-v1`), `BOND_POST_SIG_CUSTOMIZATION`, and
+`SCHEME_DOMAIN_BOND_POST` were **deleted**. The parked path signed a strict
+subset of what surface A already signs and was **verified by no production
+verifier** — a domain-separated preimage that no one checks is the dead-field
+class the SA round exists to remove.
+
+The reopen criterion this round discharged was:
 
 > **Reopen:** does the bond vin's `pqc_auths` slot sign the generic surface-A
 > payload hash (code) or the design-specified domain-separated `signature_preimage`
 > (`gate4:311-313`)? **Delete S1 + the preimage if generic wins; activate them
 > (redirect the slot + verifier special-case) if design-aligned wins.**
 
-**The round's load-bearing question is a security property, answered at the call
-graph — verified, not inherited** (the Pin-1 error was inheriting an
+**The load-bearing question was a security property, answered at the call graph —
+verified, not inherited** (the Pin-1 error was inheriting an
 "already-bound-therefore-redundant" claim instead of checking it): **can a
 bond-post auth under P's key be replayed as an emission-prefix auth under P's
 key, or vice versa, given both ride the generic surface-A path under the same
-key?** Post-SA-2 both are tx-domain-separated (`shekyl/pqc-auth-tx-v1`) but
-distinguished from *each other* only by prefix **content**, not by domain. If
-surface A's whole-tx binding forecloses the cross-role replay, **generic wins and
-B deletes.** If any residual context-confusion between P's two auth roles
-survives, **design-aligned wins and B activates** (the domain-separated preimage
-makes the two roles structurally distinct signing contexts). Decide by the
-replay analysis, never by which arm is less work.
+key?** Both are tx-domain-separated (`shekyl/pqc-auth-tx-v1`) but distinguished
+from *each other* only by prefix **content**, not by scheme domain.
+
+**Replay analysis — cross-role replay is structurally foreclosed.** The
+surface-A payload hash is `varint(TX_VERSION) ‖ TxPrefix::write ‖ …`, and
+`TxPrefix::write` emits each vin's **type tag** before its body — `0x03` for a
+bond post, `0x04` for an emission input. The tag is inside the signed bytes, so a
+signature produced over a bond-post prefix cannot verify against an
+emission-prefix payload (the tags differ ⇒ the hashes differ ⇒ the signature
+fails). The whole-tx hash therefore binds **strictly more** than the deleted
+bond preimage did: `bond_spend_pk`, `p_canonical_id`, `post_kind`, the holdings
+descriptor, and every amount field all ride inside the same signed prefix,
+**plus** the vin type tag that the bond-specific preimage never carried. Generic
+wins; the domain-separated preimage adds no separation surface A does not already
+provide, and activating it would have added a verifier special-case for zero
+security gain. The arm was chosen by the replay analysis, not by which was less
+work.
 
 ### The six surfaces
 
 | # | Surface | Sign | Verify | Scheme-level domain (ratified) |
 |---|---|---|---|---|
 | A | Tx per-input PQC auth (payload hash) | bond / emission-prefix / spend (via `sign_pqc_auth_for_output`) / C++ wallet | submit verifier, scheme-2, **C++ `tx_pqc_verify`** | **`shekyl/pqc-auth-tx-v1`** — the only undomained surface today; the load-bearing add |
-| B | Archival bond-post vin (rides surface A) | bond slot signs surface-A hash (`bond.rs:344`) | submit verifier / C++ `tx_pqc_verify` (as surface A) | **`shekyl/pqc-auth-tx-v1`** in SA-2 (same as A). Slot-preimage choice deferred to §2.2; S1 + `signature_preimage` parked inert under rule-21 |
+| B | Archival bond-post vin (rides surface A) | bond slot signs surface-A hash (`bond.rs:344`) | submit verifier / C++ `tx_pqc_verify` (as surface A) | **`shekyl/pqc-auth-tx-v1`** (same as A). Slot-preimage choice **resolved in SA-2b: generic wins**; S1 + `signature_preimage` + `SCHEME_DOMAIN_BOND_POST` deleted (§2.2) |
 | C | Emission auth — claim | `claim.rs` claim | emission_verify claim leg | `shekyl/archival-emission-claim-scheme-v1` |
 | D | Emission auth — backing | `claim.rs` backing (`sign_pqc_auth_for_output`) | emission_verify backing leg | `shekyl/archival-emission-backing-scheme-v1` |
 | E | Attestation countersignature | none in-repo | attestation_wire ← C++ | `shekyl/archival-attestation-scheme-v1` (assignable unilaterally) |
@@ -350,7 +371,7 @@ express the gate cleanly.
 |---|---|---|
 | **PR-SA-1** | RNG alignment: F-1…F-6 + F-8 seam; this round doc; index registration | **MERGED #426 (merge `69857ab9f`); archived `archive/feat/sa1-rng-alignment-2026-08-09`** — carried a user review round (`d7e3bac7f`: binding tests, seed-export hygiene) |
 | **PR-SA-2** | Nested combiner (SA-R-1 incl. `Result<()>` rewrite / R-2 / R-3 / R-4 / R-5); §2.1 six-surface domains (bond slot rides surface A's `shekyl/pqc-auth-tx-v1`; **surface B is §2.2, out of SA-2** — S1 + `signature_preimage` parked inert under rule-21); SA-R-4 version check placed by the **six-path parse-from-canonical enumeration** (precondition of the trait rewrite; check goes uniformly at parse or in `verify()`, never per-path); F1 (subsumed by `Result<()>`) + wrong-key regression; F-7 disposition; fixture regeneration + frozen v1 negative fixture; iai bench rework; `wire.rs` `3385` aliasing; FFI context-specific exports; RELEASE_CHECKLIST rows; genesis-blob no-hybrid-sig check. **C++-byte-identical** (no wire/`TX_VERSION` change) | pending — solitary review round |
-| **PR-SA-2b** | Bond-preimage reconciliation (§2.2): resolve the P-role replay question at the call graph; delete S1 + `signature_preimage` (generic) or activate them (design-aligned). Rust + C++ verify-path change, no wire change | pending — own round, rule-21 reopen |
+| **PR-SA-2b** | Bond-preimage reconciliation (§2.2): resolved the P-role replay question at the call graph — the surface-A whole-tx hash (incl. the vin type tag) forecloses cross-role replay, so **generic won**. Deleted S1 + `signature_preimage` + `BOND_POST_SIG_CUSTOMIZATION` + `SCHEME_DOMAIN_BOND_POST`; KAT surfaces 7→6. No wire change; no verifier special-case needed | **DONE** |
 | **PR-SA-3** | Registries: workspace domain registry + full-set collision test + CI grep gate (ripgrep install step); test-domain segregation; error-band table (-29xxx). **Feeds the CBOM domain section.** | pending |
 | **PR-SA-4** | Dead persisted-field sweep (writer/reader existence per persisted field; tx_notes PR-SJ-2 confirmation) | pending |
 | **PR-SA-5** | Persona lifecycle: SA-R-6 guard + scan reconstruction; ruling into `ARCHIVAL_P_DERIVE_V1` module doc + operator guide (no-rotation stated as a refusal, clustering rationale named). **Feeds the CBOM persona no-backstop row.** | pending |

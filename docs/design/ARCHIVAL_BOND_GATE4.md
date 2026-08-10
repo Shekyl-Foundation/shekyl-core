@@ -299,34 +299,34 @@ construction, the only way to obtain a `ShardSet`) and the independent
 `shekyl-wire` oracle — so an invalid set is unrepresentable past any decoder
 rather than re-guarded per verify. **Insertion order is NOT canonicalized:** the
 ids encode in the order given, so `[7, 42]` and `[42, 7]` are distinct valid
-encodings of the same set (benign — holdings feed the signature preimage, so only
+encodings of the same set (benign — holdings ride inside the signed `TxPrefix`, so only
 the signer produces either and only one connects). The encoding of any valid
 (duplicate-free) holdings is **byte-identical** to the pre-`ShardSet` form; the
 tightening rejects only duplicate-carrying byte strings, which no honest wallet
 emits.
 
 Hybrid spend authorization uses **transaction-level** `pqc_auths[]` aligned with `vin[]`
-indices (not an on-vin signature blob). Preimage:
+indices (not an on-vin signature blob).
 
-```text
-sig_preimage = cSHAKE256(
-  customization = "shekyl/archival-bond-post-v1",
-  input         = tx_prefix_hash
-                  || p_canonical_id
-                  || post_kind_u8
-                  || encode_bond_spend_commitment   // JoinMarket: bond_spend_pk canonical bytes; else empty
-                  || encode_holdings_descriptor
-                  || bonded_total_atomic_le64
-                  || bond_credit_le64
-                  || bond_debit_le64
-)
-```
+> **Amended by the SA-2b ruling** (PR-SA-2b; rationale in
+> [`SIGNATURE_ALIGNMENT.md`](SIGNATURE_ALIGNMENT.md) §2.2). The aligned
+> `pqc_auths[]` slot signs the **generic surface-A whole-tx payload hash** —
+> `varint(TX_VERSION) ‖ TxPrefix::write ‖ …` (`transaction.rs`
+> `pqc_signing_payload_hashes`) — **not** a bond-specific domain-separated
+> preimage. The whole-tx hash binds a strict **superset** of the fields a bond
+> preimage would: `bond_spend_pk`, `p_canonical_id`, `post_kind`, the holdings
+> descriptor, and every amount field ride inside the signed `TxPrefix`, and the
+> vin **type tag (`0x03`)** distinguishes a bond-post auth from every other
+> P-auth context in the same prefix — so cross-role replay is structurally
+> foreclosed. The earlier domain-separated `signature_preimage` (customization
+> `shekyl/archival-bond-post-v1`) and its signer bound only a subset, were
+> verified nowhere, and were **deleted**.
 
-`encode_holdings_descriptor` is the on-wire holdings section (`holdings_kind` byte plus
-optional shard-id varint list). `encode_bond_spend_commitment` is `bond_spend_pk`'s canonical
-bytes on the `JoinMarket` path and **empty** on every other `post_kind` — so the establishing
-identity-key signature (below) binds the committed debit authorizer at creation, foreclosing a
-key-swap at join. On-wire amount fields use varints; preimage uses fixed `le64`.
+The holdings section (`encode_holdings_descriptor`: `holdings_kind` byte plus optional
+shard-id varint list) and `bond_spend_pk`'s canonical bytes (present on the `JoinMarket`
+path, **empty** on every other `post_kind`) ride inside the signed `TxPrefix`, so the
+identity-key signature (below) binds the committed debit authorizer at creation, foreclosing
+a key-swap at join.
 
 **Bond-vin authorizing key (GF-1, gate-6 §9.6).** The `pqc_auths[]` entry aligned with the bond
 vin verifies against:
@@ -512,9 +512,9 @@ for (`HoldingsUpdate`-drop rides the same selection when it lands). The wire
 divergence is reconciled: the C++ `txin_archival_bond_post` (binary, boost, and
 JSON serializers) carries the §9.11 JoinMarket-coupled field with the exact
 canonical length enforced both directions, matching `shekyl-wire` and the
-now-coupled Rust `bond_wire` codec (whose §3.4.1 `signature_preimage` binds the
-key; the operative consensus binding also rides the tx prefix inside the pqc
-payload). The v5 record (`ArchivalBondValue`, v4 rejected at decode —
+now-coupled Rust `bond_wire` codec (whose `serialize()` refuses a §9.11-violating
+vin; the operative consensus binding rides the tx prefix inside the pqc payload —
+SA-2b retired the on-vin `signature_preimage`, §3.4.1). The v5 record (`ArchivalBondValue`, v4 rejected at decode —
 datadir-reset posture) commits the key once at JoinMarket connect
 (`put_archival_bond_record`, no-default parameter so no caller can silently
 commit an empty authorizer). The reject→auth swap landed in one change, pinned

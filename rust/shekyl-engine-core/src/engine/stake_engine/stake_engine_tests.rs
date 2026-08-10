@@ -619,8 +619,7 @@ fn verify_credit_funding_rejects_wrong_total() {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let tx_prefix_hash = [0u8; 32];
-    let vin = build_join_market_vin(&bundle, holdings, &tx_prefix_hash)
+    let vin = build_join_market_vin(&bundle, holdings)
         .expect("build_join_market_vin succeeds for valid inputs");
 
     let fee = AtomicUnits::from_raw(100);

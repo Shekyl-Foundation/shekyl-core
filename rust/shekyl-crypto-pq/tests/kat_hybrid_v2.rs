@@ -54,29 +54,27 @@
 use serde_json::{json, Value};
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
-    SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_BOND_POST, SCHEME_DOMAIN_EMISSION_BACKING,
-    SCHEME_DOMAIN_EMISSION_CLAIM, SCHEME_DOMAIN_PQC_AUTH_TX, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
-    SCHEME_DOMAIN_SERVE_CREDIT,
+    SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_EMISSION_BACKING, SCHEME_DOMAIN_EMISSION_CLAIM,
+    SCHEME_DOMAIN_PQC_AUTH_TX, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG, SCHEME_DOMAIN_SERVE_CREDIT,
 };
 use std::path::{Path, PathBuf};
 
 /// Every ratified signing surface and its scheme-level domain constant. A new
 /// `SCHEME_DOMAIN_*` constant must be added here (the pinned test counts the
 /// fixture's vectors against this table, so forgetting is loud).
-const SURFACES: [(&str, &[u8]); 7] = [
+const SURFACES: [(&str, &[u8]); 6] = [
     ("pqc_auth_tx", SCHEME_DOMAIN_PQC_AUTH_TX),
     ("pqc_auth_tx_multisig", SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG),
     ("emission_claim", SCHEME_DOMAIN_EMISSION_CLAIM),
     ("emission_backing", SCHEME_DOMAIN_EMISSION_BACKING),
     ("attestation", SCHEME_DOMAIN_ATTESTATION),
     ("serve_credit", SCHEME_DOMAIN_SERVE_CREDIT),
-    ("bond_post", SCHEME_DOMAIN_BOND_POST),
 ];
 
 /// One shared message: the cross-domain negatives below prove the *domain*
 /// separates the surfaces even over identical message bytes, which is the
 /// whole SA-R-2 property.
-const KAT_MESSAGE: &[u8] = b"shekyl-hybrid-v2-kat: one message, seven surfaces";
+const KAT_MESSAGE: &[u8] = b"shekyl-hybrid-v2-kat: one message, six surfaces";
 
 fn fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/test_vectors/PQC_HYBRID_V2_KAT.json")

@@ -283,8 +283,7 @@ impl Message<SignBond> for StakeEngine {
         //    `ArchivalPKeys` is borrowed here and never returned to the caller
         //    (rule 36-secret-locality): only the signed `JoinMarketVin` (paired
         //    with its placement offset) crosses the actor boundary.
-        let vin = build_join_market_vin(keys, msg.holdings, &msg.tx_prefix_hash)
-            .map_err(StakeEngineError::BondBuild)?;
+        let vin = build_join_market_vin(keys, msg.holdings).map_err(StakeEngineError::BondBuild)?;
         Ok(SignedBondPost {
             vin,
             bond_post_offset_blocks,

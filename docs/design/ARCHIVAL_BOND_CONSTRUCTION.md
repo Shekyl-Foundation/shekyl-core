@@ -155,7 +155,7 @@ discipline as `shekyl-standoff`):
 
 | Reused symbol | Source | Used for |
 | --- | --- | --- |
-| `ArchivalBondPostVin`, `signature_preimage`, `serialize` | `shekyl-archival-retention::bond_wire` | the vin and its sig preimage |
+| `ArchivalBondPostVin`, `serialize` | `shekyl-archival-retention::bond_wire` | the vin (authorized on-chain via the surface-A `pqc_auths` slot; SA-2b retired the on-vin `signature_preimage`) |
 | `bond_floor` | `shekyl-archival-retention::bond_floor` | `bonded_total == bond_credit == floor` |
 | `p_canonical_id_from_hybrid_pubkey` | `shekyl-archival-retention::id` | record key |
 | typed-side cleartext terms + balance eq | `shekyl-rct-balance` (NEW, §7.2/§11.1 Q2) | the consensus balance, single-sourced for construct *and* verify |
@@ -324,13 +324,16 @@ ArchivalBondPostVin {
 }
 ```
 
-Signed over `ArchivalBondPostVin::signature_preimage(&tx_prefix_hash)` with the
-**P identity key** (`hybrid_sign_sk`): JoinMarket is a credit path
-(`bond_debit == 0`), and per `ARCHIVAL_BOND_GATE4.md` §3.5 step 5 credit paths
-authorize against `P_pubkey`; the JoinMarket signature additionally binds the
-committed `bond_spend_pk` via the preimage. `bond_spend_pk` is committed on the
-record at JoinMarket and authorizes only later debit paths (Unbond,
-HoldingsUpdate drop) -- not exercised in PR 1.
+The vin carries **no on-vin signature**: its on-chain authorization is the
+transaction-level `pqc_auths` slot aligned with it (surface A), signed with the
+**P identity key** (`hybrid_sign_sk`) over the whole-tx payload hash. JoinMarket
+is a credit path (`bond_debit == 0`), and per `ARCHIVAL_BOND_GATE4.md` §3.5 step 5
+credit paths authorize against `P_pubkey`; because the vin rides inside the signed
+`TxPrefix`, that surface-A signature already binds the committed `bond_spend_pk`
+(and every other vin field) — SA-2b retired the separate on-vin
+`signature_preimage`, see `SIGNATURE_ALIGNMENT.md` §2.2. `bond_spend_pk` is
+committed on the record at JoinMarket and authorizes only later debit paths
+(Unbond, HoldingsUpdate drop) -- not exercised in PR 1.
 
 ### 7.2 Single-sourced, typed-side cleartext balance terms (`shekyl-rct-balance`)
 
@@ -762,11 +765,12 @@ format freeze):**
    evidence available at open).
 
 **CT-5d re-anchor finding (verified at source — sets how early the bonded-union
-rule bites).** The bond's persona signature covers
-`ArchivalBondPostVin::signature_preimage(tx_prefix_hash)`: it binds the
-`tx_prefix_hash`, canonical id, holdings, and cleartext terms — **not** the
-FCMP++ membership proof or the curve-tree root (those live in the RCT/prunable
-section, outside the prefix). A *content-preserving* reprove (same inputs ⇒ same
+rule bites).** The bond's persona signature is the surface-A `pqc_auths` slot
+over the whole-tx payload hash (`varint(TX_VERSION) ‖ TxPrefix::write ‖ …`; SA-2b
+retired the separate on-vin `signature_preimage`, `SIGNATURE_ALIGNMENT.md` §2.2):
+it binds the tx prefix — canonical id, holdings, `bond_spend_pk`, and cleartext
+terms — **not** the FCMP++ membership proof or the curve-tree root (those live in
+the RCT/prunable section, outside the prefix). A *content-preserving* reprove (same inputs ⇒ same
 output locks ⇒ `tx_prefix_hash` unchanged) leaves the persona signature valid.
 But CT-5d §4 (F-A) is explicit that a reprove *routinely moves `(fee, change)`* —
 depth-growth shrinks the change output, a moved fee snapshot does the same — and

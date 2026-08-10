@@ -668,8 +668,7 @@ fn build_bond_fixture() -> BondFixture {
 
     // ── Build + sign the vin over the fixed prefix; amount-level credit
     // funding rule (§7.3) before proving ─────────────────────────────────
-    let built =
-        build_join_market_vin(&p_keys, holdings, &tx_prefix_hash).expect("build JoinMarket vin");
+    let built = build_join_market_vin(&p_keys, holdings).expect("build JoinMarket vin");
     verify_credit_funding(
         AtomicUnits::from_raw(INPUT_AMOUNT),
         AtomicUnits::from_raw(change_total),

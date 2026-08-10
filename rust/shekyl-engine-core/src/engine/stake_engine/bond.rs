@@ -221,7 +221,7 @@ impl Message<AssembleBond> for StakeEngine {
 
         // ── Step 13 (§3.3 actor step 3): build + sign the vin over the now-
         // fixed prefix hash.
-        let built = build_join_market_vin(keys, msg.holdings.clone(), &prefix_hash)
+        let built = build_join_market_vin(keys, msg.holdings.clone())
             .map_err(StakeEngineError::BondBuild)?;
 
         // ── Step 14 — invariant A-1 (fail closed): the signed vin's post

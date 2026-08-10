@@ -1655,7 +1655,8 @@ mod tests {
         use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
         use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
         use shekyl_crypto_pq::kem::HybridCiphertext;
-        use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
+        // (the bond vin carries no on-chain signature; surface-A signing over the
+        // tx payload is exercised in the pqc_auths tests, not here — SA-2b)
         use shekyl_curve_io::CompressedPoint;
         use shekyl_curve_primitives::Commitment;
         use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
@@ -1692,8 +1693,7 @@ mod tests {
         let fee: u64 = 1_000;
 
         // ── Construct + sign the bond vin ────────────────────────────────
-        let built = build_join_market_vin(&p_keys, holdings.clone(), &signable_tx_hash)
-            .expect("build JoinMarket vin");
+        let built = build_join_market_vin(&p_keys, holdings.clone()).expect("build JoinMarket vin");
         assert_eq!(built.vin().bond_credit, floor);
         assert_eq!(built.vin().bond_debit, 0);
 
@@ -1814,22 +1814,16 @@ mod tests {
             "expected the construct-side self-verify to return BalanceSelfCheck, got: {self_check_err:?}"
         );
 
-        // ── Verify 1/4: vin semantics, record does not yet exist ─────────
+        // ── Verify 1/3: vin semantics, record does not yet exist ─────────
+        //
+        // The vin carries no on-chain signature of its own: P's authorization
+        // rides the transaction-level `pqc_auths` slot (surface A) over the
+        // whole-tx payload hash, exercised in the surface-A tests, not here
+        // (SA-2b; SIGNATURE_ALIGNMENT.md §2.2).
         verify_join_market_bond_post(built.vin(), false)
             .expect("verify accepts a fresh JoinMarket post");
 
-        // ── Verify 2/4: hybrid signature under P_pubkey over the preimage ─
-        let preimage = built.vin().signature_preimage(&signable_tx_hash);
-        HybridEd25519MlDsa
-            .verify(
-                p_keys.hybrid_bond_id(),
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_BOND_POST,
-                &preimage,
-                built.signature(),
-            )
-            .expect("JoinMarket signature must verify under P_pubkey");
-
-        // ── Verify 3/4: Bulletproof+ over the un-cofactored change commitment ─
+        // ── Verify 2/3: Bulletproof+ over the un-cofactored change commitment ─
         let bp_commitments: Vec<CompressedPoint> = outputs
             .iter()
             .map(|out| {
@@ -1847,7 +1841,7 @@ mod tests {
             "BP+ verifier must accept the bond-post range proof"
         );
 
-        // ── Verify 4/4: FCMP++ membership over the prover pseudo-outs ─────
+        // ── Verify 3/3: FCMP++ membership over the prover pseudo-outs ─────
         let key_images: Vec<KeyImage> = inputs
             .iter()
             .map(|inp| {
@@ -1929,22 +1923,7 @@ mod tests {
             "a tampered commitment must not satisfy the balance"
         );
 
-        // ── Reject 3: a signature that does not cover the post is rejected ─
-        let mut wrong_preimage = preimage;
-        wrong_preimage[0] ^= 0x01;
-        assert!(
-            HybridEd25519MlDsa
-                .verify(
-                    p_keys.hybrid_bond_id(),
-                    shekyl_crypto_pq::signature::SCHEME_DOMAIN_BOND_POST,
-                    &wrong_preimage,
-                    built.signature()
-                )
-                .is_err(),
-            "the bond signature must not verify against a tampered preimage"
-        );
-
-        // ── Reject 4: a replayed post (record already exists) is rejected ─
+        // ── Reject 3: a replayed post (record already exists) is rejected ─
         assert_eq!(
             verify_join_market_bond_post(built.vin(), true),
             Err(BondPostError::RecordExists),

@@ -20,10 +20,6 @@ pub enum BondBuildError {
     #[error("failed to encode P identity hybrid public key: {0}")]
     IdentityEncode(shekyl_crypto_pq::CryptoError),
 
-    /// Hybrid signing over the bond-post preimage failed.
-    #[error("hybrid signature over bond-post preimage failed: {0}")]
-    Sign(shekyl_crypto_pq::CryptoError),
-
     /// The credit-path amounts did not satisfy
     /// `sum(funding) == sum(outputs) + fee + floor`.
     #[error(
