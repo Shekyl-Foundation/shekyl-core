@@ -588,6 +588,25 @@ the round kept trying to add forensics underneath it.
    tail is fat: widen the candidate set to a coverage *band* (min and
    min+1), trading exact-3 convergence for tail anonymity — a knob the
    fork can size, not a redesign.
+   **Band-as-default inversion (2026-08-10, review — check, don't
+   carry as contingency):** the band may be the ruling rather than the
+   fallback. The budget correction already conceded exact-3 does not
+   survive maturity, so the property the band trades away is one the
+   mechanism cannot hold in the regime that matters — the trade is
+   nearly free there and only "costs" at genesis, where D is small and
+   the wave-tail problem is worst. That reads as strictly better at
+   both ends, which would make the band the default and exact-min the
+   special case — and the wave-tail check must then be **run against
+   the band**, not exact-min, or its number measures a variant we may
+   not ship. One sharpening from checking it: the band's apparent
+   genesis cost — a variable issued-count per pair (2/3/4) — is a cost
+   the settlement rule **already owes**, because the maturity budget
+   shortfall forces variable issuance under *every* variant. So the
+   fold's threshold must be restated for variable denominators
+   regardless (e.g. "Served iff ≥ 2 passes" absolute vs
+   majority-of-issued — a named sub-decision for the `settle_epoch`
+   rewrite, §4.4), and the band adds no semantic obligation the budget
+   had not already created.
 2. **Who reads — witness selection and obligation.** The decision the rest
    of the stack prices against: W₂, the abandonment penalty, the reward
    question, and the nonce anchor are all functions of who performs the
@@ -753,12 +772,35 @@ the round kept trying to add forensics underneath it.
   until it lands. Its format specification carries two frozen obligations
   from this round: the reserved padding field with its framing constraint
   (TJ-H, §7.4) and the nonce anchor (§7.2).
-- **Prunable residence for attestation records is the scaling gate**
-  (fork 1's correction): with pass records permanent at ~3.43 KB each,
-  `k_cap` is chain-growth-bound and no derivation variant clears the
-  redraw floor past ~10⁵ pairs. FOLLOWUPS marks the prunable-side design
-  as design-not-assume; this round's 2-of-3 tripled the draw on the same
-  budget, so the question got harder and is now upstream of fork 1.
+- **Prunable residence — the merits question is ANSWERED (2026-08-10,
+  verified at source): nothing downstream of settlement reaches raw pass
+  records.** Three independent layers: (1) `shekyl_emission_vin_verify`'s
+  inputs (`blockchain.cpp:4128`) are the canonical vin, the bond record,
+  claimed epochs, and the epoch **snapshots** (σ_work / budget / bonds /
+  shards / credit_pairs, gathered from `m_archival_serve_credit`) — the
+  work recompute runs over materialized credit pairs, and the auth gate
+  verifies the *claimant's* signature on the vin; no attestation record or
+  countersignature appears anywhere in the signature. (2) The settlement
+  fold is structurally incapable of reaching one — `settle_epoch` takes
+  `&[AttestationKind]` (the §4 type seam). (3) LMDB-side pruning is
+  already landed: `delete_archival_attestation_witness_before_height`
+  drops the admission-only `r` + signatures beyond the reorg window, its
+  comment naming the seam ("Settlement reads the kept tx_extra headers,
+  never this witness"). **Consequence: `k_cap` relaxes on the merits and
+  fork 1 is the scheduling choice it was framed as.** What remains is
+  carrier work, not a merits question: wire-side prunable residence was
+  ruled for the OLD carrier (credit-wire authority row — header kept,
+  3.43 KB countersignature prunable-side of the coinbase tx), but this
+  round moved pass records to **transactions** (§2 step 4), so the
+  residence ruling must be **re-instantiated for the tx carrier in TJ-B's
+  format spec, deliberately** — it is genesis-frozen in character (which
+  side of the block a record rides is consensus-visible, no migration
+  path pre-genesis), the padding-field asymmetry argument applies, and
+  the one real risk is ordering discipline: it must not fall out of TJ-B
+  by default. Carrier-specific check to carry there: the old coinbase
+  finding (`prunable_hash` hardcoded null under `CTTypeNull`) was
+  coinbase-specific — the tx carrier needs its own
+  commitment-of-the-prunable-region check.
 
 **Standing-record reconciliation** — 2026-08-02 FOLLOWUPS rulings (credit-wire
 round) whose premises this round changes; each must be revisited on the
