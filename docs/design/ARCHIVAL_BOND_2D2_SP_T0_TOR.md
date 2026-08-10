@@ -260,6 +260,21 @@ Both GPG-verified **Good** against `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` be
 aarch64 binary's digest was re-checked **on the Pi** after transfer, so the thing measured is the thing
 verified.
 
+> **The alpha line has moved on, and this table has not — deliberately.** As of
+> **2026-08-10** the alpha is **16.0a9**, and it ships tor **0.4.9.11**, not the
+> `0.4.9.3-alpha` recorded above. The rows are a *dated provenance record of what
+> was measured*, so they are correct and must not be advanced to match whatever is
+> current; re-running the comparison against 16.0a9 would be a new measurement with
+> new digests, not an edit to this one.
+>
+> Two consequences worth stating, because the table alone implies neither. The
+> **confound this pairing was built to remove has since dissolved on its own** —
+> 16.0a9 and the shipped stable 15.0.19 now carry the *same* tor 0.4.9.11, so a
+> future aarch64-vs-x86_64 run no longer has to choose between matching the Tor
+> version and using stable. And the **stable line still publishes no
+> `linux-aarch64`**, which is the fact §2d-2 actually turns on; that has not
+> changed, and it is what resolves when 16.0 goes stable.
+
 **Why the alpha, and why on both arms.** `linux-aarch64` exists only in the 16.0a1 line, so the floor
 device has no stable build to run. Using the alpha there and stable on x86 would have measured
 **hardware plus Tor version** — and the confound is not academic: **16.0a1 ships tor `0.4.9.3-alpha`,
