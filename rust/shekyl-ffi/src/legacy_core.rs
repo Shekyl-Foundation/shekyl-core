@@ -7,6 +7,7 @@
 
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme as _,
+    SCHEME_DOMAIN_PQC_AUTH_TX, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
 };
 use std::os::raw::c_char;
 use std::sync::Mutex;
@@ -94,10 +95,16 @@ pub unsafe extern "C" fn xchacha20(
 ///
 /// Returns canonical-encoded public and secret key buffers. Caller owns the
 /// buffers and must release them via `shekyl_buffer_free`.
+/// **Test-support only** (F-7): generates a fresh, *non-derived* hybrid keypair.
+/// Real wallets derive their keys (`generate_pqc_key_material`); this export
+/// exists solely for the C++ FFI test suite (`fcmp.cpp`) and has no production
+/// caller. Comment-gated only: the C++ tests link the same `shekyl-ffi`
+/// archive as production, so this symbol is present in production builds
+/// (FOLLOWUPS F-7 tracks the structural gate). Do not call from production C++.
 #[no_mangle]
 pub extern "C" fn shekyl_pqc_keypair_generate() -> ShekylPqcKeypair {
     let scheme = HybridEd25519MlDsa;
-    match scheme.keypair_generate() {
+    match scheme.generate_ephemeral_keypair_for_tests() {
         Ok((pk, sk)) => {
             let public_key = pk.to_canonical_bytes().map(ShekylBuffer::from_vec);
             let secret_key = sk.to_canonical_bytes().map(ShekylBuffer::from_vec);
@@ -122,7 +129,48 @@ pub extern "C" fn shekyl_pqc_keypair_generate() -> ShekylPqcKeypair {
     }
 }
 
-/// Sign a message using a canonical-encoded hybrid secret key.
+/// One FFI sign body for every hybrid sign export: pointer validation, secret
+/// key parse, nested sign under the export's Rust-owned domain (SA-R-2), and
+/// canonical encoding. The exports differ **only** in the domain constant they
+/// bind — keeping the body single-sourced means a hardening fix (zeroization,
+/// slice validation) cannot land in one export and silently miss the other.
+fn pqc_sign_with_domain(
+    domain: &[u8],
+    secret_key_ptr: *const u8,
+    secret_key_len: usize,
+    message_ptr: *const u8,
+    message_len: usize,
+) -> ShekylPqcSignatureResult {
+    let fail = ShekylPqcSignatureResult {
+        signature: ShekylBuffer::null(),
+        success: false,
+    };
+    let Some(secret_key_bytes) = (unsafe { slice_from_ptr(secret_key_ptr, secret_key_len) }) else {
+        return fail;
+    };
+    let Some(message) = (unsafe { slice_from_ptr(message_ptr, message_len) }) else {
+        return fail;
+    };
+    let Ok(secret_key) = HybridSecretKey::from_canonical_bytes(secret_key_bytes) else {
+        return fail;
+    };
+    match HybridEd25519MlDsa
+        .sign(&secret_key, domain, message)
+        .and_then(|sig| sig.to_canonical_bytes())
+    {
+        Ok(signature) => ShekylPqcSignatureResult {
+            signature: ShekylBuffer::from_vec(signature),
+            success: true,
+        },
+        Err(_) => fail,
+    }
+}
+
+/// Sign a message using a canonical-encoded hybrid secret key, under the
+/// **tx per-input PQC auth** surface (`SCHEME_DOMAIN_PQC_AUTH_TX`, SA-R-2 —
+/// the domain is Rust-owned; C++ never carries a domain string). Signatures
+/// from this export verify only on that surface; use the surface-specific
+/// export for any other context.
 ///
 /// Returns a canonical-encoded hybrid signature buffer. Caller owns the buffer
 /// and must release it via `shekyl_buffer_free`.
@@ -133,40 +181,40 @@ pub extern "C" fn shekyl_pqc_sign(
     message_ptr: *const u8,
     message_len: usize,
 ) -> ShekylPqcSignatureResult {
-    let Some(secret_key_bytes) = (unsafe { slice_from_ptr(secret_key_ptr, secret_key_len) }) else {
-        return ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        };
-    };
-    let Some(message) = (unsafe { slice_from_ptr(message_ptr, message_len) }) else {
-        return ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        };
-    };
+    pqc_sign_with_domain(
+        SCHEME_DOMAIN_PQC_AUTH_TX,
+        secret_key_ptr,
+        secret_key_len,
+        message_ptr,
+        message_len,
+    )
+}
 
-    let scheme = HybridEd25519MlDsa;
-    let Ok(secret_key) = HybridSecretKey::from_canonical_bytes(secret_key_bytes) else {
-        return ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        };
-    };
-
-    match scheme
-        .sign(&secret_key, message)
-        .and_then(|sig| sig.to_canonical_bytes())
-    {
-        Ok(signature) => ShekylPqcSignatureResult {
-            signature: ShekylBuffer::from_vec(signature),
-            success: true,
-        },
-        Err(_) => ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        },
-    }
+/// Sign a message as a **multisig participant** (scheme 2), under the
+/// multisig-specific domain (SA-R-5). A participant signature is NOT
+/// interchangeable with a single-signer signature (`shekyl_pqc_sign`) over the
+/// same message: this applies `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`, which is
+/// what `verify_multisig` (scheme_id=2) checks.
+///
+/// **Test-support only** (F-7): production multisig participant signing is
+/// unbuilt; this export exists so the C++ FFI test suite can assemble genuine
+/// multisig containers instead of faking participant sigs through the
+/// single-signer FFI. The domain is Rust-owned — C++ carries no domain string.
+/// Do not call from production C++. Free the buffer via `shekyl_buffer_free`.
+#[no_mangle]
+pub extern "C" fn shekyl_pqc_sign_multisig_participant(
+    secret_key_ptr: *const u8,
+    secret_key_len: usize,
+    message_ptr: *const u8,
+    message_len: usize,
+) -> ShekylPqcSignatureResult {
+    pqc_sign_with_domain(
+        SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+        secret_key_ptr,
+        secret_key_len,
+        message_ptr,
+        message_len,
+    )
 }
 
 /// Return the canonical PQC multisig wire lengths (see `ShekylPqcCanonicalLens`).
@@ -231,16 +279,16 @@ pub extern "C" fn shekyl_pqc_verify(
             let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
                 return 11;
             };
-            match scheme.verify(&pk, msg, &sig) {
-                Ok(true) => 0,
-                Ok(false) | Err(_) => 10, // CryptoVerifyFailed
+            // Rust-owned tx-auth domain (SA-R-2); C++ passes no domain.
+            match scheme.verify(&pk, SCHEME_DOMAIN_PQC_AUTH_TX, msg, &sig) {
+                Ok(()) => 0,
+                Err(_) => 10, // CryptoVerifyFailed
             }
         }
         2 => {
             use shekyl_crypto_pq::multisig::verify_multisig;
             match verify_multisig(scheme_id, pk_bytes, sig_bytes, msg) {
-                Ok(true) => 0,
-                Ok(false) => 10, // CryptoVerifyFailed
+                Ok(()) => 0,
                 Err(e) => e as u8,
             }
         }

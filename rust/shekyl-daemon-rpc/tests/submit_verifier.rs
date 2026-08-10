@@ -727,7 +727,11 @@ fn build_bond_fixture() -> BondFixture {
     let mut pqc_auths = sign_pqc_auths(&payload_hashes[..1], std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing (funding slot)");
     let bond_sig = HybridEd25519MlDsa
-        .sign(&p_keys.hybrid_sign_sk, &payload_hashes[1])
+        .sign(
+            &p_keys.hybrid_sign_sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+            &payload_hashes[1],
+        )
         .expect("sign the bond slot payload hash");
     pqc_auths.push(BuilderPqcAuth {
         auth_version: 1,

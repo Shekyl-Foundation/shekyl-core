@@ -47,6 +47,23 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **F-7 structural gate for the test-only PQC FFI exports (added
+  2026-08-10, PR-SA-2).** Two exports are test-support only:
+  `shekyl_pqc_keypair_generate` (wraps `generate_ephemeral_keypair_for_tests`)
+  and `shekyl_pqc_sign_multisig_participant` (signs under the multisig domain so
+  the C++ tests can assemble genuine multisig containers instead of faking
+  participant sigs through the single-signer FFI). Both are behind the
+  `test-utils` feature in Rust but compiled into the production `shekyl-ffi`
+  archive because the C++ unit tests link the same archive as production —
+  cmake builds one `-p shekyl-ffi`, so there is no test-vs-prod feature split.
+  The Rust doc + the `shekyl_ffi.h` header comments mark them clearly, which is
+  the ratified comment-fallback; the structural gate is a separate test-only
+  Rust archive (or a cmake feature the C++ test target enables and production
+  does not) so neither is present in the shipped cdylib. Not blocking (no
+  production caller; header-marked), but it removes the residual that a
+  production C++ caller could wire a non-derived keypair — or a multisig
+  participant signature — into an unintended path. **Target: V3.0 pre-genesis.**
+
 - **T18 weekly cargo-mutants gate no longer fits its 360-minute budget
   (surfaced 2026-08-10, dispatch run 31346130482 — the job's first
   execution after the severed-header restore).** `cargo mutants` found

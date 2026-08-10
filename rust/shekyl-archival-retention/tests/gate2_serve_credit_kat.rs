@@ -117,7 +117,7 @@ fn integration_keypair(
         return (pk, sk);
     }
     HybridEd25519MlDsa
-        .keypair_generate()
+        .generate_ephemeral_keypair_for_tests()
         .expect("integration keypair")
 }
 
@@ -130,11 +130,16 @@ fn flat_layer_scalars_hex(scalars: &[[u8; 32]]) -> String {
     )
 }
 
-fn build_integration_substrate(pinned_pk_hex: Option<&str>, pinned_sk_hex: Option<&str>) -> Value {
+fn build_integration_substrate(
+    anchor: &WireAnchor,
+    pinned_pk_hex: Option<&str>,
+    pinned_sk_hex: Option<&str>,
+    pinned_sig_hex: Option<&str>,
+) -> Value {
     let scheme = HybridEd25519MlDsa;
     let (hybrid_pk, hybrid_sk) = integration_keypair(pinned_pk_hex, pinned_sk_hex);
     let hybrid_pk_bytes = hybrid_pk.to_canonical_bytes().expect("pk bytes");
-    let _hybrid_sk_bytes = hybrid_sk.to_canonical_bytes().expect("sk bytes");
+    let hybrid_sk_bytes = hybrid_sk.to_canonical_bytes().expect("sk bytes");
     let p_id = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes).to_bytes();
 
     // Full-chunk opening: the consensus challenge path reads exactly
@@ -180,12 +185,38 @@ fn build_integration_substrate(pinned_pk_hex: Option<&str>, pinned_sk_hex: Optio
         leaf_index_in_segment: leaf_index,
         leaf_bytes,
         path,
-        hybrid_signature: kat_hybrid_signature(None),
+        // Placeholder only — `signature_preimage()` does not cover the
+        // signature field, and the real signature is set right below.
+        hybrid_signature: anchor.signature.clone(),
     };
     let preimage = response.signature_preimage();
-    response.hybrid_signature = scheme
-        .sign(&hybrid_sk, &preimage)
-        .expect("integration sign");
+    // Re-pin: reuse the committed integration signature while it still
+    // verifies over the recomputed preimage (same idempotence discipline as
+    // the wire anchor); re-sign only on a genuine construction change.
+    let pinned_sig = pinned_sig_hex
+        .map(decode_hex)
+        .and_then(|bytes| {
+            shekyl_crypto_pq::signature::HybridSignature::from_canonical_bytes(&bytes).ok()
+        })
+        .filter(|sig| {
+            scheme
+                .verify(
+                    &hybrid_pk,
+                    shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+                    &preimage,
+                    sig,
+                )
+                .is_ok()
+        });
+    response.hybrid_signature = pinned_sig.unwrap_or_else(|| {
+        scheme
+            .sign(
+                &hybrid_sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+                &preimage,
+            )
+            .expect("integration sign")
+    });
 
     verify_leaf_index(
         response.leaf_index_in_segment,
@@ -220,6 +251,14 @@ fn build_integration_substrate(pinned_pk_hex: Option<&str>, pinned_sk_hex: Optio
         "block_hash_at_seal_hex": encode_hex(&block_hash_at_seal),
         "join_settlement_epoch": 0,
         "bond_hybrid_pubkey_hex": encode_hex(&hybrid_pk_bytes),
+        // Persisted so the regen writer can re-pin: the secret key keeps the
+        // keypair (and thus p_canonical_id / h_fire / leaf_index) stable
+        // across regens; the signature hex lets the writer reuse it while it
+        // still verifies. Test-only material, like every key in this fixture.
+        "bond_hybrid_secret_key_hex": encode_hex(&hybrid_sk_bytes),
+        "bond_hybrid_signature_hex": encode_hex(
+            &response.hybrid_signature.to_canonical_bytes().expect("integration sig bytes")
+        ),
         "leaf_layer_scalars_hex": flat_layer_scalars_hex(&layer_scalars),
         "chunk_first_leaf_position": chunk_bounds.first_leaf_position,
         "chunk_leaf_count": chunk_bounds.leaf_count,
@@ -227,18 +266,71 @@ fn build_integration_substrate(pinned_pk_hex: Option<&str>, pinned_sk_hex: Optio
     })
 }
 
-fn kat_hybrid_signature(pinned_hex: Option<&str>) -> shekyl_crypto_pq::signature::HybridSignature {
-    if let Some(hex) = pinned_hex {
-        return shekyl_crypto_pq::signature::HybridSignature::from_canonical_bytes(&decode_hex(
-            hex,
-        ))
-        .expect("pinned hybrid signature");
-    }
+/// The fixed message the synthetic wire anchor signs. The anchor exists so the
+/// wire section carries a genuine (verifiable) v2 signature, not opaque bytes.
+const WIRE_ANCHOR_MESSAGE: &[u8] = b"gate2-serve-credit-kat-v1-hybrid-sig-anchor";
+
+/// The synthetic wire section's anchor signature plus the keypair that minted
+/// it (both persisted in the fixture so regens can re-pin).
+struct WireAnchor {
+    signature: shekyl_crypto_pq::signature::HybridSignature,
+    pk_bytes: Vec<u8>,
+    sk_bytes: Vec<u8>,
+}
+
+/// Build the wire anchor, re-pinning committed material wherever it is still
+/// valid: the anchor keypair is reused whenever it parses, and the anchor
+/// signature whenever it still **verifies** under the current construction —
+/// so a regen run for an unrelated tweak rewrites these fields byte-identically
+/// instead of churning the fixture (and desyncing the hand-synced C++
+/// equivalence fixture). Only a genuine construction change re-signs, and only
+/// a missing/corrupt fixture re-mints the keypair.
+fn wire_anchor(existing: Option<&Value>) -> WireAnchor {
+    use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSecretKey, HybridSignature};
     let scheme = HybridEd25519MlDsa;
-    let (_pk, sk) = scheme.keypair_generate().expect("keypair");
-    scheme
-        .sign(&sk, b"gate2-serve-credit-kat-v1-hybrid-sig-anchor")
-        .expect("sign")
+
+    let pinned_keys = existing.and_then(|v| {
+        let pk_hex = v["wire"]["anchor_pubkey_hex"].as_str()?;
+        let sk_hex = v["wire"]["anchor_secret_key_hex"].as_str()?;
+        let pk = HybridPublicKey::from_canonical_bytes(&decode_hex(pk_hex)).ok()?;
+        let sk = HybridSecretKey::from_canonical_bytes(&decode_hex(sk_hex)).ok()?;
+        Some((pk, sk))
+    });
+    let (pk, sk) = pinned_keys.unwrap_or_else(|| {
+        scheme
+            .generate_ephemeral_keypair_for_tests()
+            .expect("anchor keypair")
+    });
+
+    let pinned_sig = existing
+        .and_then(|v| v["wire"]["hybrid_signature_hex"].as_str())
+        .map(decode_hex)
+        .and_then(|bytes| HybridSignature::from_canonical_bytes(&bytes).ok())
+        .filter(|sig| {
+            scheme
+                .verify(
+                    &pk,
+                    shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+                    WIRE_ANCHOR_MESSAGE,
+                    sig,
+                )
+                .is_ok()
+        });
+    let signature = pinned_sig.unwrap_or_else(|| {
+        scheme
+            .sign(
+                &sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+                WIRE_ANCHOR_MESSAGE,
+            )
+            .expect("anchor sign")
+    });
+
+    WireAnchor {
+        signature,
+        pk_bytes: pk.to_canonical_bytes().expect("anchor pk bytes"),
+        sk_bytes: sk.to_canonical_bytes().expect("anchor sk bytes"),
+    }
 }
 
 struct Ct2Block {
@@ -378,9 +470,10 @@ fn leaf_layer_scalars(chunk: &[ChunkLeaf]) -> Vec<[u8; 32]> {
 }
 
 fn build_kat_document(
-    pinned_hybrid_signature_hex: Option<&str>,
+    anchor: &WireAnchor,
     integration_pk_hex: Option<&str>,
     integration_sk_hex: Option<&str>,
+    integration_sig_hex: Option<&str>,
 ) -> Value {
     let p_id = [0x42u8; 32];
     let shard_id = 7u64;
@@ -413,7 +506,7 @@ fn build_kat_document(
         leaf_index_in_segment: 1_234,
         leaf_bytes: [0x33; 128],
         path: path.clone(),
-        hybrid_signature: kat_hybrid_signature(pinned_hybrid_signature_hex),
+        hybrid_signature: anchor.signature.clone(),
     };
     let wire_hex = encode_hex(&response.serialize().expect("wire"));
     let encode_path_hex = encode_hex(&encode_path(&path));
@@ -450,6 +543,8 @@ fn build_kat_document(
             "hybrid_signature_hex": encode_hex(
                 &response.hybrid_signature.to_canonical_bytes().unwrap()
             ),
+            "anchor_pubkey_hex": encode_hex(&anchor.pk_bytes),
+            "anchor_secret_key_hex": encode_hex(&anchor.sk_bytes),
             "wire_hex": wire_hex,
             "encode_path_hex": encode_path_hex,
             "signature_preimage_hex": signature_preimage_hex,
@@ -461,7 +556,12 @@ fn build_kat_document(
             "c1_layers": layers_to_json(&opening_path.c1_layers),
             "c2_layers": layers_to_json(&opening_path.c2_layers),
         },
-        "integration": build_integration_substrate(integration_pk_hex, integration_sk_hex),
+        "integration": build_integration_substrate(
+            anchor,
+            integration_pk_hex,
+            integration_sk_hex,
+            integration_sig_hex,
+        ),
     })
 }
 
@@ -473,11 +573,13 @@ fn regenerate_gate2_kat_fixture() {
     let existing: Option<Value> = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok());
-    let pinned_sig = existing.as_ref().and_then(|v| {
-        v["wire"]["hybrid_signature_hex"]
-            .as_str()
-            .map(str::to_owned)
-    });
+    // Re-pin everything that is still valid (see `wire_anchor` and the
+    // integration re-pin in `build_integration_substrate`): committed keys are
+    // reused whenever they parse, committed signatures whenever they still
+    // verify under the current construction. A regen for an unrelated tweak is
+    // therefore byte-stable; only a genuine construction change re-signs (and
+    // only then does the hand-synced C++ equivalence fixture need a re-sync).
+    let anchor = wire_anchor(existing.as_ref());
     let integration_pk = existing.as_ref().and_then(|v| {
         v["integration"]["bond_hybrid_pubkey_hex"]
             .as_str()
@@ -488,10 +590,16 @@ fn regenerate_gate2_kat_fixture() {
             .as_str()
             .map(str::to_owned)
     });
+    let integration_sig = existing.as_ref().and_then(|v| {
+        v["integration"]["bond_hybrid_signature_hex"]
+            .as_str()
+            .map(str::to_owned)
+    });
     let doc = build_kat_document(
-        pinned_sig.as_deref(),
+        &anchor,
         integration_pk.as_deref(),
         integration_sk.as_deref(),
+        integration_sig.as_deref(),
     );
     std::fs::write(&path, serde_json::to_string_pretty(&doc).expect("json")).expect("write");
     eprintln!("wrote {}", path.display());
@@ -537,6 +645,21 @@ fn gate2_serve_credit_kat_vectors() {
     let hybrid_signature =
         shekyl_crypto_pq::signature::HybridSignature::from_canonical_bytes(&sig_bytes)
             .expect("hybrid sig");
+    // The anchor is a genuine pinned signature, not opaque bytes: it must
+    // still verify under the current construction (pinned-positive tripwire —
+    // a construction change fails here until the fixture is regenerated).
+    let anchor_pk = shekyl_crypto_pq::signature::HybridPublicKey::from_canonical_bytes(
+        &decode_hex(wire["anchor_pubkey_hex"].as_str().expect("anchor pk")),
+    )
+    .expect("anchor pk parse");
+    HybridEd25519MlDsa
+        .verify(
+            &anchor_pk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+            WIRE_ANCHOR_MESSAGE,
+            &hybrid_signature,
+        )
+        .expect("wire anchor must verify under the current construction");
     let response = ArchivalServeCreditResponse {
         p_canonical_id: decode_hex32(wire["p_canonical_id_hex"].as_str().expect("p_id")),
         shard_id: wire["shard_id"].as_u64().expect("shard"),
@@ -602,9 +725,35 @@ fn gate2_serve_credit_kat_vectors() {
         .to_canonical_bytes()
         .expect("integration sig bytes");
     let int_sig = HybridSignature::from_canonical_bytes(&int_sig).expect("integration sig parse");
-    assert!(HybridEd25519MlDsa
-        .verify(&int_pk, &parsed.signature_preimage(), &int_sig)
-        .expect("integration hybrid verify"));
+    HybridEd25519MlDsa
+        .verify(
+            &int_pk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+            &parsed.signature_preimage(),
+            &int_sig,
+        )
+        .expect("integration hybrid verify");
+
+    // F1 regression (serve-credit surface): a well-formed signature under the
+    // WRONG key must be REJECTED. The pre-SA-2 FFI gated on `.is_err()` over a
+    // `Result<bool>`, so `Ok(false)` (this exact case) fell through to VERIFY_OK.
+    // Under `verify -> Result<()>` there is no `Ok(false)`, so it returns `Err`.
+    // A malformed-signature test would pass on the broken code; a wrong-KEY one
+    // is the negative control on the axis the defect lived.
+    let (foreign_pk, _foreign_sk) = HybridEd25519MlDsa
+        .generate_ephemeral_keypair_for_tests()
+        .expect("foreign keypair");
+    assert!(
+        HybridEd25519MlDsa
+            .verify(
+                &foreign_pk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+                &parsed.signature_preimage(),
+                &int_sig,
+            )
+            .is_err(),
+        "a well-formed serve-credit signature under a foreign key must be rejected (F1)"
+    );
     assert_eq!(
         challenge_leaf_index(
             &parsed.p_canonical_id,

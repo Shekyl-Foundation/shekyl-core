@@ -7,6 +7,17 @@ rust-version.workspace = true
 license.workspace = true
 autoexamples = false
 
+[features]
+# Exposes test-support helpers (F-7): `generate_ephemeral_keypair_for_tests`,
+# `sign_with_ml_dsa_seed`. Names announce test-only intent; a non-derived
+# keypair must never reach a wallet. Prefer enabling under `[dev-dependencies]`
+# (benches, integration tests). **Exception:** `shekyl-ffi` enables this in its
+# normal dependency graph so the C++ unit tests can link the same archive as
+# production — cargo feature unification keeps the symbols in that artifact.
+# That is comment-gated only; the structural gate (separate test-only archive
+# or cmake feature) is FOLLOWUPS F-7, not this feature flag.
+test-utils = []
+
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
@@ -157,6 +168,11 @@ serde_json = "1"
 postcard-schema = { version = "0.2", default-features = false, features = ["derive", "use-std"] }
 
 [dev-dependencies]
+# Self-reference enabling `test-utils` for this crate's own integration tests
+# and benches (F-7): `generate_ephemeral_keypair_for_tests` is gated behind
+# that feature, and a separate integration-test crate cannot see the in-crate
+# `cfg(test)` gate. Standard cargo idiom for feature-enabling one's own tests.
+shekyl-crypto-pq = { path = ".", features = ["test-utils"] }
 hex = "0.4"
 # Note: the ARCHIVAL_P_DERIVE_V1 KAT computes its p_canonical_id via an inline
 # cSHAKE256 (so the `shekyl-archival-retention` cross-check proves the two

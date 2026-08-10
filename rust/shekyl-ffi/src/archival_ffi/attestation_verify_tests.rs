@@ -33,7 +33,9 @@ struct Scenario {
 }
 
 fn real_p() -> (Vec<u8>, [u8; 32], HybridSecretKey) {
-    let (pk, sk) = HybridEd25519MlDsa.keypair_generate().expect("keypair");
+    let (pk, sk) = HybridEd25519MlDsa
+        .generate_ephemeral_keypair_for_tests()
+        .expect("keypair");
     let pubkey = pk.to_canonical_bytes().expect("pk bytes");
     let p_id = *p_canonical_id_from_hybrid_pubkey(&pubkey).as_bytes();
     (pubkey, p_id, sk)
@@ -48,7 +50,13 @@ fn one_pass(
     claimed_pubkey: Vec<u8>,
 ) -> Scenario {
     let nonce = attestation_nonce(&R, &CB, &claimed_p_id, SHARD, EPOCH);
-    let sig = HybridEd25519MlDsa.sign(signing_sk, &nonce).expect("sign");
+    let sig = HybridEd25519MlDsa
+        .sign(
+            signing_sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
+            &nonce,
+        )
+        .expect("sign");
     let record = PassRecord {
         p_id: claimed_p_id,
         shard_id: SHARD,
@@ -198,7 +206,9 @@ fn wrong_mined_root_is_root_mismatch() {
 #[test]
 fn forged_signature_is_countersig_invalid() {
     let (pubkey, p_id, _sk) = real_p();
-    let (_other_pk, other_sk) = HybridEd25519MlDsa.keypair_generate().unwrap();
+    let (_other_pk, other_sk) = HybridEd25519MlDsa
+        .generate_ephemeral_keypair_for_tests()
+        .unwrap();
     // Signed by other_sk, claims real P: root recomputes (same sig bytes), countersig fails.
     let s = one_pass(&other_sk, p_id, pubkey);
     let pairs = [pair(s.p_id, &s.pubkey)];

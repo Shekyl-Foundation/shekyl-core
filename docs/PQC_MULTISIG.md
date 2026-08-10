@@ -1282,7 +1282,15 @@ Each signer in the M-of-N selected subset:
 4. Verifies BP+ proofs match deterministic derivation (I4)
 5. Verifies prover assignment (I5, §11.3)
 6. Computes the final tx_hash (including the prover's proof)
-7. Produces hybrid (Ed25519 + ML-DSA-65) signature over signing_payload
+7. Produces hybrid (Ed25519 + ML-DSA-65) signature over signing_payload —
+   under the **multisig scheme domain** `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`
+   (`shekyl/pqc-auth-tx-multisig-v1`), not the single-signer domain (SA-2 /
+   SA-R-5, `docs/design/SIGNATURE_ALIGNMENT.md`). A participant signature is
+   therefore not interchangeable with a single-signer signature over the same
+   payload. This is a scheme-level signing domain, distinct from the retired
+   group-id separator `DOMAIN_SEP_V31` (§5.3) — it separates the *scheme*, not a
+   *group*. Production participant signing is unbuilt; the primitive is
+   `HybridEd25519MlDsa::sign(sk, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG, signing_payload)`.
 8. Publishes `SignatureShare` (§12.2.1) including the tx_hash and
    proof commitments
 

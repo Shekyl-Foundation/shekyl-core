@@ -78,6 +78,29 @@ pub fn cn_fast_hash(data: &[u8]) -> Hash {
 /// consolidation described above.
 #[must_use]
 pub fn cshake256_32(customization: &[u8], input: &[u8]) -> Hash {
+    cshake256(customization, input)
+}
+
+/// cSHAKE256 (SP 800-185) with a customization string, 64-byte output.
+///
+/// Same primitive and conventions as [`cshake256_32`]; the two differ only in
+/// how much of the XOF stream they take. Use this width where the digest is
+/// itself the *signed content* of a signature scheme: a 32-byte digest caps
+/// collision resistance at 2^128, below ML-DSA-65's Category-3 target, while
+/// 64 bytes restores the full 2^256 (cf. FIPS 204's HashML-DSA, which pairs
+/// ML-DSA-65 with ≥384-bit digests).
+///
+/// # Panics
+///
+/// Panics if `customization` is empty, for the reason documented on
+/// [`cshake256_32`].
+#[must_use]
+pub fn cshake256_64(customization: &[u8], input: &[u8]) -> [u8; 64] {
+    cshake256(customization, input)
+}
+
+/// Shared cSHAKE256 core: one absorb path, `N` bytes of the XOF stream.
+fn cshake256<const N: usize>(customization: &[u8], input: &[u8]) -> [u8; N] {
     // cSHAKE with an empty function-name AND empty customization is defined to be
     // plain SHAKE256 (SP 800-185 §3.3; RustCrypto special-cases it back to SHAKE
     // padding). That would silently strip the domain separation this primitive
@@ -85,14 +108,14 @@ pub fn cshake256_32(customization: &[u8], input: &[u8]) -> Hash {
     // "no domain" request — reject it loudly rather than degrade in release.
     assert!(
         !customization.is_empty(),
-        "cshake256_32 requires a non-empty customization string \
+        "cshake256 requires a non-empty customization string \
          (empty customization degrades to plain SHAKE256, defeating domain separation)"
     );
     let core = CShake256Core::new(customization);
     let mut hasher: CShake256 = CoreWrapper::from_core(core);
     hasher.update(input);
     let mut reader = hasher.finalize_xof();
-    let mut out = [0u8; HASH_SIZE];
+    let mut out = [0u8; N];
     reader.read(&mut out);
     out
 }
@@ -206,6 +229,31 @@ mod tests {
                 0x0c, 0x48, 0xb8, 0xe4, 0xc8, 0x7b, 0xff, 0x32, 0xc9, 0x69, 0x9d, 0x5b, 0x68, 0x96,
                 0xee, 0xe0, 0xed, 0xd1,
             ],
+        );
+    }
+
+    #[test]
+    fn cshake256_64_nist_sp800_185_kat() {
+        // The same NIST SP 800-185 cSHAKE256 Sample #3 as above, but pinning the
+        // FULL published 512-bit output — `cshake256_64` takes exactly the
+        // sample's requested length, so this fixes the entire 64-byte stream to
+        // the external authority (and, with the test above, pins that the two
+        // widths read one XOF stream: the first 32 bytes must agree).
+        let digest = cshake256_64(b"Email Signature", &[0x00, 0x01, 0x02, 0x03]);
+        assert_eq!(
+            digest,
+            [
+                0xd0, 0x08, 0x82, 0x8e, 0x2b, 0x80, 0xac, 0x9d, 0x22, 0x18, 0xff, 0xee, 0x1d, 0x07,
+                0x0c, 0x48, 0xb8, 0xe4, 0xc8, 0x7b, 0xff, 0x32, 0xc9, 0x69, 0x9d, 0x5b, 0x68, 0x96,
+                0xee, 0xe0, 0xed, 0xd1, 0x64, 0x02, 0x0e, 0x2b, 0xe0, 0x56, 0x08, 0x58, 0xd9, 0xc0,
+                0x0c, 0x03, 0x7e, 0x34, 0xa9, 0x69, 0x37, 0xc5, 0x61, 0xa7, 0x4c, 0x41, 0x2b, 0xb4,
+                0xc7, 0x46, 0x46, 0x95, 0x27, 0x28, 0x1c, 0x8c,
+            ],
+        );
+        assert_eq!(
+            digest[..32],
+            cshake256_32(b"Email Signature", &[0x00, 0x01, 0x02, 0x03]),
+            "the 32- and 64-byte widths must be prefixes of one XOF stream"
         );
     }
 

@@ -297,3 +297,122 @@ fn sce1_key_encoding_crosscheck() {
         "SCE-1 pin: the unified A/C key encoding must not re-split"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Regen writer (FOLLOWUP 2026-08-10: "serve-credit equivalence fixture needs a
+// regen writer") — the gate-4 pattern: re-derive the gate-2-mirrored substrate
+// mechanically, preserve the hand-authored columns.
+// ---------------------------------------------------------------------------
+
+/// Replace the value of the FIRST occurrence of `"key": <number>` in `doc`.
+/// The first occurrence of every mirrored scalar lives in `gate.base` (the
+/// vectors' overrides come later in the document), so first-match is the
+/// base-targeted edit that leaves override values untouched.
+fn replace_first_scalar(doc: &str, key: &str, new_value: u64) -> String {
+    let needle = format!("\"{key}\": ");
+    let start = doc
+        .find(&needle)
+        .unwrap_or_else(|| panic!("no {key} field"))
+        + needle.len();
+    let end = start
+        + doc[start..]
+            .find(|c: char| !c.is_ascii_digit())
+            .expect("number terminator");
+    assert!(
+        doc[start..end].chars().all(|c| c.is_ascii_digit()) && start < end,
+        "{key} is not a bare number"
+    );
+    format!("{}{}{}", &doc[..start], new_value, &doc[end..])
+}
+
+/// Rewrite `serve_credit_equivalence_kat_v1.json`'s gate-2-mirrored substrate
+/// from `gate2_serve_credit_kat_v1.json` — run after any gate-2 regen. The
+/// rewrite is **textual** on purpose: only the mechanical mirrors move (the
+/// `gate.base` scalars and every p_id-prefixed key encoding), and the
+/// hand-authored columns (`expected_verdict`, `expected_reason`, `overrides`,
+/// `cpp_setup`, notes, `substrate_commit`) plus the document's layout are
+/// preserved byte-for-byte. Re-author the reason column (and bump
+/// `substrate_commit`) only when the C++ substrate itself changes (§5).
+#[test]
+#[ignore = "rewrites tests/fixtures/serve_credit_equivalence_kat_v1.json from the gate-2 substrate"]
+fn regenerate_equivalence_fixture_from_gate2() {
+    use shekyl_archival_retention::wire::ArchivalServeCreditResponse;
+
+    let gate2: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/gate2_serve_credit_kat_v1.json"))
+            .expect("gate2 fixture parses");
+    let integ = &gate2["integration"];
+    let mut doc = KAT.to_owned();
+
+    let old_pid = fixture()["gate"]["base"]["p_canonical_id_hex"]
+        .as_str()
+        .expect("old p_id")
+        .to_owned();
+    let new_pid = integ["p_canonical_id_hex"]
+        .as_str()
+        .expect("new p_id")
+        .to_owned();
+    assert_eq!(old_pid.len(), 64);
+    assert_eq!(new_pid.len(), 64);
+
+    // Every occurrence of the old p_id is a gate-2 mirror: the base field and
+    // the dedup/block-unique key encodings, which are `p_id ‖ shard ‖ epoch`
+    // words — a prefix swap re-derives them exactly.
+    doc = doc.replace(&old_pid, &new_pid);
+
+    // The integration wire is the parse-authoritative source for the leaf
+    // index the base mirrors (and for the path shape asserted below).
+    let wire = hex_bytes(&integ["wire_hex"]);
+    let response =
+        ArchivalServeCreditResponse::read(&mut wire.as_slice()).expect("integration wire parses");
+
+    for (key, value) in [
+        ("h_open", integ["h_open"].as_u64().expect("h_open")),
+        ("h_close", integ["h_close"].as_u64().expect("h_close")),
+        ("h_seal", integ["h_seal"].as_u64().expect("h_seal")),
+        ("h_fire", integ["h_fire"].as_u64().expect("h_fire")),
+        (
+            "current_height",
+            integ["current_height"].as_u64().expect("current_height"),
+        ),
+        (
+            "leaf_index_in_segment",
+            u64::from(response.leaf_index_in_segment),
+        ),
+    ] {
+        doc = replace_first_scalar(&doc, key, value);
+    }
+
+    // The base's branch-scalar-count arrays mirror the integration path's
+    // shape. That shape is a property of the CT2 tree structure, not of the
+    // keypair, so a gate-2 regen does not move it — assert instead of
+    // rewriting (a mismatch means the tree substrate itself changed, which is
+    // a hand-re-author event, not a mechanical sync).
+    let reparsed: serde_json::Value = serde_json::from_str(&doc).expect("rewritten doc parses");
+    let base = &reparsed["gate"]["base"];
+    let counts = |layers: &Vec<Vec<[u8; 32]>>| -> Vec<u64> {
+        layers.iter().map(|l| l.len() as u64).collect()
+    };
+    let json_counts = |v: &serde_json::Value| -> Vec<u64> {
+        v.as_array()
+            .expect("count array")
+            .iter()
+            .map(|c| c.as_u64().expect("count"))
+            .collect()
+    };
+    assert_eq!(
+        json_counts(&base["c1_branch_scalar_counts"]),
+        counts(&response.path.c1_layers),
+        "c1 path shape moved — the CT2 substrate changed; re-author the base by hand"
+    );
+    assert_eq!(
+        json_counts(&base["c2_branch_scalar_counts"]),
+        counts(&response.path.c2_layers),
+        "c2 path shape moved — the CT2 substrate changed; re-author the base by hand"
+    );
+
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/serve_credit_equivalence_kat_v1.json");
+    std::fs::write(&path, doc).expect("write");
+    eprintln!("wrote {}", path.display());
+}

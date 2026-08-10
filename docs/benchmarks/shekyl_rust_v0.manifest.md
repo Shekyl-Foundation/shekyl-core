@@ -437,9 +437,14 @@ transfer crypto cost" line when summing for the PR comment.
       size fixed to `log2(64) + log2(2) = 7` rounds).
     - Fiat-Shamir transcript operations (Blake2b).
     - Final proof serialization.
-- `hybrid_sign_1_input`:
-  - Ed25519 classical sign over a 32-byte sighash-shaped buffer.
-  - ML-DSA-65 post-quantum sign over the same buffer.
+- `hybrid_sign_1_input` (nested combiner v2, PR-SA-2 — SA-R-1/2/5):
+  - `preimage = cSHAKE256-64(customization = SCHEME_DOMAIN_PQC_AUTH_TX,
+    input = scheme_id ‖ message)` over the 32-byte sighash-shaped buffer.
+  - ML-DSA-65 post-quantum sign over the 64-byte preimage (PQ-inner).
+  - Ed25519 classical sign over `preimage ‖ σ_pq` (3,373 bytes,
+    classical-outer).
+  - Secret-key validation + component key parsing (inside the shared
+    `sign_nested` body).
   - Serialize the combined hybrid signature.
 
 **Fixture shape.**
@@ -467,13 +472,16 @@ each `#[library_benchmark]` with `setup = fresh_2out_commitments()`
 or `seeded_signing_state()` respectively; keygen and commitment
 generation are excluded from the measured region.
 
-**Determinism deviation (iai-callgrind only).** The iai bench
-**bypasses `HybridEd25519MlDsa::sign`** and inlines the two sign
-steps with deterministic RNG sources:
+**Determinism deviation (iai-callgrind only).** The iai bench calls
+`HybridEd25519MlDsa::sign_with_ml_dsa_seed` — since PR-SA-2 it no
+longer inlines the construction: the seeded variant shares the
+production `preimage` and nesting order through the single
+`sign_nested` body, so the bench cannot drift from production. The
+only deviation from `sign` is the PQ half's randomness source:
 
-- Ed25519 uses `SigningKey::from_bytes(..).sign(..)`, already
-  deterministic by construction (RFC 8032 §5.1.6 derives the nonce
-  from SHA-512 of the secret key + message, no RNG draw).
+- Ed25519 is deterministic by construction either way (RFC 8032
+  §5.1.6 derives the nonce from SHA-512 of the secret key + message,
+  no RNG draw).
 - ML-DSA-65 uses `try_sign_with_seed(&BENCH_SEED, ..)` instead of
   `try_sign(..)` (which draws from `OsRng` for the rejection-sampling
   loop). Without this, observed instruction-count variance across
@@ -494,6 +502,23 @@ the split are documented as §12.3 "known gap" because neither fully
 exercises the production hedged-randomized sign path in a stable
 way — the criterion half measures it but with variance, the iai
 half measures a fips204-compliant deterministic variant.
+
+**Expected structural shift (PR-SA-2, 2026-08-10): v1 parallel →
+v2 nested combiner.** The signed construction changed by ratified
+design (`SIGNATURE_ALIGNMENT.md` SA-R-1/2/5): the baseline captured
+the v1 parallel bench (ML-DSA and Ed25519 each signing the raw
+32-byte message); the PR measures the v2 nested combiner above. The
+one-time gated delta was **−40.64%** (12,071,736 → 7,166,280
+instructions). The magnitude is a fixture artifact, not a production
+performance property: the same `BENCH_SEED` now drives the ML-DSA
+rejection-sampling loop over *different signed bytes* (the 64-byte
+domain-separated preimage instead of the raw message), so the loop
+terminates after a different number of rejection rounds — per-round
+work is essentially unchanged, and the production hedged path draws
+fresh randomness per signature either way. The delta is absorbed
+into the rolling baseline on the next `dev` push that touches a
+benched path; comparisons across the v1/v2 boundary are not
+meaningful at finer grain than "the construction changed".
 
 **Known gap: FCMP++ membership proof.** A full `sign_transaction`
 additionally runs a **full-chain membership proof** over the
@@ -894,3 +919,15 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   `crypto_bench_*` class, no new routing in `compare.py`. Sections
   previously numbered §§11–13 (Known gaps, Cross-references,
   Change log) renumbered to §§12–14.
+- PR-SA-2 (`docs/design/SIGNATURE_ALIGNMENT.md` SA-R-1/2/5):
+  `crypto_bench_hybrid_sign_1_input` now measures the v2 **nested**
+  hybrid combiner through the production-shared
+  `sign_with_ml_dsa_seed` body (cSHAKE256-64 domain-separated
+  preimage, PQ-inner / Ed25519-outer) instead of an inlined v1
+  parallel construction. §5's operation list, determinism-deviation
+  note, and the recorded one-time −40.64% structural shift updated
+  accordingly. Schema version unchanged (`shekyl_rust_v0`): same
+  bench name, same `crypto_bench_*` class, same instruction counter,
+  same fixture shape — what moved is the *measured construction
+  itself*, by ratified consensus design, which the rolling baseline
+  absorbs on the next `dev` rotation.

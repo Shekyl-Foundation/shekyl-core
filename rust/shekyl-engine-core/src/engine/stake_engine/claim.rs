@@ -320,8 +320,13 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         let auth_msgs = vin
             .auth_msgs(&reward_commits, &signable_tx_hash)
             .map_err(|e| BondAssemblyError::build("auth binding message", e))?;
-        let auth_b = sign_pqc_auth_for_output(&backing_combined, backing_index, &auth_msgs.backing)
-            .map_err(|e| BondAssemblyError::build("backing auth signing", e))?;
+        let auth_b = sign_pqc_auth_for_output(
+            &backing_combined,
+            backing_index,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+            &auth_msgs.backing,
+        )
+        .map_err(|e| BondAssemblyError::build("backing auth signing", e))?;
         if auth_b.hybrid_public_key != backing_pubkey {
             // Same derivation, same inputs — divergence is a build defect.
             debug_assert!(
@@ -336,7 +341,11 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         }
         vin.auth_backing = auth_b.signature;
         let claim_sig = HybridEd25519MlDsa
-            .sign(&keys.hybrid_sign_sk, &auth_msgs.claim)
+            .sign(
+                &keys.hybrid_sign_sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
+                &auth_msgs.claim,
+            )
             .map_err(|e| BondAssemblyError::build("claim auth signing", e))?;
         vin.auth_claim = claim_sig
             .to_canonical_bytes()
@@ -483,7 +492,11 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             .map_err(|e| BondAssemblyError::build("pqc auth signing", e))?;
         let emission_payload_hash = payload_hashes[spend_inputs.len()];
         let emission_sig = HybridEd25519MlDsa
-            .sign(&keys.hybrid_sign_sk, &emission_payload_hash)
+            .sign(
+                &keys.hybrid_sign_sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                &emission_payload_hash,
+            )
             .map_err(|e| BondAssemblyError::build("emission pqc auth signing", e))?;
         pqc_auths.push(PqcAuth {
             auth_version: 1,
