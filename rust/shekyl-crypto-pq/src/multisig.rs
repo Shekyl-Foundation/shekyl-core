@@ -372,12 +372,17 @@ pub fn verify_multisig(
         .zip(sig_container.signer_indices.iter())
     {
         let pk = &key_container.keys[idx as usize];
-        let ok = scheme
-            .verify(pk, message, sig)
+        // Multisig participants verify under the multisig-specific domain
+        // (SA-R-5): a single-sig signature over `message` is not a valid
+        // participant signature, and vice versa.
+        scheme
+            .verify(
+                pk,
+                crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+                message,
+                sig,
+            )
             .map_err(|_| PqcVerifyError::CryptoVerifyFailed)?;
-        if !ok {
-            return Err(PqcVerifyError::CryptoVerifyFailed);
-        }
     }
 
     Ok(true)
@@ -411,8 +416,14 @@ mod tests {
 
     fn gen_keypairs(n: usize) -> Vec<(HybridPublicKey, crate::signature::HybridSecretKey)> {
         let scheme = HybridEd25519MlDsa;
-        (0..n).map(|_| scheme.keypair_generate().unwrap()).collect()
+        (0..n)
+            .map(|_| scheme.generate_ephemeral_keypair_for_tests().unwrap())
+            .collect()
     }
+
+    /// Multisig participant signatures use the multisig-specific domain, so
+    /// they match what `verify_multisig` checks (SA-R-5).
+    const MSD: &[u8] = crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG;
 
     fn gen_spend_auth_pubkeys(n: usize) -> Vec<[u8; 32]> {
         use ed25519_dalek::SigningKey;
@@ -449,7 +460,7 @@ mod tests {
         let scheme = HybridEd25519MlDsa;
         let sigs: Vec<HybridSignature> = signer_indices
             .iter()
-            .map(|&idx| scheme.sign(&pairs[idx as usize].1, message).unwrap())
+            .map(|&idx| scheme.sign(&pairs[idx as usize].1, MSD, message).unwrap())
             .collect();
         MultisigSigContainer {
             sig_count: sigs.len() as u8,
@@ -731,8 +742,8 @@ mod tests {
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[0].1, msg).unwrap(),
-                scheme.sign(&pairs[1].1, msg).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
+                scheme.sign(&pairs[1].1, MSD, msg).unwrap(),
             ],
             signer_indices: vec![0, 3],
         };
@@ -754,8 +765,8 @@ mod tests {
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[1].1, msg).unwrap(),
-                scheme.sign(&pairs[0].1, msg).unwrap(),
+                scheme.sign(&pairs[1].1, MSD, msg).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
             ],
             signer_indices: vec![1, 0],
         };
@@ -784,8 +795,8 @@ mod tests {
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[0].1, msg).unwrap(),
-                scheme.sign(&pairs[1].1, msg).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
+                scheme.sign(&pairs[1].1, MSD, msg).unwrap(),
             ],
             signer_indices: vec![0, 1],
         };
@@ -822,8 +833,8 @@ mod tests {
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[0].1, msg).unwrap(),
-                scheme.sign(&pairs[0].1, msg).unwrap(), // signed with key 0, but index says 1
+                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg).unwrap(), // signed with key 0, but index says 1
             ],
             signer_indices: vec![0, 1],
         };
@@ -836,23 +847,25 @@ mod tests {
         );
     }
 
-    // -- ML-DSA non-determinism test --
+    // -- Hedged / nested non-determinism test --
 
     #[test]
-    fn ml_dsa_hedged_signing_produces_different_sigs() {
+    fn nested_hedged_signing_produces_different_sigs() {
         let pairs = gen_keypairs(1);
         let msg = b"non-determinism";
         let scheme = HybridEd25519MlDsa;
-        let sig1 = scheme.sign(&pairs[0].1, msg).unwrap();
-        let sig2 = scheme.sign(&pairs[0].1, msg).unwrap();
-        // ML-DSA uses hedged signing: same message, same key -> different signature
-        // Ed25519 is deterministic so that component should match
-        assert_eq!(sig1.ed25519, sig2.ed25519);
-        // ML-DSA component should differ (overwhelmingly likely)
+        let sig1 = scheme.sign(&pairs[0].1, MSD, msg).unwrap();
+        let sig2 = scheme.sign(&pairs[0].1, MSD, msg).unwrap();
+        // ML-DSA uses hedged signing: same message, same key -> different σ_pq.
         assert_ne!(sig1.ml_dsa, sig2.ml_dsa);
-        // Both must verify
-        assert!(scheme.verify(&pairs[0].0, msg, &sig1).unwrap());
-        assert!(scheme.verify(&pairs[0].0, msg, &sig2).unwrap());
+        // Under the nested combiner the Ed25519 half signs `inner ‖ σ_pq`, so a
+        // hedged σ_pq makes the classical half differ too. This is the nesting
+        // binding the two halves — the v1 *parallel* construction left Ed25519
+        // deterministic here because it signed the bare message independently.
+        assert_ne!(sig1.ed25519, sig2.ed25519);
+        // Both must verify.
+        scheme.verify(&pairs[0].0, MSD, msg, &sig1).unwrap();
+        scheme.verify(&pairs[0].0, MSD, msg, &sig2).unwrap();
     }
 
     // -- Edge cases --

@@ -16,8 +16,55 @@ use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub const HYBRID_KEY_VERSION: u8 = 1;
-pub const HYBRID_SIG_VERSION: u8 = 1;
+/// Signature layout version. **2** = the nested combiner (SA-R-1): PQ-inner /
+/// Ed25519-outer over a domain-separated preimage. **1** was the legacy
+/// weakly-separable *parallel* construction (both halves signed the bare
+/// message). The bump is the security boundary of the round: the wire length
+/// does not move, so this byte is the only thing distinguishing an old
+/// parallel signature from a new nested one, and [`HybridSignature::from_canonical_bytes`]
+/// **rejects any version but this** — a v1 signature is refused at parse,
+/// before the combiner runs (SA-R-4). Every production verify path decodes
+/// through `from_canonical_bytes` (enumerated in `SIGNATURE_ALIGNMENT.md`), so
+/// the parse-time gate is uniform; the nested construction additionally
+/// rejects a v1 signature cryptographically (its `σ_pq` signed the bare
+/// message, not the domained preimage), so there is no in-memory bypass.
+/// `HYBRID_KEY_VERSION` stays 1 — the *key* format is unchanged.
+pub const HYBRID_SIG_VERSION: u8 = 2;
 pub const HYBRID_SCHEME_ID_ED25519_ML_DSA_65: u8 = 1;
+
+/// Scheme-level domain-separation strings (SA-R-2): one distinct string per
+/// signing **surface**. Each is the outer domain of the nested combiner — a
+/// separate layer from any inner cSHAKE customization the caller already
+/// applies to build `message`, and it gets its own string rather than reusing
+/// the inner one (a shared string across two layers would create a standing
+/// cross-parse proof obligation for no benefit). `sign`/`verify` take the
+/// domain as a required parameter so a caller cannot sign a bare message; the
+/// FFI exports apply the surface's constant internally so C++ never carries a
+/// domain string it could get wrong.
+pub const SCHEME_DOMAIN_PQC_AUTH_TX: &[u8] = b"shekyl/pqc-auth-tx-v1";
+/// Multisig participant auth (scheme 2), distinct from single-sig
+/// [`SCHEME_DOMAIN_PQC_AUTH_TX`] (SA-R-5): a single-sig signature and a
+/// multisig participant signature over the same tx payload must not be
+/// interchangeable. `verify_multisig` uses this; the single-input path uses
+/// the non-multisig constant, so the two schemes' signing inputs differ even
+/// on an identical payload.
+pub const SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG: &[u8] = b"shekyl/pqc-auth-tx-multisig-v1";
+/// Emission claim-role auth (surface C).
+pub const SCHEME_DOMAIN_EMISSION_CLAIM: &[u8] = b"shekyl/archival-emission-claim-scheme-v1";
+/// Emission backing-role auth (surface D).
+pub const SCHEME_DOMAIN_EMISSION_BACKING: &[u8] = b"shekyl/archival-emission-backing-scheme-v1";
+/// Attestation pass countersignature (surface E).
+pub const SCHEME_DOMAIN_ATTESTATION: &[u8] = b"shekyl/archival-attestation-scheme-v1";
+/// Serve-credit response (surface F).
+pub const SCHEME_DOMAIN_SERVE_CREDIT: &[u8] = b"shekyl/archival-serve-credit-scheme-v1";
+/// Bond-post vin (surface B) — **parked pending the §2.2 bond-preimage
+/// reconciliation round** (rule-21 reopen). The discarded S1 signer
+/// (`shekyl-archival-bond-builder`) passes this so it compiles under the
+/// mandatory-domain trait; whether it is deleted (generic wins) or activated
+/// (design-aligned wins) is that round's decision. Not consumed by any
+/// production verifier today — the bond vin's on-chain auth rides
+/// [`SCHEME_DOMAIN_PQC_AUTH_TX`] as an ordinary surface-A slot.
+pub const SCHEME_DOMAIN_BOND_POST: &[u8] = b"shekyl/archival-bond-post-scheme-v1";
 pub const ML_DSA_65_PUBLIC_KEY_LENGTH: usize = ml_dsa_65::PK_LEN;
 pub const ML_DSA_65_SECRET_KEY_LENGTH: usize = ml_dsa_65::SK_LEN;
 pub const ML_DSA_65_SIGNATURE_LENGTH: usize = ml_dsa_65::SIG_LEN;
@@ -235,24 +282,58 @@ impl HybridSignature {
 }
 
 pub trait SignatureScheme {
-    fn keypair_generate(&self) -> Result<(HybridPublicKey, HybridSecretKey), CryptoError>;
+    /// Sign `message` under scheme-level `domain` (SA-R-2). The domain is a
+    /// required parameter — there is no bare-message signing path — and it is
+    /// the outer domain of the nested combiner, distinct from any inner
+    /// customization the caller applied to build `message`.
     fn sign(
         &self,
         secret_key: &HybridSecretKey,
+        domain: &[u8],
         message: &[u8],
     ) -> Result<HybridSignature, CryptoError>;
+    /// Verify a signature, returning `Ok(())` on success and `Err` on any
+    /// failure — malformed inputs, a failed component, or a wrong signature.
+    ///
+    /// The return is `Result<()>`, **not** `Result<bool>` (SA-R-1): there is no
+    /// `Ok(false)` for a caller to mishandle, so the accepts-invalid shape a
+    /// `.is_err()`-gated caller once produced is unrepresentable. Fails closed.
+    /// Do not restore a boolean return.
     fn verify(
         &self,
         public_key: &HybridPublicKey,
+        domain: &[u8],
         message: &[u8],
         signature: &HybridSignature,
-    ) -> Result<bool, CryptoError>;
+    ) -> Result<(), CryptoError>;
 }
 
 pub struct HybridEd25519MlDsa;
 
-impl SignatureScheme for HybridEd25519MlDsa {
-    fn keypair_generate(&self) -> Result<(HybridPublicKey, HybridSecretKey), CryptoError> {
+impl HybridEd25519MlDsa {
+    /// The scheme's domain-separated inner preimage (SA-R-1 / SA-R-5):
+    /// `cSHAKE256(customization = domain, input = scheme_id ‖ message)`.
+    ///
+    /// Binding the scheme id in the signed bytes closes the cross-scheme
+    /// confusion the round found (a signature's input no longer depends only
+    /// on the message); the `domain` customization separates surfaces. The PQ
+    /// half signs this digest; the classical half signs `digest ‖ σ_pq`.
+    fn preimage(domain: &[u8], message: &[u8]) -> [u8; 32] {
+        let mut framed = Vec::with_capacity(1 + message.len());
+        framed.push(HYBRID_SCHEME_ID_ED25519_ML_DSA_65);
+        framed.extend_from_slice(message);
+        shekyl_crypto_hash::cshake256_32(domain, &framed)
+    }
+}
+
+// `keypair_generate` is test-support only (F-7): the old trait method read as a
+// production API and risked a non-derived keypair reaching a wallet. Renamed so
+// the name announces itself and gated so it cannot be called from production.
+#[cfg(any(test, feature = "test-utils"))]
+impl HybridEd25519MlDsa {
+    pub fn generate_ephemeral_keypair_for_tests(
+        &self,
+    ) -> Result<(HybridPublicKey, HybridSecretKey), CryptoError> {
         let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
         let verifying_key = signing_key.verifying_key();
         let (ml_dsa_public, ml_dsa_secret) =
@@ -269,10 +350,13 @@ impl SignatureScheme for HybridEd25519MlDsa {
 
         Ok((public_key, secret_key))
     }
+}
 
+impl SignatureScheme for HybridEd25519MlDsa {
     fn sign(
         &self,
         secret_key: &HybridSecretKey,
+        domain: &[u8],
         message: &[u8],
     ) -> Result<HybridSignature, CryptoError> {
         secret_key.validate()?;
@@ -296,10 +380,20 @@ impl SignatureScheme for HybridEd25519MlDsa {
         let ml_dsa_private = ml_dsa_65::PrivateKey::try_from_bytes(*ml_dsa_secret)
             .map_err(|e| CryptoError::SerializationError(e.into()))?;
 
-        let ed25519_signature = signing_key.sign(message);
+        // Nested combiner (SA-R-1): PQ-inner, Ed25519-outer.
+        let inner = Self::preimage(domain, message);
+        // PQ half signs the domained digest, empty ML-DSA ctx (SA-R-3, KAT-pinned).
         let ml_dsa_signature = ml_dsa_private
-            .try_sign(message, &[])
+            .try_sign(&inner, &[])
             .map_err(|e| CryptoError::SerializationError(e.into()))?;
+        // Classical half signs `inner ‖ σ_pq`. A verifier that skips the PQ
+        // half cannot reconstruct this outer message, so a degenerate
+        // implementation fails to verify rather than verifying insecurely
+        // (fails-closed). The nesting order is load-bearing — do not flip it.
+        let mut outer = Vec::with_capacity(inner.len() + ml_dsa_signature.len());
+        outer.extend_from_slice(&inner);
+        outer.extend_from_slice(&ml_dsa_signature);
+        let ed25519_signature = signing_key.sign(&outer);
 
         Ok(HybridSignature {
             ed25519: ed25519_signature.to_bytes().to_vec(),
@@ -310,9 +404,10 @@ impl SignatureScheme for HybridEd25519MlDsa {
     fn verify(
         &self,
         public_key: &HybridPublicKey,
+        domain: &[u8],
         message: &[u8],
         signature: &HybridSignature,
-    ) -> Result<bool, CryptoError> {
+    ) -> Result<(), CryptoError> {
         public_key.validate()?;
         signature.validate()?;
 
@@ -335,12 +430,19 @@ impl SignatureScheme for HybridEd25519MlDsa {
         let ml_dsa_public_key = ml_dsa_65::PublicKey::try_from_bytes(ml_dsa_public)
             .map_err(|e| CryptoError::SerializationError(e.into()))?;
 
-        let ed25519_ok = ed25519_verifying_key
-            .verify(message, &ed25519_signature)
-            .is_ok();
-        let ml_dsa_ok = ml_dsa_public_key.verify(message, &ml_dsa_signature, &[]);
-
-        Ok(ed25519_ok && ml_dsa_ok)
+        let inner = Self::preimage(domain, message);
+        // Verify the PQ inner first (fails-closed order): the classical outer
+        // is meaningless if the PQ half it wraps is not itself valid.
+        if !ml_dsa_public_key.verify(&inner, &ml_dsa_signature, &[]) {
+            return Err(CryptoError::SignatureVerificationFailed);
+        }
+        let mut outer = Vec::with_capacity(inner.len() + ml_dsa_signature.len());
+        outer.extend_from_slice(&inner);
+        outer.extend_from_slice(&ml_dsa_signature);
+        ed25519_verifying_key
+            .verify(&outer, &ed25519_signature)
+            .map_err(|_| CryptoError::SignatureVerificationFailed)?;
+        Ok(())
     }
 }
 
@@ -399,6 +501,13 @@ mod tests {
         HybridEd25519MlDsa
     }
 
+    /// A real surface domain, used for the round-trip tests.
+    const D: &[u8] = SCHEME_DOMAIN_PQC_AUTH_TX;
+
+    fn kp() -> (HybridPublicKey, HybridSecretKey) {
+        scheme().generate_ephemeral_keypair_for_tests().unwrap()
+    }
+
     #[allow(clippy::cast_possible_truncation)]
     fn from_hex(s: &str) -> Vec<u8> {
         assert_eq!(s.len() % 2, 0, "hex string must have even length");
@@ -415,72 +524,97 @@ mod tests {
     #[test]
     fn keygen_sign_verify_roundtrip() {
         let scheme = scheme();
-        let (pk, sk) = scheme.keypair_generate().unwrap();
+        let (pk, sk) = kp();
         let msg = b"shekyl hybrid pq signature test";
-        let sig = scheme.sign(&sk, msg).unwrap();
-        assert!(scheme.verify(&pk, msg, &sig).unwrap());
+        let sig = scheme.sign(&sk, D, msg).unwrap();
+        scheme.verify(&pk, D, msg, &sig).unwrap();
     }
 
+    /// SA-R-4 frozen v1 negative control (never regenerated).
+    /// `PQC_TEST_VECTOR_001.json` pins a **v1 parallel** signature from the
+    /// pre-SA-2 construction. After the version bump, `from_canonical_bytes`
+    /// must **reject** it at parse (version byte 1 ≠ `HYBRID_SIG_VERSION` = 2)
+    /// — the security boundary of the round, proven by a signature that once
+    /// verified and now cannot even be constructed into a `HybridSignature`.
     #[test]
-    fn documented_vector_verifies() {
+    fn frozen_v1_vector_is_rejected_at_parse() {
         let raw = include_str!("../../../docs/PQC_TEST_VECTOR_001.json");
         let v: Value = serde_json::from_str(raw).unwrap();
+        let signature_bytes = from_hex(v["hybrid_signature_hex"].as_str().unwrap());
 
-        let message_hex = v["message_hex"].as_str().unwrap();
-        let public_key_hex = v["hybrid_public_key_hex"].as_str().unwrap();
-        let signature_hex = v["hybrid_signature_hex"].as_str().unwrap();
-
-        let message = from_hex(message_hex);
-        let public_key_bytes = from_hex(public_key_hex);
-        let signature_bytes = from_hex(signature_hex);
-
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            assert_eq!(
-                public_key_bytes.len(),
-                v["hybrid_public_key_len"].as_u64().unwrap() as usize
-            );
-            assert_eq!(
-                signature_bytes.len(),
-                v["hybrid_signature_len"].as_u64().unwrap() as usize
-            );
-        }
-
-        let pk = HybridPublicKey::from_canonical_bytes(&public_key_bytes).unwrap();
-        let sig = HybridSignature::from_canonical_bytes(&signature_bytes).unwrap();
-        let scheme = scheme();
-
-        assert!(scheme.verify(&pk, &message, &sig).unwrap());
-
-        let mut tampered = message.clone();
-        tampered[0] ^= 0x01;
-        assert!(!scheme.verify(&pk, &tampered, &sig).unwrap());
+        // The pinned bytes are a well-formed v1 encoding — the first byte is 1.
+        assert_eq!(signature_bytes[0], 1, "fixture must be a v1 signature");
+        assert!(
+            HybridSignature::from_canonical_bytes(&signature_bytes).is_err(),
+            "a v1 parallel signature must be refused at parse under HYBRID_SIG_VERSION=2"
+        );
     }
 
     #[test]
     fn reject_when_ed25519_component_fails() {
         let scheme = scheme();
-        let (pk, sk) = scheme.keypair_generate().unwrap();
+        let (pk, sk) = kp();
         let msg = b"shekyl hybrid pq signature test";
-        let mut sig = scheme.sign(&sk, msg).unwrap();
+        let mut sig = scheme.sign(&sk, D, msg).unwrap();
         sig.ed25519[0] ^= 0x01;
-        assert!(!scheme.verify(&pk, msg, &sig).unwrap());
+        assert!(scheme.verify(&pk, D, msg, &sig).is_err());
     }
 
     #[test]
     fn reject_when_ml_dsa_component_fails() {
         let scheme = scheme();
-        let (pk, sk) = scheme.keypair_generate().unwrap();
+        let (pk, sk) = kp();
         let msg = b"shekyl hybrid pq signature test";
-        let mut sig = scheme.sign(&sk, msg).unwrap();
+        let mut sig = scheme.sign(&sk, D, msg).unwrap();
         sig.ml_dsa[0] ^= 0x01;
-        assert!(!scheme.verify(&pk, msg, &sig).unwrap());
+        assert!(scheme.verify(&pk, D, msg, &sig).is_err());
+    }
+
+    /// The domain binds: a signature made under one surface domain does not
+    /// verify under another (SA-R-2).
+    #[test]
+    fn domain_binds() {
+        let scheme = scheme();
+        let (pk, sk) = kp();
+        let msg = b"cross-surface message";
+        let sig = scheme.sign(&sk, SCHEME_DOMAIN_PQC_AUTH_TX, msg).unwrap();
+        assert!(
+            scheme
+                .verify(&pk, SCHEME_DOMAIN_EMISSION_CLAIM, msg, &sig)
+                .is_err(),
+            "a signature must not verify under a different surface domain"
+        );
+    }
+
+    /// A v1-style *parallel* signature (both halves over the bare message)
+    /// fails v2 nested verification even with the version byte forced to 2 —
+    /// the cryptographic backstop behind the parse-time gate. The PQ half
+    /// signed the bare message, not `preimage`, so the nested check rejects it.
+    #[test]
+    fn parallel_signature_fails_nested_verify() {
+        use ed25519_dalek::{Signer as _, SigningKey};
+        use fips204::traits::{SerDes as _, Signer as _};
+        let (pk, sk) = kp();
+        let msg = b"parallel forgery attempt";
+
+        // Hand-build the legacy parallel construction: both halves sign `msg`.
+        let ed_secret: [u8; ED25519_SECRET_KEY_LENGTH] = sk.ed25519.clone().try_into().unwrap();
+        let ml_secret: [u8; ML_DSA_65_SECRET_KEY_LENGTH] = sk.ml_dsa.clone().try_into().unwrap();
+        let ed_key = SigningKey::from_bytes(&ed_secret);
+        let ml_key = ml_dsa_65::PrivateKey::try_from_bytes(ml_secret).unwrap();
+        let parallel = HybridSignature {
+            ed25519: ed_key.sign(msg).to_bytes().to_vec(),
+            ml_dsa: ml_key.try_sign(msg, &[]).unwrap().to_vec(),
+        };
+        assert!(
+            scheme().verify(&pk, D, msg, &parallel).is_err(),
+            "a parallel signature must fail nested verification"
+        );
     }
 
     #[test]
     fn public_key_canonical_roundtrip() {
-        let scheme = scheme();
-        let (pk, _) = scheme.keypair_generate().unwrap();
+        let (pk, _) = kp();
         let encoded = pk.to_canonical_bytes().unwrap();
         let decoded = HybridPublicKey::from_canonical_bytes(&encoded).unwrap();
         assert_eq!(pk.ed25519, decoded.ed25519);
@@ -490,9 +624,9 @@ mod tests {
     #[test]
     fn signature_canonical_roundtrip() {
         let scheme = scheme();
-        let (_, sk) = scheme.keypair_generate().unwrap();
+        let (_, sk) = kp();
         let msg = b"canonical signature roundtrip";
-        let sig = scheme.sign(&sk, msg).unwrap();
+        let sig = scheme.sign(&sk, D, msg).unwrap();
         let encoded = sig.to_canonical_bytes().unwrap();
         let decoded = HybridSignature::from_canonical_bytes(&encoded).unwrap();
         assert_eq!(sig.ed25519, decoded.ed25519);
@@ -501,8 +635,7 @@ mod tests {
 
     #[test]
     fn secret_key_canonical_roundtrip() {
-        let scheme = scheme();
-        let (_, sk) = scheme.keypair_generate().unwrap();
+        let (_, sk) = kp();
         let encoded = sk.to_canonical_bytes().unwrap();
         let decoded = HybridSecretKey::from_canonical_bytes(&encoded).unwrap();
         assert_eq!(sk.ed25519, decoded.ed25519);
@@ -511,8 +644,7 @@ mod tests {
 
     #[test]
     fn malformed_public_key_rejected() {
-        let scheme = scheme();
-        let (pk, _) = scheme.keypair_generate().unwrap();
+        let (pk, _) = kp();
         let mut encoded = pk.to_canonical_bytes().unwrap();
         encoded[4] = 0; // corrupt encoded ed25519 length field
         assert!(HybridPublicKey::from_canonical_bytes(&encoded).is_err());
