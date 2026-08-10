@@ -543,8 +543,9 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
 /// `5=UpstreamError`, `6=BatchVerificationFailed`, `7=TreeDepthTooLarge`,
 /// `8=InputCountMismatch` (`po_count != pqc_hash_count`, checked before any slicing). Never
 /// `4` (`KeyImageCountMismatch`) — this path has no key images. Anti-replay is the
-/// emission per-epoch dedup, not a key image; the ML-DSA leaf gate is the sibling
-/// [`shekyl_emission_hybrid_auth_verify`].
+/// emission per-epoch dedup, not a key image; the hybrid leaf-gated auth check is
+/// step 8 of the coarse `shekyl_emission_vin_verify` call
+/// (`shekyl_archival_retention::emission_verify::emission_vin_verify_auth`).
 ///
 /// # Safety
 /// Every pointer must be valid for its stated length; `tree_root_ptr` and
@@ -645,102 +646,6 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
             tracing::debug!(error = ?e, tree_depth, "membership-only verify error");
             e.discriminant()
         }
-    }
-}
-
-/// Verify one reward-emission hybrid vin-auth (C-1 calls this per auth: Auth-B backing,
-/// Auth-P pseudonym). Given `P`'s canonical hybrid pubkey, the binding message, a
-/// canonical hybrid signature, and the in-circuit committed leaf hash:
-///  1. recompute `hash_pqc_public_key(pubkey)` and demand equality with `leaf_hash`
-///     — this binds the auth to the **proven leaf**, not merely *a* leaf (gate-6 §9.6);
-///  2. verify the hybrid signature (Ed25519 **and** ML-DSA-65) over `msg`.
-///
-/// **Leaf-hash input — do not get this wrong:** despite the `pqc_pk` naming,
-/// `hash_pqc_public_key` hashes the **full canonical hybrid** public key bytes
-/// (Ed25519 ‖ ML-DSA-65), exactly what curve-tree leaves commit
-/// (`shekyl_crypto_pq::derivation::derive_pqc_leaf_hash`). A caller hashing only the ML-DSA
-/// component computes a *different* `leaf_hash` and gets systematic `LEAF_HASH_MISMATCH`.
-///
-/// Because the leaf commits `H(full hybrid pubkey)` and step 2 exercises **both** halves,
-/// the auth binds `P` exactly as tightly as the leaf — no committed-vs-authenticated
-/// asymmetry, so soundness does not rest on any "Ed25519 non-distinguishing" invariant.
-/// Order matters: the leaf-hash equality is checked first so a signature over an
-/// unrelated (but valid) key cannot pass. Returns [`SHEKYL_EMISSION_HYBRID_AUTH_OK`] or an
-/// `SHEKYL_EMISSION_HYBRID_AUTH_ERR_*` discriminant. `pubkey_len` / `sig_len` must equal the
-/// canonical hybrid pubkey / signature lengths — a non-canonical length returns
-/// `PUBKEY_DESER` / `SIG_DESER` up front, before the buffer is read (an FFI DoS guard).
-///
-/// # Safety
-/// Every pointer must be valid for its stated length; `leaf_hash_ptr` must point to
-/// 32 readable bytes.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_emission_hybrid_auth_verify(
-    pubkey_ptr: *const u8,
-    pubkey_len: usize,
-    msg_ptr: *const u8,
-    msg_len: usize,
-    sig_ptr: *const u8,
-    sig_len: usize,
-    leaf_hash_ptr: *const u8,
-) -> u8 {
-    use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
-    use shekyl_crypto_pq::signature::{
-        HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
-    };
-
-    // FFI DoS guard: `scheme_id = 1` hybrid pubkey/signature are fixed-length canonical, so
-    // reject any other length up front — before slicing, hashing, or parsing an oversized
-    // untrusted buffer. Correct by contract (this function requires canonical encodings), and
-    // cheap: it bounds the subsequent `hash_pqc_public_key` and `from_canonical_bytes` to the
-    // fixed canonical size.
-    if pubkey_len != SINGLE_KEY_CANONICAL_LEN {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER;
-    }
-    if sig_len != SINGLE_SIG_CANONICAL_LEN {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER;
-    }
-
-    let Some(pubkey_bytes) = (unsafe { slice_from_ptr(pubkey_ptr, pubkey_len) }) else {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
-    };
-    let Some(msg) = (unsafe { slice_from_ptr(msg_ptr, msg_len) }) else {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
-    };
-    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_ptr, sig_len) }) else {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
-    };
-    if leaf_hash_ptr.is_null() {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
-    }
-    let leaf_hash: [u8; 32] = unsafe {
-        let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(leaf_hash_ptr, buf.as_mut_ptr(), 32);
-        buf
-    };
-
-    // (1) Leaf-binding first: the auth must be over the *proven leaf*'s pqc_pk.
-    if shekyl_crypto_pq::derivation::hash_pqc_public_key(pubkey_bytes) != leaf_hash {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH;
-    }
-
-    let Ok(pubkey) = HybridPublicKey::from_canonical_bytes(pubkey_bytes) else {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER;
-    };
-    let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER;
-    };
-
-    // (2) Hybrid verify (Ed25519 && ML-DSA-65). The leaf-hash gate above is
-    // the backing-role check, so this uses the backing surface domain (SA-R-2).
-    match SignatureScheme::verify(
-        &HybridEd25519MlDsa,
-        &pubkey,
-        shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
-        msg,
-        &sig,
-    ) {
-        Ok(()) => SHEKYL_EMISSION_HYBRID_AUTH_OK,
-        Err(_) => SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY,
     }
 }
 

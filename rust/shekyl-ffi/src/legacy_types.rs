@@ -125,28 +125,6 @@ pub struct ShekylFcmpProveResult {
     pub success: bool,
 }
 
-/// Reward-emission **hybrid** vin-auth verify primitive (PR-E1; the C-1 hard-gate core).
-///
-/// The auth is hybrid (Ed25519 + ML-DSA-65), matching every other signature in the
-/// system, **not** ML-DSA-only. This is the ratified posture: the emission auth is a
-/// proof-of-possession-plus-binding, and the live threat the Ed25519 leg closes is a
-/// *classical cryptanalytic break of ML-DSA-65* (orthogonal to seed compromise, where
-/// the jointly-derived halves are possession-equivalent). Auth-P (stake-side) has **no**
-/// membership-proof classical fallback, so ML-DSA-only there would be a single point of
-/// cryptographic failure — disqualifying on a quantum-posture-priority system. See
-/// `REWARD_EMISSION_VIN_PLAN.md` R1.A(2) (retracted) / §8.0.2.
-pub const SHEKYL_EMISSION_HYBRID_AUTH_OK: u8 = 0;
-/// A required pointer was null.
-pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR: u8 = 1;
-/// The supplied `P_pubkey` bytes are not a canonical hybrid public key.
-pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER: u8 = 2;
-/// The supplied signature bytes are not a canonical hybrid signature.
-pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER: u8 = 3;
-/// `H(pqc_pk)` of the supplied key does not equal the in-circuit committed leaf hash.
-pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH: u8 = 4;
-/// The hybrid (Ed25519 + ML-DSA-65) signature did not verify over the message.
-pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY: u8 = 5;
-
 /// Result of `shekyl_sign_transaction`.
 ///
 /// On success, `success` is true and `proofs_json` contains a JSON-encoded

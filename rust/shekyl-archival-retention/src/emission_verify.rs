@@ -700,9 +700,9 @@ pub fn emission_vin_verify_backing(
 /// verifier share, so they cannot drift), then verifies:
 ///
 /// 1. **Auth-B (stake-side)** — the leaf gate first
-///    (`hash_pqc_public_key(backing_pubkey) == pqc_pk_hash`, the same
-///    order the PR-E1 `shekyl_emission_hybrid_auth_verify` primitive pins:
-///    a signature over an unrelated-but-valid key must not pass), then the
+///    (`hash_pqc_public_key(backing_pubkey) == pqc_pk_hash`; the order is
+///    load-bearing: a signature over an unrelated-but-valid key must not
+///    pass — this function is where that order is pinned), then the
 ///    hybrid signature `auth_backing` under `backing_pubkey` over the
 ///    backing-role message. This binds the auth to the **proven leaf**, not
 ///    merely *a* leaf (gate-6 §9.6).

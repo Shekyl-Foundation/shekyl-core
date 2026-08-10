@@ -755,7 +755,10 @@ arithmetic and crypto never re-appear as C++ logic.
 7. **FCMP balance** — fee `txin_to_key` via existing `shekyl_fcmp_verify`.
 8. **Hybrid auth gate (§2, R1.A)** — recompute `H(pqc_pk)`, demand equality with the
    in-circuit leaf scalar, and verify the hybrid (Ed25519 + ML-DSA-65) auth(s) over
-   `emission_auth_msg` (R1.A binding) via `shekyl_emission_hybrid_auth_verify`.
+   `emission_auth_msg` (R1.A binding) via `emission_vin_verify_auth` inside the coarse
+   `shekyl_emission_vin_verify` call (the standalone PR-E1 per-auth FFI primitive
+   `shekyl_emission_hybrid_auth_verify` was retired in PR-SA-2 — it hardcoded the
+   backing domain and had no production caller once the coarse call landed).
 
 **C++ (thin shim):**
 1. **Structural pre-gate** — extend `check_inputs_types_supported` to accept
