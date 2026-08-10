@@ -2044,21 +2044,23 @@ TEST_F(levin_notify, private_forward_without_padding)
 
     ASSERT_EQ(10u, contexts_.size());
 
-    /* No loop waiting on a fluff here, and that absence IS the assertion.
-       `forward` is pre-fluff traffic the node introduces itself, and
-       Dandelion++ §4.4 has the origin stem its own transaction regardless of
-       its epoch fluff role (RD-4; the public `local_without_padding` case
-       says "must always be stem"). Waiting for a fluff outcome would wait
-       forever — which is what the first draft of this case did.
+    /* Role-dependent, so both outcomes must be observed rather than assumed —
+       the shape the public `forward_without_padding` case uses.
 
-       What this pins: that invariant now holds on the ANONYMITY zone too.
-       Before §89 this method fell through to a diffusion here. Four rounds,
-       each on a freshly drawn epoch, so a role-dependent regression cannot
-       hide behind one lucky draw. */
-    for (unsigned round = 0; round < 4; ++round)
+       `forward` is NOT exempt from the epoch role the way `local` is. Only a
+       node's OWN transaction always stems (D++ §4.4); a forwarded one belongs
+       to someone else and takes whatever role the epoch drew. An earlier draft
+       asserted always-stem here by over-generalising from the `local` case —
+       it passed under a `levin_notify.*` filter and failed in the full suite,
+       because the run order moves the RNG and with it the drawn role. */
+    bool has_stemmed = false;
+    bool has_fluffed = false;
+    while (!has_stemmed || !has_fluffed)
     {
-        EXPECT_TRUE(run_private_round(notifier, txs, cryptonote::relay_method::forward, false))
-          << "forward must stem on every epoch role; round " << round;
+        const bool is_stem =
+          run_private_round(notifier, txs, cryptonote::relay_method::forward, false);
+        has_stemmed |= is_stem;
+        has_fluffed |= !is_stem;
         notifier.run_epoch();
     }
 }
@@ -2335,21 +2337,23 @@ TEST_F(levin_notify, private_forward_with_padding)
 
     ASSERT_EQ(10u, contexts_.size());
 
-    /* No loop waiting on a fluff here, and that absence IS the assertion.
-       `forward` is pre-fluff traffic the node introduces itself, and
-       Dandelion++ §4.4 has the origin stem its own transaction regardless of
-       its epoch fluff role (RD-4; the public `local_without_padding` case
-       says "must always be stem"). Waiting for a fluff outcome would wait
-       forever — which is what the first draft of this case did.
+    /* Role-dependent, so both outcomes must be observed rather than assumed —
+       the shape the public `forward_without_padding` case uses.
 
-       What this pins: that invariant now holds on the ANONYMITY zone too.
-       Before §89 this method fell through to a diffusion here. Four rounds,
-       each on a freshly drawn epoch, so a role-dependent regression cannot
-       hide behind one lucky draw. */
-    for (unsigned round = 0; round < 4; ++round)
+       `forward` is NOT exempt from the epoch role the way `local` is. Only a
+       node's OWN transaction always stems (D++ §4.4); a forwarded one belongs
+       to someone else and takes whatever role the epoch drew. An earlier draft
+       asserted always-stem here by over-generalising from the `local` case —
+       it passed under a `levin_notify.*` filter and failed in the full suite,
+       because the run order moves the RNG and with it the drawn role. */
+    bool has_stemmed = false;
+    bool has_fluffed = false;
+    while (!has_stemmed || !has_fluffed)
     {
-        EXPECT_TRUE(run_private_round(notifier, txs, cryptonote::relay_method::forward, true))
-          << "forward must stem on every epoch role; round " << round;
+        const bool is_stem =
+          run_private_round(notifier, txs, cryptonote::relay_method::forward, true);
+        has_stemmed |= is_stem;
+        has_fluffed |= !is_stem;
         notifier.run_epoch();
     }
 }
