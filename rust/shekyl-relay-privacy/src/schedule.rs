@@ -464,6 +464,58 @@ pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 /// moved. See `DAEMON_RELAY_PRIVACY.md` §17.
 pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 874;
 
+/// The same wait on the **anonymity zones**, in seconds (§89.2).
+///
+/// The embargo went per-zone, and this follows it: 874 s was derived against a
+/// 190 s embargo, and an anonymity-zone transaction now sits under a 499 s one.
+/// A wallet waiting the clearnet time on a Tor-originated transaction declares
+/// failure while the transaction is still alive and un-reserves its inputs —
+/// the same defect the `3/2`-of-the-mean rule had, in a new place.
+///
+/// **This is per-zone rather than one worst-zone global for §75's reason, the
+/// same one §89.2 gave for the embargo itself.** A single global would make
+/// every clearnet wallet wait 2297 s — 38 minutes before a failed send is
+/// reported — to cover a path it never touches. That is a real usability cost
+/// (rules 80, 82) charged to the overwhelming majority of traffic, which is
+/// precisely the sorting §75 rejects.
+///
+/// # A wallet that cannot determine the zone must use this value
+///
+/// The applicable zone is the one the **daemon** relayed on, not the transport
+/// the wallet uses to reach it. A wallet that cannot establish it must assume
+/// the anonymity zone: over-waiting delays a failure report, while under-waiting
+/// un-reserves the inputs of a transaction that is still propagating, and only
+/// one of those is recoverable.
+pub const ANON_ZONE_PROPAGATION_TIMEOUT_SECS: u32 = 2_297;
+
+/// Per-zone provisioning, asserted at **compile time** rather than in a test.
+///
+/// If these two ever collapse to one value, §89.2's decision has been reversed
+/// — either back to a worst-zone global (charging clearnet a wait it does not
+/// need) or, worse, to the clearnet value on both (under-waiting the anonymity
+/// path, which un-reserves the inputs of a live transaction). Neither should be
+/// reachable by editing a constant, so this fails the build rather than a run.
+const _: () = assert!(
+    ANON_ZONE_PROPAGATION_TIMEOUT_SECS > ADOPTED_PROPAGATION_TIMEOUT_SECS,
+    "the anonymity wait must exceed clearnet's — per-zone provisioning was dropped"
+);
+
+/// The "still unseen → failed" wait for one relay zone, in seconds.
+///
+/// Prefer this over reading either constant directly, so the zone chooses the
+/// value rather than the call site. `Invalid` — an unknown origin — resolves to
+/// the anonymity value, matching
+/// [`DandelionParams::adopted_for`](crate::params::DandelionParams::adopted_for)
+/// and for the same reason: the shorter wait is the harmful direction.
+#[must_use]
+pub const fn propagation_timeout_secs(zone: crate::params::RelayZone) -> u32 {
+    if zone.is_clearnet() {
+        ADOPTED_PROPAGATION_TIMEOUT_SECS
+    } else {
+        ANON_ZONE_PROPAGATION_TIMEOUT_SECS
+    }
+}
+
 impl EmbargoTimer {
     /// The configuration this crate recommends shipping: exact discrete survival
     /// solve ([`crate::derive_embargo`]) at [`DEFAULT_EMBARGO_TICK_MILLIS`],
@@ -965,6 +1017,38 @@ mod tests {
             t.judge_failed_after_secs(1_000) > secs,
             "a 1-in-1000 deadline must wait longer than 1-in-100"
         );
+    }
+
+    #[test]
+    fn every_zone_waits_longer_than_its_own_embargo() {
+        // The pin above fixes clearnet. This fixes the property that made a
+        // per-zone timeout necessary at all: the wait must clear the embargo
+        // the transaction is actually sitting under, on EVERY zone. Asserting
+        // it per zone rather than on one constant is the point — a single
+        // global satisfies it on the zone it was derived from and silently
+        // fails on the other, which is exactly how 874 s came to be wrong for
+        // the anonymity path.
+        for zone in [
+            crate::params::RelayZone::Public,
+            crate::params::RelayZone::I2p,
+            crate::params::RelayZone::Tor,
+            crate::params::RelayZone::Invalid,
+        ] {
+            let t = EmbargoTimer::adopted(&DandelionParams::adopted_for(zone));
+            let derived = t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
+            assert_eq!(
+                derived,
+                propagation_timeout_secs(zone),
+                "{zone:?}: the shipped wait ({}s) is not what the table derives ({derived}s)",
+                propagation_timeout_secs(zone)
+            );
+            assert!(
+                propagation_timeout_secs(zone) > t.mean_secs(),
+                "{zone:?}: a 1-in-{PROPAGATION_FALSE_FAIL_ONE_IN} wait must exceed the \
+                 {}s embargo mean it is waiting on",
+                t.mean_secs()
+            );
+        }
     }
 
     #[test]

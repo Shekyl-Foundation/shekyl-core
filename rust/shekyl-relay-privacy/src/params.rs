@@ -244,6 +244,64 @@ impl StemGraph {
     }
 }
 
+/// The network a relay zone runs on — the Rust mirror of
+/// `epee::net_utils::zone` (`contrib/epee/include/net/enums.h`).
+///
+/// Discriminants match the C++ enum exactly, because the value crosses the
+/// FFI as a `u8` and is persisted in `txpool_tx_meta_t`'s two reserved bits
+/// (§65.4). `Invalid == 0` is load-bearing on both sides: a pre-upgrade
+/// record's spare bits are zero, so it decodes to the sentinel rather than to
+/// a wrong network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum RelayZone {
+    /// `zone::invalid` — origin unknown. Reached by pre-upgrade txpool
+    /// records and by nothing a current binary writes.
+    Invalid = 0,
+    /// `zone::public_` — clearnet.
+    Public = 1,
+    /// `zone::i2p`.
+    I2p = 2,
+    /// `zone::tor`.
+    Tor = 3,
+}
+
+impl RelayZone {
+    /// Decode the two-bit persisted form.
+    ///
+    /// Total by construction: two bits cannot express a value outside the
+    /// enum, which is the reason the field is two bits and not a `u8`. The
+    /// C++ side `static_assert`s the same fact against the epee enum, so a
+    /// future zone would fail to build rather than silently alias.
+    #[must_use]
+    pub const fn from_bits(bits: u8) -> Self {
+        match bits & 0b11 {
+            1 => Self::Public,
+            2 => Self::I2p,
+            3 => Self::Tor,
+            _ => Self::Invalid,
+        }
+    }
+
+    /// The two-bit persisted form.
+    #[must_use]
+    pub const fn to_bits(self) -> u8 {
+        self as u8
+    }
+
+    /// Whether this zone is the clearnet.
+    ///
+    /// Deliberately **not** the negation of an `is_anonymity_network` helper:
+    /// `Invalid` is neither, and the embargo choice must not treat an unknown
+    /// origin as clearnet — that is the shorter embargo and so the
+    /// privacy-losing direction (see
+    /// [`DandelionParams::adopted_for`]).
+    #[must_use]
+    pub const fn is_clearnet(self) -> bool {
+        matches!(self, Self::Public)
+    }
+}
+
 /// The complete Dandelion++ parameter set, expressed as design inputs.
 ///
 /// Every derived quantity is a method, never a stored field: a caller cannot
@@ -442,8 +500,51 @@ impl DandelionParams {
     /// and the test suite asserts it.
     #[must_use]
     pub fn adopted() -> Self {
-        let hop = crate::verify_cost::adopted_hop_ms(1, crate::verify_cost::GENESIS_TREE_DEPTH)
-            .expect("the modal genesis cell is a pinned §85.3 measurement");
+        Self::adopted_for(RelayZone::Public)
+    }
+
+    /// The adopted parameter set **for one relay zone** (§89.2).
+    ///
+    /// §89 ruled the embargo per-zone rather than one global provisioned at
+    /// the worst zone. F-7's precedent does not transfer, by §63.2's keeper:
+    /// `fluff_return_ms` crosses transports because a fluff wave returns over
+    /// whatever network the node is on, so there is no per-zone value to pick;
+    /// `time_between_hop_ms` cannot cross, because the stem it spaces only
+    /// ever runs on one transport — and §59's coherence guarantees that, since
+    /// a transaction entering the anonymity zone's stem stays there until it
+    /// fluffs. The quantity is well-defined per zone in a way `F` is not.
+    ///
+    /// Only `time_between_hop_ms` varies. `fluff_return_ms` stays the single
+    /// worst-zone value F-7 measured — correctly, for the reason just given —
+    /// and `q`, the epoch pair and the graph are network-wide constants
+    /// (verified: `relay_zone_params` carries stems and epoch only, and
+    /// nothing zone-parameterises the fluff probability).
+    ///
+    /// # `Invalid` takes the longest embargo, not the shortest
+    ///
+    /// §65.4 reserved `zone::invalid == 0` as the *"origin unknown"* sentinel
+    /// so pre-upgrade txpool records decode correctly with no migration step,
+    /// and said such records fall back to "the global embargo". That phrase
+    /// was written when there was one embargo; there are now two, so the
+    /// fallback has to be chosen rather than inherited. **It resolves to the
+    /// anonymity set — the longer one.** Under-estimating shortens the
+    /// embargo, which is the privacy-losing direction (§65, §66), and the
+    /// alternative would hand an unknown-origin record the clearnet value on
+    /// the chance that it is clearnet. The cost is recovery latency on records
+    /// that cannot be created after the upgrade.
+    #[must_use]
+    pub fn adopted_for(zone: RelayZone) -> Self {
+        let transit = if zone.is_clearnet() {
+            crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS
+        } else {
+            crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS
+        };
+        let hop = crate::verify_cost::adopted_hop_ms_with_transit(
+            1,
+            crate::verify_cost::GENESIS_TREE_DEPTH,
+            transit,
+        )
+        .expect("the modal genesis cell is a pinned §85.3 measurement");
         Self {
             time_between_hop_ms: hop,
             ..Self::inherited()
@@ -751,6 +852,76 @@ mod tests {
     #[test]
     fn adopted_params_change_provenance_not_behaviour() {
         assert_eq!(DandelionParams::adopted(), DandelionParams::inherited());
+    }
+
+    #[test]
+    fn the_clearnet_zone_is_unmoved_by_going_per_zone() {
+        // §89.2 changes what the anonymity zones get. It must change nothing
+        // on clearnet, which carries the overwhelming majority of traffic —
+        // if this moves, per-zone provisioning has become the global-at-worst-
+        // zone posture §89.2 rejected, wearing a different shape.
+        assert_eq!(
+            DandelionParams::adopted(),
+            DandelionParams::adopted_for(RelayZone::Public),
+            "adopted() must remain exactly the clearnet set"
+        );
+        assert_eq!(
+            DandelionParams::adopted_for(RelayZone::Public).time_between_hop_ms,
+            175,
+            "the clearnet hop moved off its §88 value"
+        );
+    }
+
+    #[test]
+    fn the_anonymity_zones_take_the_longer_interim_hop() {
+        let anon = DandelionParams::adopted_for(RelayZone::Tor);
+        assert_eq!(
+            anon,
+            DandelionParams::adopted_for(RelayZone::I2p),
+            "i2p and tor are both rendezvous-addressed; nothing distinguishes them here"
+        );
+        // §63.2's own worst case — "ten times clearnet latency" — reproduced
+        // as verification floor + the labelled rendezvous assumption.
+        assert_eq!(anon.time_between_hop_ms, 1_750);
+        assert!(
+            anon.time_between_hop_ms > DandelionParams::adopted().time_between_hop_ms,
+            "the anonymity hop must exceed clearnet's: a rendezvous path is six \
+             relays where clearnet is one direct connection. If this ever \
+             inverts, the interim has been edited to the privacy-losing side"
+        );
+    }
+
+    #[test]
+    fn an_unknown_origin_takes_the_longer_embargo_not_the_shorter() {
+        // §65.4's "fall back to the global embargo" was written when there was
+        // one. There are now two, so the fallback is a choice — and it must be
+        // the longer, because under-estimating shortens the embargo (§65,
+        // §66). A pre-upgrade record could have been Tor-originated; giving it
+        // the clearnet value bets that it was not.
+        assert_eq!(
+            DandelionParams::adopted_for(RelayZone::Invalid).time_between_hop_ms,
+            DandelionParams::adopted_for(RelayZone::Tor).time_between_hop_ms,
+            "an unknown origin must be provisioned as the worst case it could be"
+        );
+        assert!(!RelayZone::Invalid.is_clearnet());
+    }
+
+    #[test]
+    fn the_two_bit_persisted_form_round_trips_every_zone() {
+        for zone in [
+            RelayZone::Invalid,
+            RelayZone::Public,
+            RelayZone::I2p,
+            RelayZone::Tor,
+        ] {
+            assert_eq!(RelayZone::from_bits(zone.to_bits()), zone);
+            assert!(zone.to_bits() <= 0b11, "a zone escaped the two-bit field");
+        }
+        // Two bits cannot express anything else, which is why the field is two
+        // bits: the decode is total rather than fallible.
+        for bits in 0_u8..=0b11 {
+            assert_eq!(RelayZone::from_bits(bits).to_bits(), bits);
+        }
     }
 
     #[test]

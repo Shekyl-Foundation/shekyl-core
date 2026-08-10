@@ -289,6 +289,37 @@ impl SpecVerifyCost {
 /// under-estimating shortens the embargo, the privacy-losing direction.
 pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 
+/// The transit assumption for the **anonymity zones** (i2p/tor), in
+/// milliseconds.
+///
+/// # INTERIM AND UNMEASURED — §89.5
+///
+/// This is an *assumption*, recorded at its site the way
+/// [`ADOPTED_TRANSIT_ASSUMPTION_MS`] is, and it is **not** a measurement.
+/// §89 ruled that the anonymity zone stems, which creates Tor-latency hops
+/// inside a stem for the first time and makes this term load-bearing on the
+/// embargo — §86's "refinement, not a gate" was stated under the no-stem
+/// posture and expired with it.
+///
+/// **Provenance.** §63.2 swept the anonymity path to *"ten times clearnet
+/// latency"*, `hop = 1750 ms`, as its worst case. Pairing this constant with
+/// the shared verification floor reproduces that hop exactly
+/// (124.5 + 1625 = 1749.5 → 1750), so the interim sits on the same worst case
+/// the retired analysis had already bounded rather than on a fresh guess.
+///
+/// **Why err high.** Under-estimating shortens the embargo, which is the
+/// privacy-losing direction (§65, §66). Over-estimating costs black-hole
+/// recovery latency and nothing else (§44.3 prices the pattern). So the
+/// interim deliberately provisions above any plausible rendezvous path, and
+/// **narrows** when the measurement lands.
+///
+/// **What the measurement must be.** Onion-to-onion *rendezvous* latency
+/// between two Shekyl nodes — the anonymity zone addresses peers by `.onion`
+/// (`src/net/tor_address.h`), so no exit relay appears in the topology a stem
+/// will ever traverse. A clearnet-vs-exit delta measures a different path and
+/// must not be substituted (§89.5).
+pub const ANON_ZONE_TRANSIT_ASSUMPTION_MS: f64 = 1_625.0;
+
 /// The adopted `hop` for a transaction shape: measured verification floor
 /// plus the labelled transit assumption, rounded to whole milliseconds.
 ///
@@ -314,13 +345,40 @@ pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 /// Propagates the table's refusal — an unpopulated or out-of-domain cell
 /// must not silently become a hop value (§83.3).
 pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<u32, VerifyCostRefusal> {
+    adopted_hop_ms_with_transit(n_in, depth, ADOPTED_TRANSIT_ASSUMPTION_MS)
+}
+
+/// [`adopted_hop_ms`] with the transit term supplied by the caller.
+///
+/// The verification floor is **shared across transports and this is not an
+/// approximation**: it is the same proof verified on the same machine, so the
+/// only term a transport can move is transit (§71.3's composition). That is
+/// why the per-zone `hop` is one substituted constant rather than a second
+/// measured surface — and why §63.2's keeper holds in code as well as in
+/// prose, `hop` being transport-bound while the cost inside it is not.
+///
+/// Callers pass [`ADOPTED_TRANSIT_ASSUMPTION_MS`] for clearnet or
+/// [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`] for i2p/tor; prefer
+/// [`crate::params::DandelionParams::adopted_for`] over calling this directly,
+/// so the zone chooses the constant rather than the call site.
+///
+/// # Errors
+///
+/// Propagates the table's refusal — an unpopulated or out-of-domain cell must
+/// not silently become a hop value (§83.3).
+pub fn adopted_hop_ms_with_transit(
+    n_in: usize,
+    depth: u32,
+    transit_ms: f64,
+) -> Result<u32, VerifyCostRefusal> {
     let f = SPEC_VERIFY_COST.f_ms(n_in, depth)?;
     // CLIPPY: exact — every populated cell is const-asserted plausible
-    // (positive, finite, < 10 s), so `f + transit` lies in (50, 10_050) and
-    // the rounded value fits u32 with neither truncation nor sign loss. A
-    // NaN cannot reach this cast; it cannot build (see the const guard).
+    // (positive, finite, < 10 s) and both shipped transit constants are
+    // finite and positive, so `f + transit` stays well inside u32 with
+    // neither truncation nor sign loss. A NaN cannot reach this cast; it
+    // cannot build (see the const guard).
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    Ok((f + ADOPTED_TRANSIT_ASSUMPTION_MS).round() as u32)
+    Ok((f + transit_ms).round() as u32)
 }
 
 #[cfg(test)]
