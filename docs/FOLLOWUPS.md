@@ -9241,12 +9241,23 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
-- **Relay: end-to-end witness for R-1's coherence branch, now that it is
-  live.** §89 woke the branch §63.8 recorded as dormant: the anonymity zone
-  stems, a stem send clears `dandelionpp_fluff`, so a receiver keeps its
-  `forward` default, `still_stemming` holds, and
-  `net_node.inl`'s `r1_coherence_keeps_origin` path fires — in the
-  **default** configuration, not only with covert enabled as §63.8 predicted.
+- **Relay: make an anonymity arrival relay at arrival — the receive-side half
+  of §89.** *(Rewritten 2026-08-10 by §89.8.1: the original entry was filed as
+  "end-to-end witness for R-1's coherence branch, now that it is live". The
+  branch is **not** live, and the missing witness is what hid that.)* §89 broke
+  link 1 of §63.8's dormancy chain — the anonymity zone stems, a stem send
+  clears `dandelionpp_fluff`, so a receiver keeps its `forward` default — but a
+  fifth link §63.8 never recorded still binds: `tx_pool.cpp:360` refuses to
+  propagate `forward` into `tvc.m_relay`, the batching switch in
+  `handle_notify_new_transactions` drops it, and `relay_transactions` is never
+  called at arrival with an anonymity origin. The transaction pools as
+  `forward` and re-emerges at `zone::public_` (`cryptonote_core.cpp:1069,1091`),
+  so its remaining stem hops run on **clearnet**.
+  **Two things ride on closing this**, and both are stated in §89.8: R-1's
+  coherence branch starts firing, and §89.2's "every remaining hop runs on one
+  transport" becomes true rather than assumed — today the anonymity embargo is
+  drawn for a path the transaction leaves after one hop, and no anonymity-zone
+  embargo is armed at all (§89.8.4).
   **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s six `private_*`
   cases pin that a stem emits the flag clear and a fluff sets it;
   (2) the pure gate — `r1_coherence_predicate` pins
@@ -9258,13 +9269,16 @@ its wake.
   `handle_notify_new_transactions` on a non-public context.
   **Blocker (rule 22):** that arrival path needs a `t_core` mock the unit
   suite does not have — the one protocol-handler test that stands up real
-  sockets is `GTEST_SKIP`ped as flaky. Building that harness is its own unit.
+  sockets is `GTEST_SKIP`ped as flaky. Building that harness is its own unit,
+  and it is now the *first* task rather than the verification of a landed one:
+  §89.7 asserted live-ness across this exact gap and was wrong.
   **Why it matters more than its size suggests:** §59.1 gated coherence
   because swallowing the fluff case strands anonymity-originated transactions
   in the anonymity subgraph — "a liveness break that would read as correct."
   It is also load-bearing for §89.2: the per-zone embargo is well-defined only
   because a transaction entering the anonymity stem stays there, which is this
-  branch. See `DAEMON_RELAY_PRIVACY.md` §89.7.
+  branch. See `DAEMON_RELAY_PRIVACY.md` §89.8 (and §89.7 for the superseded
+  reading).
 
 - **Wallet: stop holding a relay constant — ask the daemon whether a
   transaction is still in flight.** `wallet2.cpp` derives its

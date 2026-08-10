@@ -2379,17 +2379,26 @@ namespace nodetool
 
     if (origin != enet::zone::invalid)
     {
-      /* LIVE since §89 — this branch was dormant and is not any more.
+      /* STILL DORMANT — §89 did not wake this, and §89.7 said it did.
 
-         §63.8 recorded it as unreachable on a four-link chain; §89 breaks
-         link 1 (anonymity stem clears `dandelionpp_fluff`). Coherence fires
-         in the default configuration.
+         §63.8 closed it on a four-link chain and §89 breaks link 1 (an
+         anonymity stem clears `dandelionpp_fluff`). But the chain has a fifth
+         link §63.8 never recorded, and it binds on its own: a non-public
+         arrival takes `relay_method::forward`
+         (`cryptonote_protocol_handler.inl:969`), `tx_pool.cpp:360` refuses to
+         propagate `forward` into `tvc.m_relay`, and the batching switch drops
+         it (`// not supposed to happen here`). So `relay_transactions` is
+         never called at arrival with an anonymity origin, and `send_txs`
+         cannot see (anon origin, pre-fluff) whatever link 1 does.
 
-         **Witness.** Link 1 is pinned by `levin.cpp`'s `private_*` cases.
-         The pure gate (`r1_coherence_keeps_origin`) is pinned by
-         `r1_coherence_predicate`. End-to-end arrival through
-         `handle_notify_new_transactions` on a non-public context still needs
-         a `t_core` mock the suite lacks — see §89.7 / FOLLOWUPS. */
+         Kept, not deleted: it is correct for the world it will run in, and
+         that world is the receive-path change §89.8.2 names. What is wrong is
+         only the claim that it runs now.
+
+         **Witness.** Link 1 is pinned by `levin.cpp`'s `private_*` cases; the
+         pure gate by `r1_coherence_predicate`. The end-to-end arrival needs a
+         `t_core` mock the suite lacks — see §89.8 / FOLLOWUPS, and note that
+         the missing witness is exactly what hid the fifth link. */
       if (cryptonote::r1_coherence_keeps_origin(tx_relay, origin) &&
           m_network_zones.count(origin))
         return send(*m_network_zones.find(origin)); // coherence: no re-roll
