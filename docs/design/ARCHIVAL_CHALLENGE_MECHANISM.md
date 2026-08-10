@@ -793,18 +793,54 @@ the round kept trying to add forensics underneath it.
    co-residency and correlated uptime remain unaddressed (the circuit
    axis is already unrepresentable via `shekyl-p-transport`) and are
    worth more to an adversary than key-material statistics.
-   **Open checks before this is ruled:** (i) **onion-address mutability**
-   in the bond record — operators re-key services and replace hosts; if
-   the address is immutable like `bond_spend_pk`, losing the onion key
-   bricks the persona (rebond-or-brick — decide now, not when the first
-   operator hits it; under labeled derivation, rotation = a new label
-   index plus a record update). (ii) **The same-entity binding artifact**:
-   whether the attestation Ed25519 leg *is* the onion key
-   (endpoint-binding per-signature, but rotation-coupled) or a sibling
-   with an onion-key proof-of-possession over the bond record at
-   post/update (rotation-free; the PoP is the binding) — a TJ-B-adjacent
-   format decision, landing on the **bond wire**, which also means (iii)
-   a persisted-wire change ⇒ version-constant bump (rule 42) when built.
+   **Mutability — RULED (2026-08-10): rotation-in-place via
+   `EndpointUpdate`.** The reasoning of record: every endpoint-burn case
+   (compromised host, discovered address, lost onion key) leaves the
+   persona's economic position untouched — bond, holdings, join epoch,
+   earnings history, and the `[E, MAX)` interval state are all
+   unaffected; **only the routing field is spoiled**. Forcing an unbond
+   would destroy a clean record to fix a network address — and worse,
+   push the operator into a new persona with fresh principal funding,
+   which is precisely the clustering edge. Rotation-in-place is the
+   privacy-preserving option as well as the operationally sane one.
+   **The invariant the spec must state explicitly, because it reads as
+   obviously wrong once stated and gets implemented wrong when it
+   isn't: rotation resets NOTHING the window or the market reads.**
+   `good_through`, `join_settlement_epoch`, the bad-interval list, and
+   the failure-window history all survive an `EndpointUpdate`
+   untouched — otherwise rotation launders bad standing (a persona
+   approaching 11-of-13 rotates and buys a clean window for the price
+   of one transaction). Shape: **routing-only mutation, no economic or
+   standing side effects, authorized by the persona's attestation key,
+   fee-funded from persona earnings, effective at epoch boundary** so
+   the drawable snapshot (§4.1) and the endpoint move together.
+   **Residuals carried as stated, not solved:** the pre-first-claim
+   funding gap (bounded at one epoch); timing correlation if an
+   operator rotates many personas at once; and the compromise window
+   between host-takeover and the update landing, during which the
+   attacker can serve and countersign as P — survivable precisely
+   because serving and countersigning honestly is what P wanted, so the
+   attacker's best move is impersonation rather than damage.
+   **Open checks before the P-side closes:** (i) **The same-entity
+   binding artifact**: whether the attestation Ed25519 leg *is* the
+   onion key (endpoint-binding per-signature, but rotation-coupled) or
+   a sibling with an onion-key proof-of-possession over the bond record
+   at post/update (rotation-free; the PoP is the binding) — a
+   TJ-B-adjacent format decision landing on the **bond wire**, hence
+   (ii) a persisted-wire change ⇒ version-constant bump (rule 42) when
+   built. (iii) **The authorization tier for `EndpointUpdate`, checked
+   against the compromise-window residual it interacts with:**
+   hot-key-authorized rotation means the attacker in that window can
+   also *rotate* — hijacking the endpoint persistently rather than
+   impersonating transiently (both parties hold the hot key; a
+   rotation war resolves only by operator vigilance) — while
+   cold-authorized rotation is hijack-proof at the cost of touching
+   cold custody for a routine operation. Coupled to it: whether
+   emission-claim authorization (the bond `hybrid_public_key` the
+   PR-E3 auth gate verifies) sits hot or cold decides whether
+   "impersonate, never drain" covers the *earnings stream* as well as
+   the bond principal. Pose both tiers explicitly in the spec; do not
+   let the hot key inherit them by default.
 3. **Expiry semantics — CLOSED (2026-08-08): expiry ⇒ miss.** The
    temptation under unattributable expiry is to discard it
    (expiry⇒uncounted); that is precisely wrong — a durably dark P
