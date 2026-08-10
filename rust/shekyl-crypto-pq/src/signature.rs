@@ -3,11 +3,17 @@
 //! # Construction
 //!
 //! ```text
-//! preimage  = cSHAKE256(customization = domain, input = scheme_id ‖ message)
+//! preimage  = cSHAKE256-64(customization = domain, input = scheme_id ‖ message)
 //! σ_pq      = MLDSA.Sign(preimage, ctx = "")          // PQ-inner
 //! σ_ed      = Ed25519.Sign(preimage ‖ σ_pq)           // classical-outer
 //! wire      = HybridSignature { ed25519: σ_ed, ml_dsa: σ_pq }  // v2
 //! ```
+//!
+//! The preimage is **64 bytes** deliberately: the digest is the signed
+//! content, so its collision resistance bounds the unforgeability of both
+//! halves. 32 bytes would cap that at 2^128 — below ML-DSA-65's Category-3
+//! target (cf. FIPS 204's HashML-DSA, which pairs ML-DSA-65 with ≥384-bit
+//! digests); 64 bytes restores the full 2^256.
 //!
 //! Nesting is **fails-closed**: a verifier that skips the PQ half cannot
 //! reconstruct the classical outer message, so a degenerate implementation
@@ -345,16 +351,21 @@ pub struct HybridEd25519MlDsa;
 
 impl HybridEd25519MlDsa {
     /// The scheme's domain-separated inner preimage (SA-R-1 / SA-R-5):
-    /// `cSHAKE256(customization = domain, input = scheme_id ‖ message)`.
+    /// `cSHAKE256-64(customization = domain, input = scheme_id ‖ message)`.
     ///
     /// Binding the scheme id in the signed bytes closes the cross-scheme
     /// confusion the round found (a signature's input no longer depends only
     /// on the message); the `domain` customization separates surfaces. The PQ
     /// half signs this digest; the classical half signs `digest ‖ σ_pq`.
     ///
+    /// The width is 64 bytes, not 32: this digest is the signed content, so
+    /// its collision resistance bounds the whole scheme's unforgeability
+    /// against a counterparty who influences message bytes (see the module
+    /// docs). Do not narrow it.
+    ///
     /// Empty `domain` is refused: the underlying cSHAKE helper would assert,
     /// and a consensus API must fail closed with `Err`, not abort.
-    fn preimage(domain: &[u8], message: &[u8]) -> Result<[u8; 32], CryptoError> {
+    fn preimage(domain: &[u8], message: &[u8]) -> Result<[u8; 64], CryptoError> {
         if domain.is_empty() {
             return Err(CryptoError::InvalidInput(
                 "scheme domain must be non-empty".into(),
@@ -363,7 +374,17 @@ impl HybridEd25519MlDsa {
         let mut framed = Vec::with_capacity(1 + message.len());
         framed.push(HYBRID_SCHEME_ID_ED25519_ML_DSA_65);
         framed.extend_from_slice(message);
-        Ok(shekyl_crypto_hash::cshake256_32(domain, &framed))
+        Ok(shekyl_crypto_hash::cshake256_64(domain, &framed))
+    }
+
+    /// The classical-outer message: `inner ‖ σ_pq`. Load-bearing framing —
+    /// the exact bytes Ed25519 signs — single-sourced so sign and verify
+    /// cannot drift (the same reason [`Self::sign_nested`] exists).
+    fn outer_message(inner: &[u8; 64], sigma_pq: &[u8]) -> Vec<u8> {
+        let mut outer = Vec::with_capacity(inner.len() + sigma_pq.len());
+        outer.extend_from_slice(inner);
+        outer.extend_from_slice(sigma_pq);
+        outer
     }
 
     /// Single nested-sign body (SA-R-1). Production [`SignatureScheme::sign`]
@@ -376,7 +397,7 @@ impl HybridEd25519MlDsa {
         message: &[u8],
         sign_pq: impl FnOnce(
             &ml_dsa_65::PrivateKey,
-            &[u8; 32],
+            &[u8; 64],
         ) -> Result<[u8; ML_DSA_65_SIGNATURE_LENGTH], CryptoError>,
     ) -> Result<HybridSignature, CryptoError> {
         secret_key.validate()?;
@@ -405,10 +426,7 @@ impl HybridEd25519MlDsa {
         let ml_dsa_signature = sign_pq(&ml_dsa_private, &inner)?;
         // Classical half signs `inner ‖ σ_pq`. A verifier that skips the PQ
         // half cannot reconstruct this outer message (fails-closed).
-        let mut outer = Vec::with_capacity(inner.len() + ml_dsa_signature.len());
-        outer.extend_from_slice(&inner);
-        outer.extend_from_slice(&ml_dsa_signature);
-        let ed25519_signature = signing_key.sign(&outer);
+        let ed25519_signature = signing_key.sign(&Self::outer_message(&inner, &ml_dsa_signature));
 
         Ok(HybridSignature {
             ed25519: ed25519_signature.to_bytes().to_vec(),
@@ -511,11 +529,11 @@ impl SignatureScheme for HybridEd25519MlDsa {
         if !ml_dsa_public_key.verify(&inner, &ml_dsa_signature, &[]) {
             return Err(CryptoError::SignatureVerificationFailed);
         }
-        let mut outer = Vec::with_capacity(inner.len() + ml_dsa_signature.len());
-        outer.extend_from_slice(&inner);
-        outer.extend_from_slice(&ml_dsa_signature);
         ed25519_verifying_key
-            .verify(&outer, &ed25519_signature)
+            .verify(
+                &Self::outer_message(&inner, &ml_dsa_signature),
+                &ed25519_signature,
+            )
             .map_err(|_| CryptoError::SignatureVerificationFailed)?;
         Ok(())
     }
