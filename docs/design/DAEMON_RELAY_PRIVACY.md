@@ -13814,3 +13814,66 @@ mechanism is in place", not "the anonymity zone is now embargoed".
 **This is the honest state, and it is a smaller claim than §89 made.** The
 posture decision stands: the anonymity zone stems, on the wire, today. What has
 not happened is the receive-side half.
+
+### 89.8.5 Coherence cannot be fixed by the receive path alone — the pool must remember
+
+**2026-08-10, third review round.** §89.7 and §89.8.1–4 both name the receive
+path as the missing half, and both understate it. Fixing arrival would buy a
+witness, not the behaviour.
+
+**The pool loop is a second consumer, and nobody is there to tell it.**
+Coherence keys on the `origin` argument to `send_txs`, and the only callers
+passing a real arrival zone are the immediate-relay sites at
+`cryptonote_protocol_handler.inl:1014` / `:1021`. The periodic re-relay
+(`core::relay_txpool_transactions`) routes `forward` entries into `stem_req` and
+sends them with **`zone::public_` as a literal** (`cryptonote_core.cpp:1091`) —
+not as a policy choice, but because the txpool stores no origin zone and the
+loop runs long after the moment that knew it.
+
+> **So an anonymity-arrived transaction reaches clearnet on the pool's own
+> cycle, and the coherence branch never sees it.** The `origin` it would test is
+> already gone.
+
+**This is pre-existing and not a regression of this round.** Before §89, an
+anonymity arrival was classed `fluff` and went to `public_req` — same
+destination, different class. What §89 did was *assume* the path was closed.
+
+### 89.8.6 §89.2's back-out was scoped too broadly, not wrong
+
+§89.2 removed §65.4's reserved bits, arguing the txpool does not need to
+remember the zone, only to be told it. **That finding is correct and stands** —
+the embargo *arming* site has the zone in hand, which is why it takes a
+parameter beside `tx_relay` and needs no persisted field.
+
+**What was over-generalised is the conclusion, not the finding.** One consumer
+was checked and the answer read as a property of the txpool rather than of that
+consumer. Two consumers, two correct answers:
+
+| consumer | when it acts | needs |
+| --- | --- | --- |
+| embargo draw (`set_relayed`) | synchronously with the relay event | to be **told** — parameter, no field |
+| pool re-relay (`relay_txpool_transactions`) | after that moment has passed | to **remember** — a stored origin zone |
+
+§65.4's framing — *"the mempool/stempool needs to know the zone a tx originated
+from"* — was right for the consumer nobody looked at. The honest record is
+**scoped too broadly**, not wrong, and the distinguishing question is cheap:
+*does this consumer run while something still knows?*
+
+### 89.8.7 The field is owed, and it does not go alone
+
+**Not in this round.** The defect is pre-existing, this PR already carries an
+intra-PR reversal, and a receive-path plus pool-loop plus FFI change on top of
+that surface is how a correction gets buried. It also changes network behaviour
+and is owed its own analysis rather than riding a merge fix.
+
+**And it cannot land alone.** Keeping anonymity-arrived traffic in-zone changes
+what `relay_method::forward` is *for*. The bridge survives — a fluff on the
+anonymity zone exits public at the next hop — but the forward path's population
+changes, and `CRYPTONOTE_FORWARD_DELAY_AVERAGE`'s stated rationale ("2+ incoming
+connections could have sent the tx") is an **anonymity-set argument written
+against the current immediate-bridge behaviour**. Change the population and the
+argument no longer describes what it justifies.
+
+That is **Q-12**, registered since Q-11 Unit 0 and still untouched. **The zone
+field and Q-12 are one round**, or the forward delay is left justifying a bridge
+that no longer works the way its comment describes.

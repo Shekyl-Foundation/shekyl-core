@@ -292,6 +292,26 @@ pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 /// The transit assumption for the **anonymity zones** (i2p/tor), in
 /// milliseconds.
 ///
+/// # THE PREMISE THIS IS DERIVED ON IS NOT SHIPPED — §89.8.2
+///
+/// > This value is derived on the premise that a transaction entering an
+/// > anonymity zone's stem **completes that stem there**. That premise is not
+/// > shipped. `cryptonote_core.cpp`'s `relay_txpool_transactions` re-relays
+/// > anonymity-arrived traffic to `zone::public_` — a literal, because the
+/// > txpool stores no origin zone and the pool loop runs after the moment that
+/// > knew it. So an anonymity-arrived transaction leaves for clearnet on the
+/// > pool's own cycle, and the remaining hops this constant spaces run on a
+/// > network it is not sized for.
+/// >
+/// > **The constant is inert, not merely unmeasured.** Nothing arms an
+/// > anonymity-zone embargo today (§89.8.4), so marking is sufficient and no
+/// > shipped behaviour depends on this number. It becomes live when the txpool
+/// > gains an origin zone — a mechanism, not a measurement.
+/// >
+/// > **Do not read the interim below as awaiting a rendezvous number.** It is
+/// > awaiting the mechanism. When that lands, this value needs *both*: the
+/// > premise made true, and then the measurement that replaces the guess.
+///
 /// # INTERIM AND UNMEASURED — §89.5
 ///
 /// This is an *assumption*, recorded at its site the way
