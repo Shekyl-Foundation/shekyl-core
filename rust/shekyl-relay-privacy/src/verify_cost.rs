@@ -301,11 +301,24 @@ pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 /// embargo — §86's "refinement, not a gate" was stated under the no-stem
 /// posture and expired with it.
 ///
-/// **Provenance.** §63.2 swept the anonymity path to *"ten times clearnet
-/// latency"*, `hop = 1750 ms`, as its worst case. Pairing this constant with
-/// the shared verification floor reproduces that hop exactly
-/// (124.5 + 1625 = 1749.5 → 1750), so the interim sits on the same worst case
-/// the retired analysis had already bounded rather than on a fresh guess.
+/// **Provenance, and why it survives its own section.** §63.2 swept the
+/// anonymity path to *"ten times clearnet latency"*, `hop = 1750 ms`, as its
+/// worst case. Pairing this constant with the shared verification floor
+/// reproduces that hop exactly (124.5 + 1625 = 1749.5 → 1750).
+///
+/// **§63.2's conclusion is retired and its sweep is not, and the distinction is
+/// the whole reason this citation is usable.** What §63.2 concluded — that the
+/// anonymity path is over-provisioned by ≥75 % — depended on the diffusing
+/// posture, where stem length was 1 with certainty; §89.1 retired that.
+/// What it *swept* was the plausible range of a Tor-borne `hop`, and that range
+/// is a property of the network's latency, not of whether the zone stems. The
+/// bound is therefore inherited from a withdrawn section without inheriting its
+/// argument — a reader following the citation should expect to land in retired
+/// text and find only the sweep still standing.
+///
+/// It remains an upper bound taken on faith, not a measurement, and §63.2 never
+/// claimed otherwise: 10× was chosen as a comfortable ceiling precisely because
+/// nothing measured the real value.
 ///
 /// **Why err high.** Under-estimating shortens the embargo, which is the
 /// privacy-losing direction (§65, §66). Over-estimating costs black-hole
