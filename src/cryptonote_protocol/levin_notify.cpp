@@ -815,7 +815,7 @@ namespace levin
 
         if (plan != SHEKYL_RELAY_PLAN_FLUFF_EPOCH)
         {
-          core_->on_transactions_relayed(epee::to_span(txs_), relay_method::stem);
+          core_->on_transactions_relayed(epee::to_span(txs_), relay_method::stem, zone_->nzone);
 
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
               make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
@@ -848,7 +848,7 @@ namespace levin
           MERROR("Unable to send transaction(s) via Dandelion++ stem");
         }
 
-        core_->on_transactions_relayed(epee::to_span(txs_), relay_method::fluff);
+        core_->on_transactions_relayed(epee::to_span(txs_), relay_method::fluff, zone_->nzone);
         relay_fluff::run(std::move(zone_), epee::to_span(txs_), source_, core_);
       }
     };
@@ -946,23 +946,23 @@ namespace levin
     if (!zone_->relay)
       throw std::logic_error{"cryptonote::levin::notify could not open its relay zone"};
 
-    const bool covert_enabled = shekyl_relay_zone_covert_enabled(zone_->relay.get());
-    if (covert_enabled || zone == epee::net_utils::zone::public_)
-    {
-      const auto now = std::chrono::steady_clock::now();
+    /* GATE 1 of 3, deleted at §89.5. This was
+       `if (covert_enabled || zone == public_)`, so a non-covert anonymity zone
+       got neither its initial stem map nor an armed wake timer. Every zone
+       stems now, and `make_relay_zone` has always been unconditional, so there
+       is no transport question left to ask here.
 
-      /* The zone drew its first epoch when it was constructed, matching the
-         inherited `start_epoch` running once here. All that is left is to offer
-         it the connections that already exist and arm the timer on the deadline
-         it chose. */
-      boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
-        relay_update_stems(z, get_out_connections(*z->p2p, core));
-        relay_wake::arm(z, core);
-      });
+       The zone drew its first epoch when it was constructed, matching the
+       inherited `start_epoch` running once here. All that is left is to offer
+       it the connections that already exist and arm the timer on the deadline
+       it chose. */
+    boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
+      relay_update_stems(z, get_out_connections(*z->p2p, core));
+      relay_wake::arm(z, core);
+    });
 
-      /* No per-channel timer to start: the zone armed every covert deadline at
-         construction and the single `wake` timer serves them (§20.2a). */
-    }
+    /* No per-channel timer to start: the zone armed every covert deadline at
+       construction and the single `wake` timer serves them (§20.2a). */
   }
 
   notify::~notify() noexcept
@@ -987,8 +987,24 @@ namespace levin
 
   void notify::new_out_connection()
   {
-    if (!zone_ || !shekyl_relay_zone_covert_enabled(zone_->relay.get()) ||
-        CRYPTONOTE_NOISE_CHANNELS <= shekyl_relay_zone_live_stems(zone_->relay.get()))
+    /* GATE 2 of 3, deleted at §89.5 — and the predicate went with it rather
+       than being rewritten.
+
+       This read `!covert_enabled || CRYPTONOTE_NOISE_CHANNELS <= live_stems`,
+       so a new peer triggered a stem-map refresh only on a covert zone. That
+       under-maintained every other zone including the public one: the map
+       self-populates on `NoRoute` and on send failure, so what was lost was
+       the *proactive* refresh, not liveness.
+
+       The obvious repair was to swap the covert throttle for the zone's own
+       stem width. That would have left C++ deciding a relay question, which
+       §18 gives to Rust. Instead the decision moves down: `update_stems` is
+       already a no-op when nothing needs doing — `StemMap::update` returns
+       `Unchanged` when every slot is live at full width, and a bound slot is
+       taken out of the candidate pool rather than re-drawn, so an
+       unconditional call cannot re-point an existing stem. The throttle was
+       C++ guessing at a condition Rust already evaluates exactly. */
+    if (!zone_)
       return;
 
     boost::asio::dispatch(zone_->strand, [z = zone_, core = core_] {
@@ -1201,7 +1217,7 @@ namespace levin
         tx_relay = relay_method::local; // do not put into stempool embargo (hopefully not there already!).
       }
 
-      core_->on_transactions_relayed(epee::to_span(txs), tx_relay);
+      core_->on_transactions_relayed(epee::to_span(txs), tx_relay, zone_->nzone);
 
       // Padding is not useful when using noise mode. Send as stem so receiver
       // forwards in Dandelion++ mode.
@@ -1233,23 +1249,24 @@ namespace levin
         case relay_method::stem:
         case relay_method::forward:
         case relay_method::local:
-          if (zone_->nzone == epee::net_utils::zone::public_)
-          {
-            // this will change a local/forward tx to stem or fluff ...
-            boost::asio::dispatch(
-              zone_->strand,
-              dandelionpp_notify{zone_, core_, std::move(txs), source, tx_relay}
-            );
-            break;
-          }
-          /* fallthrough */
+          /* GATE 3 of 3, deleted at §89.5. This was gated on
+             `zone_->nzone == public_`, so stem/forward/local on i2p/tor fell
+             through into the fluff arm and the anonymity zone diffused where
+             the design said it stemmed (§63). Tor is a transport like the
+             clear internet; changing the transport does not change the graph.
+
+             The outbound-only fluff rule is unaffected and still applies when
+             this stem later fluffs — it travels with the zone's `reach`
+             (`FluffReach::OutboundOnly`, set from `nzone != public_` in
+             `make_relay_zone`), which no stemming decision touches. */
+          // this will change a local/forward tx to stem or fluff ...
+          boost::asio::dispatch(
+            zone_->strand,
+            dandelionpp_notify{zone_, core_, std::move(txs), source, tx_relay}
+          );
+          break;
         case relay_method::fluff:
-          /* If sending stem/forward/local txes over non public networks,
-             continue to claim that relay mode even though it used the "fluff"
-             routine. A "fluff" over i2p/tor is not the same as a "fluff" over
-             ipv4/6. Marking it as "fluff" here will make the tx immediately
-             visible externally from this node, which is not desired. */
-          core_->on_transactions_relayed(epee::to_span(txs), tx_relay);
+          core_->on_transactions_relayed(epee::to_span(txs), tx_relay, zone_->nzone);
           boost::asio::dispatch(zone_->strand, relay_fluff{zone_, std::move(txs), source, core_});
           break;
       }

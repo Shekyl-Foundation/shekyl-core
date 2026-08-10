@@ -30,6 +30,7 @@
 
 #include "cryptonote_basic/blobdatatype.h"
 #include "cryptonote_protocol/enums.h"
+#include "net/enums.h"
 #include "span.h"
 
 namespace cryptonote
@@ -41,6 +42,15 @@ namespace cryptonote
 
     virtual uint64_t get_current_blockchain_height() const = 0;
     virtual bool is_synchronized() const = 0;
-    virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay) = 0;
+    /*! \param zone The relay zone the transactions went out on.
+
+        Carried alongside `tx_relay` rather than stored on the txpool entry.
+        The embargo is drawn per-zone (§89.2) at exactly one site,
+        `tx_memory_pool::set_relayed`, and every path to it is synchronous with
+        a relay event — so the zone needs to be *told*, not *remembered*. An
+        earlier draft reserved two bits on `txpool_tx_meta_t` for it; that
+        bought an LMDB record change and a pre-upgrade decode question for a
+        value nothing reads back. */
+    virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, epee::net_utils::zone zone) = 0;
   };
 }

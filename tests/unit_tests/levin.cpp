@@ -119,6 +119,7 @@ namespace
     class test_core_events final : public cryptonote::i_core_events
     {
         std::map<cryptonote::relay_method, std::vector<cryptonote::blobdata>> relayed_;
+        std::map<cryptonote::relay_method, epee::net_utils::zone> zones_;
 
         virtual bool is_synchronized() const final
         {
@@ -130,11 +131,16 @@ namespace
             return 0;
         }
 
-        virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> txes, cryptonote::relay_method relay) override final
+        virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> txes, cryptonote::relay_method relay, epee::net_utils::zone zone) override final
         {
             std::vector<cryptonote::blobdata>& cached = relayed_[relay];
             for (const auto& tx : txes)
                 cached.push_back(tx);
+            /* §89.2: the embargo is drawn per zone, and the zone arrives here
+               rather than on the txpool entry. Recorded so a test can assert
+               WHICH zone a relay was attributed to — asserting only the relay
+               method would pass whatever zone the dispatch happened to pick. */
+            zones_[relay] = zone;
         }
 
     public:
@@ -150,6 +156,15 @@ namespace
         bool has_stem_txes() const noexcept
         {
             return relayed_.count(cryptonote::relay_method::stem);
+        }
+
+        //! \return The zone the last `relay`-method relay was attributed to.
+        epee::net_utils::zone relayed_zone(cryptonote::relay_method relay) const
+        {
+            const auto found = zones_.find(relay);
+            if (found == zones_.end())
+                throw std::logic_error{"no relay recorded for that method"};
+            return found->second;
         }
 
         std::vector<cryptonote::blobdata> take_relayed(cryptonote::relay_method relay)

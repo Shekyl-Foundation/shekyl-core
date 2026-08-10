@@ -3080,16 +3080,28 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 /// cryptonote::detail::embargo_deadline). Rounding it down instead would put the
 /// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
 /// embargo is the privacy-losing direction at every draw value including zero.
-uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
+///
+/// \param zone The relay zone the transaction is embargoed on, as
+/// `epee::net_utils::zone` cast to a byte. The embargo is per-zone since §89.2:
+/// the anonymity zone stems, and a rendezvous hop needs a longer embargo than a
+/// clearnet one. Anything outside 0..=3 resolves to `zone::invalid`, which is
+/// provisioned as the worst case — a corrupt byte costs recovery latency rather
+/// than embargo length. (Masking would send 5 to `public_`, the shortest.)
+uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
 
 /// How long to wait before judging a still-unseen transaction failed, in
 /// seconds — a quantile of the embargo distribution (at most 1 in 100 embargoes
 /// still running), not a multiple of its mean. On the adopted table that is
-/// exactly 874 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
+/// exactly 2297 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
 /// pinned so the wait cannot drift from the distribution. A stem transaction is
 /// invisible to its sender until it fluffs, so a shorter deadline declares
 /// healthy transactions dead while their backstop is still running, and the
 /// sender then releases the inputs it had reserved.
+///
+/// Deliberately takes no zone, though the draw above does: this is a wallet
+/// decision, and the wallet cannot know which zone its transaction took. It
+/// gets the worst zone's wait. The whole export is a deletion target — see
+/// DAEMON_RELAY_PRIVACY.md §89.6.
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
 
