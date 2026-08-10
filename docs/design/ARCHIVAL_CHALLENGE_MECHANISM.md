@@ -542,6 +542,52 @@ the round kept trying to add forensics underneath it.
    persisted table would inherit `pop_block` revert obligations the other
    two variants do not have — a cost the urn must carry on its face if
    anyone proposes the table form.
+   **Correction (2026-08-08, review): the budget shortfall is
+   variant-independent, and it relocates the decision.** λ_eff =
+   min(λ_target, k_cap·SEB/D) is a property of the challenge *budget*,
+   not the derivation method: at D ≈ 324 k and k_cap = 30 there are
+   ~300 k challenge slots per epoch against ~972 k needed (three per
+   pair). Epoch-seed does not escape — over-subscribed, its permutation
+   degrades to a partial one (coverage below 3, per-block's failure made
+   deterministic); the urn converges to 3 only when the budget admits 3.
+   **The variants differ in how they degrade, not in whether they do**,
+   and the acceptance test above discriminates only in the genesis-scale
+   regime where the problem is easy. The binding constraint is `k_cap`,
+   chain-growth-bound at ~3.43 KB per hybrid-countersigned pass record —
+   and the mitigation is already named and marked design-not-assume in
+   FOLLOWUPS: attestation records are needed only until the epoch
+   settles and the claim window closes (exactly the ledger
+   `prune_archival_epochs_before` already drops), so they should ride
+   the **prunable side** of the block. **That question is upstream of
+   this fork:** if prunable residence lands, `k_cap` relaxes and all
+   three variants clear the floor at maturity; if it does not, none do
+   and the mechanism does not scale past ~10⁵ pairs — fork 1 becomes
+   triage, not scheduling. Note 2-of-3 made this harder, not easier: 3×
+   the draw on the same budget the earlier λ_target figures assumed.
+   **The round's lean, assuming the budget resolves (2026-08-08): the
+   urn — for a narrower reason than "it sits between."** Epoch-seed's
+   14-day window is not merely long; it is **enumerable in advance
+   across all pairs simultaneously**, so an adversary picks targets by
+   convenience rather than opportunity and schedules a campaign — and
+   under expiry⇒miss plus the guard-discovery finding, discovery and
+   availability attack compose in the same known window.
+   Coverage-by-construction does not pay for that.
+   **Check gating the urn ruling — tail predictability, now with its
+   structure derived:** the least-covered set is a deterministic
+   function of chain history, so the adversary always knows the
+   *candidate set* exactly; only the within-set selection is one-block
+   blind. The urn invariant (draw from minimum coverage) makes coverage
+   advance in **waves** — all pairs reach count 1, then 2, then 3 — so
+   the candidate set drains from D to ~0 **three times per epoch**, and
+   the narrow-set exposure recurs at each wave tail, not just near
+   close. Advance notice on pair X is "within ~m/k blocks" for current
+   min-set size m: wide (unpredictable) through most of a wave,
+   effectively pre-announced once m ≲ k·(attack ramp + W₂). The check
+   to run before ruling: what fraction of draws occur at m below that
+   threshold, at genesis and maturity D. Candidate mitigation if the
+   tail is fat: widen the candidate set to a coverage *band* (min and
+   min+1), trading exact-3 convergence for tail anonymity — a knob the
+   fork can size, not a redesign.
 2. **Who reads — witness selection and obligation.** The decision the rest
    of the stack prices against: W₂, the abandonment penalty, the reward
    question, and the nonce anchor are all functions of who performs the
@@ -707,6 +753,12 @@ the round kept trying to add forensics underneath it.
   until it lands. Its format specification carries two frozen obligations
   from this round: the reserved padding field with its framing constraint
   (TJ-H, §7.4) and the nonce anchor (§7.2).
+- **Prunable residence for attestation records is the scaling gate**
+  (fork 1's correction): with pass records permanent at ~3.43 KB each,
+  `k_cap` is chain-growth-bound and no derivation variant clears the
+  redraw floor past ~10⁵ pairs. FOLLOWUPS marks the prunable-side design
+  as design-not-assume; this round's 2-of-3 tripled the draw on the same
+  budget, so the question got harder and is now upstream of fork 1.
 
 **Standing-record reconciliation** — 2026-08-02 FOLLOWUPS rulings (credit-wire
 round) whose premises this round changes; each must be revisited on the
