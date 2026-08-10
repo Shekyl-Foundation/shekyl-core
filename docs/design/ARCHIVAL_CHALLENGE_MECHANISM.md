@@ -18,9 +18,15 @@ struck); §8 standing-record reconciliation; §9 order-statistic W₂ target.
 forks 3 (expiry⇒miss) and 6 (no pay, forced) and the obligation half of
 fork 2 (routine duty, norm-borne) are CLOSED; the peer-contrast penalty is
 withdrawn; the (m, n) re-pin is promoted to sole surviving enforcement
-instrument, carrying the common-mode-β constraint. Live remainder: TJ-H,
-fork 1 (granularity, now pure scheduling), fork 2's selection + nonce
-anchor, W₂, (m, n).
+instrument, carrying the common-mode-β constraint.
+**Revised 2026-08-08 (later): TJ-H RULED** — padding field reserved, no
+scheme specified, mitigation moved to the Tor layer (full vanguards +
+Bandguards re-derive + fetch rate-limiting); guard-holding active
+confirmation recorded as accepted residual; the circuit-construction
+oracle named as the real exposure. TJ-H no longer gates the round.
+**Live remainder, in order: fork 1 (granularity — decides the settlement
+writer's shape), fork 2's selection + nonce anchor (with TJ-B's format
+spec), W₂, (m, n).**
 
 **Lineage.** Successor to the Phase 3 (settlement writer) scope of
 `ARCHIVAL_CREDIT_WIRE.md` (TJ-B step 3). The credit-wire admission surface
@@ -533,7 +539,8 @@ the round kept trying to add forensics underneath it.
      how much pressure (a) and (b) must survive.
    The **nonce anchor** (what replaces `cb_out_key` when the reader is not
    the including block's producer) is subordinate to this fork and touches
-   the frozen response wire — decide with TJ-H (§7.4).
+   the frozen response wire — decide with TJ-B's format specification,
+   which also carries TJ-H's framing constraint (§7.4).
    **Obligation half CLOSED (2026-08-08, impossibility):** no pay and no
    penalty are both forced, so coverage is **routine duty, norm-borne,
    `λ_eff` the tripwire** — now as the *only reachable answer*, not the
@@ -566,10 +573,55 @@ the round kept trying to add forensics underneath it.
    non-observation the settlement absorbs" is superseded by this closure:
    it was ruled for the mandate design, and under 2-of-3 its logic would
    discard exactly the events a dark P produces.
-4. **TJ-H (genesis-frozen — decide FIRST):** fixed shard payload size is a
-   guard→persona traffic-confirmation oracle; variable-length padding is a
-   wire-format property of the frozen response format
-   (`SP_T3_SKELETON_MEASUREMENT.md` §20). Cannot be added later.
+4. **TJ-H — RULED (2026-08-08): reserve the padding field in the frozen
+   response format; specify no padding scheme. The mitigation moves to the
+   Tor layer.** Working the actual attack path re-framed SPIKE-F-19: the
+   adversary does not begin as the guard — guard *discovery* runs first
+   (force the service to build rendezvous circuits until an adversary
+   middle relay is chosen, confirm the position via a protocol side
+   channel, then compromise/coerce/NetFlow the guard), so the fixed
+   payload's real role is **middle-relay position confirmation in phase
+   one**, not persona identification in phase two — and the larger
+   exposure the size question never named is the **circuit-construction
+   oracle**: any node may pull a shard for its own verification, so
+   archivers expose an unlimited, free, unauthenticated circuit-build
+   primitive — exactly what guard discovery consumes.
+   **Padding rejected, four legs:** it cannot defeat a triggered probe
+   (the adversary receives the padded response over its own circuit and
+   knows the delivered size — the same bytes crossed P's guard leg, and
+   the correlation survives); size is the weakest feature on the vector
+   (Tor's fixed 514-byte cells already normalize size; working attacks key
+   on timing, burst structure, direction, duration — a bulk unidirectional
+   transfer is identifiable from any hop regardless of byte count); every
+   padded byte crosses two Tor legs and inflates W₂, the budget already
+   absorbing PoW-under-attack latency; and it does not touch the
+   circuit-construction oracle. Residual benefit against a *passive*
+   observer (a fixed size is a one-observation tell needing no classifier)
+   justifies **reserving the field**: a length header plus the option to
+   pad zero — omitting it forecloses permanently, reserving forecloses
+   nothing. **Framing constraint (structural, settled when TJ-B specifies
+   the format, not deferred with the distribution):** the padding region
+   must sit outside the bytes hashed against `R_k`, or content-addressed
+   self-authentication breaks.
+   **Mitigation actions, none genesis-frozen:** (1) pin **full vanguards**
+   (not lite) for serving personas, with L2/L3 set sizes and rotation
+   periods derived against our pull rate rather than inherited (rotation
+   rate is not a lever in either direction — each build is an independent
+   draw, so over-rotation volunteers the attack's own mechanism; the lever
+   is selection entropy per build, which saturates the oracle's yield);
+   (2) re-derive Bandguards' per-circuit cap (its ~100 MB guidance assumes
+   a service that does not move bulk content — the exact case an archiver
+   isn't); (3) rate-limit shard fetches per requester alongside the pinned
+   `HiddenServicePoW`, attacking the query count guard discovery needs.
+   **Accepted residual, recorded so padding is never mistaken for having
+   solved it:** active confirmation by an adversary already holding the
+   guard is NOT mitigated; the honest bound is SPIKE-F-19's own (research
+   accuracies under controlled conditions, degraded in the open world) —
+   the claim is that a guard operator who cares can find out cheaply, not
+   that guards know. **Withdrawn:** onion-address rotation (the guard is a
+   property of the running Tor client, not the address). **Sequencing:
+   TJ-H no longer gates the round** — fork 1 is promoted to first
+   position; the Tor-layer hardening runs independently.
 5. **W₂ derivation** — see §9; not guessable, and **gated on fork 2** (a
    response deadline prices "long enough that an honest P serving a bulk
    read is not timed out, short enough that a dishonest P cannot stall,"
@@ -605,7 +657,9 @@ the round kept trying to add forensics underneath it.
   expensively.
 - **TJ-B read/serve protocol is unbuilt** (SP-T3 supplies payload and
   consumer; promoted to challenge substrate). The mechanism has no transport
-  until it lands.
+  until it lands. Its format specification carries two frozen obligations
+  from this round: the reserved padding field with its framing constraint
+  (TJ-H, §7.4) and the nonce anchor (§7.2).
 
 **Standing-record reconciliation** — 2026-08-02 FOLLOWUPS rulings (credit-wire
 round) whose premises this round changes; each must be revisited on the
