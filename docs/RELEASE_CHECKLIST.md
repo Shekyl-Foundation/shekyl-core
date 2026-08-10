@@ -20,7 +20,7 @@
   - [ ] Address v2 layout + test vectors landed (`ADDRESS_DERIVATION_V1` successor)
   - [ ] Message-signing round unblocked (PR-SM-2's address-integrated verify freezes against the signed-off layout)
 - [ ] PQC specification frozen
-  - [ ] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation — **its hybrid-signature section still describes the pre-SA-2 parallel construction and a `Result<bool>` verify; update it to the nested combiner + `Result<()>` per `SIGNATURE_ALIGNMENT.md` before the freeze** (unchecked by PR-SA-2)
+  - [x] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation — updated in PR-SA-2 to the nested combiner (v2, 64-byte domain-separated preimage), `Result<()>` verify, and the v2/frozen-v1 test-vector split
   - [x] canonical transaction/signature serialization documented
   - [x] signed payload definition documented
   - [x] V4 PQC Privacy Roadmap published
@@ -29,7 +29,7 @@
 - [ ] PQC crypto review
   - [ ] hybrid sign/verify implementation reviewed (external audit pending)
   - [ ] FFI ownership / zeroization reviewed (external audit pending)
-  - [x] test vectors generated and archived (4 vectors: 1 positive, 3 negative)
+  - [x] test vectors generated and archived (`PQC_HYBRID_V2_KAT.json`: 7 pinned positives, one per signing surface, with cross-surface rejection; frozen v1 parse-rejection fixture; 3 negative vector integration tests)
 - [ ] PQC interoperability verification
   - [ ] wallet sign/daemon verify path tested
   - [x] malformed hybrid signature rejection tested (3 negative vector integration tests)

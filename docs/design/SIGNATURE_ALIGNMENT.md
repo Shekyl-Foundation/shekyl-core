@@ -113,6 +113,19 @@ rather than verifying insecurely), so the nesting order cannot be flipped for
 convenience later. No wire-format, size, or schema change — only the
 computation and therefore the bytes' meaning.
 
+**Preimage width (review hardening, 2026-08-10): `H_dom` is
+`cSHAKE256-64` — 64 bytes, not 32.** The digest is the *signed content*, so
+its collision resistance bounds the whole scheme's unforgeability against a
+counterparty who influences message bytes (a multisig payload proposer,
+attacker-influenced tx/challenge content): at 32 bytes a same-domain collision
+costs ~2^128 classically, below ML-DSA-65's Category-3 (192-bit) target and an
+external-prehash dependence the v1 construction (ML-DSA hashing the full
+message internally with the key) did not have. FIPS 204's HashML-DSA pairs
+ML-DSA-65 with ≥384-bit digests for exactly this reason; 64 bytes restores
+2^256. Landed inside PR-SA-2 before v2 ever shipped, so **no version bump**:
+the version byte discriminates *shipped* constructions, and no v2-32 signature
+exists outside the PR branch's own regenerated fixtures.
+
 **The verify return type changes from `Result<bool, _>` to `Result<(), Error>`
 — this is the highest-leverage line in the round.** `Result<bool>` is what
 *created* F1 (§2.1): it makes "verification failed" (`Ok(false)`) and
@@ -302,6 +315,20 @@ constants are assignable now with the KAT writers the only lockstep.
   rejection negative control pins the separation in `multisig.rs`).
 - The emission tx carries **three** hybrid signatures from the claim path
   (A prefix-auth, C claim, D backing) — distinct messages, distinct domains.
+- The §1.2 census row `shekyl-ffi/src/legacy_fcmp.rs:734`
+  (`shekyl_emission_hybrid_auth_verify`) is **retired in PR-SA-2**, not
+  domained. It was the PR-E1 per-auth primitive; its header contract claimed
+  both emission roles ("Auth-B backing, Auth-P pseudonym") but its shape was
+  backing-only (mandatory leaf gate, one domain) — serving the claim role
+  through it would have hardcoded the wrong domain, a latent Rust-vs-C++
+  consensus divergence. It had **no production C++ caller**: C-1's only entry
+  is the coarse `shekyl_emission_vin_verify`
+  (`blockchain.cpp` connect arm), whose Rust body
+  `emission_verify::emission_vin_verify_auth` verifies both roles under their
+  ratified per-role domains (C claim / D backing) and pins the
+  leaf-gate-before-signature order (`emission_verify_kat.rs`). Deleting the
+  duplicate verify path, rather than domain-patching it, is the rule-15 fix:
+  one verify path per surface, nothing to drift.
 
 ### F-7 disposition (Pin 5, ratified)
 
