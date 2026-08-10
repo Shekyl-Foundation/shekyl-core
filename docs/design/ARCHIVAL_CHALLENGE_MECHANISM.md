@@ -642,12 +642,21 @@ the round kept trying to add forensics underneath it.
      3.0 % → 1.1–1.2 %) — structurally, the min+1 bucket keeps the
      candidate set large through wave transitions.
    - **The band's issued-count variance is the heavy side of the
-     trade:** at maturity, 23.3 % of pairs finish at issued-2 (and a
-     symmetric 23.3 % at 4); at genesis, 8–25 % seed-dependent. Under
-     absolute-2, an issued-2 pair's honest epoch survival is a² (0.81
-     at a = 0.9) vs a²(3−2a) = 0.972 for issued-3 — so **the
+     trade — and the fraction is realization-dependent even at maturity
+     scale** (found porting the sim to `shekyl-economics-sim`: 23.3 %
+     at issued-2 under the first sampler, 30.0 % under the crate's
+     deterministic sampler, same D and budget; genesis runs ranged
+     8–25 %). The wave dynamics leave the straggler fraction
+     high-variance, so the honest statement is **roughly a fifth to a
+     third of pairs at issued-2, symmetric with issued-4 by draw
+     conservation** — a distribution, not a point, per the round's own
+     §9 discipline. The ruling is unaffected: the per-pair survival
+     arithmetic (a² = 0.81 at a = 0.9 vs a²(3−2a) = 0.972 for
+     issued-3) does not depend on the fraction, and the band is
+     rejected under any realization. Under absolute-2 **the
      issued-count histogram is an (m, n) derivation input** (the
-     per-epoch miss rate becomes a mixture), exactly as anticipated.
+     per-epoch miss rate becomes a mixture), exactly as anticipated —
+     now noted as a distribution input.
    - **The redraw floor holds under both variants at exact budget:**
      minimum issued = 2 in every run; 1st→2nd-draw gap p99 ≈ 6,200
      blocks < SEB.
