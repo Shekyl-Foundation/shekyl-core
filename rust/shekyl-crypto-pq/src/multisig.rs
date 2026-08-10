@@ -372,13 +372,14 @@ pub fn verify_multisig(
         .zip(sig_container.signer_indices.iter())
     {
         let pk = &key_container.keys[idx as usize];
-        // Multisig participants verify under the multisig-specific domain
-        // (SA-R-5): a single-sig signature over `message` is not a valid
-        // participant signature, and vice versa.
+        // Participants verify under the tx-auth domain. Single-vs-multisig
+        // cross-scheme separation is structural (the signed tx payload binds
+        // `scheme_id` via `PqcAuth::header_write`), not a distinct domain —
+        // see `SCHEME_DOMAIN_PQC_AUTH_TX`.
         scheme
             .verify(
                 pk,
-                crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+                crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
                 message,
                 sig,
             )
@@ -421,9 +422,9 @@ mod tests {
             .collect()
     }
 
-    /// Multisig participant signatures use the multisig-specific domain, so
-    /// they match what `verify_multisig` checks (SA-R-5).
-    const MSD: &[u8] = crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG;
+    /// Multisig participants sign under the tx-auth domain (matches
+    /// `verify_multisig`; separation is structural via the payload scheme_id).
+    const MSD: &[u8] = crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
 
     fn gen_spend_auth_pubkeys(n: usize) -> Vec<[u8; 32]> {
         use ed25519_dalek::SigningKey;

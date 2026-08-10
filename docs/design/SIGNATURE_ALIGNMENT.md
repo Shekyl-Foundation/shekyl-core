@@ -281,7 +281,16 @@ constants are assignable now with the KAT writers the only lockstep.
 
 - `claim.rs` backing (surface D) was a missing sign site in the first pass.
 - **Scheme-2 multisig has no production signer in-repo** — SA-R-5's
-  scheme-id-in-preimage lands on verify + container + tests only.
+  scheme-id-in-preimage lands on verify + container + tests only. The preimage
+  binds the hybrid scheme id (the `HybridEd25519MlDsa` constant); single-vs-
+  multisig separation is **structural**, not a distinct domain — the signed tx
+  payload already binds `scheme_id` (1 vs 2) via `PqcAuth::header_write`, so a
+  single-sig auth and a multisig auth sign different payloads. A separate
+  multisig domain was implemented, then reverted: it would have added closure
+  only for a standalone-FFI caller reusing one raw message across both schemes
+  (no production signer), at the cost of a second consensus-frozen string and
+  breaking the C++ multisig tests, which produce participant signatures through
+  the single-sig FFI. Both single and multisig use `SCHEME_DOMAIN_PQC_AUTH_TX`.
 - The emission tx carries **three** hybrid signatures from the claim path
   (A prefix-auth, C claim, D backing) — distinct messages, distinct domains.
 

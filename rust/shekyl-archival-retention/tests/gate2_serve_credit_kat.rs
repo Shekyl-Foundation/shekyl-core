@@ -619,6 +619,27 @@ fn gate2_serve_credit_kat_vectors() {
             &int_sig,
         )
         .expect("integration hybrid verify");
+
+    // F1 regression (serve-credit surface): a well-formed signature under the
+    // WRONG key must be REJECTED. The pre-SA-2 FFI gated on `.is_err()` over a
+    // `Result<bool>`, so `Ok(false)` (this exact case) fell through to VERIFY_OK.
+    // Under `verify -> Result<()>` there is no `Ok(false)`, so it returns `Err`.
+    // A malformed-signature test would pass on the broken code; a wrong-KEY one
+    // is the negative control on the axis the defect lived.
+    let (foreign_pk, _foreign_sk) = HybridEd25519MlDsa
+        .generate_ephemeral_keypair_for_tests()
+        .expect("foreign keypair");
+    assert!(
+        HybridEd25519MlDsa
+            .verify(
+                &foreign_pk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+                &parsed.signature_preimage(),
+                &int_sig,
+            )
+            .is_err(),
+        "a well-formed serve-credit signature under a foreign key must be rejected (F1)"
+    );
     assert_eq!(
         challenge_leaf_index(
             &parsed.p_canonical_id,

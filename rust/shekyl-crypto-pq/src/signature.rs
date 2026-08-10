@@ -41,14 +41,18 @@ pub const HYBRID_SCHEME_ID_ED25519_ML_DSA_65: u8 = 1;
 /// domain as a required parameter so a caller cannot sign a bare message; the
 /// FFI exports apply the surface's constant internally so C++ never carries a
 /// domain string it could get wrong.
+///
+/// Single-sig and multisig (scheme 2) both use this constant: SA-R-5's
+/// single-vs-multisig cross-scheme closure is provided **structurally**, not by
+/// a distinct domain. In the consensus tx path the signed payload includes the
+/// per-auth header (`PqcAuth::header_write`, `shekyl-wire`), which writes the
+/// `scheme_id` byte (1 vs 2) and the pubkey blob (single key vs container) — so
+/// a single-sig auth and a multisig auth sign structurally different payloads
+/// and their signatures are not interchangeable. Minting a separate multisig
+/// domain would add closure only for a standalone-FFI caller that deliberately
+/// reuses one raw message across both schemes, a path with no production signer;
+/// it is not worth a second consensus-frozen string.
 pub const SCHEME_DOMAIN_PQC_AUTH_TX: &[u8] = b"shekyl/pqc-auth-tx-v1";
-/// Multisig participant auth (scheme 2), distinct from single-sig
-/// [`SCHEME_DOMAIN_PQC_AUTH_TX`] (SA-R-5): a single-sig signature and a
-/// multisig participant signature over the same tx payload must not be
-/// interchangeable. `verify_multisig` uses this; the single-input path uses
-/// the non-multisig constant, so the two schemes' signing inputs differ even
-/// on an identical payload.
-pub const SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG: &[u8] = b"shekyl/pqc-auth-tx-multisig-v1";
 /// Emission claim-role auth (surface C).
 pub const SCHEME_DOMAIN_EMISSION_CLAIM: &[u8] = b"shekyl/archival-emission-claim-scheme-v1";
 /// Emission backing-role auth (surface D).
@@ -628,6 +632,33 @@ mod tests {
                 .verify(&pk, SCHEME_DOMAIN_EMISSION_CLAIM, msg, &sig)
                 .is_err(),
             "a signature must not verify under a different surface domain"
+        );
+    }
+
+    /// The ML-DSA half is signed with an empty context and the empty context
+    /// is load-bearing (SA-R-3): the same PQ signature does not verify under a
+    /// non-empty ctx, so a future edit that passed a ctx would break
+    /// verification loudly rather than silently change the security surface.
+    #[test]
+    fn ml_dsa_empty_ctx_is_pinned() {
+        use fips204::traits::{SerDes as _, Verifier as _};
+        let (pk, sk) = kp();
+        let msg = b"empty-ctx pin";
+        let sig = scheme().sign(&sk, D, msg).unwrap();
+
+        // Recompute the inner preimage the PQ half signed and check the ML-DSA
+        // component directly: empty ctx verifies, a non-empty ctx does not.
+        let inner = HybridEd25519MlDsa::preimage(D, msg);
+        let ml_pk_bytes: [u8; ML_DSA_65_PUBLIC_KEY_LENGTH] = pk.ml_dsa.clone().try_into().unwrap();
+        let ml_sig: [u8; ML_DSA_65_SIGNATURE_LENGTH] = sig.ml_dsa.clone().try_into().unwrap();
+        let ml_pk = ml_dsa_65::PublicKey::try_from_bytes(ml_pk_bytes).unwrap();
+        assert!(
+            ml_pk.verify(&inner, &ml_sig, &[]),
+            "the PQ half must verify under the pinned empty ctx"
+        );
+        assert!(
+            !ml_pk.verify(&inner, &ml_sig, b"x"),
+            "the PQ half must NOT verify under a non-empty ctx — empty ctx is load-bearing"
         );
     }
 

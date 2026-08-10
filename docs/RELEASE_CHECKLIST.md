@@ -20,7 +20,7 @@
   - [ ] Address v2 layout + test vectors landed (`ADDRESS_DERIVATION_V1` successor)
   - [ ] Message-signing round unblocked (PR-SM-2's address-integrated verify freezes against the signed-off layout)
 - [ ] PQC specification frozen
-  - [x] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation
+  - [ ] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation — **its hybrid-signature section still describes the pre-SA-2 parallel construction and a `Result<bool>` verify; update it to the nested combiner + `Result<()>` per `SIGNATURE_ALIGNMENT.md` before the freeze** (unchecked by PR-SA-2)
   - [x] canonical transaction/signature serialization documented
   - [x] signed payload definition documented
   - [x] V4 PQC Privacy Roadmap published
