@@ -9241,6 +9241,33 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
+- **Wallet: stop holding a relay constant — ask the daemon whether a
+  transaction is still in flight.** `wallet2.cpp` derives its
+  "still unseen → failed" wait from `shekyl_dandelionpp_propagation_timeout_seconds`,
+  which makes a **wallet** safety invariant (do not un-reserve inputs while a
+  spend might still land) a function of a **relay-privacy** constant (the
+  embargo mean). Q11-A's shape — one numeral, two mechanisms, different owners
+  — sitting across a process boundary, which is why it survived Unit 0's
+  `FORWARD_DELAY_*`/`NOISE_*` decoupling.
+  **The concrete failure is remote nodes:** the wallet compiles in its own
+  build's constant and applies it to whatever daemon it is connected to, which
+  may be a different version and may or may not have an anonymity zone. The
+  value was never a constant — it depends on the daemon's *runtime*
+  configuration — so this is wrong in a way nobody can detect, and the failure
+  mode is un-reserving inputs and inviting a re-spend.
+  **The fix is not a per-zone constant** (that synchronises a duplicate that
+  should not exist) but the layered status in §89.6.3: the daemon already holds
+  `dandelionpp_stem`, the embargo deadline in `last_relayed_time`, and
+  StemWatch, so *"in flight / delayed / failed"* needs no constant to cross the
+  boundary at all — and the middle tier ("this may last up to N minutes") is
+  what makes erring long cost nothing.
+  **Interim shipped:** one worst-zone global, `ADOPTED_PROPAGATION_TIMEOUT_SECS
+  = 2297`, deliberately with no zone parameter — chosen because it needs no
+  machinery and is therefore the cheapest thing to delete here. Cost: a
+  clearnet send reports failure at ~38 min instead of ~15.
+  Owned by the wallet rewrite (this constant dies with `wallet2.cpp`); recorded
+  now because the reason is visible now. See `DAEMON_RELAY_PRIVACY.md` §89.6.
+
 - **Relay: populate the 48-cell Pi verification surface, then consume it
   per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first
   (`shekyl-relay-privacy/src/verify_cost.rs`, 2026-08-06) carrying the four

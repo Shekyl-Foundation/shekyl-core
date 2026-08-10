@@ -13483,3 +13483,91 @@ by `.onion` (`src/net/tor_address.h`), so a stemming zone's hops are Shekyl node
 to Shekyl node over a rendezvous path. **No exit relay appears anywhere in the
 topology the design uses**, and a clearnet-vs-exit delta measures a path that
 will never carry a stem.
+
+## 89.6 The wallet holds a relay constant — that is the defect, and per-zone was downstream of it
+
+**2026-08-08, maintainer ruling, correcting the two subsections above.** §89.2
+made the embargo per-zone and this round then spent a full turn on *"how does
+the wallet learn which zone its transaction took?"* — evaluating an RPC field,
+a cached node property, and a worst-case fallback. **All three were answers to a
+question that should not be asked.**
+
+### 89.6.1 The coupling, stated precisely
+
+`shekyl_dandelionpp_propagation_timeout_seconds` makes a **wallet safety
+invariant** — do not un-reserve inputs while a spend might still land — a
+function of a **relay-privacy constant**, the embargo mean. Change the embargo
+for privacy reasons and the wallet's re-spend behaviour changes with it.
+
+> **That is Q11-A's shape: one numeral, two mechanisms, different owners.** Unit
+> 0 spent its length decoupling `FORWARD_DELAY_*` from `NOISE_*` for exactly
+> this reason (§22). The same shape here sits **across a process boundary**,
+> which is why it survived: the duplicate is not two constants in one file, it
+> is one constant compiled into two programs.
+
+### 89.6.2 The concrete failure is remote nodes, and it is undetectable
+
+The wallet compiles in **its own build's** derived constant and applies it to
+whatever daemon it is connected to. That daemon may be a different version, may
+have no anonymity zone, may have one when the wallet assumes not. **The wallet
+is reasoning about relay timing it has no knowledge of and no way to verify.**
+
+This is not a style objection. It is wrong in a way nobody can detect, and the
+failure mode is un-reserving inputs and inviting a re-spend — the exact defect
+the 874 s derivation exists to remove, reintroduced one layer up.
+
+Note what this says about the per-zone question: the value was **never a
+constant**, and not because of version skew. Same binary, same version, still
+wrong, because it depends on the daemon's *runtime configuration*. Per-zone
+provisioning of the wallet's copy would have been better synchronisation of a
+duplicate that should not exist (cf. *delete the duplicate, don't synchronize
+it*).
+
+### 89.6.3 The decomposition — the wallet should be asking, not timing
+
+The wallet already polls `seen_in_pool`. The ambiguous case is *"not in pool"*,
+which means either **never relayed** or **relayed and gone** — and **the daemon
+knows which**. It holds `dandelionpp_stem`, the embargo deadline in
+`last_relayed_time`, and now StemWatch (§§38, 47–48, 55). A wallet-facing
+*"is this transaction still in flight"* answer needs **no constant to cross the
+boundary at all**, and it fixes the remote-node case for free: the answer comes
+from the daemon actually doing the relaying rather than from the wallet's
+compiled guess about it.
+
+**The status should be layered rather than binary.** A single failed/not-failed
+verdict is what forces the timeout to be a guess in the first place. The shape
+the maintainer specified:
+
+| tier | wallet says | inputs |
+| --- | --- | --- |
+| in flight | normal pending | stay reserved |
+| delayed | *"Transaction is delayed; this may last up to N minutes"* | stay reserved |
+| failed | failed | released |
+
+The middle tier is what makes a long wait cheap: the user learns their send is
+still alive instead of watching a silent spinner, so erring long stops being a
+usability cost (rules 80, 82) and becomes an honest disclosure.
+
+### 89.6.4 Interim, and who owns the fix
+
+**The interim is the worst-zone global — 2297 s, one value, no zone parameter.**
+Chosen *because* it requires no machinery: it is the cheapest thing to delete
+when the wallet stops holding a relay constant. The per-zone accessor and the
+per-zone FFI argument added earlier in this round were **removed rather than
+left unused**, since the export has exactly one caller and adding structure to a
+deletion target is investment in the wrong direction.
+
+**Cost of the interim, stated rather than buried:** a clearnet send reports
+failure at ~38 minutes instead of ~15. That is the price of not knowing, and
+89.6.3's middle tier is what repays it.
+
+**Ownership: the wallet-rewrite track, not this round.** The decoupling is
+wallet-side work and belongs where wallet work is happening. It is recorded here
+because the *reason* is visible now and will not be later.
+
+> **The diagnostic, which is the round's real output.** Before plumbing a value
+> across a boundary, ask whether the value should cross it at all. This round
+> went straight to *"how does the wallet learn the zone"* without asking why the
+> wallet holds a relay constant — the same failure as the transit harness
+> earlier in the session, which verified how to measure a quantity without
+> re-checking whether it was owed (*re-ground the whether, not just the how*).

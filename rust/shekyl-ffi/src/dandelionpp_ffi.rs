@@ -162,39 +162,34 @@ pub extern "C" fn shekyl_dandelionpp_embargo_draw_seconds(zone: u8) -> u64 {
 /// literal on the production path and demote the derivation to a test, which is
 /// structurally the 39 s ghost this round removed. Deriving once costs one table
 /// walk at first use and keeps the number downstream of its reason.
-/// # The `zone` argument (§89.2)
 ///
-/// Per-zone for the same reason the embargo is: this wait is a quantile *of*
-/// that embargo, so 874 s derived against clearnet's 190 s under-waits an
-/// anonymity-zone transaction sitting under a 499 s one — declaring failure
-/// while the transaction is still alive and un-reserving its inputs.
+/// # No zone parameter, though the embargo draw has one (§89.6)
 ///
-/// **The zone is the one the daemon relayed on, not the transport the wallet
-/// used to reach the daemon.** A caller that cannot establish it should pass
-/// `zone::invalid`, which resolves to the anonymity wait: over-waiting delays a
-/// failure report, under-waiting un-reserves live inputs, and only one of those
-/// is recoverable. Out-of-domain bytes resolve there too.
+/// **This whole export is a deletion target.** A wallet safety invariant — do
+/// not un-reserve inputs while a spend might still land — should not be a
+/// function of a relay-privacy constant, and the wallet has no way to verify
+/// the relay timing of the daemon it is actually connected to. Giving it a zone
+/// would ship a relay fact across the boundary so the wallet could re-derive a
+/// daemon-side number: better synchronisation of a duplicate that should not
+/// exist. The replacement is the wallet asking whether a transaction is still
+/// in flight; §89.6 records it.
+///
+/// So this returns the **worst zone's** wait. That needs no machinery, which is
+/// what makes it the cheapest thing to remove.
 #[no_mangle]
-pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds(zone: u8) -> u64 {
-    static TIMEOUT_SECS: OnceLock<[u64; 4]> = OnceLock::new();
-    let all = TIMEOUT_SECS.get_or_init(|| {
-        [
-            RelayZone::Invalid,
-            RelayZone::Public,
-            RelayZone::I2p,
-            RelayZone::Tor,
-        ]
-        .map(|z| u64::from(embargo_timer(z).judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN)))
-    });
-    all[RelayZone::from_ffi_u8(zone).to_bits() as usize]
+pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
+    static TIMEOUT_SECS: OnceLock<u64> = OnceLock::new();
+    *TIMEOUT_SECS.get_or_init(|| {
+        u64::from(
+            embargo_timer(RelayZone::Tor).judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN),
+        )
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_relay_privacy::schedule::{
-        ADOPTED_PROPAGATION_TIMEOUT_SECS, ANON_ZONE_PROPAGATION_TIMEOUT_SECS,
-    };
+    use shekyl_relay_privacy::schedule::ADOPTED_PROPAGATION_TIMEOUT_SECS;
 
     #[test]
     fn embargo_boundary_hands_out_the_adopted_timer_not_the_inherited_39s() {
@@ -291,28 +286,21 @@ mod tests {
         // inputs). It must match the crate pin exactly — a "around 11 minutes"
         // bound would let the rate, table, or rounding drift the way F-1 did.
         assert_eq!(
-            shekyl_dandelionpp_propagation_timeout_seconds(RelayZone::Public.to_bits()),
+            shekyl_dandelionpp_propagation_timeout_seconds(),
             u64::from(ADOPTED_PROPAGATION_TIMEOUT_SECS),
             "FFI timeout must equal ADOPTED_PROPAGATION_TIMEOUT_SECS ({ADOPTED_PROPAGATION_TIMEOUT_SECS})"
         );
-        assert_eq!(
-            embargo_timer(RelayZone::Public).judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN),
-            ADOPTED_PROPAGATION_TIMEOUT_SECS,
-        );
 
-        // Per-zone, and matched to the embargo the transaction actually sits
-        // under. A wallet handed the clearnet wait for a Tor-originated
-        // transaction un-reserves live inputs (§89.2).
-        for zone in [RelayZone::Tor, RelayZone::I2p, RelayZone::Invalid] {
-            assert_eq!(
-                shekyl_dandelionpp_propagation_timeout_seconds(zone.to_bits()),
-                u64::from(ANON_ZONE_PROPAGATION_TIMEOUT_SECS),
-                "{zone:?} must get the anonymity wait"
-            );
+        // Worst-zone, not clearnet: the wallet cannot know which zone its
+        // transaction took, so the one wait it gets must clear them all.
+        // Under-waiting un-reserves the inputs of a live transaction (§89.6).
+        for zone in [RelayZone::Public, RelayZone::I2p, RelayZone::Tor] {
             assert!(
-                shekyl_dandelionpp_propagation_timeout_seconds(zone.to_bits())
-                    > u64::from(embargo_timer(zone).mean_secs()),
-                "{zone:?}: the wait must clear the embargo it waits on"
+                shekyl_dandelionpp_propagation_timeout_seconds()
+                    >= u64::from(
+                        embargo_timer(zone).judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN)
+                    ),
+                "{zone:?}'s embargo outlasts the single shipped wait"
             );
         }
     }
