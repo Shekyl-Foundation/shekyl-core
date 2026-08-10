@@ -223,6 +223,97 @@ So the unification **adds no new cost axis**. It makes zone selection the thing
 that *reads* the existing one — which is why the mechanism can be symmetric
 while the prices are not.
 
+### Q12-D4 — `p` cancels. The privacy requirement is the EQUALITY, not the value. RULED.
+
+**The parameter looked hard because it was being derived while holding the
+inherited rule that *all* originated traffic goes to the anonymity zone.** Drop
+that and it falls out.
+
+Let a node originate at rate `A`. Its stem-phase relay rate is `A/q`: each
+transaction traverses `1/q` stem nodes, so network-wide stem-forwards are
+`tx_rate/q`, and per node that is `1/q ×` what it originates.
+
+**Current rule** (`p_own = 1`, `p_relay = p`):
+
+```text
+precision_anon = A / (A + p·A/q) = q / (q + p)
+```
+
+**Unified rule** (the same probability applied to both classes at entry):
+
+```text
+precision_anon = p·A / (p·A + p·A/q) = 1 / (1 + 1/q) = q / (1 + q)
+```
+
+**`p` cancels.** Computed at `q = 0.2`:
+
+| `p` | current rule | unified rule |
+| --- | --- | --- |
+| 0.02 (shipped) | **0.9091** | 0.1667 |
+| 0.05 | 0.8000 | 0.1667 |
+| 0.20 | 0.5000 | 0.1667 |
+| 1.00 | 0.1667 | 0.1667 |
+
+`q/(1+q) = 0.1667` is exactly the floor a clearnet-only node already has
+(`A/(A + A/q)`). **So the unified rule gives every zone the network's own mix,
+for any `p`.**
+
+> **The current configuration is the worst point in the family.** `p_own = 1`
+> with `p_relay = 0.02` is *maximal* sorting — 0.909 — and no achievable `p`
+> repairs it, because parity under the current rule requires `p = 1`, which is
+> the unified rule arrived at by exhaustion.
+
+**Consequences:**
+
+- **Zone selection stops carrying origin information at all.** There is nothing
+  left to tune for privacy, so `p` is a **deployment** parameter, not a privacy
+  one.
+- **It holds per node, at any origination ratio.** A heavy originator still has
+  a poor floor — that is C1, inherent — but the zone choice no longer *makes it
+  worse*. **§75's test passed by construction rather than by provisioning**,
+  which is the first time in this arc that a sorting axis has been removed
+  rather than covered.
+- This **dissolves Q12-Q4 and Q12-Q5**: there is no anonymity-set size to
+  derive `p` against, so `λ`/`N` are not needed for it and "is 2+ the right
+  target" has no target left to grade.
+
+**`p` as a deployment choice, freed from the privacy constraint:**
+
+| setting | meaning |
+| --- | --- |
+| `p = 1` | Tor-only. Best against a network observer — no IP-to-transaction link at all — highest latency, requires the anon zone for all relay. |
+| `p = 0` | clearnet-only, for nodes with no anon zone. |
+| intermediate | splits the node's traffic; **both streams carry the correct mix**. |
+
+For a node that runs an anonymity zone at all, **`p = 1` is the natural
+default**: the operator configured Tor to avoid IP exposure, and any traffic on
+clearnet exposes their IP at the floor. Intermediate values buy latency at the
+cost of some IP exposure — a real trade, and **the operator's own rather than a
+stranger's**, which is what makes it a configuration rather than a protocol
+constant.
+
+### Q12-D4a — Two checks owed before Q12-D4 is ratified
+
+**1. Pin which population the entry roll applies to.**
+The `1/q` relay-rate ratio assumes the **stem-phase** population. Verified at
+source for the current code — the roll is gated on `still_stemming`
+(`net_node.inl`), which is §60's *"pre-fluff traffic only"*. If the divert were
+ever applied to *all* relayed traffic, `r_relay` is far larger and **the
+cancellation still holds** (it is ratio-preserving either way) — but the zone
+**volumes** differ by orders of magnitude.
+
+> That is §60.4's error in a new place: *"2 % of relayed transactions"* and
+> *"2 % of pre-fluff forwards"* look alike and differ by ~1000×. The
+> cancellation surviving is exactly what would let the volume mistake pass
+> unnoticed, so the population is **pinned**, not inferred.
+
+**2. Price `p = 1`'s throughput cost.**
+It makes the anonymity zone the node's **only** relay path, so that zone's
+capacity and latency become the node's throughput — against per-zone `hop`'s
+1750 ms interim versus clearnet's 175 ms. That is a real constraint, and it is
+precisely what an intermediate `p` buys off. **Priced, not assumed acceptable**,
+before `p = 1` is recommended as a default.
+
 ---
 
 ## 4. Open design questions
@@ -331,7 +422,14 @@ bridge". Either the class narrows to genuine bridging, or the bridge becomes
 explicit and `forward` is retired. This decides whether Q-12 derives a delay
 for a *smaller* population or for a *different* one.
 
-**Q12-Q4 — What are `λ` and `N`, and how are they grounded?**
+**Q12-Q4 — ~~What are `λ` and `N`?~~ DISSOLVED by Q12-D4**
+They were needed to derive `p` against an anonymity-set size. `p` cancels, so
+there is no set size to size it against and neither input is required for it.
+(If a delay is later wanted at the bridge — Q12-Q8 — that is a different
+quantity against a different objective, and would need its own grounding.)
+
+*Superseded text follows.*
+
 The natural derivation: with `N` incoming anonymity connections each delivering
 at rate `λ`, the expected number of **distinct** connections with an arrival in
 a window `D` is `N(1 − e^(−λD))`; solve for `D` at the target set size. Both
@@ -339,7 +437,14 @@ inputs are needed and neither is currently pinned. `N` may follow from the
 outbound floor work (F-8b, `shekyl_relay_zone_min_provisioned_out_peers`), but
 **inbound is not outbound** and that substitution must be argued, not assumed.
 
-**Q12-Q5 — Is "2+" the right target?**
+**Q12-Q5 — ~~Is "2+" the right target?~~ DISSOLVED by Q12-D4**
+There is no target left to grade. The privacy requirement is the **equality**
+`p_own = p_relay`, not a value, and it is met by construction for any `p`. The
+question was well-posed and its answer is that the objective it interrogated
+stopped existing.
+
+*Superseded text follows.*
+
 The inherited objective is *"2+ incoming connections could have sent the tx"*.
 An anonymity set of two is one bit. Before deriving a mean that satisfies it,
 this round should say whether the objective itself is adequate — deriving
@@ -425,7 +530,7 @@ turn out to be empty.
 | --- | --- | --- | --- |
 | **Q12-U1** | one entry rule both directions: `p_in`/`p_out` selection, coherence, per-zone `hop` as the price | Q12-Q1, Q12-D3 | no — this is the round |
 | **Q12-U2** | delete `relay_method::forward` and the fall-through branch | — (answered by Q12-D3) | no — mechanical, once Q12-U1 lands |
-| **Q12-U3** | `p_in` derived for **dilution**; `p_out` only if the round wants it nonzero | Q12-Q4, Q12-Q5, Q12-Q8 | **partly** — `p_out = 0` is a legitimate close |
+| **Q12-U3** | ~~derive `p`~~ — **enforce `p_own = p_relay`**, and pick `p` as a deployment default | Q12-D4a's two checks | **no derivation** — the equality is the requirement |
 | **Q12-U4** | `FORWARD_DELAY_*`'s disposition | Q12-Q7 | **likely empty** — the constants die with the class |
 
 The Poisson primitive's retirement is **not** a unit here; it is split out per
