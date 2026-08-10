@@ -446,11 +446,16 @@ pub const DEFAULT_EMBARGO_TICK_MILLIS: u64 = 250;
 /// un-reserves their inputs. One in a hundred is the point where the deadline
 /// stops being a coin-flip against the backstop it is waiting for.
 ///
-/// On the adopted embargo that rate is exactly
-/// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`] (874 s — was 664 s before F-7 corrected
-/// `fluff_return_ms`; §44). Pin the seconds, not only the
-/// rate: the same F-1 class of defect reappears if the wait is left as a loose
-/// bound that can drift when the table, tick, or rounding changes.
+/// The seconds this rate buys are pinned by
+/// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`] — **2 297 s**, drawn on the *worst
+/// zone's* embargo since §89.2 made the embargo per-zone (it was 874 s when
+/// the wait was the adopted clearnet embargo, and 664 s before F-7 corrected
+/// `fluff_return_ms`; §44). Which zone the quantile is taken over is the
+/// wallet-coupling defect §89.6 records, not a property of this rate.
+///
+/// Pin the seconds, not only the rate: the same F-1 class of defect reappears
+/// if the wait is left as a loose bound that can drift when the table, tick,
+/// or rounding changes.
 pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 
 /// Sender "still unseen → failed" wait, in seconds, at
