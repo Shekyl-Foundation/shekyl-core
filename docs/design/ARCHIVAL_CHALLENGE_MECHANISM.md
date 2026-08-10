@@ -274,7 +274,11 @@ Writing a Missed cell there corrupts vin-dedup and emission simultaneously.
 ### 4.4 Landed-code casualties (expected, not discoveries)
 
 - `settle_epoch` (`attestation.rs:75`) rewrites: a majority rule needs the
-  derived denominator, not a pass multiset. Pass-priority retires.
+  derived denominator, not a pass multiset. Pass-priority retires. The
+  rewrite carries a named sub-decision (fork §7.1): the threshold under
+  variable issued-count — **absolute ≥ 2 passes (the lean)** vs
+  majority-of-issued — with under-issued (< 2) epochs settling
+  non-observation under the lean.
 - `EpochSettlement::to_observation` **deletes** (not re-documents): its
   "sole bridge to the m-of-n machinery" role belonged to the superseded
   design.
@@ -607,6 +611,52 @@ the round kept trying to add forensics underneath it.
    majority-of-issued — a named sub-decision for the `settle_epoch`
    rewrite, §4.4), and the band adds no semantic obligation the budget
    had not already created.
+   **The settlement sub-decision, analyzed (2026-08-10, review — lean:
+   absolute-2):** the rules diverge precisely where issuance is short,
+   which is the maturity norm. Majority-of-issued makes the *threshold*
+   a function of issued-count — derivable, but a consensus input that
+   couples settlement correctness to every node reproducing the
+   derivation identically, and it lets 2-of-2 and 1-of-1 settle Served
+   on thinner evidence exactly where the budget is tightest. Absolute-2
+   needs only the pass count — smaller surface, and the epoch bit means
+   one fixed thing across the whole D range. The cost, recorded not
+   argued away: a pair issued < 2 can never be Served, so under-issued
+   epochs must settle **non-observation** (a pair the urn couldn't
+   reach is not a pair that failed) — which re-keys §4.2's writer on
+   **issuance, not drawability**. At exact budget this never binds (see
+   the numbers below: min issued = 2 in every run); it binds only in
+   budget-short regimes, where it is the correct behaviour.
+   **Wave-tail numbers (2026-08-10; scratchpad sim, 3 seeds at genesis;
+   the executable derivation lands in `shekyl-economics-sim` with the
+   ruling per the derive-don't-hardcode pattern):**
+   - **Exact-min exposure has a closed form and it is scale-invariant:**
+     exposure(τ) = k_avg·τ/D = **3τ/SEB** (λ_target = 3) — 0.75 % of
+     draws at ≤ 25 blocks notice, 3.0 % at ≤ 100, 6.0 % at ≤ 200;
+     identical at D = 4,096 and D = 324,000, matching simulation to
+     three digits. The tail is thin but real, and independent of scale.
+   - **The band cuts exposure ~2.5×** at every τ, both regimes (τ100:
+     3.0 % → 1.1–1.2 %) — structurally, the min+1 bucket keeps the
+     candidate set large through wave transitions.
+   - **The band's issued-count variance is the heavy side of the
+     trade:** at maturity, 23.3 % of pairs finish at issued-2 (and a
+     symmetric 23.3 % at 4); at genesis, 8–25 % seed-dependent. Under
+     absolute-2, an issued-2 pair's honest epoch survival is a² (0.81
+     at a = 0.9) vs a²(3−2a) = 0.972 for issued-3 — so **the
+     issued-count histogram is an (m, n) derivation input** (the
+     per-epoch miss rate becomes a mixture), exactly as anticipated.
+   - **The redraw floor holds under both variants at exact budget:**
+     minimum issued = 2 in every run; 1st→2nd-draw gap p99 ≈ 6,200
+     blocks < SEB.
+   - **The capped regime, for the record (k_cap = 30, D = 324 k):**
+     issued counts {0: 35 %, 1: 37 %, 2: 28 %} — under absolute-2 with
+     under-issued ⇒ non-observation, 72 % of pairs are unobservable per
+     epoch and retention teeth degrade proportionally. Triage made
+     concrete; this is what the prunable-carrier work prevents.
+   - **Candidate worth sizing, not ruling here — the adaptive band:**
+     exact-min while the min bucket is large, widening to the band only
+     when it thins below m*. Keeps exact-3 for most pairs and buys tail
+     anonymity only where the exposure lives; m* becomes the knob that
+     trades the two curves above against each other.
 2. **Who reads — witness selection and obligation.** The decision the rest
    of the stack prices against: W₂, the abandonment penalty, the reward
    question, and the nonce anchor are all functions of who performs the
