@@ -43,12 +43,10 @@
 //! construction. Two properties follow deliberately:
 //!
 //! * A **failing** OS RNG degrades to a deterministic, RFC-6979-style
-//!   nonce — never to a repeated one, and never to a panic. `OsRng`'s
-//!   `fill_bytes` panics on `getrandom` failure; this module uses
-//!   `try_fill_bytes` because a panic here aborts whatever supervisor
-//!   owns the caller (for message signing, a fail-stop key actor whose
-//!   death takes the whole wallet session with it) in exchange for no
-//!   security benefit at all.
+//!   nonce — never to a repeated one, and never to a panic. The
+//!   fresh-entropy draw and its failure policy are owned by
+//!   [`crate::rng::hedged_fresh32`], the single home of that decision;
+//!   see `rng`'s module docs for the fail-safe/fail-loud split.
 //! * A **predictable** RNG is likewise harmless: the secret scalar and
 //!   the message are already in the hash, so `k` stays unpredictable to
 //!   anyone who does not hold `sk`.
@@ -85,12 +83,9 @@ pub fn challenge(
 /// Hedged nonce — see the module docs for why this is neither a bare RNG
 /// draw nor a purely deterministic one.
 fn hedged_nonce(domain: &[u8], secret_key: &Scalar, msg: &[u8]) -> Scalar {
-    let mut fresh = [0u8; 32];
-    // Fail-safe, not fail-stop: on RNG failure the block stays zero and
+    // Fail-safe, not fail-stop: on RNG failure the block is all-zeros and
     // `k` is the deterministic H(domain ‖ "nonce" ‖ sk ‖ msg).
-    if rand::RngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut fresh).is_err() {
-        fresh = [0u8; 32];
-    }
+    let mut fresh = crate::rng::hedged_fresh32();
     let mut hasher = Sha512::new();
     hasher.update(domain);
     hasher.update(NONCE_LABEL);

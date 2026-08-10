@@ -78,7 +78,7 @@ public:
   bool update_checkpoints(const bool skip_dns = false) { return true; }
   uint64_t get_target_blockchain_height() const { return 1; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
-  virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay) {}
+  virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, epee::net_utils::zone) {}
   cryptonote::network_type get_nettype() const { return cryptonote::MAINNET; }
   bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx_blob, cryptonote::relay_category tx_category) const { return false; }
   bool pool_has_tx(const crypto::hash &txid) const { return false; }
@@ -1050,7 +1050,7 @@ TEST(node_server, race_condition)
     struct core_events_t: cryptonote::i_core_events {
       uint64_t get_current_blockchain_height() const override { return {}; }
       bool is_synchronized() const override { return {}; }
-      void on_transactions_relayed(blobs_t blobs, relay_t relay) override {}
+      void on_transactions_relayed(blobs_t blobs, relay_t relay, epee::net_utils::zone) override {}
     };
     int handle_invoke_map(bool is_notify, int command, const span_t in, byte_stream_t &out, context_t &context, bool &handled) {
       return {};

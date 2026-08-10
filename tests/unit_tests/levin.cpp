@@ -119,6 +119,7 @@ namespace
     class test_core_events final : public cryptonote::i_core_events
     {
         std::map<cryptonote::relay_method, std::vector<cryptonote::blobdata>> relayed_;
+        std::map<cryptonote::relay_method, epee::net_utils::zone> zones_;
 
         virtual bool is_synchronized() const final
         {
@@ -130,11 +131,16 @@ namespace
             return 0;
         }
 
-        virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> txes, cryptonote::relay_method relay) override final
+        virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> txes, cryptonote::relay_method relay, epee::net_utils::zone zone) override final
         {
             std::vector<cryptonote::blobdata>& cached = relayed_[relay];
             for (const auto& tx : txes)
                 cached.push_back(tx);
+            /* §89.2: the embargo is drawn per zone, and the zone arrives here
+               rather than on the txpool entry. Recorded so a test can assert
+               WHICH zone a relay was attributed to — asserting only the relay
+               method would pass whatever zone the dispatch happened to pick. */
+            zones_[relay] = zone;
         }
 
     public:
@@ -152,6 +158,15 @@ namespace
             return relayed_.count(cryptonote::relay_method::stem);
         }
 
+        //! \return The zone the last `relay`-method relay was attributed to.
+        epee::net_utils::zone relayed_zone(cryptonote::relay_method relay) const
+        {
+            const auto found = zones_.find(relay);
+            if (found == zones_.end())
+                throw std::logic_error{"no relay recorded for that method"};
+            return found->second;
+        }
+
         std::vector<cryptonote::blobdata> take_relayed(cryptonote::relay_method relay)
         {
             auto elems = relayed_.find(relay);
@@ -160,6 +175,9 @@ namespace
 
             std::vector<cryptonote::blobdata> out{std::move(elems->second)};
             relayed_.erase(elems);
+            /* Zone rides with the relay event; drop it with the blobs so
+               `relayed_zone` cannot return a stale attribution after consume. */
+            zones_.erase(relay);
             return out;
         }
     };
@@ -432,12 +450,250 @@ namespace
             }
         }
 
+        /*! One round of anonymity-zone relay under §89's stemming posture.
+
+            Shared by the six `private_*` cases, which differ only in the method
+            handed to `send_txs` and whether padding is on. The assertions are
+            written once because six copies is how one of them quietly stops
+            checking what it claims to — and one of the things it checks here is
+            a rule a port has already broken once.
+
+            \param sent_as method handed to `send_txs` (stem, local or forward)
+            \param padded  whether the notifier was built with `pad_txs`
+            \return true if this round stemmed rather than fluffed */
+        bool run_private_round(cryptonote::levin::notify& notifier,
+                               const std::vector<cryptonote::blobdata>& txs,
+                               const cryptonote::relay_method sent_as,
+                               const bool padded)
+        {
+            std::vector<cryptonote::blobdata> sorted_txs = txs;
+            std::sort(sorted_txs.begin(), sorted_txs.end());
+
+            auto context = contexts_.begin();
+            EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), sent_as));
+
+            io_service_.restart();
+            EXPECT_LT(0u, io_service_.poll());
+
+            /* §30.5 — an origin keeps its `local` txpool class whatever the
+               transport did, so for that case the record no longer
+               discriminates the wire outcome, and the origin always stems
+               (D++ §4.4). For relayed traffic the record still tracks the
+               wire, because it must arm the per-zone embargo (§89.2). */
+            const bool originated = (sent_as == cryptonote::relay_method::local);
+            const bool is_stem = originated || events_.has_stem_txes();
+            const auto method =
+              originated ? cryptonote::relay_method::local
+                         : (is_stem ? cryptonote::relay_method::stem
+                                    : cryptonote::relay_method::fluff);
+
+            /* Exactly one class recorded per round — the negative control for
+               the §30.5 rule. `upgrade_relay_method` is monotone, so an origin
+               that ALSO recorded `stem` or `fluff` has left the `local` class
+               permanently, and the next pool re-relay hands the user's own
+               transaction to the clearnet arm. Asserting only that `local` is
+               present would pass with that upgrade sitting beside it. */
+            EXPECT_EQ(1u, events_.relayed_method_size());
+
+            /* §89.2 draws the embargo per zone, and the zone reaches the draw
+               with the relay rather than off the txpool entry. Asserting the
+               METHOD alone would pass whichever zone the dispatch attributed
+               it to, which is the axis this round changed. */
+            EXPECT_EQ(epee::net_utils::zone::i2p, events_.relayed_zone(method));
+            EXPECT_EQ(txs, events_.take_relayed(method));
+
+            if (!is_stem)
+            {
+                notifier.run_fluff();
+                io_service_.restart();
+                EXPECT_LT(0u, io_service_.poll());
+            }
+
+            std::size_t send_count = 0;
+            EXPECT_EQ(0u, context->process_send_queue());
+            for (++context; context != contexts_.end(); ++context)
+            {
+                const std::size_t sent = context->process_send_queue();
+                /* OUTBOUND ONLY — stemming or fluffing, and this is the
+                   assertion to protect. On a hidden service an inbound peer is
+                   a stranger who dialled us; RP-3a dropped that rule in the
+                   port and these `private_*` cases are what caught it. Opening
+                   the stem gates must not cost the catcher. */
+                if (sent)
+                    EXPECT_EQ(1u, (context - contexts_.begin()) % 2);
+                send_count += sent;
+            }
+
+            /* One successor when stemming; the outbound half of ten when
+               fluffing — never nine, which would mean the outbound-only reach
+               was lost. */
+            const std::size_t expected = is_stem ? 1u : 5u;
+            EXPECT_EQ(expected, send_count);
+            EXPECT_EQ(expected, receiver_.notified_size());
+            for (std::size_t count = 0; count < expected; ++count)
+            {
+                auto notification =
+                  receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
+                EXPECT_EQ(is_stem ? txs : sorted_txs, notification.txs);
+                EXPECT_EQ(padded, !notification._.empty());
+                /* The flag varies on this zone again (§64.1 reviving §61.1's
+                   partition argument): false on a stem send, true on a fluff.
+                   Before §89 it was true unconditionally here. */
+                EXPECT_EQ(!is_stem, notification.dandelionpp_fluff);
+            }
+            return is_stem;
+        }
+
+        /*! Build a private (i2p) notifier with ten alternating in/out peers
+            and two fixed txs — shared setup for the stemming cases. */
+        std::shared_ptr<cryptonote::levin::notify> make_private_stem_fixture(const bool padded)
+        {
+            auto notifier_ptr = make_notifier(0, false, padded);
+            auto& notifier = *notifier_ptr;
+            for (unsigned count = 0; count < 10; ++count)
+                add_connection(count % 2 == 0);
+            {
+                const auto status = notifier.get_status();
+                EXPECT_FALSE(status.has_noise);
+                EXPECT_FALSE(status.connections_filled);
+                EXPECT_TRUE(status.has_outgoing);
+            }
+            notifier.new_out_connection();
+            io_service_.poll();
+            return notifier_ptr;
+        }
+
+        static std::vector<cryptonote::blobdata> private_stem_txs()
+        {
+            std::vector<cryptonote::blobdata> txs(2);
+            txs[0].resize(100, 'e');
+            txs[1].resize(200, 'f');
+            return txs;
+        }
+
+        /*! Drive stem/forward until both epoch roles appear, or pin local as
+            always-stem. One shell so the six cases cannot drift. */
+        void run_private_stemming_case(const cryptonote::relay_method method,
+                                       const bool padded)
+        {
+            auto notifier_ptr = make_private_stem_fixture(padded);
+            auto& notifier = *notifier_ptr;
+            const auto txs = private_stem_txs();
+            ASSERT_EQ(10u, contexts_.size());
+
+            if (method == cryptonote::relay_method::local)
+            {
+                /* D++ §4.4: origin always stems, independent of epoch role.
+                   Waiting for fluff would hang. Four rounds on freshly drawn
+                   epochs so a role-dependent regression cannot hide. */
+                for (unsigned round = 0; round < 4; ++round)
+                {
+                    EXPECT_TRUE(run_private_round(notifier, txs, method, padded))
+                      << "local must stem on every epoch role; round " << round;
+                    notifier.run_epoch();
+                }
+                return;
+            }
+
+            /* stem and forward are role-dependent — observe both outcomes.
+               (forward is NOT exempt the way local is; an earlier draft pinned
+               always-stem and failed only when full-suite run order moved RNG.) */
+            /* Bounded, and it has to be: the regression these six cases exist
+               to catch — the transport gate coming back — pins the outcome to
+               one value, and an unbounded wait for the other one turns a red
+               assertion into a CI job timeout with no failing test named.
+               P(role never varies | correct) = 0.8^64 ≈ 6e-7 at the zone's
+               20 % fluff probability, so the bound cannot flake in practice. */
+            constexpr unsigned max_rounds = 64;
+            bool has_stemmed = false;
+            bool has_fluffed = false;
+            for (unsigned round = 0; round < max_rounds; ++round)
+            {
+                const bool is_stem = run_private_round(notifier, txs, method, padded);
+                has_stemmed |= is_stem;
+                has_fluffed |= !is_stem;
+                if (has_stemmed && has_fluffed)
+                    return;
+                notifier.run_epoch();
+            }
+
+            ADD_FAILURE() << "epoch role never varied over " << max_rounds
+                          << " rounds (stemmed=" << has_stemmed
+                          << " fluffed=" << has_fluffed
+                          << ") — the anonymity zone is pinned to one outcome, "
+                             "which is what a restored transport gate looks like (§89)";
+        }
+
         boost::uuids::random_generator random_generator_;
         boost::asio::io_context io_service_;
         test_receiver receiver_;
         std::deque<test_connection> contexts_;
         test_core_events events_;
     };
+}
+
+/* Pure R-1 coherence gate — pins the production predicate without needing a
+   full non-public `handle_notify_new_transactions` mock (§89.7). Fluff must
+   never cohere (liveness exit); anonymity stem/forward/local must. */
+TEST(r1_coherence_predicate, table)
+{
+    using cryptonote::relay_method;
+    using epee::net_utils::zone;
+
+    // Fluff is the exit on every origin — coherence would strand txs.
+    for (const auto origin : {zone::public_, zone::i2p, zone::tor, zone::invalid})
+        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(relay_method::fluff, origin));
+
+    // Clearnet / invalid never cohere via this path.
+    for (const auto method : {relay_method::stem, relay_method::forward, relay_method::local})
+    {
+        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(method, zone::public_));
+        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(method, zone::invalid));
+        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(relay_method::none, zone::tor));
+        EXPECT_FALSE(cryptonote::r1_coherence_keeps_origin(relay_method::block, zone::tor));
+    }
+
+    // Pre-fluff on a real anonymity zone — the live §89 path.
+    for (const auto method : {relay_method::stem, relay_method::forward, relay_method::local})
+    {
+        EXPECT_TRUE(cryptonote::r1_coherence_keeps_origin(method, zone::i2p));
+        EXPECT_TRUE(cryptonote::r1_coherence_keeps_origin(method, zone::tor));
+        EXPECT_TRUE(cryptonote::is_pre_fluff_relay(method));
+    }
+    EXPECT_FALSE(cryptonote::is_pre_fluff_relay(relay_method::fluff));
+}
+
+/* §89 private stemming posture: the anonymity zone STEMS. Outbound-only fluff
+   reach is asserted every round inside `run_private_round`. Cases differ only
+   by method and padding. */
+TEST_F(levin_notify, private_stem_without_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::stem, false);
+}
+
+TEST_F(levin_notify, private_local_without_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::local, false);
+}
+
+TEST_F(levin_notify, private_forward_without_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::forward, false);
+}
+
+TEST_F(levin_notify, private_stem_with_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::stem, true);
+}
+
+TEST_F(levin_notify, private_local_with_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::local, true);
+}
+
+TEST_F(levin_notify, private_forward_with_padding)
+{
+    run_private_stemming_case(cryptonote::relay_method::forward, true);
 }
 
 TEST(make_header, no_expect_return)
@@ -1803,184 +2059,13 @@ TEST_F(levin_notify, private_fluff_without_padding)
     }
 }
 
-TEST_F(levin_notify, private_stem_without_padding)
-{
-    // private mode always uses fluff but marked as stem
-    //
-    // Load-bearing beyond its inherited scope (§63 of
-    // docs/design/DAEMON_RELAY_PRIVACY.md). Three assertions below pin facts
-    // four sections of relay-privacy analysis were written against the
-    // opposite of, and each is the tripwire for a different claim:
-    //
-    //   - every outbound peer is notified (not one successor): the anonymity
-    //     zone DIFFUSES, so there is no stem slot on it (§63.4);
-    //   - `dandelionpp_fluff` is true on the wire: the flag does not vary on
-    //     this zone, which is why exit (b) is not dominated (§63.7);
-    //   - the txpool is told `stem`: the embargo still arms, which is the
-    //     half of "stem and embargo present" that was right (§63.3).
-    //
-    // If a future change makes this zone run Dandelion++ — the design
-    // question §63.6 leaves open — this test SHOULD fail, and §63 is what to
-    // re-read before adjusting it.
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-    {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::stem));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_TRUE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
-    }
-}
-
-TEST_F(levin_notify, private_local_without_padding)
-{
-    // private mode always uses fluff but marked as stem
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-    {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::local));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_TRUE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
-    }
-}
-
-TEST_F(levin_notify, private_forward_without_padding)
-{
-    // private mode always uses fluff but marked as stem
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-    {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::forward));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::forward));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_TRUE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
-    }
-}
-
 TEST_F(levin_notify, private_block_without_padding)
 {
-    // private mode always uses fluff but marked as stem
+    /* `block` and `none` never reach the relay path on any zone — `send_txs`
+       returns false for both before the transport question is asked — so §89's
+       stemming ruling does not touch this case. The inherited comment here
+       said "private mode always uses fluff but marked as stem"; that is false
+       since §89 and was never what this case tested. */
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
     auto &notifier = *notifier_ptr;
 
@@ -2012,7 +2097,11 @@ TEST_F(levin_notify, private_block_without_padding)
 
 TEST_F(levin_notify, private_none_without_padding)
 {
-    // private mode always uses fluff but marked as stem
+    /* `block` and `none` never reach the relay path on any zone — `send_txs`
+       returns false for both before the transport question is asked — so §89's
+       stemming ruling does not touch this case. The inherited comment here
+       said "private mode always uses fluff but marked as stem"; that is false
+       since §89 and was never what this case tested. */
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
     auto &notifier = *notifier_ptr;
 
@@ -2075,162 +2164,6 @@ TEST_F(levin_notify, private_fluff_with_padding)
         ASSERT_LT(0u, io_service_.poll());
 
         EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_FALSE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
-    }
-}
-
-TEST_F(levin_notify, private_stem_with_padding)
-{
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-    {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::stem));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::stem));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_FALSE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
-    }
-}
-
-TEST_F(levin_notify, private_local_with_padding)
-{
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-    {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::local));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
-
-        EXPECT_EQ(0u, context->process_send_queue());
-        for (++context; context != contexts_.end(); ++context)
-        {
-            const bool is_incoming = ((context - contexts_.begin()) % 2 == 0);
-            EXPECT_EQ(is_incoming ? 0u : 1u, context->process_send_queue());
-        }
-
-        ASSERT_EQ(5u, receiver_.notified_size());
-        for (unsigned count = 0; count < 5; ++count)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_FALSE(notification._.empty());
-            EXPECT_TRUE(notification.dandelionpp_fluff);
-        }
-    }
-}
-
-TEST_F(levin_notify, private_forward_with_padding)
-{
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
-    auto &notifier = *notifier_ptr;
-
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_FALSE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-    notifier.new_out_connection();
-    io_service_.poll();
-
-    std::vector<cryptonote::blobdata> txs(2);
-    txs[0].resize(100, 'e');
-    txs[1].resize(200, 'f');
-
-    ASSERT_EQ(10u, contexts_.size());
-    {
-        auto context = contexts_.begin();
-        EXPECT_TRUE(notifier.send_txs(txs, context->get_id(), cryptonote::relay_method::forward));
-
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-        notifier.run_fluff();
-        io_service_.restart();
-        ASSERT_LT(0u, io_service_.poll());
-
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::forward));
 
         EXPECT_EQ(0u, context->process_send_queue());
         for (++context; context != contexts_.end(); ++context)

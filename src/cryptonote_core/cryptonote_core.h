@@ -40,6 +40,7 @@
 #include "cryptonote_core/i_core_events.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler_common.h"
 #include "cryptonote_protocol/enums.h"
+#include "net/enums.h"
 #include "common/command_line.h"
 #include "tx_pool.h"
 #include "blockchain.h"
@@ -247,7 +248,7 @@ namespace cryptonote
       * @brief called when a transaction is relayed.
       * @note Should only be invoked from `levin_notify`.
       */
-     void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay) final;
+     void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, epee::net_utils::zone zone) final;
 
 
      /**

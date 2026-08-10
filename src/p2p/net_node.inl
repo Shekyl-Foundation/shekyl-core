@@ -2371,27 +2371,36 @@ namespace nodetool
        traffic (below) still fails closed when anonymity cannot take it —
        leaking an origin over clearnet is the first-spy case this arc exists
        to prevent (§30.5). */
-    const bool still_stemming =
-      tx_relay == cryptonote::relay_method::stem ||
-      tx_relay == cryptonote::relay_method::forward ||
-      tx_relay == cryptonote::relay_method::local;
+    /* Pre-fluff = stem | forward | local. Shared with the pure R-1
+       predicate (`cryptonote::is_pre_fluff_relay` / `r1_coherence_keeps_origin`)
+       so the production branch and its unit witness cannot drift. Fluff is the
+       exit — must not cohere (§59.1). */
+    const bool still_stemming = cryptonote::is_pre_fluff_relay(tx_relay);
 
     if (origin != enet::zone::invalid)
     {
-      /* Dormant today, and for the same reason as the two paths below (§63.8).
-         Every anonymity-zone release sets `dandelionpp_fluff`
-         (`levin_notify.cpp:561`, "always send with fluff flag, even over
-         i2p/tor"), so a receiver overrides its `forward` default to `fluff`
-         (`cryptonote_protocol_handler.inl:946`) and `upgrade_relay_method` is
-         monotone upward, never walking it back. A transaction whose `origin`
-         is an anonymity zone therefore always arrives here as `fluff` and
-         `still_stemming` is false.
+      /* STILL DORMANT — §89 did not wake this, and §89.7 said it did.
 
-         Correct for the world it wakes into: with covert on, the covert send
-         clears the flag (`levin_notify.cpp:1195`), the receiver keeps
-         `forward`, and coherence starts firing. Until then R-1 is the entry
-         roll alone. */
-      if (still_stemming && origin != enet::zone::public_ && m_network_zones.count(origin))
+         §63.8 closed it on a four-link chain and §89 breaks link 1 (an
+         anonymity stem clears `dandelionpp_fluff`). But the chain has a fifth
+         link §63.8 never recorded, and it binds on its own: a non-public
+         arrival takes `relay_method::forward`
+         (`cryptonote_protocol_handler.inl:969`), `tx_pool.cpp:360` refuses to
+         propagate `forward` into `tvc.m_relay`, and the batching switch drops
+         it (`// not supposed to happen here`). So `relay_transactions` is
+         never called at arrival with an anonymity origin, and `send_txs`
+         cannot see (anon origin, pre-fluff) whatever link 1 does.
+
+         Kept, not deleted: it is correct for the world it will run in, and
+         that world is the receive-path change §89.8.2 names. What is wrong is
+         only the claim that it runs now.
+
+         **Witness.** Link 1 is pinned by `levin.cpp`'s `private_*` cases; the
+         pure gate by `r1_coherence_predicate`. The end-to-end arrival needs a
+         `t_core` mock the suite lacks — see §89.8 / FOLLOWUPS, and note that
+         the missing witness is exactly what hid the fifth link. */
+      if (cryptonote::r1_coherence_keeps_origin(tx_relay, origin) &&
+          m_network_zones.count(origin))
         return send(*m_network_zones.find(origin)); // coherence: no re-roll
 
       /* The roll fires only on a genuine ARRIVAL — `source` is a real peer.

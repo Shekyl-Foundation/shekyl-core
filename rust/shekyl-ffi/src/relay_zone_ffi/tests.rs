@@ -6,6 +6,11 @@
 use super::*;
 use std::cell::RefCell;
 
+/// Zone byte for the cases that do not exercise the per-zone parameter split.
+/// Spelled out rather than `1` so a change to the discriminant cannot silently
+/// re-point every fixture at a different transport.
+const PUBLIC: u8 = RelayZone::Public.as_u8();
+
 // The "C++ side", simulated: recording callbacks that capture exactly what
 // crosses the boundary. This is the Effect seam test §18.4a asks for, and it
 // runs without a daemon build — which is what lets the transparency check
@@ -89,7 +94,7 @@ fn id(byte: u8) -> [u8; 16] {
 fn fluff_effects_cross_with_peer_and_payload_intact() {
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
         let blob = [0xAB, 0xCD, 0xEF];
         let batch = [ShekylRelayBlob {
@@ -133,7 +138,7 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
     //    every peer downstream.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
         // Offered high-to-low, with a repeat: order and duplication both
         // have to be removed for the assertion below to hold.
@@ -180,7 +185,7 @@ fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
     reset();
     unsafe {
         let peers: Vec<u8> = [id(1), id(2)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
         shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
@@ -276,7 +281,7 @@ fn live_stems_atomic_tracks_the_derived_value_after_every_mutation() {
     // kind of mutation — a second writer, or a missed publish, shows here.
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         assert_eq!(shekyl_relay_zone_live_stems(h), 0, "fresh zone");
 
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
@@ -308,7 +313,7 @@ fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
     // somewhere — but it changes which `relay_method` event is emitted and
     // whether a recoverable stem is abandoned.
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         let mut out = [0u8; 16];
 
         assert_eq!(
@@ -367,7 +372,7 @@ fn the_nil_uuid_means_locally_originated_which_is_what_cpp_actually_sends() {
     // the null-source path does.
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3);
 
         let mut rolls = 0;
@@ -408,7 +413,7 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
     // agree was due and nothing in the tree would notice.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
 
         let blob = [0x5Au8];
@@ -489,7 +494,7 @@ fn polling_across_the_epoch_boundary_gathers_and_rebuilds() {
     // epoch deadline, so polling there is a rollover.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         assert!(!h.is_null(), "these params build a zone");
 
         // The set the rollover will draw its two slots from.
@@ -528,11 +533,11 @@ fn a_zone_that_would_spin_is_refused_rather_than_built() {
     // re-arm in the past forever. Refusing construction turns a silent
     // busy-loop in the p2p reactor into a loud startup failure.
     assert!(
-        shekyl_relay_zone_new(0, 2, 0, 30, 0).is_null(),
+        shekyl_relay_zone_new(0, PUBLIC, 2, 0, 30, 0).is_null(),
         "zero epoch"
     );
     assert!(
-        shekyl_relay_zone_new(0, usize::MAX, 600, 30, 0).is_null(),
+        shekyl_relay_zone_new(0, PUBLIC, usize::MAX, 600, 30, 0).is_null(),
         "unrepresentable stem width"
     );
 }
@@ -586,7 +591,7 @@ fn plan_relay_with_refresh_fills_an_empty_map() {
     reset();
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         let mut out = [0u8; 16];
         let plan = shekyl_relay_zone_plan_relay_with_refresh(
             h,
@@ -611,7 +616,7 @@ fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
     // Contract: empty blobs may pass a null ptr; non-empty must not. Fail
     // closed on the whole batch so a bad span cannot drop a sibling silently.
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
         let bad = [ShekylRelayBlob {
             ptr: std::ptr::null(),
@@ -685,7 +690,7 @@ fn zone_flag_bits_do_not_transpose() {
 
     unsafe {
         // Covert bit ALONE. A swap makes this read the fluff bit → false.
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
         assert!(
             shekyl_relay_zone_covert_enabled(h),
             "covert bit set alone must read back as covert-enabled; \
@@ -694,7 +699,7 @@ fn zone_flag_bits_do_not_transpose() {
         shekyl_relay_zone_free(h);
 
         // Fluff bit ALONE. A swap makes this read the covert bit → true.
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY);
         assert!(
             !shekyl_relay_zone_covert_enabled(h),
             "outbound-fluff bit set alone must NOT enable covert; \
@@ -704,12 +709,12 @@ fn zone_flag_bits_do_not_transpose() {
 
         // Neither, and both — the two ends, so an always-true or always-false
         // decode cannot pass the set above by accident.
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         assert!(!shekyl_relay_zone_covert_enabled(h), "no flags ⇒ no covert");
         shekyl_relay_zone_free(h);
 
         let both = SHEKYL_RELAY_ZONE_COVERT_ENABLED | SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, both);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, both);
         assert!(
             shekyl_relay_zone_covert_enabled(h),
             "both flags ⇒ covert on"
@@ -735,7 +740,7 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         shekyl_relay_privacy::stem_map::ConnectionId::from_bytes(id(byte))
     }
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
 
         let mut hashes = [0u8; 64]; // two packed 32-byte canonical tx hashes
@@ -849,7 +854,7 @@ fn an_overflowing_batch_length_trips_the_guard_not_the_multiply() {
 #[test]
 fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         let mut hashes = [0u8; 32];
         hashes[0] = 0xA1;
 
@@ -879,13 +884,77 @@ fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
     }
 }
 
+/// The zone byte selects the transport-bound parameters, and the stem
+/// observation window is where that shows.
+///
+/// §89.2 makes `hop` per-zone, but the handle was still built from
+/// `DandelionParams::adopted()` for every zone — so an anonymity zone armed a
+/// clearnet 190 s observation against the 499 s embargo its own successor
+/// draws. Every honest i2p/tor peer would age into `silent` before it was even
+/// allowed to re-relay, and `stem_tallies` would report the whole anonymity
+/// peer set as withholding.
+///
+/// Sampled rather than pinned: the deadline is a geometric draw on `OsRng`.
+/// The epoch is set far past both means so `next_wake` reports the observation
+/// rather than the epoch roll. The means differ by ~2.6x, so a 1.5x threshold
+/// cannot flake.
+#[test]
+fn the_zone_byte_selects_the_observation_window() {
+    const ROUNDS: u32 = 200;
+    const EPOCH_BEYOND_BOTH_MEANS_SECS: u32 = 1_000_000;
+
+    let mean_wake = |zone: u8| -> f64 {
+        let mut total = 0f64;
+        for _ in 0..ROUNDS {
+            unsafe {
+                let h = shekyl_relay_zone_new(0, zone, 2, EPOCH_BEYOND_BOTH_MEANS_SECS, 0, 0);
+                let mut hashes = [0u8; 32];
+                hashes[0] = 0xA1;
+                shekyl_relay_zone_record_stem(
+                    h,
+                    hashes.as_ptr(),
+                    1,
+                    id(9).as_ptr(),
+                    std::ptr::null(),
+                    0,
+                );
+                // Lossless rather than an `as` cast with a precision allow:
+                // these deadlines are milliseconds well under `u32::MAX`
+                // (~49 days), so a value that does not fit is a defect worth
+                // failing on rather than rounding.
+                let wake = u32::try_from(shekyl_relay_zone_next_wake(h))
+                    .expect("an embargo deadline in ms fits u32 at this epoch length");
+                total += f64::from(wake);
+                shekyl_relay_zone_free(h);
+            }
+        }
+        total / f64::from(ROUNDS)
+    };
+
+    let clearnet = mean_wake(PUBLIC);
+    let anonymity = mean_wake(RelayZone::Tor.as_u8());
+    assert!(
+        anonymity > clearnet * 1.5,
+        "the anonymity zone must arm a longer observation window than clearnet \
+         (§89.2): clearnet {clearnet:.0} ms vs anonymity {anonymity:.0} ms"
+    );
+
+    // Negative control: two samples of the SAME zone must not separate, or the
+    // assertion above would pass on any source of variance at all.
+    let clearnet_again = mean_wake(PUBLIC);
+    assert!(
+        clearnet_again < clearnet * 1.5 && clearnet < clearnet_again * 1.5,
+        "two clearnet samples must not separate: {clearnet:.0} vs {clearnet_again:.0} ms"
+    );
+}
+
 /// The §55 telemetry readout crosses the boundary as fixed rows, and its
 /// two-call sizing contract holds: a short buffer writes nothing and reports
 /// the needed row count.
 #[test]
 fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
 
         // Empty zone: zero rows, not an error.
