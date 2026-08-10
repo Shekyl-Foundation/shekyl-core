@@ -41,18 +41,20 @@ pub const HYBRID_SCHEME_ID_ED25519_ML_DSA_65: u8 = 1;
 /// domain as a required parameter so a caller cannot sign a bare message; the
 /// FFI exports apply the surface's constant internally so C++ never carries a
 /// domain string it could get wrong.
-///
-/// Single-sig and multisig (scheme 2) both use this constant: SA-R-5's
-/// single-vs-multisig cross-scheme closure is provided **structurally**, not by
-/// a distinct domain. In the consensus tx path the signed payload includes the
-/// per-auth header (`PqcAuth::header_write`, `shekyl-wire`), which writes the
-/// `scheme_id` byte (1 vs 2) and the pubkey blob (single key vs container) — so
-/// a single-sig auth and a multisig auth sign structurally different payloads
-/// and their signatures are not interchangeable. Minting a separate multisig
-/// domain would add closure only for a standalone-FFI caller that deliberately
-/// reuses one raw message across both schemes, a path with no production signer;
-/// it is not worth a second consensus-frozen string.
 pub const SCHEME_DOMAIN_PQC_AUTH_TX: &[u8] = b"shekyl/pqc-auth-tx-v1";
+/// Multisig participant auth (scheme 2), **distinct** from single-sig
+/// [`SCHEME_DOMAIN_PQC_AUTH_TX`] (SA-R-5). A multisig participant and a
+/// single-signer both produce a `HybridEd25519MlDsa` signature, and the
+/// preimage binds only the *hybrid* scheme id (constant 1) — so over the same
+/// raw message the two signatures would be byte-identical without a separate
+/// domain. The consensus tx path additionally distinguishes them structurally
+/// (`PqcAuth::header_write` writes the container scheme_id 1 vs 2 into the
+/// signed payload), but that is a caller-side property of the tx builder; the
+/// scheme owns its separation here so a signature made in one context cannot be
+/// reused in the other even for a caller that passes a bare payload to
+/// `verify_multisig`. `verify_multisig` and the (test-support) participant
+/// signer both use this constant; production multisig signing is unbuilt.
+pub const SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG: &[u8] = b"shekyl/pqc-auth-tx-multisig-v1";
 /// Emission claim-role auth (surface C).
 pub const SCHEME_DOMAIN_EMISSION_CLAIM: &[u8] = b"shekyl/archival-emission-claim-scheme-v1";
 /// Emission backing-role auth (surface D).

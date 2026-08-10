@@ -476,10 +476,13 @@ TEST(fcmp, multisig_pqc_leaf_hash_via_ffi)
   ASSERT_EQ(memcmp(hash_out, hash_out2, 32), 0);
 }
 
-TEST(fcmp, multisig_partial_sig_roundtrip)
+TEST(fcmp, single_sig_hex_roundtrip)
 {
-  // Generate a keypair, sign a message, and verify the signature roundtrips
-  // through hex encoding (as the signing request JSON uses).
+  // A single-signer (scheme 1) hybrid signature roundtrips through hex encoding
+  // (as the signing request JSON uses) and re-verifies. This signs and verifies
+  // under scheme 1 throughout — it is NOT a multisig test (a multisig
+  // participant would sign under the multisig domain; see
+  // multisig_2of3_sig_container_assembly).
   ShekylPqcKeypair kp = shekyl_pqc_keypair_generate();
   ASSERT_TRUE(kp.success);
 
@@ -541,11 +544,13 @@ TEST(fcmp, multisig_2of3_sig_container_assembly)
   uint8_t payload_hash[32];
   memset(payload_hash, 0xCC, 32);
 
-  // Signers 0 and 2 produce partial signatures
+  // Signers 0 and 2 produce partial signatures. Multisig participants sign
+  // under the multisig domain (SA-R-5) — a single-signer signature is NOT a
+  // valid participant signature, so use the participant export, not shekyl_pqc_sign.
   std::vector<std::pair<uint8_t, std::vector<uint8_t>>> partials;
   for (int signer : {0, 2})
   {
-    ShekylPqcSignatureResult sig = shekyl_pqc_sign(
+    ShekylPqcSignatureResult sig = shekyl_pqc_sign_multisig_participant(
         kps[signer].secret_key.ptr, kps[signer].secret_key.len,
         payload_hash, 32);
     ASSERT_TRUE(sig.success);
@@ -658,7 +663,8 @@ std::vector<uint8_t> msw6_sign_multisig_2of3(const ShekylPqcKeypair (&kps)[3],
   std::vector<std::pair<uint8_t, std::vector<uint8_t>>> partials;
   for (int signer : {0, 2})
   {
-    ShekylPqcSignatureResult sig = shekyl_pqc_sign(
+    // Participant signatures use the multisig domain (SA-R-5), not shekyl_pqc_sign.
+    ShekylPqcSignatureResult sig = shekyl_pqc_sign_multisig_participant(
         kps[signer].secret_key.ptr, kps[signer].secret_key.len,
         reinterpret_cast<const uint8_t*>(msg.data), 32);
     CHECK_AND_ASSERT_THROW_MES(sig.success, "multisig partial sign failed");

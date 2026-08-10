@@ -372,14 +372,14 @@ pub fn verify_multisig(
         .zip(sig_container.signer_indices.iter())
     {
         let pk = &key_container.keys[idx as usize];
-        // Participants verify under the tx-auth domain. Single-vs-multisig
-        // cross-scheme separation is structural (the signed tx payload binds
-        // `scheme_id` via `PqcAuth::header_write`), not a distinct domain —
-        // see `SCHEME_DOMAIN_PQC_AUTH_TX`.
+        // Participants verify under the multisig-specific domain (SA-R-5): a
+        // single-signer signature over `message` is not a valid participant
+        // signature, and vice versa, even for a caller that passes a bare
+        // payload here — see `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`.
         scheme
             .verify(
                 pk,
-                crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
                 message,
                 sig,
             )
@@ -422,9 +422,9 @@ mod tests {
             .collect()
     }
 
-    /// Multisig participants sign under the tx-auth domain (matches
-    /// `verify_multisig`; separation is structural via the payload scheme_id).
-    const MSD: &[u8] = crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
+    /// Multisig participant signatures use the multisig-specific domain, so
+    /// they match what `verify_multisig` checks (SA-R-5).
+    const MSD: &[u8] = crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG;
 
     fn gen_spend_auth_pubkeys(n: usize) -> Vec<[u8; 32]> {
         use ed25519_dalek::SigningKey;
@@ -526,6 +526,45 @@ mod tests {
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
         assert!(verify_multisig(2, &key_blob, &sig_blob, msg).unwrap());
+    }
+
+    /// SA-R-5 cross-domain separation (the negative control): a signature made
+    /// under the **single-sig** domain (`SCHEME_DOMAIN_PQC_AUTH_TX`, what the
+    /// single-signer FFI produces) is **rejected** by `verify_multisig`, which
+    /// checks under `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`. Without the distinct
+    /// domain a single-signer signature over `msg` would verify here — the
+    /// interchangeability this separation exists to remove.
+    #[test]
+    fn single_sig_domain_signature_rejected_as_multisig_participant() {
+        let pairs = gen_keypairs(1);
+        let kc = make_key_container(&pairs, 1);
+        let msg = b"cross-domain-separation";
+        // Sign under the SINGLE-SIG domain instead of the multisig one.
+        let scheme = HybridEd25519MlDsa;
+        let wrong_domain_sig = scheme
+            .sign(
+                &pairs[0].1,
+                crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                msg,
+            )
+            .unwrap();
+        let sc = MultisigSigContainer {
+            sig_count: 1,
+            sigs: vec![wrong_domain_sig],
+            signer_indices: vec![0],
+        };
+        let key_blob = kc.to_canonical_bytes().unwrap();
+        let sig_blob = sc.to_canonical_bytes().unwrap();
+
+        assert_eq!(
+            verify_multisig(2, &key_blob, &sig_blob, msg).unwrap_err(),
+            PqcVerifyError::CryptoVerifyFailed,
+            "a single-sig-domain signature must not verify as a multisig participant"
+        );
+        // And the converse: a correct multisig-domain container still verifies.
+        let good = sign_multisig(&pairs, &[0], msg);
+        let good_blob = good.to_canonical_bytes().unwrap();
+        assert!(verify_multisig(2, &key_blob, &good_blob, msg).unwrap());
     }
 
     #[test]

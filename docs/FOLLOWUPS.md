@@ -47,19 +47,22 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **F-7 structural gate for the test-only PQC keypair FFI export (added
-  2026-08-10, PR-SA-2).** `shekyl_pqc_keypair_generate` is test-support only
-  (it wraps `generate_ephemeral_keypair_for_tests`, gated behind the
-  `test-utils` feature in Rust) but is compiled into the production `shekyl-ffi`
+- **F-7 structural gate for the test-only PQC FFI exports (added
+  2026-08-10, PR-SA-2).** Two exports are test-support only:
+  `shekyl_pqc_keypair_generate` (wraps `generate_ephemeral_keypair_for_tests`)
+  and `shekyl_pqc_sign_multisig_participant` (signs under the multisig domain so
+  the C++ tests can assemble genuine multisig containers instead of faking
+  participant sigs through the single-signer FFI). Both are behind the
+  `test-utils` feature in Rust but compiled into the production `shekyl-ffi`
   archive because the C++ unit tests link the same archive as production —
   cmake builds one `-p shekyl-ffi`, so there is no test-vs-prod feature split.
-  The rename + the Rust doc + the `shekyl_ffi.h` header comment mark it clearly,
-  which is the ratified comment-fallback; the structural gate is a separate
-  test-only Rust archive (or a cmake feature the C++ test target enables and
-  production does not) so `generate_ephemeral_keypair_for_tests` is absent from
-  the shipped cdylib. Not blocking (no production caller; header-marked), but
-  it removes the residual that a production C++ caller could wire a non-derived
-  keypair into a wallet. **Target: V3.0 pre-genesis.**
+  The Rust doc + the `shekyl_ffi.h` header comments mark them clearly, which is
+  the ratified comment-fallback; the structural gate is a separate test-only
+  Rust archive (or a cmake feature the C++ test target enables and production
+  does not) so neither is present in the shipped cdylib. Not blocking (no
+  production caller; header-marked), but it removes the residual that a
+  production C++ caller could wire a non-derived keypair — or a multisig
+  participant signature — into an unintended path. **Target: V3.0 pre-genesis.**
 
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) —
   REQUIRED BEFORE THE FORMAT FREEZE (added 2026-08-08, escalated from

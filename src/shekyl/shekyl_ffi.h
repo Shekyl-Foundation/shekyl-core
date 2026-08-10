@@ -157,6 +157,19 @@ ShekylPqcSignatureResult shekyl_pqc_sign(
     const uint8_t* message_ptr,
     size_t message_len);
 
+/// TEST-SUPPORT ONLY (F-7): sign a message as a multisig participant (scheme 2),
+/// under the multisig-specific domain. A participant signature is NOT
+/// interchangeable with a shekyl_pqc_sign (single-signer) signature over the
+/// same message. Use this — not shekyl_pqc_sign — to assemble multisig
+/// containers in tests. Production multisig participant signing is unbuilt; do
+/// not call from production code. Returns signature blob; free with
+/// shekyl_buffer_free.
+ShekylPqcSignatureResult shekyl_pqc_sign_multisig_participant(
+    const uint8_t* secret_key_ptr,
+    size_t secret_key_len,
+    const uint8_t* message_ptr,
+    size_t message_len);
+
 /// Verify a hybrid PQC signature.
 ///
 /// Returns 0 on success, or a nonzero PqcVerifyError discriminant on failure:

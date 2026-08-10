@@ -7,7 +7,7 @@
 
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme as _,
-    SCHEME_DOMAIN_PQC_AUTH_TX,
+    SCHEME_DOMAIN_PQC_AUTH_TX, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
 };
 use std::os::raw::c_char;
 use std::sync::Mutex;
@@ -175,6 +175,50 @@ pub extern "C" fn shekyl_pqc_sign(
             signature: ShekylBuffer::null(),
             success: false,
         },
+    }
+}
+
+/// Sign a message as a **multisig participant** (scheme 2), under the
+/// multisig-specific domain (SA-R-5). A participant signature is NOT
+/// interchangeable with a single-signer signature (`shekyl_pqc_sign`) over the
+/// same message: this applies `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`, which is
+/// what `verify_multisig` (scheme_id=2) checks.
+///
+/// **Test-support only** (F-7): production multisig participant signing is
+/// unbuilt; this export exists so the C++ FFI test suite can assemble genuine
+/// multisig containers instead of faking participant sigs through the
+/// single-signer FFI. The domain is Rust-owned — C++ carries no domain string.
+/// Do not call from production C++. Free the buffer via `shekyl_buffer_free`.
+#[no_mangle]
+pub extern "C" fn shekyl_pqc_sign_multisig_participant(
+    secret_key_ptr: *const u8,
+    secret_key_len: usize,
+    message_ptr: *const u8,
+    message_len: usize,
+) -> ShekylPqcSignatureResult {
+    let fail = ShekylPqcSignatureResult {
+        signature: ShekylBuffer::null(),
+        success: false,
+    };
+    let Some(secret_key_bytes) = (unsafe { slice_from_ptr(secret_key_ptr, secret_key_len) }) else {
+        return fail;
+    };
+    let Some(message) = (unsafe { slice_from_ptr(message_ptr, message_len) }) else {
+        return fail;
+    };
+    let scheme = HybridEd25519MlDsa;
+    let Ok(secret_key) = HybridSecretKey::from_canonical_bytes(secret_key_bytes) else {
+        return fail;
+    };
+    match scheme
+        .sign(&secret_key, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG, message)
+        .and_then(|sig| sig.to_canonical_bytes())
+    {
+        Ok(signature) => ShekylPqcSignatureResult {
+            signature: ShekylBuffer::from_vec(signature),
+            success: true,
+        },
+        Err(_) => fail,
     }
 }
 

@@ -282,15 +282,24 @@ constants are assignable now with the KAT writers the only lockstep.
 - `claim.rs` backing (surface D) was a missing sign site in the first pass.
 - **Scheme-2 multisig has no production signer in-repo** — SA-R-5's
   scheme-id-in-preimage lands on verify + container + tests only. The preimage
-  binds the hybrid scheme id (the `HybridEd25519MlDsa` constant); single-vs-
-  multisig separation is **structural**, not a distinct domain — the signed tx
-  payload already binds `scheme_id` (1 vs 2) via `PqcAuth::header_write`, so a
-  single-sig auth and a multisig auth sign different payloads. A separate
-  multisig domain was implemented, then reverted: it would have added closure
-  only for a standalone-FFI caller reusing one raw message across both schemes
-  (no production signer), at the cost of a second consensus-frozen string and
-  breaking the C++ multisig tests, which produce participant signatures through
-  the single-sig FFI. Both single and multisig use `SCHEME_DOMAIN_PQC_AUTH_TX`.
+  binds the *hybrid* scheme id (the `HybridEd25519MlDsa` constant, 1 for both
+  single and multisig participants), so over the same raw message a single-sig
+  signature and a multisig participant signature would be byte-identical
+  **without a distinct domain**. Multisig participants therefore sign and verify
+  under a **distinct** `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`
+  (`shekyl/pqc-auth-tx-multisig-v1`), separating the two contexts at the scheme
+  level. The consensus tx path *also* separates them structurally
+  (`PqcAuth::header_write` writes the container `scheme_id` 1 vs 2 into the
+  signed payload), but that is a caller-side property of the tx builder — the
+  scheme owning its own separation is what closes the standalone `verify_multisig`
+  path where a caller could pass a bare payload. **Process note:** this multisig
+  domain was briefly reverted (mistaking the caller-side tx-path binding for
+  scheme-level closure, to accommodate C++ multisig tests that produced
+  participant signatures through the single-sig FFI); the revert was itself
+  reverted — the correct fix is the distinct domain plus a genuine
+  multisig-participant signing path for the tests
+  (`shekyl_pqc_sign_multisig_participant`, test-support FFI; a cross-domain
+  rejection negative control pins the separation in `multisig.rs`).
 - The emission tx carries **three** hybrid signatures from the claim path
   (A prefix-auth, C claim, D backing) — distinct messages, distinct domains.
 
