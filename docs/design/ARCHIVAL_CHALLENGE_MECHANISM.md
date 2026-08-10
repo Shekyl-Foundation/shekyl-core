@@ -28,9 +28,16 @@ oracle named as the real exposure. TJ-H no longer gates the round.
 the arithmetic on the record (both curves at 10⁻⁷ and below against the
 outer window); band and adaptive band not built; prunability merits
 answered at source; the capped-regime figure (72 % unobservable)
-relocated to §8 as the tx-carrier justification. **Live remainder:
-fork 2's selection + nonce anchor (with TJ-B's format spec), W₂, (m, n)
-re-pin.**
+relocated to §8 as the tx-carrier justification.
+**Revised 2026-08-10 (later): fork 2 CLOSED in full** — witness =
+producer of block h (the only party with a liveness oracle; a nominee
+cannot be compelled post-impossibility), anchor = that block's
+`cb_out_key` as a consequence; P-side already ruled (onion-bound
+identity, three-tier custody, cold-authorized `EndpointUpdate`).
+**Live remainder: ONE consolidated format round** (response wire,
+pass-record tx carrier + prunable residence, bond-wire fields, binding
+artifact, key tiers, `r`-residence) **then the three derivations**
+(W₂; (m, n); k/λ_target + tripwire definition).
 
 **Lineage.** Successor to the Phase 3 (settlement writer) scope of
 `ARCHIVAL_CREDIT_WIRE.md` (TJ-B step 3). The credit-wire admission surface
@@ -748,11 +755,33 @@ the round kept trying to add forensics underneath it.
    **Obligation half CLOSED (2026-08-08, impossibility):** no pay and no
    penalty are both forced, so coverage is **routine duty, norm-borne,
    `λ_eff` the tripwire** — now as the *only reachable answer*, not the
-   preferred one. What stays open in this fork is selection ((a) vs (b))
-   and the nonce anchor — noting that (b)'s distinguishing feature was the
-   penalizable nominee, which the impossibility deletes, leaving (a) the
-   natural default unless selection has some other reason to name a
-   non-producer.
+   preferred one.
+   **Selection + anchor CLOSED (2026-08-10): the witness is the producer
+   of block h; the anchor is that block's `cb_out_key`.** This was
+   settled, not chosen — §8.2's liveness argument already decided it
+   ("miners are the only population where being selected *is* proof of
+   being online at that instant; block production is the one thing on
+   this chain an absent party cannot fake"), and a derived nominee names
+   a party that may not be mining, may not exist, may be offline, and —
+   after the impossibility removed penalties — **cannot be compelled**.
+   There is no oracle for anyone else's liveness; the only entity
+   provably present and provably selected at height h is whoever
+   produced block h. Option (b) was a conclusion re-listed as a
+   question. The nonce anchor then follows as a consequence, not a
+   separate decision: block h's `cb_out_key` is on chain, controlled by
+   exactly the party that did the read, and it makes the
+   countersignature non-transferable — nobody can use a signature bound
+   to a coinbase key they don't hold. The landed nonce construction
+   (`H(r ‖ cb_out_key ‖ P ‖ s ‖ E)`) survives with only `r`'s residence
+   to re-home (the format round).
+   **The residue this ruling does not settle, on its face so item 12
+   does not rediscover it:** challenge servicing is available only to
+   parties that win blocks, so the coverage rate is bounded by **how
+   many distinct miners run the default client** — that is the `λ_eff`
+   tripwire's actual subject. And a large miner performs proportionally
+   many challenges: the load-concentration coupling to mining
+   decentralization (§8's precondition), now a property of the ruled
+   mechanism rather than a footnote.
    **P-side anchor + endpoint discovery — resolution shape (2026-08-10).**
    A prior gap, verified at source, that had to be answered regardless of
    key choice: `ArchivalBondPostVin` (`bond_wire.rs:205-222`) carries
