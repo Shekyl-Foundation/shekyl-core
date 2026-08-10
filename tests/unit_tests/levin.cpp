@@ -475,9 +475,25 @@ namespace
             io_service_.restart();
             EXPECT_LT(0u, io_service_.poll());
 
-            const bool is_stem = events_.has_stem_txes();
+            /* §30.5 — an origin keeps its `local` txpool class whatever the
+               transport did, so for that case the record no longer
+               discriminates the wire outcome, and the origin always stems
+               (D++ §4.4). For relayed traffic the record still tracks the
+               wire, because it must arm the per-zone embargo (§89.2). */
+            const bool originated = (sent_as == cryptonote::relay_method::local);
+            const bool is_stem = originated || events_.has_stem_txes();
             const auto method =
-              is_stem ? cryptonote::relay_method::stem : cryptonote::relay_method::fluff;
+              originated ? cryptonote::relay_method::local
+                         : (is_stem ? cryptonote::relay_method::stem
+                                    : cryptonote::relay_method::fluff);
+
+            /* Exactly one class recorded per round — the negative control for
+               the §30.5 rule. `upgrade_relay_method` is monotone, so an origin
+               that ALSO recorded `stem` or `fluff` has left the `local` class
+               permanently, and the next pool re-relay hands the user's own
+               transaction to the clearnet arm. Asserting only that `local` is
+               present would pass with that upgrade sitting beside it. */
+            EXPECT_EQ(1u, events_.relayed_method_size());
 
             /* §89.2 draws the embargo per zone, and the zone reaches the draw
                with the relay rather than off the txpool entry. Asserting the

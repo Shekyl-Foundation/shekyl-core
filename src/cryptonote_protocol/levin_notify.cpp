@@ -819,6 +819,20 @@ namespace levin
         const bool local_origin = (tx_relay == relay_method::local);
         std::vector<boost::uuids::uuid> outs = get_out_connections(*zone_->p2p, core_);
 
+        /* What the wire does and what the txpool is told are the same thing on
+           clearnet and deliberately not the same for an origin on an anonymity
+           zone. §89 opened the stem gates here; the pool class is what keeps
+           the *backstop* in-zone, and §30.5 forbids that backstop reaching
+           clearnet. So an originated transaction keeps its `local` record
+           whatever the transport did — it still stems on the wire below. */
+        const auto record_relayed = [this](const relay_method method) {
+          core_->on_transactions_relayed(
+            epee::to_span(txs_),
+            cryptonote::originated_stays_in_zone(tx_relay, zone_->nzone) ? relay_method::local : method,
+            zone_->nzone
+          );
+        };
+
         std::int32_t plan = shekyl_relay_zone_plan_relay_with_refresh(
           zone_->relay.get(), uuid_bytes(source_), local_origin,
           uuid_bytes(outs), outs.size(),
@@ -827,7 +841,7 @@ namespace levin
 
         if (plan != SHEKYL_RELAY_PLAN_FLUFF_EPOCH)
         {
-          core_->on_transactions_relayed(epee::to_span(txs_), relay_method::stem, zone_->nzone);
+          record_relayed(relay_method::stem);
 
           if (plan == SHEKYL_RELAY_PLAN_STEM &&
               make_payload_send_txs(*zone_->p2p, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
@@ -860,7 +874,7 @@ namespace levin
           MERROR("Unable to send transaction(s) via Dandelion++ stem");
         }
 
-        core_->on_transactions_relayed(epee::to_span(txs_), relay_method::fluff, zone_->nzone);
+        record_relayed(relay_method::fluff);
         relay_fluff::run(std::move(zone_), epee::to_span(txs_), source_, core_);
       }
     };
@@ -1211,10 +1225,16 @@ namespace levin
        networks provide protection against sybil attacks (we only send to
        outgoing connections).
 
-       If noise is disabled, Dandelion++ is used for public networks only.
-       Dandelion++ over I2P/Tor should be an interesting case to investigate,
-       but the mempool/stempool needs to know the zone a tx originated from to
-       work properly. */
+       If noise is disabled, Dandelion++ runs on **every** zone (§89). The
+       inherited comment here said "public networks only", and named the
+       blocker as the mempool/stempool needing to know a tx's originating zone.
+       Both are retired: Tor is a transport like the clear internet, and
+       changing the transport does not change the graph; and the zone travels
+       as a parameter beside `tx_relay` into `set_relayed`, so nothing has to
+       be remembered to draw the embargo per zone (§89.2).
+
+       What is *not* symmetric is the txpool class an origin keeps — see
+       `originated_stays_in_zone` at the record sites in `dandelionpp_notify`. */
 
     if (shekyl_relay_zone_covert_enabled(zone_->relay.get()) && !zone_->channels.empty())
     {
