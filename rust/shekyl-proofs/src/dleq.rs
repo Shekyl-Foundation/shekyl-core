@@ -10,17 +10,38 @@
 //!
 //! Used by reserve proofs to prove `key_image = x * Hp(O)` where
 //! `x = ho + b` and `x * G = O - y * T`.
+//!
+//! # The nonce is hedged, and it binds the full statement
+//!
+//! `k = H(domain ‖ "nonce" ‖ x ‖ G ‖ base2 ‖ pub1 ‖ pub2 ‖ msg ‖ 32 fresh
+//! random bytes)`, with the fresh block drawn through
+//! [`shekyl_crypto_pq::rng::hedged_fresh32`] (fail-safe: all-zeros on RNG
+//! failure, never a panic — this scalar is the output spend key, and the
+//! module previously drew its nonce bare from the OS RNG while the
+//! sibling Schnorr signature in the same reserve-proof flow was hedged).
+//!
+//! The nonce hashes **every input the challenge hashes**, and that is
+//! load-bearing, not thoroughness: under a failed RNG the construction
+//! degrades to its deterministic form, and a deterministic `k` bound to
+//! fewer inputs than the challenge repeats across distinct statements
+//! that share the bound subset. Two challenges under one `k` are two
+//! linear equations in `x` — the secret falls out. Same statement twice
+//! → same proof (harmless); any input differs → `k` differs. Do not
+//! "simplify" the nonce hash to fewer inputs.
 
 #![deny(unsafe_code)]
 
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT as G, edwards::EdwardsPoint, scalar::Scalar,
 };
-use rand_core::OsRng;
 use sha2::{Digest, Sha512};
 use zeroize::Zeroize;
 
 const DOMAIN_SEPARATOR: &[u8] = b"shekyl-reserve-proof-dleq-v1";
+
+/// Sub-label separating nonce derivation from the challenge hash under
+/// the same domain string (the `schnorr.rs` idiom).
+const NONCE_LABEL: &[u8] = b"nonce";
 
 /// A DLEQ proof: challenge `c` and response `s`, each 32 bytes.
 #[derive(Clone)]
@@ -92,7 +113,7 @@ pub fn prove_dleq(
     pub2: &EdwardsPoint,
     msg: &[u8],
 ) -> DleqProof {
-    let mut k = Scalar::random(&mut OsRng);
+    let mut k = hedged_nonce(x, base2, pub1, pub2, msg);
     let r1 = k * G;
     let r2 = k * base2;
 
@@ -105,6 +126,30 @@ pub fn prove_dleq(
         c: c.to_bytes(),
         s: s.to_bytes(),
     }
+}
+
+/// Hedged nonce — see the module docs for why it binds every challenge
+/// input and why RNG failure is fail-safe rather than fail-stop.
+fn hedged_nonce(
+    x: &Scalar,
+    base2: &EdwardsPoint,
+    pub1: &EdwardsPoint,
+    pub2: &EdwardsPoint,
+    msg: &[u8],
+) -> Scalar {
+    let mut fresh = shekyl_crypto_pq::rng::hedged_fresh32();
+    let mut hasher = Sha512::new();
+    hasher.update(DOMAIN_SEPARATOR);
+    hasher.update(NONCE_LABEL);
+    hasher.update(x.as_bytes());
+    hasher.update(G.compress().as_bytes());
+    hasher.update(base2.compress().as_bytes());
+    hasher.update(pub1.compress().as_bytes());
+    hasher.update(pub2.compress().as_bytes());
+    hasher.update(msg);
+    hasher.update(fresh);
+    fresh.zeroize();
+    Scalar::from_hash(hasher)
 }
 
 /// Verify a DLEQ proof.
@@ -144,6 +189,7 @@ pub fn verify_dleq(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand_core::OsRng;
 
     #[test]
     fn dleq_round_trip() {
@@ -158,9 +204,27 @@ mod tests {
             verify_dleq(&base2, &pub1, &pub2, msg, &proof),
             "valid DLEQ proof must verify"
         );
+    }
 
-        eprintln!("[dleq] round-trip: proof.c = {}", hex::encode(proof.c));
-        eprintln!("[dleq] round-trip: proof.s = {}", hex::encode(proof.s));
+    /// The nonce is hedged, not deterministic: two proofs of the same
+    /// statement under a working RNG differ. (The deterministic fallback
+    /// is only reached when the OS RNG fails, which no test can induce
+    /// here — the property asserted is that the healthy path does not
+    /// collapse to one nonce, i.e. the bare-RNG→hedged fix did not land
+    /// as fully-deterministic.)
+    #[test]
+    fn healthy_rng_produces_distinct_proofs() {
+        let x = Scalar::random(&mut OsRng);
+        let base2 = Scalar::random(&mut OsRng) * G;
+        let pub1 = x * G;
+        let pub2 = x * base2;
+        let msg = b"same statement";
+
+        let a = prove_dleq(&x, &base2, &pub1, &pub2, msg);
+        let b = prove_dleq(&x, &base2, &pub1, &pub2, msg);
+        assert_ne!(a.c, b.c, "challenge must differ — nonce is hedged");
+        assert!(verify_dleq(&base2, &pub1, &pub2, msg, &a));
+        assert!(verify_dleq(&base2, &pub1, &pub2, msg, &b));
     }
 
     #[test]

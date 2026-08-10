@@ -134,10 +134,10 @@ pub(crate) async fn create_wallet(
     let mut result = json!({ "wallet": handle });
     match backup {
         SeedBackup::Mnemonic(m) => {
-            result["mnemonic"] = Value::String(m);
+            result["mnemonic"] = Value::String((*m).clone());
         }
         SeedBackup::RawHex(h) => {
-            result["raw_seed_hex"] = Value::String(h);
+            result["raw_seed_hex"] = Value::String((*h).clone());
         }
     }
     Ok(result)
@@ -516,9 +516,13 @@ pub(crate) async fn change_password(
     Ok(json!({}))
 }
 
+// `Zeroizing` so the wallet's own long-lived copy of the seed material is
+// wiped on drop (matching `shekyl-genesis-tool`'s treatment of the same
+// values); the clone into the RPC response is the seed-backup export
+// itself and is the caller's to protect.
 enum SeedBackup {
-    Mnemonic(String),
-    RawHex(String),
+    Mnemonic(Zeroizing<String>),
+    RawHex(Zeroizing<String>),
 }
 
 fn generate_seed_material(
@@ -535,12 +539,16 @@ fn generate_seed_material(
             entropy.zeroize();
             let (master, _blob) = generate_account_from_bip39(&mnemonic, "", derivation)
                 .map_err(|e| WalletRpcError::InternalError(format!("bip39 account: {e}")))?;
-            Ok((master, SeedFormat::Bip39, SeedBackup::Mnemonic(mnemonic)))
+            Ok((
+                master,
+                SeedFormat::Bip39,
+                SeedBackup::Mnemonic(Zeroizing::new(mnemonic)),
+            ))
         }
         Network::Testnet => {
             let mut raw = [0u8; RAW_SEED_BYTES];
             OsRng.fill_bytes(&mut raw);
-            let seed_hex = hex::encode(raw);
+            let seed_hex = Zeroizing::new(hex::encode(raw));
             let (master, _blob) = generate_account_from_raw_seed(&raw, derivation)
                 .map_err(|e| WalletRpcError::InternalError(format!("raw account: {e}")))?;
             raw.zeroize();

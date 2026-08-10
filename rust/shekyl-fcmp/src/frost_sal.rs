@@ -113,9 +113,13 @@ impl FrostSalSession {
         let crate_input = rerand.input();
         let pseudo_out = crate_input.C_tilde().to_bytes();
 
-        let mut seed = [0u8; 32];
-        rand_core::RngCore::fill_bytes(&mut OsRng, &mut seed);
-        let rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+        // This seed is the entire state of the session's nonce RNG:
+        // recovering it recovers the FROST nonces, so it is wiped like key
+        // material. (`from_seed` takes the array by value; the named
+        // buffer here is the copy that would otherwise linger.)
+        let mut seed = Zeroizing::new([0u8; 32]);
+        rand_core::RngCore::fill_bytes(&mut OsRng, seed.as_mut());
+        let rng = rand_chacha::ChaCha20Rng::from_seed(*seed);
         let transcript = RecommendedTranscript::new(b"Shekyl FROST SAL v1");
 
         let algorithm = SalAlgorithm::new(

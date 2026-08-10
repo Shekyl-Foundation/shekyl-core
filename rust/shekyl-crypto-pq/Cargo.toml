@@ -24,7 +24,12 @@ ciphersuite = "0.4"
 curve25519-dalek = { version = "4", features = ["zeroize"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
-fips204 = "0.4.6"
+# Pinned exact for the same reason as fips203/fips205 below: fips204's
+# seeded signing path (try_sign_with_seed) is built on the same
+# DummyRng { fill_bytes = unimplemented!() } pattern, safe only while the
+# internals stick to try_fill_bytes — a "will be refactored" upstream
+# comment says they may not. Bump deliberately, re-reading traits.rs.
+fips204 = "=0.4.6"
 # Pinned exact: fips205's deterministic-keygen path (KeyGen::keygen_with_seeds)
 # is built on the same DummyRng pattern that bit fips203 below —
 # fill_bytes = unimplemented!(), seeds served via try_fill_bytes, loud panic on
