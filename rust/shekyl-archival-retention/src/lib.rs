@@ -129,7 +129,7 @@ pub use constants::{
     arm_settlement_epoch_override_for_regtest, effective_settlement_epoch_blocks,
     parse_settlement_epoch_override, settlement_epoch_blocks_overridden,
     settlement_epoch_override_ignored, settlement_epoch_override_present,
-    SettlementEpochOverrideError, CHALLENGES_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
+    SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
     CHALLENGE_RESOLUTION_BLOCKS, CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};

@@ -33,12 +33,14 @@
 //! *issued*, not on drawable, and it is what the pruned/absent row decays
 //! to (never `Missed`).
 //!
-//! **Reachability, stated so this branch is not misread:** under the
-//! exact-min urn at exact budget every drawable pair receives exactly
-//! λ = 3, so the under-issuance arm is *unreachable* — it goes live only in
-//! the capped regime (`k_cap` binding; the §8 72 %-unobservable case),
-//! i.e. only if the tx-carrier prunable-residence work does not land. It is
-//! specified defensively, not as tolerance for short issuance by design.
+//! **Reachability, stated so this branch is not misread:** the live schedule
+//! is `CHALLENGES_PER_PAIR_PER_EPOCH = 3`, and under the exact-min urn at
+//! exact budget every drawable pair receives exactly that — so the
+//! under-issuance arm is *unreachable* in normal operation. It goes live
+//! only in the capped regime (`k_cap` binding; the §8 72 %-unobservable
+//! case), i.e. only if the tx-carrier prunable-residence work does not land.
+//! It is specified defensively, not as tolerance for short issuance by
+//! design.
 //!
 //! The former `to_observation`/`is_observation` bridge to the m-of-n
 //! machinery is **deleted** (ruled with the 2-of-3 adoption): consumers at
@@ -64,20 +66,25 @@ pub enum AttestationKind {
 /// only together with `(m, n)` (the outer window prices what one epoch
 /// observation means).
 ///
-/// **Schedule coupling (this fold lands inert, and mis-wiring is
-/// fail-safe):** the crate still exports the legacy
-/// `CHALLENGES_PER_EPOCH = 1` schedule, which retires with the λ = 3
-/// cutover (design §4.4 — re-derived alongside `(m, n)`, with the
-/// economics-sim arithmetic re-run; deliberately NOT bumped here, which
-/// would smuggle a parameter past its derivation round). Until that
-/// cutover this fold has no production caller — and if one were wired
-/// early against the legacy schedule, the observation floor makes it
-/// harmless: `issued = 1 < 2` settles every epoch `NonObservation`,
-/// never a false `Served` or `Missed`. The
-/// `legacy_schedule_is_fail_safe_inert` test pins that property **and
-/// fires when the constant is bumped**, forcing the cutover wiring to
-/// revisit this fold deliberately.
+/// Jointly pinned with [`crate::constants::CHALLENGES_PER_PAIR_PER_EPOCH`]
+/// (λ = 3): 2-of-3 is **one** decision, and the two const-asserts below are
+/// what make it one rather than two numbers that can drift apart.
 pub const SERVE_THRESHOLD_PASSES: u32 = 2;
+
+// The 2-of-3 pin, as two properties §3 actually ruled — a re-pin of either
+// constant that breaks one of these fails the build, so the pair cannot
+// silently become something the §3 derivation never priced.
+const _: () = assert!(
+    SERVE_THRESHOLD_PASSES <= crate::constants::CHALLENGES_PER_PAIR_PER_EPOCH,
+    "a threshold above the issued count makes Served unreachable: every epoch \
+     would settle NonObservation and no pair could ever earn serve credit"
+);
+const _: () = assert!(
+    2 * SERVE_THRESHOLD_PASSES > crate::constants::CHALLENGES_PER_PAIR_PER_EPOCH,
+    "the threshold must be a STRICT MAJORITY of the challenges issued: a \
+     minority threshold is the biased estimator §3 rejected pass-priority for \
+     (1-of-3 more than doubles a liar's per-epoch pass rate over 1-of-1)"
+);
 
 /// The three-valued settlement of one `(P, shard, epoch)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,30 +195,6 @@ mod tests {
         let non_obs = settle_epoch(1, 1);
         assert_eq!(missed.serve_credit_bit(), non_obs.serve_credit_bit());
         assert_ne!(missed, non_obs);
-    }
-
-    #[test]
-    fn legacy_schedule_is_fail_safe_inert() {
-        // The crate's exported CHALLENGES_PER_EPOCH is still the legacy 1
-        // (it retires with the λ = 3 cutover, re-derived with (m, n) and
-        // the sim re-run — design §4.4). This fold has no production
-        // caller until then, and this test pins BOTH halves of that
-        // state: (a) fail-safe — a caller mis-wired against the legacy
-        // schedule can only ever produce NonObservation (issued = 1 is
-        // below the observation floor), never a false Served or Missed;
-        // (b) tripwire — bumping the constant to ≥ 2 changes this fold's
-        // output for the same inputs and FAILS this test, forcing the
-        // cutover wiring to revisit settlement deliberately rather than
-        // inheriting it silently.
-        let legacy = crate::constants::CHALLENGES_PER_EPOCH;
-        assert_eq!(legacy, 1, "constant bumped: re-derive (m, n), re-run the sim, and wire the settlement cutover deliberately (design section 4.4)");
-        for passes in 0..=legacy {
-            assert_eq!(
-                settle_epoch(passes, legacy),
-                EpochSettlement::NonObservation,
-                "a legacy-schedule epoch must be invisible to the window, not a false verdict"
-            );
-        }
     }
 
     #[test]
