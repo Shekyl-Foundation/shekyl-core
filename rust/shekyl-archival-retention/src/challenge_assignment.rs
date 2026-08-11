@@ -46,6 +46,16 @@
 //! - **λ_target is a parameter (§9.5 pin 3):** the 2-of-3 ruling's value
 //!   (3) is supplied by the caller; nothing here hardcodes it.
 //!
+//! ## Streaming shape
+//!
+//! The urn is a sequential feed: call [`ChallengeUrn::advance_block`] once
+//! per epoch block, in height order, with that block's predecessor hash.
+//! There is no caller-supplied block index — position is internal, so a
+//! skipped or double-fed height is unrepresentable. On reorg, discard the
+//! urn and rebuild from epoch open (recompute-on-reorg; the replay cost is
+//! the caller's to budget, measured at maturity scale by the `#[ignore]`
+//! test below).
+//!
 //! Lookahead is one block by construction: block `h`'s assignments depend
 //! only on `block_hash(h−1)`, which exists one block before the draws it
 //! seeds (the §7.1 exposure arithmetic, `3τ/SEB`, prices exactly this).
@@ -66,20 +76,28 @@ pub struct DrawablePair {
 }
 
 /// Construction rejections — every variant is a caller error, not a state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AssignmentError {
     /// The drawable set is not strictly increasing by `(p_id, shard_id)`
     /// at this index (covers both disorder and duplicates).
-    NotCanonicallyOrdered { index: usize },
+    #[error("drawable set not strictly increasing at index {index}")]
+    NotCanonicallyOrdered {
+        /// Offending index into the caller's pair list.
+        index: usize,
+    },
     /// `λ_target = 0` schedules nothing and is a misconfiguration, not an
     /// epoch with no work.
+    #[error("λ_target must be positive")]
     ZeroLambda,
     /// `epoch_blocks = 0` has no block to schedule into.
+    #[error("epoch_blocks must be positive")]
     ZeroEpochBlocks,
     /// `λ_target · D` overflows `u64` (impossible population).
+    #[error("λ_target · D overflows u64")]
     TotalDrawsOverflow,
     /// More than `u32::MAX` drawable pairs (impossible population; the
     /// working list indexes pairs as `u32`).
+    #[error("drawable set has more than u32::MAX pairs")]
     TooManyPairs,
     /// The schedule would place more than `u32::MAX` draws in a single
     /// block. The per-draw stream's in-block counter is a fixed 4-byte
@@ -87,23 +105,20 @@ pub enum AssignmentError {
     /// derivation itself), so the bound is enforced here instead — a
     /// release-mode wrap would repeat stream inputs and corrupt the
     /// assignment sequence.
+    #[error("schedule would place more than u32::MAX draws in one block")]
     PerBlockDrawsOverflow,
 }
 
-/// Feed rejections — the urn is stateful, so a desynced feed must be an
-/// **error, not a silently wrong assignment stream** (the
-/// make-bad-states-unrepresentable posture). On any reorg the caller
-/// rebuilds from epoch open and replays — recompute-on-reorg is the ruled
-/// shape; the replay cost is the caller's to budget (measured at maturity
-/// scale by the `#[ignore]` test below).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Feed rejection: every block of the epoch has already been fed.
+///
+/// The urn is strictly sequential — there is no out-of-order feed path —
+/// so the only feed error is "epoch complete." On reorg, discard and
+/// rebuild from epoch open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum FeedError {
     /// Every block of the epoch has been fed.
+    #[error("challenge-assignment epoch fully fed")]
     EpochComplete,
-    /// The caller's epoch-relative block index does not match the urn's
-    /// position — a desynced feed (skipped block, double-feed, or a reorg
-    /// the caller failed to rebuild for).
-    WrongBlockIndex { expected: u64, got: u64 },
 }
 
 /// The exact-min urn for one settlement epoch: feed it each block's
@@ -114,12 +129,6 @@ pub enum FeedError {
 /// re-derive on the new chain).
 #[derive(Debug, Clone)]
 pub struct ChallengeUrn {
-    /// The epoch-open block hash this urn is bound to: the identity of
-    /// the chain history it was built from. The module cannot verify the
-    /// fed hashes chain to it, but exposing it lets the caller assert the
-    /// binding when rebuilding after a reorg — a cross-fork feed becomes
-    /// checkable instead of silent.
-    epoch_open_hash: [u8; 32],
     pairs: Vec<DrawablePair>,
     /// Working list of indices into `pairs` for the current wave;
     /// `remaining` is its live prefix length.
@@ -135,13 +144,10 @@ pub struct ChallengeUrn {
 }
 
 impl ChallengeUrn {
-    /// Build the urn for one epoch, bound to `epoch_open_hash` (the hash
-    /// of the epoch's opening block — the identity of the snapshot the
-    /// drawable set was derived from). `pairs` must be strictly increasing
-    /// by `(p_id, shard_id)` — the canonical order every node derives
+    /// Build the urn for one epoch. `pairs` must be strictly increasing by
+    /// `(p_id, shard_id)` — the canonical order every node derives
     /// identically. An empty set is a valid epoch with no draws.
     pub fn new(
-        epoch_open_hash: [u8; 32],
         pairs: Vec<DrawablePair>,
         lambda_target: u32,
         epoch_blocks: u64,
@@ -170,7 +176,6 @@ impl ChallengeUrn {
         let working: Vec<u32> = (0..d32).collect();
         let remaining = working.len();
         Ok(ChallengeUrn {
-            epoch_open_hash,
             pairs,
             working,
             remaining,
@@ -181,12 +186,11 @@ impl ChallengeUrn {
         })
     }
 
-    /// The epoch-open block hash this urn was constructed against — the
-    /// caller asserts this against the chain when rebuilding after a
-    /// reorg, so a cross-fork or stale urn is detectable.
+    /// Epoch-relative index of the next block this urn will assign
+    /// (0-based). Equals `epoch_blocks` when the epoch is fully fed.
     #[must_use]
-    pub fn epoch_open_hash(&self) -> &[u8; 32] {
-        &self.epoch_open_hash
+    pub fn next_block(&self) -> u64 {
+        self.next_block
     }
 
     /// Draws scheduled through block index `h` (inclusive): the even-spread
@@ -198,27 +202,20 @@ impl ChallengeUrn {
         u64::try_from(due).expect("due <= total, which is u64")
     }
 
-    /// Feed block `h` (the caller's epoch-relative index, 0-based) with
-    /// its **predecessor hash** (the hash of block `h−1`) and receive the
-    /// pairs assigned at `h`, in draw order. `h` must equal the urn's own
-    /// position — a mismatched index is a desynced feed and returns
-    /// [`FeedError::WrongBlockIndex`] instead of a silently wrong
-    /// assignment stream. On any reorg, discard the urn and rebuild from
-    /// epoch open (recompute-on-reorg; see [`FeedError`]).
+    /// Feed the next epoch block with its **predecessor hash** (the hash of
+    /// the block at absolute height one below the block being assigned)
+    /// and receive the pairs assigned at that height, in draw order.
+    ///
+    /// Feeds are strictly sequential. On reorg, discard the urn and rebuild
+    /// from epoch open (recompute-on-reorg; see module docs).
     pub fn advance_block(
         &mut self,
-        h: u64,
         prev_block_hash: &[u8; 32],
     ) -> Result<Vec<DrawablePair>, FeedError> {
         if self.next_block >= self.epoch_blocks {
             return Err(FeedError::EpochComplete);
         }
-        if h != self.next_block {
-            return Err(FeedError::WrongBlockIndex {
-                expected: self.next_block,
-                got: h,
-            });
-        }
+        let h = self.next_block;
         self.next_block += 1;
         let due = self.due_through(h);
         // Capacity is a hint; saturate rather than cast on 32-bit targets.
@@ -257,9 +254,37 @@ impl ChallengeUrn {
     }
 }
 
+/// Assign every block of an epoch in one shot — the pure, desync-free form
+/// of a full-epoch recompute. `prev_hashes.len()` is the epoch length;
+/// entry `h` is the predecessor hash for epoch-relative block `h` (i.e.
+/// `block_hash` of the block at absolute height one below that block).
+/// An empty slice is [`AssignmentError::ZeroEpochBlocks`].
+pub fn assign_epoch(
+    pairs: Vec<DrawablePair>,
+    lambda_target: u32,
+    prev_hashes: &[[u8; 32]],
+) -> Result<Vec<Vec<DrawablePair>>, AssignmentError> {
+    let epoch_blocks = prev_hashes.len() as u64;
+    let mut urn = ChallengeUrn::new(pairs, lambda_target, epoch_blocks)?;
+    let mut out = Vec::with_capacity(prev_hashes.len());
+    for prev in prev_hashes {
+        // Sequential feed cannot fail mid-epoch after a successful `new`
+        // for this hash count — EpochComplete only after E feeds.
+        out.push(
+            urn.advance_block(prev)
+                .expect("exactly epoch_blocks feeds before EpochComplete"),
+        );
+    }
+    Ok(out)
+}
+
 /// Uniform draw in `[0, n)` from the domain-separated stream: rejection
 /// sampling over `cSHAKE256(label, prev_hash ‖ in_block_index ‖ attempt)`
 /// taking the first 8 bytes little-endian. `n` must be nonzero.
+///
+/// When `n == 1` the result is forced (`0`) regardless of the digest —
+/// that is the §7.1 wave-tail. The stream is still evaluated so a second
+/// implementation that always runs the loop matches byte-for-byte.
 fn draw_below(prev_block_hash: &[u8; 32], in_block_index: u32, n: u64) -> u64 {
     assert!(n > 0, "uniform draw from an empty range");
     let zone = u64::MAX - (u64::MAX % n);
@@ -290,20 +315,31 @@ mod tests {
         }
     }
 
-    /// Deterministic per-height stand-in for a block hash.
-    fn hash_at(h: u64) -> [u8; 32] {
+    /// Deterministic stand-in for the block hash at epoch-relative height
+    /// `h` (and for the pre-epoch predecessor when `h == u64::MAX` is not
+    /// used — see [`prev_hash_for`]).
+    fn block_hash_at(h: u64) -> [u8; 32] {
         let mut out = [0u8; 32];
         out[0..8].copy_from_slice(&h.to_le_bytes());
         out
     }
 
-    const OPEN_HASH: [u8; 32] = [7; 32];
+    /// Predecessor hash for epoch-relative block `h`: the hash of the
+    /// block at height `h−1`, or a fixed pre-epoch seed when `h == 0`.
+    /// Pins the documented `assignment(h) = f(block_hash(h−1), …)` contract
+    /// in every test that drives the urn.
+    fn prev_hash_for(h: u64) -> [u8; 32] {
+        if h == 0 {
+            // Distinct from any `block_hash_at(h)` used in small epochs.
+            [0xEE; 32]
+        } else {
+            block_hash_at(h - 1)
+        }
+    }
 
     fn run(pairs: Vec<DrawablePair>, lambda: u32, blocks: u64) -> Vec<Vec<DrawablePair>> {
-        let mut urn = ChallengeUrn::new(OPEN_HASH, pairs, lambda, blocks).expect("valid urn");
-        (0..blocks)
-            .map(|h| urn.advance_block(h, &hash_at(h)).expect("in-order feed"))
-            .collect()
+        let prevs: Vec<[u8; 32]> = (0..blocks).map(prev_hash_for).collect();
+        assign_epoch(pairs, lambda, &prevs).expect("valid epoch")
     }
 
     #[test]
@@ -312,20 +348,20 @@ mod tests {
         // the §9.5 pin as a type-level property, not a convention.
         let unsorted = vec![pair(2, 0), pair(1, 0)];
         assert_eq!(
-            ChallengeUrn::new(OPEN_HASH, unsorted, 3, 10).unwrap_err(),
+            ChallengeUrn::new(unsorted, 3, 10).unwrap_err(),
             AssignmentError::NotCanonicallyOrdered { index: 1 }
         );
         let dup = vec![pair(1, 7), pair(1, 7)];
         assert_eq!(
-            ChallengeUrn::new(OPEN_HASH, dup, 3, 10).unwrap_err(),
+            ChallengeUrn::new(dup, 3, 10).unwrap_err(),
             AssignmentError::NotCanonicallyOrdered { index: 1 }
         );
         assert_eq!(
-            ChallengeUrn::new(OPEN_HASH, vec![], 0, 10).unwrap_err(),
+            ChallengeUrn::new(vec![], 0, 10).unwrap_err(),
             AssignmentError::ZeroLambda
         );
         assert_eq!(
-            ChallengeUrn::new(OPEN_HASH, vec![], 3, 0).unwrap_err(),
+            ChallengeUrn::new(vec![], 3, 0).unwrap_err(),
             AssignmentError::ZeroEpochBlocks
         );
     }
@@ -338,10 +374,10 @@ mod tests {
         // (p, 1); the canonical order says the opposite, and this test is
         // what a divergent second implementation fails.
         let ordered = vec![pair(1, 1), pair(1, 256)];
-        assert!(ChallengeUrn::new(OPEN_HASH, ordered, 3, 10).is_ok());
+        assert!(ChallengeUrn::new(ordered, 3, 10).is_ok());
         let le_byte_order = vec![pair(1, 256), pair(1, 1)];
         assert_eq!(
-            ChallengeUrn::new(OPEN_HASH, le_byte_order, 3, 10).unwrap_err(),
+            ChallengeUrn::new(le_byte_order, 3, 10).unwrap_err(),
             AssignmentError::NotCanonicallyOrdered { index: 1 }
         );
     }
@@ -355,7 +391,7 @@ mod tests {
         // with λ·D = 3·(2³²−1) > u32::MAX.
         let small: Vec<_> = (0..3u8).map(|t| pair(t, 0)).collect();
         assert_eq!(
-            ChallengeUrn::new(OPEN_HASH, small, u32::MAX, 1).unwrap_err(),
+            ChallengeUrn::new(small, u32::MAX, 1).unwrap_err(),
             AssignmentError::PerBlockDrawsOverflow
         );
     }
@@ -396,10 +432,10 @@ mod tests {
         // The exact-min invariant: at every block boundary, issued counts
         // across pairs differ by at most one.
         let pairs: Vec<_> = (0..6u8).map(|t| pair(t, 1)).collect();
-        let mut urn = ChallengeUrn::new(OPEN_HASH, pairs.clone(), 3, 9).expect("valid urn");
+        let mut urn = ChallengeUrn::new(pairs.clone(), 3, 9).expect("valid urn");
         let mut counts: BTreeMap<DrawablePair, u32> = BTreeMap::new();
         for h in 0..9 {
-            for p in urn.advance_block(h, &hash_at(h)).expect("in-order feed") {
+            for p in urn.advance_block(&prev_hash_for(h)).expect("in-order feed") {
                 *counts.entry(p).or_insert(0) += 1;
             }
             let lo = pairs
@@ -433,11 +469,11 @@ mod tests {
         // once per wave. That is the §7.1 accepted 3τ/SEB exposure in
         // miniature; a perturbation landing on a forced draw changes
         // nothing, which is why this test perturbs an entropic block.
-        let mut urn = ChallengeUrn::new(OPEN_HASH, pairs, 2, 7).expect("valid urn");
+        let mut urn = ChallengeUrn::new(pairs, 2, 7).expect("valid urn");
         let mut c = Vec::new();
         for h in 0..7 {
-            let hash = if h == 1 { [0xAB; 32] } else { hash_at(h) };
-            c.push(urn.advance_block(h, &hash).expect("in-order feed"));
+            let hash = if h == 1 { [0xAB; 32] } else { prev_hash_for(h) };
+            c.push(urn.advance_block(&hash).expect("in-order feed"));
         }
         assert_eq!(
             a[..1],
@@ -449,49 +485,48 @@ mod tests {
 
     #[test]
     fn empty_drawable_set_is_a_valid_epoch_with_no_draws() {
-        let mut urn = ChallengeUrn::new(OPEN_HASH, vec![], 3, 4).expect("valid urn");
+        let mut urn = ChallengeUrn::new(vec![], 3, 4).expect("valid urn");
         for h in 0..4 {
             assert!(urn
-                .advance_block(h, &hash_at(h))
+                .advance_block(&prev_hash_for(h))
                 .expect("in-order feed")
                 .is_empty());
         }
         assert_eq!(
-            urn.advance_block(4, &hash_at(4)),
+            urn.advance_block(&prev_hash_for(4)),
             Err(FeedError::EpochComplete),
             "epoch fully fed"
         );
         assert_eq!(urn.draws_done(), 0);
+        assert_eq!(urn.next_block(), 4);
     }
 
     #[test]
-    fn desynced_feed_is_an_error_not_a_wrong_stream() {
-        // The urn is stateful; a skipped block, a double-feed, or an
-        // un-rebuilt reorg must surface as an error, never as a silently
-        // divergent assignment stream.
+    fn sequential_feed_is_the_only_representable_shape() {
+        // Position is internal: the caller cannot skip or double-feed a
+        // height — those states are unrepresentable. After E successful
+        // advances the only remaining error is EpochComplete.
         let pairs: Vec<_> = (0..3u8).map(|t| pair(t, 0)).collect();
-        let mut urn = ChallengeUrn::new(OPEN_HASH, pairs, 2, 6).expect("valid urn");
-        urn.advance_block(0, &hash_at(0)).expect("in-order feed");
+        let mut urn = ChallengeUrn::new(pairs, 2, 6).expect("valid urn");
+        assert_eq!(urn.next_block(), 0);
+        urn.advance_block(&prev_hash_for(0)).expect("first feed");
+        assert_eq!(urn.next_block(), 1);
+        for h in 1..6 {
+            urn.advance_block(&prev_hash_for(h)).expect("in-order feed");
+        }
         assert_eq!(
-            urn.advance_block(0, &hash_at(0)),
-            Err(FeedError::WrongBlockIndex {
-                expected: 1,
-                got: 0
-            }),
-            "double-feed rejected"
+            urn.advance_block(&prev_hash_for(6)),
+            Err(FeedError::EpochComplete)
         );
+    }
+
+    #[test]
+    fn assign_epoch_empty_hashes_is_zero_epoch_blocks() {
+        let pairs = vec![pair(0, 0)];
         assert_eq!(
-            urn.advance_block(2, &hash_at(2)),
-            Err(FeedError::WrongBlockIndex {
-                expected: 1,
-                got: 2
-            }),
-            "skipped block rejected"
+            assign_epoch(pairs, 1, &[]).unwrap_err(),
+            AssignmentError::ZeroEpochBlocks
         );
-        // The rejected feeds must not have advanced state.
-        urn.advance_block(1, &hash_at(1))
-            .expect("in-order feed resumes");
-        assert_eq!(urn.epoch_open_hash(), &OPEN_HASH);
     }
 
     /// Measures the recompute-on-reorg cost the caller must budget: a
@@ -511,10 +546,10 @@ mod tests {
                 DrawablePair { p_id, shard_id: 0 }
             })
             .collect();
-        let mut urn = ChallengeUrn::new(OPEN_HASH, pairs, 3, 10_000).expect("valid urn");
+        let mut urn = ChallengeUrn::new(pairs, 3, 10_000).expect("valid urn");
         let start = std::time::Instant::now();
         for h in 0..10_000 {
-            urn.advance_block(h, &hash_at(h)).expect("in-order feed");
+            urn.advance_block(&prev_hash_for(h)).expect("in-order feed");
         }
         let elapsed = start.elapsed();
         assert_eq!(urn.draws_done(), 972_000);
@@ -526,17 +561,24 @@ mod tests {
     /// module's birth and pinned; any change to the stream construction,
     /// the schedule, the wave reset, or the swap-remove evolution moves
     /// these indices and must arrive as a deliberate v2 label bump.
+    ///
+    /// Seeds follow the documented predecessor contract: block `h` is fed
+    /// `prev_hash_for(h)` (pre-epoch constant at `h == 0`, else
+    /// `block_hash_at(h − 1)`).
     #[test]
     fn golden_assignment_vector_is_pinned() {
         let pairs: Vec<_> = (0..4u8).map(|t| pair(t, u64::from(t))).collect();
-        let per_block = run(pairs.clone(), 2, 5);
+        let per_block = run(pairs, 2, 5);
         let tags: Vec<Vec<u8>> = per_block
             .iter()
             .map(|block| block.iter().map(|p| p.p_id[0]).collect())
             .collect();
         assert_eq!(
             tags,
-            vec![vec![0], vec![1, 2], vec![3], vec![3, 0], vec![1, 2]],
+            // Predecessor-linked seeds (`prev_hash_for`): pre-epoch constant
+            // at h=0, then block_hash_at(h−1). Regenerated when the test
+            // harness adopted that contract (was previously seed_at(h)).
+            vec![vec![0], vec![3, 2], vec![1], vec![2, 0], vec![1, 3]],
             "pinned golden vector moved — the derivation changed shape"
         );
     }
