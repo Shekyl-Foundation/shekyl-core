@@ -43,7 +43,10 @@ All in `rust/shekyl-curve-generators/src/lib.rs`:
 The Pedersen amount generator `H` is derived from the Ed25519 basepoint (no `"Monero"`
 string) but is equally frozen — also pinned by `frozen_singletons` / `frozen_h_pow_2_head`.
 The Bulletproof(+) tables (`b"bulletproof"` / `b"bulletproof_plus"` prefixes, varint-fed)
-are pinned by `frozen_bulletproof_tables`.
+are pinned by `frozen_bulletproof_tables`, and the Bulletproof+ transcript initializer
+`b"bulletproof_plus_transcript"` (`shekyl-bulletproofs/src/plus/transcript.rs`,
+keccak256 → hash-to-point) is frozen with them — changing it re-seeds every BP+
+transcript challenge and invalidates every existing range proof.
 
 ## The list (FROST / multisig transcript DSTs)
 

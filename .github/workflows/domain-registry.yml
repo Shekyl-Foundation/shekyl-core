@@ -6,13 +6,16 @@
 # SA-3b — cryptographic domain-separation registry gate.
 #
 # Keeps docs/design/CRYPTO_DOMAIN_REGISTRY.tsv in lockstep with the code for
-# *registered* rows: row-presence + const binding (value change, rename, move,
-# deletion) plus entry-point count-pins for always-domain entry points (cSHAKE;
-# FROST transcript labels; FROST ciphersuite ID/CONTEXT). Does NOT auto-detect
-# new unregistered domains in general-purpose mechanisms (HKDF/Blake2b/keccak/
-# SHA3-256) — that is a review duty; see the gate header and CBOM §3. Cheap
-# (ripgrep only). Anchors on the mechanism call site / registered literal, not
-# the `shekyl/` prefix.
+# *registered* rows: comment-stripped row-presence + exact `const <name>:`
+# binding (value change, rename, move, deletion) plus comment-stripped
+# entry-point count-pins for always-domain entry points (cSHAKE; FROST
+# transcript labels; FROST ciphersuite ID/CONTEXT) plus a frozen-doc
+# cross-check (every frozen-inherited row has its consequence entry in
+# docs/FROZEN_DOMAIN_SEPARATORS.md — which is why that doc is a trigger path).
+# Does NOT auto-detect new unregistered domains in general-purpose mechanisms
+# (HKDF/Blake2b/keccak/SHA3-256) — that is a review duty; see the gate header
+# and CBOM §3. Cheap (ripgrep only). Anchors on the mechanism call site /
+# registered literal, not the `shekyl/` prefix.
 #
 # Triggered on all of rust/** (not a narrow crate list): the domain census spans
 # ~13 crates, so a call site added in an unlisted crate would slip past a

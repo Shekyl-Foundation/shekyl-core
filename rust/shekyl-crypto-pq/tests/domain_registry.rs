@@ -28,27 +28,70 @@
 //! bare-info test would wrongly report as a collision, and which SA-3b is NOT
 //! permitted to "fix" (it mutates zero domain values).
 //!
+//! `test-only` rows are the segregation census: domains minted by test/bench
+//! code. They are excluded from production distinctness (test-vs-test collisions
+//! are legitimate) but must never equal a production identity in the same
+//! mechanism — a test-minted artifact would otherwise verify against the
+//! production context (cross-context replay of test artifacts).
+//!
+//! The per-mechanism census counts are pinned HERE and nowhere else: the TSV
+//! section headers carry no counts, and the CBOM / SIGNATURE_ALIGNMENT copies
+//! are dated snapshots that defer to this pin. A registry row silently vanishing
+//! (which row-presence in the CI gate cannot see — it iterates the rows that
+//! exist) fails the census pin instead.
+//!
 //! This test is the collision-catcher; the CI gate
 //! (`scripts/ci/domain_registry_gate.sh`) is the drift-closer for *registered*
-//! rows (row-presence + const binding + entry-point count-pins on mech 1/3).
-//! Together they keep the registry honest against the code without publishing
-//! any security constant. Completeness for mech 2/4/5/6 (new unregistered
-//! domains) is a review duty — see the gate header and CBOM §3.
+//! rows (row-presence + const binding + entry-point count-pins on mech 1/3 +
+//! frozen-doc cross-check). Together they keep the registry honest against the
+//! code without publishing any security constant. Completeness for mech 2/4/5/6
+//! (new unregistered domains) is a review duty — see the gate header and CBOM §3.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY.tsv");
+
+/// Pinned census: (mech, shekyl-live rows, frozen-inherited rows). Update when
+/// a row is deliberately added/removed — the failure message names the drift.
+/// The CBOM table (docs/CRYPTOGRAPHIC_INVENTORY.md §3) is a dated snapshot of
+/// these numbers.
+const PRODUCTION_PINS: [(&str, usize, usize); 6] = [
+    ("1", 24, 0),
+    ("2", 44, 0),
+    ("3", 1, 3),
+    ("4", 9, 0),
+    ("5", 7, 8),
+    ("6", 1, 0),
+];
+/// Pinned counts for the non-production sections.
+const EXCLUDED_EXPECTED: usize = 8;
+const TEST_ONLY_EXPECTED: usize = 6;
 
 /// Well-formed mechanism ids: `1`..`6` (live mechanisms) or `x` (excluded).
 fn is_valid_mech(mech: &str) -> bool {
     matches!(mech, "1" | "2" | "3" | "4" | "5" | "6" | "x")
 }
 
+fn is_valid_status(status: &str) -> bool {
+    matches!(
+        status,
+        "shekyl-live" | "frozen-inherited" | "excluded" | "test-only"
+    )
+}
+
 struct Row<'a> {
     mech: &'a str,
     literal: &'a str,
     file: &'a str,
+    status: &'a str,
     key: &'a str,
+}
+
+impl Row<'_> {
+    /// A row that participates in production distinctness (live or frozen).
+    fn is_production(&self) -> bool {
+        matches!(self.status, "shekyl-live" | "frozen-inherited")
+    }
 }
 
 fn parse_rows(text: &str) -> Result<Vec<Row<'_>>, String> {
@@ -82,15 +125,37 @@ fn parse_rows(text: &str) -> Result<Vec<Row<'_>>, String> {
                 "line {line_no}: literal and file columns must be non-empty"
             ));
         }
+        let status = f[4].trim();
+        if !is_valid_status(status) {
+            return Err(format!(
+                "line {line_no}: bad status {status:?} — expected shekyl-live | \
+                 frozen-inherited | excluded | test-only"
+            ));
+        }
+        // The excluded bucket and the excluded status must agree — a typo'd
+        // mech id cannot smuggle a row out of (or into) distinctness scope.
+        if (mech == "x") != (status == "excluded") {
+            return Err(format!(
+                "line {line_no}: mech {mech:?} / status {status:?} mismatch — \
+                 mech x rows must be status excluded, and vice versa"
+            ));
+        }
         let key = f.get(5).copied().unwrap_or("").trim();
         rows.push(Row {
             mech,
             literal,
             file,
+            status,
             key,
         });
     }
     Ok(rows)
+}
+
+/// Parse the registry or fail the calling test with the parser's diagnostic.
+/// Single owner of the parse-and-validate step for every test below.
+fn parsed_registry() -> Vec<Row<'static>> {
+    parse_rows(REGISTRY).expect("registry must parse with valid mech ids, columns, and statuses")
 }
 
 /// The identity a row occupies within its mechanism's separation space.
@@ -102,35 +167,65 @@ fn identity<'a>(row: &Row<'a>) -> &'a str {
     }
 }
 
+/// The census pin: per-mechanism production row counts, plus the excluded and
+/// test-only section sizes. This is the ONLY place counts live (the TSV headers
+/// and prose docs defer here), and it is what makes a silently vanished row
+/// loud — the CI gate iterates the rows that exist, so it cannot miss one.
 #[test]
-fn registry_rows_are_well_formed() {
-    let rows = parse_rows(REGISTRY).expect("registry must parse with valid mech ids and columns");
-    assert!(
-        rows.len() >= 90,
-        "registry parsed only {} rows — expected the full ~100-row census; \
-         parsing or the file is broken",
-        rows.len()
+fn registry_census_matches_pins() {
+    let rows = parsed_registry();
+
+    let mut live: HashMap<&str, usize> = HashMap::new();
+    let mut frozen: HashMap<&str, usize> = HashMap::new();
+    let mut excluded = 0usize;
+    let mut test_only = 0usize;
+    for row in &rows {
+        match row.status {
+            "shekyl-live" => *live.entry(row.mech).or_default() += 1,
+            "frozen-inherited" => *frozen.entry(row.mech).or_default() += 1,
+            "excluded" => excluded += 1,
+            "test-only" => test_only += 1,
+            other => unreachable!("parse_rows validated status, got {other:?}"),
+        }
+    }
+
+    for (mech, want_live, want_frozen) in PRODUCTION_PINS {
+        assert_eq!(
+            live.get(mech).copied().unwrap_or(0),
+            want_live,
+            "mechanism {mech}: shekyl-live row count drifted from the pin — \
+             if the registry change is deliberate, update PRODUCTION_PINS and \
+             the dated CBOM census (docs/CRYPTOGRAPHIC_INVENTORY.md §3)"
+        );
+        assert_eq!(
+            frozen.get(mech).copied().unwrap_or(0),
+            want_frozen,
+            "mechanism {mech}: frozen-inherited row count drifted from the pin — \
+             frozen DSTs are closed except by a genesis-parameter change \
+             (docs/FROZEN_DOMAIN_SEPARATORS.md)"
+        );
+    }
+    assert_eq!(
+        excluded, EXCLUDED_EXPECTED,
+        "excluded (mech x) row count drifted from the pin"
+    );
+    assert_eq!(
+        test_only, TEST_ONLY_EXPECTED,
+        "test-only row count drifted from the pin — register new test domains \
+         (or update the pin when one is deleted)"
     );
 }
 
 #[test]
 fn intra_mechanism_domains_are_distinct() {
-    let rows = parse_rows(REGISTRY).expect("registry must parse");
+    let rows = parsed_registry();
 
-    // Non-vacuous guard: the registry parsed to a real census, not an empty file
-    // or a mis-split that silently matched nothing, so the test cannot pass vacuously.
-    assert!(
-        rows.len() >= 90,
-        "registry parsed only {} rows — expected the full ~100-row census; \
-         parsing or the file is broken",
-        rows.len()
-    );
-
-    // Group identities by mechanism; mechanism "x" (excluded, not a domain) is
-    // out of scope for distinctness.
+    // Group PRODUCTION identities by mechanism; excluded rows are not domains
+    // and test-only rows are policed by the segregation test instead
+    // (test-vs-test collisions are legitimate).
     let mut by_mech: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
     for row in &rows {
-        if row.mech == "x" {
+        if !row.is_production() {
             continue;
         }
         by_mech
@@ -168,6 +263,40 @@ fn intra_mechanism_domains_are_distinct() {
     );
 }
 
+/// Test-domain segregation (SA-3b scope item): a domain minted by test/bench
+/// code must never equal a production identity in the same mechanism —
+/// otherwise a test-minted signature or KAT vector verifies against the
+/// production context (cross-context replay of test artifacts).
+#[test]
+fn test_domains_are_segregated_from_production() {
+    let rows = parsed_registry();
+
+    let production: HashSet<(&str, &str)> = rows
+        .iter()
+        .filter(|r| r.is_production())
+        .map(|r| (r.mech, identity(r)))
+        .collect();
+
+    let mut violations = Vec::new();
+    for row in rows.iter().filter(|r| r.status == "test-only") {
+        if production.contains(&(row.mech, identity(row))) {
+            violations.push(format!(
+                "mechanism {}: test-only domain {:?} ({}) equals a production \
+                 identity — test artifacts would verify in the production context",
+                row.mech,
+                identity(row),
+                row.file
+            ));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "test-domain segregation violations:\n{}",
+        violations.join("\n")
+    );
+}
+
 /// Guards the mechanism-2 model itself: the three shared info labels MUST still
 /// appear as two rows each (const site + inline SeedDerivation), distinct only by
 /// salt. If a future edit collapses one, this fails — surfacing that the
@@ -175,7 +304,7 @@ fn intra_mechanism_domains_are_distinct() {
 /// the main test pass on a silently-changed shape.
 #[test]
 fn shared_info_labels_stay_salt_separated() {
-    let rows = parse_rows(REGISTRY).expect("registry must parse");
+    let rows = parsed_registry();
     for shared in [
         "shekyl-ed25519-spend",
         "shekyl-ed25519-view",

@@ -17,11 +17,19 @@
 #
 # WHAT THIS GATE GUARANTEES (honest scope — do not overclaim):
 #   • Every *registered* row still has its literal at its defining file (and, when
-#     the const column is a real identifier, a `const <name>` definition site).
+#     the const column is a real identifier, a `const <name>:` definition site).
 #     Catches: value change, rename, move, deletion of a registered domain.
+#     Both checks see COMMENT-STRIPPED code only — a doc comment quoting the
+#     bytes (or a `const NAME:` mention in prose) cannot satisfy a row after
+#     the real definition changes. Registered literals must therefore never
+#     contain `//` (none do; the stripper is line-comment based).
 #   • Mech-1 (cSHAKE) and mech-3 free-form transcript labels cannot grow a new
 #     call site without bumping a count-pin (those entry points always carry a
-#     domain).
+#     domain). Counts are likewise comment-stripped: a doc-comment code example
+#     mentioning `cshake256_32(` does not move the pin.
+#   • Every `frozen-inherited` row is documented in
+#     docs/FROZEN_DOMAIN_SEPARATORS.md (the consequence table cannot silently
+#     drop a frozen DST — this is why that doc is in the workflow trigger).
 #   • Mech IDs are well-formed (`1`..`6` or `x`).
 #
 # WHAT THIS GATE DOES NOT GUARANTEE:
@@ -46,6 +54,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 REGISTRY="docs/design/CRYPTO_DOMAIN_REGISTRY.tsv"
+FROZEN_DOC="docs/FROZEN_DOMAIN_SEPARATORS.md"
 
 if ! command -v rg >/dev/null 2>&1; then
   echo "FATAL: ripgrep (rg) not found — CI must install it before this gate." >&2
@@ -55,12 +64,29 @@ if [[ ! -f "$REGISTRY" ]]; then
   echo "FATAL: registry not found at $REGISTRY" >&2
   exit 2
 fi
+if [[ ! -f "$FROZEN_DOC" ]]; then
+  echo "FATAL: frozen-DST doc not found at $FROZEN_DOC" >&2
+  exit 2
+fi
 
 fail=0
 
-# ── Tripwire 1: row-presence + const binding ────────────────────────────────
+# Line-comment-stripped view of a source file: presence/const checks must see
+# code, not prose — a doc comment quoting the registered bytes must NOT keep a
+# row green after the real definition changed (that would break the gate's
+# "catches value change" guarantee). Line-based: registered literals never
+# contain `//`. Captured into a variable, NOT piped into `rg -q`: under
+# pipefail, rg -q's early exit SIGPIPEs sed and turns a successful match into
+# a pipeline failure (flaky by file size).
+code_only() { sed 's@//.*@@' "$1"; }
+
+# ── Tripwire 1: row-presence + const binding + frozen-doc cross-check ───────
+# Tab is IFS whitespace, so a plain IFS=$'\t' read COLLAPSES adjacent tabs and
+# shifts empty middle columns left (diverging from the Rust test's split('\t')).
+# Re-delimit with unit separator (\x1f, not IFS whitespace) to keep empty
+# fields in place.
 rows=0
-while IFS=$'\t' read -r mech literal file const _status _key _notes || [[ -n "${mech:-}" ]]; do
+while IFS=$'\x1f' read -r mech literal file const status _key _notes || [[ -n "${mech:-}" ]]; do
   [[ -z "${mech:-}" || "${mech:0:1}" == "#" ]] && continue
   rows=$((rows + 1))
 
@@ -90,30 +116,41 @@ while IFS=$'\t' read -r mech literal file const _status _key _notes || [[ -n "${
   # rg -F: fixed-string, so backslash escapes (\0, \x03) match the source's own
   # escapes verbatim. Accept either the byte-string form b"..." or the &str form
   # "..." — some frozen DSTs (the bulletproof generator names) are passed as
-  # &str and .as_bytes()'d downstream.
-  if ! rg -F -q -- "b\"$literal\"" "$file" && ! rg -F -q -- "\"$literal\"" "$file"; then
-    echo "NOT FOUND: b\"$literal\" (nor \"$literal\") present in $file  [mech $mech]" >&2
+  # &str and .as_bytes()'d downstream. Searched over comment-stripped code only.
+  code=$(code_only "$file")
+  if ! rg -F -q -- "b\"$literal\"" <<<"$code" \
+    && ! rg -F -q -- "\"$literal\"" <<<"$code"; then
+    echo "NOT FOUND: b\"$literal\" (nor \"$literal\") in the CODE of $file  [mech $mech]" >&2
     fail=1
   fi
 
   # Const binding: when the const column is a real identifier (not a parenthesized
-  # site descriptor like "(SeedDerivation inline)"), require a `const <leaf>`
-  # definition site in the same file. This blocks the pure-comment false positive:
-  # a doc line that quotes the bytes cannot satisfy a named-const row after the
-  # definition is deleted. Multi-line const initializers are fine — the `const`
-  # keyword and name sit on the declaration line even when the literal is on the
-  # next line (e.g. SAL_MEMBERSHIP_ONLY_DST).
+  # site descriptor like "(SeedDerivation inline)"), require a `const <leaf>:`
+  # definition site in the same file — the trailing `:` anchors the exact name,
+  # so a short registry name (SALT, LABEL) cannot be satisfied by a longer
+  # declaration it prefixes (const SALT_KEM_DERIVE_V1). Multi-line const
+  # initializers are fine — the `const` keyword, name, and `:` sit on the
+  # declaration line even when the literal is on the next line (e.g.
+  # SAL_MEMBERSHIP_ONLY_DST). Searched over comment-stripped code only.
   if [[ -n "$const" && "$const" != "("* ]]; then
     leaf="${const##*::}"
     if [[ -z "$leaf" ]]; then
       echo "BAD CONST: empty leaf from '$const' for b\"$literal\" in $file" >&2
       fail=1
-    elif ! rg -F -q -- "const $leaf" "$file"; then
-      echo "CONST MISSING: 'const $leaf' not found in $file (row b\"$literal\" [mech $mech])" >&2
+    elif ! rg -q -- "const ${leaf}[[:space:]]*:" <<<"$code"; then
+      echo "CONST MISSING: 'const $leaf:' not found in the code of $file (row b\"$literal\" [mech $mech])" >&2
       fail=1
     fi
   fi
-done < "$REGISTRY"
+
+  # Frozen-doc cross-check: every frozen-inherited row must be documented in
+  # the consequence table — a rewrite of that doc cannot silently drop a
+  # frozen DST while the gate stays green.
+  if [[ "$status" == "frozen-inherited" ]] && ! rg -F -q -- "$literal" "$FROZEN_DOC"; then
+    echo "FROZEN DST UNDOCUMENTED: b\"$literal\" ($file) has no entry in $FROZEN_DOC" >&2
+    fail=1
+  fi
+done < <(tr '\t' '\037' < "$REGISTRY")
 echo "row-presence: checked $rows registered literals"
 
 # ── Tripwire 2: entry-point count-pins ──────────────────────────────────────
@@ -123,15 +160,19 @@ echo "row-presence: checked $rows registered literals"
 PROD_GLOBS=(-g 'rust/**/*.rs' -g '!**/tests/**' -g '!**/benches/**' -g '!**/fuzz/**' -g '!**/examples/**')
 
 count_pattern() {
-  # count total matches (not lines) of a regex across production rust code
-  # Optional second arg: path scope (default: rust)
+  # Count total matches (not lines) of a regex across production rust code,
+  # comment-stripped: print matching lines, drop `//...` tails, then re-extract
+  # — a match that lived only in a comment (doc-comment code example) vanishes
+  # and does not move the pin. Optional second arg: path scope (default: rust).
   local pattern=$1
   local scope=${2:-rust}
-  rg -o --no-filename "${PROD_GLOBS[@]}" "$pattern" "$scope" 2>/dev/null | wc -l | tr -d ' '
+  rg --no-filename "${PROD_GLOBS[@]}" -- "$pattern" "$scope" 2>/dev/null \
+    | sed 's@//.*@@' \
+    | rg -o -- "$pattern" | wc -l | tr -d ' '
 }
 
 # --- mech 1: cSHAKE256 customization call sites ---
-MECH1_EXPECTED=36
+MECH1_EXPECTED=37
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

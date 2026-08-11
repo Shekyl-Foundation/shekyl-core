@@ -27,9 +27,14 @@
 #   literal exact bytes WITHOUT the b"" wrapper (the gate greps for b"<literal>")
 #   file    repo-root-relative path where the literal is DEFINED (the b"..." site)
 #   const   defining constant name, or a short site descriptor in parens
-#   status  shekyl-live | frozen-inherited | excluded
+#   status  shekyl-live | frozen-inherited | excluded | test-only
 #   key     distinctness identity within the mechanism; empty => defaults to <literal>
 #   notes   free text
+#
+# Per-mechanism row counts are NOT annotated here — they are derivable state,
+# pinned once (and checked against the parsed rows) in
+# rust/shekyl-crypto-pq/tests/domain_registry.rs. A second hand-counted copy
+# would drift and then lie.
 #
 # MECHANISMS:
 #   1  cSHAKE256 customization        (shekyl_crypto_hash::cshake256_*, CShake256Core::new)
@@ -58,13 +63,14 @@
 #
 # mech	literal	file	const	status	key	notes
 #
-# ── Mechanism 1 — cSHAKE256 customization (23) ─────────────────────────────
+# ── Mechanism 1 — cSHAKE256 customization ─────────────────────────────
 1	shekyl/genesis-txkey-v1	rust/shekyl-genesis-tool/src/txkey.rs	GENESIS_TXKEY_CUSTOMIZATION	shekyl-live
 1	shekyl/multisig-address-v1	rust/shekyl-address/src/multisig_address.rs	MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION	shekyl-live
 1	shekyl/ek-bind-v1	rust/shekyl-address/src/address.rs	EK_BIND_DST	shekyl-live
 1	shekyl/archival-serve-challenge-leaf-v1	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_LEAF_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-serve-challenge-fire-v1	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_FIRE_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-serve-credit-response-v1	rust/shekyl-archival-retention/src/challenge.rs	SERVE_CREDIT_RESPONSE_CUSTOMIZATION	shekyl-live
+1	shekyl/archival-challenge-assignment-v1	rust/shekyl-archival-retention/src/challenge_assignment.rs	CHALLENGE_ASSIGNMENT_CUSTOMIZATION	shekyl-live		per-draw challenge-assignment stream (PR #435)
 1	shekyl/archival-p-id-v1	rust/shekyl-archival-retention/src/id.rs	P_CANONICAL_ID_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-attestation-nonce-v1	rust/shekyl-archival-retention/src/attestation_wire.rs	ATTESTATION_NONCE_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-attestation-root-v1	rust/shekyl-archival-retention/src/attestation_wire.rs	ATTESTATION_ROOT_CUSTOMIZATION	shekyl-live
@@ -83,7 +89,7 @@
 1	shekyl/archival-attestation-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_ATTESTATION	shekyl-live
 1	shekyl/archival-serve-credit-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_SERVE_CREDIT	shekyl-live
 #
-# ── Mechanism 2 — HKDF salt + info (8 salts + 33 distinct infos) ───────────
+# ── Mechanism 2 — HKDF salt + info ───────────
 # distinctness key = salt|info. The three shared infos (spend/view/kem) are
 # legitimately distinct derivations: const site (account.rs, composed salt_for)
 # vs inline SeedDerivation (kem.rs, salt=shekyl-master-derive-v1). Keyed so.
@@ -132,13 +138,13 @@
 2	shekyl-region2-aead-v1	rust/shekyl-crypto-pq/src/wallet_envelope.rs	HKDF_INFO_REGION2_AEAD_V1	shekyl-live		info
 2	nonce	rust/shekyl-multisig/src/encryption.rs	(inline info prefix)	shekyl-live		info; also a schnorr sub-label elsewhere (cross-mechanism reuse, safe: different mechanism)
 #
-# ── Mechanism 3 — FROST transcript label (4) ───────────────────────────────
+# ── Mechanism 3 — FROST transcript label ───────────────────────────────
 3	Shekyl FROST SAL v1	rust/shekyl-fcmp/src/frost_sal.rs	(RecommendedTranscript::new)	shekyl-live		LIVE Shekyl domain — through-line rule applies (not frozen: absent from upstream monero-oxide)
 3	SpendAuthAndLinkability Multisig	rust/shekyl-fcmp-proofs/src/sal/multisig.rs	(transcript.domain_separate)	frozen-inherited		byte-identical to monero-oxide fcmp++ sal/multisig.rs:319
 3	FROST-ED25519-FCMP++-v1	rust/shekyl-fcmp-proofs/src/sal/multisig.rs	Ed25519T::CONTEXT	frozen-inherited		byte-identical to monero-oxide fcmp++ sal/multisig.rs:47
 3	Ed25519 Monero T	rust/shekyl-fcmp-proofs/src/sal/multisig.rs	Ed25519T::ID	frozen-inherited		byte-identical to monero-oxide fcmp++ sal/multisig.rs:36
 #
-# ── Mechanism 4 — Blake2b DST (9) ──────────────────────────────────────────
+# ── Mechanism 4 — Blake2b DST ──────────────────────────────────────────
 4	shekyl-pqc-leaf	rust/shekyl-crypto-pq/src/derivation.rs	DOMAIN_PQC_LEAF	shekyl-live		consensus leaf hash; SSOT owner after SA-3a (fcmp wraps it)
 4	Shekyl FCMP++ SAL full v1	rust/shekyl-fcmp-proofs/src/sal/mod.rs	SAL_FULL_DST	shekyl-live
 4	Shekyl FCMP++ SAL membership-only v1	rust/shekyl-fcmp-proofs/src/sal/mod.rs	SAL_MEMBERSHIP_ONLY_DST	shekyl-live
@@ -149,7 +155,7 @@
 4	Shekyl FCMP++ MO nonce alpha v1	rust/shekyl-fcmp-proofs/src/sal/membership_only.rs	MO_NONCE_ALPHA	shekyl-live
 4	Shekyl FCMP++ MO nonce r_y v1	rust/shekyl-fcmp-proofs/src/sal/membership_only.rs	MO_NONCE_R_Y	shekyl-live
 #
-# ── Mechanism 5 — keccak / schnorr challenge DST (15) ──────────────────────
+# ── Mechanism 5 — keccak / schnorr challenge DST ──────────────────────
 5	shekyl-outbound-tx-proof-v1	rust/shekyl-proofs/src/tx_proof.rs	OUTBOUND_DOMAIN	shekyl-live		schnorr challenge domain
 5	shekyl-inbound-tx-proof-v1	rust/shekyl-proofs/src/tx_proof.rs	INBOUND_DOMAIN	shekyl-live		schnorr challenge domain
 5	shekyl-reserve-proof-v1	rust/shekyl-proofs/src/reserve_proof.rs	RESERVE_DOMAIN	shekyl-live		schnorr challenge domain
@@ -166,8 +172,28 @@
 5	bulletproof_plus	rust/shekyl-bulletproofs/build.rs	(BulletproofGenerators DST)	frozen-inherited		Bulletproof+ generator DST
 5	bulletproof_plus_transcript	rust/shekyl-bulletproofs/src/plus/transcript.rs	(keccak256 -> hash-to-point)	frozen-inherited		Bulletproof+ transcript DST
 #
-# ── Mechanism 6 — SHA3-256 direct-prefix micro-bucket (1) ──────────────────
+# ── Mechanism 6 — SHA3-256 direct-prefix micro-bucket ──────────────────
 6	shekyl-mlkem-chacha-seed	rust/shekyl-crypto-pq/src/account.rs	MLKEM_CHACHA_SEED_PREFIX	shekyl-live		domain prefix fed straight to Sha3_256 (NOT cSHAKE) to derive a ChaCha seed; kept as its own bucket rather than silently folded into mechanism 1
+#
+# ── TEST-ONLY — domains minted by test/bench code, segregated from production ─
+# Registered so the SEGREGATION is machine-checked: a test-only domain spelled
+# equal to a live production domain in the same mechanism would let a
+# test-minted artifact (signature, KAT vector) verify against the production
+# context — cross-context replay of test artifacts. The distinctness test
+# (test_domains_are_segregated_from_production) asserts every row here is
+# disjoint from the production identities of its mechanism. Test-vs-test
+# collisions are NOT policed (two tests may legitimately share a dummy domain).
+# Completeness has the same review-duty scope as mech 2/4/5/6: register new
+# test domains as they are minted; the census below is as of 2026-08-11.
+# (b"" — cshake256_32's empty-customization compatibility test in
+# shekyl-crypto-hash — is not rowed: the parser requires a non-empty literal,
+# and production domains are non-empty, so it cannot collide.)
+1	shekyl/m3a-feature-flag-smoke-v0	rust/shekyl-crypto-pq/tests/sha3_zeroize_feature.rs	(CShake256Core::new inline)	test-only		feature-flag smoke test customization
+1	shekyl/emission-wire-kat-v1	rust/shekyl-archival-retention/tests/kat_emission_auth_msg.rs	(cshake256_32 inline)	test-only		emission-wire KAT digest customization
+1	Email Signature	rust/shekyl-crypto-hash/src/lib.rs	(NIST SP 800-185 KAT)	test-only		NIST cSHAKE sample customization (cfg(test) KATs)
+1	shekyl/domain-a-v1	rust/shekyl-crypto-hash/src/lib.rs	(cfg(test) inline)	test-only		domain-separation smoke test
+1	shekyl/domain-b-v1	rust/shekyl-crypto-hash/src/lib.rs	(cfg(test) inline)	test-only		domain-separation smoke test
+5	shekyl/schnorr-test-v1	rust/shekyl-crypto-pq/src/schnorr.rs	DOMAIN	test-only		cfg(test) module schnorr domain
 #
 # ── EXCLUDED — named, not domain separation for our purposes ────────────────
 x	RandomX\x03	rust/shekyl-pow-randomx/src/argon2d.rs	RANDOMX_ARGON_SALT	excluded		RandomX upstream Argon2d salt (configuration.md §7.1), byte-identical; not a Shekyl domain
