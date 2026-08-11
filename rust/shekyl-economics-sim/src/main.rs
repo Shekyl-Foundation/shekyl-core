@@ -56,7 +56,13 @@ fn main() {
     if std::env::args().any(|a| a == "--challenge-coverage") {
         // Fork-1 evidence set (ARCHIVAL_CHALLENGE_MECHANISM.md §7.1/§8):
         // urn wave-tail exposure, issued-count histograms, capped regime.
-        challenge_coverage::run_and_print();
+        // The module renders; this binary target performs the writes
+        // (stage2 precedent — JSON to stdout, summary to stderr).
+        let runs = challenge_coverage::evidence_runs();
+        let mut summary = String::new();
+        challenge_coverage::render_summary(&mut summary, &runs).expect("String sink is infallible");
+        eprint!("{summary}");
+        println!("{}", challenge_coverage::evidence_json(&runs));
         return;
     }
 

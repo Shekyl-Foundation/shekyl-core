@@ -232,12 +232,14 @@ pub fn evidence_runs() -> Vec<CoverageRun> {
     ]
 }
 
-/// `--challenge-coverage` entry: JSON to stdout, summary to stderr
-/// (the crate's output convention).
-pub fn run_and_print() {
-    let runs = evidence_runs();
-    for r in &runs {
-        // Print the closed form next to the measurement for the ruled
+/// Render the human-readable evidence-set summary into `out`. The I/O
+/// boundary lives in the binary target — modules *render* into a
+/// `fmt::Write` sink and `main` performs the write (the stage2 /
+/// `mode_adversarial_ratio` precedent), which satisfies the
+/// no-debug-macros lint by construction rather than by exemption.
+pub fn render_summary(out: &mut impl std::fmt::Write, runs: &[CoverageRun]) -> std::fmt::Result {
+    for r in runs {
+        // Show the closed form next to the measurement for the ruled
         // variant, so the derivation self-checks in its own output.
         let closed_form = if r.variant == "exact-min" {
             format!(
@@ -247,17 +249,23 @@ pub fn run_and_print() {
         } else {
             String::new()
         };
-        eprintln!(
+        writeln!(
+            out,
             "{} D={} draws={}: exposure(tau100)={:.3}%{closed_form} hist={:?}",
             r.variant,
             r.pairs,
             r.total_draws,
             r.exposure[2] * 100.0,
             r.issued_hist
-        );
+        )?;
     }
-    let json = serde_json::to_string_pretty(&runs).expect("serializable");
-    println!("{json}");
+    Ok(())
+}
+
+/// The machine-readable evidence set (stdout side; `main` writes it).
+#[must_use]
+pub fn evidence_json(runs: &[CoverageRun]) -> String {
+    serde_json::to_string_pretty(runs).expect("CoverageRun is serializable")
 }
 
 #[cfg(test)]
