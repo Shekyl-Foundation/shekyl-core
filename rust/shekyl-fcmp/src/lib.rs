@@ -35,7 +35,8 @@ pub use shekyl_fcmp_proofs::{Input, Output};
 // The PQC leaf-hash domain is single-sourced as
 // `shekyl_crypto_pq::derivation::DOMAIN_PQC_LEAF` (SA-3a). The duplicate
 // const that lived here, and the dead `DOMAIN_KEM_V1` (defined but never
-// consumed — real KEM salt is `kem::KEM_DOMAIN_SALT`), were removed.
+// consumed — real KEM salt is `shekyl_crypto_pq::kem::KEM_DOMAIN_SALT`),
+// were removed.
 
 /// Maximum inputs per FCMP++ transaction (bounds proof gen time and tx size).
 pub const MAX_INPUTS: usize = 8;
