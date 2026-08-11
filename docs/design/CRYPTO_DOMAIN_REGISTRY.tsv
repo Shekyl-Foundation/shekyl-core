@@ -198,7 +198,7 @@
 # ── EXCLUDED — named, not domain separation for our purposes ────────────────
 x	RandomX\x03	rust/shekyl-pow-randomx/src/argon2d.rs	RANDOMX_ARGON_SALT	excluded		RandomX upstream Argon2d salt (configuration.md §7.1), byte-identical; not a Shekyl domain
 x	Tor safe cookie authentication server-to-controller hash	rust/shekyl-tor/src/control/safecookie.rs	(SAFECOOKIE HMAC key)	excluded		Tor control-protocol constant, not our DST
-x	.onion checksum	rust/shekyl-sp-t3-spike/src/onion_key.rs	ONION_CHECKSUM_PREFIX	excluded		Tor v3 onion-address checksum prefix, protocol-fixed
+x	.onion checksum	rust/shekyl-tor/src/onion_identity.rs	ONION_CHECKSUM_PREFIX	excluded		Tor v3 onion-address checksum prefix, protocol-fixed
 x	SWSP	rust/shekyl-engine-file/src/payload.rs	(wallet payload magic)	excluded		file magic, not a hash domain
 x	SHEKYLWT	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic
 x	SHEKYLWS	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic

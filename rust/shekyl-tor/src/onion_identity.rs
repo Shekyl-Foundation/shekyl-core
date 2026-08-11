@@ -19,13 +19,20 @@
 //!
 //! # The custody boundary is the API (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7.2(iii))
 //!
-//! The serving host receives **derived bundles only — never the master
-//! seed**: the emission-claim protection (Auth-B) rests on the backing
-//! secret being unreachable from the serving-side bundles, and shipping the
-//! master seed to the serving box for convenience silently evaporates it.
-//! Accordingly [`OnionIdentity::from_hs_id_seed`] takes the 32-byte
-//! **derived** seed, and no function in this crate accepts a master seed —
-//! a serving config physically cannot hold what it must never hold.
+//! Two concentric constraints:
+//!
+//! 1. **No master seed in this crate.** Expansion takes only the already-
+//!    derived 32-byte HS-identity seed ([`OnionIdentity::from_hs_id_seed`]);
+//!    nothing here accepts a wallet master seed.
+//! 2. **Serving config takes an [`OnionIdentity`], never a seed.** The seed
+//!    is consumed at expansion time and dies with the call; the value that
+//!    crosses into the supervisor is this identity (expanded key + address).
+//!    See [`crate::onion_service::OnionServiceSpec`].
+//!
+//! Holding `master_seed` — or holding the derived seed and inviting the
+//! convenient "just pass the seed" wiring — is one edit away from also
+//! holding `bond_spend_pk`'s authority. The type boundary makes that edit
+//! unrepresentable on the serving path.
 //!
 //! # The `Scalar` trap (verified against a real tor, kept from the spike)
 //!
@@ -80,7 +87,14 @@ const ONION_CHECKSUM_PREFIX: &[u8] = b".onion checksum";
 /// ([`Self::mint_onion_key`]) — the `OnionKey` posture is unchanged, and the
 /// re-mintable secret lives behind the same `Zeroizing`/redacting-`Debug`
 /// discipline.
-#[derive(Clone)]
+///
+/// # Not `Clone`
+///
+/// Same secret posture as [`OnionKey`]: holding these expanded bytes *is*
+/// the persona on the network. Accidental copies are not free; the type is
+/// moved into [`crate::onion_service::OnionServiceSpec`] and remints keys by
+/// reference. Shared ownership, if ever needed, must be an explicit
+/// `Arc<OnionIdentity>` at the call site.
 pub struct OnionIdentity {
     expanded: Zeroizing<[u8; ONION_KEY_BYTES]>,
     service_id: ServiceId,
