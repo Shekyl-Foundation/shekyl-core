@@ -1249,10 +1249,21 @@ than repealing it:
    root with onion/attestation/SOCKS as labeled siblings under
    `keygen_from_seed`. Ruled, no wire dependency, prerequisite for the
    serving daemon existing at all.
-3. **The Tor inbound half** — `ADD_ONION` with our own generated key,
-   service lifecycle in `shekyl-tor`, the request loop, shard retrieval,
-   `R_k` verification. Only the framing is frozen; the plumbing is not.
-   The vanguards and Bandguards pins land here; none are genesis-frozen.
+3. **The Tor inbound half — premise corrected against source
+   (2026-08-11):** the `ADD_ONION`/`DEL_ONION` surface is BUILT
+   (`shekyl-tor/src/control/onion.rs`, SP-T3 — typed-parts wire
+   assembly, `Detach` unrepresentable, `PoWDefensesEnabled`/queue-rate
+   params in place) and the SP-T3 spike harness already drives the full
+   inbound path end-to-end with `shekyl-p-transport`'s read-side twin.
+   The genuinely unbuilt production half: **the persona serving loop**
+   (loopback listener answering shard-by-id from the store; the
+   self-authenticating-against-`R_k` response; provisional framing,
+   THROWAWAY per the discipline above), **its lifecycle wiring** into
+   `TorService` with the wallet-derived `hs_id` bundle (index 0 today;
+   derived-bundles-only custody per §7.2 check (iii)), and **the
+   vanguards-full / Bandguards launch pins** (addon-level, not
+   `ADD_ONION` arguments). The W₂ rig then extends the spike harness to
+   the concurrent-batch shape (§9).
 4. The two standalone PRs (#433 ordering assert, #434 coverage sim) —
    in flight.
 
