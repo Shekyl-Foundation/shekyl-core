@@ -176,5 +176,5 @@ x	.onion checksum	rust/shekyl-sp-t3-spike/src/onion_key.rs	ONION_CHECKSUM_PREFIX
 x	SWSP	rust/shekyl-engine-file/src/payload.rs	(wallet payload magic)	excluded		file magic, not a hash domain
 x	SHEKYLWT	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic
 x	SHEKYLWS	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic
-x	SSP1	rust/shekyl-pow-randomx/src/superscalar.rs	SSP_MAGIC	excluded		RandomX superscalar-program wire-format magic (test-side mirror of cache path); not a hash domain
+x	SSP1	rust/shekyl-pow-randomx/src/superscalar.rs	SUPERSCALAR_PROGRAM_WIRE_MAGIC	excluded		RandomX superscalar-program wire-format tag (ASCII SSP1 = SuperScalar Program v1); format identity, not a hash domain
 x	\x01\x11\x01\x01\x01\x01\x02\x01\x01	rust/shekyl-engine-core/src/engine/daemon_observability.rs	EPEE_HEADER	excluded		EPEE portable-storage 8-byte header+version magic (also duplicated in shekyl-rpc-client); not a hash domain
