@@ -22,14 +22,21 @@ on:
     # (which tests the PR merged into its base — the stronger signal);
     # an unrestricted push trigger double-runs every job on each push
     # to an open PR. Branches without a PR get CI by opening a draft PR.
+    #
+    # `paths` with negations instead of `paths-ignore` (the two cannot be
+    # combined per event): docs are skipped EXCEPT the domain registry TSV,
+    # which shekyl-crypto-pq's tests/domain_registry.rs include_str!s — a
+    # TSV-only PR that skipped this workflow could merge a duplicate domain
+    # and turn dev's test suite red for the next unrelated rust/** PR.
+    # Order matters: the last matching pattern wins.
     branches: [dev, main]
-    paths-ignore:
-      - 'docs/**'
-      - '**/README.md'
+    paths: &rust_paths
+      - '**'
+      - '!docs/**'
+      - '!**/README.md'
+      - 'docs/design/CRYPTO_DOMAIN_REGISTRY.tsv'
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - '**/README.md'
+    paths: *rust_paths
 
 # Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
 # reruns of the Rust gate supersede only each other, not the OS build run.

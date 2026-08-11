@@ -122,6 +122,11 @@ impl FrostSalSession {
             rand_core::RngCore::fill_bytes(&mut OsRng, seed.as_mut());
             rand_chacha::ChaCha20Rng::from_seed(*seed)
         };
+        // LIVE domain (Shekyl-authored, not inherited). Its bytes are derivation
+        // state: they root every FROST SAL multisig transcript, so changing the
+        // spelling re-derives every multisig challenge — a versioned breaking
+        // change, not a rename. See the SA through-line rule (SIGNATURE_ALIGNMENT.md
+        // §5) and its registry row (CRYPTO_DOMAIN_REGISTRY.tsv, mechanism 3).
         let transcript = RecommendedTranscript::new(b"Shekyl FROST SAL v1");
 
         let algorithm = SalAlgorithm::new(
