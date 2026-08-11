@@ -63,7 +63,7 @@ this specific draw schedules.
 
 `tx_pool.cpp:312` is the **only** caller of `crypto::random_poisson_seconds`.
 `crypto::random_poisson_subseconds` — declared beside it at
-`duration.h:69-70` (since deleted with the Poisson family, `071a7cc5e`) — has **no callers at
+`duration.h:69-70` *(file since deleted by the memoryless rewrite, PR #431)* — has **no callers at
 all**; F-4/F-5 retired the fluff-delay draw that used it.
 
 > So deliverable 3 is larger than its wording. Removing this one call leaves

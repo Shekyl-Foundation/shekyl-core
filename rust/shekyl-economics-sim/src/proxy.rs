@@ -38,7 +38,7 @@ use std::sync::OnceLock;
 
 use shekyl_archival_retention::{
     failure_window_slashable, BaselineObservation, ARCHIVAL_BOND_FLOOR_ATOMIC,
-    CHALLENGES_PER_EPOCH, FAILURE_WINDOW_M, FAILURE_WINDOW_N, MAX_HOLDINGS_SHARDS,
+    CHALLENGES_PER_PAIR_PER_EPOCH, FAILURE_WINDOW_M, FAILURE_WINDOW_N, MAX_HOLDINGS_SHARDS,
     SETTLEMENT_EPOCH_BLOCKS,
 };
 
@@ -103,8 +103,8 @@ pub fn honest_storage_cost_per_epoch(storage_fiat_per_byte_year: f64) -> f64 {
     max_holdings_bytes() * storage_fiat_per_byte_year / epochs_per_year()
 }
 
-/// Proxy re-fetch bandwidth cost per epoch, fiat: one challenge per held shard
-/// (`CHALLENGES_PER_EPOCH`), each re-fetching one `payload_bytes` response.
+/// Proxy re-fetch bandwidth cost per epoch, fiat: `CHALLENGES_PER_PAIR_PER_EPOCH` challenges per held
+/// shard, each re-fetching one `payload_bytes` response.
 ///
 /// `payload_bytes` is what one challenge obliges the responder to move:
 /// [`RESPONSE_BYTES`] under the pre-TJ opening (the retained pre-pruning
@@ -114,7 +114,7 @@ pub fn honest_storage_cost_per_epoch(storage_fiat_per_byte_year: f64) -> f64 {
 /// payload-independent (it prices `q`, not bytes).
 #[must_use]
 pub fn proxy_refetch_cost_per_epoch(payload_bytes: f64, fetch_fiat_per_byte: f64) -> f64 {
-    let responses = MAX_HOLDINGS_SHARDS as f64 * f64::from(CHALLENGES_PER_EPOCH);
+    let responses = MAX_HOLDINGS_SHARDS as f64 * f64::from(CHALLENGES_PER_PAIR_PER_EPOCH);
     responses * payload_bytes * fetch_fiat_per_byte
 }
 
@@ -543,7 +543,7 @@ pub fn a5_proxy_report(
 #[must_use]
 pub fn shard_breakeven_fetch_fiat_per_byte(storage_fiat_per_byte_year: f64) -> f64 {
     honest_storage_cost_per_epoch(storage_fiat_per_byte_year)
-        / (MAX_HOLDINGS_SHARDS as f64 * f64::from(CHALLENGES_PER_EPOCH) * SHARD_BYTES)
+        / (MAX_HOLDINGS_SHARDS as f64 * f64::from(CHALLENGES_PER_PAIR_PER_EPOCH) * SHARD_BYTES)
 }
 
 /// The `q` at which `T_risk` ALONE (zero bandwidth cost — the flat-rate-residential
@@ -898,7 +898,7 @@ mod tests {
         );
         // And it is exactly S / (challenged bytes per epoch) by construction.
         let expected = honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR)
-            / (MAX_HOLDINGS_SHARDS as f64 * f64::from(CHALLENGES_PER_EPOCH) * SHARD_BYTES);
+            / (MAX_HOLDINGS_SHARDS as f64 * f64::from(CHALLENGES_PER_PAIR_PER_EPOCH) * SHARD_BYTES);
         assert!((be - expected).abs() < 1e-24);
     }
 
@@ -947,17 +947,34 @@ mod tests {
     }
 
     #[test]
-    fn within_cloud_class_cheap_transit_cell_is_marginal() {
-        // The F-1 cell the §5.3 reopen watches: within the cloud class the
-        // cheap-transit ratio is ~1.1× — decisive it is NOT, and this pin
-        // holds the honest headline in place (a drift of either term by a
-        // few tens of percent flips this cell, unlike the cross-class 26×).
+    fn within_cloud_class_cheap_transit_cell_is_decisive_at_lambda_three() {
+        // TJ §8.2 (TJ-A2d) named this cell as the one the challenge count
+        // could move: raising the per-pair count multiplies the free-rider's
+        // per-epoch transfer while honest storage is unchanged — "exactly the
+        // lever that could lift §5.7c's marginal cheap-transit cell (~1.1×)
+        // out of coin-flip territory ... a measurable claim, not an argument:
+        // it re-runs by changing one operand."
+        //
+        // The 2-of-3 ruling set λ = 3 and this is that measurement, collected:
+        // the cell moves 1.095× → 3.285×, linear in λ as predicted. The §5.3
+        // reopen's watch-cell is no longer a coin flip — within the cloud
+        // class the F-1 headline is now decisive at BOTH ends of the fetch
+        // band, and the deterrent no longer leans on the §5.7b labor
+        // threshold nobody should lean on.
         let cloud_s = honest_storage_cost_per_epoch(CLOUD_STORAGE_FIAT_PER_BYTE_YEAR);
         let t_cheap = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[0]);
         let ratio = t_cheap / cloud_s;
         assert!(
-            ratio > 1.0 && ratio < 1.5,
-            "within-cloud cheap-transit ratio must be marginal (~1.1x), got {ratio}"
+            ratio > 3.0 && ratio < 3.6,
+            "within-cloud cheap-transit ratio at lambda = 3 must be ~3.3x, got {ratio}"
+        );
+        // Linear in λ, and dividing the challenge count back out returns the
+        // ~1.1× cell TJ-A2d called marginal — the pre-ruling fact is retained
+        // here rather than deleted, so the lever's size stays legible.
+        let per_challenge = ratio / f64::from(CHALLENGES_PER_PAIR_PER_EPOCH);
+        assert!(
+            per_challenge > 1.0 && per_challenge < 1.5,
+            "per-challenge cell is the ~1.1x TJ-A2d called marginal, got {per_challenge}"
         );
         // And the retail end stays decisively closed within-class too.
         let t_retail = proxy_refetch_cost_per_epoch(SHARD_BYTES, FETCH_FIAT_PER_BYTE_BAND[1]);

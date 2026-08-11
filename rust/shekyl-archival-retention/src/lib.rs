@@ -24,7 +24,7 @@
 //!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
-//! - [`attestation`] — settlement fold over kept kinds (`settle_epoch`).
+//! - [`attestation`] — settlement fold over challenge outcome counts (`settle_epoch`, absolute-2).
 //! - [`attestation_wire`] — header, nonce, `PassRecord`, root, pass verify.
 //!
 //! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
@@ -70,7 +70,7 @@ pub use admission::{
     credited_work_at_admission, parent_state_shards_from_gather, AdmissionError, AdmissionShard,
     ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
 };
-pub use attestation::{settle_epoch, AttestationKind, EpochSettlement};
+pub use attestation::{settle_epoch, AttestationKind, EpochSettlement, SERVE_THRESHOLD_PASSES};
 pub use attestation_wire::{
     attestation_nonce, attestation_root, empty_attestation_root,
     pass_records_from_headers_and_witness, verify_pass_countersignature, AttestationHeader,
@@ -129,7 +129,7 @@ pub use constants::{
     arm_settlement_epoch_override_for_regtest, effective_settlement_epoch_blocks,
     parse_settlement_epoch_override, settlement_epoch_blocks_overridden,
     settlement_epoch_override_ignored, settlement_epoch_override_present,
-    SettlementEpochOverrideError, CHALLENGES_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
+    SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
     CHALLENGE_RESOLUTION_BLOCKS, CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
