@@ -377,7 +377,9 @@ express the gate cleanly.
 | **PR-SA-2** | Nested combiner (SA-R-1 incl. `Result<()>` rewrite / R-2 / R-3 / R-4 / R-5); §2.1 six-surface domains (bond slot rides surface A's `shekyl/pqc-auth-tx-v1`; **surface B is §2.2, out of SA-2** — S1 + `signature_preimage` parked inert under rule-21); SA-R-4 version check placed by the **six-path parse-from-canonical enumeration** (precondition of the trait rewrite; check goes uniformly at parse or in `verify()`, never per-path); F1 (subsumed by `Result<()>`) + wrong-key regression; F-7 disposition; fixture regeneration + frozen v1 negative fixture; iai bench rework; `wire.rs` `3385` aliasing; FFI context-specific exports; RELEASE_CHECKLIST rows; genesis-blob no-hybrid-sig check. **C++-byte-identical** (no wire/`TX_VERSION` change) | pending — solitary review round |
 | **PR-SA-2b** | Bond-preimage reconciliation (§2.2): resolved the P-role replay question at the call graph — the surface-A whole-tx hash (incl. the vin type tag) forecloses cross-role replay, so **generic won**. Deleted S1 + `signature_preimage` + `BOND_POST_SIG_CUSTOMIZATION` + `SCHEME_DOMAIN_BOND_POST`; KAT surfaces 7→6. No wire change; no verifier special-case needed | **DONE** |
 | **PR-SA-3a** | Consensus leaf-hash SSOT: `PqcLeafScalar::from_pqc_public_key` wraps `hash_pqc_public_key`; retired dual `DOMAIN_PQC_LEAF` + dual Blake2b/wide_reduce; pinned pre-dedup KAT (empty / 1-byte / full ML-DSA-65 / all-`0xff`). No wire change. | **MERGED #436** |
-| **PR-SA-3b** | Domain registry: single-source [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) census of every production domain string by **mechanism** (not a flat all-pairs collision test — that is a category error, §5); **per-mechanism** distinctness test (`shekyl-crypto-pq/tests/domain_registry.rs`, mech-2 keyed by `salt\|info`) with pinned per-mechanism census counts (the ONLY count copy — TSV headers and prose defer to it) and **test-domain segregation** (test-only rows machine-checked disjoint from production identities per mechanism); CI gate (`scripts/ci/domain_registry_gate.sh`) with comment-stripped row-presence + exact `const <name>:` binding + comment-stripped entry-point count-pins on always-domain mechanisms (cSHAKE / FROST) + frozen-doc cross-check, **anchored on call sites, not the `shekyl/` prefix** (§3.1) — honest scope: new unregistered domains in general-purpose mechanisms (HKDF/Blake2b/keccak/SHA3-256) are a review duty, not a false gate guarantee; frozen consequence markers (mech-3 FROST into [`FROZEN_DOMAIN_SEPARATORS.md`](../FROZEN_DOMAIN_SEPARATORS.md), naming the per-seam break); TSV-only changes run the distinctness test (Rust workflow path re-include); through-line invariant written as a rule (§5); error-band pointer (§6). Mutates **zero** domain values. **Feeds the CBOM domain section.** | **in flight** (`feat/sa3b-domain-registry`, #438) |
+| **PR-SA-3b** | Domain registry: single-source [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) census of every production domain string by **mechanism** (not a flat all-pairs collision test — that is a category error, §5); **per-mechanism** distinctness test (`shekyl-crypto-pq/tests/domain_registry.rs`, mech-2 keyed by `salt\|info`) with pinned per-mechanism census counts (the ONLY count copy — TSV headers and prose defer to it) and **test-domain segregation** (test-only rows machine-checked disjoint from production identities per mechanism); CI gate (`scripts/ci/domain_registry_gate.sh`) with comment-stripped row-presence + exact `const <name>:` binding + comment-stripped entry-point count-pins on always-domain mechanisms (cSHAKE / FROST) + frozen-doc cross-check, **anchored on call sites, not the `shekyl/` prefix** (§3.1) — honest scope: new unregistered domains in general-purpose mechanisms (HKDF/Blake2b/keccak/SHA3-256) are a review duty, not a false gate guarantee; frozen consequence markers (mech-3 FROST into [`FROZEN_DOMAIN_SEPARATORS.md`](../FROZEN_DOMAIN_SEPARATORS.md), naming the per-seam break); TSV-only changes run the distinctness test (Rust workflow path re-include); through-line invariant written as a rule (§5); error-band pointer (§6). Mutates **zero** domain values. **Feeds the CBOM domain section.** | **MERGED #438** (carried a review round: `PRODUCTION_PINS` single-count, comment-stripped gate, tab-safe delimiter, frozen-doc cross-check, `signable_header` deleted for zero callers with the B2 forward-guard relocated to `sender_sig`) |
+| **PR-SA-3c** | `SNAPSHOT_ID_CUSTOMIZATION` (`refresh.rs`) retargeted `cn_fast_hash` → cSHAKE256 with the domain as customization (`shekyl/snapshot-id-v1`); this **does** change a domain's bytes — permitted because `SnapshotId` is a wallet-internal reservation-staleness token (no `Serialize`, absent from `shekyl-engine-file`, never wire/cross-node — verified at the call graph), so it is a fresh mint, not a re-spelling (§5). Regression test re-cast to vary the cSHAKE customization; registry row moved mech 5 → mech 1, count-pins + dated snapshots updated; `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §segment-2g marked superseded. No persisted-state change (no rule-42 bump). | **in flight** (`feat/sa3c-snapshot-id-cshake`, stacked on dev) |
+| **PR-SA-3d** | `cn_fast_hash` → `keccak256` rename (Rust-internal, byte-identical; keep FFI export name); crypto-hash doc header with the Keccak/cSHAKE one-liner | pending |
 | **PR-SA-4** | Dead persisted-field sweep (writer/reader existence per persisted field; tx_notes PR-SJ-2 confirmation) | pending |
 | **PR-SA-5** | Persona lifecycle: SA-R-6 guard + scan reconstruction; ruling into `ARCHIVAL_P_DERIVE_V1` module doc + operator guide (no-rotation stated as a refusal, clustering rationale named). **Feeds the CBOM persona no-backstop row.** | pending |
 | **PR-SA-6** | CBOM close/formalize (see §4) + infra PQ posture (release-signing paragraph); untrusted-cast sweep + one clamp/reject/None ruling | pending |
@@ -399,20 +401,22 @@ class this round exists to fix. The SA-3b sweep must enumerate by *mechanism*
 (every cSHAKE customization, HKDF salt/info label, transcript label, and hash
 DST), not by prefix.
 
-**Verified in SA-3b (the enumeration by mechanism; dated snapshot, 2026-08-11 —
-the checked copy of these counts is `domain_registry.rs::PRODUCTION_PINS`):** the
-full production census is **93 distinct domain strings across the five
-mechanisms** (94 registered, including the SHA3-256 micro-bucket), not ~28 — a
-3.3× undercount by the prefix lens, which is the measure of the blind spot.
-Distribution: mechanism 1 cSHAKE customization (24, including the
-challenge-assignment domain merged mid-round by PR #435 — the round's first live
-catch: the pin went stale against dev and the row was added at true-up),
-mechanism 2 HKDF salt+info (8 salts + 33 distinct infos), mechanism 3 FROST
-transcript label (4), mechanism 4 Blake2b DST (9), mechanism 5 keccak/schnorr
-challenge DST (15) — those five sum to 93 — plus a 1-entry SHA3-256
-direct-prefix micro-bucket (`shekyl-mlkem-chacha-seed` — a real domain that sits
-outside all five, given its own bucket rather than silently folded in), for 94
-registered rows. 11 of the 93 are frozen-inherited (mech-3: 3; mech-5: 8). The registry names its own
+**Verified in SA-3b (the enumeration by mechanism; dated snapshot, 2026-08-11,
+incl. SA-3c — the checked copy of these counts is
+`domain_registry.rs::PRODUCTION_PINS`):** the full production census is **93
+distinct domain strings across the five mechanisms** (94 registered, including the
+SHA3-256 micro-bucket), not ~28 — a 3.3× undercount by the prefix lens, which is
+the measure of the blind spot. Distribution: mechanism 1 cSHAKE customization (25,
+incl. the challenge-assignment domain merged mid-round by PR #435 — the round's
+first live catch, the pin went stale against dev and the row was added at true-up
+— and the `snapshot-id` domain SA-3c moved here from mechanism 5 on its
+cn_fast_hash→cSHAKE retarget), mechanism 2 HKDF salt+info (8 salts + 33 distinct
+infos), mechanism 3 FROST transcript label (4), mechanism 4 Blake2b DST (9),
+mechanism 5 keccak/schnorr challenge DST (14) — those five sum to 93 — plus a
+1-entry SHA3-256 direct-prefix micro-bucket (`shekyl-mlkem-chacha-seed` — a real
+domain that sits outside all five, given its own bucket rather than silently folded
+in), for 94 registered rows. 11 of the 93 are frozen-inherited (mech-3: 3;
+mech-5: 8). The registry names its own
 boundary: what it excludes (RandomX Argon salt, Tor SAFECOOKIE, `.onion`
 checksum, file/wire magics) is rowed with a reason, because a silent omission is
 the failure mode a registry exists to kill. The gate is anchored on the mechanism
