@@ -3,80 +3,127 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Attestation settlement fold — the §4 decision that turns an epoch's
-//! **kept attestation headers** into the three-valued serve-credit settlement
-//! for one `(P_id, shard)` pair.
+//! Attestation settlement fold — the per-`(P, shard, epoch)` decision that
+//! turns an epoch's challenge outcomes into the three-valued serve-credit
+//! settlement.
 //!
-//! Design of record: [`ARCHIVAL_CREDIT_WIRE.md`](../../../docs/design/ARCHIVAL_CREDIT_WIRE.md)
-//! (TJ-B step 3, shape 4). This module owns **only the settlement-time fold** —
-//! the per-`(P, s, E)` rule that reads kept headers and produces the bit. It is
-//! deliberately the *settlement* half of the admission↔settlement seam (§4):
+//! Design of record: `ARCHIVAL_CHALLENGE_MECHANISM.md` §3 (nested
+//! measurement) and §7.1 (threshold ratification, 2026-08-11) — **on the
+//! `design/archival-challenge-mechanism` branch**, where the round
+//! iterates until it closes and lands on dev; the dev copy is the round's
+//! opening snapshot and carries a superseded-in-place banner. This module
+//! owns
+//! **only the settlement-time fold**; admission verifies countersignatures
+//! elsewhere, and by settlement time the signatures are pruned by
+//! construction — the fold reads only counts derived from kept data.
 //!
-//! - **Admission** (block validation, pre-prune) verifies the countersignatures
-//!   against the mined `attestation_root`. It lives elsewhere — this module
-//!   never sees a signature.
-//! - **Settlement** (slash-deadline scan, post-prune) folds the kept headers.
-//!   By then the signatures are gone by construction, so this fold must read
-//!   only what survives the prune: the per-record [`AttestationKind`].
+//! ## The ratified rule: absolute-2
 //!
-//! **The seam is a type, not a discipline.** [`settle_epoch`] takes `&[AttestationKind]`
-//! — it is *structurally incapable* of reaching a signature, an `r`, or a nonce,
-//! so a future maintainer cannot accidentally add a signature check at
-//! settlement: there is nothing of the sort in the input. That is the
-//! make-bad-states-unrepresentable form of "settlement must not touch pruned
-//! data" (§4).
+//! [`settle_epoch`] takes `(passes, issued)` and settles **Served iff
+//! `passes ≥ 2`, full stop** — the threshold is never a function of the
+//! issued count. Majority-of-issued was rejected because it makes the
+//! threshold depend on a derived quantity, coupling agreement on the bit to
+//! every node reproducing the urn derivation identically; absolute-2 needs
+//! only a pass count, the smaller consensus surface.
+//!
+//! `issued` still matters at the **observation floor**: a pair issued fewer
+//! than 2 challenges can never reach the threshold, so its epoch settles
+//! [`EpochSettlement::NonObservation`] — a pair the urn could not reach
+//! twice is not a pair that failed. That keys the settlement-outcome row on
+//! *issued*, not on drawable, and it is what the pruned/absent row decays
+//! to (never `Missed`).
+//!
+//! **Reachability, stated so this branch is not misread:** the live schedule
+//! is `CHALLENGES_PER_PAIR_PER_EPOCH = 3`, and under the exact-min urn at
+//! exact budget every drawable pair receives exactly that — so the
+//! under-issuance arm is *unreachable* in normal operation. It goes live
+//! only in the capped regime (`k_cap` binding; the §8 72 %-unobservable
+//! case), i.e. only if the tx-carrier prunable-residence work does not land.
+//! It is specified defensively, not as tolerance for short issuance by
+//! design.
+//!
+//! The former `to_observation`/`is_observation` bridge to the m-of-n
+//! machinery is **deleted** (ruled with the 2-of-3 adoption): consumers at
+//! the settlement/window seam construct their two-valued observation from
+//! the settlement directly, and the integration test does exactly that.
 
-use crate::failure_window::BaselineObservation;
-
-/// The kept per-record discriminant (§3.1): a pass carried a countersignature
-/// (now in the prunable side table); a miss carried none. The full kept header
-/// (`p_id, shard_id, E, kind`) survives the signature prune in coinbase
-/// `tx_extra` (committed via `prefix_hash`). After the settlement scan has
-/// keyed by `(P, s, E)`, **only this discriminant** is what the fold needs —
-/// which is why [`settle_epoch`] takes `&[AttestationKind]` alone.
+/// The kept per-record discriminant. `Pass` carried a countersignature (now
+/// pruned); under the ruled mechanism a miss is never asserted on the wire
+/// (expiry ⇒ miss), so `Miss` survives here only for the **interim** kept
+/// headers the admission surface still parses — it retires with the format
+/// round's deletion surface, not with this fold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttestationKind {
-    /// A countersigned pass: `P` served the read and signed the block-bound
-    /// nonce. The signature is admission-verified and then prunable.
+    /// A countersigned pass: `P` served the read and signed the
+    /// block-bound nonce.
     Pass,
-    /// A miss: the producer challenged `(P, s, E)` and recorded no valid
-    /// response. Carries no signature at any point.
+    /// Interim kept-header miss record (see type-level note above).
     Miss,
 }
 
-/// The three-valued settlement of one `(P, shard, epoch)` (§4). Wider than the
-/// two-valued [`BaselineObservation`] because the failure window must
-/// distinguish a *missed observation* (counts toward m-of-n) from a
-/// *non-observation* (the window never sees the epoch).
+/// Served requires this many passes — the 2-of-3 ruling's absolute
+/// threshold. Deliberately **not** a function of the issued count; re-pin
+/// only together with `(m, n)` (the outer window prices what one epoch
+/// observation means).
+///
+/// Jointly pinned with [`crate::constants::CHALLENGES_PER_PAIR_PER_EPOCH`]
+/// (λ = 3): 2-of-3 is **one** decision, and the two const-asserts below are
+/// what make it one rather than two numbers that can drift apart.
+pub const SERVE_THRESHOLD_PASSES: u32 = 2;
+
+// The 2-of-3 pin, as two properties §3 actually ruled — a re-pin of either
+// constant that breaks one of these fails the build, so the pair cannot
+// silently become something the §3 derivation never priced.
+const _: () = assert!(
+    SERVE_THRESHOLD_PASSES <= crate::constants::CHALLENGES_PER_PAIR_PER_EPOCH,
+    "a threshold above the issued count makes Served unreachable: every epoch \
+     would settle NonObservation and no pair could ever earn serve credit"
+);
+const _: () = assert!(
+    2 * SERVE_THRESHOLD_PASSES > crate::constants::CHALLENGES_PER_PAIR_PER_EPOCH,
+    "the threshold must be a STRICT MAJORITY of the challenges issued: a \
+     minority threshold is the biased estimator §3 rejected pass-priority for \
+     (1-of-3 more than doubles a liar's per-epoch pass rate over 1-of-1)"
+);
+
+/// The three-valued settlement of one `(P, shard, epoch)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EpochSettlement {
-    /// At least one pass: `serve_credit_bit = 1`, an observation.
+    /// `passes ≥ 2`: `serve_credit_bit = 1`, an observation.
     Served,
-    /// Observed (≥ 1 record) but no pass: `serve_credit_bit = 0`, an
-    /// observation that counts as a miss in the window.
+    /// Observed (issued ≥ 2) but under threshold: `serve_credit_bit = 0`,
+    /// counts as a miss in the outer window — under 2-of-3 this is the
+    /// *stronger* claim "failed a majority", which is why `(m, n)` re-pins
+    /// against the 2-of-3 tails rather than carrying forward.
     Missed,
-    /// No record for the pair this epoch: the window never sees it. This is the
-    /// value a **pruned** epoch decays to (§4 / `failure_window.rs:178-184`
-    /// hazard) — never `Missed`.
+    /// Issued < 2 — the pair could never have reached the threshold, so
+    /// the window never sees the epoch. This is the value a pruned or
+    /// absent settlement row decays to; never `Missed`.
     NonObservation,
 }
 
-/// Fold an epoch's attestation records for one `(P, shard)` into the
-/// three-valued settlement, **pass-priority**.
+/// Fold one epoch's challenge outcome counts for one `(P, shard)` into the
+/// three-valued settlement — **absolute-2** (§7.1 ratification).
 ///
-/// Pass-priority (any authenticated pass dominates any number of misses) is the
-/// fabrication-containment property: a fabricated miss only survives in an
-/// epoch no diligent read covered, so a single real pass clears the epoch.
+/// `passes` is the number of admission-verified pass records for the pair
+/// in this epoch; `issued` is the number of challenges the derivation
+/// assigned to it (a derived quantity — `ChallengeUrn::draws_done`
+/// bookkeeping — never counted from records, §4.2).
 ///
-/// `kinds` is the multiset of records the settlement scan gathered for this
-/// pair at this epoch — order-independent (the fold is a reduction). Empty ⇒
-/// non-observation.
+/// # Panics
+///
+/// If `passes > issued`: more passes than assigned challenges is a caller
+/// accounting error, not a settlement state.
 #[must_use]
-pub fn settle_epoch(kinds: &[AttestationKind]) -> EpochSettlement {
-    if kinds.is_empty() {
+pub fn settle_epoch(passes: u32, issued: u32) -> EpochSettlement {
+    assert!(
+        passes <= issued,
+        "more passes ({passes}) than issued challenges ({issued})"
+    );
+    if issued < SERVE_THRESHOLD_PASSES {
         return EpochSettlement::NonObservation;
     }
-    if kinds.iter().any(|k| matches!(k, AttestationKind::Pass)) {
+    if passes >= SERVE_THRESHOLD_PASSES {
         EpochSettlement::Served
     } else {
         EpochSettlement::Missed
@@ -84,100 +131,77 @@ pub fn settle_epoch(kinds: &[AttestationKind]) -> EpochSettlement {
 }
 
 impl EpochSettlement {
-    /// `serve_credit_bit(P, s, E)` — `1` iff served. Missed and non-observation
-    /// both yield `0`; the *observation* distinction they carry is
-    /// [`Self::is_observation`], not this bit (the bit alone cannot tell a miss
-    /// from an unseen epoch — which is why the settlement is three-valued and
-    /// the pruned epoch decays to non-observation rather than to a `0` the
-    /// window would read as a miss).
+    /// `serve_credit_bit(P, s, E)` — `1` iff served. Missed and
+    /// non-observation both yield `0`; the observation distinction they
+    /// carry lives in the three-valued settlement itself, which is why the
+    /// pruned epoch decays to non-observation rather than to a `0` the
+    /// window would read as a miss.
     #[must_use]
     pub fn serve_credit_bit(self) -> bool {
         matches!(self, EpochSettlement::Served)
-    }
-
-    /// Whether the failure window sees this epoch at all. `Served`/`Missed` are
-    /// observations; `NonObservation` is skipped by the walk.
-    #[must_use]
-    pub fn is_observation(self) -> bool {
-        !matches!(self, EpochSettlement::NonObservation)
-    }
-
-    /// Project to the window's two-valued [`BaselineObservation`], or `None`
-    /// for a non-observation the window must not count. This is the sole bridge
-    /// from the three-valued settlement to the existing m-of-n machinery.
-    #[must_use]
-    pub fn to_observation(self, settlement_epoch: u64) -> Option<BaselineObservation> {
-        match self {
-            EpochSettlement::Served => Some(BaselineObservation::served(settlement_epoch)),
-            EpochSettlement::Missed => Some(BaselineObservation::missed(settlement_epoch)),
-            EpochSettlement::NonObservation => None,
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use AttestationKind::{Miss, Pass};
 
     #[test]
-    fn empty_is_non_observation() {
-        // No record for the pair this epoch: the window never sees it. This is
-        // the value a pruned epoch decays to, and it must never read as a miss.
-        let s = settle_epoch(&[]);
-        assert_eq!(s, EpochSettlement::NonObservation);
-        assert!(!s.is_observation());
-        assert!(!s.serve_credit_bit());
-        assert_eq!(s.to_observation(42), None);
-    }
-
-    #[test]
-    fn any_pass_dominates_regardless_of_miss_count() {
-        // Pass-priority, the fabrication-containment property: one real pass
-        // clears the epoch no matter how many misses a fabricator filed.
-        for misses in 0..8 {
-            let mut kinds = vec![Pass];
-            kinds.extend(std::iter::repeat_n(Miss, misses));
-            // Order must not matter — the fold is a reduction.
-            for perm in [kinds.clone(), {
-                let mut r = kinds.clone();
-                r.reverse();
-                r
-            }] {
-                let s = settle_epoch(&perm);
-                assert_eq!(s, EpochSettlement::Served, "misses={misses}");
-                assert!(s.serve_credit_bit());
-                assert_eq!(s.to_observation(7), Some(BaselineObservation::served(7)));
-            }
-        }
-    }
-
-    #[test]
-    fn observed_but_no_pass_is_a_missed_observation() {
-        // A miss is an OBSERVATION (counts to the m-of-n window) but not a
-        // pass, so serve_credit_bit is 0 while is_observation stays true — the
-        // distinction the bit alone cannot carry.
-        for n in 1..6 {
-            let kinds = vec![Miss; n];
-            let s = settle_epoch(&kinds);
-            assert_eq!(s, EpochSettlement::Missed);
-            assert!(s.is_observation(), "a miss is still an observation");
+    fn under_issued_epochs_are_non_observations_even_with_a_pass() {
+        // The discriminant absolute-2 forces: 1 pass of 1 issued is NOT a
+        // served epoch — the pair never had a path to the threshold, so
+        // the epoch is outside the window entirely. This is the §4.2
+        // "a pair the urn could not reach is not a pair that failed"
+        // distinction, now keyed on issuance.
+        for (passes, issued) in [(0, 0), (0, 1), (1, 1)] {
+            let s = settle_epoch(passes, issued);
+            assert_eq!(s, EpochSettlement::NonObservation, "{passes}/{issued}");
             assert!(!s.serve_credit_bit());
-            assert_eq!(s.to_observation(9), Some(BaselineObservation::missed(9)));
         }
     }
 
     #[test]
-    fn missed_and_non_observation_share_a_zero_bit_but_differ_at_the_window() {
-        // The load-bearing three-valued distinction: both yield serve_credit_bit
-        // = 0, but only Missed is an observation. If these collapsed, a pruned
-        // (non-observation) epoch would read as a miss and slash an archiver for
-        // an epoch it was never challenged in.
-        let missed = settle_epoch(&[Miss]);
-        let non_obs = settle_epoch(&[]);
-        assert_eq!(missed.serve_credit_bit(), non_obs.serve_credit_bit()); // both 0
-        assert_ne!(missed.is_observation(), non_obs.is_observation()); // but differ
-        assert!(missed.to_observation(1).is_some());
-        assert!(non_obs.to_observation(1).is_none());
+    fn served_iff_at_least_two_passes_regardless_of_issued() {
+        // Absolute-2: the threshold never moves with the denominator.
+        for (passes, issued) in [(2, 2), (2, 3), (3, 3), (2, 4), (4, 4)] {
+            assert_eq!(
+                settle_epoch(passes, issued),
+                EpochSettlement::Served,
+                "{passes}/{issued}"
+            );
+            assert!(settle_epoch(passes, issued).serve_credit_bit());
+        }
+    }
+
+    #[test]
+    fn observed_but_under_threshold_is_missed() {
+        // One pass of three is MISSED — the strictly stronger signal the
+        // 2-of-3 adoption bought (under retired pass-priority this epoch
+        // settled Served). Zero passes of two-plus likewise.
+        for (passes, issued) in [(0, 2), (1, 2), (0, 3), (1, 3), (1, 4)] {
+            let s = settle_epoch(passes, issued);
+            assert_eq!(s, EpochSettlement::Missed, "{passes}/{issued}");
+            assert!(!s.serve_credit_bit());
+        }
+    }
+
+    #[test]
+    fn missed_and_non_observation_share_a_zero_bit_but_are_distinct() {
+        // Both yield serve_credit_bit = 0; only their settlement values
+        // differ — collapsing them would let a pruned (non-observation)
+        // epoch read as a miss and slash an archiver for an epoch the urn
+        // never reached twice.
+        let missed = settle_epoch(0, 3);
+        let non_obs = settle_epoch(1, 1);
+        assert_eq!(missed.serve_credit_bit(), non_obs.serve_credit_bit());
+        assert_ne!(missed, non_obs);
+    }
+
+    #[test]
+    #[should_panic(expected = "more passes")]
+    fn more_passes_than_issued_is_a_caller_accounting_error() {
+        // The value is unreachable (the call panics); the named-underscore
+        // binding satisfies #[must_use] on the way to the panic.
+        let _unreachable = settle_epoch(3, 2);
     }
 }

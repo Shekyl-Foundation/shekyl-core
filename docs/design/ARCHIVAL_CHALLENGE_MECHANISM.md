@@ -1,5 +1,17 @@
 # Archival challenge mechanism — design round (2026-08-07)
 
+> **THIS COPY IS THE ROUND'S OPENING SNAPSHOT (2026-08-07) AND IS
+> SUPERSEDED IN PLACE.** The round iterates on the
+> `design/archival-challenge-mechanism` branch per the WIP-design-doc
+> policy and lands here once, when it closes. Rulings made since this
+> snapshot live there — including the fork closures (attribution
+> impossibility, expiry⇒miss, exact-min urn, producer-witness), TJ-H,
+> the `EndpointUpdate` rulings, the §9.5 build/hold split, and the
+> **§7.1 `settle_epoch` threshold ratification (absolute-2,
+> 2026-08-11)** that `attestation.rs` implements. Where this snapshot
+> and the branch disagree — e.g. §7's "open forks" framing or §3's
+> majority wording — **the branch is the record.**
+
 **Status:** **Design-round output. Direction ratified; mechanism NOT ratified
 for implementation.** The ruling of record from this round: challenge
 assignment is **derived, not committed** (§2, ruled 2026-08-07 — "the more the
