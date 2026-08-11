@@ -102,6 +102,32 @@ pub enum EpochSettlement {
     NonObservation,
 }
 
+/// Why a `(passes, issued)` pair was refused rather than settled.
+///
+/// The two counts reach the fold from **independent sources** — `passes`
+/// from admission-verified records, `issued` from the urn derivation — so
+/// a desync between them is a reachable runtime state on the settlement
+/// path, and it must reject (the block, upstream) rather than panic the
+/// daemon. Same posture as the urn's own [`crate::FeedError`]: a stream
+/// the fold cannot trust is a typed refusal, never a crash and never a
+/// silently "clamped" settlement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SettleError {
+    /// More passes counted than challenges assigned — the record count and
+    /// the urn bookkeeping disagree about the same pair-epoch.
+    #[error(
+        "more passes ({passes}) than issued challenges ({issued}): passes come from \
+         admission-verified records and issued from the urn derivation, so this pair \
+         is a desynced accounting input, not a settlement state"
+    )]
+    MorePassesThanIssued {
+        /// Admission-verified pass records counted for the pair-epoch.
+        passes: u32,
+        /// Challenges the urn derivation assigned to the pair-epoch.
+        issued: u32,
+    },
+}
+
 /// Fold one epoch's challenge outcome counts for one `(P, shard)` into the
 /// three-valued settlement — **absolute-2** (§7.1 ratification).
 ///
@@ -110,24 +136,22 @@ pub enum EpochSettlement {
 /// assigned to it (a derived quantity — `ChallengeUrn::draws_done`
 /// bookkeeping — never counted from records, §4.2).
 ///
-/// # Panics
+/// # Errors
 ///
-/// If `passes > issued`: more passes than assigned challenges is a caller
-/// accounting error, not a settlement state.
-#[must_use]
-pub fn settle_epoch(passes: u32, issued: u32) -> EpochSettlement {
-    assert!(
-        passes <= issued,
-        "more passes ({passes}) than issued challenges ({issued})"
-    );
-    if issued < SERVE_THRESHOLD_PASSES {
-        return EpochSettlement::NonObservation;
+/// [`SettleError::MorePassesThanIssued`] if `passes > issued` — see
+/// [`SettleError`] for why that is a typed refusal rather than a panic.
+pub fn settle_epoch(passes: u32, issued: u32) -> Result<EpochSettlement, SettleError> {
+    if passes > issued {
+        return Err(SettleError::MorePassesThanIssued { passes, issued });
     }
-    if passes >= SERVE_THRESHOLD_PASSES {
+    if issued < SERVE_THRESHOLD_PASSES {
+        return Ok(EpochSettlement::NonObservation);
+    }
+    Ok(if passes >= SERVE_THRESHOLD_PASSES {
         EpochSettlement::Served
     } else {
         EpochSettlement::Missed
-    }
+    })
 }
 
 impl EpochSettlement {
@@ -154,7 +178,7 @@ mod tests {
         // "a pair the urn could not reach is not a pair that failed"
         // distinction, now keyed on issuance.
         for (passes, issued) in [(0, 0), (0, 1), (1, 1)] {
-            let s = settle_epoch(passes, issued);
+            let s = settle_epoch(passes, issued).unwrap();
             assert_eq!(s, EpochSettlement::NonObservation, "{passes}/{issued}");
             assert!(!s.serve_credit_bit());
         }
@@ -166,10 +190,10 @@ mod tests {
         for (passes, issued) in [(2, 2), (2, 3), (3, 3), (2, 4), (4, 4)] {
             assert_eq!(
                 settle_epoch(passes, issued),
-                EpochSettlement::Served,
+                Ok(EpochSettlement::Served),
                 "{passes}/{issued}"
             );
-            assert!(settle_epoch(passes, issued).serve_credit_bit());
+            assert!(settle_epoch(passes, issued).unwrap().serve_credit_bit());
         }
     }
 
@@ -179,7 +203,7 @@ mod tests {
         // 2-of-3 adoption bought (under retired pass-priority this epoch
         // settled Served). Zero passes of two-plus likewise.
         for (passes, issued) in [(0, 2), (1, 2), (0, 3), (1, 3), (1, 4)] {
-            let s = settle_epoch(passes, issued);
+            let s = settle_epoch(passes, issued).unwrap();
             assert_eq!(s, EpochSettlement::Missed, "{passes}/{issued}");
             assert!(!s.serve_credit_bit());
         }
@@ -191,17 +215,23 @@ mod tests {
         // differ — collapsing them would let a pruned (non-observation)
         // epoch read as a miss and slash an archiver for an epoch the urn
         // never reached twice.
-        let missed = settle_epoch(0, 3);
-        let non_obs = settle_epoch(1, 1);
+        let missed = settle_epoch(0, 3).unwrap();
+        let non_obs = settle_epoch(1, 1).unwrap();
         assert_eq!(missed.serve_credit_bit(), non_obs.serve_credit_bit());
         assert_ne!(missed, non_obs);
     }
 
     #[test]
-    #[should_panic(expected = "more passes")]
-    fn more_passes_than_issued_is_a_caller_accounting_error() {
-        // The value is unreachable (the call panics); the named-underscore
-        // binding satisfies #[must_use] on the way to the panic.
-        let _unreachable = settle_epoch(3, 2);
+    fn more_passes_than_issued_is_a_typed_refusal() {
+        // A record count exceeding the urn's issued count is a desynced
+        // accounting input — refused with both numbers named, never folded
+        // (and never a panic on the settlement path).
+        assert_eq!(
+            settle_epoch(3, 2),
+            Err(SettleError::MorePassesThanIssued {
+                passes: 3,
+                issued: 2
+            })
+        );
     }
 }

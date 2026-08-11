@@ -5,6 +5,18 @@
 
 //! Deterministic epoch challenge replay per
 //! [`ARCHIVAL_RETENTION_GATE2.md`](../../docs/design/ARCHIVAL_RETENTION_GATE2.md) §3.3–§3.4.
+//!
+//! **Mechanism status (2026-08-11):** the fire-beacon shape this module
+//! implements (`H_seal`/`H_fire`, one challenge per pair-epoch) is
+//! **superseded by derived assignment** — `ARCHIVAL_CHALLENGE_MECHANISM.md`
+//! §2, implemented in [`crate::challenge_assignment`]: `assignment(h)` seeds
+//! from `block_hash(h−1)`, issues `CHALLENGES_PER_PAIR_PER_EPOCH = 3` per
+//! pair-epoch, and needs no seal lag. This module is **not dead code**: it
+//! is the live interim serve-credit admission path (through `shekyl-ffi`
+//! into `blockchain.cpp`'s serve-credit gate and `db_lmdb.cpp`'s
+//! slash-eligibility consumer) until the format round freezes the
+//! replacement response wire. It deletes wholesale with that round's
+//! deletion surface — extend the *new* mechanism, never this one.
 
 use crate::constants::CHALLENGE_BEACON_SEAL_BLOCKS;
 use crate::hash::cshake256_32;

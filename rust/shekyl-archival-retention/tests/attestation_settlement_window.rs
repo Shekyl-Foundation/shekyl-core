@@ -25,7 +25,7 @@ use shekyl_archival_retention::{
 /// window's two-valued observation, `None` for a non-observation the window
 /// must not count.
 fn observe(epoch: u64, passes: u32, issued: u32) -> Option<BaselineObservation> {
-    match settle_epoch(passes, issued) {
+    match settle_epoch(passes, issued).expect("test inputs keep passes within issued") {
         EpochSettlement::Served => Some(BaselineObservation::served(epoch)),
         EpochSettlement::Missed => Some(BaselineObservation::missed(epoch)),
         EpochSettlement::NonObservation => None,

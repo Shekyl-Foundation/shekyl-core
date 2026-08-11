@@ -26,18 +26,61 @@
 /// re-pin, and the economics-sim arithmetic that scales with it.
 pub const CHALLENGES_PER_PAIR_PER_EPOCH: u32 = 3;
 
-/// Slash grace after `H_close` (settlement epoch end).
+/// Slash grace after `H_close` (settlement epoch end): the slash fold for
+/// epoch `E` runs at the first block strictly above
+/// `H_slash_deadline(E) = (E+1)·SEB − 1 + CHALLENGE_RESOLUTION_BLOCKS`
+/// (`failure_window.rs` carries the connect-order coupling and the `≥ 1`
+/// floor const-assert).
+///
+/// Pinned (one full epoch) under the retired fire-to-close challenge shape.
+/// Under derived assignment the binding constraint is instead against the
+/// response window: a challenge issued at the epoch's **last** block,
+/// `(E+1)·SEB − 1`, must be resolvable before the slash fold reads the
+/// epoch, so `CHALLENGE_RESOLUTION_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`
+/// (the const-assert below arms itself the moment W₂ pins). One epoch
+/// dominates any plausible W₂; re-confirm this value when the W₂
+/// measurement program reports.
 pub const CHALLENGE_RESOLUTION_BLOCKS: u64 = 10_000;
 
 /// Blocks after `H_open` before the fire beacon input `block_hash(H_seal)` is fixed.
 ///
-/// Genesis provisional pin: `1` (gate-2 §3.4 "TBD (≥ 1)"). Revisit at byte-pin pass.
+/// **Retired-mechanism constant.** The fire-beacon challenge shape
+/// (`H_seal`/`H_fire`, gate-2 §3.4) is superseded by derived assignment
+/// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §2: `assignment(h)` seeds from
+/// `block_hash(h−1)`, no seal lag). This constant still feeds the **live
+/// interim serve-credit gate** (`challenge.rs` → `shekyl-ffi` →
+/// `blockchain.cpp`/`db_lmdb.cpp`), which keeps admitting the interim wire
+/// until the format round freezes the replacement response wire — it
+/// deletes with that round's deletion surface, not before, because today it
+/// is the only admission path standing.
 pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 
-/// Blocks after `H_fire` to accept serve-credit (must end before `H_close`).
+/// W₂ — blocks after a challenge's issuing block to accept its serve-credit
+/// response.
 ///
-/// Not yet byte-pinned in gate-2 §3.1; consensus wire lands with the vin serializer.
+/// Unpinned: the value comes from the W₂ **measurement program**
+/// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5 — provisioned at the Pi-4 floor
+/// per rule 76, measured on the real Tor network), and its byte-pin lands
+/// with the format round's frozen response wire (rule 42 version bump).
+/// The gate-2 wording that its wire "lands with the vin serializer" is
+/// obsolete — that serializer is on the format round's deletion surface.
 pub const CHALLENGE_RESPONSE_BLOCKS: Option<u64> = None;
+
+// Armed the moment W₂ pins: the slash fold for epoch E must not run before
+// the response window of E's last-issued challenge has closed, or the fold
+// reads a still-open epoch and mints misses out of in-flight responses.
+// Derived from the same block-index convention failure_window.rs litigated
+// (fold runs strictly above the deadline, so `>=` is exact).
+const _: () = assert!(
+    match CHALLENGE_RESPONSE_BLOCKS {
+        Some(w2) => CHALLENGE_RESOLUTION_BLOCKS >= w2,
+        None => true,
+    },
+    "CHALLENGE_RESOLUTION_BLOCKS < CHALLENGE_RESPONSE_BLOCKS: the slash fold \
+     for an epoch would run before the response window of its last-issued \
+     challenge closes, reading in-flight responses as misses; re-derive the \
+     resolution grace alongside the W2 pin"
+);
 
 /// Global settlement-epoch boundary (`ARCHIVAL_TIMING_CONSTANTS.md` §1).
 pub const SETTLEMENT_EPOCH_BLOCKS: u64 = 10_000;
