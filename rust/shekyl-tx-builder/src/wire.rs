@@ -469,7 +469,7 @@ mod tests {
             assert_eq!(
                 shekyl_crypto_hash::keccak256(input),
                 keccak256(input),
-                "keccak256 must equal shekyl-oxide keccak256"
+                "shekyl_crypto_hash::keccak256 must equal shekyl_curve_primitives::keccak256"
             );
         }
     }

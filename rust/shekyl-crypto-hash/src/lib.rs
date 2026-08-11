@@ -29,10 +29,13 @@
 //! the same original-Keccak-256, and standardizing on the RustCrypto crate collapses
 //! the codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
 //!
-//! The `keccak256` *name* is the inherited CryptoNote consensus-primitive name
-//! ("cn" = CryptoNote; the *fast* hash vs. the slow PoW hash), kept for 1:1 source
-//! mapping to the C++ daemon; a rule-93 rename to `keccak256` is a tracked follow-up
-//! (see `60-no-monero-legacy.mdc`).
+//! SA-3d renamed this function `cn_fast_hash` → `keccak256`. The inherited
+//! CryptoNote name ("cn" = CryptoNote; the *fast* hash vs. the slow PoW hash)
+//! obscured that the primitive is plain original Keccak-256; the new name states
+//! it. The C++ daemon function and the FFI export symbol (`shekyl_cn_fast_hash`)
+//! keep the CryptoNote spelling — for 1:1 consensus source-mapping to the C++
+//! side and for C ABI stability, respectively — so only the Rust-internal name
+//! changed (see `60-no-monero-legacy.mdc`).
 
 #![deny(unsafe_code)]
 
@@ -46,7 +49,7 @@ pub type Hash = [u8; HASH_SIZE];
 
 /// Compute `keccak256` — Keccak-256 with original padding, via RustCrypto `sha3`.
 ///
-/// Matches `keccak256` in `src/crypto/hash.c` (keccak1600 absorb, first 32 bytes;
+/// Matches `cn_fast_hash` in `src/crypto/hash.c` (keccak1600 absorb, first 32 bytes;
 /// rate 136 bytes for 256-bit output). `sha3::Keccak256` is the original Keccak
 /// variant (0x01 padding), so this is byte-identical to the prior tiny-keccak impl and
 /// to the C++ daemon — verified by the empty-input KAT below and the live coinbase/

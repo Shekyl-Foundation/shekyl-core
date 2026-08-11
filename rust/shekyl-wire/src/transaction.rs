@@ -1379,7 +1379,7 @@ impl Transaction {
     }
 
     /// The FCMP++ **`signable_tx_hash`** — the prefix hash the membership/SAL proof
-    /// signs (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.2; the C++ `keccak256` over the
+    /// signs (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.2; the C++ `cn_fast_hash` over the
     /// `transaction_prefix`). It **includes the version**: the C++ `transaction_prefix`
     /// serializes `VARINT(version)` first, so this is
     /// `keccak256(varint(TX_VERSION) ‖ TxPrefix::write)` — the same `varint(3) ‖

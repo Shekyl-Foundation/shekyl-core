@@ -6,8 +6,9 @@
 //! Consensus hash identities (GENESIS_TX_WIRE_FORMAT.md §11).
 //!
 //! All hashing is `keccak256` (keccak-256, original 0x01 padding) via
-//! [`shekyl_crypto_hash::keccak256`] — byte-identical to the C++
-//! `keccak256`. This module owns the cross-cutting [`merkle_root`]; the
+//! [`shekyl_crypto_hash::keccak256`] — byte-identical to the C++ daemon's
+//! `cn_fast_hash` (the C++ symbol keeps the CryptoNote name). This module owns
+//! the cross-cutting [`merkle_root`]; the
 //! per-object tx/block hashes live on [`crate::Transaction`] / [`crate::Block`].
 
 use shekyl_crypto_hash::keccak256;
