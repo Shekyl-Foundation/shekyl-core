@@ -475,10 +475,14 @@ mod tests {
         }
     }
 
-    /// Forwarding guard (SA-3a): `PqcLeafScalar::from_pqc_public_key` now wraps
-    /// `hash_pqc_public_key` rather than re-deriving the leaf hash, so this pins
-    /// that the wrapper keeps forwarding to the single-source owner — a
-    /// regression that re-implemented the fcmp side would trip here.
+    /// Cross-crate agreement pin (SA-3a): `PqcLeafScalar::from_pqc_public_key`
+    /// forwards to `hash_pqc_public_key`, and this asserts the two entry points
+    /// agree on a real derived ML-DSA-65 public key. It pins **value agreement
+    /// only** — it catches a wrapper that stops forwarding *and* diverges, not a
+    /// byte-identical re-duplication (no value test can). The guards against
+    /// silent re-forking are structural: `shekyl-fcmp` no longer carries a
+    /// Blake2b dependency (SA-3a removed it), and the frozen byte pins in
+    /// `PQC_LEAF_HASH_RAW_PK_KAT.json` fail the moment any copy drifts.
     #[test]
     fn hash_matches_leaf_scalar() {
         use shekyl_fcmp::leaf::PqcLeafScalar;
@@ -543,6 +547,60 @@ mod tests {
                 "vector {i}: h_pqc mismatch for combined_ss={} idx={}:\n  got:      {}\n  expected: {}",
                 &v.combined_ss[..8], v.output_index,
                 hex::encode(h_pqc), v.h_pqc
+            );
+        }
+    }
+
+    #[derive(serde::Deserialize)]
+    struct RawPkLeafHashKat {
+        pqc_pk: String,
+        h_pqc: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct RawPkLeafHashKatFile {
+        vectors: Vec<RawPkLeafHashKat>,
+    }
+
+    /// SA-3a byte-proof: frozen captures of the pre-dedup
+    /// `PqcLeafScalar::from_pqc_public_key` (the duplicate Blake2b/wide_reduce
+    /// body that lived in `shekyl-fcmp`), covering the degenerate input lengths
+    /// (empty, 1-byte) the derived-path vectors above cannot express. Each
+    /// vector is asserted through **both** consensus entry points — the owner
+    /// [`hash_pqc_public_key`] and the fcmp wrapper — so any future fork of
+    /// either copy fails here. Never regenerate these from current code; on a
+    /// mismatch the code, not the vector, is wrong.
+    #[test]
+    fn pqc_leaf_hash_raw_pk_known_answer_vectors() {
+        use shekyl_fcmp::leaf::PqcLeafScalar;
+
+        let json = include_str!("../../../docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json");
+        let file: RawPkLeafHashKatFile =
+            serde_json::from_str(json).expect("failed to parse PQC_LEAF_HASH_RAW_PK_KAT.json");
+        assert_eq!(
+            file.vectors.len(),
+            4,
+            "PQC_LEAF_HASH_RAW_PK_KAT.json is a frozen pin set — vectors are never added or removed"
+        );
+
+        for (i, v) in file.vectors.iter().enumerate() {
+            let pk =
+                hex::decode(&v.pqc_pk).unwrap_or_else(|_| panic!("vector {i}: invalid pqc_pk hex"));
+            let expected =
+                hex::decode(&v.h_pqc).unwrap_or_else(|_| panic!("vector {i}: invalid h_pqc hex"));
+            let owner = hash_pqc_public_key(&pk);
+            let wrapper = PqcLeafScalar::from_pqc_public_key(&pk);
+            assert_eq!(
+                owner.as_slice(),
+                expected.as_slice(),
+                "vector {i}: hash_pqc_public_key drifted for input length {}",
+                pk.len()
+            );
+            assert_eq!(
+                wrapper.0.as_slice(),
+                expected.as_slice(),
+                "vector {i}: PqcLeafScalar::from_pqc_public_key drifted for input length {}",
+                pk.len()
             );
         }
     }

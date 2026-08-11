@@ -88,46 +88,12 @@ mod tests {
     use ciphersuite::group::ff::PrimeField;
     use helioselene::HelioseleneField;
 
-    /// Pinned KAT (SA-3a byte-proof). The consensus leaf hash for these fixed
-    /// inputs must equal the exact bytes the **pre-dedup** implementation
-    /// produced. SA-3a consolidated the duplicated `from_pqc_public_key` (which
-    /// re-implemented Blake2b/wide_reduce) into a forward to
-    /// `shekyl_crypto_pq::derivation::hash_pqc_public_key`; two "identical-value"
-    /// implementations can still differ in an unexercised edge case (empty,
-    /// short, full-length), so these vectors — captured from the original code
-    /// before the merge — prove the consolidation changed no byte. On a
-    /// consensus leaf hash, prove it; do not argue it.
-    #[test]
-    fn pqc_leaf_hash_pinned_kat() {
-        let cases: [(Vec<u8>, &str); 4] = [
-            (
-                vec![],
-                "dd457919e9f9129b3cc48b91a686bf758f9c5015ec9caf95fe0a9c87d844b675",
-            ),
-            (
-                vec![0xab],
-                "8b8de030e6ba684d7e00354ec2cd447a7da664ac14d79489b486b0cb0edbd413",
-            ),
-            (
-                vec![0xab; 1952], // full ML-DSA-65 public-key length
-                "85111edb0986bd48f35ee915ca9b8d566dc21897f6ce3c695f37a24e49070011",
-            ),
-            (
-                vec![0xff; 1952],
-                "3eb75d6bd70c42d729824cd57dc33e9de5e0c40c7b22c5f250d7a53b77d88207",
-            ),
-        ];
-        for (pk, expected) in &cases {
-            let s = PqcLeafScalar::from_pqc_public_key(pk);
-            let got: String = s.0.iter().map(|b| format!("{b:02x}")).collect();
-            assert_eq!(
-                &got,
-                expected,
-                "consensus leaf hash drifted for input length {}",
-                pk.len()
-            );
-        }
-    }
+    // The SA-3a byte pins for `from_pqc_public_key` (frozen captures of the
+    // pre-dedup implementation) live in
+    // `docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json`, consumed by
+    // `pqc_leaf_hash_raw_pk_known_answer_vectors` in
+    // `shekyl-crypto-pq/src/derivation.rs` — one pin at the SSOT owner,
+    // asserted through both consensus entry points (this wrapper included).
 
     #[test]
     fn pqc_leaf_scalar_deterministic() {

@@ -4,6 +4,20 @@
 
 ### Changed
 
+- **Pinned crypto vectors: the SA-3a raw-public-key leaf-hash pins moved to
+  a machine-readable fixture** (`docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json`;
+  PR-SA-3a, rule-30 vector-change record). The four byte pins — frozen
+  captures of the pre-dedup `PqcLeafScalar::from_pqc_public_key`
+  implementation, covering the degenerate lengths (empty, 1-byte) the
+  derived-path `PQC_LEAF_HASH_KAT.json` cannot express — are
+  **byte-identical relocations** of the inline hex that briefly lived in
+  `rust/shekyl-fcmp/src/leaf.rs`; no vector was added, removed, or
+  re-minted, so pin continuity is preserved. The consuming test
+  (`pqc_leaf_hash_raw_pk_known_answer_vectors` in `shekyl-crypto-pq`) now
+  asserts each vector through **both** consensus entry points
+  (`hash_pqc_public_key` and the `shekyl-fcmp` wrapper), and the JSON is
+  consumable by cross-language KAT tooling (C++/FFI differential harness).
+
 - **Pinned crypto vectors: the `bond_post` surface is retired from the
   hybrid-v2 KAT** (`docs/test_vectors/PQC_HYBRID_V2_KAT.json`; PR-SA-2b,
   rule-30 vector-change record). SA-2b resolved the bond-slot preimage

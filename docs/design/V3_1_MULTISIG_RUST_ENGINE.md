@@ -1200,9 +1200,9 @@ rust/shekyl-crypto-pq/src/multisig.rs:85-87  expected_blob_len = 3+n*2028
 rust/shekyl-crypto-pq/src/multisig.rs:198-201  sig = 1+M*3385+M
 
 # F-2 leaf / domain
-rust/shekyl-fcmp/src/leaf.rs:29-33
-rust/shekyl-fcmp/src/lib.rs:36 DOMAIN_PQC_LEAF
-rust/shekyl-crypto-pq/src/derivation.rs:27 DOMAIN_PQC_LEAF (duplicate)
+rust/shekyl-fcmp/src/leaf.rs:29-33 (SA-3a: now forwards to crypto-pq)
+rust/shekyl-crypto-pq/src/derivation.rs:32 DOMAIN_PQC_LEAF (SA-3a single
+  source; the shekyl-fcmp/src/lib.rs:36 duplicate this list pinned was deleted)
 
 # F-3 lineage
 rust/shekyl-engine-core/src/multisig/mod.rs  "FROST" + v31/
