@@ -3680,6 +3680,9 @@ survive the chat-log they were decided in.
   deterministic fields via `shekyl-crypto-hash::cn_fast_hash`
   (Keccak-256 with original padding) truncated to the first 128
   bits, domain-separated by the prefix `b"shekyl-snapshot-id-v1"`.
+  *(Superseded by the 2026-08-11 SA-3c entry later in this log:
+  the digest is now cSHAKE256 with `b"shekyl/snapshot-id-v1"` as
+  the customization.)*
   The hash-primitive choice is `cn_fast_hash` (revised from a
   prior `sha2`-based binding) per the
   [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
