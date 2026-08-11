@@ -353,6 +353,140 @@ before `p = 1` is recommended as a default.
 > relay, which is what makes it a configuration rather than a protocol
 > constant.
 
+### Q12-D5 — The endpoints partition the STEM GRAPH. `p = 1` as a default is RETRACTED.
+
+**Propagation is fine, and that is not the concern.** The roll is gated on
+`still_stemming`, so `p` governs stem-phase routing only. Fluff is never
+rolled: every transaction eventually fluffs, and the fluff wave crosses both
+zones by the normal rule — a transaction that stems over Tor fluffs to Tor
+peers, who relay publicly at the next hop. **A latency cost, not a partition.**
+
+**The stem graph is a different matter.** At `p = 1` a node's stem successors
+are all anonymity-zone peers; at `p = 0` all clearnet peers. **Two components
+with no edges between them.**
+
+> The consequence is the one that matters. The stem's job is source ambiguity,
+> and **the anonymity set for a transaction is the population of the component
+> it stems in, not the network.** Every Dandelion++ and Sharma result is stated
+> in terms of network size `N`; under a partition, a Tor-originated
+> transaction's `N` is the *Tor node count*.
+>
+> On a young network that can be very small — and it is the
+> **privacy-motivated population that gets the smaller set**, which is §75's
+> shape yet again, arriving through a door nobody was watching.
+
+**So the endpoints are excluded for a structural reason, not for being
+extreme:** they are the values at which a node stops bridging the stem graph. A
+node that rolls per transaction has stem successors on *both* zones and is
+therefore an **edge between the components**; enough such nodes and there is one
+graph with `N` = the whole network.
+
+**This retracts Q12-D4's `p = 1` default.** That was argued from operator IP
+exposure — real, but **local**. The partition cost is **global** and falls on
+everyone stemming in the smaller component. Wrong trade, and the correction
+runs the other way from the one Q12-D4a anticipated.
+
+**`p` is therefore doing a job again** — not dilution, which the cancellation
+handles, but **stem-graph connectivity**. That is a *network* property, so it is
+**not an operator preference and must not be a UI setting.**
+
+### Q12-D6 — `SHEKYL_ANON_ZONE_STEM_FRACTION = 0.50`, and its provenance is an indifference point
+
+**Two arguments of different strength, and the doc should not blur them:**
+
+| argument | strength | what it establishes |
+| --- | --- | --- |
+| **stem-graph connectivity** (Q12-D5) | **structural, hard** | the endpoints are excluded — a node at `0` or `1` bridges nothing |
+| **indifference on a linear trade** | soft | *which* interior value to pick |
+
+The objective: `p` is a **latency-and-recovery budget**. Precision is `q/(1+q)`
+at every value (Q12-D4); capacity is irrelevant at ~10 anonymity stem sends per
+node per day; the anonymity set differs only by adoption `t`. So the only
+quantity varying with `x` is what fraction of transactions pay the Tor path's
+cost against what fraction gain IP-hiding on the stem. Both linear, opposed, no
+threshold on either side ⇒ indifference, and the midpoint is the pick.
+
+**Symmetry-breakers checked, none found:**
+
+| axis | breaks symmetry? |
+| --- | --- |
+| capacity | no — ~10 sends/day at any `x` |
+| precision | no — cancels (Q12-D4) |
+| anonymity set | no — `t·N` vs `N`, set by adoption not by `x` |
+| propagation | no — see below |
+| recovery | a cost on an **error path**: the 499 s embargo applies to the diverted fraction |
+| fingerprint | eliminated **by** fixing the default, which is the premise |
+
+**Propagation, verified rather than quoted:** the full-stem penalty is
+`(1750 − 175) ms × 1/q = 7.88 s` — the "8 s" figure. At `x = 0.5` the mean
+network delay is `t · 0.5 · 7.88 s`.
+
+> **The conclusion does not depend on the adoption fraction.** The `t·x = 0.425`
+> arithmetic implies `t = 0.85`, which was unstated — but even at `t = 1.0` the
+> delay is **3.94 s, 3.3 % of a 120 s block**. So "under ~3 %, no cliff
+> anywhere in `[0,1]`" holds for *any* `t`, and the unstated input is not
+> load-bearing. Recorded because an unstated input that happens not to matter is
+> still worth marking, and the next reader should not have to re-derive that it
+> does not.
+
+**The constant, as it should be recorded:**
+
+```text
+SHEKYL_ANON_ZONE_STEM_FRACTION = 0.50
+```
+
+Fixed, **not configurable**. Applied identically to originated and relayed
+traffic at entry (Q12-D4's equality). Gated on the node having a usable
+anonymity zone — `x = 0` by construction otherwise, which stays correct without
+needing a rule.
+
+> **Provenance, and this labelling is the whole point:** an **indifference
+> point** on a linear latency-versus-transport-privacy trade with no threshold
+> on either side. **Not a measured optimum.**
+>
+> That is the difference between this and `175`. It says what would replace it —
+> *a measured asymmetry in either term* — rather than reading as derived and
+> inviting the next reader to treat it as settled.
+
+### Q12-D6a — The one thing that could move it, and it needs a running network
+
+If anonymity-zone **peer discovery** cannot sustain the F-8b floor of 12
+outbound peers at low adoption `t`, nodes fall to `x = 0` by the floor rule and
+the fraction becomes adoption-dependent in practice. **That does not change the
+constant; it changes what the constant achieves early on** — and it is the
+measurement worth taking, rather than another sweep of `x`.
+
+**Why no existing instrument reaches it.** Everything this arc has measured has
+been local and synthetic: verification cost on one machine, flood first-passage
+on a generated graph, linkage over generated streams. **Peer discovery is a
+population dynamic** — onion addresses propagating through peerlists, over time,
+across nodes that join and leave. One process cannot produce it, and a static
+graph cannot either, because *the question is whether the graph forms at all*.
+
+**The shape:** a multi-node testnet with a Tor zone, run long enough for
+peerlists to converge; readout is the distribution of anonymity-zone outbound
+peer count against `t`; pass condition is the **F-8b floor of 12**.
+
+**Three conditions that decide whether the number means anything:**
+
+1. **`t` is the independent variable, not a fixture constant.** The question is
+   *where the floor starts failing*, so the run needs several adoption
+   fractions. A single-`t` run gives one point and no threshold.
+2. **Peerlist propagation is the mechanism under test, so it cannot be seeded.**
+   A testnet that hands every node a full anonymity peerlist at startup measures
+   nothing — the **fixture-cannot-express-the-input** failure, in the arm
+   carrying the whole finding. Nodes must discover: seed nodes and real
+   convergence time.
+3. **The failure is asymmetric and self-reinforcing.** A node below the floor
+   does not stem on the anonymity zone, so it contributes no anonymity traffic,
+   so it is less useful as a peer. **Whether that damps or spirals is exactly
+   what a static model cannot tell you**, and it is why this needs a running
+   system rather than a simulation.
+
+> **The cost, stated honestly: this is the most expensive measurement the arc
+> has proposed, and the only one that cannot be faked.** Everything else was a
+> bench.
+
 ---
 
 ## 4. Open design questions
