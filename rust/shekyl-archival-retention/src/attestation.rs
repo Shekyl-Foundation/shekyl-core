@@ -7,8 +7,12 @@
 //! turns an epoch's challenge outcomes into the three-valued serve-credit
 //! settlement.
 //!
-//! Design of record: `ARCHIVAL_CHALLENGE_MECHANISM.md` (§3 nested
-//! measurement; §7.1 threshold ratification, 2026-08-11). This module owns
+//! Design of record: `ARCHIVAL_CHALLENGE_MECHANISM.md` §3 (nested
+//! measurement) and §7.1 (threshold ratification, 2026-08-11) — **on the
+//! `design/archival-challenge-mechanism` branch**, where the round
+//! iterates until it closes and lands on dev; the dev copy is the round's
+//! opening snapshot and carries a superseded-in-place banner. This module
+//! owns
 //! **only the settlement-time fold**; admission verifies countersignatures
 //! elsewhere, and by settlement time the signatures are pruned by
 //! construction — the fold reads only counts derived from kept data.
