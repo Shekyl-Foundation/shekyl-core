@@ -3074,7 +3074,7 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 /// so what ships is what was derived and tested. A zero draw does not mean "fire
 /// this instant" — deadlines are whole seconds, so it resolves to the earliest
 /// one that does not under-provision (the next second boundary; see
-/// cryptonote::detail::embargo_deadline). Rounding it down instead would put the
+/// cryptonote::detail::relay_deadline). Rounding it down instead would put the
 /// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
 /// embargo is the privacy-losing direction at every draw value including zero.
 ///
@@ -3099,6 +3099,22 @@ uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
 /// decision, and the wallet cannot know which zone its transaction took. It
 /// gets the worst zone's wait. The whole export is a deletion target — see
 /// DAEMON_RELAY_PRIVACY.md §89.6.
+/// Draw one i2p/tor -> clearnet forwarding delay, in seconds — memoryless.
+///
+/// Replaces `crypto::random_poisson_seconds{22s}`, whose whole header is
+/// retired with it. The MEAN is unchanged and stays Q-12's to derive
+/// (DAEMON_RELAY_PRIVACY.md sec 22.2); what moves here is the family.
+///
+/// The Poisson was F-2/F-4's signature on the tor->clearnet bridge — the
+/// moment an anonymity-arrived tx becomes clearnet-visible, so the moment
+/// arrival-time inference is worth most. Measured on F-4's own instrument at
+/// +/-1s: 0.2505 -> 0.1248 at phase 0, and the inherited draw climbs to 0.7191
+/// by phase 30 while the memoryless one stays flat, because only a memoryless
+/// family has residual == full.
+///
+/// A 0s draw is legitimate and unclamped, same reasoning as the embargo draw.
+uint64_t shekyl_dandelionpp_forward_delay_seconds(void);
+
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
 
