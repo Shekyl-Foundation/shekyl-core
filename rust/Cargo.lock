@@ -4408,6 +4408,7 @@ dependencies = [
  "sha3",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
+ "shekyl-p-serve",
  "shekyl-p-transport",
  "shekyl-tor",
  "shekyl-types",

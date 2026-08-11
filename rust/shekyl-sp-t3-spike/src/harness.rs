@@ -42,9 +42,11 @@ use shekyl_tor::control::{BootstrapReadiness, BootstrapState, Command, EventSink
 use shekyl_tor::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
 use shekyl_types::{PCanonicalId, PSlot};
 
+use shekyl_p_serve::{PServeEndpoint, ROUTE_PREFIX};
+
+use crate::fixture::FixtureShardProvider;
 use crate::measure::{FailureKind, Observation};
 use crate::onion_key::derive_onion_identity;
-use crate::serve::{ServeEndpoint, ROUTE_PREFIX};
 
 /// Ceiling on a single fetch before the harness calls it a timeout.
 ///
@@ -89,8 +91,10 @@ pub struct Persona {
     pub id: PCanonicalId,
     /// Its published onion.
     pub service_id: ServiceId,
-    /// The loopback endpoint tor forwards to.
-    pub endpoint: ServeEndpoint,
+    /// The loopback endpoint tor forwards to — the **production** serving
+    /// loop (`shekyl_p_serve`), driven here with a fixture provider. The
+    /// spike measures what ships, not a lookalike.
+    pub endpoint: PServeEndpoint,
 }
 
 impl Persona {
@@ -205,7 +209,7 @@ impl Apparatus {
         tor_binary: std::path::PathBuf,
         data_dir: std::path::PathBuf,
         persona_count: u32,
-        payload: Arc<Vec<u8>>,
+        payload: Arc<[u8]>,
     ) -> Result<Self, ApparatusError> {
         Self::bring_up_with_pow(
             tor_binary,
@@ -228,7 +232,7 @@ impl Apparatus {
         tor_binary: std::path::PathBuf,
         data_dir: std::path::PathBuf,
         persona_count: u32,
-        payload: Arc<Vec<u8>>,
+        payload: Arc<[u8]>,
         pow: OnionPow,
     ) -> Result<Self, ApparatusError> {
         let socks_port = free_port();
@@ -274,11 +278,12 @@ impl Apparatus {
                 slot,
             );
             let service_id = identity.service_id().clone();
-            let endpoint = ServeEndpoint::bind(Arc::clone(&payload))
-                .await
-                .map_err(ApparatusError::Bind)?;
+            let endpoint =
+                PServeEndpoint::bind(Arc::new(FixtureShardProvider::new(Arc::clone(&payload))))
+                    .await
+                    .map_err(ApparatusError::Bind)?;
             let port = OnionPort::loopback(80, endpoint.addr())
-                .expect("ServeEndpoint always binds loopback");
+                .expect("PServeEndpoint always binds loopback");
             // MaxStreams is pinned conservatively here; see SPIKE-PIN-1 in the
             // measurement report. A shard read is one stream per connection and
             // the harness never opens more, so 8 leaves headroom without letting
@@ -395,12 +400,12 @@ impl Apparatus {
     pub fn served_total(&self) -> u64 {
         self.personas
             .iter()
-            .map(|p| p.endpoint.request_count())
+            .map(|p| p.endpoint.served_count())
             .sum()
     }
 
     /// Total connections shed for exceeding the in-flight cap
-    /// ([`MAX_INFLIGHT`](crate::serve::MAX_INFLIGHT)).
+    /// ([`MAX_INFLIGHT`](shekyl_p_serve::MAX_INFLIGHT)).
     ///
     /// The signal that `SPIKE-PIN-2` is binding: a non-zero value during a
     /// SPIKE-F-11 sweep means the **cap**, not the transport, is shaping the
@@ -521,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn shard_url_targets_the_spike_route_on_the_onion() {
+    fn shard_url_targets_the_serving_route_on_the_onion() {
         let id = ServiceId::parse(&"a".repeat(56)).expect("valid id");
         let persona = Persona {
             slot: PSlot::from_raw(0),
@@ -533,13 +538,15 @@ mod tests {
                     .enable_all()
                     .build()
                     .expect("runtime");
-                rt.block_on(ServeEndpoint::bind(Arc::new(vec![0u8; 1])))
-                    .expect("bind")
+                rt.block_on(PServeEndpoint::bind(Arc::new(FixtureShardProvider::new(
+                    Arc::from(vec![0u8; 1].into_boxed_slice()),
+                ))))
+                .expect("bind")
             },
         };
         assert_eq!(
             persona.shard_url(7),
-            format!("http://{}.onion/x-spike/v0/shard/7", "a".repeat(56))
+            format!("http://{}.onion{ROUTE_PREFIX}7", "a".repeat(56))
         );
     }
 
