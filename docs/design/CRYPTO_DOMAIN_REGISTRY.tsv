@@ -5,12 +5,15 @@
 # BOTH:
 #   - scripts/ci/domain_registry_gate.sh  (row-presence + per-mechanism count-pins)
 #   - rust/shekyl-crypto-pq/tests/domain_registry.rs  (intra-mechanism distinctness)
-# so the census cannot silently drift from the code: a value change, rename, or
-# move breaks row-presence; a new call site breaks the count-pin; an accidental
-# equality breaks distinctness. Prefix-grep is NOT used — domain spellings share
-# no common prefix (shekyl/, shekyl-, "Shekyl ", "Monero ", bulletproof), which
-# is exactly the SA §3.1 defect class; the mechanism entry point is the only
-# complete anchor.
+# so the census cannot silently drift from the code for *registered* rows: a
+# value change, rename, or move breaks row-presence (+ const binding); a new
+# always-domain call site (cSHAKE / FROST) breaks the count-pin; an accidental
+# equality breaks distinctness. New unregistered domains in general-purpose
+# mechanisms (HKDF / Blake2b / keccak / SHA3-256) are a review duty, not a
+# gate guarantee — see the gate header and CBOM §3. Prefix-grep is NOT used —
+# domain spellings share no common prefix (shekyl/, shekyl-, "Shekyl ",
+# "Monero ", bulletproof), which is exactly the SA §3.1 defect class; the
+# mechanism entry point is the only complete anchor.
 #
 # THROUGH-LINE INVARIANT (SA, ratified): a live domain string's BYTES are
 # consensus / derivation state, not a naming convention. Style inconsistency
@@ -46,8 +49,12 @@
 # EXCLUDED (named, NOT silently dropped) — real byte-strings that are NOT
 # cryptographic domain separation for our purposes: RandomX Argon salt
 # (RANDOMX_ARGON_SALT, RandomX upstream), Tor SAFECOOKIE HMAC keys, the .onion
-# checksum prefix, file/wire magics (b"SWSP", b"SHEKYLWT/WS", b"SSP1", EPEE
-# header). Rowed at the bottom with mech=x so the exclusion is auditable.
+# checksum prefix, file/wire magics (b"SWSP", b"SHEKYLWT/WS", b"SSP1"
+# superscalar-program wire magic, EPEE portable-storage header). Rowed at the
+# bottom with mech=x so the exclusion is auditable. (The C++ epee macros
+# PORTABLE_STORAGE_SIGNATUREA/B in contrib/epee are the same 8-byte magic as
+# the Rust EPEE_HEADER row; the registry is a Rust-workspace census, so only
+# the Rust defining site is rowed.)
 #
 # mech	literal	file	const	status	key	notes
 #
@@ -169,3 +176,5 @@ x	.onion checksum	rust/shekyl-sp-t3-spike/src/onion_key.rs	ONION_CHECKSUM_PREFIX
 x	SWSP	rust/shekyl-engine-file/src/payload.rs	(wallet payload magic)	excluded		file magic, not a hash domain
 x	SHEKYLWT	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic
 x	SHEKYLWS	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic
+x	SSP1	rust/shekyl-pow-randomx/src/superscalar.rs	SSP_MAGIC	excluded		RandomX superscalar-program wire-format magic (test-side mirror of cache path); not a hash domain
+x	\x01\x11\x01\x01\x01\x01\x02\x01\x01	rust/shekyl-engine-core/src/engine/daemon_observability.rs	EPEE_HEADER	excluded		EPEE portable-storage 8-byte header+version magic (also duplicated in shekyl-rpc-client); not a hash domain

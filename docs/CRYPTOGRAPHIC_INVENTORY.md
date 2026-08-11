@@ -71,22 +71,35 @@ a `…-v2` alongside a migration, never edit `…-v1` in place — SIGNATURE_ALI
 
 **Boundary (named, not silent).** The registry excludes, each with a rowed reason:
 the RandomX Argon salt, Tor SAFECOOKIE HMAC keys, the `.onion` checksum prefix, and
-file/wire magics — none are cryptographic domain separation for our purposes.
-Transcript field sub-labels, schnorr nonce/challenge sub-labels, and HKDF
-composed-salt sub-components are out of scope (they never stand alone as a top-level
-context). A silent omission is the failure mode a registry exists to kill, so both
-the exclusions and the sub-label rule are stated in the TSV header.
+file/wire magics (`SWSP`, `SHEKYLWT/WS`, `SSP1`, EPEE portable-storage header) —
+none are cryptographic domain separation for our purposes. Transcript field
+sub-labels, schnorr nonce/challenge sub-labels, and HKDF composed-salt
+sub-components are out of scope (they never stand alone as a top-level context). A
+silent omission is the failure mode a registry exists to kill, so both the
+exclusions and the sub-label rule are stated in the TSV header.
 
 **How it stays honest (no published constant).**
 
 - **Distinctness test** — `rust/shekyl-crypto-pq/tests/domain_registry.rs`: reads the
-  TSV, asserts intra-mechanism distinctness (the collision-catcher). Non-vacuous
-  guard + a structural check that the mech-2 salt-separated model still matches code.
-- **CI gate** — `scripts/ci/domain_registry_gate.sh`: row-presence (`rg -F` each
-  literal at its file — catches a value change, rename, move, or deletion) plus
-  entry-point count-pins for the two mechanisms whose entry point always carries a
-  domain (cSHAKE, FROST transcript — catches additions). Anchored on the mechanism
-  call site, never the `shekyl/` prefix, because the strings share no common prefix.
+  TSV, asserts intra-mechanism distinctness (the collision-catcher), rejects malformed
+  mech ids / rows, and checks the mech-2 salt-separated model still matches code.
+- **CI gate** — `scripts/ci/domain_registry_gate.sh`: for every *registered* row,
+  row-presence (`rg -F` the literal at its file) plus, when the const column is a real
+  identifier, a `const <name>` binding (blocks pure-comment false positives); entry-
+  point count-pins for mechanisms whose entry point always carries a domain (cSHAKE;
+  FROST free-form transcript labels; FROST ciphersuite ID/CONTEXT in
+  `shekyl-fcmp-proofs`). Anchored on the mechanism call site / registered literal,
+  never the `shekyl/` prefix.
+
+**Honest scope — completeness for mech 2/4/5/6 is a review duty.** The gate catches
+drift and deletion of *registered* domains, and additions on always-domain entry
+points (mech 1, mech 3). It does **not** automatically detect a new HKDF / Blake2b /
+keccak / SHA3-256 domain string that lands without a registry row — those entry points
+are general-purpose primitives used for non-domain hashing too, so a call-site count is
+noise. When a PR introduces a new domain-like string into one of those mechanisms, the
+reviewer checks that a row is added (and the distinctness test still passes). Do not
+paper over this with a half-broken inverse scanner; false confidence is worse than an
+honest boundary (rule 15/16).
 
 Neither artifact makes any domain constant `pub`: the census aggregates the *bytes*
 at test/gate time (visibility stays a real boundary), it does not import the consts.

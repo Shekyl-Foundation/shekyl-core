@@ -29,13 +29,20 @@
 //! permitted to "fix" (it mutates zero domain values).
 //!
 //! This test is the collision-catcher; the CI gate
-//! (`scripts/ci/domain_registry_gate.sh`) is the drift-closer (row-presence +
-//! entry-point count-pins). Together they keep the registry honest against the
-//! code without publishing any security constant.
+//! (`scripts/ci/domain_registry_gate.sh`) is the drift-closer for *registered*
+//! rows (row-presence + const binding + entry-point count-pins on mech 1/3).
+//! Together they keep the registry honest against the code without publishing
+//! any security constant. Completeness for mech 2/4/5/6 (new unregistered
+//! domains) is a review duty — see the gate header and CBOM §3.
 
 use std::collections::HashMap;
 
 const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY.tsv");
+
+/// Well-formed mechanism ids: `1`..`6` (live mechanisms) or `x` (excluded).
+fn is_valid_mech(mech: &str) -> bool {
+    matches!(mech, "1" | "2" | "3" | "4" | "5" | "6" | "x")
+}
 
 struct Row<'a> {
     mech: &'a str,
@@ -44,9 +51,10 @@ struct Row<'a> {
     key: &'a str,
 }
 
-fn parse_rows(text: &str) -> Vec<Row<'_>> {
+fn parse_rows(text: &str) -> Result<Vec<Row<'_>>, String> {
     let mut rows = Vec::new();
-    for line in text.lines() {
+    for (lineno, line) in text.lines().enumerate() {
+        let line_no = lineno + 1;
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -56,8 +64,24 @@ fn parse_rows(text: &str) -> Vec<Row<'_>> {
         if mech.is_empty() || mech.starts_with('#') {
             continue;
         }
-        let literal = f.get(1).copied().unwrap_or("");
-        let file = f.get(2).copied().unwrap_or("");
+        if !is_valid_mech(mech) {
+            return Err(format!(
+                "line {line_no}: bad mechanism id {mech:?} — expected 1..6 or x"
+            ));
+        }
+        if f.len() < 5 {
+            return Err(format!(
+                "line {line_no}: expected at least 5 columns (mech, literal, file, const, status), got {}",
+                f.len()
+            ));
+        }
+        let literal = f[1];
+        let file = f[2];
+        if literal.is_empty() || file.is_empty() {
+            return Err(format!(
+                "line {line_no}: literal and file columns must be non-empty"
+            ));
+        }
         let key = f.get(5).copied().unwrap_or("").trim();
         rows.push(Row {
             mech,
@@ -66,7 +90,7 @@ fn parse_rows(text: &str) -> Vec<Row<'_>> {
             key,
         });
     }
-    rows
+    Ok(rows)
 }
 
 /// The identity a row occupies within its mechanism's separation space.
@@ -79,8 +103,19 @@ fn identity<'a>(row: &Row<'a>) -> &'a str {
 }
 
 #[test]
+fn registry_rows_are_well_formed() {
+    let rows = parse_rows(REGISTRY).expect("registry must parse with valid mech ids and columns");
+    assert!(
+        rows.len() >= 90,
+        "registry parsed only {} rows — expected the full ~100-row census; \
+         parsing or the file is broken",
+        rows.len()
+    );
+}
+
+#[test]
 fn intra_mechanism_domains_are_distinct() {
-    let rows = parse_rows(REGISTRY);
+    let rows = parse_rows(REGISTRY).expect("registry must parse");
 
     // Non-vacuous guard: the registry parsed to a real census, not an empty file
     // or a mis-split that silently matched nothing, so the test cannot pass vacuously.
@@ -140,7 +175,7 @@ fn intra_mechanism_domains_are_distinct() {
 /// the main test pass on a silently-changed shape.
 #[test]
 fn shared_info_labels_stay_salt_separated() {
-    let rows = parse_rows(REGISTRY);
+    let rows = parse_rows(REGISTRY).expect("registry must parse");
     for shared in [
         "shekyl-ed25519-spend",
         "shekyl-ed25519-view",
