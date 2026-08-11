@@ -38,7 +38,11 @@ identity, three-tier custody, cold-authorized `EndpointUpdate`).
 pass-record tx carrier + prunable residence, bond-wire fields, binding
 artifact, key tiers; nonce re-pinned as
 `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` — `r` deleted) **then the
-three derivations** (W₂; (m, n); k/λ_target). The `λ_eff` *statistic*
+three derivations** (W₂; (m, n); the `λ_eff` tripwire *response*). Note
+λ_target itself is **not** among them — it is ruled by §3 (= 3, landed
+2026-08-11), and *k* (draws per block) is derived by the urn as λ·D/E;
+the earlier "k/λ_target" framing was mandate-era, when k was a tuned
+coverage parameter rather than a computed one. The `λ_eff` *statistic*
 is already ruled (FOLLOWUPS: measured directly as records per pair per
 epoch, robust quantile not mean, `β̂` as a correction term never a
 divisor — the indirect `λ_nom·(1−β_lazy)` estimator is blind to a lazy
@@ -319,12 +323,22 @@ Writing a Missed cell there corrupts vin-dedup and emission simultaneously.
 - `EpochSettlement::to_observation` **deletes** (not re-documents): its
   "sole bridge to the m-of-n machinery" role belonged to the superseded
   design.
-- `CHALLENGES_PER_EPOCH = 1` (`constants.rs:11`) retires **as a
-  guarantee**: it is the rate the TJ deliverable-2 measurement assumed and
-  it is consumed by the economics sim's bandwidth arithmetic
-  (`shekyl-economics-sim/src/proxy.rs`). Moving to 3 changes the *meaning*
-  of the window's input, not a tuning value — re-derive alongside (m, n)
-  and re-run the sim arithmetic that scales with it.
+- `CHALLENGES_PER_EPOCH = 1` — **DONE (2026-08-11), and the framing here
+  was wrong in a way worth recording.** This bullet read as though λ were
+  *gated* on the (m, n) re-derivation; it is not. λ = 3 is ruled by §3,
+  which carries its own derivation — the (m, n) re-pin and the sim re-run
+  are **consequences** of the change, not preconditions on it. Read as a
+  gate, it manufactured a "cutover" that does not exist: pre-genesis there
+  is no deployed chain, so a stale constant naming the retired fire-beacon
+  mechanism is legacy to delete, not state to migrate. Landed as
+  `CHALLENGES_PER_PAIR_PER_EPOCH = 3` (renamed because the urn derives a
+  *second* challenges-per-X quantity — per block, λ·D/E — that the old
+  name invited confusion with), jointly const-asserted with
+  `SERVE_THRESHOLD_PASSES` on two properties §3 ruled: the threshold must
+  be reachable, and it must be a strict majority. **The sim re-run
+  collected TJ-A2d's lever:** the cheap-transit watch-cell lifts
+  1.095× → 3.285×, so it is no longer marginal. The (m, n) re-pin remains
+  open — as it already was.
 - `archival_baseline_observed_at_epoch` retires per §4.1 — on the Half-B
   deletion surface, after drawability lands.
 - **The Phase-4 equivalence KAT is superseded with them.** The prior plan's
@@ -1262,7 +1276,9 @@ than repealing it:
      counter — never a general-purpose PRNG.
    - **λ_target is a parameter** (derive-don't-hardcode): the module
      takes challenges-per-pair as input; 3 is the 2-of-3 ruling's value,
-     supplied by the caller, and `CHALLENGES_PER_EPOCH = 1` retires with
+     supplied by the caller (landed 2026-08-11 as
+     `CHALLENGES_PER_PAIR_PER_EPOCH = 3`), and the legacy constant retires
+     with
      its consumers (§4.4).
 2. **The persona key hierarchy** — cold bond root separate; hot serving
    root with onion/attestation/SOCKS as labeled siblings under
