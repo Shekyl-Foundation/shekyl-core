@@ -1174,6 +1174,65 @@ record, none silently:
 - **2-of-3's reference inputs are stale:** the f ≈ 0.23 liar-containment
   figure predates this rework; re-derive alongside (m, n).
 
+## 9.5 Build/hold split (ruled 2026-08-11) — what implements now
+
+The frozen-wire decisions gate anything that **serializes or validates**;
+they do not gate transport, storage, key management, or derivation. The
+items below are **ratified for implementation** to exactly this scope —
+this narrows the status header's "do not cut consensus code" gate rather
+than repealing it:
+
+**BUILD now:**
+
+1. **The derivation module** — `assignment(h) = f(block_hash(h−1),
+   drawable_set)` plus the exact-min urn. Pure computation with no wire
+   surface (under derived assignment nothing is recorded — exactly why it
+   is unblocked); everything else calls it; fully KAT-able today. Highest
+   value on the list. Three determinism pins it forces, decided here so
+   the module does not decide them silently:
+   - **Canonical pair ordering:** the drawable set is ordered
+     lexicographically by `(p_id, shard_id)` bytes — every node must
+     index the same candidate list identically.
+   - **Per-draw randomness:** a domain-separated cSHAKE stream (rule 30:
+     explicit customization label + version) seeded by
+     `block_hash(h−1)`, with the draw index within the block as a stream
+     counter — never a general-purpose PRNG.
+   - **λ_target is a parameter** (derive-don't-hardcode): the module
+     takes challenges-per-pair as input; 3 is the 2-of-3 ruling's value,
+     supplied by the caller, and `CHALLENGES_PER_EPOCH = 1` retires with
+     its consumers (§4.4).
+2. **The persona key hierarchy** — cold bond root separate; hot serving
+   root with onion/attestation/SOCKS as labeled siblings under
+   `keygen_from_seed`. Ruled, no wire dependency, prerequisite for the
+   serving daemon existing at all.
+3. **The Tor inbound half** — `ADD_ONION` with our own generated key,
+   service lifecycle in `shekyl-tor`, the request loop, shard retrieval,
+   `R_k` verification. Only the framing is frozen; the plumbing is not.
+   The vanguards and Bandguards pins land here; none are genesis-frozen.
+4. The two standalone PRs (#433 ordering assert, #434 coverage sim) —
+   in flight.
+
+**HOLD (correctly blocked on the format round):** pass-record
+serialization; the response format; `EndpointUpdate` on the bond wire;
+the settlement writer (item 9's schema is genuinely open); the
+`settle_epoch` rewrite — the last blocked on a ratification doable in a
+sitting (the absolute-2 threshold), not a design round.
+
+**The strategic point:** building the serving path is what unblocks W₂ —
+the measurement program needs a working transfer, not a frozen format
+(3.33 MB over two Tor legs takes what it takes regardless of header
+layout), and W₂ is the round's longest pole. The Bandguards cap and
+vanguards parameters, both consumed by the W₂ derivation, land on the
+same path.
+
+**The discipline that comes with it, written here and into the serving
+PR's description rather than trusted to memory: the provisional framing
+is THROWAWAY and gets no vote in the format round.** The failure mode is
+building it and then discovering the frozen format has been quietly
+shaped by what was convenient to implement — precisely the
+design-precedes-consensus-code rule; the serving transport is the one
+part of this that is not consensus code, and it stays that way.
+
 ## 10. Standing rules for any agent working this
 
 Verify every claim at file:line against `dev` **before** planning — including
