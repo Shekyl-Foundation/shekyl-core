@@ -192,7 +192,17 @@ The risk is that every node's anon peers trace back to the seeds, in which case
 the run measured the bootstrap rather than gossip. Varying seed count conflates
 two things. The direct test: after the fleet converges, start **one more node
 with exactly one `--add-peer` onion**. If gossip works it reaches 12. If only
-seeds matter it reaches 1 and stops. One run, clean isolation — and it is also
+seeds matter it reaches 1 and stops.
+
+**The single peer must be a non-seed fleet node — and both variants are worth
+running.** Pointed at a *seed*, the control measures gossip-from-seed: a seed is
+a well-connected hub by construction, so reaching 12 from one says the hub knew
+12, not that the graph gossips. Pointed at an ordinary fleet node, it measures
+gossip proper. Each variant is one node and costs nothing against an arm; **the
+difference between them is the interesting number**, because it prices how much
+of discovery is hub-mediated.
+
+One run each, clean isolation — and it is also
 the realistic case, a new operator joining an established network, which is
 exactly what the floor has to survive.
 
@@ -316,17 +326,64 @@ is `peers = 8` again. Every reported figure carries this banner.
 
 ---
 
-## 6. The propagation arm, and why it is second
+## 6. The isolation arm, and the code it is waiting on
 
 **What "isolation" means here.** Not a stem-graph partition — Q12-D5 retracted
 that; coherence makes stem paths zone-uniform and the two graphs overlap. The
 real failure mode is **propagation**: a transaction that fluffs on the anon zone
 failing to reach clearnet-only nodes.
 
+### 6.1 There is nothing for the detector to detect today
+
+The arm would report a **trivial pass**, and that is worse than not running it.
+
+Verified at source on 2026-08-11. An anon-arrived transaction is classed
+`relay_method::forward`; on the pool cycle, `forward` is routed into `stem_req`
+([`cryptonote_core.cpp:1070-1071`](../../src/cryptonote_core/cryptonote_core.cpp#L1070))
+and `stem_req` is relayed to **`epee::net_utils::zone::public_` as a literal**
+([`:1091`](../../src/cryptonote_core/cryptonote_core.cpp#L1091)). Not a
+fall-through, not a fallback — the only destination that branch has.
+
+So anon-originated traffic takes **one** anon hop, and at hop two the receiving
+node's arrival is dropped from the immediate relay path and goes public on the
+pool cycle. **Every anon transaction crosses to clearnet by construction.**
+Isolation is not merely unlikely; it is unreachable, so a clearnet-only node
+failing to receive one is an event the current code cannot produce.
+
+**This has to be stated where the arm is specified, not discovered afterwards.**
+A green isolation result is exactly the kind of number that gets cited later as
+evidence that the zones bridge correctly — and it would be evidence of nothing
+except that the branch which makes crossing unconditional was still in place.
+That is Q12-D8's lesson applied before the measurement instead of after: *does
+the thing this number describes currently run?*
+
+### 6.2 The two arms have different inputs, and neither is blocked
+
+**This is a sequencing fact, not a deferral** ([`22-no-lazy-deferral`](../../.cursor/rules/22-no-lazy-deferral.mdc)).
+The isolation arm is waiting on **Q12-U1 and Q12-U2 — code this arc already owns
+and is next to build**, ordered by Q12-D7: the txpool origin-zone field, then
+the receive path that makes anon arrivals relay at arrival. Nothing external
+gates it, and no design question is open in front of it.
+
+| arm | input |
+| --- | --- |
+| **Discovery** | the seed estate (Q12-R-W2). Independent of U1/U2 — runnable as soon as the onions exist. |
+| **Isolation** | Q12-U1 + Q12-U2 built, plus mining and funding for spendable outputs. |
+
+Writing U1 and U2 is what gives the detector something to detect: with the
+origin zone remembered and anon arrivals relaying in-zone, `forward`'s
+unconditional hop to `zone::public_` stops being the only path, and a
+transaction failing to cross becomes an event the code can produce. Until then
+the clearnet-only set is instrumented and unread — it stays in the fleet
+(Q12-R3) because it costs little and is the instrument the arm will need.
+
+### 6.3 What the arm measures once U1 and U2 are written
+
 The bridge is R-1's `tx_relay` exit — an anon fluff reaches anon peers, who are
 dual-stack, and they relay publicly at the next hop. That *should* work by
 construction. But "should work by construction" is exactly what was said about
-coherence, and coherence turned out to be dormant (§89.8). So it is measured.
+coherence, and coherence turned out to be dormant (§89.8). So it is measured —
+after there is something to measure.
 
 **Measurement.** Originate on a Tor-capable node with the anon path forced;
 measure arrival fraction and time-to-arrival at the clearnet-only set. The
@@ -335,11 +392,13 @@ pool and no clearnet node's. **Reverse arm**: originate clearnet-only and
 confirm arrival at Tor-capable nodes — the easy direction, serving as the
 control.
 
-**Why second.** The testnet is at height 1 with difficulty 1: **no spendable
-outputs exist.** The propagation arm needs mining (`skl-miner-test`), coinbase
-maturity, and funded wallets. Discovery needs none of that — it is pure
-peerlist gossip with zero chain activity. Sequencing discovery first keeps the
-fleet off the critical path of a funding step.
+**Why discovery goes first.** The testnet is at height 1 with difficulty 1:
+**no spendable outputs exist.** The isolation arm needs mining
+(`skl-miner-test`), coinbase maturity and funded wallets on top of U1/U2.
+Discovery needs none of that — it is pure peerlist gossip with zero chain
+activity. Running it first keeps the fleet off the critical path of both the
+funding step and the U1/U2 build, and its result could invalidate the anon-stem
+design outright, which is the cheapest thing to learn early.
 
 ---
 
@@ -349,15 +408,23 @@ fleet off the critical path of a funding step.
    independent of the run, but both touch `add_zone`'s neighbourhood, so they
    share a validation surface
    ([`19-validation-surface-discipline`](../../.cursor/rules/19-validation-surface-discipline.mdc)).
-2. Q12-R-W2 — seed estate: rebuild, restart `seedusw`, tor + HS ×4,
-   cross-`--add-peer`, **keys backed up**.
+2. Q12-R-W2 — seed estate: rebuild from `dev`, restart `seedusw`, tor + HS ×4,
+   cross-`--add-peer`, **keys backed up**. This is **real scope, not
+   configuration** — four binaries predating the arc, one host down, no tor
+   anywhere.
 3. Ubuntu 24.04 build artifact; fleet image pinned to match.
 4. **Discovery arms** — `A ∈ {15, 30, 60}`, 15 clearnet detectors, converge,
    record.
-5. **Late joiner** (Q12-R5) — one node, exactly one `--add-peer`.
+5. **Late joiner** (Q12-R5) — two runs, one node each: one `--add-peer` at a
+   seed, one at an ordinary fleet node.
 6. Teardown; verify no instance survives.
 7. Land the compiled **testnet** tor seed list (deferred by Q12-R2).
-8. **Propagation arm** — after mining and funding, per §6.
+8. **Q12-U1** — the txpool origin-zone field.
+9. **Q12-U2** — the receive path, so anon arrivals relay at arrival. Steps 8–9
+   are what give the isolation arm something to detect (§6.1); they are ordered
+   by Q12-D7 and are next regardless of the fleet.
+10. Mine and fund the testnet — spendable outputs for the isolation arm.
+11. **Isolation arm** — per §6.3.
 
 ---
 
