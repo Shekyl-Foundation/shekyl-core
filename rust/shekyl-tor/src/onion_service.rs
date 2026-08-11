@@ -15,7 +15,8 @@
 //!   [`crate::control::onion::evaluate_add_onion_reply`].
 //!
 //! The pure reply→verdict decision lives in [`crate::control::onion`] (it is
-//! control-protocol knowledge, next to [`parse_service_id`]). The supervisor
+//! control-protocol knowledge, next to
+//! [`parse_service_id`](crate::control::onion::parse_service_id)). The supervisor
 //! loop in [`crate::service`] only asks *when* to publish and how a failure
 //! classifies into the retry/degrade policy.
 
@@ -35,8 +36,7 @@ use crate::onion_identity::OnionIdentity;
 /// Why publishing the configured onion service failed.
 ///
 /// Protocol verdicts ([`Self::Rejected`], [`Self::NoServiceId`],
-/// [`Self::ServiceIdMismatch`]) come from
-/// [`evaluate_add_onion_reply`](crate::control::onion::evaluate_add_onion_reply);
+/// [`Self::ServiceIdMismatch`]) come from [`evaluate_add_onion_reply`];
 /// [`Self::Control`] is the transport/actor path that never produced a usable
 /// reply.
 #[derive(Debug, Clone, PartialEq, Eq)]

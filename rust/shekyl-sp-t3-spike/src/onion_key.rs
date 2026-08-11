@@ -21,8 +21,8 @@
 //! the retained hop-latency apparatus (rule 15) still exercises the full
 //! `(master_seed, p_slot) → .onion` pipeline end-to-end against a real tor.
 //! The live cross-check that ties this encoding to tor's own answer is
-//! [`Apparatus::bring_up_with_pow`]'s inline `published != service_id`
-//! fail-stop (`harness.rs`), driven by the `tests/live_apparatus.rs`
+//! [`crate::harness::Apparatus::bring_up_with_pow`]'s inline
+//! `published != service_id` fail-stop, driven by the `tests/live_apparatus.rs`
 //! integration test on the `SHEKYL_TEST_TOR_BINARY` lane. The custody
 //! discipline is unchanged: nothing is written to disk; the key is
 //! reproduced on demand and handed to tor via `ADD_ONION`.
