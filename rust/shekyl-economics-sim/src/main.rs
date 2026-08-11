@@ -4,6 +4,7 @@ mod budget_scenarios;
 mod burden;
 mod calibration;
 mod cartel;
+mod challenge_coverage;
 mod distribution;
 mod engine;
 mod escalation;
@@ -49,6 +50,19 @@ fn main() {
 
     if std::env::args().any(|a| a == "--fb1c-c2") {
         run_fb1c_c2(&params);
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--challenge-coverage") {
+        // Fork-1 evidence set (ARCHIVAL_CHALLENGE_MECHANISM.md §7.1/§8):
+        // urn wave-tail exposure, issued-count histograms, capped regime.
+        // The module renders; this binary target performs the writes
+        // (stage2 precedent — JSON to stdout, summary to stderr).
+        let runs = challenge_coverage::evidence_runs();
+        let mut summary = String::new();
+        challenge_coverage::render_summary(&mut summary, &runs).expect("String sink is infallible");
+        eprint!("{summary}");
+        println!("{}", challenge_coverage::evidence_json(&runs));
         return;
     }
 
