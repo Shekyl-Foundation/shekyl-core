@@ -977,3 +977,98 @@ restarts, 3.6 GB of 7.9 GB used, all ports bound, 10 distinct guard
 directories. **Q12-R8's two-reading rule earned itself immediately** — 29
 outbound at `t+0` against 62 at `t+240`, so a single reading would have reported
 less than half the converged count.
+
+---
+
+## 12. Q12-D9 — the below-floor rule, settled before the run
+
+**Ruled 2026-08-11, and deliberately before the arms.** The below-floor rule is
+**not an input to the run — it is the mechanism the run observes.** At `A ≤ 12`
+every node is below the floor by arithmetic (Q12-R11), so the below-floor branch
+is the *only* behaviour exhibited. Running with it undecided means the fleet
+measures whatever the code happens to do, and the decision is then read off the
+run — deriving a rule from an implementation accident, which is the failure
+Q12-D8 names. §12.11 already made this mistake once: thresholds deliberately
+unset, mechanism live, semantics pinned only afterwards.
+
+### 12.1 The answer follows from the floor's own justification
+
+F-8b's floor is not a quality preference. `hop` and `F` were provisioned at
+**`OutboundOnly@12`**, so the floor is *the condition under which the derived
+constants are valid*. A node with 4 anonymity peers is not running the topology
+the embargo was derived for: its fluff return is slower, so `F` is
+under-provisioned **in the privacy-losing direction**, and its own transactions
+carry an embargo too short for the graph they traverse.
+
+| candidate | verdict |
+| --- | --- |
+| **stem anyway** | **rejected** — ships a known-invalid provisioning to the operator who chose Tor, invisibly. §75's shape: the failure has no feedback channel. |
+| **hold** | **rejected** — at `A ≤ 12` this is not a transient stall but *every* Tor node holding indefinitely on a young network. A liveness failure dressed as caution. |
+| **don't stem (`x = 0`)** | **chosen** — the node stops stemming until the floor is met. |
+
+The trade is a real cost against an invisible one: an invalid embargo is a
+**stranger's** cost and unobservable, where `x = 0`'s exposure is the
+**operator's own and bounded**.
+
+### 12.2 Two implementation constraints that are part of the ruling
+
+- **The check must be live, not once at startup.** Peers churn, and a node above
+  the floor can fall below it. This is exactly F-8b's gap: it floors the
+  *configured cap*, never the *achieved count*, so a startup-only check would
+  re-create the defect Q12-D6a exists to observe.
+- **Refuse, don't clamp.** If the anonymity zone cannot satisfy the condition
+  its constants were derived under, it is not used — a **state the code
+  represents**, not a threshold it approximates. Same device as the depth table.
+
+### 12.3 What it makes the run
+
+The question sharpens from *"does the graph form"* to **"at what `A` do nodes
+cross the floor and the anonymity zone become usable at all?"** — a threshold
+measurement. **This rehabilitates the `A = 15` arm**, which Q12-R11 had narrowed
+to near-complete-connectivity: it is now the arm *nearest the crossing*, and so
+the most informative rather than the least.
+
+It also makes the launch condition honest and stateable: **below ~13
+Tor-capable nodes the anonymity stem does not engage**, and Tor delivers
+IP-hiding at the transport layer without the stem. A degradation with a floor,
+not a silent regression.
+
+### 12.4 OPEN — what `x = 0` does with the node's *own* transactions
+
+**The ruling says the node "routes clearnet, which exposes its IP as a relay
+source". For *relayed* traffic that is right and costless — its home was always
+clearnet. For the node's *own* transactions it contradicts a decision already in
+the tree**, so it is flagged rather than implemented either way.
+
+`send_txs` splits exactly here
+([`net_node.inl:2293-2306`](../../src/p2p/net_node.inl#L2293-L2306)):
+
+> *ORIGINATED traffic (false) takes the zone regardless and **fails closed**:
+> falling back to clearnet would put our own transaction on the public network,
+> which is the first-spy case this arc exists to prevent (§30.5). **Better to
+> send nothing.*** … *RELAYED traffic diverted by R-1's roll (true) must NOT
+> fail closed.*
+
+So the arc has already ruled that a node's own transaction never falls back to
+clearnet. Two readings of `x = 0` follow, and they differ in exactly the
+protected direction:
+
+| reading | own transactions | consistent with `:2296`? |
+| --- | --- | --- |
+| **(a) abandon the anonymity zone** — all traffic clearnet | IP exposed as origin | **no** — reverses the fail-closed rule |
+| **(b) stop *stemming*, keep the zone** — fluff on the anonymity zone | IP still hidden by Tor; stem privacy lost, transport privacy kept | **yes** |
+
+Reading (b) preserves both halves of the ruling's own logic: the invalid
+embargo is avoided (no stem ⇒ no stem timer derived at `OutboundOnly@12`), *and*
+the operator who configured Tor to avoid IP exposure still gets it. Reading (a)
+buys nothing extra and pays the operator's IP for it.
+
+**The distinction is not academic**: under (a), a node's IP appears on clearnet
+as a transaction origin the moment the anonymity population dips below 13 — the
+exact exposure Q12-D4a check 2 flagged as *"the operator's own cost, not a
+stranger's"* but which `:2296` had already refused to impose automatically.
+
+**Owed before Q12-U2 is implemented**: a ruling on (a) vs (b), and if (a), an
+explicit statement that it reverses `send_txs`'s originated-traffic
+fail-closed — because a reversal made silently in an implementation is precisely
+what Q12-D8 warns against.
