@@ -2,11 +2,16 @@
 //!
 //! Two primitives, two jobs, and the split is the point:
 //!
-//! - [`keccak256`] / [`tree_hash`] — **Keccak-256, for consensus parity only.**
-//!   Use these *iff* the output must be byte-identical to the Monero-descended C++
-//!   daemon: `prefix_hash`, `tree_hash`, block IDs, `pqc_signing_payload_hashes`,
-//!   `multisig_pqc_leaf_hash`. They are un-domained because the thing they must
-//!   match is un-domained.
+//! - [`keccak256`] / [`tree_hash`] — **Keccak-256, for existing pinned contracts
+//!   only.** Two caller classes, both closed: (a) outputs that must be
+//!   byte-identical to the Monero-descended C++ daemon — `prefix_hash`,
+//!   `tree_hash`, block IDs, `pqc_signing_payload_hashes`,
+//!   `multisig_pqc_leaf_hash`; (b) cross-party multisig contracts with no C++
+//!   mirror but multiple independent signers pinned to these bytes by spec —
+//!   `intent_hash` / the chain-state fingerprint (`shekyl-multisig/src/intent.rs`).
+//!   Class (b) migrates to cSHAKE only via its owning spec, never unilaterally
+//!   (FOLLOWUPS, "residual consensus-parity Keccak"). They are un-domained
+//!   because the thing they must match is un-domained.
 //! - [`cshake256_32`] — **cSHAKE256 (SP 800-185), for everything new.** A new
 //!   artifact on no consensus path takes this, with a customization string, so
 //!   domain separation is structural rather than definitional.
@@ -45,13 +50,20 @@ pub const HASH_SIZE: usize = 32;
 
 pub type Hash = [u8; HASH_SIZE];
 
-/// Compute `keccak256` — Keccak-256 with original padding, via RustCrypto `sha3`.
+/// Original-padding Keccak-256 (`0x01`, NOT NIST SHA3-256's `0x06`), via RustCrypto
+/// `sha3` — byte-identical to the C++ daemon's `cn_fast_hash`.
 ///
 /// Matches `cn_fast_hash` in `src/crypto/hash.c` (keccak1600 absorb, first 32 bytes;
 /// rate 136 bytes for 256-bit output). `sha3::Keccak256` is the original Keccak
-/// variant (0x01 padding), so this is byte-identical to the prior tiny-keccak impl and
-/// to the C++ daemon — verified by the empty-input KAT below and the live coinbase/
-/// spend hash KATs in shekyl-wire.
+/// variant, so this is byte-identical to the prior tiny-keccak impl and to the C++
+/// daemon — verified by the empty-input KAT below and the live coinbase/spend hash
+/// KATs in shekyl-wire.
+///
+/// A second public `keccak256` (same primitive) lives in `shekyl-curve-primitives`
+/// for the oxide-lineage hash-to-point stack; the tx-builder equivalence test
+/// (`crypto_hash_keccak256_equals_curve_primitives_keccak256`) pins that they agree,
+/// and the collapse onto one home is tracked in FOLLOWUPS (dual-keccak). Until it
+/// lands, prose and doc references should qualify which crate they mean.
 pub fn keccak256(data: &[u8]) -> Hash {
     Keccak256::digest(data).into()
 }

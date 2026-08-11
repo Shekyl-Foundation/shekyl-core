@@ -188,7 +188,7 @@ pub struct SpendIntent {
 }
 
 impl SpendIntent {
-    /// Compute `intent_hash = keccak256(canonical_serialize(SpendIntent))` (SS9.4).
+    /// Compute `intent_hash = shekyl_crypto_hash::keccak256(canonical_serialize(SpendIntent))` (SS9.4).
     ///
     /// Fallible because canonical serialization is: a field whose length
     /// exceeds the u32 wire prefix has no well-defined canonical encoding

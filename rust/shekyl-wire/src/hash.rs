@@ -5,7 +5,7 @@
 
 //! Consensus hash identities (GENESIS_TX_WIRE_FORMAT.md §11).
 //!
-//! All hashing is `keccak256` (keccak-256, original 0x01 padding) via
+//! All hashing is original-padding Keccak-256 (`0x01`, NOT SHA3-256's `0x06`) via
 //! [`shekyl_crypto_hash::keccak256`] — byte-identical to the C++ daemon's
 //! `cn_fast_hash` (the C++ symbol keeps the CryptoNote name). This module owns
 //! the cross-cutting [`merkle_root`]; the

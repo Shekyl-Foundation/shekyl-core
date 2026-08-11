@@ -110,8 +110,9 @@ daemon would reject (consistent with the known broken-spend status):
 ## 4. Migration spec (for the eventual consensus PR)
 
 **Add to shekyl-wire** (the wire authority owns the format *and* its signing hashes):
-- `Transaction::prefix_hash() -> [u8;32]` = `cn_fast_hash(varint(TX_VERSION) ‖ TxPrefix::write)`
-  — the FCMP++ `signable_tx_hash`.
+- `Transaction::prefix_hash() -> [u8;32]` = `keccak256(varint(TX_VERSION) ‖ TxPrefix::write)`
+  — the FCMP++ `signable_tx_hash` (byte-identical to the C++ daemon's `cn_fast_hash`
+  composition; SA-3d renamed the Rust API only).
 - `Transaction::pqc_signing_payload_hashes() -> Vec<[u8;32]>` — per input, the §1.1
   composition then `keccak256`, reusing the existing component serializers:
   `prefix_blob = varint(3) ‖ TxPrefix::write`; `ct_base_blob` = the `Ct::Fcmp` head
@@ -157,7 +158,9 @@ corpus + golden validated, with the live C++ oracle (§1.1) as the remaining res
   removed (crypto `Bulletproof` kept). The four §3 divergences are fixed by construction.
 
 Validation that landed: the keccak swap to RustCrypto `sha3` is pinned byte-equal
-(`cn_fast_hash == shekyl_oxide::keccak256`); the BP+ oxide↔wire layout identity is pinned
+(`shekyl_crypto_hash::keccak256 == shekyl_curve_primitives::keccak256` — the
+`crypto_hash_keccak256_equals_curve_primitives_keccak256` pin in tx-builder
+`wire.rs`); the BP+ oxide↔wire layout identity is pinned
 by an exact-consumption parse; an encode→reparse→rehash test pins that the signed bytes
 equal the encoded bytes; and golden vectors pin `prefix_hash` + the per-input preimage
 against drift. The four §3 divergences thus have a precise, reviewable resolution — the

@@ -6477,7 +6477,12 @@ sustainability is unaffected by the recalibration.
 
   **Naming hygiene — DONE (SA-3d, PR #446).** Rust-internal `cn_fast_hash` →
   `keccak256` across the workspace; C++ `cn_fast_hash` and FFI `shekyl_cn_fast_hash`
-  retained for source-mapping / ABI stability.
+  retained for source-mapping / ABI stability. The live spec layer is aligned
+  too (review sweep): `SHEKYL_MULTISIG_WIRE_FORMAT.md` §2.4/§6,
+  `PQC_MULTISIG.md` §9.3–§10.4, and `design/FCMP_SPEND_SIGNING_PREIMAGE.md`
+  §4/§6 define the Rust-implemented hashes as `keccak256` with the padding
+  byte spelled out. Remaining `cn_fast_hash` mentions in docs are the C++
+  daemon symbol, the FFI export, or banner-marked Option-D historical text.
 
   **Adjacent (not the same PR as a mechanism migrate):** collapse the dual
   public `keccak256` implementations (`shekyl-crypto-hash` +

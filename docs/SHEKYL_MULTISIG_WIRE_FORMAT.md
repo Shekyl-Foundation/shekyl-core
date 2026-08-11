@@ -22,7 +22,7 @@ stated otherwise.
 > **Option-D residue (2026-07-18, MS-5 PR-B / E′).** Two facts have moved
 > out from under this spec and it has **not** yet been rewritten to match:
 > (1) the `group_id` field named throughout (envelope offset 1, §2, §3, §4)
-> is the **retired** per-container `cn_fast_hash` — group identity is now the
+> is the **retired** per-container Keccak-256 group hash — group identity is now the
 > **address fingerprint** (`PQC_MULTISIG.md` §5.3), and (2) under Option E′
 > the wallet **owns no transport** — the engine emits/consumes a
 > self-authenticating blob and this envelope/relay framing is not a wallet
@@ -45,8 +45,8 @@ message, and file-transport blob is exactly one envelope.
 Offset   Size     Field                   Notes
 ------   ----     -----                   -----
 0        1        version                 Must be 0x01
-1        32       group_id                cn_fast_hash of group key material
-33       32       intent_hash             cn_fast_hash of SpendIntent canonical bytes
+1        32       group_id                Keccak-256 of group key material (retired — see note above)
+33       32       intent_hash             keccak256 of SpendIntent canonical bytes (§2.4)
 65       1        sender_index            0-indexed participant number
 66       4        sig_len                 u32 LE, length of sender_sig
 70       sig_len  sender_sig              Hybrid signature over the §1.2 bytes (no production signer yet; see §1.2)
@@ -182,12 +182,16 @@ Duplicate `(address, amount)` tuples are forbidden.
 ### 2.4 Intent Hash
 
 ```
-intent_hash = cn_fast_hash(canonical_bytes)
+intent_hash = keccak256(canonical_bytes)
 ```
 
-Where `cn_fast_hash` is Keccak-256 and `canonical_bytes` is the full
+Where `keccak256` is **original-padding Keccak-256** (`0x01` padding, NOT
+FIPS-202 SHA3-256's `0x06` — the two differ in one byte and fail silently)
+— implemented as `shekyl_crypto_hash::keccak256`, byte-identical to the
+C++ daemon's `cn_fast_hash` — and `canonical_bytes` is the full
 serialization from §2.2 (including `proposer_sig_len` and
-`proposer_sig`).
+`proposer_sig`). Every live hash definition in this document uses this
+primitive.
 
 ### 2.5 Signable Bytes
 
@@ -469,7 +473,7 @@ preimage = reference_block_hash          // 32 bytes
         || sorted(input_amounts)         // each u64 LE
         || sorted(input_assigned_prover_indices)  // each u8
 
-chain_state_fingerprint = cn_fast_hash(preimage)
+chain_state_fingerprint = keccak256(preimage)   // §2.4 primitive
 ```
 
 All arrays are sorted independently in ascending numeric order before
