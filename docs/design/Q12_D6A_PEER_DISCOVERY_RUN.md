@@ -883,6 +883,48 @@ Emptying the compiled lists as well as changing `NETWORK_ID` is not redundant:
 and under Q12-R8 those failures cost backoff on the very connections being
 measured.
 
+#### The load-bearing check: does a rejected handshake still leak a peerlist?
+
+`NETWORK_ID` isolation would be **nominal** if a rejected handshake still
+exchanged peer addresses — external onions would enter the fleet anyway, just
+without a usable connection. Verified in both directions at
+[`src/p2p/net_node.inl`](../../src/p2p/net_node.inl):
+
+| direction | check | peerlist handling |
+| --- | --- | --- |
+| **outbound** — we dial a foreign node | `rsp.node_data.network_id != m_network_id` at `:1078`, `return` at `:1081` | `handle_remote_peerlist(rsp.local_peerlist_new, …)` is at `:1084` — **after** the return, so their peerlist is **never merged** |
+| **inbound** — a foreign node dials us | `arg.node_data.network_id != m_network_id` is the **first statement** of `handle_handshake` (`:2674`) | `drop_connection` + `return 1` at `:2678-2680`, with `rsp` still default-constructed — **no peerlist is assembled or sent** |
+
+The inbound ordering is the stronger of the two: the check precedes the zone
+lookup, `get_local_node_data`, and every line that would populate
+`rsp.local_peerlist_new`. There is no path by which a foreign peer obtains fleet
+onions, and none by which a fleet node ingests foreign ones.
+
+**So the isolation is real, not nominal.** The response bytes are received
+before the check — that is unavoidable in a request/response protocol — but they
+are discarded rather than merged, which is the property that matters: an onion
+that never enters a peerlist never becomes a dial target.
+
+#### Why the confound is not merely a labelling problem
+
+`get_connections` reports `address_type` and `incoming` and **nothing that
+distinguishes a fleet onion from a testnet onion**. A converged count of 12 reads
+identically whether it is 12 fleet peers, 12 testnet peers, or any mix, and no
+post-hoc separation exists because the distinguishing fact was never recorded.
+
+But filtering the readout would not save the run even if it were possible,
+**because the outside population changes the mechanism and not just the count.**
+Discovery is gossip: a fleet node learns onions from its anonymity peers'
+peerlists, and a testnet peer's peerlist carries testnet onions, which propagate
+into the fleet and become dial targets. `A` then stops being the candidate pool
+at all.
+
+The spiral Q12-D6a exists to test — *no outgoing anonymity connection ⇒ no
+self-announcement ⇒ no inbound* — **is a property of a closed population**. It
+cannot manifest while there is an open supply of external onions to bootstrap
+from. An unsealed fleet would report *"the spiral does not occur"*, and the
+reason would be the confound rather than the network.
+
 **What differs from production, and why the oracle survives.** The fleet binary
 differs only in `NETWORK_ID` and the compiled seed constants. Peer discovery —
 peerlist gossip, zone segregation, self-announcement, the connection maintainer
