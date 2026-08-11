@@ -6,10 +6,12 @@ registered as **Q12-D6a** in
 *"the most expensive measurement the arc has proposed and the only one that
 cannot be faked."*
 
-**Status: DESIGN. Nothing provisioned, nothing built, no VM stood up.**
-Ground findings below are verified at source and against the live estate on
-2026-08-11 at pin [`14c2ee599`](https://github.com/Shekyl-Foundation/shekyl-core/commit/14c2ee599).
-Identifiers `Q12-R1…R6` extend the already-registered `Q12-` family (rule 94 §1;
+**Status: DESIGN, with Q12-R-W2 part-built (§9). No VM stood up, no arm run.**
+The seed estate now carries a current binary and four hidden services; the
+privileged install is blocked (§9.4). Ground findings below are verified at
+source and against the live estate on 2026-08-11 at pin
+[`14c2ee599`](https://github.com/Shekyl-Foundation/shekyl-core/commit/14c2ee599).
+Identifiers `Q12-R1…R7` extend the already-registered `Q12-` family (rule 94 §1;
 no new prefix is minted).
 
 ---
@@ -127,9 +129,13 @@ Four findings:
    oracle in its purest form.
 2. **`skl-seedusw`'s daemon is not running** and its config is the unedited
    example template.
-3. **No tor process on any host.** The SP-T3 spike's pinned Tor Expert Bundle
-   is gone. **No onion service exists yet** — the addresses the run needs must
-   be generated.
+3. **No tor process on any host** — but ~~the SP-T3 spike's pinned Tor Expert
+   Bundle is gone~~ **CORRECTED: the bundle is present on all four**, at
+   `/opt/shekyl/tor-expert-bundle-15.0.17/tor/tor`, with signed tarballs in
+   `~shekyl`. The original claim was drawn from `pgrep tor` returning nothing,
+   which shows that no service is *running*, not that the software is absent —
+   the wrong observable for the question. No onion service existed at the time
+   of the probe; §9.3 has since generated four.
 4. **Configs diverge**, but `skl-seeduse`'s split (unrestricted RPC on
    127.0.0.1:12030, *restricted* RPC public on :12029) is **correct for its
    `shekyl-web` role**, not a defect. The other three are simply plainer.
