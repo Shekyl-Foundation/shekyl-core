@@ -1165,6 +1165,19 @@ record, none silently:
   per-hop-vs-sum lesson, one level up — the doc imports §66's discipline
   and must import this instance of it). The landed shape is likely a lookup
   table that refuses outside its domain — never a scalar or fitted curve.
+  **CONCURRENCY, not bandwidth, is the W₂ unit (pinned 2026-08-11, from
+  reading the derivation module — decided before the rig is built because
+  it changes what gets instrumented).** The schedule assigns λ·D/E pairs
+  to each block's producer: at maturity ~97 pairs land on one block at
+  once, so that producer must fetch ~323 MB **concurrently** inside W₂.
+  The aggregate is unchanged and fine (a 1 % miner sustains ~32 GB/epoch
+  ≈ 27 KB/s), but the shape is bursty and highly concurrent — a
+  single-transfer rig under-estimates badly, missing circuit-establishment
+  throughput, Tor client memory, and guard capacity. This also feeds the
+  Bandguards cap and the vanguards L2/L3 sizing directly: a pinned L2 set
+  carries ~97 concurrent rendezvous circuits from the same client. The
+  rig must measure the **concurrent-batch completion distribution**, not
+  the single-transfer one.
 - **Derive-don't-hardcode:** every constant this mechanism lands (challenges
   per epoch, majority threshold, W₂, penalty) follows the `DandelionParams`
   pattern — design inputs in, derived value as a method, executable
