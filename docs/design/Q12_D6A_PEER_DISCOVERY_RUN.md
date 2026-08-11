@@ -1033,7 +1033,7 @@ Tor-capable nodes the anonymity stem does not engage**, and Tor delivers
 IP-hiding at the transport layer without the stem. A degradation with a floor,
 not a silent regression.
 
-### 12.4 OPEN — what `x = 0` does with the node's *own* transactions
+### 12.4 RESOLVED — `x = 0` keeps the zone and drops only the stem (reading (b))
 
 **The ruling says the node "routes clearnet, which exposes its IP as a relay
 source". For *relayed* traffic that is right and costless — its home was always
@@ -1068,7 +1068,57 @@ as a transaction origin the moment the anonymity population dips below 13 — th
 exact exposure Q12-D4a check 2 flagged as *"the operator's own cost, not a
 stranger's"* but which `:2296` had already refused to impose automatically.
 
-**Owed before Q12-U2 is implemented**: a ruling on (a) vs (b), and if (a), an
-explicit statement that it reverses `send_txs`'s originated-traffic
-fail-closed — because a reversal made silently in an implementation is precisely
-what Q12-D8 warns against.
+**Ruled 2026-08-11: (b).** The original phrasing reasoned about the *relayed*
+case — where the cost is small and the home was always clearnet — and then let
+it stand for originated traffic, where the cost is entirely different and
+`send_txs` had already ruled against exactly that.
+
+**The floor argument only supports (b).** The floor is a condition *on the
+stem*: below 12 anonymity peers the graph is not what `hop` and `F` were derived
+at, so the embargo is invalid. That is an argument about **arming a stem
+timer**. It says nothing about which transport carries the bytes. Reading (a)
+converts *"the stem constants are invalid here"* into *"this zone is
+unusable"* — a broader conclusion than the premise supports, and it is the
+broadening that costs the operator's IP. Reading (b) takes exactly the premise:
+no stem ⇒ no stem timer ⇒ no invalid provisioning, while the zone still carries
+the traffic and still hides the IP.
+
+**The two privacy properties are separable**, which is this arc's own grid once
+more: transport privacy (the IP) is a **wire-observer** property; stem privacy
+(source ambiguity) is a **peer-observer** property. Orthogonal — losing one is
+not a reason to discard the other.
+
+| posture | transport privacy | stem privacy |
+| --- | --- | --- |
+| clearnet node | no | no |
+| below-floor node under **(b)** | **yes** | no |
+| below-floor node under (a) | no | no |
+
+A below-floor node under (b) is therefore **strictly better off than a clearnet
+node**. Under (a) it has neither property, having surrendered transport privacy
+to avoid a stem problem the zone was not causing.
+
+#### 12.4.1 The consequence, named so a future reader is not misled
+
+Under (b) a below-floor node **fluffs on the anonymity zone with no stem** —
+which is exactly the posture §63 documented and §89 set out to correct.
+Verified at source: [`DAEMON_RELAY_PRIVACY.md:8335`](DAEMON_RELAY_PRIVACY.md)
+records *"C. Tor / I2P … diffusion — no stem (corrected per §63)"*, and
+`:10403` *"the anonymity zone has no stem"*.
+
+**That is fine here, and the record has to say why**, or a future reader finds
+the old behaviour alive in a branch and cannot tell whether it is a leftover or
+a decision:
+
+| | pre-§89 | below-floor under (b) |
+| --- | --- | --- |
+| scope | **every** anonymity transaction | a bounded fallback |
+| trigger | none — it was the default | achieved anonymity peers `< 12`, checked live |
+| known? | **no** — §63 discovered it | stated, with its cost |
+| recovery | none defined | automatic once the floor is met |
+
+The difference is not the behaviour; it is that this one has a **stated
+trigger, a stated cost, and a stated recovery condition**, where the original
+was an unexamined default nobody had noticed.
+
+**Q12-U2 is unblocked.**
