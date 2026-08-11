@@ -17,9 +17,15 @@
 //!
 //! ## The spec, precisely (so the implementation cannot drift silently)
 //!
-//! - **Canonical order (§9.5 pin 1):** the drawable set is strictly
-//!   increasing by `(p_id, shard_id)` bytes; construction rejects anything
-//!   else, so every node indexes the same candidate list identically.
+//! - **Canonical order (§9.5 pin 1, stated exactly):** the drawable set is
+//!   strictly increasing by `p_id` bytes lexicographically, then by
+//!   `shard_id` **numerically** — equivalently, memcmp over
+//!   `p_id ‖ shard_id_be` (big-endian). This is precisely the derived
+//!   `Ord` on [`DrawablePair`], and it is **NOT** the little-endian wire
+//!   encoding of `shard_id` (under LE bytes, shard 256 would sort before
+//!   shard 1 — a second implementation sorting by the wire bytes would
+//!   derive a divergent candidate list). Construction rejects anything
+//!   out of order, so every node indexes the same list identically.
 //! - **Schedule:** `total = λ_target · D` draws spread evenly over the
 //!   epoch: through block index `h` (0-based), exactly
 //!   `⌊(h+1)·total/E⌋` draws have occurred (`E` = blocks per epoch), so
@@ -75,6 +81,13 @@ pub enum AssignmentError {
     /// More than `u32::MAX` drawable pairs (impossible population; the
     /// working list indexes pairs as `u32`).
     TooManyPairs,
+    /// The schedule would place more than `u32::MAX` draws in a single
+    /// block. The per-draw stream's in-block counter is a fixed 4-byte
+    /// input to the domain-separated cSHAKE (widening it would change the
+    /// derivation itself), so the bound is enforced here instead — a
+    /// release-mode wrap would repeat stream inputs and corrupt the
+    /// assignment sequence.
+    PerBlockDrawsOverflow,
 }
 
 /// Feed rejections — the urn is stateful, so a desynced feed must be an
@@ -148,6 +161,12 @@ impl ChallengeUrn {
         let total = u64::from(lambda_target)
             .checked_mul(u64::from(d32))
             .ok_or(AssignmentError::TotalDrawsOverflow)?;
+        // The Bresenham schedule places at most ⌈total/E⌉ draws in one
+        // block; the stream's in-block counter is a fixed 4-byte input, so
+        // that ceiling must fit u32 (see `PerBlockDrawsOverflow`).
+        if total.div_ceil(epoch_blocks) > u64::from(u32::MAX) {
+            return Err(AssignmentError::PerBlockDrawsOverflow);
+        }
         let working: Vec<u32> = (0..d32).collect();
         let remaining = working.len();
         Ok(ChallengeUrn {
@@ -308,6 +327,36 @@ mod tests {
         assert_eq!(
             ChallengeUrn::new(OPEN_HASH, vec![], 3, 0).unwrap_err(),
             AssignmentError::ZeroEpochBlocks
+        );
+    }
+
+    #[test]
+    fn canonical_order_is_numeric_shard_id_not_wire_le_bytes() {
+        // The exact statement of pin 1: shard_id compares NUMERICALLY
+        // (equivalently big-endian memcmp), never as the little-endian
+        // wire bytes. Under LE-byte order, (p, 256) would sort before
+        // (p, 1); the canonical order says the opposite, and this test is
+        // what a divergent second implementation fails.
+        let ordered = vec![pair(1, 1), pair(1, 256)];
+        assert!(ChallengeUrn::new(OPEN_HASH, ordered, 3, 10).is_ok());
+        let le_byte_order = vec![pair(1, 256), pair(1, 1)];
+        assert_eq!(
+            ChallengeUrn::new(OPEN_HASH, le_byte_order, 3, 10).unwrap_err(),
+            AssignmentError::NotCanonicallyOrdered { index: 1 }
+        );
+    }
+
+    #[test]
+    fn per_block_draw_ceiling_must_fit_the_stream_counter() {
+        // ⌈total/E⌉ > u32::MAX would wrap the 4-byte in-block stream
+        // counter in release and repeat cSHAKE inputs — rejected at
+        // construction instead (the counter width is part of the
+        // derivation and cannot widen). Exercised via a one-block epoch
+        // with λ·D = 3·(2³²−1) > u32::MAX.
+        let small: Vec<_> = (0..3u8).map(|t| pair(t, 0)).collect();
+        assert_eq!(
+            ChallengeUrn::new(OPEN_HASH, small, u32::MAX, 1).unwrap_err(),
+            AssignmentError::PerBlockDrawsOverflow
         );
     }
 
