@@ -377,7 +377,7 @@ express the gate cleanly.
 | **PR-SA-2** | Nested combiner (SA-R-1 incl. `Result<()>` rewrite / R-2 / R-3 / R-4 / R-5); §2.1 six-surface domains (bond slot rides surface A's `shekyl/pqc-auth-tx-v1`; **surface B is §2.2, out of SA-2** — S1 + `signature_preimage` parked inert under rule-21); SA-R-4 version check placed by the **six-path parse-from-canonical enumeration** (precondition of the trait rewrite; check goes uniformly at parse or in `verify()`, never per-path); F1 (subsumed by `Result<()>`) + wrong-key regression; F-7 disposition; fixture regeneration + frozen v1 negative fixture; iai bench rework; `wire.rs` `3385` aliasing; FFI context-specific exports; RELEASE_CHECKLIST rows; genesis-blob no-hybrid-sig check. **C++-byte-identical** (no wire/`TX_VERSION` change) | pending — solitary review round |
 | **PR-SA-2b** | Bond-preimage reconciliation (§2.2): resolved the P-role replay question at the call graph — the surface-A whole-tx hash (incl. the vin type tag) forecloses cross-role replay, so **generic won**. Deleted S1 + `signature_preimage` + `BOND_POST_SIG_CUSTOMIZATION` + `SCHEME_DOMAIN_BOND_POST`; KAT surfaces 7→6. No wire change; no verifier special-case needed | **DONE** |
 | **PR-SA-3a** | Consensus leaf-hash SSOT: `PqcLeafScalar::from_pqc_public_key` wraps `hash_pqc_public_key`; retired dual `DOMAIN_PQC_LEAF` + dual Blake2b/wide_reduce; pinned pre-dedup KAT (empty / 1-byte / full ML-DSA-65 / all-`0xff`). No wire change. | **in flight** (`feat/sa3a-pqc-leaf-dedup`, #436) |
-| **PR-SA-3b** | Registries: workspace domain registry + full-set collision test + CI grep gate (ripgrep install step); test-domain segregation; error-band table (-29xxx). **Feeds the CBOM domain section.** (§3.1: sweep by mechanism, not `shekyl/` prefix alone.) | pending |
+| **PR-SA-3b** | Domain registry: single-source [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) census of every production domain string by **mechanism** (not a flat all-pairs collision test — that is a category error, §5); **per-mechanism** distinctness test (`shekyl-crypto-pq/tests/domain_registry.rs`, mech-2 keyed by `salt\|info`); CI gate (`scripts/ci/domain_registry_gate.sh`) with row-presence + entry-point count-pins **anchored on call sites, not the `shekyl/` prefix** (§3.1); frozen consequence markers (mech-3 FROST into [`FROZEN_DOMAIN_SEPARATORS.md`](../FROZEN_DOMAIN_SEPARATORS.md), naming the per-seam break); through-line invariant written as a rule (§5); error-band table (§6). Mutates **zero** domain values. **Feeds the CBOM domain section.** | **in flight** (`feat/sa3b-domain-registry`, stacked on SA-3a) |
 | **PR-SA-4** | Dead persisted-field sweep (writer/reader existence per persisted field; tx_notes PR-SJ-2 confirmation) | pending |
 | **PR-SA-5** | Persona lifecycle: SA-R-6 guard + scan reconstruction; ruling into `ARCHIVAL_P_DERIVE_V1` module doc + operator guide (no-rotation stated as a refusal, clustering rationale named). **Feeds the CBOM persona no-backstop row.** | pending |
 | **PR-SA-6** | CBOM close/formalize (see §4) + infra PQ posture (release-signing paragraph); untrusted-cast sweep + one clamp/reject/None ruling | pending |
@@ -398,6 +398,23 @@ anchored on `shekyl/` alone would prove less than it appears — the exact defec
 class this round exists to fix. The SA-3b sweep must enumerate by *mechanism*
 (every cSHAKE customization, HKDF salt/info label, transcript label, and hash
 DST), not by prefix.
+
+**Verified in SA-3b (the enumeration by mechanism):** the full production census
+is **92 distinct domain strings across the five mechanisms** (93 registered,
+including the SHA3-256 micro-bucket), not ~28 — a 3.3× undercount by the prefix
+lens, which is the measure of the blind spot. Distribution:
+mechanism 1 cSHAKE customization (23), mechanism 2 HKDF salt+info (8 salts + 33
+distinct infos), mechanism 3 FROST transcript label (4), mechanism 4 Blake2b DST
+(9), mechanism 5 keccak/schnorr challenge DST (15) — those five sum to 92 — plus a
+1-entry SHA3-256 direct-prefix micro-bucket (`shekyl-mlkem-chacha-seed` — a real
+domain that sits outside all five, given its own bucket rather than silently folded
+in), for 93 registered rows. 11 of the 92 are frozen-inherited (mech-3: 3;
+mech-5: 8). The registry names its own
+boundary: what it excludes (RandomX Argon salt, Tor SAFECOOKIE, `.onion`
+checksum, file/wire magics) is rowed with a reason, because a silent omission is
+the failure mode a registry exists to kill. The gate is anchored on the mechanism
+entry point, never the spelling — `Monero Generator T`, `Shekyl FROST SAL v1`, and
+`shekyl-pqc-leaf` share no prefix, and all three must be caught.
 
 ### 3.2 Fixed in PR-SA-1 while in the files
 
@@ -433,3 +450,58 @@ SLH-DSA-192s (message signing, ACVP-conformant), the hash constructions
 (cSHAKE256, Keccak / `cn_fast_hash`, SHA-512, Blake2b512), and
 Bulletproof+ / FCMP++ (curve-based — the known, recorded, accepted non-PQ ZK
 risk).
+
+---
+
+## 5. The through-line invariant — a live domain string's bytes are state, not style (RULE)
+
+**Ratified as a standing rule (2026-08-10). Destined for `.cursor/rules/` (see the
+tail row in §3); recorded here first because SA-3b is where it was needed.**
+
+A **live** domain-separation string's *bytes* are consensus (or derivation) state,
+not a naming convention. The registry [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv)
+contains strings in visibly inconsistent styles — `shekyl/pqc-auth-tx-v1`,
+`shekyl-kem-v1`, `Shekyl FROST SAL v1`, `shekyl-subaddr-v1\0`, `Monero Generator T`.
+**That inconsistency is intended and permanent.** Each string is the exact input to
+a hash or transcript whose output is verified — by a signature check, a curve-tree
+membership proof, a key derivation, a FROST session. Change one byte — normalize a
+`/` to a `-`, drop a version suffix, "align" the casing, trim a trailing NUL — and
+the derived value moves: the signature no longer verifies, the leaf no longer matches
+the tree, the restored wallet derives different keys, the multisig session cannot
+complete. Nothing fails to compile; everything fails at runtime, silently, against a
+counterparty or against already-persisted state.
+
+So **"aligning" a live domain string's spelling is the KAT-remint error at consensus
+stakes** — the same class as regenerating a pinned test vector to make a red test
+green (the in-tree instance of this class is the frozen-points KAT,
+`rust/shekyl-curve-generators/src/tests/frozen_points.rs`, which fails the moment a
+generator DST byte moves). The correct response to an
+inconsistent-looking live domain is to **leave it exactly as it is** and, if the
+inconsistency is genuinely confusing, document *why the bytes are frozen* — never to
+touch the bytes. This is the difference between a rename (an *identifier* change,
+rule 93, always safe) and a domain-value change (a *state* change, never safe once
+the value is live). The registry, the distinctness test, and the CI gate exist to
+make an accidental "cleanup" of these bytes **fail loudly** rather than ship.
+
+Corollary (frozen-inherited vs. Shekyl-live): a string carrying `"Monero"`
+provenance is additionally a rule-93 **carve-out** — a rebrand sweep skips it (see
+[`FROZEN_DOMAIN_SEPARATORS.md`](../FROZEN_DOMAIN_SEPARATORS.md)). A Shekyl-authored
+live string (e.g. `Shekyl FROST SAL v1`) is *ours to version* but no freer to
+*re-spell in place*: versioning means minting a new `…-v2` string alongside a
+migration, never editing the `…-v1` bytes.
+
+## 6. Error-band allocation — pointer, not a second table
+
+The JSON-RPC error-band allocation (`-29000..-29099` lifecycle, `-29200..-29299`
+refresh/rescan, `-29300..-29399` proofs *(reserved)*, `-29400..-29499` transfers,
+`-29800..-29899` sign/verify message *(reserved)*) is **single-sourced** in
+[`wallet_rpc.yaml`](../api/wallet_rpc.yaml) (the band map at its head, then each code
+inline). **SA-3b introduces no new band and no new code**, so — by the very §5
+discipline — it does **not** re-tabulate them here; a second copy would drift and
+then lie. Recorded only as the crypto cross-reference the CBOM needs: the two bands
+that surface *cryptographic* verify outcomes to a wallet client are `-29300` (tx /
+reserve proof malformed or unprovable) and `-29800` (message signature malformed /
+checksum-rejected / verify-failed). Consensus-level auth/verify failures (the six
+SA-2 signing surfaces) are **not** in this band at all — they are transaction
+rejections at the daemon/C++ boundary, not wallet-RPC errors, and the CBOM records
+them under the signing-surface inventory, not here.

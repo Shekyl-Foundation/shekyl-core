@@ -33,7 +33,7 @@ impl Ciphersuite for Ed25519T {
     type G = EdwardsPoint;
     type H = blake2::Blake2b512;
 
-    const ID: &'static [u8] = b"Ed25519 Monero T";
+    const ID: &'static [u8] = b"Ed25519 Monero T"; // FROZEN DST (inherited) — see docs/FROZEN_DOMAIN_SEPARATORS.md
 
     fn generator() -> Self::G {
         EdwardsPoint(*T)
@@ -44,7 +44,7 @@ impl Ciphersuite for Ed25519T {
     }
 }
 impl Curve for Ed25519T {
-    const CONTEXT: &'static [u8] = b"FROST-ED25519-FCMP++-v1";
+    const CONTEXT: &'static [u8] = b"FROST-ED25519-FCMP++-v1"; // FROZEN DST (inherited) — see docs/FROZEN_DOMAIN_SEPARATORS.md
 }
 
 #[derive(Clone, PartialEq, Eq, Zeroize)]
@@ -343,6 +343,7 @@ impl<R: Send + Sync + Clone + RngCore + CryptoRng, T: Sync + Clone + Debug + Tra
         rerandomized_output: RerandomizedOutput,
         x: Scalar,
     ) -> Self {
+        // FROZEN DST (inherited) — see docs/FROZEN_DOMAIN_SEPARATORS.md
         transcript.domain_separate(b"SpendAuthAndLinkability Multisig");
 
         transcript.append_message(b"signable_tx_hash", signable_tx_hash);

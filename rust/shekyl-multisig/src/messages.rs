@@ -68,6 +68,18 @@ impl MultisigEnvelope {
     /// payload_len is included to prevent framing attacks where an attacker
     /// swaps the length prefix while preserving the ciphertext. sig_len is
     /// NOT included because it is metadata about the signature itself.
+    ///
+    /// **Forward-guard (SA-2 / SA-3b).** This returns a **bare** header with no
+    /// scheme-level domain separator, and today has **no production signer** —
+    /// only tests/benches/fuzz call it (verified in the SA-2 §2.1 six-surface
+    /// census; the envelope `sender_sig` is not produced on any live path). If a
+    /// production signer is ever added here, it MUST route through the
+    /// domain-separated hybrid scheme (`shekyl_crypto_pq::signature`, a distinct
+    /// `…-scheme-v1` domain, per SA-R-2) and register that domain in
+    /// `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` — signing these bytes bare would
+    /// re-introduce the caller-supplied-separation weakness the SA round removed,
+    /// and would let an envelope signature be replayed as a same-shape signature
+    /// over unrelated bytes. Do not add a signer without minting its domain.
     pub fn signable_header(&self) -> Result<Vec<u8>, EnvelopeError> {
         let mut buf = Vec::with_capacity(70 + self.encrypted_payload.len());
         buf.push(self.version);
