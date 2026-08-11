@@ -905,11 +905,42 @@ the round kept trying to add forensics underneath it.
    at post/update (rotation-free; the PoP is the binding) — a
    TJ-B-adjacent format decision landing on the **bond wire**, hence
    (ii) a persisted-wire change ⇒ version-constant bump (rule 42) when
-   built. (iii) Whether **emission-claim authorization** (the bond
-   `hybrid_public_key` the PR-E3 auth gate verifies) sits hot or cold —
-   this decides whether "impersonate, never drain" covers the *earnings
-   stream* as well as the bond principal. Pose the tier explicitly in
-   the spec; do not let the hot key inherit it by default.
+   built. (iii) **RESOLVED — no change (2026-08-11, verified at
+   source): `hybrid_sign` hot is safe, because the emission claim is
+   two-of-two and only one factor is the identity hybrid.**
+   `emission_vin_verify_auth` requires Auth-P (hybrid signature under
+   `p_pubkey`) AND Auth-B (leaf-gated:
+   `hash_pqc_public_key(backing_pubkey) == pqc_pk_hash` checked FIRST —
+   order pinned, `emission_verify.rs:670/:703` — then the hybrid
+   signature under `backing_pubkey`), with `reward_commits` +
+   `signable_tx_hash` binding the destination. A compromised serving
+   host holding `hybrid_sign` produces Auth-P and nothing else: the
+   backing key is the funding output's per-output PQC key, not in
+   `ARCHIVAL_P_DERIVE_V1` and not on the serving box. No earnings-theft
+   path; GF-1 separation plus the leaf gate were already doing the
+   work, one layer down. Every hot-key surface accounted:
+   countersigning-as-P harmless (the priced q² case); emission claims
+   blocked by Auth-B; `EndpointUpdate` cold by ruling; debit/Unbond
+   under cold `bond_spend_pk`.
+   **The custody proviso the resolution rests on (verified):** the
+   backing secret IS reachable from `master_seed_64` — via the
+   receive-address KEM bundle (`kem_d_z` → decap → per-output
+   `combined_ss` → the output's PQC seed) — but NOT from the two
+   serving-side bundles (`hs_id_seed`; the identity-hybrid seeds),
+   which are independent HKDF children. So the resolution holds iff
+   **the serving host receives derived bundles only — never
+   `master_seed_64`, never the receive/KEM bundle.** Ship the master
+   seed to the box for convenience and Auth-B's protection silently
+   evaporates. This is a MUST in the operator-facing text, and the
+   export surface should have no path that puts the master seed in a
+   serving config.
+   **Consequence for §9.5 item 2:** the key-hierarchy build re-scopes
+   to a delta — `ARCHIVAL_P_DERIVE_V1` already carries the ruled
+   three-tier shape (debit authority, identity hybrid, `hs_id` serving
+   identity — GF-1/GF-9 labels, KAT-frozen). No new labels, no corpus
+   rotation. The only derivation delta is the **`hs_id` rotation
+   index**, an `EndpointUpdate` prerequisite rather than a serving-path
+   one: the daemon creates its service at index 0 today.
    **Carrier — RULED (2026-08-10): `EndpointUpdate` rides the bond-post
    vin as `BondPostKind::EndpointUpdate = 4`, same family as
    `HoldingsUpdate`, deliberately different mutation class.** The
