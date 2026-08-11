@@ -2267,21 +2267,40 @@ mod refresh_driver_tests {
         assert_eq!(id.as_bytes(), &id.0);
     }
 
-    /// The cSHAKE customization is load-bearing: the same preimage under a
-    /// different customization must yield a different truncated digest; and
-    /// production `derive_snapshot_id` must match `cshake256_32` over
-    /// [`super::snapshot_id_preimage`] with the registered customization.
+    /// The cSHAKE customization is load-bearing, and the canonical preimage
+    /// encoding is pinned by an **independent** byte-by-byte reconstruction:
+    /// the expected input is built here from the documented layout (LE u64
+    /// `synced_height` ‖ LE u64 window length ‖ per-entry LE u64 height ‖
+    /// 32-byte hash), never taken from `super::snapshot_id_preimage` — an
+    /// expected value computed from the code under test would go green on any
+    /// encoding change, and a framing-ambiguous re-encoding would silently
+    /// defeat the submit-time staleness check this digest exists to serve.
     #[test]
     fn derive_snapshot_id_domain_separated() {
-        let snap = snapshot_from_parts(7, vec![(7, [0xAB; 32])]);
-        let input = super::snapshot_id_preimage(&snap);
+        let snap = snapshot_from_parts(7, vec![(6, [0xCD; 32]), (7, [0xAB; 32])]);
+
+        // Independent oracle for the documented canonical encoding.
+        let mut expected_preimage = Vec::new();
+        expected_preimage.extend_from_slice(&7u64.to_le_bytes());
+        expected_preimage.extend_from_slice(&2u64.to_le_bytes());
+        expected_preimage.extend_from_slice(&6u64.to_le_bytes());
+        expected_preimage.extend_from_slice(&[0xCD; 32]);
+        expected_preimage.extend_from_slice(&7u64.to_le_bytes());
+        expected_preimage.extend_from_slice(&[0xAB; 32]);
+
+        assert_eq!(
+            super::snapshot_id_preimage(&snap),
+            expected_preimage,
+            "snapshot_id_preimage must produce the documented canonical encoding; \
+             an encoding change mints shekyl/snapshot-id-v2, it does not edit v1"
+        );
 
         let production = super::SNAPSHOT_ID_CUSTOMIZATION;
         let mut counterfactual = production.to_vec();
         counterfactual[0] ^= 0x01;
 
-        let factual = shekyl_crypto_hash::cshake256_32(production, &input);
-        let other = shekyl_crypto_hash::cshake256_32(&counterfactual, &input);
+        let factual = shekyl_crypto_hash::cshake256_32(production, &expected_preimage);
+        let other = shekyl_crypto_hash::cshake256_32(&counterfactual, &expected_preimage);
 
         assert_ne!(
             &factual[..16],
