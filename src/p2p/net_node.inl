@@ -756,17 +756,20 @@ namespace nodetool
     {
     case epee::net_utils::zone::public_:
       return get_ip_seed_nodes();
-    /* Shekyl has no anonymity-network seeds yet. The hidden services are
-       generated and their addresses land here as part of the Q12-D6a
-       discovery work (Q12-R1); until then an operator bootstraps an anonymity
-       zone with `--add-peer <address>`, which routes by parsed zone.
+    /* GENESIS BLOCKER until Shekyl's own hidden services exist: without seeds
+       here, a node whose only anonymity peers would come from this list has no
+       bootstrap path, and its anonymity zone never forms. An operator can still
+       bootstrap with `--add-peer <address>`, which routes by parsed zone, but
+       that is a manual step and not a default. Q12-R1 generates the addresses
+       and lands them here; nothing about Tor on mainnet works until it does.
 
-       These lists previously held MONERO's onion and i2p seeds, so a Shekyl
-       node started with `--tx-proxy tor` attempted to bootstrap its anonymity
-       zone against another network's infrastructure. Returning nothing is
-       correct until Shekyl's own addresses exist: an empty list leaves the
-       zone unbootstrapped, which is visible, where a wrong list connects to
-       strangers, which is not. */
+       These lists previously held MONERO's onion and i2p seeds, which is worse
+       than empty rather than better. A Shekyl node started with `--tx-proxy
+       tor` dialed six Monero hidden services, failed the network-ID handshake
+       at each, and had nowhere else to go — the same dead zone, reached more
+       slowly, while announcing Shekyl's Tor population to another network's
+       seed operators on the way. An unbootstrapped zone is at least visible as
+       what it is. */
     case epee::net_utils::zone::tor:
     case epee::net_utils::zone::i2p:
       return {};
