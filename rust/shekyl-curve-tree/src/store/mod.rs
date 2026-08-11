@@ -12,5 +12,5 @@
 mod ops;
 mod redb_backend;
 
-pub use ops::{mixed_composition_root, MixedRootError};
+pub use ops::{mixed_composition_root, recompute_segment_r_k, MixedRootError};
 pub use redb_backend::{FrozenSegmentRecord, LeafStore, StoreError};

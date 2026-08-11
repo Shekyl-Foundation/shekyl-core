@@ -1,0 +1,26 @@
+[package]
+name = "shekyl-p-serve"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Persona serving loop: loopback shard server behind the P onion service (2d-2 serving path, provisional framing)"
+publish = false
+
+[dependencies]
+# The shard store: `frozen_segment_leaf_bytes` is the serving read and
+# `pin_segment` is what keeps a bonded shard's bytes across `prune_frozen`.
+# `recompute_segment_r_k` is re-exported for the witness-side check the
+# integration test mirrors.
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# Same async runtime surface as the SP-T3 spike's serve endpoint whose
+# hardening shape this crate productionizes: net + io-util for the loopback
+# listener, sync for the in-flight semaphore, time for the per-step bounds.
+tokio = { version = "1", default-features = false, features = ["net", "io-util", "rt", "time", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

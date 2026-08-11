@@ -143,6 +143,10 @@ members = [
     # Per-P archival-firewall network transport (2d-2 SP-T1)
     "shekyl-p-transport",
 
+    # Persona serving loop: loopback shard server behind the P onion
+    # service (2d-2 serving path; provisional THROWAWAY framing)
+    "shekyl-p-serve",
+
     # Wallet-owned Tor integration: control client + lifecycle (2d-2 SP-T0)
     "shekyl-tor",
 
