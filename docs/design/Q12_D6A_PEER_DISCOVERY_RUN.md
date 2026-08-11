@@ -793,6 +793,11 @@ Verified:
 | corrupt/unreadable database | **refuse**, exit 2, touch nothing | refused (`rc=1`); database unchanged, zero backups created |
 | config with no `data-dir` | refuse rather than guess | refused |
 | non-executable daemon | refuse up front | refused |
+| `data-dir` absent (fresh node) | **no-op, exit 0** — this is every first provision | no-op |
+| `data-dir` exists but is a file | refuse | refused |
+| `data-dir` unreadable | refuse — `find`'s silence would be a permissions artifact | refused |
+| `data-dir` relative | refuse — it would resolve against the wrong working directory | refused |
+| `data-dir` with an inline comment | parse the path, not the comment | parsed correctly |
 | refusal matcher vs the real captured `pre-V9` text | fires | fires |
 | matcher against a future `pre-V10` | still fires | fires (matches `pre-V[0-9]+`, not a pinned 9) |
 | matcher against an unrelated `MDB_CORRUPTED` | silent | silent |

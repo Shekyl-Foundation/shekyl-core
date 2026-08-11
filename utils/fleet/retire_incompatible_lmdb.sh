@@ -48,7 +48,35 @@ command -v timeout >/dev/null || { echo "REFUSE: coreutils 'timeout' not found" 
 # The config is the ONLY source for the data directory. Refuse rather than
 # guess a default: guessing is what every defect above had in common.
 DATA=$(sed -n 's/^[[:space:]]*data-dir[[:space:]]*=[[:space:]]*//p' "$CONFIG" | tail -1)
+DATA="${DATA%%#*}"                       # an inline comment is not part of the path
+DATA="${DATA%"${DATA##*[![:space:]]}"}"  # nor is trailing whitespace
 [ -n "$DATA" ] || { echo "REFUSE: $CONFIG sets no data-dir; refusing to guess one" >&2; exit 2; }
+
+# A relative data-dir resolves against the CALLER's working directory, which is
+# not the daemon's (systemd sets WorkingDirectory). Two different trees would be
+# named by one string — the mismatch defect again, so refuse instead.
+case "$DATA" in
+  /*) ;;
+  *) echo "REFUSE: data-dir '$DATA' is relative; it would resolve against this" >&2
+     echo "        script's working directory rather than the daemon's" >&2
+     exit 2 ;;
+esac
+
+# `find` on a path it cannot enumerate prints to stderr and yields nothing, which
+# is indistinguishable from an empty tree once stderr is discarded. Silence is
+# only evidence of absence when the search could have succeeded, so separate the
+# states rather than letting one exit code cover all three.
+if [ ! -e "$DATA" ]; then
+  # Legitimate and common: a node being provisioned for the first time. The
+  # daemon creates this itself. Refusing here would fail every fresh node.
+  echo "OK: $DATA does not exist yet (from $CONFIG) — nothing to retire"
+  exit 0
+fi
+[ -d "$DATA" ] || { echo "REFUSE: data-dir '$DATA' exists but is not a directory" >&2; exit 2; }
+{ [ -r "$DATA" ] && [ -x "$DATA" ]; } || {
+  echo "REFUSE: cannot enumerate '$DATA' (need read+search); a 'no database'" >&2
+  echo "        result here would be an artifact of the permissions, not a fact" >&2
+  exit 2; }
 
 mapfile -t DBS < <(find "$DATA" -maxdepth 3 -type d -name lmdb 2>/dev/null | sort)
 if [ "${#DBS[@]}" -eq 0 ]; then
