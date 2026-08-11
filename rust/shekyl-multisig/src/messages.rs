@@ -57,42 +57,24 @@ pub struct MultisigEnvelope {
     pub address_fingerprint: [u8; 32],
     pub intent_hash: [u8; 32],
     pub sender_index: u8,
+    /// Sender's signature slot (wire §1.2 defines its preimage). **No
+    /// production signer exists today** — every live path carries it empty,
+    /// and the bare preimage builder was deleted rather than left as dead
+    /// code inviting a bare signer (rule 15; SA-2 §2.1 census / SA-3b).
+    ///
+    /// **Forward-guard.** A future signer MUST route through the
+    /// domain-separated hybrid scheme (`shekyl_crypto_pq::signature`, a
+    /// distinct `…-scheme-v1` domain, per SA-R-2) and register that domain in
+    /// `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` — signing the §1.2 bytes bare
+    /// would re-introduce the caller-supplied-separation weakness the SA round
+    /// removed, and would let an envelope signature be replayed as a
+    /// same-shape signature over unrelated bytes. Do not populate this field
+    /// without minting its domain.
     pub sender_sig: Vec<u8>,
     pub encrypted_payload: Vec<u8>,
 }
 
 impl MultisigEnvelope {
-    /// Bytes that the sender signs: version || address_fingerprint || intent_hash ||
-    /// sender_index || payload_len || encrypted_payload.
-    ///
-    /// payload_len is included to prevent framing attacks where an attacker
-    /// swaps the length prefix while preserving the ciphertext. sig_len is
-    /// NOT included because it is metadata about the signature itself.
-    ///
-    /// **Forward-guard (SA-2 / SA-3b).** This returns a **bare** header with no
-    /// scheme-level domain separator, and today has **no production signer** —
-    /// only tests/benches/fuzz call it (verified in the SA-2 §2.1 six-surface
-    /// census; the envelope `sender_sig` is not produced on any live path). If a
-    /// production signer is ever added here, it MUST route through the
-    /// domain-separated hybrid scheme (`shekyl_crypto_pq::signature`, a distinct
-    /// `…-scheme-v1` domain, per SA-R-2) and register that domain in
-    /// `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` — signing these bytes bare would
-    /// re-introduce the caller-supplied-separation weakness the SA round removed,
-    /// and would let an envelope signature be replayed as a same-shape signature
-    /// over unrelated bytes. Do not add a signer without minting its domain.
-    pub fn signable_header(&self) -> Result<Vec<u8>, EnvelopeError> {
-        let mut buf = Vec::with_capacity(70 + self.encrypted_payload.len());
-        buf.push(self.version);
-        buf.extend_from_slice(&self.address_fingerprint);
-        buf.extend_from_slice(&self.intent_hash);
-        buf.push(self.sender_index);
-        let payload_len = u32::try_from(self.encrypted_payload.len())
-            .map_err(|_| EnvelopeError::FieldTooLong("encrypted_payload"))?;
-        buf.extend_from_slice(&payload_len.to_le_bytes());
-        buf.extend_from_slice(&self.encrypted_payload);
-        Ok(buf)
-    }
-
     /// Serialize to canonical bytes for transport.
     ///
     /// Fails with `FieldTooLong` rather than truncating a length that
