@@ -625,6 +625,27 @@ processes are running, bootstrapped, SOCKS up on 9050.
 `HiddenServicePort 12021 127.0.0.1:12023`. Mainnet gets its own directory and
 its own addresses; one onion must not serve both networks.
 
+**The two ports are not a typo, and 12023 must not be "corrected" to 12021.**
+A seed runs **two** p2p listeners:
+
+| listener | bound | reached by |
+| --- | --- | --- |
+| clearnet p2p | `0.0.0.0:12021` (`p2p-bind-port`) | direct IP |
+| anonymity-zone p2p | `127.0.0.1:12023` (`--anonymous-inbound` local port) | tor, forwarded from the onion |
+
+`HiddenServicePort 12021 127.0.0.1:12023` reads *virtual port → local target*:
+the onion is **advertised on 12021**, which is why `--add-peer <onion>:12021`
+is right and matches the clearnet port. Only the *forwarding target* differs.
+
+It differs because it has to. `p2p-bind-ip=0.0.0.0` already occupies
+`127.0.0.1:12021`, so pointing the hidden service at 12021 would make the
+daemon's anonymity-zone listener collide with its own clearnet listener and
+fail to bind. The asymmetry looks like an inconsistency precisely because the
+virtual port and the local port are different kinds of thing.
+
+Verified on the running estate — every seed shows both `0.0.0.0:12021` and
+`127.0.0.1:12023` listening.
+
 **Keys are backed up off-host** to `~/.shekyl/seed-hs-backup/<host>/` on the dev
 box, `0700`, with every `hs_ed25519_secret_key` sha256-verified against its
 source. That discharges §4's requirement — but **the backup itself is now a
