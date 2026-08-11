@@ -19,7 +19,7 @@ use shekyl_curve_tree::{
     OutputIdentity, SegmentId, TargetKind,
 };
 use shekyl_p_serve::{
-    PServeEndpoint, ProviderError, ServeSetPin, ShardBody, ShardProvider, StoreShardProvider,
+    PServeEndpoint, ProviderError, ServeSetPin, ShardProvider, StoreShardProvider,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -163,24 +163,80 @@ async fn unpinned_prune_surfaces_as_a_counted_failure_not_a_distinct_response() 
 
 #[test]
 fn provider_body_is_exactly_the_store_leaves_in_order() {
-    // The production body is the store's leaves in tree order — zero-copy
-    // as bytes on the wire path, no padding, no reordering.
+    // The production body is the store's leaves in tree order — no
+    // padding, no reordering — and it streams: the length is exact before
+    // the first chunk is read, which is what lets the response head be
+    // committed before the store is touched.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     let entries = segment_entries();
     store
         .append_block_deltas(&entries, &[], &[], BlockHeight(10_000))
         .expect("append and freeze");
     let provider = StoreShardProvider::new(store);
-    let body = provider
+    let mut body = provider
         .shard_bytes(0)
         .expect("lookup")
         .expect("frozen shard");
-    assert!(matches!(body, ShardBody::Leaves(_)));
-    assert_eq!(body.byte_len(), entries.len() * 128);
-    let bytes = body.as_bytes();
+    let declared = body.remaining_bytes();
+    assert_eq!(declared, entries.len() * 128);
+
+    let mut bytes = Vec::new();
+    // A chunk size that is not a multiple of the leaf width, so a reader
+    // that quietly assumes leaf-aligned chunks fails here.
+    while let Some(chunk) = body.next_chunk(3_000).expect("chunk") {
+        bytes.extend_from_slice(&chunk);
+    }
+    assert_eq!(bytes.len(), declared, "the body matches its content-length");
     for (i, entry) in entries.iter().enumerate() {
         assert_eq!(&bytes[i * 128..(i + 1) * 128], &entry.leaf[..]);
     }
+}
+
+#[test]
+fn pin_serve_set_refuses_a_serve_set_whose_bytes_are_already_gone() {
+    // Prune-then-pin: the segment froze and was pruned before it entered
+    // the serve-set. The frozen record still exists, so a pin gated on that
+    // record alone reports the set healthy and the persona walks into its
+    // challenge epoch unable to answer. Pinning cannot restore bytes, so
+    // this is loud — the same disposition as an unrepresentable id.
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("append and freeze segment 0");
+    store.prune_frozen(&[]).expect("prune without pinning");
+
+    let provider = StoreShardProvider::new(Arc::clone(&store));
+    let err = provider
+        .pin_serve_set(&[0])
+        .expect_err("a pruned serve-set member cannot be pinned into servability");
+    assert_eq!(err, ProviderError::FrozenSegmentPruned { segment_id: 0 });
+}
+
+#[test]
+fn an_unfrozen_serve_set_member_is_pinned_before_it_freezes() {
+    // The window this closes: shard bonded, not yet frozen. If the pin
+    // waited for the freeze, a prune landing between the freeze and the
+    // next re-pin would discard the bytes permanently. Pinning ahead makes
+    // the survival of a bonded shard independent of which timer fires
+    // first.
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    let provider = StoreShardProvider::new(Arc::clone(&store));
+    assert_eq!(
+        provider.pin_serve_set(&[0]).expect("pin ahead of freeze"),
+        vec![ServeSetPin::NotYetFrozen { shard_id: 0 }]
+    );
+
+    // Freeze, then prune with no further pinning call at all.
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("append and freeze segment 0");
+    store.prune_frozen(&[]).expect("prune");
+
+    let body = provider
+        .shard_bytes(0)
+        .expect("lookup")
+        .expect("the advance pin kept the shard servable");
+    assert_eq!(body.remaining_bytes(), leaves_per_segment() * 128);
 }
 
 #[test]

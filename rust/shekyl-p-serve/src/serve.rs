@@ -30,9 +30,10 @@
 //! # No request logging, at any level
 //!
 //! Not the path, not the peer, not the timing. The only observables are
-//! three aggregate monotone counters with no per-request structure:
+//! four aggregate monotone counters with no per-request structure:
 //! [`PServeEndpoint::served_count`], [`PServeEndpoint::refused_count`],
-//! [`PServeEndpoint::lookup_failure_count`].
+//! [`PServeEndpoint::lookup_failure_count`],
+//! [`PServeEndpoint::accept_error_count`].
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -77,10 +78,15 @@ pub const MAX_REQUEST_BYTES: usize = 8 * 1024;
 /// is per rendezvous circuit. This cap is that aggregate bound.
 ///
 /// **Carried placeholder (SPIKE-PIN-2): the value is not a derivation.**
-/// The binding resource is egress, and the W₂ measurement rig derives the
-/// real value on the provisioning-floor hardware (rule 76). A rising
-/// [`PServeEndpoint::refused_count`] is the operator signal that the cap
-/// is binding.
+/// The binding resource is *egress*, not memory: a body is streamed in
+/// bounded chunks straight from the store ([`ShardBody`]), so concurrency
+/// costs descriptors, tasks, and one chunk each — not `N × 3.33 MB`. Keep
+/// it that way: a change that materialises whole shards silently
+/// reinterprets this constant as a `MAX_INFLIGHT × 3.33 MB` resident-memory
+/// budget, which at 64 is 213 MB and does not fit the rule-76 provisioning
+/// floor. The W₂ rig derives the real value on that hardware; a rising
+/// [`PServeEndpoint::refused_count`] is the operator signal that the
+/// placeholder is binding.
 pub const MAX_INFLIGHT: usize = 64;
 
 /// Bound on reading the request head from an accepted connection.
@@ -88,22 +94,44 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Bound on the whole response write (head plus body). Generous because
 /// 3.33 MB over a rendezvous circuit *is* the slow path — this is the
-/// "peer stopped reading" backstop, not a latency budget.
+/// backstop against a peer that trickles forever, not a latency budget.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Internal write granularity for the shard body.
+/// Bound on **one** write making progress into the socket.
+///
+/// [`WRITE_TIMEOUT`] alone would let a peer that simply stops reading hold
+/// its in-flight slot for ten minutes: 64 such connections, ~100 bytes
+/// each, deny every witness the persona is bonded to answer, renewed
+/// indefinitely for nothing. A peer that stalls blocks the very next chunk
+/// write, so this — not the total — is what a silent connection actually
+/// costs. It bounds *stalls*, not slowness: `write_all` returns when the
+/// kernel accepts the bytes, and the bound restarts per chunk, so a genuine
+/// slow circuit is served for as long as it keeps draining.
+const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Internal read/write granularity for the shard body.
 ///
 /// Not wire framing — the response is one `content-length` body; the wire
-/// bytes are identical to a single write. The loop is chunked so that
-/// resumability, if the format round rules it in, is a change of framing
-/// on top of an already-incremental writer instead of a rewrite — the
-/// §9.5 discipline that a format property must never be foreclosed by
-/// what was convenient to build.
+/// bytes are identical to a single write. The loop is chunked for two
+/// reasons: peak memory per in-flight connection is one chunk rather than a
+/// whole shard, and resumability, if the format round rules it in, becomes
+/// a change of framing on top of an already-incremental reader-writer
+/// instead of a rewrite — the §9.5 discipline that a format property must
+/// never be foreclosed by what was convenient to build.
 const WRITE_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Backoff when `accept` fails (e.g. transient FD pressure). Prevents a
 /// tight spin without logging or changing response shape.
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(10);
+
+/// Bound on discarding a peer's unread request bytes before close, in time
+/// and in bytes. Deliberately small: the in-flight permit is still held, so
+/// a generous drain would hand back the slot-squatting [`MAX_INFLIGHT`]
+/// exists to prevent.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Byte bound on the same drain.
+const MAX_DRAIN_BYTES: usize = 8 * 1024;
 
 /// A running loopback serve endpoint for one persona.
 ///
@@ -117,6 +145,7 @@ pub struct PServeEndpoint {
     served: Arc<AtomicU64>,
     refused: Arc<AtomicU64>,
     lookup_failures: Arc<AtomicU64>,
+    accept_errors: Arc<AtomicU64>,
 }
 
 impl PServeEndpoint {
@@ -141,9 +170,11 @@ impl PServeEndpoint {
         let served = Arc::new(AtomicU64::new(0));
         let refused = Arc::new(AtomicU64::new(0));
         let lookup_failures = Arc::new(AtomicU64::new(0));
+        let accept_errors = Arc::new(AtomicU64::new(0));
         let served_ctr = Arc::clone(&served);
         let refused_ctr = Arc::clone(&refused);
         let failures_ctr = Arc::clone(&lookup_failures);
+        let accept_errors_ctr = Arc::clone(&accept_errors);
         // Bounds concurrency without queueing: an arrival past the cap is
         // closed immediately rather than parked, so the refusal costs one
         // accept and frees the descriptor at once.
@@ -156,7 +187,11 @@ impl PServeEndpoint {
                     // The peer address is deliberately dropped rather than
                     // bound: it is a forensic surface and nothing here may
                     // record it. Back off on accept failure so FD exhaustion
-                    // cannot turn this into a tight CPU spin.
+                    // cannot turn this into a tight CPU spin, and count it —
+                    // a listener that has become permanently unusable is
+                    // otherwise indistinguishable from a quiet epoch, and
+                    // the persona would learn about it from a slash.
+                    accept_errors_ctr.fetch_add(1, Ordering::Relaxed);
                     tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
                     continue;
                 };
@@ -180,8 +215,12 @@ impl PServeEndpoint {
                     handle_connection(stream, provider, &served, &failures)
                         .await
                         .ok();
-                    // Held for the whole connection; the slot reopens only
-                    // once the shard has actually finished sending.
+                    // Held for the whole connection, so the slot reopens
+                    // only once the shard has finished sending. What bounds
+                    // that hold against a hostile peer is
+                    // WRITE_STALL_TIMEOUT, not WRITE_TIMEOUT: a connection
+                    // that stops making progress costs the cap 30 s, not
+                    // ten minutes.
                     drop(permit);
                 });
             }
@@ -192,6 +231,7 @@ impl PServeEndpoint {
             served,
             refused,
             lookup_failures,
+            accept_errors,
         })
     }
 
@@ -218,13 +258,25 @@ impl PServeEndpoint {
     }
 
     /// Lookups that failed for infrastructure reasons (store I/O, pruned
-    /// bytes). On the wire these render as the same 404 as any miss; this
-    /// counter is the only place they are distinguishable, and a nonzero
-    /// value on a bonded serve-set means pins are missing — the
-    /// silent-slash precursor, surfaced.
+    /// bytes), plus bodies that failed part-way through. On the wire the
+    /// first render as the same 404 as any miss and the second as a closed
+    /// connection; this counter is the only place any of them is
+    /// distinguishable, and a nonzero value on a bonded serve-set means
+    /// pins are missing — the silent-slash precursor, surfaced.
     #[must_use]
     pub fn lookup_failure_count(&self) -> u64 {
         self.lookup_failures.load(Ordering::Relaxed)
+    }
+
+    /// `accept` failures. The loop backs off and retries rather than
+    /// exiting, so without this a listener that has become permanently
+    /// unusable — sustained FD exhaustion, a descriptor that will never
+    /// accept again — looks exactly like a quiet epoch: the other three
+    /// counters simply stop moving. Aggregate and monotone like the rest;
+    /// it names no peer and no time.
+    #[must_use]
+    pub fn accept_error_count(&self) -> u64 {
+        self.accept_errors.load(Ordering::Relaxed)
     }
 }
 
@@ -243,11 +295,12 @@ impl std::fmt::Debug for PServeEndpoint {
     }
 }
 
-/// Read one request head, answer it, close.
+/// Read one request head, answer it, close cleanly.
 ///
 /// No keep-alive: each read is its own connection, which keeps the serve
 /// unit unambiguous and removes connection reuse as a cross-persona
-/// correlation surface.
+/// correlation surface. The close goes through [`close_gracefully`], which
+/// is load-bearing rather than tidy — see there.
 ///
 /// # Wire classes (intentionally two, not one)
 ///
@@ -260,6 +313,20 @@ impl std::fmt::Debug for PServeEndpoint {
 ///   class as ordinary circuit death; not a status-code oracle. Writing
 ///   404 after a failed head read would invent a response for peers that
 ///   never finished speaking HTTP, and would not match the capacity path.
+///
+/// # The residual: a truncated `200`
+///
+/// Which response a complete head gets is decided before any byte is
+/// written, so the two classes above are not distinguishable by *choice* of
+/// response. A body can still be cut short after the head — a stalled or
+/// vanished peer, or a store that changed under a segment whose servability
+/// was already established (corruption, or a prune of a segment being served
+/// without a pin). The first is indistinguishable from ordinary circuit
+/// death; the second is a store fault this crate cannot answer and does not
+/// hide from the operator ([`PServeEndpoint::lookup_failure_count`]). It is
+/// named here so a future change that lets *ordinary* misses truncate — for
+/// instance a body that resolves its own servability lazily — is recognised
+/// as widening a probe surface rather than as a refactor.
 async fn handle_connection(
     mut stream: TcpStream,
     provider: Arc<dyn ShardProvider>,
@@ -272,13 +339,45 @@ async fn handle_connection(
 
     let body = resolve_body(&head, provider, lookup_failures).await;
 
-    tokio::time::timeout(
+    let written = tokio::time::timeout(
         WRITE_TIMEOUT,
-        write_response(&mut stream, body.as_ref(), served),
+        write_response(&mut stream, body, served, lookup_failures),
     )
     .await
-    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write"))??;
-    Ok(())
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write"))?;
+    // Close cleanly whether or not the response completed: the drain is
+    // what keeps a half-read request from turning the bytes already queued
+    // into an RST.
+    close_gracefully(&mut stream).await;
+    written
+}
+
+/// Half-close, then discard whatever the peer still had in flight.
+///
+/// Dropping a socket that still has unread bytes in its receive queue makes
+/// Linux send RST rather than FIN, and an RST can destroy response bytes
+/// still sitting in the send buffer. Any request with a body — every `POST`
+/// on the wrong-method path — or a pipelined second request would otherwise
+/// see a reset instead of the shared 404, and a witness that pipelines could
+/// see a *truncated shard*, failing content verification on bytes this
+/// endpoint sent correctly. `connection: close` would say as much in one
+/// header, but [`RESPONSE_HEADER_NAMES`] is the cross-persona fingerprint
+/// and is closed; this says it at the socket layer, where it costs no
+/// observable at all.
+async fn close_gracefully(stream: &mut TcpStream) {
+    stream.shutdown().await.ok();
+    let mut sink = [0u8; 1024];
+    let mut drained = 0usize;
+    tokio::time::timeout(DRAIN_TIMEOUT, async {
+        while drained < MAX_DRAIN_BYTES {
+            match stream.read(&mut sink).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => drained += n,
+            }
+        }
+    })
+    .await
+    .ok();
 }
 
 /// Complete-head resolution: shard lookup or shared miss. Store I/O runs
@@ -303,27 +402,54 @@ async fn resolve_body(
     }
 }
 
+/// Write the head, then stream the body chunk by chunk.
+///
+/// `content-length` comes from [`ShardBody::remaining_bytes`], which is
+/// exact before a single leaf is read — so the head is committed before the
+/// store is touched, and a store that fails mid-body can only truncate a
+/// response, never change which response was chosen.
 async fn write_response(
     stream: &mut TcpStream,
-    body: Option<&ShardBody>,
+    body: Option<ShardBody>,
     served: &AtomicU64,
+    lookup_failures: &AtomicU64,
 ) -> io::Result<()> {
-    match body {
-        Some(payload) => {
-            let bytes = payload.as_bytes();
-            stream.write_all(render_ok(bytes.len()).as_bytes()).await?;
-            for chunk in bytes.chunks(WRITE_CHUNK_BYTES) {
-                stream.write_all(chunk).await?;
+    let Some(mut body) = body else {
+        return write_bounded(stream, NOT_FOUND.as_bytes()).await;
+    };
+    write_bounded(stream, render_ok(body.remaining_bytes()).as_bytes()).await?;
+    loop {
+        // The store read is synchronous redb, so each chunk crosses to the
+        // blocking pool and the body comes back with it.
+        let (returned, chunk) = tokio::task::spawn_blocking(move || {
+            let chunk = body.next_chunk(WRITE_CHUNK_BYTES);
+            (body, chunk)
+        })
+        .await
+        .map_err(|_| io::Error::other("shard body task"))?;
+        body = returned;
+        match chunk {
+            Ok(Some(bytes)) => write_bounded(stream, &bytes).await?,
+            Ok(None) => break,
+            Err(_) => {
+                // The head is already out; all that is left is to close.
+                // The counter is the only place this is visible, which is
+                // the same discipline as a failed lookup.
+                lookup_failures.fetch_add(1, Ordering::Relaxed);
+                return Err(io::Error::other("shard body read failed mid-stream"));
             }
-            stream.flush().await?;
-            served.fetch_add(1, Ordering::Relaxed);
-        }
-        None => {
-            stream.write_all(NOT_FOUND.as_bytes()).await?;
-            stream.flush().await?;
         }
     }
+    served.fetch_add(1, Ordering::Relaxed);
     Ok(())
+}
+
+/// One write, bounded by [`WRITE_STALL_TIMEOUT`] — see that constant for
+/// why the per-write bound, not the total, is what a stalled peer costs.
+async fn write_bounded(stream: &mut TcpStream, bytes: &[u8]) -> io::Result<()> {
+    tokio::time::timeout(WRITE_STALL_TIMEOUT, stream.write_all(bytes))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write stalled"))?
 }
 
 /// Read until the end of the request head (`\r\n\r\n`), bounded by
@@ -422,7 +548,7 @@ mod tests {
 
     impl ShardProvider for FixtureProvider {
         fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-            Ok(self.shards.get(&shard_id).cloned().map(ShardBody::Flat))
+            Ok(self.shards.get(&shard_id).cloned().map(ShardBody::flat))
         }
     }
 
@@ -582,6 +708,88 @@ mod tests {
         s.read_to_end(&mut out).await.expect("read");
         assert!(head_of(&out).starts_with("HTTP/1.1 404"));
         assert_eq!(ep.served_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_request_body_does_not_reset_the_response() {
+        // Unread bytes left in the receive queue at close make Linux send
+        // RST instead of FIN, and the RST can destroy the response already
+        // queued for sending. A complete head followed by a body must still
+        // deliver the whole shared 404 — the invariant says every
+        // complete-head non-servable outcome renders *the same bytes*, and
+        // "reset instead" is not the same bytes.
+        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, vec![1u8; 8])]))
+            .await
+            .expect("bind");
+        let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
+        let body = vec![b'z'; 64 * 1024];
+        s.write_all(
+            format!(
+                "POST /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\ncontent-length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write head");
+        s.write_all(&body).await.expect("write body");
+
+        let mut out = Vec::new();
+        s.read_to_end(&mut out).await.expect("read response");
+        assert_eq!(
+            out,
+            NOT_FOUND.as_bytes(),
+            "the complete shared 404 must survive a request that carried a body"
+        );
+    }
+
+    #[tokio::test]
+    async fn unread_request_bytes_do_not_truncate_the_served_shard() {
+        // The same mechanism with real stakes. A peer that pipelines, or
+        // that sends anything after a complete head, leaves bytes in the
+        // receive queue; closing on top of them resets the connection and
+        // the witness sees a *short shard*, failing content verification on
+        // bytes this endpoint sent correctly.
+        let payload: Vec<u8> = (0..256 * 1024u32).map(|i| (i % 251) as u8).collect();
+        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
+            .await
+            .expect("bind");
+        let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
+        s.write_all(b"GET /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
+            .await
+            .expect("write request");
+        // Never answered — no keep-alive — and exactly the unread remainder
+        // that provokes the reset.
+        s.write_all(&vec![b'q'; 64 * 1024])
+            .await
+            .expect("write trailing bytes");
+
+        let mut out = Vec::new();
+        s.read_to_end(&mut out).await.expect("read response");
+        assert!(head_of(&out).starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(
+            &out[out.len() - payload.len()..],
+            &payload[..],
+            "the whole shard must arrive intact"
+        );
+        assert_eq!(ep.served_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_multi_chunk_body_arrives_whole_and_in_order() {
+        // The body is streamed in WRITE_CHUNK_BYTES pieces; a chunking or
+        // cursor bug shows up as reordering, duplication, or a short body,
+        // none of which a same-length assertion alone would catch.
+        let payload: Vec<u8> = (0..WRITE_CHUNK_BYTES * 3 + 7)
+            .map(|i| u8::try_from(i % 253).expect("modulus is under 256"))
+            .collect();
+        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
+            .await
+            .expect("bind");
+        let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
+        let head = head_of(&r);
+        assert!(head.contains(&format!("content-length: {}", payload.len())));
+        assert_eq!(&r[r.len() - payload.len()..], &payload[..]);
     }
 
     #[tokio::test]

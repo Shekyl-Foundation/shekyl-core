@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use shekyl_curve_tree::{LeafStore, SegmentId, StoreError};
+use shekyl_curve_tree::{FrozenSegmentBody, LeafStore, SegmentId, SegmentPin, StoreError};
 
 /// A shard lookup failed for an infrastructure reason (store I/O, pruned
 /// bytes) or a serve-set construction bug. Counted locally by the endpoint
@@ -34,9 +34,14 @@ pub enum ProviderError {
         /// Local diagnostic (`Debug` of the store error); never on the wire.
         detail: String,
     },
-    /// Frozen segment leaf bytes were pruned without a pin — the silent-slash
-    /// precursor. Named so a non-zero [`crate::PServeEndpoint::lookup_failure_count`]
-    /// can be correlated with the remedy without scraping free-text.
+    /// Frozen segment leaf bytes were pruned without a pin — the
+    /// silent-slash precursor. Named so a non-zero
+    /// [`crate::PServeEndpoint::lookup_failure_count`] can be correlated
+    /// with the cause without scraping free-text, and so
+    /// [`StoreShardProvider::pin_serve_set`] can refuse a serve-set whose
+    /// bytes are already gone instead of reporting it healthy. Raised only
+    /// for an *unpinned* segment: missing bytes under a pin are corruption,
+    /// which pinning cannot fix (the store crate draws that line).
     FrozenSegmentPruned {
         /// Segment id that was frozen then pruned.
         segment_id: u32,
@@ -97,38 +102,77 @@ impl std::fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
-/// Contiguous body bytes for one served shard.
+/// The body of one served shard, read in bounded chunks.
 ///
-/// Production loads tree-ordered leaf arrays from the store and exposes
-/// them as a zero-copy byte view ([`ShardBody::as_bytes`]) — no second
-/// full-segment buffer on the wire path. Fixtures may carry an opaque
-/// flat buffer of any length for header/path tests that do not need a
-/// real segment.
-#[derive(Clone, Debug)]
-pub enum ShardBody {
-    /// Full frozen-segment leaves in tree order (production).
-    Leaves(Vec<[u8; 128]>),
-    /// Opaque payload (tests / measurement harnesses).
-    Flat(Arc<[u8]>),
+/// **Chunked, not materialised.** The serving loop holds one body per
+/// in-flight connection for as long as that connection takes, so a
+/// whole-shard buffer would silently convert the endpoint's concurrency cap
+/// into a resident-memory bound of `MAX_INFLIGHT × 3.33 MB` — a bill the
+/// rule-76 provisioning floor cannot pay, and one the cap does not claim to
+/// be charging. Peak cost here is one chunk.
+///
+/// [`Self::remaining_bytes`] is exact before the first chunk is read, which
+/// is what lets the response head — including `content-length` — go out
+/// before the store is touched at all.
+#[derive(Debug)]
+pub struct ShardBody(Source);
+
+/// Where a body's bytes come from. Private: the production and fixture
+/// sources differ in cost, not in contract, and the wire path must not be
+/// able to tell them apart.
+#[derive(Debug)]
+enum Source {
+    /// Frozen segment streamed from the store (production).
+    Segment(FrozenSegmentBody),
+    /// Opaque in-memory payload (tests, measurement harnesses).
+    Flat { bytes: Arc<[u8]>, read: usize },
 }
 
 impl ShardBody {
-    /// Wire `content-length`.
+    /// An in-memory body of arbitrary length — fixtures and measurement
+    /// harnesses, which serve opaque bytes rather than a real segment.
     #[must_use]
-    pub fn byte_len(&self) -> usize {
-        match self {
-            Self::Leaves(leaves) => leaves.len() * 128,
-            Self::Flat(bytes) => bytes.len(),
+    pub fn flat(bytes: Arc<[u8]>) -> Self {
+        Self(Source::Flat { bytes, read: 0 })
+    }
+
+    /// A store-backed frozen-segment body.
+    #[must_use]
+    pub fn segment(body: FrozenSegmentBody) -> Self {
+        Self(Source::Segment(body))
+    }
+
+    /// Bytes not yet read; before the first [`Self::next_chunk`], the wire
+    /// `content-length`.
+    #[must_use]
+    pub fn remaining_bytes(&self) -> usize {
+        match &self.0 {
+            Source::Segment(body) => body.remaining_bytes(),
+            Source::Flat { bytes, read } => bytes.len() - read,
         }
     }
 
-    /// Contiguous body bytes. For [`Self::Leaves`], this is a zero-copy
-    /// view of the leaf array's in-memory layout.
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        match self {
-            Self::Leaves(leaves) => leaves.as_flattened(),
-            Self::Flat(bytes) => bytes,
+    /// Next body chunk of at most `max_bytes`, or `None` at the end.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError`] if the store fails part-way through a body. The
+    /// response head is already on the wire by then, so the loop can only
+    /// close; the counter is the signal.
+    pub fn next_chunk(&mut self, max_bytes: usize) -> Result<Option<Vec<u8>>, ProviderError> {
+        match &mut self.0 {
+            Source::Segment(body) => body
+                .next_chunk(max_bytes)
+                .map_err(ProviderError::from_store),
+            Source::Flat { bytes, read } => {
+                if *read >= bytes.len() {
+                    return Ok(None);
+                }
+                let stop = bytes.len().min(*read + max_bytes.max(1));
+                let chunk = bytes[*read..stop].to_vec();
+                *read = stop;
+                Ok(Some(chunk))
+            }
         }
     }
 }
@@ -140,8 +184,14 @@ impl ShardBody {
 /// serve). `Err` is infrastructure failure. The endpoint renders both as
 /// the single shared 404; only the local counters tell them apart.
 pub trait ShardProvider: Send + Sync + 'static {
-    /// Full shard body for `shard_id` — the contiguous leaf bytes of the
-    /// frozen segment, exactly what the witness hashes against `R_k`.
+    /// Open the body for `shard_id` — the frozen segment's leaf bytes in
+    /// tree order, exactly what the witness hashes against `R_k`.
+    ///
+    /// Servability is settled by this call, before any byte of response is
+    /// written; the returned [`ShardBody`] then only streams. That
+    /// ordering is what keeps store health off the wire — a body that
+    /// discovered missing bytes half-way through would leak it as a
+    /// truncated `200` that no 404 can be mistaken for.
     ///
     /// # Errors
     ///
@@ -160,10 +210,12 @@ pub enum ServeSetPin {
         /// The pinned shard.
         shard_id: u64,
     },
-    /// The shard is bonded but its segment has not frozen yet — nothing to
-    /// pin or serve until the freeze boundary crosses it. Bonding before
+    /// The shard is bonded and **pinned**, but its segment has not frozen
+    /// yet, so there is nothing servable until the freeze boundary crosses
+    /// it (no committed `R_k`, nothing content-verifiable). Bonding before
     /// freeze is legal by design (`bond_post.rs`: self-harm, not an
-    /// attack); the daemon re-pins when the shard freezes.
+    /// attack); the pin is taken now precisely so the freeze cannot race a
+    /// prune.
     ///
     /// Only used when `shard_id` fits the store's [`SegmentId`] space. An
     /// unrepresentable id fails [`StoreShardProvider::pin_serve_set`] as
@@ -189,37 +241,50 @@ impl StoreShardProvider {
         Self { store }
     }
 
-    /// Pin the frozen members of the persona's serve-set so
-    /// `prune_frozen` cannot discard bytes the persona is bonded to serve
-    /// — the silent-slash hazard, closed at startup rather than left to
-    /// operator discipline. Call before serving; re-call as bonded shards
-    /// freeze (PR-B lifecycle owns the re-pin trigger).
+    /// Pin the persona's whole serve-set so `prune_frozen` cannot discard
+    /// bytes the persona is bonded to serve — the silent-slash hazard,
+    /// closed at startup rather than left to operator discipline.
+    ///
+    /// Every representable member is pinned, **including one that has not
+    /// frozen yet**. Bonding before freeze is legal by design
+    /// (`bond_post.rs`), and pinning in advance is what stops a prune from
+    /// landing between the freeze and a lifecycle re-pin; without it, a
+    /// bonded shard's survival would depend on the order two unrelated
+    /// timers happen to fire. Re-calling after a freeze upgrades the
+    /// reported outcome from [`ServeSetPin::NotYetFrozen`] to
+    /// [`ServeSetPin::Pinned`] — useful, but no longer load-bearing.
+    ///
+    /// Each entry's check and pin share one store write transaction, so a
+    /// concurrent prune cannot commit between them.
     ///
     /// # Errors
     ///
-    /// [`ProviderError`] on the first store failure, or
-    /// [`ProviderError::UnrepresentableShardId`] if any entry does not fit
-    /// the store's `u32` [`SegmentId`] space. Pins already applied stay
-    /// applied (pinning is idempotent, so a retry re-covers the set).
+    /// [`ProviderError::UnrepresentableShardId`] if an entry does not fit
+    /// the store's `u32` [`SegmentId`] space, and
+    /// [`ProviderError::FrozenSegmentPruned`] if a member's bytes were
+    /// already discarded — loud rather than mislabeled, because a pin
+    /// cannot bring pruned bytes back and reporting the set as healthy is
+    /// exactly how a persona reaches its challenge epoch unable to answer.
+    /// The remedy is a store rebuild by chain replay, not a retry. Plus
+    /// [`ProviderError::Store`] on store failure. Pins already applied stay
+    /// applied; pinning is idempotent, so a retry re-covers the set.
     pub fn pin_serve_set(&self, serve_set: &[u64]) -> Result<Vec<ServeSetPin>, ProviderError> {
         let mut out = Vec::with_capacity(serve_set.len());
         for &shard_id in serve_set {
             let Some(id) = segment_id(shard_id) else {
                 return Err(ProviderError::UnrepresentableShardId { shard_id });
             };
-            let frozen = self
+            let pin = self
                 .store
-                .frozen_segment(id)
-                .map_err(ProviderError::from_store)?
-                .is_some();
-            if frozen {
-                self.store
-                    .pin_segment(id)
-                    .map_err(ProviderError::from_store)?;
-                out.push(ServeSetPin::Pinned { shard_id });
-            } else {
-                out.push(ServeSetPin::NotYetFrozen { shard_id });
-            }
+                .pin_segment_for_serving(id)
+                .map_err(ProviderError::from_store)?;
+            out.push(match pin {
+                SegmentPin::PinnedServable => ServeSetPin::Pinned { shard_id },
+                SegmentPin::PinnedNotYetFrozen => ServeSetPin::NotYetFrozen { shard_id },
+                SegmentPin::AlreadyPruned => {
+                    return Err(ProviderError::FrozenSegmentPruned { segment_id: id.0 })
+                }
+            });
         }
         Ok(out)
     }
@@ -238,8 +303,8 @@ impl ShardProvider for StoreShardProvider {
         let Some(id) = segment_id(shard_id) else {
             return Ok(None);
         };
-        match self.store.frozen_segment_leaf_bytes(id) {
-            Ok(Some(leaves)) => Ok(Some(ShardBody::Leaves(leaves))),
+        match self.store.open_frozen_segment_body(id) {
+            Ok(Some(body)) => Ok(Some(ShardBody::segment(body))),
             Ok(None) => Ok(None),
             Err(e) => Err(ProviderError::from_store(e)),
         }

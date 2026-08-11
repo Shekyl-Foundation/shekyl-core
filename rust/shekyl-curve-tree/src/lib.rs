@@ -60,8 +60,8 @@ pub use segment::{
     SEGMENT_FREEZE_REORG_MARGIN_BLOCKS, SEGMENT_LAYER_J, SPENDABLE_AGE_BLOCKS,
 };
 pub use store::{
-    mixed_composition_root, recompute_segment_r_k, FrozenSegmentRecord, LeafStore, MixedRootError,
-    StoreError,
+    mixed_composition_root, recompute_segment_r_k, FrozenSegmentBody, FrozenSegmentRecord,
+    LeafStore, MixedRootError, SegmentPin, StoreError,
 };
 pub use types::{
     AssembleInput, AssembledPath, BlockHeight, ChunkLeaf, Gindex, LeafEntry, OutputIdentity,

@@ -68,8 +68,13 @@
 //! - incomplete heads (oversized, mid-head EOF, read timeout) and
 //!   over-capacity arrivals are **closed** with no HTTP bytes — the same
 //!   class as ordinary circuit death, not a status-code oracle;
-//! - no request logging at any level: the only observables are aggregate
-//!   monotone counters.
+//! - which response a complete head gets is settled **before any byte is
+//!   written**, so no miss can leak as a truncated `200`; the one residual
+//!   ([`serve`], "the residual") is a body cut short by a stalled peer or a
+//!   store fault, and is named rather than assumed away;
+//! - no request logging at any level: the only observables are four
+//!   aggregate monotone counters — served, refused, lookup failures, and
+//!   accept failures — none of which carries per-request structure.
 //!
 //! **Timing.** Byte identity is the invariant for complete-head misses.
 //! Micro-timing differences between a wrong path (no store read) and a
