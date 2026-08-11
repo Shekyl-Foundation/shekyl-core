@@ -1320,6 +1320,23 @@ segment 2g).**
   }
   ```
 
+  > **SUPERSEDED by SA-3c (2026-08-11).** The snapshot-id digest
+  > was retargeted from `cn_fast_hash` (Keccak-256 with a manual
+  > byte *prefix*) to **cSHAKE256 with the domain as the
+  > customization** (`b"shekyl/snapshot-id-v1"`), the house default
+  > for a new internal digest — structural separation instead of a
+  > hand-prepended prefix. The bytes changed form because it is a
+  > fresh mint, not a re-spelling: `SnapshotId` is purely in-memory
+  > (no `Serialize`, absent from `shekyl-engine-file`, never on the
+  > wire or cross-node), so nothing persisted compares a pre- to a
+  > post-change id. The current spec is `derive_snapshot_id` in
+  > `rust/shekyl-engine-core/src/engine/refresh.rs` and the domain
+  > registry (`CRYPTO_DOMAIN_REGISTRY.tsv`, mechanism 1); the
+  > paragraph and code blocks below are the retained **historical**
+  > segment-2g design. See `SIGNATURE_ALIGNMENT.md` §5 for why the
+  > byte change was permissible here and would not be on a persisted
+  > domain.
+
   **Hash primitive (segment-2g closure; revised in
   Copilot-fix follow-up).** Keccak-256 (original padding,
   `shekyl-crypto-hash::cn_fast_hash`) truncated to the first

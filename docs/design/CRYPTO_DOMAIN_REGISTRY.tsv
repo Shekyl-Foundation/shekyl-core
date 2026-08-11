@@ -88,6 +88,7 @@
 1	shekyl/archival-emission-backing-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_BACKING	shekyl-live
 1	shekyl/archival-attestation-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_ATTESTATION	shekyl-live
 1	shekyl/archival-serve-credit-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_SERVE_CREDIT	shekyl-live
+1	shekyl/snapshot-id-v1	rust/shekyl-engine-core/src/engine/refresh.rs	SNAPSHOT_ID_DOMAIN	shekyl-live		wallet-internal reservation-staleness digest; cSHAKE customization (SA-3c retargeted it off cn_fast_hash — unpersisted, no wire, fresh mint)
 #
 # ── Mechanism 2 — HKDF salt + info ───────────
 # distinctness key = salt|info. The three shared infos (spend/view/kem) are
@@ -162,7 +163,6 @@
 5	shekyl-reserve-proof-dleq-v1	rust/shekyl-proofs/src/dleq.rs	DOMAIN_SEPARATOR	shekyl-live		schnorr/DLEQ challenge domain
 5	shekyl/msg-sign-outer-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIGN_OUTER_DOMAIN	shekyl-live		schnorr outer domain
 5	shekyl-subaddr-v1\0	rust/shekyl-crypto-pq/src/output_claim.rs	CLAIM_DERIVATION_DOMAIN	shekyl-live		keccak256_to_scalar prefix; TRAILING NUL (\0) is load-bearing — part of the hashed bytes, not a C-string terminator
-5	shekyl-snapshot-id-v1	rust/shekyl-engine-core/src/engine/refresh.rs	SNAPSHOT_ID_DOMAIN	shekyl-live		keccak prefix via cn_fast_hash; SA-3c retargets to cSHAKE (wallet-internal, unpersisted)
 5	Monero Generator T	rust/shekyl-curve-generators/src/lib.rs	(hash_to_point(keccak256(..)))	frozen-inherited		FCMP++ generator DST; see docs/FROZEN_DOMAIN_SEPARATORS.md
 5	Monero FCMP++ Generator U	rust/shekyl-curve-generators/src/lib.rs	(hash_to_point(keccak256(..)))	frozen-inherited		FCMP++ generator DST
 5	Monero FCMP++ Generator V	rust/shekyl-curve-generators/src/lib.rs	(hash_to_point(keccak256(..)))	frozen-inherited		FCMP++ generator DST
