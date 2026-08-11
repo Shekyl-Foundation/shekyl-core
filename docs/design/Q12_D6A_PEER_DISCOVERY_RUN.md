@@ -724,8 +724,8 @@ So the arms are ordered:
    result. *An arm whose two readings disagree is not reported as a
    measurement.*
 
-This is not a workaround. A real network is not rolling-started, so the artifact
-is an artefact of the harness, and removing it makes the testbed resemble the
+This is not a workaround. A real network is not rolling-started, so it
+is an artifact of the harness, and removing it makes the testbed resemble the
 thing being modelled. Recording the discriminator matters more than the
 ordering: without the two-reading rule, a future run with a slower fleet
 reproduces the artifact and reports it as adoption sensitivity.
@@ -790,10 +790,38 @@ Verified:
 | --- | --- | --- |
 | no database present | no-op, exit 0 | no-op |
 | current-schema database | **left alone** | untouched, byte-for-byte |
-| corrupt/unreadable database | **refuse**, exit 2, touch nothing | refused; database unchanged, zero backups created |
+| corrupt/unreadable database | **refuse**, exit 2, touch nothing | refused (`rc=1`); database unchanged, zero backups created |
+| config with no `data-dir` | refuse rather than guess | refused |
+| non-executable daemon | refuse up front | refused |
 | refusal matcher vs the real captured `pre-V9` text | fires | fires |
 | matcher against a future `pre-V10` | still fires | fires (matches `pre-V[0-9]+`, not a pinned 9) |
 | matcher against an unrelated `MDB_CORRUPTED` | silent | silent |
+
+**Review found a fourth instance of the class — inside the fix for it.** The
+first version located the database from a `data-dir` **argument** while judging
+compatibility by probing with a **config file** that carries its own
+`data-dir=`. Nothing tied the two together, so the probe could refuse one tree
+while the move retired another, including a current-schema chain. That is
+Q12-R9's defect exactly — *a destructive operation whose guard does not look at
+its own subject* — wearing a different costume, in the script written to stop
+it.
+
+Fixed by **removing the second source** rather than checking the two agree: the
+config's `data-dir` is now the sole authority and the argument is gone, so the
+probe and the move cannot disagree about what they are discussing. Refusing when
+the config sets no `data-dir` rather than falling back to a default, because
+guessing is what every instance of this class has had in common.
+
+Two smaller ones from the same review, both real:
+
+- **A probe timeout was read as "compatible".** Exit `124` means the daemon was
+  *still running* — which for a healthy chain is the expected outcome — but the
+  code reached that verdict by finding no refusal in the log, which also
+  describes a daemon that died before it could say why. Now classified on the
+  exit code first: `124` ⇒ opened the database; any other exit ⇒ read the log;
+  no recognised reason ⇒ refuse.
+- **The daemon was checked readable, not executable, and `timeout` was assumed
+  present.** Both now refuse up front.
 
 **One gap, stated rather than papered over: the retire path is not exercised
 end-to-end.** Producing a genuine pre-V9 database is no longer possible here —
