@@ -53,7 +53,9 @@ impl SplitMix64 {
     }
 
     /// Uniform draw in `[0, n)` by rejection (no modulo bias).
+    /// `n` must be nonzero — an empty range has no uniform draw.
     fn below(&mut self, n: u64) -> u64 {
+        assert!(n > 0, "uniform draw from an empty range");
         let zone = u64::MAX - (u64::MAX % n);
         loop {
             let v = self.next();
@@ -143,6 +145,10 @@ pub struct CoverageRun {
 /// over `SETTLEMENT_EPOCH_BLOCKS` blocks, drawn from the exact-min urn or
 /// the `(min, min+1)` band.
 pub fn run_epoch(pairs: u32, total_draws: u64, band: bool, seed: u64) -> CoverageRun {
+    assert!(
+        pairs > 0,
+        "a settlement epoch needs at least one bonded pair to draw from"
+    );
     let seb = SETTLEMENT_EPOCH_BLOCKS;
     let mut rng = SplitMix64(seed.wrapping_mul(0x9e37_79b9).wrapping_add(1));
     let mut buckets = Buckets::new(pairs);
@@ -202,6 +208,10 @@ pub fn run_epoch(pairs: u32, total_draws: u64, band: bool, seed: u64) -> Coverag
 /// ruling's `λ = 3`, `3τ/SEB`, independent of `D`.
 #[must_use]
 pub fn exact_min_exposure_closed_form(total_draws: u64, pairs: u32, tau: u64) -> f64 {
+    // Assert rather than return a silent `inf`: this is a derivation
+    // function whose output feeds arithmetic, and a quiet NaN/inf is worse
+    // than a loud stop in a sim.
+    assert!(pairs > 0, "the closed form is undefined for zero pairs");
     (total_draws as f64 / pairs as f64) * tau as f64 / SETTLEMENT_EPOCH_BLOCKS as f64
 }
 
@@ -255,6 +265,14 @@ mod tests {
     use super::*;
 
     const GENESIS_D: u32 = 4_096;
+
+    #[test]
+    #[should_panic(expected = "at least one bonded pair")]
+    fn zero_pairs_is_rejected_at_the_boundary() {
+        // The empty candidate set fails loudly at the entry point with the
+        // domain reason, not deep in the RNG with a divide-by-zero.
+        let _ = run_epoch(0, 1, false, 1);
+    }
 
     #[test]
     fn exact_min_converges_to_exactly_three_per_pair() {
