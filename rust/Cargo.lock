@@ -4229,6 +4229,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-p-serve"
+version = "3.1.0"
+dependencies = [
+ "shekyl-curve-tree",
+ "tokio",
+]
+
+[[package]]
 name = "shekyl-p-transport"
 version = "3.1.0"
 dependencies = [
@@ -4400,6 +4408,7 @@ dependencies = [
  "sha3",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
+ "shekyl-p-serve",
  "shekyl-p-transport",
  "shekyl-tor",
  "shekyl-types",

@@ -33,7 +33,6 @@
 //! variable the withdrawn concurrency arm confused.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_sp_t3_spike::fixture::ShardFixture;
@@ -86,14 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let dir = tempfile::tempdir()?;
     eprintln!("bringing up 1 persona (conformant shape) behind one tor...");
-    let app = Apparatus::bring_up_with_pow(
-        tor,
-        dir.path().join("tor-data"),
-        1,
-        Arc::new(fixture.bytes().to_vec()),
-        pow,
-    )
-    .await?;
+    let app =
+        Apparatus::bring_up_with_pow(tor, dir.path().join("tor-data"), 1, fixture.bytes(), pow)
+            .await?;
 
     let publish = app.await_reachable(len).await?;
     let persona = &app.personas[0];
