@@ -183,6 +183,36 @@ const _: () = assert!(
      epochs they served and the node deleted"
 );
 
+/// **Connect-order coupling — the slash pass must read what the close wrote.**
+/// At every connect the hooks run slash **then** close
+/// (`blockchain_db.cpp`: `process_archival_slash_at_height` before
+/// `process_archival_epoch_close_at_height`), so the height at which the
+/// slash pass settles epoch `E` (the first block above
+/// `H_slash_deadline(E) = (E+1)·SEB − 1 + CHALLENGE_RESOLUTION_BLOCKS`, i.e.
+/// operand `(E+1)·SEB + CHALLENGE_RESOLUTION_BLOCKS`) must be **strictly**
+/// greater than the height at which `E`'s close fires (operand `(E+1)·SEB`) —
+/// same-height is not enough, because within one connect the slash arm runs
+/// first. The difference is exactly `CHALLENGE_RESOLUTION_BLOCKS`, so the
+/// coupling holds iff it is at least one block.
+///
+/// This can fire on a real re-pin: a future `W`-window redesign that sets the
+/// resolution window to zero ("settle immediately at close") silently inverts
+/// the order — the slash pass would read settlement state the close has not
+/// written yet, exactly the fold-before-read hazard the settlement design
+/// gates structurally. Re-pinning `CHALLENGE_RESOLUTION_BLOCKS` below one
+/// block requires reordering the connect hooks first, and that is a decision
+/// about both sides, not a constant bump. The affine-shape coupling of the
+/// two independently-maintained derivations (`epoch_close_height` here,
+/// `settlement_epoch_slash_deadline_height` in `shekyl-ffi`) is asserted by
+/// test in `shekyl-ffi`'s schedule module, which imports both.
+const _: () = assert!(
+    CHALLENGE_RESOLUTION_BLOCKS >= 1,
+    "CHALLENGE_RESOLUTION_BLOCKS = 0 lands the slash pass for epoch E on the \
+     SAME connect height as E's close, and the connect order runs slash before \
+     close - the slash would read settlement state the close has not written \
+     yet; reorder the connect hooks before re-pinning this below one block"
+);
+
 /// One baseline observation for a `(P_id, shard)` pair: an epoch at which a
 /// challenge was posed and could have been answered.
 ///
