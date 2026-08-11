@@ -295,7 +295,7 @@ variable. Top arm is 60 + 15 = 75 nodes.
 
 **Readout.** `get_connections` over the loopback RPC on each node, polled over
 ssh. `connection_info` carries `bool incoming` and `address_type`
-([`cryptonote_protocol_defs.h:50,88`](../../src/cryptonote_protocol/cryptonote_protocol_defs.h#L50)),
+([`cryptonote_protocol_defs.h:50-88`](../../src/cryptonote_protocol/cryptonote_protocol_defs.h#L50-L88)),
 and `address_type` distinguishes i2p (3) from tor (4)
 ([`enums.h:39-46`](../../contrib/epee/include/net/enums.h#L39-L46)) — so outbound
 anon peer count per node needs **no new instrument**.
@@ -337,18 +337,40 @@ failing to reach clearnet-only nodes.
 
 The arm would report a **trivial pass**, and that is worse than not running it.
 
-Verified at source on 2026-08-11. An anon-arrived transaction is classed
-`relay_method::forward`; on the pool cycle, `forward` is routed into `stem_req`
-([`cryptonote_core.cpp:1070-1071`](../../src/cryptonote_core/cryptonote_core.cpp#L1070))
-and `stem_req` is relayed to **`epee::net_utils::zone::public_` as a literal**
-([`:1091`](../../src/cryptonote_core/cryptonote_core.cpp#L1091)). Not a
-fall-through, not a fallback — the only destination that branch has.
+Verified at source on 2026-08-11. **The pool cycle sends every class except
+`local` to `zone::public_`, and it does so as a literal** — not a
+fall-through, not a fallback:
+
+| arrival class | pool-cycle route | destination |
+| --- | --- | --- |
+| `forward` | `stem_req` ([`:1070-1071`](../../src/cryptonote_core/cryptonote_core.cpp#L1070)) | `zone::public_` ([`:1091`](../../src/cryptonote_core/cryptonote_core.cpp#L1091)) |
+| `fluff` / `stem` / `block` | `public_req` ([`:1073-1077`](../../src/cryptonote_core/cryptonote_core.cpp#L1073)) | `zone::public_` ([`:1087`](../../src/cryptonote_core/cryptonote_core.cpp#L1087)) |
+| `local` | `private_req` | `zone::invalid` → anonymity zone |
+
+**Both anon-arrival branches are covered, which matters because arrival is not
+classed purely on the zone.** `cryptonote_protocol_handler.inl:968-970` assigns
+`forward` when `zone != public_` — but `:974-976` **overrides that to `fluff`**
+when the sender set `dandelionpp_fluff`. So an anon arrival is `forward` *or*
+`fluff` depending on how the sender relayed it. It makes no difference to the
+outcome: `:1087` and `:1091` are the same destination reached by two paths.
 
 So anon-originated traffic takes **one** anon hop, and at hop two the receiving
-node's arrival is dropped from the immediate relay path and goes public on the
-pool cycle. **Every anon transaction crosses to clearnet by construction.**
-Isolation is not merely unlikely; it is unreachable, so a clearnet-only node
-failing to receive one is an event the current code cannot produce.
+node relays it publicly on the pool cycle whichever class it carries. **Every
+anon transaction that reaches a second node crosses to clearnet by
+construction.**
+
+The one way clearnet-only nodes do not receive an anon-originated transaction
+is if it never reaches a second node at all — `send_txs` takes the anonymity
+zone with `require_usable = false` for originated traffic and **fails closed**
+(`net_node.inl:2293-2299`), sending nothing rather than falling back to
+clearnet. That is the origin failing to transmit, not the zones failing to
+bridge, and it does not produce §6.3's signature: a transaction sitting in
+*every* anon node's pool has by definition reached second nodes, each of which
+would have relayed it publicly.
+
+**Isolation is therefore unreachable, not merely unlikely** — a clearnet-only
+node failing to receive an anon transaction that propagated is an event the
+current code cannot produce.
 
 **This has to be stated where the arm is specified, not discovered afterwards.**
 A green isolation result is exactly the kind of number that gets cited later as
