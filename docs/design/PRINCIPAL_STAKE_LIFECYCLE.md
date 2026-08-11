@@ -44,7 +44,8 @@ actor. This doc sits one layer up, at the orchestrator.
 - **Secret-locality (rule 36 / gate-6 §9.6).** `P.view_sk`, `P`'s spend material, and
   `bond_spend_sk` never leave the `StakeEngine` actor — a property now **confirmed in
   code** (§0.1), not aspirational. Principal-side transfer building routes through
-  `KeyEngine` / `PendingTxEngine`; only signed vins / public views / scalar
+  `KeyEngine` / `PendingTxEngine`; only constructed vins (unsigned — SA-2b),
+  assembled persona-bound signed txs, public views, and scalar
   projections cross the boundary.
 - **No consensus or wallet minimum on admission** (gate-7 closed bonds-only; gate-6
   §2.5 no-minimum-at-any-layer pin). Stake-in is value movement, not a consensus action.
@@ -56,7 +57,7 @@ so Round 1 designs against what exists, not against the scoping doc's caution:
 
 | Round-0 claim | Substrate finding (`dev`) | Correction |
 |---------------|---------------------------|------------|
-| "None of [the method surface] exists today (only three `StakeInstance` future-work comments)" | `StakeEngine` actor is substantially built: `StakeEngineHandle::spawn` + `impl Message` for `MintPersonaHandle` / `ActivatePersona` / `ActivePersona` / `SignBond`→`JoinMarketVin` / `ScanStep` / `RetireBondedPersona` ([`stake_engine/`](../../rust/shekyl-engine-core/src/engine/stake_engine/) — actor + message handlers) | The **`P` persona/bond substrate is landed**; what is missing is only the **principal orchestrator surface** (`stake_in` … `drain` / queries) |
+| "None of [the method surface] exists today (only three `StakeInstance` future-work comments)" | `StakeEngine` actor is substantially built: `StakeEngineHandle::spawn` + `impl Message` for `MintPersonaHandle` / `ActivatePersona` / `ActivePersona` / `PlanBondPost`→`BondPostPlacement` (né `SignBond`) / `AssembleBond` / `ScanStep` / `RetireBondedPersona` ([`stake_engine/`](../../rust/shekyl-engine-core/src/engine/stake_engine/) — actor + message handlers) | The **`P` persona/bond substrate is landed**; what is missing is only the **principal orchestrator surface** (`stake_in` … `drain` / queries) |
 | `P` HKDF derivation is a gate-6 Round-1 lone carry ("not yet built") | `ArchivalPKeys` + derivation **built** in [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (23 KB); `bond_spend_sk` present; `BondPostKind::JoinMarket { bond_spend_pk }` serializer in [`shekyl-wire`](../../rust/shekyl-wire/src/transaction.rs) | `P` derivation + the bond-post **wire serializer** are not a blocker; the gap is the non-JoinMarket **connect-path** verify + the principal driving methods (§5 gate 2) |
 | Secret-locality of `P` keys is a forward requirement on the retool | `StakeEngine` already **owns** `spend_sk`/`view_sk`/`ml_kem_dk`/`hybrid_sign_sk`/`bond_spend_sk` (ArchivalPKeys, never `Clone`, `ZeroizeOnDrop`); emits `JoinMarketVin` / `ScanStepResult`, never keys | DQ2 is **confirmed by the built actor**, not a design still to make |
 
@@ -79,7 +80,8 @@ when `P` is `Exited` post-cooldown; `drain()` reads `P`'s non-escrowed outputs;
 `P`" is *unrepresentable*, not runtime-checked. This is **already the built actor's
 discipline**, not a new invention: `RetireBondedPersona` is constructible only with a
 `RetirementWitness` ([`stake_engine/`](../../rust/shekyl-engine-core/src/engine/stake_engine/) —
-types + actor handlers), and `SignBond` consumes a **single-use** `PersistedBondTicket`.
+types + actor handlers), and `PlanBondPost` (né `SignBond`) consumes a **single-use**
+`PersistedBondTicket`.
 Round 1 extends the same pattern to the principal surface — e.g. `unbond()` takes an
 `ExitedConfirmed` witness minted from the scan-observed FSM, the sibling of
 `RetirementWitness`. This principle sharpens **DQ2** (orchestrator = read-model + gate;
@@ -99,7 +101,7 @@ Per [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 tx-legs t
 ## 2. Method surface (Round-1 — signatures frozen per A1, bodies gated)
 
 Layered on the orchestrator `Engine<…>` over the built `StakeEngineHandle`
-(`spawn` / `mint_persona_handle` / `activate_persona` / `active_persona` / `sign_bond`
+(`spawn` / `mint_persona_handle` / `activate_persona` / `active_persona` / `plan_bond_post`
 → `JoinMarketVin` / `scan_step` / `retire_bonded_persona`). **A1 function-body
 replacement contract:** the signatures below freeze **now**; each lands as an
 `unimplemented!()` / NOP body behind its gate (§5) and is filled in place by the PR
@@ -117,9 +119,10 @@ that owns it (§4a PR map) — no signature churn between "surface" and "impleme
   P-public bond post's input-count from signalling funding-tranche count. Multi-tranche funding of
   one admission is a **conscious exception**, not the default.
 - **`fund_bond` / `join_market(shards) -> PendingTx`** — drives the **existing**
-  `StakeEngine::SignBond` → `JoinMarketVin` (built; `#[allow(dead_code)]`/inert until
-  the driving path is activated) + submit. Signs with `P`-identity + funding inputs
-  **inside** `StakeEngine`; only the signed vin crosses the boundary.
+  `StakeEngine::AssembleBond` (built; the vin-only `PlanBondPost`, né `SignBond`,
+  remains for the composition KAT) + submit. Surface-A signing with `P`-identity +
+  funding inputs happens **inside** `StakeEngine` at assemble (the vin itself is
+  unsigned — SA-2b); only the persona-bound signed tx bytes cross the boundary.
 - **`partial_unbond(shard) -> PendingTx`** — voluntary `HoldingsUpdate` drop (gate-4
   `post_kind = 3`, `bond_debit = FLOOR`). **NEW** `StakeEngine` bond-debit message op
   (signs against committed `bond_spend_sk`, gate-6 §9.6). **Genesis-scope (V3.0)** —
@@ -334,7 +337,7 @@ actor:
 | Method | Secret touched | Executes in | Crosses boundary as |
 |--------|----------------|-------------|---------------------|
 | `stake_in` | principal spend/view | `KeyEngine` + `PendingTxEngine` (built path) | signed principal tx; `P` = public recipient address |
-| `fund_bond`/`join_market` | `P`-identity + funding inputs | `StakeEngine::SignBond` (built) | `JoinMarketVin` (signed) |
+| `fund_bond`/`join_market` | `P`-identity + funding inputs | `StakeEngine::AssembleBond` (built; `PlanBondPost` constructs the vin only — SA-2b) | persona-bound signed tx bytes (`PBoundBytes`) |
 | `partial_unbond`/`unbond` | `bond_spend_sk` (debit authorizer) | `StakeEngine` bond-debit op (NEW) | signed bond-debit vin |
 | `drain` | `P.view_sk` + `P` per-output spend | `StakeEngine` `P`-spend op (NEW), from `ScanStep` id | signed `P` spend vin(s) |
 | queries | `P.view_sk` (only `drainable_balance`) | `StakeEngine` | scalar / View struct (§DQ5) |
@@ -344,9 +347,11 @@ orchestrator "**not** on the `StakeEngine` actor." That is right for `stake_in` 
 incomplete for the bond-debit and drain legs: those are **`P`-secret operations that
 must execute *inside* `StakeEngine`** (rule 36 — `P.view_sk`/`bond_spend_sk` never
 leave the actor). The correct statement: the *methods* attach at the orchestrator; the
-*`P`-secret sub-steps* delegate to `StakeEngine`, which returns signed vins / views —
+*`P`-secret sub-steps* delegate to `StakeEngine`, which returns assembled signed
+txs / constructed vins / views —
 never raw `P` keys pulled up to the orchestrator. This is **already the built shape**
-(`SignBond`→`JoinMarketVin`, `ScanStep`→`ScanStepResult`; §0.1) — Round 1 only extends
+(`AssembleBond`→`PBoundBytes`, `PlanBondPost`→`BondPostPlacement`,
+`ScanStep`→`ScanStepResult`; §0.1) — Round 1 only extends
 it with two new debit/spend message ops.
 
 **Rationale.** Rule 36 (secrets in Rust, held by their owning actor) + rule 00
@@ -528,7 +533,7 @@ A1 freezes the §2 signatures; PRs fill bodies in place. Bundled by **validation
 | **PR-P0** *(this doc)* | Round-1 ratification: DQ closes, frozen signatures, GF defaults as *directions*, GENESIS_TX_WIRE_FORMAT Q11 doc-sweep | design | **buildable now** — commit-direct-to-dev |
 | **PR-P1** | `shekyl-staking` **Tier-A** deletion (`registry.rs` / `rewards.rs` / `entitlement.rs`) | removal (rule 15) | **buildable now** — 0 production deps |
 | **PR-P2** | `stake_in(amount)` — ordinary principal→`P` transfer; **end-test = `P` dual-scan recognizes the funded output** (GF-2, real end-test not a unit stub) | ordinary-transfer + dual-scan boundary | frozen contract only; **first unblocked code cut**. Its worth is the GF-2 boundary test, not standalone user value |
-| **PR-P3** | `fund_bond`/`join_market` — drive built `SignBond`→`JoinMarketVin` + submit | JoinMarket bond-post | **lightly gated** — JoinMarket **verify is built** ([`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs)); remaining = C++ transport/FFI wiring + activating the inert driving path. The lightest of the bond legs |
+| **PR-P3** | `fund_bond`/`join_market` — drive built `AssembleBond`→`PBoundBytes` + submit | JoinMarket bond-post | **lightly gated** — JoinMarket **verify is built** ([`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs)); remaining = C++ transport/FFI wiring + activating the inert driving path. The lightest of the bond legs |
 | **PR-P4** | `partial_unbond` + `unbond` — NEW `StakeEngine` bond-debit ops (sign `bond_spend_sk`) | bond-debit wire + release cooldown | **blocked** — non-JoinMarket **connect-path code** (`bond_post.rs` rejects them today, `PostKindNotJoinMarket`) + `bond_spend_pk` debit-auth verify + **gate-6 R4 GF-4/GF-7** (recurring) |
 | **PR-P5** | `drain` — NEW `StakeEngine` `P`-spend op → `PendingTxEngine`, multi-tx | reward-output spend | **blocked** — **reward-emission leg** (outputs to drain don't exist until PR-E3 ML-DSA hard gate) **+ gate-6 R4 GF-4** |
 | **PR-P6** | query surface (View structs); `bonded_holdings`/`unbond_readiness` read public cache; `drainable_balance` = `StakeEngine` scalar | owner-grade projection | rides its data sources (public-cache queries buildable with PR-P3; `drainable_balance` with PR-P5) |
@@ -543,7 +548,7 @@ Tier-B deletion → REWARD_EMISSION_VIN_PLAN PR-E4/E5 doc-sweep.
 |----------|-------------------|-----|
 | DQ1 retire `C_stake`/band; retire reopen-pointer | **rule 16** + **rule 21** | inherited-from-own-prior-design flow contradicting the rebased threat model is *migrated, not rationalized*; the reopen-pointer is retired with a named reopening criterion, not kept as pre-provisioned flexibility |
 | DQ1 amount hidden by base transfer, not `C_stake` | **rule 00 priority-2** | privacy is the firewall/indistinguishability property, not a redundant amount-hiding artifact |
-| DQ2 orchestrator holds no secrets; `P`-legs in `StakeEngine` | **rule 36** + **rule 00 priority-1** | `P.view_sk`/`bond_spend_sk` stay in the owning actor; only signed vins/views cross |
+| DQ2 orchestrator holds no secrets; `P`-legs in `StakeEngine` | **rule 36** + **rule 00 priority-1** | `P.view_sk`/`bond_spend_sk` stay in the owning actor; only assembled signed txs / constructed vins / views cross |
 | DQ3/DQ4 re-gate with reopening criteria | **rule 21** (via **rule 26** A5) | reject-now-with-reopening-criteria over pre-provisioned flexibility; forward-action to the gate-6 R4 scaffold |
 | DQ5 queries return Views; `principal_stakes` RPC-forbidden | **rule 36** + **rule 00 priority-2** | the P↔principal edge is the one firewalled surface; secret computation returns a scalar |
 | DQ6 delete dead staking stack; migrate live tier consumers | **rule 15** + **rule 16** | delete Tier-A dead code now; migrate Tier-B claim-era inheritance, don't build on either |

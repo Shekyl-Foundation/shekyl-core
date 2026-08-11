@@ -49,8 +49,9 @@ This is not a bullet; it is a real derive-boundary round. The knot:
 - `spawn_stake_engine_if_staker` derives personas **only if `staking_enabled`** (`lifecycle.rs:894`).
 - `staking_enabled` is set **only by `persist_bond_record`** (`stake_persist.rs:147`), atomically
   with the first `bonded_slots` entry.
-- `persist_bond_record` follows a **signed** bond (`PersistedBondTicket` persist-before-use,
-  consumed by 2c-2b `sign_bond`), which needs a **derived persona**.
+- `persist_bond_record` precedes bond construction (`PersistedBondTicket`
+  persist-before-use, consumed by 2c-2b `plan_bond_post`, né `sign_bond` — the
+  vin is unsigned since SA-2b), which needs a **derived persona**.
 - …which needs the engine spawned — back to the top.
 
 **The break (source-anchored, not new architecture).** `spawn_stake_engine_if_staker` already

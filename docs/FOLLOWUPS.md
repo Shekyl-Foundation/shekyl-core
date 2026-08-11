@@ -3766,6 +3766,8 @@ sustainability is unaffected by the recalibration.
   `assemble_path` available earlier than planned: **PR 2c-1 (in progress,
   `feat/archival-bond-realtree-kat`)** the real-tree composition KAT --
   `local_pending_tx::join_market_bond_post_signs_and_verifies_over_real_tree`
+  (since renamed `join_market_bond_post_verifies_over_real_tree` — SA-2b
+  deleted on-vin signing and its signature legs)
   drives the bond's cleartext `credit_term` through
   `sign_transaction_with_terms` over a *real* depth-2 `assemble_path` tree (the
   `funded_ledger_and_tree` fixture, the same path
@@ -11309,7 +11311,9 @@ one place to confirm each item's relationship to the wallet stack.
   shape). **The 2c-2b wiring PR is gated on that spec's §6 acceptance criteria.**
   **2c-2b wiring LANDED (2026-07-05): all five §6 criteria.** `plan_entry_seam` single-sources
   the draw consumption (`shekyl-standoff::plan`); the `SignBond` handler consumes both draw
-  values into the plan, replies `SignedBondPost` (vin + plan, never decoupled), and emits to the
+  values into the plan, replies `SignedBondPost` (vin + plan, never decoupled — since renamed
+  `PlanBondPost` / `BondPostPlacement` with an *unsigned* vin, SA-2b; the plan carrier is now
+  the bare `bond_post_offset_blocks` after the GF-7 coin retirement), and emits to the
   injected observer (§6.1/§6.2); `shekyl-staking-sim --gf7-timeline` drives all three axes
   through one recorded timeline with the funding-seam-blind arm first-class (§6.3);
   `ci/gf7-no-emit-guard` asserts the dependency graph + feature containment (§6.4); the

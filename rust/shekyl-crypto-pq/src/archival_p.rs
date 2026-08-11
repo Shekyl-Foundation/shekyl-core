@@ -405,6 +405,52 @@ impl ArchivalPKeys {
     pub fn hybrid_bond_id(&self) -> &HybridPublicKey {
         &self.hybrid_sign_pk
     }
+
+    /// The public key pair a JoinMarket bond post carries, as one value:
+    /// `P`'s identity key and the GF-1 bond-debit authorizer, same-persona by
+    /// construction. This is the **only** producer of [`BondPostKeys`], so the
+    /// two same-typed roles can be neither transposed nor mixed across
+    /// personas by a caller — the pairing the pre-SA-2b `&ArchivalPKeys`
+    /// builder parameter made structural, kept without handing the secret
+    /// bundle to a public-only constructor (rule 36).
+    #[must_use]
+    pub fn bond_post_keys(&self) -> BondPostKeys<'_> {
+        BondPostKeys {
+            identity_pk: self.hybrid_bond_id(),
+            bond_spend_pk: &self.bond_spend_pk,
+        }
+    }
+}
+
+/// Public-only key pair for constructing a JoinMarket bond post.
+///
+/// Fields are private and the sole producer is
+/// [`ArchivalPKeys::bond_post_keys`]: holding one is a structural witness that
+/// `identity_pk` and `bond_spend_pk` are the *same persona's* keys in the
+/// *right roles* — two free `&HybridPublicKey` parameters would let a
+/// transposed or cross-persona call compile and produce a self-consistent vin
+/// whose mistake surfaces only at daemon-side authorization (or worse, as a
+/// committed record whose GF-1 debit key can never unlock the bond).
+#[derive(Clone, Copy, Debug)]
+pub struct BondPostKeys<'a> {
+    identity_pk: &'a HybridPublicKey,
+    bond_spend_pk: &'a HybridPublicKey,
+}
+
+impl BondPostKeys<'_> {
+    /// `P`'s public identity (`hybrid_bond_id` / `hybrid_sign_pk`) — the key
+    /// the bond record is named by and credit paths authorize against.
+    #[must_use]
+    pub fn identity_pk(&self) -> &HybridPublicKey {
+        self.identity_pk
+    }
+
+    /// The GF-1 bond-debit authorizer, JoinMarket-committed and immutable for
+    /// the record's life.
+    #[must_use]
+    pub fn bond_spend_pk(&self) -> &HybridPublicKey {
+        self.bond_spend_pk
+    }
 }
 
 /// Derive the full `ArchivalPKeys` bundle for persona slot `p_slot`.

@@ -19,7 +19,8 @@
 ## 1. Scope
 
 Promote the KAT-only bond assembly
-(`local_pending_tx.rs::join_market_bond_post_signs_and_verifies_over_real_tree`)
+(`local_pending_tx.rs::join_market_bond_post_verifies_over_real_tree`, né
+`…signs_and_verifies…` — SA-2b)
 to a production path, ending at a **sealed pending-post record** that WI-3's
 block-timed dispatch driver consumes. In scope:
 
@@ -44,7 +45,7 @@ dispatch due-check, `BroadcastSubmitter` wiring, entry-event coordination
 
 | Fact | Where |
 | --- | --- |
-| `SignBond` returns `SignedBondPost { vin, plan }`; caller drops it | `stake_engine.rs` handler (`TODO(2d)` comment in step 5) |
+| `PlanBondPost` (né `SignBond`) returns `BondPostPlacement { vin, bond_post_offset_blocks }` (unsigned vin — SA-2b); caller drops it | `stake_engine/persona.rs` handler (`TODO(2d)` comment) |
 | Wire `BondPost` prefix input carries **no signature** — the vin's hybrid signature rides tx-level auth, outside the prefix | `shekyl-wire/src/transaction.rs` `BondPost::write` |
 | `tx_prefix_hash_for_signing` computes the signable hash from prefix parts only, **before** signing | `shekyl-tx-builder/src/wire.rs` |
 | KAT flow: prefix hash → `build_join_market_vin` → `sign_transaction_with_terms` → `encode_final_tx`; credit rule `funding == change + fee + credit` (`verify_credit_funding`) | `local_pending_tx.rs` real-tree bond KAT |
@@ -177,7 +178,7 @@ Engine-side `assemble_bond_post` (public):
 6. Persist the pending-post record (§3.5) **before** returning —
    persist-before-dispatch; WI-3 never sees bytes that aren't durable.
 
-Actor message `AssembleBond` (extends the `SignBond` shape — same handle +
+Actor message `AssembleBond` (extends the `PlanBondPost` shape — same handle +
 ticket typed contracts, same RNG preflight, same draw + `plan_entry_seam`
 consumption, same GF-7 hook emissions), carrying the selected funding
 records, paths, change/fee terms, and prefix parts. Inside the handler
@@ -192,25 +193,26 @@ records, paths, change/fee terms, and prefix parts. Inside the handler
    `tx_prefix_hash_for_signing`. No circularity: the wire `BondPost` input
    carries no signature (§2), so the prefix is fully determined before
    signing.
-3. `build_join_market_vin(keys, holdings, &prefix_hash)` → signed vin +
-   `credit_term`.
-4. **Invariant A-1 (fail closed):** the vin's wire-encoded `BondPost`
-   fields must be byte-identical to the prefix's `BondPost` input from
-   Engine-side step 4. A mismatch means the signature binds a different
-   post than the hash covered — a build defect, never a recoverable state.
-5. `sign_transaction_with_terms(prefix_hash, spend_inputs, tree_ctx,
+3. `build_join_market_vin(keys.bond_post_keys(), holdings)` → constructed
+   (unsigned) vin + `credit_term`. **[As landed post-SA-2b:** the vin is
+   constructed *first* and single-sources the prefix's `BondPost` input, so
+   the originally-specified invariant A-1 (a runtime prefix↔vin equality
+   check) is discharged **by construction** — the signing circularity that
+   forced two constructions was deleted with on-vin signing, and the
+   surface-A `pqc_auths` slot signs the whole-tx payload later.**]**
+4. `sign_transaction_with_terms(prefix_hash, spend_inputs, tree_ctx,
    credit_term, …)` → proofs; `encode_final_tx` → wire bytes.
-6. **Mint `PBoundBytes::bind(persona, bytes)` here** — discharging pin
+5. **Mint `PBoundBytes::bind(persona, bytes)` here** — discharging pin
    P-1: the constructor moves to (or becomes private-to) this assemble
    module, so possession is proof of provenance and no re-wrap site
    exists.
-7. Reply: `PBoundBytes` + `EntrySeamPlan` (+ the funding gindexes for the
-   reservation record). Secrets never cross the boundary.
+6. Reply: `PBoundBytes` + the placement offset (+ the funding gindexes for
+   the reservation record). Secrets never cross the boundary.
 
-`SignBond` (the vin-only message) remains for the request-path composition
-KAT; `AssembleBond` is the production superset. If review prefers a single
-message, `SignBond` collapses into it — resolved at PR review, not
-load-bearing either way.
+`PlanBondPost` (né `SignBond`; the vin-only message) remains for the
+request-path composition KAT; `AssembleBond` is the production superset. If
+review prefers a single message, `PlanBondPost` collapses into it — resolved
+at PR review, not load-bearing either way.
 
 ### 3.4 Named limitation — external-spend detection is 2d-2 scope
 
@@ -361,7 +363,7 @@ holds them.** WI-3 inherits it as its resume-from-restart guarantee.
 ## 5. Round-1 closure
 
 Dispositions D-A1..D-A5 are the addendum's output; open-for-review items
-are (a) `SignBond`/`AssembleBond` message unification and (b) the exact
+are (a) `PlanBondPost`/`AssembleBond` message unification and (b) the exact
 placement of the P spend-bundle helper (actor-local vs `shekyl-crypto-pq`).
 Neither changes the seams above. Per the plan's 1–2-round budget, round 2
 (if any) is the PR review itself.

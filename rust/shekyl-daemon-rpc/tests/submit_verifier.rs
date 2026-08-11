@@ -538,7 +538,7 @@ fn build_fixture() -> SpendFixture {
 /// `sign_transaction_with_terms` (the credit rides as the sole
 /// `OutputTerm`) → wire encode with the bond vin appended and its
 /// pqc_auths slot signed by P's identity key — the same assembly order as
-/// the StakeEngine's `AssembleBond` handler (stake_engine.rs steps 11–18).
+/// the StakeEngine's `AssembleBond` handler (stake_engine/bond.rs steps 7–16).
 struct BondFixture {
     hex: String,
     parsed: ParsedSubmission,
@@ -629,7 +629,7 @@ fn build_bond_fixture() -> BondFixture {
     ];
 
     // ── The wire BondPost prefix input from PUBLIC parts, then the prefix
-    // hash over ToKey + bond input (stake_engine.rs steps 11–12) ─────────
+    // hash over ToKey + bond input (stake_engine/bond.rs step 12) ──────────
     let p_pubkey = p_keys
         .hybrid_bond_id()
         .to_canonical_bytes()
@@ -666,10 +666,10 @@ fn build_bond_fixture() -> BondFixture {
     )
     .expect("prefix hash with the bond input");
 
-    // ── Build + sign the vin over the fixed prefix; amount-level credit
-    // funding rule (§7.3) before proving ─────────────────────────────────
+    // ── Construct the bond vin (public keys only; SA-2b — no on-vin sig);
+    // amount-level credit funding rule (§7.3) before proving ─────────────
     let built =
-        build_join_market_vin(&p_keys, holdings, &tx_prefix_hash).expect("build JoinMarket vin");
+        build_join_market_vin(p_keys.bond_post_keys(), holdings).expect("build JoinMarket vin");
     verify_credit_funding(
         AtomicUnits::from_raw(INPUT_AMOUNT),
         AtomicUnits::from_raw(change_total),
@@ -1159,6 +1159,81 @@ fn bond_auth_key_not_identity_is_rejected() {
         verify(&parsed, &bond_admitting_facts()),
         Err(VerifyFailure::Malformed),
         "a non-identity bond auth key must be Malformed (BP5)"
+    );
+}
+
+#[test]
+fn bond_slot_tampered_signature_is_rejected() {
+    // Surface-A successor of the deleted on-vin signature negatives (SA-2b):
+    // flipping one byte of the BOND slot's hybrid signature leaves the
+    // funding slot, the membership proof, and the signed prefix untouched,
+    // so the rejection is attributable to the bond slot's own hybrid
+    // verification — pinning that the PQC battery covers the bond slot, not
+    // just the spend-input slots (a verify that sliced
+    // `..spend_inputs.len()` the way the sign side does would pass every
+    // other test in this file).
+    let parsed = bond_mutated(|tx| {
+        let shekyl_wire::transaction::Ct::Fcmp { pqc_auths, .. } = &mut tx.ct else {
+            panic!("bond fixture carries an Fcmp ct");
+        };
+        let last = pqc_auths[1].hybrid_signature.len() - 1;
+        pqc_auths[1].hybrid_signature[last] ^= 0x01;
+    });
+    assert_eq!(
+        verify(&parsed, &bond_admitting_facts()),
+        Err(VerifyFailure::Malformed),
+        "a tampered bond-slot hybrid signature must be Malformed"
+    );
+}
+
+#[test]
+fn bond_spend_pk_swap_after_signing_is_rejected() {
+    // Successor of the deleted §3.4.1 preimage assert ("two vins differing
+    // only in bond_spend_pk must not share a signature preimage"), re-pinned
+    // on the SA-2b mechanism: the GF-1 debit authorizer rides the signed tx
+    // prefix, so the surface-A payload hash must move when it changes —
+    // verified, not inherited (SIGNATURE_ALIGNMENT.md §2.2). Without this,
+    // the key-swap-at-join foreclosure (GENESIS_TX_WIRE_FORMAT.md, security-
+    // critical) would rest on no test at all.
+    let fx = bond_fixture();
+    let baseline = fx.parsed.tx.pqc_signing_payload_hashes();
+    let mut swapped = fx.parsed.tx.clone();
+    for input in &mut swapped.prefix.inputs {
+        if let shekyl_wire::transaction::Input::BondPost(bp) = input {
+            let shekyl_wire::transaction::BondPostKind::JoinMarket { bond_spend_pk } = &mut bp.kind
+            else {
+                panic!("bond fixture is a JoinMarket post");
+            };
+            bond_spend_pk[0] ^= 0x01;
+        }
+    }
+    let moved = swapped.pqc_signing_payload_hashes();
+    assert_eq!(baseline.len(), moved.len(), "slot count unchanged");
+    assert_ne!(
+        baseline[1], moved[1],
+        "the bond slot's surface-A payload hash must bind bond_spend_pk"
+    );
+
+    // End-to-end foreclosure: the swapped post is rejected. (The first leg
+    // to object may be the FCMP++ prefix binding rather than the PQC
+    // battery — the preimage inequality above is what pins the surface-A
+    // binding itself.)
+    let parsed = bond_mutated(|tx| {
+        for input in &mut tx.prefix.inputs {
+            if let shekyl_wire::transaction::Input::BondPost(bp) = input {
+                let shekyl_wire::transaction::BondPostKind::JoinMarket { bond_spend_pk } =
+                    &mut bp.kind
+                else {
+                    panic!("bond fixture is a JoinMarket post");
+                };
+                bond_spend_pk[0] ^= 0x01;
+            }
+        }
+    });
+    assert_eq!(
+        verify(&parsed, &bond_admitting_facts()),
+        Err(VerifyFailure::Malformed),
+        "a bond_spend_pk swapped after signing must be Malformed"
     );
 }
 

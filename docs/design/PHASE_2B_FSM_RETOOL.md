@@ -937,8 +937,10 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   landed in one change with the discriminating KATs (committed key accepts:
   **Unbond verifies end-to-end**; identity/foreign/no-key all reject
   fail-closed). The wallet seam simplified (the vin carries the key;
-  `wire_bond_post_input` takes it from the vin; A-1 now pins the key
-  byte-for-byte between prefix input and signed vin). **`HoldingsUpdate` is
+  `wire_bond_post_input` takes it from the vin; A-1 then pinned the key
+  byte-for-byte between prefix input and vin — since retired: SA-2b deleted
+  on-vin signing and single-sourced the constructed vin into the prefix
+  input, making the equality structural). **`HoldingsUpdate` is
   unblocked** — its drop-path auth rides the same selection.
 - **2026-07-13 (d):** **`Unbond` release-gate hardening (review round).** Added
   the slash-settlement predicate to the release verify — the scheduler's settled

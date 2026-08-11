@@ -103,7 +103,7 @@ impl StakeEngine {
         Ok(())
     }
 
-    /// Steps 1–5 shared verbatim by the [`SignBond`] and [`AssembleBond`]
+    /// Steps 1–5 shared verbatim by the [`PlanBondPost`] and [`AssembleBond`]
     /// handlers: validate the handle, cross-check it against the ticket's slot,
     /// preflight the OS entropy source, draw the guarded entry gap, plan the
     /// entry seam, and emit the GF-7 hooks. Returns the validated handle slot and

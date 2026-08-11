@@ -4,6 +4,17 @@
 
 ### Changed
 
+- **Pinned crypto vectors: the `bond_post` surface is retired from the
+  hybrid-v2 KAT** (`docs/test_vectors/PQC_HYBRID_V2_KAT.json`; PR-SA-2b,
+  rule-30 vector-change record). SA-2b resolved the bond-slot preimage
+  question as "generic wins": the bond vin carries no on-vin signature, its
+  authorization is the generic surface-A `pqc_auths` slot, and the dedicated
+  `SCHEME_DOMAIN_BOND_POST` domain was deleted — so the fixture drops from
+  seven vectors to six. The six surviving vectors and the pinned keypair are
+  **byte-identical** to the previous fixture (the shared `KAT_MESSAGE` bytes
+  are frozen with the pinned signatures; cross-build pin continuity is
+  preserved — no construction change occurred and none is masked).
+
 - **Wallet internals: the in-flight-spend lock is now derived from the
   send journal instead of being stored on each output row**
   (`WALLET_SEND_RECORD.md` PR-SJ-1b, `feat/wallet-sj1b-field-retirement`).

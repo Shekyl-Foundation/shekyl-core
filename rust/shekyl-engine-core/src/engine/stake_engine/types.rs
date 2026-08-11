@@ -280,9 +280,9 @@ impl PersonaHandle {
 /// Always-on compile-time guard: the two operation capability tokens
 /// ([`PersonaHandle`], [`PersistedBondTicket`]) must remain **single-use** —
 /// neither `Clone` nor `Copy`. Their single-use-ness is what makes "use an
-/// unheld persona" (typed contract #2) and "sign before persist" (typed
-/// contract #1) unrepresentable: a token is consumed *by value* by `sign_bond`
-/// and cannot be duplicated to bypass the consumption.
+/// unheld persona" (typed contract #2) and "construct before persist" (typed
+/// contract #1) unrepresentable: a token is consumed *by value* by
+/// `plan_bond_post` and cannot be duplicated to bypass the consumption.
 ///
 /// This replaces the originally-planned `trybuild` compile-fail tests for S7(c)
 /// (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §4 R0-D# finding): `trybuild` compiles
@@ -383,7 +383,7 @@ pub(crate) enum StakeEngineError {
     StaleHandle,
 
     /// The OS entropy source failed to supply bytes for the entry-gap timing draw
-    /// (`SignBond`, S5 / Round 3). A bond-timing draw requires a functional CSPRNG;
+    /// (`PlanBondPost`, S5 / Round 3). A bond-timing draw requires a functional CSPRNG;
     /// a source failure is fail-loud and terminal for this request — no silent
     /// fallback to a weaker source. The cause may be **transient** (very early
     /// boot, before the entropy pool is seeded) or **persistent** (a sandbox /
@@ -398,7 +398,7 @@ pub(crate) enum StakeEngineError {
     )]
     RngSourceFailed(#[source] rand_core::Error),
 
-    /// The entry-gap timing draw was statistically degenerate (`SignBond`, S5 /
+    /// The entry-gap timing draw was statistically degenerate (`PlanBondPost`, S5 /
     /// Round 3 — double-jitter-trap detection). Two consecutive draws from the
     /// same RNG produced identical spreads, which is the signature of a stuck
     /// or non-random source. The draw is rejected; a correct CSPRNG produces
@@ -411,12 +411,12 @@ pub(crate) enum StakeEngineError {
     )]
     RngDegeneracy,
 
-    /// The [`PersonaHandle`] and [`PersistedBondTicket`] passed to [`SignBond`]
+    /// The [`PersonaHandle`] and [`PersistedBondTicket`] passed to [`PlanBondPost`]
     /// name different persona slots. A ticket witnesses the durable persist for a
-    /// *specific* slot; it cannot authorize signing for any other slot.
+    /// *specific* slot; it cannot authorize a bond operation for any other slot.
     /// Non-terminal: ensure both are obtained for the same `p_slot`.
     #[error(
-        "sign-bond slot mismatch: handle names slot {handle_slot:?}, \
+        "bond-post slot mismatch: handle names slot {handle_slot:?}, \
          ticket names slot {ticket_slot:?}; both must name the same persona slot"
     )]
     SlotMismatch {
@@ -425,18 +425,18 @@ pub(crate) enum StakeEngineError {
     },
 
     /// Bond construction failed after the actor validated the handle and ticket
-    /// (`SignBond`, S2). The persona bundle was available but
+    /// (`PlanBondPost`, S2). The persona bundle was available but
     /// [`build_join_market_vin`] returned an error — see the wrapped
     /// [`BondBuildError`] for the specific cause (`BondFloorZero`,
-    /// `IdentityEncode`, or `Sign`).
+    /// `IdentityEncode`, or `BondSpendEncode`).
     #[error("bond construction failed: {0}")]
     BondBuild(#[from] BondBuildError),
 
     /// A WI-2 [`AssembleBond`] pipeline step failed — funding arithmetic,
     /// spend-bundle derivation, output construction, proving, PQC auth
-    /// signing, wire encoding, or the A-1 prefix↔vin invariant. The wrapped
-    /// [`BondAssemblyError`] names the §3.6 failure mode; in every arm
-    /// nothing was persisted and no funding was reserved.
+    /// signing, or wire encoding. The wrapped [`BondAssemblyError`] names the
+    /// §3.6 failure mode; in every arm nothing was persisted and no funding
+    /// was reserved.
     #[error("bond assembly failed: {0}")]
     Assembly(#[from] BondAssemblyError),
 
