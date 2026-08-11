@@ -1247,9 +1247,15 @@ than repealing it:
    is unblocked); everything else calls it; fully KAT-able today. Highest
    value on the list. Three determinism pins it forces, decided here so
    the module does not decide them silently:
-   - **Canonical pair ordering:** the drawable set is ordered
-     lexicographically by `(p_id, shard_id)` bytes — every node must
-     index the same candidate list identically.
+   - **Canonical pair ordering (stated exactly — the original "bytes"
+     wording was ambiguous, caught in #435 review):** lexicographic by
+     `p_id` bytes, then by `shard_id` **numerically** — equivalently,
+     memcmp over `p_id ‖ shard_id_be` (big-endian). **NOT** the
+     little-endian wire encoding of `shard_id`, under which 256 sorts
+     before 1 — a second implementation sorting by the wire bytes
+     would derive a divergent candidate list. Every node must index
+     the same list identically; the module pins the 1-vs-256 case by
+     test.
    - **Per-draw randomness:** a domain-separated cSHAKE stream (rule 30:
      explicit customization label + version) seeded by
      `block_hash(h−1)`, with the draw index within the block as a stream
