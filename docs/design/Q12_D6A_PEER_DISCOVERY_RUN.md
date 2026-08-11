@@ -275,6 +275,15 @@ and `address_type` distinguishes i2p (3) from tor (4)
 ([`enums.h:39-46`](../../contrib/epee/include/net/enums.h#L39-L46)) — so outbound
 anon peer count per node needs **no new instrument**.
 
+**The four production seeds are in the graph but not in the histogram.** After
+Q12-R-W2 they run anon zones on the same testnet, so they participate whether or
+not this doc says so — and at `A = 15` four well-known hubs are a quarter of the
+population, distorting exactly the arm where selection pressure matters most.
+So: seeds serve as **bootstrap targets and gossip participants**, and the
+reported distribution is over **fleet nodes only**. `A` counts fleet nodes.
+(Q12-R5's late joiner answers *"did we measure the bootstrap?"*; this answers
+*"what population is the histogram over?"* — two different confounds.)
+
 **Convergence.** Poll until the distribution stops moving. *Time to converge is
 itself a result*, not overhead: "does it converge at all, and how long" is half
 the question.
@@ -321,7 +330,10 @@ fleet off the critical path of a funding step.
 
 ## 7. Order
 
-1. Q12-R-W1 — repo PR: Monero seed deletion + `.at()` abort fix.
+1. Q12-R-W1 — repo PR: Monero seed deletion + `.at()` abort fix. **Q12-R-W3
+   rides this PR** — independent of the run, but both touch `add_zone`'s
+   neighbourhood, so they share a validation surface
+   ([`19-validation-surface-discipline`](../../.cursor/rules/19-validation-surface-discipline.mdc)).
 2. Q12-R-W2 — seed estate: rebuild, restart `seedusw`, tor + HS ×4,
    cross-`--add-peer`, **keys backed up**.
 3. Ubuntu 24.04 build artifact; fleet image pinned to match.
@@ -417,6 +429,15 @@ Shape:
   only because all three emitters in §8.2 are direct unmodified member reads, so
   the forwarding layer is invisible to the oracle. If any emitter ever
   transforms the value, the test must move to the wire.
+
+**One premise is unverified and must be checked at implementation time**: that
+all zones exist by the end of `init()`. The `.at()` throw pattern found in
+§2.1/§4 suggests zone construction is init-time only, but `add_zone`'s callers
+have not been enumerated. If anything constructs a zone after `init()`, the
+invariant misses it and moves to `add_zone`'s **tail** — after the `emplace`,
+which also sees the feared edit; `init()` is chosen because it is strictly
+broader, catching an `init_config` edit too. The gtest on the announced value is
+the guard that survives either placement.
 
 Filed as **Q12-R-W3**: independent of the run, small, and adjacent to the
 `add_zone` neighbourhood that Q12-R-W1 already touches.
