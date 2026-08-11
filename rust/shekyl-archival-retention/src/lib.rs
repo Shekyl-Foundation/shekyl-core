@@ -70,7 +70,9 @@ pub use admission::{
     credited_work_at_admission, parent_state_shards_from_gather, AdmissionError, AdmissionShard,
     ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
 };
-pub use attestation::{settle_epoch, AttestationKind, EpochSettlement, SERVE_THRESHOLD_PASSES};
+pub use attestation::{
+    settle_epoch, AttestationKind, EpochSettlement, SettleError, SERVE_THRESHOLD_PASSES,
+};
 pub use attestation_wire::{
     attestation_nonce, attestation_root, empty_attestation_root,
     pass_records_from_headers_and_witness, verify_pass_countersignature, AttestationHeader,
@@ -91,7 +93,7 @@ pub use bond_duration::{bond_duration, ShardAgeAtAdd};
 pub use bond_floor::{
     bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
     ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS,
-    MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
+    MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS,
 };
 pub use bond_post::{
     bond_post_block_unique, verify_holdings_update_add, verify_holdings_update_drop,

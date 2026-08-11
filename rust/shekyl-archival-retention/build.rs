@@ -74,6 +74,20 @@ fn main() {
             )
         });
 
+    // Block-span floor for archival derived-state survival before prune sweep
+    // (ARCHIVAL_TIMING_CONSTANTS.md §1 / §2.3). Same JSON authority as W,
+    // reorg depth, and release cooldown — the sim's timing-cluster coupling
+    // harness imports this rather than mirroring a local literal.
+    let retention_horizon_blocks = map
+        .get("retention_horizon_blocks")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing retention_horizon_blocks in {}",
+                config_path.display()
+            )
+        });
+
     // Per-shard retention-commitment horizon (gate-4 §4.4). Shape genesis-frozen;
     // numerics provisional (H2 plateau arm). Consumed by
     // shekyl-archival-retention::bond_duration (Rust-only at genesis); the C++
@@ -154,6 +168,7 @@ fn main() {
          pub const MAX_CLAIM_AGE_W: u64 = {max_claim_age_w};\n\
          pub const RELEASE_COOLDOWN_EPOCHS: u64 = {release_cooldown_epochs};\n\
          pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = {archival_reorg_depth_blocks};\n\
+         pub const RETENTION_HORIZON_BLOCKS: u64 = {retention_horizon_blocks};\n\
          pub const BOND_DURATION_BASE_EPOCHS: u64 = {bond_duration_base_epochs};\n\
          pub const BOND_DURATION_AGE_SCALE: u64 = {bond_duration_age_scale};\n"
     );
