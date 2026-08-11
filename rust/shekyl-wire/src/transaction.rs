@@ -43,7 +43,7 @@
 
 use std::io::{self, BufRead, Read, Write};
 
-use shekyl_crypto_hash::cn_fast_hash;
+use shekyl_crypto_hash::keccak256;
 
 use crate::bytes::{read_array, read_byte};
 use crate::hash::hash_concat;
@@ -1379,10 +1379,10 @@ impl Transaction {
     }
 
     /// The FCMP++ **`signable_tx_hash`** — the prefix hash the membership/SAL proof
-    /// signs (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.2; the C++ `cn_fast_hash` over the
+    /// signs (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.2; the C++ `keccak256` over the
     /// `transaction_prefix`). It **includes the version**: the C++ `transaction_prefix`
     /// serializes `VARINT(version)` first, so this is
-    /// `cn_fast_hash(varint(TX_VERSION) ‖ TxPrefix::write)` — the same `varint(3) ‖
+    /// `keccak256(varint(TX_VERSION) ‖ TxPrefix::write)` — the same `varint(3) ‖
     /// prefix` composition [`Self::write`] emits at the head of the tx.
     pub fn prefix_hash(&self) -> [u8; 32] {
         let mut buf = Vec::new();
@@ -1390,7 +1390,7 @@ impl Transaction {
         self.prefix
             .write(&mut buf)
             .expect("writing to a Vec is infallible");
-        cn_fast_hash(&buf)
+        keccak256(&buf)
     }
 
     /// Per-input PQC signing-preimage hashes — the `signed_hash(i)` each input's PQC
@@ -1399,14 +1399,14 @@ impl Transaction {
     ///
     /// ```text
     /// payload(i)     = prefix_blob ‖ ct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
-    /// signed_hash(i) = cn_fast_hash(payload(i))
+    /// signed_hash(i) = keccak256(payload(i))
     /// ```
     /// - `prefix_blob`    = `varint(TX_VERSION) ‖ TxPrefix::write` (same as [`Self::prefix_hash`]'s input)
     /// - `ct_base_blob`  = `CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write`
     ///   (mirrors the [`Ct::Fcmp`] write head exactly — §1.3, referenceBlock in *base*)
-    /// - `prunable_hash`  = `cn_fast_hash(Prunable::write)` (the digest, not the blob — §1.4)
+    /// - `prunable_hash`  = `keccak256(Prunable::write)` (the digest, not the blob — §1.4)
     /// - `pqc_header(i)`  = the i-th auth header, **no signature** (`PqcAuth::header_write` — §1.5)
-    /// - `all_key_hashes` = `‖ over every auth: cn_fast_hash(hybrid_public_key)` (binds every
+    /// - `all_key_hashes` = `‖ over every auth: keccak256(hybrid_public_key)` (binds every
     ///   input's key into every signature)
     ///
     /// Returns one hash per `pqc_auths` entry — `== nvin` for a valid spend, whose arity
@@ -1445,17 +1445,17 @@ impl Transaction {
         base.write(&mut ct_base_blob)
             .expect("Vec write is infallible");
 
-        // prunable_hash = cn_fast_hash(Prunable::write)
+        // prunable_hash = keccak256(Prunable::write)
         let mut prunable_blob = Vec::new();
         prunable
             .write(&mut prunable_blob)
             .expect("Vec write is infallible");
-        let prunable_hash = cn_fast_hash(&prunable_blob);
+        let prunable_hash = keccak256(&prunable_blob);
 
-        // all_key_hashes = concat over EVERY auth of cn_fast_hash(hybrid_public_key)
+        // all_key_hashes = concat over EVERY auth of keccak256(hybrid_public_key)
         let mut all_key_hashes = Vec::with_capacity(pqc_auths.len() * 32);
         for auth in pqc_auths {
-            all_key_hashes.extend_from_slice(&cn_fast_hash(&auth.hybrid_public_key));
+            all_key_hashes.extend_from_slice(&keccak256(&auth.hybrid_public_key));
         }
 
         pqc_auths
@@ -1468,7 +1468,7 @@ impl Transaction {
                 auth.header_write(&mut payload)
                     .expect("Vec write is infallible");
                 payload.extend_from_slice(&all_key_hashes);
-                cn_fast_hash(&payload)
+                keccak256(&payload)
             })
             .collect()
     }
@@ -1498,7 +1498,7 @@ impl Transaction {
         Ok(tx)
     }
 
-    /// The consensus transaction hash (`cn_fast_hash` over component hashes,
+    /// The consensus transaction hash (`keccak256` over component hashes,
     /// GENESIS_TX_WIRE_FORMAT.md §11): **3-part** for the coinbase (`Null`) —
     /// `H(prefix) · H(base) · null_hash`; **4-part** for an FCMP++ spend —
     /// `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`. `H(prefix)` includes
@@ -1509,13 +1509,13 @@ impl Transaction {
         self.prefix
             .write(&mut prefix_buf)
             .expect("Vec write is infallible");
-        let h_prefix = cn_fast_hash(&prefix_buf);
+        let h_prefix = keccak256(&prefix_buf);
 
         match &self.ct {
             Ct::Null(base) => {
                 let mut base_buf = vec![CT_TYPE_NULL];
                 base.write(&mut base_buf).expect("Vec write is infallible");
-                hash_concat(&[h_prefix, cn_fast_hash(&base_buf), [0u8; 32]])
+                hash_concat(&[h_prefix, keccak256(&base_buf), [0u8; 32]])
             }
             Ct::Fcmp {
                 fee,
@@ -1528,7 +1528,7 @@ impl Transaction {
                 write_varint(*fee, &mut base_buf).expect("Vec write is infallible");
                 base_buf.extend_from_slice(reference_block);
                 base.write(&mut base_buf).expect("Vec write is infallible");
-                let h_base = cn_fast_hash(&base_buf);
+                let h_base = keccak256(&base_buf);
 
                 // Per the C++ oracle (format_utils.cpp:1137/1163-1182): **4-part**
                 // `{prefix, base, pqc_auths, prunable}` iff `has_pqc && !pqc_auths
@@ -1543,7 +1543,7 @@ impl Transaction {
                         prunable
                             .write(&mut prunable_buf)
                             .expect("Vec write is infallible");
-                        cn_fast_hash(&prunable_buf)
+                        keccak256(&prunable_buf)
                     }
                     None => [0u8; 32],
                 };
@@ -1566,7 +1566,7 @@ impl Transaction {
                     for auth in pqc_auths {
                         auth.write(&mut auth_buf).expect("Vec write is infallible");
                     }
-                    hash_concat(&[h_prefix, h_base, cn_fast_hash(&auth_buf), h_prunable])
+                    hash_concat(&[h_prefix, h_base, keccak256(&auth_buf), h_prunable])
                 }
             }
         }

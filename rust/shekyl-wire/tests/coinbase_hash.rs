@@ -7,7 +7,7 @@
 //!
 //! `Block::hash()` and the coinbase `Transaction::hash()` must equal the C++
 //! daemon's `block_header.hash` / `miner_tx_hash` for the same blobs. This is the
-//! gold-standard validation of the cn_fast_hash component hashing (3-part coinbase
+//! gold-standard validation of the keccak256 component hashing (3-part coinbase
 //! tx hash + the `V(len)`-prefixed block-hash preimage + the single-leaf tree
 //! hash) — byte-identical to consensus.
 //!
@@ -77,12 +77,12 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
         assert_eq!(
             hex32(&block.miner_transaction.hash()),
             miner_tx_hash,
-            "height {height}: miner tx hash (3-part cn_fast_hash) must match the daemon"
+            "height {height}: miner tx hash (3-part keccak256) must match the daemon"
         );
         assert_eq!(
             hex32(&block.hash()),
             block_hash,
-            "height {height}: block hash (cn_fast_hash of V(len)·preimage) must match the daemon"
+            "height {height}: block hash (keccak256 of V(len)·preimage) must match the daemon"
         );
         // Every height in this corpus has no pass records, so the header must
         // commit the empty-set root — not null_hash. Ties C++ constructor default /

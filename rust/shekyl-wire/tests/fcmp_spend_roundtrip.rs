@@ -240,7 +240,7 @@ fn fcmp_spend_rejects_oversized_pqc_blob() {
 #[test]
 fn synthetic_spend_hash_preimage_is_pinned() {
     // Regression guard for the 4-part FCMP++ spend hash (§11):
-    //   cn_fast_hash( H(prefix) ‖ H(base) ‖ H(varint(N)·pqc_auths) ‖ H(prunable) ).
+    //   keccak256( H(prefix) ‖ H(base) ‖ H(varint(N)·pqc_auths) ‖ H(prunable) ).
     // There is no live spend-hash oracle yet (the KAT is deferred), so this pins the
     // *preimage structure* against accidental drift — most importantly the leading
     // varint(N) count prefix on the pqc_auths component, which the C++ oracle emits
@@ -263,7 +263,7 @@ fn synthetic_spend_hash_preimage_is_pinned() {
 fn synthetic_spend_prefix_hash_is_pinned() {
     // The FCMP++ `signable_tx_hash` (FCMP_SPEND_SIGNING_PREIMAGE.md §1.2) — the prefix
     // hash the membership/SAL proof signs. It INCLUDES the version:
-    // cn_fast_hash(varint(3) ‖ TxPrefix::write). Distinct from the chain-identity tx
+    // keccak256(varint(3) ‖ TxPrefix::write). Distinct from the chain-identity tx
     // hash above. Source-validated against the spec; no live spend-hash oracle yet, so
     // this pins the value against drift — confirm vs the daemon before changing it.
     let tx = synthetic_spend();
@@ -297,7 +297,7 @@ fn synthetic_spend_prefix_hash_is_pinned() {
 #[test]
 fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
     // Per-input PQC signing preimage (§1.1): payload(i) = prefix_blob ‖ ct_base_blob ‖
-    // prunable_hash ‖ pqc_header(i) ‖ all_key_hashes, then cn_fast_hash. Source-validated;
+    // prunable_hash ‖ pqc_header(i) ‖ all_key_hashes, then keccak256. Source-validated;
     // the live C++ oracle KAT is the §1.1 residual. Regression guard against drift.
     let tx = synthetic_spend();
     let hashes = tx.pqc_signing_payload_hashes();

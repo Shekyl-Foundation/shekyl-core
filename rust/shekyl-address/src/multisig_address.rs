@@ -41,7 +41,7 @@
 //! §5.5 setup ritual wanted ("did we all derive the same group?"), and it
 //! replaces the deleted `multisig_group_id`, which had no consumer under E′ and
 //! computed a per-output hash under a per-group name. See [`address_fingerprint`]
-//! for why cSHAKE256 and not the consensus `cn_fast_hash`.
+//! for why cSHAKE256 and not the consensus `keccak256`.
 
 use crate::network::{multisig_hrp, network_and_kind_from_hrp, AddressKind, Network};
 use bech32::primitives::decode::CheckedHrpstring;
@@ -387,18 +387,18 @@ pub const MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION: &[u8] = b"shekyl/multisig-
 /// long-term caller (`wallet2::create_pqc_multisig_group`) never executed
 /// successfully.
 ///
-/// # Why cSHAKE256 and not `cn_fast_hash`
+/// # Why cSHAKE256 and not `keccak256`
 ///
 /// The address is on **no consensus path** — no C++ mirror, no FFI, no leaf — so
 /// nothing requires byte-identity with the Monero-descended daemon, which is
-/// `cn_fast_hash`'s only reason to exist. What the address *does* have is four
+/// `keccak256`'s only reason to exist. What the address *does* have is four
 /// independent implementers (payer wallet, scanner, exchange, light client), and
 /// for them "Keccak-256" is not a function: original Keccak (0x01) and SHA3-256
 /// (0x06) differ by one padding byte and fail *silently* — a different fingerprint,
 /// no diagnostic. cSHAKE256 has one meaning, and its customization string makes the
 /// domain separation structural instead of definitional. This matches the house
 /// pattern for every new domain-separated artifact (`shekyl/archival-serve-credit-response-v1`,
-/// `shekyl/receive-label-hash-v1`); `cn_fast_hash` keeps exactly the consumers that
+/// `shekyl/receive-label-hash-v1`); `keccak256` keeps exactly the consumers that
 /// require parity.
 pub fn address_fingerprint(payload: &MultisigAddressPayload) -> [u8; 32] {
     shekyl_crypto_hash::cshake256_32(

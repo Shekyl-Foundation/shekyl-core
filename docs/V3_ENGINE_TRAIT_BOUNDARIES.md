@@ -5119,8 +5119,10 @@ Worked example: segment 2g's `SnapshotId` hash-primitive binding cited
 `sha2 = "0.10"` at Cargo.toml line 115 as workspace-available, but
 line 115 was `[dev-dependencies]`; production `sha2` at line 33 was
 `optional = true`. The Copilot-fix follow-up switched the binding to
-`shekyl-crypto-hash::cn_fast_hash` (unconditional `[dependencies]`
-entry per Cargo.toml line 28).
+`shekyl-crypto-hash::keccak256` (renamed from `cn_fast_hash` in SA-3d;
+unconditional `[dependencies]` entry per Cargo.toml line 28). The
+`SnapshotId` digest itself later moved off Keccak entirely to a cSHAKE
+customization in SA-3c; the dependency-discipline lesson here stands.
 
 **Inheritance read for PR 6+:** dependency recommendations cite the
 *actual* production-dependency graph, not prose descriptions of it.

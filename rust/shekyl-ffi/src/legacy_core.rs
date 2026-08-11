@@ -298,9 +298,16 @@ pub extern "C" fn shekyl_pqc_verify(
 
 // ─── Crypto: Hash Functions ──────────────────────────────────────────────────
 
-/// Compute Keccak-256 (cn_fast_hash) of `data_len` bytes at `data_ptr`.
+/// Compute original Keccak-256 of `data_len` bytes at `data_ptr`.
 /// Result is written to `out_ptr` which must point to 32 writable bytes.
 /// Returns true on success, false if pointers are null.
+///
+/// The C ABI symbol keeps the name `shekyl_cn_fast_hash` for stability — C++
+/// callers (`src/shekyl/shekyl_ffi.h`) know it by that name. The Rust primitive
+/// it forwards to was renamed `cn_fast_hash` → `keccak256` in SA-3d (the name
+/// now says plainly that it is Keccak-256, not cSHAKE); only the ABI symbol
+/// retains the historical `cn_fast_hash` spelling, so the export list is
+/// unchanged and no C++ edit is required.
 ///
 /// # Safety
 /// Caller must ensure all pointer arguments are valid or null.
@@ -316,7 +323,7 @@ pub unsafe extern "C" fn shekyl_cn_fast_hash(
     let Some(data) = (unsafe { slice_from_ptr(data_ptr, data_len) }) else {
         return false;
     };
-    let hash = shekyl_crypto_hash::cn_fast_hash(data);
+    let hash = shekyl_crypto_hash::keccak256(data);
     std::ptr::copy_nonoverlapping(hash.as_ptr(), out_ptr, 32);
     true
 }

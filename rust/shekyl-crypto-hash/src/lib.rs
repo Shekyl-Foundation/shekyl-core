@@ -2,7 +2,7 @@
 //!
 //! Two primitives, two jobs, and the split is the point:
 //!
-//! - [`cn_fast_hash`] / [`tree_hash`] — **Keccak-256, for consensus parity only.**
+//! - [`keccak256`] / [`tree_hash`] — **Keccak-256, for consensus parity only.**
 //!   Use these *iff* the output must be byte-identical to the Monero-descended C++
 //!   daemon: `prefix_hash`, `tree_hash`, block IDs, `pqc_signing_payload_hashes`,
 //!   `multisig_pqc_leaf_hash`. They are un-domained because the thing they must
@@ -29,7 +29,7 @@
 //! the same original-Keccak-256, and standardizing on the RustCrypto crate collapses
 //! the codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
 //!
-//! The `cn_fast_hash` *name* is the inherited CryptoNote consensus-primitive name
+//! The `keccak256` *name* is the inherited CryptoNote consensus-primitive name
 //! ("cn" = CryptoNote; the *fast* hash vs. the slow PoW hash), kept for 1:1 source
 //! mapping to the C++ daemon; a rule-93 rename to `keccak256` is a tracked follow-up
 //! (see `60-no-monero-legacy.mdc`).
@@ -44,14 +44,14 @@ pub const HASH_SIZE: usize = 32;
 
 pub type Hash = [u8; HASH_SIZE];
 
-/// Compute `cn_fast_hash` — Keccak-256 with original padding, via RustCrypto `sha3`.
+/// Compute `keccak256` — Keccak-256 with original padding, via RustCrypto `sha3`.
 ///
-/// Matches `cn_fast_hash` in `src/crypto/hash.c` (keccak1600 absorb, first 32 bytes;
+/// Matches `keccak256` in `src/crypto/hash.c` (keccak1600 absorb, first 32 bytes;
 /// rate 136 bytes for 256-bit output). `sha3::Keccak256` is the original Keccak
 /// variant (0x01 padding), so this is byte-identical to the prior tiny-keccak impl and
 /// to the C++ daemon — verified by the empty-input KAT below and the live coinbase/
 /// spend hash KATs in shekyl-wire.
-pub fn cn_fast_hash(data: &[u8]) -> Hash {
+pub fn keccak256(data: &[u8]) -> Hash {
     Keccak256::digest(data).into()
 }
 
@@ -60,7 +60,7 @@ pub fn cn_fast_hash(data: &[u8]) -> Hash {
 /// **The default for any new hashed artifact.** The customization string makes
 /// domain separation structural: two contexts cannot collide even over identical
 /// input bytes, without anyone having to remember a convention. Use
-/// [`cn_fast_hash`] only where byte-identity with the C++ daemon is required.
+/// [`keccak256`] only where byte-identity with the C++ daemon is required.
 ///
 /// `customization` follows the house convention `b"shekyl/<domain>-v1"` (see
 /// `shekyl/archival-serve-credit-response-v1`, `shekyl/receive-label-hash-v1`);
@@ -144,7 +144,7 @@ pub fn tree_hash(hashes: &[Hash]) -> Hash {
             let mut buf = [0u8; 2 * HASH_SIZE];
             buf[..HASH_SIZE].copy_from_slice(&hashes[0]);
             buf[HASH_SIZE..].copy_from_slice(&hashes[1]);
-            cn_fast_hash(&buf)
+            keccak256(&buf)
         }
         _ => {
             let mut cnt = tree_hash_cnt(count);
@@ -159,7 +159,7 @@ pub fn tree_hash(hashes: &[Hash]) -> Hash {
                 let mut buf = [0u8; 2 * HASH_SIZE];
                 buf[..HASH_SIZE].copy_from_slice(&hashes[i]);
                 buf[HASH_SIZE..].copy_from_slice(&hashes[i + 1]);
-                ints[j] = cn_fast_hash(&buf);
+                ints[j] = keccak256(&buf);
                 i += 2;
                 j += 1;
             }
@@ -171,14 +171,14 @@ pub fn tree_hash(hashes: &[Hash]) -> Hash {
                     let mut buf = [0u8; 2 * HASH_SIZE];
                     buf[..HASH_SIZE].copy_from_slice(&ints[2 * k]);
                     buf[HASH_SIZE..].copy_from_slice(&ints[2 * k + 1]);
-                    ints[k] = cn_fast_hash(&buf);
+                    ints[k] = keccak256(&buf);
                 }
             }
 
             let mut buf = [0u8; 2 * HASH_SIZE];
             buf[..HASH_SIZE].copy_from_slice(&ints[0]);
             buf[HASH_SIZE..].copy_from_slice(&ints[1]);
-            cn_fast_hash(&buf)
+            keccak256(&buf)
         }
     }
 }
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn empty_hash() {
-        let h = cn_fast_hash(&[]);
+        let h = keccak256(&[]);
         // Known Keccak-256 of empty input (original padding, NOT SHA3)
         let expected = [
             0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7,
@@ -198,13 +198,13 @@ mod tests {
         ];
         assert_eq!(
             h, expected,
-            "cn_fast_hash of empty input must match Keccak-256"
+            "keccak256 of empty input must match Keccak-256"
         );
     }
 
     #[test]
     fn known_hash() {
-        let h = cn_fast_hash(b"Shekyl");
+        let h = keccak256(b"Shekyl");
         assert_eq!(h.len(), HASH_SIZE);
         assert_ne!(h, [0u8; 32]);
     }
@@ -288,12 +288,12 @@ mod tests {
 
     #[test]
     fn tree_hash_two() {
-        let a = cn_fast_hash(b"a");
-        let b = cn_fast_hash(b"b");
+        let a = keccak256(b"a");
+        let b = keccak256(b"b");
         let root = tree_hash(&[a, b]);
         let mut combined = [0u8; 64];
         combined[..32].copy_from_slice(&a);
         combined[32..].copy_from_slice(&b);
-        assert_eq!(root, cn_fast_hash(&combined));
+        assert_eq!(root, keccak256(&combined));
     }
 }

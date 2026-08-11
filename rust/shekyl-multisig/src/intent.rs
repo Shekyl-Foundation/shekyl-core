@@ -188,7 +188,7 @@ pub struct SpendIntent {
 }
 
 impl SpendIntent {
-    /// Compute `intent_hash = cn_fast_hash(canonical_serialize(SpendIntent))` (SS9.4).
+    /// Compute `intent_hash = keccak256(canonical_serialize(SpendIntent))` (SS9.4).
     ///
     /// Fallible because canonical serialization is: a field whose length
     /// exceeds the u32 wire prefix has no well-defined canonical encoding
@@ -198,7 +198,7 @@ impl SpendIntent {
     /// unvalidated, pathologically-large intent.
     pub fn intent_hash(&self) -> Result<[u8; 32], SpendIntentError> {
         let canonical = self.to_canonical_bytes()?;
-        Ok(shekyl_crypto_hash::cn_fast_hash(&canonical))
+        Ok(shekyl_crypto_hash::keccak256(&canonical))
     }
 
     /// Append a `u32`-LE length taken from `len`, failing with
@@ -445,7 +445,7 @@ impl ChainStateFingerprint {
             preimage.extend_from_slice(&a.to_raw().to_le_bytes());
         }
 
-        shekyl_crypto_hash::cn_fast_hash(&preimage)
+        shekyl_crypto_hash::keccak256(&preimage)
     }
 }
 
