@@ -558,3 +558,90 @@ feared edit — randomizing `m_config.m_peer_id` inside `add_zone`:
 The test carries its own negative control: the public zone must *not* read as
 the sentinel, so a harness unable to observe the per-zone value cannot pass.
 Full unit suite 1055 passed, 0 failed.
+
+---
+
+## 9. Q12-R-W2 progress — the unprivileged half is done
+
+State as of 2026-08-11. Everything below was done without root; the remainder
+is blocked on privileged access (§9.4).
+
+### 9.1 Q12-R7 — build at a portable baseline, not at the build host
+
+**Ruled after the binary crashed on a seed.** The first Ubuntu 24.04 artifact
+ran on three seeds and died with `Illegal instruction` on `skl-seedaus`:
+
+| host | provider | CPU | AVX-512 |
+| --- | --- | --- | --- |
+| `skl-seedaus` | DigitalOcean | `DO-Regular` | **no** |
+| `skl-seedeu` / `skl-seeduse` / `skl-seedusw` | Vultr | Xeon Skylake | yes |
+| dev box | — | i9-11950H (Rocket Lake) | yes |
+
+`CMakeLists.txt` defaults `ARCH` to `native` (`set_default_arch`), so the
+container compiled for the machine that was handy — **exactly the failure
+[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+names**, reached through a build flag rather than a constant.
+
+Rebuilt with `-DARCH=x86-64` and `-C target-cpu=x86-64` for the Rust side.
+**The intersection of today's four hosts would also be the wrong baseline**:
+the fleet is arbitrary instance types across three providers, so the floor is
+generic `x86-64`, not "what all four seeds happen to share". Verified: zero
+AVX-512 instructions emitted, and the artifact runs on all four.
+
+Relay nodes are not compute-bound, so the cost is nil — and RandomX carries its
+own runtime dispatch, so mining is unaffected by the daemon's baseline.
+
+### 9.2 The build artifact
+
+Built in an Ubuntu 24.04 container (`glibc` 2.39) because the dev box is
+Debian 13 (`glibc` 2.41) and a trixie-built binary will not run on the seeds.
+Requires at most `GLIBC_2.38` / `GLIBCXX_3.4.30`. Stripped and `zstd -19`
+compressed to 17 MB for transfer; `sha256 f7e35f3c…` verified identical on all
+four hosts, `--version` returning `Shekyl 'Shekyl NG' (v3.1.0-unknown,
+protocol 3)` on each.
+
+Staged at `~shekyl/shekyld-u2404`. **Not installed** — see §9.4.
+
+### 9.3 Hidden services, and where the keys live
+
+One v3 service per seed, generated from the pinned Tor Expert Bundle already
+staged by SP-T3 (`/opt/shekyl/tor-expert-bundle-15.0.17/tor/tor`). All four tor
+processes are running, bootstrapped, SOCKS up on 9050.
+
+| host | testnet `.onion` |
+| --- | --- |
+| `skl-seedaus` | `aghoxa757l2wqribeto2hv2rk3wjwcwdqzvu5hjkqdjcm24nuhaszjqd.onion` |
+| `skl-seedeu` | `aks2vbpjb5ojfyqcataqedodws7ardjxczy76bqwmlv55mgfunsxoiyd.onion` |
+| `skl-seeduse` | `23dkgevx7qnhrx2wmhmjvhsz2mpp54xomkujcvhuhm3ajgdciwztypad.onion` |
+| `skl-seedusw` | `nqkfnallpz5kaoxkj2y6bmeifk4helrwp5z2fdtayo3rfzbx4q7z2tqd.onion` |
+
+**These are testnet services** — `HiddenServiceDir ~/tor-hs-testnet`,
+`HiddenServicePort 12021 127.0.0.1:12023`. Mainnet gets its own directory and
+its own addresses; one onion must not serve both networks.
+
+**Keys are backed up off-host** to `~/.shekyl/seed-hs-backup/<host>/` on the dev
+box, `0700`, with every `hs_ed25519_secret_key` sha256-verified against its
+source. That discharges §4's requirement — but **the backup itself is now a
+single copy on one machine**, alongside the genesis wallet, and wants a second
+location before these addresses are compiled into source.
+
+They are **not** in `get_seed_nodes` yet, per Q12-R2: compiling the testnet list
+before the runs would give every fleet binary four unsuppressable anon seeds and
+contaminate the late-joiner control.
+
+### 9.4 Blocked: privileged install
+
+`sudo` requires a password on all four hosts and no `NOPASSWD` entries exist, so
+the remainder is not reachable unattended: installing to `/usr/local/bin`,
+editing `/etc/shekyl/*.conf`, converging the systemd units, and restarting.
+
+**Two estate defects found while grounding, both needing that access:**
+
+1. **`skl-seedusw` is in a restart loop, not crashed.** Its unit runs
+   `/opt/shekyl/shekyld --config-file …` with **no `--non-interactive`** — the
+   daemon starts, finds no console, exits `status=0/SUCCESS`, and systemd
+   restarts it forever. It also points at `/opt/shekyl/shekyld` where the others
+   use `/usr/local/bin/shekyld`.
+2. **The units have diverged into two naming schemes** —
+   `shekyld-testnet.service` on `seedaus`/`seedeu`, `shekyld-test.service` on
+   `seeduse`/`seedusw`. Worth converging while the estate is open.
