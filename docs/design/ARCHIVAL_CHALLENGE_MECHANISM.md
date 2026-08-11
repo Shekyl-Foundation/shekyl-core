@@ -298,11 +298,24 @@ Writing a Missed cell there corrupts vin-dedup and emission simultaneously.
 ### 4.4 Landed-code casualties (expected, not discoveries)
 
 - `settle_epoch` (`attestation.rs:75`) rewrites: a majority rule needs the
-  derived denominator, not a pass multiset. Pass-priority retires. The
-  rewrite carries a named sub-decision (fork §7.1): the threshold under
-  variable issued-count — **absolute ≥ 2 passes (the lean)** vs
-  majority-of-issued — with under-issued (< 2) epochs settling
-  non-observation under the lean.
+  derived denominator, not a pass multiset. Pass-priority retires.
+  **The threshold sub-decision is RATIFIED (2026-08-11): absolute-2.**
+  `settle_epoch(passes, issued)`, three-valued: Served iff passes ≥ 2,
+  full stop; issued < 2 settles **NonObservation** (a pair the urn could
+  not reach twice is not a pair that failed — the §4.2 distinction), so
+  the settlement-outcome row keys on *issued*, not drawable.
+  Majority-of-issued is rejected because it makes the threshold a
+  function of a derived quantity — a node must reproduce the urn
+  derivation identically to agree on the bit; absolute-2 needs only a
+  pass count, the smaller consensus surface. `to_observation` /
+  `is_observation` **delete** (not demote), per the earlier ruling.
+  **Stated so nobody later misreads the branch:** under the exact-min
+  urn at exact budget every drawable pair receives exactly λ = 3, so
+  the under-issuance branch is **unreachable** — it becomes live only
+  in the capped regime (`k_cap` binding, the §8 72 %-unobservable
+  case), i.e. only if the tx-carrier prunable-residence work does NOT
+  land. It is specified defensively, not as evidence the mechanism
+  tolerates short issuance by design.
 - `EpochSettlement::to_observation` **deletes** (not re-documents): its
   "sole bridge to the m-of-n machinery" role belonged to the superseded
   design.
@@ -1263,7 +1276,21 @@ than repealing it:
    derived-bundles-only custody per §7.2 check (iii)), and **the
    vanguards-full / Bandguards launch pins** (addon-level, not
    `ADD_ONION` arguments). The W₂ rig then extends the spike harness to
-   the concurrent-batch shape (§9).
+   the concurrent-batch shape (§9). **Rig expectations, set before it
+   exists (2026-08-11):** off-floor hardware gives *shape, not the
+   governing figure* — batch-concurrency scaling, the knees, vanguards'
+   pinned-L2 behaviour under ~97 simultaneous rendezvous circuits, and
+   whether Bandguards' cap trips are structural and largely
+   hardware-independent, but the absolute quantile W₂ derives from
+   comes from the Pi floor (rule 76) — **build the rig so a floor run
+   is a re-run, not a rewrite**. Measure on the **real Tor network**,
+   never a local test net (chutney has none of the latency structure
+   that makes the distribution heavy-tailed); synthetic
+   3,326,976-byte payloads are fine. And the sharpest form of the
+   throwaway-framing discipline: a streaming or chunked serving loop
+   makes **resumability** feel natural — resumability is a *format
+   property* with real W₂ consequences, decided on its merits in the
+   format round, never inherited from what was convenient to build.
 4. The two standalone PRs (#433 ordering assert, #434 coverage sim) —
    in flight.
 
