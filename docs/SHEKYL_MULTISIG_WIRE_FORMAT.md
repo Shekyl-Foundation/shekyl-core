@@ -49,7 +49,7 @@ Offset   Size     Field                   Notes
 33       32       intent_hash             cn_fast_hash of SpendIntent canonical bytes
 65       1        sender_index            0-indexed participant number
 66       4        sig_len                 u32 LE, length of sender_sig
-70       sig_len  sender_sig              Hybrid signature over signable_header
+70       sig_len  sender_sig              Hybrid signature over the §1.2 bytes (no production signer yet; see §1.2)
 70+S     4        payload_len             u32 LE, length of encrypted_payload
 74+S     P        encrypted_payload       AEAD ciphertext (see §4)
 ```
@@ -78,6 +78,15 @@ Note: `payload_len` (4 bytes, u32 LE) is included in the signed data
 to prevent framing attacks where an attacker swaps the length prefix
 while preserving the ciphertext. `sig_len` is NOT included because it
 is metadata about the signature itself.
+
+**No production signer exists (SA-2 §2.1 census / SA-3b).** Every live
+path carries `sender_sig` empty (`sig_len = 0`), and the bare
+preimage-builder function was deleted rather than kept as dead code. A
+future signer MUST NOT sign these bytes bare: it must route through the
+domain-separated hybrid scheme (`shekyl_crypto_pq::signature`) under a
+distinct `…-scheme-v1` domain registered in
+`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (SA-R-2), which will version
+this section.
 
 The signature is computed over these bytes using the sender's hybrid
 signing key (Ed25519 + ML-DSA-65). The signature format is the hybrid

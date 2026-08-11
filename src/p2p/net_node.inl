@@ -756,28 +756,22 @@ namespace nodetool
     {
     case epee::net_utils::zone::public_:
       return get_ip_seed_nodes();
+    /* GENESIS BLOCKER until Shekyl's own hidden services exist: without seeds
+       here, a node whose only anonymity peers would come from this list has no
+       bootstrap path, and its anonymity zone never forms. An operator can still
+       bootstrap with `--add-peer <address>`, which routes by parsed zone, but
+       that is a manual step and not a default. Q12-R1 generates the addresses
+       and lands them here; nothing about Tor on mainnet works until it does.
+
+       These lists previously held MONERO's onion and i2p seeds, which is worse
+       than empty rather than better. A Shekyl node started with `--tx-proxy
+       tor` dialed six Monero hidden services, failed the network-ID handshake
+       at each, and had nowhere else to go — the same dead zone, reached more
+       slowly, while announcing Shekyl's Tor population to another network's
+       seed operators on the way. An unbootstrapped zone is at least visible as
+       what it is. */
     case epee::net_utils::zone::tor:
-      if (m_nettype == cryptonote::MAINNET)
-      {
-        return {
-          "zbjkbsxc5munw3qusl7j2hpcmikhqocdf4pqhnhtpzw5nt5jrmofptid.onion:18083",
-          "plowsof3t5hogddwabaeiyrno25efmzfxyro2vligremt7sxpsclfaid.onion:18083",
-          "plowsoffjexmxalw73tkjmf422gq6575fc7vicuu4javzn2ynnte6tyd.onion:18083",
-          "plowsofe6cleftfmk2raiw5h2x66atrik3nja4bfd3zrfa2hdlgworad.onion:18083",
-          "aclc4e2jhhtr44guufbnwk5bzwhaecinax4yip4wr4tjn27sjsfg6zqd.onion:18083",
-          "lykcas4tus7mkm4bhsgqe4drtd4awi7gja24goscc47xfgzj54yofyqd.onion:18083",
-        };
-      }
-      return {};
     case epee::net_utils::zone::i2p:
-      if (m_nettype == cryptonote::MAINNET)
-      {
-        return {
-          "uqj3aphckqtjsitz7kxx5flqpwjlq5ppr3chazfued7xucv3nheq.b32.i2p",
-          "vdmnehdjkpkg57nthgnjfuaqgku673r5bpbqg56ix6fyqoywgqrq.b32.i2p",
-          "ugnlcdciyhghh2zert7c3kl4biwkirc43ke33jiy5slnd3mv2trq.b32.i2p",
-        };
-      }
       return {};
     default:
       break;
@@ -835,6 +829,24 @@ namespace nodetool
 
     res = init_config();
     CHECK_AND_ASSERT_MES(res, false, "Failed to init config.");
+
+    /* Every zone this node runs now exists (all `add_zone` calls are made from
+       `handle_command_line` above) and `init_config` has assigned the public
+       zone its random `peer_id`. This is therefore the first point at which
+       the invariant can be checked, and it is downstream of both sites a
+       future change would touch. See `ANON_ZONE_SENTINEL_PEER_ID`. */
+    for (const auto& zone : m_network_zones)
+    {
+      if (zone.first == epee::net_utils::zone::public_)
+        continue;
+      CHECK_AND_ASSERT_MES(
+        zone.second.m_config.m_peer_id == ANON_ZONE_SENTINEL_PEER_ID, false,
+        "Refusing to start: the " << epee::net_utils::zone_to_string(zone.first)
+          << " zone has a non-sentinel peer_id. A per-node peer_id announced on an "
+             "anonymity zone correlates this node's hidden-service address with its "
+             "public IP address."
+      );
+    }
 
     for (auto& zone : m_network_zones)
     {
@@ -2944,6 +2956,18 @@ namespace nodetool
         public_zone->second.m_net_server.get_config_object().del_out_connections(current - count);
       m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, count);
     }
+  }
+
+  template<class t_payload_net_handler>
+  peerid_type node_server<t_payload_net_handler>::get_announced_peer_id(const epee::net_utils::zone zone) const
+  {
+    /* The quantity `get_local_node_data`, the anonymity-zone self-announcement
+       and `handle_ping` all read verbatim. Named so the invariant in `init`
+       has something a test can observe. */
+    const auto found = m_network_zones.find(zone);
+    if (found == m_network_zones.end())
+      return 0;
+    return found->second.m_config.m_peer_id;
   }
 
   template<class t_payload_net_handler>

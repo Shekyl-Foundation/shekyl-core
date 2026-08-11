@@ -112,6 +112,24 @@ namespace nodetool
   socks_connect_internal(const std::atomic<bool>& stop_signal, boost::asio::io_context& service, const net::socks::endpoint& proxy, const epee::net_utils::network_address& remote);
 
 
+  /*! The `peer_id` every node announces on an anonymity zone.
+
+    \note DO NOT RANDOMIZE THIS. `peer_id` is announced on the wire in three
+      places — the handshake (`node_data.peer_id`), the anonymity-zone
+      self-announcement peerlist entry, and `handle_ping`'s response — and it
+      is announced on *every* zone the node runs. Only the public zone is
+      given a random value; an anonymity zone keeps this fixed sentinel, so
+      the value carries no entropy and correlates nothing.
+
+      Giving an anonymity zone a random `peer_id` would hand every node a
+      stable unique identifier announced on both its clearnet and its Tor
+      connections. Recovering the operator's IP from their `.onion` address
+      would then be a passive lookup — connect to the hidden service, read
+      `peer_id` from the handshake, scan clearnet for a match — with no
+      timing analysis and no traffic correlation. `node_server::init`
+      enforces this invariant and refuses to start if it is broken. */
+  constexpr peerid_type ANON_ZONE_SENTINEL_PEER_ID = 1;
+
   template<class base_type>
   struct p2p_connection_context_t: base_type //t_payload_net_handler::connection_context //public net_utils::connection_context_base
   {
@@ -154,7 +172,7 @@ namespace nodetool
     {
       config_t()
         : m_net_config(),
-          m_peer_id(1),
+          m_peer_id(ANON_ZONE_SENTINEL_PEER_ID),
           m_support_flags(0)
       {}
 
@@ -291,6 +309,9 @@ namespace nodetool
     size_t get_public_gray_peers_count();
     void get_public_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);
     void get_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);
+
+    //! \return The `peer_id` announced on `zone`, or 0 if this node has no such zone.
+    peerid_type get_announced_peer_id(epee::net_utils::zone zone) const;
 
     void change_max_out_public_peers(size_t count);
     uint32_t get_max_out_public_peers() const;

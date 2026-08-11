@@ -31,7 +31,7 @@
 //! **no `kind` field**. Wire encode materializes `kind = Pass`. A miss is a
 //! kept header alone and cannot enter these APIs. That is the admission half of
 //! the same make-bad-states-unrepresentable seam settlement already uses
-//! (`settle_epoch(&[AttestationKind])`).
+//! (`settle_epoch(passes, issued)` — absolute-2, §7.1 ratification).
 
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,

@@ -912,6 +912,14 @@ and attribution is mechanical.
      argument:** it re-runs through the same `tj_shard_payload_report` machinery
      by changing one operand, and Round 1 should measure it rather than assert
      it.
+     **MEASURED 2026-08-11 — the claim holds.** The 2-of-3 ruling set the count
+     to `3` (renamed `CHALLENGES_PER_PAIR_PER_EPOCH`), and re-running that one
+     operand lifts §5.7c's watch-cell from **1.095× to 3.285×** — linear in the
+     count, as argued. The cheap-transit cell is no longer marginal: the
+     within-class F-1 headline is decisive at BOTH ends of the fetch band, and
+     the deterrent no longer leans on §5.7b's labor threshold "nobody should
+     lean on". Pinned by
+     `within_cloud_class_cheap_transit_cell_is_decisive_at_lambda_three`.
   *Caveat to check, not to wave away:* a free-rider who **holds between**
   sequential challenges pays one ingress for `n` challenges, collapsing (1) —
   but holding between challenges **is archiving**, which is the honest

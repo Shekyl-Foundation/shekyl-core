@@ -152,6 +152,22 @@ pub(crate) const RANDOMX_SUPERSCALAR_LATENCY: usize = 170;
 /// `SuperscalarMaxSize = 3 * RANDOMX_SUPERSCALAR_LATENCY + 2 = 512`.
 pub(crate) const SUPERSCALAR_MAX_SIZE: usize = 3 * RANDOMX_SUPERSCALAR_LATENCY + 2;
 
+/// Four-byte wire-format tag for a serialized [`SuperscalarProgram`].
+///
+/// The bytes are ASCII `"SSP1"` — **S**uper**S**calar **P**rogram, format
+/// version **1** — matching the RandomX C generator's program-blob prefix
+/// (`emit_ss_program_into_blake2b` / Layer A `.bin` vectors). This is
+/// **format identity only**, not a cryptographic domain separator (see the
+/// domain-registry exclusion row). Name spells out the type so readers do
+/// not have to expand the upstream acronym.
+///
+/// `#[cfg(test)]`: the wire blob is only exchanged with committed reference
+/// vectors and the C generator today; production Cache/Dataset paths keep
+/// programs in-memory. Shared by superscalar Layer A/B tests and the cache
+/// Blake2b feed so the tag has a single definition.
+#[cfg(test)]
+pub(crate) const SUPERSCALAR_PROGRAM_WIRE_MAGIC: &[u8; 4] = b"SSP1";
+
 /// Number of integer registers in the `SuperscalarHash` register
 /// file (`r0`-`r7`).
 pub(crate) const REGISTERS_COUNT: usize = 8;
@@ -1732,11 +1748,6 @@ mod tests {
     /// initialization at the `emit_layer_b` call site.
     const LAYER_B_INPUT_R: [u64; REGISTERS_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7];
 
-    /// Wire-format magic for a serialized [`SuperscalarProgram`]. ASCII
-    /// "SSP1" pins the format version; any future drift (e.g., metadata
-    /// expansion) is caught at the deserializer's assertion site.
-    const SSP_MAGIC: &[u8; 4] = b"SSP1";
-
     /// Serialize a program in the canonical wire format. Used by Layer
     /// A tests to compare against the committed `.bin` bytes.
     fn serialize_program(prog: &SuperscalarProgram) -> Vec<u8> {
@@ -1744,7 +1755,7 @@ mod tests {
         assert!(size <= SUPERSCALAR_MAX_SIZE);
         let size_u16 = u16::try_from(size).expect("size fits in u16");
         let mut buf = Vec::with_capacity(8 + size * 8);
-        buf.extend_from_slice(SSP_MAGIC);
+        buf.extend_from_slice(SUPERSCALAR_PROGRAM_WIRE_MAGIC);
         buf.extend_from_slice(&size_u16.to_le_bytes());
         buf.push(prog.address_register());
         buf.push(0); // reserved
@@ -1763,7 +1774,11 @@ mod tests {
     /// program?" (Layer A) from "did we execute correctly?" (Layer B).
     fn deserialize_program(bytes: &[u8]) -> SuperscalarProgram {
         assert!(bytes.len() >= 8, "wire format header is 8 bytes");
-        assert_eq!(&bytes[0..4], SSP_MAGIC, "wire-format magic mismatch");
+        assert_eq!(
+            &bytes[0..4],
+            SUPERSCALAR_PROGRAM_WIRE_MAGIC,
+            "superscalar program wire-magic mismatch"
+        );
         let size = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
         assert!(
             size <= SUPERSCALAR_MAX_SIZE,

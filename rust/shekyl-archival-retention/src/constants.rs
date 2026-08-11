@@ -7,8 +7,24 @@
 //! [`ARCHIVAL_RETENTION_GATE2.md`](../../docs/design/ARCHIVAL_RETENTION_GATE2.md) §3.1
 //! and [`ARCHIVAL_TIMING_CONSTANTS.md`](../../docs/design/ARCHIVAL_TIMING_CONSTANTS.md).
 
-/// Guaranteed on-demand tests per `(P, shard, settlement_epoch)`.
-pub const CHALLENGES_PER_EPOCH: u32 = 1;
+/// λ_target — derived challenges issued per `(P, shard)` pair per settlement
+/// epoch. Ruled `3` by the 2-of-3 nesting
+/// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §3): the inner majority settles one
+/// epoch's serve-credit bit, and §3 carries its derivation (liar containment
+/// `3f²(1−f)+f³`, honest survival `a²(3−2a)`, the unanimity rejection, and the
+/// free-rider deterrent `n·I − S`).
+///
+/// **Per *pair*, not per block.** The urn issues `λ·D/E` draws in each block
+/// (`D` = drawable pairs, `E` = `SETTLEMENT_EPOCH_BLOCKS`); that per-block
+/// count is *derived* by [`crate::challenge_assignment`], never pinned. This
+/// constant is the coverage target the urn is given.
+///
+/// Jointly pinned with [`crate::SERVE_THRESHOLD_PASSES`] — 2-of-3 is one
+/// decision, and `attestation.rs` const-asserts the two properties that make
+/// it one: the threshold must be reachable, and it must be a strict majority.
+/// Re-pinning either requires re-running §3's derivation, the `(m, n)` window
+/// re-pin, and the economics-sim arithmetic that scales with it.
+pub const CHALLENGES_PER_PAIR_PER_EPOCH: u32 = 3;
 
 /// Slash grace after `H_close` (settlement epoch end).
 pub const CHALLENGE_RESOLUTION_BLOCKS: u64 = 10_000;
