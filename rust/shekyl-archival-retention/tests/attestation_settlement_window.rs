@@ -94,11 +94,14 @@ fn under_issued_epochs_decay_to_non_observation_and_do_not_slash() {
     assert_eq!(window.len(), 2, "only the two real observations survive");
     assert_eq!(failure_window_slashable(&window), Ok(false));
 
-    // Negative control: the SAME epoch positions filled with real Missed
-    // epochs DO slash — proving it was the non-observation drop that spared
-    // the archiver, not a window too short for some unrelated reason.
+    // Negative control at genuinely the same epoch positions: re-walk the
+    // scenario's own head-down sequence (head 2000 + n + 5, the epochs the
+    // under-issued run occupied above), now with every epoch observed as a
+    // real Missed (0 of 3). The window fills and DOES slash — proving it
+    // was the non-observation drop that spared the archiver, not the
+    // epoch geometry or a window too short for some unrelated reason.
     let mut all_miss = Vec::new();
-    let mut e = 2000 + n;
+    let mut e = 2000 + n + 5; // the scenario's head epoch
     for _ in 0..FAILURE_WINDOW_N {
         all_miss.push(observe(e, 0, 3).expect("observed"));
         e -= 1;
