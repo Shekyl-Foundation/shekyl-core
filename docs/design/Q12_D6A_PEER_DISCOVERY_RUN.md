@@ -219,16 +219,31 @@ the distinction the condition was reaching for.
 
 ## 4. What must happen before the fleet exists
 
-**Q12-R-W1 — repo PR (small, C++).** Delete the Monero mainnet onion and i2p
-seed lists (§2.4). Separately, `--add-peer <x>.onion` with no tor zone
-configured reaches `m_network_zones.at(...)` at `:846` and throws
-`std::out_of_range` uncaught — a flag-ordering mistake aborts the daemon
-instead of reporting an error. Both fixes are C++.
+**Q12-R-W1 — repo PR (small, C++).** Delete the Monero onion and i2p seed
+lists (§2.4).
 [`20-rust-vs-cpp-policy`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc) is
 named explicitly rather than slid past: the p2p layer has no Rust counterpart
-and is not on the current migration front; one change is a **data constant**
-and the other is **converting an abort into a diagnostic**. Neither adds C++
-surface area that the Rust rewrite would later have to pay down.
+and is not on the current migration front, and the change is a **data
+constant**. It adds no C++ surface area for the Rust rewrite to pay down.
+
+> **RETRACTED, 2026-08-11 — the `.at()` abort does not exist.** This section
+> also claimed that `--add-peer <x>.onion` with no tor zone configured reaches
+> `m_network_zones.at(...)` at `:846` and throws `std::out_of_range` uncaught.
+> **It does not.** `handle_command_line` calls `add_zone(adr->get_zone())` at
+> `:494` *before* pushing to `m_command_line_peers` (and `:2869` does the same
+> for the `--add-exclusive-node` / `--add-priority-node` container), so the
+> zone always exists by the time `:846` looks it up.
+>
+> Worse for the original claim, the diagnostic it asked for **already
+> exists**: `:638-645` sweeps every zone after the `--tx-proxy` loop and
+> refuses to start with *"Set outgoing peer for tor but did not set
+> --tx-proxy"*, a message that names the fix. The behaviour was already
+> correct.
+>
+> The claim was written from the `.at()` call site without reading the
+> callers that populate the map — Q12-D8's own test applied to a control-flow
+> assumption instead of a number. Recorded rather than deleted: the retraction
+> is the finding.
 
 **Q12-R-W2 — the seed estate.** Rebuild `shekyld` from current `dev` on all
 four (§2.5 finding 1 is on the critical path for any measurement); restart
@@ -330,9 +345,9 @@ fleet off the critical path of a funding step.
 
 ## 7. Order
 
-1. Q12-R-W1 — repo PR: Monero seed deletion + `.at()` abort fix. **Q12-R-W3
-   rides this PR** — independent of the run, but both touch `add_zone`'s
-   neighbourhood, so they share a validation surface
+1. Q12-R-W1 — repo PR: Monero seed deletion. **Q12-R-W3 rides this PR** —
+   independent of the run, but both touch `add_zone`'s neighbourhood, so they
+   share a validation surface
    ([`19-validation-surface-discipline`](../../.cursor/rules/19-validation-surface-discipline.mdc)).
 2. Q12-R-W2 — seed estate: rebuild, restart `seedusw`, tor + HS ×4,
    cross-`--add-peer`, **keys backed up**.
@@ -430,14 +445,27 @@ Shape:
   the forwarding layer is invisible to the oracle. If any emitter ever
   transforms the value, the test must move to the wire.
 
-**One premise is unverified and must be checked at implementation time**: that
-all zones exist by the end of `init()`. The `.at()` throw pattern found in
-§2.1/§4 suggests zone construction is init-time only, but `add_zone`'s callers
-have not been enumerated. If anything constructs a zone after `init()`, the
-invariant misses it and moves to `add_zone`'s **tail** — after the `emplace`,
-which also sees the feared edit; `init()` is chosen because it is strictly
-broader, catching an `init_config` edit too. The gtest on the announced value is
-the guard that survives either placement.
+**The premise is now verified.** All four `add_zone` callers — `:494`
+(`--add-peer`), `:615` (`--tx-proxy`), `:654` (`--anonymous-inbound`) and
+`:2869` (`parse_peers_and_add_to_container`) — are reached from
+`handle_command_line`, which `init()` calls first. No zone is constructed after
+`init()`, so the invariant sits after `init_config()`: downstream of every
+construction path *and* downstream of the randomization it guards.
 
 Filed as **Q12-R-W3**: independent of the run, small, and adjacent to the
 `add_zone` neighbourhood that Q12-R-W1 already touches.
+
+### 8.5 Built and negative-controlled
+
+Landed on `fix/p2p-anon-zone-hygiene`. Both legs were proven by injecting the
+feared edit — randomizing `m_config.m_peer_id` inside `add_zone`:
+
+- **defect alone** — `init` refuses to start, logging the correlation as the
+  reason;
+- **defect with the guard deleted** — the announced-value assertion fails and
+  prints the leaked identifier (`15317140264242224297`), so the test catches
+  the defect **independently of the guard**.
+
+The test carries its own negative control: the public zone must *not* read as
+the sentinel, so a harness unable to observe the per-zone value cannot pass.
+Full unit suite 1055 passed, 0 failed.
