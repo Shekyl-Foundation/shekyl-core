@@ -116,7 +116,7 @@ fn embargo_timer(zone: RelayZone) -> &'static EmbargoTimer {
 /// What "zero" means downstream, stated precisely because it is easy to overread
 /// as "fluffs this instant": the daemon stores whole-second deadlines, so a
 /// zero draw resolves to the *earliest deadline that does not under-provision* —
-/// the next second boundary (`cryptonote::detail::embargo_deadline`). The
+/// the next second boundary (`cryptonote::detail::relay_deadline`). The
 /// deadline is never earlier than `now + draw`, uniformly and including at zero.
 /// Rounding a zero draw *down* instead would place the deadline up to ~999 ms in
 /// the past, which is under-provisioning by the same asymmetry this boundary

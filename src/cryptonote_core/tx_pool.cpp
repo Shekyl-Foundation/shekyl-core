@@ -122,7 +122,7 @@ namespace cryptonote
 
   namespace detail
   {
-    std::time_t embargo_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs)
+    std::time_t relay_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs)
     {
       // Cast: the FFI returns uint64_t; seconds::rep is signed, so list-init
       // would be a narrowing conversion on some standard libraries.
@@ -315,8 +315,8 @@ namespace cryptonote
                pays most. Measured on F-4's instrument: 2.01x more invertible
                at phase 0, and 0.72 vs 0.12 late in the window, because only a
                memoryless family has residual == full. */
-            last_relayed_time = clock::to_time_t(
-              clock::now() + std::chrono::seconds{shekyl_dandelionpp_forward_delay_seconds()});
+            last_relayed_time =
+              detail::relay_deadline(clock::now(), shekyl_dandelionpp_forward_delay_seconds());
             set_if_less(m_next_check, time_t(last_relayed_time));
           }
           // else the `set_relayed` function will adjust the time accordingly later
@@ -1062,7 +1062,7 @@ namespace cryptonote
           if (meta.dandelionpp_stem)
           {
             meta.last_relayed_time =
-              detail::embargo_deadline(now, shekyl_dandelionpp_embargo_draw_seconds(static_cast<std::uint8_t>(zone)));
+              detail::relay_deadline(now, shekyl_dandelionpp_embargo_draw_seconds(static_cast<std::uint8_t>(zone)));
             next_relay = std::min(next_relay, meta.last_relayed_time);
           }
           else

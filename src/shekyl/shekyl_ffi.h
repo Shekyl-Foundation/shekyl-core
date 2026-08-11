@@ -3077,7 +3077,7 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 /// so what ships is what was derived and tested. A zero draw does not mean "fire
 /// this instant" — deadlines are whole seconds, so it resolves to the earliest
 /// one that does not under-provision (the next second boundary; see
-/// cryptonote::detail::embargo_deadline). Rounding it down instead would put the
+/// cryptonote::detail::relay_deadline). Rounding it down instead would put the
 /// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
 /// embargo is the privacy-losing direction at every draw value including zero.
 ///

@@ -300,37 +300,37 @@ namespace
   }
 }
 
-TEST(embargo_deadline, fractional_now_rounds_up_never_down)
+TEST(relay_deadline, fractional_now_rounds_up_never_down)
 {
   // The case the bug lived in: 1ms past the second, so truncation would return
   // 1000 + 144 and silently shorten the embargo by 999ms.
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 1), 144), 1145)
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(1000, 1), 144), 1145)
     << "a sub-second remainder must push the deadline to the next whole second";
   // Worst case for truncation.
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 999), 144), 1145);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(1000, 999), 144), 1145);
   // Anywhere in the interior rounds to the same next second.
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 500), 144), 1145);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(1000, 500), 144), 1145);
 }
 
-TEST(embargo_deadline, exact_second_is_not_padded)
+TEST(relay_deadline, exact_second_is_not_padded)
 {
   // On an exact boundary there is nothing to round: ceil must be the identity,
   // not an unconditional +1. Rounding up here would lengthen every embargo by a
   // second for no reason, which is a (smaller) drift in the other direction.
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 0), 144), 1144);
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(0, 0), 0), 0);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(1000, 0), 144), 1144);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(0, 0), 0), 0);
 }
 
-TEST(embargo_deadline, zero_draw_still_never_lands_in_the_past)
+TEST(relay_deadline, zero_draw_still_never_lands_in_the_past)
 {
   // A 0s draw is legitimate (~0.17%: the memoryless geometric's support includes
   // 0). It must still not resolve to an already-past deadline when `now` is
   // mid-second, which is exactly what truncation would produce.
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(5000, 1), 0), 5001);
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(5000, 0), 0), 5000);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(5000, 1), 0), 5001);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(5000, 0), 0), 5000);
 }
 
-TEST(embargo_deadline, is_monotonic_in_the_draw)
+TEST(relay_deadline, is_monotonic_in_the_draw)
 {
   // A longer draw can never yield an earlier deadline, at any sub-second offset.
   for (const int frac : {0, 1, 250, 999})
@@ -338,7 +338,7 @@ TEST(embargo_deadline, is_monotonic_in_the_draw)
     std::time_t previous = std::numeric_limits<std::time_t>::min();
     for (std::uint64_t draw = 0; draw <= 300; ++draw)
     {
-      const std::time_t d = cryptonote::detail::embargo_deadline(at(1000, frac), draw);
+      const std::time_t d = cryptonote::detail::relay_deadline(at(1000, frac), draw);
       EXPECT_GE(d, previous) << "non-monotonic at frac=" << frac << " draw=" << draw;
       previous = d;
     }
