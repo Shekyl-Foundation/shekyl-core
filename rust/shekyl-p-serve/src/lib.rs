@@ -16,6 +16,19 @@
 //! building either here would prejudge the fork, so the pass-record axis
 //! lands with the format round, not with this loop.
 //!
+//! # PR-A of the §9.5 item-3 arc
+//!
+//! | PR | Surface | This crate |
+//! |----|---------|------------|
+//! | **A (here)** | Loopback serve + store serving read + serve-set pin | owns |
+//! | **B** | `TorService` `ADD_ONION` / `DEL_ONION` + derived-bundle custody (§7.2(iii)) | consumer of [`PServeEndpoint::addr`] + [`StoreShardProvider`] |
+//! | **C** | vanguards-full / Bandguards launch pins | no surface here |
+//!
+//! Dropping [`PServeEndpoint`] aborts the accept loop (test-friendly). PR-B
+//! owns coordinated persona lifecycle (register onion → pin serve-set →
+//! serve → tear down); it should not need to grow this crate's privacy
+//! contract.
+//!
 //! # `x-provisional/v0` — THROWAWAY framing, no vote in the format round
 //!
 //! The route is `GET /x-provisional/v0/shard/{shard_id}`. §9.5 records the
@@ -33,16 +46,14 @@
 //! **Is:** the loopback listener ([`PServeEndpoint`]) and the store-backed
 //! shard lookup ([`StoreShardProvider`]) — pure transport plus a read.
 //! The endpoint binds `127.0.0.1:0` only; reachability comes from the
-//! `ADD_ONION` mapping the daemon wires in (`shekyl-tor`), which is a
-//! separate PR precisely because it carries the key-custody boundary
-//! (§7.2(iii): the serving host receives **derived bundles only**, never
-//! the master seed). This crate touches no key material at all.
+//! `ADD_ONION` mapping PR-B wires in (`shekyl-tor`). This crate touches
+//! no key material at all.
 //!
-//! **Is not:** a pass-record builder, a countersigner, a wire format, or a
-//! consensus surface. It is also not the W₂ rig — the rig extends this
-//! loop with the concurrent-batch measurement shape (§9), and the two
-//! placeholder pins carried here ([`serve::MAX_INFLIGHT`], inherited from
-//! SPIKE-PIN-2) are derived there, on the provisioning-floor hardware.
+//! **Is not:** a pass-record builder, a countersigner, a wire format, a
+//! consensus surface, onion registration, or the W₂ rig. The rig extends
+//! this loop with the concurrent-batch measurement shape (§9); the
+//! placeholder [`serve::MAX_INFLIGHT`] (SPIKE-PIN-2) is derived there on
+//! the provisioning-floor hardware (rule 76).
 //!
 //! # Privacy invariants (carried from the SP-T3 spike as tests, not memories)
 //!
@@ -53,12 +64,20 @@
 //! - every **complete-head** non-servable outcome — wrong path, wrong
 //!   method, malformed route/id, **unknown shard, unfrozen shard, store
 //!   failure** — renders one identical 404, so neither the route table
-//!   nor store health is probeable;
+//!   nor store health is probeable by **response bytes**;
 //! - incomplete heads (oversized, mid-head EOF, read timeout) and
 //!   over-capacity arrivals are **closed** with no HTTP bytes — the same
 //!   class as ordinary circuit death, not a status-code oracle;
 //! - no request logging at any level: the only observables are aggregate
 //!   monotone counters.
+//!
+//! **Timing.** Byte identity is the invariant for complete-head misses.
+//! Micro-timing differences between a wrong path (no store read) and a
+//! valid-route miss (store read via `spawn_blocking`) are out of scope for
+//! this loopback listener: PR-B places it behind onion RTT noise, and
+//! holdings/freeze progress are already chain-public. Do not invent
+//! equalising delays here — they would not survive the onion path and
+//! would only obscure local diagnostics.
 
 #![forbid(unsafe_code)]
 
@@ -66,4 +85,7 @@ pub mod provider;
 pub mod serve;
 
 pub use provider::{ProviderError, ServeSetPin, ShardBody, ShardProvider, StoreShardProvider};
-pub use serve::PServeEndpoint;
+pub use serve::{
+    PServeEndpoint, CONTENT_TYPE, MAX_INFLIGHT, MAX_REQUEST_BYTES, RESPONSE_HEADER_NAMES,
+    ROUTE_PREFIX,
+};

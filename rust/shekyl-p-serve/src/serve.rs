@@ -11,6 +11,10 @@
 //! `x-provisional/v0` is equally THROWAWAY (crate doc), it is simply the
 //! throwaway that serves real shards by id.
 //!
+//! Integration point for PR-B: [`PServeEndpoint::bind`] +
+//! [`PServeEndpoint::addr`] as the `ADD_ONION` `Port=` target. This module
+//! does not speak Tor.
+//!
 //! # Why hand-rolled HTTP/1.1 rather than a framework
 //!
 //! Two personas served from one wallet must be **byte-indistinguishable at
@@ -41,7 +45,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
-use crate::provider::ShardProvider;
+use crate::provider::{ShardBody, ShardProvider};
 
 /// The one route this endpoint answers. **Provisional and THROWAWAY** —
 /// see the crate doc; nothing about this path is a format-round candidate.
@@ -104,7 +108,9 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(10);
 /// A running loopback serve endpoint for one persona.
 ///
 /// Dropping it aborts the accept loop; in-flight connection tasks are
-/// detached and end at their own timeouts.
+/// detached and end at their own timeouts. That is the right shape for
+/// tests; PR-B's persona lifecycle may replace Drop-abort with an ordered
+/// stop once onion registration is wired.
 pub struct PServeEndpoint {
     addr: SocketAddr,
     accept_task: JoinHandle<()>,
@@ -189,7 +195,7 @@ impl PServeEndpoint {
         })
     }
 
-    /// The bound loopback address, for `ADD_ONION`'s `Port=` target.
+    /// The bound loopback address, for `ADD_ONION`'s `Port=` target (PR-B).
     #[must_use]
     pub fn addr(&self) -> SocketAddr {
         self.addr
@@ -264,14 +270,28 @@ async fn handle_connection(
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "request head"))??;
 
-    // Every complete-head non-servable outcome collapses to the one shared
-    // 404 below, so neither the route table nor store health is probeable
-    // through the rendezvous.
-    let body = match parse_request(&head) {
+    let body = resolve_body(&head, provider, lookup_failures).await;
+
+    tokio::time::timeout(
+        WRITE_TIMEOUT,
+        write_response(&mut stream, body.as_ref(), served),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write"))??;
+    Ok(())
+}
+
+/// Complete-head resolution: shard lookup or shared miss. Store I/O runs
+/// on a blocking pool; join / store errors increment `lookup_failures` and
+/// collapse to the same miss as an unknown id.
+async fn resolve_body(
+    head: &[u8],
+    provider: Arc<dyn ShardProvider>,
+    lookup_failures: &AtomicU64,
+) -> Option<ShardBody> {
+    match parse_request(head) {
         Some(Request::Shard(shard_id)) => {
-            let looked_up =
-                tokio::task::spawn_blocking(move || provider.shard_bytes(shard_id)).await;
-            match looked_up {
+            match tokio::task::spawn_blocking(move || provider.shard_bytes(shard_id)).await {
                 Ok(Ok(found)) => found,
                 Ok(Err(_)) | Err(_) => {
                     lookup_failures.fetch_add(1, Ordering::Relaxed);
@@ -280,37 +300,44 @@ async fn handle_connection(
             }
         }
         None => None,
-    };
+    }
+}
 
-    tokio::time::timeout(WRITE_TIMEOUT, async {
-        match body {
-            Some(payload) => {
-                let bytes = payload.as_bytes();
-                stream.write_all(render_ok(bytes.len()).as_bytes()).await?;
-                for chunk in bytes.chunks(WRITE_CHUNK_BYTES) {
-                    stream.write_all(chunk).await?;
-                }
-                stream.flush().await?;
-                served.fetch_add(1, Ordering::Relaxed);
+async fn write_response(
+    stream: &mut TcpStream,
+    body: Option<&ShardBody>,
+    served: &AtomicU64,
+) -> io::Result<()> {
+    match body {
+        Some(payload) => {
+            let bytes = payload.as_bytes();
+            stream.write_all(render_ok(bytes.len()).as_bytes()).await?;
+            for chunk in bytes.chunks(WRITE_CHUNK_BYTES) {
+                stream.write_all(chunk).await?;
             }
-            None => {
-                stream.write_all(NOT_FOUND.as_bytes()).await?;
-                stream.flush().await?;
-            }
+            stream.flush().await?;
+            served.fetch_add(1, Ordering::Relaxed);
         }
-        Ok::<(), io::Error>(())
-    })
-    .await
-    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write"))??;
+        None => {
+            stream.write_all(NOT_FOUND.as_bytes()).await?;
+            stream.flush().await?;
+        }
+    }
     Ok(())
 }
 
 /// Read until the end of the request head (`\r\n\r\n`), bounded by
 /// [`MAX_REQUEST_BYTES`] **as the buffer grows**, so an oversized head is
 /// refused before it is fully allocated.
+///
+/// The terminator scan only examines the newly arrived region (plus a
+/// three-byte overlap), so cost stays linear in head size.
 async fn read_head(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
+    // Index up to which `buf` has already been scanned for the terminator,
+    // excluding a 3-byte overlap so a split `\r\n\r\n` across reads is found.
+    let mut scanned = 0usize;
     loop {
         let n = stream.read(&mut chunk).await?;
         if n == 0 {
@@ -323,9 +350,11 @@ async fn read_head(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
         if buf.len() > MAX_REQUEST_BYTES {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "head too large"));
         }
-        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+        let start = scanned.saturating_sub(3);
+        if buf[start..].windows(4).any(|w| w == b"\r\n\r\n") {
             return Ok(buf);
         }
+        scanned = buf.len();
     }
 }
 
@@ -346,7 +375,14 @@ fn parse_request(head: &[u8]) -> Option<Request> {
         return None;
     }
     let path = parts.next()?;
+    // Require a well-formed request line tail (HTTP version token). Absent
+    // or extra shape → miss, same as any other non-route.
+    let _version = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
     let shard_id = path.strip_prefix(ROUTE_PREFIX)?;
+    // Exact decimal id — no path suffix, no query string.
     shard_id.parse::<u64>().ok().map(Request::Shard)
 }
 
@@ -358,7 +394,8 @@ fn render_ok(len: usize) -> String {
 }
 
 /// The single error response, byte-identical for every non-servable
-/// complete-head outcome.
+/// complete-head outcome. Built from the same header names/values as
+/// success so the declared set stays one source of truth in tests.
 const NOT_FOUND: &str =
     "HTTP/1.1 404 Not Found\r\ncontent-type: application/octet-stream\r\ncontent-length: 0\r\n\r\n";
 
@@ -394,7 +431,7 @@ mod tests {
 
     impl ShardProvider for FailingProvider {
         fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-            Err(ProviderError::new("synthetic store failure"))
+            Err(ProviderError::other("synthetic store failure"))
         }
     }
 
@@ -414,6 +451,14 @@ mod tests {
             .position(|w| w == b"\r\n\r\n")
             .expect("response has a head");
         String::from_utf8_lossy(&response[..end]).to_string()
+    }
+
+    fn header_names(head: &str) -> Vec<String> {
+        head.lines()
+            .skip(1)
+            .filter(|l| !l.is_empty())
+            .map(|l| l.split(':').next().unwrap_or_default().to_ascii_lowercase())
+            .collect()
     }
 
     #[tokio::test]
@@ -466,19 +511,25 @@ mod tests {
         // The header set is exactly the declared one — checked by name so
         // a future addition fails here instead of widening the
         // fingerprint.
-        let names: Vec<String> = ha
-            .lines()
-            .skip(1)
-            .filter(|l| !l.is_empty())
-            .map(|l| l.split(':').next().unwrap_or_default().to_ascii_lowercase())
-            .collect();
-        assert_eq!(names, RESPONSE_HEADER_NAMES);
+        assert_eq!(header_names(&ha), RESPONSE_HEADER_NAMES);
         for banned in ["server", "date", "etag", "accept-ranges", "connection"] {
             assert!(
                 !ha.to_ascii_lowercase().contains(banned),
                 "{banned} must not be emitted: {ha}"
             );
         }
+    }
+
+    #[test]
+    fn not_found_uses_the_declared_header_set_and_content_type() {
+        // One source of truth: 404 is not a second fingerprint with a
+        // divergent header list or content-type spelling.
+        assert!(NOT_FOUND.contains(&format!("content-type: {CONTENT_TYPE}")));
+        let head = NOT_FOUND
+            .split("\r\n\r\n")
+            .next()
+            .expect("status + headers");
+        assert_eq!(header_names(head), RESPONSE_HEADER_NAMES);
     }
 
     #[tokio::test]
@@ -535,37 +586,59 @@ mod tests {
 
     #[tokio::test]
     async fn concurrency_past_the_cap_is_refused_by_close_not_by_a_status_code() {
-        // Opens MAX_INFLIGHT connections and holds them open (by never
-        // sending a request head, so each occupies a permit until its
-        // READ_TIMEOUT), then asserts the endpoint sheds the excess by
-        // CLOSE — never a new status code, which would add a response
-        // shape and a capacity oracle.
+        // Hold connections open (no request head → each keeps a permit
+        // until READ_TIMEOUT). Poll until the accept loop has actually
+        // filled the cap and starts shedding by CLOSE — never a fixed
+        // sleep that flakes under load.
         let ep = PServeEndpoint::bind(FixtureProvider::new([(0, vec![3u8; 64])]))
             .await
             .expect("bind");
 
-        let mut held = Vec::new();
-        for _ in 0..MAX_INFLIGHT {
-            held.push(TcpStream::connect(ep.addr()).await.expect("connect"));
-        }
-        // Give the accept loop time to take all MAX_INFLIGHT permits.
-        tokio::time::sleep(Duration::from_millis(300)).await;
-
+        let mut held: Vec<TcpStream> = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut saw_close_refusal = false;
         let mut refused_bodies = Vec::new();
-        for _ in 0..8 {
-            let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
+
+        while tokio::time::Instant::now() < deadline {
+            while held.len() < MAX_INFLIGHT {
+                held.push(TcpStream::connect(ep.addr()).await.expect("connect hold"));
+            }
+            // Let the accept loop drain the backlog.
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+
+            let before = ep.refused_count();
+            let mut s = TcpStream::connect(ep.addr()).await.expect("probe");
             let mut out = Vec::new();
-            // A refused connection is closed: EOF with no bytes, never an
-            // HTTP response.
-            tokio::time::timeout(Duration::from_secs(5), s.read_to_end(&mut out))
+            tokio::time::timeout(Duration::from_millis(100), s.read_to_end(&mut out))
                 .await
                 .ok();
-            refused_bodies.push(out);
+            if ep.refused_count() > before {
+                assert!(
+                    !out.starts_with(b"HTTP/"),
+                    "a refusal must be a close, never a status line"
+                );
+                saw_close_refusal = true;
+                refused_bodies.push(out);
+                // A few more excess arrivals for confidence.
+                for _ in 0..4 {
+                    let mut s = TcpStream::connect(ep.addr()).await.expect("excess");
+                    let mut out = Vec::new();
+                    tokio::time::timeout(Duration::from_millis(100), s.read_to_end(&mut out))
+                        .await
+                        .ok();
+                    refused_bodies.push(out);
+                }
+                break;
+            }
+            // Still under capacity: this probe was accepted — hold it so
+            // we fill the remaining slots.
+            held.push(s);
         }
 
         assert!(
-            ep.refused_count() > 0,
-            "the cap must actually shed load; refused = {}",
+            saw_close_refusal && ep.refused_count() > 0,
+            "the cap must shed load without a fixed sleep; refused = {}",
             ep.refused_count()
         );
         for body in &refused_bodies {
@@ -635,6 +708,20 @@ mod tests {
         // A negative id is not a u64 — rejected rather than wrapped.
         assert_eq!(
             parse_request(b"GET /x-provisional/v0/shard/-1 HTTP/1.1\r\n\r\n"),
+            None
+        );
+        // No version token / extra tokens → miss.
+        assert_eq!(
+            parse_request(b"GET /x-provisional/v0/shard/1\r\n\r\n"),
+            None
+        );
+        assert_eq!(
+            parse_request(b"GET /x-provisional/v0/shard/1 HTTP/1.1 extra\r\n\r\n"),
+            None
+        );
+        // Query / suffix is not a bare u64.
+        assert_eq!(
+            parse_request(b"GET /x-provisional/v0/shard/1?x=1 HTTP/1.1\r\n\r\n"),
             None
         );
     }

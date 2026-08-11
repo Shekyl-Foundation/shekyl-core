@@ -11,41 +11,87 @@
 //! trait the endpoint calls via `spawn_blocking`. It is **not** an
 //! abstraction over storage backends — the store is `LeafStore`, and the
 //! trait's second implementor is the test fixture.
+//!
+//! PR-B wires [`StoreShardProvider`] + [`StoreShardProvider::pin_serve_set`]
+//! into persona lifecycle; this module stays free of Tor and key material.
 
 use std::sync::Arc;
 
 use shekyl_curve_tree::{LeafStore, SegmentId, StoreError};
 
 /// A shard lookup failed for an infrastructure reason (store I/O, pruned
-/// bytes). Counted locally by the endpoint and **never distinguishable on
-/// the wire** — the peer sees the same 404 as any other miss, because a
-/// distinct failure response would let a prober read store health through
-/// the rendezvous.
-#[derive(Debug)]
-pub struct ProviderError {
-    detail: String,
+/// bytes) or a serve-set construction bug. Counted locally by the endpoint
+/// when it is a lookup failure and **never distinguishable on the wire** —
+/// the peer sees the same 404 as any other miss, because a distinct failure
+/// response would let a prober read store health through the rendezvous.
+///
+/// Variants are for operator-side / harness diagnostics only; the wire path
+/// collapses them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderError {
+    /// redb / store failure other than a named pruned-segment case.
+    Store {
+        /// Local diagnostic (`Debug` of the store error); never on the wire.
+        detail: String,
+    },
+    /// Frozen segment leaf bytes were pruned without a pin — the silent-slash
+    /// precursor. Named so a non-zero [`crate::PServeEndpoint::lookup_failure_count`]
+    /// can be correlated with the remedy without scraping free-text.
+    FrozenSegmentPruned {
+        /// Segment id that was frozen then pruned.
+        segment_id: u32,
+    },
+    /// Serve-set entry cannot name a [`SegmentId`] (`u32`). Construction bug,
+    /// not a freeze race.
+    UnrepresentableShardId {
+        /// The illegal shard id.
+        shard_id: u64,
+    },
+    /// Non-store failure (tests, future callers).
+    Other {
+        /// Local diagnostic; never on the wire.
+        detail: String,
+    },
 }
 
 impl ProviderError {
-    /// A lookup failure with a local diagnostic description. For
-    /// [`ShardProvider`] implementors; the description never reaches the
-    /// wire.
-    pub fn new(detail: impl Into<String>) -> Self {
-        Self {
+    /// A non-store lookup failure with a local diagnostic description.
+    pub fn other(detail: impl Into<String>) -> Self {
+        Self::Other {
             detail: detail.into(),
         }
     }
 
-    /// Wrap a store failure, keeping its debug rendering for the local
-    /// (aggregate, operator-side) diagnostic only.
-    fn store(err: &StoreError) -> Self {
-        Self::new(format!("{err:?}"))
+    /// Map a store error, preserving the pruned-segment case as its own arm.
+    fn from_store(err: StoreError) -> Self {
+        match err {
+            StoreError::FrozenSegmentPruned { id } => {
+                Self::FrozenSegmentPruned { segment_id: id.0 }
+            }
+            other => Self::Store {
+                detail: format!("{other:?}"),
+            },
+        }
     }
 }
 
 impl std::fmt::Display for ProviderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "shard lookup failed: {}", self.detail)
+        match self {
+            Self::Store { detail } | Self::Other { detail } => {
+                write!(f, "shard lookup failed: {detail}")
+            }
+            Self::FrozenSegmentPruned { segment_id } => write!(
+                f,
+                "shard lookup failed: frozen segment {segment_id} pruned (pin serve-set before prune)"
+            ),
+            Self::UnrepresentableShardId { shard_id } => {
+                write!(
+                    f,
+                    "shard_id {shard_id} exceeds store SegmentId space (u32)"
+                )
+            }
+        }
     }
 }
 
@@ -62,7 +108,7 @@ impl std::error::Error for ProviderError {}
 pub enum ShardBody {
     /// Full frozen-segment leaves in tree order (production).
     Leaves(Vec<[u8; 128]>),
-    /// Opaque payload (tests).
+    /// Opaque payload (tests / measurement harnesses).
     Flat(Arc<[u8]>),
 }
 
@@ -71,7 +117,7 @@ impl ShardBody {
     #[must_use]
     pub fn byte_len(&self) -> usize {
         match self {
-            Self::Leaves(leaves) => leaves.len().saturating_mul(128),
+            Self::Leaves(leaves) => leaves.len() * 128,
             Self::Flat(bytes) => bytes.len(),
         }
     }
@@ -99,9 +145,9 @@ pub trait ShardProvider: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// [`ProviderError`] on store failure — including the pruned-bytes
-    /// misconfiguration (`StoreError::FrozenSegmentPruned`), which means
-    /// the serve-set was not pinned before a prune ran.
+    /// [`ProviderError`] on store failure — including
+    /// [`ProviderError::FrozenSegmentPruned`] when the serve-set was not
+    /// pinned before a prune ran.
     fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError>;
 }
 
@@ -120,8 +166,8 @@ pub enum ServeSetPin {
     /// attack); the daemon re-pins when the shard freezes.
     ///
     /// Only used when `shard_id` fits the store's [`SegmentId`] space. An
-    /// unrepresentable id is a serve-set bug and fails [`StoreShardProvider::pin_serve_set`]
-    /// outright rather than being mislabeled as not-yet-frozen.
+    /// unrepresentable id fails [`StoreShardProvider::pin_serve_set`] as
+    /// [`ProviderError::UnrepresentableShardId`].
     NotYetFrozen {
         /// The not-yet-frozen shard.
         shard_id: u64,
@@ -147,32 +193,29 @@ impl StoreShardProvider {
     /// `prune_frozen` cannot discard bytes the persona is bonded to serve
     /// — the silent-slash hazard, closed at startup rather than left to
     /// operator discipline. Call before serving; re-call as bonded shards
-    /// freeze.
+    /// freeze (PR-B lifecycle owns the re-pin trigger).
     ///
     /// # Errors
     ///
-    /// [`ProviderError`] on the first store failure, or if any `shard_id`
-    /// does not fit the store's `u32` [`SegmentId`] space (that is a
-    /// serve-set construction bug, not a freeze race). Pins already
-    /// applied stay applied (pinning is idempotent, so a retry re-covers
-    /// the set).
+    /// [`ProviderError`] on the first store failure, or
+    /// [`ProviderError::UnrepresentableShardId`] if any entry does not fit
+    /// the store's `u32` [`SegmentId`] space. Pins already applied stay
+    /// applied (pinning is idempotent, so a retry re-covers the set).
     pub fn pin_serve_set(&self, serve_set: &[u64]) -> Result<Vec<ServeSetPin>, ProviderError> {
         let mut out = Vec::with_capacity(serve_set.len());
         for &shard_id in serve_set {
             let Some(id) = segment_id(shard_id) else {
-                return Err(ProviderError::new(format!(
-                    "shard_id {shard_id} exceeds store SegmentId space (u32)"
-                )));
+                return Err(ProviderError::UnrepresentableShardId { shard_id });
             };
             let frozen = self
                 .store
                 .frozen_segment(id)
-                .map_err(|e| ProviderError::store(&e))?
+                .map_err(ProviderError::from_store)?
                 .is_some();
             if frozen {
                 self.store
                     .pin_segment(id)
-                    .map_err(|e| ProviderError::store(&e))?;
+                    .map_err(ProviderError::from_store)?;
                 out.push(ServeSetPin::Pinned { shard_id });
             } else {
                 out.push(ServeSetPin::NotYetFrozen { shard_id });
@@ -184,7 +227,8 @@ impl StoreShardProvider {
 
 /// A shard id names a `SegmentId` iff it fits the store's `u32` id space;
 /// anything larger cannot exist in this store and is an ordinary miss on
-/// the serve path (and a hard error in [`StoreShardProvider::pin_serve_set`]).
+/// the serve path (and [`ProviderError::UnrepresentableShardId`] in
+/// [`StoreShardProvider::pin_serve_set`]).
 fn segment_id(shard_id: u64) -> Option<SegmentId> {
     u32::try_from(shard_id).ok().map(SegmentId)
 }
@@ -197,7 +241,7 @@ impl ShardProvider for StoreShardProvider {
         match self.store.frozen_segment_leaf_bytes(id) {
             Ok(Some(leaves)) => Ok(Some(ShardBody::Leaves(leaves))),
             Ok(None) => Ok(None),
-            Err(e) => Err(ProviderError::store(&e)),
+            Err(e) => Err(ProviderError::from_store(e)),
         }
     }
 }

@@ -18,7 +18,9 @@ use shekyl_curve_tree::{
     leaves_per_segment, recompute_segment_r_k, BlockHeight, Gindex, LeafEntry, LeafStore,
     OutputIdentity, SegmentId, TargetKind,
 };
-use shekyl_p_serve::{PServeEndpoint, ServeSetPin, ShardBody, ShardProvider, StoreShardProvider};
+use shekyl_p_serve::{
+    PServeEndpoint, ProviderError, ServeSetPin, ShardBody, ShardProvider, StoreShardProvider,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -187,11 +189,9 @@ fn pin_serve_set_refuses_unrepresentable_shard_ids() {
     // serve-set entry that cannot name a SegmentId is a construction bug.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     let provider = StoreShardProvider::new(store);
+    let bad = u64::from(u32::MAX) + 1;
     let err = provider
-        .pin_serve_set(&[u64::from(u32::MAX) + 1])
+        .pin_serve_set(&[bad])
         .expect_err("u32 overflow must fail pin");
-    assert!(
-        err.to_string().contains("SegmentId"),
-        "error should name the id-space bug: {err}"
-    );
+    assert_eq!(err, ProviderError::UnrepresentableShardId { shard_id: bad });
 }

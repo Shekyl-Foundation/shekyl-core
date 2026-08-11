@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Persona serving loop: loopback shard server behind the P onion service (2d-2 serving path, provisional framing)"
+description = "PR-A persona serving loop: loopback shard server + store pin/read (2d-2 §9.5 item 3; Tor wiring is PR-B)"
 publish = false
 
 [dependencies]
