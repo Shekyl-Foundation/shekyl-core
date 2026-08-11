@@ -124,9 +124,32 @@ namespace cryptonote
   {
     std::time_t relay_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs)
     {
-      // Cast: the FFI returns uint64_t; seconds::rep is signed, so list-init
-      // would be a narrowing conversion on some standard libraries.
-      const auto delay = std::chrono::seconds{static_cast<std::chrono::seconds::rep>(draw_secs)};
+      using rep = std::chrono::seconds::rep;
+
+      /* SATURATE, never wrap. The FFI returns `uint64_t` and `rep` is signed:
+         an out-of-range draw would cast to a NEGATIVE delay — a deadline in the
+         past — which SHORTENS the delay, and shortening is the privacy-losing
+         direction for both callers (a short embargo fluffs early; a short
+         forward delay gives back cover at the tor->clearnet bridge). Overflowing
+         `now + delay` past the clock's range is the same failure by another
+         route.
+
+         Saturating instead is liveness-visible: the transaction sits rather
+         than relaying early, and a stuck transaction gets noticed. That is the
+         same preference F-8b records for its cap of 0 — loud beats quiet when
+         the quiet direction is the unsafe one.
+
+         No shipped draw can reach this. Both tables are truncated orders of
+         magnitude below it, so this is a boundary guard on the FFI's DECLARED
+         type rather than a live path; it exists because the declared type is
+         what a future caller will read. */
+      const auto headroom = std::chrono::floor<std::chrono::seconds>(
+                              std::chrono::system_clock::time_point::max() - now)
+                            - std::chrono::seconds{1}; // margin for the ceil below
+      const std::uint64_t max_safe =
+        headroom.count() > 0 ? static_cast<std::uint64_t>(headroom.count()) : 0;
+
+      const auto delay = std::chrono::seconds{static_cast<rep>(std::min(draw_secs, max_safe))};
       // ceil, not to_time_t's truncation — the header explains why the direction
       // is a privacy decision rather than a formatting one.
       return std::chrono::system_clock::to_time_t(

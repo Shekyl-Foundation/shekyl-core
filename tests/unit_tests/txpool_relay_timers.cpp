@@ -321,6 +321,40 @@ TEST(relay_deadline, exact_second_is_not_padded)
   EXPECT_EQ(cryptonote::detail::relay_deadline(at(0, 0), 0), 0);
 }
 
+TEST(relay_deadline, an_out_of_range_draw_saturates_forward_never_backward)
+{
+  /* The FFI declares `uint64_t` and `seconds::rep` is signed, so a value past
+     the signed range would cast NEGATIVE — a deadline in the past, which
+     shortens the delay. Shortening is the privacy-losing direction for both
+     callers, and it would be silent: the transaction relays early and nothing
+     reports it.
+
+     No shipped draw reaches here (both tables truncate far below), so this
+     guards the declared type rather than a live path — which is exactly the
+     kind of boundary a future caller reads and trusts. */
+  const auto now = at(1000, 0);
+  const std::time_t plain = cryptonote::detail::relay_deadline(now, 144);
+
+  for (const std::uint64_t absurd : {
+         std::uint64_t{1} << 62,
+         std::uint64_t{1} << 63,                       // exactly the sign bit
+         std::numeric_limits<std::uint64_t>::max(),
+       })
+  {
+    const std::time_t got = cryptonote::detail::relay_deadline(now, absurd);
+    EXPECT_GT(got, plain)
+      << "an absurd draw must saturate FORWARD, not wrap: got " << got
+      << " against " << plain << " for a normal 144 s draw";
+    EXPECT_GE(got, static_cast<std::time_t>(1000))
+      << "a saturated deadline must never land at or before `now`";
+  }
+
+  // Control: the guard must not disturb a normal draw. Without this, clamping
+  // everything to a constant would pass the assertions above.
+  EXPECT_EQ(cryptonote::detail::relay_deadline(now, 144), 1144);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(now, 0), 1000);
+}
+
 TEST(relay_deadline, zero_draw_still_never_lands_in_the_past)
 {
   // A 0s draw is legitimate (~0.17%: the memoryless geometric's support includes
