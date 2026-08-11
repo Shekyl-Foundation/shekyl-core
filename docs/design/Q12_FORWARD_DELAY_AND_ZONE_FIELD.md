@@ -39,7 +39,7 @@ certain in every branch (§5.1).
 
 ## 2. Ground findings
 
-Verified at source on 2026-08-10, at the pin `6bc65d2a9`.
+Verified at source on 2026-08-10, at the pin [`6bc65d2a9`](https://github.com/Shekyl-Foundation/shekyl-core/commit/6bc65d2a9091d3da5d6d8d906ed3420c250b947d).
 
 ### 2.1 The coupling is at the line, not merely conceptual
 
@@ -446,6 +446,66 @@ one, and Q12-D5a shows the indifference one is conditional on a semantics
 question that is itself unsettled. **The value is withdrawn rather than
 re-argued** — proposing a replacement now would repeat exactly the failure the
 round has just caught twice.
+
+### Q12-D6a — The measurement that could move it, and it needs a running network
+
+**Restored.** This section was deleted by the Q12-D5/D6 rewrite above while
+Q12-D7 still cited "the Q12-D6a testnet" — a dangling reference to a removed
+section, caught by an assertion failing rather than by reading.
+
+**Its premise was also wrong, corrected by Bugbot on PR #430.** The draft said
+that if anonymity-zone peer discovery cannot sustain the F-8b floor of 12,
+nodes "fall to `x = 0` by the floor rule".
+
+> **That rule does not exist.** F-8b floors the **configured cap**, not the
+> achieved peer count: `set_max_out_peers` refuses a start below it and
+> `change_max_out_public_peers` clamps a runtime request (`net_node.inl`).
+> Neither observes how many peers a node actually connected to, and nothing
+> switches a node's stem fraction off when it cannot fill the floor.
+>
+> **The gap exposed is worse than the inconsistency reported.** A node that
+> configures 12 but reaches 3 keeps stemming on the anonymity zone at an
+> *actual* fluff degree below what the embargo derivation assumes —
+> **under-provisioned in the privacy-losing direction**, which is the exact
+> condition F-8b exists to prevent, reached by a path F-8b does not watch.
+>
+> So the question changes from *"does the floor rule trigger?"* to **"does such
+> a rule need to exist, and what should it do?"** — recorded for the
+> implementation round rather than answered, since answering it from prose is
+> what Q12-D8 warns against.
+
+**The measurement stands and is more useful under the correction**: it reports
+the *achieved* anonymity-zone outbound peer distribution against adoption `t`,
+which is the quantity no existing rule observes.
+
+**Why no existing instrument reaches it.** Everything this arc has measured has
+been local and synthetic — verification cost on one machine, flood
+first-passage on a generated graph, linkage over generated streams. **Peer
+discovery is a population dynamic**: onion addresses propagating through
+peerlists, over time, across nodes that join and leave. One process cannot
+produce it, and a static graph cannot either, because *the question is whether
+the graph forms at all*.
+
+**The shape:** a multi-node testnet with a Tor zone, run long enough for
+peerlists to converge; readout is the distribution of anonymity-zone outbound
+peer count against `t`; reference point is the F-8b floor of 12.
+
+**Three conditions that decide whether the number means anything:**
+
+1. **`t` is the independent variable, not a fixture constant.** The question is
+   *where* the floor stops being reachable, so the run needs several adoption
+   fractions. A single-`t` run gives one point and no threshold.
+2. **Peerlist propagation is the mechanism under test, so it cannot be seeded.**
+   A testnet that hands every node a full anonymity peerlist at startup measures
+   nothing — the **fixture-cannot-express-the-input** failure, in the arm
+   carrying the whole finding. Nodes must discover: seed nodes and real
+   convergence time.
+3. **The failure is asymmetric and self-reinforcing.** A node below the floor
+   contributes no anonymity traffic, so it is less useful as a peer. **Whether
+   that damps or spirals is exactly what a static model cannot tell you.**
+
+> **The cost, honestly: the most expensive measurement the arc has proposed, and
+> the only one that cannot be faked.** Everything else was a bench.
 
 ### Q12-D7 — Build the mechanism first. `p` is not a design question.
 
