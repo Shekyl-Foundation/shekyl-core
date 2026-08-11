@@ -96,7 +96,10 @@ layer.]**
 | `VerifiedRange` / `PReconcileSet` (SP-6) | **landed 2026-06-29** (`pscan/reconcile.rs:67` / `exhaustiveness.rs:64`; `82870235b` + PR #211 review) *(row corrected 2026-07-18; previously "0 files — design-level, future")* | Consume for half (B) — **gate CLEARED**; the consumer is SP-R0 **arm #2** ([`ARCHIVAL_BOND_SP_R0_PLAN.md`](ARCHIVAL_BOND_SP_R0_PLAN.md)) |
 | `CoverDiscovery` (SP-7) — re-fund takes `AbsentVerified` only | **landed with the 2d-1 slices** (`pscan/cover_discovery.rs`) *(row corrected 2026-07-18; previously "0 files")* | Honor it; no auto-escalation of `Incomplete` |
 | `tip_height()` = "this source's *claimed* tip" (TM-3) | concept (in the plan) | Resolved by **posture**, not multi-source machinery (§4) |
-| `spread` / `bond_first` broadcast placement | **drawn AND consumed** (2c-2b PR #255): `plan_entry_seam` turns the draw into an `EntrySeamPlan` (block offsets for both events), carried in the `SignBond` reply (`SignedBondPost`); the write-side *seam* it will feed is built (SP-T4a `PTransactionSubmitter` + `BroadcastPosture`), but the plan is **not** yet wired into any broadcast | Carry the `EntrySeamPlan` to the wire over the per-`P` circuit (§5) — gated on the 2c-2a assemble / 2d dispatch wiring, not the seam or the plan |
+| `spread` / `bond_first` broadcast placement | **drawn AND consumed** (2c-2b PR #255): `plan_entry_seam` turns the draw into an `EntrySeamPlan` (block offsets for both events), carried in the `SignBond` reply (`SignedBondPost` — since renamed
+`PlanBondPost` / `BondPostPlacement` with an *unsigned* vin, SA-2b, and the
+plan reduced to the bare `bond_post_offset_blocks` in the GF-7 coin
+retirement); the write-side *seam* it will feed is built (SP-T4a `PTransactionSubmitter` + `BroadcastPosture`), but the plan is **not** yet wired into any broadcast | Carry the `EntrySeamPlan` to the wire over the per-`P` circuit (§5) — gated on the 2c-2a assemble / 2d dispatch wiring, not the seam or the plan |
 
 **Implication for 2d-2 half (B) (corrected 2026-07-18):** the reconcile's SP-6 and
 driving-task gates are **both cleared** (see the corrected rows above and the §12 SP-R0

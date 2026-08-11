@@ -74,7 +74,14 @@ const SURFACES: [(&str, &[u8]); 6] = [
 /// One shared message: the cross-domain negatives below prove the *domain*
 /// separates the surfaces even over identical message bytes, which is the
 /// whole SA-R-2 property.
-const KAT_MESSAGE: &[u8] = b"shekyl-hybrid-v2-kat: one message, six surfaces";
+///
+/// The string is **frozen with the pinned signatures**: every vector was
+/// minted over exactly these bytes, so editing the literal (even cosmetically
+/// — the "seven" is historical; bond_post was retired in SA-2b) invalidates
+/// every pinned signature and forces a wholesale re-mint, destroying the
+/// cross-build pin continuity this fixture exists for. The live surface count
+/// is enforced against `SURFACES.len()`, never against this string.
+const KAT_MESSAGE: &[u8] = b"shekyl-hybrid-v2-kat: one message, seven surfaces";
 
 fn fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/test_vectors/PQC_HYBRID_V2_KAT.json")

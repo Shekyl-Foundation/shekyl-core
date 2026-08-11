@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Persona lifecycle messages (mint, activate, identity, SignBond).
+//! Persona lifecycle messages (mint, activate, identity, PlanBondPost).
 
 use kameo::message::{Context, Message};
 
@@ -98,7 +98,7 @@ impl Message<ActivatePersona> for StakeEngine {
 }
 
 /// Report the public identity of the **held** persona at `p_slot` — a pure
-/// projection, like [`ActivePersona`]: no activation, no activation, no
+/// projection, like [`ActivePersona`]: no activation, no retired-slot wipe, no
 /// generation advance, so every outstanding handle stays valid. The claim
 /// request path (CB-3) uses this to derive the claimant's canonical id from
 /// actor-held state without the lifecycle side effects of
@@ -172,14 +172,17 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
     }
 }
 
-/// Request the StakeEngine to build and sign a JoinMarket archival bond post,
-/// consuming the persist-before-use typestate (Bond-PR 2c-2b, S1/S2).
+/// Request the StakeEngine to construct a JoinMarket archival bond-post vin
+/// and draw its placement, consuming the persist-before-use typestate
+/// (Bond-PR 2c-2b, S1/S2). Formerly `SignBond`; renamed when SA-2b deleted
+/// on-vin signing — the handler constructs and plans, it signs nothing
+/// (surface-A signing is the assemble path).
 ///
 /// Both `handle` and `ticket` must name the same persona slot: the handle
 /// proves the slot is currently held at the generation this message was minted
 /// for; the ticket proves its live-bond record was durably committed before
-/// signing. This structural pairing makes "sign before persist" and "sign for
-/// an unheld persona" unexpressible (typed contracts #1 and #2).
+/// construction. This structural pairing makes "construct before persist" and
+/// "construct for an unheld persona" unexpressible (typed contracts #1 and #2).
 ///
 /// The entry-gap timing draw runs inside the handler (S4/S5): the OS entropy
 /// source is preflighted via `try_fill_bytes` (fail-loud on source failure —
@@ -207,10 +210,10 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
 /// stake.activate_persona(handle1)           (sets active slot; handle1 consumed)
 /// engine.persist_bond_record(slot) → ticket (durable; Engine, not actor)
 /// stake.mint_handle(slot)      → handle2
-/// stake.sign_bond(handle2, ticket, holdings) → BondPostPlacement
+/// stake.plan_bond_post(handle2, ticket, holdings) → BondPostPlacement
 /// ```
 #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
-pub(crate) struct SignBond {
+pub(crate) struct PlanBondPost {
     /// Operation-scoped capability proving the slot is currently held (typed
     /// contract #2). Must match `ticket.p_slot()`.
     pub handle: PersonaHandle,
@@ -222,7 +225,7 @@ pub(crate) struct SignBond {
     pub holdings: HoldingsDescriptor,
 }
 
-/// Reply of [`SignBond`]: the constructed bond vin **and** the block-timed
+/// Reply of [`PlanBondPost`]: the constructed bond vin **and** the block-timed
 /// placement offset derived from the same request's entry-gap draw.
 ///
 /// Pairing them in one reply is the seam discipline: the caller that receives
@@ -242,12 +245,12 @@ pub(crate) struct BondPostPlacement {
     pub bond_post_offset_blocks: u64,
 }
 
-impl Message<SignBond> for StakeEngine {
+impl Message<PlanBondPost> for StakeEngine {
     type Reply = Result<BondPostPlacement, StakeEngineError>;
 
     async fn handle(
         &mut self,
-        msg: SignBond,
+        msg: PlanBondPost,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         // Steps 1–5 (validate + slot cross-check + entropy preflight + guarded
@@ -284,7 +287,7 @@ impl Message<SignBond> for StakeEngine {
         //    never returned to the caller (rule 36-secret-locality): only the
         //    constructed `JoinMarketVin` (paired with its placement offset)
         //    crosses the actor boundary.
-        let vin = build_join_market_vin(keys.hybrid_bond_id(), &keys.bond_spend_pk, msg.holdings)
+        let vin = build_join_market_vin(keys.bond_post_keys(), msg.holdings)
             .map_err(StakeEngineError::BondBuild)?;
         Ok(BondPostPlacement {
             vin,

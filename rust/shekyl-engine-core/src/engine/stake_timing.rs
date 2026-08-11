@@ -30,7 +30,7 @@ use shekyl_units::AtomicUnits;
 
 /// Bridges [`rand_core::OsRng`] to the standoff [`GapRng`] trait for the
 /// wallet's **live** entropy draws: the stake engine's entry-gap draw
-/// ([`SignBond`](super::stake_engine)) and the WI-3 dispatch driver's
+/// ([`PlanBondPost`](super::stake_engine)) and the WI-3 dispatch driver's
 /// send-time dispersal draw
 /// ([`DispatchDriver`](super::pscan::dispatch)). Zero-state — fresh OS
 /// entropy per `next_u64` — so a single shared adapter serves both draws
@@ -91,7 +91,7 @@ pub(crate) use shekyl_standoff::conformance::CERTIFY_SAMPLE_N;
 /// never the default path. See §3.4 of `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`.
 ///
 /// **Design-now / wire-2d.** The bond transaction orchestration layer (2d)
-/// takes `cover: CoverAmount`; the `SignBond` message does not (the VIN
+/// takes `cover: CoverAmount`; the `PlanBondPost` message does not (the VIN
 /// carries `bond_floor` only).
 ///
 /// The inner value is [`AtomicUnits`] — the canonical money newtype — not a

@@ -110,12 +110,15 @@ over `funded_ledger_and_tree`).
 `assemble_path` available earlier than planned, PR 2c was split: **PR 2c-1**
 closes the real-tree bond round-trip and **PR 2c-2** carries the StakeEngine
 wiring / JoinMarket orchestration. The 2c-1 KAT
-(`local_pending_tx::join_market_bond_post_signs_and_verifies_over_real_tree`)
+(`local_pending_tx::join_market_bond_post_verifies_over_real_tree` — renamed
+from `…signs_and_verifies…` when SA-2b deleted on-vin signing)
 re-runs PR 2a's composition over a **real** depth-2 `assemble_path` tree (the
 `funded_ledger_and_tree` fixture, the same path `build_then_submit_…` drives),
 carrying the bond's `credit_term` through `sign_transaction_with_terms` over
 genuine branch layers and checking BP+, the RCT balance over prover-emitted
-commitments, and vin/signature accept+reject. It drives the prover directly
+commitments, and constructed-vin accept+reject (the on-vin signature legs were
+deleted with SA-2b; the surface-A authorization negatives live in the daemon
+submit battery, `submit_verifier.rs`). It drives the prover directly
 rather than the transfer bridge (`sign_bridge.rs` deliberately still calls the
 **zero-terms** `sign_transaction`): per Q3 a bond does not take the transfer
 signer path, so threading a credit term through the bridge would be dead code
@@ -137,8 +140,10 @@ real-tree prove→verify roundtrip (tracked in `FOLLOWUPS.md`,
 "real-tree FCMP++ verify"). The earlier "not on CT-5" note above was correct for
 the prove side only.
 The KAT also asserts the verify side *rejects* a wrong `bond_credit`, a tampered
-output commitment, a tampered signature preimage, and a replayed post -- the
-honest milestone is "valid accepts and invalid rejects," not accept alone. Lives
+output commitment, and a replayed post -- the honest milestone is "valid accepts
+and invalid rejects," not accept alone. (The on-vin signature legs were deleted
+with SA-2b; the surface-A authorization negatives live in the daemon submit
+battery, `submit_verifier.rs`.) Lives
 in `shekyl-engine-core::engine::local_keys::tests`
 (`join_market_bond_post_signs_and_verifies_through_prover`), reusing the M3c
 synthetic-tree and key-derivation fixtures rather than promoting them to public
@@ -683,13 +688,14 @@ live bond", not a clean shrinking window.
 
 **Persist-before-use is a typestate, not a discipline (typed contract #1; the
 cross-split seam).** `p_slot` and the per-persona bond record must persist
-**before the persona key signs the bond at build time** — not merely before the
-bond posts on-chain (see the CT-5d finding below). A crash in that window,
-combined with the bonded-union rule, could otherwise drop a bonded persona from
-the derived set entirely and make it unreachable. The invariant is lifted into
-the types: `Engine::persist_bond_record(..) -> PersistedBondTicket` is the *only*
-producer of a `PersistedBondTicket`, and 2c-2b's `sign_bond(ticket:
-PersistedBondTicket, ..)` consumes it — so sign-before-persist is *uncallable*,
+**before the persona's bond post is constructed for assembly** — not merely
+before the bond posts on-chain (see the CT-5d finding below). A crash in that
+window, combined with the bonded-union rule, could otherwise drop a bonded
+persona from the derived set entirely and make it unreachable. The invariant is
+lifted into the types: `Engine::persist_bond_record(..) -> PersistedBondTicket`
+is the *only* producer of a `PersistedBondTicket`, and 2c-2b's
+`plan_bond_post(ticket: PersistedBondTicket, ..)` (né `sign_bond`, renamed with
+SA-2b) consumes it — so construct-before-persist is *uncallable*,
 there is no ticket to pass. The ticket is `!Clone` and consumed by value; minting
 it goes through `save_state` → `atomic_write_file` (`tmp → fsync → rename →
 fsync(parent)`), so the ticket witnesses a **durable, crash-atomic** commit. This
@@ -766,21 +772,25 @@ format freeze):**
 
 **CT-5d re-anchor finding (verified at source — sets how early the bonded-union
 rule bites).** The bond's persona signature is the surface-A `pqc_auths` slot
-over the whole-tx payload hash (`varint(TX_VERSION) ‖ TxPrefix::write ‖ …`; SA-2b
-retired the separate on-vin `signature_preimage`, `SIGNATURE_ALIGNMENT.md` §2.2):
-it binds the tx prefix — canonical id, holdings, `bond_spend_pk`, and cleartext
-terms — **not** the FCMP++ membership proof or the curve-tree root (those live in
-the RCT/prunable section, outside the prefix). A *content-preserving* reprove (same inputs ⇒ same
-output locks ⇒ `tx_prefix_hash` unchanged) leaves the persona signature valid.
-But CT-5d §4 (F-A) is explicit that a reprove *routinely moves `(fee, change)`* —
-depth-growth shrinks the change output, a moved fee snapshot does the same — and
-the change-output amount lives in the vout, so the prefix changes and the persona
-re-signs. **Persona re-sign is therefore the common case, not the rare deep
-reselect**: any fee/change drift over the standoff delay triggers it, and on a
-600-block window that is most of the time. So a *pending-broadcast* bond needs its
-building persona's key for essentially the whole standoff delay, and the
-bonded-set rule spans the **`consumer_held` (built, pending broadcast) window
-plus posted-and-still-bonded**, not posted-only. 2c-2 lands no submission, so this
+over the whole-tx payload hash (SA-2b retired the separate on-vin
+`signature_preimage`, `SIGNATURE_ALIGNMENT.md` §2.2). That payload
+(`shekyl-wire` `Transaction::pqc_signing_payload_hashes`) is
+`varint(TX_VERSION) ‖ TxPrefix::write ‖ ct_base ‖ cn_fast_hash(Prunable::write)
+‖ auth header ‖ per-auth key hashes` — it binds the tx prefix (canonical id,
+holdings, `bond_spend_pk`), the fee and `reference_block` (the curve-tree
+anchor, in `ct_base`), **and the prunable section** (the FCMP++ membership
+proof and pseudo-outs, via their hash). The proof bytes are randomized on
+every prove, so **every re-anchoring reprove invalidates the persona
+signature — including a content-preserving one** (same inputs, same outputs,
+`tx_prefix_hash` unchanged): there is no reprove that leaves the surface-A
+signature valid. (Under the deleted on-vin preimage, which bound only
+`tx_prefix_hash` + vin fields, re-sign was conditional on fee/change drift;
+surface A makes it unconditional.) **Persona re-sign is therefore universal,
+not the fee-drift common case**: each reprove over the standoff delay needs
+the key. So a *pending-broadcast* bond needs its building persona's key for
+essentially the whole standoff delay, and the bonded-set rule spans the
+**`consumer_held` (built, pending broadcast) window plus
+posted-and-still-bonded**, not posted-only. 2c-2 lands no submission, so this
 does not execute yet; it is pinned now so the schema and derive-forward set are
 correct when broadcast/re-anchor wiring lands in 2d.
 

@@ -23,7 +23,7 @@ use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
     ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
-    MintPersonaHandle, PersonaIdentityOf, SignBond,
+    MintPersonaHandle, PersonaIdentityOf, PlanBondPost,
 };
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
 use super::types::*;
@@ -190,8 +190,8 @@ impl StakeEngineHandle {
     }
 
     /// The public identity of the held persona at `p_slot` — a pure
-    /// projection: no activation, no activation, no generation advance (see
-    /// [`PersonaIdentityOf`]).
+    /// projection: no activation, no retired-slot wipe, no generation advance
+    /// (see [`PersonaIdentityOf`]).
     pub(crate) async fn persona_identity(
         &self,
         p_slot: PSlot,
@@ -212,7 +212,7 @@ impl StakeEngineHandle {
     /// so "construct before persist" and "construct for an unheld persona" are
     /// uncallable.
     ///
-    /// See [`SignBond`] for the full caller workflow.
+    /// See [`PlanBondPost`] for the full caller workflow.
     ///
     /// # Errors
     ///
@@ -228,14 +228,14 @@ impl StakeEngineHandle {
     /// - [`StakeEngineError::RngDegeneracy`] — timing draw degenerate; retry.
     /// - [`StakeEngineError::BondBuild`] — bond construction failed (see inner).
     #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
-    pub(crate) async fn sign_bond(
+    pub(crate) async fn plan_bond_post(
         &self,
         handle: PersonaHandle,
         ticket: crate::engine::stake_persist::PersistedBondTicket,
         holdings: HoldingsDescriptor,
     ) -> Result<BondPostPlacement, StakeEngineError> {
         self.actor
-            .ask(SignBond {
+            .ask(PlanBondPost {
                 handle,
                 ticket,
                 holdings,

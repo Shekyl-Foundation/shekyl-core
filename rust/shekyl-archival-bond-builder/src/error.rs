@@ -20,6 +20,11 @@ pub enum BondBuildError {
     #[error("failed to encode P identity hybrid public key: {0}")]
     IdentityEncode(shekyl_crypto_pq::CryptoError),
 
+    /// The GF-1 bond-debit authorizer public key (`bond_spend_pk`) could not
+    /// be serialized to its canonical wire bytes.
+    #[error("failed to encode bond_spend_pk (GF-1 debit authorizer): {0}")]
+    BondSpendEncode(shekyl_crypto_pq::CryptoError),
+
     /// The credit-path amounts did not satisfy
     /// `sum(funding) == sum(outputs) + fee + floor`.
     #[error(

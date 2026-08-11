@@ -33,7 +33,7 @@ as a security property.
 | ~~`shekyl-archival-bond-builder` S1 on-vin sign~~ | — | — | **Deleted in SA-2b** (§2.2): bond vin rides generic surface-A `pqc_auths` (see `stake_engine/bond.rs` bond-slot row). Live census = eight sites below |
 | `shekyl-archival-retention/src/attestation_wire.rs:488` | verify | `record.nonce(r, cb_out_key)` | yes — `shekyl/archival-attestation-nonce-v1` |
 | `shekyl-crypto-pq/src/output.rs:991` | sign | caller's `message` (`sign_pqc_auth_for_output`) | **no** — bare |
-| `shekyl-engine-core/…/stake_engine/bond.rs:343` | sign | `bond_payload_hash` | **no** — bare hash |
+| `shekyl-engine-core/…/stake_engine/bond.rs:313` | sign | `bond_payload_hash` | **no** — bare hash |
 | `shekyl-engine-core/…/stake_engine/claim.rs:337,484` | sign | claim / emission payload hash | **no** — bare hash |
 | `shekyl-ffi/src/legacy_core.rs:157` (`shekyl_pqc_sign`) | sign | raw FFI `message` | **no** — bare, arbitrary |
 | `shekyl-ffi/src/legacy_fcmp.rs:734` | verify | FFI `msg` | **no** — bare |
@@ -228,7 +228,7 @@ two counts**, both verified at source:
   prefix it signs (circular). There is no field to add.
 
 The bond vin's `pqc_auths` slot **already exists, is occupied, and is verified**.
-Today it signs the **generic** surface-A payload hash (`bond.rs:342-344`); the
+Today it signs the **generic** surface-A payload hash (`bond.rs:313-315`); the
 design (`gate4:311-313`) specifies it sign the **domain-separated**
 `signature_preimage` (`shekyl/archival-bond-post-v1`) — which the discarded S1
 signature computes. So the real question is neither "wire" nor "delete" but
@@ -283,21 +283,25 @@ surface-A payload hash is `varint(TX_VERSION) ‖ TxPrefix::write ‖ …`, and
 bond post, `0x04` for an emission input. The tag is inside the signed bytes, so a
 signature produced over a bond-post prefix cannot verify against an
 emission-prefix payload (the tags differ ⇒ the hashes differ ⇒ the signature
-fails). The whole-tx hash therefore binds **strictly more** than the deleted
-bond preimage did: `bond_spend_pk`, `p_canonical_id`, `post_kind`, the holdings
-descriptor, and every amount field all ride inside the same signed prefix,
-**plus** the vin type tag that the bond-specific preimage never carried. Generic
-wins; the domain-separated preimage adds no separation surface A does not already
-provide, and activating it would have added a verifier special-case for zero
-security gain. The arm was chosen by the replay analysis, not by which was less
-work.
+fails). The whole-tx hash binds **strictly more** than the deleted bond
+preimage did — but be precise about the differential: the deleted preimage's
+*first input field was `tx_prefix_hash`* (plus `p_canonical_id`, `post_kind`,
+`bond_spend_pk`, holdings, and the amount fields directly), so it already bound
+every vin type tag *transitively* through the prefix hash. What the bond
+preimage genuinely never carried is what makes surface A the strict superset:
+the `ct_base` blob (fee and `reference_block`, the curve-tree anchor), the
+**prunable hash** (the FCMP++ proof and pseudo-outs), and the per-auth key-hash
+list. Generic wins; the domain-separated preimage adds no separation surface A
+does not already provide, and activating it would have added a verifier
+special-case for zero security gain. The arm was chosen by the replay analysis,
+not by which was less work.
 
 ### The six surfaces
 
 | # | Surface | Sign | Verify | Scheme-level domain (ratified) |
 |---|---|---|---|---|
 | A | Tx per-input PQC auth (payload hash) | bond / emission-prefix / spend (via `sign_pqc_auth_for_output`) / C++ wallet | submit verifier, scheme-2, **C++ `tx_pqc_verify`** | **`shekyl/pqc-auth-tx-v1`** — the only undomained surface today; the load-bearing add |
-| B | Archival bond-post vin (rides surface A) | bond slot signs surface-A hash (`bond.rs:344`) | submit verifier / C++ `tx_pqc_verify` (as surface A) | **`shekyl/pqc-auth-tx-v1`** (same as A). Slot-preimage choice **resolved in SA-2b: generic wins**; S1 + `signature_preimage` + `SCHEME_DOMAIN_BOND_POST` deleted (§2.2) |
+| B | Archival bond-post vin (rides surface A) | bond slot signs surface-A hash (`bond.rs:313`) | submit verifier / C++ `tx_pqc_verify` (as surface A) | **`shekyl/pqc-auth-tx-v1`** (same as A). Slot-preimage choice **resolved in SA-2b: generic wins**; S1 + `signature_preimage` + `SCHEME_DOMAIN_BOND_POST` deleted (§2.2) |
 | C | Emission auth — claim | `claim.rs` claim | emission_verify claim leg | `shekyl/archival-emission-claim-scheme-v1` |
 | D | Emission auth — backing | `claim.rs` backing (`sign_pqc_auth_for_output`) | emission_verify backing leg | `shekyl/archival-emission-backing-scheme-v1` |
 | E | Attestation countersignature | none in-repo | attestation_wire ← C++ | `shekyl/archival-attestation-scheme-v1` (assignable unilaterally) |

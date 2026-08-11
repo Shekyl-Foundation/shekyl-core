@@ -2181,7 +2181,10 @@ async fn join_market_bond_post_verifies_over_real_tree() {
     //
     // The vin carries no on-chain signature of its own: P's authorization
     // rides the transaction-level `pqc_auths` slot (surface A) over the
-    // whole-tx payload hash, exercised in the surface-A tests, not here
+    // whole-tx payload hash — exercised in the daemon submit battery
+    // (`shekyl-daemon-rpc/tests/submit_verifier.rs`:
+    // `bond_slot_tampered_signature_is_rejected`,
+    // `bond_spend_pk_swap_after_signing_is_rejected`), not here
     // (SA-2b; SIGNATURE_ALIGNMENT.md §2.2).
     verify_join_market_bond_post(built.vin(), false)
         .expect("verify accepts a fresh JoinMarket post");
@@ -2430,12 +2433,8 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     }];
 
     // ── Build the bond vin + the change output ───────────────────────
-    let built = build_join_market_vin(
-        p_keys.hybrid_bond_id(),
-        &p_keys.bond_spend_pk,
-        holdings.clone(),
-    )
-    .expect("build JoinMarket vin");
+    let built = build_join_market_vin(p_keys.bond_post_keys(), holdings.clone())
+        .expect("build JoinMarket vin");
     assert_eq!(built.vin().bond_credit, floor);
     assert_eq!(built.vin().bond_debit, 0);
 

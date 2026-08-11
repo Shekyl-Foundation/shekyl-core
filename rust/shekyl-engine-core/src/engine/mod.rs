@@ -354,7 +354,7 @@ pub(crate) mod signing_assembly;
 pub(crate) mod stake_engine;
 /// PR 2c-2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, typed contract #1): the
 /// `PersistedBondTicket` persist-before-use typestate and its sole producer
-/// `Engine::persist_bond_record`. Inert until 2c-2b's `sign_bond` consumes the
+/// `Engine::persist_bond_record`. Inert until 2c-2b's `plan_bond_post` consumes the
 /// ticket; produced here so the cross-split contract is an unforgeable type.
 pub(crate) mod stake_persist;
 /// Bond-PR 2c-2b (Round 2): typed timing-seam newtypes — `BlockSpan`, `SebSpan`,

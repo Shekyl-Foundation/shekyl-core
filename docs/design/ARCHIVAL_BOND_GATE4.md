@@ -423,8 +423,9 @@ reversion clause).
      `bond_spend_pk`. The account identity key `P_pubkey` (`= hybrid_sign_pk`) **must not**
      authorize a debit (identity-only invariant).
    - `bond_debit == 0` (`JoinMarket`, `Rebond`, `HoldingsUpdate` add) → verify against
-     `P_pubkey`; on `JoinMarket` this signature also binds the committed `bond_spend_pk` via the
-     sig-preimage (§3.4.1).
+     `P_pubkey`; on `JoinMarket` this signature also binds the committed `bond_spend_pk` —
+     the vin rides inside the signed tx prefix of the surface-A whole-tx payload
+     (§3.4.1; SA-2b retired the separate sig-preimage).
 6. **FCMP++ balance** — `Σ in = Σ out + fee + bond_credit − bond_debit`; **no emission mint**.
    When `bulletproofs_plus` is non-empty, layout must be canonical (exactly one aggregated
    proof, `1 ≤ V.size() ≤ BULLETPROOF_PLUS_MAX_OUTPUTS`); credit-only join may omit proofs.
@@ -598,7 +599,8 @@ view of this log, never a stored flag.
 **`bond_spend_pk` — dedicated bond-debit authorizer (GF-1, gate-6 §9.6).** A `HybridPublicKey`
 (`scheme_id = 1`, Ed25519 + ML-DSA-65), **domain-separated from `P_pubkey`** by its own HKDF
 labels (gate-6 §9.3 `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1`). It is committed
-**once, at `JoinMarket`** (bound into the post sig-preimage, §3.4.1) and is **immutable for the
+**once, at `JoinMarket`** (bound into the surface-A signed payload via the tx prefix, §3.4.1;
+SA-2b retired the separate sig-preimage) and is **immutable for the
 record's life**; it authorizes every later `bond_debit` (`Unbond`, `HoldingsUpdate` drop, §3.5
 step 5). This keeps `P_pubkey` (`= hybrid_sign_pk`) **identity-only** — its compromise reveals
 nothing spendable — rather than carving the Round-1 identity-only invariant by letting the

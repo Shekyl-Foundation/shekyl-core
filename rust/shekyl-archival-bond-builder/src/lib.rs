@@ -46,7 +46,7 @@ use shekyl_archival_retention::{
     bond_floor, p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, BondPostKind,
     HoldingsDescriptor,
 };
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::archival_p::BondPostKeys;
 use shekyl_ct_balance::OutputTerm;
 use shekyl_units::AtomicUnits;
 
@@ -88,9 +88,11 @@ impl JoinMarketVin {
 /// Build a JoinMarket bond-post `vin` for persona `P` over the holdings being
 /// bonded (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.1).
 ///
-/// `identity_pk` is P's public identity (`hybrid_bond_id` / `hybrid_sign_pk`).
-/// `bond_spend_pk` is the GF-1 debit authorizer. Neither secret is required —
-/// this constructor does not sign (surface-A signing is the assemble path).
+/// `keys` pairs P's public identity (`hybrid_bond_id` / `hybrid_sign_pk`) with
+/// the GF-1 debit authorizer; its only producer is
+/// `ArchivalPKeys::bond_post_keys`, so the two roles are same-persona and
+/// un-transposable by construction. No secret is required — this constructor
+/// does not sign (surface-A signing is the assemble path).
 ///
 /// The constructed `vin` is accepted by
 /// [`shekyl_archival_retention::verify_join_market_bond_post`] with
@@ -100,10 +102,11 @@ impl JoinMarketVin {
 /// # Errors
 ///
 /// - [`BondBuildError::BondFloorZero`] if `holdings` are structurally invalid.
-/// - [`BondBuildError::IdentityEncode`] if a public key fails to serialize.
+/// - [`BondBuildError::IdentityEncode`] /
+///   [`BondBuildError::BondSpendEncode`] if the named public key fails to
+///   serialize.
 pub fn build_join_market_vin(
-    identity_pk: &HybridPublicKey,
-    bond_spend_pk: &HybridPublicKey,
+    keys: BondPostKeys<'_>,
     holdings: HoldingsDescriptor,
 ) -> Result<JoinMarketVin, BondBuildError> {
     let floor = bond_floor(&holdings);
@@ -115,7 +118,8 @@ pub fn build_join_market_vin(
     // independently (`ARCHIVAL_FIREWALL_GATE6.md` §9.4 / id::* over the same
     // canonical bytes the verify side recomputes). Public keys only — this
     // constructor does not sign (SA-2b / rule 36).
-    let hybrid_public_key = identity_pk
+    let hybrid_public_key = keys
+        .identity_pk()
         .to_canonical_bytes()
         .map_err(BondBuildError::IdentityEncode)?;
     // The producer returns the `PCanonicalId` domain newtype; the wire vin stores
@@ -125,9 +129,10 @@ pub fn build_join_market_vin(
     // The GF-1 debit authorizer, JoinMarket-coupled on the wire (§9.11) and
     // committed into the record at connect. It rides the signed tx prefix, so
     // P's surface-A `pqc_auths` signature binds it (SA-2b).
-    let bond_spend_pk = bond_spend_pk
+    let bond_spend_pk = keys
+        .bond_spend_pk()
         .to_canonical_bytes()
-        .map_err(BondBuildError::IdentityEncode)?;
+        .map_err(BondBuildError::BondSpendEncode)?;
 
     // JoinMarket is a pure credit path: bonded_total == bond_credit == floor,
     // bond_debit == 0 (the verify side pins this in verify_join_market_bond_post).

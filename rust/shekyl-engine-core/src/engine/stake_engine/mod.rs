@@ -13,7 +13,7 @@
 //! | [`types`] | Domain values, errors, spawn args |
 //! | [`helpers`] | Shared funding/vout prep, P-secrets, entry-gap draw |
 //! | [`actor`] | `StakeEngine` struct, spawn, inherent methods, Actor |
-//! | [`persona`] | Mint / activate / identity / SignBond |
+//! | [`persona`] | Mint / activate / identity / PlanBondPost |
 //! | [`bond`] | AssembleBond |
 //! | [`drain`] | AssembleDrain shell |
 //! | [`claim`] | AssembleEmissionClaim |

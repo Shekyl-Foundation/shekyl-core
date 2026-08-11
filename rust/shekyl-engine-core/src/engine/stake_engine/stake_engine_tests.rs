@@ -606,7 +606,7 @@ fn degeneracy_guard_passes_correct_rng() {
 /// S7(a) — `verify_credit_funding` rejects incorrect funding totals.
 ///
 /// Tests the builder-level funding invariant directly (the actor path would
-/// call `verify_credit_funding` after the `sign_bond` handler produces the
+/// call `verify_credit_funding` after the `plan_bond_post` handler produces the
 /// `JoinMarketVin`). Exercises both underflow and overflow cases.
 #[test]
 fn verify_credit_funding_rejects_wrong_total() {
@@ -619,7 +619,7 @@ fn verify_credit_funding_rejects_wrong_total() {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let vin = build_join_market_vin(bundle.hybrid_bond_id(), &bundle.bond_spend_pk, holdings)
+    let vin = build_join_market_vin(bundle.bond_post_keys(), holdings)
         .expect("build_join_market_vin succeeds for valid inputs");
 
     let fee = AtomicUnits::from_raw(100);
@@ -655,7 +655,7 @@ fn verify_credit_funding_rejects_wrong_total() {
 /// S7 slot-mismatch negative — a ticket for slot A with a handle for slot B
 /// produces [`StakeEngineError::SlotMismatch`], not a signing attempt.
 #[tokio::test]
-async fn sign_bond_slot_mismatch_is_rejected() {
+async fn plan_bond_post_slot_mismatch_is_rejected() {
     use crate::engine::stake_persist::PersistedBondTicket;
     use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
 
@@ -677,7 +677,7 @@ async fn sign_bond_slot_mismatch_is_rejected() {
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
     let err = handle
-        .sign_bond(h0, ticket_for_slot_1, holdings)
+        .plan_bond_post(h0, ticket_for_slot_1, holdings)
         .await
         .expect_err("slot mismatch must fail");
 
@@ -694,7 +694,7 @@ async fn sign_bond_slot_mismatch_is_rejected() {
 }
 
 /// GF-7 hooks-spec §6.2 (emission-complete for the 2c-2b surface) — a
-/// successful `sign_bond` emits exactly the draw-consumption and schedule
+/// successful `plan_bond_post` emits exactly the draw-consumption and schedule
 /// events to the **injected** observer, and the emitted payloads are
 /// internally consistent: the scheduled offset equals the drawn spread
 /// (causal — the post fires `spread` blocks after the private intent), and
@@ -703,7 +703,7 @@ async fn sign_bond_slot_mismatch_is_rejected() {
 /// window parameter on the draw event.
 #[cfg(feature = "gf7-hooks")]
 #[tokio::test]
-async fn sign_bond_emits_gf7_draw_and_schedule_events() {
+async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
     use std::sync::{Arc, Mutex};
 
     use crate::engine::stake_engine::types::StakeEngineArgs;
@@ -744,9 +744,9 @@ async fn sign_bond_emits_gf7_draw_and_schedule_events() {
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
     let post = handle
-        .sign_bond(h0, ticket, holdings)
+        .plan_bond_post(h0, ticket, holdings)
         .await
-        .expect("sign_bond succeeds for a held, matching slot");
+        .expect("plan_bond_post succeeds for a held, matching slot");
 
     let events = recorded.lock().expect("recorder lock");
     assert_eq!(

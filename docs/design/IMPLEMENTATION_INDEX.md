@@ -181,7 +181,7 @@ Verified at `dev` = `e22549a79`:
 | Layer | State | Evidence anchor |
 | --- | --- | --- |
 | `StakeEngine` persona/bond/scan surface | **Live** — spawned by orchestrator lifecycle for staker wallets | `engine/lifecycle.rs` (`spawn_stake_engine_if_staker`) |
-| Bond signing (`sign_bond` → `JoinMarketVin`) | **Live** (inert output — signed vin not yet assembled into a broadcastable tx in production) | `engine/stake_engine.rs` |
+| Bond vin construction (`plan_bond_post` → `BondPostPlacement`) | **Live** (inert output — the constructed vin carries no on-vin signature (SA-2b) and is not yet dispatched in production; surface-A signing rides `AssembleBond`) | `engine/stake_engine/persona.rs` |
 | `P`-scan pipeline (SP-0…SP-7) | **Wired (WI-1)** — `start_pscan_if_staker` called from `shekyl-wallet-rpc`'s wallet lifecycle (staker open/close); closure proven by a behavioral test, not the `dead_code` lint | `engine/pscan/start.rs`; `shekyl-wallet-rpc/src/lifecycle.rs` |
 | `P` transport (`PTorClient`, `PRpc`, `PBlockSource`) | **Built, unwired** | `shekyl-p-transport`, `engine/pscan/` |
 | `BroadcastSubmitter` / `BroadcastPosture` (SP-T4a) | **Live (`Local` posture)** — the WI-3 dispatch driver feeds `submit_bound`; `PerP` posture still awaits 2d-2 | `engine/transaction_submitter.rs` (`for_posture`/`submit_bound`), `engine/posture.rs`; landed #254, fed by `pscan/dispatch.rs` |

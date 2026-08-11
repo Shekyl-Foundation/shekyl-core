@@ -22,7 +22,7 @@
 //! A two-line sign/persist reordering is invisible in review and catastrophic
 //! in effect, so the ordering is lifted into the type system rather than left as
 //! a comment: [`Engine::persist_bond_record`] returns a [`PersistedBondTicket`],
-//! and 2c-2b's `sign_bond(ticket: PersistedBondTicket, ..)` *consumes* it. With
+//! and 2c-2b's `plan_bond_post(ticket: PersistedBondTicket, ..)` *consumes* it. With
 //! no other constructor, "sign before persist" has no expressible form — there
 //! is no ticket to pass.
 //!
@@ -60,7 +60,7 @@ use super::{Engine, EngineSignerKind, LocalLedger};
 /// Minted only by [`Engine::persist_bond_record`] after a successful
 /// crash-atomic `save_state`; the field is module-private and there is no other
 /// constructor, so a ticket cannot exist without the durable commit having
-/// happened. Consumed **by value** by 2c-2b's `sign_bond`, so one persist
+/// happened. Consumed **by value** by 2c-2b's `plan_bond_post`, so one persist
 /// authorizes one sign — persist-before-use, enforced structurally.
 ///
 /// Deliberately **not** `Clone`: a ticket is single-use evidence of one commit;
@@ -69,15 +69,15 @@ use super::{Engine, EngineSignerKind, LocalLedger};
 /// Reopen this only if a 2c-2b caller provably needs to re-sign the *same*
 /// already-persisted record, with documented justification.
 #[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code)] // inert until 2c-2b consumes it via sign_bond
+#[allow(dead_code)] // inert until 2c-2b consumes it via plan_bond_post
 pub(crate) struct PersistedBondTicket {
     /// The persona slot whose live-bond record this ticket witnesses. Bound so
-    /// 2c-2b's `sign_bond` can assert the ticket matches the persona being
+    /// 2c-2b's `plan_bond_post` can assert the ticket matches the persona being
     /// signed (a ticket for slot A cannot authorize a sign for slot B).
     p_slot: PSlot,
 }
 
-#[allow(dead_code)] // inert until 2c-2b consumes it via sign_bond
+#[allow(dead_code)] // inert until 2c-2b consumes it via plan_bond_post
 impl PersistedBondTicket {
     /// The persona slot this ticket was minted for.
     #[must_use]
@@ -115,7 +115,7 @@ impl<
     > Engine<S, D, LocalLedger, E, super::LocalRefresh, P, F>
 {
     /// Durably commit the live-bond record for persona `slot`, returning the
-    /// [`PersistedBondTicket`] that 2c-2b's `sign_bond` consumes.
+    /// [`PersistedBondTicket`] that 2c-2b's `plan_bond_post` consumes.
     ///
     /// Records `slot` in [`StakingBlock::bonded_slots`] (idempotent — a repeat
     /// of an already-recorded slot is a no-op on the set), flips
@@ -137,7 +137,7 @@ impl<
     /// [`PersistenceError`] if the durable `save_state` fails; in that case **no
     /// ticket is produced**, so the caller cannot proceed to sign — persist
     /// failure fails the operation closed, never open.
-    #[allow(dead_code)] // inert until 2c-2b consumes the ticket via sign_bond
+    #[allow(dead_code)] // inert until 2c-2b consumes the ticket via plan_bond_post
     pub(crate) fn persist_bond_record(
         &self,
         slot: PSlot,

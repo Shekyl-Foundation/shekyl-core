@@ -9,10 +9,12 @@ evidence pipeline.**
 §6 criteria.** Seam + vocabulary: `rust/shekyl-standoff/src/gf7.rs` (behind the
 non-default `gf7-hooks` feature); single-sourced draw consumer:
 `rust/shekyl-standoff/src/plan.rs` (`plan_entry_seam`); consumption point +
-emission: the `SignBond` handler in
-`rust/shekyl-engine-core/src/engine/stake_engine.rs` (reply is
-`SignedBondPost`: vin + plan, never decoupled; the module docs carry the §6.5
-no-behavioral-delta argument); §6.3 joint-axis scenario:
+emission: the `PlanBondPost` handler (né `SignBond`) in
+`rust/shekyl-engine-core/src/engine/stake_engine/persona.rs` (reply is
+`BondPostPlacement`, né `SignedBondPost`: unsigned vin + placement offset,
+never decoupled — SA-2b deleted on-vin signing and the GF-7 coin retirement
+reduced the plan to the bare `bond_post_offset_blocks`; the module docs carry
+the §6.5 no-behavioral-delta argument); §6.3 joint-axis scenario:
 `shekyl-staking-sim --gf7-timeline` (`rust/shekyl-staking-sim/src/gf7_timeline.rs`,
 the only recording observer); §6.4 guard:
 `.github/workflows/gf7-no-emit-guard.yml`. `BondPostDispatched` from a live
