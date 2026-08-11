@@ -41,15 +41,18 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (verified 2026-08-10): 92 distinct production domain strings across the
-five mechanisms — 93 registered, including the SHA3-256 micro-bucket.** The
+**Census (dated snapshot, 2026-08-11): 93 distinct production domain strings across
+the five mechanisms — 94 registered, including the SHA3-256 micro-bucket.** The
 `shekyl/`-prefix lens saw ~28 — a 3.3× undercount, which is the measure of the blind
-spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below sums to 93: the five
-mechanisms 92, plus the 1-entry micro-bucket.)
+spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below sums to 94: the five
+mechanisms 93, plus the 1-entry micro-bucket.) **This table is a snapshot, not the
+checked copy** — the per-mechanism counts are pinned once, against the parsed TSV
+rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry legitimately
+changes, that pin fails and this table is refreshed with a new as-of date.
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 23 | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 24 | 0 |
 | 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 33 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 9 | 0 |
@@ -60,14 +63,22 @@ Distinctness identity is per-mechanism; mechanism 2 is keyed by `(salt, info)`, 
 three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused across two
 derivations that differ only by salt — legitimately distinct, not a collision.
 
-**Frozen vs. live.** 11 of the 92 are **frozen-inherited** (mech-3: the FROST
+**Frozen vs. live.** 11 of the 93 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
 generator and Bulletproof(+) DSTs). Frozen strings are byte-identical to the
 un-vendored upstream, are pinned by derived-output KATs, and are **rule-93
 carve-outs** (a rebrand sweep skips them) — enumerated with per-seam consequences in
-[`FROZEN_DOMAIN_SEPARATORS.md`](FROZEN_DOMAIN_SEPARATORS.md). The remaining 81 are
+[`FROZEN_DOMAIN_SEPARATORS.md`](FROZEN_DOMAIN_SEPARATORS.md), and the CI gate
+cross-checks that every frozen row still has its entry there. The remaining 82 are
 Shekyl-authored **live** strings: still byte-load-bearing, but ours to version (mint
 a `…-v2` alongside a migration, never edit `…-v1` in place — SIGNATURE_ALIGNMENT §5).
+
+**Test-domain segregation.** Domains minted by test/bench code are rowed
+`test-only` and machine-checked to be disjoint from the production identities of
+their mechanism (`test_domains_are_segregated_from_production`) — a test-only
+domain equal to a live one would let a test-minted artifact verify against the
+production context. Test-vs-test collisions are not policed. Completeness of the
+test census has the same review-duty scope as mech 2/4/5/6 completeness below.
 
 **Boundary (named, not silent).** The registry excludes, each with a rowed reason:
 the RandomX Argon salt, Tor SAFECOOKIE HMAC keys, the `.onion` checksum prefix, and
@@ -82,14 +93,19 @@ exclusions and the sub-label rule are stated in the TSV header.
 
 - **Distinctness test** — `rust/shekyl-crypto-pq/tests/domain_registry.rs`: reads the
   TSV, asserts intra-mechanism distinctness (the collision-catcher), rejects malformed
-  mech ids / rows, and checks the mech-2 salt-separated model still matches code.
+  mech ids / statuses / rows, pins the per-mechanism census counts (so a silently
+  vanished row fails loudly), enforces test-domain segregation, and checks the mech-2
+  salt-separated model still matches code. Runs on TSV-only changes too — the Rust
+  workflow's path filter re-includes the registry.
 - **CI gate** — `scripts/ci/domain_registry_gate.sh`: for every *registered* row,
-  row-presence (`rg -F` the literal at its file) plus, when the const column is a real
-  identifier, a `const <name>` binding (blocks pure-comment false positives); entry-
-  point count-pins for mechanisms whose entry point always carries a domain (cSHAKE;
+  row-presence (`rg -F` the literal at its file, over comment-stripped code — a doc
+  comment quoting the bytes cannot keep a row green) plus, when the const column is a
+  real identifier, an exact `const <name>:` binding; entry-point count-pins (likewise
+  comment-stripped) for mechanisms whose entry point always carries a domain (cSHAKE;
   FROST free-form transcript labels; FROST ciphersuite ID/CONTEXT in
-  `shekyl-fcmp-proofs`). Anchored on the mechanism call site / registered literal,
-  never the `shekyl/` prefix.
+  `shekyl-fcmp-proofs`); and a frozen-doc cross-check (every frozen-inherited row has
+  its entry in `FROZEN_DOMAIN_SEPARATORS.md`). Anchored on the mechanism call site /
+  registered literal, never the `shekyl/` prefix.
 
 **Honest scope — completeness for mech 2/4/5/6 is a review duty.** The gate catches
 drift and deletion of *registered* domains, and additions on always-domain entry
