@@ -3,89 +3,104 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! End-to-end: attestation records → settlement fold → failure window.
+//! End-to-end: challenge outcome counts → settlement fold → failure window.
 //!
 //! The unit tests for [`settle_epoch`] and [`failure_window_slashable`] each
-//! live on one side of the `to_observation` bridge. This test drives the whole
-//! chain — fold each epoch's records, project through `to_observation`, drop the
+//! live on one side of the settlement/window seam. This test drives the whole
+//! chain — fold each epoch's `(passes, issued)`, project the three-valued
+//! settlement to the window's two-valued observation at the seam (the bridge
+//! the deleted `to_observation` used to be; consumers now own it), drop the
 //! non-observations, and evaluate the assembled window — because that is the
-//! only place the pruned-epoch hazard (`failure_window.rs:178-184`) actually
-//! bites: a pruned epoch decays to `NonObservation`, which must be *dropped*
-//! from the window, never counted as a miss.
+//! only place the pruned-epoch hazard (`failure_window.rs` prune
+//! const-assert) actually bites: a pruned or under-issued epoch decays to
+//! `NonObservation`, which must be *dropped* from the window, never counted
+//! as a miss.
 
 use shekyl_archival_retention::{
-    failure_window_slashable, settle_epoch, AttestationKind, BaselineObservation, FAILURE_WINDOW_M,
+    failure_window_slashable, settle_epoch, BaselineObservation, EpochSettlement, FAILURE_WINDOW_M,
     FAILURE_WINDOW_N,
 };
 
-/// Fold one epoch's record multiset and project it to the window's two-valued
-/// observation — `None` for a non-observation the window must not count.
-fn observe(epoch: u64, kinds: &[AttestationKind]) -> Option<BaselineObservation> {
-    settle_epoch(kinds).to_observation(epoch)
+/// The settlement/window seam: project the three-valued settlement to the
+/// window's two-valued observation, `None` for a non-observation the window
+/// must not count.
+fn observe(epoch: u64, passes: u32, issued: u32) -> Option<BaselineObservation> {
+    match settle_epoch(passes, issued) {
+        EpochSettlement::Served => Some(BaselineObservation::served(epoch)),
+        EpochSettlement::Missed => Some(BaselineObservation::missed(epoch)),
+        EpochSettlement::NonObservation => None,
+    }
 }
 
 #[test]
-fn a_full_window_of_misses_slashes_and_pass_priority_clears_mixed_epochs() {
-    // n observed epochs, most-recent-first, head a miss. m of them miss; the
-    // remaining (n − m) are *mixed* sets [Miss, Miss, Pass] that pass-priority
-    // resolves to Served — so a real pass clears an epoch even when misses were
-    // also filed against it.
-    //
-    // Head epoch is derived from n so the descending walk never underflows if
-    // FAILURE_WINDOW_N is raised later.
+fn a_full_window_of_missed_epochs_slashes_and_two_of_three_clears() {
+    // n observed epochs, most-recent-first. m settle Missed (0 of 3); the
+    // remaining (n − m) settle Served at exactly the 2-of-3 threshold — a
+    // pair passing two of its three challenges clears the epoch even though
+    // one challenge expired against it.
     let (m, n) = (u64::from(FAILURE_WINDOW_M), u64::from(FAILURE_WINDOW_N));
     let head = 1000 + n;
     let mut window = Vec::new();
     for i in 0..n {
-        let epoch = head - i; // strictly descending, head = 1000 + n
-        let kinds: Vec<AttestationKind> = if i < m {
-            vec![AttestationKind::Miss]
+        let epoch = head - i; // strictly descending
+        let obs = if i < m {
+            observe(epoch, 0, 3)
         } else {
-            // Served despite two misses in the same epoch — pass-priority.
-            vec![
-                AttestationKind::Miss,
-                AttestationKind::Miss,
-                AttestationKind::Pass,
-            ]
+            observe(epoch, 2, 3)
         };
-        window.push(observe(epoch, &kinds).expect("an observed epoch"));
+        window.push(obs.expect("an observed epoch"));
     }
     assert_eq!(window.len(), usize::try_from(n).unwrap());
     assert_eq!(failure_window_slashable(&window), Ok(true));
 }
 
 #[test]
-fn pruned_epochs_decay_to_non_observation_and_do_not_slash() {
-    // The hazard, end to end: an archiver with only two observed misses but a run
-    // of pruned/unchallenged epochs between them. The pruned epochs (empty record
-    // sets) fold to NonObservation and are dropped, so the window is just the two
-    // misses — below m, not slashable. Were NonObservation to collapse to Missed,
-    // the window would be full of misses and wrongly slash.
-    //
-    // Head derived from FAILURE_WINDOW_N so the descending walk cannot underflow
-    // if the constant grows.
+fn one_of_three_counts_as_a_miss_the_signal_pass_priority_hid() {
+    // The doctrine change absolute-2 encodes: a pair scraping ONE pass per
+    // epoch settles Missed every epoch and slashes — under the retired
+    // pass-priority OR gate these same epochs all settled Served and the
+    // window could never fill. This is the strictly-stronger per-epoch
+    // claim the (m, n) re-pin prices.
+    let n = u64::from(FAILURE_WINDOW_N);
+    let head = 3000 + n;
+    let window: Vec<BaselineObservation> = (0..n)
+        .map(|i| observe(head - i, 1, 3).expect("observed"))
+        .collect();
+    assert_eq!(failure_window_slashable(&window), Ok(true));
+}
+
+#[test]
+fn under_issued_epochs_decay_to_non_observation_and_do_not_slash() {
+    // The hazard, end to end: an archiver with two real Missed epochs and a
+    // long run of under-issued epochs between them — including a 1-pass-of-
+    // 1-issued epoch, which absolute-2 refuses to count as Served OR
+    // Missed. The under-issued epochs are dropped, so the window is just
+    // the two misses — below m, not slashable. Were NonObservation to
+    // collapse to Missed, the window would fill and wrongly slash.
     let n = u64::from(FAILURE_WINDOW_N);
     let mut raw = Vec::new();
     let mut epoch = 2000 + n + 5;
-    raw.push(observe(epoch, &[AttestationKind::Miss])); // head: a real miss
+    raw.push(observe(epoch, 0, 3)); // head: a real missed epoch
     epoch -= 1;
-    for _ in 0..(FAILURE_WINDOW_N + 5) {
-        raw.push(observe(epoch, &[])); // pruned / never challenged → None
+    for i in 0..(FAILURE_WINDOW_N + 5) {
+        // Alternate the under-issuance shapes, including the 1-of-1 pass.
+        let (passes, issued) = if i % 2 == 0 { (0, 0) } else { (1, 1) };
+        raw.push(observe(epoch, passes, issued)); // → None, dropped
         epoch -= 1;
     }
-    raw.push(observe(epoch, &[AttestationKind::Miss])); // one older real miss
+    raw.push(observe(epoch, 0, 2)); // one older real missed epoch
 
     let window: Vec<BaselineObservation> = raw.into_iter().flatten().collect();
     assert_eq!(window.len(), 2, "only the two real observations survive");
     assert_eq!(failure_window_slashable(&window), Ok(false));
 
-    // Negative control: the SAME epoch positions filled with real misses DO
-    // slash. This proves it was the non-observation *drop* that spared the
-    // archiver — not a window that was too short for some unrelated reason.
+    // Negative control: the SAME epoch positions filled with real Missed
+    // epochs DO slash — proving it was the non-observation drop that spared
+    // the archiver, not a window too short for some unrelated reason.
     let mut all_miss = Vec::new();
     let mut e = 2000 + n;
     for _ in 0..FAILURE_WINDOW_N {
-        all_miss.push(observe(e, &[AttestationKind::Miss]).expect("observed"));
+        all_miss.push(observe(e, 0, 3).expect("observed"));
         e -= 1;
     }
     assert_eq!(failure_window_slashable(&all_miss), Ok(true));

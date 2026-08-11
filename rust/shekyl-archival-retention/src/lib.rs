@@ -22,7 +22,7 @@
 //!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
-//! - [`attestation`] — settlement fold over kept kinds (`settle_epoch`).
+//! - [`attestation`] — settlement fold over challenge outcome counts (`settle_epoch`, absolute-2).
 //! - [`attestation_wire`] — header, nonce, `PassRecord`, root, pass verify.
 //!
 //! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
@@ -67,7 +67,7 @@ pub use admission::{
     credited_work_at_admission, parent_state_shards_from_gather, AdmissionError, AdmissionShard,
     ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
 };
-pub use attestation::{settle_epoch, AttestationKind, EpochSettlement};
+pub use attestation::{settle_epoch, AttestationKind, EpochSettlement, SERVE_THRESHOLD_PASSES};
 pub use attestation_wire::{
     attestation_nonce, attestation_root, empty_attestation_root,
     pass_records_from_headers_and_witness, verify_pass_countersignature, AttestationHeader,
