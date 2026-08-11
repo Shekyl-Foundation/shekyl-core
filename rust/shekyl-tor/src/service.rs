@@ -56,10 +56,14 @@ use tokio::sync::{oneshot, watch};
 
 use crate::binary::{self, TorBinaryError, VerifiedTorBinary};
 use crate::control::framing::ControlReply;
+use crate::control::onion::{
+    parse_service_id, AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId,
+};
 use crate::control::{
     BootstrapReadiness, BootstrapState, Command, ControlError, EventSink, ManagedTor, SocksPort,
     TorControl, TorControlConfig, TorExit, TorLaunch,
 };
+use crate::onion_identity::OnionIdentity;
 
 /// The service-level posture — what the rest of the wallet sees. One long-lived
 /// watch, owned by the supervisor, outliving every incarnation (the §3b
@@ -149,6 +153,36 @@ pub enum ServiceFailure {
     /// its rendered message (the type is neither `Clone` nor `Eq`, so it is kept
     /// as text) rather than masquerading as a tor `Exited`.
     Internal(String),
+    /// `ADD_ONION` for the configured onion service failed — the incarnation
+    /// bootstrapped and has a SOCKS listener, but the persona's serving
+    /// endpoint could not be published, so `Ready` (which means the FULL
+    /// serving posture is up) is never reached on this incarnation.
+    OnionPublish(OnionPublishError),
+}
+
+/// Why publishing the configured onion service failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OnionPublishError {
+    /// The control channel failed (or the reply timed out) during
+    /// `ADD_ONION`.
+    Control(ControlError),
+    /// Tor answered with a non-250 status.
+    Rejected {
+        /// The status tor returned.
+        status: u16,
+    },
+    /// A 250 reply with no parseable `ServiceID=` line.
+    NoServiceId,
+    /// Tor published a **different address** than the one derived from the
+    /// configured seed — the spike's fail-stop, kept: serving at an address
+    /// the persona does not advertise is an unreachable service that looks
+    /// healthy from the inside. (Both ids render redacted.)
+    ServiceIdMismatch {
+        /// The address derived from the configured seed.
+        expected: ServiceId,
+        /// The address tor reported.
+        published: ServiceId,
+    },
 }
 
 /// The two retry cadences (§3c restart classification).
@@ -172,7 +206,8 @@ pub fn classify(failure: &ServiceFailure) -> FailureClass {
         | ServiceFailure::NoSocksListener
         | ServiceFailure::BootstrapTimeout
         | ServiceFailure::Exited(_)
-        | ServiceFailure::Internal(_) => FailureClass::Transient,
+        | ServiceFailure::Internal(_)
+        | ServiceFailure::OnionPublish(_) => FailureClass::Transient,
     }
 }
 
@@ -200,6 +235,11 @@ pub struct SupervisorPolicy {
     /// keeps SOCKS discovery from hanging the supervisor (and thus `shutdown()`).
     /// Policy-driven (like the other timeouts) so tests can shrink it.
     pub socks_discovery_deadline: Duration,
+    /// Bound on the `ADD_ONION` reply for the configured onion service.
+    /// `ADD_ONION` loads the key and answers immediately — descriptor
+    /// publication is asynchronous and NOT awaited here — so, like SOCKS
+    /// discovery, a stall means a wedged control port, not a slow network.
+    pub onion_publish_deadline: Duration,
 }
 
 impl Default for SupervisorPolicy {
@@ -212,6 +252,7 @@ impl Default for SupervisorPolicy {
             trust_retry: Duration::from_secs(300),
             bootstrap_deadline: Duration::from_secs(300),
             socks_discovery_deadline: Duration::from_secs(30),
+            onion_publish_deadline: Duration::from_secs(30),
         }
     }
 }
@@ -306,6 +347,99 @@ impl TorBinarySource {
     }
 }
 
+/// The persona's onion service, as supervisor configuration: everything the
+/// supervisor needs to (re-)publish the service on **every** incarnation.
+///
+/// `Detach` is unrepresentable in the `ADD_ONION` surface, so a published
+/// onion dies with its incarnation; the supervisor mints a fresh one-shot
+/// key from the held [`OnionIdentity`] and republishes at the *same* address
+/// on each `Ready` transition.
+///
+/// **The boundary is an [`OnionIdentity`], never a seed** — the least-
+/// privilege credential (the expanded onion key authorizes exactly one
+/// thing, publishing this onion), derived once in the wallet context. A
+/// serving config that cannot hold a seed cannot hold `master_seed`, so the
+/// cold/hot bond-authority separation (§7.2(iii)) is structural here rather
+/// than a wiring convention. See [`crate::onion_identity::OnionIdentity`].
+///
+/// **One `Option`, not a `Vec`, deliberately:** one persona on the wire per
+/// wallet is the Model D co-activation rule, and the SP-T3 spike priced
+/// multi-persona co-serving as a forbidden layout. A service instance that
+/// can hold at most one onion makes that layout unrepresentable here; a
+/// second persona is a second wallet process with its own `TorService`
+/// (and its own guard identity).
+pub struct OnionServiceSpec {
+    /// The wallet-derived serving identity (expanded key + address); the
+    /// supervisor mints a one-shot `OnionKey` from it per incarnation.
+    identity: OnionIdentity,
+    /// The virtual-port → loopback-target mapping (loopback enforced at
+    /// construction by [`OnionPort::loopback`]).
+    port: OnionPort,
+    /// Per-rendezvous-circuit stream cap (`MaxStreams`, with
+    /// `MaxStreamsCloseCircuit` always on — the wire assembly pins that).
+    ///
+    /// **Carried placeholder (SPIKE-PIN-1), not a derivation.** A witness
+    /// drawn for several of one `P`'s shards in the same block opens
+    /// concurrent streams on *one* rendezvous circuit, so this interacts
+    /// with the λ=3 per-pair concurrency finding; the W₂ rig derives the
+    /// real value. Parameterized (not hardcoded) so the rig chooses it.
+    max_streams: u16,
+    /// PoW defense posture; defaults to [`OnionPow::Enabled`].
+    pow: OnionPow,
+}
+
+impl OnionServiceSpec {
+    /// A spec publishing `virtual_port` onto the loopback `target`, keyed by
+    /// the wallet-derived `identity`. Returns `None` when `target` is not
+    /// loopback (hard invariant 4, enforced where the mapping is created).
+    ///
+    /// Takes an [`OnionIdentity`] — the expanded credential, never a seed
+    /// (see the type doc's custody boundary). `HiddenServicePoW` defaults
+    /// **on** ([`OnionPow::Enabled`]) — the TJ-H ruling pins PoW for serving
+    /// personas as part of the guard-discovery mitigation set;
+    /// [`Self::with_pow`] exists for measurement arms that price the other
+    /// postures, not as a production opt-out.
+    #[must_use]
+    pub fn new(
+        identity: OnionIdentity,
+        virtual_port: u16,
+        target: SocketAddr,
+        max_streams: u16,
+    ) -> Option<Self> {
+        let port = OnionPort::loopback(virtual_port, target)?;
+        Some(Self {
+            identity,
+            port,
+            max_streams,
+            pow: OnionPow::Enabled,
+        })
+    }
+
+    /// Override the PoW posture (measurement arms; production keeps the
+    /// default).
+    #[must_use]
+    pub fn with_pow(mut self, pow: OnionPow) -> Self {
+        self.pow = pow;
+        self
+    }
+
+    /// The `.onion` address this spec publishes at — so the caller can
+    /// advertise it (and dial it) without waiting for a `Ready` posture. The
+    /// supervisor fail-stops any incarnation where tor reports a different
+    /// id.
+    #[must_use]
+    pub fn service_id(&self) -> ServiceId {
+        self.identity.service_id().clone()
+    }
+}
+
+// The identity is the persona's serving key; redact wholesale.
+impl std::fmt::Debug for OnionServiceSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OnionServiceSpec").finish_non_exhaustive()
+    }
+}
+
 /// Supervisor configuration.
 pub struct TorServiceConfig {
     /// Per-incarnation binary source (the gate re-runs every spawn).
@@ -326,6 +460,14 @@ pub struct TorServiceConfig {
     /// **production always leaves it `false`**. Same typed-knob rationale as
     /// `ManagedTor::disable_network`.
     pub disable_network: bool,
+    /// The persona's onion service, republished on every incarnation's
+    /// `Ready` transition (onions are per-incarnation: `Detach` is
+    /// unrepresentable). When set, `Ready` means the **full** serving
+    /// posture is up — SOCKS discovered *and* the onion published at the
+    /// derived address; a publish failure tears the incarnation down
+    /// through the normal retry/degrade policy instead of publishing a
+    /// half-up `Ready`.
+    pub onion: Option<OnionServiceSpec>,
 }
 
 /// Handle to a running supervisor: the posture watch + shutdown.
@@ -463,11 +605,13 @@ async fn supervise(
             readiness,
         });
 
-        // 3. Drive it: bootstrap → SOCKS discovery → Ready → hold until death.
+        // 3. Drive it: bootstrap → SOCKS discovery → onion publish → Ready →
+        //    hold until death.
         let end = drive_incarnation(
             &actor,
             ready_rx,
             &config.policy,
+            config.onion.as_ref(),
             &mut attempt,
             &mut degraded,
             &posture,
@@ -571,13 +715,16 @@ async fn wait_or_shutdown(delay: Duration, shutdown: &mut oneshot::Receiver<()>)
 }
 
 /// Drive one incarnation from spawn to death: forward bootstrap telemetry,
-/// discover the SOCKS endpoint at `Ready`, then hold until the actor dies, the
-/// bootstrap deadline fires, or the caller shuts down. Clears the sticky alarm
-/// in place once this incarnation has held `Ready` for `stable_reset`.
+/// discover the SOCKS endpoint, publish the configured onion (if any), then
+/// hold until the actor dies, the bootstrap deadline fires, or the caller
+/// shuts down. Clears the sticky alarm in place once this incarnation has
+/// held `Ready` for `stable_reset`.
+#[allow(clippy::too_many_arguments)]
 async fn drive_incarnation(
     actor: &kameo::actor::ActorRef<TorControl>,
     mut ready_rx: watch::Receiver<BootstrapState>,
     policy: &SupervisorPolicy,
+    onion: Option<&OnionServiceSpec>,
     attempt: &mut u32,
     degraded: &mut bool,
     posture: &watch::Sender<TorPosture>,
@@ -641,6 +788,19 @@ async fn drive_incarnation(
         }
         Err(_) => return IncarnationEnd::Failed(ServiceFailure::Exited(None)),
     };
+    // Phase 2b: publish the persona's onion service, if configured — on
+    // EVERY incarnation, because a published onion dies with its control
+    // connection (`Detach` is unrepresentable). Runs before the `Ready`
+    // posture so `Ready` means the FULL serving posture is up: a persona
+    // whose SOCKS works but whose onion did not publish is unreachable for
+    // challenges, and publishing `Ready` for it would hide exactly the
+    // failure the supervisor exists to surface.
+    if let Some(spec) = onion {
+        if let Err(end) = publish_onion(actor, spec, policy, shutdown).await {
+            return end;
+        }
+    }
+
     // Usable now — published unconditionally (never hide a working transport
     // from SP-T1). While the degraded episode is still open, `recovering: true`
     // keeps the operator incident continuous instead of flapping it closed.
@@ -681,6 +841,79 @@ async fn drive_incarnation(
     }
 }
 
+/// Publish `spec`'s onion service on the current incarnation: derive the
+/// identity fresh from the seed, `ADD_ONION`, and **fail-stop unless tor
+/// reports exactly the derived address** (the spike's published-vs-derived
+/// cross-check, kept — a mismatch means the persona would serve at an
+/// address it does not advertise). Teardown needs no pairing: the actor's
+/// `on_stop` already `DEL_ONION`s everything it published.
+async fn publish_onion(
+    actor: &kameo::actor::ActorRef<TorControl>,
+    spec: &OnionServiceSpec,
+    policy: &SupervisorPolicy,
+    shutdown: &mut oneshot::Receiver<()>,
+) -> Result<(), IncarnationEnd> {
+    let expected = spec.identity.service_id().clone();
+    // `discard_pk` always: the key is re-mintable from the held identity on
+    // demand, so tor has no reason to keep a copy it could be asked to hand
+    // back.
+    let request = AddOnion::new(spec.identity.mint_onion_key(), spec.port, spec.max_streams)
+        .with_flags(OnionFlags { discard_pk: true })
+        .with_pow(spec.pow);
+
+    let onion_failed =
+        |e: OnionPublishError| IncarnationEnd::Failed(ServiceFailure::OnionPublish(e));
+
+    // Bounded and shutdown-responsive, exactly like SOCKS discovery:
+    // ADD_ONION answers immediately (descriptor publication is async and
+    // not awaited), so a stall is a wedged control port.
+    let reply = tokio::select! {
+        _ = &mut *shutdown => return Err(IncarnationEnd::Shutdown),
+        () = tokio::time::sleep(policy.onion_publish_deadline) => {
+            return Err(onion_failed(OnionPublishError::Control(ControlError::Timeout)));
+        }
+        r = actor.ask(Command::AddOnion(request)) => r,
+    };
+    let reply = match reply {
+        Ok(reply) => reply,
+        // Preserve the control-level cause; an actor-stopped send error is a
+        // death, not a publish fault.
+        Err(SendError::HandlerError(e)) => {
+            return Err(onion_failed(OnionPublishError::Control(e)));
+        }
+        Err(_) => return Err(IncarnationEnd::Failed(ServiceFailure::Exited(None))),
+    };
+    evaluate_add_onion_reply(&reply, &expected).map_err(onion_failed)
+}
+
+/// Decide whether an `ADD_ONION` reply published the expected service — the
+/// pure core of [`publish_onion`], so the non-250 / no-id / mismatch
+/// fail-stops are unit-testable without a tor.
+///
+/// The mismatch check is the load-bearing one: tor returning 250 with a
+/// *different* `ServiceID` than the address derived from the persona's key
+/// means the service exists but not at the address the persona advertises —
+/// unreachable to every witness, and invisible from the serving side. It
+/// must fail the incarnation, not pass it.
+fn evaluate_add_onion_reply(
+    reply: &ControlReply,
+    expected: &ServiceId,
+) -> Result<(), OnionPublishError> {
+    if reply.status() != 250 {
+        return Err(OnionPublishError::Rejected {
+            status: reply.status(),
+        });
+    }
+    match parse_service_id(reply.lines()) {
+        Some(published) if &published == expected => Ok(()),
+        Some(published) => Err(OnionPublishError::ServiceIdMismatch {
+            expected: expected.clone(),
+            published,
+        }),
+        None => Err(OnionPublishError::NoServiceId),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,6 +927,7 @@ mod tests {
             trust_retry: Duration::from_millis(20),
             bootstrap_deadline: Duration::from_secs(5),
             socks_discovery_deadline: Duration::from_secs(2),
+            onion_publish_deadline: Duration::from_secs(2),
         }
     }
 
@@ -769,6 +1003,100 @@ mod tests {
         assert_eq!(
             classify(&ServiceFailure::Internal("gate task panicked".to_owned())),
             FailureClass::Transient
+        );
+        // A publish failure is transient: the persona should keep retrying to
+        // get its onion up (a not-yet-published service is a coming slash),
+        // never sit in a give-up state.
+        assert_eq!(
+            classify(&ServiceFailure::OnionPublish(
+                OnionPublishError::NoServiceId
+            )),
+            FailureClass::Transient
+        );
+    }
+
+    // --- onion publish decision (pure core; the live publish is on the
+    // SHEKYL_TEST_TOR_BINARY lane, like the other tor-touching tests) ---
+
+    /// A derived identity plus a reply that published it — the seed is
+    /// arbitrary; what matters is that `expected` is the address the reply
+    /// carries.
+    fn identity_and_id() -> (crate::onion_identity::OnionIdentity, ServiceId) {
+        let identity = crate::onion_identity::OnionIdentity::from_hs_id_seed(&[0x24u8; 32]);
+        let id = identity.service_id().clone();
+        (identity, id)
+    }
+
+    #[test]
+    fn add_onion_reply_accepts_the_derived_address() {
+        let (_identity, id) = identity_and_id();
+        let reply = reply_from(&format!("ServiceID={}", id.as_str()));
+        assert_eq!(evaluate_add_onion_reply(&reply, &id), Ok(()));
+    }
+
+    #[test]
+    fn add_onion_reply_fail_stops_on_a_different_address() {
+        // The load-bearing check: tor published *a* service, but not the
+        // persona's. Publishing Ready here would advertise an address no
+        // witness can reach.
+        let (_identity, expected) = identity_and_id();
+        let other = crate::onion_identity::OnionIdentity::from_hs_id_seed(&[0x99u8; 32])
+            .service_id()
+            .clone();
+        let reply = reply_from(&format!("ServiceID={}", other.as_str()));
+        assert_eq!(
+            evaluate_add_onion_reply(&reply, &expected),
+            Err(OnionPublishError::ServiceIdMismatch {
+                expected,
+                published: other,
+            })
+        );
+    }
+
+    #[test]
+    fn add_onion_reply_without_a_service_id_is_a_publish_failure() {
+        let (_identity, expected) = identity_and_id();
+        // 250 OK but no ServiceID= line — a malformed success.
+        let reply = reply_from("version=0.4.9.11");
+        assert_eq!(
+            evaluate_add_onion_reply(&reply, &expected),
+            Err(OnionPublishError::NoServiceId)
+        );
+    }
+
+    #[test]
+    fn add_onion_non_250_carries_the_status() {
+        // Build a 550 reply directly through the framer.
+        let mut framer = crate::control::ReplyFramer::new();
+        framer.push_bytes(b"550 Onion address collision\r\n");
+        let reply = framer
+            .next_reply()
+            .expect("well-formed")
+            .expect("one reply");
+        let (_identity, expected) = identity_and_id();
+        assert_eq!(
+            evaluate_add_onion_reply(&reply, &expected),
+            Err(OnionPublishError::Rejected { status: 550 })
+        );
+    }
+
+    #[test]
+    fn onion_spec_refuses_a_non_loopback_target() {
+        let (identity, _id) = identity_and_id();
+        // A routable target would make the endpoint reachable off the onion.
+        assert!(OnionServiceSpec::new(identity, 80, "8.8.8.8:1234".parse().unwrap(), 8).is_none());
+    }
+
+    #[test]
+    fn onion_spec_advertises_the_derived_address_and_defaults_pow_on() {
+        let (identity, id) = identity_and_id();
+        let spec = OnionServiceSpec::new(identity, 80, "127.0.0.1:9000".parse().unwrap(), 8)
+            .expect("loopback target");
+        assert_eq!(spec.service_id(), id, "advertised == derived, pre-Ready");
+        assert_eq!(
+            spec.pow,
+            OnionPow::Enabled,
+            "HiddenServicePoW on by default"
         );
     }
 
@@ -865,6 +1193,7 @@ mod tests {
             events: EventSink::new(tx),
             policy: tiny_policy(),
             disable_network: true,
+            onion: None,
         });
         let mut posture = service.posture();
 
@@ -915,6 +1244,7 @@ mod tests {
             events: EventSink::new(tx),
             policy: tiny_policy(),
             disable_network: true,
+            onion: None,
         });
         let mut posture = service.posture();
         service.shutdown().await;
@@ -981,6 +1311,7 @@ mod live_tests {
                 ..SupervisorPolicy::default()
             },
             disable_network: false,
+            onion: None,
         });
         let mut posture = service.posture();
 
@@ -1041,6 +1372,78 @@ mod live_tests {
         while posture.changed().await.is_ok() {}
     }
 
+    /// The onion is republished on **every** incarnation, not just the first —
+    /// the reviewer's concern made a test: a persona that publishes once and
+    /// then serves until its first Tor restart, after which it silently stops,
+    /// is a slow slash. With an onion configured, `Ready` *means the onion is
+    /// published at the derived address* (the publish runs before `Ready` and
+    /// fail-stops on any other outcome), so reaching `Ready` again after a
+    /// SIGKILL is exactly the proof that the second incarnation republished.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
+    async fn onion_is_republished_on_every_incarnation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().join("data");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // A loopback target for the onion's virtual port — it need not be
+        // listening for ADD_ONION to succeed; the publish is what we test.
+        let target = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind loopback target")
+            .local_addr()
+            .expect("local addr");
+        let identity = crate::onion_identity::OnionIdentity::from_hs_id_seed(&[0x5cu8; 32]);
+        // The address the persona advertises is known before spawn (the caller
+        // holds it from the spec), so witnesses can be told where to connect
+        // without waiting on any posture.
+        let spec = OnionServiceSpec::new(identity, 80, target, 8).expect("loopback spec");
+        let _advertised = spec.service_id();
+
+        let service = TorService::spawn(TorServiceConfig {
+            binary: TorBinarySource::UncheckedForTest(tor_binary()),
+            data_dir: data_dir.clone(),
+            events: EventSink::new(tx),
+            policy: SupervisorPolicy {
+                backoff_base: Duration::from_millis(100),
+                backoff_cap: Duration::from_secs(2),
+                ..SupervisorPolicy::default()
+            },
+            disable_network: false,
+            onion: Some(spec),
+        });
+        let mut posture = service.posture();
+
+        // First life: Ready is only published after the onion published at
+        // `expected` (a mismatch or rejection would fail the incarnation).
+        await_posture(&mut posture, 120, "first Ready (onion published)", |p| {
+            matches!(p, TorPosture::Ready { .. })
+        })
+        .await;
+
+        // Crash it; the republish must happen again on the fresh incarnation.
+        let killed = std::process::Command::new("pkill")
+            .arg("-9")
+            .arg("-f")
+            .arg(data_dir.to_str().expect("utf8 tmpdir"))
+            .status()
+            .expect("pkill runs");
+        assert!(killed.success(), "pkill must find the managed tor");
+
+        await_posture(&mut posture, 30, "Restarting after SIGKILL", |p| {
+            matches!(p, TorPosture::Restarting { .. } | TorPosture::Starting)
+        })
+        .await;
+        // Second Ready ⇒ the onion republished on the second incarnation.
+        await_posture(&mut posture, 120, "second Ready (onion republished)", |p| {
+            matches!(p, TorPosture::Ready { .. })
+        })
+        .await;
+
+        service.shutdown().await;
+        while posture.changed().await.is_ok() {}
+    }
+
     /// The degraded-episode continuity (§3c, review round 3): a crash trips the
     /// sticky alarm, the *next* incarnation is usable-but-still-in-episode
     /// (`Ready { recovering: true }`), and once it holds `Ready` for `stable_reset`
@@ -1067,6 +1470,7 @@ mod live_tests {
                 ..SupervisorPolicy::default()
             },
             disable_network: false,
+            onion: None,
         });
         let mut posture = service.posture();
 
@@ -1161,6 +1565,7 @@ mod live_tests {
             // Never bootstraps → every incarnation hits the bootstrap deadline →
             // teardown + respawn into the same DataDirectory.
             disable_network: true,
+            onion: None,
         });
         let mut posture = service.posture();
 

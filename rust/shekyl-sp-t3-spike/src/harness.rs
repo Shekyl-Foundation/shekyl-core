@@ -283,7 +283,7 @@ impl Apparatus {
             // measurement report. A shard read is one stream per connection and
             // the harness never opens more, so 8 leaves headroom without letting
             // one client hold many streams on a rendezvous circuit.
-            let request = AddOnion::new(identity.into_onion_key(), port, 8)
+            let request = AddOnion::new(identity.mint_onion_key(), port, 8)
                 .with_flags(OnionFlags { discard_pk: true })
                 .with_pow(pow);
             let reply = control

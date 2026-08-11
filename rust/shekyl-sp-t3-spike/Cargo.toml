@@ -9,20 +9,6 @@ description = "DISPOSABLE measurement spike: PD-F-2 Tor-borne shard-fetch disper
 publish = false
 
 [dependencies]
-# The v3 onion key is an ed25519 key: `derive_p_hs_id_seed` (below) produces the
-# seed, this crate expands it per RFC 8032 §5.1.5, and needs the *public* half to
-# check the service id tor returns against one derived independently. Same
-# `ed25519-dalek` `shekyl-crypto-pq` uses for every other ed25519 key, so this
-# adds no supply-chain edge.
-ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"] }
-# SHA3-256 for the v3 onion-address checksum (rend-spec-v3 §6). Same `sha3` the
-# archival crates already carry. (The former spike-local cSHAKE256 derivation was
-# retired by SPIKE-F-4; only the checksum use remains.)
-sha3 = { version = "0.10", default-features = false }
-# RFC 8032 seed expansion is SHA-512.
-sha2 = { version = "0.10", default-features = false }
-# The derived onion key is secret key material (rule 35).
-zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }
 # The serve endpoint: a loopback listener whose accept loop is decoupled from any
 # actor mailbox and whose every read step is timeout-bounded (the SP-T3 inbound
 # threat model, ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md §6a). Hand-rolled over
