@@ -20,7 +20,12 @@
 //! cross-mechanism reuse of `b"nonce"`).
 //!
 //! The distinctness IDENTITY is the registry `key` column, defaulting to the
-//! literal. Mechanism 2 (HKDF) is keyed by `salt|info`, because a derivation's
+//! literal, **decoded to bytes** before comparison: registry spellings are
+//! source-faithful (the CI gate greps them verbatim at the defining site), so
+//! `b"A"` and `b"\x41"` — identical domains — may legitimately be spelled
+//! differently, and comparing spellings would let a real same-mechanism
+//! collision hide behind escape encoding. Mechanism 2 (HKDF) is keyed by
+//! `salt|info`, because a derivation's
 //! separation comes from the (salt, info) pair, not the info alone: the three
 //! shared info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) appear as both a
 //! const (composed `salt_for` salt) and an inline `SeedDerivation` (fixed
@@ -158,13 +163,69 @@ fn parsed_registry() -> Vec<Row<'static>> {
     parse_rows(REGISTRY).expect("registry must parse with valid mech ids, columns, and statuses")
 }
 
-/// The identity a row occupies within its mechanism's separation space.
-fn identity<'a>(row: &Row<'a>) -> &'a str {
-    if row.key.is_empty() {
+/// Decode the Rust byte-string escapes a registry spelling may contain
+/// (`\0`, `\t`, `\n`, `\r`, `\\`, `\'`, `\"`, `\xHH`) into the bytes the
+/// mechanism actually hashes. Distinctness must compare BYTES, not spellings:
+/// `b"A"` and `b"\x41"` are the same domain, and the registry deliberately
+/// keeps SOURCE-FAITHFUL spellings (the CI gate greps the literal verbatim
+/// at its defining site), so two rows could otherwise register identical
+/// bytes under different escape encodings and pass. Unknown escapes are a
+/// loud parse error, never passed through.
+fn decode_escapes(s: &str) -> Result<Vec<u8>, String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'\\' {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        let Some(&esc) = b.get(i + 1) else {
+            return Err(format!("{s:?}: dangling backslash"));
+        };
+        match esc {
+            b'0' => out.push(0x00),
+            b't' => out.push(b'\t'),
+            b'n' => out.push(b'\n'),
+            b'r' => out.push(b'\r'),
+            b'\\' => out.push(b'\\'),
+            b'\'' => out.push(b'\''),
+            b'"' => out.push(b'"'),
+            b'x' => {
+                let hex = s
+                    .get(i + 2..i + 4)
+                    .ok_or_else(|| format!("{s:?}: truncated \\x escape"))?;
+                out.push(
+                    u8::from_str_radix(hex, 16)
+                        .map_err(|_| format!("{s:?}: bad \\x{hex} escape"))?,
+                );
+                i += 4;
+                continue;
+            }
+            other => {
+                return Err(format!(
+                    "{s:?}: unsupported escape \\{} — extend decode_escapes deliberately",
+                    other as char
+                ));
+            }
+        }
+        i += 2;
+    }
+    Ok(out)
+}
+
+/// The identity a row occupies within its mechanism's separation space,
+/// decoded to bytes (escape-blind — see `decode_escapes`). For keyed rows
+/// (mech-2 `salt|info` composites) the key is decoded the same way: its
+/// fragments are literal spellings joined by separators.
+fn identity(row: &Row<'_>) -> Vec<u8> {
+    let spelling = if row.key.is_empty() {
         row.literal
     } else {
         row.key
-    }
+    };
+    decode_escapes(spelling).unwrap_or_else(|e| panic!("row {:?} ({}): {e}", row.literal, row.file))
 }
 
 /// The census pin: per-mechanism production row counts, plus the excluded and
@@ -223,7 +284,7 @@ fn intra_mechanism_domains_are_distinct() {
     // Group PRODUCTION identities by mechanism; excluded rows are not domains
     // and test-only rows are policed by the segregation test instead
     // (test-vs-test collisions are legitimate).
-    let mut by_mech: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+    let mut by_mech: HashMap<&str, Vec<(Vec<u8>, &str)>> = HashMap::new();
     for row in &rows {
         if !row.is_production() {
             continue;
@@ -245,12 +306,15 @@ fn intra_mechanism_domains_are_distinct() {
 
     let mut collisions = Vec::new();
     for (mech, entries) in &by_mech {
-        let mut seen: HashMap<&str, &str> = HashMap::new();
+        let mut seen: HashMap<&[u8], &str> = HashMap::new();
         for (id, file) in entries {
             if let Some(prev_file) = seen.insert(id, file) {
                 collisions.push(format!(
-                    "mechanism {mech}: identity {id:?} appears twice \
-                     ({prev_file} and {file}) — a same-mechanism domain collision"
+                    "mechanism {mech}: identity {:?} appears twice \
+                     ({prev_file} and {file}) — a same-mechanism domain collision \
+                     (compared as decoded BYTES, so differing escape spellings \
+                     of the same bytes still collide)",
+                    String::from_utf8_lossy(id)
                 ));
             }
         }
@@ -271,7 +335,7 @@ fn intra_mechanism_domains_are_distinct() {
 fn test_domains_are_segregated_from_production() {
     let rows = parsed_registry();
 
-    let production: HashSet<(&str, &str)> = rows
+    let production: HashSet<(&str, Vec<u8>)> = rows
         .iter()
         .filter(|r| r.is_production())
         .map(|r| (r.mech, identity(r)))
@@ -282,9 +346,10 @@ fn test_domains_are_segregated_from_production() {
         if production.contains(&(row.mech, identity(row))) {
             violations.push(format!(
                 "mechanism {}: test-only domain {:?} ({}) equals a production \
-                 identity — test artifacts would verify in the production context",
+                 identity (compared as decoded bytes) — test artifacts would \
+                 verify in the production context",
                 row.mech,
-                identity(row),
+                String::from_utf8_lossy(&identity(row)),
                 row.file
             ));
         }
