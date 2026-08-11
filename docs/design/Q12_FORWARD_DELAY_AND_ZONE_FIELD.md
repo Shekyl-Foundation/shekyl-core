@@ -270,9 +270,32 @@ for any `p`.**
   one.
 - **It holds per node, at any origination ratio.** A heavy originator still has
   a poor floor — that is C1, inherent — but the zone choice no longer *makes it
-  worse*. **§75's test passed by construction rather than by provisioning**,
-  which is the first time in this arc that a sorting axis has been removed
-  rather than covered.
+  worse*.
+
+> **Say what this is precisely, because the obvious phrasing overclaims.**
+> `q/(1+q) = 0.1667` **is** the C1 floor — the same floor clearnet already has,
+> the same one §6.9 concedes as irreducible. So **zone selection stops being a
+> sorting axis; it does not become a protection.** Both zones now sit *at* the
+> floor instead of one sitting above it.
+>
+> An earlier draft of this section called it *"removed rather than covered"*.
+> That reads as a leak closing, and a reviewer who checks finds 0.1667 is
+> exactly where clearnet already was. The floor is still covered by nothing —
+> because nothing can cover it.
+
+> **The stronger claim is available, and it is about the mechanism rather than
+> a number: `p` cancels, so the parameter cannot be set wrong.**
+>
+> Every other axis this arc made safe was made safe by **provisioning at a
+> quantile** — hardware (§78), shape (§80), depth (§82) — and each one needs a
+> *value* that a later reviewer could re-derive against typical rather than
+> worst case. §81.4 names why that is dangerous: too low is an error with a
+> feedback channel, **too high is one nothing reports**.
+>
+> This axis has no value to get wrong. There is nothing here for a
+> well-intentioned reviewer with a benchmark to propose changing, so §81.4's
+> asymmetry has no purchase — **the first axis in the arc where that trap does
+> not exist**, and it does not exist structurally rather than by being guarded.
 - This **dissolves Q12-Q4 and Q12-Q5**: there is no anonymity-set size to
   derive `p` against, so `λ`/`N` are not needed for it and "is 2+ the right
   target" has no target left to grade.
@@ -307,12 +330,28 @@ cancellation still holds** (it is ratio-preserving either way) — but the zone
 > cancellation surviving is exactly what would let the volume mistake pass
 > unnoticed, so the population is **pinned**, not inferred.
 
-**2. Price `p = 1`'s throughput cost.**
+**2. Price `p = 1`'s throughput cost — this is the check that can still move the
+design.**
 It makes the anonymity zone the node's **only** relay path, so that zone's
 capacity and latency become the node's throughput — against per-zone `hop`'s
-1750 ms interim versus clearnet's 175 ms. That is a real constraint, and it is
-precisely what an intermediate `p` buys off. **Priced, not assumed acceptable**,
+1750 ms interim versus clearnet's 175 ms. **Priced, not assumed acceptable**,
 before `p = 1` is recommended as a default.
+
+> **And if the zone cannot carry the volume, the natural response is an
+> intermediate `p` — which is not free, though Q12-D4 invites reading it that
+> way.** An intermediate `p` splits the node's traffic across two zones. The
+> cancellation **survives** that, since each stream carries the correct mix; the
+> equality is unaffected.
+>
+> But the node's IP then appears on clearnet for `1 − p` of its traffic, which
+> is **exactly the exposure the operator ran Tor to avoid**.
+>
+> So state it in both halves: **`p` is privacy-neutral *between zones*, and not
+> privacy-neutral *for the operator*.** Calling it "a deployment parameter"
+> invites reading it as costless. It is not — its cost simply lands on the
+> operator who sets it rather than on the strangers whose transactions they
+> relay, which is what makes it a configuration rather than a protocol
+> constant.
 
 ---
 
