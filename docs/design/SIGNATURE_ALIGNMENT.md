@@ -376,7 +376,8 @@ express the gate cleanly.
 | **PR-SA-1** | RNG alignment: F-1…F-6 + F-8 seam; this round doc; index registration | **MERGED #426 (merge `69857ab9f`); archived `archive/feat/sa1-rng-alignment-2026-08-09`** — carried a user review round (`d7e3bac7f`: binding tests, seed-export hygiene) |
 | **PR-SA-2** | Nested combiner (SA-R-1 incl. `Result<()>` rewrite / R-2 / R-3 / R-4 / R-5); §2.1 six-surface domains (bond slot rides surface A's `shekyl/pqc-auth-tx-v1`; **surface B is §2.2, out of SA-2** — S1 + `signature_preimage` parked inert under rule-21); SA-R-4 version check placed by the **six-path parse-from-canonical enumeration** (precondition of the trait rewrite; check goes uniformly at parse or in `verify()`, never per-path); F1 (subsumed by `Result<()>`) + wrong-key regression; F-7 disposition; fixture regeneration + frozen v1 negative fixture; iai bench rework; `wire.rs` `3385` aliasing; FFI context-specific exports; RELEASE_CHECKLIST rows; genesis-blob no-hybrid-sig check. **C++-byte-identical** (no wire/`TX_VERSION` change) | pending — solitary review round |
 | **PR-SA-2b** | Bond-preimage reconciliation (§2.2): resolved the P-role replay question at the call graph — the surface-A whole-tx hash (incl. the vin type tag) forecloses cross-role replay, so **generic won**. Deleted S1 + `signature_preimage` + `BOND_POST_SIG_CUSTOMIZATION` + `SCHEME_DOMAIN_BOND_POST`; KAT surfaces 7→6. No wire change; no verifier special-case needed | **DONE** |
-| **PR-SA-3** | Registries: workspace domain registry + full-set collision test + CI grep gate (ripgrep install step); test-domain segregation; error-band table (-29xxx). **Feeds the CBOM domain section.** | pending |
+| **PR-SA-3a** | Consensus leaf-hash SSOT: `PqcLeafScalar::from_pqc_public_key` wraps `hash_pqc_public_key`; retired dual `DOMAIN_PQC_LEAF` + dual Blake2b/wide_reduce; pinned pre-dedup KAT (empty / 1-byte / full ML-DSA-65 / all-`0xff`). No wire change. | **in flight** (`feat/sa3a-pqc-leaf-dedup`, #436) |
+| **PR-SA-3b** | Registries: workspace domain registry + full-set collision test + CI grep gate (ripgrep install step); test-domain segregation; error-band table (-29xxx). **Feeds the CBOM domain section.** (§3.1: sweep by mechanism, not `shekyl/` prefix alone.) | pending |
 | **PR-SA-4** | Dead persisted-field sweep (writer/reader existence per persisted field; tx_notes PR-SJ-2 confirmation) | pending |
 | **PR-SA-5** | Persona lifecycle: SA-R-6 guard + scan reconstruction; ruling into `ARCHIVAL_P_DERIVE_V1` module doc + operator guide (no-rotation stated as a refusal, clustering rationale named). **Feeds the CBOM persona no-backstop row.** | pending |
 | **PR-SA-6** | CBOM close/formalize (see §4) + infra PQ posture (release-signing paragraph); untrusted-cast sweep + one clamp/reject/None ruling | pending |
@@ -386,16 +387,17 @@ express the gate cleanly.
 tag-specific READ_LEN caps) stays in the **credit-wire lane** (PR-B2) — named
 here so this round does not create a duplicate tracker.
 
-### 3.1 Note for PR-SA-3 — the domain-style blind spot
+### 3.1 Note for PR-SA-3b — the domain-style blind spot
 
 The `shekyl/`-anchored census (~28 strings) is **not** the full set. Styles
 already found outside it: `shekyl-reserve-proof-dleq-v1` (dleq),
-`shekyl-pqc-leaf` (derivation), `shekyl-kem-v1` (kem HKDF salt),
-`Shekyl FROST SAL v1` (transcript label), `Shekyl FCMP++ MO nonce * v1`
-(Blake2b DSTs). A registry and CI grep gate anchored on `shekyl/` alone would
-prove less than it appears — the exact defect class this round exists to fix.
-The SA-3 sweep must enumerate by *mechanism* (every cSHAKE customization,
-HKDF salt/info label, transcript label, and hash DST), not by prefix.
+`shekyl-pqc-leaf` (derivation — **SSOT after SA-3a**, no longer dual-defined),
+`shekyl-kem-v1` (kem HKDF salt), `Shekyl FROST SAL v1` (transcript label),
+`Shekyl FCMP++ MO nonce * v1` (Blake2b DSTs). A registry and CI grep gate
+anchored on `shekyl/` alone would prove less than it appears — the exact defect
+class this round exists to fix. The SA-3b sweep must enumerate by *mechanism*
+(every cSHAKE customization, HKDF salt/info label, transcript label, and hash
+DST), not by prefix.
 
 ### 3.2 Fixed in PR-SA-1 while in the files
 

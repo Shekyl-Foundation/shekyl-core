@@ -84,8 +84,10 @@ curve equation inside its `on_curve` gadget. This means a single output's
 leaf data is exactly 4 field elements (128 bytes), not 6 or 8.
 
 The hash function for the 4th scalar uses Blake2b-512 with domain separator
-`shekyl-pqc-leaf`, implemented in `rust/shekyl-fcmp/src/lib.rs` and
-exposed via `shekyl_fcmp_pqc_leaf_hash()`.
+`shekyl-pqc-leaf`, implemented once in
+`rust/shekyl-crypto-pq/src/derivation.rs` (`hash_pqc_public_key`, the SA-3a
+single source; `shekyl_fcmp::leaf::PqcLeafScalar` wraps it) and exposed over
+FFI via `shekyl_fcmp_pqc_leaf_hash()`.
 
 ---
 

@@ -4070,7 +4070,6 @@ dependencies = [
 name = "shekyl-fcmp"
 version = "3.1.0"
 dependencies = [
- "blake2",
  "ciphersuite",
  "curve25519-dalek",
  "dalek-ff-group 0.5.0",

@@ -18,6 +18,8 @@
 //! # Public surface
 //!
 //! - [`challenge`] — `challenge_leaf_index`, `challenge_fire_height`, domain labels.
+//! - [`challenge_assignment`] — exact-min derived assignment urn
+//!   ([`ChallengeUrn`], [`assign_epoch`]); pure, no wire surface.
 //! - [`path`] — [`SegmentPathOpening`], [`verify_segment_path`] (requires the
 //!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
@@ -41,6 +43,7 @@ pub mod bond_floor;
 pub mod bond_post;
 pub mod bond_wire;
 pub mod challenge;
+pub mod challenge_assignment;
 pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
@@ -103,6 +106,10 @@ pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
+};
+pub use challenge_assignment::{
+    assign_epoch, AssignmentError, ChallengeUrn, DrawablePair, FeedError,
+    CHALLENGE_ASSIGNMENT_CUSTOMIZATION,
 };
 pub use claimed_epochs::{
     claim_window_floor, claimed_epochs_check_and_set, claimed_epochs_contains,

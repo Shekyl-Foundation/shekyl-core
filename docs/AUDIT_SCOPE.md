@@ -39,7 +39,12 @@ extension preserves the zero-knowledge proof system's security properties.
 3. **PQC commitment binding**
    - Circuit correctly constrains 4th leaf scalar = `H(pqc_pk)`
    - `H(pqc_pk)` computation: Blake2b-512 with domain separator
-     `shekyl-pqc-leaf`, implemented in `rust/shekyl-fcmp/src/lib.rs`
+     `shekyl-pqc-leaf`, implemented once in
+     `rust/shekyl-crypto-pq/src/derivation.rs` (`hash_pqc_public_key` /
+     `DOMAIN_PQC_LEAF` — the SA-3a single source). Forwarding-only entry
+     points to verify stay forwarding-only:
+     `shekyl_fcmp::leaf::PqcLeafScalar::from_pqc_public_key` and the FFI
+     `shekyl_fcmp_pqc_leaf_hash()` in `rust/shekyl-ffi/src/legacy_fcmp.rs`
    - Public input handling for `H(pqc_pk)` values in `shekyl_fcmp_verify()`
    - No information leakage about `pqc_pk` beyond the hash value
 

@@ -23,7 +23,12 @@ use fips204::ml_dsa_65;
 
 use crate::CryptoError;
 
-/// Domain separator for per-output PQC leaf hash.
+/// Domain separator for the per-output PQC leaf hash.
+///
+/// This crate is the **single source** for the consensus leaf hash: both this
+/// module's [`hash_pqc_public_key`] and `shekyl_fcmp::PqcLeafScalar` compute the
+/// leaf scalar through this constant, and `shekyl-fcmp` wraps `hash_pqc_public_key`
+/// rather than re-deriving it (SA-3a retired the duplicate definition + logic).
 pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";
 
 /// ML-DSA-65 public key length.
@@ -54,7 +59,10 @@ pub fn keygen_from_seed(
 ///
 /// Uses domain-separated Blake2b-512, reduced to a canonical Selene base
 /// field element via `HelioseleneField::wide_reduce` on the full 512-bit
-/// hash output. This matches `PqcLeafScalar::from_pqc_public_key` exactly.
+/// hash output. This is the **single source** for the consensus leaf hash:
+/// `shekyl_fcmp::PqcLeafScalar::from_pqc_public_key` wraps this function
+/// (SA-3a), so the two entry points are identical by construction rather than
+/// by two implementations agreeing.
 pub fn hash_pqc_public_key(pqc_pk_bytes: &[u8]) -> [u8; 32] {
     use ciphersuite::group::ff::PrimeField;
     use helioselene::HelioseleneField;
@@ -467,6 +475,14 @@ mod tests {
         }
     }
 
+    /// Cross-crate agreement pin (SA-3a): `PqcLeafScalar::from_pqc_public_key`
+    /// forwards to `hash_pqc_public_key`, and this asserts the two entry points
+    /// agree on a real derived ML-DSA-65 public key. It pins **value agreement
+    /// only** — it catches a wrapper that stops forwarding *and* diverges, not a
+    /// byte-identical re-duplication (no value test can). The guards against
+    /// silent re-forking are structural: `shekyl-fcmp` no longer carries a
+    /// Blake2b dependency (SA-3a removed it), and the frozen byte pins in
+    /// `PQC_LEAF_HASH_RAW_PK_KAT.json` fail the moment any copy drifts.
     #[test]
     fn hash_matches_leaf_scalar() {
         use shekyl_fcmp::leaf::PqcLeafScalar;
@@ -477,7 +493,7 @@ mod tests {
         let leaf_scalar = PqcLeafScalar::from_pqc_public_key(&pk_bytes);
         assert_eq!(
             h, leaf_scalar.0,
-            "hash_pqc_public_key and PqcLeafScalar::from_pqc_public_key must agree"
+            "PqcLeafScalar::from_pqc_public_key must forward to hash_pqc_public_key"
         );
     }
 
@@ -531,6 +547,60 @@ mod tests {
                 "vector {i}: h_pqc mismatch for combined_ss={} idx={}:\n  got:      {}\n  expected: {}",
                 &v.combined_ss[..8], v.output_index,
                 hex::encode(h_pqc), v.h_pqc
+            );
+        }
+    }
+
+    #[derive(serde::Deserialize)]
+    struct RawPkLeafHashKat {
+        pqc_pk: String,
+        h_pqc: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct RawPkLeafHashKatFile {
+        vectors: Vec<RawPkLeafHashKat>,
+    }
+
+    /// SA-3a byte-proof: frozen captures of the pre-dedup
+    /// `PqcLeafScalar::from_pqc_public_key` (the duplicate Blake2b/wide_reduce
+    /// body that lived in `shekyl-fcmp`), covering the degenerate input lengths
+    /// (empty, 1-byte) the derived-path vectors above cannot express. Each
+    /// vector is asserted through **both** consensus entry points — the owner
+    /// [`hash_pqc_public_key`] and the fcmp wrapper — so any future fork of
+    /// either copy fails here. Never regenerate these from current code; on a
+    /// mismatch the code, not the vector, is wrong.
+    #[test]
+    fn pqc_leaf_hash_raw_pk_known_answer_vectors() {
+        use shekyl_fcmp::leaf::PqcLeafScalar;
+
+        let json = include_str!("../../../docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json");
+        let file: RawPkLeafHashKatFile =
+            serde_json::from_str(json).expect("failed to parse PQC_LEAF_HASH_RAW_PK_KAT.json");
+        assert_eq!(
+            file.vectors.len(),
+            4,
+            "PQC_LEAF_HASH_RAW_PK_KAT.json is a frozen pin set — vectors are never added or removed"
+        );
+
+        for (i, v) in file.vectors.iter().enumerate() {
+            let pk =
+                hex::decode(&v.pqc_pk).unwrap_or_else(|_| panic!("vector {i}: invalid pqc_pk hex"));
+            let expected =
+                hex::decode(&v.h_pqc).unwrap_or_else(|_| panic!("vector {i}: invalid h_pqc hex"));
+            let owner = hash_pqc_public_key(&pk);
+            let wrapper = PqcLeafScalar::from_pqc_public_key(&pk);
+            assert_eq!(
+                owner.as_slice(),
+                expected.as_slice(),
+                "vector {i}: hash_pqc_public_key drifted for input length {}",
+                pk.len()
+            );
+            assert_eq!(
+                wrapper.0.as_slice(),
+                expected.as_slice(),
+                "vector {i}: PqcLeafScalar::from_pqc_public_key drifted for input length {}",
+                pk.len()
             );
         }
     }
