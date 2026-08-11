@@ -1337,6 +1337,84 @@ shaped by what was convenient to implement — precisely the
 design-precedes-consensus-code rule; the serving transport is the one
 part of this that is not consensus code, and it stays that way.
 
+## 9.6 Build-round review dispositions (2026-08-11)
+
+Findings from the serving-path build review, recorded where the build
+slices will look for them. PR-A (`shekyl-p-serve` + the store read) and
+PR-B (the `TorService` onion surface + relocated v3 identity) are landed
+against these.
+
+1. **Custody boundary is *which secret crosses the process boundary*,
+   not the derivation tree — resolved in PR-B.** The flat HKDF siblings
+   are independent, but they all derive from `master_seed`, so a serving
+   process holding `master_seed` (or holding the derived `hs_id_seed`,
+   one convenient edit from the master seed) also holds `bond_spend_pk`'s
+   authority — the exposure is **bond authority** (Unbond, the debit
+   arms, `EndpointUpdate`), not the emission claim (Auth-B stays
+   leaf-gated on `backing_pubkey`, which is not in `ARCHIVAL_P_DERIVE_V1`
+   — check (iii) still resolves "no change" on *that* axis). The build
+   constraint: the serving side receives the **expanded onion identity**,
+   derived once wallet-side, never a seed. Made unrepresentable —
+   `OnionServiceSpec::new` takes an `OnionIdentity`, not a seed.
+
+2. **The sampled-leaf verification path is fossil — do not build against
+   it.** `verify_segment_path` / `verify_leaf_index` (replaying a single
+   derived-index leaf opening) belong to the retired fire-beacon design
+   and sit on §2's deletion surface alongside `challenge_leaf_index`. The
+   ruled mechanism serves the **whole** shard and verifies by
+   recomputing `R_k` over the received bytes (`recompute_segment_r_k`) —
+   which is what PR-A's axis test calls; nothing in either PR touches the
+   sampled mode. *Remaining hygiene (a later archival-retention slice, not
+   PR-A/B):* `path.rs` is on the same beacon deletion surface that #441
+   annotated in `challenge.rs`/`constants.rs` but was not itself marked —
+   annotate it there, so a future reader does not resurrect sampled PoR
+   through the implementation door.
+
+3. **The shard universe grows without bound; `D` is a moving number, not
+   a maturity plateau.** `SegmentId` is dense and `segment_freeze_eligible`
+   is a pure height gate, so one shard freezes per `SEGMENT_LEAF_COUNT`
+   outputs, forever; `MAX_HOLDINGS_SHARDS = 4096` caps a *bond's*
+   holdings, not the universe. Three unpriced consequences: challenge
+   load `λ·D/E` per block rises monotonically with `D`; an archiver must
+   post `HoldingsUpdate` **continuously** to keep covering new segments (a
+   recurring on-chain cost, with a recurring principal-funding question
+   attached — and it interacts with the cold-authorized `EndpointUpdate`
+   family); and the Foundation `CompleteTree` node's holdings grow forever
+   by definition. **The `D ≈ 324k` figure the round sized against is a
+   snapshot, not a ceiling** — the concurrency inputs (and the
+   `max_streams` / `MAX_INFLIGHT` placeholders) must be treated as
+   functions of a growing `D`, not constants. *Open for the round; not a
+   build blocker.*
+
+4. **The pin set must be *derived from the bond record*, not maintained
+   alongside it.** Nothing structural binds `held_shard_ids` in the
+   consensus bond record to local `pin_segment` state, so a `P` that posts
+   holdings and forgets to pin has *its own node* prune the leaf bytes it
+   is obligated to serve — then fails challenges, then slashes, an epoch
+   later, for a local bookkeeping mismatch. PR-A already shaped
+   `pin_serve_set(&[u64])` to take the serve-set as an **input**; the
+   **daemon-composition slice** must feed it `record_held_shard_ids` from
+   the bond record (re-pinning as shards freeze), never a
+   separately-maintained list. Build-list requirement, recorded so the
+   composition cannot forget it.
+
+5. **The retention economy closes cleanly, and it should be stated.** The
+   witness verifies a `SEGMENT_LEAF_COUNT·128`-byte response against a
+   56-byte `FrozenSegmentRecord`, and `prune_frozen` keeps `R_k` while
+   discarding leaves — so a pruning full node retains exactly what it
+   needs to *challenge* and nothing it needs to *serve*. **Verification is
+   free; storage is the scarce thing; the asymmetry is structural**, which
+   is what makes challenge coverage cheap for miners (the property GF-7
+   and the coverage sim implicitly rely on). Worth stating as a first-class
+   property rather than leaving implicit.
+
+6. **The witness-side fetch-and-recompute path is equally unbuilt.** The
+   build survey's "net for a serving loop" was entirely `P`-side; the
+   witness leg (fetch the whole shard over the rendezvous,
+   `recompute_segment_r_k`, compare to the on-chain `R_k`) is the other
+   half, and it is **W₂-rig scope** — the rig measures both legs of the
+   3.33 MB transfer.
+
 ## 10. Standing rules for any agent working this
 
 Verify every claim at file:line against `dev` **before** planning — including
