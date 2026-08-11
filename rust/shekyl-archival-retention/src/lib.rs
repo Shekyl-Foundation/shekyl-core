@@ -41,6 +41,7 @@ pub mod bond_floor;
 pub mod bond_post;
 pub mod bond_wire;
 pub mod challenge;
+pub mod challenge_assignment;
 pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
@@ -103,6 +104,9 @@ pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
+};
+pub use challenge_assignment::{
+    AssignmentError, ChallengeUrn, DrawablePair, CHALLENGE_ASSIGNMENT_CUSTOMIZATION,
 };
 pub use claimed_epochs::{
     claim_window_floor, claimed_epochs_check_and_set, claimed_epochs_contains,
