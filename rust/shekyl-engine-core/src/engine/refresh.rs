@@ -148,57 +148,28 @@ impl LedgerSnapshot {
     }
 }
 
-/// Domain-separation customization for [`derive_snapshot_id`].
+/// cSHAKE256 customization for [`derive_snapshot_id`].
 ///
-/// SA-3c retargeted this internal digest from `cn_fast_hash` (Keccak-256 with a
-/// manually pre-pended domain *prefix*) to cSHAKE256 with this string as the
-/// **customization** — structural domain separation (SP 800-185) rather than a
-/// hand-concatenated prefix, the house default for a new hashed artifact.
-///
-/// The bytes changed form (`shekyl-…` → `shekyl/…`, the mech-1 cSHAKE
-/// convention `b"shekyl/<domain>-v1"`) because this is a **fresh mint, not a
-/// re-spelling**: `SnapshotId` is a purely in-memory reservation-staleness token
-/// (no `Serialize`; absent from `shekyl-engine-file`; never on the wire or
-/// cross-node — verified at the call graph), so nothing persisted or transmitted
-/// ever compares a pre-change id to a post-change one. The through-line rule
-/// (`SIGNATURE_ALIGNMENT.md` §5) forbids re-spelling a *live persisted* domain;
-/// it does not bind a mechanism change on an unpersisted internal digest, where
-/// the aligned choice is precisely a new cSHAKE customization.
-///
-/// Bound to `v1`; a future encoding change co-exists under
-/// `shekyl/snapshot-id-v2`. C2γ wired `derive_snapshot_id` into
-/// `build_pending_tx_in_state` per the `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X
-/// commit decomposition, so the customization is consumed by production code.
-/// Registered in `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism 1).
-pub(crate) const SNAPSHOT_ID_DOMAIN: &[u8] = b"shekyl/snapshot-id-v1";
+/// House form `b"shekyl/<name>-v1"` (mechanism 1). Versioned so an encoding
+/// change mints `shekyl/snapshot-id-v2` rather than reinterpreting these bytes.
+/// Registered in `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv`. SA-3c mint rationale
+/// (unpersisted internal digest; not a re-spelling of a live persisted domain):
+/// `docs/V3_WALLET_DECISION_LOG.md` entry 2026-08-11.
+pub(crate) const SNAPSHOT_ID_CUSTOMIZATION: &[u8] = b"shekyl/snapshot-id-v1";
 
-/// Derive the opaque [`SnapshotId`] for a [`LedgerSnapshot`].
-///
-/// Per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0b (SA-3c update): the
-/// digest is `cSHAKE256` ([`shekyl_crypto_hash::cshake256_32`]) with
-/// [`SNAPSHOT_ID_DOMAIN`] as the customization string, over a canonical
-/// byte-encoding of the snapshot's deterministic fields, truncated to the first
-/// 128 bits. The domain is the cSHAKE **customization** (structural separation),
-/// no longer a byte prefix inside the input. The encoding is:
+/// Canonical cSHAKE **input** for [`derive_snapshot_id`] (domain is the
+/// customization, not part of these bytes):
 ///
 /// ```text
-/// customization = SNAPSHOT_ID_DOMAIN ("shekyl/snapshot-id-v1")
-/// input =
 ///   snapshot.synced_height       (LE u64, 8 bytes)
 /// ‖ reorg_blocks.blocks.len()    (LE u64, 8 bytes; length prefix)
 /// ‖ for each (h, hash) in window:
 ///     LE u64 height (8 bytes) ‖ 32-byte block hash
 /// ```
 ///
-/// The length-prefixed reorg-window count forecloses extension /
-/// concatenation collisions against same-tip ledgers with different
-/// reorg-window depth; the cSHAKE customization excludes collisions
-/// against any other domain-separated digest in the workspace.
-///
-/// `pub(crate)`: callers in [`super::pending`] derive `SnapshotId`
-/// from an engine-internal snapshot read; consumers never pass a
-/// `SnapshotId` into the trait surface from outside.
-pub(crate) fn derive_snapshot_id(snapshot: &LedgerSnapshot) -> SnapshotId {
+/// The length prefix forecloses extension/concatenation collisions against
+/// same-tip ledgers with different reorg-window depth.
+fn snapshot_id_preimage(snapshot: &LedgerSnapshot) -> Vec<u8> {
     let n_blocks = snapshot.reorg_blocks.blocks.len();
     let mut buf = Vec::with_capacity(8 + 8 + n_blocks * (8 + 32));
     buf.extend_from_slice(&snapshot.synced_height.to_le_bytes());
@@ -207,7 +178,25 @@ pub(crate) fn derive_snapshot_id(snapshot: &LedgerSnapshot) -> SnapshotId {
         buf.extend_from_slice(&height.to_le_bytes());
         buf.extend_from_slice(hash);
     }
-    let digest = shekyl_crypto_hash::cshake256_32(SNAPSHOT_ID_DOMAIN, &buf);
+    buf
+}
+
+/// Derive the opaque [`SnapshotId`] for a [`LedgerSnapshot`].
+///
+/// `cSHAKE256` ([`shekyl_crypto_hash::cshake256_32`]) with
+/// [`SNAPSHOT_ID_CUSTOMIZATION`] over [`snapshot_id_preimage`], truncated to
+/// the first 128 bits. Structural domain separation (SP 800-185); the
+/// customization excludes collisions against any other domain-separated digest
+/// in the workspace.
+///
+/// `pub(crate)`: callers in [`super::pending`] derive `SnapshotId` from an
+/// engine-internal snapshot read; consumers never pass a `SnapshotId` into the
+/// trait surface from outside.
+pub(crate) fn derive_snapshot_id(snapshot: &LedgerSnapshot) -> SnapshotId {
+    let digest = shekyl_crypto_hash::cshake256_32(
+        SNAPSHOT_ID_CUSTOMIZATION,
+        &snapshot_id_preimage(snapshot),
+    );
     let mut out = [0u8; 16];
     out.copy_from_slice(&digest[..16]);
     SnapshotId(out)
@@ -2278,44 +2267,28 @@ mod refresh_driver_tests {
         assert_eq!(id.as_bytes(), &id.0);
     }
 
-    /// The domain **customization** is load-bearing in the cSHAKE
-    /// derivation (SA-3c): the same canonical input under a different
-    /// customization must produce a different digest. cSHAKE folds the
-    /// customization into the sponge (SP 800-185), so this is structural
-    /// separation, not a hand-prepended prefix — the test varies only
-    /// the customization and asserts the truncated digests differ, then
-    /// pins that the production derivation applies the documented
-    /// customization-plus-input encoding verbatim.
+    /// The cSHAKE customization is load-bearing: the same preimage under a
+    /// different customization must yield a different truncated digest; and
+    /// production `derive_snapshot_id` must match `cshake256_32` over
+    /// [`super::snapshot_id_preimage`] with the registered customization.
     #[test]
     fn derive_snapshot_id_domain_separated() {
         let snap = snapshot_from_parts(7, vec![(7, [0xAB; 32])]);
-        let n_blocks = snap.reorg_blocks.blocks.len();
+        let input = super::snapshot_id_preimage(&snap);
 
-        // The canonical cSHAKE input — the deterministic fields, with the
-        // domain carried out-of-band as the customization (NOT in these bytes).
-        let mut input = Vec::new();
-        input.extend_from_slice(&snap.synced_height.to_le_bytes());
-        input.extend_from_slice(&(n_blocks as u64).to_le_bytes());
-        for (height, hash) in &snap.reorg_blocks.blocks {
-            input.extend_from_slice(&height.to_le_bytes());
-            input.extend_from_slice(hash);
-        }
+        let production = super::SNAPSHOT_ID_CUSTOMIZATION;
+        let mut counterfactual = production.to_vec();
+        counterfactual[0] ^= 0x01;
 
-        let production_customization = super::SNAPSHOT_ID_DOMAIN;
-        let mut counterfactual_customization = production_customization.to_vec();
-        counterfactual_customization[0] ^= 0x01;
-
-        let factual = shekyl_crypto_hash::cshake256_32(production_customization, &input);
-        let counterfactual =
-            shekyl_crypto_hash::cshake256_32(&counterfactual_customization, &input);
+        let factual = shekyl_crypto_hash::cshake256_32(production, &input);
+        let other = shekyl_crypto_hash::cshake256_32(&counterfactual, &input);
 
         assert_ne!(
             &factual[..16],
-            &counterfactual[..16],
+            &other[..16],
             "cSHAKE customization must separate the snapshot-id domain"
         );
 
-        // And the production derivation matches the factual digest.
         let id = derive_snapshot_id(&snap);
         assert_eq!(
             id.as_bytes()[..],

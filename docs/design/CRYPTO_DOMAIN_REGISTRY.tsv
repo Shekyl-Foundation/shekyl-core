@@ -88,7 +88,7 @@
 1	shekyl/archival-emission-backing-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_BACKING	shekyl-live
 1	shekyl/archival-attestation-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_ATTESTATION	shekyl-live
 1	shekyl/archival-serve-credit-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_SERVE_CREDIT	shekyl-live
-1	shekyl/snapshot-id-v1	rust/shekyl-engine-core/src/engine/refresh.rs	SNAPSHOT_ID_DOMAIN	shekyl-live		wallet-internal reservation-staleness digest; cSHAKE customization (SA-3c retargeted it off cn_fast_hash — unpersisted, no wire, fresh mint)
+1	shekyl/snapshot-id-v1	rust/shekyl-engine-core/src/engine/refresh.rs	SNAPSHOT_ID_CUSTOMIZATION	shekyl-live		wallet-internal reservation-staleness digest; cSHAKE customization (SA-3c retargeted it off cn_fast_hash — unpersisted, no wire, fresh mint)
 #
 # ── Mechanism 2 — HKDF salt + info ───────────
 # distinctness key = salt|info. The three shared infos (spend/view/kem) are
