@@ -803,3 +803,107 @@ which is the part that could silently stop matching after a `VERSION` bump. The
 move itself is guarded by `mv -n` plus a post-move assertion that the source is
 gone and the destination exists, so a no-op move reports failure rather than
 success.
+
+---
+
+## 11. Two findings from the density test — one of them a blocker
+
+### 11.1 Q12-R10 — the fleet must be NETWORK-ISOLATED, and this is a blocker
+
+The density host showed a node holding an outbound **clearnet** peer.
+`get_ip_seed_nodes` returns the four production seeds for testnet, so fleet
+nodes bootstrap onto the **live testnet** automatically.
+
+**This was first written up as consistent with Q12-R3. That was wrong.** R3
+ruled the production seeds out of the *histogram*; what this is, is a path to
+the live testnet — an **unbounded, unmeasured population outside the fleet**.
+
+**It breaks `A` as the independent variable.** At `A = 15`, a node's anonymity
+peers may come from its 14 fleet peers *or* from however many Tor-capable nodes
+exist on the live testnet. The floor could be reached entirely from outside the
+fleet, and the histogram would report a healthy 12 that has nothing to do with
+`A`.
+
+**And the contamination is inversely correlated with the variable.** It matters
+most where the fleet population is smallest — which is precisely the arm the
+finding rests on. A confound that grows as the signal shrinks.
+
+**It cannot be corrected afterwards.** A converged histogram does not record
+whether a peer was fleet-sourced or testnet-sourced, so this is a
+decide-before-running matter, not an analysis-time adjustment.
+
+The counter-argument — *a real network is not sealed either* — is true and
+beside the point. Under it, `A` is not what is being measured: the run would be
+measuring the testnet's Tor population with a fleet attached, and the sweep
+would be meaningless.
+
+**Ruled: a fleet build with a distinct `NETWORK_ID` and empty compiled seed
+lists.** Verified at source, `--seed-node` alone is **not** sufficient:
+`net_node.inl:1749-1759` appends `get_ip_seed_nodes()` as a *fallback* when no
+configured seed connects, so the production seeds re-enter through a path that
+overriding the seed list does not close.
+
+| candidate | verdict |
+| --- | --- |
+| distinct `NETWORK_ID` + empty compiled seeds | **chosen** — isolation by construction; a foreign peer fails the handshake whatever is dialled |
+| `--seed-node` override alone | rejected — the compiled fallback re-adds production seeds |
+| `--add-exclusive-node` | rejected — it *changes peer selection*, which is the mechanism under test |
+| firewall the seed IPs | rejected alone — the daemon still dials and fails, burning backoff slots (Q12-R8) |
+
+Emptying the compiled lists as well as changing `NETWORK_ID` is not redundant:
+`NETWORK_ID` alone still leaves nodes *dialling* production seeds and failing,
+and under Q12-R8 those failures cost backoff on the very connections being
+measured.
+
+**What differs from production, and why the oracle survives.** The fleet binary
+differs only in `NETWORK_ID` and the compiled seed constants. Peer discovery —
+peerlist gossip, zone segregation, self-announcement, the connection maintainer
+and its backoff — is byte-identical. `NETWORK_ID` gates *handshake acceptance*,
+not discovery, so the quantity under measurement is unchanged. This is recorded
+rather than assumed, because a modified binary is a different oracle unless the
+difference is argued.
+
+### 11.2 Q12-R11 — at `A ≤ 12` the floor is unreachable by arithmetic
+
+The density host ran 10 anonymity-capable nodes and no node exceeded 8 outbound
+anonymity peers, against a floor of 12 and 9 possible peers.
+
+**That is not a shakeout artifact; it is a result.** `12 > A − 1` means the
+floor cannot be met by any node, so **every** node sits below it — not because
+discovery failed, but because the population is smaller than the requirement.
+
+**Which makes Q12-U2's open question the launch condition rather than an edge
+case.** Whatever a below-floor node should do — not stem, stem anyway, hold — is
+what *every* node does while the anonymity population is under 13. A young
+network with few Tor-capable nodes **is** that state. Q12-D6a recorded that no
+such rule exists and that F-8b floors the configured cap rather than the
+achieved count; this bounds when the gap is load-bearing, and it is at exactly
+the moment a network launches.
+
+**And it narrows what the `A = 15` arm can say.** With 15 nodes and a floor of
+12, the arm asks *whether near-complete connectivity forms*, not whether
+selection is selective — 12 of 14 possible peers is nearly the whole
+population. It should be reported as that question, not read as the low end of a
+trend across the sweep. The `A = 60` arm is the only one where the floor is a
+genuine selection among candidates.
+
+### 11.3 Recorded for the next fleet: the release path supplies a binary, not a topology
+
+The `.deb` is correct for its purpose and resolves dependencies declaratively —
+the right answer to the boost/libevent hunt. It does **not** supply the fleet's
+service topology: its unit is single-instance and hardcodes `--data-dir
+/var/lib/shekyl`, a fixed log path, `StateDirectory`, and `ReadWritePaths`, with
+no `--config-file` at all.
+
+Ten instances per host therefore need `skl-node@.service` and `skl-tor@.service`
+templates carrying `%i` into every path the shipped unit pins, with
+`Requires=skl-tor@%i` so Q12-R8's ordering is **structural rather than a
+convention in a start script**. Kept here so the distinction is not
+re-litigated at the next fleet: the release path is right for releases, and the
+fleet's needs are genuinely different.
+
+**Density verified** on one host (4 vCPU / 8 GB): 10 daemons + 10 tor, 0
+restarts, 3.6 GB of 7.9 GB used, all ports bound, 10 distinct guard
+directories. **Q12-R8's two-reading rule earned itself immediately** — 29
+outbound at `t+0` against 62 at `t+240`, so a single reading would have reported
+less than half the converged count.
