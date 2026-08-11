@@ -18,7 +18,7 @@ use shekyl_curve_tree::{
     leaves_per_segment, recompute_segment_r_k, BlockHeight, Gindex, LeafEntry, LeafStore,
     OutputIdentity, SegmentId, TargetKind,
 };
-use shekyl_p_serve::{PServeEndpoint, ServeSetPin, ShardProvider, StoreShardProvider};
+use shekyl_p_serve::{PServeEndpoint, ServeSetPin, ShardBody, ShardProvider, StoreShardProvider};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -160,21 +160,38 @@ async fn unpinned_prune_surfaces_as_a_counted_failure_not_a_distinct_response() 
 }
 
 #[test]
-fn provider_flattens_exactly_the_store_chunks() {
-    // Storeless sanity on the flattening: the provider's bytes are the
-    // store's leaves in order, no padding, no reordering.
+fn provider_body_is_exactly_the_store_leaves_in_order() {
+    // The production body is the store's leaves in tree order — zero-copy
+    // as bytes on the wire path, no padding, no reordering.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     let entries = segment_entries();
     store
         .append_block_deltas(&entries, &[], &[], BlockHeight(10_000))
         .expect("append and freeze");
     let provider = StoreShardProvider::new(store);
-    let bytes = provider
+    let body = provider
         .shard_bytes(0)
         .expect("lookup")
         .expect("frozen shard");
-    assert_eq!(bytes.len(), entries.len() * 128);
+    assert!(matches!(body, ShardBody::Leaves(_)));
+    assert_eq!(body.byte_len(), entries.len() * 128);
+    let bytes = body.as_bytes();
     for (i, entry) in entries.iter().enumerate() {
         assert_eq!(&bytes[i * 128..(i + 1) * 128], &entry.leaf[..]);
     }
+}
+
+#[test]
+fn pin_serve_set_refuses_unrepresentable_shard_ids() {
+    // NotYetFrozen is only for freeze races inside SegmentId space. A
+    // serve-set entry that cannot name a SegmentId is a construction bug.
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    let provider = StoreShardProvider::new(store);
+    let err = provider
+        .pin_serve_set(&[u64::from(u32::MAX) + 1])
+        .expect_err("u32 overflow must fail pin");
+    assert!(
+        err.to_string().contains("SegmentId"),
+        "error should name the id-space bug: {err}"
+    );
 }

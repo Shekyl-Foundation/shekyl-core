@@ -97,6 +97,10 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(600);
 /// what was convenient to build.
 const WRITE_CHUNK_BYTES: usize = 64 * 1024;
 
+/// Backoff when `accept` fails (e.g. transient FD pressure). Prevents a
+/// tight spin without logging or changing response shape.
+const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(10);
+
 /// A running loopback serve endpoint for one persona.
 ///
 /// Dropping it aborts the accept loop; in-flight connection tasks are
@@ -145,7 +149,9 @@ impl PServeEndpoint {
                 let Ok((stream, _peer)) = listener.accept().await else {
                     // The peer address is deliberately dropped rather than
                     // bound: it is a forensic surface and nothing here may
-                    // record it.
+                    // record it. Back off on accept failure so FD exhaustion
+                    // cannot turn this into a tight CPU spin.
+                    tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
                     continue;
                 };
                 // Over capacity: drop the stream, which closes it. Not a
@@ -236,6 +242,18 @@ impl std::fmt::Debug for PServeEndpoint {
 /// No keep-alive: each read is its own connection, which keeps the serve
 /// unit unambiguous and removes connection reuse as a cross-persona
 /// correlation surface.
+///
+/// # Wire classes (intentionally two, not one)
+///
+/// * **Complete request head that is non-servable** (wrong path/method,
+///   malformed route/id, unknown or unfrozen shard, store failure) → the
+///   single shared [`NOT_FOUND`] body. That is the probe surface for the
+///   route table, holdings, and store health — collapsed to one shape.
+/// * **No complete head** (oversized buffer, mid-head EOF, read timeout)
+///   or **over capacity** → connection close with no HTTP bytes. Same
+///   class as ordinary circuit death; not a status-code oracle. Writing
+///   404 after a failed head read would invent a response for peers that
+///   never finished speaking HTTP, and would not match the capacity path.
 async fn handle_connection(
     mut stream: TcpStream,
     provider: Arc<dyn ShardProvider>,
@@ -246,10 +264,9 @@ async fn handle_connection(
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "request head"))??;
 
-    // Every non-servable outcome — wrong path, wrong method, malformed,
-    // unknown shard, unfrozen shard, store failure — collapses to the one
-    // shared 404 below, so neither the route table nor store health is
-    // probeable through the rendezvous.
+    // Every complete-head non-servable outcome collapses to the one shared
+    // 404 below, so neither the route table nor store health is probeable
+    // through the rendezvous.
     let body = match parse_request(&head) {
         Some(Request::Shard(shard_id)) => {
             let looked_up =
@@ -267,7 +284,8 @@ async fn handle_connection(
 
     tokio::time::timeout(WRITE_TIMEOUT, async {
         match body {
-            Some(bytes) => {
+            Some(payload) => {
+                let bytes = payload.as_bytes();
                 stream.write_all(render_ok(bytes.len()).as_bytes()).await?;
                 for chunk in bytes.chunks(WRITE_CHUNK_BYTES) {
                     stream.write_all(chunk).await?;
@@ -340,20 +358,18 @@ fn render_ok(len: usize) -> String {
 }
 
 /// The single error response, byte-identical for every non-servable
-/// outcome.
+/// complete-head outcome.
 const NOT_FOUND: &str =
     "HTTP/1.1 404 Not Found\r\ncontent-type: application/octet-stream\r\ncontent-length: 0\r\n\r\n";
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
-    use crate::provider::ProviderError;
+    use crate::provider::{ProviderError, ShardBody};
 
     /// In-memory provider: the loop's wire behaviour, storeless.
     struct FixtureProvider {
-        shards: HashMap<u64, Arc<[u8]>>,
+        shards: std::collections::HashMap<u64, Arc<[u8]>>,
     }
 
     impl FixtureProvider {
@@ -368,8 +384,8 @@ mod tests {
     }
 
     impl ShardProvider for FixtureProvider {
-        fn shard_bytes(&self, shard_id: u64) -> Result<Option<Arc<[u8]>>, ProviderError> {
-            Ok(self.shards.get(&shard_id).cloned())
+        fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
+            Ok(self.shards.get(&shard_id).cloned().map(ShardBody::Flat))
         }
     }
 
@@ -377,7 +393,7 @@ mod tests {
     struct FailingProvider;
 
     impl ShardProvider for FailingProvider {
-        fn shard_bytes(&self, _shard_id: u64) -> Result<Option<Arc<[u8]>>, ProviderError> {
+        fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
             Err(ProviderError::new("synthetic store failure"))
         }
     }
@@ -467,11 +483,13 @@ mod tests {
 
     #[tokio::test]
     async fn every_non_servable_outcome_renders_one_identical_404() {
-        // The full miss set in one sweep: wrong path, wrong prefix,
-        // malformed id, UNKNOWN shard id (a valid route to a shard this
-        // persona does not hold), and a provider infrastructure failure.
-        // All must be byte-identical, or the differences become a probe
-        // surface for the route table, the holdings, or store health.
+        // The full *complete-head* miss set in one sweep: wrong path, wrong
+        // prefix, malformed id, UNKNOWN shard id (a valid route to a shard
+        // this persona does not hold), and a provider infrastructure
+        // failure. All must be byte-identical, or the differences become a
+        // probe surface for the route table, the holdings, or store health.
+        // Incomplete heads (oversized / EOF / timeout) are a different
+        // wire class — close, like over-capacity — covered separately.
         let ep = PServeEndpoint::bind(FixtureProvider::new([(3, vec![7u8; 32])]))
             .await
             .expect("bind");
@@ -576,9 +594,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oversized_request_head_is_refused_without_unbounded_buffering() {
-        // The pre-allocation bound: the cap is enforced while reading. A
-        // head that never terminates is dropped rather than buffered.
+    async fn oversized_request_head_is_closed_not_answered() {
+        // Incomplete / hostile head: close with no HTTP bytes — same wire
+        // class as over-capacity, not the complete-head shared 404. The
+        // pre-allocation bound is enforced while reading.
         let ep = PServeEndpoint::bind(FixtureProvider::new([(0, vec![0u8; 8])]))
             .await
             .expect("bind");
@@ -591,8 +610,8 @@ mod tests {
         let mut out = Vec::new();
         s.read_to_end(&mut out).await.ok();
         assert!(
-            !out.starts_with(b"HTTP/1.1 200"),
-            "an oversized head must never be served"
+            !out.starts_with(b"HTTP/"),
+            "an incomplete/oversized head must close, not invent a status: {out:?}"
         );
         assert_eq!(ep.served_count(), 0);
     }

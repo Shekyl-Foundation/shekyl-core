@@ -51,6 +51,42 @@ impl std::fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
+/// Contiguous body bytes for one served shard.
+///
+/// Production loads tree-ordered leaf arrays from the store and exposes
+/// them as a zero-copy byte view ([`ShardBody::as_bytes`]) — no second
+/// full-segment buffer on the wire path. Fixtures may carry an opaque
+/// flat buffer of any length for header/path tests that do not need a
+/// real segment.
+#[derive(Clone, Debug)]
+pub enum ShardBody {
+    /// Full frozen-segment leaves in tree order (production).
+    Leaves(Vec<[u8; 128]>),
+    /// Opaque payload (tests).
+    Flat(Arc<[u8]>),
+}
+
+impl ShardBody {
+    /// Wire `content-length`.
+    #[must_use]
+    pub fn byte_len(&self) -> usize {
+        match self {
+            Self::Leaves(leaves) => leaves.len().saturating_mul(128),
+            Self::Flat(bytes) => bytes.len(),
+        }
+    }
+
+    /// Contiguous body bytes. For [`Self::Leaves`], this is a zero-copy
+    /// view of the leaf array's in-memory layout.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Leaves(leaves) => leaves.as_flattened(),
+            Self::Flat(bytes) => bytes,
+        }
+    }
+}
+
 /// Serve-side shard lookup.
 ///
 /// `Ok(None)` is the *unservable* case — unknown id, or a segment that has
@@ -58,7 +94,7 @@ impl std::error::Error for ProviderError {}
 /// serve). `Err` is infrastructure failure. The endpoint renders both as
 /// the single shared 404; only the local counters tell them apart.
 pub trait ShardProvider: Send + Sync + 'static {
-    /// Full shard bytes for `shard_id` — the contiguous leaf bytes of the
+    /// Full shard body for `shard_id` — the contiguous leaf bytes of the
     /// frozen segment, exactly what the witness hashes against `R_k`.
     ///
     /// # Errors
@@ -66,7 +102,7 @@ pub trait ShardProvider: Send + Sync + 'static {
     /// [`ProviderError`] on store failure — including the pruned-bytes
     /// misconfiguration (`StoreError::FrozenSegmentPruned`), which means
     /// the serve-set was not pinned before a prune ran.
-    fn shard_bytes(&self, shard_id: u64) -> Result<Option<Arc<[u8]>>, ProviderError>;
+    fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError>;
 }
 
 /// Outcome of pinning one serve-set member at startup.
@@ -82,6 +118,10 @@ pub enum ServeSetPin {
     /// pin or serve until the freeze boundary crosses it. Bonding before
     /// freeze is legal by design (`bond_post.rs`: self-harm, not an
     /// attack); the daemon re-pins when the shard freezes.
+    ///
+    /// Only used when `shard_id` fits the store's [`SegmentId`] space. An
+    /// unrepresentable id is a serve-set bug and fails [`StoreShardProvider::pin_serve_set`]
+    /// outright rather than being mislabeled as not-yet-frozen.
     NotYetFrozen {
         /// The not-yet-frozen shard.
         shard_id: u64,
@@ -111,16 +151,18 @@ impl StoreShardProvider {
     ///
     /// # Errors
     ///
-    /// [`ProviderError`] on the first store failure; pins already applied
-    /// stay applied (pinning is idempotent, so a retry re-covers the set).
+    /// [`ProviderError`] on the first store failure, or if any `shard_id`
+    /// does not fit the store's `u32` [`SegmentId`] space (that is a
+    /// serve-set construction bug, not a freeze race). Pins already
+    /// applied stay applied (pinning is idempotent, so a retry re-covers
+    /// the set).
     pub fn pin_serve_set(&self, serve_set: &[u64]) -> Result<Vec<ServeSetPin>, ProviderError> {
         let mut out = Vec::with_capacity(serve_set.len());
         for &shard_id in serve_set {
             let Some(id) = segment_id(shard_id) else {
-                // Beyond the store's id space: nothing exists to pin, and
-                // the serving read for it is a plain miss.
-                out.push(ServeSetPin::NotYetFrozen { shard_id });
-                continue;
+                return Err(ProviderError::new(format!(
+                    "shard_id {shard_id} exceeds store SegmentId space (u32)"
+                )));
             };
             let frozen = self
                 .store
@@ -141,24 +183,19 @@ impl StoreShardProvider {
 }
 
 /// A shard id names a `SegmentId` iff it fits the store's `u32` id space;
-/// anything larger cannot exist in this store and is an ordinary miss.
+/// anything larger cannot exist in this store and is an ordinary miss on
+/// the serve path (and a hard error in [`StoreShardProvider::pin_serve_set`]).
 fn segment_id(shard_id: u64) -> Option<SegmentId> {
     u32::try_from(shard_id).ok().map(SegmentId)
 }
 
 impl ShardProvider for StoreShardProvider {
-    fn shard_bytes(&self, shard_id: u64) -> Result<Option<Arc<[u8]>>, ProviderError> {
+    fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
         let Some(id) = segment_id(shard_id) else {
             return Ok(None);
         };
         match self.store.frozen_segment_leaf_bytes(id) {
-            Ok(Some(chunks)) => {
-                let mut flat = Vec::with_capacity(chunks.len() * 128);
-                for chunk in &chunks {
-                    flat.extend_from_slice(chunk);
-                }
-                Ok(Some(Arc::from(flat.into_boxed_slice())))
-            }
+            Ok(Some(leaves)) => Ok(Some(ShardBody::Leaves(leaves))),
             Ok(None) => Ok(None),
             Err(e) => Err(ProviderError::store(&e)),
         }

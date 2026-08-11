@@ -935,11 +935,17 @@ impl LeafStore {
 
     /// Pin segment `id` so [`Self::prune_frozen`] retains its full leaf bytes.
     ///
-    /// Pin before pruning any segment whose full chunk contents may be needed
-    /// later (root queries below the frozen boundary, or store-backed branch
-    /// reads). Path assembly today rebuilds branches from the client's
-    /// replay-held entries, so pruning does not break it; pinning is the
-    /// store-level escape hatch if that ever changes.
+    /// **Primary consumer: persona serving.** A bonded serve-set must be
+    /// pinned before any prune runs; otherwise
+    /// [`Self::frozen_segment_leaf_bytes`] returns
+    /// [`StoreError::FrozenSegmentPruned`] and the persona cannot answer
+    /// challenges (the silent-slash precursor). Call at serve-set startup
+    /// and again as bonded shards freeze.
+    ///
+    /// Secondary: any other reader that needs a frozen segment's full leaf
+    /// bytes across prune (root queries below the frozen boundary,
+    /// store-backed branch reads). Path assembly today rebuilds branches
+    /// from the client's replay-held entries, so it does not require pins.
     pub fn pin_segment(&self, id: SegmentId) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         {
@@ -1039,15 +1045,13 @@ impl LeafStore {
         }
         let e = leaves_per_segment() as u64;
         let start = u64::from(id.0) * e;
-        let leaves = txn.open_table(LEAVES_TABLE)?;
-        let mut out = Vec::with_capacity(leaves_per_segment());
-        for pos in (start..start + e).map(TreePosition) {
-            let leaf = leaves
-                .get(pos)?
-                .ok_or(StoreError::FrozenSegmentPruned { id })?;
-            out.push(*leaf.value());
-        }
-        Ok(Some(out))
+        // Same bulk reader as root/recompute paths; missing leaf after a
+        // freeze row is the pruned (or corrupt) case named for the serve
+        // path, not generic metadata corruption.
+        let leaves = read_leaf_bytes_range_read_with(&txn, start, start + e, |_| {
+            StoreError::FrozenSegmentPruned { id }
+        })?;
+        Ok(Some(leaves))
     }
 
     /// Recompute the boundary-adjacent frozen segment's `R_k`.
@@ -1227,18 +1231,32 @@ fn read_leaf_bytes_range(
     Ok(out)
 }
 
+/// Bulk leaf read on a read transaction. Missing positions map to
+/// [`StoreError::CorruptMeta`] — the default for freeze/recompute paths
+/// where a hole is store corruption, not a named prune outcome.
 fn read_leaf_bytes_range_read(
     txn: &redb::ReadTransaction,
     start: u64,
     end: u64,
 ) -> Result<Vec<[u8; 128]>, StoreError> {
+    read_leaf_bytes_range_read_with(txn, start, end, |_| StoreError::CorruptMeta("missing leaf"))
+}
+
+/// Bulk leaf read with a caller-chosen missing-leaf error.
+///
+/// One scan loop for every full-segment reader: freeze recompute uses
+/// corruption, the serving path uses [`StoreError::FrozenSegmentPruned`].
+fn read_leaf_bytes_range_read_with(
+    txn: &redb::ReadTransaction,
+    start: u64,
+    end: u64,
+    missing: impl Fn(TreePosition) -> StoreError,
+) -> Result<Vec<[u8; 128]>, StoreError> {
     let leaves = txn.open_table(LEAVES_TABLE)?;
     let cap = usize::try_from(end - start).expect("leaf range fits usize");
     let mut out = Vec::with_capacity(cap);
     for pos in (start..end).map(TreePosition) {
-        let leaf = leaves
-            .get(pos)?
-            .ok_or(StoreError::CorruptMeta("missing leaf"))?;
+        let leaf = leaves.get(pos)?.ok_or_else(|| missing(pos))?;
         out.push(*leaf.value());
     }
     Ok(out)

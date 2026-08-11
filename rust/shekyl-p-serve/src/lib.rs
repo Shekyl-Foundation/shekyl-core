@@ -50,11 +50,13 @@
 //!   target ([`shekyl_tor` `OnionPort::loopback`] on the daemon side);
 //! - two personas served from one wallet are byte-identical at the header
 //!   level ([`serve::RESPONSE_HEADER_NAMES`] is the complete set);
-//! - every miss — wrong path, wrong method, malformed, **unknown shard,
-//!   unfrozen shard, store failure** — renders one identical 404, so
-//!   neither the route table nor store health is probeable;
-//! - over-capacity arrivals are closed, never answered, so there is no
-//!   capacity oracle and no extra response shape;
+//! - every **complete-head** non-servable outcome — wrong path, wrong
+//!   method, malformed route/id, **unknown shard, unfrozen shard, store
+//!   failure** — renders one identical 404, so neither the route table
+//!   nor store health is probeable;
+//! - incomplete heads (oversized, mid-head EOF, read timeout) and
+//!   over-capacity arrivals are **closed** with no HTTP bytes — the same
+//!   class as ordinary circuit death, not a status-code oracle;
 //! - no request logging at any level: the only observables are aggregate
 //!   monotone counters.
 
@@ -63,5 +65,5 @@
 pub mod provider;
 pub mod serve;
 
-pub use provider::{ProviderError, ServeSetPin, ShardProvider, StoreShardProvider};
+pub use provider::{ProviderError, ServeSetPin, ShardBody, ShardProvider, StoreShardProvider};
 pub use serve::PServeEndpoint;
