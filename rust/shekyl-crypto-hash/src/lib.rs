@@ -29,13 +29,11 @@
 //! the same original-Keccak-256, and standardizing on the RustCrypto crate collapses
 //! the codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
 //!
-//! SA-3d renamed this function `cn_fast_hash` → `keccak256`. The inherited
-//! CryptoNote name ("cn" = CryptoNote; the *fast* hash vs. the slow PoW hash)
-//! obscured that the primitive is plain original Keccak-256; the new name states
-//! it. The C++ daemon function and the FFI export symbol (`shekyl_cn_fast_hash`)
-//! keep the CryptoNote spelling — for 1:1 consensus source-mapping to the C++
-//! side and for C ABI stability, respectively — so only the Rust-internal name
-//! changed (see `60-no-monero-legacy.mdc`).
+//! **Naming.** Rust API is [`keccak256`] (states the primitive). The C++ daemon
+//! function stays `cn_fast_hash` (`src/crypto/hash.c`) for 1:1 consensus
+//! source-mapping; the FFI export stays `shekyl_cn_fast_hash` for C ABI
+//! stability. CryptoNote lineage name on the C++/ABI side only
+//! (`60-no-monero-legacy.mdc`).
 
 #![deny(unsafe_code)]
 

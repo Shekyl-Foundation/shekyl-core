@@ -455,10 +455,10 @@ mod tests {
 
     #[test]
     fn crypto_hash_keccak256_equals_curve_primitives_keccak256() {
-        // Two keccak256s exist in the workspace — `shekyl_crypto_hash::keccak256`
-        // (SA-3d renamed it from `cn_fast_hash`) and `shekyl_curve_primitives::keccak256`
-        // — same original Keccak-256 primitive, different crate homes. Pin that they
-        // agree so the signing-hash bytes are preserved regardless of which is used.
+        // Two public keccak256s exist (crypto-hash + curve-primitives) — same
+        // original Keccak-256, different crate homes. Pin they agree so
+        // signing-hash bytes are preserved regardless of which is used.
+        // Collapse onto one home is tracked in FOLLOWUPS (dual-keccak).
         use shekyl_curve_primitives::keccak256;
         for input in [
             &b""[..],

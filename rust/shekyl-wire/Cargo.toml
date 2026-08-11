@@ -8,9 +8,8 @@ repository.workspace = true
 description = "Canonical Shekyl genesis block/tx binary wire format (serializer). See docs/design/GENESIS_TX_WIRE_FORMAT.md."
 
 [dependencies]
-# Consensus keccak-256 (`keccak256`, renamed from `cn_fast_hash` in SA-3d;
-# original 0x01 padding, byte-identical to the C++ `cn_fast_hash`). The single
-# source for the tx/block hash identities.
+# Consensus original Keccak-256 (`shekyl_crypto_hash::keccak256`; 0x01 padding;
+# byte-identical to C++ `cn_fast_hash`). Single source for tx/block hash identities.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 
 [dev-dependencies]
