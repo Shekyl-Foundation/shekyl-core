@@ -33,11 +33,12 @@ pub const CHALLENGES_PER_PAIR_PER_EPOCH: u32 = 3;
 /// floor const-assert).
 ///
 /// Pinned (one full epoch) under the retired fire-to-close challenge shape.
-/// Under derived assignment the binding constraint is instead against the
-/// response window: a challenge issued at the epoch's **last** block,
-/// `(E+1)·SEB − 1`, must be resolvable before the slash fold reads the
-/// epoch, so `CHALLENGE_RESOLUTION_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`
-/// (the const-assert below arms itself the moment W₂ pins). One epoch
+/// Under derived assignment the binding constraint is against the response
+/// window: a challenge issued at the epoch's **last** block, `(E+1)·SEB − 1`,
+/// must be resolvable before the slash fold reads the epoch, so once W₂ is
+/// pinned the resolution grace must satisfy
+/// `CHALLENGE_RESOLUTION_BLOCKS ≥ w2` (the const-assert below arms on the
+/// inner value of [`CHALLENGE_RESPONSE_BLOCKS`]'s `Some`). One epoch
 /// dominates any plausible W₂; re-confirm this value when the W₂
 /// measurement program reports.
 pub const CHALLENGE_RESOLUTION_BLOCKS: u64 = 10_000;
@@ -58,28 +59,36 @@ pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 /// W₂ — blocks after a challenge's issuing block to accept its serve-credit
 /// response.
 ///
-/// Unpinned: the value comes from the W₂ **measurement program**
+/// Unpinned (`None`): the value comes from the W₂ **measurement program**
 /// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5 — provisioned at the Pi-4 floor
 /// per rule 76, measured on the real Tor network), and its byte-pin lands
 /// with the format round's frozen response wire (rule 42 version bump).
 /// The gate-2 wording that its wire "lands with the vin serializer" is
 /// obsolete — that serializer is on the format round's deletion surface.
+///
+/// **Pin shape:** collapse this to a bare `u64` when the measurement program
+/// reports — do **not** leave `Option`/`Some(n)` as permanent scaffolding
+/// (rule 21: optionality without need is debt). The match-assert below is
+/// interim tripwire for a `Some` staging pin only; the pin PR replaces both
+/// with `pub const CHALLENGE_RESPONSE_BLOCKS: u64 = n` and
+/// `assert!(CHALLENGE_RESOLUTION_BLOCKS >= CHALLENGE_RESPONSE_BLOCKS)`.
 pub const CHALLENGE_RESPONSE_BLOCKS: Option<u64> = None;
 
-// Armed the moment W₂ pins: the slash fold for epoch E must not run before
-// the response window of E's last-issued challenge has closed, or the fold
-// reads a still-open epoch and mints misses out of in-flight responses.
-// Derived from the same block-index convention failure_window.rs litigated
-// (fold runs strictly above the deadline, so `>=` is exact).
+// Interim tripwire while W₂ is still `Option`: when (and only when) the
+// slot is staged as `Some(w2)`, require resolution grace ≥ that inner
+// value so the slash fold for epoch E cannot run before the response
+// window of E's last-issued challenge closes (fold runs strictly above
+// the deadline — `failure_window.rs` — so `>=` is exact). Always-true
+// while unpinned. Delete this match form with the bare-u64 pin above.
 const _: () = assert!(
     match CHALLENGE_RESPONSE_BLOCKS {
         Some(w2) => CHALLENGE_RESOLUTION_BLOCKS >= w2,
         None => true,
     },
-    "CHALLENGE_RESOLUTION_BLOCKS < CHALLENGE_RESPONSE_BLOCKS: the slash fold \
-     for an epoch would run before the response window of its last-issued \
-     challenge closes, reading in-flight responses as misses; re-derive the \
-     resolution grace alongside the W2 pin"
+    "CHALLENGE_RESOLUTION_BLOCKS < pinned W2 (CHALLENGE_RESPONSE_BLOCKS inner): \
+     the slash fold for an epoch would run before the response window of its \
+     last-issued challenge closes, reading in-flight responses as misses; \
+     re-derive the resolution grace alongside the W2 pin"
 );
 
 /// Global settlement-epoch boundary (`ARCHIVAL_TIMING_CONSTANTS.md` §1).

@@ -10,9 +10,15 @@ use serde::Serialize;
 // a crate re-pin would leave this harness silently verifying stale values.
 // Importing means the coupling checks below run against the LIVE cluster, so
 // a re-pin that breaks an inequality fails this sim's test.
+//
+// Timing values that live in `config/consensus_constants.json` reach Rust via
+// `shekyl-archival-retention`'s build-generated bond-floor module (W, reorg
+// depth, release cooldown, retention horizon). `SETTLEMENT_EPOCH_BLOCKS` and
+// `CHALLENGE_RESOLUTION_BLOCKS` are still hand-pinned in that crate's
+// `constants.rs` (JSON has them too; dual-source cleanup is a separate pass).
 pub use shekyl_archival_retention::{
     ARCHIVAL_REORG_DEPTH_BLOCKS, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W,
-    RELEASE_COOLDOWN_EPOCHS, SETTLEMENT_EPOCH_BLOCKS,
+    RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
 
 /// Canonical owner is `emission_wire`'s `usize` bound; this cluster does
@@ -20,10 +26,6 @@ pub use shekyl_archival_retention::{
 /// target).
 pub const MAX_SETTLEMENT_EPOCHS_PER_EMISSION: u64 =
     shekyl_archival_retention::MAX_SETTLEMENT_EPOCHS_PER_EMISSION as u64;
-
-/// No canonical Rust owner yet (authoritative in
-/// `ARCHIVAL_TIMING_CONSTANTS.md` §1); local pin until one exists.
-pub const RETENTION_HORIZON_BLOCKS: u64 = 420_000;
 
 pub const BLOCK_TIME_SEC: u64 = 120;
 pub const JOIN_LAG_BLOCKS: u64 = SETTLEMENT_EPOCH_BLOCKS;
