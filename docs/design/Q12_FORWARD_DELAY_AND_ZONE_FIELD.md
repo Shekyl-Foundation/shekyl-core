@@ -223,7 +223,15 @@ So the unification **adds no new cost axis**. It makes zone selection the thing
 that *reads* the existing one — which is why the mechanism can be symmetric
 while the prices are not.
 
-### Q12-D4 — `p` cancels. The privacy requirement is the EQUALITY, not the value. RULED.
+### Q12-D4 — `p` cancels. The privacy requirement is the EQUALITY, not the value. RULED, CONDITIONALLY.
+
+> **CONDITIONAL ON SEMANTICS — see Q12-D5a.** The cancellation below holds
+> exactly under **once-at-origin** rolling. Under **per-hop** rolling plus
+> coherence — an absorbing process — the two classes reach the anonymity zone
+> at different effective rates, nothing cancels, and
+> `precision_clearnet` rises to **0.865 at `p = 0.5`** and **1.0 at `p = 1`**:
+> configuration B's oracle, mirrored onto clearnet. The result below is what
+> the round is aiming for, not what today's semantics deliver.
 
 **The parameter looked hard because it was being derived while holding the
 inherited rule that *all* originated traffic goes to the anonymity zone.** Drop
@@ -317,7 +325,12 @@ constant.
 
 ### Q12-D4a — Two checks owed before Q12-D4 is ratified
 
-**1. Pin which population the entry roll applies to.**
+**1. Pin which population — and which SEMANTICS — the entry roll applies to. RE-FILED AT CORRECTNESS SEVERITY (Q12-D5a).**
+This was written as a volume detail and then read as a justification for a
+value. It is neither: **once-at-origin preserves Q12-D4's cancellation and
+per-hop absorption destroys it**, re-creating the oracle on clearnet. It is a
+precondition for the round's central result, not a refinement of it.
+
 The `1/q` relay-rate ratio assumes the **stem-phase** population. Verified at
 source for the current code — the roll is gated on `still_stemming`
 (`net_node.inl`), which is §60's *"pre-fluff traffic only"*. If the divert were
@@ -353,139 +366,132 @@ before `p = 1` is recommended as a default.
 > relay, which is what makes it a configuration rather than a protocol
 > constant.
 
-### Q12-D5 — The endpoints partition the STEM GRAPH. `p = 1` as a default is RETRACTED.
+### Q12-D5 — RETRACTED. There is no partition, and there was no connectivity argument.
 
-**Propagation is fine, and that is not the concern.** The roll is gated on
-`still_stemming`, so `p` governs stem-phase routing only. Fluff is never
-rolled: every transaction eventually fluffs, and the fluff wave crosses both
-zones by the normal rule — a transaction that stems over Tor fluffs to Tor
-peers, who relay publicly at the next hop. **A latency cost, not a partition.**
+**Withdrawn the day it was written, on the maintainer's correction.** The
+section claimed the endpoints sever the stem graph into two components and that
+intermediate `p` bridges them. **Coherence chooses the zone once at origin and
+holds it**, so a stem path is **zone-uniform** — it never alternates, so there
+is nothing to bridge and no partition to fix.
 
-**The stem graph is a different matter.** At `p = 1` a node's stem successors
-are all anonymity-zone peers; at `p = 0` all clearnet peers. **Two components
-with no edges between them.**
+What exists is **two overlapping graphs**: clearnet spanning all `N`, the
+anonymity zone spanning `t·N`, with **every Tor-capable node in both**. `p`
+selects which graph a transaction *uses*; it does not connect them. So `p = 1`
+is not a defection at the stem layer, and **the endpoints have no structural
+exclusion.**
 
-> The consequence is the one that matters. The stem's job is source ambiguity,
-> and **the anonymity set for a transaction is the population of the component
-> it stems in, not the network.** Every Dandelion++ and Sharma result is stated
-> in terms of network size `N`; under a partition, a Tor-originated
-> transaction's `N` is the *Tor node count*.
->
-> On a young network that can be very small — and it is the
-> **privacy-motivated population that gets the smaller set**, which is §75's
-> shape yet again, arriving through a door nobody was watching.
+**What survives, restated correctly:** a Tor-stemming transaction's anonymity
+set is `t·N` **because the anonymity graph spans `t·N`** — not because a
+component was severed. That remains a real §75-shaped cost, and it is
+**adoption-dependent, not `p`-dependent**.
 
-**So the endpoints are excluded for a structural reason, not for being
-extreme:** they are the values at which a node stops bridging the stem graph. A
-node that rolls per transaction has stem successors on *both* zones and is
-therefore an **edge between the components**; enough such nodes and there is one
-graph with `N` = the whole network.
+### Q12-D5a — The semantics question is upstream of Q12-D4 itself
 
-**This retracts Q12-D4's `p = 1` default.** That was argued from operator IP
-exposure — real, but **local**. The partition cost is **global** and falls on
-everyone stemming in the smaller component. Wrong trade, and the correction
-runs the other way from the one Q12-D4a anticipated.
+**This is the finding the retraction uncovered, and it outranks everything the
+round had been arguing about.**
 
-**`p` is therefore doing a job again** — not dilution, which the cancellation
-handles, but **stem-graph connectivity**. That is a *network* property, so it is
-**not an operator preference and must not be a UI setting.**
+Per-hop rolling plus coherence is a **one-way absorbing process**: a transaction
+moves clearnet→anon and never back, so at stem position `j` it is still on
+clearnet with probability `(1−p)^j`. **Clearnet traffic is therefore skewed
+toward low `j` — toward the origin**, and position 0 *is* the origin.
 
-### Q12-D6 — `SHEKYL_ANON_ZONE_STEM_FRACTION = 0.50`, and its provenance is an indifference point
-
-**Two arguments of different strength, and the doc should not blur them:**
-
-| argument | strength | what it establishes |
-| --- | --- | --- |
-| **stem-graph connectivity** (Q12-D5) | **structural, hard** | the endpoints are excluded — a node at `0` or `1` bridges nothing |
-| **indifference on a linear trade** | soft | *which* interior value to pick |
-
-The objective: `p` is a **latency-and-recovery budget**. Precision is `q/(1+q)`
-at every value (Q12-D4); capacity is irrelevant at ~10 anonymity stem sends per
-node per day; the anonymity set differs only by adoption `t`. So the only
-quantity varying with `x` is what fraction of transactions pay the Tor path's
-cost against what fraction gain IP-hiding on the stem. Both linear, opposed, no
-threshold on either side ⇒ indifference, and the midpoint is the pick.
-
-**Symmetry-breakers checked, none found:**
-
-| axis | breaks symmetry? |
-| --- | --- |
-| capacity | no — ~10 sends/day at any `x` |
-| precision | no — cancels (Q12-D4) |
-| anonymity set | no — `t·N` vs `N`, set by adoption not by `x` |
-| propagation | no — see below |
-| recovery | a cost on an **error path**: the 499 s embargo applies to the diverted fraction |
-| fingerprint | eliminated **by** fixing the default, which is the premise |
-
-**Propagation, verified rather than quoted:** the full-stem penalty is
-`(1750 − 175) ms × 1/q = 7.88 s` — the "8 s" figure. At `x = 0.5` the mean
-network delay is `t · 0.5 · 7.88 s`.
-
-> **The conclusion does not depend on the adoption fraction.** The `t·x = 0.425`
-> arithmetic implies `t = 0.85`, which was unstated — but even at `t = 1.0` the
-> delay is **3.94 s, 3.3 % of a 120 s block**. So "under ~3 %, no cliff
-> anywhere in `[0,1]`" holds for *any* `t`, and the unstated input is not
-> load-bearing. Recorded because an unstated input that happens not to matter is
-> still worth marking, and the next reader should not have to re-derive that it
-> does not.
-
-**The constant, as it should be recorded:**
+With `α` the absorbed fraction of arriving relay traffic:
 
 ```text
-SHEKYL_ANON_ZONE_STEM_FRACTION = 0.50
+precision_anon      = p / (p + [α + (1−α)p]/q)     falls below q/(1+q)   (better)
+precision_clearnet  = q / (q + 1 − α)              rises above q/(1+q)   (worse)
 ```
 
-Fixed, **not configurable**. Applied identically to originated and relayed
-traffic at entry (Q12-D4's equality). Gated on the node having a usable
-anonymity zone — `x = 0` by construction otherwise, which stays correct without
-needing a rule.
+**Computed, at `q = 0.2`:**
 
-> **Provenance, and this labelling is the whole point:** an **indifference
-> point** on a linear latency-versus-transport-privacy trade with no threshold
-> on either side. **Not a measured optimum.**
->
-> That is the difference between this and `175`. It says what would replace it —
-> *a measured asymmetry in either term* — rather than reading as derived and
-> inviting the next reader to treat it as settled.
+| `p` | `α` | precision_clearnet | precision_anon |
+| --- | --- | --- | --- |
+| 0.02 | 0.096 | 0.1812 | 0.0339 |
+| 0.25 | 0.763 | 0.4573 | 0.0573 |
+| **0.50** | 0.969 | **0.8649** | 0.0922 |
+| 1.00 | 1.000 | **1.0000** | 0.1667 |
 
-### Q12-D6a — The one thing that could move it, and it needs a running network
+> **At `p = 0.5` the clearnet zone reaches 0.865, against the 0.909 this round
+> exists to remove. At `p = 1` it is exactly 1.0.** So absorption does not
+> merely weaken Q12-D4's cancellation — **it reproduces the original defect on
+> the other zone.** The zone that carries only fresh originations becomes the
+> one that identifies them: R-1's oracle, mirrored.
 
-If anonymity-zone **peer discovery** cannot sustain the F-8b floor of 12
-outbound peers at low adoption `t`, nodes fall to `x = 0` by the floor rule and
-the fraction becomes adoption-dependent in practice. **That does not change the
-constant; it changes what the constant achieves early on** — and it is the
-measurement worth taking, rather than another sweep of `x`.
+**Why it breaks the cancellation:** Q12-D4's `p` terms divide out only when both
+classes reach the anonymity zone at the *same* rate. Under absorption they do
+not — the origin's own transaction is always fresh (`α = 0` for it) while the
+traffic it relays is partly absorbed, so the two classes are absorbed at
+different effective rates and there is nothing to cancel.
 
-**Why no existing instrument reaches it.** Everything this arc has measured has
-been local and synthetic: verification cost on one machine, flood first-passage
-on a generated graph, linkage over generated streams. **Peer discovery is a
-population dynamic** — onion addresses propagating through peerlists, over time,
-across nodes that join and leave. One process cannot produce it, and a static
-graph cannot either, because *the question is whether the graph forms at all*.
+**Under once-at-origin semantics the cancellation is exact**: both zones sit at
+`0.1667` for every `p`, verified across `p ∈ {0.02, 0.5, 1.0}`.
 
-**The shape:** a multi-node testnet with a Tor zone, run long enough for
-peerlists to converge; readout is the distribution of anonymity-zone outbound
-peer count against `t`; pass condition is the **F-8b floor of 12**.
+> **The concavity finding is the same culprit seen from the other side.** The
+> earlier analysis — benefit `1−(1−p)^{1/q}` saturating while cost keeps
+> accruing, cost-per-unit-benefit rising 61 % across the range — is an artifact
+> of *absorbing* semantics. Under once-at-origin both terms go linear and the
+> ratio is flat at 7.88 for every `p`, so indifference is exact. **Two
+> independent analyses, one cause.**
 
-**Three conditions that decide whether the number means anything:**
+**So Q12-D4a check 1 is re-filed at correctness severity.** It was written as
+"pin which population the roll applies to" for *volume* reasons, then read as a
+justification for a *value*. It is neither: **it is a correctness precondition
+for the round's central result.** Once-at-origin preserves the cancellation;
+absorption destroys it and re-creates configuration B's oracle.
 
-1. **`t` is the independent variable, not a fixture constant.** The question is
-   *where the floor starts failing*, so the run needs several adoption
-   fractions. A single-`t` run gives one point and no threshold.
-2. **Peerlist propagation is the mechanism under test, so it cannot be seeded.**
-   A testnet that hands every node a full anonymity peerlist at startup measures
-   nothing — the **fixture-cannot-express-the-input** failure, in the arm
-   carrying the whole finding. Nodes must discover: seed nodes and real
-   convergence time.
-3. **The failure is asymmetric and self-reinforcing.** A node below the floor
-   does not stem on the anonymity zone, so it contributes no anonymity traffic,
-   so it is less useful as a peer. **Whether that damps or spirals is exactly
-   what a static model cannot tell you**, and it is why this needs a running
-   system rather than a simulation.
+### Q12-D6 — WITHDRAWN. `SHEKYL_ANON_ZONE_STEM_FRACTION` has no surviving justification
 
-> **The cost, stated honestly: this is the most expensive measurement the arc
-> has proposed, and the only one that cannot be faked.** Everything else was a
-> bench.
+Two tiers were claimed and **neither holds**: Q12-D5 retracted the structural
+one, and Q12-D5a shows the indifference one is conditional on a semantics
+question that is itself unsettled. **The value is withdrawn rather than
+re-argued** — proposing a replacement now would repeat exactly the failure the
+round has just caught twice.
+
+### Q12-D7 — Build the mechanism first. `p` is not a design question.
+
+**The entire `p` discussion has been about a mechanism that has never taken a
+transaction anywhere.** Coherence does not run; anonymity arrivals never reach
+`relay_transactions`; the pool loop passes `public_` as a literal (§89.8). A
+hypothetical has unlimited surface area, which is why it did not converge.
+
+**Order:**
+
+1. **The txpool zone field.** Two reserved bits, `invalid == 0` decoding safely,
+   no migration. Without it the pool loop cannot route by origin zone and
+   coherence is unreachable no matter what else changes.
+2. **The receive path.** Anonymity arrivals relay at arrival instead of being
+   dropped by the forward gate — what §89.8 filed as owed, and what makes
+   coherence *execute*.
+3. **Then `p`** — and it is no longer a design question. Ship at a stated value
+   with its provenance line, run the Q12-D6a testnet, and read precision and
+   latency off `/get_stem_tallies` and `get_connections`. **The semantics
+   question answers itself the moment a transaction can be followed through a
+   stem.**
+
+**Shelved as blocked on the MECHANISM, not on a decision:** Q12-D6's value,
+Q12-D4a's semantics, and the concavity analysis. They are **not resolved and not
+owed** — they are unanswerable until step 2. Filing them this way is what stops
+the next session reopening them as though a ruling would settle them.
+
+### Q12-D8 — The round's lesson: which numbers stuck
+
+**Every number in this arc that survived came from running code.** F-7's
+3250 ms, the 48-cell verification surface, the linkage matcher, the 2.38×
+family fix, the Pi/x86 ratio — all measured against something that executed,
+and **none reversed**.
+
+**Every number that flip-flopped was reasoned about a branch that does not
+execute.** `p`'s semantics, the partition, the concavity, the cancellation —
+**four reversals in two days**, all concerning dormant code paths.
+
+> That is the test, and it is cheap to apply: *does the thing this number
+> describes currently run?* If not, the number is a hypothesis about a
+> hypothetical, and no amount of care in deriving it substitutes for the
+> mechanism existing.
+
+**What the round produced that keeps its value without a number:** the
+**cancellation as a property to aim for**, and the **unified rule as the
+shape**. Neither needs `p` to be true.
 
 ---
 
@@ -696,15 +702,14 @@ correctly: its fate is the same question as `forward`'s (Q12-Q3, Q12-Q7).
 
 ## 6. Round structure
 
-**The round is Q12-U1.** The rest are its consequences, and two of them may
-turn out to be empty.
+**The round is Q12-U1, and Q12-D7 orders it: build the mechanism, then measure.**
 
-| unit | subject | gates on | may be empty? |
-| --- | --- | --- | --- |
-| **Q12-U1** | one entry rule both directions: `p_in`/`p_out` selection, coherence, per-zone `hop` as the price | Q12-Q1, Q12-D3 | no — this is the round |
-| **Q12-U2** | delete `relay_method::forward` and the fall-through branch | — (answered by Q12-D3) | no — mechanical, once Q12-U1 lands |
-| **Q12-U3** | ~~derive `p`~~ — **enforce `p_own = p_relay`**, and pick `p` as a deployment default | Q12-D4a's two checks | **no derivation** — the equality is the requirement |
-| **Q12-U4** | `FORWARD_DELAY_*`'s disposition | Q12-Q7 | **likely empty** — the constants die with the class |
+| unit | subject | status |
+| --- | --- | --- |
+| **Q12-U1** | the txpool origin-zone field — two reserved bits, `invalid == 0`, no migration | **the round.** Without it the pool loop cannot route by origin and coherence is unreachable |
+| **Q12-U2** | the receive path — anonymity arrivals relay at arrival instead of being dropped by the forward gate | **required.** This is what makes coherence *execute* (§89.8's owed item) |
+| **Q12-U3** | `p` — ship at a stated value, run the Q12-D6a testnet, read precision and latency off `/get_stem_tallies` and `get_connections` | **not a design question.** Unanswerable before Q12-U2 |
+| **Q12-U4** | `FORWARD_DELAY_*`'s disposition | likely empty — the constants die with the class |
 
 The Poisson primitive's retirement is **not** a unit here; it is split out per
 §5.1 and proceeds independently.
