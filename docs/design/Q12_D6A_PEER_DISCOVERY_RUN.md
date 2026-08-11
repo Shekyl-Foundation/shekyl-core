@@ -656,7 +656,7 @@ They are **not** in `get_seed_nodes` yet, per Q12-R2: compiling the testnet list
 before the runs would give every fleet binary four unsuppressable anon seeds and
 contaminate the late-joiner control.
 
-### 9.4 Blocked: privileged install
+### 9.4 ~~Blocked: privileged install~~ — CLEARED 2026-08-11
 
 `sudo` requires a password on all four hosts and no `NOPASSWD` entries exist, so
 the remainder is not reachable unattended: installing to `/usr/local/bin`,
@@ -672,3 +672,134 @@ editing `/etc/shekyl/*.conf`, converging the systemd units, and restarting.
 2. **The units have diverged into two naming schemes** —
    `shekyld-testnet.service` on `seedaus`/`seedeu`, `shekyld-test.service` on
    `seeduse`/`seedusw`. Worth converging while the estate is open.
+
+---
+
+## 10. The estate is built — and two findings the building produced
+
+Q12-R-W2 is **complete**. Five hosts (`skl-seedjp` added), all running the same
+binary, all with a hidden service, all meshed over Tor at 3–4 anonymity peers
+out of a possible 4. §9.4's blocker is cleared: a scoped `NOPASSWD` set covering
+`install` to pinned destinations and `systemctl` on named units, with an
+out-of-scope command verified denied on every host.
+
+Both findings below come from the deployment rather than from the design, and
+both change how the fleet must be run.
+
+### 10.1 Q12-R8 — the arms need a defined start ordering and settle time
+
+**A node that is down when its peers dial does not get dialled again for a long
+time.** The anonymity zone's connection maintainer backs off after failed
+attempts, and the backoff outlives the outage that caused it.
+
+**This is a controlled result, not an explanation after the fact.** It was
+observed, predicted, and then reproduced by restoring the condition:
+
+| pass | condition | outcome |
+| --- | --- | --- |
+| first rolling restart | peers' daemons still restarting when each node dialled | `seedaus` **0** Tor peers; `seedeu`/`seeduse` paired only with each other |
+| `seedaus` restarted alone, peers now live | dial targets up | **2** Tor peers immediately |
+| second rolling restart, all 5 tor + HS live beforehand | dial targets up | **full mesh first pass**, 3–4 peers everywhere |
+
+The effect appears when the condition holds and disappears when it is removed —
+the same shape as a pre-registered prediction rather than a story fitted to one
+observation. Twice at zero, once at full mesh, with the difference being solely
+whether dial targets existed at dial time.
+
+**Why it threatens the run.** At `A = 60`, a rolling start guarantees that early
+nodes dial peers that do not yet exist. Their backoff then suppresses the
+achieved anonymity peer count — **the exact quantity this run measures** — for a
+reason that has nothing to do with peer discovery. It would present as a low
+`x` against `A`, i.e. as *"the graph did not form"*, which is the run's headline
+finding. A backoff artifact is indistinguishable from the result unless the run
+is designed to separate them.
+
+So the arms are ordered:
+
+1. **All tor processes and hidden services up first**, every one bootstrapped and
+   its SOCKS port listening, before any daemon starts.
+2. **Then daemons**, and a **settle period** before the first reading.
+3. **Readings taken twice**, separated by longer than the backoff. A count that
+   rises between them is a settling artifact; a count that is stable is a
+   result. *An arm whose two readings disagree is not reported as a
+   measurement.*
+
+This is not a workaround. A real network is not rolling-started, so the artifact
+is an artefact of the harness, and removing it makes the testbed resemble the
+thing being modelled. Recording the discriminator matters more than the
+ordering: without the two-reading rule, a future run with a slower fleet
+reproduces the artifact and reports it as adoption sensitivity.
+
+### 10.2 Q12-R9 — a destructive operation guarded by a predicate that cannot see its own subject
+
+The deploy script retired each host's LMDB with:
+
+```sh
+[ -d /var/lib/shekyl/testnet/lmdb ] && mv .../lmdb .../lmdb.pre-v9.bak
+```
+
+**The intent was a schema version; the test was existence.** The predicate is
+true whenever a daemon has ever run, so on the second pass it moved aside the
+*freshly built V9* databases — the ones that had just been created to replace
+the pre-V9 ones. The cost here was nil (height 1, genesis only), but the same
+line on a synced chain deletes the chain.
+
+**The more useful half is the backup.** The safety claim rested entirely on the
+`.bak` suffix — and `rm -rf ...bak` earlier in the same script overwrote it on
+the second pass. So **reversibility was never a property of the operation; it
+was a property of running it exactly once.** The second invocation destroyed the
+recovery path silently, and only the worthlessness of the current state made
+that free.
+
+**This is the third instance of one class in this arc**, each in a different
+costume:
+
+| instance | looked like | actually did |
+| --- | --- | --- |
+| `\| tail -200` on a build log | capturing output | discarded the artifact and swallowed the exit code |
+| `;` between gate commands | chaining a gate | made the gate decorative — it could not fail |
+| `.bak` + existence predicate | a reversible move | lost the ability to undo, on the second run |
+
+**All three look defensive, none is, and none fails loudly.** The first two lost
+data; this one lost the ability to recover it. The common shape is a construct
+whose *appearance* of safety is doing the work that its *behaviour* does not.
+
+Two changes, and the second is independent of the first:
+
+- **Test the version, and refuse on unknown.** Read the schema version; act only
+  on a version the script recognises as needing retirement. If it cannot read
+  one, **stop** rather than guess — the same device as refuse-don't-clamp.
+  Guessing is precisely what `-d` was doing.
+- **Never overwrite an existing backup.** Timestamp it, or fail if one exists.
+  **Fixing the predicate alone would not have saved the backups**; the
+  overwrite is a separate defect on the same line, and only its independence
+  makes it easy to miss while congratulating oneself on the first fix.
+
+**This lands before the fleet.** At 75 nodes the same script runs 75 times, and
+the current version is safe only because there is nothing to lose.
+
+**Landed** as [`utils/fleet/retire_incompatible_lmdb.sh`](../../utils/fleet/retire_incompatible_lmdb.sh).
+It asks the **daemon** for the verdict instead of parsing the schema itself: a
+second implementation of the version check would be a duplicate free to drift
+from the one that actually refuses, and the daemon is the only oracle that
+cannot disagree with the daemon.
+
+Verified:
+
+| case | expected | result |
+| --- | --- | --- |
+| no database present | no-op, exit 0 | no-op |
+| current-schema database | **left alone** | untouched, byte-for-byte |
+| corrupt/unreadable database | **refuse**, exit 2, touch nothing | refused; database unchanged, zero backups created |
+| refusal matcher vs the real captured `pre-V9` text | fires | fires |
+| matcher against a future `pre-V10` | still fires | fires (matches `pre-V[0-9]+`, not a pinned 9) |
+| matcher against an unrelated `MDB_CORRUPTED` | silent | silent |
+
+**One gap, stated rather than papered over: the retire path is not exercised
+end-to-end.** Producing a genuine pre-V9 database is no longer possible here —
+Q12-R9's own defect destroyed the last copies. What *is* verified is the
+trigger, against the real refusal text captured from `skl-seedaus`'s journal,
+which is the part that could silently stop matching after a `VERSION` bump. The
+move itself is guarded by `mv -n` plus a post-move assertion that the source is
+gone and the destination exists, so a no-op move reports failure rather than
+success.
