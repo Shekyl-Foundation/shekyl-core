@@ -246,6 +246,9 @@ committed. Losing one means a source change to replace a seed.
 Ubuntu 24.04 container (or on one seed) and distribute that artifact — and
 provision the fleet VMs on the same image so one binary serves both.
 
+**Q12-R-W3 — guard the anon-zone `peer_id` sentinel.** Independent of the run,
+adjacent to `add_zone`, and it protects something much larger than it is. §8.
+
 ---
 
 ## 5. The fleet
@@ -328,3 +331,92 @@ fleet off the critical path of a funding step.
 6. Teardown; verify no instance survives.
 7. Land the compiled **testnet** tor seed list (deferred by Q12-R2).
 8. **Propagation arm** — after mining and funding, per §6.
+
+---
+
+## 8. Q12-R-W3 — the anon-zone `peer_id` sentinel
+
+**Can `peer_id` correlate a Tor peer to a clearnet IP? Today, no — but the
+safety is a default, not an invariant.** Verified at source, 2026-08-11.
+
+### 8.1 Why it is safe today
+
+`peer_id` is **per-zone, not global**: `m_config` is a `network_zone` member,
+default-constructed `m_config{}` in both zone constructors
+([`net_node.h:167-210`](../../src/p2p/net_node.h#L167-L210)), and `config_t`'s
+constructor sets `m_peer_id(1)` ([`net_node.h:157`](../../src/p2p/net_node.h#L157)).
+
+**Only the public zone is ever randomized** —
+`public_zone.m_config.m_peer_id = crypto::rand<uint64_t>()` at
+[`net_node.inl:147`](../../src/p2p/net_node.inl#L147). `add_zone`
+(`:788-796`) constructs an anonymity zone by `emplace_hint` passing only the
+io_context, and never touches `m_config`. So **every Shekyl node announces
+`peer_id = 1` on its Tor zone** — uniform across the network, zero entropy,
+correlates nothing.
+
+Every *comparator* is gated to match: `:1097` and `:2691` test
+`azone == zone::public_`, `:1196` and `:1221` test `is_public`. The
+`is_same_host` clause at `:1202` sits inside an `is_public &&`, so it never
+evaluates on an anon connection.
+
+### 8.2 The wire surface is three emitters, not two
+
+`m_config.m_peer_id` reaches the wire at:
+
+- [`:2130`](../../src/p2p/net_node.inl#L2130) — `node_data.peer_id`, the handshake;
+- [`:2641`](../../src/p2p/net_node.inl#L2641) — the anon-zone **self-announce**
+  peerlist entry;
+- [`:2767`](../../src/p2p/net_node.inl#L2767) — `handle_ping`'s response,
+  `m_network_zones.at(context.m_remote_address.get_zone()).m_config.m_peer_id`.
+
+The third is worth naming separately. It is **ungated and zone-dynamic** — it
+reads the peer_id of whichever zone the connection arrived on. That is *correct*
+today and would remain correct under any per-zone scheme, which is exactly what
+makes it invisible: it is the shape the code would take if per-zone `peer_id`
+were a deliberate design, so a reviewer scanning for "sites that leak the public
+id over tor" finds nothing wrong with it. It emits the sentinel because the
+sentinel is what is there, not because anything checks.
+
+**The value is already on the wire today. It just happens to be 1.**
+
+### 8.3 The mistake that would break it looks like a cleanup
+
+Nothing asserts that an anon zone's `peer_id` stays constant. A maintainer
+factoring the init code — *"why is `peer_id` only randomized for the public
+zone? that looks like an oversight"* — moves the `crypto::rand` call into
+`add_zone`, and every node acquires a stable unique identifier announced on
+**both** its clearnet and its Tor connections.
+
+The correlation is then trivial and passive: connect to the onion, read
+`peer_id` from the handshake, scan clearnet for a match. Onion→IP, no timing
+analysis, no traffic correlation, no statistical work at all. It would be the
+single worst privacy defect in the tree, and it arrives as a tidying commit.
+
+### 8.4 The guard, and where it must sit
+
+The device is the one used by `derive.rs` refusing a block-time term and `f`
+refusing a timing parameter: **make the mistake require a visible edit to a
+thing that names its own consequence.**
+
+**Placement matters, and the obvious site does not work.** A check at the *top*
+of `add_zone` catches only a change to the constructor default — it runs
+*before* the feared edit's `crypto::rand` call would execute, so the very edit
+it exists to catch sails past it. The guard must sit **downstream of every
+construction path**: an invariant checked once after zone setup completes in
+`init()`, asserting that every non-public zone's `peer_id` equals the sentinel,
+and **refusing to start** if not.
+
+Shape:
+
+- a named constant (`ANON_ZONE_SENTINEL_PEER_ID = 1`) used in `config_t`'s
+  constructor, carrying the reason in a comment at the definition —
+  *randomizing this correlates the node's onion address with its IP*;
+- a fail-closed invariant after zone construction in `init()`;
+- a gtest that stands up a node with a tor zone and asserts the announced value.
+  The assertion is on the **config value**, one step from the wire — legitimate
+  only because all three emitters in §8.2 are direct unmodified member reads, so
+  the forwarding layer is invisible to the oracle. If any emitter ever
+  transforms the value, the test must move to the wire.
+
+Filed as **Q12-R-W3**: independent of the run, small, and adjacent to the
+`add_zone` neighbourhood that Q12-R-W1 already touches.
