@@ -778,64 +778,51 @@ Two changes, and the second is independent of the first:
 **This lands before the fleet.** At 75 nodes the same script runs 75 times, and
 the current version is safe only because there is nothing to lose.
 
-**Landed** as [`utils/fleet/retire_incompatible_lmdb.sh`](../../utils/fleet/retire_incompatible_lmdb.sh).
-It asks the **daemon** for the verdict instead of parsing the schema itself: a
-second implementation of the version check would be a duplicate free to drift
-from the one that actually refuses, and the daemon is the only oracle that
-cannot disagree with the daemon.
+**Landed** as [`utils/fleet/check_chain_db_compatible.sh`](../../utils/fleet/check_chain_db_compatible.sh) —
+**a classifier that touches nothing.**
 
-Verified:
+It began as a retirement tool that located, backed up and moved the database.
+**Four review rounds found four defects, and all four were one mistake:**
+
+| # | defect | what it really was |
+| --- | --- | --- |
+| 1 | database located from a `data-dir` **argument**, compatibility judged from a **config** with its own `data-dir=` | the caller named a different tree than the daemon uses |
+| 2 | probe timeout read as "compatible" | the caller inferred a state it could not see |
+| 3 | `find` on an unreadable directory returns nothing | the caller's permissions, not the daemon's |
+| 4 | `[ ! -e "$DATA" ]` false when a **parent** is unsearchable | the caller's permissions again — reported as a fresh node |
+
+(1) is a wrong vantage point. (2)–(4) are the caller inferring, from **its own
+uid, cwd and permissions**, the state of a tree the daemon opens from **its
+own** (`User=shekyl`, systemd's `WorkingDirectory`). *The caller's silence was
+repeatedly taken for the daemon's absence.*
+
+**A fifth guard would have been a fifth chance to make the same mistake.** So
+the vantage point was removed rather than defended: the script now performs **no
+filesystem introspection and no destructive action**. The daemon opens its own
+data directory with its own identity and reports what it found — the only
+observer that cannot be wrong about it — and the caller decides, in the open,
+where a `rm -rf` is visible in a provisioning script rather than hidden behind a
+`.bak` that proved reversible exactly once.
+
+It answers one question — *will this daemon start with this config?* — as
+`0` usable / `10` incompatible / `2` refused. 141 lines became 97, of which the
+comment explaining the four defects is the largest part.
 
 | case | expected | result |
 | --- | --- | --- |
-| no database present | no-op, exit 0 | no-op |
-| current-schema database | **left alone** | untouched, byte-for-byte |
-| corrupt/unreadable database | **refuse**, exit 2, touch nothing | refused (`rc=1`); database unchanged, zero backups created |
-| config with no `data-dir` | refuse rather than guess | refused |
+| fresh node, no data-dir at all | usable, exit 0 | usable |
+| existing current-schema database | usable, exit 0 | usable |
+| corrupt database | refuse, exit 2 | refused (`rc=1`), no conclusion drawn |
+| **unreadable data-dir** | the **daemon** reports, not our `find` | refused — defect (4) closed by construction |
 | non-executable daemon | refuse up front | refused |
-| `data-dir` absent (fresh node) | **no-op, exit 0** — this is every first provision | no-op |
-| `data-dir` exists but is a file | refuse | refused |
-| `data-dir` unreadable | refuse — `find`'s silence would be a permissions artifact | refused |
-| `data-dir` relative | refuse — it would resolve against the wrong working directory | refused |
-| `data-dir` with an inline comment | parse the path, not the comment | parsed correctly |
-| refusal matcher vs the real captured `pre-V9` text | fires | fires |
-| matcher against a future `pre-V10` | still fires | fires (matches `pre-V[0-9]+`, not a pinned 9) |
-| matcher against an unrelated `MDB_CORRUPTED` | silent | silent |
+| matcher vs a future `pre-V10` | still fires | version-invariant (`pre-V[0-9]+`) |
 
-**Review found a fourth instance of the class — inside the fix for it.** The
-first version located the database from a `data-dir` **argument** while judging
-compatibility by probing with a **config file** that carries its own
-`data-dir=`. Nothing tied the two together, so the probe could refuse one tree
-while the move retired another, including a current-schema chain. That is
-Q12-R9's defect exactly — *a destructive operation whose guard does not look at
-its own subject* — wearing a different costume, in the script written to stop
-it.
-
-Fixed by **removing the second source** rather than checking the two agree: the
-config's `data-dir` is now the sole authority and the argument is gone, so the
-probe and the move cannot disagree about what they are discussing. Refusing when
-the config sets no `data-dir` rather than falling back to a default, because
-guessing is what every instance of this class has had in common.
-
-Two smaller ones from the same review, both real:
-
-- **A probe timeout was read as "compatible".** Exit `124` means the daemon was
-  *still running* — which for a healthy chain is the expected outcome — but the
-  code reached that verdict by finding no refusal in the log, which also
-  describes a daemon that died before it could say why. Now classified on the
-  exit code first: `124` ⇒ opened the database; any other exit ⇒ read the log;
-  no recognised reason ⇒ refuse.
-- **The daemon was checked readable, not executable, and `timeout` was assumed
-  present.** Both now refuse up front.
-
-**One gap, stated rather than papered over: the retire path is not exercised
-end-to-end.** Producing a genuine pre-V9 database is no longer possible here —
-Q12-R9's own defect destroyed the last copies. What *is* verified is the
-trigger, against the real refusal text captured from `skl-seedaus`'s journal,
-which is the part that could silently stop matching after a `VERSION` bump. The
-move itself is guarded by `mv -n` plus a post-move assertion that the source is
-gone and the destination exists, so a no-op move reports failure rather than
-success.
+**The retirement path is gone rather than untested.** The earlier version could
+not be exercised end-to-end because producing a genuine pre-V9 database is no
+longer possible — Q12-R9's own defect destroyed the last copies. That gap is now
+moot: there is no retirement path to test, only a classification, and the
+classification is verified against the real refusal text captured from
+`skl-seedaus`'s journal.
 
 ---
 
