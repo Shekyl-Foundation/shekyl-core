@@ -124,16 +124,15 @@ pub const STUB_FEE_ATOMIC_UNITS: AtomicUnits = AtomicUnits::from_raw(1_000);
 /// (the trait surface always derives `SnapshotId` from a freshly-read
 /// [`LedgerSnapshot`] inside the engine).
 ///
-/// Derived inside the `engine::refresh` module over the snapshot's
-/// deterministic fields, hashed by Keccak-256 (via `shekyl-crypto-hash`'s
-/// [`cn_fast_hash`](shekyl_crypto_hash::cn_fast_hash)) with a
-/// domain-separation prefix and truncated to 128 bits per the
-/// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0b binding-form pin.
-/// The 128-bit truncation is sized for bounded-population second-
-/// preimage resistance, not generic collision resistance (≪ 2⁴⁰
-/// snapshots over the wallet's operational lifetime); see the
-/// `2026-05-26` `V3_WALLET_DECISION_LOG.md` entry, R2 disposition,
-/// for the full security framing.
+/// Derived by [`derive_snapshot_id`](super::refresh::derive_snapshot_id):
+/// cSHAKE256 ([`shekyl_crypto_hash::cshake256_32`]) with customization
+/// [`SNAPSHOT_ID_CUSTOMIZATION`](super::refresh::SNAPSHOT_ID_CUSTOMIZATION)
+/// (`b"shekyl/snapshot-id-v1"`) over the snapshot's deterministic fields,
+/// truncated to 128 bits (structural domain separation, SP 800-185).
+/// Process-local only (no `Serialize`; not in `shekyl-engine-file`; never
+/// wire). 128-bit sizing: bounded-population second-preimage resistance,
+/// not generic collision resistance — `2026-05-26` decision-log R2; SA-3c
+/// mint: `2026-08-11` entry.
 ///
 /// `Clone + Copy + PartialEq + Eq` is required by the submit-handler
 /// field-comparison contract; `Hash + Ord` lets V3.x consumer-actor

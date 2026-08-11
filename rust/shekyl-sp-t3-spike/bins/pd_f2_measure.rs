@@ -31,7 +31,6 @@
 //! substituted its payload would be worse than no measurement.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_sp_t3_spike::fixture::ShardFixture;
@@ -130,13 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let dir = tempfile::tempdir()?;
     println!("bringing up 2 personas behind one tor (this includes a bootstrap)...");
-    let app = Apparatus::bring_up(
-        tor,
-        dir.path().join("tor-data"),
-        2,
-        Arc::new(fixture.bytes().to_vec()),
-    )
-    .await?;
+    let app = Apparatus::bring_up(tor, dir.path().join("tor-data"), 2, fixture.bytes()).await?;
 
     let publish = app.await_reachable(payload_len).await?;
     println!(

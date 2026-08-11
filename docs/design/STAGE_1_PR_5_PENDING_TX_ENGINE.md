@@ -57,7 +57,9 @@ binding-form enumeration including new Phase 0h `Signer` /
 0i `OutputSelector` / 0j `FeeEstimator` / 0k
 `SubmissionStrategyActor` topology slot; `SnapshotId` hash
 primitive pinned as Keccak-256/128-bit truncation via
-`shekyl-crypto-hash::cn_fast_hash` (revised from segment-2g's
+`shekyl-crypto-hash::cn_fast_hash` (since superseded by SA-3c →
+cSHAKE256 customization, see the §4 segment-2g SUPERSEDED
+banner; revised from segment-2g's
 prior `sha2`-based binding in the Copilot-fix follow-up for
 dependency-discipline correctness — `sha2` at Cargo.toml line
 115 is dev-deps-only, production at line 33 is `optional =
@@ -1319,6 +1321,23 @@ segment 2g).**
       fn from(snapshot: &LedgerSnapshot) -> Self { /* … */ }
   }
   ```
+
+  > **SUPERSEDED by SA-3c (2026-08-11).** The snapshot-id digest
+  > was retargeted from `cn_fast_hash` (Keccak-256 with a manual
+  > byte *prefix*) to **cSHAKE256 with the domain as the
+  > customization** (`b"shekyl/snapshot-id-v1"`), the house default
+  > for a new internal digest — structural separation instead of a
+  > hand-prepended prefix. The bytes changed form because it is a
+  > fresh mint, not a re-spelling: `SnapshotId` is purely in-memory
+  > (no `Serialize`, absent from `shekyl-engine-file`, never on the
+  > wire or cross-node), so nothing persisted compares a pre- to a
+  > post-change id. The current spec is `derive_snapshot_id` in
+  > `rust/shekyl-engine-core/src/engine/refresh.rs` and the domain
+  > registry (`CRYPTO_DOMAIN_REGISTRY.tsv`, mechanism 1); the
+  > paragraph and code blocks below are the retained **historical**
+  > segment-2g design. See `SIGNATURE_ALIGNMENT.md` §5 for why the
+  > byte change was permissible here and would not be on a persisted
+  > domain.
 
   **Hash primitive (segment-2g closure; revised in
   Copilot-fix follow-up).** Keccak-256 (original padding,
@@ -3052,6 +3071,17 @@ to Round 2 with the dispositions framed below.
   V3.0 ships `SnapshotId` as a **16-byte content-addressed
   digest** computed from the deterministic fields of
   `LedgerSnapshot` (per §5.4 R12 (a)):
+
+  > **SUPERSEDED by SA-3c (2026-08-11) — primitive only.** The
+  > sketch below shows the retired `cn_fast_hash` + manual-prefix
+  > derivation; the digest is now cSHAKE256 with
+  > `b"shekyl/snapshot-id-v1"` as the customization. Current spec:
+  > `derive_snapshot_id` in
+  > `rust/shekyl-engine-core/src/engine/refresh.rs` and
+  > `CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism 1). Full rationale at
+  > the §4 segment-2g SUPERSEDED banner. The **shape** disposition
+  > (opaque 16-byte content-addressed digest) is unchanged and
+  > still binding.
 
   ```rust
   pub struct SnapshotId([u8; 16]);
@@ -4967,6 +4997,8 @@ the Phase 0 binding-form enumeration:
   primitive pinned (Keccak-256/128-bit truncation via
   `shekyl-crypto-hash::cn_fast_hash` — unconditional
   workspace dep — with versioned domain-separation prefix;
+  since superseded by SA-3c → cSHAKE256 customization, see
+  the §4 segment-2g SUPERSEDED banner;
   revised in Copilot-fix follow-up from segment-2g's prior
   `sha2`-based binding for dependency-discipline
   correctness); §5.0.3
@@ -6917,7 +6949,9 @@ finalization).**
   `DaemonRejected { kind }` variants enumerated.
 - [x] `SnapshotId` opaque type, Keccak-256/128-bit truncation
   via `shekyl-crypto-hash::cn_fast_hash`, domain-separation
-  prefix — Phase 0b binding form pinned in segment 2g; hash
+  prefix *(hash primitive since superseded by SA-3c →
+  cSHAKE256 customization, see the §4 segment-2g SUPERSEDED
+  banner)* — Phase 0b binding form pinned in segment 2g; hash
   primitive rationale recorded per dependency-discipline
   (`shekyl-crypto-hash` is unconditional `[dependencies]` in
   `shekyl-engine-core` per Cargo.toml line 28); security
@@ -7503,7 +7537,10 @@ work, by round:
     topology slot per R15 segment-2c closure — V3.x
     introduction).
   - **`SnapshotId` hash primitive pinned (revised in
-    Copilot-fix follow-up).** Keccak-256 via
+    Copilot-fix follow-up; SUPERSEDED by SA-3c 2026-08-11 —
+    now cSHAKE256 with customization `b"shekyl/snapshot-id-v1"`,
+    see the §4 segment-2g SUPERSEDED banner; the rest of this
+    bullet is the retained historical pin).** Keccak-256 via
     `shekyl-crypto-hash::cn_fast_hash` (original padding)
     truncated to the first 128 bits with input
     domain-separated by versioned prefix
@@ -7895,6 +7932,16 @@ post-Round-3 surface`).
 ---
 
 ### Commit C1 — `SnapshotId` opaque type + `cn_fast_hash` derivation + domain-separation prefix
+
+> **SUPERSEDED by SA-3c (2026-08-11) — derivation only.** The
+> commit below landed as written (`3424c9fd9`), but the derivation
+> it introduced was later retargeted from `cn_fast_hash` + manual
+> prefix to cSHAKE256 with `b"shekyl/snapshot-id-v1"` as the
+> customization. Current spec: `derive_snapshot_id` in
+> `rust/shekyl-engine-core/src/engine/refresh.rs` and
+> `CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism 1). Full rationale at the
+> §4 segment-2g SUPERSEDED banner. The type shape, visibility, and
+> test roster below remain accurate.
 
 C1 lands the smallest type-level prerequisite: the opaque
 16-byte `SnapshotId` token plus the domain-separated derivation

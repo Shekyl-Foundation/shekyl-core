@@ -3680,6 +3680,9 @@ survive the chat-log they were decided in.
   deterministic fields via `shekyl-crypto-hash::cn_fast_hash`
   (Keccak-256 with original padding) truncated to the first 128
   bits, domain-separated by the prefix `b"shekyl-snapshot-id-v1"`.
+  *(Superseded by the 2026-08-11 SA-3c entry later in this log:
+  the digest is now cSHAKE256 with `b"shekyl/snapshot-id-v1"` as
+  the customization.)*
   The hash-primitive choice is `cn_fast_hash` (revised from a
   prior `sha2`-based binding) per the
   [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
@@ -4619,6 +4622,35 @@ fee-floor note; `rust/shekyl-archival-retention/src/bond_ct_balance.rs`;
 `rust/shekyl-engine-core/src/engine/backing_set.rs`
 (`ClaimFeeInputsRequired`); FOLLOWUPS "V3.x — staker archival" (implementation
 rider).
+
+---
+
+## 2026-08-11 — SA-3c supersedes the snapshot-id hash-primitive selection
+
+**Supersedes** the segment-2g snapshot-id decision recorded earlier in this log
+(the `derive_snapshot_id` "domain-separated by the prefix `b"shekyl-snapshot-id-v1"`"
+selection). The snapshot-id digest is retargeted from `cn_fast_hash` (Keccak-256
+with a manually pre-pended domain *prefix*) to **cSHAKE256 with the domain as the
+customization** (`b"shekyl/snapshot-id-v1"`) — structural domain separation
+(SP 800-185), the house default for a new internal digest, and bucket-3 of the
+`cn_fast_hash` triage (internal digests → domained cSHAKE; consensus / content
+identity stays Keccak).
+
+**Why the byte change is permissible** (the SA through-line rule forbids
+*re-spelling* a live persisted domain). `SnapshotId` is a purely in-memory
+reservation-staleness token: it derives no `Serialize`/`Deserialize`, is absent
+from `shekyl-engine-file` (the persistence crate), has no manual byte
+serialization, and is never placed on the wire or shared cross-node — verified at
+the call graph before minting. Its only consumers compare two ids derived by the
+**same** code version within one wallet process. Nothing persisted or transmitted
+ever compares a pre- to a post-change id, so this is a **fresh mint, not a
+re-spelling**. No persisted-state change ⇒ no rule-42 (serialization-schema) bump.
+
+**Reference.** SA-3c (PR in flight, `feat/sa3c-snapshot-id-cshake`);
+`SIGNATURE_ALIGNMENT.md` §5 (the through-line rule) and §3 table;
+`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism 1);
+`rust/shekyl-engine-core/src/engine/refresh.rs` (`derive_snapshot_id`);
+`STAGE_1_PR_5_PENDING_TX_ENGINE.md` §segment-2g (marked superseded there too).
 
 ---
 

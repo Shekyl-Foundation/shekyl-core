@@ -41,22 +41,24 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-08-11): 93 distinct production domain strings across
-the five mechanisms — 94 registered, including the SHA3-256 micro-bucket.** The
-`shekyl/`-prefix lens saw ~28 — a 3.3× undercount, which is the measure of the blind
-spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below sums to 94: the five
-mechanisms 93, plus the 1-entry micro-bucket.) **This table is a snapshot, not the
-checked copy** — the per-mechanism counts are pinned once, against the parsed TSV
-rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry legitimately
-changes, that pin fails and this table is refreshed with a new as-of date.
+**Census (dated snapshot, 2026-08-11, incl. SA-3c): 93 distinct production domain
+strings across the five mechanisms — 94 registered, including the SHA3-256
+micro-bucket.** The `shekyl/`-prefix lens saw ~28 — a 3.3× undercount, which is the
+measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
+sums to 94: the five mechanisms 93, plus the 1-entry micro-bucket.) **This table is a
+snapshot, not the checked copy** — the per-mechanism counts are pinned once, against
+the parsed TSV rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry
+legitimately changes, that pin fails and this table is refreshed with a new as-of
+date. SA-3c moved `snapshot-id` from mechanism 5 to mechanism 1 (cn_fast_hash →
+cSHAKE); the total is unchanged (one domain recategorized, not added).
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 24 | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 25 | 0 |
 | 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 33 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 9 | 0 |
-| 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 15 | 8 |
+| 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 14 | 8 |
 | 6 — SHA3-256 direct-prefix (micro-bucket) | prefix fed straight to `Sha3_256` | 1 | 0 |
 
 Distinctness identity is per-mechanism; mechanism 2 is keyed by `(salt, info)`, since

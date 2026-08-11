@@ -148,52 +148,55 @@ impl LedgerSnapshot {
     }
 }
 
-/// Domain-separation prefix for [`derive_snapshot_id`].
+/// cSHAKE256 customization for [`derive_snapshot_id`].
 ///
-/// Bound to a `v1` suffix so a future encoding change can co-exist
-/// with the current derivation under a `v2` prefix without colliding
-/// on bytes; current callers pin to `v1`. C2γ wired
-/// `derive_snapshot_id` into `build_pending_tx_in_state` per the
-/// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X commit decomposition,
-/// so the prefix is transitively consumed by production code.
-pub(crate) const SNAPSHOT_ID_DOMAIN: &[u8] = b"shekyl-snapshot-id-v1";
+/// House form `b"shekyl/<name>-v1"` (mechanism 1). Versioned so an encoding
+/// change mints `shekyl/snapshot-id-v2` rather than reinterpreting these bytes.
+/// Registered in `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv`. SA-3c mint rationale
+/// (unpersisted internal digest; not a re-spelling of a live persisted domain):
+/// `docs/V3_WALLET_DECISION_LOG.md` entry 2026-08-11.
+pub(crate) const SNAPSHOT_ID_CUSTOMIZATION: &[u8] = b"shekyl/snapshot-id-v1";
 
-/// Derive the opaque [`SnapshotId`] for a [`LedgerSnapshot`].
-///
-/// Per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0b: the digest is
-/// `cn_fast_hash` (Keccak-256, original padding via
-/// [`shekyl_crypto_hash::cn_fast_hash`]) over a canonical byte-encoding
-/// of the snapshot's deterministic fields, truncated to the first 128
-/// bits. The encoding is:
+/// Canonical cSHAKE **input** for [`derive_snapshot_id`] (domain is the
+/// customization, not part of these bytes):
 ///
 /// ```text
-///   SNAPSHOT_ID_DOMAIN           (21 bytes, "shekyl-snapshot-id-v1")
-/// ‖ snapshot.synced_height       (LE u64, 8 bytes)
+///   snapshot.synced_height       (LE u64, 8 bytes)
 /// ‖ reorg_blocks.blocks.len()    (LE u64, 8 bytes; length prefix)
 /// ‖ for each (h, hash) in window:
 ///     LE u64 height (8 bytes) ‖ 32-byte block hash
 /// ```
 ///
-/// The length-prefixed reorg-window count forecloses extension /
-/// concatenation collisions against same-tip ledgers with different
-/// reorg-window depth; the versioned prefix excludes collisions
-/// against any other domain-separated `cn_fast_hash` input that ever
-/// shipped in the workspace.
-///
-/// `pub(crate)`: callers in [`super::pending`] derive `SnapshotId`
-/// from an engine-internal snapshot read; consumers never pass a
-/// `SnapshotId` into the trait surface from outside.
-pub(crate) fn derive_snapshot_id(snapshot: &LedgerSnapshot) -> SnapshotId {
+/// The length prefix forecloses extension/concatenation collisions against
+/// same-tip ledgers with different reorg-window depth.
+fn snapshot_id_preimage(snapshot: &LedgerSnapshot) -> Vec<u8> {
     let n_blocks = snapshot.reorg_blocks.blocks.len();
-    let mut buf = Vec::with_capacity(SNAPSHOT_ID_DOMAIN.len() + 8 + 8 + n_blocks * (8 + 32));
-    buf.extend_from_slice(SNAPSHOT_ID_DOMAIN);
+    let mut buf = Vec::with_capacity(8 + 8 + n_blocks * (8 + 32));
     buf.extend_from_slice(&snapshot.synced_height.to_le_bytes());
     buf.extend_from_slice(&(n_blocks as u64).to_le_bytes());
     for (height, hash) in &snapshot.reorg_blocks.blocks {
         buf.extend_from_slice(&height.to_le_bytes());
         buf.extend_from_slice(hash);
     }
-    let digest = shekyl_crypto_hash::cn_fast_hash(&buf);
+    buf
+}
+
+/// Derive the opaque [`SnapshotId`] for a [`LedgerSnapshot`].
+///
+/// `cSHAKE256` ([`shekyl_crypto_hash::cshake256_32`]) with
+/// [`SNAPSHOT_ID_CUSTOMIZATION`] over [`snapshot_id_preimage`], truncated to
+/// the first 128 bits. Structural domain separation (SP 800-185); the
+/// customization excludes collisions against any other domain-separated digest
+/// in the workspace.
+///
+/// `pub(crate)`: callers in [`super::pending`] derive `SnapshotId` from an
+/// engine-internal snapshot read; consumers never pass a `SnapshotId` into the
+/// trait surface from outside.
+pub(crate) fn derive_snapshot_id(snapshot: &LedgerSnapshot) -> SnapshotId {
+    let digest = shekyl_crypto_hash::cshake256_32(
+        SNAPSHOT_ID_CUSTOMIZATION,
+        &snapshot_id_preimage(snapshot),
+    );
     let mut out = [0u8; 16];
     out.copy_from_slice(&digest[..16]);
     SnapshotId(out)
@@ -2264,65 +2267,52 @@ mod refresh_driver_tests {
         assert_eq!(id.as_bytes(), &id.0);
     }
 
-    /// The versioned domain-separation prefix is load-bearing in
-    /// the derivation: two synthetic Keccak-256 inputs that share
-    /// every byte after the prefix but differ in the prefix bytes
-    /// must hash to different digests. The test computes the raw
-    /// `cn_fast_hash` directly with the production prefix and with
-    /// a counter-factual prefix of the same length, then truncates
-    /// both to 16 bytes and asserts inequality. This regression-
-    /// gates the canonical-encoding promise that the prefix is part
-    /// of the hashed input, not implicit in some other shape.
+    /// The cSHAKE customization is load-bearing, and the canonical preimage
+    /// encoding is pinned by an **independent** byte-by-byte reconstruction:
+    /// the expected input is built here from the documented layout (LE u64
+    /// `synced_height` ‖ LE u64 window length ‖ per-entry LE u64 height ‖
+    /// 32-byte hash), never taken from `super::snapshot_id_preimage` — an
+    /// expected value computed from the code under test would go green on any
+    /// encoding change, and a framing-ambiguous re-encoding would silently
+    /// defeat the submit-time staleness check this digest exists to serve.
     #[test]
     fn derive_snapshot_id_domain_separated() {
-        let snap = snapshot_from_parts(7, vec![(7, [0xAB; 32])]);
-        let n_blocks = snap.reorg_blocks.blocks.len();
+        let snap = snapshot_from_parts(7, vec![(6, [0xCD; 32]), (7, [0xAB; 32])]);
 
-        // Build the canonical post-prefix tail exactly as
-        // `derive_snapshot_id` does. The factual hash applies the
-        // production prefix; the counter-factual hash applies a
-        // same-length but lexically-different prefix to the same
-        // tail. Truncated to 16 bytes, the digests must differ —
-        // that is what a load-bearing prefix delivers.
-        let mut tail = Vec::new();
-        tail.extend_from_slice(&snap.synced_height.to_le_bytes());
-        tail.extend_from_slice(&(n_blocks as u64).to_le_bytes());
-        for (height, hash) in &snap.reorg_blocks.blocks {
-            tail.extend_from_slice(&height.to_le_bytes());
-            tail.extend_from_slice(hash);
-        }
+        // Independent oracle for the documented canonical encoding.
+        let mut expected_preimage = Vec::new();
+        expected_preimage.extend_from_slice(&7u64.to_le_bytes());
+        expected_preimage.extend_from_slice(&2u64.to_le_bytes());
+        expected_preimage.extend_from_slice(&6u64.to_le_bytes());
+        expected_preimage.extend_from_slice(&[0xCD; 32]);
+        expected_preimage.extend_from_slice(&7u64.to_le_bytes());
+        expected_preimage.extend_from_slice(&[0xAB; 32]);
 
-        let production_prefix = super::SNAPSHOT_ID_DOMAIN;
-        let mut counterfactual_prefix = production_prefix.to_vec();
-        counterfactual_prefix[0] ^= 0x01;
         assert_eq!(
-            counterfactual_prefix.len(),
-            production_prefix.len(),
-            "counter-factual prefix must be the same length to isolate the prefix-bytes signal"
+            super::snapshot_id_preimage(&snap),
+            expected_preimage,
+            "snapshot_id_preimage must produce the documented canonical encoding; \
+             an encoding change mints shekyl/snapshot-id-v2, it does not edit v1"
         );
 
-        let mut factual_input = Vec::with_capacity(production_prefix.len() + tail.len());
-        factual_input.extend_from_slice(production_prefix);
-        factual_input.extend_from_slice(&tail);
-        let factual = shekyl_crypto_hash::cn_fast_hash(&factual_input);
+        let production = super::SNAPSHOT_ID_CUSTOMIZATION;
+        let mut counterfactual = production.to_vec();
+        counterfactual[0] ^= 0x01;
 
-        let mut counterfactual_input = Vec::with_capacity(counterfactual_prefix.len() + tail.len());
-        counterfactual_input.extend_from_slice(&counterfactual_prefix);
-        counterfactual_input.extend_from_slice(&tail);
-        let counterfactual = shekyl_crypto_hash::cn_fast_hash(&counterfactual_input);
+        let factual = shekyl_crypto_hash::cshake256_32(production, &expected_preimage);
+        let other = shekyl_crypto_hash::cshake256_32(&counterfactual, &expected_preimage);
 
         assert_ne!(
             &factual[..16],
-            &counterfactual[..16],
-            "domain-separation prefix must be part of the hashed input"
+            &other[..16],
+            "cSHAKE customization must separate the snapshot-id domain"
         );
 
-        // And the production derivation matches the factual hash.
         let id = derive_snapshot_id(&snap);
         assert_eq!(
             id.as_bytes()[..],
             factual[..16],
-            "derive_snapshot_id must apply the documented canonical encoding verbatim"
+            "derive_snapshot_id must apply the documented cSHAKE encoding verbatim"
         );
     }
 

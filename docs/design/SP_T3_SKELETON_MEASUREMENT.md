@@ -949,6 +949,19 @@ semantics* become consensus-critical and freeze at genesis; nothing here may be
 mistaken for that format. A reviewer who finds `x-spike/v0` cited in a design doc
 should treat it as a bug.
 
+> **Amendment (2026-08-11, PR-A of the §9.5 item-3 arc).** The spike's own
+> `serve.rs` is **deleted**. The production serving loop landed as
+> `shekyl-p-serve`, and the spike now drives it behind a fixture
+> `ShardProvider` instead of carrying a near-identical second copy — the two
+> had already diverged (accept-error backoff on one side only), which for a
+> measurement rig means measuring something other than what ships. The route
+> a re-run exercises is therefore `x-provisional/v0`, disclaimed in the same
+> terms and with the same standing in the format round: none. Everything this
+> section says about the spike's *disposability* is unchanged; what changed is
+> that the inbound-hardening shape it validated now has exactly one
+> implementation. The numbers already recorded in this document were taken on
+> the `x-spike/v0` route and are not restated.
+
 **Candidates to survive, having been *validated* here rather than designed here:**
 
 - **`shekyl_tor::control::onion`** (D1) — already production-shaped and living
@@ -1091,14 +1104,14 @@ service with `EnabledTuned` and asserts `250` — the same discipline that caugh
 (Flags → MaxStreams → PoW\* → Port) is pinned by ordinal assertion, because tor
 answers an out-of-order argument with a `512`.
 
-### Lever 2 — bounded in-flight connections (`serve::MAX_INFLIGHT`)
+### Lever 2 — bounded in-flight connections (`MAX_INFLIGHT`)
 
 PoW bounds arrival; it does not bound how many accepted connections are streaming
 at once. A semaphore caps concurrency, and an arrival past the cap is **closed
 immediately** rather than queued.
 
 **The refusal is a close, deliberately not a `503`.** A new status code would add
-a response shape to the `x-spike/v0` surface that §9.4 warns must never be
+a response shape to the provisional surface that §9.4 warns must never be
 mistaken for TJ-B's, and would hand a prober a free capacity oracle. A closed
 connection is indistinguishable from ordinary circuit failure — which, over Tor,
 is what a client already handles. `refused_count()` is the aggregate operator

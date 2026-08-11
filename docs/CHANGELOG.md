@@ -15513,7 +15513,10 @@
     versioned domain-separation prefix
     (`b"shekyl-snapshot-id-v1"`) permits V3.x migration to
     a wider output or different hash family without cross-
-    stage rebuild.
+    stage rebuild. *(Since superseded by SA-3c, 2026-08-11:
+    the digest is now cSHAKE256 with the domain as the
+    customization, `b"shekyl/snapshot-id-v1"` — see the
+    V3_WALLET_DECISION_LOG SA-3c entry.)*
 
     Sites updated: `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`
     §4 Phase 0b binding, §5.4 R2 sketch + prose, §5.5
@@ -15704,7 +15707,10 @@
   `shekyl-crypto-hash::cn_fast_hash` (original padding,
   consensus-audited) truncated to the first 128 bits with
   versioned domain-separation prefix
-  (`b"shekyl-snapshot-id-v1"`). *(Forward-pointer: the
+  (`b"shekyl-snapshot-id-v1"`). *(Since superseded by
+  SA-3c, 2026-08-11 → cSHAKE256 with the domain as the
+  customization; see the V3_WALLET_DECISION_LOG SA-3c
+  entry.)* *(Forward-pointer: the
   Copilot-fix follow-up entry below revised this binding from
   segment-2g's prior `sha2`-based form to the Keccak-based
   form. The prior `sha2` citation referenced
