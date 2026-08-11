@@ -63,6 +63,20 @@ pub enum AttestationKind {
 /// threshold. Deliberately **not** a function of the issued count; re-pin
 /// only together with `(m, n)` (the outer window prices what one epoch
 /// observation means).
+///
+/// **Schedule coupling (this fold lands inert, and mis-wiring is
+/// fail-safe):** the crate still exports the legacy
+/// `CHALLENGES_PER_EPOCH = 1` schedule, which retires with the λ = 3
+/// cutover (design §4.4 — re-derived alongside `(m, n)`, with the
+/// economics-sim arithmetic re-run; deliberately NOT bumped here, which
+/// would smuggle a parameter past its derivation round). Until that
+/// cutover this fold has no production caller — and if one were wired
+/// early against the legacy schedule, the observation floor makes it
+/// harmless: `issued = 1 < 2` settles every epoch `NonObservation`,
+/// never a false `Served` or `Missed`. The
+/// `legacy_schedule_is_fail_safe_inert` test pins that property **and
+/// fires when the constant is bumped**, forcing the cutover wiring to
+/// revisit this fold deliberately.
 pub const SERVE_THRESHOLD_PASSES: u32 = 2;
 
 /// The three-valued settlement of one `(P, shard, epoch)`.
@@ -174,6 +188,30 @@ mod tests {
         let non_obs = settle_epoch(1, 1);
         assert_eq!(missed.serve_credit_bit(), non_obs.serve_credit_bit());
         assert_ne!(missed, non_obs);
+    }
+
+    #[test]
+    fn legacy_schedule_is_fail_safe_inert() {
+        // The crate's exported CHALLENGES_PER_EPOCH is still the legacy 1
+        // (it retires with the λ = 3 cutover, re-derived with (m, n) and
+        // the sim re-run — design §4.4). This fold has no production
+        // caller until then, and this test pins BOTH halves of that
+        // state: (a) fail-safe — a caller mis-wired against the legacy
+        // schedule can only ever produce NonObservation (issued = 1 is
+        // below the observation floor), never a false Served or Missed;
+        // (b) tripwire — bumping the constant to ≥ 2 changes this fold's
+        // output for the same inputs and FAILS this test, forcing the
+        // cutover wiring to revisit settlement deliberately rather than
+        // inheriting it silently.
+        let legacy = crate::constants::CHALLENGES_PER_EPOCH;
+        assert_eq!(legacy, 1, "constant bumped: re-derive (m, n), re-run the sim, and wire the settlement cutover deliberately (design section 4.4)");
+        for passes in 0..=legacy {
+            assert_eq!(
+                settle_epoch(passes, legacy),
+                EpochSettlement::NonObservation,
+                "a legacy-schedule epoch must be invisible to the window, not a false verdict"
+            );
+        }
     }
 
     #[test]
