@@ -23,7 +23,12 @@ use fips204::ml_dsa_65;
 
 use crate::CryptoError;
 
-/// Domain separator for per-output PQC leaf hash.
+/// Domain separator for the per-output PQC leaf hash.
+///
+/// This crate is the **single source** for the consensus leaf hash: both this
+/// module's [`hash_pqc_public_key`] and `shekyl_fcmp::PqcLeafScalar` compute the
+/// leaf scalar through this constant, and `shekyl-fcmp` wraps `hash_pqc_public_key`
+/// rather than re-deriving it (SA-3a retired the duplicate definition + logic).
 pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";
 
 /// ML-DSA-65 public key length.
@@ -54,7 +59,10 @@ pub fn keygen_from_seed(
 ///
 /// Uses domain-separated Blake2b-512, reduced to a canonical Selene base
 /// field element via `HelioseleneField::wide_reduce` on the full 512-bit
-/// hash output. This matches `PqcLeafScalar::from_pqc_public_key` exactly.
+/// hash output. This is the **single source** for the consensus leaf hash:
+/// `shekyl_fcmp::PqcLeafScalar::from_pqc_public_key` wraps this function
+/// (SA-3a), so the two entry points are identical by construction rather than
+/// by two implementations agreeing.
 pub fn hash_pqc_public_key(pqc_pk_bytes: &[u8]) -> [u8; 32] {
     use ciphersuite::group::ff::PrimeField;
     use helioselene::HelioseleneField;
@@ -467,6 +475,10 @@ mod tests {
         }
     }
 
+    /// Forwarding guard (SA-3a): `PqcLeafScalar::from_pqc_public_key` now wraps
+    /// `hash_pqc_public_key` rather than re-deriving the leaf hash, so this pins
+    /// that the wrapper keeps forwarding to the single-source owner — a
+    /// regression that re-implemented the fcmp side would trip here.
     #[test]
     fn hash_matches_leaf_scalar() {
         use shekyl_fcmp::leaf::PqcLeafScalar;
@@ -477,7 +489,7 @@ mod tests {
         let leaf_scalar = PqcLeafScalar::from_pqc_public_key(&pk_bytes);
         assert_eq!(
             h, leaf_scalar.0,
-            "hash_pqc_public_key and PqcLeafScalar::from_pqc_public_key must agree"
+            "PqcLeafScalar::from_pqc_public_key must forward to hash_pqc_public_key"
         );
     }
 

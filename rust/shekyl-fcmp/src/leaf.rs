@@ -10,38 +10,27 @@
 //! `pqc_auth` public key presented in the transaction, binding PQC
 //! authorization to the UTXO set without revealing which output is spent.
 
-use blake2::{Blake2b512, Digest};
-use ciphersuite::group::ff::PrimeField;
-use helioselene::HelioseleneField;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
-
-use crate::DOMAIN_PQC_LEAF;
 
 /// A 32-byte scalar representing `H(pqc_pk)` for the 4th leaf position.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize, Serialize, Deserialize)]
 pub struct PqcLeafScalar(pub [u8; 32]);
 
 impl PqcLeafScalar {
-    /// Compute `H(pqc_pk)` using domain-separated Blake2b-512, reduced to a
-    /// Selene scalar. The hash is: `Blake2b-512(DOMAIN_PQC_LEAF || pqc_pk_bytes)`,
-    /// then the 512-bit output is reduced modulo the Selene scalar field order.
+    /// Compute `H(pqc_pk)` — the 4th leaf scalar.
+    ///
+    /// Single-sourced from [`shekyl_crypto_pq::derivation::hash_pqc_public_key`],
+    /// the byte-exact consensus leaf hash: `Blake2b-512(b"shekyl-pqc-leaf" ||
+    /// pqc_pk_bytes)` reduced modulo the Selene scalar field order to a canonical
+    /// `HelioseleneField` element. SA-3a retired the duplicate Blake2b/wide_reduce
+    /// implementation that lived here — it was kept in sync with the owner only by
+    /// a doc comment, so one edit to either side would have silently forked the
+    /// consensus leaf hash.
     pub fn from_pqc_public_key(pqc_pk_bytes: &[u8]) -> Self {
-        let mut hasher = Blake2b512::new();
-        hasher.update(DOMAIN_PQC_LEAF);
-        hasher.update(pqc_pk_bytes);
-        let hash_512 = hasher.finalize();
-
-        // Proper modular reduction: use the full 512-bit hash to produce
-        // an unbiased, canonical Selene base field element (HelioseleneField).
-        // The leaf layer of the curve tree is a Selene hash, so all 4 scalars
-        // must be valid HelioseleneField elements.
-        let mut uniform = [0u8; 64];
-        uniform.copy_from_slice(hash_512.as_ref());
-        let field_elem = HelioseleneField::wide_reduce(uniform);
-        uniform.zeroize();
-
-        PqcLeafScalar(field_elem.to_repr())
+        PqcLeafScalar(shekyl_crypto_pq::derivation::hash_pqc_public_key(
+            pqc_pk_bytes,
+        ))
     }
 }
 
@@ -97,6 +86,49 @@ impl ShekylLeaf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ciphersuite::group::ff::PrimeField;
+    use helioselene::HelioseleneField;
+
+    /// Pinned KAT (SA-3a byte-proof). The consensus leaf hash for these fixed
+    /// inputs must equal the exact bytes the **pre-dedup** implementation
+    /// produced. SA-3a consolidated the duplicated `from_pqc_public_key` (which
+    /// re-implemented Blake2b/wide_reduce) into a forward to
+    /// `shekyl_crypto_pq::derivation::hash_pqc_public_key`; two "identical-value"
+    /// implementations can still differ in an unexercised edge case (empty,
+    /// short, full-length), so these vectors — captured from the original code
+    /// before the merge — prove the consolidation changed no byte. On a
+    /// consensus leaf hash, prove it; do not argue it.
+    #[test]
+    fn pqc_leaf_hash_pinned_kat() {
+        let cases: [(Vec<u8>, &str); 4] = [
+            (
+                vec![],
+                "dd457919e9f9129b3cc48b91a686bf758f9c5015ec9caf95fe0a9c87d844b675",
+            ),
+            (
+                vec![0xab],
+                "8b8de030e6ba684d7e00354ec2cd447a7da664ac14d79489b486b0cb0edbd413",
+            ),
+            (
+                vec![0xab; 1952], // full ML-DSA-65 public-key length
+                "85111edb0986bd48f35ee915ca9b8d566dc21897f6ce3c695f37a24e49070011",
+            ),
+            (
+                vec![0xff; 1952],
+                "3eb75d6bd70c42d729824cd57dc33e9de5e0c40c7b22c5f250d7a53b77d88207",
+            ),
+        ];
+        for (pk, expected) in &cases {
+            let s = PqcLeafScalar::from_pqc_public_key(pk);
+            let got: String = s.0.iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(
+                &got,
+                expected,
+                "consensus leaf hash drifted for input length {}",
+                pk.len()
+            );
+        }
+    }
 
     #[test]
     fn pqc_leaf_scalar_deterministic() {
@@ -120,7 +152,6 @@ mod tests {
         let pk = vec![0xff; 1952];
         let s = PqcLeafScalar::from_pqc_public_key(&pk);
         // Verify the result is a canonical HelioseleneField element by round-tripping
-        use ciphersuite::group::ff::PrimeField;
         assert!(
             bool::from(HelioseleneField::from_repr(s.0).is_some()),
             "leaf scalar must be a canonical Selene base field element"
