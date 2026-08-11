@@ -1374,6 +1374,12 @@ TEST(node_server, anonymity_zone_announces_the_sentinel_peer_id)
   vm.find(nodetool::arg_p2p_bind_port.name)->second =
     boost::program_options::variable_value(std::string("48085"), false);
   // 12 outbound connections: the F-8b floor, so the zone is accepted.
+  //
+  // `find` is safe on an option absent from the command line because
+  // `make_semantic` gives every vector-valued arg_descriptor an empty
+  // `default_value` (src/common/command_line.h), so `store` inserts it into the
+  // map regardless. Were that not so this would dereference `end()` rather than
+  // fail an assertion — hence naming it here rather than relying on it quietly.
   vm.find(nodetool::arg_tx_proxy.name)->second =
     boost::program_options::variable_value(
       std::vector<std::string>{"tor,127.0.0.1:9050,12"}, false);
