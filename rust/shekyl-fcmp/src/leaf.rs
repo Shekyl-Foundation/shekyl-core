@@ -20,13 +20,12 @@ pub struct PqcLeafScalar(pub [u8; 32]);
 impl PqcLeafScalar {
     /// Compute `H(pqc_pk)` — the 4th leaf scalar.
     ///
-    /// Single-sourced from [`shekyl_crypto_pq::derivation::hash_pqc_public_key`],
-    /// the byte-exact consensus leaf hash: `Blake2b-512(b"shekyl-pqc-leaf" ||
-    /// pqc_pk_bytes)` reduced modulo the Selene scalar field order to a canonical
-    /// `HelioseleneField` element. SA-3a retired the duplicate Blake2b/wide_reduce
-    /// implementation that lived here — it was kept in sync with the owner only by
-    /// a doc comment, so one edit to either side would have silently forked the
-    /// consensus leaf hash.
+    /// Forwards to [`shekyl_crypto_pq::derivation::hash_pqc_public_key`] (the
+    /// single source for the consensus leaf hash; domain
+    /// [`shekyl_crypto_pq::derivation::DOMAIN_PQC_LEAF`]). SA-3a retired the
+    /// duplicate Blake2b/wide_reduce body that lived here — it was kept in sync
+    /// with the owner only by a doc comment, so one edit to either side would
+    /// have silently forked the leaf hash.
     pub fn from_pqc_public_key(pqc_pk_bytes: &[u8]) -> Self {
         PqcLeafScalar(shekyl_crypto_pq::derivation::hash_pqc_public_key(
             pqc_pk_bytes,

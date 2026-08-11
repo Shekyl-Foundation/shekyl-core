@@ -32,10 +32,10 @@ pub use tree::{
 pub use shekyl_fcmp_proofs::sal::SpendAuthAndLinkability;
 pub use shekyl_fcmp_proofs::{Input, Output};
 
-// The PQC leaf-hash domain (`b"shekyl-pqc-leaf"`) is single-sourced in
-// `shekyl_crypto_pq::derivation` — the owner of the byte-exact consensus leaf
-// hash (SA-3a). The duplicate const that lived here, and the dead
-// `DOMAIN_KEM_V1` (defined but never consumed), were removed.
+// The PQC leaf-hash domain is single-sourced as
+// `shekyl_crypto_pq::derivation::DOMAIN_PQC_LEAF` (SA-3a). The duplicate
+// const that lived here, and the dead `DOMAIN_KEM_V1` (defined but never
+// consumed — real KEM salt is `kem::KEM_DOMAIN_SALT`), were removed.
 
 /// Maximum inputs per FCMP++ transaction (bounds proof gen time and tx size).
 pub const MAX_INPUTS: usize = 8;

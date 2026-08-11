@@ -490,9 +490,10 @@ pub fn ed25519_point_to_selene_scalar(compressed: &[u8; 32]) -> Option<[u8; 32]>
 /// and PQC key hash.
 ///
 /// Computes Hp(O) (Monero's hash-to-curve), then extracts the Wei25519
-/// x-coordinates of O, Hp(O), and C.  The 4th scalar is `h_pqc` (the
-/// domain-separated Blake2b-512 hash of the hybrid PQC public key, reduced
-/// to a Selene scalar).  Pass `&[0u8; 32]` for outputs that have no PQC
+/// x-coordinates of O, Hp(O), and C. The 4th scalar is `h_pqc` — pass the
+/// consensus leaf hash from [`crate::leaf::PqcLeafScalar::from_pqc_public_key`]
+/// (which forwards to [`shekyl_crypto_pq::derivation::hash_pqc_public_key`],
+/// the SA-3a single source). Pass `&[0u8; 32]` for outputs that have no PQC
 /// key commitment (e.g. coinbase before self-encapsulation is wired).
 pub fn construct_leaf(
     output_key: &[u8; 32],
