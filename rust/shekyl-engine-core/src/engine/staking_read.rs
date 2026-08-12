@@ -377,7 +377,7 @@ mod tests {
         BondPostRecord, PFundingOutputRecord, RetiredPersonaRecord,
     };
     use shekyl_engine_state::{PendingBondPost, PendingPostState};
-    use shekyl_types::{PCanonicalId, SettlementEpoch, TxHash};
+    use shekyl_types::{PCanonicalId, SettlementEpoch};
 
     fn persona(b: u8) -> PCanonicalId {
         PCanonicalId::from_bytes([b; 32])
@@ -399,7 +399,6 @@ mod tests {
     ) -> PFundingOutputRecord {
         PFundingOutputRecord {
             p_slot: PSlot::from_raw(slot),
-            tx_hash: TxHash::from_bytes([0xA1; 32]),
             index_in_transaction: 0,
             gindex: GlobalOutputIndex::from_raw(gindex),
             output_key: [0; 32],

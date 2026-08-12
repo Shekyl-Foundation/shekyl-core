@@ -34,15 +34,21 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot, SettlementEpoch, TxHash};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. **v6** domain-newtypes the
+/// Schema version of the durable P-scan state. **v8** removes the dead
+/// `tx_hash` field from [`PFundingOutputRecord`] (SA-4 dead persisted-field
+/// sweep, rule-15): no consumer read it — spend/claim re-derivation keys on
+/// `index_in_transaction` + the ciphertexts, and every needed tx hash is
+/// recomputed fresh from the wire object at the scan seam. Reopen: a spend
+/// path that needs the source-tx identity persisted rather than re-derived.
+/// **v6** domain-newtypes the
 /// residual raw fields on [`PFundingOutputRecord`] (`p_slot` → [`PSlot`],
-/// `tx_hash` → [`TxHash`], `gindex` → [`GlobalOutputIndex`] — FOLLOWUPS
+/// `gindex` → [`GlobalOutputIndex`] — FOLLOWUPS
 /// WI-2 orchestrator carrier; postcard-transparent, fail-closed on mismatch);
 /// **v5** adds the
 /// [`MintLineageOutput`] `lineage` field and the `spendable_height` field on
@@ -58,7 +64,7 @@ use crate::pscan_cursor::PScanCursor;
 /// migration at any step: pre-genesis, a version mismatch means re-scan (rule 15).
 /// Distinct from the inner [`PScanCursor`]'s own version (nested, like the wallet
 /// ledger over its sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 7;
+pub const PSCAN_STATE_VERSION: u32 = 8;
 
 /// The GF-4b mint-lineage ladder for a `P`-owned funding output — the
 /// scan-provenance classification (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
@@ -169,8 +175,6 @@ impl std::fmt::Debug for BondPostRecord {
 pub struct PFundingOutputRecord {
     /// The owning persona's slot ordinal (selects the re-derivation keys).
     pub p_slot: PSlot,
-    /// Hash of the transaction carrying the output.
-    pub tx_hash: TxHash,
     /// The output's index within its transaction — the KEM derivation index
     /// the spend-bundle re-derivation consumes.
     pub index_in_transaction: u64,
@@ -512,7 +516,6 @@ mod tests {
     fn funding_output(slot: u32, gindex: u64, amount: u64, height: u64) -> PFundingOutputRecord {
         PFundingOutputRecord {
             p_slot: PSlot::from_raw(slot),
-            tx_hash: TxHash::from_bytes([0xA1; 32]),
             index_in_transaction: 1,
             gindex: GlobalOutputIndex::from_raw(gindex),
             output_key: [0xB2; 32],
