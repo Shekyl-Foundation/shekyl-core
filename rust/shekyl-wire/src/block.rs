@@ -17,7 +17,7 @@
 
 use std::io::{self, BufRead, Read, Write};
 
-use shekyl_crypto_hash::cn_fast_hash;
+use shekyl_crypto_hash::keccak256;
 
 use crate::bytes::read_array;
 use crate::hash::merkle_root;
@@ -231,7 +231,7 @@ impl Block {
         blob
     }
 
-    /// The consensus block hash: `cn_fast_hash(V(len) · pow_blob)` (§11). The
+    /// The consensus block hash: `keccak256(V(len) · pow_blob)` (§11). The
     /// length-varint prefix is what distinguishes the block-hash preimage from the
     /// PoW preimage (which omits it). The Monero block-202612 special case is shed
     /// (dead pre-genesis chain history).
@@ -240,7 +240,7 @@ impl Block {
         let mut preimage = Vec::new();
         write_varint(blob.len(), &mut preimage).expect("Vec write is infallible");
         preimage.extend_from_slice(&blob);
-        cn_fast_hash(&preimage)
+        keccak256(&preimage)
     }
 }
 

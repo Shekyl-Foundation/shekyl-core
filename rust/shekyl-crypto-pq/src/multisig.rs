@@ -9,7 +9,7 @@
 
 use crate::error::PqcVerifyError;
 use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme};
-use shekyl_crypto_hash::cn_fast_hash;
+use shekyl_crypto_hash::keccak256;
 
 /// Largest multisig group served (MSW-G, settled 2026-07-15: 2f+1 at f=2;
 /// withdrew the same-day MAX=8 pick). The value is the *correctness* cap —
@@ -407,7 +407,7 @@ pub fn multisig_pqc_leaf_hash(
     container: &MultisigKeyContainer,
 ) -> Result<[u8; 32], PqcVerifyError> {
     let canonical = container.to_canonical_bytes()?;
-    Ok(cn_fast_hash(&canonical))
+    Ok(keccak256(&canonical))
 }
 
 // ---------------------------------------------------------------------------

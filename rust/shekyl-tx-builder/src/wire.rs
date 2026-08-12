@@ -454,10 +454,11 @@ mod tests {
     }
 
     #[test]
-    fn cn_fast_hash_equals_oxide_keccak256() {
-        // The migration replaces the tx-builder's `shekyl_oxide::keccak256` with
-        // shekyl-wire's `cn_fast_hash`. Pin that they are the same primitive (original
-        // Keccak-256) so the signing-hash bytes are preserved.
+    fn crypto_hash_keccak256_equals_curve_primitives_keccak256() {
+        // Two public keccak256s exist (crypto-hash + curve-primitives) — same
+        // original Keccak-256, different crate homes. Pin they agree so
+        // signing-hash bytes are preserved regardless of which is used.
+        // Collapse onto one home is tracked in FOLLOWUPS (dual-keccak).
         use shekyl_curve_primitives::keccak256;
         for input in [
             &b""[..],
@@ -466,9 +467,9 @@ mod tests {
             &vec![0xABu8; 5000][..],
         ] {
             assert_eq!(
-                shekyl_crypto_hash::cn_fast_hash(input),
+                shekyl_crypto_hash::keccak256(input),
                 keccak256(input),
-                "cn_fast_hash must equal shekyl-oxide keccak256"
+                "shekyl_crypto_hash::keccak256 must equal shekyl_curve_primitives::keccak256"
             );
         }
     }

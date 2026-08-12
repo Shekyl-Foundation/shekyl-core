@@ -61,7 +61,7 @@ const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY
 /// The CBOM table (docs/CRYPTOGRAPHIC_INVENTORY.md §3) is a dated snapshot of
 /// these numbers.
 const PRODUCTION_PINS: [(&str, usize, usize); 6] = [
-    ("1", 25, 0), // SA-3c: +1 (snapshot-id moved here from mech 5 on cn_fast_hash->cSHAKE)
+    ("1", 25, 0), // SA-3c: +1 (snapshot-id moved mech 5→1 on cn_fast_hash/Keccak→cSHAKE)
     ("2", 44, 0),
     ("3", 1, 3),
     ("4", 9, 0),
