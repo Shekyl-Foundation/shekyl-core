@@ -368,15 +368,7 @@ fn map_wallet_file_err(e: &WalletFileError) -> u32 {
             SHEKYL_WALLET_ERR_PAYLOAD
         }
         WalletFileError::Ledger(_) => SHEKYL_WALLET_ERR_LEDGER,
-        // `AtomicWriteDirSync` is a post-rename parent-dir fsync failure — an
-        // I/O failure at the last atomic-write step. The write is already
-        // applied and the condition is retriable (an idempotent re-save
-        // re-confirms durability), so it shares the retriable-IO code rather
-        // than minting a new wire-stable constant for the C++ deletion-target
-        // to learn (rule 20 / 40). The Rust-internal `target_replaced`
-        // distinction that drives the undo decision is upstream of this
-        // crosswalk.
-        WalletFileError::Io(_) | WalletFileError::AtomicWriteDirSync { .. } => SHEKYL_WALLET_ERR_IO,
+        WalletFileError::Io(_) => SHEKYL_WALLET_ERR_IO,
         WalletFileError::KeysFileAlreadyExists { .. } => SHEKYL_WALLET_ERR_KEYS_FILE_ALREADY_EXISTS,
         WalletFileError::KeysFileWriteOnceViolation { .. } => {
             SHEKYL_WALLET_ERR_KEYS_FILE_WRITE_ONCE_VIOLATION

@@ -210,23 +210,6 @@ pub enum PersistenceError {
     Prefs(#[from] shekyl_engine_prefs::PrefsError),
 }
 
-impl PersistenceError {
-    /// Whether the failed save had already replaced the on-disk wallet file
-    /// before it failed — the signal a fail-closed caller needs to decide
-    /// whether an in-memory undo would diverge from disk (see
-    /// [`shekyl_engine_file::WalletFileError::target_replaced`]).
-    ///
-    /// A [`Self::Prefs`] failure never touches the ledger file, so it leaves
-    /// the ledger's on-disk state unchanged.
-    #[must_use]
-    pub(crate) fn target_replaced(&self) -> bool {
-        match self {
-            Self::WalletFile(e) => e.target_replaced(),
-            Self::Prefs(_) => false,
-        }
-    }
-}
-
 /// Failures from [`super::Engine::change_password`](super::Engine::change_password)
 /// when rotation and prefs flush are separate steps (PR 6 §5.10 / segment 2b).
 #[derive(Debug, thiserror::Error)]

@@ -34,10 +34,13 @@
 //! 5. **`fsync(parent_dir)`**. Without this, the rename is not
 //!    guaranteed durable across a crash on ext4/xfs/btrfs even though
 //!    the file data is; the dirent entry pointing `target` at the new
-//!    inode may still be buffered in the dcache.
-//! 6. **Return**. On any failure between steps 1 and 4, the temp file is
-//!    unlinked by `tempfile`'s drop guard; the target (if any) is left
-//!    untouched.
+//!    inode may still be buffered in the dcache. This step runs *after*
+//!    the rename has committed, so its failure does not un-apply the
+//!    write — it is reported as [`Durability::Unconfirmed`], not an error.
+//! 6. **Return** [`Durability`]. On any failure between steps 1 and 4 the
+//!    temp file is unlinked by `tempfile`'s drop guard and the target (if
+//!    any) is left untouched, returned as `Err`; a step-5 failure returns
+//!    `Ok(Durability::Unconfirmed)` — applied, durability unconfirmed.
 //!
 //! # Platform notes
 //!
@@ -68,10 +71,39 @@ use std::path::Path;
 
 use crate::error::WalletFileError;
 
+/// Whether an [`atomic_write_file`] that **applied** its write also confirmed
+/// the write's crash-durability.
+///
+/// The write's *data* is always fsynced before the rename, so `Unconfirmed`
+/// means only that the post-rename parent-directory fsync — which hardens the
+/// rename itself against an immediate crash — failed. The bytes are on disk
+/// and the rename is visible; only a crash in the narrow window before the
+/// filesystem journals the directory entry could revert the rename (the same
+/// window any program that does not fsync the parent dir already lives with).
+///
+/// No caller branches on this today; it is **returned rather than swallowed**
+/// so a durability-sensitive path — e.g. write-once keys-file creation — can
+/// later choose to fail loud on `Unconfirmed` without re-litigating the
+/// atomic-write contract. It is deliberately not an error: the write is
+/// applied, so surfacing it as `Err` would force every caller to unwind an
+/// already-committed write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Durability {
+    /// The write is applied and the parent-directory fsync succeeded.
+    Confirmed,
+    /// The write is applied, but the post-rename parent-directory fsync
+    /// failed — durability across an immediate crash is unconfirmed.
+    Unconfirmed,
+}
+
 /// Write `bytes` to `target` using the six-step atomic dance described
 /// in the module docs. Mode is `0o600` on Unix; inherit-default on
-/// Windows. Returns `Ok(())` only after the durable rename has landed
-/// and the parent directory has been fsynced (where applicable).
+/// Windows.
+///
+/// Returns [`Durability`] once the write is **applied** (the `rename(2)` has
+/// landed): `Confirmed` when the parent-directory fsync also succeeded,
+/// `Unconfirmed` when it did not. A failure *before* the rename leaves the
+/// target untouched and returns `Err`.
 ///
 /// # Errors
 ///
@@ -82,7 +114,13 @@ use crate::error::WalletFileError;
 ///   can distinguish "couldn't write the bytes" from "wrote the bytes
 ///   but couldn't swap them in" — the latter means the target is
 ///   untouched, which is sometimes recoverable.
-pub(crate) fn atomic_write_file(target: &Path, bytes: &[u8]) -> Result<(), WalletFileError> {
+///
+/// Every error path leaves the target **byte-unchanged**; a post-rename
+/// failure is reported as `Ok(Durability::Unconfirmed)`, never as `Err`.
+pub(crate) fn atomic_write_file(
+    target: &Path,
+    bytes: &[u8],
+) -> Result<Durability, WalletFileError> {
     let parent = target.parent().ok_or_else(|| {
         WalletFileError::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -119,15 +157,16 @@ pub(crate) fn atomic_write_file(target: &Path, bytes: &[u8]) -> Result<(), Walle
     tmp.persist(target)
         .map_err(|e| WalletFileError::rename(target.to_path_buf(), e.error))?;
 
-    // The rename above has already committed the new file into place. A
-    // failure of the durability fsync below is therefore NOT "the write
-    // failed" — the target is already replaced. It wraps into
-    // `AtomicWriteDirSync` (not a generic `Io`) so a caller can tell the
-    // target changed (`WalletFileError::target_replaced`) and keep, not
-    // undo, the in-memory state that already matches disk.
-    fsync_parent_dir(parent)
-        .map_err(|source| WalletFileError::dir_sync(target.to_path_buf(), source))?;
-    Ok(())
+    // The rename above has already committed the new file into place, and the
+    // file data was fsynced before it. The parent-dir fsync only hardens the
+    // rename against an immediate crash; if it fails the write is still
+    // applied, so this is a completed write with unconfirmed durability — not
+    // a failure a caller must unwind an already-applied write around. Report
+    // it in the return value instead of as an error.
+    match fsync_parent_dir(parent) {
+        Ok(()) => Ok(Durability::Confirmed),
+        Err(_) => Ok(Durability::Unconfirmed),
+    }
 }
 
 /// Platform-gated parent-directory fsync. POSIX: open the dir and
@@ -135,9 +174,9 @@ pub(crate) fn atomic_write_file(target: &Path, bytes: &[u8]) -> Result<(), Walle
 /// `sync_all` on the file suffices once the rename has completed).
 ///
 /// Returns the raw `io::Error` (not a `WalletFileError`) so the sole caller
-/// can wrap a failure into [`WalletFileError::AtomicWriteDirSync`] — this
-/// runs *after* the rename has committed, a distinction that would be lost
-/// if the failure surfaced as a generic `WalletFileError::Io`.
+/// classifies a failure as `Durability::Unconfirmed` rather than an error —
+/// this runs *after* the rename has committed, so the write is already
+/// applied.
 #[cfg(unix)]
 fn fsync_parent_dir(parent: &Path) -> io::Result<()> {
     // `std::fs::File::open` on a directory is portable on all Unixes we
@@ -149,8 +188,8 @@ fn fsync_parent_dir(parent: &Path) -> io::Result<()> {
 #[cfg(not(unix))]
 fn fsync_parent_dir(_parent: &Path) -> io::Result<()> {
     // Windows NTFS guarantees rename durability after the file's
-    // sync_all; there is no directory-fsync equivalent. The
-    // `AtomicWriteDirSync` variant is therefore unreachable on Windows.
+    // sync_all; there is no directory-fsync equivalent, so the write is
+    // always `Durability::Confirmed` there.
     Ok(())
 }
 
@@ -163,41 +202,12 @@ mod tests {
     fn writes_to_fresh_target() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("foo.bin");
-        atomic_write_file(&target, b"hello").unwrap();
+        // A normal write on a healthy filesystem confirms durability.
+        assert_eq!(
+            atomic_write_file(&target, b"hello").unwrap(),
+            Durability::Confirmed
+        );
         assert_eq!(fs::read(&target).unwrap(), b"hello");
-    }
-
-    /// `target_replaced` must isolate exactly the one post-rename failure:
-    /// the dir-fsync case reports the target changed, every pre-rename
-    /// failure reports it unchanged. This is the classification a caller's
-    /// undo-or-keep decision rides on, so it is pinned rather than left to
-    /// the variant's shape.
-    #[test]
-    fn target_replaced_isolates_the_post_rename_failure() {
-        let path = std::path::PathBuf::from("/x/wallet");
-
-        // Post-rename: the rename committed, only the durability fsync failed.
-        let dir_sync =
-            WalletFileError::dir_sync(path.clone(), io::Error::other("parent fsync failed"));
-        assert!(
-            dir_sync.target_replaced(),
-            "a post-rename dir-fsync failure must report the target was replaced"
-        );
-
-        // Pre-rename: the rename itself failed — target untouched.
-        let rename = WalletFileError::rename(path, io::Error::other("rename failed"));
-        assert!(
-            !rename.target_replaced(),
-            "a failed rename leaves the target unchanged"
-        );
-
-        // Pre-rename: a generic write/permission failure — target untouched.
-        let io_err =
-            WalletFileError::Io(io::Error::new(io::ErrorKind::PermissionDenied, "no perms"));
-        assert!(
-            !io_err.target_replaced(),
-            "a pre-rename I/O failure leaves the target unchanged"
-        );
     }
 
     #[test]
