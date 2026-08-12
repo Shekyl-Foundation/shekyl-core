@@ -790,7 +790,20 @@ std::string get_nix_version_display_string()
 
   bool on_startup()
   {
-    mlog_configure("", true);
+    // NO LOGGING INIT HERE. This used to call `mlog_configure("", true)`, which
+    // was harmless under easylogging++ because `mlog_configure` RECONFIGURED an
+    // existing logger. The tracing subscriber behind it installs ONCE and the
+    // first caller wins, so an unconditional stderr-only init here silently
+    // defeated every later `mlog_configure(<path>)` in the same process --
+    // `--log-file`, `--max-log-file-size` and `--max-log-files` all became
+    // inert on the daemon, the wallet, and all eight `blockchain_*` tools, with
+    // no file and no diagnostic. Inherited code is not inherited architecture
+    // (.cursor/rules/16-architectural-inheritance.mdc): the call was correct for
+    // the backend it was written against and wrong for the one underneath it.
+    //
+    // Every entry point now initialises logging exactly once, with its FINAL
+    // configuration. Callers that genuinely want stderr only say so themselves
+    // (cn_deserialize.cpp, object_sizes.cpp, gen_ssl_cert.cpp).
 
     setup_crash_dump();
 
