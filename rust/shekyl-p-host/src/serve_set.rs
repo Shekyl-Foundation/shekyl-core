@@ -190,6 +190,26 @@ pub trait ServeSetPinner {
 ///
 /// It also carries the [`ServeSet`], so the host holds the record-derived
 /// list rather than a second copy of it.
+///
+/// # A point-in-time fact, not a standing property
+///
+/// This witnesses that **these** shards were pinned against the record read
+/// at [`ServeSet::as_of_height`] — not that the host's pins still match the
+/// connected record. They diverge whenever holdings change: an ordinary
+/// `HoldingsUpdate` (which an archiver posts continuously to keep covering
+/// newly frozen segments) or a reorg that alters `held_shard_ids` without
+/// moving the curve tree. The store clears pins on **tree** rollback only,
+/// and there is no unpin path at all, so nothing self-corrects.
+///
+/// The consequence that matters: a shard *gained* after this witness was
+/// minted is unpinned, and a `prune_frozen` in that window discards bytes no
+/// re-pin can restore. Keeping the set current is the refresh loop's job
+/// (SH-2), and the governing rule is that **acquiring a pin needs no
+/// finality while releasing one does** — re-pin the whole set on every
+/// refresh, unconditionally; release, if implemented at all, waits on a
+/// finality depth, because a reorged-back release can cost bytes a slash is
+/// measured in while the disk it reclaims is merely disk. See
+/// `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 5.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinnedServeSet {
     set: ServeSet,

@@ -1509,7 +1509,9 @@ against these.
 §9.5 item 3's "lifecycle wiring" and §9.6 items 1/4 land together in
 `rust/shekyl-p-host`, because they are the same object: the serve-set's
 provenance, the pin, the onion, and the listener have one lifetime or they
-have none. Four dispositions worth the record.
+have none. Six dispositions worth the record — the last two are **open
+hazards SH-1 does not close**, written here rather than left for SH-2 to
+decide implicitly.
 
 **1. The composition is entirely Rust, and nothing crosses the FFI.** The
 serving host's three inputs are all already wallet-side: the shard bytes are
@@ -1545,6 +1547,29 @@ fabricated path unrepresentable too needs a sealed decoder type minted only
 by the claim-source decode; **that is SH-2's, on the crate that owns the
 decode**, and is written here so it is owed rather than discovered.
 
+*Why it is owed rather than tolerated:* with `ClaimantBondRecord`
+constructible by anyone, the drift invariant rests on **the production chain
+being the only one anyone uses** — which is convention, and convention is
+what the rest of this slice refuses everywhere else. The reachability check
+makes it a live gap rather than a hypothetical: the fabrication site would be
+an ordinary-looking struct literal in the wiring, indistinguishable at review
+from the correct call.
+
+**Closure criterion (SH-2).** A type minted **only** by
+`EmissionClaimSource::from_json` — a private-field newtype over the decoded
+record, or `BondContext::record()` returning it — such that
+`ServeSet::from_connected_record` cannot be called with a hand-assembled
+value. Discharged when no path to a `ServeSet` exists that does not pass
+through the claim-source decode, provable by the constructor's visibility
+rather than by inspecting call sites.
+
+**Reopen criterion (if SH-2 declines it).** The gap stops being tolerable the
+moment a *second* production caller derives a serve-set — today there is
+exactly one planned (the wiring's refresh path), and one call site is
+reviewable by reading it. A second consumer, a test-support constructor that
+escapes `#[cfg(test)]`, or any FFI surface that accepts holdings from outside
+the decode all re-open this item at its full weight.
+
 **4. A new load-bearing invariant, in the same class as the vanguards
 one: a serving host must never rebind its listener.** `TorService`
 republishes the onion on every incarnation from one `OnionServiceSpec`
@@ -1556,6 +1581,80 @@ the host owns it for its whole life, there is no rebind method, and teardown
 stops tor *before* the listener so no descriptor outlives the port it names.
 Exactly the shape of "a tor restart must not cause a rotation" (§7.4), and
 silent in exactly the same way.
+
+**5. OPEN — deriving the pin set from the connected record makes it
+reorg-sensitive, and the type system cannot reach this one.** Items 3 and 4
+are about *how* a value is constructed, which a type can settle. This is
+about *when* it is recomputed, which no signature can express. Verified at
+source, and the state of it is worse than "needs reconciliation":
+
+- `PinnedServeSet` is minted **once, at `start`**. Nothing in SH-1
+  recomputes it. `ServeSet::as_of_height` makes staleness *detectable*, and
+  nothing yet reads it.
+- The store clears pins on **tree** rollback only —
+  `truncate_from_tree_position` deletes pins at and above the truncation
+  point, which is what `rollback_to_fork` drives. Holdings live in the bond
+  record, not the leaf store, so a reorg that changes `held_shard_ids`
+  **without moving the tree** is invisible to every pin-clearing path there
+  is.
+- There is **no unpin path at all**. Pins are cleared by truncation and by
+  nothing else.
+
+Two directions, and they are not symmetric:
+
+*Gained shard (the direction that slashes).* A reorg — or an ordinary
+`HoldingsUpdate`, which §9.6 item 3 says an archiver must post
+**continuously** to keep covering new segments — puts a shard in the
+connected record that the running host never pinned. A `prune_frozen` in that
+window discards its bytes, `AlreadyPruned` is terminal (the remedy is a chain
+replay, not a retry), and the persona is now obligated to serve a shard it
+provably cannot. Exactly §9.6 item 4's hazard, re-entering through the
+refresh axis after the construction axis closed it.
+
+*Departed shard (the direction that leaks).* A shard leaving holdings leaves
+its pin forever. At `MAX_HOLDINGS_SHARDS = 4096` and
+`SEGMENT_LEAF_COUNT · 128 ≈ 3.33 MB` per shard, unbounded churn against a
+growing `D` retains up to ~13.6 GB the node is no longer obligated to hold —
+on a rule-76 Pi-4 floor. Not a rounding error, and not self-correcting.
+
+**The asymmetry that should govern the fix, ruled here so SH-2 does not
+decide it implicitly: acquiring a pin needs no finality; releasing one
+does.** Acquisition is idempotent, additive, and already designed to run
+ahead of the freeze — re-pinning a superset on *every* serve-set refresh
+costs a bounded write and closes the slashing direction completely. Release
+is the dangerous verb: a holdings change that is later reorged back can, if
+the pin was already released, have let a prune discard bytes no re-pin
+restores. So the release path needs a finality depth (and the reclaim it
+buys is disk, which is recoverable; the loss it risks is a slash, which is
+not). Today's "never release" is the *safe* default and the correct one to
+ship SH-1 on — it fails toward retention — but it is a leak, not a policy.
+
+**Closure criterion (SH-2).** Re-derive and re-pin on every claim-source
+refresh, unconditionally; and either implement release behind a stated
+finality depth or record "never release" as a **ruled** disposition with its
+retention cost priced against the provisioning floor. A refresh that reads
+`as_of_height` and re-pins is the whole of the slashing-direction fix.
+
+**6. OPEN — the W₂ rig's three provenance requirements are stated in §9.5
+but not wired.** `VanguardsMode::Managed`, the rule-76 Pi-4 floor, and the
+real Tor network (never chutney) are today three sentences of prose in three
+places. Each one's failure mode is silent and points the same way: a
+non-vanguards run measures a shorter path than production ships, an off-floor
+run measures faster hardware than the floor, and a chutney run has none of the
+latency structure that makes the distribution heavy-tailed. All three come
+back *looking good*. Prose cannot stop a run that violates one from producing
+a number that then gets cited.
+
+**Requirement, written before the rig exists (the same discipline §9.5
+applied to the vanguards mode).** The rig's provenance record is a **single
+type that cannot be constructed without all three**, and a W₂ datum is a
+value of that type — so an incomplete run yields no datum rather than an
+unlabelled one. Three separate flags checked at three points is the shape
+that fails, because it makes "record the mode" a step someone can skip;
+one indivisible value is the shape that holds. Same call as
+`ServingPosture::Serving` carrying the onion and the vanguards mode as one
+value, for the same reason. This lands with the rig, not before it — a
+provenance type with no measurement to stamp is scaffolding.
 
 ## 10. Standing rules for any agent working this
 

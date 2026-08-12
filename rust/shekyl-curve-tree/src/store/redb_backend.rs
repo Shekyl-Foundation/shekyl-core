@@ -1222,6 +1222,22 @@ impl LeafStore {
     /// store fault is re-covered by re-calling; pins already written stay
     /// written.
     ///
+    /// # There is no release
+    ///
+    /// Pins are cleared by [`Self::truncate_from_tree_position`] (and so by
+    /// [`Self::rollback_to_fork`]) at and above the truncation point, and by
+    /// nothing else. A shard that leaves a persona's holdings therefore keeps
+    /// its pin — and its full leaf bytes — indefinitely.
+    ///
+    /// That asymmetry is deliberate for now, not an oversight: acquisition is
+    /// idempotent and safe to repeat, while a release that a reorg undoes can
+    /// let a prune discard bytes no later pin restores
+    /// ([`SegmentPin::AlreadyPruned`] is terminal — chain replay, not retry).
+    /// Failing toward retention costs disk; failing the other way costs a
+    /// slash. The retention leak it buys is real and priced in
+    /// `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 5, which also states the
+    /// condition a release path would have to meet (a finality depth).
+    ///
     /// # Errors
     ///
     /// [`StoreError::UnrepresentableShardId`] for a member outside the
