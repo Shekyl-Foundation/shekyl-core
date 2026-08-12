@@ -271,7 +271,7 @@ impl WalletLedger {
     /// the wallet's transaction population rather than by client input).
     /// Clearing an entry (empty note) is always allowed, so a note left behind
     /// on a txid a reorg later dropped can still be removed. Length is enforced
-    /// by [`TxMetaBlock::set_note`] underneath.
+    /// by `TxMetaBlock::set_note` underneath.
     ///
     /// # Errors
     ///

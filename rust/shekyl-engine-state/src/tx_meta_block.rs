@@ -82,7 +82,7 @@ pub const TX_META_BLOCK_VERSION: u32 = 3;
 /// human note and small on disk.
 ///
 /// **Enforced structurally**: the `tx_notes` map is private and
-/// [`TxMetaBlock::set_note`] is its only insertion door, so every caller —
+/// `TxMetaBlock::set_note` is its only insertion door, so every caller —
 /// RPC, CLI, tests, and any future writer — passes this bound rather than
 /// agreeing to. Boundaries may pre-check with this constant to fail before
 /// taking a write lock, but they are not the enforcement.
@@ -113,7 +113,7 @@ pub struct TxNoteTooLong {
 /// Enforce [`TX_NOTE_MAX_BYTES`] on a candidate note — the **single owner** of
 /// the ceiling check.
 ///
-/// [`TxMetaBlock::set_note`] calls it on the write path; a boundary (e.g. the
+/// `TxMetaBlock::set_note` calls it on the write path; a boundary (e.g. the
 /// wallet-RPC handler) may also call it to fast-fail an over-length request
 /// before doing work, but the comparison, the ceiling, and the refusal all
 /// live here, so an early refusal can never differ from the write-door one.
@@ -132,7 +132,7 @@ pub fn check_tx_note_len(note: &str) -> Result<(), TxNoteTooLong> {
     Ok(())
 }
 
-/// The pre-write note value captured by [`TxMetaBlock::set_note`] and consumed
+/// The pre-write note value captured by `TxMetaBlock::set_note` and consumed
 /// by [`TxMetaBlock::restore_note`] to undo a write after a failed durable
 /// save (fail closed).
 ///
@@ -144,7 +144,7 @@ pub fn check_tx_note_len(note: &str) -> Result<(), TxNoteTooLong> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PriorNote(Option<String>);
 
-/// Result of [`TxMetaBlock::set_note`]: whether the map changed (and thus
+/// Result of `TxMetaBlock::set_note`: whether the map changed (and thus
 /// needs a durable save) or the write is already a no-op.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SetTxNoteOutcome {
@@ -276,7 +276,7 @@ pub struct TxMetaBlock {
     /// User-authored free-text notes, keyed by txid.
     ///
     /// **Private on purpose.** [`TX_NOTE_MAX_BYTES`] is enforced on every path
-    /// that *authors* a note: [`Self::set_note`] is the only write door and
+    /// that *authors* a note: `Self::set_note` is the only write door and
     /// refuses an over-length note (via [`check_tx_note_len`]), and
     /// [`Self::restore_note`] consumes only an opaque [`PriorNote`] that
     /// `set_note` already validated — so no in-memory API can insert an
@@ -321,7 +321,7 @@ impl TxMetaBlock {
     /// version. Convenience for tests and the orchestrator's build path.
     ///
     /// Takes no notes map: notes are bounded state and enter only through
-    /// [`Self::set_note`], so there is no constructor that can seed the block
+    /// `Self::set_note`, so there is no constructor that can seed the block
     /// past [`TX_NOTE_MAX_BYTES`]. Callers that want notes set them after
     /// construction.
     pub fn new(
@@ -372,13 +372,23 @@ impl TxMetaBlock {
     /// of rows and would otherwise pay a lookup call per row.
     ///
     /// Shared immutably: reading notes is unrestricted, writing them is not —
-    /// the map itself is private and [`Self::set_note`] is the only door in.
+    /// the map itself is private and `Self::set_note` is the only door in.
     #[must_use]
     pub fn notes(&self) -> &BTreeMap<[u8; 32], String> {
         &self.tx_notes
     }
 
-    /// Set or clear the note for `txid`.
+    /// Set or clear the note for `txid` — the crate-internal length door.
+    ///
+    /// **`pub(crate)` on purpose.** This enforces the note *length* bound but
+    /// **not** the membership rule (a note attaches only to a transaction the
+    /// wallet has), because that rule needs the whole ledger and this type
+    /// sees only its own block. [`crate::WalletLedger::set_note`] is the public
+    /// door: it checks membership, then calls this. Keeping this inner method
+    /// out of the public API is what makes the membership rule *structural* —
+    /// no cross-crate caller can reach the map past it (the `tx_notes` field is
+    /// private, and [`Self::restore_note`] only re-admits an opaque
+    /// [`PriorNote`] this method already validated).
     ///
     /// - Empty `note` removes any entry (no separate delete method).
     /// - Non-empty `note` inserts or replaces; length is capped at
@@ -391,7 +401,7 @@ impl TxMetaBlock {
     ///
     /// [`TxNoteTooLong`] when `note` exceeds the byte ceiling. The error
     /// reports counts only — never the note content.
-    pub fn set_note(
+    pub(crate) fn set_note(
         &mut self,
         txid: [u8; 32],
         note: String,
@@ -421,7 +431,7 @@ impl TxMetaBlock {
 
     /// Restore a prior note entry after a failed durable save (fail closed).
     ///
-    /// `previous` is the opaque [`PriorNote`] from [`Self::set_note`]'s
+    /// `previous` is the opaque [`PriorNote`] from `Self::set_note`'s
     /// [`SetTxNoteOutcome::Applied`] arm — a previously-validated value, so the
     /// restore cannot re-admit an over-length note. Its `Some` re-inserts, its
     /// `None` removes.
