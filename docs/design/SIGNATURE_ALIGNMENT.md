@@ -632,12 +632,14 @@ was wired per its ratified SJ-DQ-7 disposition (`WALLET_SEND_RECORD.md`
 §SJ-DQ-7 resolution): `Engine::set_tx_note` writer + `note`-on-`TransferView`
 reader + `set_tx_note` / `get_tx_note` RPC + OpenAPI. Now live.
 
-`get_tx_note` is part of the wiring, not an extra: `set_tx_note` accepts any
-well-formed txid by ratified design (so a user can annotate an incoming
-payment before the scanner catches up), while `TransferView.note` can only
-annotate rows that exist. Without the paired reader a note on a not-yet-scanned
-txid would be write-only — acknowledged, persisted, unreadable. It also gives
-`Engine::tx_note` its first caller, so the wiring has no dead half.
+`get_tx_note` is part of the wiring, not an extra: `set_tx_note` accepts a note
+on any txid the wallet is a party to (`WALLET_SEND_RECORD.md` §SJ-DQ-7, amended
+2026-08-12 to a membership precondition), some of which — a still-pending or
+pool-only tx — have no `TransferView` row yet, while `TransferView.note` can
+only annotate rows that exist. Without the paired reader a note on a
+not-yet-materialized txid would be write-only — acknowledged, persisted,
+unreadable. It also gives `Engine::tx_note` its first caller, so the wiring has
+no dead half.
 
 The map's bound was made structural in the same pass: `TxMetaBlock::tx_notes`
 is now **private**, with `set_note` the only door in, so `TX_NOTE_MAX_BYTES` is

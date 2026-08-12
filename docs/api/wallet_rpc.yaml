@@ -895,12 +895,17 @@ components:
         surfaces on every `get_transfers` / `get_transfer_by_id` row for
         that txid, both the INCOMING change row and the OUTGOING row of a
         self-send. Purely local wallet UX state: never on the wire, never in
-        a proof. An **empty `note` clears** any existing note (there is no
-        separate delete method — "unset" and "set-empty" are the same
-        state). A note longer than 4096 UTF-8 bytes is rejected with -32602
-        (byte length, not character count); the refusal reports byte counts
-        only, never the note text. The same ceiling is enforced on the
-        wallet write path so every caller shares the invariant.
+        a proof. A non-empty note is accepted only for a **transaction this
+        wallet is a party to** — received, spent, pending, or seen in the
+        pool; a note on an unknown txid is refused with -32602 ("no such
+        transaction in this wallet"). An **empty `note` clears** any existing
+        note (there is no separate delete method — "unset" and "set-empty"
+        are the same state) and is always allowed, even for an unknown txid,
+        so a note orphaned by a reorg can be removed. A note longer than 4096
+        UTF-8 bytes is rejected with -32602 (byte length, not character
+        count); the refusal reports byte counts only, never the note text.
+        The same ceilings are enforced on the wallet write path so every
+        caller shares the invariant.
       properties:
         tx_hash:
           $ref: "#/components/schemas/Hex32"
@@ -931,13 +936,14 @@ components:
       description: >
         `get_tx_note` (WALLET_SEND_RECORD.md SJ-DQ-7): read back the note
         stored for a txid. This is the paired reader for `set_tx_note`, and it
-        is the ONLY way to read a note whose transaction the wallet does not
-        know: `set_tx_note` deliberately accepts any well-formed txid — so a
-        user can annotate an incoming payment before the scanner catches up —
-        but `TransferView.note` can only annotate rows that exist, so until
-        the transaction is scanned the note appears on no history row. An
-        unknown txid is NOT an error: it answers with `note` omitted, exactly
-        as a cleared note does.
+        is the ONLY way to read a note whose transaction has no history row
+        yet: a note can be set on any txid the wallet is a party to, including
+        an outgoing tx still pending confirmation or one seen only in the pool,
+        but `TransferView.note` can only annotate rows that exist — so until
+        the transaction lands in scanned history the note appears on no history
+        row. An unknown txid is NOT an error: it answers with `note` omitted,
+        exactly as a cleared note does (a read makes no existence claim about
+        the transaction).
       properties:
         tx_hash:
           $ref: "#/components/schemas/Hex32"

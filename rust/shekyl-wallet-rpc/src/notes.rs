@@ -9,23 +9,29 @@
 //! lifecycle. The handlers live here (not under `send`) so annotation policy
 //! does not leak into the pending-tx / abandon surface.
 //!
+//! # Membership precondition (SJ-DQ-7, amended 2026-08-12)
+//!
+//! A non-empty note is accepted only for a txid this wallet is a party to —
+//! received, spent, pending, retained-key, or seen in the pool (see
+//! [`shekyl_engine_state::WalletLedger::knows_transaction`]). A note on an
+//! unknown txid is refused (`WalletLedger::set_note` → "no such transaction in
+//! this wallet", surfaced as `-32602`). Clearing is never gated: an empty note
+//! removes the entry even for an unknown txid, so a note orphaned by a reorg is
+//! always removable. This reverses the original "accepts any well-formed txid"
+//! shape (`WALLET_SEND_RECORD.md` §SJ-DQ-7, amended) and bounds the note count
+//! by the wallet's own transaction population — an arbitrary-txid write could
+//! otherwise grow the map without limit.
+//!
 //! # The pair is the surface
 //!
 //! `set_tx_note` writes and `get_tx_note` reads the same keyspace. The reader
-//! is not optional convenience: a note may be attached to a txid the wallet
-//! does not yet know — the ratified SJ-DQ-7 shape, so a user can annotate an
-//! incoming payment before the scanner catches up — and such a note appears on
-//! no transfer row, because `TransferView.note` can only annotate rows that
-//! exist. Without `get_tx_note` a note on a not-yet-known txid would be
-//! write-only: acknowledged, persisted, and unreadable until the scanner
-//! happened to catch up.
-//!
-//! **Residual, stated so it is not re-raised as new:** a note written against
-//! a *mistyped* txid is still unrecoverable without retyping the same wrong
-//! txid. That is inherent to id-keyed annotation with no membership
-//! precondition — the same property that lets the ahead-of-the-scanner case
-//! work — and it is bounded: such a note is a stray map entry, never a
-//! misdirected payment.
+//! is not optional convenience: a note may be attached to a known txid that has
+//! no transfer row yet — an outgoing tx still pending confirmation, or one seen
+//! only in the pool — and such a note surfaces on no `get_transfers` row,
+//! because `TransferView.note` can only annotate rows that exist. Without
+//! `get_tx_note` a note on a known-but-not-yet-materialized txid would be
+//! write-only: acknowledged, persisted, and unreadable until the transaction
+//! lands in scanned history.
 
 use serde::Deserialize;
 use serde_json::Value;
