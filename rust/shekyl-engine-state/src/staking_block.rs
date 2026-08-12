@@ -171,6 +171,24 @@ impl StakingBlock {
     /// rolled-back persisted cursor cannot re-activate a retired
     /// persona and link its activities. `saturating_add` keeps the
     /// `u32::MAX` edge total rather than wrapping into a low slot.
+    ///
+    /// # Chain-fed form (SA-5): the scan-derivable half of SA-R-6
+    ///
+    /// Passing a chain-observed `highest_bonded_slot_seen` is the second
+    /// half of ratified ruling **SA-R-6** (`SIGNATURE_ALIGNMENT.md` §2): the
+    /// mark must be *scan-derivable, not merely cached*, so a sealed cursor
+    /// that rolled back cannot re-offer a slot with on-chain activity. Its
+    /// first production caller is SP-R0 **arm #4**
+    /// (`engine::stake_persist::raise_cursor_from_scan_evidence`): at open,
+    /// over the sealed scan evidence and strictly after the phantom GC's
+    /// drops, it lifts the cursor above any bond observed within the
+    /// derive-forward window. [`Self::monotone_current_slot_from_record`]
+    /// remains the hint-fed feed for the record's own bonded set.
+    ///
+    /// A cursor rolled back *beyond* the lookahead (a fresh restore-from-seed
+    /// opens as a non-staker and derives nothing) needs a widening forward
+    /// probe and a production bond-posting entry to reach the state; that is a
+    /// **separate slice** (`ARCHIVAL_BOND_CONSTRUCTION.md` §11; `FOLLOWUPS.md`).
     pub fn monotone_current_slot(&self, highest_bonded_slot_seen: Option<u32>) -> u32 {
         match highest_bonded_slot_seen {
             Some(highest) => self.p_slot.max(highest.saturating_add(1)),

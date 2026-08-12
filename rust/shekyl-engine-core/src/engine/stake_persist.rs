@@ -255,6 +255,144 @@ pub(crate) fn reconcile_phantom_bonded_slots<E>(
     })
 }
 
+/// SP-R0 **arm #4** (SA-5, ratified ruling **SA-R-6**) — the *scan-derivable*
+/// half of the monotone `p_slot` guard: **raise** the cursor from chain-observed
+/// bond posts so a rolled-back sealed cursor can never re-offer a slot that
+/// already has on-chain activity. Re-using a used or retired persona links the
+/// operator's personas to each other and to their principal — the exact
+/// unlinkability the sequential rotation exists to protect
+/// (`shekyl-crypto-pq` `archival_p` module docs; `SIGNATURE_ALIGNMENT.md` §2,
+/// SA-R-6).
+///
+/// # Ordering — this MUST run after the arm-#2/#3 drops, over the same evidence
+///
+/// The `evidence` is the same sealed [`PReconcileSet`] the phantom GC consumes,
+/// and this runs **after** it, so the raise composes with the drops rather than
+/// fighting them:
+///
+/// - a slot the GC dropped as a **phantom** has no match, so its verdict is not
+///   [`Present`](crate::engine::pscan::reconcile::ReconcileVerdict::Present) and
+///   it **cannot** raise the cursor — a phantom never burns a slot;
+/// - a **real** (or retired-but-not-yet-removed) bond has a `Present` verdict
+///   and pulls the cursor strictly above its slot, so a dropped-then-stale match
+///   cannot leave the cursor at or below a slot with observed activity.
+///
+/// The cursor is only ever **raised** ([`StakingBlock::monotone_current_slot`]
+/// takes the `max`), never lowered, so this composes with the "cursor never
+/// lowered" invariant the GC and derive-forward set already rely on.
+///
+/// # Scope — the derive-forward window (the rollback case)
+///
+/// The candidate set is the derive-forward set the scan covered:
+/// `bonded_slots ∪ {cursor ..= cursor + lookahead}`. This heals a cursor rolled
+/// back **within** the lookahead window — the reachable region a sealed-blob
+/// rollback plus the persist-before-use lag can produce. A cursor rolled back
+/// *further* than the lookahead (e.g. a fresh restore-from-seed, where nothing
+/// is derived or scanned at all) needs a widening forward probe and is a
+/// **separate slice** (`ARCHIVAL_BOND_CONSTRUCTION.md` §11; `FOLLOWUPS.md`).
+///
+/// Returns the highest chain-observed slot that contributed a raise (`None` if
+/// no covered bond was found — the cursor is then left as the record's own).
+pub(crate) fn raise_cursor_from_scan_evidence<E>(
+    staking: &mut StakingBlock,
+    evidence: &PReconcileSet,
+    lookahead: u32,
+    mut id_of_slot: impl FnMut(u32) -> Result<PCanonicalId, E>,
+) -> Result<Option<u32>, E> {
+    let cursor = staking.p_slot;
+    let mut candidates: std::collections::BTreeSet<u32> =
+        staking.bonded_slots.iter().copied().collect();
+    for offset in 0..=lookahead {
+        if let Some(slot) = cursor.checked_add(offset) {
+            candidates.insert(slot);
+        }
+    }
+
+    let mut chain_high: Option<u32> = None;
+    for slot in candidates {
+        let id = id_of_slot(slot)?;
+        if matches!(
+            evidence.reconcile_full_scan(id),
+            crate::engine::pscan::reconcile::ReconcileVerdict::Present { .. }
+        ) {
+            chain_high = Some(chain_high.map_or(slot, |c| c.max(slot)));
+        }
+    }
+
+    if let Some(high) = chain_high {
+        staking.p_slot = staking.monotone_current_slot(Some(high));
+    }
+    Ok(chain_high)
+}
+
+/// Run the SP-R0 open-time staking reconciliation over sealed scan `evidence`,
+/// in the one order the arms are sound in:
+///
+/// - **arm #2** (retired GC): drop durably-RETIRED `retired_slots` from the live
+///   hint (records-driven — the wallet's own ledger — so no absence gate needed);
+///   an emptied hint reverts the wallet to a non-staker (a fully-retired wallet
+///   must not spawn an actor "for nothing" every open).
+/// - **arm #3** (phantom GC): drop confirmed-absent, unpended phantom slots
+///   ([`reconcile_phantom_bonded_slots`]).
+/// - **arm #4** (SA-5 monotone raise): lift the `p_slot` cursor above any bond
+///   observed on-chain within the derive-forward window
+///   ([`raise_cursor_from_scan_evidence`]).
+///
+/// The order is load-bearing: the raise runs **last**, over the same evidence the
+/// drops used, so a dropped phantom (no `Present` verdict) cannot raise the cursor
+/// and a real bond keeps it above its slot. `id_of_slot` maps a slot to its
+/// canonical id and is shared by arms #3 and #4, so both reconcile against
+/// identical ids.
+pub(crate) fn reconcile_staking_at_open<E>(
+    staking: &mut StakingBlock,
+    evidence: &PReconcileSet,
+    pending_slots: &std::collections::BTreeSet<u32>,
+    retired_slots: &std::collections::BTreeSet<u32>,
+    lookahead: u32,
+    mut id_of_slot: impl FnMut(u32) -> Result<PCanonicalId, E>,
+) -> Result<(), E> {
+    // arm #2 — drop durably-retired slots before anything derives. The
+    // derive-forward subtraction follows for free: the lookahead starts at the
+    // monotone cursor, kept strictly above every observed bonded slot.
+    if !retired_slots.is_empty() {
+        let before = staking.bonded_slots.len();
+        staking.bonded_slots.retain(|s| !retired_slots.contains(s));
+        let dropped = before - staking.bonded_slots.len();
+        if dropped > 0 {
+            if staking.bonded_slots.is_empty() {
+                staking.staking_enabled = false;
+            }
+            tracing::info!(
+                dropped,
+                reverted = !staking.staking_enabled,
+                "SP-R0 arm #2: retired slots cleaned from the live hint at open"
+            );
+        }
+    }
+
+    // arm #3 — phantom GC.
+    let sweep = reconcile_phantom_bonded_slots(staking, evidence, pending_slots, &mut id_of_slot)?;
+    if !sweep.dropped.is_empty() {
+        tracing::info!(
+            dropped = sweep.dropped.len(),
+            staking_disabled = sweep.staking_disabled,
+            "SP-R0 arm #3: phantom bonded_slots collected at open"
+        );
+    }
+
+    // arm #4 — monotone raise (SA-5, SA-R-6): SAME evidence, AFTER the drops.
+    if let Some(high) =
+        raise_cursor_from_scan_evidence(staking, evidence, lookahead, &mut id_of_slot)?
+    {
+        tracing::info!(
+            chain_high = high,
+            cursor = staking.p_slot,
+            "SP-R0 arm #4: monotone p_slot cursor raised from scan evidence"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +465,85 @@ mod tests {
         assert!(sweep.dropped.is_empty());
         assert_eq!(st.bonded_slots, vec![7], "unscanned absence never GCs");
         assert!(st.staking_enabled);
+    }
+
+    /// Arm #4 (SA-5): a chain-observed bond at a slot above the (rolled-back)
+    /// cursor lifts the monotone cursor one past it — the anti-rollback heal.
+    #[test]
+    fn raise_lifts_cursor_above_a_chain_observed_bond() {
+        let mut st = staking(&[0, 1]);
+        st.p_slot = 0; // sealed cursor rolled back below the slot-1 bond
+        let ev = evidence(100, vec![match_for(id(1), 10)]);
+        let high = raise_cursor_from_scan_evidence(&mut st, &ev, 2, |slot| {
+            Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
+        })
+        .expect("raise");
+        assert_eq!(high, Some(1));
+        assert_eq!(st.p_slot, 2, "cursor lifted to one past the observed bond");
+    }
+
+    /// A phantom (absent-within-covered) contributes no raise: arm #4 keys on the
+    /// same `Present` verdict arm #3's drop does, so a slot with no real bond
+    /// cannot burn the cursor forward — the drop/raise ordering is airtight.
+    #[test]
+    fn raise_ignores_phantom_slots() {
+        let mut st = staking(&[0, 1]);
+        st.p_slot = 0;
+        let ev = evidence(100, Vec::new()); // covered, but no match → AbsentWithinCovered
+        let high = raise_cursor_from_scan_evidence(&mut st, &ev, 2, |slot| {
+            Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
+        })
+        .expect("raise");
+        assert_eq!(high, None, "no covered bond → no raise");
+        assert_eq!(st.p_slot, 0, "cursor untouched by a phantom");
+    }
+
+    /// Unscanned evidence (`high == 0` ⇒ `OutsideCovered`) never raises —
+    /// absence-≠-unscanned holds on the raise side too.
+    #[test]
+    fn raise_does_nothing_when_unscanned() {
+        let mut st = staking(&[5]);
+        st.p_slot = 3;
+        let ev = evidence(0, Vec::new());
+        let high = raise_cursor_from_scan_evidence(&mut st, &ev, 2, |slot| {
+            Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
+        })
+        .expect("raise");
+        assert_eq!(high, None);
+        assert_eq!(
+            st.p_slot, 3,
+            "an unscanned cursor is left as the record's own"
+        );
+    }
+
+    /// Density invariant (SA-5): the monotone selection is **dense** — selecting
+    /// the next slot from a contiguous prefix `{0..=n}` yields exactly `n + 1`,
+    /// never a skip. The restore raise (arm #4) and the "terminate at the first
+    /// empty slot" reconstruction both depend on `bonded_slots` being contiguous;
+    /// this pins that against the real selection function
+    /// (`monotone_current_slot_from_record`, the value the bond orchestrator
+    /// bonds at and `persist_bond_record` advances to), so a future edit that
+    /// introduced sparsity — a `+k` rotation, a distribution scheme — fails here
+    /// rather than silently breaking the reconstruction underneath.
+    #[test]
+    fn monotone_selection_is_dense_no_gap_reachable() {
+        let mut st = StakingBlock::empty();
+        for expected in 0..64u32 {
+            // Selection: the slot the orchestrator bonds at is the monotone cursor.
+            let slot = st.monotone_current_slot_from_record();
+            assert_eq!(
+                slot, expected,
+                "selection must be dense (contiguous), never skip a slot"
+            );
+            // Placement: mirror `persist_bond_record`'s durable mutation.
+            st.bonded_slots.push(slot);
+            st.p_slot = st.monotone_current_slot_from_record();
+        }
+        assert_eq!(
+            st.bonded_slots,
+            (0..64).collect::<Vec<u32>>(),
+            "the whole reachable bonded set is a gap-free contiguous prefix"
+        );
     }
 
     /// Emptying `bonded_slots` reverts the wallet to a non-staker, and the

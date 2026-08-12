@@ -800,67 +800,37 @@ impl Engine<SoloSigner> {
                     pending_slots,
                     retired_slots,
                 })) => {
-                    // SP-R0 arm #2 — "stop deriving slot N": drop durably
-                    // RETIRED slots from the live hint before anything
-                    // derives (records-driven, the wallet's own ledger — no
-                    // absence inference, so no evidence gate needed). The
-                    // derive-forward subtraction follows for free: the
-                    // lookahead starts at the monotone cursor, which the
-                    // persist path keeps strictly above every observed
-                    // bonded slot, so a cleaned hint means no path
-                    // re-derives a retired persona. An emptied hint reverts
-                    // the wallet to a non-staker (a fully-retired wallet
-                    // must not spawn an actor "for nothing" every open —
-                    // the forever-derive problem the ledger exists to fix).
-                    if !retired_slots.is_empty() {
-                        let before = ledger.staking.bonded_slots.len();
-                        ledger
-                            .staking
-                            .bonded_slots
-                            .retain(|s| !retired_slots.contains(s));
-                        let dropped = before - ledger.staking.bonded_slots.len();
-                        if dropped > 0 {
-                            if ledger.staking.bonded_slots.is_empty() {
-                                ledger.staking.staking_enabled = false;
-                            }
-                            tracing::info!(
-                                dropped,
-                                reverted = !ledger.staking.staking_enabled,
-                                "SP-R0 arm #2: retired slots cleaned from the live hint at open"
-                            );
-                        }
-                    }
+                    // SP-R0 open-time staking reconciliation (arms #2 retired GC,
+                    // #3 phantom GC, #4 SA-5 monotone raise) — one ordered pass
+                    // over the sealed evidence, in `stake_persist` so the raise
+                    // stays co-located with the drops it must run after.
                     let derivation_network = network_to_derivation(network);
-                    let sweep = super::stake_persist::reconcile_phantom_bonded_slots(
+                    let id_of_slot = |slot: u32| -> Result<shekyl_types::PCanonicalId, OpenError> {
+                        let keys = derive_archival_p_keys(
+                            master_seed,
+                            derivation_network,
+                            seed_format,
+                            slot,
+                        )
+                        .map_err(|e| {
+                            OpenError::Key(KeyError::Primitive {
+                                detail: rederivation_failure_detail(&e),
+                            })
+                        })?;
+                        super::stake_engine::persona_canonical_id(&keys).map_err(|_| {
+                            OpenError::Key(KeyError::Primitive {
+                                detail: "persona canonical id encode failed",
+                            })
+                        })
+                    };
+                    super::stake_persist::reconcile_staking_at_open(
                         &mut ledger.staking,
                         &evidence,
                         &pending_slots,
-                        |slot| -> Result<_, OpenError> {
-                            let keys = derive_archival_p_keys(
-                                master_seed,
-                                derivation_network,
-                                seed_format,
-                                slot,
-                            )
-                            .map_err(|e| {
-                                OpenError::Key(KeyError::Primitive {
-                                    detail: rederivation_failure_detail(&e),
-                                })
-                            })?;
-                            super::stake_engine::persona_canonical_id(&keys).map_err(|_| {
-                                OpenError::Key(KeyError::Primitive {
-                                    detail: "persona canonical id encode failed",
-                                })
-                            })
-                        },
+                        &retired_slots,
+                        ARCHIVAL_PERSONA_LOOKAHEAD,
+                        id_of_slot,
                     )?;
-                    if !sweep.dropped.is_empty() {
-                        tracing::info!(
-                            dropped = sweep.dropped.len(),
-                            staking_disabled = sweep.staking_disabled,
-                            "SP-R0 arm #3: phantom bonded_slots collected at open"
-                        );
-                    }
                 }
                 // No sealed scan state yet — nothing to reconcile against.
                 Ok(None) => {}
