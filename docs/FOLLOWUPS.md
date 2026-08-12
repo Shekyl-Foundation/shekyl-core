@@ -9290,11 +9290,12 @@ its wake.
   a clearnet leak; that was retracted before push. The literal is the fluff
   exit. See `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
   **Consequence — `txpool_tx_meta_t::origin_zone` has no production consumer.**
-  It is written at admission and preserved across hard-fork re-validation, and
+  It is written at first arrival (`add_tx` does not revise it on a
+  stem→fluff upgrade) and preserved across hard-fork re-validation, and
   nothing reads it to decide anything. Its named consumer is Q12-U3's per-zone
-  telemetry. **Open disposition, not a defect to sweep:** unlike the dead
-  fields removed in #450 it has a writer and a dated reader, but it should not
-  sit unread indefinitely.
+  telemetry, which is the next PR. **Open disposition, not a defect to sweep:**
+  unlike the dead fields removed in #450 it has a writer and a dated reader,
+  but it should not sit unread indefinitely.
   **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s `private_*` cases
   pin that a stem emits the flag clear and a fluff sets it; (2) the pure gate —
   `r1_coherence_predicate` pins `r1_coherence_keeps_origin` /

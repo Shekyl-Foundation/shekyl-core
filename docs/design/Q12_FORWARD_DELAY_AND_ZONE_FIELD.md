@@ -5,9 +5,12 @@
 multi-round, FFI boundary, persisted-layout change. Cited explicitly, as that
 rule requires.
 
-**Status: DESIGN, nothing implemented.** Every numeric claim below is subject to
-verification at pre-flight (rule 26's B6/B9). Where a number is inherited rather
-than derived, it says so.
+**Status: PARTLY LANDED (2026-08-12).** Q12-U1 + Q12-U2 + Q12-U4 shipped;
+Q12-U3 is next. The opening text below is the design as opened and is
+kept as the record of the questions; the as-built sections at the end
+are what the code does now. Every numeric claim in the opening is
+subject to verification at pre-flight (rule 26's B6/B9). Where a number
+is inherited rather than derived, it says so.
 
 ---
 
@@ -822,8 +825,10 @@ already exists and was previously collapsed into `relay_method::forward` — dow
 through `handle_incoming_tx` → `add_new_tx` → `add_tx` to the record. It is
 passed **alongside** `relay_method`, never folded into it: the relay method is
 a routing decision that may be revised, the origin zone is a fact about where
-the bytes came from that must not be. Folding the fact into the decision is
-exactly what made the zone unrecoverable in the first place.
+the bytes first came from. `add_tx` writes it only on a fresh insert
+(first-writer-wins), so a stem→fluff upgrade does not hand a later reader the
+second peer's zone. Folding the fact into the decision is exactly what made
+the zone unrecoverable in the first place.
 
 **No default argument**, deliberately. A defaulted `zone::invalid` would have
 left the block-sourced and test call sites untouched and would have been
@@ -843,10 +848,11 @@ recorded origin survives the round trip.
 
 Tested: the two bits round-trip every zone; a zeroed record reads as
 `invalid`; the record is still 192 bytes; origin and relay method do not alias
-(all four zones × all six relay methods, **both orders**, since they share a
-byte and `set_relay_method` clears five sibling bits); and the zone survives a
-**real LMDB** round trip — not a stub DB, which would store the whole struct
-and round-trip it by construction, proving nothing about the storage format.
+(all four zones × all five remaining relay methods, **both orders**, since they
+share a byte and `set_relay_method` clears sibling bits); `upgrade_relay_method`
+does not revise a stored origin; and the zone survives a **real LMDB** round
+trip — not a stub DB, which would store the whole struct and round-trip it by
+construction, proving nothing about the storage format.
 
 **Not tested:** no test drives a transaction through `add_tx` end to end with a
 non-`invalid` zone. The seam is compiler-verified and both its endpoints are
@@ -854,9 +860,9 @@ tested, but the arrival→pool path is not exercised behaviourally. That needs a
 real pool-insertion fixture, which is where Q12-U2 lives, and is recorded here
 rather than left for a reader to assume from "the parts pass".
 
-`is_forwarding` is untouched. It remains live in
-`set_relay_method`/`get_relay_method`, and retiring it is Q12-D3's consequence
-landing in Q12-U2's receive path.
+`is_forwarding` was live when this paragraph was first written. Q12-U4, in the
+same PR, deleted the class and kept the bit as reserved padding so
+`fcmp_verified` / `origin_zone` do not shift.
 
 > **Amended when Q12-U2 landed in the same PR.** The sentence above originally
 > ended "— a different validation surface", and that was wrong in a way worth
@@ -867,11 +873,13 @@ landing in Q12-U2's receive path.
 > would have shipped a dead persisted field — the exact class swept in #450 —
 > in the PR that introduced it. They are one surface and landed as one PR.
 
-## Q12-U2 / Q12-U4 as built — the class dies, and the field gets a reader
+## Q12-U2 / Q12-U4 as built — the class dies; the field is written, not read
 
 **2026-08-12.** The receive path stems every arrival whatever transport
-carried it, `relay_method::forward` is deleted, and the pool's re-relay loop
-routes by the recorded origin instead of a `zone::public_` literal.
+carried it, and `relay_method::forward` is deleted. The pool re-relay loop
+is unchanged beyond losing its `forward` arm: expired stems leave as fluff
+at `zone::public_`. The field is written at first arrival and preserved
+across re-validation; it has no production consumer in this PR.
 
 ### The field has no consumer yet, and the attempt to give it one was wrong
 
@@ -910,10 +918,14 @@ leaves nothing for the origin to route.
 > fluff request"* — and was edited to compile against the new signature without
 > being read.
 
-**So `origin_zone` is written and preserved, not consumed.** Its only
+**So `origin_zone` is written and preserved, not consumed.** First arrival
+wins: `add_tx` calls the setter only on a fresh insert, so a stem→fluff
+upgrade does not replace a tor origin with the looping peer's zone. Its only
 non-test read is `tx_pool.cpp`'s hard-fork re-validation, which reads it to
-write it back. Its consumer is **Q12-U3**'s per-zone telemetry. That is a
-disposition this round owes an answer to, not one it has given.
+write it back (`take_tx` makes that a new insert, so the stored origin must
+be passed in). Its consumer is **Q12-U3**'s per-zone telemetry, which is the
+next PR. That is a disposition this round owes an answer to, not one it has
+given.
 
 ### §89.2's premise is now shipped
 

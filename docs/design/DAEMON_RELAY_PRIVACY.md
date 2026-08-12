@@ -13685,6 +13685,13 @@ argument and by link 1, not by execution.
 
 ## 89.8 Correction — coherence did not wake, and the origin was leaking to clearnet
 
+> **HISTORICAL as of Q12-U2 (2026-08-12).** This section is the #427
+> diagnosis. Link 5 is closed: an arrival is stemmed whatever transport
+> carried it, `relay_method::forward` is deleted, and coherence executes
+> on the live connection's zone. The pool re-relay does **not** read
+> `origin_zone`; expired stems leave as fluff at `zone::public_`, which
+> is the exit, not a leak. See `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+
 **2026-08-10, review round on #427.** Three findings, all in §89's own
 territory, and the first two are the same mistake §63.9 named: reasoning from
 the design document instead of from the dispatch.
