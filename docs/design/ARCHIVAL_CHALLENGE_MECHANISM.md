@@ -464,10 +464,11 @@ two derivations**. Add one when this lands.
   hashrate share) ÷ (interceptions needed), floored by honest tolerance of
   genuine read failures. Bond-sized and reward-sized are both wrong (former
   deters all honest witnessing; latter ~3 orders above target). The property
-  that keeps the number tractable is drain-on-satisfaction (§2): a pair that
-  never serves never leaves the pool, so evasion must hold across every draw
-  for months — the attacker pays per interception, repeatedly, against a
-  one-time avoided loss. The penalty need not be punitive alone; it must
+  that keeps the number tractable is **persistent drawability (§2 — the pool
+  does *not* drain on satisfaction)**: no pair leaves the pool, served or
+  not, so evasion must hold across every draw for months — the attacker
+  pays per interception, repeatedly, against a one-time avoided loss. The
+  penalty need not be punitive alone; it must
   make the **accumulated** cost cross the position value before the window
   closes. Both terms are estimable from landed constants: position value
   from `reward_share_floor` and the budget schedule; draw count from pool
@@ -921,7 +922,7 @@ the round kept trying to add forensics underneath it.
    `good_through`, `join_settlement_epoch`, the bad-interval list, and
    the failure-window history all survive an `EndpointUpdate`
    untouched — otherwise rotation launders bad standing (a persona
-   approaching 11-of-13 rotates and buys a clean window for the price
+   approaching 11-of-13 rotates and buys a clean window for the price <!-- doc-literal-gate-allow: archival failure-window m-of-n (slash observations), not multisig operator config -->
    of one transaction). Shape: **routing-only mutation, no economic or
    standing side effects, authorized by the persona's attestation key,
    fee-funded from persona earnings, effective at epoch boundary** so
@@ -1139,8 +1140,12 @@ the round kept trying to add forensics underneath it.
    **on-disk persistence** reloaded by the supervisor on restart; and the
    spec's published parameters as **spec-pins, not provisional** (corrected
    2026-08-11): `NUM_LAYER2_GUARDS = 4`, `NUM_LAYER3_GUARDS = 6`, L2 lifetime
-   uniform over 30–60 days (mean 45), L3 lifetime `max(X, X)` over 1–48 hours
-   (mean 31.5). These come from the **Sybil rotation table** — a property of
+   uniform over 30–60 days (mean 45), L3 lifetime `max(X₁, X₂)` where `X₁` and
+   `X₂` are **two independent** uniform draws over 1–48 hours inclusive
+   (mean 31.5 — max-of-two skews longer than the 24.5 a single uniform gives;
+   the spec writes this `max(X, X)`, which reads as self-equaling, so it is
+   spelled out here rather than left for an implementer to take literally).
+   These come from the **Sybil rotation table** — a property of
    the Tor network's adversary model (with `NUM_LAYER3_GUARDS = 6`, 50 %
    Sybil success takes ~15.75 d at 1 %, ~4 d at 5 %, ~2.62 d at 10 %), not of
    our traffic. What the rig derives is **capacity** (whether a 4-node L2 set
@@ -1397,9 +1402,14 @@ than repealing it:
 
 **HOLD (correctly blocked on the format round):** pass-record
 serialization; the response format; `EndpointUpdate` on the bond wire;
-the settlement writer (item 9's schema is genuinely open); the
-`settle_epoch` rewrite — the last blocked on a ratification doable in a
-sitting (the absolute-2 threshold), not a design round.
+the settlement writer (item 9's schema is genuinely open).
+
+**No longer held — the `settle_epoch` rewrite LANDED** (PR #437, merged):
+this list previously carried it as "blocked on a ratification doable in a
+sitting," §7.1 then ratified absolute-2 (2026-08-11), and the fold shipped
+as `settle_epoch(passes, issued)` in `attestation.rs`. Recorded rather than
+silently deleted, because the entry's own framing — a hold whose blocker was
+a *decision*, not a design round — is what let it clear in one sitting.
 
 **The strategic point:** building the serving path is what unblocks W₂ —
 the measurement program needs a working transfer, not a frozen format
