@@ -1433,6 +1433,82 @@ The exact first-failure value is set once the fetch-latency tail is measured,
 because it must exceed the timeout it is retrying against — that is the only
 place the two constants genuinely couple.
 
+### 11.8 Measured: the timeout is already right, and the whole defect is the suppression
+
+**60 cold descriptor fetches**, from a warm bootstrapped tor to 60 freshly
+provisioned hidden services published 180 s earlier, probed at a **120 s cap** so
+the distribution is observed rather than censored at the 45 s constant under
+test.
+
+| statistic | value |
+| --- | --- |
+| median | **7.9 s** |
+| p85 | 78.3 s |
+| failures | **8 / 60 = 13.3 %** |
+| dials exceeding 45 s | **9 / 60 = 15.0 %** |
+
+**The distribution is bimodal, not heavy-tailed.** Every one of the eight
+failures sat at the 120 s cap — `119.2, 119.4, 119.5, 119.5, 119.5, 119.6,
+119.6, 119.7` — and exactly one success landed between, at 78.3 s. A fetch
+either resolves in **under ~30 s** or it does not resolve at all.
+
+Which makes the timeout question answerable without judgement:
+
+| timeout | dials that fail |
+| --- | --- |
+| 30 s | 15.0 % |
+| **45 s (current)** | **15.0 %** |
+| 60 s | 15.0 % |
+| 75 s | 15.0 % |
+| 90 s | 13.3 % |
+| 120 s | 13.3 % |
+
+**Anything from 30 s to 75 s gives the identical result.** Going to 90 s buys
+one dial in sixty. **So `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT = 45` is not
+changed** — no value in a sane range does better, and a longer one only makes a
+node wait longer to learn the same thing. The earlier framing of "45 s of
+patience" as the deficient half was wrong: it is generous by six times over the
+median, and the failures are not slow, they are *absent*.
+
+**The entire defect is therefore the suppression.** That is a one-constant
+change plus escalation rather than a re-provisioned pair — smaller, and better
+justified, than §11.7 anticipated.
+
+**And it makes the suppression's disproportion worse, not better.** The failing
+15 % are attempts against services that are *fine*, whose descriptors publish or
+refresh within minutes. The daemon responds to a condition that resolves itself
+in minutes by refusing to look for an hour.
+
+#### The measured rate is a floor, and the ring says by how much
+
+15.0 % here against **~23 %** in the six-host ring. The gap is the
+self-selection this rig was built with: freshly provisioned, healthy services
+published by one tor on one well-connected host. Real peers may be mid-restart,
+throttled or dead. **Both figures are above the level at which §11.7's
+reachability table fails at `A = 15`,** so the conclusion does not depend on
+which is used.
+
+**The ring's failures also name the mechanism**: four of its seven timeouts
+targeted the *same* node — the one whose tor had been restarted 3.6 minutes
+earlier — and the failures cluster on **targets**, not on dialers. A restart
+republishes with new introduction points while clients may still hold the old
+descriptor. **So the documented remedy for a service that never published
+(restart tor, §11.5) creates a window in which every node that dials during it
+burns that target for an hour.** The operator's fix propagates suppression to
+everyone else.
+
+#### A methodology error worth recording
+
+At 48 of 60 attempts this experiment read **0 failures, max 29.6 s**, and was
+nearly written up as "the timeout is comfortable". The completed run says 13.3 %
+failure with a p85 of 78 s.
+
+**Fast attempts finish first.** Reading a latency experiment while it is still
+running samples the head of its own distribution, and the incompleteness is
+*correlated with the quantity being measured*. That is the same defect class as
+the rest of this arc — a check sharing a fate with its subject — reached this
+time by reading results that were still being produced.
+
 ---
 
 ## 12. Q12-D9 — the below-floor rule, settled before the run
