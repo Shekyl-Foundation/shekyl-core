@@ -3851,16 +3851,17 @@ sustainability is unaffected by the recalibration.
     against re-offering a rotated-past slot (reusing a retired persona clusters
     the operator's personas onto their principal). SA-5 **wired the rollback
     case**: SP-R0 **arm #4** (`stake_persist::raise_cursor_from_scan_evidence`)
-    raises the cursor from chain-observed bonds within the derive-forward window,
-    over the same sealed evidence as the phantom GC and strictly after its drops
-    (a phantom has no `Present` verdict, so it cannot raise the cursor). Density
-    is pinned as an invariant (`monotone_selection_is_dense_no_gap_reachable`).
+    applies the hint-fed `monotone_current_slot_from_record` heal, then walks
+    only the lookahead tail for chain-observed `Present` bonds (a `Present`
+    already in `bonded_slots` cannot move the cursor past `from_record`).
+    Density is pinned on `StakingBlock`
+    (`monotone_selection_is_dense_no_gap_reachable`). The from-seed probe is
+    the same `highest_present` idea over a wider candidate set.
     **What remains in this reopen:** the *from-seed* reconstruction — a cursor
     rolled back beyond the lookahead, where the wallet opens as a non-staker and
     derives/scans nothing — needs a widening forward probe under Model D and is
     unreachable until bond posting is production-reachable. The ruling lives in
-    `shekyl-crypto-pq` `archival_p` module docs,
-    `StakingBlock::monotone_current_slot`'s docstring, and CBOM §5.
+    `shekyl-crypto-pq` `archival_p` module docs and CBOM §5.
   - **Broadcast / re-anchor wiring activates the CT-5d persona-pin.** The CT-5d
     finding (persona signature binds `tx_prefix_hash`, not the proof, so a
     content-changing re-anchor re-signs the persona — the *common* path over a

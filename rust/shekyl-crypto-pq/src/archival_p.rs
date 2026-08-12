@@ -83,8 +83,7 @@
 //! format, p_slot)`: any `p_slot` produces a valid persona. The **discipline on
 //! which slots are ever bound** — never re-binding a used or lower slot — is a
 //! **wallet-level** enforcement, not a consensus rule. This is the ratified
-//! ruling **SA-R-6** (`docs/design/SIGNATURE_ALIGNMENT.md` §2, "persona
-//! lifecycle enforcement is wallet-level").
+//! ruling **SA-R-6** (`docs/design/SIGNATURE_ALIGNMENT.md` §2).
 //!
 //! *Why wallet-level and not consensus.* Re-binding a retired `p_slot`
 //! re-derives a persona the operator already rotated past and **clusters that
@@ -96,33 +95,15 @@
 //! harm only the operator can suffer. The wallet is the correct enforcement tier.
 //!
 //! *What the wallet enforces.* It tracks a **monotone high-water mark** on
-//! `p_slot` and never offers a used or lower slot for a new binding — the guard
-//! `StakingBlock::monotone_current_slot` in `shekyl-engine-state`
-//! (`current = max(persisted p_slot, highest_bonded_slot_seen + 1)`).
-//!
-//! *What is enforced (SA-5).* SA-R-6 has a second clause: the mark must be
-//! **scan-derivable, not merely cached** — a cached cursor that rolled back
-//! (a sealed blob has confidentiality and integrity, but not anti-rollback)
-//! could otherwise re-offer a slot with on-chain activity. Two feeds satisfy
-//! it. The sealed `bonded_slots` **hint** (`monotone_current_slot_from_record`)
-//! covers the record's own bonds; and, as of SA-5, a **chain-derived raise** —
-//! SP-R0 **arm #4** (`stake_persist::raise_cursor_from_scan_evidence`), the
-//! first production caller of `StakingBlock::monotone_current_slot(Some(_))`.
-//! At open, over the same sealed scan evidence the phantom GC consumes and
-//! strictly after its drops, arm #4 lifts the cursor above any bond observed
-//! on-chain within the derive-forward window, so a sealed cursor rolled back
-//! inside the lookahead cannot re-offer a rotated-past slot.
-//!
-//! *The remaining reconstruction (separate slice).* A cursor rolled back
-//! *beyond* the lookahead window — most sharply a fresh **restore-from-seed**,
-//! which opens as a non-staker (`staking_enabled = false`) and so derives and
-//! scans nothing — is not healed by arm #4. Recovering it needs a widening
-//! forward probe under Model D (derive-and-scan personas from slot 0 while the
-//! seed is transiently present, stopping at the first empty slot — which the
-//! dense, sequential rotation makes definitive), plus a production bond-posting
-//! entry to even reach the state. That is scoped separately
-//! (`ARCHIVAL_BOND_CONSTRUCTION.md` §11; `FOLLOWUPS.md`), reopened when bond
-//! posting becomes production-reachable.
+//! `p_slot` and never offers a used or lower slot for a new binding
+//! (`current = max(persisted p_slot, highest_bonded_slot_seen + 1)`). The mark
+//! is **scan-derivable, not merely cached**: a sealed blob has confidentiality
+//! and integrity, but not anti-rollback, so a stored counter alone can reset
+//! and re-offer a slot with on-chain activity. The wallet heals the mark from
+//! its sealed bonded-slot hint and from chain-observed bond posts at open.
+//! A restore-from-seed reconstruction (the wallet opens as a non-staker and
+//! derives nothing) is a separate wallet-layer slice
+//! (`ARCHIVAL_BOND_CONSTRUCTION.md` §11; `FOLLOWUPS.md`).
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use ed25519_dalek::SigningKey;

@@ -93,6 +93,8 @@
 //! [`SyncStateBlock`]: crate::sync_state_block::SyncStateBlock
 //! [`WalletLedger`]: crate::wallet_ledger::WalletLedger
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::WalletLedgerError;
@@ -172,23 +174,11 @@ impl StakingBlock {
     /// persona and link its activities. `saturating_add` keeps the
     /// `u32::MAX` edge total rather than wrapping into a low slot.
     ///
-    /// # Chain-fed form (SA-5): the scan-derivable half of SA-R-6
-    ///
-    /// Passing a chain-observed `highest_bonded_slot_seen` is the second
-    /// half of ratified ruling **SA-R-6** (`SIGNATURE_ALIGNMENT.md` §2): the
-    /// mark must be *scan-derivable, not merely cached*, so a sealed cursor
-    /// that rolled back cannot re-offer a slot with on-chain activity. Its
-    /// first production caller is SP-R0 **arm #4**
-    /// (`engine::stake_persist::raise_cursor_from_scan_evidence`): at open,
-    /// over the sealed scan evidence and strictly after the phantom GC's
-    /// drops, it lifts the cursor above any bond observed within the
-    /// derive-forward window. [`Self::monotone_current_slot_from_record`]
-    /// remains the hint-fed feed for the record's own bonded set.
-    ///
-    /// A cursor rolled back *beyond* the lookahead (a fresh restore-from-seed
-    /// opens as a non-staker and derives nothing) needs a widening forward
-    /// probe and a production bond-posting entry to reach the state; that is a
-    /// **separate slice** (`ARCHIVAL_BOND_CONSTRUCTION.md` §11; `FOLLOWUPS.md`).
+    /// `Some(highest)` is the chain-fed form (SA-R-6's scan-derivable
+    /// half): a sealed blob has confidentiality and integrity, but not
+    /// anti-rollback, so a stored counter alone can reset and re-offer a
+    /// slot with on-chain activity. [`Self::monotone_current_slot_from_record`]
+    /// is the hint-fed feed for the record's own bonded set.
     pub fn monotone_current_slot(&self, highest_bonded_slot_seen: Option<u32>) -> u32 {
         match highest_bonded_slot_seen {
             Some(highest) => self.p_slot.max(highest.saturating_add(1)),
@@ -204,6 +194,24 @@ impl StakingBlock {
     /// lands.
     pub fn monotone_current_slot_from_record(&self) -> u32 {
         self.monotone_current_slot(self.bonded_slots.iter().copied().max())
+    }
+
+    /// The Model-D derive-forward set:
+    /// `{bonded_slots} ∪ {cursor ..= cursor + lookahead}`, where `cursor`
+    /// is [`Self::monotone_current_slot_from_record`].
+    ///
+    /// `checked_add` drops the `u32::MAX` tail rather than wrapping to
+    /// slot 0 (which would re-derive a moved-past persona — the
+    /// unlinkability break the monotone cursor exists to prevent).
+    pub fn derive_forward_slots(&self, lookahead: u32) -> BTreeSet<u32> {
+        let cursor = self.monotone_current_slot_from_record();
+        let mut slots: BTreeSet<u32> = self.bonded_slots.iter().copied().collect();
+        for offset in 0..=lookahead {
+            if let Some(slot) = cursor.checked_add(offset) {
+                slots.insert(slot);
+            }
+        }
+        slots
     }
 
     /// Serialize to postcard bytes.
@@ -346,6 +354,44 @@ mod tests {
         // A bonded slot at u32::MAX must not wrap to 0.
         let b = StakingBlock::new(true, 0, vec![u32::MAX]);
         assert_eq!(b.monotone_current_slot_from_record(), u32::MAX);
+    }
+
+    #[test]
+    fn derive_forward_slots_is_bonded_union_monotone_lookahead() {
+        // cursor = max(4, 3+1) = 4; set = {1,3} ∪ {4,5,6} for lookahead=2.
+        let b = StakingBlock::new(true, 4, vec![1, 3]);
+        assert_eq!(
+            b.derive_forward_slots(2).into_iter().collect::<Vec<_>>(),
+            vec![1, 3, 4, 5, 6]
+        );
+    }
+
+    /// Density invariant: selecting the next slot from a contiguous prefix
+    /// `{0..=n}` yields exactly `n + 1`, never a skip. The open-time raise
+    /// and the "terminate at the first empty slot" reconstruction both
+    /// depend on `bonded_slots` being contiguous; this pins that against
+    /// the real selection function so a future `+k` rotation fails here
+    /// rather than silently breaking the reconstruction.
+    ///
+    /// This bites against a sparse selection edit; it does NOT cover the
+    /// chain-fed raise itself (that lives with the scan-evidence consumer).
+    #[test]
+    fn monotone_selection_is_dense_no_gap_reachable() {
+        let mut st = StakingBlock::empty();
+        for expected in 0..64u32 {
+            let slot = st.monotone_current_slot_from_record();
+            assert_eq!(
+                slot, expected,
+                "selection must be dense (contiguous), never skip a slot"
+            );
+            st.bonded_slots.push(slot);
+            st.p_slot = st.monotone_current_slot_from_record();
+        }
+        assert_eq!(
+            st.bonded_slots,
+            (0..64).collect::<Vec<u32>>(),
+            "the whole reachable bonded set is a gap-free contiguous prefix"
+        );
     }
 
     proptest! {
