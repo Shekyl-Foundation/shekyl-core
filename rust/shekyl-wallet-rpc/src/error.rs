@@ -14,7 +14,7 @@ use shekyl_engine_core::{
     RefreshError, SendError, SetTxNoteError,
 };
 use shekyl_engine_file::WalletFileError;
-use shekyl_engine_state::TxNoteTooLong;
+use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
 use shekyl_rpc_client::{RejectCause, SubmitVerdict};
 use thiserror::Error;
 
@@ -586,10 +586,22 @@ impl From<TxNoteTooLong> for WalletRpcError {
     }
 }
 
+impl From<SetNoteError> for WalletRpcError {
+    fn from(err: SetNoteError) -> Self {
+        match err {
+            // A note targets a transaction of this wallet; a txid it has no
+            // part in is a bad request, not an internal error. Message names
+            // no txid (never an existence oracle) and no note body.
+            SetNoteError::UnknownTransaction => Self::InvalidParams(err.to_string()),
+            SetNoteError::NoteTooLong(e) => e.into(),
+        }
+    }
+}
+
 impl From<SetTxNoteError> for WalletRpcError {
     fn from(err: SetTxNoteError) -> Self {
         match err {
-            SetTxNoteError::TooLong(e) => e.into(),
+            SetTxNoteError::Note(e) => e.into(),
             // Fail-closed rollback already ran; category-only message
             // (the detail can carry a filesystem path).
             SetTxNoteError::Persistence(e) => internal_detail("wallet persistence error", e),

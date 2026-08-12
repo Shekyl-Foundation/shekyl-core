@@ -521,19 +521,33 @@ story, not the read path.
   pre-check and keep the no-echo discipline at its arg layer for UX.
 
   **Read-back pair (`get_tx_note`), added in the review round (2026-08-12).**
-  Arm 1 accepts any well-formed txid — that is what lets a user annotate an
-  incoming payment before the scanner catches up — but `TransferView.note`
-  can only annotate rows that exist. The two together made the write-only
-  case: a note on a not-yet-scanned txid was acknowledged, persisted, and
-  unreadable. `get_tx_note` closes it, and gives `Engine::tx_note` its first
-  caller so the wiring has no dead half. An unknown txid is **not** an error —
-  it answers with the note omitted, exactly as a cleared one does; a note
-  carries no existence claim about the transaction, and refusing would turn
-  the read into an oracle for which txids the wallet has annotated. Residual,
-  stated so it is not re-raised: a note on a *mistyped* txid is still
-  unrecoverable without retyping the same wrong txid — inherent to id-keyed
-  annotation without a membership precondition, and bounded (a stray map
-  entry, never a misdirected payment).
+  `get_tx_note` gives `Engine::tx_note` its first caller so the wiring has no
+  dead half. On the **read** side an unknown txid is **not** an error — it
+  answers with the note omitted, exactly as a cleared one does; a note carries
+  no existence claim about the transaction, and refusing would turn the read
+  into an oracle for which txids the wallet has annotated.
+
+  **Membership precondition (amended 2026-08-12, reversing the "any
+  well-formed txid" stance).** The original ruling accepted a note on *any*
+  well-formed txid — to allow annotating a payment before the scanner caught
+  up — and called the residual "a note on a mistyped txid… bounded (a stray
+  map entry, never a misdirected payment)." That "bounded" claim did not
+  survive review: it assumed a human mistyping *one* txid, but with no
+  membership check a client can set notes on unboundedly many arbitrary
+  txids, driving the shared `WalletLedger` toward `PAYLOAD_BODY_MAX` — whose
+  blast radius is *every* save (refresh, send), not notes. A byte budget would
+  have been a cap slapped onto a capability that should not exist. **Ruling: a
+  note attaches to a transaction the wallet is part of, one per transaction.**
+  `WalletLedger::set_note` refuses a non-empty note for a txid the wallet has
+  no relationship with (a received transfer or its spend, a send-journal row
+  in any state, a pending send, a retained tx-key, or a mempool observation);
+  clearing is always allowed so a note orphaned by a reorg can be removed. The
+  amplification vector is gone by construction — the note count cannot exceed
+  the wallet's own transaction population, which the payload already bounds —
+  so no note-count or note-byte budget is needed. **What it costs:** the
+  pre-scan annotation case (a txid learned out-of-band before the wallet has
+  seen it); thin, and served by annotating once the scanner has the tx. The
+  read-side oracle stance above is unchanged.
 
   **Dead-field connection (so the next audit reads this as deliberate).**
   With PR-SA-4, `tx_notes` now has a production writer (`Engine::set_tx_note`)

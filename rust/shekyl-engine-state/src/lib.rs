@@ -85,4 +85,4 @@ pub use tx_meta_block::{
     check_tx_note_len, PriorNote, ScannedPoolTx, SetTxNoteOutcome, TxMetaBlock, TxNoteTooLong,
     TxSecretKey, TxSecretKeys, TX_META_BLOCK_VERSION, TX_NOTE_MAX_BYTES,
 };
-pub use wallet_ledger::{WalletLedger, WALLET_LEDGER_FORMAT_VERSION};
+pub use wallet_ledger::{SetNoteError, WalletLedger, WALLET_LEDGER_FORMAT_VERSION};

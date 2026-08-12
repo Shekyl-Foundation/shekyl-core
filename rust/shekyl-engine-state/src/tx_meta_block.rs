@@ -87,15 +87,14 @@ pub const TX_META_BLOCK_VERSION: u32 = 3;
 /// agreeing to. Boundaries may pre-check with this constant to fail before
 /// taking a write lock, but they are not the enforcement.
 ///
-/// **What this does not bound: the number of notes.** Entry count is not
-/// capped here, deliberately and for the same reason `scanned_pool_txs` is
-/// not (see the module docs): a count policy belongs to the orchestrator that
-/// knows the wallet's transaction population, not to the persistence layer
-/// that round-trips it, and no cap that would refuse a user's next annotation
-/// has a derivation anyone can defend. The outer ceiling is real but
-/// structural rather than note-specific — `shekyl-engine-file`'s
-/// `PAYLOAD_BODY_MAX` refuses an over-large wallet payload on the *write*
-/// path, so the map cannot grow the file without limit.
+/// **The number of notes needs no separate cap.** A note attaches to a
+/// transaction the wallet is part of — [`crate::WalletLedger::set_note`]
+/// refuses a note for a txid the wallet has no relationship with — so the
+/// entry count can never exceed the wallet's own transaction population,
+/// which is already bounded by the payload the transfers and journal consume.
+/// The count is a side effect of the membership rule, not a number anyone had
+/// to derive; a client cannot inflate the map with notes on arbitrary txids,
+/// which is what made the payload the only backstop before.
 pub const TX_NOTE_MAX_BYTES: usize = 4 * 1024;
 
 /// Refusal when a note exceeds [`TX_NOTE_MAX_BYTES`].

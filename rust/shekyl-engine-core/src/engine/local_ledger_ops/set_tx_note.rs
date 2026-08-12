@@ -44,7 +44,7 @@
 //! bounded here; see the constant's own docs for why and for the outer
 //! ceiling.
 
-use shekyl_engine_state::{SetTxNoteOutcome, TxNoteTooLong};
+use shekyl_engine_state::{SetNoteError, SetTxNoteOutcome};
 use shekyl_types::TxHash;
 
 use crate::engine::error::PersistenceError;
@@ -54,11 +54,11 @@ use crate::engine::{Engine, EngineSignerKind, LocalLedger};
 /// Failures from [`Engine::set_tx_note`].
 #[derive(Debug, thiserror::Error)]
 pub enum SetTxNoteError {
-    /// Note exceeds [`shekyl_engine_state::TX_NOTE_MAX_BYTES`].
-    ///
-    /// Display reports **byte counts only** — never the note text.
+    /// The note was refused before any save — a txid the wallet has no part
+    /// in, or a note over the byte ceiling. Reports byte counts only (never
+    /// the note text) and no txid (never an existence oracle in a log).
     #[error(transparent)]
-    TooLong(#[from] TxNoteTooLong),
+    Note(#[from] SetNoteError),
 
     /// Durable save failed; the in-memory map entry was rolled back
     /// (fail closed).
@@ -92,7 +92,9 @@ impl<
     ///
     /// # Errors
     ///
-    /// - [`SetTxNoteError::TooLong`] — note exceeds the byte ceiling; map
+    /// - [`SetTxNoteError::Note`] — the note was refused before any save: a
+    ///   txid the wallet has no part in ([`SetNoteError::UnknownTransaction`]),
+    ///   or a note over the byte ceiling ([`SetNoteError::NoteTooLong`]). Map
     ///   unchanged.
     /// - [`SetTxNoteError::Persistence`] — durable save failed; the
     ///   in-memory map entry is rolled back to its pre-write value (fail
@@ -108,7 +110,7 @@ impl<
         // `save_state` takes `&WalletLedger`, so no second lock is needed and
         // concurrent merge/watchdog block until we finish.
         let mut guard = self.ledger.write();
-        let outcome = guard.ledger.tx_meta.set_note(key, note)?;
+        let outcome = guard.ledger.set_note(key, note)?;
 
         match outcome {
             SetTxNoteOutcome::Unchanged { stored } => Ok(stored),
@@ -139,14 +141,26 @@ impl<
 mod tests {
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_engine_file::SafetyOverrides;
-    use shekyl_engine_state::TX_NOTE_MAX_BYTES;
+    use shekyl_engine_state::{SetNoteError, TxSecretKey, TX_NOTE_MAX_BYTES};
     use shekyl_rpc_transport::HttpRpc;
     use shekyl_types::TxHash;
+    use zeroize::Zeroizing;
 
     use crate::engine::lifecycle::EngineCreateParams;
     use crate::engine::{Credentials, DaemonClient, Engine, SoloSigner};
 
     use super::SetTxNoteError;
+
+    /// Make `txid` a transaction the wallet knows so a note may attach to it —
+    /// a retained tx-secret is the cheapest membership seed
+    /// (`WalletLedger::knows_transaction`). Notes annotate the wallet's own
+    /// transactions, so every set-path test seeds one first.
+    fn mark_known(engine: &Engine<SoloSigner>, txid: TxHash) {
+        engine.ledger.write().ledger.record_retained_tx_key(
+            txid.to_bytes(),
+            TxSecretKey::new(Zeroizing::new([0xAB; 32])),
+        );
+    }
 
     /// A `DaemonClient` over an unreachable URL — setting a note is a local,
     /// crash-atomic operation with no daemon I/O on any path under test.
@@ -174,6 +188,7 @@ mod tests {
         let params = EngineCreateParams::for_test_full(&base_path, &creds, &s);
         let engine = Engine::<SoloSigner>::create(params, daemon().await).expect("create");
         let txid = TxHash::from_bytes([0x11; 32]);
+        mark_known(&engine, txid);
 
         // Absent by default.
         assert_eq!(engine.tx_note(txid), None);
@@ -220,13 +235,14 @@ mod tests {
         let params = EngineCreateParams::for_test_full(&base_path, &creds, &s);
         let engine = Engine::<SoloSigner>::create(params, daemon().await).expect("create");
         let txid = TxHash::from_bytes([0x33; 32]);
+        mark_known(&engine, txid);
 
         let over = format!("CANARY{}", "x".repeat(TX_NOTE_MAX_BYTES));
         match engine
             .set_tx_note(txid, over)
             .expect_err("over-length must refuse")
         {
-            SetTxNoteError::TooLong(e) => {
+            SetTxNoteError::Note(SetNoteError::NoteTooLong(e)) => {
                 assert_eq!(e.max, TX_NOTE_MAX_BYTES);
                 let msg = e.to_string();
                 assert!(
@@ -234,9 +250,53 @@ mod tests {
                     "refusal must not echo note content: {msg}"
                 );
             }
-            other => panic!("expected TooLong, got {other:?}"),
+            other => panic!("expected NoteTooLong, got {other:?}"),
         }
         assert_eq!(engine.tx_note(txid), None);
+    }
+
+    /// A note attaches to a specific transaction of *this* wallet. Setting a
+    /// note on a txid the wallet has no part in is refused; clearing one is
+    /// still allowed (so an entry a reorg orphaned can be removed).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn note_on_unknown_transaction_is_refused() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"set_tx_note unknown");
+        let s = seed(5);
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &s);
+        let engine = Engine::<SoloSigner>::create(params, daemon().await).expect("create");
+        let unknown = TxHash::from_bytes([0x44; 32]);
+
+        // A non-empty note for a txid the wallet does not know is refused,
+        // and nothing is persisted.
+        match engine
+            .set_tx_note(unknown, "not mine".to_owned())
+            .expect_err("note on unknown tx must refuse")
+        {
+            SetTxNoteError::Note(SetNoteError::UnknownTransaction) => {}
+            other => panic!("expected UnknownTransaction, got {other:?}"),
+        }
+        assert_eq!(engine.tx_note(unknown), None);
+
+        // Clearing an unknown txid is a no-op that still succeeds (removal is
+        // never gated — it only ever cleans up).
+        assert_eq!(
+            engine
+                .set_tx_note(unknown, String::new())
+                .expect("clear ok"),
+            None
+        );
+
+        // Once the wallet knows the tx, the note attaches.
+        mark_known(&engine, unknown);
+        assert_eq!(
+            engine
+                .set_tx_note(unknown, "now mine".to_owned())
+                .expect("known set")
+                .as_deref(),
+            Some("now mine")
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -250,6 +310,7 @@ mod tests {
         let params = EngineCreateParams::for_test_full(&base_path, &creds, &s);
         let network = params.network;
         let engine = Engine::<SoloSigner>::create(params, daemon().await).expect("create");
+        mark_known(&engine, txid);
         engine.set_tx_note(txid, "keep me".to_owned()).expect("set");
         // Release the advisory lock before reopening.
         engine.close(&creds).expect("close");

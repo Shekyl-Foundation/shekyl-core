@@ -179,10 +179,13 @@ fn check_tip_not_below_transfer(ledger: &LedgerBlock) -> Result<(), WalletLedger
 /// it confirms (leaving `pending_tx_hashes`) the *only* live
 /// references to its txid are the spent rows it consumed.
 ///
-/// `tx_notes` is deliberately *not* part of this check: user-authored
-/// notes may legitimately reference an arbitrary txid (e.g. an incoming
-/// payment from a friend, recorded before the scanner has caught up),
-/// and stripping them on load would lose user data.
+/// `tx_notes` is deliberately *not* part of this check. A note is set only
+/// on a transaction the wallet knows ([`WalletLedger::set_note`] refuses an
+/// unknown txid), so notes do not create orphans at write time — but a tx
+/// that was known when annotated can leave the live set later (a reorg drops
+/// a confirmed transfer), and stripping the note on load would lose user
+/// data. So notes ride along on load regardless; the membership rule lives at
+/// the write door, not in this load-time invariant.
 fn check_tx_keys_no_orphans(
     ledger: &LedgerBlock,
     tx_meta: &TxMetaBlock,

@@ -60,7 +60,7 @@ use crate::{
     staking_block::StakingBlock,
     sync_state_block::SyncStateBlock,
     transfer::TransferDetails,
-    tx_meta_block::{TxMetaBlock, TxSecretKey, TxSecretKeys},
+    tx_meta_block::{SetTxNoteOutcome, TxMetaBlock, TxNoteTooLong, TxSecretKey, TxSecretKeys},
 };
 
 /// Bundle-level `format_version`.
@@ -169,6 +169,23 @@ pub struct WalletLedger {
     pub send_journal: SendJournalBlock,
 }
 
+/// Refusal from [`WalletLedger::set_note`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SetNoteError {
+    /// A non-empty note was requested for a txid the wallet has no part in.
+    /// A note annotates a specific transaction of this wallet; there is
+    /// nothing to annotate for a txid it never sent, received, or observed.
+    /// Carries no txid so the message cannot become an existence oracle in a
+    /// log — the caller already holds the txid it asked about.
+    #[error("no such transaction in this wallet")]
+    UnknownTransaction,
+
+    /// The note exceeds [`TxNoteTooLong`]'s byte ceiling. Reports byte counts
+    /// only — never the note content (rules 35/36).
+    #[error(transparent)]
+    NoteTooLong(#[from] TxNoteTooLong),
+}
+
 impl WalletLedger {
     /// Fresh, empty wallet ledger pinned to the current format version.
     /// Every inner block starts at its own current `block_version`.
@@ -218,6 +235,58 @@ impl WalletLedger {
     #[must_use]
     pub fn spend_locks(&self) -> crate::send_journal_block::InFlightSpendLocks {
         self.send_journal.spend_locks()
+    }
+
+    /// Whether the wallet has a relationship with `txid` — i.e. it is one of
+    /// *this wallet's own* transactions: a received transfer (or the tx that
+    /// spent one of its outputs), a send it dispatched (a journal row in any
+    /// state), a send still in flight, a retained tx-secret, or a mempool
+    /// observation.
+    ///
+    /// This is the membership precondition for annotating a transaction (see
+    /// [`Self::set_note`]): a note attaches to a specific transaction the
+    /// wallet is part of, never to an arbitrary txid. It is a **superset** of
+    /// the I-2 tx-key-retention live set — that one counts only
+    /// retention-holding journal rows, whereas a note may legitimately
+    /// annotate a send in *any* state, including a confirmed or terminal one.
+    #[must_use]
+    pub fn knows_transaction(&self, txid: &[u8; 32]) -> bool {
+        self.ledger.transfers().iter().any(|t| {
+            t.tx_hash.to_bytes() == *txid
+                || t.spending_tx_hash
+                    .as_ref()
+                    .is_some_and(|s| s.to_bytes() == *txid)
+        }) || self.send_journal.rows.contains_key(txid)
+            || self.sync_state.pending_tx_hashes.contains(txid)
+            || self.tx_meta.tx_keys.contains_key(txid)
+            || self.tx_meta.scanned_pool_txs.contains_key(txid)
+    }
+
+    /// Set or clear the user's note for `txid`.
+    ///
+    /// The **membership door**: a non-empty note requires `txid` to be one of
+    /// the wallet's own transactions ([`Self::knows_transaction`]) — a note
+    /// annotates a specific transaction, so a note for a txid the wallet has
+    /// no part in is refused (which is also what keeps the note map bounded by
+    /// the wallet's transaction population rather than by client input).
+    /// Clearing an entry (empty note) is always allowed, so a note left behind
+    /// on a txid a reorg later dropped can still be removed. Length is enforced
+    /// by [`TxMetaBlock::set_note`] underneath.
+    ///
+    /// # Errors
+    ///
+    /// - [`SetNoteError::UnknownTransaction`] — a non-empty note for a txid the
+    ///   wallet does not know.
+    /// - [`SetNoteError::NoteTooLong`] — the note exceeds the byte ceiling.
+    pub fn set_note(
+        &mut self,
+        txid: [u8; 32],
+        note: String,
+    ) -> Result<SetTxNoteOutcome, SetNoteError> {
+        if !note.is_empty() && !self.knows_transaction(&txid) {
+            return Err(SetNoteError::UnknownTransaction);
+        }
+        Ok(self.tx_meta.set_note(txid, note)?)
     }
 
     /// Unspent, unfrozen transfers not under an F14 lock — journal and
