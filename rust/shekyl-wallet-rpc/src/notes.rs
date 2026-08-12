@@ -29,7 +29,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_engine_state::{TxNoteTooLong, TX_NOTE_MAX_BYTES};
+use shekyl_engine_state::check_tx_note_len;
 use shekyl_types::TxHash;
 
 use crate::error::WalletRpcError;
@@ -57,27 +57,6 @@ fn parse_txid(tx_hash: &str) -> Result<TxHash, WalletRpcError> {
     })
 }
 
-/// Reject a note over [`TX_NOTE_MAX_BYTES`] **before** taking a lock.
-///
-/// This is a fast-fail, not the invariant: `TxMetaBlock::set_note` is the only
-/// door into the map and enforces the same ceiling. The refusal is built from
-/// the engine's own [`TxNoteTooLong`] rather than a second message written
-/// here, so the wording and the ceiling have exactly one owner — a boundary
-/// that refuses early must not also get to refuse *differently*.
-///
-/// Reports byte counts only — never the note content — so counterparty text
-/// cannot escape via the error string (rules 35/36).
-fn check_note_len(note: &str) -> Result<(), WalletRpcError> {
-    if note.len() > TX_NOTE_MAX_BYTES {
-        return Err(TxNoteTooLong {
-            len: note.len(),
-            max: TX_NOTE_MAX_BYTES,
-        }
-        .into());
-    }
-    Ok(())
-}
-
 /// `set_tx_note` (`WALLET_SEND_RECORD.md` SJ-DQ-7): attach or clear a
 /// user-authored note on a transaction, keyed by the bare txid. An empty
 /// `note` clears the entry (there is no separate delete method). Purely
@@ -94,10 +73,12 @@ pub(crate) async fn set_tx_note(
 ) -> Result<Value, WalletRpcError> {
     let p: SetTxNoteParams = parse_required_object(params, "set_tx_note")?;
     let txid = parse_txid(&p.tx_hash)?;
-    // Bound before the note can enter the ledger, and before any lock is
-    // taken — a refused note never reaches the engine or its write guard.
-    // The same constant is enforced again on the write path.
-    check_note_len(&p.note)?;
+    // Fast-fail an over-length note before taking a lock — a refused note
+    // never reaches the engine or its write guard. This defers to the engine's
+    // single checker (`set_note` enforces the same one on the write path), so
+    // an early refusal cannot differ from the write-door one; `TxNoteTooLong`
+    // maps to `-32602 InvalidParams` and reports byte counts only (rules 35/36).
+    check_tx_note_len(&p.note)?;
 
     let shared = require_open_engine(tenants).await?;
     let engine = shared.read().await;
@@ -142,24 +123,24 @@ mod tests {
     use super::*;
 
     use crate::error::WalletRpcErrorCode;
+    use shekyl_engine_state::TX_NOTE_MAX_BYTES;
 
+    /// The boundary maps the engine's over-length refusal onto the wire
+    /// contract `-32602 InvalidParams` **without echoing the note content**.
+    /// The bound itself is owned and tested in `shekyl-engine-state`; this
+    /// pins the RPC-facing half — the wire code and the no-echo property that
+    /// fires if the refusal ever grows to include the note.
     #[test]
-    fn note_length_bound_refuses_without_echoing_content() {
+    fn over_length_note_maps_to_invalid_params_without_echoing_content() {
         // At the limit is accepted; one byte over is refused.
-        assert!(check_note_len(&"x".repeat(TX_NOTE_MAX_BYTES)).is_ok());
-        assert!(check_note_len("short note").is_ok());
+        assert!(check_tx_note_len(&"x".repeat(TX_NOTE_MAX_BYTES)).is_ok());
+        assert!(check_tx_note_len("short note").is_ok());
 
-        // An over-length note carrying a marker: the refusal must report
-        // byte counts only and must NOT echo the note content, so
-        // counterparty text cannot escape through the error string (the
-        // property fires if someone later "improves" the message to include
-        // the note — including via the engine-owned `TxNoteTooLong` Display
-        // this now delegates to).
         let over = format!("CANARY{}", "x".repeat(TX_NOTE_MAX_BYTES));
-        let err = check_note_len(&over).expect_err("over-length note must be refused");
+        let err: WalletRpcError = check_tx_note_len(&over)
+            .expect_err("over-length note must be refused")
+            .into();
 
-        // The refusal contract is the wire code, not just the variant:
-        // `-32602` is what the OpenAPI document promises for this case.
         assert_eq!(
             err.code(),
             WalletRpcErrorCode::InvalidParams,

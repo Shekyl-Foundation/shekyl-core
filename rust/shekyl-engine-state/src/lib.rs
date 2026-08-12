@@ -82,7 +82,7 @@ pub use staking_block::{StakingBlock, STAKING_BLOCK_VERSION};
 pub use sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};
 pub use transfer::{AwaitingConfirmation, FcmpPrecomputedPath, TransferDetails, SPENDABLE_AGE};
 pub use tx_meta_block::{
-    ScannedPoolTx, SetTxNoteOutcome, TxMetaBlock, TxNoteTooLong, TxSecretKey, TxSecretKeys,
-    TX_META_BLOCK_VERSION, TX_NOTE_MAX_BYTES,
+    check_tx_note_len, PriorNote, ScannedPoolTx, SetTxNoteOutcome, TxMetaBlock, TxNoteTooLong,
+    TxSecretKey, TxSecretKeys, TX_META_BLOCK_VERSION, TX_NOTE_MAX_BYTES,
 };
 pub use wallet_ledger::{WalletLedger, WALLET_LEDGER_FORMAT_VERSION};

@@ -111,15 +111,51 @@ pub struct TxNoteTooLong {
     pub max: usize,
 }
 
+/// Enforce [`TX_NOTE_MAX_BYTES`] on a candidate note — the **single owner** of
+/// the ceiling check.
+///
+/// [`TxMetaBlock::set_note`] calls it on the write path; a boundary (e.g. the
+/// wallet-RPC handler) may also call it to fast-fail an over-length request
+/// before doing work, but the comparison, the ceiling, and the refusal all
+/// live here, so an early refusal can never differ from the write-door one.
+/// Reports byte counts only — never the note content (rules 35/36).
+///
+/// # Errors
+///
+/// [`TxNoteTooLong`] when `note` exceeds [`TX_NOTE_MAX_BYTES`].
+pub fn check_tx_note_len(note: &str) -> Result<(), TxNoteTooLong> {
+    if note.len() > TX_NOTE_MAX_BYTES {
+        return Err(TxNoteTooLong {
+            len: note.len(),
+            max: TX_NOTE_MAX_BYTES,
+        });
+    }
+    Ok(())
+}
+
+/// The pre-write note value captured by [`TxMetaBlock::set_note`] and consumed
+/// by [`TxMetaBlock::restore_note`] to undo a write after a failed durable
+/// save (fail closed).
+///
+/// Its inner value is **private**, so the only way to obtain one is from
+/// `set_note`. A caller cannot mint a `PriorNote` from an arbitrary string —
+/// which is what keeps the restore path from re-admitting an unbounded note
+/// the write door refused: restore only ever puts back a value that was
+/// already in the map (hence already validated), never a fresh one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriorNote(Option<String>);
+
 /// Result of [`TxMetaBlock::set_note`]: whether the map changed (and thus
 /// needs a durable save) or the write is already a no-op.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SetTxNoteOutcome {
-    /// Map entry changed. `previous` is the pre-write value (for fail-closed
-    /// rollback); `stored` is the post-write value (`None` when cleared).
+    /// Map entry changed. `previous` is the pre-write value (an opaque
+    /// [`PriorNote`], for fail-closed rollback via [`TxMetaBlock::restore_note`]);
+    /// `stored` is the post-write value (`None` when cleared).
     Applied {
-        /// Entry present before this write, if any.
-        previous: Option<String>,
+        /// Entry present before this write, if any — opaque, feed it straight
+        /// to [`TxMetaBlock::restore_note`].
+        previous: PriorNote,
         /// Entry present after this write (`None` when the note was cleared).
         stored: Option<String>,
     },
@@ -240,11 +276,22 @@ pub struct TxMetaBlock {
 
     /// User-authored free-text notes, keyed by txid.
     ///
-    /// **Private on purpose.** [`TX_NOTE_MAX_BYTES`] is a ledger invariant,
-    /// and an invariant a caller can bypass by assigning to a public field is
-    /// a convention, not a bound. [`Self::set_note`] is the only door in,
-    /// [`Self::notes`] / [`Self::note`] the only doors out, so over-length is
-    /// unrepresentable rather than merely discouraged.
+    /// **Private on purpose.** [`TX_NOTE_MAX_BYTES`] is enforced on every path
+    /// that *authors* a note: [`Self::set_note`] is the only write door and
+    /// refuses an over-length note (via [`check_tx_note_len`]), and
+    /// [`Self::restore_note`] consumes only an opaque [`PriorNote`] that
+    /// `set_note` already validated — so no in-memory API can insert an
+    /// over-length note. [`Self::notes`] / [`Self::note`] are the only doors
+    /// out.
+    ///
+    /// **`Deserialize` is deliberately not re-validated.** The sealed on-disk
+    /// form is trusted input: the AEAD envelope authenticates it and this
+    /// wallet only ever wrote it through `set_note`, so `Deserialize`
+    /// *restores* prior values rather than admitting new ones. Validating on
+    /// load would defend against a file this wallet cannot produce (an
+    /// over-length note in a validly-sealed block) and would pay for it by
+    /// making a wallet **unopenable** — the wrong trade for the one file that
+    /// holds a user's seed-adjacent state. Declined by design, not overlooked.
     #[serde(default = "BTreeMap::new")]
     tx_notes: BTreeMap<[u8; 32], String>,
 
@@ -354,18 +401,13 @@ impl TxMetaBlock {
             return Ok(match self.tx_notes.remove(&txid) {
                 None => SetTxNoteOutcome::Unchanged { stored: None },
                 Some(previous) => SetTxNoteOutcome::Applied {
-                    previous: Some(previous),
+                    previous: PriorNote(Some(previous)),
                     stored: None,
                 },
             });
         }
 
-        if note.len() > TX_NOTE_MAX_BYTES {
-            return Err(TxNoteTooLong {
-                len: note.len(),
-                max: TX_NOTE_MAX_BYTES,
-            });
-        }
+        check_tx_note_len(&note)?;
 
         if self.tx_notes.get(&txid).is_some_and(|cur| cur == &note) {
             return Ok(SetTxNoteOutcome::Unchanged { stored: Some(note) });
@@ -373,17 +415,19 @@ impl TxMetaBlock {
 
         let previous = self.tx_notes.insert(txid, note.clone());
         Ok(SetTxNoteOutcome::Applied {
-            previous,
+            previous: PriorNote(previous),
             stored: Some(note),
         })
     }
 
     /// Restore a prior note entry after a failed durable save (fail closed).
     ///
-    /// `previous` is the value returned from [`Self::set_note`]'s
-    /// [`SetTxNoteOutcome::Applied`] arm — `Some` re-inserts, `None` removes.
-    pub fn restore_note(&mut self, txid: [u8; 32], previous: Option<String>) {
-        match previous {
+    /// `previous` is the opaque [`PriorNote`] from [`Self::set_note`]'s
+    /// [`SetTxNoteOutcome::Applied`] arm — a previously-validated value, so the
+    /// restore cannot re-admit an over-length note. Its `Some` re-inserts, its
+    /// `None` removes.
+    pub fn restore_note(&mut self, txid: [u8; 32], previous: PriorNote) {
+        match previous.0 {
             Some(prior) => {
                 self.tx_notes.insert(txid, prior);
             }
@@ -541,7 +585,7 @@ mod tests {
         // Set applies.
         match b.set_note(id, "rent".into()).expect("set") {
             SetTxNoteOutcome::Applied {
-                previous: None,
+                previous: PriorNote(None),
                 stored: Some(s),
             } => assert_eq!(s, "rent"),
             other => panic!("expected Applied first set, got {other:?}"),
@@ -559,7 +603,7 @@ mod tests {
         // Overwrite applies with previous.
         match b.set_note(id, "rent — March".into()).expect("overwrite") {
             SetTxNoteOutcome::Applied {
-                previous: Some(p),
+                previous: PriorNote(Some(p)),
                 stored: Some(s),
             } => {
                 assert_eq!(p, "rent");
@@ -568,11 +612,12 @@ mod tests {
             other => panic!("expected Applied overwrite, got {other:?}"),
         }
 
-        // Clear applies and restores via restore_note.
+        // Clear applies and restores via restore_note — the opaque `PriorNote`
+        // token round-trips straight back through the restore door.
         let outcome = b.set_note(id, String::new()).expect("clear");
         match &outcome {
             SetTxNoteOutcome::Applied {
-                previous: Some(p),
+                previous: PriorNote(Some(p)),
                 stored: None,
             } => assert_eq!(p, "rent — March"),
             other => panic!("expected Applied clear, got {other:?}"),
