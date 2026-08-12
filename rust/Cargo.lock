@@ -4402,10 +4402,7 @@ dependencies = [
 name = "shekyl-sp-t3-spike"
 version = "3.1.0"
 dependencies = [
- "ed25519-dalek",
  "kameo",
- "sha2",
- "sha3",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
  "shekyl-p-serve",
@@ -4415,7 +4412,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "ureq",
- "zeroize",
 ]
 
 [[package]]
@@ -4444,6 +4440,7 @@ version = "3.1.0"
 name = "shekyl-tor"
 version = "3.1.0"
 dependencies = [
+ "ed25519-dalek",
  "futures-core",
  "getrandom 0.2.17",
  "hex-literal",
@@ -4451,6 +4448,7 @@ dependencies = [
  "kameo",
  "libc",
  "sha2",
+ "sha3",
  "shekyl-p-transport",
  "shekyl-types",
  "tempfile",
