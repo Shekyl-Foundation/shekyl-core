@@ -343,7 +343,6 @@ mod regtest_e2e;
 pub(crate) mod rescan;
 pub(crate) mod scan_floor;
 pub(crate) mod sealing_keys;
-pub(crate) mod serve_set_source;
 pub(crate) mod sign_bridge;
 pub mod signer;
 pub(crate) mod signing_assembly;

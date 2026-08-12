@@ -18,6 +18,7 @@
 //! | [`drain`] | AssembleDrain shell |
 //! | [`claim`] | AssembleEmissionClaim |
 //! | [`scan`] | ScanStep |
+//! | [`serve_set_source`] | Serve-set derivation from the connected bond record (SH-2) |
 //! | [`retire`] | Retire / project-id |
 //! | [`handle`] | `StakeEngineHandle` |
 //!
@@ -53,6 +54,7 @@ mod helpers;
 mod persona;
 mod retire;
 mod scan;
+pub(crate) mod serve_set_source;
 mod types;
 
 #[cfg(test)]

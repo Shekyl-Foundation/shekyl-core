@@ -41,14 +41,20 @@ use shekyl_curve_tree::{SegmentPin, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
 use shekyl_rpc_client::Rpc;
 
-use super::curve_tree_actor::CurveTreeHandle;
-use super::emission_source::fetch_emission_claim_source;
+use crate::engine::curve_tree_actor::CurveTreeHandle;
+use crate::engine::emission_source::fetch_emission_claim_source;
 
 /// Derives a persona's serve-set from its connected bond record and pins it.
 // Inert until the lifecycle slice starts a `PersonaServingHost` and drives its
 // refresh from the P-scan sweep. Landed with the seam it implements rather
 // than after it, so the one place a serve-set can come from exists before
 // anything can be wired to a second one.
+//
+// Lives under `stake_engine/` rather than at `engine/` top level because both
+// halves of its input are already this tree's: the bond record it reads is what
+// `bond`/`claim` assemble, and the lifecycle call that will start the host is a
+// `StakeEngine` message. A `serve_set_source` at the engine root would have been
+// a module the composition root declares and nothing else near it uses.
 #[allow(dead_code)]
 pub(crate) struct EngineServeSetPinner<R: Rpc> {
     curve_tree: CurveTreeHandle,
