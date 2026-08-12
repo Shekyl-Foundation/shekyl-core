@@ -480,6 +480,15 @@ fn read_state(path: &Path) -> StateOnDisk {
 /// file, so the destination has to go first — and [`read_state`] falls back to
 /// it. A successful rename consumes it, so a temp file lingering is itself the
 /// signal that the last save did not complete.
+///
+/// **The boundary of that recovery, stated rather than implied:** the temp has
+/// one fixed name, so a later save truncates it. Both copies are therefore lost
+/// only by a *double* fault — a Windows rename that failed after the destination
+/// was removed, followed by a save whose write also fails — and only a process
+/// restart inside that window re-draws, since in-memory state carries the set
+/// meanwhile. Per-save unique temp names would close it at the cost of durable
+/// garbage accumulating in the Tor `DataDirectory` (or a GC pass to sweep it),
+/// which is the worse trade for a two-fault, one-platform path.
 fn save_state(path: &Path, state: &RotationState) -> std::io::Result<()> {
     use std::io::Write as _;
 
