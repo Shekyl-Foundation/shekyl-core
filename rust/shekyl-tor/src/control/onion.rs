@@ -63,6 +63,8 @@ use std::net::SocketAddr;
 
 use zeroize::{Zeroize, Zeroizing};
 
+use super::encoding::base64_encode_padded;
+
 /// Length of tor's `ED25519-V3` key blob: an **expanded** ed25519 secret key,
 /// `clamp(SHA-512(seed)[0..32]) ‖ SHA-512(seed)[32..64]` (RFC 8032 §5.1.5) —
 /// *not* the 32-byte seed. See [`OnionKey`].
@@ -110,7 +112,7 @@ impl OnionKey {
     /// Returns a [`Zeroizing<String>`] so the encoded copy is wiped on drop
     /// alongside the key itself.
     fn to_base64(&self) -> Zeroizing<String> {
-        Zeroizing::new(base64_encode(&self.0))
+        Zeroizing::new(base64_encode_padded(&self.0))
     }
 }
 
@@ -495,37 +497,6 @@ pub fn evaluate_add_onion_reply(
     }
 }
 
-/// Standard-alphabet, padded base64 (RFC 4648 §4).
-///
-/// Hand-rolled rather than adding a dependency to this crate: the single call
-/// site encodes a fixed 64-byte key, the alphabet is the load-bearing property
-/// (it is what makes the blob token structurally injection-free), and the
-/// implementation is pinned by RFC 4648 §10 test vectors below. Rule 17's
-/// weighing lands on "no new edge" for a dozen lines of table lookup.
-fn base64_encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = u32::from(chunk[0]);
-        let b1 = chunk.get(1).copied().map_or(0, u32::from);
-        let b2 = chunk.get(2).copied().map_or(0, u32::from);
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(ALPHABET[((n >> 18) & 0x3f) as usize] as char);
-        out.push(ALPHABET[((n >> 12) & 0x3f) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(ALPHABET[((n >> 6) & 0x3f) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(ALPHABET[(n & 0x3f) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,20 +513,6 @@ mod tests {
     fn loopback_port() -> OnionPort {
         OnionPort::loopback(80, SocketAddr::from((Ipv4Addr::LOCALHOST, 40001)))
             .expect("127.0.0.1 is loopback")
-    }
-
-    #[test]
-    fn base64_matches_rfc4648_vectors() {
-        // RFC 4648 §10 — pins the alphabet, the padding, and the bit packing.
-        // A drift in any of the three would produce a blob tor rejects (or, worse,
-        // a blob tor accepts as a *different* key).
-        assert_eq!(base64_encode(b""), "");
-        assert_eq!(base64_encode(b"f"), "Zg==");
-        assert_eq!(base64_encode(b"fo"), "Zm8=");
-        assert_eq!(base64_encode(b"foo"), "Zm9v");
-        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
-        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
-        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
     }
 
     #[test]

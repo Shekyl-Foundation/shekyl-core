@@ -27,14 +27,20 @@
 //! (SP-T0b) is the sans-IO readiness half — the `BootstrapState` a consumer awaits
 //! and the `GETINFO status/bootstrap-phase` parser the actor's poll task drives it
 //! with (design §3b: a poll, never a `STATUS_CLIENT` subscription).
+//! [`encoding`] holds the byte↔text conversions the wire needs — uppercase hex
+//! and base64 — once, so a codec correction cannot land on one call site and
+//! miss its counterpart.
 
 pub mod actor;
 pub mod auth;
 pub mod bootstrap;
+pub mod consensus;
+pub mod encoding;
 pub mod framing;
 pub mod onion;
 pub mod safecookie;
 pub mod stream;
+pub mod vanguards;
 
 pub use actor::{
     BootstrapReadiness, Command, CommandResult, ControlError, EventSink, ManagedTor, SocksPort,
@@ -42,10 +48,14 @@ pub use actor::{
 };
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
 pub use bootstrap::{parse_bootstrap_progress, BootstrapState};
-pub use framing::{ControlReply, Framed, FramingError, ReplyFramer, ASYNC_EVENT_STATUS};
+pub use framing::{
+    ControlReply, Framed, FramingError, ReplyBudget, ReplyFramer, ASYNC_EVENT_STATUS,
+    BULK_REPLY_BYTES, ORDINARY_REPLY_BYTES,
+};
 pub use onion::{
     evaluate_add_onion_reply, parse_service_id, AddOnion, AddOnionReplyError, OnionFlags, OnionKey,
     OnionPort, OnionPow, ServiceId, ONION_KEY_BYTES, SERVICE_ID_CHARS,
 };
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
 pub use stream::{parse_stream_event, CircId, StreamEvent, StreamStatus};
+pub use vanguards::{HsLayerPins, RelayFingerprint, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS};

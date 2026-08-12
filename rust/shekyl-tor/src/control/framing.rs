@@ -37,18 +37,46 @@
 /// distinct from a synchronous command reply (control-spec §4.1).
 pub const ASYNC_EVENT_STATUS: u16 = 650;
 
-/// Upper bound on the bytes the framer will buffer for a single in-progress
-/// reply — both one un-terminated line and the running total of an un-terminated
-/// reply. Past it, [`ReplyFramer::next_reply`] returns
-/// [`FramingError::ReplyTooLarge`] so the caller tears the connection down rather
-/// than buffering forever.
+/// Upper bound on the bytes the framer will buffer for an **ordinary** reply —
+/// both one un-terminated line and the running total of an un-terminated reply.
+/// Past it, [`ReplyFramer::next_reply`] returns [`FramingError::ReplyTooLarge`]
+/// so the caller tears the connection down rather than buffering forever.
 ///
-/// The wallet's control replies are small (a status + short value, or a `STREAM`
-/// event), so 256 KiB is generous; it caps a misbehaving — or compromised —
-/// local Tor without risking a legitimate reply. The control port is
-/// loopback-local, so this is defense-in-depth (DoS-never-theft), not an
-/// adversarial-network bound.
-const MAX_REPLY_BYTES: usize = 256 * 1024;
+/// Every reply the crate issues except one is tiny (status lines, `STREAM`
+/// events, `ADD_ONION`, listener discovery), so this is the bound that holds on
+/// essentially the whole connection. The control port is loopback-local, so this
+/// is defense-in-depth against a misbehaving — or compromised — local Tor
+/// (DoS-never-theft), not an adversarial-network bound.
+pub const ORDINARY_REPLY_BYTES: usize = 256 * 1024;
+
+/// Upper bound while a **bulk** command is on the wire — today only `GETINFO
+/// ns/all`, which returns the full network-status candidate set for vanguard
+/// selection and is multi-megabyte on a live consensus.
+///
+/// Granted per command by [`ReplyBudget`], never globally: one command's
+/// legitimate need must not become every reply path's allowance. The actor arms
+/// this the moment the bulk line goes on the wire and drops back to
+/// [`ORDINARY_REPLY_BYTES`] as soon as its reply lands.
+///
+/// **Headroom, stated rather than assumed:** an `ns/all` entry is ~250 bytes
+/// over ~8.5 k relays, so a present-day consensus is ~2 MB — roughly 7× under
+/// this bound. Exceeding it is not a soft failure: the framer's trip is a stream
+/// error, and the actor treats a stream error as a desync it will not reconnect
+/// into, so the incarnation dies and the supervisor retries into the same wall.
+/// The condition is global (every incarnation sees the same consensus), so the
+/// diagnostic has to carry its own remedy — hence `ReplyTooLarge` naming the
+/// limit it hit. Growth toward this number is the signal to raise it.
+pub const BULK_REPLY_BYTES: usize = 16 * 1024 * 1024;
+
+/// Per-entry cost charged on top of a line's own bytes, so the byte cap bounds
+/// the framer's **real** memory rather than only its payload.
+///
+/// A `Vec<String>` entry costs a `String` header plus its heap allocation; a
+/// flood of empty mid-lines (`250-\r\n`, payload `""`) would otherwise grow
+/// `lines` by ~24 bytes an entry while the charge stayed at 4. Charging the
+/// header makes [`ORDINARY_REPLY_BYTES`] an honest memory bound instead of one a
+/// tiny-line flood can multiply.
+const PER_LINE_OVERHEAD: usize = std::mem::size_of::<String>();
 
 /// Reclaim the consumed prefix of `buf` once it passes this size, so the buffer
 /// does not retain already-returned lines indefinitely. Keeps a steady stream of
@@ -183,12 +211,12 @@ pub enum FramingError {
         /// Conflicting code on a later framing line.
         found: u16,
     },
-    /// A single line, or the running total of one reply, exceeded the
-    /// `MAX_REPLY_BYTES` buffer cap without terminating — an un-terminated
+    /// A single line, or the running total of one reply, exceeded the buffer cap
+    /// in force ([`ReplyBudget`]) without terminating — an un-terminated
     /// line/reply that would otherwise buffer without bound (DoS). Content-free:
     /// only the limit.
     ReplyTooLarge {
-        /// The byte cap that was exceeded (`MAX_REPLY_BYTES`).
+        /// The byte cap that was exceeded.
         limit: usize,
     },
 }
@@ -219,6 +247,62 @@ impl std::fmt::Display for FramingError {
 
 impl std::error::Error for FramingError {}
 
+/// The framer's live per-reply byte cap, shared with the actor that knows which
+/// command is on the wire.
+///
+/// A *budget* rather than a constant because exactly one command — `GETINFO
+/// ns/all` — legitimately returns megabytes. Sizing a single global cap to that
+/// outlier would hand a misbehaving local Tor a 64× larger buffer on every path
+/// that does not need it (status lines, `STREAM` events, `ADD_ONION`), so the
+/// allowance is granted for the round trip that needs it and withdrawn again.
+///
+/// Cloning shares the cell: the framer reads it while the actor writes it from
+/// its own task, which is why it is an atomic and not a plain field.
+///
+/// The writer arms the allowance **before** putting the bulk command on the
+/// wire, so the store precedes the existence of any byte it governs. `Release`
+/// / `Acquire` is what makes that ordering a guarantee rather than an
+/// observation about how fast a task gets rescheduled — and on the platforms
+/// this runs on it costs nothing over `Relaxed`.
+#[derive(Clone, Debug)]
+pub struct ReplyBudget(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl ReplyBudget {
+    /// A budget holding the ordinary cap.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(
+            ORDINARY_REPLY_BYTES,
+        )))
+    }
+
+    /// Raise the cap to [`BULK_REPLY_BYTES`] for the bulk command about to go on
+    /// the wire.
+    pub fn arm_bulk(&self) {
+        self.0
+            .store(BULK_REPLY_BYTES, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Drop back to [`ORDINARY_REPLY_BYTES`] — called as soon as the bulk reply
+    /// lands (or the command fails), so the wide allowance never outlives the
+    /// one round trip that earned it.
+    pub fn restore_ordinary(&self) {
+        self.0
+            .store(ORDINARY_REPLY_BYTES, std::sync::atomic::Ordering::Release);
+    }
+
+    /// The cap in force right now.
+    fn limit(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+impl Default for ReplyBudget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Sans-IO state machine that frames a Tor control byte stream into
 /// [`ControlReply`]s. Feed bytes with [`Self::push_bytes`] as the socket yields
 /// them; pull complete replies with [`Self::next_reply`] until it returns
@@ -235,15 +319,13 @@ pub struct ReplyFramer {
     /// `true` while inside a `XYZ+ … .` multi-line data block.
     in_data_block: bool,
     /// Running DoS charge for the in-progress reply: each line's **wire length,
-    /// `CRLF` stripped** (`line.len()`), plus the `\n` every `+` fold inserts. This
-    /// is *not* the exact stored byte count — a framing line stores only `line[4..]`
-    /// (dropping the 3-digit status + separator) — and that is **deliberate**:
-    /// charging the whole line keeps a 4-byte margin per line that offsets the
-    /// per-entry `String`/`Vec` overhead a flood of tiny lines would otherwise hide,
-    /// so the cap bounds the real `self.lines` memory to within a small factor.
-    /// Charging only `line[4..]` would let empty mid-lines (`250-\r\n`, payload `""`)
-    /// grow the `Vec` with `reply_bytes` flat. Bounds an un-terminated *reply* (many
-    /// lines, no end line) against [`MAX_REPLY_BYTES`]; reset when a reply completes.
+    /// `CRLF` stripped** (`line.len()`) **plus [`PER_LINE_OVERHEAD`]**, plus the `\n`
+    /// every `+` fold inserts. Charging the per-entry header is what makes the charge
+    /// an upper bound on real memory rather than only on payload: empty mid-lines
+    /// (`250-\r\n`, payload `""`) cost ~24 bytes of `Vec<String>` each, so a charge of
+    /// their 4 wire bytes alone would let a flood grow `lines` sixfold past the cap.
+    /// Bounds an un-terminated *reply* (many lines, no end line) against
+    /// [`Self::budget`]; reset when a reply completes.
     reply_bytes: usize,
     /// Start of the unconsumed bytes in `buf`. [`Self::take_line`] advances this
     /// rather than front-draining per line, and [`Self::compact`] reclaims the
@@ -253,6 +335,10 @@ pub struct ReplyFramer {
     /// `buf` index (≥ `read_pos`) from which the next `CRLF` search resumes, so a
     /// trickled line is scanned once rather than rescanned each call.
     scan_from: usize,
+    /// The live cap, owned by whoever knows which command is on the wire. A
+    /// stand-alone framer (the handshake's, and every KAT here) holds its own at
+    /// [`ORDINARY_REPLY_BYTES`].
+    budget: ReplyBudget,
 }
 
 // Redacting `Debug` (not derived): `buf` holds raw control bytes mid-assembly and
@@ -276,10 +362,17 @@ impl std::fmt::Debug for ReplyFramer {
 }
 
 impl ReplyFramer {
-    /// A fresh framer with no buffered bytes.
+    /// A fresh framer with no buffered bytes and its own ordinary-cap budget.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The budget cell this framer charges against — cloned by the actor so it
+    /// can widen the cap for the one bulk command and narrow it again after.
+    #[must_use]
+    pub fn budget(&self) -> ReplyBudget {
+        self.budget.clone()
     }
 
     /// Append freshly-read socket bytes. Does not parse; call
@@ -295,8 +388,9 @@ impl ReplyFramer {
         while let Some(line) = self.take_line()? {
             // Bound an un-terminated reply: many valid lines with no end line grow
             // `self.lines` without bound. (`take_line` separately bounds a single
-            // un-terminated *line*.) `reply_bytes` resets in `finish`.
-            self.charge_reply_bytes(line.len())?;
+            // un-terminated *line*.) The per-entry header rides along so the charge
+            // bounds real memory, not just payload. `reply_bytes` resets in `finish`.
+            self.charge_reply_bytes(line.len() + PER_LINE_OVERHEAD)?;
             // Inside a `+` data block every line is verbatim data until a lone
             // `.`; nothing here is a framing line.
             if self.in_data_block {
@@ -361,17 +455,16 @@ impl ReplyFramer {
         Ok(None)
     }
 
-    /// Charge `n` bytes toward the in-progress reply and trip the cap if exceeded.
-    /// Called with each line's length **and** the `\n` a data-block fold inserts,
-    /// so the running total conservatively bounds the buffered reply memory —
-    /// closing the hole where a folded `\n` (e.g. a flood of empty data lines)
-    /// would otherwise go uncounted.
+    /// Charge `n` bytes toward the in-progress reply and trip the live cap if
+    /// exceeded. Called with each line's length **and** the `\n` a data-block fold
+    /// inserts, so the running total conservatively bounds the buffered reply
+    /// memory — closing the hole where a folded `\n` (e.g. a flood of empty data
+    /// lines) would otherwise go uncounted.
     fn charge_reply_bytes(&mut self, n: usize) -> Result<(), FramingError> {
-        self.reply_bytes += n;
-        if self.reply_bytes > MAX_REPLY_BYTES {
-            return Err(FramingError::ReplyTooLarge {
-                limit: MAX_REPLY_BYTES,
-            });
+        let limit = self.budget.limit();
+        self.reply_bytes = self.reply_bytes.saturating_add(n);
+        if self.reply_bytes > limit {
+            return Err(FramingError::ReplyTooLarge { limit });
         }
         Ok(())
     }
@@ -400,10 +493,9 @@ impl ReplyFramer {
             // No terminator yet. Everything from `read_pos` is one partial line; if
             // it already exceeds the cap the peer will never terminate it (or is
             // flooding) — refuse rather than buffer on.
-            if self.buf.len() - self.read_pos > MAX_REPLY_BYTES {
-                return Err(FramingError::ReplyTooLarge {
-                    limit: MAX_REPLY_BYTES,
-                });
+            let limit = self.budget.limit();
+            if self.buf.len() - self.read_pos > limit {
+                return Err(FramingError::ReplyTooLarge { limit });
             }
             // Resume next time from the last byte: it may be the `\r` of a `\r\n`
             // the next chunk completes (never before `read_pos`).
@@ -412,10 +504,9 @@ impl ReplyFramer {
         };
         let crlf = self.scan_from + rel;
         // A single terminated line longer than the cap is abuse, too.
-        if crlf - self.read_pos > MAX_REPLY_BYTES {
-            return Err(FramingError::ReplyTooLarge {
-                limit: MAX_REPLY_BYTES,
-            });
+        let limit = self.budget.limit();
+        if crlf - self.read_pos > limit {
+            return Err(FramingError::ReplyTooLarge { limit });
         }
         let line = std::str::from_utf8(&self.buf[self.read_pos..crlf])
             .map_err(|_| FramingError::InvalidUtf8)?
@@ -668,11 +759,11 @@ mod tests {
     fn caps_an_unterminated_line() {
         // A single line that never sends `CRLF` must not buffer without bound.
         let mut framer = ReplyFramer::new();
-        framer.push_bytes(&vec![b'x'; MAX_REPLY_BYTES + 1]);
+        framer.push_bytes(&vec![b'x'; ORDINARY_REPLY_BYTES + 1]);
         assert_eq!(
             framer.next_reply(),
             Err(FramingError::ReplyTooLarge {
-                limit: MAX_REPLY_BYTES,
+                limit: ORDINARY_REPLY_BYTES,
             }),
         );
     }
@@ -682,10 +773,12 @@ mod tests {
         // Many large *valid* mid-lines with no end line trip the per-reply cap
         // (each line is individually under the per-line cap, so only the running
         // total catches it).
-        let big_mid = format!("250-{}\r\n", "x".repeat(60_000)); // ~60 KB mid-line
+        let chunk = 16 * 1024; // 16 KiB payload per mid-line
+        let big_mid = format!("250-{}\r\n", "x".repeat(chunk));
+        let pushes_needed = (ORDINARY_REPLY_BYTES / chunk) + 2;
         let mut framer = ReplyFramer::new();
         let mut hit = None;
-        for _ in 0..8 {
+        for _ in 0..pushes_needed {
             framer.push_bytes(big_mid.as_bytes());
             if let Err(e) = framer.next_reply() {
                 hit = Some(e);
@@ -695,8 +788,69 @@ mod tests {
         assert_eq!(
             hit,
             Some(FramingError::ReplyTooLarge {
-                limit: MAX_REPLY_BYTES,
+                limit: ORDINARY_REPLY_BYTES,
             }),
+        );
+    }
+
+    #[test]
+    fn the_bulk_allowance_is_scoped_to_the_command_that_armed_it() {
+        // The `GETINFO ns/all` round trip is the ONE case that needs megabytes.
+        // A payload over the ordinary cap must be refused before the arm, admitted
+        // while armed, and refused again once the budget is restored — the whole
+        // point of a per-command budget over a globally-raised constant.
+        let over_ordinary = ORDINARY_REPLY_BYTES + 1;
+        let body = "x".repeat(over_ordinary);
+
+        let mut framer = ReplyFramer::new();
+        framer.push_bytes(format!("250-{body}\r\n").as_bytes());
+        assert_eq!(
+            framer.next_reply(),
+            Err(FramingError::ReplyTooLarge {
+                limit: ORDINARY_REPLY_BYTES,
+            }),
+            "ordinary replies keep the tight bound",
+        );
+
+        let mut framer = ReplyFramer::new();
+        let budget = framer.budget();
+        budget.arm_bulk();
+        framer.push_bytes(format!("250-{body}\r\n250 OK\r\n").as_bytes());
+        let reply = framer.next_reply().expect("armed").expect("one reply");
+        assert_eq!(reply.status(), 250);
+
+        // Withdrawn again the moment the bulk reply lands.
+        budget.restore_ordinary();
+        framer.push_bytes(format!("250-{body}\r\n").as_bytes());
+        assert_eq!(
+            framer.next_reply(),
+            Err(FramingError::ReplyTooLarge {
+                limit: ORDINARY_REPLY_BYTES,
+            }),
+        );
+    }
+
+    #[test]
+    fn the_charge_bounds_real_memory_not_just_payload() {
+        // A flood of empty mid-lines is the amplification case: 4 wire bytes each,
+        // but ~24 bytes of `Vec<String>` apiece. Charging `PER_LINE_OVERHEAD` on top
+        // is what keeps the cap an honest memory bound — without it the same flood
+        // grows `lines` roughly sixfold past the limit before tripping.
+        let mut framer = ReplyFramer::new();
+        let chunk = b"250-\r\n".repeat(4096);
+        let mut entries_at_trip = 0;
+        for _ in 0..(ORDINARY_REPLY_BYTES / (4 * 4096) + 4) {
+            framer.push_bytes(&chunk);
+            if framer.next_reply().is_err() {
+                break;
+            }
+            entries_at_trip = framer.lines.len();
+        }
+        let entry_bytes = entries_at_trip * PER_LINE_OVERHEAD;
+        assert!(
+            entry_bytes <= ORDINARY_REPLY_BYTES,
+            "{entries_at_trip} entries = {entry_bytes} B of `Vec<String>` outgrew the \
+             {ORDINARY_REPLY_BYTES} B cap the charge is supposed to bound",
         );
     }
 
@@ -735,9 +889,11 @@ mod tests {
             None,
             "block opened, no data yet"
         );
-        let big_data = format!("{}\r\n", "x".repeat(60_000)); // ~60 KB data line
+        let chunk = 256 * 1024;
+        let big_data = format!("{}\r\n", "x".repeat(chunk));
+        let pushes_needed = (ORDINARY_REPLY_BYTES / chunk) + 2;
         let mut hit = None;
-        for _ in 0..8 {
+        for _ in 0..pushes_needed {
             framer.push_bytes(big_data.as_bytes());
             if let Err(e) = framer.next_reply() {
                 hit = Some(e);
@@ -747,7 +903,7 @@ mod tests {
         assert_eq!(
             hit,
             Some(FramingError::ReplyTooLarge {
-                limit: MAX_REPLY_BYTES,
+                limit: ORDINARY_REPLY_BYTES,
             }),
         );
     }
@@ -819,16 +975,25 @@ mod tests {
         // `line.len() == 0`) must still trip the cap: each fold inserts a `\n` —
         // real buffered state the raw `line.len()` charge alone would miss, which
         // would let the entry grow unbounded with `reply_bytes` flat. Regression.
-        let mut wire = b"250+k=\r\n".to_vec();
-        for _ in 0..(MAX_REPLY_BYTES + 8) {
-            wire.extend_from_slice(b"\r\n");
-        }
         let mut framer = ReplyFramer::new();
-        framer.push_bytes(&wire);
+        framer.push_bytes(b"250+k=\r\n");
+        let chunk = b"\r\n".repeat(4096);
+        let mut hit = None;
+        for _ in 0..(ORDINARY_REPLY_BYTES / 4096 + 4) {
+            framer.push_bytes(&chunk);
+            match framer.next_reply() {
+                Err(e) => {
+                    hit = Some(e);
+                    break;
+                }
+                Ok(None) => {}
+                Ok(Some(_)) => panic!("reply completed before the cap tripped"),
+            }
+        }
         assert_eq!(
-            framer.next_reply(),
-            Err(FramingError::ReplyTooLarge {
-                limit: MAX_REPLY_BYTES,
+            hit,
+            Some(FramingError::ReplyTooLarge {
+                limit: ORDINARY_REPLY_BYTES,
             }),
         );
     }
@@ -855,20 +1020,28 @@ mod tests {
     #[test]
     fn caps_a_flood_of_empty_mid_lines() {
         // Empty mid-lines (`250-\r\n`, payload `""`) store an empty entry, but the
-        // cap must still trip: `reply_bytes` charges the full wire line (incl. the
-        // 4-byte prefix), which offsets the per-entry `Vec`/`String` overhead.
+        // cap must still trip: `reply_bytes` charges the full wire line plus the
+        // per-entry header, which is what the empty payload would otherwise hide.
         // Regression against charging only `line[4..]` (which would be 0 here, so
         // the `Vec` would grow unbounded with the cap flat).
-        let mut wire = Vec::new();
-        for _ in 0..(MAX_REPLY_BYTES / 4 + 8) {
-            wire.extend_from_slice(b"250-\r\n"); // each charges 4
-        }
         let mut framer = ReplyFramer::new();
-        framer.push_bytes(&wire);
+        let chunk = b"250-\r\n".repeat(4096);
+        let mut hit = None;
+        for _ in 0..(ORDINARY_REPLY_BYTES / (4 * 4096) + 4) {
+            framer.push_bytes(&chunk);
+            match framer.next_reply() {
+                Err(e) => {
+                    hit = Some(e);
+                    break;
+                }
+                Ok(None) => {}
+                Ok(Some(_)) => panic!("reply completed before the cap tripped"),
+            }
+        }
         assert_eq!(
-            framer.next_reply(),
-            Err(FramingError::ReplyTooLarge {
-                limit: MAX_REPLY_BYTES,
+            hit,
+            Some(FramingError::ReplyTooLarge {
+                limit: ORDINARY_REPLY_BYTES,
             }),
         );
     }

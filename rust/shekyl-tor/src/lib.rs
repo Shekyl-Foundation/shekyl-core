@@ -55,6 +55,7 @@ pub mod control;
 pub mod onion_identity;
 pub mod onion_service;
 pub mod service;
+pub mod vanguard_rotation;
 
 #[cfg(test)]
 mod test_support;

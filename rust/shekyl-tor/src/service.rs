@@ -61,12 +61,14 @@ use crate::control::{
     TorControl, TorControlConfig, TorExit, TorLaunch,
 };
 use crate::onion_service::{publish_onion, OnionPublishAbort};
+use crate::vanguard_rotation::{VanguardManager, VanguardsAbort};
 
-// Config/error types for the onion publish surface live in `onion_service`
-// (their own concern). Re-exported here so `TorServiceConfig` consumers can
-// name them next to the supervisor types they configure.
+// Config/error types live next to their owners; re-exported here so a
+// `TorServiceConfig` consumer names them beside the supervisor types.
 #[doc(inline)]
 pub use crate::onion_service::{OnionPublishError, OnionServiceSpec};
+#[doc(inline)]
+pub use crate::vanguard_rotation::{VanguardsError, VanguardsMode, VanguardsWarning};
 
 /// The service-level posture — what the rest of the wallet sees. One long-lived
 /// watch, owned by the supervisor, outliving every incarnation (the §3b
@@ -96,6 +98,18 @@ pub enum TorPosture {
     Ready {
         /// The bound `SocksPort auto` address of the *current* incarnation.
         socks_addr: SocketAddr,
+        /// A fault the transport **survived** — the tor at `socks_addr` is
+        /// usable and the persona is served, but a guarantee behind it is
+        /// degraded (see [`ServiceWarning`]). `None` is the healthy case.
+        ///
+        /// This field exists because the alternative to it is worse in both
+        /// directions: reporting such a fault by failing the incarnation kills a
+        /// working transport (and, since the condition persists, keeps killing
+        /// it), while not reporting it at all breaks the "never silent"
+        /// commitment for a privacy guarantee the operator is the only one who
+        /// can restore. An alarm layer should treat `Some` as an open incident,
+        /// and it clears itself the moment the underlying operation succeeds.
+        warning: Option<ServiceWarning>,
         /// `true` while the degraded episode has **not yet cleared**: the tor is
         /// usable now, but has not held `Ready` for `stable_reset` since the
         /// alarm fired. An operator-alarm layer should render
@@ -126,6 +140,32 @@ pub enum TorPosture {
         /// The most recent failure (updated on each failed retry).
         last: ServiceFailure,
     },
+}
+
+/// A fault that did **not** cost the transport, carried on
+/// [`TorPosture::Ready`].
+///
+/// The split from [`ServiceFailure`] is the point: a failure ends an
+/// incarnation, a warning does not. Everything here leaves tor bootstrapped,
+/// SOCKS listening and the persona served, while degrading a guarantee that
+/// only an operator can restore — so the supervisor alarms and keeps serving
+/// rather than tearing a healthy tor down to make itself heard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServiceWarning {
+    /// The vanguard set is pinned and confirmed, but its persistence is not
+    /// intact — the state file could not be read at load (so the set was
+    /// re-drawn) or could not be written (so a restart would re-draw). The live
+    /// guard topology is correct either way; what is at risk is its survival
+    /// across a restart.
+    Vanguards(VanguardsWarning),
+}
+
+impl std::fmt::Display for ServiceWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Vanguards(w) => write!(f, "{w}"),
+        }
+    }
 }
 
 /// Why an incarnation failed — the classification input, carried in
@@ -162,6 +202,14 @@ pub enum ServiceFailure {
     /// serving posture is up when an onion is configured) is never reached
     /// on this incarnation.
     OnionPublish(OnionPublishError),
+    /// Pinning or rotating the vanguard set failed. Transient like any other
+    /// control fault: retries continue, because a serving persona without
+    /// vanguards is a posture we refuse to publish `Ready` for.
+    ///
+    /// Only faults that leave the pinned set and our state genuinely at odds
+    /// reach here — a persistence fault does not, since the `SETCONF` has
+    /// already been confirmed by then; that is a [`ServiceWarning`].
+    Vanguards(VanguardsError),
 }
 
 /// The two retry cadences (§3c restart classification).
@@ -186,7 +234,8 @@ pub fn classify(failure: &ServiceFailure) -> FailureClass {
         | ServiceFailure::BootstrapTimeout
         | ServiceFailure::Exited(_)
         | ServiceFailure::Internal(_)
-        | ServiceFailure::OnionPublish(_) => FailureClass::Transient,
+        | ServiceFailure::OnionPublish(_)
+        | ServiceFailure::Vanguards(_) => FailureClass::Transient,
     }
 }
 
@@ -214,6 +263,11 @@ pub struct SupervisorPolicy {
     /// keeps SOCKS discovery from hanging the supervisor (and thus `shutdown()`).
     /// Policy-driven (like the other timeouts) so tests can shrink it.
     pub socks_discovery_deadline: Duration,
+    /// Bound on each vanguards control round-trip (`GETINFO ns/all` and the
+    /// `SETCONF`). More generous than the other reply bounds because the
+    /// consensus reply is large (thousands of router entries), not because
+    /// the network is slow.
+    pub vanguards_deadline: Duration,
     /// Bound on the `ADD_ONION` reply for the configured onion service.
     /// `ADD_ONION` loads the key and answers immediately — descriptor
     /// publication is asynchronous and NOT awaited here — so, like SOCKS
@@ -231,6 +285,7 @@ impl Default for SupervisorPolicy {
             trust_retry: Duration::from_secs(300),
             bootstrap_deadline: Duration::from_secs(300),
             socks_discovery_deadline: Duration::from_secs(30),
+            vanguards_deadline: Duration::from_secs(60),
             onion_publish_deadline: Duration::from_secs(30),
         }
     }
@@ -346,14 +401,70 @@ pub struct TorServiceConfig {
     /// **production always leaves it `false`**. Same typed-knob rationale as
     /// `ManagedTor::disable_network`.
     pub disable_network: bool,
-    /// The persona's onion service, republished on every incarnation's
-    /// `Ready` transition (onions are per-incarnation: `Detach` is
-    /// unrepresentable). When set, `Ready` means the **full** serving
-    /// posture is up — SOCKS discovered *and* the onion published at the
-    /// derived address; a publish failure tears the incarnation down
-    /// through the normal retry/degrade policy instead of publishing a
-    /// half-up `Ready`.
-    pub onion: Option<OnionServiceSpec>,
+    /// What this instance is for — client, hardened client, or serving persona.
+    /// Carries the onion spec on the one variant that has one.
+    pub posture: ServingPosture,
+}
+
+/// What a supervised tor is **for**, and therefore what guard protection it
+/// runs behind.
+///
+/// One field rather than an independent `onion: Option<_>` plus a
+/// `vanguards: VanguardsMode`, because those two knobs have a forbidden
+/// combination and this shape does not contain it. A serving persona on
+/// lite-only guard protection is the configuration the mechanism ruling
+/// forbids — silently weaker, no feedback channel, against an adversary whose
+/// success is invisible to the operator — and the two-field shape could express
+/// it, so it had to be *detected*, after a full binary gate, tor spawn and
+/// network bootstrap, on every retry, forever. Here there is nothing to detect:
+/// the variant does not exist. (Unrepresentable over validated — the same call
+/// the `SETCONF` argument type and the
+/// [`VanguardsActive`](crate::vanguard_rotation::VanguardsActive) witness make.)
+///
+/// The asymmetry is real and is why this is not simply "vanguards follow the
+/// onion": `HardenedClient` is legitimate. The witness leg is an onion *client*
+/// building rendezvous circuits, and client-side guard discovery is a genuine
+/// attack, so managed vanguards without a published onion stays available.
+#[derive(Default)]
+pub enum ServingPosture {
+    /// A plain client: no onion, tor's built-in vanguards-lite. The default,
+    /// and the cheap one — full vanguards adds a guard layer and its latency,
+    /// which a non-serving instance should not pay. Defaulting *here* rather
+    /// than on a `vanguards` field is what keeps the mechanical "add the new
+    /// field, take the default" edit from landing on a serving persona with no
+    /// vanguards: that combination has no representation to default into.
+    #[default]
+    Client,
+    /// A client with supervisor-managed **full** vanguards: no published onion,
+    /// but the rendezvous circuits it builds get the same guard discipline a
+    /// serving persona has.
+    HardenedClient,
+    /// A serving persona: full vanguards **and** this onion service,
+    /// republished on every incarnation's `Ready` transition (onions are
+    /// per-incarnation — `Detach` is unrepresentable). `Ready` then means the
+    /// **full** serving posture is up: SOCKS discovered *and* the onion
+    /// published at the derived address; a publish failure tears the
+    /// incarnation down through the normal retry/degrade policy instead of
+    /// publishing a half-up `Ready`.
+    Serving(OnionServiceSpec),
+}
+
+impl ServingPosture {
+    /// The vanguards mode this posture implies.
+    fn vanguards(&self) -> VanguardsMode {
+        match self {
+            Self::Client => VanguardsMode::Off,
+            Self::HardenedClient | Self::Serving(_) => VanguardsMode::Managed,
+        }
+    }
+
+    /// The onion to publish, if this posture serves one.
+    fn onion(&self) -> Option<&OnionServiceSpec> {
+        match self {
+            Self::Client | Self::HardenedClient => None,
+            Self::Serving(spec) => Some(spec),
+        }
+    }
 }
 
 /// Handle to a running supervisor: the posture watch + shutdown.
@@ -444,6 +555,11 @@ async fn supervise(
     // incarnation holds `Ready` for `stable_reset` (in `drive_incarnation`).
     let mut degraded = false;
 
+    // Vanguards live at SUPERVISOR scope and outlive every incarnation — the
+    // load-bearing invariant: a tor restart must not cause a rotation. The
+    // manager owns mode, in-memory state, and the on-disk path.
+    let mut vanguards = VanguardManager::load(config.posture.vanguards(), &config.data_dir);
+
     loop {
         if !degraded {
             posture.send(TorPosture::Starting).ok();
@@ -491,13 +607,13 @@ async fn supervise(
             readiness,
         });
 
-        // 3. Drive it: bootstrap → SOCKS discovery → onion publish → Ready →
-        //    hold until death.
+        // 3. Drive it: bootstrap → SOCKS → vanguards → onion → Ready → hold.
         let end = drive_incarnation(
             &mut IncarnationCtx {
                 actor: &actor,
                 policy: &config.policy,
-                onion: config.onion.as_ref(),
+                onion: config.posture.onion(),
+                vanguards: &mut vanguards,
                 attempt: &mut attempt,
                 degraded: &mut degraded,
                 posture: &posture,
@@ -608,10 +724,21 @@ struct IncarnationCtx<'a> {
     actor: &'a kameo::actor::ActorRef<TorControl>,
     policy: &'a SupervisorPolicy,
     onion: Option<&'a OnionServiceSpec>,
+    /// Supervisor-scoped; borrowed so a restart cannot re-draw the set.
+    vanguards: &'a mut VanguardManager,
     attempt: &'a mut u32,
     degraded: &'a mut bool,
     posture: &'a watch::Sender<TorPosture>,
     shutdown: &'a mut oneshot::Receiver<()>,
+}
+
+/// Map a vanguards abort onto the incarnation's outcome.
+fn vanguards_abort_to_end(abort: VanguardsAbort) -> IncarnationEnd {
+    match abort {
+        VanguardsAbort::Shutdown => IncarnationEnd::Shutdown,
+        VanguardsAbort::ActorGone => IncarnationEnd::Failed(ServiceFailure::Exited(None)),
+        VanguardsAbort::Failed(e) => IncarnationEnd::Failed(ServiceFailure::Vanguards(e)),
+    }
 }
 
 /// Drive one incarnation from spawn to death: forward bootstrap telemetry,
@@ -685,19 +812,41 @@ async fn drive_incarnation(
         }
         Err(_) => return IncarnationEnd::Failed(ServiceFailure::Exited(None)),
     };
+    // Phase 2a: full vanguards (if managed) — BEFORE the onion, because
+    // publishing needs the witness this step mints, and because a persona
+    // must never be reachable on lite-only protection even briefly. Restores
+    // the supervisor-scoped state (repairing only relays that left the
+    // consensus); it never re-selects, so this restart does not rotate.
+    let vanguards_witness = match ctx
+        .vanguards
+        .establish(ctx.actor, ctx.policy.vanguards_deadline, ctx.shutdown)
+        .await
+    {
+        Ok(witness) => witness,
+        Err(abort) => return vanguards_abort_to_end(abort),
+    };
+
     // Phase 2b: publish the persona's onion service, if configured — on
     // EVERY incarnation, because a published onion dies with its control
     // connection (`Detach` is unrepresentable). Runs before the `Ready`
-    // posture so `Ready` means the FULL serving posture is up: a persona
-    // whose SOCKS works but whose onion did not publish is unreachable for
-    // challenges, and publishing `Ready` for it would hide exactly the
-    // failure the supervisor exists to surface.
+    // posture so `Ready` means the FULL serving posture is up.
     if let Some(spec) = ctx.onion {
+        // `ServingPosture::Serving` implies `VanguardsMode::Managed`, and
+        // `establish` returns the witness for every managed instance — so the
+        // ruled-out "serving persona on lite-only protection" is not a case to
+        // handle here, it is a case the config cannot express. The `Option` that
+        // remains is only "did this instance run vanguards at all", and a
+        // serving one always did.
+        let Some(witness) = vanguards_witness else {
+            return IncarnationEnd::Failed(ServiceFailure::Internal(
+                "serving posture reached the onion publish without a vanguards witness".to_owned(),
+            ));
+        };
         match publish_onion(
-            ctx.actor,
             spec,
             ctx.policy.onion_publish_deadline,
             ctx.shutdown,
+            witness,
         )
         .await
         {
@@ -714,13 +863,24 @@ async fn drive_incarnation(
 
     // Usable now — published unconditionally (never hide a working transport
     // from SP-T1). While the degraded episode is still open, `recovering: true`
-    // keeps the operator incident continuous instead of flapping it closed.
-    ctx.posture
-        .send(TorPosture::Ready {
-            socks_addr,
-            recovering: *ctx.degraded,
-        })
-        .ok();
+    // keeps the operator incident continuous instead of flapping it closed, and
+    // any vanguards fault the transport survived rides alongside rather than
+    // costing the transport it did not break.
+    let publish_ready =
+        |posture: &watch::Sender<TorPosture>, recovering: bool, warning: Option<ServiceWarning>| {
+            posture
+                .send(TorPosture::Ready {
+                    socks_addr,
+                    recovering,
+                    warning,
+                })
+                .ok();
+        };
+    publish_ready(
+        ctx.posture,
+        *ctx.degraded,
+        ctx.vanguards.warning().map(ServiceWarning::Vanguards),
+    );
 
     // Phase 3: hold until death or shutdown. Once this incarnation has held
     // `Ready` for `stable_reset`, forgive prior instability in place (§3c): clear
@@ -731,10 +891,30 @@ async fn drive_incarnation(
     let reset_deadline = tokio::time::Instant::now() + ctx.policy.stable_reset;
     let mut forgiven = false;
     loop {
+        // Vanguard reconcile rides its own arm: L3 nodes average ~31.5 h and
+        // each expires independently, so a long-lived incarnation must repair
+        // dead relays and rotate mid-life. The arm is inert when Off or when
+        // no state has been established yet.
+        // `select!` polls every arm's future, so the disabled case needs a future
+        // that never completes rather than a placeholder delay standing in as a
+        // number a reader would mistake for rotation policy.
+        let reconcile = async {
+            match ctx.vanguards.next_deadline() {
+                Some(delay) => tokio::time::sleep(delay).await,
+                None => std::future::pending().await,
+            }
+        };
+        let mut reconcile_due = false;
+
         tokio::select! {
             _ = &mut *ctx.shutdown => return IncarnationEnd::Shutdown,
             () = ctx.actor.wait_for_shutdown() => {
                 return IncarnationEnd::Failed(ServiceFailure::Exited(None));
+            }
+            () = reconcile => {
+                // Handled after the select! so reconcile can borrow `ctx` whole
+                // without colliding with this arm's own borrow of it.
+                reconcile_due = true;
             }
             () = tokio::time::sleep_until(reset_deadline), if !forgiven => {
                 let was_degraded = *ctx.degraded;
@@ -742,13 +922,33 @@ async fn drive_incarnation(
                 *ctx.degraded = false;
                 forgiven = true;
                 if was_degraded {
-                    ctx.posture
-                        .send(TorPosture::Ready {
-                            socks_addr,
-                            recovering: false,
-                        })
-                        .ok();
+                    publish_ready(
+                        ctx.posture,
+                        false,
+                        ctx.vanguards.warning().map(ServiceWarning::Vanguards),
+                    );
                 }
+            }
+        }
+
+        if reconcile_due {
+            let before = ctx.vanguards.warning();
+            if let Err(abort) = ctx
+                .vanguards
+                .reconcile(ctx.actor, ctx.policy.vanguards_deadline, ctx.shutdown)
+                .await
+            {
+                return vanguards_abort_to_end(abort);
+            }
+            // Republish only on an edge: a persist that started or stopped
+            // failing is news, an unchanged posture is not.
+            let after = ctx.vanguards.warning();
+            if after != before {
+                publish_ready(
+                    ctx.posture,
+                    *ctx.degraded,
+                    after.map(ServiceWarning::Vanguards),
+                );
             }
         }
     }
@@ -767,6 +967,7 @@ mod tests {
             trust_retry: Duration::from_millis(20),
             bootstrap_deadline: Duration::from_secs(5),
             socks_discovery_deadline: Duration::from_secs(2),
+            vanguards_deadline: Duration::from_secs(2),
             onion_publish_deadline: Duration::from_secs(2),
         }
     }
@@ -816,6 +1017,51 @@ mod tests {
         assert!(!is_degraded(&p, FailureClass::Transient, 2));
         assert!(is_degraded(&p, FailureClass::Transient, 3));
         assert!(is_degraded(&p, FailureClass::Transient, 4));
+    }
+
+    #[test]
+    fn a_serving_posture_always_carries_managed_vanguards() {
+        // The ruled-out configuration — a serving persona on lite-only guard
+        // protection — used to be a runtime refusal discovered after a full tor
+        // spawn and bootstrap. It is now unrepresentable, and this is the pin on
+        // that: there is no posture that publishes an onion without vanguards.
+        let target = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind loopback target")
+            .local_addr()
+            .expect("local addr");
+        let identity = crate::onion_identity::OnionIdentity::from_hs_id_seed(&[0x5cu8; 32]);
+        let spec = OnionServiceSpec::new(identity, 80, target, 8).expect("loopback spec");
+        assert_eq!(
+            ServingPosture::Serving(spec).vanguards(),
+            VanguardsMode::Managed
+        );
+        // And the legitimate asymmetry stays available: managed vanguards with
+        // no published onion is the onion-CLIENT hardening case, not a mistake.
+        assert_eq!(
+            ServingPosture::HardenedClient.vanguards(),
+            VanguardsMode::Managed
+        );
+        assert!(ServingPosture::HardenedClient.onion().is_none());
+        assert_eq!(ServingPosture::Client.vanguards(), VanguardsMode::Off);
+    }
+
+    #[test]
+    fn vanguards_control_failures_are_transient() {
+        // A SETCONF refused by a wedged control port is an ordinary liveness
+        // fault: back off and retry, do not alarm on the first one.
+        assert_eq!(
+            classify(&ServiceFailure::Vanguards(VanguardsError::Rejected {
+                status: 552
+            })),
+            FailureClass::Transient
+        );
+    }
+
+    #[test]
+    fn vanguards_mode_defaults_to_off() {
+        // Full vanguards costs an extra guard layer and its latency; a
+        // non-serving instance must not pay it by default.
+        assert_eq!(VanguardsMode::default(), VanguardsMode::Off);
     }
 
     #[test]
@@ -949,7 +1195,7 @@ mod tests {
             events: EventSink::new(tx),
             policy: tiny_policy(),
             disable_network: true,
-            onion: None,
+            posture: ServingPosture::Client,
         });
         let mut posture = service.posture();
 
@@ -1000,7 +1246,7 @@ mod tests {
             events: EventSink::new(tx),
             policy: tiny_policy(),
             disable_network: true,
-            onion: None,
+            posture: ServingPosture::Client,
         });
         let mut posture = service.posture();
         service.shutdown().await;
@@ -1067,7 +1313,7 @@ mod live_tests {
                 ..SupervisorPolicy::default()
             },
             disable_network: false,
-            onion: None,
+            posture: ServingPosture::Client,
         });
         let mut posture = service.posture();
 
@@ -1079,6 +1325,7 @@ mod live_tests {
         let TorPosture::Ready {
             socks_addr: first_addr,
             recovering,
+            warning,
         } = first
         else {
             unreachable!()
@@ -1087,8 +1334,10 @@ mod live_tests {
             first_addr.ip().is_loopback(),
             "SocksPort auto must bind loopback"
         );
-        // A clean first launch is not a degraded-episode recovery.
+        // A clean first launch is not a degraded-episode recovery, and a
+        // writable data dir leaves nothing for the warning channel to carry.
         assert!(!recovering, "first Ready must not be flagged recovering");
+        assert_eq!(warning, None, "a healthy first Ready carries no warning");
         // The safe accessor returns the same live endpoint while Ready.
         assert_eq!(service.current_socks(), Some(first_addr));
 
@@ -1166,7 +1415,7 @@ mod live_tests {
                 ..SupervisorPolicy::default()
             },
             disable_network: false,
-            onion: Some(spec),
+            posture: ServingPosture::Serving(spec),
         });
         let mut posture = service.posture();
 
@@ -1226,7 +1475,7 @@ mod live_tests {
                 ..SupervisorPolicy::default()
             },
             disable_network: false,
-            onion: None,
+            posture: ServingPosture::Client,
         });
         let mut posture = service.posture();
 
@@ -1321,7 +1570,7 @@ mod live_tests {
             // Never bootstraps → every incarnation hits the bootstrap deadline →
             // teardown + respawn into the same DataDirectory.
             disable_network: true,
-            onion: None,
+            posture: ServingPosture::Client,
         });
         let mut posture = service.posture();
 

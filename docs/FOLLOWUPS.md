@@ -14423,6 +14423,26 @@ one place to confirm each item's relationship to the wallet stack.
   post-testnet. *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md`
   §*L12* finding 1.
 
+- **Vanguard eligibility flag set is a provisional pin awaiting the W₂ rig
+  (VG-2 / transport; rule-21 reopen record).** `REQUIRED_FLAGS = ["Fast",
+  "Stable", "Valid", "Running"]` in `rust/shekyl-tor/src/control/consensus.rs`
+  decides which relays a serving persona's L2/L3 vanguards may be drawn from.
+  The `Guard` flag is deliberately **not** required — vanguards are middle
+  positions, not entry guards — and the four that are required are the
+  "real bandwidth, long-lived, usable" reading of the mechanism ruling, not a
+  spec-pinned constant like the set sizes (`NUM_LAYER2_GUARDS = 4` /
+  `NUM_LAYER3_GUARDS = 6`, which come from the Sybil rotation table and are
+  **not** in scope here). The in-code comment names the dependency but a
+  comment is not a durable reopening record, which is what rule 21 asks for.
+  *Blocker:* the W₂ capacity rig — whether a 4-node L2 set drawn from this
+  eligibility pool carries a serving persona's concurrent rendezvous load is
+  the measurement that decides whether the set should be stricter (fewer,
+  better relays) or looser (a larger pool at lower average quality). *Reopening
+  criterion:* the first W₂ run that reports L2 saturation or draw-pool
+  exhaustion against this filter, or a tor release that renames/retires any of
+  the four flags. *Target:* gate 6, alongside the rig. *Reference:*
+  `ARCHIVAL_CHALLENGE_MECHANISM.md` §7.4; PR #447.
+
 ---
 
 ## V4+ — horizontal scaling
