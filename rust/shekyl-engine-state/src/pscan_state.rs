@@ -134,10 +134,13 @@ pub enum MintLineageOutput {
 /// public amount-delta gets.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct BondPostRecord {
-    /// Height of the block carrying the post. **No live reader yet** (SA-4
-    /// census): the intended consumer is the 2d-2 SP-R0 reconcile GC
-    /// (`reconcile_set`, `#[allow(dead_code)] // transient`). Retained for
-    /// that named vehicle, not deleted.
+    /// Height of the block carrying the post. **Live production reader**
+    /// (SA-4 census correction): `claim_orchestrator`'s
+    /// `last_confirmed_sweep_height` takes the max over this persona's posts
+    /// and hands it to `BackingSet::from_spendable` as the emission claim's
+    /// legal-tranche boundary — deleting this field silently moves the
+    /// spendable backing window. The 2d-2 SP-R0 reconcile GC is a *second*,
+    /// still-dormant consumer, not the only one.
     pub height: BlockHeight,
     /// The matched persona's canonical id (a public on-chain pseudonym handle).
     pub p_canonical_id: PCanonicalId,
@@ -199,9 +202,13 @@ pub struct PFundingOutputRecord {
     /// Height of the block carrying the output.
     pub height: BlockHeight,
     /// The settlement epoch `height` falls in. **No live reader yet** (SA-4
-    /// census): the `accruals` map is the per-epoch signal today. Retained
-    /// alongside `accruals` for the same SP-7 `C_min` vehicle — per-output
-    /// epoch attribution it may need — rather than stranding it.
+    /// census): as with [`PScanState::accruals`], the rule-18 resume seam
+    /// round-trips this field (`FundingOutputMatch` ⇄
+    /// `PFundingOutputRecord`) — carriage, not a reader, since nothing's
+    /// behavior changes with the value; the `accruals` map is the per-epoch
+    /// signal today. Retained alongside
+    /// `accruals` for the same SP-7 `C_min` vehicle — per-output epoch
+    /// attribution it may need — rather than stranding it.
     pub epoch: SettlementEpoch,
     /// GF-4b mint-lineage rung, classified at the scan seam
     /// (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3). Persisted so the C-1
@@ -291,11 +298,15 @@ pub struct PScanState {
     /// [`SettlementEpoch`] — not a bare `u64` — and `BTreeMap`-ordered, so the
     /// postcard encoding is canonical (sorted) without the producer sorting.
     ///
-    /// **No live reader yet** (SA-4 census): the intended consumer is SP-7
-    /// `C_min` sizing via `finalized_inflow`, which is `#[allow(dead_code)]
-    /// // transient`. Retained because that vehicle is named and tracked, not
-    /// deleted — accrual is cheap and re-deriving the per-epoch history after
-    /// the cursor has sealed past it is not.
+    /// **No live reader yet** (SA-4 census, where a *reader* is a consumer
+    /// whose behavior changes with the value). Named explicitly because a
+    /// grep says otherwise: the resume seam round-trips this map
+    /// (`PScanAccrual::from_state` hydrates it, `to_state` seals it back),
+    /// which is carriage, not a reader. The reader is SP-7 `C_min` sizing via
+    /// `finalized_inflow` (`#[allow(dead_code)] // transient`). Retained
+    /// because that vehicle is named and tracked, not deleted — accrual is
+    /// cheap and re-deriving the per-epoch history after the cursor has sealed
+    /// past it is not.
     accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
     /// Confirmed-but-retire-pending personas: [`PCanonicalId`] → the settlement
     /// epoch its `Unbond` was confirmed in (2d-1 DQ8).
@@ -474,26 +485,19 @@ impl PScanState {
     }
 
     /// Deserialize from [`Self::to_postcard_bytes`] output. **Refuses a version
-    /// mismatch** on the outer state version; the inner [`PScanCursor`] applies
-    /// its own version gate on access via its constructors.
+    /// mismatch before decoding the body** on the outer state version; the
+    /// inner [`PScanCursor`] is then version-checked on the decoded value.
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
+        // Version first, body second — see [`crate::version_gate`]. This is the
+        // reachable case: `.wallet.pscan` is its own file with its own version,
+        // so nothing upstream refuses a stale one first. SA-4 deleted
+        // `PFundingOutputRecord::tx_hash` from the middle of a repeated record,
+        // which shifts every following byte; decoding first would report a
+        // staker's intact wallet as corrupt instead of naming the re-scan.
+        crate::version_gate::gate_leading_version(bytes, "pscan_state", PSCAN_STATE_VERSION)?;
         let state: Self = postcard::from_bytes(bytes)?;
-        state.check_version()?;
         state.cursor.check_version()?;
         Ok(state)
-    }
-
-    /// Version gate. Called automatically by [`Self::from_postcard_bytes`];
-    /// exposed so a future composite loader can fan out the same check.
-    pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        if self.version != PSCAN_STATE_VERSION {
-            return Err(WalletLedgerError::UnsupportedBlockVersion {
-                block: "pscan_state",
-                file: self.version,
-                binary: PSCAN_STATE_VERSION,
-            });
-        }
-        Ok(())
     }
 }
 
