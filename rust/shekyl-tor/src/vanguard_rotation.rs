@@ -69,7 +69,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use kameo::error::SendError;
 use tokio::sync::oneshot;
 
-use crate::control::consensus::{parse_ns_all, ConsensusRelay};
+use crate::control::consensus::{parse_ns_all, ConsensusRelay, ConsensusView};
 use crate::control::vanguards::{
     HsLayerPins, RelayFingerprint, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS,
 };
@@ -245,6 +245,18 @@ pub enum VanguardsWarning {
     /// the next process start would re-draw. In-memory state still carries the
     /// set, so nothing rotates while this process lives.
     StateUnpersisted(String),
+    /// Some announced consensus entries did not decode, so departure-based
+    /// repair was skipped for this pass: a pinned relay that has genuinely
+    /// left the network keeps its slot until a complete view arrives. The
+    /// alternative — repairing against a partial view — could replace a live
+    /// vanguard on no evidence, which is a silent fresh draw. Selection and
+    /// clock rotation are unaffected.
+    RepairSkipped {
+        /// Entries whose identity decoded.
+        decoded: usize,
+        /// Entries the reply announced.
+        announced: usize,
+    },
 }
 
 impl std::fmt::Display for VanguardsWarning {
@@ -258,6 +270,12 @@ impl std::fmt::Display for VanguardsWarning {
                 f,
                 "vanguard state could not be persisted (the live set is correct; a restart \
                  would re-draw): {why}"
+            ),
+            Self::RepairSkipped { decoded, announced } => write!(
+                f,
+                "vanguard departure-repair skipped: only {decoded} of {announced} consensus \
+                 entries decoded, so absence does not prove departure (the pinned set is \
+                 unchanged; selection and clock rotation are unaffected)"
             ),
         }
     }
@@ -594,13 +612,27 @@ impl RotationState {
     /// is still present (identity **and** expiry untouched), replace **only**
     /// nodes whose relay has left the consensus. Does not expire anything —
     /// that is [`Self::expire_due`]'s job. A restart alone must not rotate.
+    ///
+    /// Takes the whole [`ConsensusView`], not a relay slice, because the
+    /// decision it makes needs evidence the slice cannot carry: reading
+    /// "absent" as "departed" is sound only against a **complete** view
+    /// ([`ConsensusView::is_complete`] — an undecoded entry has no fingerprint,
+    /// so it is exactly the entry that might be one of ours). Against an
+    /// incomplete view the repair is **skipped entirely** and the state is
+    /// returned untouched: a stale pin is loud and self-correcting, a spurious
+    /// re-draw is silent and is the attack. `Ok(false)` reports the skip so the
+    /// caller can surface it.
     fn restore(
         mut self,
-        consensus: &[ConsensusRelay],
+        consensus: &ConsensusView,
         rng: &mut impl VanguardRng,
-    ) -> Result<Self, RotationError> {
+    ) -> Result<(Self, bool), RotationError> {
+        if !consensus.is_complete() {
+            return Ok((self, false));
+        }
         // "Present" = appears in the consensus at all, regardless of flags.
-        let present: HashSet<RelayFingerprint> = consensus.iter().map(|r| r.fingerprint).collect();
+        let present: HashSet<RelayFingerprint> =
+            consensus.relays.iter().map(|r| r.fingerprint).collect();
 
         let mut in_use: Vec<RelayFingerprint> = self
             .layer2
@@ -610,9 +642,21 @@ impl RotationState {
             .filter(|fp| present.contains(fp))
             .collect();
 
-        swap_absent(&mut self.layer2, &present, consensus, &mut in_use, rng)?;
-        swap_absent(&mut self.layer3, &present, consensus, &mut in_use, rng)?;
-        Ok(self)
+        swap_absent(
+            &mut self.layer2,
+            &present,
+            &consensus.relays,
+            &mut in_use,
+            rng,
+        )?;
+        swap_absent(
+            &mut self.layer3,
+            &present,
+            &consensus.relays,
+            &mut in_use,
+            rng,
+        )?;
+        Ok((self, true))
     }
 
     /// Rotate out every node whose expiry is at or before `now`, replacing
@@ -983,20 +1027,21 @@ impl VanguardManager {
         // failure into a forced re-draw on the next establish).
         let mut state = match self.state.clone() {
             Some(previous) => previous,
-            None => {
-                RotationState::select_fresh(&consensus, now, &mut rng).map_err(rotation_failed)?
-            }
+            None => RotationState::select_fresh(&consensus.relays, now, &mut rng)
+                .map_err(rotation_failed)?,
         };
 
         // A long downtime may have spanned whole lifetimes; the clock still
         // decides.
         state
-            .expire_due(&consensus, now, &mut rng)
+            .expire_due(&consensus.relays, now, &mut rng)
             .map_err(rotation_failed)?;
 
         // Then repair: a relay that left the consensus is swapped without
-        // waiting for its expiry, timers untouched.
-        let state = state
+        // waiting for its expiry, timers untouched. Only against a COMPLETE
+        // view — see `ConsensusView::is_complete`; an incomplete one skips
+        // repair rather than replacing live vanguards on no evidence.
+        let (state, repaired) = state
             .restore(&consensus, &mut rng)
             .map_err(rotation_failed)?;
 
@@ -1006,10 +1051,19 @@ impl VanguardManager {
         // reuses this set rather than selecting fresh.
         self.state = Some(state.clone());
 
+        // A skipped repair is worth surfacing: the set is live and correct,
+        // but one pinned relay may have left the network and we could not tell.
+        // It clears itself the next time a complete view arrives.
+        let repair_warning = (!repaired).then_some(VanguardsWarning::RepairSkipped {
+            decoded: consensus.relays.len(),
+            announced: consensus.announced,
+        });
+
         self.warning = match save_state(&self.path, &state) {
             // A durable write retires whatever was wrong before — including an
-            // unusable file at load, which this rename has just replaced.
-            Ok(()) => None,
+            // unusable file at load, which this rename has just replaced. A
+            // skipped repair is a separate fact and survives the write.
+            Ok(()) => repair_warning,
             Err(e) => Some(VanguardsWarning::StateUnpersisted(e.to_string())),
         };
         Ok(witness)
@@ -1021,7 +1075,7 @@ async fn fetch_consensus(
     actor: &kameo::actor::ActorRef<TorControl>,
     reply_deadline: Duration,
     shutdown: &mut oneshot::Receiver<()>,
-) -> Result<Vec<ConsensusRelay>, VanguardsAbort> {
+) -> Result<ConsensusView, VanguardsAbort> {
     let reply = tokio::select! {
         _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
         () = tokio::time::sleep(reply_deadline) => {
@@ -1032,12 +1086,12 @@ async fn fetch_consensus(
     match reply {
         Ok(reply) if reply.status() == 250 => {
             let view = parse_ns_all(&reply);
-            // Refuse a view we cannot read rather than acting on it: everything
-            // downstream reads "absent from the consensus" as "this vanguard
-            // left the network", so a wholesale parse shortfall would present as
-            // the whole network churning and re-draw the persona's entire guard
-            // topology. Better to fail this incarnation loudly.
-            if !view.is_trustworthy() {
+            // Refuse a view too thin to even draw from. Note this is the
+            // *pool* gate only — whether "absent" may be read as "departed" is
+            // a separate, stricter question the view carries to `restore`
+            // (`is_complete`), because a threshold can never make that
+            // inference sound.
+            if !view.is_usable_pool() {
                 return Err(VanguardsAbort::Failed(VanguardsError::Rotation(
                     RotationError::ConsensusUnusable {
                         decoded: view.relays.len(),
@@ -1045,7 +1099,7 @@ async fn fetch_consensus(
                     },
                 )));
             }
-            Ok(view.relays)
+            Ok(view)
         }
         Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::Rejected {
             status: reply.status(),
@@ -1111,6 +1165,16 @@ mod tests {
                 eligible: true,
             })
             .collect()
+    }
+
+    /// A **complete** view over `relays` — every announced entry decoded, so
+    /// absence-based repair is permitted. Tests that need an incomplete view
+    /// build it explicitly.
+    fn view(relays: &[ConsensusRelay]) -> ConsensusView {
+        ConsensusView {
+            relays: relays.to_vec(),
+            announced: relays.len(),
+        }
     }
 
     fn t0() -> SystemTime {
@@ -1201,13 +1265,65 @@ mod tests {
     fn restore_with_all_relays_present_is_a_no_op_the_invariant() {
         let consensus = pool(30);
         let original = RotationState::select_fresh(&consensus, t0(), &mut SeededRng(9)).unwrap();
-        let restored = original
+        let (restored, repaired) = original
             .clone()
-            .restore(&consensus, &mut SeededRng(123))
+            .restore(&view(&consensus), &mut SeededRng(123))
             .unwrap();
+        assert!(repaired, "a complete view permits the repair pass to run");
         assert_eq!(
             restored, original,
             "restore must preserve identities AND expiry timers"
+        );
+    }
+
+    #[test]
+    fn an_incomplete_view_never_repairs_even_though_a_pin_looks_absent() {
+        // Copilot review, PR #447: the pool gate alone let a view with many
+        // undecoded entries drive departure-repair. An undecoded entry has no
+        // fingerprint, so it is EXACTLY the entry that might be one of ours —
+        // and repairing on that reads a live vanguard as departed and re-draws
+        // it, a silent fresh draw (an adversary landing chance).
+        //
+        // Here the pinned L2[0] is genuinely missing from `relays`, but the
+        // view announces more entries than decoded, so its absence proves
+        // nothing. The set must come back untouched, and the caller must be
+        // told the repair did not run.
+        let consensus = pool(30);
+        let original = RotationState::select_fresh(&consensus, t0(), &mut SeededRng(5)).unwrap();
+        let vanished = original.layer2[0].fingerprint;
+        let relays: Vec<ConsensusRelay> = consensus
+            .iter()
+            .filter(|r| r.fingerprint != vanished)
+            .copied()
+            .collect();
+
+        // Same relay list, two views: one honest about a failed decode, one
+        // claiming completeness. Only the difference in `announced` decides.
+        let incomplete = ConsensusView {
+            relays: relays.clone(),
+            announced: relays.len() + 1,
+        };
+        let (kept, repaired) = original
+            .clone()
+            .restore(&incomplete, &mut SeededRng(77))
+            .unwrap();
+        assert!(!repaired, "an incomplete view must not run the repair pass");
+        assert_eq!(
+            kept, original,
+            "a pin absent from an incomplete view keeps its slot and its timer"
+        );
+
+        // Negative control: the SAME missing relay against a complete view is
+        // a real departure and IS repaired — so the test above is not passing
+        // because nothing was ever replaceable.
+        let (swapped, repaired) = original
+            .clone()
+            .restore(&view(&relays), &mut SeededRng(77))
+            .unwrap();
+        assert!(repaired);
+        assert_ne!(
+            swapped.layer2[0].fingerprint, vanished,
+            "against a complete view the departed relay is replaced"
         );
     }
 
@@ -1223,10 +1339,11 @@ mod tests {
             .copied()
             .collect();
 
-        let restored = original
+        let (restored, repaired) = original
             .clone()
-            .restore(&shrunk, &mut SeededRng(77))
+            .restore(&view(&shrunk), &mut SeededRng(77))
             .unwrap();
+        assert!(repaired);
 
         assert_ne!(restored.layer2[0].fingerprint, dropped);
         assert_eq!(
@@ -1431,9 +1548,9 @@ L3 $BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB 2\n";
             s
         };
         // The pipeline's order: expire, then repair.
-        let repaired = after_expiry
+        let (repaired, _) = after_expiry
             .clone()
-            .restore(&replacement_pool, &mut rng)
+            .restore(&view(&replacement_pool), &mut rng)
             .unwrap();
         assert_eq!(
             repaired, after_expiry,

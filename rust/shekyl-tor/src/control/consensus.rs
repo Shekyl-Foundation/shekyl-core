@@ -78,7 +78,9 @@ fn is_eligible(flags: &str) -> bool {
 /// (a moved identity field, padded base64, a renamed flag) would silently look
 /// like the whole network churning at once and re-draw the persona's entire
 /// guard topology — the exact failure full vanguards exists to prevent. Keeping
-/// `announced` lets [`Self::is_trustworthy`] refuse instead.
+/// `announced` is what lets the two questions be asked separately:
+/// [`Self::is_usable_pool`] (may we draw from this?) and [`Self::is_complete`]
+/// (may we read absence as departure?).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConsensusView {
     /// Every router entry whose identity decoded.
@@ -87,25 +89,49 @@ pub struct ConsensusView {
     pub announced: usize,
 }
 
-/// One announced entry in this many must decode before the view is treated as a
-/// picture of the network rather than of our parser.
+/// One announced entry in this many must decode before the view is a usable
+/// *candidate pool*.
 ///
 /// Deliberately loose: skipping the occasional odd entry is the documented,
 /// wanted behaviour (one bad router line must not deny a persona its
 /// vanguards). What it catches is the *wholesale* shortfall — a format change,
 /// a truncated reply, a wrong key — where the honest answer is "we do not know
-/// what the consensus contains", not "everything the operator pinned is gone".
+/// what the consensus contains".
 const MIN_DECODED_IN: usize = 2;
 
 impl ConsensusView {
-    /// Did enough of the announced entries decode for absence to mean the relay
-    /// left the network, rather than that we could not read it?
+    /// Is there enough of the network here to **draw from** — first selection
+    /// and clock-driven rotation?
     ///
-    /// An empty reply announces nothing and so proves nothing — never
-    /// trustworthy, however it came to be empty.
+    /// Loose by design: drawing needs *candidates*, not a complete picture, and
+    /// a few unreadable entries only narrow the pool slightly. An empty reply
+    /// announces nothing and so proves nothing — never usable, however it came
+    /// to be empty.
     #[must_use]
-    pub fn is_trustworthy(&self) -> bool {
+    pub fn is_usable_pool(&self) -> bool {
         self.announced > 0 && self.relays.len() >= self.announced.div_ceil(MIN_DECODED_IN)
+    }
+
+    /// Did **every** announced entry decode — the only condition under which
+    /// "absent from this view" may be read as "this relay left the network"?
+    ///
+    /// # Why this is all-or-nothing, and not a second threshold
+    ///
+    /// An entry we failed to decode has **no fingerprint by definition**, so it
+    /// is precisely the entry we cannot rule out as one of our own pinned
+    /// vanguards. No decoded-fraction — 50 %, 99 % — makes that inference
+    /// sound; it only makes the spurious replacement rarer. And the cost is
+    /// asymmetric: skipping a repair leaves one stale pin, which is loud
+    /// (circuits through it fail) and self-corrects at the next complete
+    /// parse, whereas a spurious repair is a **silent fresh draw** — an
+    /// independent chance for an adversary to land in the set, which is the
+    /// attack full vanguards exists to make expensive.
+    ///
+    /// So absence-based repair is gated on completeness, while
+    /// [`Self::is_usable_pool`] governs drawing. Two questions, two predicates.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.announced > 0 && self.relays.len() == self.announced
     }
 }
 
@@ -115,7 +141,8 @@ impl ConsensusView {
 /// than failing the whole parse — a single bad router line must not deny a
 /// persona its vanguards — but every skip is **counted**, so a caller can tell
 /// a lenient skip from a wholesale parse failure ([`ConsensusView`]). An absent
-/// `ns/all=` payload yields the empty view, which is never trustworthy.
+/// `ns/all=` payload yields the empty view, which is neither a usable pool nor
+/// a complete one.
 #[must_use]
 pub fn parse_ns_all(reply: &ControlReply) -> ConsensusView {
     let Some(payload) = reply.lines().iter().find_map(|l| l.strip_prefix("ns/all=")) else {
@@ -285,7 +312,8 @@ mod tests {
         // The load-bearing half: an empty view must never read as "the network
         // is empty", because the caller would take that as every pinned vanguard
         // having left and re-draw the persona's whole topology.
-        assert!(!view.is_trustworthy());
+        assert!(!view.is_usable_pool());
+        assert!(!view.is_complete());
     }
 
     #[test]
@@ -306,14 +334,19 @@ mod tests {
         let view = parse_ns_all(&reply_ns_all(&broken));
         assert_eq!(view.announced, 10);
         assert!(view.relays.is_empty());
-        assert!(!view.is_trustworthy());
+        assert!(!view.is_usable_pool());
+        assert!(!view.is_complete());
     }
 
     #[test]
-    fn the_documented_occasional_skip_stays_trustworthy() {
+    fn an_occasional_skip_is_a_usable_pool_but_never_a_complete_view() {
         // One bad router line among many must not deny a persona its vanguards —
-        // the leniency this parser is specified to have. The floor only catches
-        // the wholesale case.
+        // the leniency this parser is specified to have — so the POOL stays
+        // usable. But the view is NOT complete, and that distinction is
+        // load-bearing: the skipped entry has no fingerprint, so it is exactly
+        // the entry that might be a currently-pinned vanguard. Reading absence
+        // as departure here would replace a live guard on no evidence (a silent
+        // fresh draw). Selection may proceed; departure-repair may not.
         let fp22 = "IiIiIiIiIiIiIiIiIiIiIiIiIiI";
         let view = parse_ns_all(&reply_ns_all(&format!(
             "r Alice {FP11_B64} abc 2026-08-11 00:00:00 1.2.3.4 9001 0\n\
@@ -328,6 +361,10 @@ mod tests {
         )));
         assert_eq!(view.announced, 3);
         assert_eq!(view.relays.len(), 2);
-        assert!(view.is_trustworthy());
+        assert!(view.is_usable_pool(), "two of three still draws fine");
+        assert!(
+            !view.is_complete(),
+            "one undecoded entry forbids absence-based repair"
+        );
     }
 }
