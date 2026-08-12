@@ -1598,3 +1598,50 @@ TEST(node_server, public_zone_window_is_not_shortened_by_the_anon_fix)
   EXPECT_TRUE(cache.is_recently_failed(addr, t0 + P2P_FAILED_ADDR_FORGET_SECONDS - 1));
   EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_FAILED_ADDR_FORGET_SECONDS + 1));
 }
+
+TEST(node_server, unknown_zone_keeps_the_public_window)
+{
+  // The window is selected by NAMING the anonymity zones. A not-public test
+  // would give `zone::invalid` -- an address whose zone could not be determined
+  // -- the short anonymity window, which no measurement supports: the 240 s
+  // comes from hidden-service republication, a property invalid addresses do
+  // not have. This pins the safe default so a later refactor to `!= public_`
+  // reds a test instead of silently shortening suppression.
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::invalid, 1),
+            P2P_FAILED_ADDR_FORGET_SECONDS);
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::public_, 1),
+            P2P_FAILED_ADDR_FORGET_SECONDS);
+  // ...while both real anonymity zones do get it.
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::tor, 1),
+            P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::i2p, 1),
+            P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
+}
+
+TEST(node_server, both_outbound_paths_clear_the_failure_history)
+{
+  // node_server has TWO outbound connect+handshake routines:
+  // `try_to_connect_and_handshake_with_new_peer` (white/anchor selection) and
+  // `check_connection_and_handshake_with_peer` (gray-peerlist housekeeping).
+  // Both record failures. The first version of this fix cleared on success in
+  // only one of them, so on the gray route the failure history was WRITE-ONLY:
+  // the path that exists to re-test doubtful peers accumulated escalation those
+  // peers could never shed, and a peer promoted from gray to white carried its
+  // counter with it.
+  //
+  // The mechanism is asserted at the cache, which is what both routines call.
+  nodetool::failed_addr_cache cache;
+  const auto addr = tor_addr("aks2vbpjb5ojfyqcataqedodws7ardjxczy76bqwmlv55mgfunsxoiyd.onion");
+  const time_t t0 = 2000000;
+
+  cache.record_failure(addr, t0);
+  cache.record_failure(addr, t0);
+  EXPECT_TRUE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
+    << "two failures must have escalated beyond the first-failure window";
+
+  cache.record_success(addr);
+  cache.record_failure(addr, t0);
+  EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
+    << "after a success the next failure is charged the FIRST-failure window, "
+       "whichever routine reported the success";
+}

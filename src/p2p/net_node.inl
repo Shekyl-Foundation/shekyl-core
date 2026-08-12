@@ -1395,6 +1395,14 @@ namespace nodetool
       return false;
     }
 
+    // Same reset as the white path: this function also completes an outbound
+    // handshake, and an address that answers here has proved itself reachable.
+    // Without it the failure history is WRITE-ONLY on this route -- both its
+    // failure paths record, none of its success paths clear -- so the gray
+    // housekeeping that exists to re-test doubtful peers would accumulate
+    // escalation those peers could never shed.
+    record_addr_success(na);
+
     zone.m_net_server.get_config_object().close(con->m_connection_id);
 
     LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK AND CLOSED.");

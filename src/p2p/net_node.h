@@ -156,7 +156,16 @@ namespace nodetool
       \note NOT a latency. See `P2P_ANON_FAILED_ADDR_FORGET_SECONDS`. */
     static time_t window(epee::net_utils::zone zone, uint32_t consecutive)
     {
-      if (zone == epee::net_utils::zone::public_)
+      // Tested by NAMING the anonymity zones, not by asking "is it not public".
+      // `epee::net_utils::zone` also has `invalid`, and a not-public test would
+      // hand the SHORT window to an address whose zone could not be determined
+      // -- a behaviour change with no evidence behind it, since the measured
+      // recovery this value comes from is a hidden-service property. Anything
+      // that is not demonstrably an anonymity address keeps the public hour,
+      // which is also the safe default for any zone added later.
+      const bool anonymity_zone =
+        zone == epee::net_utils::zone::tor || zone == epee::net_utils::zone::i2p;
+      if (!anonymity_zone)
         return P2P_FAILED_ADDR_FORGET_SECONDS;
 
       uint64_t w = P2P_ANON_FAILED_ADDR_FORGET_SECONDS;
