@@ -1163,6 +1163,30 @@ an isolated node, biasing the statistic **in the direction of the run's headline
 claim**; such nodes are restarted before the arm, and if a restart does not fix
 one, it is dropped and the drop count reported.
 
+#### The constant, confirmed to within four seconds
+
+The three-node smoke test was left running and polled every 60 s. It is the
+whole finding in one timeline:
+
+| time (UTC) | event |
+| --- | --- |
+| `00:58:25` | three daemons start; `B` holds `--add-peer <A.onion>` |
+| `00:59:12.622` | `B`'s only dial fails: `Timeout on socks connect` |
+| `00:59:12` → `01:59:12` | **zero connections on all three nodes, for sixty minutes**, polled once a minute |
+| `01:59:12.622` | `+3600 s` — the cache entry ages out |
+| `01:59:16.106` | **`B` connects to `A`** — 3.5 s later |
+| `02:00:26` | converged: `A` 2 out / 2 in, `B` 1/2, `C` 2/1 — 5 of 6 possible links |
+
+**Nothing changed except the clock.** Same binaries, same tor processes, same
+configs, no restart, no intervention. The graph the code could not form for an
+hour formed completely in under sixty seconds once the suppression expired, and
+`C` — which was never given `A`'s address — reached it by gossip.
+
+That is `P2P_FAILED_ADDR_FORGET_SECONDS` measured rather than read, and it
+settles the mechanism beyond argument: the hour is not a symptom of a broken
+peer, an unreachable service or a misconfiguration. It is the daemon declining
+to retry.
+
 ### 11.5.1 The gate must probe from the proxy that will dial — a correction
 
 **Written after the six-node rehearsal contradicted the first version of this
