@@ -270,6 +270,12 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     // The supervisor here cannot launch (its binary fails the hash gate), so
     // it churns through failed incarnations for the length of the test. The
     // serving endpoint must be untouched by that.
+    //
+    // What enforces the invariant is the *absence* of a rebind path, not this
+    // test — `serve_addr` reads a field nothing mutates. What this test
+    // genuinely establishes is the observable half: the listener is still
+    // answering, with the same bytes, after the supervisor has failed
+    // repeatedly. It is the guard against someone adding the rebind later.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))

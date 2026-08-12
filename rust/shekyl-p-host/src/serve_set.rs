@@ -25,7 +25,11 @@ use shekyl_curve_tree::SegmentPin;
 ///
 /// The only constructor is [`Self::from_connected_record`], which takes a
 /// [`ClaimantBondRecord`] — the *connected* bond record, decoded from the
-/// daemon's claim-source reply — never a bare `Vec<u64>`. That is the whole
+/// daemon's claim-source reply — never a bare `Vec<u64>`. The production
+/// chain is already end-to-end: `get_archival_emission_claim_source` →
+/// `EmissionClaimSource::from_json` → `BondContext::record()`, with the
+/// reply's `chain_height` as the stamp. Nothing has to be hand-assembled to
+/// satisfy this signature. That is the whole
 /// point: "what I posted" is not "what connected", and a locally-maintained
 /// shard list that drifts from the record is exactly §9.6 item 4's
 /// silent-slash path. There is no way to build this type from a list the
@@ -144,6 +148,18 @@ impl std::error::Error for PinError {}
 /// actor message, so the method is `async`, and there is exactly one
 /// implementor per process — nothing here needs the vtable that would cost
 /// a boxed future.
+///
+/// **The `String` error is deliberate, against this codebase's usual typed-
+/// error grain.** The failures an implementor can have are its own — a redb
+/// fault, a dead kameo actor, a poisoned client — and this crate has no
+/// business enumerating them: an error type here would either have to name
+/// the curve-tree actor's failure modes (a dependency inversion) or be a
+/// catch-all with one variant. What matters to the *caller* is a single
+/// bit — the pins are not established, so no host starts — and that
+/// distinction is typed, as [`PinError::Pinner`] versus
+/// [`PinError::MembersAlreadyPruned`]: retry the first, rebuild the store
+/// for the second. The string is the diagnostic riding along, and it never
+/// reaches the wire.
 pub trait ServeSetPinner {
     /// Pin every member, returning each outcome paired with its shard id.
     ///
