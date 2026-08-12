@@ -1131,13 +1131,9 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         // curve-tree handle and daemon under a brief read guard, then
         // drop the guard before the long-running ingest `.await`s so
         // close / mutation paths are not blocked during backfill.
-        let (curve_tree, daemon, store_path) = {
+        let (curve_tree, daemon) = {
             let g = engine_arc.read().await;
-            (
-                g.curve_tree.clone(),
-                g.daemon.clone(),
-                shekyl_engine_file::paths::curve_tree_store_path_from(g.persistence.base_path()),
-            )
+            (g.curve_tree.clone(), g.daemon.clone())
         };
         let producer_leaves =
             match super::merge::index_block_leaves(std::mem::take(&mut result.block_leaves)) {
@@ -1150,7 +1146,6 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         if let Err(e) = super::merge::curve_tree_ingest_scan_result_with_respawn(
             &curve_tree,
             &daemon,
-            &store_path,
             &result,
             &producer_leaves,
         )

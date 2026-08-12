@@ -100,9 +100,10 @@ impl std::error::Error for HostError {
 ///   one. Same failure class as a vanguards rotation on restart — silent,
 ///   and paid for an epoch later at the slash.
 /// - **Serving cannot start before the serve-set is pinned.** [`Self::start`]
-///   takes a [`PinnedServeSet`], which only `PinnedServeSet::acquire` mints.
-///   The §9.6 item 4 hazard is not a startup step that could be reordered
-///   or forgotten; it is an argument.
+///   takes a [`ServeSetPinner`] and acquires the witness itself. The
+///   §9.6 item 4 hazard is not a startup step that could be reordered or
+///   forgotten; there is no argument through which to hand in an
+///   unpinned host.
 /// - **And it serves the store those pins are in.** The witness carries its
 ///   own [`ServingReader`](shekyl_curve_tree::ServingReader); `start` takes
 ///   no store argument at all. Pins applied to one store while another is
@@ -118,15 +119,17 @@ impl std::error::Error for HostError {
 /// # Custody (§7.2(iii))
 ///
 /// This host holds: an expanded [`OnionIdentity`], a **read-only**
-/// [`ServingReader`](shekyl_curve_tree::ServingReader) on the store, and a
-/// list of shard ids. It holds no
-/// seed, no bond spend authority, and no write handle. The one assumption
-/// worth stating rather than leaving implicit: the design frames the custody
-/// boundary as *which secret crosses the process boundary*, and this host is
-/// in-process with the wallet — so what enforces the boundary here is the
-/// type of what it can hold, not an address space. Splitting the serving
-/// host into its own process is a stronger form of the same rule and is not
-/// foreclosed by anything here.
+/// [`ServingReader`](shekyl_curve_tree::ServingReader) on the store (via
+/// the live witness), and the one [`ServeSetPinner`] taken at start. It
+/// holds no seed, no bond spend authority, and no store write handle of
+/// its own — pinning writes go through the pinner to the curve-tree
+/// actor. The one assumption worth stating rather than leaving implicit:
+/// the design frames the custody boundary as *which secret crosses the
+/// process boundary*, and this host is in-process with the wallet — so
+/// what enforces the boundary here is the type of what it can hold, not
+/// an address space. Splitting the serving host into its own process is
+/// a stronger form of the same rule and is not foreclosed by anything
+/// here.
 pub struct PersonaServingHost<P: ServeSetPinner> {
     /// Bound once in [`Self::start`]; never rebound. See the type doc.
     endpoint: PServeEndpoint,
@@ -168,6 +171,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     ///
     /// # Errors
     ///
+    /// [`HostError::Pin`] if the serve-set could not be pinned,
     /// [`HostError::Bind`] if the loopback listener cannot be created, and
     /// [`HostError::NonLoopbackTarget`] if the bound address is refused as
     /// an onion target.
@@ -308,7 +312,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         &self,
         bound: StalenessBound,
     ) -> Result<Staleness, shekyl_curve_tree::StoreError> {
-        self.pinned.lock().expect("serve-set lock").staleness(bound)
+        self.lock_pinned().staleness(bound)
     }
 
     /// The bound loopback address the onion targets.

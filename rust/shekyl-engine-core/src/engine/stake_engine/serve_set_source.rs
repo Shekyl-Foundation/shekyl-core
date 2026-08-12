@@ -37,7 +37,7 @@
 //! (§7.4 transport pin). This type does not create transports; it takes one,
 //! so the enforcement stays where the persona's identity is known.
 
-use shekyl_curve_tree::{SegmentPin, ServingReader};
+use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
 use shekyl_rpc_client::Rpc;
 
@@ -117,7 +117,7 @@ impl<R: Rpc + Sync> ServeSetPinner for EngineServeSetPinner<R> {
             as_of_height: source
                 .chain_height
                 .tip()
-                .map_or(0, shekyl_types::BlockHeight::to_raw),
+                .map_or(BlockHeight(0), |h| BlockHeight(h.to_raw())),
             outcomes,
             reader,
         })

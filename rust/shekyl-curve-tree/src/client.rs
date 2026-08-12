@@ -248,8 +248,10 @@ pub struct CurveTreeClient {
     /// Behind an `Arc` so the read-only [`ServingReader`] can share the
     /// open database rather than opening a second one (redb takes an
     /// exclusive file lock, so a second open would simply be refused).
-    /// The `Arc` is never handed out — only [`Self::serving_reader`]'s
-    /// read-only wrapper is — so this client stays the sole writer.
+    /// The `Arc` leaves this client only as that read-only wrapper, or
+    /// as the store a [`Self::resume`] rebuilds a writer over — so a
+    /// fail-stop recovery does not open a second database beside a
+    /// serving host that is still holding the first.
     store: Arc<LeafStore>,
     // `pub(crate)` so the sibling `assemble` module and unit tests read leaf
     // candidates. Drained leaves are mirrored into `store` on each ingest.
@@ -268,9 +270,10 @@ pub struct CurveTreeClient {
     /// Set when [`Self::rollback_to_fork`] commits the store rollback but
     /// fails before rebuilding in-memory state, leaving memory inconsistent
     /// with the authoritative store. While set, load-bearing public methods
-    /// fail fast with [`ClientError::Poisoned`]; the only recovery is
-    /// drop-and-reopen ([`Self::open`]). See the `rollback_to_fork` poison
-    /// contract.
+    /// fail fast with [`ClientError::Poisoned`]; the only recovery is to
+    /// drop this client and [`Self::resume`] over the same store (or
+    /// [`Self::open`] a path when nothing else holds it). See the
+    /// `rollback_to_fork` poison contract.
     poisoned: bool,
 }
 
@@ -415,7 +418,22 @@ impl CurveTreeClient {
     /// `leaf_count` — cannot arise from pruning and is reported distinctly
     /// as [`ClientError::ResumeFromCorruptStore`] so a corrupt store is
     /// not misdiagnosed as a pruned one.
-    fn resume(store: Arc<LeafStore>) -> Result<Self, ClientError> {
+    /// Rebuild a write client over a store that is already open.
+    ///
+    /// This is the fail-stop recovery constructor. [`Self::open`] opens a
+    /// *new* database on a path; a serving host's [`ServingReader`] already
+    /// holds the live one, and a second open is `DatabaseAlreadyOpen` for
+    /// the host's life. Recovery therefore keeps that `Arc` and rebuilds
+    /// only the in-memory writer state from the store's tables.
+    ///
+    /// Prefer [`Self::resume_from_reader`] at the actor-handle seam: the
+    /// handle holds a [`ServingReader`], not a write `Arc`.
+    ///
+    /// # Errors
+    ///
+    /// The same resume refusals as [`Self::open`] (`ResumeFromPrunedStore`,
+    /// `ResumeFromCorruptStore`, store I/O).
+    pub fn resume(store: Arc<LeafStore>) -> Result<Self, ClientError> {
         let rebuilt = Self::rebuild_from_store(&store)?;
 
         Ok(Self {
@@ -427,6 +445,19 @@ impl CurveTreeClient {
             ingested_tip_height: rebuilt.ingested_tip_height,
             poisoned: false,
         })
+    }
+
+    /// Rebuild a write client over the store this reader holds.
+    ///
+    /// The serving host and the curve-tree handle both keep a
+    /// [`ServingReader`]; fail-stop recovery uses this so the new writer
+    /// is the same open database the host is already serving.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::resume`]'s.
+    pub fn resume_from_reader(reader: &ServingReader) -> Result<Self, ClientError> {
+        Self::resume(reader.store_arc())
     }
 
     /// Rebuild the in-memory state from the store's drained and pending

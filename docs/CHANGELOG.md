@@ -4,6 +4,14 @@
 
 ### Changed
 
+- **Curve-tree actor fail-stop now resumes over the held store, not a
+  path-reopen** (SH-2a). `CurveTreeHandle` keeps the `ServingReader` for
+  the wallet's life and `respawn` rebuilds the writer with
+  `CurveTreeClient::resume_from_reader`. A live serving host already
+  holds that `Arc`; reopening the file would be `DatabaseAlreadyOpen`
+  (or, if it succeeded, a second store the host is not serving). The
+  wallet-close/open reopen poll stays on `open_and_spawn` only.
+
 - **Pinned crypto vectors: the SA-3a raw-public-key leaf-hash pins moved to
   a machine-readable fixture** (`docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json`;
   PR-SA-3a, rule-30 vector-change record). The four byte pins — frozen

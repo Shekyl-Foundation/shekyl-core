@@ -16,7 +16,7 @@
 //! all the way to the slash, which is what makes a runtime check the wrong
 //! shape of defense.
 
-use shekyl_curve_tree::{SegmentPin, ServingReader, StoreError};
+use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader, StoreError};
 
 /// The shards a persona is bonded to serve, as read back from the chain.
 ///
@@ -47,12 +47,15 @@ use shekyl_curve_tree::{SegmentPin, ServingReader, StoreError};
 /// moving number, not a plateau. [`Self::as_of_height`] records the chain
 /// height the record was read at, so a stale set is *distinguishable* from a
 /// current one rather than merely being out of date. Nothing here expires a
-/// set on its own; the wiring slice refreshes and re-pins, and this stamp is
-/// what lets it tell whether it needs to.
+/// set, and nothing here decides whether to refresh: refresh is
+/// unconditional (pinning is idempotent; a "did holdings change?" gate is
+/// the question §9.6 item 4 exists because nobody answers it reliably).
+/// The stamp is the tripwire for a refresh that has *stopped* — see
+/// [`Staleness`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeSet {
     shard_ids: Vec<u64>,
-    as_of_height: u64,
+    as_of_height: BlockHeight,
 }
 
 impl ServeSet {
@@ -60,7 +63,7 @@ impl ServeSet {
     /// type doc — a serving host does not get to name its own obligations,
     /// and the only path to a `ServeSet` runs through
     /// [`ServeSetPinner::pin_serve_set`].
-    pub(crate) fn reported(shard_ids: Vec<u64>, as_of_height: u64) -> Self {
+    pub(crate) fn reported(shard_ids: Vec<u64>, as_of_height: BlockHeight) -> Self {
         Self {
             shard_ids,
             as_of_height,
@@ -75,7 +78,7 @@ impl ServeSet {
 
     /// The chain height the record was read at.
     #[must_use]
-    pub fn as_of_height(&self) -> u64 {
+    pub fn as_of_height(&self) -> BlockHeight {
         self.as_of_height
     }
 
@@ -122,6 +125,17 @@ pub enum PinError {
         /// The members its outcomes actually covered, in the order reported.
         covered: Vec<u64>,
     },
+    /// A refresh's pins landed in a different open store than the one this
+    /// witness is serving.
+    ///
+    /// Distinct from [`Self::PinnerCoverageMismatch`] because the two
+    /// halves of the report can agree with each other and still describe
+    /// the wrong database. Retrying only repeats it. The production
+    /// pinner cannot produce this: it pins through the wallet's
+    /// curve-tree handle, which resumes over the same store Arc across
+    /// fail-stop, so the reader it returns is the store the host already
+    /// serves. A report that trips this is an implementor defect.
+    PinnerStoreMismatch,
 }
 
 impl std::fmt::Display for PinError {
@@ -143,6 +157,13 @@ impl std::fmt::Display for PinError {
                  does not describe, so this persona does not serve. This is an \
                  implementor defect, not a transient fault — retrying will repeat it"
             ),
+            Self::PinnerStoreMismatch => write!(
+                f,
+                "the pin report's reader is not the store this host is serving; \
+                 the pins cannot be witnessed for a store nobody is reading, so \
+                 this persona keeps its previous pins. This is an implementor \
+                 defect, not a transient fault — retrying will repeat it"
+            ),
         }
     }
 }
@@ -160,8 +181,12 @@ pub struct PinReport {
     /// record's own order — the set the implementor pinned.
     pub shard_ids: Vec<u64>,
     /// The chain height that record was read at; becomes
-    /// [`ServeSet::as_of_height`], the tripwire's first clock.
-    pub as_of_height: u64,
+    /// [`ServeSet::as_of_height`], the tripwire's first clock. A
+    /// [`BlockHeight`], not a raw count: the other clock
+    /// ([`ServingReader::sync_tip_height`]) is a height, and a
+    /// `ChainCount` laundered in here would cry wolf by one block
+    /// forever.
+    pub as_of_height: BlockHeight,
     /// Each member's outcome paired with its shard id, in `shard_ids` order.
     pub outcomes: Vec<(u64, SegmentPin)>,
     /// A reader on the store the pins were applied in.
@@ -269,16 +294,20 @@ impl<T: ServeSetPinner + Sync> ServeSetPinner for &T {
     }
 }
 
-/// Proof that a serve-set's pins are in place — the ticket
-/// [`crate::PersonaServingHost::start`] demands.
+/// A serve-set whose pins are in place — the host's live pin state.
+///
+/// [`Self::acquire`] is the only way to mint one. The host calls it
+/// inside [`crate::PersonaServingHost::start`] (so serving cannot begin
+/// unpinned) and replaces the result on every [`crate::PersonaServingHost::refresh`].
+/// It is not a ticket the caller hands `start`: that argument was removed
+/// so a host cannot be started on pins its later refreshes cannot reach.
 ///
 /// The sealed-witness shape this codebase already uses for
 /// `VerifiedTorBinary` (the binary passed its hash gate) and
 /// `VanguardsActive` (full vanguards are configured on this incarnation),
 /// applied to the third precondition a serving persona has: **its shards
-/// will survive the next prune**. [`Self::acquire`] is the only way to mint
-/// one, so "the host pinned before it served" is not a startup step someone
-/// can reorder — it is the argument type.
+/// will survive the next prune**. Possessing one is evidence the pin ran;
+/// replacing one is how holdings that arrive later stay covered.
 ///
 /// It also carries the [`ServeSet`], so the host holds the record-derived
 /// list rather than a second copy of it.
@@ -314,7 +343,7 @@ pub struct PinnedServeSet {
 }
 
 impl PinnedServeSet {
-    /// Pin `set` through `pinner` and mint the witness.
+    /// Pin the set the pinner reports and mint the witness.
     ///
     /// Members that have not frozen yet are pinned and **accepted**: bonding
     /// before a segment freezes is legal by design, and pinning ahead is
@@ -356,6 +385,16 @@ impl PinnedServeSet {
             .pin_serve_set()
             .await
             .map_err(|detail| PinError::Pinner { detail })?;
+        // Pins must have landed in the store this witness already serves.
+        // `same_store` is allocation identity, and that is store identity
+        // here: the wallet's curve-tree handle keeps the store Arc across
+        // fail-stop and resumes the writer over it, so a healthy recovery
+        // does not mint a second database. A report whose reader is a
+        // different Arc is therefore a different open store — the pins
+        // are not in the one the host is reading.
+        if !self.reader.same_store(&report.reader) {
+            return Err(PinError::PinnerStoreMismatch);
+        }
         Self::from_report(report, self.reader.clone())
     }
 
@@ -370,7 +409,6 @@ impl PinnedServeSet {
             reader: _,
         } = report;
         let set = ServeSet::reported(shard_ids, as_of_height);
-        let outcomes = &outcomes[..];
         // THE EVIDENCE MUST COVER THE OBLIGATION. The report states two
         // things — the set this persona owes, and the pins that were applied
         // — and the witness is only meaningful if the second describes the
@@ -458,8 +496,8 @@ impl PinnedServeSet {
     ///
     /// Store failure reading the sync tip.
     pub fn staleness(&self, bound: StalenessBound) -> Result<Staleness, StoreError> {
-        let tip = self.reader.sync_tip_height()?.0;
-        let lag = tip.saturating_sub(self.set.as_of_height());
+        let tip = self.reader.sync_tip_height()?;
+        let lag = tip.0.saturating_sub(self.set.as_of_height().0);
         Ok(if lag > bound.get() {
             Staleness::Stale {
                 lag,
@@ -563,7 +601,7 @@ impl std::fmt::Display for Staleness {
                 f,
                 "serve-set has not been re-derived for {lag} blocks of ingest (bound {bound}): \
                  a shard connected since then is unpinned and can be pruned before it is \
-                 served — check that the P-scan sweep is still running"
+                 served — check that refresh is still succeeding"
             ),
         }
     }

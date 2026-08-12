@@ -103,9 +103,10 @@ shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 # `=0.20.0`). No new `kameo`/`redb` edge versions are introduced.
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # The persona serving host (SH-2): this crate implements its `ServeSetPinner`
-# seam and drives the host's refresh from the P-scan sweep. The dependency runs
-# engine-core -> p-host and never the reverse — p-host names no engine type,
-# which is what lets the pinner seam be the only path to a `ServeSet`.
+# seam. Driving `PersonaServingHost::refresh` from the P-scan sweep is SH-2b.
+# The dependency runs engine-core -> p-host and never the reverse — p-host
+# names no engine type, which is what lets the pinner seam be the only path
+# to a `ServeSet`.
 shekyl-p-host = { path = "../shekyl-p-host" }
 # Phase 2a-3 synthetic FCMP++ tree root (§3.0.5): Selene multiexp + Helios
 # placeholder siblings in `engine::synthetic_tree`, consumed by assembly and

@@ -221,6 +221,29 @@ impl ServingReader {
     pub fn sync_tip_height(&self) -> Result<BlockHeight, StoreError> {
         self.store.sync_tip_height()
     }
+
+    /// Whether `other` is a handle on the **same open database**.
+    ///
+    /// This is allocation identity, and that is store identity: a
+    /// `LeafStore` is the live `redb::Database`, and the wallet's
+    /// curve-tree handle keeps this `Arc` across fail-stop so recovery
+    /// resumes the writer over it rather than opening a second file.
+    /// A healthy respawn therefore does not mint a new `Arc`. Two
+    /// readers that do not share an `Arc` are two open stores — even
+    /// when they were opened on the same path — and pins applied to
+    /// one are not pins in the other.
+    #[must_use]
+    pub fn same_store(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.store, &other.store)
+    }
+
+    /// The live store this reader holds. Crate-private so
+    /// [`crate::CurveTreeClient::resume_from_reader`] can rebuild a writer
+    /// over the same database without publishing a write `Arc` on the
+    /// serving surface.
+    pub(crate) fn store_arc(&self) -> Arc<LeafStore> {
+        Arc::clone(&self.store)
+    }
 }
 
 // The store handle carries no secret (the curve tree is public on-chain
