@@ -3,10 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Send-lifecycle JSON-RPC methods (Phase 4b; `abandon_tx` PR-SJ-3).
+//! Send-lifecycle JSON-RPC methods (Phase 4b; `abandon_tx` PR-SJ-3;
+//! `set_tx_note` PR-SA-4 / SJ-DQ-7).
 //!
 //! `build_pending_tx`, `submit_pending_tx`, `discard_pending_tx`,
-//! `abandon_tx`.
+//! `abandon_tx`, `set_tx_note`.
 
 use std::num::NonZeroU64;
 
@@ -196,6 +197,20 @@ pub(crate) async fn abandon_tx(
 /// generous for a human note (thousands of characters) and small on disk.
 pub(crate) const TX_NOTE_MAX_BYTES: usize = 4 * 1024;
 
+/// Reject a note over [`TX_NOTE_MAX_BYTES`]. Reports byte counts only —
+/// **never the note content** — so counterparty text cannot escape via the
+/// error string (rules 35/36). Extracted so the no-echo property is pinned
+/// by a test, not left to code inspection.
+fn check_note_len(note: &str) -> Result<(), WalletRpcError> {
+    if note.len() > TX_NOTE_MAX_BYTES {
+        return Err(WalletRpcError::InvalidParams(format!(
+            "note exceeds the {TX_NOTE_MAX_BYTES}-byte maximum ({} bytes)",
+            note.len()
+        )));
+    }
+    Ok(())
+}
+
 /// `set_tx_note` (`WALLET_SEND_RECORD.md` SJ-DQ-7): attach or clear a
 /// user-authored note on a transaction, keyed by the bare txid. An empty
 /// `note` clears the entry (there is no separate delete method). Purely
@@ -214,15 +229,9 @@ pub(crate) async fn set_tx_note(
     let txid = parse_hex32(&p.tx_hash).ok_or_else(|| {
         WalletRpcError::InvalidParams("tx_hash must be 64 lowercase hex characters".into())
     })?;
-    // Bound before the note can enter the ledger. Report lengths only —
-    // never the note bytes — so counterparty text does not escape via the
-    // error string.
-    if p.note.len() > TX_NOTE_MAX_BYTES {
-        return Err(WalletRpcError::InvalidParams(format!(
-            "note exceeds the {TX_NOTE_MAX_BYTES}-byte maximum ({} bytes)",
-            p.note.len()
-        )));
-    }
+    // Bound before the note can enter the ledger, and before any lock is
+    // taken — a refused note never reaches the engine or its write guard.
+    check_note_len(&p.note)?;
 
     let shared = require_open_engine(tenants).await?;
     let engine = shared.read().await;
@@ -268,6 +277,33 @@ fn parse_reservation_id(s: &str) -> Result<ReservationId, WalletRpcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn note_length_bound_refuses_without_echoing_content() {
+        // At the limit is accepted; one byte over is refused.
+        assert!(check_note_len(&"x".repeat(TX_NOTE_MAX_BYTES)).is_ok());
+        assert!(check_note_len("short note").is_ok());
+
+        // An over-length note carrying a marker: the refusal must report
+        // byte counts only and must NOT echo the note content, so
+        // counterparty text cannot escape through the error string (the
+        // property fires if someone later "improves" the message to include
+        // the note).
+        let over = format!("CANARY{}", "x".repeat(TX_NOTE_MAX_BYTES));
+        match check_note_len(&over).expect_err("over-length note must be refused") {
+            WalletRpcError::InvalidParams(msg) => {
+                assert!(
+                    !msg.contains("CANARY"),
+                    "refusal must not echo note content: {msg}"
+                );
+                assert!(
+                    msg.contains("maximum"),
+                    "refusal should name the limit: {msg}"
+                );
+            }
+            other => panic!("expected InvalidParams, got {other:?}"),
+        }
+    }
 
     #[test]
     fn parses_named_and_custom_priority() {
