@@ -28,7 +28,7 @@
 //!
 //! Edge, I-2 migration, and the durable save all run under **one** ledger
 //! write guard and persist as a single atomic envelope replace
-//! ([`drive_persistence`] → `save_state`). Holding the write across the
+//! ([`Engine::save_or_rollback`] → `save_state`). Holding the write across the
 //! save is deliberate and differs from the payment-request pattern
 //! (mutate → drop write → read-save): abandon is concurrent with refresh
 //! merge and the confirmed-absent watchdog, either of which can
@@ -44,7 +44,6 @@ use shekyl_engine_state::{AbandonEdge, SendState};
 use shekyl_types::TxHash;
 
 use crate::engine::error::PersistenceError;
-use crate::engine::lifecycle::drive_persistence;
 use crate::engine::traits::{DaemonEngine, PendingTxEngine, PersistenceEngine, RefreshEngine};
 use crate::engine::{Engine, EngineSignerKind, LocalLedger};
 
@@ -126,17 +125,12 @@ impl<
             (AbandonEdge::NotFound, _) => Err(AbandonTxError::NotFound),
             (AbandonEdge::Forbidden { state }, _) => Err(AbandonTxError::StateForbids { state }),
             (AbandonEdge::Applied { previous }, was_pending) => {
-                let save_result = drive_persistence(
-                    self.persistence
-                        .save_state(self.state_wrap_key(), &guard.ledger),
-                );
-                if let Err(e) = save_result {
-                    // Fail closed under the same exclusive guard: restore
-                    // the pre-abandon shape. Abandon never touched
-                    // baseline/locks, so state + pending is a full undo.
-                    guard.ledger.unabandon_send(&key, previous, was_pending);
-                    return Err(AbandonTxError::Persistence(e.into()));
-                }
+                // Fail closed under the same exclusive guard: restore the
+                // pre-abandon shape. Abandon never touched baseline/locks,
+                // so state + pending is a full undo.
+                self.save_or_rollback(&mut guard, |state| {
+                    state.ledger.unabandon_send(&key, previous, was_pending);
+                })?;
                 Ok(AbandonTxOutcome::Abandoned)
             }
         }

@@ -13,14 +13,12 @@
 //! incoming-change and outgoing rows share the one note).
 //!
 //! The write is crash-atomic under a single ledger write guard, the same
-//! discipline as `abandon_tx_persisted`: mutate the map via
+//! discipline as `abandon_tx_persisted` and through the same owner
+//! ([`Engine::save_or_rollback`]): mutate the map via
 //! [`TxMetaBlock::set_note`], save, and on save failure restore the prior
-//! entry (fail closed) so a retry starts from the pre-write state.
-//! `WalletFile::save_state` writes via `atomic_write_file` (temp → fsync →
-//! `rename(2)` → parent fsync), so a failed save leaves the on-disk state
-//! byte-unchanged — the rollback's precondition holds. An empty note
-//! **clears** the entry rather than storing an empty string, so there is no
-//! separate delete method.
+//! entry (fail closed) so a retry starts from the pre-write state. An empty
+//! note **clears** the entry rather than storing an empty string, so there is
+//! no separate delete method.
 //!
 //! No-ops (clear of an absent note, or set of an already-identical string)
 //! short-circuit without a durable save — matching abandon's
@@ -38,16 +36,18 @@
 //!
 //! # Size bound
 //!
-//! [`shekyl_engine_state::TX_NOTE_MAX_BYTES`] is enforced on the write path
-//! inside [`TxMetaBlock::set_note`]. Callers may pre-check the same constant
-//! (e.g. RPC before taking a lock) but that is a fast-fail, not the sole
-//! invariant.
+//! [`shekyl_engine_state::TX_NOTE_MAX_BYTES`] bounds one note, and
+//! [`TxMetaBlock::set_note`] is the only door into the map — the field behind
+//! it is private — so the bound holds structurally rather than by agreement.
+//! Callers may pre-check the same constant (e.g. RPC before taking a lock),
+//! but that is a fast-fail, never the enforcement. Note *count* is not
+//! bounded here; see the constant's own docs for why and for the outer
+//! ceiling.
 
 use shekyl_engine_state::{SetTxNoteOutcome, TxNoteTooLong};
 use shekyl_types::TxHash;
 
 use crate::engine::error::PersistenceError;
-use crate::engine::lifecycle::drive_persistence;
 use crate::engine::traits::{DaemonEngine, PendingTxEngine, PersistenceEngine, RefreshEngine};
 use crate::engine::{Engine, EngineSignerKind, LocalLedger};
 
@@ -113,15 +113,11 @@ impl<
         match outcome {
             SetTxNoteOutcome::Unchanged { stored } => Ok(stored),
             SetTxNoteOutcome::Applied { previous, stored } => {
-                let save_result = drive_persistence(
-                    self.persistence
-                        .save_state(self.state_wrap_key(), &guard.ledger),
-                );
-                if let Err(e) = save_result {
-                    // Fail closed under the same exclusive guard.
-                    guard.ledger.tx_meta.restore_note(key, previous);
-                    return Err(SetTxNoteError::Persistence(e.into()));
-                }
+                // Save under the guard we already hold; on failure the undo
+                // runs before we return, still exclusive.
+                self.save_or_rollback(&mut guard, |state| {
+                    state.ledger.tx_meta.restore_note(key, previous);
+                })?;
                 Ok(stored)
             }
         }
