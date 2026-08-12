@@ -780,3 +780,75 @@ and became mechanical, and Q12-U3's subject narrowed from "derive a bridge
 delay" to "derive `p_in` for dilution, and decide whether `p_out` is nonzero at
 all". The units that remain are smaller and fewer than when the round opened,
 which is what a unifying rule is supposed to do.
+
+## Q12-U1 as built — and the seam the spec did not name
+
+**2026-08-12.** The field landed as specified: `origin_zone: 2`, taken from
+`bf_padding`, record unchanged at a fixed 192 bytes, `zone::invalid == 0` as
+the migration-free default.
+
+**The no-migration claim is stronger than §65.4 stated, and checking it is what
+showed that.** §65.4 argued from the spare-bits convention — *"a pre-upgrade
+record, whose spare bits are zero, decodes to `invalid`"*. That is true but it
+is an argument about convention. The stronger fact: `bf_padding` was **never
+read anywhere**, and its only writes were three explicit `= 0` assignments in
+`tx_pool.cpp`. Every record ever persisted carries zero in those bits *by
+construction*, so the fallback is a property of the data rather than a
+convention it happens to follow.
+
+**Both `static_assert`s guard silent failures**, which is why they are
+assertions and not comments. If `zone::invalid` stopped being 0, every existing
+record would re-read as a *real* transport and anonymity-arrived traffic would
+become indistinguishable from clearnet — the privacy-losing direction, with no
+error anywhere. If the enum outgrew two bits, `tor` (3) would truncate to `i2p`
+(2): one real zone silently becoming another.
+
+### The gap: the spec specifies the field and is silent on the seam
+
+§65.4 pins the storage — width, default, byte count, no migration — and says
+nothing about **how the arrival zone reaches the pool**. That silence is worth
+recording rather than resolving by implementation, because the field is inert
+without the seam and an unrecorded seam becomes whichever one was written
+first.
+
+**As built**, the zone is carried from
+`cryptonote_protocol_handler.inl` — where `context.m_remote_address.get_zone()`
+already exists and was previously collapsed into `relay_method::forward` — down
+through `handle_incoming_tx` → `add_new_tx` → `add_tx` to the record. It is
+passed **alongside** `relay_method`, never folded into it: the relay method is
+a routing decision that may be revised, the origin zone is a fact about where
+the bytes came from that must not be. Folding the fact into the decision is
+exactly what made the zone unrecoverable in the first place.
+
+**No default argument**, deliberately. A defaulted `zone::invalid` would have
+left the block-sourced and test call sites untouched and would have been
+*correct* for them — but a future anonymity-carrying caller would then inherit
+`invalid` by omission. All nine call sites name their zone, so each documents
+its own provenance.
+
+**One site is a correctness trap rather than plumbing.** `tx_pool.cpp`'s
+hard-fork re-validation re-adds transactions from stored meta. Passing
+`invalid` there — the obvious mechanical fill — would erase every
+transaction's origin at every re-validation, silently: the transaction still
+propagates, nothing errors, and the only symptom is anonymity-arrived traffic
+losing the fact that it was. It passes `e.meta.get_origin_zone()`, so the
+recorded origin survives the round trip.
+
+### What is tested, and what is not
+
+Tested: the two bits round-trip every zone; a zeroed record reads as
+`invalid`; the record is still 192 bytes; origin and relay method do not alias
+(all four zones × all six relay methods, **both orders**, since they share a
+byte and `set_relay_method` clears five sibling bits); and the zone survives a
+**real LMDB** round trip — not a stub DB, which would store the whole struct
+and round-trip it by construction, proving nothing about the storage format.
+
+**Not tested:** no test drives a transaction through `add_tx` end to end with a
+non-`invalid` zone. The seam is compiler-verified and both its endpoints are
+tested, but the arrival→pool path is not exercised behaviourally. That needs a
+real pool-insertion fixture, which is where Q12-U2 lives, and is recorded here
+rather than left for a reader to assume from "the parts pass".
+
+`is_forwarding` is untouched. It remains live in
+`set_relay_method`/`get_relay_method`, and retiring it is Q12-D3's consequence
+landing in Q12-U2's receive path — a different validation surface.

@@ -982,7 +982,11 @@ namespace cryptonote
     for (auto& tx : arg.txs)
     {
       tx_verification_context tvc{};
-      if (!m_core.handle_incoming_tx(tx, tvc, tx_relay, true) && !tvc.m_no_drop_offense)
+      // `zone` is the arrival transport, computed above. It is passed ALONGSIDE
+      // `tx_relay` rather than folded into it: the relay method is a routing
+      // decision that may be revised, the zone is a fact about where the bytes
+      // came from that must not be.
+      if (!m_core.handle_incoming_tx(tx, tvc, tx_relay, true, zone) && !tvc.m_no_drop_offense)
       {
         LOG_PRINT_CCONTEXT_L1("Tx verification failed, dropping connection");
         drop_connection(context, false, false);

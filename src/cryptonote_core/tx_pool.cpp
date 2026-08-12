@@ -174,7 +174,8 @@ namespace cryptonote
   bool tx_memory_pool::add_tx(transaction &tx, /*const crypto::hash& tx_prefix_hash,*/
     const crypto::hash &id, const cryptonote::blobdata &blob, size_t tx_weight,
     tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-    uint8_t version, uint8_t nic_verified_hf_version)
+    uint8_t version, epee::net_utils::zone origin_zone,
+    uint8_t nic_verified_hf_version)
   {
     const bool kept_by_block = (tx_relay == relay_method::block);
 
@@ -271,13 +272,11 @@ namespace cryptonote
         meta.double_spend_seen = have_tx_keyimges_as_spent(tx, id);
         meta.pruned = tx.pruned;
         meta.fcmp_verified = 0;
-        // Origin zone is stated explicitly rather than left to the bit's
-        // previous zero-fill, so the value is a decision with a name. The
-        // arrival zone is not reachable at this depth yet -- threading it
-        // from the protocol handler is the seam commit -- and `invalid`
-        // is the honest reading until it is: origin unknown, which is what
-        // every record said before this field existed.
-        meta.set_origin_zone(epee::net_utils::zone::invalid);
+        // The zone the bytes actually arrived over, carried from the protocol
+        // handler rather than inferred from the relay method. `invalid` here
+        // means the caller had no arrival to report (block-sourced, or locally
+        // originated), which is a different statement from "clearnet".
+        meta.set_origin_zone(origin_zone);
         meta.fcmp_verification_hash = null_hash;
         memset(meta.padding, 0, sizeof(meta.padding));
         try
@@ -362,7 +361,7 @@ namespace cryptonote
           meta.relayed = relayed;
           meta.double_spend_seen = false;
           meta.pruned = tx.pruned;
-          meta.set_origin_zone(epee::net_utils::zone::invalid);  // see above
+          meta.set_origin_zone(origin_zone);  // see above
           memset(meta.padding, 0, sizeof(meta.padding));
 
           if (tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc)
@@ -411,7 +410,8 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::add_tx(transaction &tx, tx_verification_context& tvc, relay_method tx_relay,
-    bool relayed, uint8_t version, uint8_t nic_verified_hf_version)
+    bool relayed, uint8_t version, epee::net_utils::zone origin_zone,
+    uint8_t nic_verified_hf_version)
   {
     crypto::hash h = null_hash;
     cryptonote::blobdata bl;
@@ -419,7 +419,7 @@ namespace cryptonote
     if (bl.size() == 0 || !get_transaction_hash(tx, h))
       return false;
     return add_tx(tx, h, bl, get_transaction_weight(tx, bl.size()), tvc, tx_relay, relayed, version,
-      nic_verified_hf_version);
+      origin_zone, nic_verified_hf_version);
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::insert_attested_tx(transaction &tx, const crypto::hash &id,
@@ -2124,7 +2124,13 @@ namespace cryptonote
 
         cryptonote::tx_verification_context tvc{};
         relay_method tx_relay = e.meta.get_relay_method();
-        if (!add_tx(tx, e.txid, blob, e.meta.weight, tvc, tx_relay, relayed, version))
+        // Re-validation is not a new arrival, so the recorded origin must
+        // SURVIVE the round trip. Passing `invalid` here would quietly erase a
+        // transaction's provenance at every hard-fork re-validation -- the tx
+        // would still propagate and nothing would error, and the only symptom
+        // would be anonymity-arrived traffic losing the fact that it was.
+        if (!add_tx(tx, e.txid, blob, e.meta.weight, tvc, tx_relay, relayed, version,
+              e.meta.get_origin_zone()))
         {
           MINFO("Failed to re-validate tx " << e.txid << " for v" << (unsigned)version << ", dropped");
           continue;
