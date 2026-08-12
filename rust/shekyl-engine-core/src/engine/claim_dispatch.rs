@@ -281,11 +281,9 @@ where
             .map_err(|e| EmissionClaimRequestError::state("dispatch tip", e))?;
         let persona = *assembled.bound_tx.persona();
         let sealed = PendingEmissionClaim {
-            p_slot,
             persona,
             tx_bytes: assembled.bound_tx.bytes().to_vec(),
             fee_gindexes: assembled.fee_gindexes.clone(),
-            claimed_epochs: assembled.claimed_epochs.clone(),
             state: PendingPostState::Pending,
         };
         let pushed = store
