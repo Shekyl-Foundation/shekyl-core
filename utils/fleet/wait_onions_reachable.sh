@@ -92,7 +92,16 @@ while [ "${#remaining[@]}" -gt 0 ]; do
   if [ "$elapsed" -ge "$DEADLINE_SECONDS" ]; then
     echo "UNREACHABLE after ${elapsed}s — do NOT start the run:" >&2
     printf '  %s\n' "${remaining[@]}" >&2
+    echo >&2
     echo "Each of these would cost an hour of connection suppression on first dial." >&2
+    echo "Waiting longer does not fix it. A hidden service can fail to publish its" >&2
+    echo "descriptor entirely while its own tor reports Bootstrapped 100% — observed," >&2
+    echo "and invisible from the node itself. RESTART that instance's tor: a healthy" >&2
+    echo "one uploads to every HSDir within seconds (grep 'hsdesc' at Log info), and" >&2
+    echo "the onion answers on the next probe. If a restart does not fix it, drop the" >&2
+    echo "node from the arm and report the drop — it would otherwise enter the" >&2
+    echo "histogram as an isolated node and bias the result toward the run's own" >&2
+    echo "headline claim." >&2
     exit 1
   fi
   echo "  ${#remaining[@]} still unreachable at ${elapsed}s; retrying"

@@ -1122,20 +1122,43 @@ histogram read at `t + 20 min` would report a sparse graph caused entirely by
 the start procedure. Q12-R8 predicted this shape from the seed estate; R13 gives
 it a number and shows the ordering rule as written does not prevent it.
 
-#### A hidden service can be unfetchable while its own tor reports 100 %
+#### A hidden service can silently never publish, while its own tor reports 100 %
 
-The gate found this on its first real use, and it is not the propagation window.
-Of the smoke test's three services, **one was unreachable from both other nodes
-more than an hour after `Bootstrapped 100%`** — while answering from *its own*
-tor, which proves only that the local listener is up, since tor short-circuits a
-request for a service it hosts. Its log showed no circuit activity after
-bootstrap where the two working services showed hidden-service guard selection.
+The gate found this on its first real use, and it is **not** the propagation
+window. Of the smoke test's three services, **one was unreachable from both
+other nodes more than an hour after `Bootstrapped 100%`** — while answering from
+*its own* tor, which proves only that the local listener is up, since tor
+short-circuits a request for a service it hosts. Every local indicator said
+healthy: tor bootstrapped, the daemon's anonymity listener bound, the onion
+present in `hostname`.
 
-**So the gate is a health check, not a settling delay.** A node whose onion never
-becomes fetchable is a *tor* failure, and if it enters an arm it enters the
-histogram as an isolated node — biasing the statistic **in the direction of the
-run's headline claim**. It must be restarted or dropped from the arm before the
-arm begins, and the count of nodes dropped is itself reported.
+Running that tor at `info` level named it. A working service logs
+
+> `handle_response_upload_hsdesc(): Uploading hidden service descriptor:
+> finished with status 200 ("HS descriptor stored successfully.")`
+
+once per HSDir, and the broken one had **never logged it at all**. On restart it
+uploaded to every HSDir within **6 seconds** and was reachable on the next probe.
+
+| stage | observable | value |
+| --- | --- | --- |
+| tor bootstrap | `Bootstrapped 100%` | present in **both** cases — says nothing |
+| descriptor upload | `hsdesc … status 200` at `info` | **absent** in the broken case, ~6 s after start in the healthy one |
+| external reachability | another node's SOCKS | the only signal that separates them |
+
+**Three things follow.** The gate is a **health check**, not a settling delay —
+a wait of any length would not have fixed this. The remedy is a **tor restart**,
+and it is reliable. And a node whose onion never publishes would enter an arm as
+an isolated node, biasing the statistic **in the direction of the run's headline
+claim**; such nodes are restarted before the arm, and if a restart does not fix
+one, it is dropped and the drop count reported.
+
+**This is a mainnet failure mode too, and a quiet one.** A user running
+`--tx-proxy tor` whose descriptor never uploads receives no inbound anonymity
+connections, forever, with **no local indication** — the daemon cannot see the
+difference and tor logs nothing at default verbosity. It compounds with the
+suppression above: that node also cannot be found by anyone who dialled it
+during the window.
 
 **Found for the price of one dev box.** The smoke test existed to check that
 stagenet's anonymity zone forms at all; it found the scheduling defect that
