@@ -119,26 +119,38 @@ pub(crate) fn atomic_write_file(target: &Path, bytes: &[u8]) -> Result<(), Walle
     tmp.persist(target)
         .map_err(|e| WalletFileError::rename(target.to_path_buf(), e.error))?;
 
-    fsync_parent_dir(parent)?;
+    // The rename above has already committed the new file into place. A
+    // failure of the durability fsync below is therefore NOT "the write
+    // failed" — the target is already replaced. It wraps into
+    // `AtomicWriteDirSync` (not a generic `Io`) so a caller can tell the
+    // target changed (`WalletFileError::target_replaced`) and keep, not
+    // undo, the in-memory state that already matches disk.
+    fsync_parent_dir(parent)
+        .map_err(|source| WalletFileError::dir_sync(target.to_path_buf(), source))?;
     Ok(())
 }
 
 /// Platform-gated parent-directory fsync. POSIX: open the dir and
 /// `fsync` the fd. Windows: no-op (per Windows' durability model, the
 /// `sync_all` on the file suffices once the rename has completed).
+///
+/// Returns the raw `io::Error` (not a `WalletFileError`) so the sole caller
+/// can wrap a failure into [`WalletFileError::AtomicWriteDirSync`] — this
+/// runs *after* the rename has committed, a distinction that would be lost
+/// if the failure surfaced as a generic `WalletFileError::Io`.
 #[cfg(unix)]
-fn fsync_parent_dir(parent: &Path) -> Result<(), WalletFileError> {
+fn fsync_parent_dir(parent: &Path) -> io::Result<()> {
     // `std::fs::File::open` on a directory is portable on all Unixes we
     // care about (Linux, macOS, FreeBSD).
     let dir = File::open(parent)?;
-    dir.sync_all()?;
-    Ok(())
+    dir.sync_all()
 }
 
 #[cfg(not(unix))]
-fn fsync_parent_dir(_parent: &Path) -> Result<(), WalletFileError> {
+fn fsync_parent_dir(_parent: &Path) -> io::Result<()> {
     // Windows NTFS guarantees rename durability after the file's
-    // sync_all; there is no directory-fsync equivalent.
+    // sync_all; there is no directory-fsync equivalent. The
+    // `AtomicWriteDirSync` variant is therefore unreachable on Windows.
     Ok(())
 }
 
@@ -153,6 +165,39 @@ mod tests {
         let target = dir.path().join("foo.bin");
         atomic_write_file(&target, b"hello").unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"hello");
+    }
+
+    /// `target_replaced` must isolate exactly the one post-rename failure:
+    /// the dir-fsync case reports the target changed, every pre-rename
+    /// failure reports it unchanged. This is the classification a caller's
+    /// undo-or-keep decision rides on, so it is pinned rather than left to
+    /// the variant's shape.
+    #[test]
+    fn target_replaced_isolates_the_post_rename_failure() {
+        let path = std::path::PathBuf::from("/x/wallet");
+
+        // Post-rename: the rename committed, only the durability fsync failed.
+        let dir_sync =
+            WalletFileError::dir_sync(path.clone(), io::Error::other("parent fsync failed"));
+        assert!(
+            dir_sync.target_replaced(),
+            "a post-rename dir-fsync failure must report the target was replaced"
+        );
+
+        // Pre-rename: the rename itself failed — target untouched.
+        let rename = WalletFileError::rename(path, io::Error::other("rename failed"));
+        assert!(
+            !rename.target_replaced(),
+            "a failed rename leaves the target unchanged"
+        );
+
+        // Pre-rename: a generic write/permission failure — target untouched.
+        let io_err =
+            WalletFileError::Io(io::Error::new(io::ErrorKind::PermissionDenied, "no perms"));
+        assert!(
+            !io_err.target_replaced(),
+            "a pre-rename I/O failure leaves the target unchanged"
+        );
     }
 
     #[test]

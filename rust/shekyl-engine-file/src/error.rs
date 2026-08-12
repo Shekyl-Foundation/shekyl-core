@@ -116,6 +116,23 @@ pub enum WalletFileError {
         source: io::Error,
     },
 
+    /// The atomic-write `rename(2)` **succeeded** — the new file is already
+    /// in place and visible — but the follow-up parent-directory `fsync`
+    /// that hardens the rename against a crash failed. The write **is
+    /// applied** (`target` was replaced); only its durability across a power
+    /// loss is unconfirmed until the next successful save re-syncs the
+    /// directory. This is the one atomic-write failure that leaves the
+    /// on-disk state *changed* — see [`Self::target_replaced`] — so a caller
+    /// must **not** undo an in-memory mutation on this error (that would
+    /// diverge memory from the now-current file); a fail-closed retry
+    /// re-runs the save and re-establishes durability idempotently.
+    #[error("atomic write into {target} committed but parent-dir fsync failed: {source}")]
+    AtomicWriteDirSync {
+        target: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
     /// The keys file decoded cleanly but declared a `network` byte that
     /// does not map to any known [`Network`]. Envelope-level validation
     /// does not currently vet this field, so the orchestrator is the
@@ -198,5 +215,32 @@ impl WalletFileError {
     /// construction at every call site.
     pub(crate) fn rename(target: PathBuf, source: io::Error) -> Self {
         Self::AtomicWriteRename { target, source }
+    }
+
+    /// Convenience: wraps the `io::Error` from the post-rename
+    /// parent-directory `fsync` into [`Self::AtomicWriteDirSync`]. Same
+    /// centralizing rationale as [`Self::rename`].
+    pub(crate) fn dir_sync(target: PathBuf, source: io::Error) -> Self {
+        Self::AtomicWriteDirSync { target, source }
+    }
+
+    /// Whether this failure occurred **after** the atomic write had already
+    /// replaced its target on disk.
+    ///
+    /// Only [`Self::AtomicWriteDirSync`] answers `true`: it is minted solely
+    /// by the one atomic-write step that runs after the `rename(2)` commit
+    /// (the parent-directory `fsync`). Every other `WalletFileError` — a
+    /// framing/ledger/envelope error before the write, a temp-file or
+    /// permission `Io` failure, or an `AtomicWriteRename` where the rename
+    /// itself failed — leaves the target **byte-unchanged**.
+    ///
+    /// A caller that mutated in-memory state and is deciding whether to undo
+    /// on a save failure uses this to stay consistent with disk: undo when
+    /// the target is unchanged, keep the mutation when it was replaced. **Any
+    /// future atomic-write failure that can occur after the rename commits
+    /// must be added here**, or such a caller will wrongly undo it.
+    #[must_use]
+    pub fn target_replaced(&self) -> bool {
+        matches!(self, Self::AtomicWriteDirSync { .. })
     }
 }
