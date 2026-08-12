@@ -9642,6 +9642,13 @@ fix is an integration test that links the FFI; recorded as owed.
   safe to delete when a constant is a pending derivation's other half.** The
   zero-consumer fact is now recorded at the site, since Q-12's derivation
   needs it.
+  > **CLOSED 2026-08-12 by Q12-U4 — and the rule held rather than failed.**
+  > Both constants are now deleted, because Q12-D3 deleted
+  > `relay_method::forward` and the delay had no mechanism left to time. That
+  > is not "we should have swept it in §55.3": the reason for keeping it was
+  > that it was half of a pending derivation, and it stayed exactly until that
+  > derivation resolved. It resolved by **deletion** rather than by producing a
+  > number — which is one of the three closes §55.3 left open, not a surprise.
 
 ## 56. Q-11 Unit 2 — the shape, measured; and the metronome is disqualified
 

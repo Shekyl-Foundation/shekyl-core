@@ -747,6 +747,11 @@ two aliases.
 `CRYPTONOTE_FORWARD_DELAY_BASE` is **not** split out and stays pending
 correctly: its fate is the same question as `forward`'s (Q12-Q3, Q12-Q7).
 
+> **RESOLVED 2026-08-12 by Q12-U4.** `forward` is deleted, so BASE and AVERAGE
+> go with it. Holding BASE pending was the right call and it paid: its fate
+> *was* the same question, and the question got answered by deletion rather
+> than by derivation.
+
 ### 5.2 Not in scope
 
 - **The coherence end-to-end witness.** Still blocked on a `t_core` mock the
@@ -767,10 +772,10 @@ correctly: its fate is the same question as `forward`'s (Q12-Q3, Q12-Q7).
 
 | unit | subject | status |
 | --- | --- | --- |
-| **Q12-U1** | the txpool origin-zone field — two reserved bits, `invalid == 0`, no migration | **the round.** Without it the pool loop cannot route by origin and coherence is unreachable |
-| **Q12-U2** | the receive path — anonymity arrivals relay at arrival instead of being dropped by the forward gate | **required.** This is what makes coherence *execute* (§89.8's owed item) |
-| **Q12-U3** | `p` — ship at a stated value, run the Q12-D6a testnet, read precision and latency off `/get_stem_tallies` and `get_connections` | **not a design question.** Unanswerable before Q12-U2 |
-| **Q12-U4** | `FORWARD_DELAY_*`'s disposition | likely empty — the constants die with the class |
+| **Q12-U1** | the txpool origin-zone field — two reserved bits, `invalid == 0`, no migration | **LANDED** (2026-08-12), with Q12-U2 in one PR: split, it ships a field with no production reader |
+| **Q12-U2** | the receive path — anonymity arrivals relay at arrival instead of being dropped by the forward gate | **LANDED** (2026-08-12). Coherence executes, and the re-relay loop stops routing anonymity-arrived traffic to `zone::public_` |
+| **Q12-U3** | `p` — ship at a stated value, run the Q12-D6a testnet, read precision and latency off `/get_stem_tallies` and `get_connections` | **NEXT, and now unblocked.** §89.2's premise is shipped, so the per-zone `hop` is live and measurable rather than inert |
+| **Q12-U4** | `FORWARD_DELAY_*`'s disposition | **LANDED** with U2 — the forecast held: the constants died with the class, by deletion rather than derivation |
 
 The Poisson primitive's retirement is **not** a unit here; it is split out per
 §5.1 and proceeds independently.
@@ -851,4 +856,92 @@ rather than left for a reader to assume from "the parts pass".
 
 `is_forwarding` is untouched. It remains live in
 `set_relay_method`/`get_relay_method`, and retiring it is Q12-D3's consequence
-landing in Q12-U2's receive path — a different validation surface.
+landing in Q12-U2's receive path.
+
+> **Amended when Q12-U2 landed in the same PR.** The sentence above originally
+> ended "— a different validation surface", and that was wrong in a way worth
+> keeping visible rather than editing out. U1 recorded its own end-to-end gap
+> and assigned the fixture that would close it to U2; a unit that ships a
+> field whose only reader is a test, and defers the reader to the next unit,
+> is not a separate surface from the one that adds the reader. Splitting them
+> would have shipped a dead persisted field — the exact class swept in #450 —
+> in the PR that introduced it. They are one surface and landed as one PR.
+
+## Q12-U2 / Q12-U4 as built — the class dies, and the field gets a reader
+
+**2026-08-12.** The receive path stems every arrival whatever transport
+carried it, `relay_method::forward` is deleted, and the pool's re-relay loop
+routes by the recorded origin instead of a `zone::public_` literal.
+
+### The reader is the point, not a bonus
+
+§65.4 specified the field and Q12-U2 was scoped as "the receive path". Taken
+literally that pairing ships a field nothing production reads: coherence at
+**arrival** reads `context.m_remote_address.get_zone()` — the live connection —
+and never consults the record.
+
+The reader is the **re-relay**. `core::relay_txpool_transactions` runs minutes
+later from stored state with a nil source and no connection to ask, and handed
+every stem to `zone::public_` as a literal. So an anonymity arrival was held on
+its zone at admission and then moved to the clear internet by the pool timer —
+silently, since the transaction still propagates and nothing errors. Coherence
+without this is undone by its own re-relay loop.
+
+That is why the origin travels with the entry (`relayable_tx`) and stems are
+bucketed by origin zone. An unusable origin still falls through to clearnet,
+which is Q12-D3's ruling and not an omission: relayed traffic's home was always
+clearnet, and originated traffic is the class that fails closed.
+
+### §89.2's premise is now shipped
+
+The per-zone `hop` was derived on the premise that a transaction entering an
+anonymity stem completes it there, and §89.8.4 recorded the constant as inert
+because the premise was not shipped. It is shipped now. The constant becomes
+**live rather than derived** — measuring it is Q12-U3, and
+`ANON_ZONE_TRANSIT_ASSUMPTION_MS` keeps its interim banner until then.
+
+### What the #427 tripwire actually pinned
+
+It greened, as designed, and demanded a re-read of §89.2's premise rather than
+a deleted assertion. Both happened. But it was weaker than it read: it
+**constructed** the `forward` state by calling `set_relayed` directly rather
+than driving an arrival, so it pinned the **class**, not the **path**, and
+would not have fired on the receive-path change alone — only on the class's
+deletion. Its own text said the suite could not drive an arrival; the
+consequence of that was not recorded. A tripwire that cannot reach the path it
+guards fires on whichever adjacent thing moves first.
+
+### What is tested, and what is still not
+
+Tested: a stemming entry carries its anonymity origin out of the pool to the
+relay loop; a clearnet entry does not acquire one; an entry with no recorded
+origin reports none rather than a reader-invented default. **Verified by
+mutation** — pinning the reader back to `zone::public_` reds all three,
+including the negative control.
+
+**Still not tested: the arrival-to-record leg.** Q12-U1 recorded this gap and
+assigned it here; it **narrows rather than closes**. `add_tx` runs full input
+verification, so driving an arrival needs a valid FCMP++ proof, and the fixture
+builds shape-only transactions. Three fixture obstacles fell in sequence
+(encoded fee, output count, reference block) and the fourth does not fall to
+fixture work — it is the same `t_core`-harness blocker FOLLOWUPS records
+against this path, now confirmed at a second site. Saying the gap closed would
+be claiming a harness that does not exist.
+
+### Q12-U4 landed here rather than as its own unit
+
+It was forecast as "likely empty — the constants die with the class", and is
+nearly that: `CRYPTONOTE_FORWARD_DELAY_BASE`/`_AVERAGE`, Rust `ForwardDelay`
+and `ADOPTED_FORWARD_DELAY_MEAN_SECS`, and the
+`shekyl_dandelionpp_forward_delay_seconds` export all go. The pending Q-12 item
+was to *derive* the mean from the stated anonymity-set objective; a constant
+whose mechanism no longer exists is not derived, it is removed.
+
+**Two migration claims ride in this PR and they are not the same claim.** U1's
+is free — `bf_padding` was never read and only ever written as zero, so the
+default is a property of the data. U4's is argued and weaker: deleting
+`is_forwarding` would shift `fcmp_verified` and `origin_zone` down one bit and
+make new code misread old records, including `fcmp_verified` reading 1 where 0
+was written. Pre-genesis there is no deployed pool, and the txpool is ephemeral
+node-local state rather than chain history — but the bit is kept reserved
+anyway, because one line removes the question instead of arguing it.
