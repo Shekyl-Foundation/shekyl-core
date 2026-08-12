@@ -1104,7 +1104,7 @@ later succeeded immediately.
 
 | Q12-R8 as written | Q12-R13 |
 | --- | --- |
-| tor + HS up before daemons | every onion **verified reachable through another node's SOCKS proxy** before any daemon starts (`utils/fleet/wait_onions_reachable.sh`) |
+| tor + HS up before daemons | every onion **verified reachable through the SOCKS proxy that will dial it** — not through any convenient one — before any daemon starts (`utils/fleet/wait_onions_reachable.sh`, and §11.5.1) |
 | two readings "longer than the backoff" apart | **three readings, or one well after `t + 3600 s`** — see below |
 | — | a fleet whose first dials failed is **restarted**, not waited out: the cache is in-memory and has no other clearing path |
 
@@ -1153,21 +1153,94 @@ an isolated node, biasing the statistic **in the direction of the run's headline
 claim**; such nodes are restarted before the arm, and if a restart does not fix
 one, it is dropped and the drop count reported.
 
-**This is a mainnet failure mode too, and a quiet one.** A user running
-`--tx-proxy tor` whose descriptor never uploads receives no inbound anonymity
-connections, forever, with **no local indication** — the daemon cannot see the
-difference and tor logs nothing at default verbosity. It compounds with the
-suppression above: that node also cannot be found by anyone who dialled it
-during the window.
+### 11.5.1 The gate must probe from the proxy that will dial — a correction
+
+**Written after the six-node rehearsal contradicted the first version of this
+section.** That run gated all six onions, *passed*, wired the ring, started the
+daemons — **and dials still failed**:
+
+> `jp` at `01:35:38Z`: `Timeout on socks connect (127.0.0.1:21003 to
+> x5ll6ukod….onion:13021)` — the very onion the gate had passed minutes earlier.
+
+Seven such timeouts across the six nodes (2/1/1/0/1/2) against ~23 successful
+links. **The gate was not wrong; it was asked the wrong question.** It probed
+through *one* tor — the dev box's — and every fleet node dials through **its
+own**, which must fetch the descriptor independently over its own circuits. A
+descriptor published and fetchable by one client says nothing about whether a
+different client can fetch it inside its timeout.
+
+**So the requirement is per-proxy, and it has a second benefit.** Probing onion
+`Y` through node `X`'s SOCKS caches `Y`'s descriptor in `X`'s tor, so `X`'s
+daemon then dials against a warm cache. The gate stops being only a check and
+becomes a **cache primer** — which is why running it from the dialing proxy is
+both the correct test *and* the mitigation.
+
+**And it does not scale to a full graph, which is the finding.** Priming is
+`O(A²)` — 3540 probes at `A = 60` — and **gossip-learned onions cannot be primed
+at all**, because they are not known until the run is under way. Every such
+address is a fresh 45-second gamble against an hour of suppression. Burn-in is
+therefore **not eliminable by procedure** at fleet scale; the run must expect a
+residual, measure it, and report it.
+
+#### The asymmetry, stated as a number
+
+| quantity | value | source |
+| --- | --- | --- |
+| patience for a SOCKS connect | **45 s** | `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT` ([`cryptonote_config.h:191`](../../src/cryptonote_config.h#L191)), applied at [`net_node.cpp:415-419`](../../src/p2p/net_node.cpp#L415) |
+| penalty for exceeding it | **3600 s** | `P2P_FAILED_ADDR_FORGET_SECONDS` ([`:201`](../../src/cryptonote_config.h#L201)) |
+| ratio | **1 : 80** | — |
+
+A node waits 45 seconds for a descriptor fetch and, on missing it, buys an hour
+of blindness to that peer. Neither constant is unreasonable alone; **the ratio
+between them is what makes a transient fetch permanent-ish**, and neither was
+chosen with the other in view.
+
+**Measured first-dial failure rate: ~7 in 30**, on six well-provisioned hosts
+across three providers with every descriptor confirmed published. That is the
+input the derivation in §11.6 needs, and it is not small.
+
+#### Correction to the record
+
+An earlier reading of this rehearsal attributed `use`'s low inbound count to
+suppression left over from **restarting its tor**. That mechanism was wrong: no
+node dialled anything before the gate passed, because the phase-2 daemons are
+peerless and stagenet has no compiled seeds. The real cause is the post-gate
+failure above — `jp` burned `use` at `01:35:38Z` and will not retry it until
+`02:35:38Z`. The *conclusion* survives (a node needing a restart carries
+depressed inbound, and inbound is half the readout); the *reason* was
+misattributed, and the corrected reason is worse, because it needs no restart to
+occur.
 
 **Found for the price of one dev box.** The smoke test existed to check that
 stagenet's anonymity zone forms at all; it found the scheduling defect that
 would have silently corrupted the first paid arm — and then a second one.
 
-### 11.6 Q12-R13 is a daemon defect, not a run precondition — the mainnet bootstrap spiral
+### 11.6 Q12-R13 is one onboarding defect, not two findings
 
-**Ruled 2026-08-11.** The suppression above is not a property of fleets. Run the
-same sequence on mainnet with a real new user:
+**Ruled 2026-08-11.** The suppression window and the publication failure are
+filed together deliberately. **Neither is serious alone**; composed, they
+produce a silent failure at first launch that the operator cannot diagnose:
+
+| ingredient | measured | alone it is |
+| --- | --- | --- |
+| a hidden service that starts, reports healthy, and never publishes | **2 of 2 trials showed one**; ~1 in 5 instances | an annoyance — restart tor |
+| a first dial that misses its 45 s window | **~7 in 30** post-gate | a retry — except there is no retry for an hour |
+
+**Composed, the observed behaviour is: "Tor works after you restart it once."**
+A new node's hidden service fails to publish; it dials its seeds anyway; the
+dials fail; all seed onions are suppressed for 3600 s; the operator sees a node
+with no anonymity peers and — reaching for the standard remedy — restarts it,
+which clears both the tor-side publication failure *and* the daemon-side
+suppression cache at once. **It then works, and nothing in the logs at default
+verbosity says why.** Roughly one operator in five meets this, concludes Tor
+support is flaky, and is right for reasons no one can see.
+
+**The gate this run builds is the fleet's workaround. Mainnet has no operator
+running it.** That is precisely why this is filed as a defect against the daemon
+rather than as a run precondition.
+
+The suppression half is not a property of fleets either. Run the same sequence on
+mainnet with a real new user:
 
 1. A node starts with `--tx-proxy tor` and dials the compiled onion seeds
    (Q12-R1's list, once it lands).
@@ -1209,6 +1282,13 @@ invented here ([`76-device-provisioning-floor`](../../.cursor/rules/76-device-pr
   onions from 60 tor processes and `wait_onions_reachable.sh` already times
   every one. **The run therefore gains a deliverable it was not built for.**
 - Repeated failures escalate; a *first* failure must not cost an hour.
+- **The two constants are provisioned as a pair, not separately.** §11.5.1's
+  1 : 80 ratio is the defect — 45 s of patience bought with 3600 s of
+  blindness — and it exists because
+  `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT` and `P2P_FAILED_ADDR_FORGET_SECONDS` were
+  each chosen without the other in view. Whatever the anon-zone window becomes,
+  it is derived *against* the connect timeout from the same latency
+  distribution, and a change to either reopens the other.
 
 Deriving it needs the run's own numbers, so the constant lands after the arms.
 That is a named dependency rather than a deferral
