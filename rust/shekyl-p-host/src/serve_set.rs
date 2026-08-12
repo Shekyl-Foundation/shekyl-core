@@ -17,7 +17,7 @@
 //! shape of defense.
 
 use shekyl_archival_retention::ClaimantBondRecord;
-use shekyl_curve_tree::SegmentPin;
+use shekyl_curve_tree::{SegmentPin, ServingReader};
 
 /// The shards a persona is bonded to serve, as read back from the chain.
 ///
@@ -159,13 +159,45 @@ impl std::fmt::Display for PinError {
 
 impl std::error::Error for PinError {}
 
-/// Applies a serve-set's pins.
+/// What a [`ServeSetPinner`] returns: the per-member pin outcomes, and a
+/// read-only handle on the store they were written to.
+///
+/// The two travel together so they cannot be paired wrongly — see the trait
+/// doc for why that is a soundness property and not a convenience.
+#[derive(Debug, Clone)]
+pub struct PinReport {
+    /// Each member's outcome paired with its shard id, in the caller's order.
+    pub outcomes: Vec<(u64, SegmentPin)>,
+    /// A reader on the store the pins were applied in.
+    pub reader: ServingReader,
+}
+
+/// Pins a serve-set, and hands back the store those pins are in.
 ///
 /// A trait rather than a concrete store handle because pinning is a **store
 /// write**, and the store's single writer is the wallet's curve-tree actor —
 /// the serving host must reach it through that actor, not around it. The
 /// production implementor is the actor's handle; tests implement it
 /// directly.
+///
+/// # Why the reader comes back from the pin
+///
+/// The pin and the serving read must land on **the same store**, and the
+/// only way to make that unconditional is to derive one from the other.
+/// Taking a [`ServingReader`] as a separate argument anywhere — on this
+/// method, on [`PinnedServeSet::acquire`], or on
+/// [`crate::PersonaServingHost::start`] — recreates a call site holding two
+/// opaque handles that a caller can pair wrongly, which is not a fix but a
+/// relocation of the same defect: pins applied to store A while store B is
+/// served leaves the served store unpinned, and `prune_frozen` is then free
+/// to remove the bytes a challenge will ask for. Silent to the slash, like
+/// everything else on this path.
+///
+/// So [`PinReport`] carries both. The caller never chooses a reader, because
+/// there is no argument through which to choose one. What remains is an
+/// *implementor* returning a reader for some other store — a much narrower
+/// surface, and the same trust level this trait already extends to the pin
+/// outcomes themselves.
 ///
 /// Generic rather than `dyn`: the production implementor round-trips an
 /// actor message, so the method is `async`, and there is exactly one
@@ -184,12 +216,16 @@ impl std::error::Error for PinError {}
 /// for the second. The string is the diagnostic riding along, and it never
 /// reaches the wire.
 pub trait ServeSetPinner {
-    /// Pin every member, returning each outcome paired with its shard id.
+    /// Pin every member and return the outcomes together with a read-only
+    /// handle on the store they were applied in.
     ///
     /// Contract (matching `LeafStore::pin_serve_set`, which the production
     /// implementor forwards to): outcomes come back in the caller's order,
-    /// [`SegmentPin::AlreadyPruned`] is *reported* rather than raised, and
-    /// pinning is idempotent.
+    /// [`SegmentPin::AlreadyPruned`] is *reported* rather than raised, the
+    /// whole set is applied in one transaction, and pinning is idempotent.
+    /// [`PinReport::reader`] must be a handle on **the store the pins were
+    /// written to** — the production implementor takes both from the one
+    /// `CurveTreeClient` it owns, so they cannot diverge.
     ///
     /// # Errors
     ///
@@ -197,7 +233,7 @@ pub trait ServeSetPinner {
     fn pin_serve_set(
         &self,
         shard_ids: &[u64],
-    ) -> impl std::future::Future<Output = Result<Vec<(u64, SegmentPin)>, String>> + Send;
+    ) -> impl std::future::Future<Output = Result<PinReport, String>> + Send;
 }
 
 /// Proof that a serve-set's pins are in place — the ticket
@@ -233,10 +269,15 @@ pub trait ServeSetPinner {
 /// finality depth, because a reorged-back release can cost bytes a slash is
 /// measured in while the disk it reclaims is merely disk. See
 /// `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 5.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PinnedServeSet {
     set: ServeSet,
     not_yet_frozen: Vec<u64>,
+    /// The store these pins are in — carried, never supplied, so the host
+    /// cannot serve a different one. No `PartialEq`/`Eq` on this type as a
+    /// result; nothing needs them, and a store handle has no meaningful
+    /// equality anyway.
+    reader: ServingReader,
 }
 
 impl PinnedServeSet {
@@ -255,7 +296,7 @@ impl PinnedServeSet {
     /// [`PinError::MembersAlreadyPruned`] if any member's bytes are already
     /// gone, and [`PinError::Pinner`] if the pin could not be applied.
     pub async fn acquire<P: ServeSetPinner>(pinner: &P, set: ServeSet) -> Result<Self, PinError> {
-        let outcomes = pinner
+        let PinReport { outcomes, reader } = pinner
             .pin_serve_set(set.shard_ids())
             .await
             .map_err(|detail| PinError::Pinner { detail })?;
@@ -300,6 +341,7 @@ impl PinnedServeSet {
         Ok(Self {
             set,
             not_yet_frozen,
+            reader,
         })
     }
 
@@ -314,5 +356,12 @@ impl PinnedServeSet {
     #[must_use]
     pub fn not_yet_frozen(&self) -> &[u64] {
         &self.not_yet_frozen
+    }
+
+    /// A reader on the store these pins are in — the store the host serves
+    /// from, by construction rather than by the caller's choice.
+    #[must_use]
+    pub fn reader(&self) -> &ServingReader {
+        &self.reader
     }
 }

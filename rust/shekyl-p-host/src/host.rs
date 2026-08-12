@@ -8,7 +8,6 @@
 
 use std::sync::Arc;
 
-use shekyl_curve_tree::ServingReader;
 use shekyl_p_serve::{PServeEndpoint, StoreShardProvider};
 use shekyl_tor::control::ServiceId;
 use shekyl_tor::onion_identity::OnionIdentity;
@@ -93,6 +92,13 @@ impl std::error::Error for HostError {}
 ///   takes a [`PinnedServeSet`], which only `PinnedServeSet::acquire` mints.
 ///   The §9.6 item 4 hazard is not a startup step that could be reordered
 ///   or forgotten; it is an argument.
+/// - **And it serves the store those pins are in.** The witness carries its
+///   own [`ServingReader`](shekyl_curve_tree::ServingReader); `start` takes
+///   no store argument at all. Pins applied to one store while another is
+///   served would leave the served store unpinned — the same silent-slash
+///   hazard, re-entering through the API's shape rather than through
+///   bookkeeping. A call site holding two opaque store handles is a call
+///   site that can pair them wrongly, so there is only ever one.
 /// - **A serving persona always runs full vanguards.** The posture this host
 ///   writes is [`ServingPosture::Serving`], the one variant that carries both
 ///   the onion and `VanguardsMode::Managed`. The "onion without vanguards"
@@ -101,7 +107,8 @@ impl std::error::Error for HostError {}
 /// # Custody (§7.2(iii))
 ///
 /// This host holds: an expanded [`OnionIdentity`], a **read-only**
-/// [`ServingReader`] on the store, and a list of shard ids. It holds no
+/// [`ServingReader`](shekyl_curve_tree::ServingReader) on the store, and a
+/// list of shard ids. It holds no
 /// seed, no bond spend authority, and no write handle. The one assumption
 /// worth stating rather than leaving implicit: the design frames the custody
 /// boundary as *which secret crosses the process boundary*, and this host is
@@ -151,10 +158,13 @@ impl PersonaServingHost {
     pub async fn start(
         mut tor: TorServiceConfig,
         serving: PersonaServing,
-        reader: ServingReader,
         pinned: PinnedServeSet,
     ) -> Result<Self, HostError> {
-        let endpoint = PServeEndpoint::bind(Arc::new(StoreShardProvider::new(reader)))
+        // The reader comes from the witness, not from an argument: the store
+        // served must be the store pinned, and the only way to make that
+        // unconditional is to leave the caller no way to name a second one.
+        let provider = StoreShardProvider::new(pinned.reader().clone());
+        let endpoint = PServeEndpoint::bind(Arc::new(provider))
             .await
             .map_err(|e| HostError::Bind {
                 detail: e.to_string(),

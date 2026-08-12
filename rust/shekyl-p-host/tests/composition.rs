@@ -25,7 +25,7 @@ use shekyl_curve_tree::{
     ServingReader, TargetKind,
 };
 use shekyl_p_host::{
-    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeSet,
+    HostError, PersonaServing, PersonaServingHost, PinError, PinReport, PinnedServeSet, ServeSet,
     ServeSetPinner,
 };
 use shekyl_tor::onion_identity::OnionIdentity;
@@ -83,10 +83,17 @@ fn record(holdings: &HoldingsDescriptor) -> ClaimantBondRecord<'_> {
 struct StorePinner(Arc<LeafStore>);
 
 impl ServeSetPinner for StorePinner {
-    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, String> {
-        self.0
+    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<PinReport, String> {
+        let outcomes = self
+            .0
             .pin_serve_set(shard_ids)
-            .map_err(|e| format!("{e:?}"))
+            .map_err(|e| format!("{e:?}"))?;
+        // Both halves off the one store — the production implementor takes
+        // them from the one `CurveTreeClient` it owns, for the same reason.
+        Ok(PinReport {
+            outcomes,
+            reader: ServingReader::new(Arc::clone(&self.0)),
+        })
     }
 }
 
@@ -94,7 +101,7 @@ impl ServeSetPinner for StorePinner {
 struct DeadPinner;
 
 impl ServeSetPinner for DeadPinner {
-    async fn pin_serve_set(&self, _shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, String> {
+    async fn pin_serve_set(&self, _shard_ids: &[u64]) -> Result<PinReport, String> {
         Err("curve-tree actor unavailable".into())
     }
 }
@@ -104,12 +111,16 @@ impl ServeSetPinner for DeadPinner {
 struct ShortPinner;
 
 impl ServeSetPinner for ShortPinner {
-    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, String> {
-        Ok(shard_ids
+    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<PinReport, String> {
+        let outcomes = shard_ids
             .iter()
             .take(shard_ids.len().saturating_sub(1))
             .map(|&id| (id, SegmentPin::PinnedServable))
-            .collect())
+            .collect();
+        Ok(PinReport {
+            outcomes,
+            reader: ServingReader::new(Arc::new(LeafStore::open_ephemeral().expect("open store"))),
+        })
     }
 }
 
@@ -118,13 +129,16 @@ impl ServeSetPinner for ShortPinner {
 struct ReorderingPinner;
 
 impl ServeSetPinner for ReorderingPinner {
-    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, String> {
-        let mut out: Vec<(u64, SegmentPin)> = shard_ids
+    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<PinReport, String> {
+        let mut outcomes: Vec<(u64, SegmentPin)> = shard_ids
             .iter()
             .map(|&id| (id, SegmentPin::PinnedServable))
             .collect();
-        out.reverse();
-        Ok(out)
+        outcomes.reverse();
+        Ok(PinReport {
+            outcomes,
+            reader: ServingReader::new(Arc::new(LeafStore::open_ephemeral().expect("open store"))),
+        })
     }
 }
 
@@ -133,11 +147,15 @@ impl ServeSetPinner for ReorderingPinner {
 struct SubstitutingPinner;
 
 impl ServeSetPinner for SubstitutingPinner {
-    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, String> {
-        Ok(shard_ids
+    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<PinReport, String> {
+        let outcomes = shard_ids
             .iter()
             .map(|&id| (id + 1_000_000, SegmentPin::PinnedServable))
-            .collect())
+            .collect();
+        Ok(PinReport {
+            outcomes,
+            reader: ServingReader::new(Arc::new(LeafStore::open_ephemeral().expect("open store"))),
+        })
     }
 }
 
@@ -392,7 +410,6 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
             virtual_port: 80,
             max_streams: 8,
         },
-        ServingReader::new(Arc::clone(&store)),
         pinned,
     )
     .await
@@ -466,7 +483,6 @@ async fn shutdown_stops_the_listener() {
             virtual_port: 80,
             max_streams: 8,
         },
-        ServingReader::new(store),
         pinned,
     )
     .await

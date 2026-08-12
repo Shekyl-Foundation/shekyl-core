@@ -149,8 +149,26 @@ impl std::fmt::Debug for LeafStore {
 /// which is what makes "the serving host does not write to the store" a
 /// property of the types rather than a rule in a doc.
 ///
-/// Minted by `CurveTreeClient::serving_reader`, which is the object the
-/// actor owns.
+/// # Narrowing, not gating — which is why [`Self::new`] is public
+///
+/// In production this comes from `CurveTreeClient::serving_reader`, the
+/// object the actor owns. But [`Self::new`] is deliberately public and takes
+/// an `Arc<LeafStore>`, so anyone holding the store can mint one directly
+/// (the serving crates' tests do).
+///
+/// That is not a hole, because this type is **capability-narrowing, not
+/// capability-gating** — a different category from the witnesses elsewhere
+/// on this path. `VerifiedTorBinary` and `VanguardsActive` gate: possessing
+/// one is evidence a check ran, so a public constructor would forge the
+/// evidence. `ServingReader` proves nothing. It removes reach: whoever holds
+/// one can only read, and whoever can mint one already held the store and so
+/// already had strictly more. Restricting construction would buy no
+/// invariant and would only push the serving crates into a test-only
+/// back door — which is how a narrowing type acquires the ceremony of a
+/// gating one without the guarantee.
+///
+/// What the type is for is the *holder*: the serving host is handed one of
+/// these and therefore cannot write, whatever it is asked to do later.
 #[derive(Clone)]
 pub struct ServingReader {
     store: Arc<LeafStore>,

@@ -18,6 +18,7 @@
 //! |---|---|
 //! | Serve-set drifts from the consensus bond record → own node prunes bonded bytes → slash (§9.6 item 4) | [`ServeSet`] has no constructor from a bare id list |
 //! | Serving starts before the pins are applied | [`PersonaServingHost::start`] takes a [`PinnedServeSet`] witness |
+//! | Pins land on one store while another is served | The witness carries its own reader; `start` takes no store argument |
 //! | Loopback endpoint rebinds under an unchanged onion mapping → published address answers nothing | The host binds once and owns the endpoint for its life |
 //! | A serving persona runs on vanguards-lite | `ServingPosture::Serving` carries the onion *and* `Managed` as one value |
 //! | Teardown leaves a live descriptor at a closed port | [`PersonaServingHost::shutdown`] stops tor before the listener |
@@ -59,4 +60,4 @@ pub mod host;
 pub mod serve_set;
 
 pub use host::{HostError, PersonaServing, PersonaServingHost};
-pub use serve_set::{PinError, PinnedServeSet, ServeSet, ServeSetPinner};
+pub use serve_set::{PinError, PinReport, PinnedServeSet, ServeSet, ServeSetPinner};
