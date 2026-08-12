@@ -134,7 +134,10 @@ pub enum MintLineageOutput {
 /// public amount-delta gets.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct BondPostRecord {
-    /// Height of the block carrying the post.
+    /// Height of the block carrying the post. **No live reader yet** (SA-4
+    /// census): the intended consumer is the 2d-2 SP-R0 reconcile GC
+    /// (`reconcile_set`, `#[allow(dead_code)] // transient`). Retained for
+    /// that named vehicle, not deleted.
     pub height: BlockHeight,
     /// The matched persona's canonical id (a public on-chain pseudonym handle).
     pub p_canonical_id: PCanonicalId,
@@ -195,7 +198,10 @@ pub struct PFundingOutputRecord {
     pub amount: AtomicUnits,
     /// Height of the block carrying the output.
     pub height: BlockHeight,
-    /// The settlement epoch `height` falls in.
+    /// The settlement epoch `height` falls in. **No live reader yet** (SA-4
+    /// census): the `accruals` map is the per-epoch signal today. Retained
+    /// alongside `accruals` for the same SP-7 `C_min` vehicle — per-output
+    /// epoch attribution it may need — rather than stranding it.
     pub epoch: SettlementEpoch,
     /// GF-4b mint-lineage rung, classified at the scan seam
     /// (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3). Persisted so the C-1
@@ -252,10 +258,15 @@ pub struct RetiredPersonaRecord {
     /// `pending_unbonds` / `bond_post_matches` keying).
     pub p_canonical_id: PCanonicalId,
     /// The settlement epoch the `Unbond` was confirmed in (carried from the
-    /// `pending_unbonds` entry this record replaces).
+    /// `pending_unbonds` entry this record replaces). Authoritative-record
+    /// provenance (the retire clock justification); **no live reader** — the
+    /// derive-forward subtraction keys on `p_slot`. Retained as the ratified
+    /// done-side record shape (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`
+    /// §"Records-driven retirement"), not a dead-field delete.
     pub unbond_epoch: SettlementEpoch,
     /// The settlement epoch the retire-time prune ran in (the settled epoch
-    /// at prune time — after the claim-window lapse, by construction).
+    /// at prune time — after the claim-window lapse, by construction). Same
+    /// provenance/no-live-reader status as `unbond_epoch`.
     pub retired_epoch: SettlementEpoch,
 }
 
@@ -279,6 +290,12 @@ pub struct PScanState {
     /// finality-sealed behind the cursor (SP-4 idempotent recompute). Keyed by
     /// [`SettlementEpoch`] — not a bare `u64` — and `BTreeMap`-ordered, so the
     /// postcard encoding is canonical (sorted) without the producer sorting.
+    ///
+    /// **No live reader yet** (SA-4 census): the intended consumer is SP-7
+    /// `C_min` sizing via `finalized_inflow`, which is `#[allow(dead_code)]
+    /// // transient`. Retained because that vehicle is named and tracked, not
+    /// deleted — accrual is cheap and re-deriving the per-epoch history after
+    /// the cursor has sealed past it is not.
     accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
     /// Confirmed-but-retire-pending personas: [`PCanonicalId`] → the settlement
     /// epoch its `Unbond` was confirmed in (2d-1 DQ8).

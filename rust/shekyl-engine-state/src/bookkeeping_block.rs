@@ -59,12 +59,23 @@ pub struct BookkeepingBlock {
     pub block_version: u32,
 
     /// Optional human-readable label for the wallet's primary address.
+    ///
+    /// **Reserved — no writer/reader wired yet** (SA-4 census): V3.0
+    /// constructs this `None` and no projection reads it. Retained (not
+    /// deleted) as a named future UX surface; wiring the set/get path is its
+    /// own change, gated on a labelling UX decision.
     #[serde(default)]
     pub primary_label: Option<String>,
 
     /// External address book (contacts / recurring payees). Ordered by
     /// the user-controlled insertion order; the persistence layer
     /// preserves that order verbatim.
+    ///
+    /// **Reserved — no writer/reader wired yet** (SA-4 census): V3.0
+    /// constructs this empty and no projection reads it. Retained as a named
+    /// future UX surface (the address book is an open per-feature question,
+    /// `WALLET_REWRITE_PLAN.md`), pending that feature decision — not a
+    /// dead-field delete.
     #[serde(default)]
     pub address_book: Vec<AddressBookEntry>,
 
