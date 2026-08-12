@@ -77,7 +77,7 @@ use kameo::message::{Context, Message};
 
 use shekyl_curve_tree::{
     AssembleInput, AssembledPath, BlockHeight, BlockLeaves, ClientError, CurveTreeClient,
-    ReferenceBlock, TxLeafInputs,
+    ReferenceBlock, SegmentPin, ServingReader, TxLeafInputs,
 };
 
 use crate::scan::OwnedTxLeaves;
@@ -178,6 +178,26 @@ pub(crate) struct RollbackToFork {
 /// this message.
 pub(crate) struct IngestedTipHeight;
 
+/// Actor message for the persona serving host's pin (SH-2): pin every shard
+/// in `shard_ids` and hand back a read-only handle on the store they landed
+/// in.
+///
+/// **Both halves in one message, deliberately.** `shekyl-p-host`'s
+/// `ServeSetPinner` contract is that the reader it receives is a handle on
+/// the store the pins were written to; splitting this into a pin call and a
+/// separate reader call would let the two answer about different clients
+/// across a respawn, which is exactly the pairing the p-host seam removed
+/// from its call sites. One `ask`, one client, one answer.
+///
+/// The pin is a **store write**, which is why it lives here at all: the
+/// actor's message loop is what serializes writes on the single-writer redb
+/// store, so a serving host reaching the store directly would be a second
+/// writer beside the one this actor exists to be.
+pub(crate) struct PinServeSet {
+    /// Shard ids from the connected bond record, in the record's order.
+    pub shard_ids: Vec<u64>,
+}
+
 /// Actor message for the §3.3 ingest-time integrity verify (CT-5b): reconstruct
 /// the curve-tree root at `height` and require it to byte-equal the consensus
 /// header-committed `expected_root`. Replies [`ClientError::RootMismatch`] on
@@ -259,6 +279,19 @@ impl Message<IngestBlock> for CurveTreeActor {
             height: msg.height,
             txs: &txs,
         })
+    }
+}
+
+impl Message<PinServeSet> for CurveTreeActor {
+    type Reply = Result<(Vec<(u64, SegmentPin)>, ServingReader), ClientError>;
+
+    async fn handle(
+        &mut self,
+        msg: PinServeSet,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let outcomes = self.client.pin_serve_set(&msg.shard_ids)?;
+        Ok((outcomes, self.client.serving_reader()))
     }
 }
 
@@ -661,6 +694,24 @@ impl CurveTreeHandle {
     ) -> Result<Option<BlockHeight>, CurveTreeHandleError> {
         self.actor_ref()
             .ask(IngestedTipHeight)
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Pin a persona's serve-set and take a reader on the store it landed in
+    /// (SH-2) — see [`PinServeSet`] for why both come back together.
+    ///
+    /// # Errors
+    ///
+    /// [`CurveTreeHandleError::Client`] wrapping the store's refusal (an
+    /// unrepresentable shard id, or a store fault), and
+    /// [`CurveTreeHandleError::Unavailable`] on a stopped actor.
+    pub(crate) async fn pin_serve_set(
+        &self,
+        shard_ids: Vec<u64>,
+    ) -> Result<(Vec<(u64, SegmentPin)>, ServingReader), CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(PinServeSet { shard_ids })
             .await
             .map_err(collapse_send_error)
     }

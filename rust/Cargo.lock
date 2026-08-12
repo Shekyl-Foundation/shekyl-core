@@ -3985,6 +3985,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
  "shekyl-multisig",
+ "shekyl-p-host",
  "shekyl-p-transport",
  "shekyl-proofs",
  "shekyl-rpc-client",
