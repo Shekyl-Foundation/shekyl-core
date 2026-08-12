@@ -99,33 +99,48 @@ def stored_anon(peers_raw):
     # checked every reading. Contamination VOIDS the arm, and it must be loud
     # at the moment it appears rather than inferred afterwards from a
     # suspiciously easy floor.
-    excl = _excluded_onions()
-    if excl:
-        for key in ("white_list", "gray_list"):
-            for e in (p.get(key) or []):
-                if not isinstance(e, dict):
-                    continue
-                host = str(e.get("host", ""))
-                for bad in excl:
-                    if bad and bad in host:
-                        return "CONTAMINATED:%s" % bad[:16]
-
-    out = []
+    # ENTRIES ARE VALIDATED, NOT SKIPPED. An earlier version ignored any entry
+    # that was not a dict or had no `host`, which meant a partially corrupt
+    # reply counted DOWN: fifteen unreadable entries produced white=0 gray=0,
+    # an empty candidate set, which is the suppression failure this arm exists
+    # to detect. Silently skipping malformed input is how an instrument
+    # manufactures its own headline, and the connections path two functions
+    # below already refuses entry-level damage rather than dropping it -- this
+    # is that same rule, applied on the side where it was missing.
+    #
+    # A non-onion host is NOT malformed: white and gray legitimately carry
+    # public-zone peers. Only unreadable STRUCTURE refuses.
+    hosts = {"white_list": [], "gray_list": []}
     for key in ("white_list", "gray_list"):
         v = p.get(key, [])
         if v is None:
             v = []
         if not isinstance(v, list):
             return None
-        # `host` carries the PORT too -- "xxxx.onion:13021" -- so an
-        # endswith(".onion") match counts nothing. It did: every node read
-        # white=0 gray=0 while aus demonstrably held 4 and 1. The None-vs-zero
-        # guard above does not catch this, because the read was fine and the
-        # MATCHER was wrong; a guard against unparseable input says nothing
-        # about a predicate that parses cleanly and matches the wrong thing.
-        out.append(sum(1 for e in v
-                       if isinstance(e, dict) and ".onion" in str(e.get("host", ""))))
-    return out
+        for e in v:
+            if not isinstance(e, dict):
+                return None
+            h = e.get("host")
+            if not isinstance(h, str) or not h:
+                return None
+            hosts[key].append(h)
+
+    excl = _excluded_onions()
+    if excl:
+        for key in ("white_list", "gray_list"):
+            for h in hosts[key]:
+                for bad in excl:
+                    if bad and bad in h:
+                        return "CONTAMINATED:%s" % bad[:16]
+
+    # `host` carries the PORT too -- "xxxx.onion:13021" -- so an
+    # endswith(".onion") match counts nothing. It did: every node read
+    # white=0 gray=0 while aus demonstrably held 5 and 1. The None-vs-zero
+    # guard does not catch that, because the read was fine and the MATCHER was
+    # wrong; a guard against unparseable input says nothing about a predicate
+    # that parses cleanly and matches the wrong thing.
+    return [sum(1 for h in hosts[k] if ".onion" in h)
+            for k in ("white_list", "gray_list")]
 
 def verdict():
     raw = sys.stdin.read()
@@ -169,6 +184,15 @@ def verdict():
             return "ERR connection-entry-not-an-object:%s" % type(x).__name__
         if "address_type" not in x:
             return "ERR connection-entry-missing-address_type"
+        # `incoming` was read with `not x.get("incoming")`, so an entry MISSING
+        # the field counted as OUTBOUND -- inflating the one quantity the floor
+        # is measured on, in the direction that reports a node as better
+        # connected than it is. The loop already refused a missing
+        # `address_type`; the direction field is exactly as load-bearing and
+        # was not checked. A default is not available here: there is no safe
+        # guess about which way a connection points.
+        if not isinstance(x.get("incoming"), bool):
+            return "ERR connection-entry-bad-incoming"
     tor_out = sum(1 for x in c if x.get("address_type") == 4 and not x.get("incoming"))
     tor_in  = sum(1 for x in c if x.get("address_type") == 4 and x.get("incoming"))
     pub     = sum(1 for x in c if x.get("address_type") != 4)

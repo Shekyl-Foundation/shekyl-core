@@ -56,6 +56,11 @@ INVENTORY="$1"; PER_HOST="$2"
 case "$PER_HOST" in ''|*[!0-9]*) echo "REFUSE: instances-per-host '$PER_HOST' is not a number" >&2; exit 2 ;; esac
 [ "$PER_HOST" -ge 1 ] || { echo "REFUSE: instances-per-host must be at least 1" >&2; exit 2; }
 
+# Both are load-bearing for every host below. A missing one turns the gate
+# into a fleet-wide refusal that looks like a broken fleet.
+command -v ssh     >/dev/null || { echo "REFUSE: ssh not found" >&2; exit 2; }
+command -v timeout >/dev/null || { echo "REFUSE: timeout not found; every instance would read as unreachable and the gate would refuse a healthy fleet" >&2; exit 2; }
+
 LOG_GLOB="${LOG_GLOB:-/home/shekyl/fleet/log/node-*.stdout}"
 STALE_S="${STALE_S:-180}"
 bad=0

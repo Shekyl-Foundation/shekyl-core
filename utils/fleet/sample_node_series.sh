@@ -107,7 +107,7 @@ for i in $(seq 1 "$N"); do
       '$1=="NODE"{printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s, t, $2, $3, $4, $6, $7}' >> "$RAW"
     printf '%s  sample %s/%s ok  links=[%s]  stored=[%s]\n' "$ts" "$i" "$N" \
       "$(printf '%s\n' "$out" | awk -F'\t' '$1=="NODE"{printf "%s%s", sep, $3; sep=","}')" \
-      "$(printf '%s\n' "$out" | awk -F'\t' '$1=="NODE"{printf "%s%s", sep, $6; sep=","}')"
+      "$(printf '%s\n' "$out" | awk -F'\t' '$1=="NODE"{printf "%s%s", sep, $6 + $7; sep=","}')"
   fi
   [ "$i" -lt "$N" ] && sleep "$GAP"
 done
@@ -120,10 +120,17 @@ fi
 
 echo "per-node summary (floor = $FLOOR)"
 awk -F'\t' -v floor="$FLOOR" '
+  # Candidates are WHITE PLUS GRAY. Outbound connection-making draws on both --
+  # net_node.inl:1841-1847 falls back to gray once white is exhausted, and the
+  # non-pruning branch starts from gray -- so a white-only figure understates
+  # what a node can recover to, and reports a node with white=0 and a healthy
+  # gray list as candidate-less. Candidate-less is the suppression failure this
+  # series exists to detect, so understating it is the one direction that
+  # matters. The two stay SEPARATE in series.tsv; only the summary adds them.
   { n[$3]++; if ($4 >= floor) up[$3]++
     if (!($3 in lo) || $4 < lo[$3]) lo[$3] = $4
     if (!($3 in hi) || $4 > hi[$3]) hi[$3] = $4
-    if (!($3 in slo) || $6 < slo[$3]) slo[$3] = $6
+    if (!($3 in slo) || ($6 + $7) < slo[$3]) slo[$3] = $6 + $7
     sum[$3] += $4 }
   END {
     printf "  %-8s %7s %7s %9s %9s %s\n", "node", "min", "max", "mean", "stored", "at-or-above-floor"

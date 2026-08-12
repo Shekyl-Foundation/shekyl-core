@@ -88,6 +88,9 @@ INVENTORY="$1"
 # which would read as a fleet-wide outage instead of a missing interpreter.
 command -v python3 >/dev/null || { echo "REFUSE: python3 not found; every node would read as NO ANSWER" >&2; exit 2; }
 command -v ssh     >/dev/null || { echo "REFUSE: ssh not found" >&2; exit 2; }
+# `timeout` wraps every ssh call below with exactly the same load-bearing
+# role as ssh itself, and was the one dependency not preflighted.
+command -v timeout >/dev/null || { echo "REFUSE: timeout not found; every node would read as NO ANSWER" >&2; exit 2; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -r "$SCRIPT_DIR/anon_readout_parse.py" ] || {

@@ -147,6 +147,54 @@ check("a connection entry missing address_type is refused",
                       "connections": [{"address": ONION_A, "incoming": False}]}}, peers()),
       "ERR connection-entry-missing-address_type")
 
+# --- malformed input must count UP to a refusal, not DOWN to zero ----------
+# Review finding. Entries that were not dicts, or had no `host`, were SKIPPED --
+# so a partially corrupt peer list counted DOWN, and fifteen unreadable entries
+# produced white=0 gray=0. An empty candidate set IS the suppression failure
+# this arm exists to detect, so silently dropping damage lets the instrument
+# manufacture its own headline. The connections path already refused
+# entry-level damage; this is the same rule on the side that lacked it.
+check("a peer entry that is not an object refuses",
+      run(conns([c(ONION_A, False)]),
+          {"status": "OK", "white_list": [ONION_A], "gray_list": []}),
+      "ERR peer-list-unusable")
+
+check("a peer entry with no host refuses rather than counting zero",
+      run(conns([c(ONION_A, False)]),
+          {"status": "OK", "white_list": [{"id": 1, "ip": 0, "port": 0}], "gray_list": []}),
+      "ERR peer-list-unusable")
+
+check("a peer entry whose host is not a string refuses",
+      run(conns([c(ONION_A, False)]),
+          {"status": "OK", "white_list": [{"host": 12345}], "gray_list": []}),
+      "ERR peer-list-unusable")
+
+# A non-onion host is NOT damage: white and gray legitimately carry public-zone
+# peers. Refusing those would make the instrument refuse healthy fleets.
+check("a public-zone peer is counted out, not refused",
+      run(conns([]), {"status": "OK", "untrusted": False,
+                      "white_list": [{"host": "1.2.3.4:18080"}, {"host": ONION_A}],
+                      "gray_list": []}),
+      "OK 0 0 0 1 0")
+
+# --- direction is load-bearing and was unchecked ---------------------------
+# `not x.get("incoming")` made a MISSING field count as OUTBOUND, inflating the
+# exact quantity the floor is measured on, in the direction that reports a node
+# as better connected than it is. There is no safe default for which way a
+# connection points.
+check("a connection entry missing incoming refuses",
+      run({"jsonrpc": "2.0", "id": "0",
+           "result": {"status": "OK", "untrusted": False,
+                      "connections": [{"address": ONION_A, "address_type": 4}]}}, peers()),
+      "ERR connection-entry-bad-incoming")
+
+check("a connection entry with a non-bool incoming refuses",
+      run({"jsonrpc": "2.0", "id": "0",
+           "result": {"status": "OK", "untrusted": False,
+                      "connections": [{"address": ONION_A, "address_type": 4,
+                                       "incoming": "yes"}]}}, peers()),
+      "ERR connection-entry-bad-incoming")
+
 # --- seed exclusion is an invariant, not an arrangement ------------------
 # The arm excludes the bootstrap ring from the CANDIDATE pool (a different
 # membership from the histogram exclusion, and the one the derivation rests on:
