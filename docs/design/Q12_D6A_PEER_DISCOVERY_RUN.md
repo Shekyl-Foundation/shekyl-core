@@ -306,6 +306,11 @@ and `address_type` distinguishes i2p (3) from tor (4)
 ([`enums.h:39-46`](../../contrib/epee/include/net/enums.h#L39-L46)) — so outbound
 anon peer count per node needs **no new instrument**.
 
+> **Amended by Q12-R12 (§11.4):** the *production* seeds run testnet and cannot
+> join a stagenet fleet at all. What follows applies unchanged to the **stagenet
+> bootstrap instances** run alongside them on the same six hosts — they are
+> bootstrap targets and gossip participants, and they are not in the histogram.
+
 **The four production seeds are in the graph but not in the histogram.** After
 Q12-R-W2 they run anon zones on the same testnet, so they participate whether or
 not this doc says so — and at `A = 15` four well-known hubs are a quarter of the
@@ -440,7 +445,12 @@ design outright, which is the cheapest thing to learn early.
    cross-`--add-peer`, **keys backed up**. This is **real scope, not
    configuration** — four binaries predating the arc, one host down, no tor
    anywhere.
-3. Ubuntu 24.04 build artifact; fleet image pinned to match.
+3. Ubuntu 24.04 build artifact; fleet image pinned to match. **No isolated
+   variant is built** — the fleet runs this same artifact with `--stagenet`
+   (Q12-R12, §11.4).
+3b. **Stagenet bootstrap instances on the seed hosts** — a second daemon, tor
+   process and hidden service per seed host, up before the fleet, with their
+   onions passed to fleet nodes as `--add-peer`.
 4. **Discovery arms** — `A ∈ {15, 30, 60}`, 15 clearnet detectors, converge,
    record.
 5. **Late joiner** (Q12-R5) — two runs, one node each: one `--add-peer` at a
@@ -857,6 +867,11 @@ beside the point. Under it, `A` is not what is being measured: the run would be
 measuring the testnet's Tor population with a fleet attached, and the sweep
 would be meaningless.
 
+> **The REQUIREMENT below stands; its REMEDY is superseded — see §11.4
+> (Q12-R12), 2026-08-11.** Both properties this section demands already exist in
+> the shipped binary as `--stagenet`, so no fleet build is made. The requirement
+> was right; what was missed is that it was already met.
+
 **Ruled: a fleet build with a distinct `NETWORK_ID` and empty compiled seed
 lists.** Verified at source, `--seed-node` alone is **not** sufficient:
 `net_node.inl:1749-1759` appends `get_ip_seed_nodes()` as a *fallback* when no
@@ -969,6 +984,139 @@ restarts, 3.6 GB of 7.9 GB used, all ports bound, 10 distinct guard
 directories. **Q12-R8's two-reading rule earned itself immediately** — 29
 outbound at `t+0` against 62 at `t+240`, so a single reading would have reported
 less than half the converged count.
+
+### 11.4 Q12-R12 — the isolated network already exists; no fleet build is made
+
+**Ruled 2026-08-11. Supersedes §11.1's remedy, not its requirement.** Q12-R10
+demanded two properties — a distinct `NETWORK_ID` and no compiled seed dial
+targets — and then specified a modified build to obtain them. **`--stagenet`
+already has both, in the shipped binary.**
+
+| property R10 requires | stagenet, at source |
+| --- | --- |
+| distinct `NETWORK_ID` | `::config::stagenet::NETWORK_ID` ([`cryptonote_config.h:429-431`](../../src/cryptonote_config.h#L429)) shares no bytes with testnet's at `:418-420` |
+| no compiled IP seeds | `get_ip_seed_nodes()`'s `STAGENET` branch is empty ([`net_node.inl:736-739`](../../src/p2p/net_node.inl#L736)) — the four production seeds are inside the `TESTNET` branch |
+| no compiled anon seeds | `get_seed_nodes()` returns `{}` for `tor` and `i2p` on **every** network ([`:770-772`](../../src/p2p/net_node.inl#L770)) — Q12-R2 has not landed the testnet list yet |
+
+Everything else is the same chain: `stagenet_hard_forks[]` is `{1,1,0,…}`,
+byte-identical to testnet's ([`hardforks.cpp:41-50`](../../src/hardforks/hardforks.cpp#L41)),
+so stagenet is v3-from-genesis with every feature active exactly as testnet is.
+It differs in `NETWORK_ID`, genesis tx, ports (13021/13029) and address prefix —
+and in nothing that peer discovery touches.
+
+**Verified empirically, not only read.** A stock `shekyld --stagenet` on a fresh
+data-dir starts, creates genesis, brings up p2p and RPC, and **dials nothing**:
+no `134.199.*` / `45.7*` appears in its log, because the seed set it is given is
+empty rather than overridden.
+
+#### What this buys beyond convenience
+
+**§11.1's oracle paragraph is discharged by construction rather than by
+argument.** That section had to reason that a modified binary was still a valid
+oracle — "`NETWORK_ID` gates handshake acceptance, not discovery, so the
+quantity under measurement is unchanged." The reasoning was sound, but it was
+reasoning. With stagenet the fleet runs **the same artifact a user installs**,
+and the argument is not needed at all. An assumption that never has to be made
+cannot be wrong.
+
+It also deletes a build: no depends/gitian pass, no second `.deb`, no risk that
+the fleet artifact and the release artifact drift.
+
+#### Four consequences, none of them optional
+
+1. **The production seeds cannot participate.** They run testnet; a stagenet
+   fleet node fails their handshake — which is the point. Each seed host
+   therefore runs a **second** daemon on stagenet with its **own** tor process,
+   `DataDirectory` and hidden service (SPIKE-F-12), giving the fleet six
+   bootstrap hosts that were up before it. §5's rule is unchanged: seeds are
+   **bootstrap targets and gossip participants, and are not in the histogram**.
+2. **The fleet's seed onions stay out of source.** They are passed as
+   `--add-peer` flags at provisioning. Q12-R1's "HS keys are infrastructure the
+   moment they are compiled into source" therefore does **not** attach to them:
+   these are disposable fixtures, destroyed with the fleet, and carry no backup
+   obligation. The *testnet* seed keys in `~/.shekyl/seed-hs-backup/` are a
+   separate thing and still do.
+3. **Bootstrap must use `--add-peer`, not `--seed-node`.** Verified at
+   [`net_node.inl:527-533`](../../src/p2p/net_node.inl#L527): `--seed-node`
+   parses into `public_zone.m_seed_nodes` **only** — it is public-zone by
+   construction and cannot carry an onion into the anonymity zone. `--add-peer`
+   routes by parsed zone (`add_zone(adr->get_zone())` at `:494`), which is the
+   mechanism Q12-D6a already relies on.
+4. **Ports change.** Stagenet defaults are 13021/13029. Templates, configs and
+   any firewall rules written against 12021/12029 must be swept — a hardcoded
+   testnet port is the one way a fleet node could still reach the live network.
+
+#### What the smoke test established before any VM was paid for
+
+Three stagenet daemons on the dev box, each with its own tor process,
+`DataDirectory` and v3 hidden service, chained `A ← B ← C` so that **C is given
+only B's onion and must learn A by gossip**. This tests the thing the run
+measures, on the network the run will use, for the price of one local box.
+
+**And it produced a finding on the first attempt.** The daemons refused to start
+with `--tx-proxy tor,127.0.0.1:<port>,10`:
+
+> `--tx-proxy outbound count 10 is below the floor of 12 that the relay embargo
+> derivation assumes; refusing to start under-provisioned.`
+
+F-8b's floor is **enforced at startup and refuses rather than clamps** — the
+posture Q12-D9 §12.2 requires of the *live* check. Worth recording because
+Q12-R11 says every node sits below the floor by arithmetic at `A ≤ 12`: the
+*configured* floor is enforced, the *achieved* one is not, and the smoke test
+walked into exactly that seam from the enforced side.
+
+### 11.5 Q12-R13 — the backoff is one hour, and the ordering rule was too weak
+
+**Q12-R8 said "two readings separated by longer than the backoff" without
+knowing what the backoff was. It is 3600 seconds**, and the density test's
+240-second separation was short of it by a factor of fifteen.
+
+The smoke test's three nodes sat at **zero connections** with a single dial
+attempt in the log:
+
+> `Timeout on socks connect (127.0.0.1:29051 to y6l247vv….onion:13021)` — at
+> `t+47s`, then nothing for the next hour.
+
+At source, one failed connect is remembered for an hour and suppresses every
+subsequent selection of that address:
+
+| step | site |
+| --- | --- |
+| a failed connect records the address | `record_addr_failed` → `m_conn_fails_cache[addr.host_str()] = now` ([`net_node.inl:1404-1408`](../../src/p2p/net_node.inl#L1404)) |
+| the filter | `is_addr_recently_failed` returns true until `now - t > P2P_FAILED_ADDR_FORGET_SECONDS` ([`:1411-1421`](../../src/p2p/net_node.inl#L1411)) |
+| the constant | `#define P2P_FAILED_ADDR_FORGET_SECONDS (60*60)` ([`cryptonote_config.h:201`](../../src/cryptonote_config.h#L201)) |
+| where it bites | white/gray selection `:1439`, the maintainer's candidate loop `:1698`, and peerlist appending `:2135` — the log line `No available peer in white list filtered by 1` **is** this filter |
+
+**The cache is keyed on `host_str()`, so an onion is filtered by its full
+address** — there is no per-zone exemption, and no way to clear it short of a
+restart.
+
+#### Why the *first* dial failed, and what the ordering rule must actually say
+
+Q12-R8 ruled: all tor and hidden services up **first**, then daemons. The smoke
+test did exactly that — three tor processes at `Bootstrapped 100%` before any
+daemon started — **and the first dial still failed**, because a hidden service
+being *published* is not the same as its descriptor being *fetchable* by another
+client. Reaching the same onion by hand through the same SOCKS port minutes
+later succeeded immediately.
+
+**So the rule is strengthened, not restated:**
+
+| Q12-R8 as written | Q12-R13 |
+| --- | --- |
+| tor + HS up before daemons | every onion **verified reachable through another node's SOCKS proxy** before any daemon starts |
+| two readings "longer than the backoff" apart | two readings **> 3600 s** apart — and a fleet whose first dials failed is *restarted*, not waited out |
+
+**This is the run's largest scheduling fact.** At `A = 60`, a rolling start
+means early nodes dial onions that are not yet fetchable; each such failure
+costs an hour of suppression on the exact quantity being measured, and a
+histogram read at `t + 20 min` would report a sparse graph caused entirely by
+the start procedure. Q12-R8 predicted this shape from the seed estate; R13 gives
+it a number and shows the ordering rule as written does not prevent it.
+
+**Found for the price of one dev box.** The smoke test existed to check that
+stagenet's anonymity zone forms at all; it found the scheduling defect that
+would have silently corrupted the first paid arm.
 
 ---
 
