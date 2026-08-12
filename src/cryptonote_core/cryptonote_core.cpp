@@ -30,7 +30,6 @@
 
 #include <boost/algorithm/string.hpp>
 #include <boost/uuid/nil_generator.hpp>
-#include <map>
 
 #include "string_tools.h"
 using namespace epee;
@@ -1052,47 +1051,42 @@ namespace cryptonote
   bool core::relay_txpool_transactions()
   {
     // we attempt to relay txes that should be relayed, but were not
-    std::vector<relayable_tx> txs;
+    std::vector<std::tuple<crypto::hash, cryptonote::blobdata, relay_method>> txs;
     if (m_mempool.get_relayable_transactions(txs) && !txs.empty())
     {
       NOTIFY_NEW_TRANSACTIONS::request public_req{};
       NOTIFY_NEW_TRANSACTIONS::request private_req{};
 
-      /* Q12-U2: stems are bucketed BY ORIGIN ZONE, not lumped into one request
-         sent at `zone::public_`.
+      /* Q12-U2 deleted the `forward` arm here, and deliberately changed
+         NOTHING else about this routing.
 
-         That literal was the coherence leak. An anonymity arrival is kept on
-         its arrival zone at admission by the R-1 coherence branch, but this
-         loop re-sends from stored state minutes later with a nil source and no
-         connection to consult. Handing its stem to `public_` moved it to the
-         clear internet on the first re-relay and undid the hold — silently,
-         because the transaction still propagates and nothing errors. The
-         origin now travels with the entry (`relayable_tx`), and coherence in
-         `send_txs` fires on it exactly as it does at arrival.
+         The `stem` arm reads like a leak and is not one. A pool entry recorded
+         `stem` reaches this loop only once its embargo has EXPIRED
+         (`get_relayable_transactions` skips it until then), and embargo expiry
+         IS the Dandelion++ stem→fluff transition. So it rides the fluff
+         request by design: fluff is the deliberate exit from the anonymity
+         zone, and a transaction that does not take it would be stranded in the
+         anonymity subgraph (§59.1). Re-stemming it here on its arrival zone
+         would let an entry re-stem indefinitely instead of diffusing.
 
-         Clearnet-origin and unknown-origin stems still key `public_`, which is
-         the behaviour they always had. */
-      std::map<epee::net_utils::zone, NOTIFY_NEW_TRANSACTIONS::request> stem_reqs;
+         The leak the #427 tripwire recorded was the `forward` arm, which put
+         STILL-STEMMING anonymity traffic into `stem_req` at `zone::public_` —
+         stemming on the wrong network. Deleting the class closes it; there is
+         nothing left here to route by origin. */
       for (auto& tx : txs)
       {
-        switch (tx.method)
+        switch (std::get<2>(tx))
         {
           default:
           case relay_method::none:
             break;
           case relay_method::local:
-            private_req.txs.push_back(std::move(tx.blob));
+            private_req.txs.push_back(std::move(std::get<1>(tx)));
             break;
-          case relay_method::stem:
-          {
-            const epee::net_utils::zone origin =
-              tx.origin == epee::net_utils::zone::invalid ? epee::net_utils::zone::public_ : tx.origin;
-            stem_reqs[origin].txs.push_back(std::move(tx.blob));
-            break;
-          }
           case relay_method::block:
           case relay_method::fluff:
-            public_req.txs.push_back(std::move(tx.blob));
+          case relay_method::stem:
+            public_req.txs.push_back(std::move(std::get<1>(tx)));
             break;
         }
       }
@@ -1106,17 +1100,6 @@ namespace cryptonote
         get_protocol()->relay_transactions(public_req, source, epee::net_utils::zone::public_, relay_method::fluff);
       if (!private_req.txs.empty())
         get_protocol()->relay_transactions(private_req, source, epee::net_utils::zone::invalid, relay_method::local);
-      for (auto& stem : stem_reqs)
-      {
-        /* If the origin zone is no longer usable, `send_txs` falls through to
-           clearnet. That is the RULED behaviour, not an oversight: relayed
-           traffic's home was always clearnet, and an unusable zone is simply
-           not selectable (Q12-D3, which dissolved Q12-Q2 by removing the
-           special case). Originated traffic is the class that fails closed,
-           and it travels as `local` through `private_req` above. */
-        if (!stem.second.txs.empty())
-          get_protocol()->relay_transactions(stem.second, source, stem.first, relay_method::stem);
-      }
     }
     return true;
   }

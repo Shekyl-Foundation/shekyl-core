@@ -115,33 +115,6 @@ namespace cryptonote
   //! container for sorting transactions by fee per unit size
   typedef std::set<tx_by_fee_and_receive_time_entry, txCompare> sorted_tx_container;
 
-  /*! \brief One pool entry the periodic relay loop should re-send, with the
-      zone it must be re-sent ON.
-
-      Q12-U2. The origin is what stops the re-relay loop undoing coherence.
-      An anonymity arrival is held on its arrival zone at admission
-      (`net_node.inl`, the R-1 coherence branch), but the pool loop runs
-      minutes later from stored state with no connection to consult, and used
-      to hand every stem to `zone::public_` as a literal. That put an
-      anonymity-arrived transaction on the clear internet on its first
-      re-relay, silently — the exact leak the origin-zone field (Q12-U1)
-      exists to close, and the reason that field is read in production rather
-      than only asserted in tests.
-
-      A struct rather than the `std::tuple<hash, blobdata, relay_method>` this
-      replaces: adding the zone would have made it a four-tuple with two
-      adjacent enum members, where `std::get<2>` and `std::get<3>` are both
-      well-formed and only one is right. */
-  struct relayable_tx
-  {
-    crypto::hash txid;
-    cryptonote::blobdata blob;
-    //! How the transaction should leave this node.
-    relay_method method;
-    //! Zone it ARRIVED over; `zone::invalid` when locally originated or unknown.
-    epee::net_utils::zone origin;
-  };
-
   /**
    * @brief Transaction pool, handles transactions which are not part of a block
    *
@@ -487,7 +460,7 @@ namespace cryptonote
      *
      * @return True if DB was checked, false if DB checks skipped.
      */
-    bool get_relayable_transactions(std::vector<relayable_tx>& txs);
+    bool get_relayable_transactions(std::vector<std::tuple<crypto::hash, cryptonote::blobdata, relay_method>>& txs);
 
     /**
      * @brief tell the pool that certain transactions were just relayed

@@ -990,7 +990,7 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   //TODO: investigate whether boolean return is appropriate
-  bool tx_memory_pool::get_relayable_transactions(std::vector<relayable_tx> &txs)
+  bool tx_memory_pool::get_relayable_transactions(std::vector<std::tuple<crypto::hash, cryptonote::blobdata, relay_method>> &txs)
   {
     using clock = std::chrono::system_clock;
 
@@ -1039,14 +1039,7 @@ namespace cryptonote
         {
           try
           {
-            /* The origin travels with the entry (Q12-U2). Without it the relay
-               loop has nothing to route by: it runs from stored state, minutes
-               after the arrival, with no connection left to ask. */
-            txs.push_back(relayable_tx{
-              txid,
-              m_blockchain.get_txpool_tx_blob(txid, relay_category::all),
-              tx_relay,
-              meta.get_origin_zone()});
+            txs.emplace_back(txid, m_blockchain.get_txpool_tx_blob(txid, relay_category::all), tx_relay);
           }
           catch (const std::exception &e)
           {

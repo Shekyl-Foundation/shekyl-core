@@ -6,10 +6,11 @@
 // RP-4 (docs/design/DAEMON_RELAY_PRIVACY.md §17.1): the embargo and
 // MIN_RELAY_TIME are disjoint timers, and that must stay true.
 //
-// get_relayable_transactions dispatches on relay *method*: stem/forward are
-// gated solely by `last_relayed_time > now` — which for a stemmed tx IS its
-// embargo deadline — while get_relay_delay/MIN_RELAY_TIME gates only
-// local/fluff/block. That disjointness is why lengthening the embargo from the
+// get_relayable_transactions dispatches on relay *method*: stem is gated
+// solely by `last_relayed_time > now` — which for a stemmed tx IS its embargo
+// deadline — while get_relay_delay/MIN_RELAY_TIME gates only
+// local/fluff/block. (`forward` shared the stem arm until Q12-U2 deleted the
+// class; the disjointness this file guards is unchanged by that.) That disjointness is why lengthening the embargo from the
 // inherited 39s to the derived 144s cannot race the re-broadcast interval, even
 // though the origin-alone black-hole recovery p90 (~331s) now exceeds
 // MIN_RELAY_TIME (300s).
@@ -225,10 +226,10 @@ struct RelayTimerFixture
 
   bool relayable()
   {
-    std::vector<cryptonote::relayable_tx> txs;
+    std::vector<std::tuple<crypto::hash, cryptonote::blobdata, relay_method>> txs;
     bap.txpool.get_relayable_transactions(txs);
     for (const auto& t : txs)
-      if (t.txid == txid)
+      if (std::get<0>(t) == txid)
         return true;
     return false;
   }
