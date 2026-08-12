@@ -42,6 +42,7 @@
 #include "cryptonote_basic/difficulty.h"
 #include "cryptonote_basic/hardfork.h"
 #include "cryptonote_protocol/enums.h"
+#include "net/enums.h"
 #include "blockchain_db/shekyl_types.h"
 #include "shekyl/shekyl_ffi.h" // epoch-close FFI row structs for ArchivalEmissionEpochSnapshot::to_ffi_*
 
@@ -208,7 +209,24 @@ struct txpool_tx_meta_t
   uint8_t dandelionpp_stem : 1;
   uint8_t is_forwarding: 1;
   uint8_t fcmp_verified: 1;  // set when fcmp_verification_hash is valid
-  uint8_t bf_padding: 2;
+  //! Zone this transaction ARRIVED over. See set_origin_zone/get_origin_zone.
+  //
+  // Q12-U1. Exactly two bits, because `invalid`/`public_`/`i2p`/`tor` is four
+  // values -- the right width, not merely spare room. The record stays a fixed
+  // 192 bytes, so nothing about the format grows and there is no version to
+  // bump (rule 42 governs `rust/shekyl-engine-{state,file}/**`; this is
+  // daemon-side C++ LMDB, re-verified at pre-flight rather than inherited).
+  //
+  // NO MIGRATION, and the reason is load-bearing: `zone::invalid == 0`, and a
+  // record written before this field existed has these bits zero, so it
+  // decodes to "origin unknown" -- already the correct sentinel.
+  //
+  // That is stronger than "the spare bits happen to be zero". The predecessor
+  // `bf_padding` was never READ anywhere, and its only writes were three
+  // explicit `= 0` assignments in tx_pool.cpp, now replaced by the setter. So
+  // every record ever persisted carries zero here by construction, and the
+  // fallback is a fact about the data rather than a hope about it.
+  uint8_t origin_zone: 2;
 
   // FCMP++ verification cache: hash(proof || tree_root || key_images).
   // When fcmp_verified == 1, the proof was previously verified against
@@ -220,6 +238,23 @@ struct txpool_tx_meta_t
 
   void set_relay_method(relay_method method) noexcept;
   relay_method get_relay_method() const noexcept;
+
+  //! Record the zone this transaction ARRIVED over.
+  //
+  // Deliberately separate from `set_relay_method`. The relay method is a
+  // routing DECISION and the origin zone is a FACT about where the bytes came
+  // from; folding the fact into the decision is what made the zone
+  // unrecoverable in the first place -- `relay_method::forward` meant "arrived
+  // somewhere other than clearnet" and threw away which somewhere.
+  void set_origin_zone(epee::net_utils::zone zone) noexcept;
+
+  //! The zone this transaction arrived over, or `zone::invalid` if unknown.
+  //
+  // `invalid` is returned for every record written before this field existed,
+  // and for locally originated transactions, which did not arrive over
+  // anything. Callers must treat it as "origin unknown" rather than as a
+  // fourth transport.
+  epee::net_utils::zone get_origin_zone() const noexcept;
 
   //! \return True if `get_relay_method()` now returns `method`.
   bool upgrade_relay_method(relay_method method) noexcept;

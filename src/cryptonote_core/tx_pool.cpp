@@ -271,7 +271,13 @@ namespace cryptonote
         meta.double_spend_seen = have_tx_keyimges_as_spent(tx, id);
         meta.pruned = tx.pruned;
         meta.fcmp_verified = 0;
-        meta.bf_padding = 0;
+        // Origin zone is stated explicitly rather than left to the bit's
+        // previous zero-fill, so the value is a decision with a name. The
+        // arrival zone is not reachable at this depth yet -- threading it
+        // from the protocol handler is the seam commit -- and `invalid`
+        // is the honest reading until it is: origin unknown, which is what
+        // every record said before this field existed.
+        meta.set_origin_zone(epee::net_utils::zone::invalid);
         meta.fcmp_verification_hash = null_hash;
         memset(meta.padding, 0, sizeof(meta.padding));
         try
@@ -356,7 +362,7 @@ namespace cryptonote
           meta.relayed = relayed;
           meta.double_spend_seen = false;
           meta.pruned = tx.pruned;
-          meta.bf_padding = 0;
+          meta.set_origin_zone(epee::net_utils::zone::invalid);  // see above
           memset(meta.padding, 0, sizeof(meta.padding));
 
           if (tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc)
@@ -463,7 +469,11 @@ namespace cryptonote
     meta.do_not_relay = 0;
     meta.double_spend_seen = false;
     meta.pruned = tx.pruned;
-    meta.bf_padding = 0;
+    // A locally originated transaction did not ARRIVE over anything, so
+    // `invalid` here is the permanent answer rather than a value awaiting the
+    // seam. Origin-unknown and origin-none are the same statement to every
+    // consumer: do not route this by a provenance it does not have.
+    meta.set_origin_zone(epee::net_utils::zone::invalid);
     memset(meta.padding, 0, sizeof(meta.padding));
 
     // §3.5 attestation: same derivation as the P2P path above. The
