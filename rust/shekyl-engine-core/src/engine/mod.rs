@@ -178,8 +178,8 @@
 //! pattern is documented instead (reopen at Phase 2 ops).
 pub mod abandon_tx; // PR-SJ-3 (WALLET_SEND_RECORD P3-4)
 pub mod capability;
-pub mod set_tx_note; // PR-SA-4 (SJ-DQ-7 tx-note annotation surface, WALLET_SEND_RECORD)
-
+// set_tx_note: PR-SA-4 / SJ-DQ-7 annotation surface (own file, not Engine growth).
+pub mod set_tx_note;
 // CT-5 curve-tree actor + handle (`docs/design/CT5_ENGINE_WIRING.md` §3.1).
 // Mirrors `key_actor`: a `kameo` actor owns the wallet's `CurveTreeClient`
 // (redb single-writer), and `Engine` holds a `Clone` `CurveTreeHandle`.
@@ -393,6 +393,8 @@ pub(crate) mod submit_watchdog;
 /// identified"; two were).
 #[cfg(test)]
 pub(crate) mod synthetic_tree;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) mod traits;
 pub(crate) mod transaction_submitter;
 pub(crate) mod tx_counts;
@@ -400,9 +402,6 @@ pub(crate) mod tx_fee_model;
 #[cfg(test)]
 mod tx_weight_kat;
 pub mod view_material;
-
-#[cfg(test)]
-pub(crate) mod test_support;
 
 pub use capability::Capability;
 pub use daemon::DaemonClient;
