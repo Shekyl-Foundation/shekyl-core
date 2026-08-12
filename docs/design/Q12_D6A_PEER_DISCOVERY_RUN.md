@@ -1514,6 +1514,30 @@ Recorded because the conclusion never depended on it: §11.7's reachability tabl
 is evaluated at 0.10, 0.23 and 0.35 precisely so that no single estimate is
 load-bearing.
 
+**The general form, since this arc produced it twice.** *When a measured rate
+feeds a decision, carry the interval through the decision — do not pick a value
+and then defend it.*
+
+That is what made the correction chain harmless here. The reachability table was
+evaluated across the plausible range before any estimate had settled, so
+13.3 % → 9.2 % → 12.7 % moved no conclusion; the answer at `A = 15` is "the floor
+is not reliably reachable" at every rate in the interval. Had the table been
+computed at one number, each revision would have required re-deriving it, and
+the natural move at that point is to defend the number rather than redo the
+work.
+
+**Precision claimed by revision is the failure mode to watch for.** A sequence of
+restatements reads as convergence even when no estimate in it was
+distinguishable from its neighbours at the sample in hand — the same shape as
+reading a duration experiment at 48 of 60, with the bias source moved: there,
+incompleteness correlated with the quantity; here, a small sample was mistaken
+for a better one because it arrived second.
+
+The same discipline is why `P2P_ANON_FAILED_ADDR_FORGET_SECONDS` **names its
+quantile at the constant** (§11.12). A bare `240` invites a later reader to
+adjust it toward a value that looks more central; `240 = p90 of measured
+recovery` states what would have to be re-measured to move it.
+
 #### The measured rate is a floor, and the ring says by how much
 
 **12.7 %** (CI 9.4–16.9 %) here against **~23 %** in the six-host ring. The gap is the
