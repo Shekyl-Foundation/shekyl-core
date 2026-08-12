@@ -54,9 +54,21 @@ echo "reading at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 while read -r host port label; do
   case "${host:-}" in ''|'#'*) continue ;; esac
 
+  # TWO instruments, one round trip. `get_connections` omits the `connections`
+  # field entirely when a node has no peers — verified against a node built to
+  # be genuinely isolated, which returns `{"status":"OK","untrusted":false}`.
+  # So absence is ambiguous between "truly zero" and "a response shape we do
+  # not understand", and the ambiguity is NOT resolved by guessing: `get_info`
+  # is fetched alongside and its independent connection counts must corroborate
+  # a zero before one is reported. That also survives a change to the
+  # serializer's treatment of empty containers, which is an epee detail this
+  # script should not depend on.
   out=$(timeout "$SSH_TIMEOUT" ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$host" \
     "curl -s -m 10 http://127.0.0.1:$port/json_rpc -H 'Content-Type: application/json' \
-     -d '{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"get_connections\"}'" 2>/dev/null)
+     -d '{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"get_connections\"}'
+     echo '@@SPLIT@@'
+     curl -s -m 10 http://127.0.0.1:$port/json_rpc -H 'Content-Type: application/json' \
+     -d '{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"get_info\"}'" 2>/dev/null)
 
   # An RPC ERROR MUST NOT READ AS ZERO CONNECTIONS. `get_connections` is
   # unavailable in restricted mode (-32601), and a `.get("result", {})` turns
@@ -67,27 +79,74 @@ while read -r host port label; do
   # estate, where every node read 0/0/0 and every node was fine.
   parsed=$(printf '%s' "$out" | python3 -c '
 import sys, json
+
+# A COUNT IS EMITTED ONLY FROM A PATH THAT AFFIRMATIVELY PARSED A LIST OF
+# CONNECTION OBJECTS. Every other shape — an error, a missing field, a field of
+# the wrong type, an element that is not an object, an exception nobody
+# predicted — produces ERR. The class being closed is not "restricted mode": it
+# is ANY unrecognized response collapsing to zero, because zero is this run its
+# headline claim and the instrument must not be able to manufacture it.
+def corroborated_zero(info_raw):
+    """A missing `connections` field is only a zero if a SECOND instrument says so."""
+    try:
+        i = json.loads(info_raw)
+    except Exception:
+        return "ERR no-connections-field:get_info-unparseable"
+    if not isinstance(i, dict) or not isinstance(i.get("result"), dict):
+        return "ERR no-connections-field:get_info-unusable"
+    r = i["result"]
+    inc, outg = r.get("incoming_connections_count"), r.get("outgoing_connections_count")
+    if not isinstance(inc, int) or not isinstance(outg, int):
+        return "ERR no-connections-field:get_info-counts-missing"
+    if inc == 0 and outg == 0:
+        return "OK 0 0 0"
+    # The node HAS peers and still omitted the list: an unknown shape, and
+    # exactly the case that must never be reported as an isolated node.
+    return "ERR no-connections-field:but-get_info-says-in=%d-out=%d" % (inc, outg)
+
+def verdict():
+    raw = sys.stdin.read()
+    conn_raw, _, info_raw = raw.partition("@@SPLIT@@")
+    try:
+        d = json.loads(conn_raw)
+    except Exception as e:
+        return "ERR unparseable:%s" % type(e).__name__
+    if not isinstance(d, dict):
+        return "ERR non-object-response:%s" % type(d).__name__
+    if d.get("error"):
+        e = d["error"]
+        if isinstance(e, dict):
+            return "ERR rpc-error:%s:%s" % (e.get("code"), e.get("message"))
+        return "ERR rpc-error:%s" % (e,)
+    if "result" not in d:
+        return "ERR no-result-field"
+    r = d["result"]
+    if not isinstance(r, dict):
+        return "ERR result-not-an-object:%s" % type(r).__name__
+    if "connections" not in r:
+        return corroborated_zero(info_raw)
+    c = r["connections"]
+    if c is None:
+        return "ERR connections-null"
+    if not isinstance(c, list):
+        return "ERR connections-not-a-list:%s" % type(c).__name__
+    for x in c:
+        if not isinstance(x, dict):
+            return "ERR connection-entry-not-an-object:%s" % type(x).__name__
+        if "address_type" not in x:
+            return "ERR connection-entry-missing-address_type"
+    tor_out = sum(1 for x in c if x.get("address_type") == 4 and not x.get("incoming"))
+    tor_in  = sum(1 for x in c if x.get("address_type") == 4 and x.get("incoming"))
+    pub     = sum(1 for x in c if x.get("address_type") != 4)
+    return "OK %d %d %d" % (tor_out, tor_in, pub)
+
 try:
-    d = json.load(sys.stdin)
-except Exception:
-    print("ERR unparseable-response"); raise SystemExit
-if not isinstance(d, dict):
-    print("ERR non-object-response"); raise SystemExit
-if "error" in d and d["error"]:
-    e = d["error"]
-    code = e.get("code")
-    msg = e.get("message")
-    print("ERR rpc-error:%s:%s" % (code, msg)); raise SystemExit
-if "result" not in d:
-    print("ERR no-result-field"); raise SystemExit
-c = d["result"].get("connections")
-if c is None:
-    # Absent is not empty: an empty pool of connections is reported as [].
-    print("ERR no-connections-field"); raise SystemExit
-tor_out = sum(1 for x in c if x.get("address_type") == 4 and not x.get("incoming"))
-tor_in  = sum(1 for x in c if x.get("address_type") == 4 and x.get("incoming"))
-pub     = sum(1 for x in c if x.get("address_type") != 4)
-print(f"OK {tor_out} {tor_in} {pub}")' 2>/dev/null)
+    print(verdict())
+except Exception as e:
+    # Even an unforeseen failure names itself rather than vanishing into the
+    # NO ANSWER bucket, which is what hid the escaped-quote defect in the
+    # previous version of this parser.
+    print("ERR unexpected:%s:%s" % (type(e).__name__, e))' 2>/dev/null)
 
   case "${parsed:-}" in
     'OK '*) parsed="${parsed#OK }" ;;
