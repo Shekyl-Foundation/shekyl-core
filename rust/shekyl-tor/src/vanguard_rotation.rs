@@ -22,15 +22,19 @@
 //!
 //! - **L2:** uniform over [30, 60] days (mean 45). Implementations *may*
 //!   expose L2 as a user pinning option.
-//! - **L3:** `max(X, X)` over [1, 48] hours inclusive (mean 31.5 h), and
+//! - **L3:** `max(X₁, X₂)` — **two independent** uniform draws over
+//!   [1, 48] hours inclusive, taking the longer (mean 31.5 h, vs the 24.5 a
+//!   single uniform would give). The spec writes this `max(X, X)`, which
+//!   reads as self-equaling; the two draws are independent. It is also
 //!   **not** user-pinnable. The skew is deliberate: some chance of a very
 //!   short rotation to deter compromise/coercion, biased toward longer
 //!   periods so a Sybil attack must be sustained.
 //!
 //! **Recorded divergence:** the spec *text* gives L2 a uniform distribution,
-//! but notes the reference implementation uses `max(X, X)` for *both* layers
-//! "for simplicity." We follow the spec text (the analyzed version): L2
-//! uniform, L3 `max(X, X)`.
+//! but notes the reference implementation uses that same max-of-two-draws
+//! form for *both* layers "for simplicity." We follow the spec text (the
+//! analyzed version): L2
+//! uniform, L3 max-of-two.
 //!
 //! # Replacement policy on restore
 //!
@@ -78,7 +82,8 @@ use crate::control::{Command, ControlError, TorControl};
 /// L2 lifetime bounds (spec): uniform over [30, 60] days.
 const L2_LIFETIME_MIN: Duration = Duration::from_secs(30 * 86_400);
 const L2_LIFETIME_MAX: Duration = Duration::from_secs(60 * 86_400);
-/// L3 lifetime bounds (spec): `max(X, X)` over [1, 48] hours inclusive.
+/// L3 lifetime bounds (spec): the two independent uniform draws of
+/// `max(X₁, X₂)` are each taken over [1, 48] hours inclusive.
 const L3_LIFETIME_MIN: Duration = Duration::from_secs(3_600);
 const L3_LIFETIME_MAX: Duration = Duration::from_secs(48 * 3_600);
 
@@ -570,7 +575,8 @@ fn sync_parent_dir(path: &Path) {
 enum Layer {
     /// Second-level guard (L2): uniform 30–60 day lifetime.
     Two,
-    /// Third-level guard (L3): `max(X, X)` 1–48 hour lifetime.
+    /// Third-level guard (L3): `max(X₁, X₂)` of two independent uniform
+    /// 1–48 hour draws.
     Three,
 }
 
