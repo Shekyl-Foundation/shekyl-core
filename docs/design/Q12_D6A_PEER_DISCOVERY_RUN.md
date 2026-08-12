@@ -1466,7 +1466,16 @@ Which makes the timeout question answerable without judgement:
 **Anything from 30 s to 75 s gives the identical result.** Going to 90 s buys
 one dial in sixty. **So `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT = 45` is not
 changed** — no value in a sane range does better, and a longer one only makes a
-node wait longer to learn the same thing. The earlier framing of "45 s of
+node wait longer to learn the same thing.
+
+**This measurement's value is a negative one, and it should be cited that way.**
+The obvious response to "15 % of dials fail" is *raise the timeout*. Bimodality
+forecloses it, and the single success in the gap is `n = 1`. The measurement
+earns its cost by killing the plausible wrong fix before a round is spent on it,
+leaving the suppression as the entire defect. **Equally, nothing here justifies
+*lowering* 45 s**: `n = 60` through one client tor is far too thin to move a
+constant downward, and the failures are not slow dials that a shorter timeout
+would catch sooner — they are dials that never resolve. The earlier framing of "45 s of
 patience" as the deficient half was wrong: it is generous by six times over the
 median, and the failures are not slow, they are *absent*.
 
@@ -1508,6 +1517,141 @@ running samples the head of its own distribution, and the incompleteness is
 *correlated with the quantity being measured*. That is the same defect class as
 the rest of this arc — a check sharing a fate with its subject — reached this
 time by reading results that were still being produced.
+
+**The bias is structural, not bad luck**: *any* partial read of a duration
+experiment reads fast. The countermeasure is the one already in
+`read_anon_histogram.sh` — **refuse to report below the expected count** — which
+is now the fourth time refuse-don't-clamp has been the answer in this arc.
+
+### 11.9 Every missing link was a burn, and they all expired on schedule
+
+**The six-host ring was sampled every ~3 minutes for an hour.** The result is the
+strongest confirmation available, because the prediction was made in advance
+from a constant read at source.
+
+| sample (UTC) | total links | `use` inbound |
+| --- | --- | --- |
+| 02:21:52 – 02:34:49 | 21–23 of 30 | **1** |
+| **02:38:05 onward** | **30 of 30** | **5** |
+
+Seven links were missing at 02:34:49. **Seven timeouts appear in the six nodes'
+logs**, every one of them at daemon start:
+
+| dialer → target | burned | expires |
+| --- | --- | --- |
+| jp → use | 01:35:38 | 02:35:38 |
+| eu → use | 01:35:39 | 02:35:39 |
+| usw → brz | 01:35:40 | 02:35:40 |
+| brz → aus | 01:35:43 | 02:35:43 |
+| aus → use | 01:35:44 | 02:35:44 |
+| aus → brz | 01:36:40 | 02:36:40 |
+| brz → use | 01:37:06 | 02:37:06 |
+
+**All seven expire inside an 88-second window, and the very next sample reads a
+complete mesh.** The correspondence is exact: 7 burns, 7 missing links, 30/30
+once they aged out.
+
+**So the plateau was never churn, and it was never discovery.** Discovery had
+finished long before; the graph was being held incomplete by the failure cache
+alone. An earlier reading of this data as "a band of 21–23, not a decline" was
+the **third** premature conclusion of the session — and the per-node series is
+what refutes it, because every node's count is monotone and then flat, which no
+oscillating process produces.
+
+**Which settles a measurement requirement for the arms.** A fleet total hides
+this completely: a node steady at 20 and a node oscillating across 12 are
+indistinguishable in a sum, and at `A = 60` the floor is **per node**. The arms
+record **per-node time series**, not a total with a spread.
+
+### 11.10 Publication freshness dominates the failure rate — 55 % against 13 %
+
+The same 60-service rig, probed with **no publication settle** instead of 180 s:
+
+| | settled 180 s | probed immediately |
+| --- | --- | --- |
+| failure rate | **13.3 %** | **55.0 %** |
+| median success | 7.9 s | 18.4 s |
+| dials exceeding 45 s | 15.0 % | **61.7 %** |
+
+**A freshly published service is four times more likely to be undialable**, and
+this is the mechanism behind §11.5's finding rather than a separate one.
+
+#### The restart loop — the remedy causes the symptom that prompts it
+
+Compose the measurements and a self-reinforcing cycle falls out, with every step
+observed rather than supposed:
+
+1. A node's hidden service **fails to publish** on first start — **1 in 5**
+   (§11.5, two trials).
+2. The operator applies the documented remedy: **restart tor**.
+3. The restart republishes with **new introduction points**, and for a window
+   afterwards dials against it fail at **55 %** (§11.10) while clients may still
+   hold the old descriptor.
+4. Every node that dials during that window **burns the onion for an hour**, so
+   the node's inbound collapses and it looks broken.
+5. The operator restarts again.
+
+**The fix for not publishing is what keeps the node unreachable.** This is
+Q12-D6a's spiral reached from a direction the design was not watching: not *no
+outgoing connection ⇒ no self-announcement ⇒ no inbound*, but *the repair
+sustains the failure*.
+
+**The dress rehearsal reproduced it at n = 1 and it was written up as residue.**
+`use` — the node whose tor was restarted 3.6 minutes before the daemons started
+— took **four of the ring's seven burns** and sat at `anon_in = 1` for the full
+hour. Failures cluster on **targets**, not dialers.
+
+#### What this rig cannot tell us, stated rather than implied
+
+Whether failures also correlate *through the dialer* — one node having a bad few
+minutes and burning much of its candidate set at once — **is not testable from
+this data.** Every failure ran to the 120 s cap, so all eight are the last eight
+*completions* by construction; completion order carries no information about
+when they started, and the rig records duration and result but **not start
+time**. The ring's target-clustering is real evidence for the target-side
+mechanism; this rig neither corroborates nor contradicts a dialer-side one.
+Recording per-attempt start timestamps is a one-line change and is owed before
+the question is answered either way.
+
+**It matters because the binomial in §11.7 assumes independence.** If failures
+correlate through the dialer, the binomial is the *optimistic* model and the
+`p³` compounding that justifies three retries does not hold, because attempts
+inside 60–120 s would share the circuit state that caused them.
+
+### 11.11 Two constraints on the retry design that the derivation missed
+
+**Dialing is serial and blocking.** `make_expected_connections_count` makes **one**
+attempt per call ([`net_node.inl`](../../src/p2p/net_node.inl), the
+`make_new_connection_from_peerlist` branch) and `connections_maker` loops on its
+boolean result. Each failure therefore costs up to the full 45 s **in sequence**,
+so one pass over twelve candidates at a 23 % failure rate already spends minutes
+on failures alone, and three attempts per candidate puts the worst case at the
+order of half an hour.
+
+**Time-to-floor is therefore a constraint in its own right**, and the retry count
+must be derived against it rather than against `p^n` alone. It also composes with
+§12's live check: a node below the floor is out of the anonymity zone for that
+entire window.
+
+**Escalation must reset on a successful handshake.** Doubling toward the
+public-zone value is right for a service that is genuinely gone. But a
+transiently flaky peer — fails, succeeds, fails — would otherwise ratchet up to
+3600 s and arrive at the same defect by a slower road. **The fix decays into the
+thing it replaces unless the counter is cleared on success.**
+
+### 11.12 The launch condition, stated plainly
+
+Composing §11.7's reachability with §12's below-floor rule: below the floor a
+node does not stem on the anonymity zone. At `p ≈ 0.15–0.23` the floor is
+unreachable up to roughly `A ≈ 19`.
+
+**So under the current constants, on a young network, no Shekyl node anywhere
+stems over Tor** — and the operator sees a working Tor connection, peers,
+traffic, and no indication that the stem is not running.
+
+That is the launch condition, and it is now a number rather than a concern. It is
+also the reason the pairing fix is **pre-genesis**: the constant that makes Tor
+stemming work at launch cannot be one we intend to change after launch.
 
 ---
 
