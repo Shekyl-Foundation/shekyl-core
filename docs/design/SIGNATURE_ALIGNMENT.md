@@ -548,6 +548,38 @@ WalletLedger-internal blocks). Refuse-don't-migrate; all bumps touch only
 the state-side SWSP payloads (`.wallet` / `.wallet.pscan` / `.wallet.pending`,
 rescan-regenerable), never the write-once `.wallet.keys` seed envelope.
 
+**The bumps only refuse if they get to run** (review round, 2026-08-12).
+Deleting `PFundingOutputRecord.tx_hash` removes a fixed 32 bytes from the
+middle of a *repeated* record, shifting every following byte; postcard carries
+no framing, so decoding a stale `.wallet.pscan` under the new declaration died
+inside the codec (`bad varint`) before `check_version()` could name the
+version. The user-visible answer was "your wallet is corrupt" on a wallet whose
+keys and seed are intact — the exact diagnostic the refuse-don't-migrate
+version bump exists to replace. `PScanState` was the reachable case (its own
+file, its own version, nothing upstream to refuse first); `TxMetaBlock` and
+`SyncStateBlock` had the same ordering but load behind the already-correct
+`WalletLedger` bundle gate, so only a standalone caller could reach it.
+
+Fixed as a class, not an instance: `shekyl-engine-state::version_gate` now owns
+both the pre-decode leading-varint gate and the version comparison, and all
+eight persisted **blocks** load through it. Two deliberate non-members, stated
+so this paragraph is not itself an over-claim: `SendJournalBlock` has no
+standalone loader (it only ever loads inside the bundle) so it shares the
+comparison but needs no prefix gate; and `WalletLedger` — the bundle — keeps
+its own pre-decode gate because it refuses with a different variant
+(`UnsupportedFormatVersion`, not `UnsupportedBlockVersion`), which the shared
+helper does not fit. The gate rests on a structural precondition —
+each block declares its `u32` version first — which is itself pinned by a
+table-driven test over all eight blocks, so a field reorder fails a test rather
+than silently turning the gate into a comparison against an unrelated value.
+
+Finishing-third: moving the gate orphaned two post-decode `check_version`
+methods (`PScanState`, `PendingPostBlock`) — neither block is in the
+`WalletLedger` bundle, so nothing fanned out to them, and re-checking a value
+the pre-decode gate just refused on is vacuous. Both deleted, in keeping with
+this PR's own thesis. The bundle blocks keep theirs: `check_all_block_versions`
+is a real caller over already-decoded blocks.
+
 ### Kept, docstrings corrected (named future vehicle or ratified retention)
 
 | Field(s) | Why kept |
@@ -555,21 +587,66 @@ rescan-regenerable), never the write-once `.wallet.keys` seed envelope.
 | `creation_anchor_hash` (`SyncStateBlock`) | named staking-canonicity "trust floor" concept + pending newtype migration |
 | `scanned_pool_txs` (`TxMetaBlock`) | provisioned for the Stage-4 `MempoolMonitorActor` |
 | `change_amount` / `SendRecipient.address` / `SendInputRef.amount` (`SendRecord`) | SJ-DQ-1 full row: replay cannot recover counterparty + the split; awaiting the OUTGOING detail projection |
-| `accruals` (`PScanState`) | SP-7 `C_min` reader is `#[allow(dead_code)] // transient` |
-| `BondPostRecord.height` | 2d-2 SP-R0 reconcile GC reader is dormant |
-| `PFundingOutputRecord.epoch` | kept alongside `accruals` for SP-7 per-output attribution |
+| `accruals` (`PScanState`) | SP-7 `C_min` reader (`finalized_inflow`) is `#[allow(dead_code)] // transient`. The resume seam round-trips the map (`PScanAccrual::from_state` / `to_state`) — not a reader; see the correction below |
+| `PFundingOutputRecord.epoch` | kept alongside `accruals` for SP-7 per-output attribution; likewise round-tripped through the rule-18 seam, with no reader |
 | `RetiredPersonaRecord.{unbond,retired}_epoch` | ratified done-side authoritative-record provenance (2026-06-29 round); derive-forward keys on `p_slot` |
 | `BookkeepingBlock.{primary_label, address_book}` | reserved future UX surfaces; the address book is an open per-feature question |
 
 `SWSP _reserved` is **not** a finding — const-zero write with a non-zero
 refusal gate is standard forward-compat framing.
 
+### Correction (review round, 2026-08-12): `BondPostRecord.height` was never dead
+
+The first pass filed `BondPostRecord.height` in the table above, claiming its
+only consumer was the dormant 2d-2 SP-R0 reconcile GC. **That was wrong**, and
+it is recorded here rather than quietly edited out, because the census is this
+PR's deliverable and a census that can be silently corrected is not evidence.
+
+`claim_orchestrator::last_confirmed_sweep_height` takes the max `height` over
+the persona's posts and passes it to `BackingSet::from_spendable` as the
+emission claim's legal-tranche boundary — a live production consumer on the
+claim path, squarely inside the "behavior changes with the value" definition
+above. Retaining the field on a *dormant-vehicle* rationale would have licensed
+a later maintainer to drop the vehicle and then the field, silently moving the
+claim's spendable backing window. The row is deleted from the kept table; the
+field is simply live.
+
+**Method defect the correction exposes, and the fix applied to the rest of the
+table.** The original pass grepped for the *word* reader instead of applying
+the definition above. Several kept fields are touched on the rule-18
+state⇄transform resume seam, which round-trips whole records — those hits are
+**not** live readers by the definition, since nothing's behavior changes with
+the value. So a reader-grep both over-reports (round-trip noise) and
+under-reports (a genuine consumer hides in the noise), which is how a live
+`BondPostRecord.height` consumer went unseen. Every remaining kept row was
+re-verified against the definition rather than the grep, and its docstring now
+names the round-trip explicitly — "no live reader; the resume seam
+round-trips it, which is not a reader" — so the next person to grep does not
+read the docstring as a lie. One vocabulary throughout: **live reader**, as
+defined above.
+
 ### Wired (the tx_notes / PR-SJ-2 confirmation)
 
 `tx_notes` (`TxMetaBlock`) was persisted-but-inert. Rather than delete it, it
 was wired per its ratified SJ-DQ-7 disposition (`WALLET_SEND_RECORD.md`
 §SJ-DQ-7 resolution): `Engine::set_tx_note` writer + `note`-on-`TransferView`
-reader + `set_tx_note` RPC + OpenAPI. Now live.
+reader + `set_tx_note` / `get_tx_note` RPC + OpenAPI. Now live.
+
+`get_tx_note` is part of the wiring, not an extra: `set_tx_note` accepts any
+well-formed txid by ratified design (so a user can annotate an incoming
+payment before the scanner catches up), while `TransferView.note` can only
+annotate rows that exist. Without the paired reader a note on a not-yet-scanned
+txid would be write-only — acknowledged, persisted, unreadable. It also gives
+`Engine::tx_note` its first caller, so the wiring has no dead half.
+
+The map's bound was made structural in the same pass: `TxMetaBlock::tx_notes`
+is now **private**, with `set_note` the only door in, so `TX_NOTE_MAX_BYTES` is
+an invariant rather than a convention a public field let any caller bypass.
+Note *count* is deliberately not capped — the same position `scanned_pool_txs`
+holds: a count policy belongs to the orchestrator that knows the wallet's
+transaction population, no defensible derivation exists for a number that would
+refuse a user's next annotation, and the outer ceiling (`PAYLOAD_BODY_MAX`, on
+the write path) already bounds file growth.
 
 **Inert-field findings, closed:** `attributes` **deleted**, `tx_notes`
 **wired**, `AddressBookEntry.payment_id` **still pending** its own disposition

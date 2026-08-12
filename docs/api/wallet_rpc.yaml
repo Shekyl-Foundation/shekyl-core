@@ -44,8 +44,11 @@
 #     build_pending_tx, submit_pending_tx, discard_pending_tx,
 #     abandon_tx                                   (PR-SJ-3 — the P3-4
 #                                                   user-authored abandon)
-#     set_tx_note                                  (PR-SA-4 — SJ-DQ-7
-#                                                   per-txid annotation)
+#     set_tx_note, get_tx_note                     (PR-SA-4 — SJ-DQ-7
+#                                                   per-txid annotation;
+#                                                   the reader is the only
+#                                                   way to read a note whose
+#                                                   tx is not yet scanned)
 #     get_transfers, get_transfer_by_id,
 #     refresh, rescan_blockchain,
 #     get_height, get_version,
@@ -242,6 +245,7 @@ components:
             - discard_pending_tx
             - abandon_tx
             - set_tx_note
+            - get_tx_note
             - get_transfers
             - get_transfer_by_id
             - get_wallet_info
@@ -920,6 +924,35 @@ components:
           description: >
             The note as stored after the write. Omitted when the note was
             cleared (empty input).
+
+    GetTxNoteParams:
+      type: object
+      required: [tx_hash]
+      description: >
+        `get_tx_note` (WALLET_SEND_RECORD.md SJ-DQ-7): read back the note
+        stored for a txid. This is the paired reader for `set_tx_note`, and it
+        is the ONLY way to read a note whose transaction the wallet does not
+        know: `set_tx_note` deliberately accepts any well-formed txid — so a
+        user can annotate an incoming payment before the scanner catches up —
+        but `TransferView.note` can only annotate rows that exist, so until
+        the transaction is scanned the note appears on no history row. An
+        unknown txid is NOT an error: it answers with `note` omitted, exactly
+        as a cleared note does.
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+
+    GetTxNoteResult:
+      type: object
+      required: [tx_hash]
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        note:
+          type: string
+          description: >
+            The stored note. Omitted when there is none — which is also the
+            answer for a txid the wallet has never seen.
 
     # ── History ──────────────────────────────────────────────────────
     ReceiveAttributionKind:

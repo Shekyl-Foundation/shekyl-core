@@ -480,6 +480,19 @@ story, not the read path.
     before taking a write lock as a fast-fail, but that is not the sole
     enforcement — a second boundary that forgets the check cannot bloat the
     wallet file. 4 KiB is generous for a human note.
+
+    *Amended in the PR-SA-4 review round (2026-08-12):* "shared invariant"
+    is now **structural**. `TxMetaBlock::tx_notes` was public, so the bound
+    was a convention any caller could assign around; the field is private
+    and `set_note` is the only door in, which is what makes the sentence
+    above true rather than aspirational. The boundary's pre-check was also
+    re-pointed at the engine's own `TxNoteTooLong` instead of re-writing the
+    message, so the fast-fail and the write path cannot refuse the same
+    request *differently*. Note **count** stays uncapped, deliberately and
+    on the same footing as `scanned_pool_txs`: a count policy belongs to the
+    orchestrator that knows the wallet's transaction population, and the
+    outer ceiling (`PAYLOAD_BODY_MAX`, refused on the write path) already
+    bounds file growth.
   - **Boundary hygiene (rules 35/36).** A note is counterparty-bearing free
     text. The over-length refusal reports byte counts only, never the note;
     the persistence-failure path is category-only (`internal_detail`, no
@@ -507,10 +520,26 @@ story, not the read path.
   command inherits the write-path bound automatically; it should still
   pre-check and keep the no-echo discipline at its arg layer for UX.
 
+  **Read-back pair (`get_tx_note`), added in the review round (2026-08-12).**
+  Arm 1 accepts any well-formed txid — that is what lets a user annotate an
+  incoming payment before the scanner catches up — but `TransferView.note`
+  can only annotate rows that exist. The two together made the write-only
+  case: a note on a not-yet-scanned txid was acknowledged, persisted, and
+  unreadable. `get_tx_note` closes it, and gives `Engine::tx_note` its first
+  caller so the wiring has no dead half. An unknown txid is **not** an error —
+  it answers with the note omitted, exactly as a cleared one does; a note
+  carries no existence claim about the transaction, and refusing would turn
+  the read into an oracle for which txids the wallet has annotated. Residual,
+  stated so it is not re-raised: a note on a *mistyped* txid is still
+  unrecoverable without retyping the same wrong txid — inherent to id-keyed
+  annotation without a membership precondition, and bounded (a stray map
+  entry, never a misdirected payment).
+
   **Dead-field connection (so the next audit reads this as deliberate).**
   With PR-SA-4, `tx_notes` now has a production writer (`Engine::set_tx_note`)
-  and a production reader (the `note` on every `get_transfers` /
-  `get_transfer_by_id` row), so it moves from "persisted but inert" to
+  and production readers (the `note` on every `get_transfers` /
+  `get_transfer_by_id` row, plus the `get_tx_note` point read), so it moves
+  from "persisted but inert" to
   "wired" — closing the second of the three inert-field findings the SA-4
   census surfaced: `attributes` **deleted**, `tx_notes` **now live**, and
   `AddressBookEntry.payment_id` **still pending its own disposition** (it
