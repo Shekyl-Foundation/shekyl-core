@@ -80,6 +80,7 @@ use super::bootstrap::{bootstrap_step, parse_bootstrap_progress, BootstrapState,
 use super::framing::{ControlReply, Framed, FramingError, ReplyFramer};
 use super::onion::{AddOnion, ServiceId};
 use super::safecookie::verify_server_hash;
+use super::vanguards::HsLayerPins;
 use crate::binary::VerifiedTorBinary;
 
 /// Per-read bound on a hung control port — a handshake read that does not complete
@@ -241,6 +242,13 @@ pub enum Command {
     /// `DEL_ONION <service-id>` — tear the service down. Issued on the actor's
     /// shutdown path as well as on demand.
     DelOnion(ServiceId),
+    /// `SETCONF HSLayer2Nodes=… HSLayer3Nodes=…` — pin the serving persona's
+    /// vanguard layer-2/layer-3 guard sets (PR-C). Built from typed
+    /// [`RelayFingerprint`](super::vanguards::RelayFingerprint)s, so — like
+    /// `ADD_ONION` — it cannot render a line that injects a second command,
+    /// which is what makes it safe to add `SETCONF` (the dangerous verb) to
+    /// this surface without a validated-string path.
+    SetConf(HsLayerPins),
 }
 
 impl Command {
@@ -272,6 +280,9 @@ impl Command {
             // Infallible by construction — no validation step exists to fail.
             Self::AddOnion(add) => return Ok(add.to_wire_line()),
             Self::DelOnion(id) => return Ok(Zeroizing::new(format!("DEL_ONION {}", id.as_str()))),
+            // Also infallible: every value is a `$hex` specifier that cannot
+            // carry a space or control byte (see `vanguards`).
+            Self::SetConf(pins) => return Ok(Zeroizing::new(pins.to_wire_line())),
         };
         if tokens.is_empty() {
             return Err(ControlError::InvalidCommand);
@@ -1274,6 +1285,25 @@ mod tests {
         assert_eq!(
             Command::SetEvents(vec![]).to_wire(),
             Err(ControlError::InvalidCommand)
+        );
+    }
+
+    #[test]
+    fn setconf_renders_the_hslayer_pin_line_infallibly() {
+        // The dangerous verb is safe here because the value is typed: a
+        // `Command::SetConf` built from fingerprints renders exactly the
+        // SETCONF line and can never take the InvalidCommand path.
+        use super::super::vanguards::{HsLayerPins, RelayFingerprint};
+        let pins = HsLayerPins::new(
+            vec![RelayFingerprint::from_bytes([0x11; 20])],
+            vec![RelayFingerprint::from_bytes([0x22; 20])],
+        )
+        .expect("non-empty");
+        let wire = Command::SetConf(pins).to_wire().expect("infallible");
+        assert_eq!(
+            wire.as_str(),
+            "SETCONF HSLayer2Nodes=$1111111111111111111111111111111111111111 \
+             HSLayer3Nodes=$2222222222222222222222222222222222222222"
         );
     }
 

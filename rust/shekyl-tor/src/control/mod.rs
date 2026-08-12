@@ -35,6 +35,7 @@ pub mod framing;
 pub mod onion;
 pub mod safecookie;
 pub mod stream;
+pub mod vanguards;
 
 pub use actor::{
     BootstrapReadiness, Command, CommandResult, ControlError, EventSink, ManagedTor, SocksPort,
@@ -49,3 +50,4 @@ pub use onion::{
 };
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
 pub use stream::{parse_stream_event, CircId, StreamEvent, StreamStatus};
+pub use vanguards::{HsLayerPins, RelayFingerprint};
