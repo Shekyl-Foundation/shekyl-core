@@ -91,6 +91,13 @@ int main(int argc, char* argv[])
 {
   TRY_ENTRY();
 
+  // This tool writes no log file, and it is the only `on_startup()` caller that
+  // never configures logging afterwards -- so it asks for the stderr sink
+  // itself. `on_startup()` no longer installs one, because doing so
+  // unconditionally is what made `--log-file` inert everywhere else (see the
+  // note there).
+  mlog_configure("", true);
+
   tools::on_startup();
 
   po::options_description desc_cmd_only("Command line options");
