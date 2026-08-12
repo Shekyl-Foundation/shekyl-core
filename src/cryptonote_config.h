@@ -198,7 +198,51 @@
 #define P2P_DEFAULT_LIMIT_RATE_UP                       8192       // kB/s
 #define P2P_DEFAULT_LIMIT_RATE_DOWN                     32768       // kB/s
 
+/*! How long a failed address is not retried, on the PUBLIC zone.
+
+  An hour is right here and is unchanged: on a clearnet address a failed dial
+  usually means a down host, and not retrying a down host for an hour is cheap
+  and polite. */
 #define P2P_FAILED_ADDR_FORGET_SECONDS                  (60*60)     //1 hour
+
+/*! The same, for an ANONYMITY zone, on the FIRST failure. Doubles per
+    consecutive failure up to `P2P_FAILED_ADDR_FORGET_SECONDS`, and is cleared
+    entirely by a successful handshake.
+
+    \note THIS IS NOT A LATENCY. It is not derived from how long a descriptor
+      fetch takes, and lengthening it does not give a slow fetch more time —
+      `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT` governs that, and measurement showed
+      fetches to be BIMODAL: under ~30 s or never, with 30 s and 75 s timeouts
+      producing an identical failure rate.
+
+    What this value must outlast is a TOR-PROTOCOL event: the window during
+    which a hidden service is undialable because its introduction points have
+    just changed. That window is why the constant exists at this size:
+
+      - roughly 1 anonymity node in 5 fails to publish its descriptor on first
+        start, while reporting healthy;
+      - the remedy is to restart tor, which republishes with NEW introduction
+        points;
+      - dials landing in that window fail at 55% against 13% for a settled
+        service;
+      - and under a one-hour suppression every node that dialled during it is
+        blind to that peer for an hour, so the node looks broken and the
+        operator restarts again. The repair sustains the failure.
+
+    Measured recovery after such a restart is on the order of a minute, so a
+    retry spaced at this value lands after the service is dialable again rather
+    than inside the same dead window.
+
+    \note An hour on an anonymity zone is not merely impolite, it is
+      DISCONNECTING. With a per-dial failure rate around 0.15-0.23 and F-8b's
+      floor of 12, a node reaches the floor only if at most `A-1-12` of its
+      candidates burn: at `A = 15` that succeeds about a third of the time. So
+      below roughly `A = 19` the floor is unreachable BY SUPPRESSION — the peers
+      exist and answer, and the node has blacklisted them — and a node below the
+      floor does not stem on the anonymity zone at all.
+
+    See docs/design/Q12_D6A_PEER_DISCOVERY_RUN.md sections 11.5-11.12. */
+#define P2P_ANON_FAILED_ADDR_FORGET_SECONDS             120         //2 minutes
 #define P2P_IP_BLOCKTIME                                (60*60*24)  //24 hour
 #define P2P_IP_FAILS_BEFORE_BLOCK                       10
 
