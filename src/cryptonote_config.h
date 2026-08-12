@@ -229,9 +229,19 @@
         blind to that peer for an hour, so the node looks broken and the
         operator restarts again. The repair sustains the failure.
 
-    Measured recovery after such a restart is on the order of a minute, so a
-    retry spaced at this value lands after the service is dialable again rather
-    than inside the same dead window.
+    PROVISIONED AT THE p90 OF MEASURED POST-RESTART RECOVERY, NOT THE MEDIAN.
+    Twenty services restarted with the same keys recovered at a median of 96 s
+    but with a tail to 262 s -- more than twice the median -- and the asymmetry
+    is one-sided: a window that is too SHORT retries into the same dead
+    interval, fails, escalates the counter, and pushes the next attempt further
+    out, so under-estimating COMPOUNDS rather than degrades. Over-estimating
+    costs only a slightly slower first retry. Same shape as F's provisioning,
+    and the same direction.
+
+    p90 is also the largest quantile the retry budget admits: at 240 s three
+    attempts across twelve candidates cost 3300 s, while provisioning at the
+    observed maximum would cost 3720 s and exceed the very hour this constant
+    exists to avoid spending.
 
     \note An hour on an anonymity zone is not merely impolite, it is
       DISCONNECTING. With a per-dial failure rate around 0.15-0.23 and F-8b's
@@ -242,7 +252,7 @@
       floor does not stem on the anonymity zone at all.
 
     See docs/design/Q12_D6A_PEER_DISCOVERY_RUN.md sections 11.5-11.12. */
-#define P2P_ANON_FAILED_ADDR_FORGET_SECONDS             120         //2 minutes
+#define P2P_ANON_FAILED_ADDR_FORGET_SECONDS             240         //4 min = p90 of measured recovery
 #define P2P_IP_BLOCKTIME                                (60*60*24)  //24 hour
 #define P2P_IP_FAILS_BEFORE_BLOCK                       10
 
