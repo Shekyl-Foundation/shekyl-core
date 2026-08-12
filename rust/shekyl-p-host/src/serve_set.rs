@@ -16,35 +16,29 @@
 //! all the way to the slash, which is what makes a runtime check the wrong
 //! shape of defense.
 
-use shekyl_archival_retention::ClaimantBondRecord;
 use shekyl_curve_tree::{SegmentPin, ServingReader, StoreError};
 
 /// The shards a persona is bonded to serve, as read back from the chain.
 ///
 /// # Where a serve-set may come from
 ///
-/// The only constructor is [`Self::from_connected_record`], which takes a
-/// [`ClaimantBondRecord`] — the *connected* bond record, decoded from the
-/// daemon's claim-source reply — never a bare `Vec<u64>`. The production
-/// chain is already end-to-end: `get_archival_emission_claim_source` →
-/// `EmissionClaimSource::from_json` → `BondContext::record()`, with the
-/// reply's `chain_height` as the stamp. Nothing has to be hand-assembled to
-/// satisfy this signature. That is the whole
-/// point: "what I posted" is not "what connected", and a locally-maintained
-/// shard list that drifts from the record is exactly §9.6 item 4's
-/// silent-slash path. There is no way to build this type from a list the
-/// caller is keeping alongside the record, because the shape that would
-/// permit it does not exist.
+/// **Not from the host, and not from its caller.** `ServeSet` has no public
+/// constructor at all: the only way to obtain one is
+/// [`ServeSetPinner::pin_serve_set`], which reports the shards it derived
+/// from the connected bond record *and pinned*. A serving host cannot
+/// nominate its own obligations, because there is no argument through which
+/// to nominate them.
 ///
-/// **The limit of that guarantee, stated rather than implied.**
-/// `ClaimantBondRecord` is an ordinary struct with public fields, so a
-/// caller who *wants* to fabricate one can. What this closes is the
-/// accidental path — the drifting parallel list, the stale cached `Vec`, the
-/// "just pass the ids you already have" call site — which is the one the
-/// design names. Making the fabricated path unrepresentable too needs a
-/// sealed decoder type minted only by the claim-source decode; that is the
-/// wiring slice's work, on the crate that owns the decode, and it belongs
-/// there rather than being approximated here.
+/// That is the same move made twice elsewhere on this path — the store comes
+/// from the pin ([`PinReport::reader`]), and now the set does too — and it is
+/// one rule rather than three fixes: **the host does not choose anything
+/// about its own duty.** Every such value is reported by the side that holds
+/// the bond record and the store, because that is the side that knows.
+///
+/// The residual is an *implementor* that reports the wrong set. That is one
+/// engine-side implementor, reviewable by reading it, and it is a strictly
+/// narrower surface than a constructor any caller could reach — the second
+/// construction site never comes into existence rather than being permitted.
 ///
 /// # The height stamp
 ///
@@ -62,17 +56,13 @@ pub struct ServeSet {
 }
 
 impl ServeSet {
-    /// The serve-set implied by a connected bond record read at
-    /// `as_of_height`.
-    ///
-    /// An empty holdings set is legal and is **not** an error here: a
-    /// `CompleteTree` node carries no shard ids, and an `Unbond` exit
-    /// empties them. [`PinnedServeSet`] is what decides whether an empty
-    /// set is worth hosting.
-    #[must_use]
-    pub fn from_connected_record(record: &ClaimantBondRecord<'_>, as_of_height: u64) -> Self {
+    /// Build the set the pinner reported. Crate-private on purpose: see the
+    /// type doc — a serving host does not get to name its own obligations,
+    /// and the only path to a `ServeSet` runs through
+    /// [`ServeSetPinner::pin_serve_set`].
+    pub(crate) fn reported(shard_ids: Vec<u64>, as_of_height: u64) -> Self {
         Self {
-            shard_ids: record.holdings.shard_ids.as_slice().to_vec(),
+            shard_ids,
             as_of_height,
         }
     }
@@ -119,18 +109,18 @@ pub enum PinError {
         /// Local diagnostic; never on the wire.
         detail: String,
     },
-    /// The pinner did not report on the members it was asked about.
+    /// A pin report's outcomes do not describe the set it reported.
     ///
     /// Distinct from [`Self::Pinner`] because the remedy is different: a
     /// pinner failure is an environment fault and a retry re-covers it, but a
-    /// pinner that answers about the wrong members is a defect in the
-    /// implementor, and retrying only repeats it. Both member lists are
-    /// carried so the divergence is readable without re-running anything.
+    /// report whose evidence does not cover its own claim is a defect in the
+    /// implementor, and retrying only repeats it. Both lists are carried so
+    /// the divergence is readable without re-running anything.
     PinnerCoverageMismatch {
-        /// The members the pinner was asked to pin, in the record's order.
-        requested: Vec<u64>,
-        /// The members it reported on, in the order reported.
-        returned: Vec<u64>,
+        /// The shard set the report claimed, in the record's order.
+        reported_set: Vec<u64>,
+        /// The members its outcomes actually covered, in the order reported.
+        covered: Vec<u64>,
     },
 }
 
@@ -144,14 +134,14 @@ impl std::fmt::Display for PinError {
             ),
             Self::Pinner { detail } => write!(f, "serve-set pin failed: {detail}"),
             Self::PinnerCoverageMismatch {
-                requested,
-                returned,
+                reported_set,
+                covered,
             } => write!(
                 f,
-                "the pinner reported on {returned:?} but was asked to pin {requested:?}; \
-                 the pins cannot be witnessed for members it did not report, so this \
-                 persona does not serve. This is an implementor defect, not a \
-                 transient fault — retrying will repeat it"
+                "the pin report claims the serve-set {reported_set:?} but its outcomes \
+                 cover {covered:?}; the pins cannot be witnessed for members the report \
+                 does not describe, so this persona does not serve. This is an \
+                 implementor defect, not a transient fault — retrying will repeat it"
             ),
         }
     }
@@ -166,7 +156,13 @@ impl std::error::Error for PinError {}
 /// doc for why that is a soundness property and not a convenience.
 #[derive(Debug, Clone)]
 pub struct PinReport {
-    /// Each member's outcome paired with its shard id, in the caller's order.
+    /// The shard ids derived from the **connected** bond record, in the
+    /// record's own order — the set the implementor pinned.
+    pub shard_ids: Vec<u64>,
+    /// The chain height that record was read at; becomes
+    /// [`ServeSet::as_of_height`], the tripwire's first clock.
+    pub as_of_height: u64,
+    /// Each member's outcome paired with its shard id, in `shard_ids` order.
     pub outcomes: Vec<(u64, SegmentPin)>,
     /// A reader on the store the pins were applied in.
     pub reader: ServingReader,
@@ -179,6 +175,29 @@ pub struct PinReport {
 /// the serving host must reach it through that actor, not around it. The
 /// production implementor is the actor's handle; tests implement it
 /// directly.
+///
+/// # The host does not choose anything about its own duty
+///
+/// This trait reports three things and takes none of them: **which shards**
+/// the persona is obligated to serve, **whether they are pinned**, and
+/// **which store** they are pinned in. All three come from the side holding
+/// the bond record and the store, because that is the side that knows —
+/// and a value the host cannot supply is a value the host cannot get wrong.
+///
+/// That is one rule, not three local fixes. Each parameter removed from this
+/// seam closed a real defect of the same shape: a caller pairing a pinner for
+/// one store with a reader for another, or handing the pin a shard list it
+/// maintained alongside the record instead of derived from it
+/// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 4). Both are call-site
+/// mistakes, and the fix for a call-site mistake is to delete the call site's
+/// opportunity, not to validate it afterwards.
+///
+/// **The residual, stated rather than left implicit:** an implementor can
+/// report a set it did not derive from the record, or a reader for a store it
+/// did not pin. That is one engine-side implementor, reviewable by reading
+/// it, and it is strictly narrower than a public constructor any caller could
+/// reach. The corresponding "second construction site" therefore never comes
+/// into existence rather than being permitted.
 ///
 /// # Why the reader comes back from the pin
 ///
@@ -216,8 +235,12 @@ pub struct PinReport {
 /// for the second. The string is the diagnostic riding along, and it never
 /// reaches the wire.
 pub trait ServeSetPinner {
-    /// Pin every member and return the outcomes together with a read-only
-    /// handle on the store they were applied in.
+    /// Read the connected bond record, pin every shard it holds, and report
+    /// the set, the outcomes, and a handle on the store they landed in.
+    ///
+    /// **Takes no serve-set argument, deliberately.** The implementor derives
+    /// the shards from the record; the caller does not supply them. See the
+    /// trait doc for why that is the whole seam rather than a convenience.
     ///
     /// Contract (matching `LeafStore::pin_serve_set`, which the production
     /// implementor forwards to): outcomes come back in the caller's order,
@@ -230,10 +253,7 @@ pub trait ServeSetPinner {
     /// # Errors
     ///
     /// Implementor-defined; surfaced as [`PinError::Pinner`].
-    fn pin_serve_set(
-        &self,
-        shard_ids: &[u64],
-    ) -> impl std::future::Future<Output = Result<PinReport, String>> + Send;
+    fn pin_serve_set(&self) -> impl std::future::Future<Output = Result<PinReport, String>> + Send;
 }
 
 /// Proof that a serve-set's pins are in place — the ticket
@@ -295,12 +315,13 @@ impl PinnedServeSet {
     ///
     /// [`PinError::MembersAlreadyPruned`] if any member's bytes are already
     /// gone, and [`PinError::Pinner`] if the pin could not be applied.
-    pub async fn acquire<P: ServeSetPinner>(pinner: &P, set: ServeSet) -> Result<Self, PinError> {
-        let PinReport { outcomes, reader } = pinner
-            .pin_serve_set(set.shard_ids())
+    pub async fn acquire<P: ServeSetPinner>(pinner: &P) -> Result<Self, PinError> {
+        let report = pinner
+            .pin_serve_set()
             .await
             .map_err(|detail| PinError::Pinner { detail })?;
-        Self::from_outcomes(set, &outcomes, reader)
+        let reader = report.reader.clone();
+        Self::from_report(report, reader)
     }
 
     /// Re-pin `set` through `pinner`, **keeping this witness's store**.
@@ -317,46 +338,52 @@ impl PinnedServeSet {
     /// # Errors
     ///
     /// Exactly [`Self::acquire`]'s.
-    pub async fn refreshed<P: ServeSetPinner>(
-        &self,
-        pinner: &P,
-        set: ServeSet,
-    ) -> Result<Self, PinError> {
+    pub async fn refreshed<P: ServeSetPinner>(&self, pinner: &P) -> Result<Self, PinError> {
         let report = pinner
-            .pin_serve_set(set.shard_ids())
+            .pin_serve_set()
             .await
             .map_err(|detail| PinError::Pinner { detail })?;
-        Self::from_outcomes(set, &report.outcomes, self.reader.clone())
+        Self::from_report(report, self.reader.clone())
     }
 
-    /// Validate a pinner's outcomes against the set they were asked about and
-    /// mint the witness. The one place the checks live, so `acquire` and
-    /// `refreshed` cannot drift apart on what a witness requires.
-    fn from_outcomes(
-        set: ServeSet,
-        outcomes: &[(u64, SegmentPin)],
-        reader: ServingReader,
-    ) -> Result<Self, PinError> {
-        // THE WITNESS MUST WITNESS WHAT IT CLAIMS. Nothing above checks that
-        // the pinner reported on the members it was asked about, so a pinner
-        // returning a short list minted a `PinnedServeSet` for a set whose
-        // unreported members were never pinned — and an unpinned member is
-        // exactly what `prune_frozen` is free to remove out from under a
-        // read. The type's whole purpose is to be un-forgeable evidence that
-        // the pins are in place; evidence that is not checked is an
-        // assumption wearing a type.
+    /// Validate a report's internal coherence and mint the witness. The one
+    /// place the checks live, so `acquire` and `refreshed` cannot drift apart
+    /// on what a witness requires.
+    fn from_report(report: PinReport, reader: ServingReader) -> Result<Self, PinError> {
+        let PinReport {
+            shard_ids,
+            as_of_height,
+            outcomes,
+            reader: _,
+        } = report;
+        let set = ServeSet::reported(shard_ids, as_of_height);
+        let outcomes = &outcomes[..];
+        // THE EVIDENCE MUST COVER THE OBLIGATION. The report states two
+        // things — the set this persona owes, and the pins that were applied
+        // — and the witness is only meaningful if the second describes the
+        // first. A report whose outcomes are short mints a witness for a set
+        // whose unreported members were never pinned, and an unpinned member
+        // is exactly what `prune_frozen` is free to remove out from under a
+        // read.
         //
-        // Sequence equality rather than set coverage: the trait already
-        // promises outcomes "in the caller's order", so comparing the
-        // sequence enforces the documented contract exactly, and catches
-        // omissions, extras, duplicates and reordering in one comparison. A
-        // coverage-only check would leave the documented ordering unverified
-        // and free to drift.
-        let returned: Vec<u64> = outcomes.iter().map(|(shard_id, _)| *shard_id).collect();
-        if returned != set.shard_ids() {
+        // Since the pinner now reports the set as well as the outcomes, this
+        // is an internal-coherence check rather than a did-you-answer-what-I-
+        // asked one. That is a narrower guarantee and worth naming: it cannot
+        // catch an implementor that derived the wrong set (the residual the
+        // trait doc states), but it does catch the bug class this whole slice
+        // is about — two derivations of the same fact drifting apart, here
+        // the reported set and the ids actually pinned.
+        //
+        // Sequence equality rather than set coverage: the trait promises
+        // outcomes in the reported set's order, so comparing the sequence
+        // enforces that contract exactly and catches omissions, extras,
+        // duplicates and reordering in one comparison. A coverage-only check
+        // would leave the documented ordering unverified and free to drift.
+        let covered: Vec<u64> = outcomes.iter().map(|(shard_id, _)| *shard_id).collect();
+        if covered != set.shard_ids() {
             return Err(PinError::PinnerCoverageMismatch {
-                requested: set.shard_ids().to_vec(),
-                returned,
+                reported_set: set.shard_ids().to_vec(),
+                covered,
             });
         }
 

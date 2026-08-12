@@ -16,9 +16,7 @@ use shekyl_tor::service::{
 };
 use tokio::sync::watch;
 
-use crate::serve_set::{
-    PinError, PinnedServeSet, ServeSet, ServeSetPinner, Staleness, StalenessBound,
-};
+use crate::serve_set::{PinError, PinnedServeSet, ServeSetPinner, Staleness, StalenessBound};
 
 /// The serving identity and the shape of its published port.
 ///
@@ -229,24 +227,23 @@ impl PersonaServingHost {
     /// serialized; a failure leaves the previous witness in place, which is
     /// the safe direction: stale pins retain bytes, missing pins lose them.
     ///
-    /// The store is **not** re-chosen — see `PinnedServeSet::refreshed`.
+    /// The store is **not** re-chosen — see `PinnedServeSet::refreshed` — and
+    /// the *set* is not supplied either: the pinner reports the shards it
+    /// derived from the connected record. A serving host does not name its
+    /// own obligations on any tick, first or later.
     ///
     /// # Errors
     ///
     /// [`PinError`] as [`PinnedServeSet::acquire`]; the host keeps serving on
     /// its previous pins either way, and the caller should treat a persistent
     /// failure as the [`Staleness::Stale`] condition it will become.
-    pub async fn refresh<P: ServeSetPinner>(
-        &self,
-        pinner: &P,
-        set: ServeSet,
-    ) -> Result<(), PinError> {
+    pub async fn refresh<P: ServeSetPinner>(&self, pinner: &P) -> Result<(), PinError> {
         // Clone the current witness rather than holding the lock across the
         // await: the pin is an actor round trip, and holding a lock across it
         // is the shape the curve-tree actor's own lock-ordering rule exists
         // to forbid.
         let current = self.pinned_serve_set();
-        let next = current.refreshed(pinner, set).await?;
+        let next = current.refreshed(pinner).await?;
         *self.pinned.lock().expect("serve-set lock") = next;
         Ok(())
     }

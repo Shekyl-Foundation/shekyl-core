@@ -16,16 +16,15 @@
 //! not this property.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use shekyl_archival_retention::{ClaimantBondRecord, HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_curve_tree::{
     leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity, SegmentPin,
     ServingReader, TargetKind,
 };
 use shekyl_p_host::{
-    HostError, PersonaServing, PersonaServingHost, PinError, PinReport, PinnedServeSet, ServeSet,
+    HostError, PersonaServing, PersonaServingHost, PinError, PinReport, PinnedServeSet,
     ServeSetPinner, Staleness, StalenessBound,
 };
 use shekyl_tor::onion_identity::OnionIdentity;
@@ -62,37 +61,47 @@ fn segment_entries() -> Vec<LeafEntry> {
         .collect()
 }
 
-/// A connected bond record carrying `shard_ids`.
-fn holdings(shard_ids: &[u64]) -> HoldingsDescriptor {
-    HoldingsDescriptor {
-        kind: HoldingsKind::ShardSetCompact,
-        shard_ids: ShardSet::new(shard_ids.to_vec()).expect("valid shard set"),
-    }
-}
-
-fn record(holdings: &HoldingsDescriptor) -> ClaimantBondRecord<'_> {
-    ClaimantBondRecord {
-        join_settlement_epoch: 7,
-        holdings,
-        claimed_settlement_epochs: &[],
-    }
-}
-
 /// A pinner over a real store — the production shape, minus the actor hop
-/// (which is the wiring slice's, and adds nothing this axis can observe).
-struct StorePinner(Arc<LeafStore>);
+/// and the claim-source fetch (both SH-2b's, and neither observable on this
+/// axis). It *reports* its serve-set, exactly as the engine implementor will
+/// report the one it derives from the connected bond record; the host never
+/// supplies it.
+///
+/// The set is behind a lock so a test can move it, which is what an
+/// on-chain `HoldingsUpdate` looks like from here.
+struct StorePinner {
+    store: Arc<LeafStore>,
+    reported: Mutex<(Vec<u64>, u64)>,
+}
+
+impl StorePinner {
+    fn new(store: Arc<LeafStore>, shard_ids: &[u64], as_of_height: u64) -> Self {
+        Self {
+            store,
+            reported: Mutex::new((shard_ids.to_vec(), as_of_height)),
+        }
+    }
+
+    /// Holdings move on-chain: the record now says something else.
+    fn holdings_became(&self, shard_ids: &[u64], as_of_height: u64) {
+        *self.reported.lock().expect("lock") = (shard_ids.to_vec(), as_of_height);
+    }
+}
 
 impl ServeSetPinner for StorePinner {
-    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<PinReport, String> {
+    async fn pin_serve_set(&self) -> Result<PinReport, String> {
+        let (shard_ids, as_of_height) = self.reported.lock().expect("lock").clone();
         let outcomes = self
-            .0
-            .pin_serve_set(shard_ids)
+            .store
+            .pin_serve_set(&shard_ids)
             .map_err(|e| format!("{e:?}"))?;
         // Both halves off the one store — the production implementor takes
         // them from the one `CurveTreeClient` it owns, for the same reason.
         Ok(PinReport {
+            shard_ids,
+            as_of_height,
             outcomes,
-            reader: ServingReader::new(Arc::clone(&self.0)),
+            reader: ServingReader::new(Arc::clone(&self.store)),
         })
     }
 }
@@ -101,58 +110,48 @@ impl ServeSetPinner for StorePinner {
 struct DeadPinner;
 
 impl ServeSetPinner for DeadPinner {
-    async fn pin_serve_set(&self, _shard_ids: &[u64]) -> Result<PinReport, String> {
+    async fn pin_serve_set(&self) -> Result<PinReport, String> {
         Err("curve-tree actor unavailable".into())
     }
 }
 
-/// A pinner that reports on FEWER members than it was asked about — the
-/// shape that used to mint a witness for members nobody pinned.
-struct ShortPinner;
-
-impl ServeSetPinner for ShortPinner {
-    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<PinReport, String> {
-        let outcomes = shard_ids
-            .iter()
-            .take(shard_ids.len().saturating_sub(1))
-            .map(|&id| (id, SegmentPin::PinnedServable))
-            .collect();
-        Ok(PinReport {
-            outcomes,
-            reader: ServingReader::new(Arc::new(LeafStore::open_ephemeral().expect("open store"))),
-        })
-    }
+/// Reports outcomes that do not describe the set it reported. `SHORT` drops a
+/// member, `REORDER` permutes, `SUBSTITUTE` keeps the right COUNT and the
+/// wrong members — the last is the negative control that keeps the check
+/// about identity rather than arithmetic.
+struct IncoherentPinner {
+    shard_ids: Vec<u64>,
+    mode: Incoherence,
 }
 
-/// A pinner that reports on the right members in the wrong order. The trait
-/// promises the caller's order; nothing verified it.
-struct ReorderingPinner;
+#[derive(Clone, Copy)]
+enum Incoherence {
+    Short,
+    Reorder,
+    Substitute,
+}
 
-impl ServeSetPinner for ReorderingPinner {
-    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<PinReport, String> {
-        let mut outcomes: Vec<(u64, SegmentPin)> = shard_ids
+impl ServeSetPinner for IncoherentPinner {
+    async fn pin_serve_set(&self) -> Result<PinReport, String> {
+        let mut outcomes: Vec<(u64, SegmentPin)> = self
+            .shard_ids
             .iter()
             .map(|&id| (id, SegmentPin::PinnedServable))
             .collect();
-        outcomes.reverse();
+        match self.mode {
+            Incoherence::Short => {
+                outcomes.pop();
+            }
+            Incoherence::Reorder => outcomes.reverse(),
+            Incoherence::Substitute => {
+                for o in &mut outcomes {
+                    o.0 += 1_000_000;
+                }
+            }
+        }
         Ok(PinReport {
-            outcomes,
-            reader: ServingReader::new(Arc::new(LeafStore::open_ephemeral().expect("open store"))),
-        })
-    }
-}
-
-/// A pinner that answers about members it was never asked about, with the
-/// right COUNT. A length check alone would pass this.
-struct SubstitutingPinner;
-
-impl ServeSetPinner for SubstitutingPinner {
-    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<PinReport, String> {
-        let outcomes = shard_ids
-            .iter()
-            .map(|&id| (id + 1_000_000, SegmentPin::PinnedServable))
-            .collect();
-        Ok(PinReport {
+            shard_ids: self.shard_ids.clone(),
+            as_of_height: 1,
             outcomes,
             reader: ServingReader::new(Arc::new(LeafStore::open_ephemeral().expect("open store"))),
         })
@@ -208,37 +207,6 @@ async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
 // Where a serve-set may come from
 // ---------------------------------------------------------------------------
 
-#[test]
-fn a_serve_set_carries_the_record_it_came_from_and_the_height_it_was_read_at() {
-    // §9.6 item 4: the pin set is *derived* from the bond record, never
-    // maintained alongside it. The type has no other constructor — and the
-    // height stamp is what makes a stale set distinguishable from a current
-    // one rather than merely wrong.
-    let h = holdings(&[3, 1, 4]);
-    let set = ServeSet::from_connected_record(&record(&h), 812_345);
-
-    assert_eq!(
-        set.shard_ids(),
-        &[3, 1, 4],
-        "the record's own order is preserved — it is the wire form"
-    );
-    assert_eq!(set.as_of_height(), 812_345);
-    assert!(!set.is_empty());
-}
-
-#[test]
-fn an_empty_holdings_set_is_a_legal_serve_set() {
-    // A `CompleteTree` node carries no shard ids and an `Unbond` exit
-    // empties them, so empty is a state, not a fault.
-    let h = HoldingsDescriptor {
-        kind: HoldingsKind::CompleteTree,
-        shard_ids: ShardSet::empty(),
-    };
-    let set = ServeSet::from_connected_record(&record(&h), 1);
-    assert!(set.is_empty());
-    assert_eq!(set.shard_ids(), &[] as &[u64]);
-}
-
 // ---------------------------------------------------------------------------
 // What the pin must establish
 // ---------------------------------------------------------------------------
@@ -257,9 +225,7 @@ async fn a_pruned_member_refuses_the_whole_serve_set_and_names_every_one() {
         .expect("append and freeze segment 0");
     store.prune_frozen(&[]).expect("prune without pinning");
 
-    let h = holdings(&[0, 1]);
-    let set = ServeSet::from_connected_record(&record(&h), 10_000);
-    let err = PinnedServeSet::acquire(&StorePinner(Arc::clone(&store)), set)
+    let err = PinnedServeSet::acquire(&StorePinner::new(Arc::clone(&store), &[0, 1], 10_000))
         .await
         .expect_err("a pruned member must refuse the set");
 
@@ -280,9 +246,7 @@ async fn unfrozen_members_are_pinned_and_recorded_as_not_yet_servable() {
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("append and freeze segment 0");
 
-    let h = holdings(&[0, 1]);
-    let set = ServeSet::from_connected_record(&record(&h), 10_000);
-    let pinned = PinnedServeSet::acquire(&StorePinner(Arc::clone(&store)), set)
+    let pinned = PinnedServeSet::acquire(&StorePinner::new(Arc::clone(&store), &[0, 1], 10_000))
         .await
         .expect("frozen + not-yet-frozen is a healthy set");
 
@@ -307,65 +271,41 @@ async fn a_failed_pin_mints_no_witness() {
     // nothing to hand `start`. Pinning is idempotent, so the caller's move
     // is to retry — which is why this is a distinct arm from the pruned
     // case, whose remedy is a rebuild.
-    let h = holdings(&[0]);
-    let set = ServeSet::from_connected_record(&record(&h), 5);
-    let err = PinnedServeSet::acquire(&DeadPinner, set)
+    let err = PinnedServeSet::acquire(&DeadPinner)
         .await
         .expect_err("a dead pinner cannot establish the pins");
     assert!(matches!(err, PinError::Pinner { .. }));
 }
 
 #[tokio::test]
-async fn a_pinner_that_under_reports_mints_no_witness() {
-    // The gap this closes: `acquire` trusted the outcome list to describe the
-    // members it asked about. A short list carried no `AlreadyPruned`, so the
-    // witness minted — for a set whose unreported members were never pinned,
-    // and an unpinned member is precisely what `prune_frozen` may remove out
-    // from under a read. A witness that is not checked is an assumption
-    // wearing a type.
-    let h = holdings(&[0, 1, 2]);
-    let set = ServeSet::from_connected_record(&record(&h), 5);
-    let err = PinnedServeSet::acquire(&ShortPinner, set)
+async fn a_report_whose_outcomes_do_not_cover_its_own_set_mints_no_witness() {
+    // The witness is evidence that the pins cover the obligation. A report
+    // stating a set and then describing a different one is not that, and the
+    // three shapes are covered together: a dropped member, a permutation, and
+    // a substitution with the right COUNT and the wrong members — the last is
+    // why the check compares identity rather than arithmetic.
+    for mode in [
+        Incoherence::Short,
+        Incoherence::Reorder,
+        Incoherence::Substitute,
+    ] {
+        let err = PinnedServeSet::acquire(&IncoherentPinner {
+            shard_ids: vec![7, 8, 9],
+            mode,
+        })
         .await
-        .expect_err("a pinner that skipped a member cannot witness its pin");
-    match err {
-        PinError::PinnerCoverageMismatch {
-            requested,
-            returned,
-        } => {
-            assert_eq!(requested, vec![0, 1, 2]);
-            assert_eq!(returned, vec![0, 1]);
-        }
-        other => panic!("expected a coverage mismatch, got {other:?}"),
+        .expect_err("an incoherent report must not mint a witness");
+        let PinError::PinnerCoverageMismatch {
+            reported_set,
+            covered,
+        } = &err
+        else {
+            panic!("expected a coverage mismatch, got {err:?}");
+        };
+        assert_eq!(reported_set, &[7, 8, 9]);
+        assert_ne!(covered, reported_set);
+        assert!(err.to_string().contains("implementor defect"));
     }
-}
-
-#[tokio::test]
-async fn a_pinner_that_answers_out_of_order_mints_no_witness() {
-    // The trait promises outcomes in the caller's order and nothing verified
-    // it, so the promise was decoration. Enforcing the documented contract is
-    // cheaper than discovering later which callers had quietly come to depend
-    // on it.
-    let h = holdings(&[0, 1, 2]);
-    let set = ServeSet::from_connected_record(&record(&h), 5);
-    let err = PinnedServeSet::acquire(&ReorderingPinner, set)
-        .await
-        .expect_err("outcomes out of the caller's order break the trait contract");
-    assert!(matches!(err, PinError::PinnerCoverageMismatch { .. }));
-}
-
-#[tokio::test]
-async fn a_pinner_that_substitutes_members_mints_no_witness() {
-    // The negative control on the check itself: this reply has the RIGHT
-    // COUNT and the wrong members, so a length comparison would accept it.
-    // Comparing the sequence is what makes the check about identity rather
-    // than arithmetic.
-    let h = holdings(&[0, 1, 2]);
-    let set = ServeSet::from_connected_record(&record(&h), 5);
-    let err = PinnedServeSet::acquire(&SubstitutingPinner, set)
-        .await
-        .expect_err("a pinner answering about other members witnesses nothing");
-    assert!(matches!(err, PinError::PinnerCoverageMismatch { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -394,9 +334,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("append and freeze segment 0");
 
-    let h = holdings(&[0]);
-    let set = ServeSet::from_connected_record(&record(&h), 10_000);
-    let pinned = PinnedServeSet::acquire(&StorePinner(Arc::clone(&store)), set)
+    let pinned = PinnedServeSet::acquire(&StorePinner::new(Arc::clone(&store), &[0], 10_000))
         .await
         .expect("pin");
 
@@ -469,9 +407,7 @@ async fn shutdown_stops_the_listener() {
     // port it points at); what is observable without a live onion is that
     // the listener is gone once shutdown resolves.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let h = holdings(&[]);
-    let set = ServeSet::from_connected_record(&record(&h), 0);
-    let pinned = PinnedServeSet::acquire(&StorePinner(Arc::clone(&store)), set)
+    let pinned = PinnedServeSet::acquire(&StorePinner::new(Arc::clone(&store), &[], 0))
         .await
         .expect("an empty serve-set pins vacuously");
 
@@ -531,9 +467,8 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("freeze segment 0");
 
-    let pinner = StorePinner(Arc::clone(&store));
-    let h0 = holdings(&[0]);
-    let pinned = PinnedServeSet::acquire(&pinner, ServeSet::from_connected_record(&record(&h0), 1))
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], 1);
+    let pinned = PinnedServeSet::acquire(&pinner)
         .await
         .expect("pin the initial set");
 
@@ -551,13 +486,8 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     .expect("start");
 
     // Holdings grow to cover segment 1, which then freezes.
-    let h1 = holdings(&[0, 1]);
-    host.refresh(
-        &pinner,
-        ServeSet::from_connected_record(&record(&h1), 20_000),
-    )
-    .await
-    .expect("refresh");
+    pinner.holdings_became(&[0, 1], 20_000);
+    host.refresh(&pinner).await.expect("refresh");
     let mut second = segment_entries();
     for (i, e) in second.iter_mut().enumerate() {
         e.gindex = Gindex(leaves_per_segment() as u64 + i as u64);
@@ -586,11 +516,8 @@ async fn staleness_reads_two_clocks_with_independent_drivers() {
     // advances on the principal's block scan. Ingest without refresh is
     // exactly the divergence a halted sweep produces.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let pinner = StorePinner(Arc::clone(&store));
-    let h = holdings(&[]);
-    let pinned = PinnedServeSet::acquire(&pinner, ServeSet::from_connected_record(&record(&h), 0))
-        .await
-        .expect("pin");
+    let pinner = StorePinner::new(Arc::clone(&store), &[], 0);
+    let pinned = PinnedServeSet::acquire(&pinner).await.expect("pin");
 
     let bound = StalenessBound::blocks(100);
     assert_eq!(
@@ -610,13 +537,8 @@ async fn staleness_reads_two_clocks_with_independent_drivers() {
     assert!(stale.to_string().contains("P-scan sweep is still running"));
 
     // And a refresh clears it — the same two clocks, re-aligned.
-    let refreshed = pinned
-        .refreshed(
-            &pinner,
-            ServeSet::from_connected_record(&record(&h), 10_000),
-        )
-        .await
-        .expect("refresh");
+    pinner.holdings_became(&[], 10_000);
+    let refreshed = pinned.refreshed(&pinner).await.expect("refresh");
     assert_eq!(
         refreshed.staleness(bound).expect("read staleness"),
         Staleness::Current { lag: 0 }
@@ -632,13 +554,9 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
     store
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("freeze segment 0");
-    let h = holdings(&[0]);
-    let pinned = PinnedServeSet::acquire(
-        &StorePinner(Arc::clone(&store)),
-        ServeSet::from_connected_record(&record(&h), 1),
-    )
-    .await
-    .expect("pin");
+    let pinned = PinnedServeSet::acquire(&StorePinner::new(Arc::clone(&store), &[0], 1))
+        .await
+        .expect("pin");
 
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
@@ -654,7 +572,7 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
     .expect("start");
 
     let err = host
-        .refresh(&DeadPinner, ServeSet::from_connected_record(&record(&h), 2))
+        .refresh(&DeadPinner)
         .await
         .expect_err("a dead pinner cannot refresh");
     assert!(matches!(err, PinError::Pinner { .. }));

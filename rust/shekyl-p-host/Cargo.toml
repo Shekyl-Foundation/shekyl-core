@@ -9,10 +9,6 @@ description = "Persona serving host: composes the loopback serving loop with the
 publish = false
 
 [dependencies]
-# The bond-record vocabulary the serve-set must come from: `ClaimantBondRecord`
-# is the decoded *connected* record, and taking it (rather than a `Vec<u64>`)
-# is what keeps a hand-maintained shard list out of the pin path — §9.6 item 4.
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # `ServingReader` (the read-only store handle this host is allowed to hold) and
 # `SegmentPin` (the per-member pin outcome whose policy this crate sets).
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }

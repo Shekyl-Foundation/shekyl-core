@@ -16,7 +16,7 @@
 //!
 //! | Hazard | Closed by |
 //! |---|---|
-//! | Serve-set drifts from the consensus bond record → own node prunes bonded bytes → slash (§9.6 item 4) | [`ServeSet`] has no constructor from a bare id list |
+//! | Serve-set drifts from the consensus bond record → own node prunes bonded bytes → slash (§9.6 item 4) | [`ServeSet`] has no public constructor; the pinner reports it |
 //! | Serving starts before the pins are applied | [`PersonaServingHost::start`] takes a [`PinnedServeSet`] witness |
 //! | Pins land on one store while another is served | The witness carries its own reader; `start` takes no store argument |
 //! | Loopback endpoint rebinds under an unchanged onion mapping → published address answers nothing | The host binds once and owns the endpoint for its life |
@@ -55,6 +55,15 @@
 //! freeze is the wiring slice's job, on the crate that owns the claim-source
 //! decode and the curve-tree actor; this crate provides the seam
 //! ([`ServeSetPinner`]) it plugs into.
+//!
+//! # One rule the seam keeps applying
+//!
+//! [`ServeSetPinner`] reports three things and takes none: which shards the
+//! persona owes, whether they are pinned, and which store they are pinned in.
+//! **The host does not choose anything about its own duty** — each of those
+//! was once a parameter, and each removal closed a real call-site defect of
+//! the same shape. What a caller cannot supply, a caller cannot get wrong;
+//! what is left is one engine-side implementor, reviewable by reading it.
 
 #![forbid(unsafe_code)]
 
