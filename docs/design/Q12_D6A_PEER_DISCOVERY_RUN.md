@@ -1488,14 +1488,37 @@ justified, than §11.7 anticipated.
 refresh within minutes. The daemon responds to a condition that resolves itself
 in minutes by refusing to look for an hour.
 
+#### Replicated, and the first estimate was the high half of it
+
+The rig was run again under identical conditions. **Round 1: 8/60. Round 3:
+3/60.** Fisher exact two-sided `p = 0.204` — consistent with a single rate, so
+this is sampling rather than drift, and the pooled estimate over `n = 120` is
+**9.2 %**.
+
+**The earlier 13.3 % was therefore the high half of its own distribution quoted
+as the estimate.** Recorded because the correction runs the other way from every
+other figure in this section: the rig's population is healthier than first
+reported, which widens rather than narrows the gap to the ring.
+
 #### The measured rate is a floor, and the ring says by how much
 
-15.0 % here against **~23 %** in the six-host ring. The gap is the
+**9.2 %** here against **~23 %** in the six-host ring. The gap is the
 self-selection this rig was built with: freshly provisioned, healthy services
 published by one tor on one well-connected host. Real peers may be mid-restart,
-throttled or dead. **Both figures are above the level at which §11.7's
-reachability table fails at `A = 15`,** so the conclusion does not depend on
-which is used.
+throttled or dead.
+
+**Which rate is used matters, and the two are not interchangeable:**
+
+| rate | population it describes | floor reachable at `A = 15` |
+| --- | --- | --- |
+| 9.2 % (rig) | healthy services on one well-connected host — a **floor** | ~84 % — marginal |
+| ~23 % (ring) | real nodes across three providers — **representative** | **~34 % — decisive** |
+
+So the reachability finding **rests on the ring**, which is why the rig was
+labelled a floor from the outset rather than after the numbers came in. Quoting
+the two as a range would let a later reader take the convenient end; §11.7's
+table is computed at 0.10, 0.23 and 0.35 precisely so the conclusion can be read
+off at whichever rate a reader believes.
 
 **The ring's failures also name the mechanism**: four of its seven timeouts
 targeted the *same* node — the one whose tor had been restarted 3.6 minutes
