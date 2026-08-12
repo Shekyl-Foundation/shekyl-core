@@ -32,6 +32,15 @@ fi
 OUT="$1"; ROLE="$2"; COUNT="$3"; START="${4:-0}"
 case "$ROLE" in anon|clearnet) ;; *) echo "REFUSE: role must be anon or clearnet" >&2; exit 2 ;; esac
 
+# COUNT and START drive `seq` and arithmetic expansion. Non-numeric or
+# non-positive values produce confusing shell errors rather than a statement of
+# what was wrong, and a silently-empty `seq` would write no configs at all while
+# exiting 0 -- a generator that produces nothing and reports success.
+case "$COUNT" in ''|*[!0-9]*) echo "REFUSE: count '$COUNT' is not a non-negative integer" >&2; exit 2 ;; esac
+case "$START" in ''|*[!0-9]*) echo "REFUSE: start-index '$START' is not a non-negative integer" >&2; exit 2 ;; esac
+[ "$COUNT" -ge 1 ] || { echo "REFUSE: count must be at least 1, got $COUNT" >&2; exit 2; }
+
+
 # One block of ten per instance keeps every port derivable from the index, so a
 # misfiled config is visible rather than merely wrong.
 PORT_BASE="${PORT_BASE:-21000}"
@@ -39,6 +48,13 @@ PORT_BASE="${PORT_BASE:-21000}"
 # per-instance port. The two are different kinds of thing (§9.3).
 VPORT=13021
 TOR_BIN="${TOR_BIN:-/opt/shekyl-tor/tor}"
+
+# Ports derive as PORT_BASE + index*10 + offset, so the highest index must stay
+# inside the port space. Checked HERE, after PORT_BASE is defined -- the first
+# version of this check sat above that line and died on an unbound variable,
+# which `set -u` caught only because the script is run, not read.
+_top=$(( PORT_BASE + (START + COUNT - 1) * 10 + 3 ))
+[ "$_top" -le 65535 ] || { echo "REFUSE: instance $((START + COUNT - 1)) would need port $_top" >&2; exit 2; }
 DATA_ROOT="${DATA_ROOT:-/var/lib/shekyl-fleet}"
 TOR_ROOT="${TOR_ROOT:-/var/lib/shekyl-fleet-tor}"
 LOG_ROOT="${LOG_ROOT:-/var/log/shekyl-fleet}"
@@ -92,5 +108,12 @@ done
 
 echo
 echo "Wrote $COUNT $ROLE config(s) to $OUT. Nothing was installed or started."
-echo "Next: install to /etc/shekyl-fleet, start skl-tor@<i> ONLY, collect the"
-echo "onions, then follow the four phases in wait_onions_reachable.sh."
+if [ "$ROLE" = anon ]; then
+  echo "Next: install to /etc/shekyl-fleet, start skl-tor@<i> ONLY, collect the"
+  echo "onions, then follow the four phases in wait_onions_reachable.sh."
+  echo "These instances run under skl-node@<i>, which Requires= their tor."
+else
+  echo "Next: install to /etc/shekyl-fleet. These run under skl-clearnet@<i> --"
+  echo "NOT skl-node@, which requires a tor instance the clearnet role has no"
+  echo "torrc for. The detector set has no tor by design (Q12-R3)."
+fi

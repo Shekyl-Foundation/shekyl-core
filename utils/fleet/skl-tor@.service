@@ -25,6 +25,11 @@ RestartSec=5
 # The hidden-service key lives here; only this instance may read it.
 StateDirectory=shekyl-fleet-tor/%i
 StateDirectoryMode=0700
+# The generated torrc and node config both log under /var/log/shekyl-fleet.
+# StateDirectory alone does not create it, and tor refuses to start when it
+# cannot open its log file -- a failure that would look like a tor defect.
+LogsDirectory=shekyl-fleet
+LogsDirectoryMode=0755
 
 [Install]
 WantedBy=skl-fleet.target

@@ -20,7 +20,7 @@
 # Enabling this unit at boot would restore exactly the race the run cannot see.
 
 [Unit]
-Description=Shekyl stagenet fleet node %i
+Description=Shekyl stagenet fleet node %i (anonymity-capable)
 Requires=skl-tor@%i.service
 After=skl-tor@%i.service
 PartOf=skl-fleet.target
@@ -34,6 +34,10 @@ Restart=on-failure
 RestartSec=10
 StateDirectory=shekyl-fleet/%i
 StateDirectoryMode=0750
+# The node config writes to /var/log/shekyl-fleet; StateDirectory does not
+# create it.
+LogsDirectory=shekyl-fleet
+LogsDirectoryMode=0755
 
 # Deliberately no [Install] section: see the ordering note above. The run
 # starts these explicitly, after the reachability gate.

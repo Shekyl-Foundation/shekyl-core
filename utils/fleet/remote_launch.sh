@@ -57,7 +57,16 @@ if [ "$#" -lt 4 ]; then
 fi
 
 HOST="$1"; PIDFILE="$2"; LOGFILE="$3"; shift 3
-CMD="$*"
+
+# The remote side is a SHELL, so the command must reach it as a string -- but
+# `$*` flattens argv and the remote shell then re-splits it, so any argument
+# containing a space arrives as two. `printf %q` quotes each argument for shell
+# re-parsing, which preserves argv exactly and, as a side effect, removes the
+# injection surface a flattened string would have.
+CMD=""
+for arg in "$@"; do
+  CMD="${CMD:+$CMD }$(printf '%q' "$arg")"
+done
 
 # Absolute paths only. `~` does not expand inside the quoting this script needs
 # to survive spaces, so a tilde silently writes nothing and the run then reports

@@ -45,6 +45,12 @@ fi
 INVENTORY="$1"
 [ -r "$INVENTORY" ] || { echo "REFUSE: cannot read $INVENTORY" >&2; exit 2; }
 
+# This script's contract is that it never reports a wrong number, so a missing
+# dependency must announce itself rather than turn every node into NO ANSWER --
+# which would read as a fleet-wide outage instead of a missing interpreter.
+command -v python3 >/dev/null || { echo "REFUSE: python3 not found; every node would read as NO ANSWER" >&2; exit 2; }
+command -v ssh     >/dev/null || { echo "REFUSE: ssh not found" >&2; exit 2; }
+
 SSH_TIMEOUT="${SSH_TIMEOUT:-30}"
 counts=()
 failed=0
@@ -53,6 +59,14 @@ echo "reading at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 while read -r host port label; do
   case "${host:-}" in ''|'#'*) continue ;; esac
+
+  # An inventory is a file, and a file is input. A host beginning with `-` is
+  # read by ssh as an OPTION, and a non-numeric port is interpolated into a
+  # remote shell command. Neither is a plausible typo that fails loudly, so both
+  # are refused here rather than producing a confusing reading later.
+  case "$host" in -*) echo "REFUSE: host '$host' starts with '-' and would be read as an ssh option" >&2; exit 2 ;; esac
+  case "${port:-}" in ''|*[!0-9]*) echo "REFUSE: port '${port:-}' for '$label' is not numeric" >&2; exit 2 ;; esac
+  [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || { echo "REFUSE: port $port for '$label' is out of range" >&2; exit 2; }
 
   # TWO instruments, one round trip. `get_connections` omits the `connections`
   # field entirely when a node has no peers — verified against a node built to
