@@ -202,6 +202,7 @@ pub fn attribution_matches(
 pub fn transfer_view(
     td: &TransferDetails,
     spend_locks: &shekyl_engine_state::InFlightSpendLocks,
+    note: Option<String>,
 ) -> TransferView {
     TransferView {
         id: transfer_id(td),
@@ -220,6 +221,9 @@ pub fn transfer_view(
             .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
         // Receive-side row, so attribution is always meaningful here.
         attribution: Some(attribution_view(&td.receive_attribution)),
+        // Per-txid note (SJ-DQ-7); looked up by the caller from
+        // `tx_meta.tx_notes` and shared across both directions of a txid.
+        note,
     }
 }
 
@@ -292,6 +296,7 @@ pub fn outgoing_transfer_state(row: &SendRecord) -> TransferState {
 pub fn outgoing_transfer_view(
     txid: &TxHash,
     row: &SendRecord,
+    note: Option<String>,
 ) -> Result<TransferView, WalletRpcError> {
     let sent = row.sent_amount().ok_or_else(|| {
         WalletRpcError::InternalError(format!(
@@ -311,6 +316,9 @@ pub fn outgoing_transfer_view(
         // Receive attribution is documented "Present on INCOMING rows
         // only" — a send has no receive side to attribute.
         attribution: None,
+        // Per-txid note (SJ-DQ-7); looked up by the caller from
+        // `tx_meta.tx_notes` and shared across both directions of a txid.
+        note,
     })
 }
 
@@ -692,6 +700,7 @@ mod tests {
         let view = outgoing_transfer_view(
             &txid,
             &sample_send_record(SendState::Confirmed { height: 250 }),
+            Some("rent".to_owned()),
         )
         .expect("project");
         assert_eq!(view.id, "ab".repeat(32));
@@ -702,10 +711,15 @@ mod tests {
         assert_eq!(view.block_height, Some(250));
         assert_eq!(view.state, TransferState::Confirmed);
         assert_eq!(view.spent_height, None);
+        // The per-txid note is projected onto the OUTGOING view (SJ-DQ-7).
+        assert_eq!(view.note.as_deref(), Some("rent"));
 
-        let failed =
-            outgoing_transfer_view(&txid, &sample_send_record(SendState::TerminalRejected))
-                .expect("project");
+        let failed = outgoing_transfer_view(
+            &txid,
+            &sample_send_record(SendState::TerminalRejected),
+            None,
+        )
+        .expect("project");
         assert_eq!(failed.state, TransferState::Failed);
         assert_eq!(failed.block_height, None);
 
@@ -720,8 +734,9 @@ mod tests {
             "unmined send must not carry a block_height: {json}"
         );
 
-        let dropped = outgoing_transfer_view(&txid, &sample_send_record(SendState::PresumedDead))
-            .expect("project");
+        let dropped =
+            outgoing_transfer_view(&txid, &sample_send_record(SendState::PresumedDead), None)
+                .expect("project");
         let json = serde_json::to_value(&dropped).expect("serialize");
         assert_eq!(json["state"], "DROPPED");
     }
@@ -734,7 +749,7 @@ mod tests {
     fn unsummable_recipient_amounts_do_not_panic_the_read_path() {
         let mut row = sample_send_record(SendState::Dispatched);
         row.recipients[0].amount = u64::MAX;
-        let err = outgoing_transfer_view(&TxHash::from_bytes([0xab; 32]), &row)
+        let err = outgoing_transfer_view(&TxHash::from_bytes([0xab; 32]), &row, None)
             .expect_err("overflowing recipient sum must not project");
         assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
     }

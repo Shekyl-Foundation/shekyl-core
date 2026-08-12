@@ -573,6 +573,14 @@ impl From<shekyl_engine_core::AbandonTxError> for WalletRpcError {
     }
 }
 
+impl From<PersistenceError> for WalletRpcError {
+    fn from(err: PersistenceError) -> Self {
+        // Category-only message; the detail can carry a filesystem path
+        // (WI-RPC-2a: internal errors never echo io/persistence paths).
+        internal_detail("wallet persistence error", err)
+    }
+}
+
 impl From<PendingTxError> for WalletRpcError {
     fn from(err: PendingTxError) -> Self {
         match err {

@@ -432,6 +432,14 @@ pub struct TransferView {
     /// than carrying an invented `UNATTRIBUTED`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attribution: Option<ReceiveAttributionView>,
+    /// User-authored note for this transaction (SJ-DQ-7), set via
+    /// `set_tx_note`.
+    ///
+    /// Keyed by the bare txid, so it annotates the transaction rather than
+    /// one output row: both directions of a self-send surface the same
+    /// note. Absent when no note is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// `get_wallet_info` result — one-round-trip aggregate of live read surfaces
@@ -567,6 +575,17 @@ pub struct DiscardPendingTxResult {}
 pub struct AbandonTxResult {
     /// Resulting journal state, in `get_transfers` vocabulary.
     pub state: TransferState,
+}
+
+/// `set_tx_note` result (SJ-DQ-7): the note as stored after the write.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetTxNoteResult {
+    /// The transaction the note is attached to (lowercase hex).
+    pub tx_hash: String,
+    /// The note as stored after the write — `null` when it was cleared
+    /// (an empty note removes the entry rather than storing `""`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Payment-request lifecycle state (WI-RPC-1 receiving).

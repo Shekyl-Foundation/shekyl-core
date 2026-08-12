@@ -443,6 +443,80 @@ story, not the read path.
   no engine work beyond read/write — so the projection contract is
   designed once. It is not gated on the journal; pull it into its own
   small PR only if wanted sooner than PR-SJ-2.
+
+  **SJ-DQ-7 annotation half RESOLVED + shipped in PR-SA-4 (2026-08-11).**
+  PR-SJ-2 shipped the journal half but not the annotation half; SA-4's
+  dead-persisted-field sweep found `tx_notes` still dormant (a persisted
+  field with no writer and no reader) and, rather than delete it, wired it
+  per this ruling. Four rulings the "OUTGOING-only vs both" framing hid,
+  each with a rationale rather than a toggle:
+
+  - **Scope = the transaction, not the output (arm 1).** A note is keyed by
+    the **bare txid** and surfaces wherever that txid appears — both the
+    INCOMING change row and the OUTGOING row of a self-send carry the one
+    note. This is *not* the `attribution` analogy: `attribution` is
+    INCOMING-only because it is inherently about an output (who paid *this*
+    receive); a note is inherently about a **payment**, which is the
+    transaction. Seeing "rent" on both the send and its owned-change row is
+    correct — it is one payment; the change output is your own money
+    returning, with no counterparty and no distinct event to note
+    differently. The **declined alternative (arm 2)** is re-keying
+    `tx_notes` to `{txid}:{output_index}` for per-output notes — a
+    `TxMetaBlock` schema change, cheap now and a migration later, hence the
+    freeze-window question. It is declined **not as a cost trade-off but as
+    the wrong seam**: the only case that would motivate per-output notes is a
+    multi-recipient tx where one wants a note per *recipient*, but arm 2 keys
+    on the output *index*, and output ordering is not something the user
+    reasons about — so arm 2 delivers per-output-index notes, a different and
+    less useful thing than the per-recipient notes anyone would actually
+    want. Reopen criterion, sharpened accordingly: **not** "someone wants two
+    notes on one tx" but "**a per-recipient note model emerges**" — and such
+    a model needs recipient identity carried to the projection layer, a
+    larger design than re-keying `tx_notes` (arm 2 is not the cheap path to
+    it; it is not the path at all).
+  - **Size bound (`TX_NOTE_MAX_BYTES` = 4 KiB), enforced at the RPC
+    boundary before the note can enter the ledger.** A persisted,
+    rescan-preserved, schema-versioned field taking unbounded input from an
+    RPC caller is a wallet-file-bloat / storage-amplification vector; the
+    ceiling is the same pre-decode discipline the persisted payload sizes
+    already follow. 4 KiB is generous for a human note.
+  - **Boundary hygiene (rules 35/36).** A note is counterparty-bearing free
+    text. The over-length refusal reports byte counts only, never the note;
+    the persistence-failure path is category-only (`internal_detail`, no
+    ledger content); the note is never logged. This is the actual privacy
+    work — `tx_notes` is the wallet's first automatic-ish
+    counterparty-bearing artifact, it lives inside the AEAD envelope, and
+    the discipline is at the boundary crossings (the RPC wire this PR adds).
+  - **Zeroize disposition, stated.** A note is a `String` in a `BTreeMap` —
+    it does not zeroize, exactly like the send-journal's recipient
+    addresses (the same not-a-key, disclosure-if-dumped class). In-memory
+    disclosure is an **accepted residual**; the protection is the AEAD
+    envelope at rest plus the boundary discipline above.
+  - **Empty note clears (contract term, not an implementation detail).**
+    `set_tx_note("")` removes the entry — "unset" and "set-empty" collapse,
+    so there is no separate delete method. Stated in the OpenAPI
+    description so a client sending `""` to mean "store nothing" is not
+    surprised by a delete.
+
+  Persist correctness confirmed (not inherited from `abandon_tx`):
+  `save_state` writes via `atomic_write_file` (temp → fsync → `rename(2)` →
+  parent fsync), so a failed save leaves the state byte-unchanged and the
+  fail-closed in-memory rollback stays consistent with disk. CLI enablement
+  remains optional (no CLI command exists for `abandon_tx` either); the
+  load-bearing surface is the RPC method + these rulings. If a CLI note
+  command is added later, the note crosses the same 4 KiB bound and the same
+  no-echo discipline at the CLI arg layer — a CLI is just another boundary.
+
+  **Dead-field connection (so the next audit reads this as deliberate).**
+  With PR-SA-4, `tx_notes` now has a production writer (`Engine::set_tx_note`)
+  and a production reader (the `note` on every `get_transfers` /
+  `get_transfer_by_id` row), so it moves from "persisted but inert" to
+  "wired" — closing the second of the three inert-field findings the SA-4
+  census surfaced: `attributes` **deleted**, `tx_notes` **now live**, and
+  `AddressBookEntry.payment_id` **still pending its own disposition** (it
+  rides with the deliberately-retained `address_book`, itself an open
+  per-feature question — see the SA-4 kept-fields ruling). A future audit
+  should see `tx_notes` as moved on purpose, not left inert by accident.
 - **`attributes` — its own disposition, not a ride-along** *(posed at
   R1 pass 2; ratify at pass 3)*. The untyped `String → String` bag is
   wallet2-lineage shape by its own docstring ("Wallet2 used an

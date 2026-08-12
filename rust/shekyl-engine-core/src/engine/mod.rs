@@ -178,6 +178,8 @@
 //! pattern is documented instead (reopen at Phase 2 ops).
 pub mod abandon_tx; // PR-SJ-3 (WALLET_SEND_RECORD P3-4)
 pub mod capability;
+pub mod set_tx_note; // PR-SA-4 (SJ-DQ-7 tx-note annotation surface, WALLET_SEND_RECORD)
+
 // CT-5 curve-tree actor + handle (`docs/design/CT5_ENGINE_WIRING.md` §3.1).
 // Mirrors `key_actor`: a `kameo` actor owns the wallet's `CurveTreeClient`
 // (redb single-writer), and `Engine` holds a `Clone` `CurveTreeHandle`.

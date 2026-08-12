@@ -18,7 +18,7 @@ use crate::error::WalletRpcError;
 use crate::params::{parse_atomic_units, parse_hex32, parse_required_object};
 use crate::project::{pending_tx_result, submit_pending_tx_result};
 use crate::tenant::{require_open_engine, TenantState};
-use crate::types::{AbandonTxResult, DiscardPendingTxResult, TransferState};
+use crate::types::{AbandonTxResult, DiscardPendingTxResult, SetTxNoteResult, TransferState};
 
 /// One recipient in `build_pending_tx` params.
 #[derive(Debug, Deserialize)]
@@ -59,6 +59,13 @@ struct DiscardPendingTxParams {
 #[derive(Debug, Deserialize)]
 struct AbandonTxParams {
     tx_hash: String,
+}
+
+/// Params for `set_tx_note` (SJ-DQ-7). An empty `note` clears the entry.
+#[derive(Debug, Deserialize)]
+struct SetTxNoteParams {
+    tx_hash: String,
+    note: String,
 }
 
 pub(crate) async fn build_pending_tx(
@@ -179,6 +186,54 @@ pub(crate) async fn abandon_tx(
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize abandon_tx: {e}")))
+}
+
+/// Maximum note length in UTF-8 bytes (SJ-DQ-7). A note is persisted,
+/// rescan-preserved, schema-versioned state written from an RPC caller, so
+/// it is a wallet-file-bloat / storage-amplification vector without a
+/// ceiling — bounded here, before it can enter the ledger (the pre-decode
+/// discipline the persisted-payload sizes already follow). 4 KiB is
+/// generous for a human note (thousands of characters) and small on disk.
+pub(crate) const TX_NOTE_MAX_BYTES: usize = 4 * 1024;
+
+/// `set_tx_note` (`WALLET_SEND_RECORD.md` SJ-DQ-7): attach or clear a
+/// user-authored note on a transaction, keyed by the bare txid. An empty
+/// `note` clears the entry (there is no separate delete method). Purely
+/// local UX state — never on the wire. The engine drives its own
+/// crash-atomic save; an exclusive `Engine` borrow is not required (same
+/// shape as `abandon_tx`).
+///
+/// The note is counterparty-bearing free text (rules 35/36): the
+/// over-length refusal reports the byte counts, never the note content, so
+/// nothing the user wrote leaves the AEAD envelope through an error string.
+pub(crate) async fn set_tx_note(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    let p: SetTxNoteParams = parse_required_object(params, "set_tx_note")?;
+    let txid = parse_hex32(&p.tx_hash).ok_or_else(|| {
+        WalletRpcError::InvalidParams("tx_hash must be 64 lowercase hex characters".into())
+    })?;
+    // Bound before the note can enter the ledger. Report lengths only —
+    // never the note bytes — so counterparty text does not escape via the
+    // error string.
+    if p.note.len() > TX_NOTE_MAX_BYTES {
+        return Err(WalletRpcError::InvalidParams(format!(
+            "note exceeds the {TX_NOTE_MAX_BYTES}-byte maximum ({} bytes)",
+            p.note.len()
+        )));
+    }
+
+    let shared = require_open_engine(tenants).await?;
+    let engine = shared.read().await;
+    let stored = engine.set_tx_note(TxHash::from_bytes(txid), p.note)?;
+
+    let result = SetTxNoteResult {
+        tx_hash: TxHash::from_bytes(txid).to_string(),
+        note: stored,
+    };
+    serde_json::to_value(result)
+        .map_err(|e| WalletRpcError::InternalError(format!("serialize set_tx_note: {e}")))
 }
 
 fn parse_fee_priority(p: FeePriorityParams) -> Result<FeePriority, WalletRpcError> {

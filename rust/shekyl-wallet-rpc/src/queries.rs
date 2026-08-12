@@ -99,6 +99,7 @@ fn below_since(block_height: Option<u64>, since: Option<u64>) -> bool {
 fn collect_transfers(
     ledger_rows: &[TransferDetails],
     journal: &SendJournalBlock,
+    tx_notes: &std::collections::BTreeMap<[u8; 32], String>,
     filters: &GetTransfersParams,
     since: Option<u64>,
 ) -> Result<Vec<TransferView>, WalletRpcError> {
@@ -132,7 +133,11 @@ fn collect_transfers(
             {
                 continue;
             }
-            let view = transfer_view(td, &spend_locks);
+            let view = transfer_view(
+                td,
+                &spend_locks,
+                tx_notes.get(&td.tx_hash.to_bytes()).cloned(),
+            );
             rows.push((
                 TransferOrder {
                     block_height: view.block_height,
@@ -161,7 +166,11 @@ fn collect_transfers(
             if filters.attribution.is_some() {
                 continue;
             }
-            let view = outgoing_transfer_view(&TxHash::from_bytes(*txid), row)?;
+            let view = outgoing_transfer_view(
+                &TxHash::from_bytes(*txid),
+                row,
+                tx_notes.get(txid).cloned(),
+            )?;
             rows.push((
                 TransferOrder {
                     block_height: view.block_height,
@@ -341,6 +350,7 @@ pub(crate) async fn get_transfers(
     let transfers = collect_transfers(
         ledger.ledger.transfers(),
         &ledger.send_journal,
+        &ledger.tx_meta.tx_notes,
         &filters,
         since,
     )?;
@@ -381,12 +391,24 @@ pub(crate) async fn get_transfer_by_id(
             .transfers()
             .iter()
             .find(|td| td.tx_hash == tx_hash && td.internal_output_index == output_index)
-            .map(|td| transfer_view(td, &ledger.spend_locks())),
+            .map(|td| {
+                transfer_view(
+                    td,
+                    &ledger.spend_locks(),
+                    ledger.tx_meta.tx_notes.get(&td.tx_hash.to_bytes()).cloned(),
+                )
+            }),
         TransferLookupId::Outgoing { tx_hash } => ledger
             .send_journal
             .rows
             .get(&tx_hash.to_bytes())
-            .map(|row| outgoing_transfer_view(&tx_hash, row))
+            .map(|row| {
+                outgoing_transfer_view(
+                    &tx_hash,
+                    row,
+                    ledger.tx_meta.tx_notes.get(&tx_hash.to_bytes()).cloned(),
+                )
+            })
             .transpose()?,
     };
 
@@ -470,6 +492,12 @@ mod tests {
         views.iter().map(|v| v.id.as_str()).collect()
     }
 
+    /// Empty tx-note map for the collect-transfers tests that do not
+    /// exercise note projection.
+    fn no_notes() -> std::collections::BTreeMap<[u8; 32], String> {
+        std::collections::BTreeMap::new()
+    }
+
     /// The `direction` filter selects a *side*, and each side is only
     /// reachable from its own source. Inverting the two `want_*`
     /// predicates — the defect that made `direction: OUTGOING` a no-op
@@ -478,12 +506,14 @@ mod tests {
     fn direction_filter_selects_the_matching_source() {
         let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
 
-        let all = collect_transfers(&[], &block, &filters(None, None), None).expect("project");
+        let all = collect_transfers(&[], &block, &no_notes(), &filters(None, None), None)
+            .expect("project");
         assert_eq!(ids(&all), vec!["ab".repeat(32)]);
 
         let outgoing = collect_transfers(
             &[],
             &block,
+            &no_notes(),
             &filters(Some(TransferDirection::Outgoing), None),
             None,
         )
@@ -495,6 +525,7 @@ mod tests {
         let incoming = collect_transfers(
             &[],
             &block,
+            &no_notes(),
             &filters(Some(TransferDirection::Incoming), None),
             None,
         )
@@ -522,7 +553,8 @@ mod tests {
             (TransferState::Abandoned, "05"),
         ] {
             let got =
-                collect_transfers(&[], &block, &filters(None, Some(state)), None).expect("project");
+                collect_transfers(&[], &block, &no_notes(), &filters(None, Some(state)), None)
+                    .expect("project");
             assert_eq!(
                 ids(&got),
                 vec![expected_seed.repeat(32)],
@@ -534,11 +566,32 @@ mod tests {
         let spent = collect_transfers(
             &[],
             &block,
+            &no_notes(),
             &filters(None, Some(TransferState::Spent)),
             None,
         )
         .expect("project");
         assert!(spent.is_empty());
+    }
+
+    /// A per-txid note (SJ-DQ-7) is looked up from `tx_meta.tx_notes` and
+    /// projected onto the transfer view; a row with no note carries none.
+    /// The note is keyed by the bare txid (arm 1: a note is about the
+    /// transaction), so the same lookup feeds both directions of a txid.
+    #[test]
+    fn note_projects_onto_the_transfer_view() {
+        let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
+        let mut notes = no_notes();
+        notes.insert([0xab; 32], "rent".to_owned());
+
+        let with =
+            collect_transfers(&[], &block, &notes, &filters(None, None), None).expect("project");
+        assert_eq!(with.len(), 1);
+        assert_eq!(with[0].note.as_deref(), Some("rent"));
+
+        let without = collect_transfers(&[], &block, &no_notes(), &filters(None, None), None)
+            .expect("project");
+        assert_eq!(without[0].note, None);
     }
 
     /// Receive attribution exists on INCOMING rows only (WI-RPC-4), so
@@ -551,7 +604,7 @@ mod tests {
         let mut f = filters(None, None);
         f.attribution = Some(ReceiveAttributionFilter::Unattributed);
 
-        let got = collect_transfers(&[], &block, &f, None).expect("project");
+        let got = collect_transfers(&[], &block, &no_notes(), &f, None).expect("project");
         assert!(
             got.is_empty(),
             "a send matched a receive-attribution filter"
@@ -575,8 +628,8 @@ mod tests {
 
         // Watermark far above the dispatch height: the confirmed row is
         // below it and drops out; the four unmined rows stay.
-        let got =
-            collect_transfers(&[], &block, &filters(None, None), Some(1_000)).expect("project");
+        let got = collect_transfers(&[], &block, &no_notes(), &filters(None, None), Some(1_000))
+            .expect("project");
         assert_eq!(
             ids(&got),
             vec![
@@ -589,7 +642,8 @@ mod tests {
 
         // At its own height the confirmed row is included (inclusive bound).
         let at_height =
-            collect_transfers(&[], &block, &filters(None, None), Some(250)).expect("project");
+            collect_transfers(&[], &block, &no_notes(), &filters(None, None), Some(250))
+                .expect("project");
         assert!(at_height.iter().any(|v| v.id == "02".repeat(32)));
     }
 
@@ -612,7 +666,7 @@ mod tests {
             },
         ];
 
-        let err = collect_transfers(&[], &block, &filters(None, None), None)
+        let err = collect_transfers(&[], &block, &no_notes(), &filters(None, None), None)
             .expect_err("overflowing recipient sum must not project");
         assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
     }
