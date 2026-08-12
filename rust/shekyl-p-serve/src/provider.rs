@@ -4,20 +4,31 @@
 // BSD-3-Clause
 
 //! Shard lookup behind the serving loop: the [`ShardProvider`] seam and its
-//! production [`LeafStore`] implementation.
+//! production [`ServingReader`] implementation.
 //!
 //! The seam exists so the loop's wire behaviour is testable without a
 //! store, and so the store read (synchronous redb) is confined behind one
 //! trait the endpoint calls via `spawn_blocking`. It is **not** an
-//! abstraction over storage backends — the store is `LeafStore`, and the
-//! trait's second implementor is the test fixture.
+//! abstraction over storage backends — the store is `shekyl_curve_tree`'s
+//! `LeafStore`, and the trait's second implementor is the test fixture.
 //!
-//! PR-B wires [`StoreShardProvider`] + [`StoreShardProvider::pin_serve_set`]
-//! into persona lifecycle; this module stays free of Tor and key material.
+//! # Read-only, structurally
+//!
+//! [`StoreShardProvider`] is built from a [`ServingReader`], not from the
+//! store: the store is a single-writer redb database whose single writer is
+//! the wallet's curve-tree actor, and the serving loop runs beside it.
+//! Pinning a serve-set *is* a write, so it lives on the actor's own object
+//! (`CurveTreeClient::pin_serve_set`) and reaches the serving host through
+//! `shekyl-p-host`'s pinner seam — it is deliberately not a method here.
+//! What is left in this module cannot write to the store at all, which is
+//! the property that keeps "the serving side is a reader" from being a
+//! convention.
+//!
+//! This module stays free of Tor and key material.
 
 use std::sync::Arc;
 
-use shekyl_curve_tree::{FrozenSegmentBody, LeafStore, SegmentId, SegmentPin, StoreError};
+use shekyl_curve_tree::{FrozenSegmentBody, SegmentId, ServingReader, StoreError};
 
 /// A shard lookup failed for an infrastructure reason (store I/O, pruned
 /// bytes) or a serve-set construction bug. Counted locally by the endpoint
@@ -37,20 +48,17 @@ pub enum ProviderError {
     /// Frozen segment leaf bytes were pruned without a pin — the
     /// silent-slash precursor. Named so a non-zero
     /// [`crate::PServeEndpoint::lookup_failure_count`] can be correlated
-    /// with the cause without scraping free-text, and so
-    /// [`StoreShardProvider::pin_serve_set`] can refuse a serve-set whose
-    /// bytes are already gone instead of reporting it healthy. Raised only
-    /// for an *unpinned* segment: missing bytes under a pin are corruption,
-    /// which pinning cannot fix (the store crate draws that line).
+    /// with the cause without scraping free-text. Raised only for an
+    /// *unpinned* segment: missing bytes under a pin are corruption, which
+    /// pinning cannot fix (the store crate draws that line).
+    ///
+    /// Seeing this on the read path means the persona is already serving a
+    /// shard whose bytes are gone — the pin that should have prevented it
+    /// belongs to `shekyl-p-host`, which refuses to start a host over a
+    /// serve-set in this state.
     FrozenSegmentPruned {
         /// Segment id that was frozen then pruned.
         segment_id: u32,
-    },
-    /// Serve-set entry cannot name a [`SegmentId`] (`u32`). Construction bug,
-    /// not a freeze race.
-    UnrepresentableShardId {
-        /// The illegal shard id.
-        shard_id: u64,
     },
     /// Non-store failure (tests, future callers).
     Other {
@@ -90,12 +98,6 @@ impl std::fmt::Display for ProviderError {
                 f,
                 "shard lookup failed: frozen segment {segment_id} pruned (pin serve-set before prune)"
             ),
-            Self::UnrepresentableShardId { shard_id } => {
-                write!(
-                    f,
-                    "shard_id {shard_id} exceeds store SegmentId space (u32)"
-                )
-            }
         }
     }
 }
@@ -201,99 +203,27 @@ pub trait ShardProvider: Send + Sync + 'static {
     fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError>;
 }
 
-/// Outcome of pinning one serve-set member at startup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServeSetPin {
-    /// The shard is frozen and now pinned: `prune_frozen` will retain its
-    /// full leaf bytes.
-    Pinned {
-        /// The pinned shard.
-        shard_id: u64,
-    },
-    /// The shard is bonded and **pinned**, but its segment has not frozen
-    /// yet, so there is nothing servable until the freeze boundary crosses
-    /// it (no committed `R_k`, nothing content-verifiable). Bonding before
-    /// freeze is legal by design (`bond_post.rs`: self-harm, not an
-    /// attack); the pin is taken now precisely so the freeze cannot race a
-    /// prune.
-    ///
-    /// Only used when `shard_id` fits the store's [`SegmentId`] space. An
-    /// unrepresentable id fails [`StoreShardProvider::pin_serve_set`] as
-    /// [`ProviderError::UnrepresentableShardId`].
-    NotYetFrozen {
-        /// The not-yet-frozen shard.
-        shard_id: u64,
-    },
-}
-
-/// The production provider: shard reads out of the persona's [`LeafStore`].
+/// The production provider: shard reads out of the persona's store,
+/// through a read-only [`ServingReader`].
 ///
 /// Shard ids are segment indices — "shard" and "frozen segment" are the
 /// same object; the challenge path's `shard_id` is the segment index.
 pub struct StoreShardProvider {
-    store: Arc<LeafStore>,
+    reader: ServingReader,
 }
 
 impl StoreShardProvider {
-    /// Wrap a store handle.
+    /// Wrap a read-only store handle.
     #[must_use]
-    pub fn new(store: Arc<LeafStore>) -> Self {
-        Self { store }
-    }
-
-    /// Pin the persona's whole serve-set so `prune_frozen` cannot discard
-    /// bytes the persona is bonded to serve — the silent-slash hazard,
-    /// closed at startup rather than left to operator discipline.
-    ///
-    /// Every representable member is pinned, **including one that has not
-    /// frozen yet**. Bonding before freeze is legal by design
-    /// (`bond_post.rs`), and pinning in advance is what stops a prune from
-    /// landing between the freeze and a lifecycle re-pin; without it, a
-    /// bonded shard's survival would depend on the order two unrelated
-    /// timers happen to fire. Re-calling after a freeze upgrades the
-    /// reported outcome from [`ServeSetPin::NotYetFrozen`] to
-    /// [`ServeSetPin::Pinned`] — useful, but no longer load-bearing.
-    ///
-    /// Each entry's check and pin share one store write transaction, so a
-    /// concurrent prune cannot commit between them.
-    ///
-    /// # Errors
-    ///
-    /// [`ProviderError::UnrepresentableShardId`] if an entry does not fit
-    /// the store's `u32` [`SegmentId`] space, and
-    /// [`ProviderError::FrozenSegmentPruned`] if a member's bytes were
-    /// already discarded — loud rather than mislabeled, because a pin
-    /// cannot bring pruned bytes back and reporting the set as healthy is
-    /// exactly how a persona reaches its challenge epoch unable to answer.
-    /// The remedy is a store rebuild by chain replay, not a retry. Plus
-    /// [`ProviderError::Store`] on store failure. Pins already applied stay
-    /// applied; pinning is idempotent, so a retry re-covers the set.
-    pub fn pin_serve_set(&self, serve_set: &[u64]) -> Result<Vec<ServeSetPin>, ProviderError> {
-        let mut out = Vec::with_capacity(serve_set.len());
-        for &shard_id in serve_set {
-            let Some(id) = segment_id(shard_id) else {
-                return Err(ProviderError::UnrepresentableShardId { shard_id });
-            };
-            let pin = self
-                .store
-                .pin_segment_for_serving(id)
-                .map_err(ProviderError::from_store)?;
-            out.push(match pin {
-                SegmentPin::PinnedServable => ServeSetPin::Pinned { shard_id },
-                SegmentPin::PinnedNotYetFrozen => ServeSetPin::NotYetFrozen { shard_id },
-                SegmentPin::AlreadyPruned => {
-                    return Err(ProviderError::FrozenSegmentPruned { segment_id: id.0 })
-                }
-            });
-        }
-        Ok(out)
+    pub fn new(reader: ServingReader) -> Self {
+        Self { reader }
     }
 }
 
 /// A shard id names a `SegmentId` iff it fits the store's `u32` id space;
 /// anything larger cannot exist in this store and is an ordinary miss on
-/// the serve path (and [`ProviderError::UnrepresentableShardId`] in
-/// [`StoreShardProvider::pin_serve_set`]).
+/// the serve path. (On the *pin* path it is a construction bug instead —
+/// `CurveTreeClient::pin_serve_set` refuses it rather than skipping it.)
 fn segment_id(shard_id: u64) -> Option<SegmentId> {
     u32::try_from(shard_id).ok().map(SegmentId)
 }
@@ -303,7 +233,7 @@ impl ShardProvider for StoreShardProvider {
         let Some(id) = segment_id(shard_id) else {
             return Ok(None);
         };
-        match self.store.open_frozen_segment_body(id) {
+        match self.reader.open_frozen_segment_body(id) {
             Ok(Some(body)) => Ok(Some(ShardBody::segment(body))),
             Ok(None) => Ok(None),
             Err(e) => Err(ProviderError::from_store(e)),

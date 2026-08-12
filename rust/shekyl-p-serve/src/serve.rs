@@ -11,9 +11,9 @@
 //! `x-provisional/v0` is equally THROWAWAY (crate doc), it is simply the
 //! throwaway that serves real shards by id.
 //!
-//! Integration point for PR-B: [`PServeEndpoint::bind`] +
-//! [`PServeEndpoint::addr`] as the `ADD_ONION` `Port=` target. This module
-//! does not speak Tor.
+//! Integration point for the serving host (SH-1): [`PServeEndpoint::bind`]
+//! plus [`PServeEndpoint::addr`] as the `ADD_ONION` `Port=` target. This
+//! module does not speak Tor.
 //!
 //! # Why hand-rolled HTTP/1.1 rather than a framework
 //!
@@ -136,9 +136,9 @@ const MAX_DRAIN_BYTES: usize = 8 * 1024;
 /// A running loopback serve endpoint for one persona.
 ///
 /// Dropping it aborts the accept loop; in-flight connection tasks are
-/// detached and end at their own timeouts. That is the right shape for
-/// tests; PR-B's persona lifecycle may replace Drop-abort with an ordered
-/// stop once onion registration is wired.
+/// detached and end at their own timeouts. `shekyl-p-host` keeps that
+/// shape and *orders* it: it stops tor first, so the drop happens only
+/// once no onion descriptor points at this port.
 pub struct PServeEndpoint {
     addr: SocketAddr,
     accept_task: JoinHandle<()>,
@@ -235,7 +235,11 @@ impl PServeEndpoint {
         })
     }
 
-    /// The bound loopback address, for `ADD_ONION`'s `Port=` target (PR-B).
+    /// The bound loopback address — the `ADD_ONION` `Port=` target.
+    ///
+    /// Bound once per endpoint (`127.0.0.1:0`), so a caller that publishes
+    /// an onion against it holds a target that stays valid for as long as
+    /// it holds the endpoint. `shekyl-p-host` rests on exactly that.
     #[must_use]
     pub fn addr(&self) -> SocketAddr {
         self.addr

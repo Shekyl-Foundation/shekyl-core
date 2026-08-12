@@ -128,6 +128,63 @@ impl std::fmt::Debug for LeafStore {
     }
 }
 
+/// A **read-only** handle on the store, for the persona serving path.
+///
+/// The store is a single-writer redb database, and in the wallet that
+/// single writer is the `CurveTreeActor` — its message loop is what
+/// serializes writes, in place of an explicit lock. The serving loop runs
+/// concurrently with block ingest and holds a body reader open for the
+/// seconds a 3.33 MB rendezvous transfer takes, so handing it the store
+/// itself would put a second writer beside the one the actor exists to be.
+/// redb would not corrupt anything, but the two would contend on the write
+/// lock, and the actor's structural guarantee would become a convention
+/// nobody is checking.
+///
+/// So the serving side gets *this* instead: the same `Arc<LeafStore>`,
+/// with only [`Self::open_frozen_segment_body`] reachable through it.
+/// redb readers are MVCC snapshots and run concurrently with the writer,
+/// so nothing is given up — a read-only reader is all the serving loop
+/// ever needed. The point is that it is now the only thing it *can* do:
+/// there is no `&LeafStore` behind this handle to reach a write through,
+/// which is what makes "the serving host does not write to the store" a
+/// property of the types rather than a rule in a doc.
+///
+/// Minted by `CurveTreeClient::serving_reader`, which is the object the
+/// actor owns.
+#[derive(Clone)]
+pub struct ServingReader {
+    store: Arc<LeafStore>,
+}
+
+impl ServingReader {
+    /// Wrap a store handle in the read-only view.
+    #[must_use]
+    pub fn new(store: Arc<LeafStore>) -> Self {
+        Self { store }
+    }
+
+    /// The serving read — see [`LeafStore::open_frozen_segment_body`] for
+    /// the full contract (this is a pure forward).
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`LeafStore::open_frozen_segment_body`]'s.
+    pub fn open_frozen_segment_body(
+        &self,
+        id: SegmentId,
+    ) -> Result<Option<FrozenSegmentBody>, StoreError> {
+        self.store.open_frozen_segment_body(id)
+    }
+}
+
+// The store handle carries no secret (the curve tree is public on-chain
+// material), but there is nothing useful to print either.
+impl std::fmt::Debug for ServingReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServingReader").finish_non_exhaustive()
+    }
+}
+
 /// Chunked reader over a frozen segment's leaf bytes — the body a persona
 /// serves for one shard, from [`LeafStore::open_frozen_segment_body`].
 ///
@@ -235,6 +292,17 @@ pub enum StoreError {
     FrozenSegmentPruned {
         /// The frozen segment whose leaf bytes are gone.
         id: SegmentId,
+    },
+    /// A [`LeafStore::pin_serve_set`] member does not fit the store's `u32`
+    /// [`SegmentId`] space, so it cannot name a segment in *any* store — a
+    /// construction bug in whatever built the serve-set, not a freeze race.
+    /// Refused rather than skipped: silently dropping a member would report
+    /// a serve-set as fully pinned while a shard the persona is bonded to
+    /// serve was never covered, which is the same silent-slash shape the
+    /// pin exists to close.
+    UnrepresentableShardId {
+        /// The illegal shard id.
+        shard_id: u64,
     },
     /// `append_drained` was handed leaf bytes that are not four canonical
     /// Selene scalars. Rejected at write time so invalid bytes can never
@@ -1134,6 +1202,42 @@ impl LeafStore {
         }
         txn.commit()?;
         Ok(outcome)
+    }
+
+    /// Pin a whole serve-set, returning each member's outcome paired with
+    /// its shard id, in the caller's order.
+    ///
+    /// Shard ids are segment indices — "shard" and "frozen segment" are the
+    /// same object — so this is [`Self::pin_segment_for_serving`] over a
+    /// list, plus the `u64` → [`SegmentId`] narrowing the wire form needs.
+    ///
+    /// [`SegmentPin::AlreadyPruned`] is *returned*, not raised: it is a
+    /// fact about the store, and what to do about a pruned member is a
+    /// serving-policy question (`shekyl-p-host` refuses the whole set)
+    /// deliberately not decided here.
+    ///
+    /// Members are validated **before** any pin is attempted, so an
+    /// unrepresentable id cannot leave the pin state a partial function of
+    /// an invalid input. Pinning is idempotent, so a call interrupted by a
+    /// store fault is re-covered by re-calling; pins already written stay
+    /// written.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::UnrepresentableShardId`] for a member outside the
+    /// `u32` id space, plus any [`Self::pin_segment_for_serving`] failure.
+    pub fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, StoreError> {
+        let ids = shard_ids
+            .iter()
+            .map(|&shard_id| {
+                u32::try_from(shard_id)
+                    .map(|id| (shard_id, SegmentId(id)))
+                    .map_err(|_| StoreError::UnrepresentableShardId { shard_id })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|(shard_id, id)| self.pin_segment_for_serving(id).map(|pin| (shard_id, pin)))
+            .collect()
     }
 
     /// Prune frozen, unpinned segments down to their `R_k` records.
@@ -2478,6 +2582,60 @@ mod tests {
         let recomputed = crate::store::ops::recompute_segment_r_k(&leaves).unwrap();
         let record = store.frozen_segment(SegmentId(0)).unwrap().unwrap();
         assert_eq!(recomputed, record.r_k);
+    }
+
+    #[test]
+    fn pin_serve_set_reports_each_member_and_refuses_an_unrepresentable_id() {
+        // A whole serve-set in one call: a frozen member, a member bonded
+        // before its segment froze, and a pruned one. All three are
+        // *reported* — the store states facts, and the serving host decides
+        // which of them is disqualifying.
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        assert_eq!(
+            store.pin_serve_set(&[0, 1]).unwrap(),
+            vec![
+                (0, SegmentPin::PinnedServable),
+                (1, SegmentPin::PinnedNotYetFrozen)
+            ],
+            "outcomes come back paired with their shard ids, in caller order"
+        );
+
+        let pruned = Arc::new(LeafStore::open_ephemeral().unwrap());
+        pruned
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        pruned.prune_frozen(&[]).unwrap();
+        assert_eq!(
+            pruned.pin_serve_set(&[0]).unwrap(),
+            vec![(0, SegmentPin::AlreadyPruned)],
+            "a pruned member is a reported state, not a store-level error"
+        );
+
+        // An id outside SegmentId space cannot name a segment in any store,
+        // so it is a construction bug — and it is refused *before* any pin
+        // runs, so a bad set cannot leave the store half-pinned.
+        let refused = Arc::new(LeafStore::open_ephemeral().unwrap());
+        refused
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        let bad = u64::from(u32::MAX) + 1;
+        assert!(matches!(
+            refused.pin_serve_set(&[0, bad]),
+            Err(StoreError::UnrepresentableShardId { shard_id }) if shard_id == bad
+        ));
+        // Segment 0 is valid and came first: if the loop had pinned as it
+        // walked, this prune would spare it. It does not.
+        refused.prune_frozen(&[]).unwrap();
+        assert!(
+            matches!(
+                refused.open_frozen_segment_body(SegmentId(0)),
+                Err(StoreError::FrozenSegmentPruned { id: SegmentId(0) })
+            ),
+            "the valid member of a refused set must not have been pinned"
+        );
     }
 
     #[test]
