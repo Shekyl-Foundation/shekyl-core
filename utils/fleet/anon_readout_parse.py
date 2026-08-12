@@ -11,6 +11,7 @@
 #
 #   OK <anon_out> <anon_in> <public> <white> <gray>
 #   ERR <reason>
+import os
 import sys, json
 
 # A COUNT IS EMITTED ONLY FROM A PATH THAT AFFIRMATIVELY PARSED A LIST OF
@@ -48,6 +49,22 @@ def absent_connections_is_empty(r):
         return "ERR no-connections-field:not-a-get_connections-reply"
     return "OK 0 0 0"
 
+def _excluded_onions():
+    """Onions that must NOT appear in any fleet node's peer list.
+
+    From SEED_EXCLUDE_FILE. Unset means no exclusion is being asserted, which
+    is the right default for a fleet that has no separate bootstrap population
+    -- but a file that is SET and unreadable is a refusal, not an empty set: an
+    exclusion list that silently becomes empty is a check that silently stops
+    checking.
+    """
+    path = os.environ.get("SEED_EXCLUDE_FILE")
+    if not path:
+        return []
+    with open(path) as fh:          # deliberately unguarded; see docstring
+        return [ln.split(":")[0].strip() for ln in fh
+                if ln.strip() and not ln.lstrip().startswith("#")]
+
 def stored_anon(peers_raw):
     """White/gray anonymity candidates, or None if the reply is unusable.
 
@@ -67,6 +84,32 @@ def stored_anon(peers_raw):
         return None
     if not isinstance(p, dict) or p.get("status") != "OK":
         return None
+
+    # SEED EXCLUSION IS AN INVARIANT, NOT AN ARRANGEMENT.
+    #
+    # The arm excludes the bootstrap ring from the candidate pool -- with it
+    # included, a node choosing 12 outbound from 20 candidates tolerates 8 burns
+    # instead of 2, and can satisfy the floor entirely on ring links while
+    # discovering nothing. Today that exclusion holds only because nobody wired
+    # the two together, and both populations share a stagenet NETWORK_ID: one
+    # stray onion in one config and the arm is measuring a different network
+    # than it reports.
+    #
+    # "Nobody made a mistake" is not a property a result can rest on, so it is
+    # checked every reading. Contamination VOIDS the arm, and it must be loud
+    # at the moment it appears rather than inferred afterwards from a
+    # suspiciously easy floor.
+    excl = _excluded_onions()
+    if excl:
+        for key in ("white_list", "gray_list"):
+            for e in (p.get(key) or []):
+                if not isinstance(e, dict):
+                    continue
+                host = str(e.get("host", ""))
+                for bad in excl:
+                    if bad and bad in host:
+                        return "CONTAMINATED:%s" % bad[:16]
+
     out = []
     for key in ("white_list", "gray_list"):
         v = p.get(key, [])
@@ -106,6 +149,11 @@ def verdict():
     stored = stored_anon(peers_raw)
     if stored is None:
         return "ERR peer-list-unusable"
+    # Contamination is reported as ERR so it propagates through the reader as a
+    # FAILED node and the sampler discards the whole reading. A contaminated arm
+    # must not produce a summary line at all.
+    if isinstance(stored, str):
+        return "ERR seed-%s" % stored
     white, gray = stored
 
     if "connections" not in r:

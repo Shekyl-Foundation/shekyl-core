@@ -23,6 +23,7 @@
 # Run: python3 utils/fleet/test_anon_readout_parse.py
 
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -35,13 +36,17 @@ ONION_B = "kbesdwuof6il5btctanrh2vafalnfogln6qwyly3nvpjh74yklxdiayd.onion:13021"
 failures = []
 
 
-def run(conn, peers):
+def run(conn, peers, exclude_file=None):
     """Feed the parser the two joined replies exactly as the shell does."""
     conn_s = conn if isinstance(conn, str) else json.dumps(conn)
     peers_s = peers if isinstance(peers, str) else json.dumps(peers)
+    env = dict(os.environ)
+    env.pop("SEED_EXCLUDE_FILE", None)
+    if exclude_file is not None:
+        env["SEED_EXCLUDE_FILE"] = exclude_file
     p = subprocess.run([sys.executable, str(PARSER)],
                        input=conn_s + "\n@@SPLIT@@\n" + peers_s,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=env)
     return p.stdout.strip()
 
 
@@ -141,6 +146,36 @@ check("a connection entry missing address_type is refused",
            "result": {"status": "OK", "untrusted": False,
                       "connections": [{"address": ONION_A, "incoming": False}]}}, peers()),
       "ERR connection-entry-missing-address_type")
+
+# --- seed exclusion is an invariant, not an arrangement ------------------
+# The arm excludes the bootstrap ring from the CANDIDATE pool (a different
+# membership from the histogram exclusion, and the one the derivation rests on:
+# with the ring in the pool a node tolerates 8 burns instead of 2 and can meet
+# the floor entirely on ring links). That exclusion currently holds only because
+# nobody wired the two together, and both share a NETWORK_ID -- so it is checked
+# every reading rather than assumed.
+import tempfile
+_seed = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)
+_seed.write("# seeds\n" + ONION_B + "\n")
+_seed.close()
+
+check("no exclusion file asserts nothing (default stays open)",
+      run(conns([c(ONION_A, False)]), peers(white=[ONION_A, ONION_B])),
+      "OK 1 0 0 2 0")
+
+check("a seed onion in the peer list VOIDS the reading",
+      run(conns([c(ONION_A, False)]), peers(white=[ONION_A, ONION_B]), exclude_file=_seed.name),
+      lambda g: g.startswith("ERR seed-CONTAMINATED"))
+
+check("a clean fleet passes with exclusion armed",
+      run(conns([c(ONION_A, False)]), peers(white=[ONION_A]), exclude_file=_seed.name),
+      "OK 1 0 0 1 0")
+
+# An exclusion list that silently becomes empty is a check that silently stops
+# checking -- the exact shape of the corroborator this file was written for.
+check("an exclusion file that is set but unreadable refuses",
+      run(conns([]), peers(white=[ONION_A]), exclude_file="/nonexistent/seeds.txt"),
+      lambda g: g.startswith("ERR unexpected:FileNotFoundError"))
 
 # --- negative control on the SUITE ------------------------------------------
 # If the parser were replaced by one that always printed a fixed verdict, the
