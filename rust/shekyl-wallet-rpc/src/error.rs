@@ -11,7 +11,7 @@ use shekyl_engine_core::engine::error::{RetryableRejectCause, TerminalErrorKind}
 use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
     ChangePasswordError, IoError, OpenError, PScanStartError, PendingTxError, PersistenceError,
-    RefreshError, SendError,
+    RefreshError, SendError, SetTxNoteError,
 };
 use shekyl_engine_file::WalletFileError;
 use shekyl_rpc_client::{RejectCause, SubmitVerdict};
@@ -573,11 +573,15 @@ impl From<shekyl_engine_core::AbandonTxError> for WalletRpcError {
     }
 }
 
-impl From<PersistenceError> for WalletRpcError {
-    fn from(err: PersistenceError) -> Self {
-        // Category-only message; the detail can carry a filesystem path
-        // (WI-RPC-2a: internal errors never echo io/persistence paths).
-        internal_detail("wallet persistence error", err)
+impl From<SetTxNoteError> for WalletRpcError {
+    fn from(err: SetTxNoteError) -> Self {
+        match err {
+            // Counts only — engine error never carries the note body.
+            SetTxNoteError::TooLong(e) => Self::InvalidParams(e.to_string()),
+            // Fail-closed rollback already ran; category-only message
+            // (the detail can carry a filesystem path).
+            SetTxNoteError::Persistence(e) => internal_detail("wallet persistence error", e),
+        }
     }
 }
 

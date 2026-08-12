@@ -474,12 +474,12 @@ story, not the read path.
     a model needs recipient identity carried to the projection layer, a
     larger design than re-keying `tx_notes` (arm 2 is not the cheap path to
     it; it is not the path at all).
-  - **Size bound (`TX_NOTE_MAX_BYTES` = 4 KiB), enforced at the RPC
-    boundary before the note can enter the ledger.** A persisted,
-    rescan-preserved, schema-versioned field taking unbounded input from an
-    RPC caller is a wallet-file-bloat / storage-amplification vector; the
-    ceiling is the same pre-decode discipline the persisted payload sizes
-    already follow. 4 KiB is generous for a human note.
+  - **Size bound (`TX_NOTE_MAX_BYTES` = 4 KiB UTF-8 bytes), enforced on the
+    write path (`TxMetaBlock::set_note`) so every caller shares the ledger
+    invariant.** RPC (and any future CLI) may pre-check the same constant
+    before taking a write lock as a fast-fail, but that is not the sole
+    enforcement — a second boundary that forgets the check cannot bloat the
+    wallet file. 4 KiB is generous for a human note.
   - **Boundary hygiene (rules 35/36).** A note is counterparty-bearing free
     text. The over-length refusal reports byte counts only, never the note;
     the persistence-failure path is category-only (`internal_detail`, no
@@ -503,9 +503,9 @@ story, not the read path.
   parent fsync), so a failed save leaves the state byte-unchanged and the
   fail-closed in-memory rollback stays consistent with disk. CLI enablement
   remains optional (no CLI command exists for `abandon_tx` either); the
-  load-bearing surface is the RPC method + these rulings. If a CLI note
-  command is added later, the note crosses the same 4 KiB bound and the same
-  no-echo discipline at the CLI arg layer — a CLI is just another boundary.
+  load-bearing surface is the RPC method + these rulings. A future CLI note
+  command inherits the write-path bound automatically; it should still
+  pre-check and keep the no-echo discipline at its arg layer for UX.
 
   **Dead-field connection (so the next audit reads this as deliberate).**
   With PR-SA-4, `tx_notes` now has a production writer (`Engine::set_tx_note`)

@@ -271,11 +271,12 @@ where
         .await?;
 
         // Persist-before-dispatch (module docs; pin P-2's sibling): seal the
-        // claim record — bytes, fee reservation, claimed epochs — and its
-        // Dispatched transition in ONE mutation, before any network send. A
-        // crash after this seal resumes as "maybe sent", which is safe
-        // because every resend is byte-identical. `at` reads the same named
-        // daemon-claimed-tip clock as the bond dispatch (WI-3 R2-1).
+        // claim record — bytes and fee reservation — and its Dispatched
+        // transition in ONE mutation, before any network send. Claimed epochs
+        // live in the sealed tx bytes (no separate pending-post field;
+        // SA-4). A crash after this seal resumes as "maybe sent", which is
+        // safe because every resend is byte-identical. `at` reads the same
+        // named daemon-claimed-tip clock as the bond dispatch (WI-3 R2-1).
         let dispatch_tip = daemon_claimed_tip(&daemon)
             .await
             .map_err(|e| EmissionClaimRequestError::state("dispatch tip", e))?;

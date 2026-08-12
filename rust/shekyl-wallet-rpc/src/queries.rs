@@ -133,11 +133,7 @@ fn collect_transfers(
             {
                 continue;
             }
-            let view = transfer_view(
-                td,
-                &spend_locks,
-                tx_notes.get(&td.tx_hash.to_bytes()).cloned(),
-            );
+            let view = transfer_view(td, &spend_locks, tx_notes);
             rows.push((
                 TransferOrder {
                     block_height: view.block_height,
@@ -166,11 +162,7 @@ fn collect_transfers(
             if filters.attribution.is_some() {
                 continue;
             }
-            let view = outgoing_transfer_view(
-                &TxHash::from_bytes(*txid),
-                row,
-                tx_notes.get(txid).cloned(),
-            )?;
+            let view = outgoing_transfer_view(&TxHash::from_bytes(*txid), row, tx_notes)?;
             rows.push((
                 TransferOrder {
                     block_height: view.block_height,
@@ -391,24 +383,12 @@ pub(crate) async fn get_transfer_by_id(
             .transfers()
             .iter()
             .find(|td| td.tx_hash == tx_hash && td.internal_output_index == output_index)
-            .map(|td| {
-                transfer_view(
-                    td,
-                    &ledger.spend_locks(),
-                    ledger.tx_meta.tx_notes.get(&td.tx_hash.to_bytes()).cloned(),
-                )
-            }),
+            .map(|td| transfer_view(td, &ledger.spend_locks(), &ledger.tx_meta.tx_notes)),
         TransferLookupId::Outgoing { tx_hash } => ledger
             .send_journal
             .rows
             .get(&tx_hash.to_bytes())
-            .map(|row| {
-                outgoing_transfer_view(
-                    &tx_hash,
-                    row,
-                    ledger.tx_meta.tx_notes.get(&tx_hash.to_bytes()).cloned(),
-                )
-            })
+            .map(|row| outgoing_transfer_view(&tx_hash, row, &ledger.tx_meta.tx_notes))
             .transpose()?,
     };
 

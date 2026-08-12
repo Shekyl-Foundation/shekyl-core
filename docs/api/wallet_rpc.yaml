@@ -894,17 +894,20 @@ components:
         a proof. An **empty `note` clears** any existing note (there is no
         separate delete method — "unset" and "set-empty" are the same
         state). A note longer than 4096 UTF-8 bytes is rejected with -32602
-        before it is stored; the refusal reports byte counts only, never the
-        note text.
+        (byte length, not character count); the refusal reports byte counts
+        only, never the note text. The same ceiling is enforced on the
+        wallet write path so every caller shares the invariant.
       properties:
         tx_hash:
           $ref: "#/components/schemas/Hex32"
         note:
           type: string
-          maxLength: 4096
           description: >
-            The note text (UTF-8). Empty string clears the note. Max 4096
-            bytes.
+            The note text (UTF-8). Empty string clears the note. Hard limit is
+            4096 **UTF-8 bytes** (not Unicode scalar count) — OpenAPI has no
+            byte-length constraint, so clients must measure `len(utf8)` and
+            not character count; the server refuses over-length notes with
+            -32602 reporting byte counts only.
 
     SetTxNoteResult:
       type: object

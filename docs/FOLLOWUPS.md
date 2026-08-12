@@ -1768,8 +1768,8 @@ sustainability is unaffected by the recalibration.
   as `engine/refresh_slot.rs`). The reset preserves everything a chain
   replay cannot re-derive — `tx_keys`, payment-request rows,
   `restore_from_height`, and the durable `bonded_slots` bond record — and
-  clears the whole `LedgerBlock` plus the runtime indexes, `scan_completed`
-  and `scanned_pool_txs`. The chain-global curve tree is left alone (it
+  clears the whole `LedgerBlock` plus the runtime indexes and
+  `scanned_pool_txs`. The chain-global curve tree is left alone (it
   holds no wallet data, and rolling it back would force a genesis-onward
   re-ingest). Refusals are hoisted ahead of the destructive step: daemon
   preflight, then an in-flight-transaction guard atomic with the wipe.

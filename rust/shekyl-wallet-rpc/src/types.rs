@@ -582,8 +582,10 @@ pub struct AbandonTxResult {
 pub struct SetTxNoteResult {
     /// The transaction the note is attached to (lowercase hex).
     pub tx_hash: String,
-    /// The note as stored after the write — `null` when it was cleared
-    /// (an empty note removes the entry rather than storing `""`).
+    /// The note as stored after the write. **Omitted** (not serialized as
+    /// JSON `null`) when the note was cleared — an empty input removes the
+    /// entry rather than storing `""`, matching the OpenAPI shape and the
+    /// `skip_serializing_if` on `TransferView.note`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }

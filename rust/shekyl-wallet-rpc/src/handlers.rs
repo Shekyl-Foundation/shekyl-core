@@ -13,6 +13,7 @@ use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use crate::error::WalletRpcError;
 use crate::fees;
 use crate::lifecycle;
+use crate::notes;
 use crate::proofs;
 use crate::queries;
 use crate::receiving;
@@ -53,7 +54,7 @@ pub async fn dispatch(
         "submit_pending_tx" => send::submit_pending_tx(tenants, params).await,
         "discard_pending_tx" => send::discard_pending_tx(tenants, params).await,
         "abandon_tx" => send::abandon_tx(tenants, params).await,
-        "set_tx_note" => send::set_tx_note(tenants, params).await,
+        "set_tx_note" => notes::set_tx_note(tenants, params).await,
         // WI-RPC-1 receiving (FA-8d projection; `rid` on the URI — no
         // subaddress/account model exists in Shekyl).
         "create_payment_request" => receiving::create_payment_request(tenants, params).await,

@@ -75,6 +75,49 @@ use crate::{error::WalletLedgerError, serde_helpers::zeroizing_bytes_32};
 ///   typed UX-state need that `tx_notes` cannot carry.
 pub const TX_META_BLOCK_VERSION: u32 = 3;
 
+/// Maximum note length in **UTF-8 bytes** (SJ-DQ-7).
+///
+/// A note is persisted, rescan-preserved, schema-versioned state. Without a
+/// ceiling it is a wallet-file bloat / storage-amplification vector. 4 KiB is
+/// generous for a human note and small on disk. Enforced on the write path
+/// ([`TxMetaBlock::set_note`]) so every caller — RPC, CLI, tests — shares the
+/// same ledger invariant. Boundaries may pre-check with this constant to fail
+/// before taking a write lock, but they are not the sole enforcement.
+pub const TX_NOTE_MAX_BYTES: usize = 4 * 1024;
+
+/// Refusal when a note exceeds [`TX_NOTE_MAX_BYTES`].
+///
+/// Carries **byte counts only** — never the note text — so counterparty-
+/// bearing free text cannot escape through an error string (rules 35/36).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("note exceeds the {max}-byte maximum ({len} bytes)")]
+pub struct TxNoteTooLong {
+    /// Observed UTF-8 byte length of the refused note.
+    pub len: usize,
+    /// Ceiling that was exceeded ([`TX_NOTE_MAX_BYTES`]).
+    pub max: usize,
+}
+
+/// Result of [`TxMetaBlock::set_note`]: whether the map changed (and thus
+/// needs a durable save) or the write is already a no-op.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetTxNoteOutcome {
+    /// Map entry changed. `previous` is the pre-write value (for fail-closed
+    /// rollback); `stored` is the post-write value (`None` when cleared).
+    Applied {
+        /// Entry present before this write, if any.
+        previous: Option<String>,
+        /// Entry present after this write (`None` when the note was cleared).
+        stored: Option<String>,
+    },
+    /// Map already matched the requested state (clear of absent, or set of
+    /// an identical string). No durable save is required.
+    Unchanged {
+        /// Authoritative post-write state (`None` when no note is set).
+        stored: Option<String>,
+    },
+}
+
 /// A single 32-byte tx secret scalar, wrapped so both its in-memory
 /// representation and its deserialization path zeroize on drop.
 ///
@@ -250,6 +293,73 @@ impl TxMetaBlock {
         }
         Ok(())
     }
+
+    /// Read the user-authored note for `txid`, if any.
+    #[must_use]
+    pub fn note(&self, txid: &[u8; 32]) -> Option<&str> {
+        self.tx_notes.get(txid).map(String::as_str)
+    }
+
+    /// Set or clear the note for `txid`.
+    ///
+    /// - Empty `note` removes any entry (no separate delete method).
+    /// - Non-empty `note` inserts or replaces; length is capped at
+    ///   [`TX_NOTE_MAX_BYTES`] UTF-8 bytes.
+    /// - Identical set / clear-of-absent returns
+    ///   [`SetTxNoteOutcome::Unchanged`] so the caller can skip a durable
+    ///   save (same discipline as abandon's already-abandoned short-circuit).
+    ///
+    /// # Errors
+    ///
+    /// [`TxNoteTooLong`] when `note` exceeds the byte ceiling. The error
+    /// reports counts only — never the note content.
+    pub fn set_note(
+        &mut self,
+        txid: [u8; 32],
+        note: String,
+    ) -> Result<SetTxNoteOutcome, TxNoteTooLong> {
+        if note.is_empty() {
+            return Ok(match self.tx_notes.remove(&txid) {
+                None => SetTxNoteOutcome::Unchanged { stored: None },
+                Some(previous) => SetTxNoteOutcome::Applied {
+                    previous: Some(previous),
+                    stored: None,
+                },
+            });
+        }
+
+        if note.len() > TX_NOTE_MAX_BYTES {
+            return Err(TxNoteTooLong {
+                len: note.len(),
+                max: TX_NOTE_MAX_BYTES,
+            });
+        }
+
+        if self.tx_notes.get(&txid).is_some_and(|cur| cur == &note) {
+            return Ok(SetTxNoteOutcome::Unchanged { stored: Some(note) });
+        }
+
+        let previous = self.tx_notes.insert(txid, note.clone());
+        Ok(SetTxNoteOutcome::Applied {
+            previous,
+            stored: Some(note),
+        })
+    }
+
+    /// Restore a prior note entry after a failed durable save (fail closed).
+    ///
+    /// `previous` is the value returned from [`Self::set_note`]'s
+    /// [`SetTxNoteOutcome::Applied`] arm — `Some` re-inserts, `None` removes.
+    pub fn restore_note(&mut self, txid: [u8; 32], previous: Option<String>) {
+        match previous {
+            Some(prior) => {
+                self.tx_notes.insert(txid, prior);
+            }
+            None => {
+                self.tx_notes.remove(&txid);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +488,80 @@ mod tests {
         let sk = secret(0xFF);
         let rendered = format!("{sk:?}");
         assert_eq!(rendered, "TxSecretKey(<redacted>)");
+    }
+
+    #[test]
+    fn set_note_set_clear_and_noop() {
+        let mut b = TxMetaBlock::empty();
+        let id = key(0x10, 0);
+
+        // Clear of absent is a no-op.
+        assert_eq!(
+            b.set_note(id, String::new()).expect("clear-absent"),
+            SetTxNoteOutcome::Unchanged { stored: None }
+        );
+        assert!(b.note(&id).is_none());
+
+        // Set applies.
+        match b.set_note(id, "rent".into()).expect("set") {
+            SetTxNoteOutcome::Applied {
+                previous: None,
+                stored: Some(s),
+            } => assert_eq!(s, "rent"),
+            other => panic!("expected Applied first set, got {other:?}"),
+        }
+        assert_eq!(b.note(&id), Some("rent"));
+
+        // Identical set is Unchanged (no dirty write).
+        assert_eq!(
+            b.set_note(id, "rent".into()).expect("identical"),
+            SetTxNoteOutcome::Unchanged {
+                stored: Some("rent".into())
+            }
+        );
+
+        // Overwrite applies with previous.
+        match b.set_note(id, "rent — March".into()).expect("overwrite") {
+            SetTxNoteOutcome::Applied {
+                previous: Some(p),
+                stored: Some(s),
+            } => {
+                assert_eq!(p, "rent");
+                assert_eq!(s, "rent — March");
+            }
+            other => panic!("expected Applied overwrite, got {other:?}"),
+        }
+
+        // Clear applies and restores via restore_note.
+        let outcome = b.set_note(id, String::new()).expect("clear");
+        match &outcome {
+            SetTxNoteOutcome::Applied {
+                previous: Some(p),
+                stored: None,
+            } => assert_eq!(p, "rent — March"),
+            other => panic!("expected Applied clear, got {other:?}"),
+        }
+        if let SetTxNoteOutcome::Applied { previous, .. } = outcome {
+            b.restore_note(id, previous);
+        }
+        assert_eq!(b.note(&id), Some("rent — March"));
+    }
+
+    #[test]
+    fn set_note_refuses_over_length_without_mutating() {
+        let mut b = TxMetaBlock::empty();
+        let id = key(0x11, 0);
+        b.set_note(id, "keep".into()).expect("seed");
+
+        let over = "x".repeat(TX_NOTE_MAX_BYTES + 1);
+        let err = b.set_note(id, over).expect_err("over-length must refuse");
+        assert_eq!(err.max, TX_NOTE_MAX_BYTES);
+        assert_eq!(err.len, TX_NOTE_MAX_BYTES + 1);
+        // Map unchanged; error Display carries counts only.
+        assert_eq!(b.note(&id), Some("keep"));
+        let msg = err.to_string();
+        assert!(msg.contains("maximum"), "{msg}");
+        assert!(!msg.contains("xxxxx"), "refusal must not echo note body");
     }
 
     #[test]

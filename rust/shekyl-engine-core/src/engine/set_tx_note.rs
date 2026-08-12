@@ -13,13 +13,18 @@
 //! incoming-change and outgoing rows share the one note).
 //!
 //! The write is crash-atomic under a single ledger write guard, the same
-//! discipline as `abandon_tx_persisted`: mutate the map, save, and on save
-//! failure restore the prior map entry (fail closed) so a retry starts from
-//! the pre-write state. `WalletFile::save_state` writes via
-//! `atomic_write_file` (temp → fsync → `rename(2)` → parent fsync), so a
-//! failed save leaves the on-disk state byte-unchanged — the rollback's
-//! precondition holds. An empty note **clears** the entry rather than
-//! storing an empty string, so there is no separate delete method.
+//! discipline as `abandon_tx_persisted`: mutate the map via
+//! [`TxMetaBlock::set_note`], save, and on save failure restore the prior
+//! entry (fail closed) so a retry starts from the pre-write state.
+//! `WalletFile::save_state` writes via `atomic_write_file` (temp → fsync →
+//! `rename(2)` → parent fsync), so a failed save leaves the on-disk state
+//! byte-unchanged — the rollback's precondition holds. An empty note
+//! **clears** the entry rather than storing an empty string, so there is no
+//! separate delete method.
+//!
+//! No-ops (clear of an absent note, or set of an already-identical string)
+//! short-circuit without a durable save — matching abandon's
+//! already-abandoned path.
 //!
 //! # Secret disposition (stated, not assumed)
 //!
@@ -29,17 +34,37 @@
 //! which are the same not-a-key, disclosure-if-dumped class. In-memory
 //! disclosure of a note is an **accepted residual**; the protection is the
 //! AEAD wallet envelope at rest plus boundary discipline in transit (never
-//! on the wire, never in a log or error string — rules 35/36). The
-//! ceiling on note length lives at the RPC boundary
-//! (`set_tx_note`'s `TX_NOTE_MAX_BYTES`), so this method trusts its input's
-//! size.
+//! on the wire, never in a log or error string — rules 35/36).
+//!
+//! # Size bound
+//!
+//! [`shekyl_engine_state::TX_NOTE_MAX_BYTES`] is enforced on the write path
+//! inside [`TxMetaBlock::set_note`]. Callers may pre-check the same constant
+//! (e.g. RPC before taking a lock) but that is a fast-fail, not the sole
+//! invariant.
 
+use shekyl_engine_state::{SetTxNoteOutcome, TxNoteTooLong};
 use shekyl_types::TxHash;
 
 use super::error::PersistenceError;
 use super::lifecycle::drive_persistence;
 use super::traits::{DaemonEngine, PendingTxEngine, PersistenceEngine, RefreshEngine};
 use super::{Engine, EngineSignerKind, LocalLedger};
+
+/// Failures from [`Engine::set_tx_note`].
+#[derive(Debug, thiserror::Error)]
+pub enum SetTxNoteError {
+    /// Note exceeds [`shekyl_engine_state::TX_NOTE_MAX_BYTES`].
+    ///
+    /// Display reports **byte counts only** — never the note text.
+    #[error(transparent)]
+    TooLong(#[from] TxNoteTooLong),
+
+    /// Durable save failed; the in-memory map entry was rolled back
+    /// (fail closed).
+    #[error("set_tx_note persistence failed: {0}")]
+    Persistence(#[from] PersistenceError),
+}
 
 // Generic over `F: PersistenceEngine` so the durable save drives the normal
 // crash-atomic ledger path — the same widening `abandon_tx.rs` /
@@ -58,53 +83,48 @@ impl<
     /// Set (or clear) the user's note for `txid` **and durably commit it**.
     ///
     /// An empty `note` removes any existing entry; a non-empty `note`
-    /// inserts or replaces it. Returns the note as stored after the write
-    /// (`None` when cleared). The mutation and the crash-atomic save run
-    /// under one ledger write guard so a concurrent refresh/watchdog cannot
-    /// interleave.
+    /// inserts or replaces it (capped at
+    /// [`shekyl_engine_state::TX_NOTE_MAX_BYTES`]). Returns the note as
+    /// stored after the write (`None` when cleared). The mutation and the
+    /// crash-atomic save run under one ledger write guard so a concurrent
+    /// refresh/watchdog cannot interleave. Idempotent no-ops skip the
+    /// durable save.
     ///
     /// # Errors
     ///
-    /// [`PersistenceError`] if the durable save failed; the in-memory map
-    /// entry is rolled back to its pre-write value (fail closed), so a retry
-    /// starts from the prior state.
+    /// - [`SetTxNoteError::TooLong`] — note exceeds the byte ceiling; map
+    ///   unchanged.
+    /// - [`SetTxNoteError::Persistence`] — durable save failed; the
+    ///   in-memory map entry is rolled back to its pre-write value (fail
+    ///   closed), so a retry starts from the prior state.
     pub fn set_tx_note(
         &self,
         txid: TxHash,
         note: String,
-    ) -> Result<Option<String>, PersistenceError> {
+    ) -> Result<Option<String>, SetTxNoteError> {
         let key = txid.to_bytes();
 
         // One write guard for the map mutation + save (+ optional rollback);
         // `save_state` takes `&WalletLedger`, so no second lock is needed and
         // concurrent merge/watchdog block until we finish.
         let mut guard = self.ledger.write();
-        let previous = if note.is_empty() {
-            guard.ledger.tx_meta.tx_notes.remove(&key)
-        } else {
-            guard.ledger.tx_meta.tx_notes.insert(key, note)
-        };
+        let outcome = guard.ledger.tx_meta.set_note(key, note)?;
 
-        let save_result = drive_persistence(
-            self.persistence
-                .save_state(self.state_wrap_key(), &guard.ledger),
-        );
-        if let Err(e) = save_result {
-            // Fail closed under the same exclusive guard: restore the prior
-            // entry (re-insert the old value, or remove if there was none).
-            match previous {
-                Some(prior) => {
-                    guard.ledger.tx_meta.tx_notes.insert(key, prior);
+        match outcome {
+            SetTxNoteOutcome::Unchanged { stored } => Ok(stored),
+            SetTxNoteOutcome::Applied { previous, stored } => {
+                let save_result = drive_persistence(
+                    self.persistence
+                        .save_state(self.state_wrap_key(), &guard.ledger),
+                );
+                if let Err(e) = save_result {
+                    // Fail closed under the same exclusive guard.
+                    guard.ledger.tx_meta.restore_note(key, previous);
+                    return Err(SetTxNoteError::Persistence(e.into()));
                 }
-                None => {
-                    guard.ledger.tx_meta.tx_notes.remove(&key);
-                }
+                Ok(stored)
             }
-            return Err(e.into());
         }
-
-        // Authoritative post-write state (None when cleared).
-        Ok(guard.ledger.tx_meta.tx_notes.get(&key).cloned())
     }
 
     /// Read the user's note for `txid`, if any. Pure read — no persistence.
@@ -114,9 +134,8 @@ impl<
             .read()
             .ledger
             .tx_meta
-            .tx_notes
-            .get(&txid.to_bytes())
-            .cloned()
+            .note(&txid.to_bytes())
+            .map(str::to_owned)
     }
 }
 
@@ -124,11 +143,13 @@ impl<
 mod tests {
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_engine_file::SafetyOverrides;
+    use shekyl_engine_state::TX_NOTE_MAX_BYTES;
     use shekyl_rpc_transport::HttpRpc;
     use shekyl_types::TxHash;
 
     use super::super::lifecycle::EngineCreateParams;
     use super::super::{Credentials, DaemonClient, Engine, SoloSigner};
+    use super::SetTxNoteError;
 
     /// A `DaemonClient` over an unreachable URL — setting a note is a local,
     /// crash-atomic operation with no daemon I/O on any path under test.
@@ -176,11 +197,49 @@ mod tests {
         assert_eq!(cleared, None);
         assert_eq!(engine.tx_note(txid), None);
 
-        // Clearing an already-absent note is a no-op that still commits.
+        // Clearing an already-absent note is a no-op that still succeeds
+        // without requiring a dirty write (Unchanged short-circuit).
         let again = engine
             .set_tx_note(txid, String::new())
             .expect("clear-absent");
         assert_eq!(again, None);
+
+        // Identical re-set is a no-op.
+        engine
+            .set_tx_note(txid, "same".to_owned())
+            .expect("set same");
+        let again = engine
+            .set_tx_note(txid, "same".to_owned())
+            .expect("identical set");
+        assert_eq!(again.as_deref(), Some("same"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn over_length_note_is_refused_without_echo() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"set_tx_note too long");
+        let s = seed(3);
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &s);
+        let engine = Engine::<SoloSigner>::create(params, daemon().await).expect("create");
+        let txid = TxHash::from_bytes([0x33; 32]);
+
+        let over = format!("CANARY{}", "x".repeat(TX_NOTE_MAX_BYTES));
+        match engine
+            .set_tx_note(txid, over)
+            .expect_err("over-length must refuse")
+        {
+            SetTxNoteError::TooLong(e) => {
+                assert_eq!(e.max, TX_NOTE_MAX_BYTES);
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("CANARY"),
+                    "refusal must not echo note content: {msg}"
+                );
+            }
+            other => panic!("expected TooLong, got {other:?}"),
+        }
+        assert_eq!(engine.tx_note(txid), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
