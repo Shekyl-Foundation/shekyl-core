@@ -3846,6 +3846,21 @@ sustainability is unaffected by the recalibration.
     SA-DQ-3); **production-firing** gated on the activation round (#332). A bare
     "discharged" is forbidden (DQ-F Guard 2).
     **Target: V3.0** (must land before genesis freezes the absence of GC).
+    **SA-5 update (2026-08-12):** the *raising* side of this reconcile is
+    SA-R-6's **scan-derivable `p_slot` high-water mark** — the privacy guard
+    against re-offering a rotated-past slot (reusing a retired persona clusters
+    the operator's personas onto their principal). SA-5 **wired the rollback
+    case**: SP-R0 **arm #4** (`stake_persist::raise_cursor_from_scan_evidence`)
+    raises the cursor from chain-observed bonds within the derive-forward window,
+    over the same sealed evidence as the phantom GC and strictly after its drops
+    (a phantom has no `Present` verdict, so it cannot raise the cursor). Density
+    is pinned as an invariant (`monotone_selection_is_dense_no_gap_reachable`).
+    **What remains in this reopen:** the *from-seed* reconstruction — a cursor
+    rolled back beyond the lookahead, where the wallet opens as a non-staker and
+    derives/scans nothing — needs a widening forward probe under Model D and is
+    unreachable until bond posting is production-reachable. The ruling lives in
+    `shekyl-crypto-pq` `archival_p` module docs,
+    `StakingBlock::monotone_current_slot`'s docstring, and CBOM §5.
   - **Broadcast / re-anchor wiring activates the CT-5d persona-pin.** The CT-5d
     finding (persona signature binds `tx_prefix_hash`, not the proof, so a
     content-changing re-anchor re-signs the persona — the *common* path over a

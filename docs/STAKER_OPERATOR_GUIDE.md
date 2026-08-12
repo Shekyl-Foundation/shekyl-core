@@ -221,12 +221,25 @@ discipline during the cold-start window, which this section is.
 | Independence *across* your funding events | **You** | Do not anchor multiple events to a common trigger |
 | Challenge traffic over anonymity transport | **Wallet/node** (loud refusal default) | Do not reconfigure it to allow clearnet |
 | `P` ↔ principal network isolation | **You** (transport config) | Keep separate circuits/guards/streams |
+| Fresh persona per bond, never reused | **Wallet** (automatic, monotone) | Nothing — you do not pick or manage personas; do not try to "reset" or reuse one |
 | Cold-start thin cover | **Time** (self-resolves) | Extra opsec discipline while early |
 
 The pattern: **the protocol protects what it can see and police; the residuals
 that live in operator behavior are routed here, to you, because consensus cannot
 reach them.** The good news is that all of them are avoided by the same posture
 -- set it up correctly and leave it alone.
+
+**On personas: the wallet never reuses one, and this is a refusal, not a
+setting.** Each time you bond, the wallet stands up a *fresh* persona and moves
+forward; it will not hand back a persona it has already retired. That refusal is
+deliberate. Reusing a retired persona would tie its new activity to its old
+activity, and -- because every one of your personas derives from your single
+wallet seed -- a linked pair of personas is a thread back to *you*, the same
+clustering fingerprint [Footgun 2](#footgun-2-the-shared-anchor-funding-tell)
+warns about, but self-inflicted. You do not manage this, cannot see a "slot
+number", and never need to: keep one wallet as the source of truth for your
+staking and back up its seed. Treat that wallet as the record of which personas
+you have used -- the same care you already give a wallet that holds funds.
 
 ---
 
