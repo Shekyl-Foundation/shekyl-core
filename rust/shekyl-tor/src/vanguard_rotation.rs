@@ -115,22 +115,39 @@ pub enum VanguardsMode {
 /// ([`VerifiedTorBinary`](crate::binary::VerifiedTorBinary)): the guarantee
 /// is structural rather than a convention the serving daemon must remember.
 ///
-/// Deliberately carries no data — it is proof, not a value.
+/// **It carries the actor it was confirmed on, and publication consumes it.**
+/// A zero-sized, actor-unbound token accepted by reference would only prove
+/// that pins were confirmed *somewhere*: a caller could mint against one
+/// incarnation's control actor and publish on another where nothing was
+/// pinned, which is the forbidden `Off + onion` posture wearing a witness.
+/// Binding the actor means publication has exactly one source for it — there
+/// is no second argument to mismatch — and consuming the witness means one
+/// confirmed `SETCONF` authorizes one publication, not a standing capability
+/// that outlives the incarnation that earned it.
 ///
 /// **No test bypass exists yet, on purpose.** The obvious sibling would be a
 /// loud `unchecked_for_test` mirroring
 /// [`VerifiedTorBinary`](crate::binary::VerifiedTorBinary)'s, and one should
-/// land the day a test drives [`crate::onion_service::publish_onion`]
+/// land the day a test drives `crate::onion_service::publish_onion`
 /// directly. Today no test does — the supervisor path mints the witness for
 /// real — so adding the escape hatch now would put an unused hole in a
 /// security gate, which is the kind of debt this codebase deletes rather than
 /// carries.
 #[derive(Debug)]
-pub struct VanguardsActive(());
+pub struct VanguardsActive {
+    /// The control actor the pins were confirmed on. Publication rides this
+    /// actor, so it cannot target an incarnation that never pinned.
+    actor: kameo::actor::ActorRef<TorControl>,
+}
 
 impl VanguardsActive {
-    fn confirmed() -> Self {
-        Self(())
+    fn confirmed(actor: kameo::actor::ActorRef<TorControl>) -> Self {
+        Self { actor }
+    }
+
+    /// The actor this witness authorizes publication on.
+    pub(crate) fn actor(&self) -> &kameo::actor::ActorRef<TorControl> {
+        &self.actor
     }
 }
 
@@ -564,10 +581,35 @@ enum Layer {
 /// restart, drives rotation. Each node's expiry is tracked **independently**
 /// (the spec keeps per-node rotation times so the primary and second-level
 /// guards' rotations are not disclosed together).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct VanguardNode {
     fingerprint: RelayFingerprint,
     expires_at: SystemTime,
+}
+
+/// A node is a fingerprint plus the instant it rotates — the persona's guard
+/// topology *and* its rotation schedule, both of which the spec keeps private
+/// (per-node rotation times are tracked separately precisely so the primary
+/// and second-level guards' rotations are not disclosed together). So `Debug`
+/// renders nothing, matching the redaction `HsLayerPins` already applies to
+/// the same assembled topology: a panic message or a stray `{:?}` must not be
+/// the thing that hands an adversary the set it is trying to Sybil.
+impl std::fmt::Debug for VanguardNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("VanguardNode(<redacted>)")
+    }
+}
+
+/// Counts only — see [`VanguardNode`]'s `Debug`. `PartialEq` is untouched, so
+/// tests still compare states exactly; what they lose is a rendering of the
+/// difference, which is the correct trade for a secret this shape.
+impl std::fmt::Debug for RotationState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RotationState")
+            .field("layer2_count", &self.layer2.len())
+            .field("layer3_count", &self.layer3.len())
+            .finish()
+    }
 }
 
 /// The full rotation state: the L2 and L3 node sets with their timers.
@@ -576,7 +618,7 @@ struct VanguardNode {
 /// rotation loop mutates it as nodes expire. Once constructed (via
 /// [`Self::select_fresh`] or a successful [`Self::deserialize`]), both layers
 /// always hold exactly the spec counts and are pairwise disjoint.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct RotationState {
     layer2: Vec<VanguardNode>,
     layer3: Vec<VanguardNode>,
@@ -1130,7 +1172,7 @@ async fn apply_pins(
         r = actor.ask(Command::SetConf(pins)) => r,
     };
     match reply {
-        Ok(reply) if reply.status() == 250 => Ok(VanguardsActive::confirmed()),
+        Ok(reply) if reply.status() == 250 => Ok(VanguardsActive::confirmed(actor.clone())),
         Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::Rejected {
             status: reply.status(),
         })),
@@ -1274,6 +1316,32 @@ mod tests {
             restored, original,
             "restore must preserve identities AND expiry timers"
         );
+    }
+
+    #[test]
+    fn debug_never_renders_the_topology_or_the_rotation_schedule() {
+        // Copilot review, PR #447: `RotationState` derived `Debug` and printed
+        // the full fingerprint set AND every expiry — the persona's guard
+        // topology plus its rotation schedule, which is exactly what a
+        // guard-discovery adversary wants, and which `HsLayerPins` already
+        // redacts for the same data. A panic message or a stray `{:?}` must
+        // not be what hands it over.
+        let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(4)).unwrap();
+        let rendered = format!("{state:?}");
+        for node in state.layer2.iter().chain(&state.layer3) {
+            assert!(
+                !rendered.contains(&node.fingerprint.to_specifier()),
+                "a pinned fingerprint reached Debug output"
+            );
+        }
+        // Nor the schedule: no expiry timestamp in any form.
+        assert!(!rendered.contains("expires_at"));
+        assert!(
+            !format!("{:?}", state.layer2[0]).contains(&state.layer2[0].fingerprint.to_specifier())
+        );
+        // Counts still render, so the type stays diagnosable in shape.
+        assert!(rendered.contains("layer2_count"));
+        assert!(rendered.contains("layer3_count"));
     }
 
     #[test]

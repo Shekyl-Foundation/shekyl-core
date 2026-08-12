@@ -837,13 +837,12 @@ async fn drive_incarnation(
         // handle here, it is a case the config cannot express. The `Option` that
         // remains is only "did this instance run vanguards at all", and a
         // serving one always did.
-        let Some(witness) = vanguards_witness.as_ref() else {
+        let Some(witness) = vanguards_witness else {
             return IncarnationEnd::Failed(ServiceFailure::Internal(
                 "serving posture reached the onion publish without a vanguards witness".to_owned(),
             ));
         };
         match publish_onion(
-            ctx.actor,
             spec,
             ctx.policy.onion_publish_deadline,
             ctx.shutdown,

@@ -10,7 +10,8 @@
 //!
 //! - [`OnionServiceSpec`] — the least-privilege credential + port map the
 //!   supervisor holds across incarnations (an [`OnionIdentity`], never a seed).
-//! - [`OnionPublishError`] / [`publish_onion`] — drive `ADD_ONION` on a live
+//! - [`OnionPublishError`] / `publish_onion` (crate-private — the supervisor
+//!   is the only legitimate publisher) — drive `ADD_ONION` on a live
 //!   control actor, map control faults, and surface protocol verdicts from
 //!   [`crate::control::onion::evaluate_add_onion_reply`].
 //!
@@ -30,7 +31,7 @@ use crate::control::onion::{
     evaluate_add_onion_reply, AddOnion, AddOnionReplyError, OnionFlags, OnionPort, OnionPow,
     ServiceId,
 };
-use crate::control::{Command, ControlError, TorControl};
+use crate::control::{Command, ControlError};
 use crate::onion_identity::OnionIdentity;
 use crate::vanguard_rotation::VanguardsActive;
 
@@ -215,15 +216,29 @@ impl std::fmt::Debug for OnionServiceSpec {
 /// [`VanguardManager::establish`](crate::vanguard_rotation::VanguardManager::establish)
 /// after a confirmed `SETCONF`, so "onion published without full vanguards"
 /// has no representation here — the guarantee is structural rather than a
-/// convention the caller must remember. The value is unused by design; its
-/// *existence* is the proof.
-pub async fn publish_onion(
-    actor: &kameo::actor::ActorRef<TorControl>,
+/// convention the caller must remember.
+///
+/// It is taken **by value**, and the actor comes *out of it* rather than
+/// alongside it. A shared reference to a zero-sized token would only prove
+/// pins were confirmed *somewhere*: it could be minted against one
+/// incarnation's control actor and reused to publish on another that never
+/// pinned — the forbidden `Off + onion` posture wearing a witness. Carrying
+/// the actor leaves no second argument to mismatch, and consuming the witness
+/// binds one confirmed `SETCONF` to one publication rather than to a standing
+/// capability that outlives the incarnation which earned it.
+///
+/// Crate-private for the same reason it is gated: the supervisor is the only
+/// legitimate publisher, and public API with no external consumer is surface
+/// that can only be misused (rule 15).
+pub(crate) async fn publish_onion(
     spec: &OnionServiceSpec,
     reply_deadline: Duration,
     shutdown: &mut oneshot::Receiver<()>,
-    _vanguards: &VanguardsActive,
+    vanguards: VanguardsActive,
 ) -> Result<(), OnionPublishAbort> {
+    // The witness carries the actor its pins were confirmed on; publication
+    // rides that actor and nothing else.
+    let actor = vanguards.actor();
     let expected = spec.identity.service_id().clone();
     // `discard_pk` always: the key is re-mintable from the held identity on
     // demand, so tor has no reason to keep a copy it could be asked to hand
