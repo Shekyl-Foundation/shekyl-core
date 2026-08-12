@@ -31,6 +31,7 @@
 pub mod actor;
 pub mod auth;
 pub mod bootstrap;
+pub mod consensus;
 pub mod framing;
 pub mod onion;
 pub mod safecookie;
