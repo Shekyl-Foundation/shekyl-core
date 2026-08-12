@@ -1129,9 +1129,17 @@ the round kept trying to add forensics underneath it.
    free-form key=value); our **own** relay selection (bandwidth-weighted,
    from the consensus over the control port) and rotation manager with
    **on-disk persistence** reloaded by the supervisor on restart; and the
-   spec's published parameters as provisional pins the rig re-derives:
-   `NUM_LAYER2_GUARDS = 4`, `NUM_LAYER3_GUARDS = 6`, L2 lifetime uniform
-   over 30–60 days (mean 45). It is us implementing a Tor subsystem —
+   spec's published parameters as **spec-pins, not provisional** (corrected
+   2026-08-11): `NUM_LAYER2_GUARDS = 4`, `NUM_LAYER3_GUARDS = 6`, L2 lifetime
+   uniform over 30–60 days (mean 45), L3 lifetime `max(X, X)` over 1–48 hours
+   (mean 31.5). These come from the **Sybil rotation table** — a property of
+   the Tor network's adversary model (with `NUM_LAYER3_GUARDS = 6`, 50 %
+   Sybil success takes ~15.75 d at 1 %, ~4 d at 5 %, ~2.62 d at 10 %), not of
+   our traffic. What the rig derives is **capacity** (whether a 4-node L2 set
+   carries a serving persona's concurrent rendezvous load) — a different
+   question. (Divergence recorded in code: the spec *text* gives L2 uniform
+   while its reference impl uses `max(X, X)` for both layers; we follow the
+   analyzed spec text.) It is us implementing a Tor subsystem —
    accepted here only because the alternative is a distro-dropped Python
    package holding a second control connection. **Bandguards and Rendguards
    stay OUT** (reopen criterion, rule 21): they need CIRC-event parsing and
