@@ -48,7 +48,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use kameo::actor::Spawn;
 use kameo::error::SendError;
@@ -56,11 +56,16 @@ use tokio::sync::{oneshot, watch};
 
 use crate::binary::{self, TorBinaryError, VerifiedTorBinary};
 use crate::control::framing::ControlReply;
+use crate::control::vanguards::OsVanguardRng;
 use crate::control::{
     BootstrapReadiness, BootstrapState, Command, ControlError, EventSink, ManagedTor, SocksPort,
     TorControl, TorControlConfig, TorExit, TorLaunch,
 };
 use crate::onion_service::{publish_onion, OnionPublishAbort};
+use crate::vanguard_rotation::{
+    apply_pins, fetch_consensus, load_state, save_state, state_path, RotationState, VanguardsAbort,
+    VanguardsActive, VanguardsError, VanguardsMode,
+};
 
 // Config/error types for the onion publish surface live in `onion_service`
 // (their own concern). Re-exported here so `TorServiceConfig` consumers can
@@ -162,6 +167,18 @@ pub enum ServiceFailure {
     /// serving posture is up when an onion is configured) is never reached
     /// on this incarnation.
     OnionPublish(OnionPublishError),
+    /// Pinning or rotating the vanguard set failed. Transient like any other
+    /// control fault: retries continue, because a serving persona without
+    /// vanguards is a posture we refuse to publish `Ready` for.
+    Vanguards(VanguardsError),
+    /// An onion service is configured with [`VanguardsMode::Off`] — the
+    /// combination the mechanism ruling forbids (a serving persona on
+    /// lite-only guard protection, silently weaker with no feedback channel).
+    /// Refused at every incarnation; the fix is operator-side
+    /// (`vanguards: VanguardsMode::Managed`), so retrying cannot clear it —
+    /// which is precisely why it must be a visible alarm rather than a
+    /// silent downgrade.
+    VanguardsRequired,
 }
 
 /// The two retry cadences (§3c restart classification).
@@ -180,13 +197,18 @@ pub enum FailureClass {
 /// Classify a failure into its retry cadence.
 pub fn classify(failure: &ServiceFailure) -> FailureClass {
     match failure {
-        ServiceFailure::Binary(_) => FailureClass::Trust,
+        // `VanguardsRequired` joins the trust class deliberately: it is an
+        // operator misconfiguration that retrying cannot clear, so it should
+        // alarm immediately and retry slowly — fixing the config then
+        // auto-recovers, exactly like reinstalling a refused binary.
+        ServiceFailure::Binary(_) | ServiceFailure::VanguardsRequired => FailureClass::Trust,
         ServiceFailure::Control(_)
         | ServiceFailure::NoSocksListener
         | ServiceFailure::BootstrapTimeout
         | ServiceFailure::Exited(_)
         | ServiceFailure::Internal(_)
-        | ServiceFailure::OnionPublish(_) => FailureClass::Transient,
+        | ServiceFailure::OnionPublish(_)
+        | ServiceFailure::Vanguards(_) => FailureClass::Transient,
     }
 }
 
@@ -214,6 +236,11 @@ pub struct SupervisorPolicy {
     /// keeps SOCKS discovery from hanging the supervisor (and thus `shutdown()`).
     /// Policy-driven (like the other timeouts) so tests can shrink it.
     pub socks_discovery_deadline: Duration,
+    /// Bound on each vanguards control round-trip (`GETINFO ns/all` and the
+    /// `SETCONF`). More generous than the other reply bounds because the
+    /// consensus reply is large (thousands of router entries), not because
+    /// the network is slow.
+    pub vanguards_deadline: Duration,
     /// Bound on the `ADD_ONION` reply for the configured onion service.
     /// `ADD_ONION` loads the key and answers immediately — descriptor
     /// publication is asynchronous and NOT awaited here — so, like SOCKS
@@ -231,6 +258,7 @@ impl Default for SupervisorPolicy {
             trust_retry: Duration::from_secs(300),
             bootstrap_deadline: Duration::from_secs(300),
             socks_discovery_deadline: Duration::from_secs(30),
+            vanguards_deadline: Duration::from_secs(60),
             onion_publish_deadline: Duration::from_secs(30),
         }
     }
@@ -353,7 +381,19 @@ pub struct TorServiceConfig {
     /// derived address; a publish failure tears the incarnation down
     /// through the normal retry/degrade policy instead of publishing a
     /// half-up `Ready`.
+    ///
+    /// Requires [`VanguardsMode::Managed`]: publishing needs a
+    /// [`VanguardsActive`]
+    /// witness, so `onion` + [`VanguardsMode::Off`] is refused loudly at the
+    /// incarnation ([`ServiceFailure::VanguardsRequired`]) rather than
+    /// serving a persona on lite-only protection.
     pub onion: Option<OnionServiceSpec>,
+    /// Whether the supervisor manages **full** vanguards for this instance
+    /// (select → `SETCONF` → rotate → persist). Defaults to
+    /// [`VanguardsMode::Off`]: full vanguards adds a guard layer and its
+    /// latency, which a non-serving instance should not pay. A serving
+    /// persona (`onion` set) requires `Managed`.
+    pub vanguards: VanguardsMode,
 }
 
 /// Handle to a running supervisor: the posture watch + shutdown.
@@ -444,6 +484,14 @@ async fn supervise(
     // incarnation holds `Ready` for `stable_reset` (in `drive_incarnation`).
     let mut degraded = false;
 
+    // Vanguard rotation state lives at SUPERVISOR scope and outlives every
+    // incarnation — the load-bearing invariant: a tor restart must not cause
+    // a rotation. Loaded from disk once (an absent/corrupt file yields `None`,
+    // and the first incarnation selects fresh); thereafter incarnations
+    // restore-and-apply it, and only the clock rotates it.
+    let state_file = state_path(&config.data_dir);
+    let mut rotation: Option<RotationState> = load_state(&state_file);
+
     loop {
         if !degraded {
             posture.send(TorPosture::Starting).ok();
@@ -498,6 +546,9 @@ async fn supervise(
                 actor: &actor,
                 policy: &config.policy,
                 onion: config.onion.as_ref(),
+                vanguards: config.vanguards,
+                rotation: &mut rotation,
+                state_file: &state_file,
                 attempt: &mut attempt,
                 degraded: &mut degraded,
                 posture: &posture,
@@ -608,10 +659,87 @@ struct IncarnationCtx<'a> {
     actor: &'a kameo::actor::ActorRef<TorControl>,
     policy: &'a SupervisorPolicy,
     onion: Option<&'a OnionServiceSpec>,
+    vanguards: VanguardsMode,
+    /// Supervisor-scoped rotation state — borrowed, never owned by the
+    /// incarnation, so a restart cannot re-draw it.
+    rotation: &'a mut Option<RotationState>,
+    state_file: &'a std::path::Path,
     attempt: &'a mut u32,
     degraded: &'a mut bool,
     posture: &'a watch::Sender<TorPosture>,
     shutdown: &'a mut oneshot::Receiver<()>,
+}
+
+/// Map a vanguards abort onto the incarnation's outcome.
+fn vanguards_abort_to_end(abort: VanguardsAbort) -> IncarnationEnd {
+    match abort {
+        VanguardsAbort::Shutdown => IncarnationEnd::Shutdown,
+        VanguardsAbort::ActorGone => IncarnationEnd::Failed(ServiceFailure::Exited(None)),
+        VanguardsAbort::Failed(e) => IncarnationEnd::Failed(ServiceFailure::Vanguards(e)),
+    }
+}
+
+/// Bring this incarnation's vanguards up: fetch the consensus, **restore**
+/// the supervisor-scoped set (or select it if there is none yet), expire
+/// anything the clock has aged out, `SETCONF` it, and persist.
+///
+/// The restore path is why a restart does not rotate: the persisted set and
+/// its per-node timers survive verbatim, and only relays that have left the
+/// consensus are repaired. The in-memory state is replaced **only on
+/// success** — an error must not leave the supervisor holding `None`, because
+/// the next incarnation would then select fresh, turning a transient failure
+/// into exactly the restart-driven rotation this design forbids.
+async fn establish_vanguards(
+    ctx: &mut IncarnationCtx<'_>,
+) -> Result<VanguardsActive, IncarnationEnd> {
+    let consensus =
+        match fetch_consensus(ctx.actor, ctx.policy.vanguards_deadline, ctx.shutdown).await {
+            Ok(relays) => relays,
+            Err(abort) => return Err(vanguards_abort_to_end(abort)),
+        };
+
+    let mut rng = OsVanguardRng;
+    let now = SystemTime::now();
+    // Clone, never take — see the doc note above.
+    let built = match ctx.rotation.clone() {
+        Some(previous) => previous.restore(&consensus, &mut rng),
+        None => RotationState::select_fresh(&consensus, now, &mut rng),
+    };
+    let mut state = match built {
+        Ok(state) => state,
+        Err(e) => {
+            return Err(IncarnationEnd::Failed(ServiceFailure::Vanguards(
+                VanguardsError::Rotation(e),
+            )))
+        }
+    };
+    // A long downtime may have spanned whole lifetimes; the clock still
+    // decides. This is not "a restart rotates" — it is "the wall clock
+    // rotated while we were down".
+    if let Err(e) = state.expire_due(&consensus, now, &mut rng) {
+        return Err(IncarnationEnd::Failed(ServiceFailure::Vanguards(
+            VanguardsError::Rotation(e),
+        )));
+    }
+
+    let witness = match apply_pins(
+        ctx.actor,
+        &state,
+        ctx.policy.vanguards_deadline,
+        ctx.shutdown,
+    )
+    .await
+    {
+        Ok(witness) => witness,
+        Err(abort) => return Err(vanguards_abort_to_end(abort)),
+    };
+    if let Err(e) = save_state(ctx.state_file, &state) {
+        return Err(IncarnationEnd::Failed(ServiceFailure::Vanguards(
+            VanguardsError::Persist(e.to_string()),
+        )));
+    }
+    *ctx.rotation = Some(state);
+    Ok(witness)
 }
 
 /// Drive one incarnation from spawn to death: forward bootstrap telemetry,
@@ -692,12 +820,31 @@ async fn drive_incarnation(
     // whose SOCKS works but whose onion did not publish is unreachable for
     // challenges, and publishing `Ready` for it would hide exactly the
     // failure the supervisor exists to surface.
+    // Phase 2a: apply full vanguards, if managed — BEFORE the onion, because
+    // publishing needs the witness this step mints, and because a persona
+    // must never be reachable on lite-only protection even briefly. Restores
+    // the supervisor-scoped state (repairing only relays that left the
+    // consensus) — it never re-selects, so this restart does not rotate.
+    let vanguards_witness = match ctx.vanguards {
+        VanguardsMode::Off => None,
+        VanguardsMode::Managed => match establish_vanguards(ctx).await {
+            Ok(witness) => Some(witness),
+            Err(end) => return end,
+        },
+    };
+
     if let Some(spec) = ctx.onion {
+        // The ruled-out configuration, refused rather than downgraded: no
+        // witness exists in `Off`, so there is nothing to pass here.
+        let Some(witness) = vanguards_witness.as_ref() else {
+            return IncarnationEnd::Failed(ServiceFailure::VanguardsRequired);
+        };
         match publish_onion(
             ctx.actor,
             spec,
             ctx.policy.onion_publish_deadline,
             ctx.shutdown,
+            witness,
         )
         .await
         {
@@ -731,10 +878,33 @@ async fn drive_incarnation(
     let reset_deadline = tokio::time::Instant::now() + ctx.policy.stable_reset;
     let mut forgiven = false;
     loop {
+        // Vanguard rotation rides its own arm, not the incarnation: L3 nodes
+        // average ~31.5 h and each node expires INDEPENDENTLY, so a
+        // long-lived incarnation must rotate mid-life. Sleep to the earliest
+        // per-node expiry; the arm is inert unless vanguards are managed.
+        let rotate_in = ctx
+            .rotation
+            .as_ref()
+            .and_then(RotationState::next_expiry)
+            .map(|at| {
+                at.duration_since(SystemTime::now())
+                    .unwrap_or(Duration::ZERO)
+            });
+        let rotate_armed = matches!(ctx.vanguards, VanguardsMode::Managed) && rotate_in.is_some();
+        // The sleep expression is always built (select! requires it); the
+        // guard is what decides whether it is polled.
+        let rotate_delay = rotate_in.unwrap_or(Duration::from_secs(3600));
+        let mut rotate_due = false;
+
         tokio::select! {
             _ = &mut *ctx.shutdown => return IncarnationEnd::Shutdown,
             () = ctx.actor.wait_for_shutdown() => {
                 return IncarnationEnd::Failed(ServiceFailure::Exited(None));
+            }
+            () = tokio::time::sleep(rotate_delay), if rotate_armed => {
+                // Handled after the select! so the rotation can borrow `ctx`
+                // whole without colliding with the other arms' futures.
+                rotate_due = true;
             }
             () = tokio::time::sleep_until(reset_deadline), if !forgiven => {
                 let was_degraded = *ctx.degraded;
@@ -751,7 +921,55 @@ async fn drive_incarnation(
                 }
             }
         }
+
+        if rotate_due {
+            if let Err(end) = rotate_vanguards(ctx).await {
+                return end;
+            }
+        }
     }
+}
+
+/// Rotate the vanguards whose clocks have expired, re-`SETCONF` the whole set,
+/// and persist. Called from the hold loop's rotation arm — never from a
+/// restart path.
+///
+/// A failure here fails the incarnation: the pinned set and our state would
+/// otherwise disagree, and `Ready` is defined as the full posture being up.
+/// The restart re-applies from persisted state, which is a repair, not a
+/// rotation.
+async fn rotate_vanguards(ctx: &mut IncarnationCtx<'_>) -> Result<(), IncarnationEnd> {
+    let consensus =
+        match fetch_consensus(ctx.actor, ctx.policy.vanguards_deadline, ctx.shutdown).await {
+            Ok(relays) => relays,
+            Err(abort) => return Err(vanguards_abort_to_end(abort)),
+        };
+    let Some(mut state) = ctx.rotation.clone() else {
+        return Ok(());
+    };
+    let mut rng = OsVanguardRng;
+    if let Err(e) = state.expire_due(&consensus, SystemTime::now(), &mut rng) {
+        return Err(IncarnationEnd::Failed(ServiceFailure::Vanguards(
+            VanguardsError::Rotation(e),
+        )));
+    }
+    if let Err(abort) = apply_pins(
+        ctx.actor,
+        &state,
+        ctx.policy.vanguards_deadline,
+        ctx.shutdown,
+    )
+    .await
+    {
+        return Err(vanguards_abort_to_end(abort));
+    }
+    if let Err(e) = save_state(ctx.state_file, &state) {
+        return Err(IncarnationEnd::Failed(ServiceFailure::Vanguards(
+            VanguardsError::Persist(e.to_string()),
+        )));
+    }
+    *ctx.rotation = Some(state);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -767,6 +985,7 @@ mod tests {
             trust_retry: Duration::from_millis(20),
             bootstrap_deadline: Duration::from_secs(5),
             socks_discovery_deadline: Duration::from_secs(2),
+            vanguards_deadline: Duration::from_secs(2),
             onion_publish_deadline: Duration::from_secs(2),
         }
     }
@@ -816,6 +1035,42 @@ mod tests {
         assert!(!is_degraded(&p, FailureClass::Transient, 2));
         assert!(is_degraded(&p, FailureClass::Transient, 3));
         assert!(is_degraded(&p, FailureClass::Transient, 4));
+    }
+
+    #[test]
+    fn vanguards_required_alarms_immediately_and_keeps_retrying() {
+        // The ruled-out configuration (serving onion + VanguardsMode::Off) is
+        // an operator misconfiguration, so it takes the TRUST cadence: alarm
+        // on the first occurrence and retry slowly forever, so fixing the
+        // config auto-recovers. It must not be transient — that would alarm
+        // only after `degrade_after` failures, hiding a persona whose serving
+        // posture we refuse to allow at all.
+        let p = tiny_policy();
+        assert_eq!(
+            classify(&ServiceFailure::VanguardsRequired),
+            FailureClass::Trust
+        );
+        assert!(is_degraded(&p, FailureClass::Trust, 1));
+        assert_eq!(retry_delay(&p, FailureClass::Trust, 50), p.trust_retry);
+    }
+
+    #[test]
+    fn vanguards_control_failures_are_transient() {
+        // A SETCONF refused by a wedged control port is an ordinary liveness
+        // fault: back off and retry, do not alarm on the first one.
+        assert_eq!(
+            classify(&ServiceFailure::Vanguards(VanguardsError::Rejected {
+                status: 552
+            })),
+            FailureClass::Transient
+        );
+    }
+
+    #[test]
+    fn vanguards_mode_defaults_to_off() {
+        // Full vanguards costs an extra guard layer and its latency; a
+        // non-serving instance must not pay it by default.
+        assert_eq!(VanguardsMode::default(), VanguardsMode::Off);
     }
 
     #[test]
@@ -950,6 +1205,7 @@ mod tests {
             policy: tiny_policy(),
             disable_network: true,
             onion: None,
+            vanguards: VanguardsMode::Off,
         });
         let mut posture = service.posture();
 
@@ -1001,6 +1257,7 @@ mod tests {
             policy: tiny_policy(),
             disable_network: true,
             onion: None,
+            vanguards: VanguardsMode::Off,
         });
         let mut posture = service.posture();
         service.shutdown().await;
@@ -1068,6 +1325,7 @@ mod live_tests {
             },
             disable_network: false,
             onion: None,
+            vanguards: VanguardsMode::Off,
         });
         let mut posture = service.posture();
 
@@ -1167,6 +1425,7 @@ mod live_tests {
             },
             disable_network: false,
             onion: Some(spec),
+            vanguards: VanguardsMode::Managed,
         });
         let mut posture = service.posture();
 
@@ -1227,6 +1486,7 @@ mod live_tests {
             },
             disable_network: false,
             onion: None,
+            vanguards: VanguardsMode::Off,
         });
         let mut posture = service.posture();
 
@@ -1322,6 +1582,7 @@ mod live_tests {
             // teardown + respawn into the same DataDirectory.
             disable_network: true,
             onion: None,
+            vanguards: VanguardsMode::Off,
         });
         let mut posture = service.posture();
 

@@ -43,15 +43,19 @@
 //! proposal explicitly notes the design did not have to be that way. Treating
 //! flag-loss as a rotation is a separate, argued decision — not inherited.
 
+use std::collections::HashSet;
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use std::collections::HashSet;
+use kameo::error::SendError;
+use tokio::sync::oneshot;
 
-use crate::control::consensus::ConsensusRelay;
+use crate::control::consensus::{parse_ns_all, ConsensusRelay};
 use crate::control::vanguards::{
     draw_replacement, select_disjoint, HsLayerPins, RelayFingerprint, VanguardRng,
     NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS,
 };
+use crate::control::{Command, ControlError, TorControl};
 
 /// L2 lifetime bounds (spec): uniform over [30, 60] days.
 const L2_LIFETIME_MIN: Duration = Duration::from_secs(30 * 86_400);
@@ -59,6 +63,210 @@ const L2_LIFETIME_MAX: Duration = Duration::from_secs(60 * 86_400);
 /// L3 lifetime bounds (spec): `max(X, X)` over [1, 48] hours inclusive.
 const L3_LIFETIME_MIN: Duration = Duration::from_secs(3_600);
 const L3_LIFETIME_MAX: Duration = Duration::from_secs(48 * 3_600);
+
+/// Whether this Tor instance runs supervisor-managed **full** vanguards.
+///
+/// Defaults to [`Self::Off`]: full vanguards adds two guard layers where
+/// tor's built-in lite adds one, which the spec is explicit costs longer
+/// paths and higher latency — a non-serving instance should not pay that.
+///
+/// The four configurations, and why only three are representable:
+/// - `Off` + no onion — a plain client (the unchanged default);
+/// - `Managed` + no onion — **legitimate**: the witness leg is an onion
+///   *client* building rendezvous circuits, and client-side guard discovery
+///   is a real attack, so this configuration stays available;
+/// - `Managed` + onion — the serving posture;
+/// - `Off` + onion — **the configuration our own ruling forbids** (a serving
+///   persona with lite-only protection is silently weaker with no feedback
+///   channel, against an adversary whose success is invisible to the
+///   operator). It is made unrepresentable at the registration surface:
+///   publishing a persona onion requires a [`VanguardsActive`] witness, and
+///   no witness exists in `Off`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VanguardsMode {
+    /// No supervisor pinning; tor's built-in vanguards-lite applies.
+    #[default]
+    Off,
+    /// The supervisor selects, pins, rotates and persists full vanguards.
+    Managed,
+}
+
+/// Evidence that full vanguards are **pinned and confirmed on the current
+/// incarnation** — the token the onion-registration surface demands.
+///
+/// Mintable only by [`apply_pins`], and only after tor has answered the
+/// `SETCONF` with `250`. This is the crate's established sealed-witness
+/// pattern ([`VerifiedTorBinary`](crate::binary::VerifiedTorBinary), mintable
+/// only by `discover_and_verify`): the guarantee is structural rather than a
+/// convention the serving daemon must remember, which is exactly what this
+/// crate keeps refusing to rely on.
+///
+/// Deliberately carries no data — it is proof, not a value.
+///
+/// **No test bypass exists yet, on purpose.** The obvious sibling would be a
+/// loud `unchecked_for_test` mirroring
+/// [`VerifiedTorBinary`](crate::binary::VerifiedTorBinary)'s, and one should
+/// land the day a test drives [`crate::onion_service::publish_onion`]
+/// directly. Today no test does — the supervisor path mints the witness for
+/// real — so adding the escape hatch now would put an unused hole in a
+/// security gate, which is the kind of debt this codebase deletes rather than
+/// carries.
+#[derive(Debug)]
+pub struct VanguardsActive(());
+
+impl VanguardsActive {
+    /// Mint the witness. **Private on purpose**: only the confirmed-`SETCONF`
+    /// path may call it.
+    fn confirmed() -> Self {
+        Self(())
+    }
+}
+
+/// Why applying vanguards aborted.
+#[derive(Debug)]
+pub enum VanguardsAbort {
+    /// The caller asked the service to stop mid-apply.
+    Shutdown,
+    /// The control actor died — an incarnation death, not a vanguards fault.
+    ActorGone,
+    /// The apply itself failed.
+    Failed(VanguardsError),
+}
+
+/// Why a vanguards apply failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VanguardsError {
+    /// The control channel failed (or the reply timed out).
+    Control(ControlError),
+    /// Tor refused the `SETCONF` with a non-250 status.
+    Rejected {
+        /// The status tor returned.
+        status: u16,
+    },
+    /// The consensus could not fill or repair the vanguard set.
+    Rotation(RotationError),
+    /// The persisted state could not be written — refused loudly rather than
+    /// running with state that would be lost on restart, because losing it
+    /// means the next incarnation re-draws (a rotation a restart must never
+    /// cause).
+    Persist(String),
+}
+
+impl std::fmt::Display for VanguardsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Control(e) => write!(f, "vanguards control failure: {e}"),
+            Self::Rejected { status } => write!(f, "tor refused SETCONF with status {status}"),
+            Self::Rotation(e) => write!(f, "vanguard set could not be built: {e}"),
+            Self::Persist(e) => write!(f, "vanguard state could not be persisted: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for VanguardsError {}
+
+/// Fetch the consensus over the control port (`GETINFO ns/all`) — the
+/// candidate pool selection and repair draw from.
+///
+/// # Errors
+///
+/// [`VanguardsAbort`] on shutdown, actor death, timeout, or a non-250 reply.
+pub async fn fetch_consensus(
+    actor: &kameo::actor::ActorRef<TorControl>,
+    reply_deadline: Duration,
+    shutdown: &mut oneshot::Receiver<()>,
+) -> Result<Vec<ConsensusRelay>, VanguardsAbort> {
+    let reply = tokio::select! {
+        _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
+        () = tokio::time::sleep(reply_deadline) => {
+            return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
+        }
+        r = actor.ask(Command::GetInfo(vec!["ns/all".to_owned()])) => r,
+    };
+    match reply {
+        Ok(reply) if reply.status() == 250 => Ok(parse_ns_all(&reply)),
+        Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::Rejected {
+            status: reply.status(),
+        })),
+        Err(SendError::HandlerError(e)) => Err(VanguardsAbort::Failed(VanguardsError::Control(e))),
+        Err(_) => Err(VanguardsAbort::ActorGone),
+    }
+}
+
+/// Apply `state`'s pins to the live tor with one `SETCONF`, and — only on a
+/// confirmed `250` — mint the [`VanguardsActive`] witness.
+///
+/// This is the **sole** minting path, which is what makes "a persona onion is
+/// only published behind confirmed vanguards" a type-level guarantee.
+///
+/// # Errors
+///
+/// [`VanguardsAbort`] on shutdown, actor death, timeout, a non-250 reply, or
+/// an unfillable set.
+pub async fn apply_pins(
+    actor: &kameo::actor::ActorRef<TorControl>,
+    state: &RotationState,
+    reply_deadline: Duration,
+    shutdown: &mut oneshot::Receiver<()>,
+) -> Result<VanguardsActive, VanguardsAbort> {
+    let pins = state
+        .to_pins()
+        .ok_or(VanguardsAbort::Failed(VanguardsError::Rotation(
+            RotationError::TooFewEligible,
+        )))?;
+    let reply = tokio::select! {
+        _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
+        () = tokio::time::sleep(reply_deadline) => {
+            return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
+        }
+        r = actor.ask(Command::SetConf(pins)) => r,
+    };
+    match reply {
+        Ok(reply) if reply.status() == 250 => Ok(VanguardsActive::confirmed()),
+        Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::Rejected {
+            status: reply.status(),
+        })),
+        Err(SendError::HandlerError(e)) => Err(VanguardsAbort::Failed(VanguardsError::Control(e))),
+        Err(_) => Err(VanguardsAbort::ActorGone),
+    }
+}
+
+/// The persisted state file inside the Tor `DataDirectory`.
+///
+/// **Plaintext, deliberately.** Tor's own guard state — which holds the *L1
+/// entry guards*, strictly more sensitive than our L2/L3 set — sits
+/// unencrypted in the same directory; encrypting one file beside it would be
+/// theatre. The honest operator-facing statement is about the directory as a
+/// whole: the Tor data directory is a persona-linkable artifact, and backing
+/// it up or imaging the host is a deanonymization vector.
+#[must_use]
+pub fn state_path(data_dir: &Path) -> std::path::PathBuf {
+    data_dir.join("shekyl-vanguards.state")
+}
+
+/// Load persisted rotation state. `None` when absent **or malformed** — a
+/// corrupt file is treated as "no state" (the caller selects fresh) rather
+/// than as a partial set that would silently under-pin.
+#[must_use]
+pub fn load_state(path: &Path) -> Option<RotationState> {
+    let text = std::fs::read_to_string(path).ok()?;
+    RotationState::deserialize(&text)
+}
+
+/// Persist rotation state **atomically** (write a temp file, then rename).
+///
+/// Atomicity is load-bearing, not hygiene: a torn write would be read back as
+/// corrupt, the caller would select fresh, and the restart would have caused a
+/// rotation — precisely the invariant this module exists to hold.
+///
+/// # Errors
+///
+/// The underlying I/O error.
+pub fn save_state(path: &Path, state: &RotationState) -> std::io::Result<()> {
+    let tmp = path.with_extension("state.tmp");
+    std::fs::write(&tmp, state.serialize())?;
+    std::fs::rename(&tmp, path)
+}
 
 /// Which layer a node sits in — its lifetime distribution differs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

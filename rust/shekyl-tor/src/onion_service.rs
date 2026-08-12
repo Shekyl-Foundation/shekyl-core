@@ -32,6 +32,7 @@ use crate::control::onion::{
 };
 use crate::control::{Command, ControlError, TorControl};
 use crate::onion_identity::OnionIdentity;
+use crate::vanguard_rotation::VanguardsActive;
 
 /// Why publishing the configured onion service failed.
 ///
@@ -205,11 +206,23 @@ impl std::fmt::Debug for OnionServiceSpec {
 /// and answers immediately; descriptor publication is asynchronous and is
 /// **not** awaited here. A stall means a wedged control port, not a slow
 /// network.
+///
+/// # The `VanguardsActive` parameter is the gate, not decoration
+///
+/// A serving persona **must not** run on lite-only guard protection: it would
+/// be silently weaker with no feedback channel, against an adversary whose
+/// success is invisible to the operator. The witness is mintable only by
+/// [`apply_pins`](crate::vanguard_rotation::apply_pins) after a confirmed
+/// `SETCONF`, so "onion published without full vanguards" has no
+/// representation here — the guarantee is structural rather than a
+/// convention the caller must remember. The value is unused by design; its
+/// *existence* is the proof.
 pub async fn publish_onion(
     actor: &kameo::actor::ActorRef<TorControl>,
     spec: &OnionServiceSpec,
     reply_deadline: Duration,
     shutdown: &mut oneshot::Receiver<()>,
+    _vanguards: &VanguardsActive,
 ) -> Result<(), OnionPublishAbort> {
     let expected = spec.identity.service_id().clone();
     // `discard_pk` always: the key is re-mintable from the held identity on
