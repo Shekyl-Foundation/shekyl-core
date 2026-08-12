@@ -176,10 +176,8 @@
 //! "where is `Engine::balance()`?": a thin wrapper would freeze a
 //! signature before the Phase 2 filtered-query design settles, so the
 //! pattern is documented instead (reopen at Phase 2 ops).
-pub mod abandon_tx; // PR-SJ-3 (WALLET_SEND_RECORD P3-4)
 pub mod capability;
-// set_tx_note: PR-SA-4 / SJ-DQ-7 annotation surface (own file, not Engine growth).
-pub mod set_tx_note;
+pub mod local_ledger_ops;
 // CT-5 curve-tree actor + handle (`docs/design/CT5_ENGINE_WIRING.md` §3.1).
 // Mirrors `key_actor`: a `kameo` actor owns the wallet's `CurveTreeClient`
 // (redb single-writer), and `Engine` holds a `Clone` `CurveTreeHandle`.

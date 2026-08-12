@@ -43,10 +43,10 @@
 use shekyl_engine_state::{AbandonEdge, SendState};
 use shekyl_types::TxHash;
 
-use super::error::PersistenceError;
-use super::lifecycle::drive_persistence;
-use super::traits::{DaemonEngine, PendingTxEngine, PersistenceEngine, RefreshEngine};
-use super::{Engine, EngineSignerKind, LocalLedger};
+use crate::engine::error::PersistenceError;
+use crate::engine::lifecycle::drive_persistence;
+use crate::engine::traits::{DaemonEngine, PendingTxEngine, PersistenceEngine, RefreshEngine};
+use crate::engine::{Engine, EngineSignerKind, LocalLedger};
 
 /// Success outcome of [`Engine::abandon_tx_persisted`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +88,7 @@ pub enum AbandonTxError {
 impl<
         S: EngineSignerKind,
         D: DaemonEngine,
-        E: super::traits::EconomicsEngine,
+        E: crate::engine::traits::EconomicsEngine,
         R: RefreshEngine,
         P: PendingTxEngine,
         F: PersistenceEngine,
@@ -160,9 +160,10 @@ mod tests {
     use tokio::sync::RwLock;
     use zeroize::Zeroizing;
 
-    use super::super::lifecycle::EngineCreateParams;
-    use super::super::traits::LedgerEngine;
-    use super::super::{Credentials, DaemonClient, Engine, SoloSigner};
+    use crate::engine::lifecycle::EngineCreateParams;
+    use crate::engine::traits::LedgerEngine;
+    use crate::engine::{Credentials, DaemonClient, Engine, SoloSigner};
+
     use super::{AbandonTxError, AbandonTxOutcome};
 
     /// Minimal unspent funding row at `gindex` (tests override spend
@@ -411,7 +412,7 @@ mod tests {
         let mut guard = engine.ledger.write();
         let state = &mut *guard;
         // The wipe, then replay re-creates the funding row.
-        super::super::rescan::reset_scan_derived_state(&mut state.ledger, &mut state.indexes);
+        crate::engine::rescan::reset_scan_derived_state(&mut state.ledger, &mut state.indexes);
         let wallet = &mut state.ledger;
         wallet.ledger.transfers.push(mk_row(0x11, 7));
         wallet.ledger.tip.synced_height = 40;

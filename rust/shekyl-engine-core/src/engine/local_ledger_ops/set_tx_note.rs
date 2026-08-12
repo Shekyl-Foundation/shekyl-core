@@ -46,10 +46,10 @@
 use shekyl_engine_state::{SetTxNoteOutcome, TxNoteTooLong};
 use shekyl_types::TxHash;
 
-use super::error::PersistenceError;
-use super::lifecycle::drive_persistence;
-use super::traits::{DaemonEngine, PendingTxEngine, PersistenceEngine, RefreshEngine};
-use super::{Engine, EngineSignerKind, LocalLedger};
+use crate::engine::error::PersistenceError;
+use crate::engine::lifecycle::drive_persistence;
+use crate::engine::traits::{DaemonEngine, PendingTxEngine, PersistenceEngine, RefreshEngine};
+use crate::engine::{Engine, EngineSignerKind, LocalLedger};
 
 /// Failures from [`Engine::set_tx_note`].
 #[derive(Debug, thiserror::Error)]
@@ -74,7 +74,7 @@ pub enum SetTxNoteError {
 impl<
         S: EngineSignerKind,
         D: DaemonEngine,
-        E: super::traits::EconomicsEngine,
+        E: crate::engine::traits::EconomicsEngine,
         R: RefreshEngine,
         P: PendingTxEngine,
         F: PersistenceEngine,
@@ -147,8 +147,9 @@ mod tests {
     use shekyl_rpc_transport::HttpRpc;
     use shekyl_types::TxHash;
 
-    use super::super::lifecycle::EngineCreateParams;
-    use super::super::{Credentials, DaemonClient, Engine, SoloSigner};
+    use crate::engine::lifecycle::EngineCreateParams;
+    use crate::engine::{Credentials, DaemonClient, Engine, SoloSigner};
+
     use super::SetTxNoteError;
 
     /// A `DaemonClient` over an unreachable URL — setting a note is a local,
