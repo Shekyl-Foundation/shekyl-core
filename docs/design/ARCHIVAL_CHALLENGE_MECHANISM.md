@@ -1504,6 +1504,59 @@ against these.
    half, and it is **W₂-rig scope** — the rig measures both legs of the
    3.33 MB transfer.
 
+## 9.7 The composition slice (SH-1, landed 2026-08-12)
+
+§9.5 item 3's "lifecycle wiring" and §9.6 items 1/4 land together in
+`rust/shekyl-p-host`, because they are the same object: the serve-set's
+provenance, the pin, the onion, and the listener have one lifetime or they
+have none. Four dispositions worth the record.
+
+**1. The composition is entirely Rust, and nothing crosses the FFI.** The
+serving host's three inputs are all already wallet-side: the shard bytes are
+the wallet's redb `LeafStore` (the daemon's LMDB curve tree is the consensus
+copy and is not involved), the onion is the wallet's own `TorService`, and
+the connected `held_shard_ids` come back over the **existing**
+`get_archival_emission_claim_source` RPC, whose wallet-side decode already
+exists in Rust and already rides the persona transport. Recorded because the
+rule-20 question was asked explicitly and the honest answer is *no C++ was
+added and none needed deleting* — the boundary did not move because this
+slice never reaches it.
+
+**2. Pinning is a store write, so it cannot live on the serving side.** The
+`LeafStore` is single-writer redb, and its single writer is the wallet's
+curve-tree actor — that is what the actor is *for*. §9.6 item 4's "feed
+`pin_serve_set` from the bond record" therefore could not be implemented by
+handing the serving host a store handle: that is a second writer beside the
+one whose message loop is the serialization. The split: the host holds a
+read-only `ServingReader` (redb readers are MVCC snapshots, so serving reads
+run concurrently with block ingest at no cost), and the pin runs on the
+actor's own object behind a `ServeSetPinner` seam. The serving side now has
+no write to reach.
+
+**3. The serve-set's provenance is closed against drift, not against
+forgery — stated rather than implied.** `ServeSet`'s only constructor takes
+a decoded `ClaimantBondRecord`, so there is no way to start a serving host
+from a list maintained alongside the record; it also stamps the chain height
+it was read at, so a stale set is distinguishable rather than merely wrong.
+What that does **not** close: `ClaimantBondRecord` is an ordinary struct, so
+a caller determined to fabricate one can. The accidental path — the drifting
+parallel list — is the one §9.6 item 4 names, and it is gone. Making the
+fabricated path unrepresentable too needs a sealed decoder type minted only
+by the claim-source decode; **that is SH-2's, on the crate that owns the
+decode**, and is written here so it is owed rather than discovered.
+
+**4. A new load-bearing invariant, in the same class as the vanguards
+one: a serving host must never rebind its listener.** `TorService`
+republishes the onion on every incarnation from one `OnionServiceSpec`
+holding one loopback target. A listener rebound under an unchanged spec
+(`:0` picks a fresh ephemeral port) leaves the published descriptor pointing
+at a dead port — the persona looks healthy, publishes at its advertised
+address, and answers nothing, until the slash. So the endpoint binds once,
+the host owns it for its whole life, there is no rebind method, and teardown
+stops tor *before* the listener so no descriptor outlives the port it names.
+Exactly the shape of "a tor restart must not cause a rotation" (§7.4), and
+silent in exactly the same way.
+
 ## 10. Standing rules for any agent working this
 
 Verify every claim at file:line against `dev` **before** planning — including
