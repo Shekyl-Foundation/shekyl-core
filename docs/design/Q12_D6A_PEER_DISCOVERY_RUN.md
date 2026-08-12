@@ -1658,7 +1658,8 @@ event a dialer walks into. A fresh client polled all 20 until each answered:
 
 ```
 20 20 20 21 21 22 25 80 96 96 103 136 136 137 138 139 222 239 259 262   (seconds)
-recovered 20/20   min 20 s   p50 103 s   p90 259 s   max 262 s
+recovered 20/20   min 20 s   p50 96 s   p90 239 s   max 262 s
+(nearest-rank quantiles, n = 20 — the same estimator the constant is set from)
 ```
 
 **Every service came back.** Nothing was permanently broken by the restart — the
@@ -1666,25 +1667,40 @@ peers were up and correct the whole time, and undialable for between 20 seconds
 and four and a half minutes. Against `P2P_FAILED_ADDR_FORGET_SECONDS = 3600`,
 the daemon answers a four-minute condition with an hour of blindness.
 
-#### Deriving the window rather than choosing it
+#### Provisioned at the TAIL, not the median
 
-| candidate first window | first retry succeeds | second retry (at `3w`) covers |
+| candidate first window | first retry succeeds | three attempts cost |
 | --- | --- | --- |
-| 60 s | 35 % | 16/20 |
-| **120 s** | **55 %** | **20/20** |
-| 180 s | 80 % | 20/20 |
-| 300 s | 100 % | 20/20 |
+| 120 s | 55 % | 2460 s |
+| 180 s | 80 % | 2880 s |
+| **240 s (p90 = 239 s)** | **90 %** | **3300 s** |
+| 300 s (covers max) | 100 % | 3720 s — **exceeds the hour** |
 
-**Ruled: `P2P_ANON_FAILED_ADDR_FORGET_SECONDS = 120`** — the smallest round value
-above the **measured median** recovery of 103 s. The first retry then succeeds
-more often than not, and **escalation covers the tail by construction**: the
-second retry falls at `120 + 240 = 360 s`, past the 262 s maximum observed.
-Choosing 300 s to catch every case on the first attempt would trade a tail that
-escalation already handles for a window two and a half times longer on *every*
-address, which is the wrong side of the floor-reachability trade.
+**Ruled: `P2P_ANON_FAILED_ADDR_FORGET_SECONDS = 240`, the p90 of measured
+post-restart recovery.**
 
-A first window that is occasionally too short is **self-correcting**; one that is
-too long is the defect being fixed.
+**The asymmetry is one-sided, which is what forces a quantile.** A window that is
+too short retries *into the same dead interval*: it fails, escalates the
+counter, and pushes the next attempt further out. Under-estimating therefore
+**compounds** rather than degrades, while over-estimating costs only a slightly
+slower first retry. An earlier draft of this section argued the opposite — that
+a short first window is "self-correcting" because escalation absorbs it. **That
+was wrong, and wrong in a recognisable way**: the escalation ladder exists for a
+peer that is *genuinely gone*, and using it to absorb a mis-provisioned first
+value is machinery defending a wrong number.
+
+This is `F`'s provisioning shape and `hop`'s missing one: a distribution whose
+tail is more than twice its median (96 s against 262 s) cannot be summarised by
+its centre when the cost of being under is the failure being fixed.
+
+**p90 is also the largest quantile the retry budget admits.** Provisioning at the
+observed maximum would put three attempts at 3720 s — *more than the hour this
+constant exists to avoid spending*. The tail requirement and the time-to-floor
+bound meet at p90 rather than merely coexisting there.
+
+**The quantile is stated at the constant itself**, in `cryptonote_config.h`, so
+the next reader knows the value is a tail figure and does not "correct" it
+toward a central one.
 
 #### Time-to-floor, checked rather than assumed
 
@@ -1692,22 +1708,31 @@ Dials are serial and blocking (§11.11), so the retry count has a wall-clock cos
 
 | attempt | window | + 12 serial dials at 45 s | cumulative |
 | --- | --- | --- | --- |
-| 1 | 120 s | 540 s | 660 s |
-| 2 | 240 s | 540 s | 1440 s |
-| 3 | 480 s | 540 s | **2460 s** |
+| 1 | 240 s | 540 s | 780 s |
+| 2 | 480 s | 540 s | 1800 s |
+| 3 | 960 s | 540 s | **3300 s** |
 
 **Three full attempts at every one of twelve candidates costs less than the hour
 the unfixed code spends on a single failure.** That bound is asserted in
 `tests/unit_tests/node_server.cpp` rather than left in prose, so a future
 re-derivation of either constant has to keep it true.
 
-#### Measured three times, and the rate is stable
+#### Two rates, not one range
 
-The baselines of the three restart runs give an independent read of the
-publication failure rate, by a different method than §11.8's parallel rig:
-**17/20, 15/20, 16/20 dialable** after a 240 s settle — 15 %, 25 %, 20 %.
-Consistent with the rig's 13.3 % and the ring's ~23 %, and above the level at
-which §11.7's reachability table fails at `A = 15` under any of them.
+These are **different quantities** and folding them together hides the thing the
+fix is for:
+
+| quantity | what it is | measured |
+| --- | --- | --- |
+| **steady-state dial failure** | a dial against a settled, healthy service | 13.3 % (rig), 15 / 25 / 20 % (three restart baselines), ~23 % (the six-host ring) |
+| **post-restart dial failure** | a dial *inside the window the operator just created* | **55 %** |
+
+The first sets the reachability arithmetic in §11.7. **The second is the
+restart-loop's magnitude**, and it is the one that makes the documented remedy
+actively harmful: a *majority* of dials fail during exactly the interval the
+operator opened by applying the fix, and each of them costs an hour under the
+unpatched constant. Reported as a range, the 55 % reads as an outlier in a
+noisy measurement rather than as the mechanism.
 
 ### 11.13 The launch condition, stated plainly
 
