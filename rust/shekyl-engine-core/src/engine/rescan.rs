@@ -19,9 +19,9 @@
 //! that is supposed to restore it never writes it.
 //!
 //! **Preserve (RESCAN-SURVIVING — not reconstructible from chain):**
-//! - `sync_state.restore_from_height`, `creation_anchor_hash`, prefs
+//! - `sync_state.restore_from_height`, `creation_anchor_hash`
 //! - `tx_meta.tx_keys` (+ `pending_tx_hashes` — I-2 live set with keys)
-//! - `tx_meta.tx_notes`, `attributes`
+//! - `tx_meta.tx_notes`
 //! - bookkeeping rows (primary label, address book, payment-request
 //!   **records** — matches are unwound so replay can re-match)
 //! - `staking.staking_enabled`, `p_slot`, **and `bonded_slots`**.
@@ -40,7 +40,6 @@
 //!   wholesale rather than field-by-field, so a scan-derived field added
 //!   later is reset by construction instead of by remembering this function
 //! - runtime `LedgerIndexes`
-//! - `sync_state.scan_completed`
 //! - `tx_meta.scanned_pool_txs`
 //! - payment-request match fields (via attribution rewind, classified
 //!   against the **pre-reset** height)
@@ -89,7 +88,6 @@ pub(crate) fn reset_scan_derived_state(wallet: &mut WalletLedger, indexes: &mut 
     wallet.ledger = LedgerBlock::empty();
     *indexes = LedgerIndexes::empty();
 
-    wallet.sync_state.scan_completed = false;
     wallet.tx_meta.scanned_pool_txs.clear();
 
     // Preserve payment-request *rows*; unwind matches against the emptied
@@ -302,10 +300,7 @@ mod tests {
         let mut wallet = WalletLedger::empty();
         wallet.sync_state.restore_from_height = 42;
         wallet.sync_state.creation_anchor_hash = Some([7u8; 32]);
-        wallet.sync_state.scan_completed = true;
         wallet.sync_state.pending_tx_hashes.push([9u8; 32]);
-        wallet.sync_state.confirmations_required = 10;
-        wallet.sync_state.trusted_daemon = true;
 
         wallet.ledger.transfers.push(sample_transfer(1));
         wallet.ledger.tip = BlockchainTip::new(50, [1u8; 32]);
@@ -347,12 +342,9 @@ mod tests {
         reset_scan_derived_state(&mut wallet, &mut indexes);
 
         assert_unscanned(&wallet.ledger);
-        assert!(!wallet.sync_state.scan_completed);
         assert_eq!(wallet.sync_state.restore_from_height, 42);
         assert_eq!(wallet.sync_state.creation_anchor_hash, Some([7u8; 32]));
         assert_eq!(wallet.sync_state.pending_tx_hashes, vec![[9u8; 32]]);
-        assert_eq!(wallet.sync_state.confirmations_required, 10);
-        assert!(wallet.sync_state.trusted_daemon);
         assert!(wallet.tx_meta.tx_keys.contains_key(&txid));
         assert!(wallet.tx_meta.scanned_pool_txs.is_empty());
         assert!(wallet.staking.staking_enabled);
@@ -548,7 +540,6 @@ mod start_rescan_integration_tests {
         let engine = arc.write().await;
         let mut guard = engine.ledger.write();
         guard.ledger.ledger.tip = BlockchainTip::new(500, [0xAB; 32]);
-        guard.ledger.sync_state.scan_completed = true;
         500
     }
 
@@ -599,10 +590,6 @@ mod start_rescan_integration_tests {
             engine.ledger.synced_height(),
             seeded,
             "a refused rescan must not reset the ledger"
-        );
-        assert!(
-            engine.ledger.read().ledger.sync_state.scan_completed,
-            "a refused rescan must not clear scan_completed"
         );
         assert!(
             !engine.refresh_slot.is_claimed(),

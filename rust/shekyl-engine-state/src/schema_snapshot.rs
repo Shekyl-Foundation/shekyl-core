@@ -10,7 +10,7 @@
 //! described in `docs/MID_REWIRE_HARDENING.md` §3.4 (hardening-pass commit
 //! 3.4). Every type that lands on disk — [`WalletLedger`] and the five inner
 //! blocks [`LedgerBlock`], [`BookkeepingBlock`], [`TxMetaBlock`],
-//! [`SendJournalBlock`],
+//! [`SendJournalBlock`](crate::send_journal_block::SendJournalBlock),
 //! [`SyncStateBlock`], and [`StakingBlock`], plus the `P`-isolated
 //! [`PScanCursor`], [`PScanState`], and [`PendingPostBlock`] (separate sealed
 //! records, not wallet-ledger sub-blocks) —

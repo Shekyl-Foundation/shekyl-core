@@ -8,7 +8,8 @@
 //! Same shape as `http_rescan.rs`: these pin the transport-visible half
 //! — routing, params validation, and error codes. Engine-side behaviour
 //! (the P3-4 edge, the I-2 reference migration, the drop-then-confirm
-//! crash ordering) is covered in `shekyl-engine-core::engine::abandon_tx`.
+//! crash ordering) is covered in
+//! `shekyl-engine-core::engine::local_ledger_ops::abandon_tx`.
 
 use std::sync::Arc;
 

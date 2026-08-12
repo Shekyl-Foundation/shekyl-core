@@ -199,9 +199,12 @@ pub fn attribution_matches(
 
 /// Project a ledger transfer to the RPC view (no key material).
 /// `spend_locks` is the journal-derived lock map (PR-SJ-1b).
+/// `tx_notes` is the per-txid annotation map (SJ-DQ-7); looked up here so
+/// every call site shares the same projection.
 pub fn transfer_view(
     td: &TransferDetails,
     spend_locks: &shekyl_engine_state::InFlightSpendLocks,
+    tx_notes: &std::collections::BTreeMap<[u8; 32], String>,
 ) -> TransferView {
     TransferView {
         id: transfer_id(td),
@@ -220,6 +223,8 @@ pub fn transfer_view(
             .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
         // Receive-side row, so attribution is always meaningful here.
         attribution: Some(attribution_view(&td.receive_attribution)),
+        // Per-txid note (SJ-DQ-7); shared across both directions of a txid.
+        note: tx_notes.get(&td.tx_hash.to_bytes()).cloned(),
     }
 }
 
@@ -292,6 +297,7 @@ pub fn outgoing_transfer_state(row: &SendRecord) -> TransferState {
 pub fn outgoing_transfer_view(
     txid: &TxHash,
     row: &SendRecord,
+    tx_notes: &std::collections::BTreeMap<[u8; 32], String>,
 ) -> Result<TransferView, WalletRpcError> {
     let sent = row.sent_amount().ok_or_else(|| {
         WalletRpcError::InternalError(format!(
@@ -311,6 +317,8 @@ pub fn outgoing_transfer_view(
         // Receive attribution is documented "Present on INCOMING rows
         // only" — a send has no receive side to attribute.
         attribution: None,
+        // Per-txid note (SJ-DQ-7); shared across both directions of a txid.
+        note: tx_notes.get(&txid.to_bytes()).cloned(),
     })
 }
 
@@ -689,9 +697,14 @@ mod tests {
     #[test]
     fn outgoing_view_projects_txid_id_fee_and_recipient_sum() {
         let txid = TxHash::from_bytes([0xab; 32]);
+        let mut notes = std::collections::BTreeMap::new();
+        notes.insert([0xab; 32], "rent".to_owned());
+        let empty = std::collections::BTreeMap::new();
+
         let view = outgoing_transfer_view(
             &txid,
             &sample_send_record(SendState::Confirmed { height: 250 }),
+            &notes,
         )
         .expect("project");
         assert_eq!(view.id, "ab".repeat(32));
@@ -702,10 +715,15 @@ mod tests {
         assert_eq!(view.block_height, Some(250));
         assert_eq!(view.state, TransferState::Confirmed);
         assert_eq!(view.spent_height, None);
+        // The per-txid note is projected onto the OUTGOING view (SJ-DQ-7).
+        assert_eq!(view.note.as_deref(), Some("rent"));
 
-        let failed =
-            outgoing_transfer_view(&txid, &sample_send_record(SendState::TerminalRejected))
-                .expect("project");
+        let failed = outgoing_transfer_view(
+            &txid,
+            &sample_send_record(SendState::TerminalRejected),
+            &empty,
+        )
+        .expect("project");
         assert_eq!(failed.state, TransferState::Failed);
         assert_eq!(failed.block_height, None);
 
@@ -720,8 +738,9 @@ mod tests {
             "unmined send must not carry a block_height: {json}"
         );
 
-        let dropped = outgoing_transfer_view(&txid, &sample_send_record(SendState::PresumedDead))
-            .expect("project");
+        let dropped =
+            outgoing_transfer_view(&txid, &sample_send_record(SendState::PresumedDead), &empty)
+                .expect("project");
         let json = serde_json::to_value(&dropped).expect("serialize");
         assert_eq!(json["state"], "DROPPED");
     }
@@ -734,7 +753,8 @@ mod tests {
     fn unsummable_recipient_amounts_do_not_panic_the_read_path() {
         let mut row = sample_send_record(SendState::Dispatched);
         row.recipients[0].amount = u64::MAX;
-        let err = outgoing_transfer_view(&TxHash::from_bytes([0xab; 32]), &row)
+        let empty = std::collections::BTreeMap::new();
+        let err = outgoing_transfer_view(&TxHash::from_bytes([0xab; 32]), &row, &empty)
             .expect_err("overflowing recipient sum must not project");
         assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
     }

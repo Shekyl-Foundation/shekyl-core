@@ -231,8 +231,6 @@ impl std::fmt::Debug for BondPostMatch {
 pub(crate) struct FundingOutputMatch {
     /// The owning persona's slot ordinal (selects the re-derivation keys).
     pub(crate) p_slot: shekyl_types::PSlot,
-    /// Hash of the transaction carrying the output.
-    pub(crate) tx_hash: shekyl_types::TxHash,
     /// The output's index within its transaction — the KEM derivation index.
     pub(crate) index_in_transaction: u64,
     /// The global (chain-wide) output index — the curve-tree leaf position.
@@ -282,7 +280,6 @@ impl From<&FundingOutputMatch> for PFundingOutputRecord {
     fn from(m: &FundingOutputMatch) -> Self {
         PFundingOutputRecord {
             p_slot: m.p_slot,
-            tx_hash: m.tx_hash,
             index_in_transaction: m.index_in_transaction,
             gindex: m.gindex,
             output_key: m.output_key,
@@ -303,7 +300,6 @@ impl From<&PFundingOutputRecord> for FundingOutputMatch {
     fn from(r: &PFundingOutputRecord) -> Self {
         FundingOutputMatch {
             p_slot: r.p_slot,
-            tx_hash: r.tx_hash,
             index_in_transaction: r.index_in_transaction,
             gindex: r.gindex,
             output_key: r.output_key,
@@ -838,7 +834,6 @@ pub(crate) fn run_dual_extractor(
 
                 funding_outputs.push(FundingOutputMatch {
                     p_slot: shekyl_types::PSlot::from_raw(*slot),
-                    tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
                     index_in_transaction: wo.index_in_transaction(),
                     gindex: shekyl_types::GlobalOutputIndex::from_raw(wo.index_on_blockchain()),
                     output_key: wo.key().compress().to_bytes(),

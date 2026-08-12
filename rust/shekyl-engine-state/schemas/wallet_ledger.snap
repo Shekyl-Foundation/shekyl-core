@@ -2263,24 +2263,6 @@
                 }
               },
               {
-                "name": "attributes",
-                "ty": {
-                  "name": "BTreeMap<K, V>",
-                  "ty": {
-                    "Map": {
-                      "key": {
-                        "name": "String",
-                        "ty": "String"
-                      },
-                      "val": {
-                        "name": "String",
-                        "ty": "String"
-                      }
-                    }
-                  }
-                }
-              },
-              {
                 "name": "scanned_pool_txs",
                 "ty": {
                   "name": "BTreeMap<K, V>",
@@ -2614,13 +2596,6 @@
                 }
               },
               {
-                "name": "scan_completed",
-                "ty": {
-                  "name": "bool",
-                  "ty": "Bool"
-                }
-              },
-              {
                 "name": "pending_tx_hashes",
                 "ty": {
                   "name": "Vec<T>",
@@ -2761,20 +2736,6 @@
                       }
                     }
                   }
-                }
-              },
-              {
-                "name": "confirmations_required",
-                "ty": {
-                  "name": "u32",
-                  "ty": "U32"
-                }
-              },
-              {
-                "name": "trusted_daemon",
-                "ty": {
-                  "name": "bool",
-                  "ty": "Bool"
                 }
               }
             ]

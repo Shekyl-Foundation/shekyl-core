@@ -179,11 +179,13 @@ fn check_tip_not_below_transfer(ledger: &LedgerBlock) -> Result<(), WalletLedger
 /// it confirms (leaving `pending_tx_hashes`) the *only* live
 /// references to its txid are the spent rows it consumed.
 ///
-/// `tx_notes` and `attributes` are deliberately *not* part of this
-/// check: user-authored notes may legitimately reference an arbitrary
-/// txid (e.g. an incoming payment from a friend, recorded before the
-/// scanner has caught up), and stripping them on load would lose
-/// user data.
+/// `tx_notes` is deliberately *not* part of this check. A note is set only
+/// on a transaction the wallet knows ([`WalletLedger::set_note`] refuses an
+/// unknown txid), so notes do not create orphans at write time — but a tx
+/// that was known when annotated can leave the live set later (a reorg drops
+/// a confirmed transfer), and stripping the note on load would lose user
+/// data. So notes ride along on load regardless; the membership rule lives at
+/// the write door, not in this load-time invariant.
 fn check_tx_keys_no_orphans(
     ledger: &LedgerBlock,
     tx_meta: &TxMetaBlock,
@@ -476,7 +478,7 @@ mod tests {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
             },
         );
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
         let w = WalletLedger::new(
             LedgerBlock::empty(),
             BookkeepingBlock::empty(),
@@ -497,7 +499,7 @@ mod tests {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
             },
         );
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
         let mut sync = SyncStateBlock::empty();
         sync.pending_tx_hashes = vec![txid];
         let w = WalletLedger::new(
@@ -526,7 +528,7 @@ mod tests {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
             },
         );
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
         let mut w = WalletLedger::new(
             LedgerBlock::empty(),
             BookkeepingBlock::empty(),
@@ -565,7 +567,7 @@ mod tests {
         );
         let mut pool = BTreeMap::new();
         pool.insert(txid, ScannedPoolTx::default());
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), pool);
+        let tx_meta = TxMetaBlock::new(tx_keys, pool);
         let w = WalletLedger::new(
             LedgerBlock::empty(),
             BookkeepingBlock::empty(),
@@ -590,7 +592,7 @@ mod tests {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
             },
         );
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
         // The spent row's own tx_hash differs from `txid`; only the
         // `spending_tx_hash` leg satisfies I-2 here.
         let mut spent_row = mk_transfer(0x11, 10);
@@ -631,7 +633,7 @@ mod tests {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
             },
         );
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
         let ledger = LedgerBlock::new(
             vec![mk_transfer(0x11, 10)],
             BlockchainTip::new(30, [0xAA; 32]),

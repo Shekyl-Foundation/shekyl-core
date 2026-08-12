@@ -354,7 +354,6 @@ where
             .map_err(|e| DrainRequestError::state("dispatch tip", e))?;
         let persona = *assembled.bound_tx.persona();
         let sealed = PendingDrain {
-            p_slot,
             persona,
             tx_bytes: assembled.bound_tx.bytes().to_vec(),
             funding_gindexes: assembled.funding_gindexes.clone(),

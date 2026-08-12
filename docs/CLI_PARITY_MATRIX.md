@@ -9,7 +9,7 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 
 - **Covered**: shekyl-cli has a working equivalent.
 - **Out of scope**: Command is Monero-inherited dead code or irrelevant to Shekyl. Reason documented.
-- **Planned**: Equivalent is designed but gated on an RPC surface that has not landed (RESERVED refusal in the CLI names the gate; carriers in `docs/FOLLOWUPS.md` §"WI-RPC-2b deferrals").
+- **Planned**: Equivalent is designed but not yet built in `shekyl-cli`. Usually that is because the RPC surface it needs has not landed (RESERVED refusal in the CLI names the gate; carriers in `docs/FOLLOWUPS.md` §"WI-RPC-2b deferrals"). Where the RPC *has* landed and only the CLI command is outstanding, the row's note says so — those are unblocked, not gated.
 
 > **Note (2026-07-19, WI-RPC-1).** Rows 1–4's `account` / `--subaddr-index` /
 > `address new` / `--subaddr-indices` language is **wallet2-era** and does not
@@ -39,7 +39,7 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 > refuses to print the seed to a non-TTY (pipe/redirect/log) rather than leak
 > it — so the `seed`-safety row's guarantee now holds on every path.
 
-## Parity matrix (24 covered, 6 planned, 51 out of scope)
+## Parity matrix (25 covered, 7 planned, 49 out of scope)
 
 | # | simplewallet command | shekyl-cli equivalent | Status | Notes |
 |---|---|---|---|---|
@@ -92,7 +92,7 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 47 | `freeze` | N/A | Out of scope | Output freezing, Monero-specific feature |
 | 48 | `frozen` | N/A | Out of scope | List frozen outputs |
 | 49 | `get_description` | N/A | Out of scope | Wallet description, trivial metadata |
-| 50 | `get_tx_note` | N/A | Out of scope | Transaction notes, trivial metadata |
+| 50 | `get_tx_note` | N/A | Planned | RPC **landed** (PR-SA-4 / SJ-DQ-7): `get_tx_note` in [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml). Only the CLI command is outstanding — unblocked, not gated |
 | 51 | `hw_key_images_sync` | N/A | Out of scope | Hardware wallet, not supported |
 | 52 | `hw_reconnect` | N/A | Out of scope | Hardware wallet, not supported |
 | 53 | `import_outputs` | N/A | Out of scope | Output import for multisig, not supported |
@@ -111,7 +111,7 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 66 | `set_description` | N/A | Out of scope | Wallet description, trivial metadata |
 | 67 | `set_log` | N/A | Out of scope | Log level, use RUST_LOG env var |
 | 68 | `set_tx_key` | N/A | Out of scope | Manual tx key injection, niche |
-| 69 | `set_tx_note` | N/A | Out of scope | Transaction notes, trivial metadata |
+| 69 | `set_tx_note` | N/A | Planned | RPC **landed** (PR-SA-4 / SJ-DQ-7): `set_tx_note` in [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml); empty note clears, 4096-UTF-8-byte ceiling. Only the CLI command is outstanding — unblocked, not gated |
 | 70 | `show_qr_code` | N/A | Out of scope | QR display, GUI concern |
 | 71 | `start_mining` | N/A | Out of scope | Mining, daemon concern |
 | 72 | `start_mining_for_rpc` | N/A | Out of scope | RPC mining, removed |

@@ -44,6 +44,11 @@
 #     build_pending_tx, submit_pending_tx, discard_pending_tx,
 #     abandon_tx                                   (PR-SJ-3 — the P3-4
 #                                                   user-authored abandon)
+#     set_tx_note, get_tx_note                     (PR-SA-4 — SJ-DQ-7
+#                                                   per-txid annotation;
+#                                                   the reader is the only
+#                                                   way to read a note whose
+#                                                   tx is not yet scanned)
 #     get_transfers, get_transfer_by_id,
 #     refresh, rescan_blockchain,
 #     get_height, get_version,
@@ -239,6 +244,8 @@ components:
             - submit_pending_tx
             - discard_pending_tx
             - abandon_tx
+            - set_tx_note
+            - get_tx_note
             - get_transfers
             - get_transfer_by_id
             - get_wallet_info
@@ -878,6 +885,81 @@ components:
           enum: [ABANDONED]
           description: The row's resulting state (always ABANDONED).
 
+    SetTxNoteParams:
+      type: object
+      required: [tx_hash, note]
+      description: >
+        `set_tx_note` (WALLET_SEND_RECORD.md SJ-DQ-7): attach or clear a
+        user-authored note on a transaction. The note is keyed by the bare
+        txid, so it annotates the transaction rather than one output — it
+        surfaces on every `get_transfers` / `get_transfer_by_id` row for
+        that txid, both the INCOMING change row and the OUTGOING row of a
+        self-send. Purely local wallet UX state: never on the wire, never in
+        a proof. A non-empty note is accepted only for a **transaction this
+        wallet is a party to** — received, spent, pending, or seen in the
+        pool; a note on an unknown txid is refused with -32602 ("no such
+        transaction in this wallet"). An **empty `note` clears** any existing
+        note (there is no separate delete method — "unset" and "set-empty"
+        are the same state) and is always allowed, even for an unknown txid,
+        so a note orphaned by a reorg can be removed. A note longer than 4096
+        UTF-8 bytes is rejected with -32602 (byte length, not character
+        count); the refusal reports byte counts only, never the note text.
+        The same ceilings are enforced on the wallet write path so every
+        caller shares the invariant.
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        note:
+          type: string
+          description: >
+            The note text (UTF-8). Empty string clears the note. Hard limit is
+            4096 **UTF-8 bytes** (not Unicode scalar count) — OpenAPI has no
+            byte-length constraint, so clients must measure `len(utf8)` and
+            not character count; the server refuses over-length notes with
+            -32602 reporting byte counts only.
+
+    SetTxNoteResult:
+      type: object
+      required: [tx_hash]
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        note:
+          type: string
+          description: >
+            The note as stored after the write. Omitted when the note was
+            cleared (empty input).
+
+    GetTxNoteParams:
+      type: object
+      required: [tx_hash]
+      description: >
+        `get_tx_note` (WALLET_SEND_RECORD.md SJ-DQ-7): read back the note
+        stored for a txid. This is the paired reader for `set_tx_note`, and it
+        is the ONLY way to read a note whose transaction has no history row
+        yet: a note can be set on any txid the wallet is a party to, including
+        an outgoing tx still pending confirmation or one seen only in the pool,
+        but `TransferView.note` can only annotate rows that exist — so until
+        the transaction lands in scanned history the note appears on no history
+        row. An unknown txid is NOT an error: it answers with `note` omitted,
+        exactly as a cleared note does (a read makes no existence claim about
+        the transaction).
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+
+    GetTxNoteResult:
+      type: object
+      required: [tx_hash]
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        note:
+          type: string
+          description: >
+            The stored note. Omitted when there is none — which is also the
+            answer for a txid the wallet has never seen.
+
     # ── History ──────────────────────────────────────────────────────
     ReceiveAttributionKind:
       type: string
@@ -984,6 +1066,13 @@ components:
             which payment request a receive arrived against, which has no
             meaning for a row the wallet sent, so an OUTGOING row omits
             the field rather than carrying an invented `UNATTRIBUTED`.
+        note:
+          type: string
+          description: >
+            User-authored note for this transaction (SJ-DQ-7), set via
+            `set_tx_note`. Keyed by the bare txid, so it annotates the
+            transaction, not one output: both directions of a self-send
+            surface the same note. Omitted when no note is set.
 
     GetTransfersParams:
       type: object

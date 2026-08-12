@@ -443,6 +443,123 @@ story, not the read path.
   no engine work beyond read/write — so the projection contract is
   designed once. It is not gated on the journal; pull it into its own
   small PR only if wanted sooner than PR-SJ-2.
+
+  **SJ-DQ-7 annotation half RESOLVED + shipped in PR-SA-4 (2026-08-11).**
+  PR-SJ-2 shipped the journal half but not the annotation half; SA-4's
+  dead-persisted-field sweep found `tx_notes` still dormant (a persisted
+  field with no writer and no reader) and, rather than delete it, wired it
+  per this ruling. Four rulings the "OUTGOING-only vs both" framing hid,
+  each with a rationale rather than a toggle:
+
+  - **Scope = the transaction, not the output (arm 1).** A note is keyed by
+    the **bare txid** and surfaces wherever that txid appears — both the
+    INCOMING change row and the OUTGOING row of a self-send carry the one
+    note. This is *not* the `attribution` analogy: `attribution` is
+    INCOMING-only because it is inherently about an output (who paid *this*
+    receive); a note is inherently about a **payment**, which is the
+    transaction. Seeing "rent" on both the send and its owned-change row is
+    correct — it is one payment; the change output is your own money
+    returning, with no counterparty and no distinct event to note
+    differently. The **declined alternative (arm 2)** is re-keying
+    `tx_notes` to `{txid}:{output_index}` for per-output notes — a
+    `TxMetaBlock` schema change, cheap now and a migration later, hence the
+    freeze-window question. It is declined **not as a cost trade-off but as
+    the wrong seam**: the only case that would motivate per-output notes is a
+    multi-recipient tx where one wants a note per *recipient*, but arm 2 keys
+    on the output *index*, and output ordering is not something the user
+    reasons about — so arm 2 delivers per-output-index notes, a different and
+    less useful thing than the per-recipient notes anyone would actually
+    want. Reopen criterion, sharpened accordingly: **not** "someone wants two
+    notes on one tx" but "**a per-recipient note model emerges**" — and such
+    a model needs recipient identity carried to the projection layer, a
+    larger design than re-keying `tx_notes` (arm 2 is not the cheap path to
+    it; it is not the path at all).
+  - **Size bound (`TX_NOTE_MAX_BYTES` = 4 KiB UTF-8 bytes), enforced on the
+    write path (`TxMetaBlock::set_note`) so every caller shares the ledger
+    invariant.** RPC (and any future CLI) may pre-check the same constant
+    before taking a write lock as a fast-fail, but that is not the sole
+    enforcement — a second boundary that forgets the check cannot bloat the
+    wallet file. 4 KiB is generous for a human note.
+
+    *Amended in the PR-SA-4 review round (2026-08-12):* "shared invariant"
+    is now **structural**. `TxMetaBlock::tx_notes` was public, so the bound
+    was a convention any caller could assign around; the field is private
+    and `set_note` is the only door in, which is what makes the sentence
+    above true rather than aspirational. The boundary's pre-check was also
+    re-pointed at the engine's own `TxNoteTooLong` instead of re-writing the
+    message, so the fast-fail and the write path cannot refuse the same
+    request *differently*. Note **count** stays uncapped, deliberately and
+    on the same footing as `scanned_pool_txs`: a count policy belongs to the
+    orchestrator that knows the wallet's transaction population, and the
+    outer ceiling (`PAYLOAD_BODY_MAX`, refused on the write path) already
+    bounds file growth.
+  - **Boundary hygiene (rules 35/36).** A note is counterparty-bearing free
+    text. The over-length refusal reports byte counts only, never the note;
+    the persistence-failure path is category-only (`internal_detail`, no
+    ledger content); the note is never logged. This is the actual privacy
+    work — `tx_notes` is the wallet's first automatic-ish
+    counterparty-bearing artifact, it lives inside the AEAD envelope, and
+    the discipline is at the boundary crossings (the RPC wire this PR adds).
+  - **Zeroize disposition, stated.** A note is a `String` in a `BTreeMap` —
+    it does not zeroize, exactly like the send-journal's recipient
+    addresses (the same not-a-key, disclosure-if-dumped class). In-memory
+    disclosure is an **accepted residual**; the protection is the AEAD
+    envelope at rest plus the boundary discipline above.
+  - **Empty note clears (contract term, not an implementation detail).**
+    `set_tx_note("")` removes the entry — "unset" and "set-empty" collapse,
+    so there is no separate delete method. Stated in the OpenAPI
+    description so a client sending `""` to mean "store nothing" is not
+    surprised by a delete.
+
+  Persist correctness confirmed (not inherited from `abandon_tx`):
+  `save_state` writes via `atomic_write_file` (temp → fsync → `rename(2)` →
+  parent fsync), so a failed save leaves the state byte-unchanged and the
+  fail-closed in-memory rollback stays consistent with disk. CLI enablement
+  remains optional (no CLI command exists for `abandon_tx` either); the
+  load-bearing surface is the RPC method + these rulings. A future CLI note
+  command inherits the write-path bound automatically; it should still
+  pre-check and keep the no-echo discipline at its arg layer for UX.
+
+  **Read-back pair (`get_tx_note`), added in the review round (2026-08-12).**
+  `get_tx_note` gives `Engine::tx_note` its first caller so the wiring has no
+  dead half. On the **read** side an unknown txid is **not** an error — it
+  answers with the note omitted, exactly as a cleared one does; a note carries
+  no existence claim about the transaction, and refusing would turn the read
+  into an oracle for which txids the wallet has annotated.
+
+  **Membership precondition (amended 2026-08-12, reversing the "any
+  well-formed txid" stance).** The original ruling accepted a note on *any*
+  well-formed txid — to allow annotating a payment before the scanner caught
+  up — and called the residual "a note on a mistyped txid… bounded (a stray
+  map entry, never a misdirected payment)." That "bounded" claim did not
+  survive review: it assumed a human mistyping *one* txid, but with no
+  membership check a client can set notes on unboundedly many arbitrary
+  txids, driving the shared `WalletLedger` toward `PAYLOAD_BODY_MAX` — whose
+  blast radius is *every* save (refresh, send), not notes. A byte budget would
+  have been a cap slapped onto a capability that should not exist. **Ruling: a
+  note attaches to a transaction the wallet is part of, one per transaction.**
+  `WalletLedger::set_note` refuses a non-empty note for a txid the wallet has
+  no relationship with (a received transfer or its spend, a send-journal row
+  in any state, a pending send, a retained tx-key, or a mempool observation);
+  clearing is always allowed so a note orphaned by a reorg can be removed. The
+  amplification vector is gone by construction — the note count cannot exceed
+  the wallet's own transaction population, which the payload already bounds —
+  so no note-count or note-byte budget is needed. **What it costs:** the
+  pre-scan annotation case (a txid learned out-of-band before the wallet has
+  seen it); thin, and served by annotating once the scanner has the tx. The
+  read-side oracle stance above is unchanged.
+
+  **Dead-field connection (so the next audit reads this as deliberate).**
+  With PR-SA-4, `tx_notes` now has a production writer (`Engine::set_tx_note`)
+  and production readers (the `note` on every `get_transfers` /
+  `get_transfer_by_id` row, plus the `get_tx_note` point read), so it moves
+  from "persisted but inert" to
+  "wired" — closing the second of the three inert-field findings the SA-4
+  census surfaced: `attributes` **deleted**, `tx_notes` **now live**, and
+  `AddressBookEntry.payment_id` **still pending its own disposition** (it
+  rides with the deliberately-retained `address_book`, itself an open
+  per-feature question — see the SA-4 kept-fields ruling). A future audit
+  should see `tx_notes` as moved on purpose, not left inert by accident.
 - **`attributes` — its own disposition, not a ride-along** *(posed at
   R1 pass 2; ratify at pass 3)*. The untyped `String → String` bag is
   wallet2-lineage shape by its own docstring ("Wallet2 used an

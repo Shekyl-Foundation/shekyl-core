@@ -857,9 +857,6 @@ pub(crate) fn funding_record(
 ) -> PFundingOutputRecord {
     PFundingOutputRecord {
         p_slot: shekyl_types::PSlot::from_raw(p_slot),
-        tx_hash: shekyl_types::TxHash::from_bytes(
-            [u8::try_from(gindex & 0xFF).expect("masked to a byte"); 32],
-        ),
         index_in_transaction: 0,
         gindex: shekyl_types::GlobalOutputIndex::from_raw(gindex),
         output_key: [1u8; 32],

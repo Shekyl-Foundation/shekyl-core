@@ -328,24 +328,6 @@
         }
       },
       {
-        "name": "attributes",
-        "ty": {
-          "name": "BTreeMap<K, V>",
-          "ty": {
-            "Map": {
-              "key": {
-                "name": "String",
-                "ty": "String"
-              },
-              "val": {
-                "name": "String",
-                "ty": "String"
-              }
-            }
-          }
-        }
-      },
-      {
         "name": "scanned_pool_txs",
         "ty": {
           "name": "BTreeMap<K, V>",

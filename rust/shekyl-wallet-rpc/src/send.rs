@@ -6,7 +6,8 @@
 //! Send-lifecycle JSON-RPC methods (Phase 4b; `abandon_tx` PR-SJ-3).
 //!
 //! `build_pending_tx`, `submit_pending_tx`, `discard_pending_tx`,
-//! `abandon_tx`.
+//! `abandon_tx`. Transaction notes live in [`crate::notes`] (SJ-DQ-7) —
+//! they are not send-lifecycle state.
 
 use std::num::NonZeroU64;
 

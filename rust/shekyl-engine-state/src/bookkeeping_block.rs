@@ -59,12 +59,23 @@ pub struct BookkeepingBlock {
     pub block_version: u32,
 
     /// Optional human-readable label for the wallet's primary address.
+    ///
+    /// **Reserved — no writer/reader wired yet** (SA-4 census): V3.0
+    /// constructs this `None` and no projection reads it. Retained (not
+    /// deleted) as a named future UX surface; wiring the set/get path is its
+    /// own change, gated on a labelling UX decision.
     #[serde(default)]
     pub primary_label: Option<String>,
 
     /// External address book (contacts / recurring payees). Ordered by
     /// the user-controlled insertion order; the persistence layer
     /// preserves that order verbatim.
+    ///
+    /// **Reserved — no writer/reader wired yet** (SA-4 census): V3.0
+    /// constructs this empty and no projection reads it. Retained as a named
+    /// future UX surface (the address book is an open per-feature question,
+    /// `WALLET_REWRITE_PLAN.md`), pending that feature decision — not a
+    /// dead-field delete.
     #[serde(default)]
     pub address_book: Vec<AddressBookEntry>,
 
@@ -100,25 +111,28 @@ impl BookkeepingBlock {
     }
 
     /// Deserialize from postcard bytes produced by
-    /// [`Self::to_postcard_bytes`]. Refuses any version mismatch.
+    /// [`Self::to_postcard_bytes`].
+    /// **Refuses a version mismatch before decoding the body**, so a blob
+    /// written by another schema version reports its version rather than
+    /// surfacing as a codec error (see [`crate::version_gate`]).
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
-        let block: Self = postcard::from_bytes(bytes)?;
-        block.check_version()?;
-        Ok(block)
+        // Version first, body second — see [`crate::version_gate`]: postcard
+        // carries no framing, so a stale blob decoded under the current
+        // declaration fails as corruption before any post-decode check can
+        // name the version. The gate reads only the leading varint.
+        crate::version_gate::gate_leading_version(bytes, "bookkeeping", BOOKKEEPING_BLOCK_VERSION)?;
+        Ok(postcard::from_bytes(bytes)?)
     }
 
     /// Version gate. Called automatically by
     /// [`Self::from_postcard_bytes`]; exposed publicly so the
     /// `WalletLedger` aggregator can fan out the same check.
     pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        if self.block_version != BOOKKEEPING_BLOCK_VERSION {
-            return Err(WalletLedgerError::UnsupportedBlockVersion {
-                block: "bookkeeping",
-                file: self.block_version,
-                binary: BOOKKEEPING_BLOCK_VERSION,
-            });
-        }
-        Ok(())
+        crate::version_gate::gate_version(
+            self.block_version,
+            "bookkeeping",
+            BOOKKEEPING_BLOCK_VERSION,
+        )
     }
 }
 

@@ -288,7 +288,7 @@ impl TransferDetails {
     /// chain confirmation (the F14 lock, §2.6) are excluded: selecting one
     /// would build a second tx bearing the same key image. The lock map is
     /// journal-derived (PR-SJ-1b — [`crate::SendJournalBlock::spend_locks`]
-    /// / [`crate::WalletLedger::spend_locks`]); taking [`InFlightSpendLocks`] — a
+    /// / [`crate::WalletLedger::spend_locks`]); taking [`InFlightSpendLocks`](crate::send_journal_block::InFlightSpendLocks) — a
     /// type only that derivation can produce, not a free `bool` and not
     /// a bare map — keeps the §7.1 self-link check tied to the
     /// derivation at compile time.

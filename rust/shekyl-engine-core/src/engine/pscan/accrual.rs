@@ -678,7 +678,6 @@ mod tests {
     fn funding_match(gindex: u64, height: u64) -> FundingOutputMatch {
         FundingOutputMatch {
             p_slot: shekyl_types::PSlot::from_raw(0),
-            tx_hash: shekyl_types::TxHash::from_bytes([0u8; 32]),
             index_in_transaction: 0,
             gindex: shekyl_types::GlobalOutputIndex::from_raw(gindex),
             output_key: [0u8; 32],
@@ -1140,7 +1139,6 @@ mod tests {
     fn funding_outputs_accumulate_and_round_trip_through_the_seal() {
         let record = FundingOutputMatch {
             p_slot: shekyl_types::PSlot::from_raw(3),
-            tx_hash: shekyl_types::TxHash::from_bytes([0xAA; 32]),
             index_in_transaction: 1,
             gindex: shekyl_types::GlobalOutputIndex::from_raw(42),
             output_key: [0xBB; 32],

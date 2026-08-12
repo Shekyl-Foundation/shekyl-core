@@ -34,15 +34,21 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot, SettlementEpoch, TxHash};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. **v6** domain-newtypes the
+/// Schema version of the durable P-scan state. **v8** removes the dead
+/// `tx_hash` field from [`PFundingOutputRecord`] (SA-4 dead persisted-field
+/// sweep, rule-15): no consumer read it — spend/claim re-derivation keys on
+/// `index_in_transaction` + the ciphertexts, and every needed tx hash is
+/// recomputed fresh from the wire object at the scan seam. Reopen: a spend
+/// path that needs the source-tx identity persisted rather than re-derived.
+/// **v6** domain-newtypes the
 /// residual raw fields on [`PFundingOutputRecord`] (`p_slot` → [`PSlot`],
-/// `tx_hash` → [`TxHash`], `gindex` → [`GlobalOutputIndex`] — FOLLOWUPS
+/// `gindex` → [`GlobalOutputIndex`] — FOLLOWUPS
 /// WI-2 orchestrator carrier; postcard-transparent, fail-closed on mismatch);
 /// **v5** adds the
 /// [`MintLineageOutput`] `lineage` field and the `spendable_height` field on
@@ -58,7 +64,7 @@ use crate::pscan_cursor::PScanCursor;
 /// migration at any step: pre-genesis, a version mismatch means re-scan (rule 15).
 /// Distinct from the inner [`PScanCursor`]'s own version (nested, like the wallet
 /// ledger over its sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 7;
+pub const PSCAN_STATE_VERSION: u32 = 8;
 
 /// The GF-4b mint-lineage ladder for a `P`-owned funding output — the
 /// scan-provenance classification (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
@@ -128,7 +134,13 @@ pub enum MintLineageOutput {
 /// public amount-delta gets.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct BondPostRecord {
-    /// Height of the block carrying the post.
+    /// Height of the block carrying the post. **Live production reader**
+    /// (SA-4 census correction): `claim_orchestrator`'s
+    /// `last_confirmed_sweep_height` takes the max over this persona's posts
+    /// and hands it to `BackingSet::from_spendable` as the emission claim's
+    /// legal-tranche boundary — deleting this field silently moves the
+    /// spendable backing window. The 2d-2 SP-R0 reconcile GC is a *second*,
+    /// still-dormant consumer, not the only one.
     pub height: BlockHeight,
     /// The matched persona's canonical id (a public on-chain pseudonym handle).
     pub p_canonical_id: PCanonicalId,
@@ -169,8 +181,6 @@ impl std::fmt::Debug for BondPostRecord {
 pub struct PFundingOutputRecord {
     /// The owning persona's slot ordinal (selects the re-derivation keys).
     pub p_slot: PSlot,
-    /// Hash of the transaction carrying the output.
-    pub tx_hash: TxHash,
     /// The output's index within its transaction — the KEM derivation index
     /// the spend-bundle re-derivation consumes.
     pub index_in_transaction: u64,
@@ -191,7 +201,14 @@ pub struct PFundingOutputRecord {
     pub amount: AtomicUnits,
     /// Height of the block carrying the output.
     pub height: BlockHeight,
-    /// The settlement epoch `height` falls in.
+    /// The settlement epoch `height` falls in. **No live reader yet** (SA-4
+    /// census): as with [`PScanState::accruals`], the rule-18 resume seam
+    /// round-trips this field (`FundingOutputMatch` ⇄
+    /// `PFundingOutputRecord`) — carriage, not a reader, since nothing's
+    /// behavior changes with the value; the `accruals` map is the per-epoch
+    /// signal today. Retained alongside
+    /// `accruals` for the same SP-7 `C_min` vehicle — per-output epoch
+    /// attribution it may need — rather than stranding it.
     pub epoch: SettlementEpoch,
     /// GF-4b mint-lineage rung, classified at the scan seam
     /// (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3). Persisted so the C-1
@@ -248,10 +265,15 @@ pub struct RetiredPersonaRecord {
     /// `pending_unbonds` / `bond_post_matches` keying).
     pub p_canonical_id: PCanonicalId,
     /// The settlement epoch the `Unbond` was confirmed in (carried from the
-    /// `pending_unbonds` entry this record replaces).
+    /// `pending_unbonds` entry this record replaces). Authoritative-record
+    /// provenance (the retire clock justification); **no live reader** — the
+    /// derive-forward subtraction keys on `p_slot`. Retained as the ratified
+    /// done-side record shape (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`
+    /// §"Records-driven retirement"), not a dead-field delete.
     pub unbond_epoch: SettlementEpoch,
     /// The settlement epoch the retire-time prune ran in (the settled epoch
-    /// at prune time — after the claim-window lapse, by construction).
+    /// at prune time — after the claim-window lapse, by construction). Same
+    /// provenance/no-live-reader status as `unbond_epoch`.
     pub retired_epoch: SettlementEpoch,
 }
 
@@ -275,6 +297,16 @@ pub struct PScanState {
     /// finality-sealed behind the cursor (SP-4 idempotent recompute). Keyed by
     /// [`SettlementEpoch`] — not a bare `u64` — and `BTreeMap`-ordered, so the
     /// postcard encoding is canonical (sorted) without the producer sorting.
+    ///
+    /// **No live reader yet** (SA-4 census, where a *reader* is a consumer
+    /// whose behavior changes with the value). Named explicitly because a
+    /// grep says otherwise: the resume seam round-trips this map
+    /// (`PScanAccrual::from_state` hydrates it, `to_state` seals it back),
+    /// which is carriage, not a reader. The reader is SP-7 `C_min` sizing via
+    /// `finalized_inflow` (`#[allow(dead_code)] // transient`). Retained
+    /// because that vehicle is named and tracked, not deleted — accrual is
+    /// cheap and re-deriving the per-epoch history after the cursor has sealed
+    /// past it is not.
     accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
     /// Confirmed-but-retire-pending personas: [`PCanonicalId`] → the settlement
     /// epoch its `Unbond` was confirmed in (2d-1 DQ8).
@@ -453,26 +485,19 @@ impl PScanState {
     }
 
     /// Deserialize from [`Self::to_postcard_bytes`] output. **Refuses a version
-    /// mismatch** on the outer state version; the inner [`PScanCursor`] applies
-    /// its own version gate on access via its constructors.
+    /// mismatch before decoding the body** on the outer state version; the
+    /// inner [`PScanCursor`] is then version-checked on the decoded value.
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
+        // Version first, body second — see [`crate::version_gate`]. This is the
+        // reachable case: `.wallet.pscan` is its own file with its own version,
+        // so nothing upstream refuses a stale one first. SA-4 deleted
+        // `PFundingOutputRecord::tx_hash` from the middle of a repeated record,
+        // which shifts every following byte; decoding first would report a
+        // staker's intact wallet as corrupt instead of naming the re-scan.
+        crate::version_gate::gate_leading_version(bytes, "pscan_state", PSCAN_STATE_VERSION)?;
         let state: Self = postcard::from_bytes(bytes)?;
-        state.check_version()?;
         state.cursor.check_version()?;
         Ok(state)
-    }
-
-    /// Version gate. Called automatically by [`Self::from_postcard_bytes`];
-    /// exposed so a future composite loader can fan out the same check.
-    pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        if self.version != PSCAN_STATE_VERSION {
-            return Err(WalletLedgerError::UnsupportedBlockVersion {
-                block: "pscan_state",
-                file: self.version,
-                binary: PSCAN_STATE_VERSION,
-            });
-        }
-        Ok(())
     }
 }
 
@@ -512,7 +537,6 @@ mod tests {
     fn funding_output(slot: u32, gindex: u64, amount: u64, height: u64) -> PFundingOutputRecord {
         PFundingOutputRecord {
             p_slot: PSlot::from_raw(slot),
-            tx_hash: TxHash::from_bytes([0xA1; 32]),
             index_in_transaction: 1,
             gindex: GlobalOutputIndex::from_raw(gindex),
             output_key: [0xB2; 32],

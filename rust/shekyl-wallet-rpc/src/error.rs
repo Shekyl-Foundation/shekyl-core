@@ -11,9 +11,10 @@ use shekyl_engine_core::engine::error::{RetryableRejectCause, TerminalErrorKind}
 use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
     ChangePasswordError, IoError, OpenError, PScanStartError, PendingTxError, PersistenceError,
-    RefreshError, SendError,
+    RefreshError, SendError, SetTxNoteError,
 };
 use shekyl_engine_file::WalletFileError;
+use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
 use shekyl_rpc_client::{RejectCause, SubmitVerdict};
 use thiserror::Error;
 
@@ -569,6 +570,41 @@ impl From<shekyl_engine_core::AbandonTxError> for WalletRpcError {
             // Fail-closed rollback already ran; category-only message
             // (the detail can carry a filesystem path).
             E::Persistence(e) => internal_detail("abandon persistence failed", e),
+        }
+    }
+}
+
+impl From<TxNoteTooLong> for WalletRpcError {
+    /// The one place an over-length note becomes a wire error, so the
+    /// boundary's pre-lock fast-fail and the engine's write-path refusal
+    /// cannot answer the same request differently.
+    ///
+    /// Counts only — [`TxNoteTooLong`]'s `Display` never carries the note
+    /// body (rules 35/36).
+    fn from(err: TxNoteTooLong) -> Self {
+        Self::InvalidParams(err.to_string())
+    }
+}
+
+impl From<SetNoteError> for WalletRpcError {
+    fn from(err: SetNoteError) -> Self {
+        match err {
+            // A note targets a transaction of this wallet; a txid it has no
+            // part in is a bad request, not an internal error. Message names
+            // no txid (never an existence oracle) and no note body.
+            SetNoteError::UnknownTransaction => Self::InvalidParams(err.to_string()),
+            SetNoteError::NoteTooLong(e) => e.into(),
+        }
+    }
+}
+
+impl From<SetTxNoteError> for WalletRpcError {
+    fn from(err: SetTxNoteError) -> Self {
+        match err {
+            SetTxNoteError::Note(e) => e.into(),
+            // Fail-closed rollback already ran; category-only message
+            // (the detail can carry a filesystem path).
+            SetTxNoteError::Persistence(e) => internal_detail("wallet persistence error", e),
         }
     }
 }

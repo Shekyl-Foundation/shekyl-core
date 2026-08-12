@@ -277,18 +277,6 @@
               "ty": {
                 "Struct": [
                   {
-                    "name": "p_slot",
-                    "ty": {
-                      "name": "PSlot",
-                      "ty": {
-                        "NewtypeStruct": {
-                          "name": "u32",
-                          "ty": "U32"
-                        }
-                      }
-                    }
-                  },
-                  {
                     "name": "persona",
                     "ty": {
                       "name": "PCanonicalId",
@@ -461,18 +449,6 @@
                     }
                   },
                   {
-                    "name": "claimed_epochs",
-                    "ty": {
-                      "name": "Vec<T>",
-                      "ty": {
-                        "Seq": {
-                          "name": "u64",
-                          "ty": "U64"
-                        }
-                      }
-                    }
-                  },
-                  {
                     "name": "state",
                     "ty": {
                       "name": "PendingPostState",
@@ -527,18 +503,6 @@
               "name": "PendingDrain",
               "ty": {
                 "Struct": [
-                  {
-                    "name": "p_slot",
-                    "ty": {
-                      "name": "PSlot",
-                      "ty": {
-                        "NewtypeStruct": {
-                          "name": "u32",
-                          "ty": "U32"
-                        }
-                      }
-                    }
-                  },
                   {
                     "name": "persona",
                     "ty": {

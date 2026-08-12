@@ -103,12 +103,12 @@ use crate::payload::{decode_payload, encode_payload, PayloadKind};
 /// # Why not merge into `WalletLedger`?
 ///
 /// We could overload by returning just `WalletLedger` and letting the
-/// caller check `sync_state.scan_completed == false`. We don't,
-/// because "scan_completed == false on a fresh empty ledger" is
-/// indistinguishable from "scan_completed == false because this wallet
-/// is still doing its initial sync". The discriminator here is
-/// structural (did we load state from disk, or seed it?), not
-/// state-derived.
+/// caller infer "did this come from disk?" from the ledger's contents.
+/// We don't, because a freshly-seeded empty ledger and a persisted
+/// wallet still at height 0 are value-indistinguishable — no field of
+/// `WalletLedger` separates them. The discriminator here is structural
+/// (did we load state from disk, or seed it?), not state-derived, so it
+/// belongs in the return type, not in a field the caller must interpret.
 #[derive(Debug)]
 pub enum OpenOutcome {
     /// `.wallet` was present and decoded successfully. The ledger is
@@ -1671,7 +1671,6 @@ mod tests {
                 assert!(ledger.ledger.transfers.is_empty());
                 assert!(ledger.tx_meta.tx_keys.is_empty());
                 assert!(ledger.bookkeeping.primary_label.is_none());
-                assert!(!ledger.sync_state.scan_completed);
             }
             OpenOutcome::StateLoaded(_) => panic!("expected StateLost for missing .wallet"),
         }

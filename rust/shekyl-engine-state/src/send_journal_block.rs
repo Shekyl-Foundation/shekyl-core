@@ -142,8 +142,12 @@ pub struct SendRecipient {
 pub struct SendInputRef {
     /// The input's global output index on chain.
     pub gindex: u64,
-    /// The input's amount in atomic units (change derivation +
-    /// display; our own output, already known to this wallet).
+    /// The input's amount in atomic units — part of the SJ-DQ-1 full row.
+    /// Read only at write time (the `change_amount` derivation); no live
+    /// reader consumes the persisted value yet, and there is no display
+    /// path — it is retained so the row is complete for a future OUTGOING
+    /// detail projection (the amount is our own output, already known to
+    /// this wallet, so storing it leaks nothing new).
     pub amount: u64,
 }
 
@@ -266,7 +270,10 @@ pub struct SendRecord {
     /// Realized recipients, in transaction order.
     pub recipients: Vec<SendRecipient>,
     /// Change returned to this wallet, in atomic units
-    /// (`Σ inputs − Σ recipients − fee`, computed at dispatch).
+    /// (`Σ inputs − Σ recipients − fee`, computed at dispatch). Part of the
+    /// SJ-DQ-1 full row: replay cannot recover the split, so it is stored —
+    /// no live reader consumes it yet, awaiting the OUTGOING detail
+    /// projection (SA-4 keeps it for that reason, not a dead-field delete).
     pub change_amount: u64,
     /// The dispatched input set — carried across a rescan wipe so the
     /// F14 locks re-derive (SJ-DQ-4 inversion).
@@ -335,14 +342,11 @@ impl SendJournalBlock {
 
     /// Enforce the block version gate at load.
     pub fn check_version(&self) -> Result<(), crate::error::WalletLedgerError> {
-        if self.block_version != SEND_JOURNAL_BLOCK_VERSION {
-            return Err(crate::error::WalletLedgerError::UnsupportedBlockVersion {
-                block: "send_journal",
-                file: self.block_version,
-                binary: SEND_JOURNAL_BLOCK_VERSION,
-            });
-        }
-        Ok(())
+        crate::version_gate::gate_version(
+            self.block_version,
+            "send_journal",
+            SEND_JOURNAL_BLOCK_VERSION,
+        )
     }
 
     /// Birth a dispatch-authored row (pin-1 form: before the bytes can

@@ -50,6 +50,12 @@ pub mod staking_block;
 pub mod sync_state_block;
 pub mod transfer;
 pub mod tx_meta_block;
+// Public for its *documentation*, not its API: every block's public
+// `from_postcard_bytes` links here for the load-ordering contract it obeys,
+// so the module has to be reachable from the docs those methods generate.
+// The gate functions stay `pub(crate)` — callers reach them only through a
+// block's own loader.
+pub mod version_gate;
 pub mod wallet_ledger;
 
 pub use bookkeeping_block::{AddressBookEntry, BookkeepingBlock, BOOKKEEPING_BLOCK_VERSION};
@@ -76,6 +82,7 @@ pub use staking_block::{StakingBlock, STAKING_BLOCK_VERSION};
 pub use sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};
 pub use transfer::{AwaitingConfirmation, FcmpPrecomputedPath, TransferDetails, SPENDABLE_AGE};
 pub use tx_meta_block::{
-    ScannedPoolTx, TxMetaBlock, TxSecretKey, TxSecretKeys, TX_META_BLOCK_VERSION,
+    check_tx_note_len, PriorNote, ScannedPoolTx, SetTxNoteOutcome, TxMetaBlock, TxNoteTooLong,
+    TxSecretKey, TxSecretKeys, TX_META_BLOCK_VERSION, TX_NOTE_MAX_BYTES,
 };
-pub use wallet_ledger::{WalletLedger, WALLET_LEDGER_FORMAT_VERSION};
+pub use wallet_ledger::{SetNoteError, WalletLedger, WALLET_LEDGER_FORMAT_VERSION};
