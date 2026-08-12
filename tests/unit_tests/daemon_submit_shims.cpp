@@ -999,26 +999,69 @@ TEST(daemon_submit_shims, legacy_add_tx_double_spend_pin)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// §89.8.5: the coherence gap, pinned in its CURRENT (broken) state
+// §89.8.5 / Q12-U2: the coherence gap, CLOSED — and pinned closed
 // ─────────────────────────────────────────────────────────────────────────
 
-/* This test asserts behaviour we intend to CHANGE, and that is its purpose.
+/* This replaces the tripwire that pinned the gap in its broken state.
 
-   §89.8.5: an anonymity-zone arrival is classed `forward`, and `add_tx` refuses
-   to propagate `forward` into `tvc.m_relay` (`tx_pool.cpp`, the
-   `tx_relay != relay_method::forward` conjunct). So the transaction is not
-   relayed at arrival, the coherence branch — whose only real-origin callers are
-   the immediate-relay sites — never sees it, and the periodic pool loop later
-   ships it to `zone::public_` because nothing stored an origin zone.
+   The old test asserted that an anonymity arrival was classed `forward`, armed
+   no embargo, and was handed to the relay loop as a class
+   `relay_txpool_transactions` sent to `zone::public_` — i.e. that an
+   anonymity-arrived transaction was put on the path to clearnet. It carried an
+   instruction: whoever greens it must re-read §89.2's premise rather than
+   delete the assertion. Q12-U2 greens it, and this is the re-read.
 
-   §89.2's per-zone `hop` is derived on the premise that a transaction entering
-   an anonymity stem completes it there. That premise is not shipped, and the
-   constant is inert because of it. **The day someone makes an anonymity arrival
-   propagate, this test fails** — which is the point. A recorded note is a hope;
-   a failing test is a deadline. Whoever greens it must go re-read §89.2's
-   premise and §89.8.7 (the zone field, which rides with Q-12), not just delete
-   the assertion. */
-TEST(daemon_submit_shims, an_anonymity_classed_entry_arms_nothing_and_leaves_as_forward)
+   **Where the tripwire was weaker than it read.** It CONSTRUCTED the `forward`
+   state by calling `set_relayed` directly, rather than driving an arrival. So
+   it would not have fired on the receive-path change alone — only on the
+   class's deletion. Its own text said why (the suite cannot drive a full
+   `handle_notify_new_transactions` arrival), but the consequence was not
+   recorded: it pinned the CLASS, not the PATH. This replacement drives
+   `add_tx` with a real non-`invalid` zone, which is the closest the unit suite
+   gets to the path, and is exactly the end-to-end coverage Q12-U1 recorded as
+   missing.
+
+   §89.2's premise — a transaction entering an anonymity stem completes it
+   there — is now shipped rather than assumed, which is what makes the per-zone
+   `hop` live instead of inert. Measuring it is Q12-U3. */
+/* Seed the pool with an entry that arrived over `origin` and is still
+   stemming, then hand it to the relay loop.
+
+   **Why not drive `add_tx` instead.** Because it cannot be driven here, and
+   finding that out is worth recording. `add_tx` runs full input verification,
+   so an arrival needs a valid FCMP++ proof; the fixture builds shape-only
+   transactions (5 fake proof bytes) and the RPC-submit path it was written for
+   bypasses verification precisely because the Rust engine already did it.
+   Three fixture obstacles fell in sequence — encoded fee, output count,
+   reference block — and the fourth does not fall to fixture work at all.
+
+   That is the same blocker FOLLOWUPS records against the receive path, now
+   confirmed at a second site. So Q12-U1's "not tested end to end" narrows
+   rather than closes: the stored-state half below is real, and the
+   arrival-to-record half still needs the harness that unit is blocked on. */
+void seed_stemming_entry(ShimFixture& fx, const SubmitTx& s, epee::net_utils::zone origin)
+{
+  txpool_tx_meta_t meta;
+  ASSERT_TRUE(fx.db->get_txpool_tx_meta(s.txid, meta));
+  meta.set_relay_method(relay_method::stem);
+  meta.set_origin_zone(origin);
+  // Expired embargo: the loop must consider it, or the assertions are vacuous
+  // by the entry never being offered.
+  meta.last_relayed_time = static_cast<uint64_t>(time(nullptr)) - 3600;
+  meta.receive_time = static_cast<uint64_t>(time(nullptr)) - 100;
+  meta.relayed = true;
+  fx.db->update_txpool_tx(s.txid, meta);
+  fx.bap.txpool.m_next_check = 0;
+}
+
+/* The leak, closed at the site it happened. The periodic relay loop runs from
+   stored state with a nil source, minutes after the arrival — it has no
+   connection left to ask. It used to hand every stem to `zone::public_` as a
+   literal, which put an anonymity-arrived transaction on the clear internet on
+   its first re-relay, silently: the transaction still propagates and nothing
+   errors. The recorded origin is what `relay_txpool_transactions` now buckets
+   on, and this is the assertion that it survives the pool. */
+TEST(daemon_submit_shims, a_stemming_entry_carries_its_anonymity_origin_to_the_relay_loop)
 {
   ShimFixture fx;
   SubmitTx s = fx.make_tx(0, 0);
@@ -1026,48 +1069,62 @@ TEST(daemon_submit_shims, an_anonymity_classed_entry_arms_nothing_and_leaves_as_
   shekyl_submit_facts_ffi fresh;
   uint8_t fresh_ki = 0;
   ASSERT_EQ(fx.commit(s, fresh, fresh_ki), SHEKYL_SUBMIT_OK);
+  seed_stemming_entry(fx, s, epee::net_utils::zone::tor);
 
-  /* `forward` is the class a receiver assigns a non-public arrival. Record it
-     on the anonymity zone — the zone argument is real, and irrelevant to the
-     outcome, which is the point. */
-  std::vector<bool> just_broadcasted;
-  fx.bap.txpool.set_relayed(epee::span<const crypto::hash>(&s.txid, 1),
-    relay_method::forward, epee::net_utils::zone::tor, just_broadcasted);
-
-  txpool_tx_meta_t meta;
-  ASSERT_TRUE(fx.db->get_txpool_tx_meta(s.txid, meta));
-  EXPECT_EQ(meta.get_relay_method(), relay_method::forward);
-
-  // Half one of §89.8.4: no embargo arms for this class, on ANY zone. The
-  // per-zone timer is correct and never consulted here.
-  EXPECT_EQ(meta.dandelionpp_stem, 0)
-    << "a forward entry must arm no embargo — if it does, §89.8.4's "
-       "'unreachable on the anonymity zone' has changed";
-
-  /* Half two, and the tripwire: the entry is handed to the periodic relay
-     loop still classed `forward`, and `core::relay_txpool_transactions` routes
-     `forward` into `stem_req`, which it sends with `zone::public_` as a
-     literal. So this is the moment an anonymity-arrived transaction is put on
-     the path to clearnet, and nothing here can stop it — the pool stored no
-     origin zone to route back to (§89.8.5).
-
-     **This asserts behaviour we intend to change.** When the zone field lands
-     (§89.8.7, riding with Q-12), a forward entry must stop being offered as a
-     class that routes to public, and this fails. Whoever greens it should
-     re-derive §89.2's per-zone `hop` — it is sized for a stem that completes
-     in-zone, which is exactly the premise this test shows is not shipped —
-     rather than delete the assertion. */
-  std::vector<std::tuple<crypto::hash, cryptonote::blobdata, relay_method>> relayable;
-  fx.bap.txpool.get_relayable_transactions(relayable);
+  std::vector<cryptonote::relayable_tx> relayable;
+  ASSERT_TRUE(fx.bap.txpool.get_relayable_transactions(relayable));
 
   const auto found = std::find_if(relayable.begin(), relayable.end(),
-    [&s](const auto& t) { return std::get<0>(t) == s.txid; });
+    [&s](const cryptonote::relayable_tx& t) { return t.txid == s.txid; });
   ASSERT_NE(found, relayable.end())
-    << "the entry must reach the relay loop at all, or the assertion below is "
-       "vacuous by absence rather than true by class";
-  EXPECT_EQ(std::get<2>(*found), relay_method::forward)
-    << "still offered as `forward`, the class relay_txpool_transactions sends "
-       "to zone::public_ — the coherence gap, at the site it happens";
+    << "the entry must reach the relay loop at all, or the assertions below "
+       "are vacuous by absence rather than true by routing";
+  EXPECT_EQ(found->method, relay_method::stem);
+  EXPECT_EQ(found->origin, epee::net_utils::zone::tor)
+    << "a `public_` here is the coherence leak: the re-relay would carry an "
+       "anonymity-arrived transaction onto the clear internet (§89.8.5)";
+}
+
+/* Negative control. If `get_relayable_transactions` filled the origin with a
+   constant, or ignored the record entirely, the test above would pass for the
+   wrong reason. A clearnet-origin entry must come back `public_`, and one that
+   never recorded an origin must come back `invalid` — which the caller maps to
+   `public_`, the behaviour such entries always had. */
+TEST(daemon_submit_shims, the_relay_loop_origin_is_read_from_the_record_not_assumed)
+{
+  {
+    ShimFixture fx;
+    SubmitTx s = fx.make_tx(0, 0);
+    shekyl_submit_facts_ffi fresh;
+    uint8_t fresh_ki = 0;
+    ASSERT_EQ(fx.commit(s, fresh, fresh_ki), SHEKYL_SUBMIT_OK);
+    seed_stemming_entry(fx, s, epee::net_utils::zone::public_);
+
+    std::vector<cryptonote::relayable_tx> relayable;
+    ASSERT_TRUE(fx.bap.txpool.get_relayable_transactions(relayable));
+    const auto found = std::find_if(relayable.begin(), relayable.end(),
+      [&s](const cryptonote::relayable_tx& t) { return t.txid == s.txid; });
+    ASSERT_NE(found, relayable.end());
+    EXPECT_EQ(found->origin, epee::net_utils::zone::public_)
+      << "a clearnet entry must not acquire an anonymity origin";
+  }
+  {
+    ShimFixture fx;
+    SubmitTx s = fx.make_tx(0, 0);
+    shekyl_submit_facts_ffi fresh;
+    uint8_t fresh_ki = 0;
+    ASSERT_EQ(fx.commit(s, fresh, fresh_ki), SHEKYL_SUBMIT_OK);
+    seed_stemming_entry(fx, s, epee::net_utils::zone::invalid);
+
+    std::vector<cryptonote::relayable_tx> relayable;
+    ASSERT_TRUE(fx.bap.txpool.get_relayable_transactions(relayable));
+    const auto found = std::find_if(relayable.begin(), relayable.end(),
+      [&s](const cryptonote::relayable_tx& t) { return t.txid == s.txid; });
+    ASSERT_NE(found, relayable.end());
+    EXPECT_EQ(found->origin, epee::net_utils::zone::invalid)
+      << "an entry with no recorded origin must report none, not a default "
+         "zone invented by the reader";
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1114,12 +1171,12 @@ TEST(daemon_submit_shims, embargo_arms_future_deadline_and_expiry_routes_to_rela
   fx.db->update_txpool_tx(s.txid, meta);
   fx.bap.txpool.m_next_check = 0;
 
-  std::vector<std::tuple<crypto::hash, cryptonote::blobdata, relay_method>> relayable;
+  std::vector<cryptonote::relayable_tx> relayable;
   ASSERT_TRUE(fx.bap.txpool.get_relayable_transactions(relayable));
   ASSERT_EQ(relayable.size(), 1u);
-  EXPECT_EQ(std::get<0>(relayable[0]), s.txid);
-  EXPECT_EQ(std::get<1>(relayable[0]), s.blob);
-  EXPECT_EQ(std::get<2>(relayable[0]), relay_method::stem)
+  EXPECT_EQ(relayable[0].txid, s.txid);
+  EXPECT_EQ(relayable[0].blob, s.blob);
+  EXPECT_EQ(relayable[0].method, relay_method::stem)
     << "an expired stem entry rides the fluff request (origin-fluff path)";
 
   // The loop re-arms the deadline on each attempt.

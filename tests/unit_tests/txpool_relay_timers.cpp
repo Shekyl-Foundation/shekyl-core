@@ -225,10 +225,10 @@ struct RelayTimerFixture
 
   bool relayable()
   {
-    std::vector<std::tuple<crypto::hash, cryptonote::blobdata, relay_method>> txs;
+    std::vector<cryptonote::relayable_tx> txs;
     bap.txpool.get_relayable_transactions(txs);
     for (const auto& t : txs)
-      if (std::get<0>(t) == txid)
+      if (t.txid == txid)
         return true;
     return false;
   }

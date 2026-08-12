@@ -331,23 +331,16 @@ namespace cryptonote
 
         if (meta.upgrade_relay_method(tx_relay) || !existing_tx) // synchronize with embargo timer or stem/fluff out-of-order messages
         {
+          /* Q12-U2 deleted the bridge delay along with the class that used it.
+             The randomized hold existed to blur the moment an anonymity
+             arrival became clearnet-visible; under Q12-D3 the arrival does not
+             cross to clearnet at admission at all — it stems on the zone it
+             arrived over — so there is no bridge left here to delay. The
+             latency the path does cost is priced by the zone's own `hop`
+             (§89.2, `ANON_ZONE_TRANSIT_ASSUMPTION_MS`), which is where a
+             per-zone cost belongs. `set_relayed` adjusts the time later. */
           using clock = std::chrono::system_clock;
           auto last_relayed_time = std::numeric_limits<decltype(meta.last_relayed_time)>::max();
-          if (tx_relay == relay_method::forward)
-          {
-            /* Memoryless, not Poisson (Q-12's family half; the mean is
-               unchanged and stays Q-12's to derive). The inherited
-               `random_poisson_seconds{22s}` was F-2/F-4's signature sitting on
-               the tor->clearnet bridge — the moment an anonymity-arrived tx
-               becomes clearnet-visible, so the moment arrival-time inference
-               pays most. Measured on F-4's instrument: 2.01x more invertible
-               at phase 0, and 0.72 vs 0.12 late in the window, because only a
-               memoryless family has residual == full. */
-            last_relayed_time =
-              detail::relay_deadline(clock::now(), shekyl_dandelionpp_forward_delay_seconds());
-            set_if_less(m_next_check, time_t(last_relayed_time));
-          }
-          // else the `set_relayed` function will adjust the time accordingly later
 
           //update transactions container
           meta.last_relayed_time = last_relayed_time;
@@ -391,8 +384,15 @@ namespace cryptonote
         return false;
       }
 
+      /* Q12-U2 removed the `tx_relay != relay_method::forward` conjunct that
+         used to sit here. It was the fifth link in the chain that held
+         coherence dormant: an anonymity arrival was classed `forward`, this
+         refused to propagate it into `tvc.m_relay`, the caller's batching
+         switch therefore dropped it, and `relay_transactions` was never
+         reached with an anonymity origin. The class is gone and so is the
+         suppression — an arrival now relays at arrival. */
       static_assert(unsigned(relay_method::none) == 0, "expected relay_method::none value to be zero");
-      if(meta.fee > 0 && tx_relay != relay_method::forward)
+      if(meta.fee > 0)
         tvc.m_relay = tx_relay;
     }
 
@@ -990,7 +990,7 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   //TODO: investigate whether boolean return is appropriate
-  bool tx_memory_pool::get_relayable_transactions(std::vector<std::tuple<crypto::hash, cryptonote::blobdata, relay_method>> &txs)
+  bool tx_memory_pool::get_relayable_transactions(std::vector<relayable_tx> &txs)
   {
     using clock = std::chrono::system_clock;
 
@@ -1040,7 +1040,14 @@ namespace cryptonote
         {
           try
           {
-            txs.emplace_back(txid, m_blockchain.get_txpool_tx_blob(txid, relay_category::all), tx_relay);
+            /* The origin travels with the entry (Q12-U2). Without it the relay
+               loop has nothing to route by: it runs from stored state, minutes
+               after the arrival, with no connection left to ask. */
+            txs.push_back(relayable_tx{
+              txid,
+              m_blockchain.get_txpool_tx_blob(txid, relay_category::all),
+              tx_relay,
+              meta.get_origin_zone()});
           }
           catch (const std::exception &e)
           {
