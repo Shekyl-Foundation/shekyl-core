@@ -111,6 +111,10 @@ use crate::{
 /// Version `15` removes `TransferDetails::awaiting_confirmation`
 /// (`LEDGER_BLOCK_VERSION` 10, PR-SJ-1b): the F14 lock retires from
 /// persisted state — journal facts derive it on demand.
+/// Version `16` removes dead persisted fields (SA-4): `TxMetaBlock`'s
+/// wallet2-lineage `attributes` bag (`TX_META_BLOCK_VERSION` 3, P3-5)
+/// and `SyncStateBlock`'s three never-wired fields (`scan_completed`,
+/// `confirmations_required`, `trusted_daemon`; `SYNC_STATE_BLOCK_VERSION` 2).
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -122,7 +126,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 15;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 16;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.

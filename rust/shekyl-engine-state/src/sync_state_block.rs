@@ -16,23 +16,19 @@
 //!   derived from the seed epoch). Scans never descend below this height,
 //!   so the scanner knows where to start when the ledger is empty.
 //! * `creation_anchor_hash` — an optional block hash committing the
-//!   wallet to a specific fork at creation time. Lets the orchestrator
-//!   catch "this wallet was never valid on the fork the daemon is
-//!   currently serving" at load time instead of after a silent resync.
-//! * `scan_completed` — whether the initial full-history scan has
-//!   finished at least once. Drives the UX "restoring…" indicator and
-//!   gates background scan throttling.
+//!   wallet to a specific fork at creation time (the staking-canonicity
+//!   "trust floor"). **Reserved:** V3.0 constructs it `None` and no code
+//!   reads it yet — see the field docstring.
 //! * `pending_tx_hashes` — txids the *user* has submitted locally but
 //!   that have not yet been observed on-chain by the scanner. Used for
 //!   the UX "pending outgoing" state; reconciled against
 //!   [`LedgerBlock::transfers`] and [`TxMetaBlock::scanned_pool_txs`] at
 //!   load time.
-//! * `confirmations_required` — user preference for "confirmed" in the
-//!   GUI (0 = consider any observed tx confirmed). Not a consensus
-//!   value — the scanner still reports the raw height deltas.
-//! * `trusted_daemon` — whether the last-configured daemon is flagged
-//!   as trusted by the user. Affects which RPC methods the scanner is
-//!   willing to call.
+//!
+//! SA-4 deleted three never-wired wallet2-lineage fields at block version
+//! `2` (`scan_completed`, `confirmations_required`, `trusted_daemon`):
+//! each had no writer, no reader, and a docstring naming a consumer that
+//! did not exist (see [`SYNC_STATE_BLOCK_VERSION`]).
 //!
 //! # Wire format
 //!
@@ -49,10 +45,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the sync-state block. V3.0 ships version `1`.
+/// Schema version of the sync-state block. V3.0 ships version `2`.
 /// Any field addition / removal / renaming bumps this; loads that see
 /// a different version refuse rather than migrate.
-pub const SYNC_STATE_BLOCK_VERSION: u32 = 1;
+///
+/// Version history:
+/// - `1` — initial shape; carried three never-wired wallet2-lineage
+///   fields (`scan_completed`, `confirmations_required`, `trusted_daemon`).
+/// - `2` — those three fields deleted (SA-4 dead persisted-field sweep,
+///   rule-15 / rule-60): each had no production writer, no reader, and a
+///   docstring asserting a consumer that did not exist. Reopen criteria
+///   are per-field (a real restoring-progress UX, a confirmation-count
+///   preference surface, and a network-posture trust gate, respectively).
+pub const SYNC_STATE_BLOCK_VERSION: u32 = 2;
 
 /// The sync-state block. See module docs for scope, versioning, and
 /// design rationale.
@@ -67,35 +72,25 @@ pub struct SyncStateBlock {
     /// fresh wallets, the current chain tip at creation time.
     pub restore_from_height: u64,
 
-    /// Optional block-hash anchor pinning the wallet to a specific
-    /// fork at creation. When `Some`, the orchestrator verifies this
-    /// hash against the daemon's `restore_from_height` on load and
-    /// refuses to connect on mismatch.
+    /// Optional block-hash anchor pinning the wallet to a specific fork
+    /// at creation — the "trust floor" of the staking-canonicity model
+    /// (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`: below it trusted, above it
+    /// exhaustiveness-verified).
+    ///
+    /// **Reserved — no writer/reader yet.** V3.0 always constructs this
+    /// `None` and no code reads it; the fork-pin verification the concept
+    /// implies (verify against the daemon on load, refuse on mismatch) is
+    /// not built. Kept because it is a named design concept with a pending
+    /// newtype migration (`RAW_TYPE_NEWTYPE_MIGRATION.md`), not wallet2
+    /// cruft. Wiring the writer/reader is its own change.
     #[serde(default)]
     pub creation_anchor_hash: Option<[u8; 32]>,
-
-    /// True once the initial full-history scan has completed at least
-    /// once. Used by the UX to decide whether to show "restoring…".
-    #[serde(default)]
-    pub scan_completed: bool,
 
     /// Locally-submitted txids that have not yet been observed on-chain.
     /// The orchestrator reconciles this list with the ledger's
     /// `transfers` and the tx-meta block's `scanned_pool_txs` on load.
     #[serde(default)]
     pub pending_tx_hashes: Vec<[u8; 32]>,
-
-    /// UX preference: how many confirmations to consider a tx
-    /// "confirmed". 0 = any observation is confirmed. Purely visual —
-    /// no consensus meaning.
-    #[serde(default)]
-    pub confirmations_required: u32,
-
-    /// Whether the last-used daemon was flagged as trusted. Gates
-    /// privacy-sensitive RPC methods the scanner would otherwise
-    /// refuse to call.
-    #[serde(default)]
-    pub trusted_daemon: bool,
 }
 
 impl Default for SyncStateBlock {
@@ -113,10 +108,7 @@ impl SyncStateBlock {
             block_version: SYNC_STATE_BLOCK_VERSION,
             restore_from_height: 0,
             creation_anchor_hash: None,
-            scan_completed: false,
             pending_tx_hashes: Vec::new(),
-            confirmations_required: 0,
-            trusted_daemon: false,
         }
     }
 
@@ -126,10 +118,7 @@ impl SyncStateBlock {
             block_version: SYNC_STATE_BLOCK_VERSION,
             restore_from_height,
             creation_anchor_hash,
-            scan_completed: false,
             pending_tx_hashes: Vec::new(),
-            confirmations_required: 0,
-            trusted_daemon: false,
         }
     }
 
@@ -175,10 +164,7 @@ mod tests {
             block_version: SYNC_STATE_BLOCK_VERSION,
             restore_from_height: 3_141_592,
             creation_anchor_hash: Some([0xABu8; 32]),
-            scan_completed: true,
             pending_tx_hashes: vec![[0x11; 32], [0x22; 32], [0x33; 32]],
-            confirmations_required: 10,
-            trusted_daemon: true,
         }
     }
 
@@ -244,19 +230,13 @@ mod tests {
         fn populated_block_round_trip_proptest(
             restore in any::<u64>(),
             anchor in any::<Option<[u8; 32]>>(),
-            completed in any::<bool>(),
             pending in proptest::collection::vec(any::<[u8; 32]>(), 0..6),
-            confs in any::<u32>(),
-            trusted in any::<bool>(),
         ) {
             let b = SyncStateBlock {
                 block_version: SYNC_STATE_BLOCK_VERSION,
                 restore_from_height: restore,
                 creation_anchor_hash: anchor,
-                scan_completed: completed,
                 pending_tx_hashes: pending,
-                confirmations_required: confs,
-                trusted_daemon: trusted,
             };
             let bytes = b.to_postcard_bytes().expect("serialize");
             let back = SyncStateBlock::from_postcard_bytes(&bytes).expect("deserialize");

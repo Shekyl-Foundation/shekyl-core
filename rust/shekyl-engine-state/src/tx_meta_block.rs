@@ -3,8 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Transaction-meta block — per-tx secret keys + notes + free-form attributes
-//! + short-lived pool-tx observations.
+//! Transaction-meta block — per-tx secret keys + notes + short-lived
+//! pool-tx observations.
 //!
 //! Third of four `.wallet`-side ledger blocks (after
 //! [`LedgerBlock`](crate::ledger_block::LedgerBlock) and
@@ -15,9 +15,6 @@
 //!   generated when it *constructed* a tx. Kept so the user can later prove a
 //!   payment to a third party without re-deriving from the seed.
 //! * **User notes** — free-text notes the user attached to specific txids.
-//! * **Attributes** — opaque `String -> String` key/value pairs used as a
-//!   forward-compatible extension point for UX settings that the wallet
-//!   wants to persist but has no dedicated field for yet.
 //! * **Scanned pool transactions** — the live mempool observations the
 //!   scanner has made. Short-lived by nature but persisted across runs so
 //!   that a restart does not lose the "pending" state the user sees.
@@ -71,7 +68,12 @@ use crate::{error::WalletLedgerError, serde_helpers::zeroizing_bytes_32};
 ///   single tx secret scalar for every output including change
 ///   (`sign_bridge::sign_tx`), it has no subaddresses, and the field
 ///   had no producer whole-tree.
-pub const TX_META_BLOCK_VERSION: u32 = 2;
+/// - `3` — `attributes` deleted (SA-4 dead persisted-field sweep,
+///   executing the P3-5 ruling `WALLET_SEND_RECORD.md`): the untyped
+///   `String -> String` wallet2-lineage bag had no writer, no reader,
+///   and no defined semantics (rules 60/81). Reopen criterion: a named,
+///   typed UX-state need that `tx_notes` cannot carry.
+pub const TX_META_BLOCK_VERSION: u32 = 3;
 
 /// A single 32-byte tx secret scalar, wrapped so both its in-memory
 /// representation and its deserialization path zeroize on drop.
@@ -184,12 +186,6 @@ pub struct TxMetaBlock {
     #[serde(default = "BTreeMap::new")]
     pub tx_notes: BTreeMap<[u8; 32], String>,
 
-    /// Opaque `String -> String` attribute bag for forward-compatible UX
-    /// state. Wallet2 used an `unordered_map<string, string>`; we keep the
-    /// functional surface but insist on `BTreeMap` for byte stability.
-    #[serde(default = "BTreeMap::new")]
-    pub attributes: BTreeMap<String, String>,
-
     /// Scanner-observed mempool transactions. Bounded externally by the
     /// orchestrator's pruning policy (see module-level follow-up).
     #[serde(default = "BTreeMap::new")]
@@ -209,7 +205,6 @@ impl TxMetaBlock {
             block_version: TX_META_BLOCK_VERSION,
             tx_keys: BTreeMap::new(),
             tx_notes: BTreeMap::new(),
-            attributes: BTreeMap::new(),
             scanned_pool_txs: BTreeMap::new(),
         }
     }
@@ -219,14 +214,12 @@ impl TxMetaBlock {
     pub fn new(
         tx_keys: BTreeMap<[u8; 32], TxSecretKeys>,
         tx_notes: BTreeMap<[u8; 32], String>,
-        attributes: BTreeMap<String, String>,
         scanned_pool_txs: BTreeMap<[u8; 32], ScannedPoolTx>,
     ) -> Self {
         Self {
             block_version: TX_META_BLOCK_VERSION,
             tx_keys,
             tx_notes,
-            attributes,
             scanned_pool_txs,
         }
     }
@@ -301,10 +294,6 @@ mod tests {
         tx_notes.insert(key(0x01, 0), "rent".into());
         tx_notes.insert(key(0x03, 0), "alice".into());
 
-        let mut attributes = BTreeMap::new();
-        attributes.insert("display.fiat".into(), "USD".into());
-        attributes.insert("display.theme".into(), "dark".into());
-
         let mut scanned_pool_txs = BTreeMap::new();
         scanned_pool_txs.insert(
             key(0x04, 0),
@@ -321,7 +310,7 @@ mod tests {
             },
         );
 
-        TxMetaBlock::new(tx_keys, tx_notes, attributes, scanned_pool_txs)
+        TxMetaBlock::new(tx_keys, tx_notes, scanned_pool_txs)
     }
 
     #[test]
@@ -402,7 +391,7 @@ mod tests {
     }
 
     proptest! {
-        // Arbitrary tx_notes + attributes + scanned_pool_txs sizes.
+        // Arbitrary tx_notes + scanned_pool_txs sizes.
         // We deliberately keep tx_keys out of the proptest: TxSecretKey
         // has no Clone, which makes generic `Strategy` composition
         // awkward, and leaf-level coverage already lives in
@@ -413,11 +402,6 @@ mod tests {
                 any::<[u8; 32]>(),
                 "[a-zA-Z0-9 ]{0,32}",
                 0..8,
-            ),
-            attrs in proptest::collection::btree_map(
-                "[a-z.]{1,16}",
-                "[a-z0-9 ]{0,16}",
-                0..6,
             ),
             pool in proptest::collection::btree_map(
                 any::<[u8; 32]>(),
@@ -437,7 +421,7 @@ mod tests {
                     )
                 })
                 .collect();
-            let b = TxMetaBlock::new(BTreeMap::new(), notes, attrs, scanned_pool_txs);
+            let b = TxMetaBlock::new(BTreeMap::new(), notes, scanned_pool_txs);
             let bytes = b.to_postcard_bytes().expect("serialize");
             let back = TxMetaBlock::from_postcard_bytes(&bytes).expect("deserialize");
             prop_assert_eq!(&back, &b);
