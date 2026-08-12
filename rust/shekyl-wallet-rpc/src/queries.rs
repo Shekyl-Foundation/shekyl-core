@@ -342,7 +342,7 @@ pub(crate) async fn get_transfers(
     let transfers = collect_transfers(
         ledger.ledger.transfers(),
         &ledger.send_journal,
-        &ledger.tx_meta.tx_notes,
+        ledger.tx_meta.notes(),
         &filters,
         since,
     )?;
@@ -383,12 +383,12 @@ pub(crate) async fn get_transfer_by_id(
             .transfers()
             .iter()
             .find(|td| td.tx_hash == tx_hash && td.internal_output_index == output_index)
-            .map(|td| transfer_view(td, &ledger.spend_locks(), &ledger.tx_meta.tx_notes)),
+            .map(|td| transfer_view(td, &ledger.spend_locks(), ledger.tx_meta.notes())),
         TransferLookupId::Outgoing { tx_hash } => ledger
             .send_journal
             .rows
             .get(&tx_hash.to_bytes())
-            .map(|row| outgoing_transfer_view(&tx_hash, row, &ledger.tx_meta.tx_notes))
+            .map(|row| outgoing_transfer_view(&tx_hash, row, ledger.tx_meta.notes()))
             .transpose()?,
     };
 
@@ -554,7 +554,7 @@ mod tests {
         assert!(spent.is_empty());
     }
 
-    /// A per-txid note (SJ-DQ-7) is looked up from `tx_meta.tx_notes` and
+    /// A per-txid note (SJ-DQ-7) is looked up from `TxMetaBlock::notes` and
     /// projected onto the transfer view; a row with no note carries none.
     /// The note is keyed by the bare txid (arm 1: a note is about the
     /// transaction), so the same lookup feeds both directions of a txid.

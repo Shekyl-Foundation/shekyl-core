@@ -475,7 +475,7 @@ mod tests {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
             },
         );
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new());
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
         let w = WalletLedger::new(
             LedgerBlock::empty(),
             BookkeepingBlock::empty(),
@@ -496,7 +496,7 @@ mod tests {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
             },
         );
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new());
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
         let mut sync = SyncStateBlock::empty();
         sync.pending_tx_hashes = vec![txid];
         let w = WalletLedger::new(
@@ -525,7 +525,7 @@ mod tests {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
             },
         );
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new());
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
         let mut w = WalletLedger::new(
             LedgerBlock::empty(),
             BookkeepingBlock::empty(),
@@ -564,7 +564,7 @@ mod tests {
         );
         let mut pool = BTreeMap::new();
         pool.insert(txid, ScannedPoolTx::default());
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), pool);
+        let tx_meta = TxMetaBlock::new(tx_keys, pool);
         let w = WalletLedger::new(
             LedgerBlock::empty(),
             BookkeepingBlock::empty(),
@@ -589,7 +589,7 @@ mod tests {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
             },
         );
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new());
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
         // The spent row's own tx_hash differs from `txid`; only the
         // `spending_tx_hash` leg satisfies I-2 here.
         let mut spent_row = mk_transfer(0x11, 10);
@@ -630,7 +630,7 @@ mod tests {
                 primary: TxSecretKey::new(Zeroizing::new([0; 32])),
             },
         );
-        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new());
+        let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
         let ledger = LedgerBlock::new(
             vec![mk_transfer(0x11, 10)],
             BlockchainTip::new(30, [0xAA; 32]),

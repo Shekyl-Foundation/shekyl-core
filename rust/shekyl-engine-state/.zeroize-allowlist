@@ -185,8 +185,16 @@ rust/shekyl-engine-state/src/tx_meta_block.rs|struct TxSecretKeySchema(Vec<u8>);
 # (secret keys, user notes, pool scan state). The tx-hash itself is
 # public; the *values* carry any secret material and are wrapped
 # separately (e.g. `TxSecretKey` wraps `Zeroizing<[u8; 32]>`).
+#
+# `tx_notes` is listed **without** `pub`: the field was made private in
+# the PR-SA-4 review round so `set_note` is the only door in and
+# `TX_NOTE_MAX_BYTES` holds structurally. Visibility does not change the
+# zeroize disposition — a note is counterparty-bearing free text, not
+# key material, the same not-a-key / disclosure-if-dumped class as the
+# send journal's recipient addresses (SJ-DQ-7 ruling); the protection is
+# the AEAD envelope at rest plus boundary discipline, not wipe-on-drop.
 rust/shekyl-engine-state/src/tx_meta_block.rs|pub tx_keys: BTreeMap<[u8; 32], TxSecretKeys>
-rust/shekyl-engine-state/src/tx_meta_block.rs|pub tx_notes: BTreeMap<[u8; 32], String>
+rust/shekyl-engine-state/src/tx_meta_block.rs|tx_notes: BTreeMap<[u8; 32], String>
 rust/shekyl-engine-state/src/tx_meta_block.rs|pub scanned_pool_txs: BTreeMap<[u8; 32], ScannedPoolTx>
 
 # ── send_journal_block.rs ─────────────────────────────────────────────

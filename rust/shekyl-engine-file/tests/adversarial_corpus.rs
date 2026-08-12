@@ -597,7 +597,7 @@ fn ledger_invariant_orphan_tx_key_is_refused() {
             primary: TxSecretKey::new(Zeroizing::new([0xCD; 32])),
         },
     );
-    let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new(), BTreeMap::new());
+    let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
     let w = WalletLedger::new(
         shekyl_engine_state::LedgerBlock::empty(),
         shekyl_engine_state::BookkeepingBlock::empty(),

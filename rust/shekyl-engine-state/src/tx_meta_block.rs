@@ -56,7 +56,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{error::WalletLedgerError, serde_helpers::zeroizing_bytes_32};
 
-/// Schema version of the tx-meta block. V3.0 ships version `2`.
+/// Schema version of the tx-meta block. V3.0 ships version `3`.
 /// Any field addition / removal / renaming inside the block bumps this;
 /// loads that see a different version refuse rather than migrate.
 ///
@@ -75,14 +75,27 @@ use crate::{error::WalletLedgerError, serde_helpers::zeroizing_bytes_32};
 ///   typed UX-state need that `tx_notes` cannot carry.
 pub const TX_META_BLOCK_VERSION: u32 = 3;
 
-/// Maximum note length in **UTF-8 bytes** (SJ-DQ-7).
+/// Maximum length of **one** note, in UTF-8 bytes (SJ-DQ-7).
 ///
-/// A note is persisted, rescan-preserved, schema-versioned state. Without a
-/// ceiling it is a wallet-file bloat / storage-amplification vector. 4 KiB is
-/// generous for a human note and small on disk. Enforced on the write path
-/// ([`TxMetaBlock::set_note`]) so every caller — RPC, CLI, tests — shares the
-/// same ledger invariant. Boundaries may pre-check with this constant to fail
-/// before taking a write lock, but they are not the sole enforcement.
+/// A note is persisted, rescan-preserved, schema-versioned state, so an
+/// unbounded one is a storage-amplification vector. 4 KiB is generous for a
+/// human note and small on disk.
+///
+/// **Enforced structurally**: the `tx_notes` map is private and
+/// [`TxMetaBlock::set_note`] is its only insertion door, so every caller —
+/// RPC, CLI, tests, and any future writer — passes this bound rather than
+/// agreeing to. Boundaries may pre-check with this constant to fail before
+/// taking a write lock, but they are not the enforcement.
+///
+/// **What this does not bound: the number of notes.** Entry count is not
+/// capped here, deliberately and for the same reason `scanned_pool_txs` is
+/// not (see the module docs): a count policy belongs to the orchestrator that
+/// knows the wallet's transaction population, not to the persistence layer
+/// that round-trips it, and no cap that would refuse a user's next annotation
+/// has a derivation anyone can defend. The outer ceiling is real but
+/// structural rather than note-specific — `shekyl-engine-file`'s
+/// `PAYLOAD_BODY_MAX` refuses an over-large wallet payload on the *write*
+/// path, so the map cannot grow the file without limit.
 pub const TX_NOTE_MAX_BYTES: usize = 4 * 1024;
 
 /// Refusal when a note exceeds [`TX_NOTE_MAX_BYTES`].
@@ -226,8 +239,14 @@ pub struct TxMetaBlock {
     pub tx_keys: BTreeMap<[u8; 32], TxSecretKeys>,
 
     /// User-authored free-text notes, keyed by txid.
+    ///
+    /// **Private on purpose.** [`TX_NOTE_MAX_BYTES`] is a ledger invariant,
+    /// and an invariant a caller can bypass by assigning to a public field is
+    /// a convention, not a bound. [`Self::set_note`] is the only door in,
+    /// [`Self::notes`] / [`Self::note`] the only doors out, so over-length is
+    /// unrepresentable rather than merely discouraged.
     #[serde(default = "BTreeMap::new")]
-    pub tx_notes: BTreeMap<[u8; 32], String>,
+    tx_notes: BTreeMap<[u8; 32], String>,
 
     /// Scanner-observed mempool transactions. Bounded externally by the
     /// orchestrator's pruning policy (see module-level follow-up).
@@ -254,15 +273,19 @@ impl TxMetaBlock {
 
     /// Construct a tx-meta block from its component maps at the current
     /// version. Convenience for tests and the orchestrator's build path.
+    ///
+    /// Takes no notes map: notes are bounded state and enter only through
+    /// [`Self::set_note`], so there is no constructor that can seed the block
+    /// past [`TX_NOTE_MAX_BYTES`]. Callers that want notes set them after
+    /// construction.
     pub fn new(
         tx_keys: BTreeMap<[u8; 32], TxSecretKeys>,
-        tx_notes: BTreeMap<[u8; 32], String>,
         scanned_pool_txs: BTreeMap<[u8; 32], ScannedPoolTx>,
     ) -> Self {
         Self {
             block_version: TX_META_BLOCK_VERSION,
             tx_keys,
-            tx_notes,
+            tx_notes: BTreeMap::new(),
             scanned_pool_txs,
         }
     }
@@ -273,31 +296,40 @@ impl TxMetaBlock {
     }
 
     /// Deserialize from postcard bytes produced by
-    /// [`Self::to_postcard_bytes`]. Refuses any version mismatch.
+    /// [`Self::to_postcard_bytes`].
+    /// **Refuses a version mismatch before decoding the body**, so a blob
+    /// written by another schema version reports its version rather than
+    /// surfacing as a codec error (see [`crate::version_gate`]).
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
-        let block: Self = postcard::from_bytes(bytes)?;
-        block.check_version()?;
-        Ok(block)
+        // Version first, body second — see [`crate::version_gate`]: postcard
+        // carries no framing, so a stale blob decoded under the current
+        // declaration fails as corruption before any post-decode check can
+        // name the version. The gate reads only the leading varint.
+        crate::version_gate::gate_leading_version(bytes, "tx_meta", TX_META_BLOCK_VERSION)?;
+        Ok(postcard::from_bytes(bytes)?)
     }
 
     /// Version gate. Called automatically by [`Self::from_postcard_bytes`];
     /// exposed publicly so the `WalletLedger` aggregator (commit 2g) can
     /// fan out the same check.
     pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        if self.block_version != TX_META_BLOCK_VERSION {
-            return Err(WalletLedgerError::UnsupportedBlockVersion {
-                block: "tx_meta",
-                file: self.block_version,
-                binary: TX_META_BLOCK_VERSION,
-            });
-        }
-        Ok(())
+        crate::version_gate::gate_version(self.block_version, "tx_meta", TX_META_BLOCK_VERSION)
     }
 
     /// Read the user-authored note for `txid`, if any.
     #[must_use]
     pub fn note(&self, txid: &[u8; 32]) -> Option<&str> {
         self.tx_notes.get(txid).map(String::as_str)
+    }
+
+    /// The whole note map, read-only — for projections that annotate a batch
+    /// of rows and would otherwise pay a lookup call per row.
+    ///
+    /// Shared immutably: reading notes is unrestricted, writing them is not —
+    /// the map itself is private and [`Self::set_note`] is the only door in.
+    #[must_use]
+    pub fn notes(&self) -> &BTreeMap<[u8; 32], String> {
+        &self.tx_notes
     }
 
     /// Set or clear the note for `txid`.
@@ -400,10 +432,6 @@ mod tests {
             },
         );
 
-        let mut tx_notes = BTreeMap::new();
-        tx_notes.insert(key(0x01, 0), "rent".into());
-        tx_notes.insert(key(0x03, 0), "alice".into());
-
         let mut scanned_pool_txs = BTreeMap::new();
         scanned_pool_txs.insert(
             key(0x04, 0),
@@ -420,7 +448,15 @@ mod tests {
             },
         );
 
-        TxMetaBlock::new(tx_keys, tx_notes, scanned_pool_txs)
+        let mut block = TxMetaBlock::new(tx_keys, scanned_pool_txs);
+        // Notes enter only through the bounded door.
+        block
+            .set_note(key(0x01, 0), "rent".into())
+            .expect("in-bound note");
+        block
+            .set_note(key(0x03, 0), "alice".into())
+            .expect("in-bound note");
+        block
     }
 
     #[test]
@@ -582,9 +618,12 @@ mod tests {
         // `tx_secret_key_roundtrips_via_postcard`.
         #[test]
         fn populated_block_round_trip_proptest(
+            // 1.. characters, not 0..: the empty string is not a storable
+            // note — `set_note("")` is the clear operation — so generating one
+            // would assert a round-trip the type deliberately does not offer.
             notes in proptest::collection::btree_map(
                 any::<[u8; 32]>(),
-                "[a-zA-Z0-9 ]{0,32}",
+                "[a-zA-Z0-9 ]{1,32}",
                 0..8,
             ),
             pool in proptest::collection::btree_map(
@@ -605,7 +644,10 @@ mod tests {
                     )
                 })
                 .collect();
-            let b = TxMetaBlock::new(BTreeMap::new(), notes, scanned_pool_txs);
+            let mut b = TxMetaBlock::new(BTreeMap::new(), scanned_pool_txs);
+            for (txid, note) in notes {
+                b.set_note(txid, note).expect("generated notes are in bound");
+            }
             let bytes = b.to_postcard_bytes().expect("serialize");
             let back = TxMetaBlock::from_postcard_bytes(&bytes).expect("deserialize");
             prop_assert_eq!(&back, &b);
