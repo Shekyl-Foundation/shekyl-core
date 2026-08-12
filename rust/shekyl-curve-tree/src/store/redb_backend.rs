@@ -1179,37 +1179,67 @@ impl LeafStore {
     /// not an error — the caller decides how loud that is.
     pub fn pin_segment_for_serving(&self, id: SegmentId) -> Result<SegmentPin, StoreError> {
         let txn = self.db.begin_write()?;
-        let outcome = {
-            let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
-            if frozen.get(id)?.is_none() {
-                SegmentPin::PinnedNotYetFrozen
-            } else {
-                // Prune removes a segment's whole leaf range in one
-                // transaction, so the first position is an exact
-                // pruned/present discriminant — no full-segment scan.
-                let leaves = txn.open_table(LEAVES_TABLE)?;
-                let start = u64::from(id.0) * leaves_per_segment() as u64;
-                if leaves.get(TreePosition(start))?.is_none() {
-                    SegmentPin::AlreadyPruned
-                } else {
-                    SegmentPin::PinnedServable
-                }
-            }
-        };
-        if outcome != SegmentPin::AlreadyPruned {
-            let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
-            pinned.insert(id, &1u32)?;
-        }
+        let mut outcomes = Self::pin_ids_within(&txn, &[id])?;
         txn.commit()?;
-        Ok(outcome)
+        // `pin_ids_within` returns one outcome per input, so the pop is total.
+        Ok(outcomes.pop().unwrap_or(SegmentPin::AlreadyPruned))
+    }
+
+    /// Pin `ids` inside a caller-supplied write transaction, one outcome per
+    /// input, in order.
+    ///
+    /// The single and whole-set entry points share this rather than one
+    /// calling the other in a loop: a serve-set may hold up to
+    /// `MAX_HOLDINGS_SHARDS` = 4096 members, and a transaction per member
+    /// made host start pay 4096 durable commits. It also made pinning
+    /// **partial** — a failure part-way left earlier members pinned and later
+    /// ones not, a half-applied state the caller then had to be told was safe
+    /// to retry. One transaction for the whole set removes that state instead
+    /// of documenting it: either every member is pinned or none is.
+    fn pin_ids_within(
+        txn: &redb::WriteTransaction,
+        ids: &[SegmentId],
+    ) -> Result<Vec<SegmentPin>, StoreError> {
+        let mut outcomes = Vec::with_capacity(ids.len());
+        {
+            let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
+            let leaves = txn.open_table(LEAVES_TABLE)?;
+            let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
+            for &id in ids {
+                let outcome = if frozen.get(id)?.is_none() {
+                    SegmentPin::PinnedNotYetFrozen
+                } else {
+                    // Prune removes a segment's whole leaf range in one
+                    // transaction, so the first position is an exact
+                    // pruned/present discriminant — no full-segment scan.
+                    let start = u64::from(id.0) * leaves_per_segment() as u64;
+                    if leaves.get(TreePosition(start))?.is_none() {
+                        SegmentPin::AlreadyPruned
+                    } else {
+                        SegmentPin::PinnedServable
+                    }
+                };
+                if outcome != SegmentPin::AlreadyPruned {
+                    pinned.insert(id, &1u32)?;
+                }
+                outcomes.push(outcome);
+            }
+        }
+        Ok(outcomes)
     }
 
     /// Pin a whole serve-set, returning each member's outcome paired with
     /// its shard id, in the caller's order.
     ///
     /// Shard ids are segment indices — "shard" and "frozen segment" are the
-    /// same object — so this is [`Self::pin_segment_for_serving`] over a
-    /// list, plus the `u64` → [`SegmentId`] narrowing the wire form needs.
+    /// same object — so this is the same pin decision as
+    /// [`Self::pin_segment_for_serving`], plus the `u64` → [`SegmentId`]
+    /// narrowing the wire form needs.
+    ///
+    /// The whole set is pinned in ONE write transaction, so it is applied
+    /// atomically: a serve-set of up to `MAX_HOLDINGS_SHARDS` = 4096 members
+    /// costs one durable commit rather than 4096, and no failure can leave
+    /// half a serve-set pinned.
     ///
     /// [`SegmentPin::AlreadyPruned`] is *returned*, not raised: it is a
     /// fact about the store, and what to do about a pruned member is a
@@ -1251,9 +1281,15 @@ impl LeafStore {
                     .map_err(|_| StoreError::UnrepresentableShardId { shard_id })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        ids.into_iter()
-            .map(|(shard_id, id)| self.pin_segment_for_serving(id).map(|pin| (shard_id, pin)))
-            .collect()
+        let segment_ids: Vec<SegmentId> = ids.iter().map(|(_, id)| *id).collect();
+        let txn = self.db.begin_write()?;
+        let outcomes = Self::pin_ids_within(&txn, &segment_ids)?;
+        txn.commit()?;
+        Ok(ids
+            .into_iter()
+            .map(|(shard_id, _)| shard_id)
+            .zip(outcomes)
+            .collect())
     }
 
     /// Prune frozen, unpinned segments down to their `R_k` records.

@@ -119,6 +119,19 @@ pub enum PinError {
         /// Local diagnostic; never on the wire.
         detail: String,
     },
+    /// The pinner did not report on the members it was asked about.
+    ///
+    /// Distinct from [`Self::Pinner`] because the remedy is different: a
+    /// pinner failure is an environment fault and a retry re-covers it, but a
+    /// pinner that answers about the wrong members is a defect in the
+    /// implementor, and retrying only repeats it. Both member lists are
+    /// carried so the divergence is readable without re-running anything.
+    PinnerCoverageMismatch {
+        /// The members the pinner was asked to pin, in the record's order.
+        requested: Vec<u64>,
+        /// The members it reported on, in the order reported.
+        returned: Vec<u64>,
+    },
 }
 
 impl std::fmt::Display for PinError {
@@ -130,6 +143,16 @@ impl std::fmt::Display for PinError {
                  the store must be rebuilt by chain replay before this persona can serve"
             ),
             Self::Pinner { detail } => write!(f, "serve-set pin failed: {detail}"),
+            Self::PinnerCoverageMismatch {
+                requested,
+                returned,
+            } => write!(
+                f,
+                "the pinner reported on {returned:?} but was asked to pin {requested:?}; \
+                 the pins cannot be witnessed for members it did not report, so this \
+                 persona does not serve. This is an implementor defect, not a \
+                 transient fault — retrying will repeat it"
+            ),
         }
     }
 }
@@ -236,6 +259,29 @@ impl PinnedServeSet {
             .pin_serve_set(set.shard_ids())
             .await
             .map_err(|detail| PinError::Pinner { detail })?;
+
+        // THE WITNESS MUST WITNESS WHAT IT CLAIMS. Nothing above checks that
+        // the pinner reported on the members it was asked about, so a pinner
+        // returning a short list minted a `PinnedServeSet` for a set whose
+        // unreported members were never pinned — and an unpinned member is
+        // exactly what `prune_frozen` is free to remove out from under a
+        // read. The type's whole purpose is to be un-forgeable evidence that
+        // the pins are in place; evidence that is not checked is an
+        // assumption wearing a type.
+        //
+        // Sequence equality rather than set coverage: the trait already
+        // promises outcomes "in the caller's order", so comparing the
+        // sequence enforces the documented contract exactly, and catches
+        // omissions, extras, duplicates and reordering in one comparison. A
+        // coverage-only check would leave the documented ordering unverified
+        // and free to drift.
+        let returned: Vec<u64> = outcomes.iter().map(|(shard_id, _)| *shard_id).collect();
+        if returned != set.shard_ids() {
+            return Err(PinError::PinnerCoverageMismatch {
+                requested: set.shard_ids().to_vec(),
+                returned,
+            });
+        }
 
         let pruned: Vec<u64> = outcomes
             .iter()

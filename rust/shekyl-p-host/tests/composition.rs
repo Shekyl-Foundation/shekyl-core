@@ -99,6 +99,48 @@ impl ServeSetPinner for DeadPinner {
     }
 }
 
+/// A pinner that reports on FEWER members than it was asked about — the
+/// shape that used to mint a witness for members nobody pinned.
+struct ShortPinner;
+
+impl ServeSetPinner for ShortPinner {
+    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, String> {
+        Ok(shard_ids
+            .iter()
+            .take(shard_ids.len().saturating_sub(1))
+            .map(|&id| (id, SegmentPin::PinnedServable))
+            .collect())
+    }
+}
+
+/// A pinner that reports on the right members in the wrong order. The trait
+/// promises the caller's order; nothing verified it.
+struct ReorderingPinner;
+
+impl ServeSetPinner for ReorderingPinner {
+    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, String> {
+        let mut out: Vec<(u64, SegmentPin)> = shard_ids
+            .iter()
+            .map(|&id| (id, SegmentPin::PinnedServable))
+            .collect();
+        out.reverse();
+        Ok(out)
+    }
+}
+
+/// A pinner that answers about members it was never asked about, with the
+/// right COUNT. A length check alone would pass this.
+struct SubstitutingPinner;
+
+impl ServeSetPinner for SubstitutingPinner {
+    async fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, String> {
+        Ok(shard_ids
+            .iter()
+            .map(|&id| (id + 1_000_000, SegmentPin::PinnedServable))
+            .collect())
+    }
+}
+
 /// A supervisor config whose binary cannot pass the gate, with a backoff
 /// short enough that several incarnations fail inside a test.
 fn churning_tor(dir: &tempfile::TempDir) -> TorServiceConfig {
@@ -253,6 +295,59 @@ async fn a_failed_pin_mints_no_witness() {
         .await
         .expect_err("a dead pinner cannot establish the pins");
     assert!(matches!(err, PinError::Pinner { .. }));
+}
+
+#[tokio::test]
+async fn a_pinner_that_under_reports_mints_no_witness() {
+    // The gap this closes: `acquire` trusted the outcome list to describe the
+    // members it asked about. A short list carried no `AlreadyPruned`, so the
+    // witness minted — for a set whose unreported members were never pinned,
+    // and an unpinned member is precisely what `prune_frozen` may remove out
+    // from under a read. A witness that is not checked is an assumption
+    // wearing a type.
+    let h = holdings(&[0, 1, 2]);
+    let set = ServeSet::from_connected_record(&record(&h), 5);
+    let err = PinnedServeSet::acquire(&ShortPinner, set)
+        .await
+        .expect_err("a pinner that skipped a member cannot witness its pin");
+    match err {
+        PinError::PinnerCoverageMismatch {
+            requested,
+            returned,
+        } => {
+            assert_eq!(requested, vec![0, 1, 2]);
+            assert_eq!(returned, vec![0, 1]);
+        }
+        other => panic!("expected a coverage mismatch, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_pinner_that_answers_out_of_order_mints_no_witness() {
+    // The trait promises outcomes in the caller's order and nothing verified
+    // it, so the promise was decoration. Enforcing the documented contract is
+    // cheaper than discovering later which callers had quietly come to depend
+    // on it.
+    let h = holdings(&[0, 1, 2]);
+    let set = ServeSet::from_connected_record(&record(&h), 5);
+    let err = PinnedServeSet::acquire(&ReorderingPinner, set)
+        .await
+        .expect_err("outcomes out of the caller's order break the trait contract");
+    assert!(matches!(err, PinError::PinnerCoverageMismatch { .. }));
+}
+
+#[tokio::test]
+async fn a_pinner_that_substitutes_members_mints_no_witness() {
+    // The negative control on the check itself: this reply has the RIGHT
+    // COUNT and the wrong members, so a length comparison would accept it.
+    // Comparing the sequence is what makes the check about identity rather
+    // than arithmetic.
+    let h = holdings(&[0, 1, 2]);
+    let set = ServeSet::from_connected_record(&record(&h), 5);
+    let err = PinnedServeSet::acquire(&SubstitutingPinner, set)
+        .await
+        .expect_err("a pinner answering about other members witnesses nothing");
+    assert!(matches!(err, PinError::PinnerCoverageMismatch { .. }));
 }
 
 // ---------------------------------------------------------------------------
