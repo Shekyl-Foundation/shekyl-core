@@ -320,6 +320,16 @@ reported distribution is over **fleet nodes only**. `A` counts fleet nodes.
 (Q12-R5's late joiner answers *"did we measure the bootstrap?"*; this answers
 *"what population is the histogram over?"* — two different confounds.)
 
+> **The readout must never turn a refusal into a zero.** `get_connections` is
+> unavailable in restricted mode (`-32601`), and a reader that does
+> `result.get("connections", [])` reports that refusal as **zero connections** —
+> i.e. as an isolated node, **which is the run's headline claim**. The
+> instrument would then manufacture the finding it exists to test. Caught on the
+> production testnet estate, where all five nodes read `0/0/0` and all five were
+> fine; `utils/fleet/read_anon_histogram.sh` now distinguishes an RPC error, an
+> absent `result`, and an absent `connections` field from an empty list, and
+> exits nonzero naming which.
+
 **Convergence.** Poll until the distribution stops moving. *Time to converge is
 itself a result*, not overhead: "does it converge at all, and how long" is half
 the question.

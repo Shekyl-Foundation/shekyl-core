@@ -58,22 +58,50 @@ while read -r host port label; do
     "curl -s -m 10 http://127.0.0.1:$port/json_rpc -H 'Content-Type: application/json' \
      -d '{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"get_connections\"}'" 2>/dev/null)
 
+  # An RPC ERROR MUST NOT READ AS ZERO CONNECTIONS. `get_connections` is
+  # unavailable in restricted mode (-32601), and a `.get("result", {})` turns
+  # that refusal into an empty list — reporting a healthy, well-connected node
+  # as isolated. Zero is the most dangerous false value this script can produce,
+  # because an isolated node IS the run's headline claim: the instrument would
+  # manufacture the result it exists to test. Caught on the production testnet
+  # estate, where every node read 0/0/0 and every node was fine.
   parsed=$(printf '%s' "$out" | python3 -c '
 import sys, json
 try:
-    c = json.load(sys.stdin).get("result", {}).get("connections", []) or []
+    d = json.load(sys.stdin)
 except Exception:
-    print("ERR"); raise SystemExit
+    print("ERR unparseable-response"); raise SystemExit
+if not isinstance(d, dict):
+    print("ERR non-object-response"); raise SystemExit
+if "error" in d and d["error"]:
+    e = d["error"]
+    code = e.get("code")
+    msg = e.get("message")
+    print("ERR rpc-error:%s:%s" % (code, msg)); raise SystemExit
+if "result" not in d:
+    print("ERR no-result-field"); raise SystemExit
+c = d["result"].get("connections")
+if c is None:
+    # Absent is not empty: an empty pool of connections is reported as [].
+    print("ERR no-connections-field"); raise SystemExit
 tor_out = sum(1 for x in c if x.get("address_type") == 4 and not x.get("incoming"))
 tor_in  = sum(1 for x in c if x.get("address_type") == 4 and x.get("incoming"))
 pub     = sum(1 for x in c if x.get("address_type") != 4)
-print(f"{tor_out} {tor_in} {pub}")' 2>/dev/null)
+print(f"OK {tor_out} {tor_in} {pub}")' 2>/dev/null)
 
-  if [ "$parsed" = "ERR" ] || [ -z "$parsed" ]; then
-    printf '  %-24s %-8s NO ANSWER\n' "$label" "$host"
-    failed=$((failed + 1))
-    continue
-  fi
+  case "${parsed:-}" in
+    'OK '*) parsed="${parsed#OK }" ;;
+    ERR*)
+      printf '  %-24s %-14s %s\n' "$label" "$host" "$parsed"
+      failed=$((failed + 1))
+      continue
+      ;;
+    *)
+      printf '  %-24s %-14s NO ANSWER\n' "$label" "$host"
+      failed=$((failed + 1))
+      continue
+      ;;
+  esac
 
   set -- $parsed
   printf '  %-24s anon_out=%-3s anon_in=%-3s public=%-3s\n' "$label" "$1" "$2" "$3"
