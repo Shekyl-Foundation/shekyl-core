@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! The vanguard rotation manager — supervisor-scoped state that outlives Tor
-//! incarnations, so a Tor **restart never causes a rotation** (PR-C3 core).
+//! incarnations, so a Tor **restart never causes a rotation** (PR-C3).
 //!
 //! # The load-bearing invariant
 //!
@@ -42,9 +42,15 @@
 //! vanguards-lite replaces a vanguard that loses `Fast`/`Stable`, but the
 //! proposal explicitly notes the design did not have to be that way. Treating
 //! flag-loss as a rotation is a separate, argued decision — not inherited.
+//!
+//! # Ownership
+//!
+//! [`VanguardManager`] is the sole orchestration surface the supervisor calls.
+//! Selection, lifetimes, control-port I/O, and persistence all live here so
+//! `service` stays a thin policy loop rather than growing feature branches.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kameo::error::SendError;
@@ -52,8 +58,7 @@ use tokio::sync::oneshot;
 
 use crate::control::consensus::{parse_ns_all, ConsensusRelay};
 use crate::control::vanguards::{
-    draw_replacement, select_disjoint, HsLayerPins, RelayFingerprint, VanguardRng,
-    NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS,
+    HsLayerPins, RelayFingerprint, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS,
 };
 use crate::control::{Command, ControlError, TorControl};
 
@@ -63,6 +68,8 @@ const L2_LIFETIME_MAX: Duration = Duration::from_secs(60 * 86_400);
 /// L3 lifetime bounds (spec): `max(X, X)` over [1, 48] hours inclusive.
 const L3_LIFETIME_MIN: Duration = Duration::from_secs(3_600);
 const L3_LIFETIME_MAX: Duration = Duration::from_secs(48 * 3_600);
+
+// ── Mode + sealed witness ──────────────────────────────────────────────────
 
 /// Whether this Tor instance runs supervisor-managed **full** vanguards.
 ///
@@ -94,12 +101,10 @@ pub enum VanguardsMode {
 /// Evidence that full vanguards are **pinned and confirmed on the current
 /// incarnation** — the token the onion-registration surface demands.
 ///
-/// Mintable only by [`apply_pins`], and only after tor has answered the
-/// `SETCONF` with `250`. This is the crate's established sealed-witness
-/// pattern ([`VerifiedTorBinary`](crate::binary::VerifiedTorBinary), mintable
-/// only by `discover_and_verify`): the guarantee is structural rather than a
-/// convention the serving daemon must remember, which is exactly what this
-/// crate keeps refusing to rely on.
+/// Mintable only by the confirmed-`SETCONF` path inside [`VanguardManager`].
+/// This is the crate's established sealed-witness pattern
+/// ([`VerifiedTorBinary`](crate::binary::VerifiedTorBinary)): the guarantee
+/// is structural rather than a convention the serving daemon must remember.
 ///
 /// Deliberately carries no data — it is proof, not a value.
 ///
@@ -115,12 +120,12 @@ pub enum VanguardsMode {
 pub struct VanguardsActive(());
 
 impl VanguardsActive {
-    /// Mint the witness. **Private on purpose**: only the confirmed-`SETCONF`
-    /// path may call it.
     fn confirmed() -> Self {
         Self(())
     }
 }
+
+// ── Errors ─────────────────────────────────────────────────────────────────
 
 /// Why applying vanguards aborted.
 #[derive(Debug)]
@@ -138,7 +143,7 @@ pub enum VanguardsAbort {
 pub enum VanguardsError {
     /// The control channel failed (or the reply timed out).
     Control(ControlError),
-    /// Tor refused the `SETCONF` with a non-250 status.
+    /// Tor refused the `SETCONF` / `GETINFO` with a non-250 status.
     Rejected {
         /// The status tor returned.
         status: u16,
@@ -147,8 +152,9 @@ pub enum VanguardsError {
     Rotation(RotationError),
     /// The persisted state could not be written — refused loudly rather than
     /// running with state that would be lost on restart, because losing it
-    /// means the next incarnation re-draws (a rotation a restart must never
-    /// cause).
+    /// means the next process start re-draws (a rotation a restart must never
+    /// cause). In-memory state is still committed so a same-process retry
+    /// does not re-select.
     Persist(String),
 }
 
@@ -165,71 +171,126 @@ impl std::fmt::Display for VanguardsError {
 
 impl std::error::Error for VanguardsError {}
 
-/// Fetch the consensus over the control port (`GETINFO ns/all`) — the
-/// candidate pool selection and repair draw from.
-///
-/// # Errors
-///
-/// [`VanguardsAbort`] on shutdown, actor death, timeout, or a non-250 reply.
-pub async fn fetch_consensus(
-    actor: &kameo::actor::ActorRef<TorControl>,
-    reply_deadline: Duration,
-    shutdown: &mut oneshot::Receiver<()>,
-) -> Result<Vec<ConsensusRelay>, VanguardsAbort> {
-    let reply = tokio::select! {
-        _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
-        () = tokio::time::sleep(reply_deadline) => {
-            return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
+/// Why a rotation operation failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RotationError {
+    /// The consensus lacks enough eligible relays to fill or replace the set.
+    TooFewEligible {
+        /// Eligible, positive-bandwidth candidates available.
+        available: usize,
+        /// Seats that needed filling.
+        needed: usize,
+    },
+}
+
+impl std::fmt::Display for RotationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooFewEligible { available, needed } => write!(
+                f,
+                "only {available} eligible relays for {needed} vanguard seats"
+            ),
         }
-        r = actor.ask(Command::GetInfo(vec!["ns/all".to_owned()])) => r,
-    };
-    match reply {
-        Ok(reply) if reply.status() == 250 => Ok(parse_ns_all(&reply)),
-        Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::Rejected {
-            status: reply.status(),
-        })),
-        Err(SendError::HandlerError(e)) => Err(VanguardsAbort::Failed(VanguardsError::Control(e))),
-        Err(_) => Err(VanguardsAbort::ActorGone),
     }
 }
 
-/// Apply `state`'s pins to the live tor with one `SETCONF`, and — only on a
-/// confirmed `250` — mint the [`VanguardsActive`] witness.
+impl std::error::Error for RotationError {}
+
+// ── Selection (bandwidth-weighted) ─────────────────────────────────────────
+
+/// A source of randomness for vanguard selection — a seam so the weighted
+/// draw is deterministic under test yet a real CSPRNG in production.
 ///
-/// This is the **sole** minting path, which is what makes "a persona onion is
-/// only published behind confirmed vanguards" a type-level guarantee.
-///
-/// # Errors
-///
-/// [`VanguardsAbort`] on shutdown, actor death, timeout, a non-250 reply, or
-/// an unfillable set.
-pub async fn apply_pins(
-    actor: &kameo::actor::ActorRef<TorControl>,
-    state: &RotationState,
-    reply_deadline: Duration,
-    shutdown: &mut oneshot::Receiver<()>,
-) -> Result<VanguardsActive, VanguardsAbort> {
-    let pins = state
-        .to_pins()
-        .ok_or(VanguardsAbort::Failed(VanguardsError::Rotation(
-            RotationError::TooFewEligible,
-        )))?;
-    let reply = tokio::select! {
-        _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
-        () = tokio::time::sleep(reply_deadline) => {
-            return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
-        }
-        r = actor.ask(Command::SetConf(pins)) => r,
-    };
-    match reply {
-        Ok(reply) if reply.status() == 250 => Ok(VanguardsActive::confirmed()),
-        Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::Rejected {
-            status: reply.status(),
-        })),
-        Err(SendError::HandlerError(e)) => Err(VanguardsAbort::Failed(VanguardsError::Control(e))),
-        Err(_) => Err(VanguardsAbort::ActorGone),
+/// Selection must be **unpredictable** (an adversary who could predict our
+/// draw could bias toward landing in the set), so the production impl
+/// ([`OsVanguardRng`]) pulls from the OS CSPRNG; tests use a seeded
+/// generator. Modeled on the `challenge_coverage` sim's local-PRNG
+/// precedent rather than pulling a `rand` dependency.
+pub trait VanguardRng {
+    /// The next 64 random bits.
+    fn next_u64(&mut self) -> u64;
+}
+
+/// Production RNG: OS CSPRNG bytes via `getrandom`.
+pub struct OsVanguardRng;
+
+impl VanguardRng for OsVanguardRng {
+    fn next_u64(&mut self) -> u64 {
+        let mut buf = [0u8; 8];
+        getrandom::getrandom(&mut buf).expect("OS CSPRNG");
+        u64::from_le_bytes(buf)
     }
 }
+
+/// Draw disjoint layer-2 and layer-3 fingerprint sets, bandwidth-weighted —
+/// without replacement. L2 is drawn first, L3 from the remainder.
+/// `None` if the eligible pool cannot fill `l2 + l3` seats.
+fn select_disjoint(
+    relays: &[ConsensusRelay],
+    l2: usize,
+    l3: usize,
+    rng: &mut impl VanguardRng,
+) -> Option<(Vec<RelayFingerprint>, Vec<RelayFingerprint>)> {
+    let mut pool = eligible_pool(relays);
+    if pool.len() < l2 + l3 {
+        return None;
+    }
+    let layer2 = draw_weighted(&mut pool, l2, rng);
+    let layer3 = draw_weighted(&mut pool, l3, rng);
+    Some((layer2, layer3))
+}
+
+/// Draw **one** replacement relay, bandwidth-weighted, excluding everything
+/// in `exclude`. `None` if nothing eligible remains.
+fn draw_replacement(
+    relays: &[ConsensusRelay],
+    exclude: &[RelayFingerprint],
+    rng: &mut impl VanguardRng,
+) -> Option<RelayFingerprint> {
+    let mut pool: Vec<(RelayFingerprint, u64)> = eligible_pool(relays)
+        .into_iter()
+        .filter(|(fp, _)| !exclude.contains(fp))
+        .collect();
+    if pool.is_empty() {
+        return None;
+    }
+    Some(draw_weighted(&mut pool, 1, rng).remove(0))
+}
+
+fn eligible_pool(relays: &[ConsensusRelay]) -> Vec<(RelayFingerprint, u64)> {
+    relays
+        .iter()
+        .filter(|r| r.eligible && r.bandwidth > 0)
+        .map(|r| (r.fingerprint, r.bandwidth))
+        .collect()
+}
+
+/// Draw `count` fingerprints from `pool` weighted by bandwidth, removing
+/// each as it is drawn. Caller guarantees `pool.len() >= count`.
+fn draw_weighted(
+    pool: &mut Vec<(RelayFingerprint, u64)>,
+    count: usize,
+    rng: &mut impl VanguardRng,
+) -> Vec<RelayFingerprint> {
+    let mut drawn = Vec::with_capacity(count);
+    for _ in 0..count {
+        let total: u128 = pool.iter().map(|(_, bw)| u128::from(*bw)).sum();
+        // total > 0: every pool entry has bandwidth > 0 and pool is non-empty.
+        let mut target = (u128::from(rng.next_u64()) % total) + 1;
+        let mut idx = 0;
+        for (i, (_, bw)) in pool.iter().enumerate() {
+            target = target.saturating_sub(u128::from(*bw));
+            if target == 0 {
+                idx = i;
+                break;
+            }
+        }
+        drawn.push(pool.swap_remove(idx).0);
+    }
+    drawn
+}
+
+// ── Persistence ────────────────────────────────────────────────────────────
 
 /// The persisted state file inside the Tor `DataDirectory`.
 ///
@@ -240,15 +301,16 @@ pub async fn apply_pins(
 /// whole: the Tor data directory is a persona-linkable artifact, and backing
 /// it up or imaging the host is a deanonymization vector.
 #[must_use]
-pub fn state_path(data_dir: &Path) -> std::path::PathBuf {
+pub fn state_path(data_dir: &Path) -> PathBuf {
     data_dir.join("shekyl-vanguards.state")
 }
 
-/// Load persisted rotation state. `None` when absent **or malformed** — a
-/// corrupt file is treated as "no state" (the caller selects fresh) rather
-/// than as a partial set that would silently under-pin.
+/// Load persisted rotation state. `None` when absent **or malformed** —
+/// including wrong set sizes, duplicates, or L2/L3 overlap. A corrupt file
+/// is treated as "no state" (the caller selects fresh) rather than as a
+/// partial set that would silently under-pin.
 #[must_use]
-pub fn load_state(path: &Path) -> Option<RotationState> {
+fn load_state(path: &Path) -> Option<RotationState> {
     let text = std::fs::read_to_string(path).ok()?;
     RotationState::deserialize(&text)
 }
@@ -259,18 +321,35 @@ pub fn load_state(path: &Path) -> Option<RotationState> {
 /// corrupt, the caller would select fresh, and the restart would have caused a
 /// rotation — precisely the invariant this module exists to hold.
 ///
-/// # Errors
-///
-/// The underlying I/O error.
-pub fn save_state(path: &Path, state: &RotationState) -> std::io::Result<()> {
+/// On Windows, `rename` cannot overwrite an existing destination, so the
+/// destination is removed first. That is not a fully atomic replace on
+/// Windows, but it is the portable shape available without a platform-specific
+/// replace API; a crash between remove and rename leaves the `.tmp` for the
+/// next start to ignore (load reads only the canonical path → select fresh).
+fn save_state(path: &Path, state: &RotationState) -> std::io::Result<()> {
     let tmp = path.with_extension("state.tmp");
     std::fs::write(&tmp, state.serialize())?;
-    std::fs::rename(&tmp, path)
+    // POSIX rename overwrites atomically. Windows rename fails if dest exists.
+    #[cfg(windows)]
+    {
+        // Windows rename cannot overwrite; best-effort remove first.
+        drop(std::fs::remove_file(path));
+    }
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Best-effort cleanup; the rename error is what the caller needs.
+            drop(std::fs::remove_file(&tmp));
+            Err(e)
+        }
+    }
 }
+
+// ── Rotation state ─────────────────────────────────────────────────────────
 
 /// Which layer a node sits in — its lifetime distribution differs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Layer {
+enum Layer {
     /// Second-level guard (L2): uniform 30–60 day lifetime.
     Two,
     /// Third-level guard (L3): `max(X, X)` 1–48 hour lifetime.
@@ -285,42 +364,40 @@ pub enum Layer {
 /// (the spec keeps per-node rotation times so the primary and second-level
 /// guards' rotations are not disclosed together).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct VanguardNode {
-    /// The pinned relay.
-    pub fingerprint: RelayFingerprint,
-    /// Wall-clock instant at which this node rotates out.
-    pub expires_at: SystemTime,
+struct VanguardNode {
+    fingerprint: RelayFingerprint,
+    expires_at: SystemTime,
 }
 
 /// The full rotation state: the L2 and L3 node sets with their timers.
 ///
 /// Supervisor-scoped and persisted; incarnations read it to apply pins, the
-/// rotation loop mutates it as nodes expire.
+/// rotation loop mutates it as nodes expire. Once constructed (via
+/// [`Self::select_fresh`] or a successful [`Self::deserialize`]), both layers
+/// always hold exactly the spec counts and are pairwise disjoint.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RotationState {
-    /// Layer-2 nodes (`NUM_LAYER2_GUARDS` of them once initialized).
-    pub layer2: Vec<VanguardNode>,
-    /// Layer-3 nodes (`NUM_LAYER3_GUARDS`).
-    pub layer3: Vec<VanguardNode>,
+struct RotationState {
+    layer2: Vec<VanguardNode>,
+    layer3: Vec<VanguardNode>,
 }
 
 impl RotationState {
     /// Draw a fresh state from the consensus — the first-ever selection, when
     /// no persisted state exists. Every node gets an independent lifetime
     /// from its layer's distribution.
-    ///
-    /// # Errors
-    ///
-    /// [`RotationError::TooFewEligible`] if the consensus cannot fill
-    /// `NUM_LAYER2_GUARDS + NUM_LAYER3_GUARDS` disjoint seats.
-    pub fn select_fresh(
+    fn select_fresh(
         consensus: &[ConsensusRelay],
         now: SystemTime,
         rng: &mut impl VanguardRng,
     ) -> Result<Self, RotationError> {
+        let needed = NUM_LAYER2_GUARDS + NUM_LAYER3_GUARDS;
         let (l2_fps, l3_fps) =
-            select_disjoint(consensus, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS, rng)
-                .ok_or(RotationError::TooFewEligible)?;
+            select_disjoint(consensus, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS, rng).ok_or(
+                RotationError::TooFewEligible {
+                    available: eligible_pool(consensus).len(),
+                    needed,
+                },
+            )?;
         Ok(Self {
             layer2: l2_fps
                 .into_iter()
@@ -339,40 +416,27 @@ impl RotationState {
         })
     }
 
-    /// The pins an incarnation applies via `SETCONF` — the current node set,
-    /// unchanged. `None` only if a layer is empty (an uninitialized state).
-    #[must_use]
-    pub fn to_pins(&self) -> Option<HsLayerPins> {
+    /// The pins an incarnation applies via `SETCONF`. Always `Some` for a
+    /// well-formed state (non-empty layers by construction).
+    fn to_pins(&self) -> Option<HsLayerPins> {
         HsLayerPins::new(
             self.layer2.iter().map(|n| n.fingerprint).collect(),
             self.layer3.iter().map(|n| n.fingerprint).collect(),
         )
     }
 
-    /// **Restore** persisted state against the current consensus: keep every
-    /// node whose relay is still present (identity **and** expiry untouched —
-    /// the load-bearing invariant), and replace **only** nodes whose relay
-    /// has left the consensus with a fresh draw disjoint from all survivors.
-    ///
-    /// This does not expire anything — that is [`Self::expire_due`]'s job,
-    /// which the caller runs after restore. A restart alone must not rotate.
-    ///
-    /// # Errors
-    ///
-    /// [`RotationError::TooFewEligible`] if replacements cannot be drawn.
-    pub fn restore(
+    /// **Restore** against the current consensus: keep every node whose relay
+    /// is still present (identity **and** expiry untouched), replace **only**
+    /// nodes whose relay has left the consensus. Does not expire anything —
+    /// that is [`Self::expire_due`]'s job. A restart alone must not rotate.
+    fn restore(
         mut self,
         consensus: &[ConsensusRelay],
         rng: &mut impl VanguardRng,
     ) -> Result<Self, RotationError> {
-        // "Present" = appears in the consensus **at all**, regardless of
-        // flags. Flag-loss is deliberately NOT a replacement trigger (see the
-        // module doc); only a relay that has left the consensus entirely is
-        // swapped, because pinning a dead relay breaks circuits.
+        // "Present" = appears in the consensus at all, regardless of flags.
         let present: HashSet<RelayFingerprint> = consensus.iter().map(|r| r.fingerprint).collect();
 
-        // Exclusion base: the survivors (relay still present). Replacements
-        // are drawn disjoint from these and from each other.
         let mut in_use: Vec<RelayFingerprint> = self
             .layer2
             .iter()
@@ -387,51 +451,43 @@ impl RotationState {
     }
 
     /// Rotate out every node whose expiry is at or before `now`, replacing
-    /// each with a fresh draw (disjoint from all current nodes) and a new
-    /// lifetime. Returns the fingerprints actually rotated (for logging /
-    /// re-`SETCONF` decisions). Only the clock drives this.
-    ///
-    /// # Errors
-    ///
-    /// [`RotationError::TooFewEligible`] if a replacement cannot be drawn.
-    pub fn expire_due(
+    /// each with a fresh draw and a new lifetime. Returns how many nodes
+    /// rotated (for no-op short-circuiting).
+    fn expire_due(
         &mut self,
         consensus: &[ConsensusRelay],
         now: SystemTime,
         rng: &mut impl VanguardRng,
-    ) -> Result<Vec<RelayFingerprint>, RotationError> {
+    ) -> Result<usize, RotationError> {
         let mut in_use: Vec<RelayFingerprint> = self
             .layer2
             .iter()
             .chain(&self.layer3)
             .map(|n| n.fingerprint)
             .collect();
-        let mut rotated = Vec::new();
-        rotate_expired(
+        let mut rotated = 0;
+        rotated += rotate_expired(
             &mut self.layer2,
             Layer::Two,
             consensus,
             now,
             &mut in_use,
-            &mut rotated,
             rng,
         )?;
-        rotate_expired(
+        rotated += rotate_expired(
             &mut self.layer3,
             Layer::Three,
             consensus,
             now,
             &mut in_use,
-            &mut rotated,
             rng,
         )?;
         Ok(rotated)
     }
 
-    /// The earliest expiry across all nodes — the deadline the supervisor's
-    /// rotation `select!` arm sleeps until. `None` for an empty state.
-    #[must_use]
-    pub fn next_expiry(&self) -> Option<SystemTime> {
+    /// The earliest expiry across all nodes. `None` only for an empty state
+    /// (which cannot arise from `select_fresh` / valid deserialize).
+    fn next_expiry(&self) -> Option<SystemTime> {
         self.layer2
             .iter()
             .chain(&self.layer3)
@@ -440,10 +496,8 @@ impl RotationState {
     }
 
     /// Serialize to the persisted text form: one `L2|L3 $fp <unix-secs>` line
-    /// per node. Hand-rolled (no serde dep); round-trips through
-    /// [`Self::deserialize`].
-    #[must_use]
-    pub fn serialize(&self) -> String {
+    /// per node.
+    fn serialize(&self) -> String {
         let mut out = String::new();
         for (tag, nodes) in [("L2", &self.layer2), ("L3", &self.layer3)] {
             for node in nodes {
@@ -462,11 +516,11 @@ impl RotationState {
         out
     }
 
-    /// Parse the persisted text form. `None` on any malformed line — a
-    /// corrupt state file is treated as "no state" by the caller (re-select),
-    /// never as a partial set that would silently under-pin.
-    #[must_use]
-    pub fn deserialize(text: &str) -> Option<Self> {
+    /// Parse the persisted text form. `None` on any malformed line **or** on
+    /// a structurally invalid state (wrong counts, duplicates, L2/L3 overlap).
+    /// A corrupt state file is treated as "no state" — never as a partial set
+    /// that would silently under-pin.
+    fn deserialize(text: &str) -> Option<Self> {
         let mut layer2 = Vec::new();
         let mut layer3 = Vec::new();
         for line in text.lines() {
@@ -490,16 +544,25 @@ impl RotationState {
                 _ => return None,
             }
         }
+        // Exact sizes — the load-bearing under-pin gate.
+        if layer2.len() != NUM_LAYER2_GUARDS || layer3.len() != NUM_LAYER3_GUARDS {
+            return None;
+        }
+        // Pairwise uniqueness across both layers (no within-layer dups, no
+        // L2/L3 overlap). Spec requires a disjoint topology.
+        let mut seen = HashSet::with_capacity(NUM_LAYER2_GUARDS + NUM_LAYER3_GUARDS);
+        for n in layer2.iter().chain(&layer3) {
+            if !seen.insert(n.fingerprint) {
+                return None;
+            }
+        }
         Some(Self { layer2, layer3 })
     }
 }
 
-/// Swap, in `set`, every node whose relay is **absent from the consensus**
-/// (`present`) for a fresh bandwidth-weighted draw disjoint from `in_use`.
-/// The slot **keeps its existing expiry timer** — swapping a dead relay for a
-/// live one is a repair, not a rotation, so a fresh timer here would be a
-/// hidden rotation. Surviving nodes are left entirely untouched (the
-/// load-bearing invariant).
+/// Swap every node whose relay is absent from the consensus for a fresh
+/// bandwidth-weighted draw. The slot **keeps its existing expiry timer** —
+/// swapping a dead relay is a repair, not a rotation.
 fn swap_absent(
     set: &mut [VanguardNode],
     present: &HashSet<RelayFingerprint>,
@@ -510,7 +573,10 @@ fn swap_absent(
     for node in set.iter_mut() {
         if !present.contains(&node.fingerprint) {
             let fresh =
-                draw_replacement(consensus, in_use, rng).ok_or(RotationError::TooFewEligible)?;
+                draw_replacement(consensus, in_use, rng).ok_or(RotationError::TooFewEligible {
+                    available: eligible_pool(consensus).len(),
+                    needed: 1,
+                })?;
             in_use.push(fresh);
             node.fingerprint = fresh;
         }
@@ -518,43 +584,40 @@ fn swap_absent(
     Ok(())
 }
 
-/// Rotate, in `set`, every node whose expiry is at or before `now`: a fresh
-/// bandwidth-weighted draw disjoint from `in_use` **and a new lifetime** for
-/// its layer. `in_use` is kept current so two expiries in one pass cannot
-/// draw the same replacement.
-#[allow(clippy::too_many_arguments)]
+/// Rotate every node whose expiry is at or before `now`. Returns the count
+/// rotated. `in_use` is kept current so two expiries in one pass cannot draw
+/// the same replacement.
 fn rotate_expired(
     set: &mut [VanguardNode],
     layer: Layer,
     consensus: &[ConsensusRelay],
     now: SystemTime,
     in_use: &mut [RelayFingerprint],
-    rotated: &mut Vec<RelayFingerprint>,
     rng: &mut impl VanguardRng,
-) -> Result<(), RotationError> {
+) -> Result<usize, RotationError> {
+    let mut rotated = 0;
     for node in set.iter_mut() {
         if node.expires_at <= now {
             let old = node.fingerprint;
             let fresh =
-                draw_replacement(consensus, in_use, rng).ok_or(RotationError::TooFewEligible)?;
+                draw_replacement(consensus, in_use, rng).ok_or(RotationError::TooFewEligible {
+                    available: eligible_pool(consensus).len(),
+                    needed: 1,
+                })?;
             if let Some(slot) = in_use.iter_mut().find(|f| **f == old) {
                 *slot = fresh;
             }
             node.fingerprint = fresh;
             node.expires_at = now + sample_lifetime(layer, rng);
-            rotated.push(fresh);
+            rotated += 1;
         }
     }
-    Ok(())
+    Ok(rotated)
 }
 
-/// Sample a node's lifetime from its layer's distribution.
 fn sample_lifetime(layer: Layer, rng: &mut impl VanguardRng) -> Duration {
     match layer {
-        // L2: uniform over [min, max].
         Layer::Two => uniform_between(L2_LIFETIME_MIN, L2_LIFETIME_MAX, rng),
-        // L3: max(X, X) — draw two uniforms, take the longer. Skews toward
-        // longer lifetimes (spec).
         Layer::Three => {
             let a = uniform_between(L3_LIFETIME_MIN, L3_LIFETIME_MAX, rng);
             let b = uniform_between(L3_LIFETIME_MIN, L3_LIFETIME_MAX, rng);
@@ -563,7 +626,6 @@ fn sample_lifetime(layer: Layer, rng: &mut impl VanguardRng) -> Duration {
     }
 }
 
-/// A uniform `Duration` in `[min, max]` inclusive.
 fn uniform_between(min: Duration, max: Duration, rng: &mut impl VanguardRng) -> Duration {
     let span = max.as_secs() - min.as_secs();
     let offset = if span == 0 {
@@ -574,28 +636,211 @@ fn uniform_between(min: Duration, max: Duration, rng: &mut impl VanguardRng) -> 
     min + Duration::from_secs(offset)
 }
 
-/// Why a rotation operation failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RotationError {
-    /// The consensus lacks enough eligible relays to fill or replace the set.
-    TooFewEligible,
+// ── Manager (supervisor-facing orchestration) ──────────────────────────────
+
+/// Supervisor-scoped owner of vanguard mode, in-memory rotation state, and
+/// the on-disk path. Constructed once per [`crate::service::TorService`] and
+/// passed into every incarnation — never re-created on restart.
+pub struct VanguardManager {
+    mode: VanguardsMode,
+    state: Option<RotationState>,
+    path: PathBuf,
 }
 
-impl std::fmt::Display for RotationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TooFewEligible => write!(f, "too few eligible relays for the vanguard set"),
+impl VanguardManager {
+    /// Load from disk when `Managed` (absent/corrupt → empty, first establish
+    /// selects fresh). `Off` never touches the file.
+    #[must_use]
+    pub fn load(mode: VanguardsMode, data_dir: &Path) -> Self {
+        let path = state_path(data_dir);
+        let state = match mode {
+            VanguardsMode::Off => None,
+            VanguardsMode::Managed => load_state(&path),
+        };
+        Self { mode, state, path }
+    }
+
+    /// Whether this instance manages full vanguards.
+    #[must_use]
+    pub fn is_managed(&self) -> bool {
+        matches!(self.mode, VanguardsMode::Managed)
+    }
+
+    /// Sleep duration until the earliest per-node expiry. `None` when Off or
+    /// when no state has been established yet (the hold-loop arm stays inert).
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<Duration> {
+        if !self.is_managed() {
+            return None;
         }
+        let at = self.state.as_ref()?.next_expiry()?;
+        Some(
+            at.duration_since(SystemTime::now())
+                .unwrap_or(Duration::ZERO),
+        )
+    }
+
+    /// Bring this incarnation's vanguards up: fetch consensus, restore (or
+    /// select fresh), expire anything the clock aged out, `SETCONF`, persist.
+    ///
+    /// Returns `None` when mode is [`VanguardsMode::Off`]. On Managed, mints
+    /// the sealed [`VanguardsActive`] witness after a confirmed `SETCONF`.
+    ///
+    /// # Errors
+    ///
+    /// [`VanguardsAbort`] on shutdown, actor death, timeout, refusal, or an
+    /// unfillable set.
+    pub async fn establish(
+        &mut self,
+        actor: &kameo::actor::ActorRef<TorControl>,
+        reply_deadline: Duration,
+        shutdown: &mut oneshot::Receiver<()>,
+    ) -> Result<Option<VanguardsActive>, VanguardsAbort> {
+        if !self.is_managed() {
+            return Ok(None);
+        }
+        let witness = self.pin_set(actor, reply_deadline, shutdown).await?;
+        Ok(Some(witness))
+    }
+
+    /// Mid-life reconcile: repair relays that left the consensus **and**
+    /// expire due nodes, then re-`SETCONF` and persist. Called from the hold
+    /// loop's rotation arm — never from a restart path (restart uses
+    /// [`Self::establish`], which runs the same repair+expire pipeline).
+    ///
+    /// A no-op when Off or when no state is held yet.
+    ///
+    /// # Errors
+    ///
+    /// [`VanguardsAbort`] on control / rotation / persist failure. Failing
+    /// here fails the incarnation: the pinned set and our state would
+    /// otherwise disagree, and `Ready` is defined as the full posture being up.
+    pub async fn reconcile(
+        &mut self,
+        actor: &kameo::actor::ActorRef<TorControl>,
+        reply_deadline: Duration,
+        shutdown: &mut oneshot::Receiver<()>,
+    ) -> Result<(), VanguardsAbort> {
+        if !self.is_managed() || self.state.is_none() {
+            return Ok(());
+        }
+        let _witness = self.pin_set(actor, reply_deadline, shutdown).await?;
+        Ok(())
+    }
+
+    /// Shared pin pipeline used by both establish and mid-life reconcile:
+    /// consensus → restore-or-fresh → expire → SETCONF → commit memory →
+    /// persist.
+    ///
+    /// In-memory state is committed **before** disk write so a transient
+    /// persist failure on first selection cannot force the next incarnation
+    /// down the `select_fresh` path (the restart-driven rotation this design
+    /// forbids). Persist still fails the incarnation loudly — the operator
+    /// must learn about a directory that cannot hold state.
+    async fn pin_set(
+        &mut self,
+        actor: &kameo::actor::ActorRef<TorControl>,
+        reply_deadline: Duration,
+        shutdown: &mut oneshot::Receiver<()>,
+    ) -> Result<VanguardsActive, VanguardsAbort> {
+        let consensus = fetch_consensus(actor, reply_deadline, shutdown).await?;
+
+        let mut rng = OsVanguardRng;
+        let now = SystemTime::now();
+
+        // Clone, never take — an error must not leave the manager holding
+        // `None` when it previously had state (that would turn a transient
+        // failure into a forced re-draw on the next establish).
+        let built = match self.state.clone() {
+            Some(previous) => previous.restore(&consensus, &mut rng),
+            None => RotationState::select_fresh(&consensus, now, &mut rng),
+        };
+        let mut state = built.map_err(|e| VanguardsAbort::Failed(VanguardsError::Rotation(e)))?;
+
+        // A long downtime may have spanned whole lifetimes; the clock still
+        // decides. Mid-life reconcile also runs restore above so a relay that
+        // left the consensus is repaired without waiting for its expiry.
+        state
+            .expire_due(&consensus, now, &mut rng)
+            .map_err(|e| VanguardsAbort::Failed(VanguardsError::Rotation(e)))?;
+
+        let witness = apply_pins(actor, &state, reply_deadline, shutdown).await?;
+
+        // Commit memory first so a same-process retry after persist failure
+        // reuses this set rather than selecting fresh.
+        self.state = Some(state.clone());
+
+        if let Err(e) = save_state(&self.path, &state) {
+            return Err(VanguardsAbort::Failed(VanguardsError::Persist(
+                e.to_string(),
+            )));
+        }
+        Ok(witness)
     }
 }
 
-impl std::error::Error for RotationError {}
+/// Fetch the consensus over the control port (`GETINFO ns/all`).
+async fn fetch_consensus(
+    actor: &kameo::actor::ActorRef<TorControl>,
+    reply_deadline: Duration,
+    shutdown: &mut oneshot::Receiver<()>,
+) -> Result<Vec<ConsensusRelay>, VanguardsAbort> {
+    let reply = tokio::select! {
+        _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
+        () = tokio::time::sleep(reply_deadline) => {
+            return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
+        }
+        r = actor.ask(Command::GetInfo(vec!["ns/all".to_owned()])) => r,
+    };
+    match reply {
+        Ok(reply) if reply.status() == 250 => Ok(parse_ns_all(&reply)),
+        Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::Rejected {
+            status: reply.status(),
+        })),
+        Err(SendError::HandlerError(e)) => Err(VanguardsAbort::Failed(VanguardsError::Control(e))),
+        Err(_) => Err(VanguardsAbort::ActorGone),
+    }
+}
+
+/// Apply `state`'s pins with one `SETCONF`; mint the witness only on `250`.
+async fn apply_pins(
+    actor: &kameo::actor::ActorRef<TorControl>,
+    state: &RotationState,
+    reply_deadline: Duration,
+    shutdown: &mut oneshot::Receiver<()>,
+) -> Result<VanguardsActive, VanguardsAbort> {
+    let pins = state
+        .to_pins()
+        .ok_or(VanguardsAbort::Failed(VanguardsError::Rotation(
+            RotationError::TooFewEligible {
+                available: 0,
+                needed: NUM_LAYER2_GUARDS + NUM_LAYER3_GUARDS,
+            },
+        )))?;
+    let reply = tokio::select! {
+        _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
+        () = tokio::time::sleep(reply_deadline) => {
+            return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
+        }
+        r = actor.ask(Command::SetConf(pins)) => r,
+    };
+    match reply {
+        Ok(reply) if reply.status() == 250 => Ok(VanguardsActive::confirmed()),
+        Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::Rejected {
+            status: reply.status(),
+        })),
+        Err(SendError::HandlerError(e)) => Err(VanguardsAbort::Failed(VanguardsError::Control(e))),
+        Err(_) => Err(VanguardsAbort::ActorGone),
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Seeded SplitMix64 (the crate's test-RNG shape, no `rand` dep).
+    /// Seeded SplitMix64 (no `rand` dep).
     struct SeededRng(u64);
     impl VanguardRng for SeededRng {
         fn next_u64(&mut self) -> u64 {
@@ -621,27 +866,97 @@ mod tests {
         UNIX_EPOCH + Duration::from_secs(1_000_000_000)
     }
 
+    fn full_state_text(state: &RotationState) -> String {
+        state.serialize()
+    }
+
     #[test]
     fn fresh_selection_fills_both_layers_disjoint() {
         let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(1)).unwrap();
         assert_eq!(state.layer2.len(), NUM_LAYER2_GUARDS);
         assert_eq!(state.layer3.len(), NUM_LAYER3_GUARDS);
-        // All ten expiries are in the future.
+        let mut seen = HashSet::new();
         for n in state.layer2.iter().chain(&state.layer3) {
             assert!(n.expires_at > t0());
+            assert!(seen.insert(n.fingerprint), "duplicate in fresh set");
         }
     }
 
     #[test]
+    fn selection_is_bandwidth_weighted() {
+        // One relay with overwhelming weight is picked essentially always.
+        let mut relays = vec![ConsensusRelay {
+            fingerprint: RelayFingerprint::from_bytes([1; 20]),
+            bandwidth: 1_000_000,
+            eligible: true,
+        }];
+        for b in 2..=12u8 {
+            relays.push(ConsensusRelay {
+                fingerprint: RelayFingerprint::from_bytes([b; 20]),
+                bandwidth: 1,
+                eligible: true,
+            });
+        }
+        let heavy = RelayFingerprint::from_bytes([1; 20]);
+        let mut hits = 0;
+        for seed in 0..200u64 {
+            let state =
+                RotationState::select_fresh(&relays, t0(), &mut SeededRng(seed)).expect("enough");
+            if state
+                .layer2
+                .iter()
+                .chain(&state.layer3)
+                .any(|n| n.fingerprint == heavy)
+            {
+                hits += 1;
+            }
+        }
+        assert!(hits >= 199, "bandwidth weighting not applied: {hits}/200");
+    }
+
+    #[test]
+    fn selection_ignores_ineligible_and_zero_bandwidth() {
+        let mut relays = vec![
+            ConsensusRelay {
+                fingerprint: RelayFingerprint::from_bytes([1; 20]),
+                bandwidth: 500,
+                eligible: true,
+            },
+            ConsensusRelay {
+                fingerprint: RelayFingerprint::from_bytes([2; 20]),
+                bandwidth: 500,
+                eligible: true,
+            },
+        ];
+        // Pad to fill 4+6 with only eligible seats — but only 2 eligible,
+        // so selection must refuse.
+        relays.push(ConsensusRelay {
+            fingerprint: RelayFingerprint::from_bytes([3; 20]),
+            bandwidth: 999_999,
+            eligible: false,
+        });
+        relays.push(ConsensusRelay {
+            fingerprint: RelayFingerprint::from_bytes([4; 20]),
+            bandwidth: 0,
+            eligible: true,
+        });
+        let err = RotationState::select_fresh(&relays, t0(), &mut SeededRng(7)).unwrap_err();
+        assert!(matches!(
+            err,
+            RotationError::TooFewEligible {
+                available: 2,
+                needed: 10
+            }
+        ));
+    }
+
+    #[test]
     fn restore_with_all_relays_present_is_a_no_op_the_invariant() {
-        // THE load-bearing test: a restart (restore) with every relay still
-        // in the consensus and nothing expired must NOT change the set or any
-        // timer. Only the clock rotates.
         let consensus = pool(30);
         let original = RotationState::select_fresh(&consensus, t0(), &mut SeededRng(9)).unwrap();
         let restored = original
             .clone()
-            .restore(&consensus, &mut SeededRng(123)) // different rng seed
+            .restore(&consensus, &mut SeededRng(123))
             .unwrap();
         assert_eq!(
             restored, original,
@@ -654,7 +969,6 @@ mod tests {
         let consensus = pool(30);
         let original = RotationState::select_fresh(&consensus, t0(), &mut SeededRng(5)).unwrap();
 
-        // Drop exactly one L2 relay from the consensus.
         let dropped = original.layer2[0].fingerprint;
         let shrunk: Vec<ConsensusRelay> = consensus
             .iter()
@@ -667,8 +981,6 @@ mod tests {
             .restore(&shrunk, &mut SeededRng(77))
             .unwrap();
 
-        // The dropped node was replaced; every other node (identity + timer)
-        // is byte-identical to before.
         assert_ne!(restored.layer2[0].fingerprint, dropped);
         assert_eq!(
             restored.layer2[0].expires_at, original.layer2[0].expires_at,
@@ -678,7 +990,7 @@ mod tests {
             assert_eq!(restored.layer2[i], original.layer2[i]);
         }
         assert_eq!(restored.layer3, original.layer3);
-        // Replacement is disjoint from the rest.
+
         let all: Vec<_> = restored
             .layer2
             .iter()
@@ -686,7 +998,7 @@ mod tests {
             .map(|n| n.fingerprint)
             .collect();
         let mut dedup = all.clone();
-        dedup.sort_by_key(|fp| fp.to_specifier());
+        dedup.sort_by_key(RelayFingerprint::to_specifier);
         dedup.dedup();
         assert_eq!(all.len(), dedup.len(), "no duplicate after replacement");
     }
@@ -697,14 +1009,12 @@ mod tests {
         let mut state = RotationState::select_fresh(&consensus, t0(), &mut SeededRng(2)).unwrap();
         let before = state.clone();
 
-        // Nothing is due yet.
         let rotated = state
             .expire_due(&consensus, t0(), &mut SeededRng(3))
             .unwrap();
-        assert!(rotated.is_empty());
+        assert_eq!(rotated, 0);
         assert_eq!(state, before, "no expiry => no change");
 
-        // Advance past the earliest expiry: exactly the due node(s) rotate.
         let earliest = state.next_expiry().unwrap();
         let due_count = state
             .layer2
@@ -715,8 +1025,7 @@ mod tests {
         let rotated = state
             .expire_due(&consensus, earliest, &mut SeededRng(4))
             .unwrap();
-        assert_eq!(rotated.len(), due_count);
-        // Rotated nodes now expire in the future again.
+        assert_eq!(rotated, due_count);
         for n in state.layer2.iter().chain(&state.layer3) {
             assert!(n.expires_at > earliest || n.expires_at > t0());
         }
@@ -724,8 +1033,6 @@ mod tests {
 
     #[test]
     fn l3_lifetimes_fall_in_the_spec_band_and_skew_long() {
-        // Sample many L3 lifetimes; every one is within [1h, 48h], and the
-        // mean is above the midpoint (24.5h) because of the max(X,X) skew.
         let mut rng = SeededRng(11);
         let mut total = 0u64;
         let n = 500;
@@ -744,15 +1051,16 @@ mod tests {
     #[test]
     fn persistence_round_trips() {
         let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(8)).unwrap();
-        let text = state.serialize();
+        let text = full_state_text(&state);
         let back = RotationState::deserialize(&text).expect("valid");
         assert_eq!(back, state);
     }
 
     #[test]
-    fn corrupt_state_is_rejected_whole_not_partially_loaded() {
+    fn corrupt_or_partial_state_is_rejected_whole() {
+        // Malformed lines.
         assert!(RotationState::deserialize("L2 $notahex 123").is_none());
-        assert!(RotationState::deserialize("L2 $AA 123").is_none()); // short fp
+        assert!(RotationState::deserialize("L2 $AA 123").is_none());
         assert!(
             RotationState::deserialize("LX $AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA 1").is_none()
         );
@@ -760,5 +1068,83 @@ mod tests {
             RotationState::deserialize("L2 $AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA 1 extra")
                 .is_none()
         );
+
+        // Empty / whitespace — not "empty state", no state.
+        assert!(RotationState::deserialize("").is_none());
+        assert!(RotationState::deserialize("\n\n").is_none());
+
+        // Structurally short: one valid L2 + one valid L3 under-pins.
+        let short = "\
+L2 $AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA 1\n\
+L3 $BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB 2\n";
+        assert!(
+            RotationState::deserialize(short).is_none(),
+            "under-sized set must not load"
+        );
+
+        // A full-size set with an L2/L3 overlap is rejected.
+        let mut lines = Vec::new();
+        let mut l2_fps = Vec::new();
+        for i in 0..NUM_LAYER2_GUARDS {
+            let mut fp = [0u8; 20];
+            fp[0] = u8::try_from(i + 1).expect("set size fits u8");
+            l2_fps.push(fp);
+            lines.push(format!(
+                "L2 {} 100",
+                RelayFingerprint::from_bytes(fp).to_specifier()
+            ));
+        }
+        // L3[0] deliberately reuses L2[0]'s fingerprint.
+        lines.push(format!(
+            "L3 {} 100",
+            RelayFingerprint::from_bytes(l2_fps[0]).to_specifier()
+        ));
+        for i in 1..NUM_LAYER3_GUARDS {
+            let mut fp = [0u8; 20];
+            fp[0] = u8::try_from(50 + i).expect("set size fits u8");
+            lines.push(format!(
+                "L3 {} 100",
+                RelayFingerprint::from_bytes(fp).to_specifier()
+            ));
+        }
+        assert!(
+            RotationState::deserialize(&lines.join("\n")).is_none(),
+            "overlapping L2/L3 must not load"
+        );
+    }
+
+    #[test]
+    fn manager_off_never_establishes_a_witness() {
+        // Pure unit shape: Off load has no state and reports no deadline.
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = VanguardManager::load(VanguardsMode::Off, dir.path());
+        assert!(!mgr.is_managed());
+        assert!(mgr.next_deadline().is_none());
+    }
+
+    #[test]
+    fn manager_managed_loads_valid_state_and_rejects_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(dir.path());
+
+        // Corrupt → treated as no state (no deadline until establish selects).
+        std::fs::write(&path, "L2 $AA 1\n").unwrap();
+        let mgr = VanguardManager::load(VanguardsMode::Managed, dir.path());
+        assert!(mgr.is_managed());
+        assert!(mgr.next_deadline().is_none());
+
+        // Valid full set → loaded; a deadline exists.
+        let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(3)).unwrap();
+        save_state(&path, &state).unwrap();
+        let mgr = VanguardManager::load(VanguardsMode::Managed, dir.path());
+        assert!(mgr.is_managed());
+        assert!(mgr.next_deadline().is_some());
+    }
+
+    #[test]
+    fn selection_is_deterministic_under_a_fixed_seed() {
+        let a = RotationState::select_fresh(&pool(20), t0(), &mut SeededRng(42)).unwrap();
+        let b = RotationState::select_fresh(&pool(20), t0(), &mut SeededRng(42)).unwrap();
+        assert_eq!(a, b);
     }
 }

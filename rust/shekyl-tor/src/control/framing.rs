@@ -43,12 +43,13 @@ pub const ASYNC_EVENT_STATUS: u16 = 650;
 /// [`FramingError::ReplyTooLarge`] so the caller tears the connection down rather
 /// than buffering forever.
 ///
-/// The wallet's control replies are small (a status + short value, or a `STREAM`
-/// event), so 256 KiB is generous; it caps a misbehaving — or compromised —
-/// local Tor without risking a legitimate reply. The control port is
-/// loopback-local, so this is defense-in-depth (DoS-never-theft), not an
-/// adversarial-network bound.
-const MAX_REPLY_BYTES: usize = 256 * 1024;
+/// Most control replies are tiny (status lines, `STREAM` events). The outlier is
+/// `GETINFO ns/all`, which returns the full network-status candidate set for
+/// vanguard selection and is multi-megabyte on a live consensus. 16 MiB admits
+/// that legitimate reply while still capping a misbehaving — or compromised —
+/// local Tor. The control port is loopback-local, so this is defense-in-depth
+/// (DoS-never-theft), not an adversarial-network bound.
+const MAX_REPLY_BYTES: usize = 16 * 1024 * 1024;
 
 /// Reclaim the consumed prefix of `buf` once it passes this size, so the buffer
 /// does not retain already-returned lines indefinitely. Keeps a steady stream of
@@ -681,11 +682,14 @@ mod tests {
     fn caps_an_unterminated_reply() {
         // Many large *valid* mid-lines with no end line trip the per-reply cap
         // (each line is individually under the per-line cap, so only the running
-        // total catches it).
-        let big_mid = format!("250-{}\r\n", "x".repeat(60_000)); // ~60 KB mid-line
+        // total catches it). Chunk size chosen so a handful of pushes exceed
+        // the 16 MiB reply bound without allocating one giant string.
+        let chunk = 256 * 1024; // 256 KiB payload per mid-line
+        let big_mid = format!("250-{}\r\n", "x".repeat(chunk));
+        let pushes_needed = (MAX_REPLY_BYTES / chunk) + 2;
         let mut framer = ReplyFramer::new();
         let mut hit = None;
-        for _ in 0..8 {
+        for _ in 0..pushes_needed {
             framer.push_bytes(big_mid.as_bytes());
             if let Err(e) = framer.next_reply() {
                 hit = Some(e);
@@ -735,9 +739,11 @@ mod tests {
             None,
             "block opened, no data yet"
         );
-        let big_data = format!("{}\r\n", "x".repeat(60_000)); // ~60 KB data line
+        let chunk = 256 * 1024;
+        let big_data = format!("{}\r\n", "x".repeat(chunk));
+        let pushes_needed = (MAX_REPLY_BYTES / chunk) + 2;
         let mut hit = None;
-        for _ in 0..8 {
+        for _ in 0..pushes_needed {
             framer.push_bytes(big_data.as_bytes());
             if let Err(e) = framer.next_reply() {
                 hit = Some(e);
@@ -819,15 +825,26 @@ mod tests {
         // `line.len() == 0`) must still trip the cap: each fold inserts a `\n` —
         // real buffered state the raw `line.len()` charge alone would miss, which
         // would let the entry grow unbounded with `reply_bytes` flat. Regression.
-        let mut wire = b"250+k=\r\n".to_vec();
-        for _ in 0..(MAX_REPLY_BYTES + 8) {
-            wire.extend_from_slice(b"\r\n");
-        }
+        // Chunked pushes keep the test under a few thousand iterations even with
+        // the multi-megabyte reply bound required by `GETINFO ns/all`.
         let mut framer = ReplyFramer::new();
-        framer.push_bytes(&wire);
+        framer.push_bytes(b"250+k=\r\n");
+        let chunk = b"\r\n".repeat(4096);
+        let mut hit = None;
+        for _ in 0..(MAX_REPLY_BYTES / 4096 + 4) {
+            framer.push_bytes(&chunk);
+            match framer.next_reply() {
+                Err(e) => {
+                    hit = Some(e);
+                    break;
+                }
+                Ok(None) => {}
+                Ok(Some(_)) => panic!("reply completed before the cap tripped"),
+            }
+        }
         assert_eq!(
-            framer.next_reply(),
-            Err(FramingError::ReplyTooLarge {
+            hit,
+            Some(FramingError::ReplyTooLarge {
                 limit: MAX_REPLY_BYTES,
             }),
         );
@@ -859,15 +876,24 @@ mod tests {
         // 4-byte prefix), which offsets the per-entry `Vec`/`String` overhead.
         // Regression against charging only `line[4..]` (which would be 0 here, so
         // the `Vec` would grow unbounded with the cap flat).
-        let mut wire = Vec::new();
-        for _ in 0..(MAX_REPLY_BYTES / 4 + 8) {
-            wire.extend_from_slice(b"250-\r\n"); // each charges 4
-        }
+        // Chunked pushes: each mid-line charges 4; avoid a multi-gig intermediate.
         let mut framer = ReplyFramer::new();
-        framer.push_bytes(&wire);
+        let chunk = b"250-\r\n".repeat(4096); // each line charges 4 → 16 KiB per chunk
+        let mut hit = None;
+        for _ in 0..(MAX_REPLY_BYTES / (4 * 4096) + 4) {
+            framer.push_bytes(&chunk);
+            match framer.next_reply() {
+                Err(e) => {
+                    hit = Some(e);
+                    break;
+                }
+                Ok(None) => {}
+                Ok(Some(_)) => panic!("reply completed before the cap tripped"),
+            }
+        }
         assert_eq!(
-            framer.next_reply(),
-            Err(FramingError::ReplyTooLarge {
+            hit,
+            Some(FramingError::ReplyTooLarge {
                 limit: MAX_REPLY_BYTES,
             }),
         );

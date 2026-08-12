@@ -48,7 +48,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use kameo::actor::Spawn;
 use kameo::error::SendError;
@@ -56,22 +56,19 @@ use tokio::sync::{oneshot, watch};
 
 use crate::binary::{self, TorBinaryError, VerifiedTorBinary};
 use crate::control::framing::ControlReply;
-use crate::control::vanguards::OsVanguardRng;
 use crate::control::{
     BootstrapReadiness, BootstrapState, Command, ControlError, EventSink, ManagedTor, SocksPort,
     TorControl, TorControlConfig, TorExit, TorLaunch,
 };
 use crate::onion_service::{publish_onion, OnionPublishAbort};
-use crate::vanguard_rotation::{
-    apply_pins, fetch_consensus, load_state, save_state, state_path, RotationState, VanguardsAbort,
-    VanguardsActive, VanguardsError, VanguardsMode,
-};
+use crate::vanguard_rotation::{VanguardManager, VanguardsAbort};
 
-// Config/error types for the onion publish surface live in `onion_service`
-// (their own concern). Re-exported here so `TorServiceConfig` consumers can
-// name them next to the supervisor types they configure.
+// Config/error types live next to their owners; re-exported here so a
+// `TorServiceConfig` consumer names them beside the supervisor types.
 #[doc(inline)]
 pub use crate::onion_service::{OnionPublishError, OnionServiceSpec};
+#[doc(inline)]
+pub use crate::vanguard_rotation::{VanguardsError, VanguardsMode};
 
 /// The service-level posture — what the rest of the wallet sees. One long-lived
 /// watch, owned by the supervisor, outliving every incarnation (the §3b
@@ -484,13 +481,10 @@ async fn supervise(
     // incarnation holds `Ready` for `stable_reset` (in `drive_incarnation`).
     let mut degraded = false;
 
-    // Vanguard rotation state lives at SUPERVISOR scope and outlives every
-    // incarnation — the load-bearing invariant: a tor restart must not cause
-    // a rotation. Loaded from disk once (an absent/corrupt file yields `None`,
-    // and the first incarnation selects fresh); thereafter incarnations
-    // restore-and-apply it, and only the clock rotates it.
-    let state_file = state_path(&config.data_dir);
-    let mut rotation: Option<RotationState> = load_state(&state_file);
+    // Vanguards live at SUPERVISOR scope and outlive every incarnation — the
+    // load-bearing invariant: a tor restart must not cause a rotation. The
+    // manager owns mode, in-memory state, and the on-disk path.
+    let mut vanguards = VanguardManager::load(config.vanguards, &config.data_dir);
 
     loop {
         if !degraded {
@@ -539,16 +533,13 @@ async fn supervise(
             readiness,
         });
 
-        // 3. Drive it: bootstrap → SOCKS discovery → onion publish → Ready →
-        //    hold until death.
+        // 3. Drive it: bootstrap → SOCKS → vanguards → onion → Ready → hold.
         let end = drive_incarnation(
             &mut IncarnationCtx {
                 actor: &actor,
                 policy: &config.policy,
                 onion: config.onion.as_ref(),
-                vanguards: config.vanguards,
-                rotation: &mut rotation,
-                state_file: &state_file,
+                vanguards: &mut vanguards,
                 attempt: &mut attempt,
                 degraded: &mut degraded,
                 posture: &posture,
@@ -659,11 +650,8 @@ struct IncarnationCtx<'a> {
     actor: &'a kameo::actor::ActorRef<TorControl>,
     policy: &'a SupervisorPolicy,
     onion: Option<&'a OnionServiceSpec>,
-    vanguards: VanguardsMode,
-    /// Supervisor-scoped rotation state — borrowed, never owned by the
-    /// incarnation, so a restart cannot re-draw it.
-    rotation: &'a mut Option<RotationState>,
-    state_file: &'a std::path::Path,
+    /// Supervisor-scoped; borrowed so a restart cannot re-draw the set.
+    vanguards: &'a mut VanguardManager,
     attempt: &'a mut u32,
     degraded: &'a mut bool,
     posture: &'a watch::Sender<TorPosture>,
@@ -677,69 +665,6 @@ fn vanguards_abort_to_end(abort: VanguardsAbort) -> IncarnationEnd {
         VanguardsAbort::ActorGone => IncarnationEnd::Failed(ServiceFailure::Exited(None)),
         VanguardsAbort::Failed(e) => IncarnationEnd::Failed(ServiceFailure::Vanguards(e)),
     }
-}
-
-/// Bring this incarnation's vanguards up: fetch the consensus, **restore**
-/// the supervisor-scoped set (or select it if there is none yet), expire
-/// anything the clock has aged out, `SETCONF` it, and persist.
-///
-/// The restore path is why a restart does not rotate: the persisted set and
-/// its per-node timers survive verbatim, and only relays that have left the
-/// consensus are repaired. The in-memory state is replaced **only on
-/// success** — an error must not leave the supervisor holding `None`, because
-/// the next incarnation would then select fresh, turning a transient failure
-/// into exactly the restart-driven rotation this design forbids.
-async fn establish_vanguards(
-    ctx: &mut IncarnationCtx<'_>,
-) -> Result<VanguardsActive, IncarnationEnd> {
-    let consensus =
-        match fetch_consensus(ctx.actor, ctx.policy.vanguards_deadline, ctx.shutdown).await {
-            Ok(relays) => relays,
-            Err(abort) => return Err(vanguards_abort_to_end(abort)),
-        };
-
-    let mut rng = OsVanguardRng;
-    let now = SystemTime::now();
-    // Clone, never take — see the doc note above.
-    let built = match ctx.rotation.clone() {
-        Some(previous) => previous.restore(&consensus, &mut rng),
-        None => RotationState::select_fresh(&consensus, now, &mut rng),
-    };
-    let mut state = match built {
-        Ok(state) => state,
-        Err(e) => {
-            return Err(IncarnationEnd::Failed(ServiceFailure::Vanguards(
-                VanguardsError::Rotation(e),
-            )))
-        }
-    };
-    // A long downtime may have spanned whole lifetimes; the clock still
-    // decides. This is not "a restart rotates" — it is "the wall clock
-    // rotated while we were down".
-    if let Err(e) = state.expire_due(&consensus, now, &mut rng) {
-        return Err(IncarnationEnd::Failed(ServiceFailure::Vanguards(
-            VanguardsError::Rotation(e),
-        )));
-    }
-
-    let witness = match apply_pins(
-        ctx.actor,
-        &state,
-        ctx.policy.vanguards_deadline,
-        ctx.shutdown,
-    )
-    .await
-    {
-        Ok(witness) => witness,
-        Err(abort) => return Err(vanguards_abort_to_end(abort)),
-    };
-    if let Err(e) = save_state(ctx.state_file, &state) {
-        return Err(IncarnationEnd::Failed(ServiceFailure::Vanguards(
-            VanguardsError::Persist(e.to_string()),
-        )));
-    }
-    *ctx.rotation = Some(state);
-    Ok(witness)
 }
 
 /// Drive one incarnation from spawn to death: forward bootstrap telemetry,
@@ -813,26 +738,24 @@ async fn drive_incarnation(
         }
         Err(_) => return IncarnationEnd::Failed(ServiceFailure::Exited(None)),
     };
-    // Phase 2b: publish the persona's onion service, if configured — on
-    // EVERY incarnation, because a published onion dies with its control
-    // connection (`Detach` is unrepresentable). Runs before the `Ready`
-    // posture so `Ready` means the FULL serving posture is up: a persona
-    // whose SOCKS works but whose onion did not publish is unreachable for
-    // challenges, and publishing `Ready` for it would hide exactly the
-    // failure the supervisor exists to surface.
-    // Phase 2a: apply full vanguards, if managed — BEFORE the onion, because
+    // Phase 2a: full vanguards (if managed) — BEFORE the onion, because
     // publishing needs the witness this step mints, and because a persona
     // must never be reachable on lite-only protection even briefly. Restores
     // the supervisor-scoped state (repairing only relays that left the
-    // consensus) — it never re-selects, so this restart does not rotate.
-    let vanguards_witness = match ctx.vanguards {
-        VanguardsMode::Off => None,
-        VanguardsMode::Managed => match establish_vanguards(ctx).await {
-            Ok(witness) => Some(witness),
-            Err(end) => return end,
-        },
+    // consensus); it never re-selects, so this restart does not rotate.
+    let vanguards_witness = match ctx
+        .vanguards
+        .establish(ctx.actor, ctx.policy.vanguards_deadline, ctx.shutdown)
+        .await
+    {
+        Ok(witness) => witness,
+        Err(abort) => return vanguards_abort_to_end(abort),
     };
 
+    // Phase 2b: publish the persona's onion service, if configured — on
+    // EVERY incarnation, because a published onion dies with its control
+    // connection (`Detach` is unrepresentable). Runs before the `Ready`
+    // posture so `Ready` means the FULL serving posture is up.
     if let Some(spec) = ctx.onion {
         // The ruled-out configuration, refused rather than downgraded: no
         // witness exists in `Off`, so there is nothing to pass here.
@@ -878,33 +801,25 @@ async fn drive_incarnation(
     let reset_deadline = tokio::time::Instant::now() + ctx.policy.stable_reset;
     let mut forgiven = false;
     loop {
-        // Vanguard rotation rides its own arm, not the incarnation: L3 nodes
-        // average ~31.5 h and each node expires INDEPENDENTLY, so a
-        // long-lived incarnation must rotate mid-life. Sleep to the earliest
-        // per-node expiry; the arm is inert unless vanguards are managed.
-        let rotate_in = ctx
-            .rotation
-            .as_ref()
-            .and_then(RotationState::next_expiry)
-            .map(|at| {
-                at.duration_since(SystemTime::now())
-                    .unwrap_or(Duration::ZERO)
-            });
-        let rotate_armed = matches!(ctx.vanguards, VanguardsMode::Managed) && rotate_in.is_some();
-        // The sleep expression is always built (select! requires it); the
-        // guard is what decides whether it is polled.
-        let rotate_delay = rotate_in.unwrap_or(Duration::from_secs(3600));
-        let mut rotate_due = false;
+        // Vanguard reconcile rides its own arm: L3 nodes average ~31.5 h and
+        // each expires independently, so a long-lived incarnation must repair
+        // dead relays and rotate mid-life. The arm is inert when Off or when
+        // no state has been established yet.
+        let reconcile_in = ctx.vanguards.next_deadline();
+        // select! needs the future always constructed; the guard decides
+        // whether it is polled.
+        let reconcile_delay = reconcile_in.unwrap_or(Duration::from_secs(3600));
+        let mut reconcile_due = false;
 
         tokio::select! {
             _ = &mut *ctx.shutdown => return IncarnationEnd::Shutdown,
             () = ctx.actor.wait_for_shutdown() => {
                 return IncarnationEnd::Failed(ServiceFailure::Exited(None));
             }
-            () = tokio::time::sleep(rotate_delay), if rotate_armed => {
-                // Handled after the select! so the rotation can borrow `ctx`
+            () = tokio::time::sleep(reconcile_delay), if reconcile_in.is_some() => {
+                // Handled after the select! so reconcile can borrow `ctx`
                 // whole without colliding with the other arms' futures.
-                rotate_due = true;
+                reconcile_due = true;
             }
             () = tokio::time::sleep_until(reset_deadline), if !forgiven => {
                 let was_degraded = *ctx.degraded;
@@ -922,54 +837,16 @@ async fn drive_incarnation(
             }
         }
 
-        if rotate_due {
-            if let Err(end) = rotate_vanguards(ctx).await {
-                return end;
+        if reconcile_due {
+            if let Err(abort) = ctx
+                .vanguards
+                .reconcile(ctx.actor, ctx.policy.vanguards_deadline, ctx.shutdown)
+                .await
+            {
+                return vanguards_abort_to_end(abort);
             }
         }
     }
-}
-
-/// Rotate the vanguards whose clocks have expired, re-`SETCONF` the whole set,
-/// and persist. Called from the hold loop's rotation arm — never from a
-/// restart path.
-///
-/// A failure here fails the incarnation: the pinned set and our state would
-/// otherwise disagree, and `Ready` is defined as the full posture being up.
-/// The restart re-applies from persisted state, which is a repair, not a
-/// rotation.
-async fn rotate_vanguards(ctx: &mut IncarnationCtx<'_>) -> Result<(), IncarnationEnd> {
-    let consensus =
-        match fetch_consensus(ctx.actor, ctx.policy.vanguards_deadline, ctx.shutdown).await {
-            Ok(relays) => relays,
-            Err(abort) => return Err(vanguards_abort_to_end(abort)),
-        };
-    let Some(mut state) = ctx.rotation.clone() else {
-        return Ok(());
-    };
-    let mut rng = OsVanguardRng;
-    if let Err(e) = state.expire_due(&consensus, SystemTime::now(), &mut rng) {
-        return Err(IncarnationEnd::Failed(ServiceFailure::Vanguards(
-            VanguardsError::Rotation(e),
-        )));
-    }
-    if let Err(abort) = apply_pins(
-        ctx.actor,
-        &state,
-        ctx.policy.vanguards_deadline,
-        ctx.shutdown,
-    )
-    .await
-    {
-        return Err(vanguards_abort_to_end(abort));
-    }
-    if let Err(e) = save_state(ctx.state_file, &state) {
-        return Err(IncarnationEnd::Failed(ServiceFailure::Vanguards(
-            VanguardsError::Persist(e.to_string()),
-        )));
-    }
-    *ctx.rotation = Some(state);
-    Ok(())
 }
 
 #[cfg(test)]
