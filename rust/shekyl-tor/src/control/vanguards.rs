@@ -7,7 +7,7 @@
 //! injection-safe way to pin a serving persona's vanguard layer-2/layer-3
 //! guard sets.
 //!
-//! # Why this is here, and what it is *not* (PR-C ruling, 2026-08-11)
+//! # Why this is here, and what it is *not* (VG ruling, 2026-08-11)
 //!
 //! `ARCHIVAL_CHALLENGE_MECHANISM.md` §7.4 rules that the vanguards
 //! **path-selection** half is built natively in Rust rather than by
@@ -83,14 +83,7 @@ impl RelayFingerprint {
     /// The canonical `$<40 UPPER hex>` specifier.
     #[must_use]
     pub fn to_specifier(&self) -> String {
-        const HEX: &[u8; 16] = b"0123456789ABCDEF";
-        let mut s = String::with_capacity(41);
-        s.push('$');
-        for byte in self.0 {
-            s.push(HEX[(byte >> 4) as usize] as char);
-            s.push(HEX[(byte & 0x0f) as usize] as char);
-        }
-        s
+        format!("${}", super::encoding::hex_upper(&self.0))
     }
 }
 

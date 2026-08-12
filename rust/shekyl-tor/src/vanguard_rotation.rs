@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! The vanguard rotation manager — supervisor-scoped state that outlives Tor
-//! incarnations, so a Tor **restart never causes a rotation** (PR-C3).
+//! incarnations, so a Tor **restart never causes a rotation** (VG-3).
 //!
 //! # The load-bearing invariant
 //!
@@ -15,7 +15,7 @@
 //! restarts), so we would have paid for full vanguards' complexity while
 //! reimplementing lite's flaw. Our backoff starts at 1 s, so a flapping Tor
 //! could re-draw many times an hour: the over-rotation failure at its worst.
-//! [`RotationState::restore`] therefore keeps every surviving node's identity
+//! `RotationState::restore` therefore keeps every surviving node's identity
 //! **and its expiry timestamp** untouched.
 //!
 //! # Lifetimes (spec-pinned; prop-333 / guard-spec)
@@ -42,6 +42,19 @@
 //! vanguards-lite replaces a vanguard that loses `Fast`/`Stable`, but the
 //! proposal explicitly notes the design did not have to be that way. Treating
 //! flag-loss as a rotation is a separate, argued decision — not inherited.
+//!
+//! # Two kinds of fault
+//!
+//! [`VanguardsError`] ends an incarnation; [`VanguardsWarning`] does not. The
+//! line between them is whether the **live** posture is still right: a control
+//! failure or an unfillable set leaves the pinned set and our state at odds, so
+//! the incarnation cannot be trusted to keep serving — but a state file that
+//! cannot be read or written leaves tor bootstrapped, SOCKS listening and the
+//! correct set pinned, degrading only *restart survival*. Reporting the second
+//! kind by tearing tor down would trade a conditional future privacy loss for a
+//! certain present liveness loss, recurring every incarnation for as long as the
+//! disk stays broken. So it alarms and keeps serving, and the alarm clears itself
+//! on the next successful persist.
 //!
 //! # Ownership
 //!
@@ -77,18 +90,14 @@ const L3_LIFETIME_MAX: Duration = Duration::from_secs(48 * 3_600);
 /// tor's built-in lite adds one, which the spec is explicit costs longer
 /// paths and higher latency — a non-serving instance should not pay that.
 ///
-/// The four configurations, and why only three are representable:
-/// - `Off` + no onion — a plain client (the unchanged default);
-/// - `Managed` + no onion — **legitimate**: the witness leg is an onion
-///   *client* building rendezvous circuits, and client-side guard discovery
-///   is a real attack, so this configuration stays available;
-/// - `Managed` + onion — the serving posture;
-/// - `Off` + onion — **the configuration our own ruling forbids** (a serving
-///   persona with lite-only protection is silently weaker with no feedback
-///   channel, against an adversary whose success is invisible to the
-///   operator). It is made unrepresentable at the registration surface:
-///   publishing a persona onion requires a [`VanguardsActive`] witness, and
-///   no witness exists in `Off`.
+/// This is the *derived* knob, not the configured one: callers choose a
+/// [`ServingPosture`](crate::service::ServingPosture), which implies the mode.
+/// That is what keeps the one forbidden pairing — a serving persona on
+/// lite-only guard protection, silently weaker with no feedback channel, against
+/// an adversary whose success is invisible to the operator — from existing to be
+/// checked for. The runtime gate is the second, independent lock: publishing a
+/// persona onion needs a [`VanguardsActive`] witness, and no witness is minted
+/// in `Off`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum VanguardsMode {
     /// No supervisor pinning; tor's built-in vanguards-lite applies.
@@ -150,12 +159,6 @@ pub enum VanguardsError {
     },
     /// The consensus could not fill or repair the vanguard set.
     Rotation(RotationError),
-    /// The persisted state could not be written — refused loudly rather than
-    /// running with state that would be lost on restart, because losing it
-    /// means the next process start re-draws (a rotation a restart must never
-    /// cause). In-memory state is still committed so a same-process retry
-    /// does not re-select.
-    Persist(String),
 }
 
 impl std::fmt::Display for VanguardsError {
@@ -164,7 +167,6 @@ impl std::fmt::Display for VanguardsError {
             Self::Control(e) => write!(f, "vanguards control failure: {e}"),
             Self::Rejected { status } => write!(f, "tor refused SETCONF with status {status}"),
             Self::Rotation(e) => write!(f, "vanguard set could not be built: {e}"),
-            Self::Persist(e) => write!(f, "vanguard state could not be persisted: {e}"),
         }
     }
 }
@@ -181,6 +183,22 @@ pub enum RotationError {
         /// Seats that needed filling.
         needed: usize,
     },
+    /// Too few of the router entries the `ns/all` reply announced could be
+    /// decoded for it to be read as a picture of the network.
+    ///
+    /// This is refused rather than acted on because the downstream reading of
+    /// "absent from the consensus" is "this vanguard left the network, replace
+    /// it" — so a wholesale parse failure would present as the entire network
+    /// churning at once and re-draw the persona's whole guard topology.
+    ConsensusUnusable {
+        /// Entries whose identity decoded.
+        decoded: usize,
+        /// Entries the reply announced.
+        announced: usize,
+    },
+    /// The OS CSPRNG refused. Selection has to be unpredictable, so there is no
+    /// degraded draw to fall back to.
+    RngUnavailable,
 }
 
 impl std::fmt::Display for RotationError {
@@ -190,11 +208,60 @@ impl std::fmt::Display for RotationError {
                 f,
                 "only {available} eligible relays for {needed} vanguard seats"
             ),
+            Self::ConsensusUnusable { decoded, announced } => write!(
+                f,
+                "only {decoded} of {announced} announced consensus entries could be read"
+            ),
+            Self::RngUnavailable => write!(f, "the OS CSPRNG refused to produce bytes"),
         }
     }
 }
 
 impl std::error::Error for RotationError {}
+
+impl From<RngUnavailable> for RotationError {
+    fn from(RngUnavailable: RngUnavailable) -> Self {
+        Self::RngUnavailable
+    }
+}
+
+/// A vanguards fault the **transport survives**.
+///
+/// Separate from [`VanguardsError`] deliberately, and the distinction is the
+/// lesson of the persistence path: a fault that leaves tor bootstrapped, SOCKS
+/// listening, and the correct guard set pinned must not be reported by killing
+/// tor. Both variants degrade a *future* guarantee — the set surviving a
+/// restart — while the live posture is exactly right, so the honest response is
+/// a loud alarm that clears itself when the next persist succeeds, not an
+/// outage that recurs every incarnation for as long as the disk stays broken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VanguardsWarning {
+    /// Persisted state was present but unusable — unreadable, or content that
+    /// failed the structural gate — so the set was drawn fresh. That re-draw
+    /// **is** the restart-driven rotation this module exists to prevent, and it
+    /// repeats on every start until the operator clears the file.
+    StateUnusable(String),
+    /// The set is pinned and live but its state file could not be written, so
+    /// the next process start would re-draw. In-memory state still carries the
+    /// set, so nothing rotates while this process lives.
+    StateUnpersisted(String),
+}
+
+impl std::fmt::Display for VanguardsWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StateUnusable(why) => write!(
+                f,
+                "persisted vanguard state was unusable, so the set was re-drawn: {why}"
+            ),
+            Self::StateUnpersisted(why) => write!(
+                f,
+                "vanguard state could not be persisted (the live set is correct; a restart \
+                 would re-draw): {why}"
+            ),
+        }
+    }
+}
 
 // ── Selection (bandwidth-weighted) ─────────────────────────────────────────
 
@@ -208,53 +275,83 @@ impl std::error::Error for RotationError {}
 /// precedent rather than pulling a `rand` dependency.
 pub trait VanguardRng {
     /// The next 64 random bits.
-    fn next_u64(&mut self) -> u64;
+    ///
+    /// # Errors
+    ///
+    /// [`RngUnavailable`] when the source refuses.
+    fn next_u64(&mut self) -> Result<u64, RngUnavailable>;
 }
+
+/// The randomness source refused.
+///
+/// Fallible rather than panicking, which is the point: every draw runs inside
+/// the supervisor task, so an `expect` here would abort that task and drop the
+/// posture channel — a dead Tor service with a *closed* channel instead of a
+/// `Degraded` posture, the one outcome the supervisor's "never silent"
+/// commitment forbids. A blocked `getrandom` (a hardened seccomp profile, a
+/// container policy) is rare but it is an environment fact, not a bug, so it
+/// fails the incarnation the way any other vanguards fault does. The crate
+/// already handles the same call this way in the SAFECOOKIE handshake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RngUnavailable;
+
+impl std::fmt::Display for RngUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the OS CSPRNG refused to produce bytes")
+    }
+}
+
+impl std::error::Error for RngUnavailable {}
 
 /// Production RNG: OS CSPRNG bytes via `getrandom`.
 pub struct OsVanguardRng;
 
 impl VanguardRng for OsVanguardRng {
-    fn next_u64(&mut self) -> u64 {
+    fn next_u64(&mut self) -> Result<u64, RngUnavailable> {
         let mut buf = [0u8; 8];
-        getrandom::getrandom(&mut buf).expect("OS CSPRNG");
-        u64::from_le_bytes(buf)
+        getrandom::getrandom(&mut buf).map_err(|_| RngUnavailable)?;
+        Ok(u64::from_le_bytes(buf))
     }
 }
 
 /// Draw disjoint layer-2 and layer-3 fingerprint sets, bandwidth-weighted —
 /// without replacement. L2 is drawn first, L3 from the remainder.
-/// `None` if the eligible pool cannot fill `l2 + l3` seats.
 fn select_disjoint(
     relays: &[ConsensusRelay],
     l2: usize,
     l3: usize,
     rng: &mut impl VanguardRng,
-) -> Option<(Vec<RelayFingerprint>, Vec<RelayFingerprint>)> {
+) -> Result<(Vec<RelayFingerprint>, Vec<RelayFingerprint>), RotationError> {
     let mut pool = eligible_pool(relays);
     if pool.len() < l2 + l3 {
-        return None;
+        return Err(RotationError::TooFewEligible {
+            available: pool.len(),
+            needed: l2 + l3,
+        });
     }
-    let layer2 = draw_weighted(&mut pool, l2, rng);
-    let layer3 = draw_weighted(&mut pool, l3, rng);
-    Some((layer2, layer3))
+    let layer2 = draw_weighted(&mut pool, l2, rng)?;
+    let layer3 = draw_weighted(&mut pool, l3, rng)?;
+    Ok((layer2, layer3))
 }
 
 /// Draw **one** replacement relay, bandwidth-weighted, excluding everything
-/// in `exclude`. `None` if nothing eligible remains.
+/// in `exclude`.
 fn draw_replacement(
     relays: &[ConsensusRelay],
     exclude: &[RelayFingerprint],
     rng: &mut impl VanguardRng,
-) -> Option<RelayFingerprint> {
+) -> Result<RelayFingerprint, RotationError> {
     let mut pool: Vec<(RelayFingerprint, u64)> = eligible_pool(relays)
         .into_iter()
         .filter(|(fp, _)| !exclude.contains(fp))
         .collect();
     if pool.is_empty() {
-        return None;
+        return Err(RotationError::TooFewEligible {
+            available: 0,
+            needed: 1,
+        });
     }
-    Some(draw_weighted(&mut pool, 1, rng).remove(0))
+    Ok(draw_weighted(&mut pool, 1, rng)?.remove(0))
 }
 
 fn eligible_pool(relays: &[ConsensusRelay]) -> Vec<(RelayFingerprint, u64)> {
@@ -271,12 +368,12 @@ fn draw_weighted(
     pool: &mut Vec<(RelayFingerprint, u64)>,
     count: usize,
     rng: &mut impl VanguardRng,
-) -> Vec<RelayFingerprint> {
+) -> Result<Vec<RelayFingerprint>, RngUnavailable> {
     let mut drawn = Vec::with_capacity(count);
     for _ in 0..count {
         let total: u128 = pool.iter().map(|(_, bw)| u128::from(*bw)).sum();
         // total > 0: every pool entry has bandwidth > 0 and pool is non-empty.
-        let mut target = (u128::from(rng.next_u64()) % total) + 1;
+        let mut target = (u128::from(rng.next_u64()?) % total) + 1;
         let mut idx = 0;
         for (i, (_, bw)) in pool.iter().enumerate() {
             target = target.saturating_sub(u128::from(*bw));
@@ -287,7 +384,7 @@ fn draw_weighted(
         }
         drawn.push(pool.swap_remove(idx).0);
     }
-    drawn
+    Ok(drawn)
 }
 
 // ── Persistence ────────────────────────────────────────────────────────────
@@ -305,42 +402,119 @@ pub fn state_path(data_dir: &Path) -> PathBuf {
     data_dir.join("shekyl-vanguards.state")
 }
 
-/// Load persisted rotation state. `None` when absent **or malformed** —
-/// including wrong set sizes, duplicates, or L2/L3 overlap. A corrupt file
-/// is treated as "no state" (the caller selects fresh) rather than as a
-/// partial set that would silently under-pin.
-#[must_use]
-fn load_state(path: &Path) -> Option<RotationState> {
-    let text = std::fs::read_to_string(path).ok()?;
-    RotationState::deserialize(&text)
+/// The in-progress copy [`save_state`] writes before committing it over
+/// [`state_path`]. Also the crash-recovery copy [`read_state`] falls back to:
+/// it exists **only** when a save did not complete.
+fn temp_path(path: &Path) -> PathBuf {
+    path.with_extension("state.tmp")
 }
 
-/// Persist rotation state **atomically** (write a temp file, then rename).
+/// What reading the persisted state found.
 ///
-/// Atomicity is load-bearing, not hygiene: a torn write would be read back as
-/// corrupt, the caller would select fresh, and the restart would have caused a
-/// rotation — precisely the invariant this module exists to hold.
+/// Three outcomes, not two, because "no file" and "a file we could not use" are
+/// different facts with different costs. Collapsing them — as an `Option` does —
+/// makes an unreadable state file indistinguishable from a first run, so the
+/// persona's whole guard topology gets re-drawn with nothing said about it.
+enum StateOnDisk {
+    /// Nothing persisted: a genuine first run, where selecting fresh is both
+    /// correct and unremarkable.
+    Absent,
+    /// A usable state — from the canonical file, or recovered from the temp copy
+    /// an interrupted save left behind.
+    Held(RotationState),
+    /// Something is there that could not be turned into a state: an I/O error,
+    /// or content that failed the structural gate. The caller still selects
+    /// fresh (a persona with no transport is the worse failure), but that
+    /// re-draw is the restart-driven rotation this module exists to prevent, so
+    /// it is reported rather than silently absorbed — see
+    /// [`VanguardsWarning::StateUnusable`].
+    Unusable(String),
+}
+
+/// Read persisted rotation state, distinguishing absent from unusable.
 ///
-/// On Windows, `rename` cannot overwrite an existing destination, so the
-/// destination is removed first. That is not a fully atomic replace on
-/// Windows, but it is the portable shape available without a platform-specific
-/// replace API; a crash between remove and rename leaves the `.tmp` for the
-/// next start to ignore (load reads only the canonical path → select fresh).
-fn save_state(path: &Path, state: &RotationState) -> std::io::Result<()> {
-    let tmp = path.with_extension("state.tmp");
-    std::fs::write(&tmp, state.serialize())?;
-    // POSIX rename overwrites atomically. Windows rename fails if dest exists.
-    #[cfg(windows)]
-    {
-        // Windows rename cannot overwrite; best-effort remove first.
-        drop(std::fs::remove_file(path));
+/// Malformed content — wrong set sizes, duplicates, L2/L3 overlap — is never
+/// accepted as a partial set that would silently under-pin. When the canonical
+/// file is missing or unusable, the temp copy is tried: it exists only after an
+/// interrupted save, where it may be the *only* durable record of the set, and
+/// [`RotationState::deserialize`]'s structural gate is what makes reading a
+/// possibly-partial file safe.
+fn read_state(path: &Path) -> StateOnDisk {
+    let recovered = |fallback: StateOnDisk| match std::fs::read_to_string(temp_path(path)) {
+        Ok(text) => RotationState::deserialize(&text).map_or(fallback, StateOnDisk::Held),
+        Err(_) => fallback,
+    };
+    match std::fs::read_to_string(path) {
+        Ok(text) => match RotationState::deserialize(&text) {
+            Some(state) => StateOnDisk::Held(state),
+            None => recovered(StateOnDisk::Unusable(format!(
+                "{} is present but is not a well-formed vanguard state",
+                path.display()
+            ))),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => recovered(StateOnDisk::Absent),
+        // Present but unreadable (permissions, a directory in its place, a
+        // failing disk). The bytes may be perfectly good, so treating this as a
+        // first run would re-draw a set that is sitting right there.
+        Err(e) => recovered(StateOnDisk::Unusable(format!(
+            "{} could not be read: {e}",
+            path.display()
+        ))),
     }
-    match std::fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            // Best-effort cleanup; the rename error is what the caller needs.
-            drop(std::fs::remove_file(&tmp));
-            Err(e)
+}
+
+/// Persist rotation state **atomically and durably**: write a temp file, force
+/// it to stable storage, rename it over the canonical path, then force the
+/// directory entry.
+///
+/// Both halves are load-bearing for the same reason, and neither alone is
+/// enough. Atomicity keeps a half-written file from ever being read as the
+/// state; durability keeps the rename from committing a directory entry that
+/// points at data the page cache still holds, which a power loss would expose as
+/// a zero-length file. Either way the read-back is corrupt, the caller selects
+/// fresh, and the restart has caused a rotation — precisely the invariant this
+/// module exists to hold.
+///
+/// The temp file is **never deleted on failure**. After a failed rename it can
+/// be the only durable copy of the set — Windows cannot rename onto an existing
+/// file, so the destination has to go first — and [`read_state`] falls back to
+/// it. A successful rename consumes it, so a temp file lingering is itself the
+/// signal that the last save did not complete.
+fn save_state(path: &Path, state: &RotationState) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let tmp = temp_path(path);
+    {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(state.serialize().as_bytes())?;
+        // The rename below is only as good as the bytes it commits.
+        file.sync_all()?;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        // POSIX `rename` overwrites atomically and never reports this; Windows
+        // refuses an existing destination, so remove and retry — and only ever
+        // here, after the temp is already on stable storage, so the window where
+        // the canonical path is missing is covered by `read_state`'s fallback
+        // rather than left open. Any other error is the caller's to see.
+        if e.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err(e);
+        }
+        std::fs::remove_file(path)?;
+        std::fs::rename(&tmp, path)?;
+    }
+    sync_parent_dir(path);
+    Ok(())
+}
+
+/// Force the directory entry the rename just created.
+///
+/// Best-effort: not every platform lets a directory be opened for sync (Windows
+/// does not), and a failure costs durability of the *rename*, not correctness —
+/// a reader still sees either the old state or the new one, never a mix.
+fn sync_parent_dir(path: &Path) {
+    if let Some(dir) = path.parent() {
+        if let Ok(handle) = std::fs::File::open(dir) {
+            drop(handle.sync_all());
         }
     }
 }
@@ -390,29 +564,11 @@ impl RotationState {
         now: SystemTime,
         rng: &mut impl VanguardRng,
     ) -> Result<Self, RotationError> {
-        let needed = NUM_LAYER2_GUARDS + NUM_LAYER3_GUARDS;
         let (l2_fps, l3_fps) =
-            select_disjoint(consensus, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS, rng).ok_or(
-                RotationError::TooFewEligible {
-                    available: eligible_pool(consensus).len(),
-                    needed,
-                },
-            )?;
+            select_disjoint(consensus, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS, rng)?;
         Ok(Self {
-            layer2: l2_fps
-                .into_iter()
-                .map(|fp| VanguardNode {
-                    fingerprint: fp,
-                    expires_at: now + sample_lifetime(Layer::Two, rng),
-                })
-                .collect(),
-            layer3: l3_fps
-                .into_iter()
-                .map(|fp| VanguardNode {
-                    fingerprint: fp,
-                    expires_at: now + sample_lifetime(Layer::Three, rng),
-                })
-                .collect(),
+            layer2: fresh_nodes(l2_fps, Layer::Two, now, rng)?,
+            layer3: fresh_nodes(l3_fps, Layer::Three, now, rng)?,
         })
     }
 
@@ -536,7 +692,13 @@ impl RotationState {
             }
             let node = VanguardNode {
                 fingerprint,
-                expires_at: UNIX_EPOCH + Duration::from_secs(secs),
+                // Checked, not `+`: `SystemTime` addition panics past the
+                // platform's representable range, and this input is a file that
+                // any torn write or disk fault can put an arbitrary u64 into.
+                // The contract here is `None` on malformed input — a panic would
+                // instead abort the supervisor task and close the posture
+                // channel, i.e. kill the whole Tor service with no diagnostic.
+                expires_at: UNIX_EPOCH.checked_add(Duration::from_secs(secs))?,
             };
             match tag {
                 "L2" => layer2.push(node),
@@ -560,6 +722,25 @@ impl RotationState {
     }
 }
 
+/// Give each drawn fingerprint an independent lifetime from its layer's
+/// distribution.
+fn fresh_nodes(
+    fingerprints: Vec<RelayFingerprint>,
+    layer: Layer,
+    now: SystemTime,
+    rng: &mut impl VanguardRng,
+) -> Result<Vec<VanguardNode>, RotationError> {
+    fingerprints
+        .into_iter()
+        .map(|fingerprint| {
+            Ok(VanguardNode {
+                fingerprint,
+                expires_at: now + sample_lifetime(layer, rng)?,
+            })
+        })
+        .collect()
+}
+
 /// Swap every node whose relay is absent from the consensus for a fresh
 /// bandwidth-weighted draw. The slot **keeps its existing expiry timer** —
 /// swapping a dead relay is a repair, not a rotation.
@@ -572,11 +753,7 @@ fn swap_absent(
 ) -> Result<(), RotationError> {
     for node in set.iter_mut() {
         if !present.contains(&node.fingerprint) {
-            let fresh =
-                draw_replacement(consensus, in_use, rng).ok_or(RotationError::TooFewEligible {
-                    available: eligible_pool(consensus).len(),
-                    needed: 1,
-                })?;
+            let fresh = draw_replacement(consensus, in_use, rng)?;
             in_use.push(fresh);
             node.fingerprint = fresh;
         }
@@ -599,41 +776,41 @@ fn rotate_expired(
     for node in set.iter_mut() {
         if node.expires_at <= now {
             let old = node.fingerprint;
-            let fresh =
-                draw_replacement(consensus, in_use, rng).ok_or(RotationError::TooFewEligible {
-                    available: eligible_pool(consensus).len(),
-                    needed: 1,
-                })?;
+            let fresh = draw_replacement(consensus, in_use, rng)?;
             if let Some(slot) = in_use.iter_mut().find(|f| **f == old) {
                 *slot = fresh;
             }
             node.fingerprint = fresh;
-            node.expires_at = now + sample_lifetime(layer, rng);
+            node.expires_at = now + sample_lifetime(layer, rng)?;
             rotated += 1;
         }
     }
     Ok(rotated)
 }
 
-fn sample_lifetime(layer: Layer, rng: &mut impl VanguardRng) -> Duration {
+fn sample_lifetime(layer: Layer, rng: &mut impl VanguardRng) -> Result<Duration, RngUnavailable> {
     match layer {
         Layer::Two => uniform_between(L2_LIFETIME_MIN, L2_LIFETIME_MAX, rng),
         Layer::Three => {
-            let a = uniform_between(L3_LIFETIME_MIN, L3_LIFETIME_MAX, rng);
-            let b = uniform_between(L3_LIFETIME_MIN, L3_LIFETIME_MAX, rng);
-            a.max(b)
+            let a = uniform_between(L3_LIFETIME_MIN, L3_LIFETIME_MAX, rng)?;
+            let b = uniform_between(L3_LIFETIME_MIN, L3_LIFETIME_MAX, rng)?;
+            Ok(a.max(b))
         }
     }
 }
 
-fn uniform_between(min: Duration, max: Duration, rng: &mut impl VanguardRng) -> Duration {
+fn uniform_between(
+    min: Duration,
+    max: Duration,
+    rng: &mut impl VanguardRng,
+) -> Result<Duration, RngUnavailable> {
     let span = max.as_secs() - min.as_secs();
     let offset = if span == 0 {
         0
     } else {
-        rng.next_u64() % (span + 1)
+        rng.next_u64()? % (span + 1)
     };
-    min + Duration::from_secs(offset)
+    Ok(min + Duration::from_secs(offset))
 }
 
 // ── Manager (supervisor-facing orchestration) ──────────────────────────────
@@ -645,19 +822,45 @@ pub struct VanguardManager {
     mode: VanguardsMode,
     state: Option<RotationState>,
     path: PathBuf,
+    /// The current non-fatal fault, if any — see [`VanguardsWarning`]. Held as
+    /// live state rather than a one-shot event so that it *clears itself*: the
+    /// first successful persist retires it, which is what makes the operator
+    /// alarm end on its own when the disk comes back.
+    warning: Option<VanguardsWarning>,
 }
 
 impl VanguardManager {
-    /// Load from disk when `Managed` (absent/corrupt → empty, first establish
-    /// selects fresh). `Off` never touches the file.
+    /// Load from disk when `Managed`. `Off` never touches the file.
+    ///
+    /// State that is absent (a first run) leaves no warning; state that is
+    /// present but unusable leaves a [`VanguardsWarning::StateUnusable`], because
+    /// the fresh selection it forces is exactly the restart-driven rotation this
+    /// module exists to prevent and the operator is the only one who can stop it
+    /// recurring.
     #[must_use]
     pub fn load(mode: VanguardsMode, data_dir: &Path) -> Self {
         let path = state_path(data_dir);
-        let state = match mode {
-            VanguardsMode::Off => None,
-            VanguardsMode::Managed => load_state(&path),
+        let (state, warning) = match mode {
+            VanguardsMode::Off => (None, None),
+            VanguardsMode::Managed => match read_state(&path) {
+                StateOnDisk::Absent => (None, None),
+                StateOnDisk::Held(state) => (Some(state), None),
+                StateOnDisk::Unusable(why) => (None, Some(VanguardsWarning::StateUnusable(why))),
+            },
         };
-        Self { mode, state, path }
+        Self {
+            mode,
+            state,
+            path,
+            warning,
+        }
+    }
+
+    /// The live non-fatal fault, if any. The supervisor publishes this alongside
+    /// `Ready` — the transport is up, and this is what is nevertheless wrong.
+    #[must_use]
+    pub fn warning(&self) -> Option<VanguardsWarning> {
+        self.warning.clone()
     }
 
     /// Whether this instance manages full vanguards.
@@ -712,9 +915,11 @@ impl VanguardManager {
     ///
     /// # Errors
     ///
-    /// [`VanguardsAbort`] on control / rotation / persist failure. Failing
-    /// here fails the incarnation: the pinned set and our state would
-    /// otherwise disagree, and `Ready` is defined as the full posture being up.
+    /// [`VanguardsAbort`] when the control round trip or the draw itself fails —
+    /// then the pinned set and our state genuinely disagree, so the incarnation
+    /// cannot be trusted to keep serving. A persist failure is **not** in that
+    /// class: it leaves the live set correct, so it is reported as a
+    /// [`VanguardsWarning`] instead of tearing a working tor down.
     pub async fn reconcile(
         &mut self,
         actor: &kameo::actor::ActorRef<TorControl>,
@@ -729,14 +934,28 @@ impl VanguardManager {
     }
 
     /// Shared pin pipeline used by both establish and mid-life reconcile:
-    /// consensus → restore-or-fresh → expire → SETCONF → commit memory →
-    /// persist.
+    /// consensus → restore-or-fresh → expire → repair → SETCONF → commit memory
+    /// → persist.
     ///
-    /// In-memory state is committed **before** disk write so a transient
+    /// **Expire before repair, deliberately.** A node that is both past its
+    /// expiry *and* gone from the consensus needs exactly **one** replacement:
+    /// rotating it draws a relay that is in the consensus by construction, so
+    /// the repair pass then finds nothing to do. The other order replaces the
+    /// same slot twice — two adversary-facing draws where the clock only bought
+    /// one, in a module whose whole discipline is minimizing draws.
+    ///
+    /// In-memory state is committed **before** the disk write so a transient
     /// persist failure on first selection cannot force the next incarnation
     /// down the `select_fresh` path (the restart-driven rotation this design
-    /// forbids). Persist still fails the incarnation loudly — the operator
-    /// must learn about a directory that cannot hold state.
+    /// forbids). A persist failure then becomes a
+    /// [`VanguardsWarning::StateUnpersisted`], not an abort: the `SETCONF` has
+    /// already been confirmed, so the live set is exactly right and the only
+    /// thing lost is restart survival. Failing the incarnation for it would
+    /// SIGTERM a healthy tor — dropping SOCKS, unpublishing the persona's onion,
+    /// and re-bootstrapping — every incarnation for as long as the directory
+    /// stays unwritable, trading a conditional future privacy loss for a certain
+    /// present liveness loss. The slash model this supervisor serves prices that
+    /// the other way round.
     async fn pin_set(
         &mut self,
         actor: &kameo::actor::ActorRef<TorControl>,
@@ -747,22 +966,30 @@ impl VanguardManager {
 
         let mut rng = OsVanguardRng;
         let now = SystemTime::now();
+        let rotation_failed =
+            |e: RotationError| VanguardsAbort::Failed(VanguardsError::Rotation(e));
 
         // Clone, never take — an error must not leave the manager holding
         // `None` when it previously had state (that would turn a transient
         // failure into a forced re-draw on the next establish).
-        let built = match self.state.clone() {
-            Some(previous) => previous.restore(&consensus, &mut rng),
-            None => RotationState::select_fresh(&consensus, now, &mut rng),
+        let mut state = match self.state.clone() {
+            Some(previous) => previous,
+            None => {
+                RotationState::select_fresh(&consensus, now, &mut rng).map_err(rotation_failed)?
+            }
         };
-        let mut state = built.map_err(|e| VanguardsAbort::Failed(VanguardsError::Rotation(e)))?;
 
         // A long downtime may have spanned whole lifetimes; the clock still
-        // decides. Mid-life reconcile also runs restore above so a relay that
-        // left the consensus is repaired without waiting for its expiry.
+        // decides.
         state
             .expire_due(&consensus, now, &mut rng)
-            .map_err(|e| VanguardsAbort::Failed(VanguardsError::Rotation(e)))?;
+            .map_err(rotation_failed)?;
+
+        // Then repair: a relay that left the consensus is swapped without
+        // waiting for its expiry, timers untouched.
+        let state = state
+            .restore(&consensus, &mut rng)
+            .map_err(rotation_failed)?;
 
         let witness = apply_pins(actor, &state, reply_deadline, shutdown).await?;
 
@@ -770,11 +997,12 @@ impl VanguardManager {
         // reuses this set rather than selecting fresh.
         self.state = Some(state.clone());
 
-        if let Err(e) = save_state(&self.path, &state) {
-            return Err(VanguardsAbort::Failed(VanguardsError::Persist(
-                e.to_string(),
-            )));
-        }
+        self.warning = match save_state(&self.path, &state) {
+            // A durable write retires whatever was wrong before — including an
+            // unusable file at load, which this rename has just replaced.
+            Ok(()) => None,
+            Err(e) => Some(VanguardsWarning::StateUnpersisted(e.to_string())),
+        };
         Ok(witness)
     }
 }
@@ -793,7 +1021,23 @@ async fn fetch_consensus(
         r = actor.ask(Command::GetInfo(vec!["ns/all".to_owned()])) => r,
     };
     match reply {
-        Ok(reply) if reply.status() == 250 => Ok(parse_ns_all(&reply)),
+        Ok(reply) if reply.status() == 250 => {
+            let view = parse_ns_all(&reply);
+            // Refuse a view we cannot read rather than acting on it: everything
+            // downstream reads "absent from the consensus" as "this vanguard
+            // left the network", so a wholesale parse shortfall would present as
+            // the whole network churning and re-draw the persona's entire guard
+            // topology. Better to fail this incarnation loudly.
+            if !view.is_trustworthy() {
+                return Err(VanguardsAbort::Failed(VanguardsError::Rotation(
+                    RotationError::ConsensusUnusable {
+                        decoded: view.relays.len(),
+                        announced: view.announced,
+                    },
+                )));
+            }
+            Ok(view.relays)
+        }
         Ok(reply) => Err(VanguardsAbort::Failed(VanguardsError::Rejected {
             status: reply.status(),
         })),
@@ -809,14 +1053,12 @@ async fn apply_pins(
     reply_deadline: Duration,
     shutdown: &mut oneshot::Receiver<()>,
 ) -> Result<VanguardsActive, VanguardsAbort> {
-    let pins = state
-        .to_pins()
-        .ok_or(VanguardsAbort::Failed(VanguardsError::Rotation(
-            RotationError::TooFewEligible {
-                available: 0,
-                needed: NUM_LAYER2_GUARDS + NUM_LAYER3_GUARDS,
-            },
-        )))?;
+    let pins = state.to_pins().ok_or_else(|| {
+        VanguardsAbort::Failed(VanguardsError::Rotation(RotationError::TooFewEligible {
+            available: state.layer2.len() + state.layer3.len(),
+            needed: NUM_LAYER2_GUARDS + NUM_LAYER3_GUARDS,
+        }))
+    })?;
     let reply = tokio::select! {
         _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
         () = tokio::time::sleep(reply_deadline) => {
@@ -843,12 +1085,12 @@ mod tests {
     /// Seeded SplitMix64 (no `rand` dep).
     struct SeededRng(u64);
     impl VanguardRng for SeededRng {
-        fn next_u64(&mut self) -> u64 {
+        fn next_u64(&mut self) -> Result<u64, RngUnavailable> {
             self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
             let mut z = self.0;
             z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
             z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
+            Ok(z ^ (z >> 31))
         }
     }
 
@@ -864,10 +1106,6 @@ mod tests {
 
     fn t0() -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(1_000_000_000)
-    }
-
-    fn full_state_text(state: &RotationState) -> String {
-        state.serialize()
     }
 
     #[test]
@@ -1037,7 +1275,7 @@ mod tests {
         let mut total = 0u64;
         let n = 500;
         for _ in 0..n {
-            let d = sample_lifetime(Layer::Three, &mut rng);
+            let d = sample_lifetime(Layer::Three, &mut rng).expect("seeded rng");
             assert!(d >= L3_LIFETIME_MIN && d <= L3_LIFETIME_MAX);
             total += d.as_secs();
         }
@@ -1051,7 +1289,7 @@ mod tests {
     #[test]
     fn persistence_round_trips() {
         let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(8)).unwrap();
-        let text = full_state_text(&state);
+        let text = state.serialize();
         let back = RotationState::deserialize(&text).expect("valid");
         assert_eq!(back, state);
     }
@@ -1123,15 +1361,149 @@ L3 $BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB 2\n";
     }
 
     #[test]
+    fn an_out_of_range_expiry_is_rejected_rather_than_panicking() {
+        // `SystemTime + Duration` panics past the platform's range, and this
+        // input is a file any torn write can put an arbitrary u64 into. A panic
+        // here runs inside the supervisor task, so it would close the posture
+        // channel — a dead Tor service with NO failure signal, for a file the
+        // contract says to treat as simply absent.
+        let fp = "$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        assert!(RotationState::deserialize(&format!("L2 {fp} {}\n", u64::MAX)).is_none());
+        assert!(
+            RotationState::deserialize(&format!("L2 {fp} {}\n", i64::MAX as u64 + 1)).is_none()
+        );
+    }
+
+    #[test]
+    fn a_refusing_rng_fails_the_draw_instead_of_panicking() {
+        // Same reasoning one layer down: every draw runs inside the supervisor
+        // task, so a blocked `getrandom` must surface as a rotation error the
+        // supervisor can alarm on and retry, not as an aborted task.
+        struct Refuses;
+        impl VanguardRng for Refuses {
+            fn next_u64(&mut self) -> Result<u64, RngUnavailable> {
+                Err(RngUnavailable)
+            }
+        }
+        assert_eq!(
+            RotationState::select_fresh(&pool(30), t0(), &mut Refuses),
+            Err(RotationError::RngUnavailable)
+        );
+    }
+
+    #[test]
+    fn an_expired_and_absent_node_is_replaced_exactly_once() {
+        // Expire-before-repair is what buys this. A node past its expiry that has
+        // ALSO left the consensus needs one replacement: rotating it draws a
+        // relay that is in the consensus by construction, so the repair pass then
+        // finds nothing to do. The other order draws twice for the same slot —
+        // two adversary opportunities where the clock only bought one.
+        let consensus = pool(30);
+        let mut rng = SeededRng(77);
+        let mut state = RotationState::select_fresh(&consensus, t0(), &mut rng).unwrap();
+
+        // Age every node out, and make the whole persisted set absent from a
+        // consensus of entirely different relays.
+        for node in state.layer2.iter_mut().chain(state.layer3.iter_mut()) {
+            node.expires_at = t0();
+        }
+        let replacement_pool: Vec<ConsensusRelay> = (100..=160u8)
+            .map(|b| ConsensusRelay {
+                fingerprint: RelayFingerprint::from_bytes([b; 20]),
+                bandwidth: 1000,
+                eligible: true,
+            })
+            .collect();
+
+        let after_expiry = {
+            let mut s = state.clone();
+            s.expire_due(&replacement_pool, t0() + Duration::from_secs(1), &mut rng)
+                .unwrap();
+            s
+        };
+        // The pipeline's order: expire, then repair.
+        let repaired = after_expiry
+            .clone()
+            .restore(&replacement_pool, &mut rng)
+            .unwrap();
+        assert_eq!(
+            repaired, after_expiry,
+            "the repair pass must find nothing left to do after expiry re-drew the slots",
+        );
+    }
+
+    #[test]
+    fn a_durable_save_leaves_no_temp_behind() {
+        // The temp file is the crash-recovery copy, so its *presence* is the
+        // signal that a save did not complete. A successful save must consume it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(dir.path());
+        let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(5)).unwrap();
+        save_state(&path, &state).unwrap();
+        assert!(path.exists());
+        assert!(!temp_path(&path).exists());
+        // And an overwrite of an existing file works on every platform.
+        save_state(&path, &state).unwrap();
+        assert!(!temp_path(&path).exists());
+    }
+
+    #[test]
+    fn an_interrupted_save_is_recovered_from_the_temp_copy() {
+        // The window this closes: a rename that failed after the destination was
+        // removed (Windows cannot rename onto an existing file), leaving the temp
+        // as the ONLY durable copy. Reading only the canonical path would re-draw
+        // the persona's whole topology; the structural gate is what makes reading
+        // a possibly-partial temp safe.
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(dir.path());
+        let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(6)).unwrap();
+        std::fs::write(temp_path(&path), state.serialize()).unwrap();
+
+        match read_state(&path) {
+            StateOnDisk::Held(recovered) => assert_eq!(recovered, state),
+            _ => panic!("a complete temp copy must be recovered, not re-drawn"),
+        }
+
+        // A partial temp is still refused — recovery must not lower the bar.
+        std::fs::write(temp_path(&path), "L2 $AA 1\n").unwrap();
+        assert!(matches!(read_state(&path), StateOnDisk::Absent));
+    }
+
+    #[test]
+    fn an_unreadable_state_file_is_not_mistaken_for_a_first_run() {
+        // Collapsing "no file" and "a file we could not read" into one answer is
+        // what lets a permissions change silently re-draw the persona's guard
+        // topology on every start, with nothing said about it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(dir.path());
+        assert!(matches!(read_state(&path), StateOnDisk::Absent));
+
+        // A directory where the state file belongs: present, unreadable.
+        std::fs::create_dir(&path).unwrap();
+        assert!(matches!(read_state(&path), StateOnDisk::Unusable(_)));
+
+        let mgr = VanguardManager::load(VanguardsMode::Managed, dir.path());
+        assert!(
+            matches!(mgr.warning(), Some(VanguardsWarning::StateUnusable(_))),
+            "the forced re-draw must reach the operator, not just happen",
+        );
+    }
+
+    #[test]
     fn manager_managed_loads_valid_state_and_rejects_corrupt() {
         let dir = tempfile::tempdir().unwrap();
         let path = state_path(dir.path());
 
-        // Corrupt → treated as no state (no deadline until establish selects).
+        // Corrupt → no state (no deadline until establish selects), and the
+        // re-draw that forces is reported rather than absorbed.
         std::fs::write(&path, "L2 $AA 1\n").unwrap();
         let mgr = VanguardManager::load(VanguardsMode::Managed, dir.path());
         assert!(mgr.is_managed());
         assert!(mgr.next_deadline().is_none());
+        assert!(matches!(
+            mgr.warning(),
+            Some(VanguardsWarning::StateUnusable(_))
+        ));
 
         // Valid full set → loaded; a deadline exists.
         let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(3)).unwrap();
@@ -1139,6 +1511,7 @@ L3 $BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB 2\n";
         let mgr = VanguardManager::load(VanguardsMode::Managed, dir.path());
         assert!(mgr.is_managed());
         assert!(mgr.next_deadline().is_some());
+        assert_eq!(mgr.warning(), None, "a clean load carries no warning");
     }
 
     #[test]

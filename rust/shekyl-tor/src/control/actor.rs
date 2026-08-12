@@ -77,7 +77,8 @@ use zeroize::Zeroizing;
 
 use super::auth::{parse_authchallenge, read_cookie_file, AuthError};
 use super::bootstrap::{bootstrap_step, parse_bootstrap_progress, BootstrapState, BootstrapStep};
-use super::framing::{ControlReply, Framed, FramingError, ReplyFramer};
+use super::encoding::hex_upper;
+use super::framing::{ControlReply, Framed, FramingError, ReplyBudget, ReplyFramer};
 use super::onion::{AddOnion, ServiceId};
 use super::safecookie::verify_server_hash;
 use super::vanguards::HsLayerPins;
@@ -243,7 +244,7 @@ pub enum Command {
     /// shutdown path as well as on demand.
     DelOnion(ServiceId),
     /// `SETCONF HSLayer2Nodes=… HSLayer3Nodes=…` — pin the serving persona's
-    /// vanguard layer-2/layer-3 guard sets (PR-C). Built from typed
+    /// vanguard layer-2/layer-3 guard sets (VG-1). Built from typed
     /// [`RelayFingerprint`](super::vanguards::RelayFingerprint)s, so — like
     /// `ADD_ONION` — it cannot render a line that injects a second command,
     /// which is what makes it safe to add `SETCONF` (the dangerous verb) to
@@ -251,7 +252,24 @@ pub enum Command {
     SetConf(HsLayerPins),
 }
 
+/// The one `GETINFO` key whose reply is legitimately megabytes: the full network
+/// status vanguard selection draws from.
+///
+/// Named here because it is the **whole** justification for
+/// [`BULK_REPLY_BYTES`]: the wide framer allowance is granted for this key's
+/// round trip and withdrawn again, so adding a second bulk command is a
+/// deliberate edit to this list rather than a cap everybody already pays for.
+const BULK_REPLY_KEYS: [&str; 1] = ["ns/all"];
+
 impl Command {
+    /// Does this command's reply need the [`BULK_REPLY_BYTES`] allowance?
+    fn needs_bulk_reply(&self) -> bool {
+        match self {
+            Self::GetInfo(keys) => keys.iter().any(|k| BULK_REPLY_KEYS.contains(&k.as_str())),
+            _ => false,
+        }
+    }
+
     /// The wire line (without the trailing CRLF), or [`ControlError::InvalidCommand`]
     /// if a token-list command is empty or any token carries a forbidden character.
     ///
@@ -313,6 +331,22 @@ enum PendingKind {
     Plain,
     /// An `ADD_ONION`: on success, record the service id for teardown.
     AddOnion,
+}
+
+/// Everything the actor must remember about the command currently on the wire:
+/// what its reply owes the actor, and how large that reply may be.
+///
+/// The size axis is separate from [`PendingKind`] because it is answered by a
+/// different question — not "what is this reply for" but "how many bytes may the
+/// framer buffer while it arrives" — and it travels with the queued line so the
+/// allowance is armed when the command reaches the wire, not when it is enqueued.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InFlight {
+    /// What the reply owes the actor beyond forwarding.
+    kind: PendingKind,
+    /// `true` for a [`BULK_REPLY_KEYS`] command — the only case that holds the
+    /// wide framer allowance, withdrawn the moment its reply lands.
+    bulk: bool,
 }
 
 /// Spawn-time configuration ([`Actor::Args`]).
@@ -426,7 +460,12 @@ pub struct TorControl {
     events: EventSink,
     /// The command currently on the wire, awaiting its reply (`DelegatedReply`),
     /// with what the actor must do with that reply beyond forwarding it.
-    pending: Option<(ReplySender<CommandResult>, PendingKind)>,
+    pending: Option<(ReplySender<CommandResult>, InFlight)>,
+    /// The framer's live reply-size allowance. The actor owns it because only the
+    /// actor knows which command is on the wire, and exactly one command
+    /// ([`BULK_REPLY_KEYS`]) may buffer megabytes — everything else keeps the
+    /// tight bound.
+    budget: ReplyBudget,
     /// Commands that arrived while one was on the wire — their **already-validated
     /// wire lines** — drained FIFO as each reply lands, so order (the only reply
     /// correlation there is) is preserved. Storing the rendered line (not the
@@ -436,7 +475,7 @@ pub struct TorControl {
     /// secret key: a queued command may sit here across several reply round-trips,
     /// so the encoded key must be wiped when the entry is dropped rather than left
     /// in a freed allocation.
-    queue: VecDeque<(Zeroizing<String>, ReplySender<CommandResult>, PendingKind)>,
+    queue: VecDeque<(Zeroizing<String>, ReplySender<CommandResult>, InFlight)>,
     /// Onion services this actor published, torn down with `DEL_ONION` on the
     /// shutdown path.
     ///
@@ -610,7 +649,9 @@ impl Actor for TorControl {
             };
 
         // Handshake done — hand the read half to the stream and let kameo merge it
-        // into the mailbox.
+        // into the mailbox. The budget cell is shared with the stream's framer: the
+        // stream charges against it, the actor sets it per command.
+        let budget = framer.budget();
         actor_ref.attach_stream(
             ReplyStream {
                 read: reader,
@@ -631,6 +672,7 @@ impl Actor for TorControl {
             writer,
             events,
             pending: None,
+            budget,
             queue: VecDeque::new(),
             published_onions: Vec::new(),
             child,
@@ -1006,12 +1048,26 @@ async fn bootstrap_poll_loop(actor: ActorRef<TorControl>, tx: watch::Sender<Boot
 impl TorControl {
     /// Fail every in-flight and queued caller with `err` — the actor is stopping.
     fn fail_all_pending(&mut self, err: &ControlError) {
-        if let Some((tx, _kind)) = self.pending.take() {
+        if let Some((tx, _in_flight)) = self.pending.take() {
             tx.send(Err(err.clone()));
         }
-        for (_line, tx, _kind) in self.queue.drain(..) {
+        for (_line, tx, _in_flight) in self.queue.drain(..) {
             tx.send(Err(err.clone()));
         }
+        // Nothing is on the wire, so no reply is entitled to the wide allowance.
+        self.budget.restore_ordinary();
+    }
+
+    /// Record the command now on the wire and set the framer's allowance to match.
+    /// The single place `pending` is armed, so the budget cannot drift out of step
+    /// with what is actually in flight.
+    fn set_in_flight(&mut self, tx: ReplySender<CommandResult>, in_flight: InFlight) {
+        if in_flight.bulk {
+            self.budget.arm_bulk();
+        } else {
+            self.budget.restore_ordinary();
+        }
+        self.pending = Some((tx, in_flight));
     }
 }
 
@@ -1020,11 +1076,14 @@ impl Message<Command> for TorControl {
 
     async fn handle(&mut self, cmd: Command, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let (delegated, reply_sender) = ctx.reply_sender();
-        // What this command's reply will owe the actor — captured before `cmd` is
-        // consumed by `to_wire`.
-        let kind = match &cmd {
-            Command::AddOnion(_) => PendingKind::AddOnion,
-            _ => PendingKind::Plain,
+        // What this command's reply will owe the actor, and how large it may be —
+        // captured before `cmd` is consumed by `to_wire`.
+        let in_flight = InFlight {
+            kind: match &cmd {
+                Command::AddOnion(_) => PendingKind::AddOnion,
+                _ => PendingKind::Plain,
+            },
+            bulk: cmd.needs_bulk_reply(),
         };
         // Commands must be `ask` — a `tell` (no reply channel) would write a
         // command whose reply has nowhere to go and would desync the stream, so a
@@ -1038,10 +1097,10 @@ impl Message<Command> for TorControl {
                 Err(e) => tx.send(Err(e)),
                 // One already on the wire — queue the validated line to preserve FIFO
                 // + one-on-the-wire.
-                Ok(line) if self.pending.is_some() => self.queue.push_back((line, tx, kind)),
+                Ok(line) if self.pending.is_some() => self.queue.push_back((line, tx, in_flight)),
                 // The wire is free — write the line now.
                 Ok(line) => match write_line(&mut self.writer, &line).await {
-                    Ok(()) => self.pending = Some((tx, kind)),
+                    Ok(()) => self.set_in_flight(tx, in_flight),
                     // An Io failure mid-write disturbs the wire; fail the actor.
                     Err(e) => {
                         tx.send(Err(e.clone()));
@@ -1078,7 +1137,10 @@ impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl
             // A command reply — complete the in-flight command, then put the next
             // queued command (if any) on the wire.
             StreamMessage::Next(Ok(Framed::CommandReply(reply))) => match self.pending.take() {
-                Some((tx, kind)) => {
+                Some((tx, in_flight)) => {
+                    // The wire is free again: withdraw any bulk allowance now, and
+                    // let the next command re-arm it if it earns one.
+                    self.budget.restore_ordinary();
                     // An accepted `ADD_ONION` is the one reply the actor reads for
                     // itself: the service id must be recorded *here*, before the
                     // reply is moved to the caller, or shutdown has nothing to
@@ -1088,15 +1150,15 @@ impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl
                     // this crate could not validate would put an unvalidated string
                     // on the wire, which is exactly what `ServiceId::parse` exists
                     // to prevent. (The service still dies with the connection.)
-                    if kind == PendingKind::AddOnion && reply.status() == 250 {
+                    if in_flight.kind == PendingKind::AddOnion && reply.status() == 250 {
                         if let Some(id) = super::onion::parse_service_id(reply.lines()) {
                             self.published_onions.push(id);
                         }
                     }
                     tx.send(Ok(reply));
-                    if let Some((next_line, next_tx, next_kind)) = self.queue.pop_front() {
+                    if let Some((next_line, next_tx, next_in_flight)) = self.queue.pop_front() {
                         match write_line(&mut self.writer, &next_line).await {
-                            Ok(()) => self.pending = Some((next_tx, next_kind)),
+                            Ok(()) => self.set_in_flight(next_tx, next_in_flight),
                             Err(e) => {
                                 next_tx.send(Err(e.clone()));
                                 self.fail_all_pending(&e);
@@ -1229,11 +1291,6 @@ async fn expect_status(
     }
 }
 
-/// Uppercase hex (Tor's control-port convention) of `bytes`.
-fn hex_upper(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02X}")).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1308,10 +1365,13 @@ mod tests {
     }
 
     #[test]
-    fn hex_upper_is_fixed_width_uppercase() {
-        assert_eq!(hex_upper(&[0x00, 0x0a, 0xff, 0xab]), "000AFFAB");
-        // A 32-byte nonce always renders to 64 hex digits.
-        assert_eq!(hex_upper(&[0u8; 32]).len(), 64);
+    fn only_the_consensus_fetch_earns_the_bulk_reply_allowance() {
+        // The wide framer cap exists for `GETINFO ns/all` and nothing else — a
+        // second command quietly joining that list is the regression this pins.
+        assert!(Command::GetInfo(vec!["ns/all".to_owned()]).needs_bulk_reply());
+        assert!(!Command::GetInfo(vec!["status/bootstrap-phase".to_owned()]).needs_bulk_reply());
+        assert!(!Command::GetInfo(vec!["net/listeners/socks".to_owned()]).needs_bulk_reply());
+        assert!(!Command::SetEvents(vec!["STREAM".to_owned()]).needs_bulk_reply());
     }
 
     #[test]
