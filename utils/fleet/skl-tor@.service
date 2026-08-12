@@ -1,0 +1,30 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# One tor process per fleet node, each with its own DataDirectory.
+#
+# The per-process DataDirectory is not tidiness: guard sets are a property of a
+# tor process and its state directory (SPIKE-F-12). Ten nodes sharing one tor
+# would share one guard set, and every anonymity-graph number the run produces
+# would be measuring one circuit-selection state rather than ten.
+#
+# %i is the instance number. Everything this unit touches carries it.
+
+[Unit]
+Description=Tor for Shekyl fleet node %i
+After=network-online.target
+Wants=network-online.target
+PartOf=skl-fleet.target
+
+[Service]
+Type=simple
+User=shekyl
+Group=shekyl
+ExecStart=/opt/shekyl-tor/tor -f /etc/shekyl-fleet/tor-%i.torrc
+Restart=on-failure
+RestartSec=5
+# The hidden-service key lives here; only this instance may read it.
+StateDirectory=shekyl-fleet-tor/%i
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=skl-fleet.target

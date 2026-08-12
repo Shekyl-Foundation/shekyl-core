@@ -1,0 +1,39 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# One shekyld per fleet node. The shipped release unit is single-instance and
+# hardcodes --data-dir /var/lib/shekyl, a fixed log path, StateDirectory and
+# ReadWritePaths, with no --config-file at all: correct for a release, wrong for
+# ten instances on one host (Q12-R11 §11.3). This template carries %i into every
+# path that unit pins.
+#
+# `Requires=skl-tor@%i` makes Q12-R8's ordering STRUCTURAL rather than a
+# convention in a start script — systemd will not run the daemon without its own
+# tor process.
+#
+# BUT ORDERING IS NOT SUFFICIENT, AND THIS UNIT MUST NOT BE ENABLED AT BOOT.
+# Q12-R13: a running, fully bootstrapped tor does not mean this node's hidden
+# service descriptor is FETCHABLE by another node yet, and one failed dial costs
+# an hour of suppression (P2P_FAILED_ADDR_FORGET_SECONDS = 3600, keyed on the
+# onion address, unclearable short of a restart). The fleet therefore starts
+# `skl-tor@*` first, runs utils/fleet/wait_onions_reachable.sh until every onion
+# answers through another node's SOCKS proxy, and only then starts these.
+# Enabling this unit at boot would restore exactly the race the run cannot see.
+
+[Unit]
+Description=Shekyl stagenet fleet node %i
+Requires=skl-tor@%i.service
+After=skl-tor@%i.service
+PartOf=skl-fleet.target
+
+[Service]
+Type=simple
+User=shekyl
+Group=shekyl
+ExecStart=/usr/local/bin/shekyld --config-file /etc/shekyl-fleet/node-%i.conf --non-interactive
+Restart=on-failure
+RestartSec=10
+StateDirectory=shekyl-fleet/%i
+StateDirectoryMode=0750
+
+# Deliberately no [Install] section: see the ordering note above. The run
+# starts these explicitly, after the reachability gate.

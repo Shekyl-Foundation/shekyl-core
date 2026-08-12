@@ -995,7 +995,7 @@ already has both, in the shipped binary.**
 | property R10 requires | stagenet, at source |
 | --- | --- |
 | distinct `NETWORK_ID` | `::config::stagenet::NETWORK_ID` ([`cryptonote_config.h:429-431`](../../src/cryptonote_config.h#L429)) shares no bytes with testnet's at `:418-420` |
-| no compiled IP seeds | `get_ip_seed_nodes()`'s `STAGENET` branch is empty ([`net_node.inl:736-739`](../../src/p2p/net_node.inl#L736)) — the four production seeds are inside the `TESTNET` branch |
+| no compiled IP seeds | `get_ip_seed_nodes()`'s `STAGENET` branch is empty — `else if` at [`net_node.inl:737`](../../src/p2p/net_node.inl#L737), the block `:738-740` holding only the comment at `:739`; the four production seeds are inside the `TESTNET` branch |
 | no compiled anon seeds | `get_seed_nodes()` returns `{}` for `tor` and `i2p` on **every** network ([`:770-772`](../../src/p2p/net_node.inl#L770)) — Q12-R2 has not landed the testnet list yet |
 
 Everything else is the same chain: `stagenet_hard_forks[]` is `{1,1,0,…}`,
@@ -1104,8 +1104,16 @@ later succeeded immediately.
 
 | Q12-R8 as written | Q12-R13 |
 | --- | --- |
-| tor + HS up before daemons | every onion **verified reachable through another node's SOCKS proxy** before any daemon starts |
-| two readings "longer than the backoff" apart | two readings **> 3600 s** apart — and a fleet whose first dials failed is *restarted*, not waited out |
+| tor + HS up before daemons | every onion **verified reachable through another node's SOCKS proxy** before any daemon starts (`utils/fleet/wait_onions_reachable.sh`) |
+| two readings "longer than the backoff" apart | **three readings, or one well after `t + 3600 s`** — see below |
+| — | a fleet whose first dials failed is **restarted**, not waited out: the cache is in-memory and has no other clearing path |
+
+**`> 3600 s` of separation is necessary and not sufficient.** If a node burned
+its addresses at `t+0`, the entries expire at `t+3600` — but the node then has
+to *retry and converge*, and a reading taken at the moment of expiry catches it
+mid-recovery. The second reading must come after that retry has settled, which
+is why the rule is three readings rather than two with a bigger gap. An arm
+whose last two readings disagree is not a measurement (Q12-R8).
 
 **This is the run's largest scheduling fact.** At `A = 60`, a rolling start
 means early nodes dial onions that are not yet fetchable; each such failure
@@ -1114,13 +1122,110 @@ histogram read at `t + 20 min` would report a sparse graph caused entirely by
 the start procedure. Q12-R8 predicted this shape from the seed estate; R13 gives
 it a number and shows the ordering rule as written does not prevent it.
 
+#### A hidden service can be unfetchable while its own tor reports 100 %
+
+The gate found this on its first real use, and it is not the propagation window.
+Of the smoke test's three services, **one was unreachable from both other nodes
+more than an hour after `Bootstrapped 100%`** — while answering from *its own*
+tor, which proves only that the local listener is up, since tor short-circuits a
+request for a service it hosts. Its log showed no circuit activity after
+bootstrap where the two working services showed hidden-service guard selection.
+
+**So the gate is a health check, not a settling delay.** A node whose onion never
+becomes fetchable is a *tor* failure, and if it enters an arm it enters the
+histogram as an isolated node — biasing the statistic **in the direction of the
+run's headline claim**. It must be restarted or dropped from the arm before the
+arm begins, and the count of nodes dropped is itself reported.
+
 **Found for the price of one dev box.** The smoke test existed to check that
 stagenet's anonymity zone forms at all; it found the scheduling defect that
-would have silently corrupted the first paid arm.
+would have silently corrupted the first paid arm — and then a second one.
+
+### 11.6 Q12-R13 is a daemon defect, not a run precondition — the mainnet bootstrap spiral
+
+**Ruled 2026-08-11.** The suppression above is not a property of fleets. Run the
+same sequence on mainnet with a real new user:
+
+1. A node starts with `--tx-proxy tor` and dials the compiled onion seeds
+   (Q12-R1's list, once it lands).
+2. Its tor is freshly bootstrapped and its circuits are new. Some or all seed
+   descriptors are **published but not yet fetchable through those circuits** —
+   exactly what the smoke test reproduced.
+3. Every dial fails. Every seed onion is now suppressed **for an hour**, keyed on
+   the onion, with no retry path and no clearing path.
+4. The node has no anonymity peers, cannot self-announce, and therefore receives
+   no inbound. **On restart it does the same thing**, because the state that
+   would have made the second attempt succeed is tor's and the state that
+   suppresses it is the daemon's.
+
+**This is Q12-D6a's spiral reached by a mechanism the design did not predict.**
+D6a's spiral is *no outgoing anonymity connection ⇒ no self-announcement ⇒ no
+inbound*. R13 supplies a new entrance to it: **one badly-timed dial round costs
+an hour, and the failure is at the descriptor layer rather than the peer's.**
+The peer is up. The peer is correct. The peer is unreachable for a reason that
+has nothing to do with the peer.
+
+**The constant is inherited from the IP era and its justification does not
+survive the transport change.** `P2P_FAILED_ADDR_FORGET_SECONDS = 3600` is
+reasonable for an IPv4 address: a failed dial usually means a down host, and an
+hour of not retrying a down host is polite and cheap. A failed *onion* dial is
+frequently a transient descriptor fetch against a host that is up, and an hour
+is neither. Same shape as `FORWARD_DELAY` and `peers = 8`
+([`16-architectural-inheritance`](../../.cursor/rules/16-architectural-inheritance.mdc)):
+a constant carried across a boundary its derivation never crossed.
+
+**Ruled: the suppression window is a property of the transport, and the anon-zone
+value is derived, not picked.** The shape is settled here; the number is not
+invented here ([`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+— provisioned at the floor, from a measurement, never at whatever was handy):
+
+- `is_addr_recently_failed` must consult a **per-zone** window rather than one
+  global constant. The public zone keeps 3600 s; its justification is intact.
+- The anonymity-zone window is provisioned from the **descriptor-fetch latency
+  distribution**, which this run can measure directly — the fleet dials 60
+  onions from 60 tor processes and `wait_onions_reachable.sh` already times
+  every one. **The run therefore gains a deliverable it was not built for.**
+- Repeated failures escalate; a *first* failure must not cost an hour.
+
+Deriving it needs the run's own numbers, so the constant lands after the arms.
+That is a named dependency rather than a deferral
+([`22-no-lazy-deferral`](../../.cursor/rules/22-no-lazy-deferral.mdc)): the
+measurement that supplies the input is scheduled, and the finding is registered
+now so the value cannot be quietly picked in the meantime.
+
+#### Consequence for Q12-D9: the below-floor state is stickier than the ruling assumed
+
+§12 ruled `x = 0` — a node below F-8b's floor stops stemming until the floor is
+met. **That rule assumes the node can climb back**, which is the whole reason
+`x = 0` was preferred over holding: the exposure is *bounded* because the node
+recovers.
+
+Under R13 it may not. A node that drops below the floor because a round of dials
+failed has those addresses suppressed for an hour, and the peers it would climb
+back with are precisely the ones it just burned. The below-floor state is
+therefore **stickier than §12.1's trade priced**, and on a young network — where
+Q12-R11 says *every* node is below the floor by arithmetic — the two interact:
+the population is too small to reach the floor, and the retry path that would
+find the few peers there are is suppressed.
+
+**This does not reverse §12's ruling** — `x = 0` remains right, and the
+alternatives are worse under stickiness rather than better. It changes the
+**cost side of the trade**, which §12.1 stated as "the operator's own and
+bounded". The bound is an hour longer than it appeared, and the live floor check
+(§12.2) must be read against a peer count that cannot recover promptly. Recorded
+here rather than silently inherited by the implementation.
 
 ---
 
 ## 12. Q12-D9 — the below-floor rule, settled before the run
+
+> **Amended by Q12-R13 (§11.6), 2026-08-11 — the ruling stands, its cost
+> estimate does not.** `x = 0` was chosen because the operator's exposure is
+> *bounded by recovery*. A node that fell below the floor through failed dials
+> has those peers suppressed for an hour and cannot promptly climb back, so the
+> below-floor state is stickier than §12.1 priced. The alternatives are worse
+> under stickiness, not better; what changes is the size of the accepted cost
+> and what the live check in §12.2 must expect to see.
 
 **Ruled 2026-08-11, and deliberately before the arms.** The below-floor rule is
 **not an input to the run — it is the mechanism the run observes.** At `A ≤ 12`
