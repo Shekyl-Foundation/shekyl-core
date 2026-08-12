@@ -16,18 +16,19 @@
 //! building either here would prejudge the fork, so the pass-record axis
 //! lands with the format round, not with this loop.
 //!
-//! # PR-A of the §9.5 item-3 arc
+//! # This crate's place in the §9.5 item-3 arc
 //!
-//! | PR | Surface | This crate |
+//! | Slice | Surface | This crate |
 //! |----|---------|------------|
-//! | **A (here)** | Loopback serve + store serving read + serve-set pin | owns |
-//! | **B** | `TorService` `ADD_ONION` / `DEL_ONION` + derived-bundle custody (§7.2(iii)) | consumer of [`PServeEndpoint::addr`] + [`StoreShardProvider`] |
-//! | **C** | vanguards-full / Bandguards launch pins | no surface here |
+//! | **PR-A (here)** | Loopback serve + store serving read | owns |
+//! | **PR-B** | `TorService` `ADD_ONION` / `DEL_ONION` + derived-bundle custody (§7.2(iii)) | no surface here |
+//! | **VG-1…VG-3** | Native full-vanguards path selection | no surface here |
+//! | **SH-1** | The composition: endpoint + onion + record-derived serve-set, one lifetime | consumer of [`PServeEndpoint::addr`] + [`StoreShardProvider`] |
 //!
-//! Dropping [`PServeEndpoint`] aborts the accept loop (test-friendly). PR-B
-//! owns coordinated persona lifecycle (register onion → pin serve-set →
-//! serve → tear down); it should not need to grow this crate's privacy
-//! contract.
+//! Dropping [`PServeEndpoint`] aborts the accept loop (test-friendly);
+//! `shekyl-p-host` owns coordinated persona lifecycle (pin serve-set →
+//! bind → publish onion → tear down) and did not need to grow this
+//! crate's privacy contract to do it.
 //!
 //! # `x-provisional/v0` — THROWAWAY framing, no vote in the format round
 //!
@@ -46,8 +47,9 @@
 //! **Is:** the loopback listener ([`PServeEndpoint`]) and the store-backed
 //! shard lookup ([`StoreShardProvider`]) — pure transport plus a read.
 //! The endpoint binds `127.0.0.1:0` only; reachability comes from the
-//! `ADD_ONION` mapping PR-B wires in (`shekyl-tor`). This crate touches
-//! no key material at all.
+//! `ADD_ONION` mapping `shekyl-p-host` wires in. This crate touches no key
+//! material at all — and, since [`StoreShardProvider`] is built from a
+//! read-only `ServingReader`, it cannot write to the store either.
 //!
 //! **Is not:** a pass-record builder, a countersigner, a wire format, a
 //! consensus surface, onion registration, or the W₂ rig. The rig extends
@@ -58,7 +60,7 @@
 //! # Privacy invariants (carried from the SP-T3 spike as tests, not memories)
 //!
 //! - loopback-only bind, enforced at bind and again at the `ADD_ONION`
-//!   target ([`shekyl_tor` `OnionPort::loopback`] on the daemon side);
+//!   target (`shekyl_tor`'s `OnionPort::loopback`, on the host side);
 //! - two personas served from one wallet are byte-identical at the header
 //!   level ([`serve::RESPONSE_HEADER_NAMES`] is the complete set);
 //! - every **complete-head** non-servable outcome — wrong path, wrong
@@ -79,7 +81,8 @@
 //! **Timing.** Byte identity is the invariant for complete-head misses.
 //! Micro-timing differences between a wrong path (no store read) and a
 //! valid-route miss (store read via `spawn_blocking`) are out of scope for
-//! this loopback listener: PR-B places it behind onion RTT noise, and
+//! this loopback listener: the serving host places it behind onion RTT
+//! noise, and
 //! holdings/freeze progress are already chain-public. Do not invent
 //! equalising delays here — they would not survive the onion path and
 //! would only obscure local diagnostics.
@@ -89,7 +92,7 @@
 pub mod provider;
 pub mod serve;
 
-pub use provider::{ProviderError, ServeSetPin, ShardBody, ShardProvider, StoreShardProvider};
+pub use provider::{ProviderError, ShardBody, ShardProvider, StoreShardProvider};
 pub use serve::{
     PServeEndpoint, CONTENT_TYPE, MAX_INFLIGHT, MAX_REQUEST_BYTES, RESPONSE_HEADER_NAMES,
     ROUTE_PREFIX,

@@ -16,11 +16,9 @@ use std::sync::Arc;
 
 use shekyl_curve_tree::{
     leaves_per_segment, recompute_segment_r_k, BlockHeight, Gindex, LeafEntry, LeafStore,
-    OutputIdentity, SegmentId, TargetKind,
+    OutputIdentity, SegmentId, SegmentPin, ServingReader, TargetKind,
 };
-use shekyl_p_serve::{
-    PServeEndpoint, ProviderError, ServeSetPin, ShardProvider, StoreShardProvider,
-};
+use shekyl_p_serve::{PServeEndpoint, ShardProvider, StoreShardProvider};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -76,16 +74,16 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("append and freeze segment 0");
 
-    let provider = StoreShardProvider::new(Arc::clone(&store));
-    let pins = provider.pin_serve_set(&[0, 1]).expect("pin serve set");
+    let pins = store.pin_serve_set(&[0, 1]).expect("pin serve set");
     assert_eq!(
         pins,
         vec![
-            ServeSetPin::Pinned { shard_id: 0 },
+            (0, SegmentPin::PinnedServable),
             // Bonded-before-freeze is legal; nothing to pin yet.
-            ServeSetPin::NotYetFrozen { shard_id: 1 },
+            (1, SegmentPin::PinnedNotYetFrozen),
         ]
     );
+    let provider = StoreShardProvider::new(ServingReader::new(Arc::clone(&store)));
     // The prune a wallet lifecycle would run: the pin keeps shard 0
     // servable through it.
     store.prune_frozen(&[]).expect("prune");
@@ -127,9 +125,11 @@ async fn unfrozen_and_unknown_shards_are_indistinguishable_404s() {
     store
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("append and freeze segment 0");
-    let ep = PServeEndpoint::bind(Arc::new(StoreShardProvider::new(Arc::clone(&store))))
-        .await
-        .expect("bind");
+    let ep = PServeEndpoint::bind(Arc::new(StoreShardProvider::new(ServingReader::new(
+        Arc::clone(&store),
+    ))))
+    .await
+    .expect("bind");
 
     let unfrozen = fetch(ep.addr(), "/x-provisional/v0/shard/1").await;
     let unknown = fetch(ep.addr(), "/x-provisional/v0/shard/77").await;
@@ -151,9 +151,11 @@ async fn unpinned_prune_surfaces_as_a_counted_failure_not_a_distinct_response() 
         .expect("append and freeze segment 0");
     store.prune_frozen(&[]).expect("prune without pinning");
 
-    let ep = PServeEndpoint::bind(Arc::new(StoreShardProvider::new(Arc::clone(&store))))
-        .await
-        .expect("bind");
+    let ep = PServeEndpoint::bind(Arc::new(StoreShardProvider::new(ServingReader::new(
+        Arc::clone(&store),
+    ))))
+    .await
+    .expect("bind");
     let pruned = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
     let bad_route = fetch(ep.addr(), "/nope").await;
     assert_eq!(pruned, bad_route, "store failure renders the shared 404");
@@ -172,7 +174,7 @@ fn provider_body_is_exactly_the_store_leaves_in_order() {
     store
         .append_block_deltas(&entries, &[], &[], BlockHeight(10_000))
         .expect("append and freeze");
-    let provider = StoreShardProvider::new(store);
+    let provider = StoreShardProvider::new(ServingReader::new(store));
     let mut body = provider
         .shard_bytes(0)
         .expect("lookup")
@@ -193,26 +195,6 @@ fn provider_body_is_exactly_the_store_leaves_in_order() {
 }
 
 #[test]
-fn pin_serve_set_refuses_a_serve_set_whose_bytes_are_already_gone() {
-    // Prune-then-pin: the segment froze and was pruned before it entered
-    // the serve-set. The frozen record still exists, so a pin gated on that
-    // record alone reports the set healthy and the persona walks into its
-    // challenge epoch unable to answer. Pinning cannot restore bytes, so
-    // this is loud — the same disposition as an unrepresentable id.
-    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
-        .expect("append and freeze segment 0");
-    store.prune_frozen(&[]).expect("prune without pinning");
-
-    let provider = StoreShardProvider::new(Arc::clone(&store));
-    let err = provider
-        .pin_serve_set(&[0])
-        .expect_err("a pruned serve-set member cannot be pinned into servability");
-    assert_eq!(err, ProviderError::FrozenSegmentPruned { segment_id: 0 });
-}
-
-#[test]
 fn an_unfrozen_serve_set_member_is_pinned_before_it_freezes() {
     // The window this closes: shard bonded, not yet frozen. If the pin
     // waited for the freeze, a prune landing between the freeze and the
@@ -220,10 +202,10 @@ fn an_unfrozen_serve_set_member_is_pinned_before_it_freezes() {
     // the survival of a bonded shard independent of which timer fires
     // first.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let provider = StoreShardProvider::new(Arc::clone(&store));
+    let provider = StoreShardProvider::new(ServingReader::new(Arc::clone(&store)));
     assert_eq!(
-        provider.pin_serve_set(&[0]).expect("pin ahead of freeze"),
-        vec![ServeSetPin::NotYetFrozen { shard_id: 0 }]
+        store.pin_serve_set(&[0]).expect("pin ahead of freeze"),
+        vec![(0, SegmentPin::PinnedNotYetFrozen)]
     );
 
     // Freeze, then prune with no further pinning call at all.
@@ -237,17 +219,4 @@ fn an_unfrozen_serve_set_member_is_pinned_before_it_freezes() {
         .expect("lookup")
         .expect("the advance pin kept the shard servable");
     assert_eq!(body.remaining_bytes(), leaves_per_segment() * 128);
-}
-
-#[test]
-fn pin_serve_set_refuses_unrepresentable_shard_ids() {
-    // NotYetFrozen is only for freeze races inside SegmentId space. A
-    // serve-set entry that cannot name a SegmentId is a construction bug.
-    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let provider = StoreShardProvider::new(store);
-    let bad = u64::from(u32::MAX) + 1;
-    let err = provider
-        .pin_serve_set(&[bad])
-        .expect_err("u32 overflow must fail pin");
-    assert_eq!(err, ProviderError::UnrepresentableShardId { shard_id: bad });
 }

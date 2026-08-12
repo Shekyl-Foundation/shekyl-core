@@ -216,15 +216,22 @@ jobs:
         # this is a dev/test lane, and dev edges are deliberately in scope
         # for the feature (see gf7-no-emit-guard.yml header).
         run: cargo clippy -p shekyl-engine-core --all-targets --features gf7-hooks -- -D warnings
-      - name: rustdoc -D warnings (shekyl-tor)
+      - name: rustdoc -D warnings (persona serving path)
         working-directory: rust
-        # shekyl-tor's docs carry load-bearing security contracts (the trust
-        # gate, the §3c supervisor posture, the pin-time/runtime split) and its
-        # reviews repeatedly turned up public→private intra-doc links that only a
-        # `-D warnings` doc build catches. Scoped to shekyl-tor (not `--workspace`)
-        # because other crates carry pre-existing rustdoc warnings; widening this
-        # to the workspace is a separate hygiene task, tracked in FOLLOWUPS.
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --locked -p shekyl-tor --no-deps --lib
+        # These crates' docs carry load-bearing security contracts (shekyl-tor's
+        # trust gate, §3c supervisor posture and pin-time/runtime split;
+        # shekyl-p-serve's wire-indistinguishability invariants; shekyl-p-host's
+        # custody boundary and endpoint-lifetime invariant), and reviews here
+        # repeatedly turned up public→private intra-doc links that only a
+        # `-D warnings` doc build catches. Each crate joins this list in the PR
+        # that lands it, while it is known clean — retrofitting a gate over
+        # accumulated warnings is the task that never happens. Still scoped
+        # rather than `--workspace` because other crates carry pre-existing
+        # rustdoc warnings; widening to the whole workspace is a separate
+        # hygiene task, tracked in FOLLOWUPS.
+        run: >-
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
+          -p shekyl-tor -p shekyl-p-serve -p shekyl-p-host
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp

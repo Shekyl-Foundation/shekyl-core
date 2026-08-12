@@ -1,0 +1,41 @@
+[package]
+name = "shekyl-p-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Persona serving host: composes the loopback serving loop with the wallet's Tor onion service, over a serve-set derived from the bond record"
+publish = false
+
+[dependencies]
+# The bond-record vocabulary the serve-set must come from: `ClaimantBondRecord`
+# is the decoded *connected* record, and taking it (rather than a `Vec<u64>`)
+# is what keeps a hand-maintained shard list out of the pin path — §9.6 item 4.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `ServingReader` (the read-only store handle this host is allowed to hold) and
+# `SegmentPin` (the per-member pin outcome whose policy this crate sets).
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# The serving loop itself: the loopback endpoint + the store-backed provider.
+shekyl-p-serve = { path = "../shekyl-p-serve" }
+# The onion half: the supervisor, the serving posture (vanguards + onion as one
+# indivisible knob), and the derived serving identity.
+shekyl-tor = { path = "../shekyl-tor" }
+# Same runtime the two halves already use; `sync` for the posture watch this
+# crate re-exports, `time` for the bounded startup wait.
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = [
+    "macros",
+    "rt-multi-thread",
+    "io-util",
+    "net",
+] }
+# The workspace's standard test fixture: a `DataDirectory` for the supervisor
+# under test (which never launches — the composition test drives it with a
+# binary that cannot pass the hash gate).
+tempfile = "3"
+
+[lints]
+workspace = true

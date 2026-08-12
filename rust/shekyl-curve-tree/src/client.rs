@@ -53,9 +53,10 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::recon::{collect_block_leaves, extract_leaf_hashes, per_output_h_pqc, TxOutputs};
-use crate::store::{LeafStore, StoreError};
+use crate::store::{LeafStore, SegmentPin, ServingReader, StoreError};
 use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
@@ -244,7 +245,12 @@ impl ClientError {
 /// store errors propagate and there is no silent replay-oracle fallback.
 #[derive(Debug)]
 pub struct CurveTreeClient {
-    store: LeafStore,
+    /// Behind an `Arc` so the read-only [`ServingReader`] can share the
+    /// open database rather than opening a second one (redb takes an
+    /// exclusive file lock, so a second open would simply be refused).
+    /// The `Arc` is never handed out — only [`Self::serving_reader`]'s
+    /// read-only wrapper is — so this client stays the sole writer.
+    store: Arc<LeafStore>,
     // `pub(crate)` so the sibling `assemble` module and unit tests read leaf
     // candidates. Drained leaves are mirrored into `store` on each ingest.
     pub(crate) entries: Vec<LeafEntry>,
@@ -286,7 +292,7 @@ impl CurveTreeClient {
     /// Open an empty client backed by an ephemeral store.
     pub fn try_new() -> Result<Self, ClientError> {
         Ok(Self {
-            store: LeafStore::open_ephemeral().map_err(ClientError::from)?,
+            store: Arc::new(LeafStore::open_ephemeral().map_err(ClientError::from)?),
             entries: Vec::new(),
             next_gindex: 0,
             drained_through_counts: Vec::new(),
@@ -315,7 +321,43 @@ impl CurveTreeClient {
     /// case (F8): resume yields an empty client ready for genesis ingest.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ClientError> {
         let store = LeafStore::open(path).map_err(ClientError::from)?;
-        Self::resume(store)
+        Self::resume(Arc::new(store))
+    }
+
+    /// A read-only handle on this client's store, for the persona serving
+    /// loop (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5 item 3).
+    ///
+    /// Serving reads run concurrently with block ingest — a shard body is
+    /// held open for the seconds a 3.33 MB rendezvous transfer takes, and
+    /// stalling ingest behind it is not an option. redb readers are MVCC
+    /// snapshots, so that concurrency is free; what is *not* free is
+    /// letting the serving side write, because this client is the single
+    /// writer the actor layer serializes. [`ServingReader`] is how both
+    /// hold true at once: same open database, no write reachable.
+    #[must_use]
+    pub fn serving_reader(&self) -> ServingReader {
+        ServingReader::new(Arc::clone(&self.store))
+    }
+
+    /// Pin every member of a persona's serve-set so [`LeafStore::prune_frozen`]
+    /// cannot discard bytes it is bonded to serve — the silent-slash hazard
+    /// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 4).
+    ///
+    /// **Reachable here rather than on the serving side**, even though it is
+    /// the serving side that cares, because pinning is a store *write*: it
+    /// must run on the object the actor owns, or it is a second writer
+    /// beside the one whose message loop is the serialization. The serving
+    /// host holds only [`Self::serving_reader`] and reaches this through the
+    /// actor. Pure forward to [`LeafStore::pin_serve_set`] — the per-member
+    /// contract lives there.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping [`LeafStore::pin_serve_set`]'s.
+    pub fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, ClientError> {
+        self.store
+            .pin_serve_set(shard_ids)
+            .map_err(ClientError::from)
     }
 
     /// Rebuild the in-memory client state from a store's persisted tables.
@@ -373,7 +415,7 @@ impl CurveTreeClient {
     /// `leaf_count` — cannot arise from pruning and is reported distinctly
     /// as [`ClientError::ResumeFromCorruptStore`] so a corrupt store is
     /// not misdiagnosed as a pruned one.
-    fn resume(store: LeafStore) -> Result<Self, ClientError> {
+    fn resume(store: Arc<LeafStore>) -> Result<Self, ClientError> {
         let rebuilt = Self::rebuild_from_store(&store)?;
 
         Ok(Self {
@@ -1728,7 +1770,7 @@ mod tests {
                 BlockHeight(70),
             )
             .unwrap();
-        let err = CurveTreeClient::resume(store).unwrap_err();
+        let err = CurveTreeClient::resume(Arc::new(store)).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1751,7 +1793,7 @@ mod tests {
         store.append_drained(&entries, BlockHeight(10_000)).unwrap();
         store.prune_frozen(&[]).unwrap();
 
-        let err = CurveTreeClient::resume(store).unwrap_err();
+        let err = CurveTreeClient::resume(Arc::new(store)).unwrap_err();
         match err {
             ClientError::ResumeFromPrunedStore { stored, readable } => {
                 assert_eq!(stored, e + 1);
