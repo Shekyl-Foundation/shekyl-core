@@ -22,6 +22,8 @@
 //! | Loopback endpoint rebinds under an unchanged onion mapping → published address answers nothing | The host binds once and owns the endpoint for its life |
 //! | A serving persona runs on vanguards-lite | `ServingPosture::Serving` carries the onion *and* `Managed` as one value |
 //! | Teardown leaves a live descriptor at a closed port | [`PersonaServingHost::shutdown`] stops tor before the listener |
+//! | Holdings move on-chain and the pins do not follow | [`PersonaServingHost::refresh`] re-pins the whole set, unconditionally |
+//! | The refresh itself stops firing | [`PersonaServingHost::staleness`] reads two clocks with independent drivers |
 //!
 //! Every one of those failures has the same signature: the persona looks
 //! healthy, publishes at its advertised address, and learns otherwise from
@@ -60,4 +62,6 @@ pub mod host;
 pub mod serve_set;
 
 pub use host::{HostError, PersonaServing, PersonaServingHost};
-pub use serve_set::{PinError, PinReport, PinnedServeSet, ServeSet, ServeSetPinner};
+pub use serve_set::{
+    PinError, PinReport, PinnedServeSet, ServeSet, ServeSetPinner, Staleness, StalenessBound,
+};

@@ -17,7 +17,7 @@
 //! shape of defense.
 
 use shekyl_archival_retention::ClaimantBondRecord;
-use shekyl_curve_tree::{SegmentPin, ServingReader};
+use shekyl_curve_tree::{SegmentPin, ServingReader, StoreError};
 
 /// The shards a persona is bonded to serve, as read back from the chain.
 ///
@@ -300,7 +300,43 @@ impl PinnedServeSet {
             .pin_serve_set(set.shard_ids())
             .await
             .map_err(|detail| PinError::Pinner { detail })?;
+        Self::from_outcomes(set, &outcomes, reader)
+    }
 
+    /// Re-pin `set` through `pinner`, **keeping this witness's store**.
+    ///
+    /// The reader the pinner returns is deliberately discarded here, and that
+    /// is a soundness choice rather than an oversight. The store a host
+    /// serves is bound to its listener, and the listener never rebinds — so
+    /// the served store cannot change for the life of the host, and a refresh
+    /// that could swap it would defeat the no-rebind invariant from the other
+    /// side: the endpoint would stay up, still published, now reading a store
+    /// nobody pinned. Refresh therefore changes *which shards*, never *which
+    /// store*.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::acquire`]'s.
+    pub async fn refreshed<P: ServeSetPinner>(
+        &self,
+        pinner: &P,
+        set: ServeSet,
+    ) -> Result<Self, PinError> {
+        let report = pinner
+            .pin_serve_set(set.shard_ids())
+            .await
+            .map_err(|detail| PinError::Pinner { detail })?;
+        Self::from_outcomes(set, &report.outcomes, self.reader.clone())
+    }
+
+    /// Validate a pinner's outcomes against the set they were asked about and
+    /// mint the witness. The one place the checks live, so `acquire` and
+    /// `refreshed` cannot drift apart on what a witness requires.
+    fn from_outcomes(
+        set: ServeSet,
+        outcomes: &[(u64, SegmentPin)],
+        reader: ServingReader,
+    ) -> Result<Self, PinError> {
         // THE WITNESS MUST WITNESS WHAT IT CLAIMS. Nothing above checks that
         // the pinner reported on the members it was asked about, so a pinner
         // returning a short list minted a `PinnedServeSet` for a set whose
@@ -363,5 +399,124 @@ impl PinnedServeSet {
     #[must_use]
     pub fn reader(&self) -> &ServingReader {
         &self.reader
+    }
+
+    /// How far this serve-set has fallen behind the store's own ingest.
+    ///
+    /// Both operands come from here: `as_of_height` from the record this set
+    /// was derived from, the tip from the store the pins are in. See
+    /// [`Staleness`] for why the two clocks' independence is what makes the
+    /// reading meaningful.
+    ///
+    /// A tip *below* `as_of_height` reads as zero lag rather than as an
+    /// error: the wallet's own ingest trailing the daemon's reported height
+    /// is ordinary (the record is read over RPC, the tip is local), and it is
+    /// not a staleness condition — nothing has been ingested that the
+    /// serve-set has not seen.
+    ///
+    /// # Errors
+    ///
+    /// Store failure reading the sync tip.
+    pub fn staleness(&self, bound: StalenessBound) -> Result<Staleness, StoreError> {
+        let tip = self.reader.sync_tip_height()?.0;
+        let lag = tip.saturating_sub(self.set.as_of_height());
+        Ok(if lag > bound.get() {
+            Staleness::Stale {
+                lag,
+                bound: bound.get(),
+            }
+        } else {
+            Staleness::Current { lag }
+        })
+    }
+}
+
+/// How many blocks of local ingest a serve-set may lag the record it was
+/// derived from before the host is considered stale.
+///
+/// **Injectable, and deliberately not pinned here.** The tolerable lag is
+/// "how long can a newly-connected shard go unpinned before a challenge can
+/// ask for it", which is a function of the assignment schedule and
+/// drawability — fork-2-adjacent territory, and the same class of number the
+/// round refuses to guess for W₂ (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7 fork
+/// 5: deriving it first would be picking a number and back-filling the
+/// justification). Injected rather than constant, on the `ScanSchedule`
+/// precedent: the loop takes its cadence as a parameter so a later round can
+/// pin it without touching the loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StalenessBound(u64);
+
+impl StalenessBound {
+    /// A bound of `blocks` of local ingest.
+    #[must_use]
+    pub const fn blocks(blocks: u64) -> Self {
+        Self(blocks)
+    }
+
+    /// The bound in blocks.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// How far a host's serve-set has fallen behind its own ingest.
+///
+/// Read from two clocks with **different drivers**: `as_of_height` advances
+/// only when the refresh runs (the persona-side P-scan sweep), while the
+/// store's sync tip advances on the principal's block scan. That
+/// independence is the whole point — a refresh that has stopped freezes one
+/// and not the other. Two clocks the same driver advances would read
+/// `Current` forever, which is the failure the tripwire exists to catch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Staleness {
+    /// Within the bound.
+    Current {
+        /// Blocks ingested since the serve-set was last derived.
+        lag: u64,
+    },
+    /// Past the bound: the serve-set has stopped tracking the bond record.
+    ///
+    /// **This is the shape the refresh's own failure takes.** The P-scan task
+    /// halts — loudly, but into its own log — on a chain-exhaustiveness
+    /// anomaly and returns; nothing on the serving side observes that. A host
+    /// whose refresh has stopped keeps serving a frozen serve-set, and a
+    /// shard connected after the freeze is unpinned and prunable. This is the
+    /// only local evidence of it.
+    Stale {
+        /// Blocks ingested since the serve-set was last derived.
+        lag: u64,
+        /// The bound that was exceeded.
+        bound: u64,
+    },
+}
+
+impl Staleness {
+    /// Whether the bound was exceeded.
+    #[must_use]
+    pub fn is_stale(self) -> bool {
+        matches!(self, Self::Stale { .. })
+    }
+
+    /// Blocks ingested since the serve-set was last derived.
+    #[must_use]
+    pub fn lag(self) -> u64 {
+        match self {
+            Self::Current { lag } | Self::Stale { lag, .. } => lag,
+        }
+    }
+}
+
+impl std::fmt::Display for Staleness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Current { lag } => write!(f, "serve-set current ({lag} blocks behind ingest)"),
+            Self::Stale { lag, bound } => write!(
+                f,
+                "serve-set has not been re-derived for {lag} blocks of ingest (bound {bound}): \
+                 a shard connected since then is unpinned and can be pruned before it is \
+                 served — check that the P-scan sweep is still running"
+            ),
+        }
     }
 }

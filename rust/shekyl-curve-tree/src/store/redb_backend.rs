@@ -193,6 +193,34 @@ impl ServingReader {
     ) -> Result<Option<FrozenSegmentBody>, StoreError> {
         self.store.open_frozen_segment_body(id)
     }
+
+    /// How far this store has ingested — the serving host's **independent
+    /// clock**.
+    ///
+    /// A serving host's serve-set is re-derived on the persona-side P-scan
+    /// sweep, and its `as_of_height` advances only when that refresh runs.
+    /// This tip advances on a *different* driver: the principal's block scan,
+    /// which feeds `CurveTreeClient::ingest_block` through the curve-tree
+    /// actor. Two independent drivers is exactly what makes the pair usable
+    /// as a liveness signal — if the refresh stops (the P-scan task halts
+    /// loudly on a chain-exhaustiveness anomaly and returns), `as_of_height`
+    /// freezes while this keeps climbing, and the gap is local evidence that
+    /// the serve-set has stopped tracking the record. A tripwire built on one
+    /// clock, or on two clocks the same driver advances, would read zero
+    /// forever.
+    ///
+    /// It also measures the right quantity. The gap is "blocks I have
+    /// ingested since I last re-derived my holdings" — not wall-clock, and
+    /// not a remote tip. A wallet that is simply offline freezes both, and
+    /// correctly reports no staleness: it has learned nothing its serve-set
+    /// could be stale against.
+    ///
+    /// # Errors
+    ///
+    /// Store failure (a read transaction on the meta table).
+    pub fn sync_tip_height(&self) -> Result<BlockHeight, StoreError> {
+        self.store.sync_tip_height()
+    }
 }
 
 // The store handle carries no secret (the curve tree is public on-chain

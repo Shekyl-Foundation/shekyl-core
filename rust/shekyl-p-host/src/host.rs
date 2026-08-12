@@ -6,7 +6,7 @@
 //! [`PersonaServingHost`]: the loopback serving loop and the onion that
 //! publishes it, composed into one object with one lifetime.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use shekyl_p_serve::{PServeEndpoint, StoreShardProvider};
 use shekyl_tor::control::ServiceId;
@@ -16,7 +16,9 @@ use shekyl_tor::service::{
 };
 use tokio::sync::watch;
 
-use crate::serve_set::PinnedServeSet;
+use crate::serve_set::{
+    PinError, PinnedServeSet, ServeSet, ServeSetPinner, Staleness, StalenessBound,
+};
 
 /// The serving identity and the shape of its published port.
 ///
@@ -123,8 +125,9 @@ pub struct PersonaServingHost {
     service_id: ServiceId,
     /// Held, not just consumed: dropping the witness on the floor would
     /// make the pins look like a startup formality rather than a live
-    /// property of this host.
-    pinned: PinnedServeSet,
+    /// property of this host. Behind a `Mutex` because it is exactly that —
+    /// live — and [`Self::refresh`] replaces it as holdings change.
+    pinned: Mutex<PinnedServeSet>,
 }
 
 impl PersonaServingHost {
@@ -186,7 +189,7 @@ impl PersonaServingHost {
             endpoint,
             tor,
             service_id,
-            pinned,
+            pinned: Mutex::new(pinned),
         })
     }
 
@@ -204,11 +207,65 @@ impl PersonaServingHost {
         self.tor.posture()
     }
 
-    /// The serve-set these pins cover, and which of its members are not yet
-    /// servable because their segments have not frozen.
+    /// A snapshot of the serve-set these pins cover.
     #[must_use]
-    pub fn pinned_serve_set(&self) -> &PinnedServeSet {
-        &self.pinned
+    pub fn pinned_serve_set(&self) -> PinnedServeSet {
+        self.pinned.lock().expect("serve-set lock").clone()
+    }
+
+    /// Re-derive the pins from a freshly read bond record.
+    ///
+    /// **Call this unconditionally on every refresh tick — do not gate it on
+    /// "did holdings change".** Pinning is idempotent and additive, so
+    /// re-pinning an unchanged set costs one bounded write and re-pinning a
+    /// grown one closes the slashing direction outright. A conditional
+    /// refresh reintroduces the question "did we notice the change", which is
+    /// the question §9.6 item 4 exists because nobody can answer reliably.
+    ///
+    /// **Acquire before release.** The new witness is minted — meaning its
+    /// pins are already applied — before the old one is dropped, so there is
+    /// no instant in which neither covers the set. The pin call runs outside
+    /// the lock (it awaits an actor round trip), and only the swap is
+    /// serialized; a failure leaves the previous witness in place, which is
+    /// the safe direction: stale pins retain bytes, missing pins lose them.
+    ///
+    /// The store is **not** re-chosen — see `PinnedServeSet::refreshed`.
+    ///
+    /// # Errors
+    ///
+    /// [`PinError`] as [`PinnedServeSet::acquire`]; the host keeps serving on
+    /// its previous pins either way, and the caller should treat a persistent
+    /// failure as the [`Staleness::Stale`] condition it will become.
+    pub async fn refresh<P: ServeSetPinner>(
+        &self,
+        pinner: &P,
+        set: ServeSet,
+    ) -> Result<(), PinError> {
+        // Clone the current witness rather than holding the lock across the
+        // await: the pin is an actor round trip, and holding a lock across it
+        // is the shape the curve-tree actor's own lock-ordering rule exists
+        // to forbid.
+        let current = self.pinned_serve_set();
+        let next = current.refreshed(pinner, set).await?;
+        *self.pinned.lock().expect("serve-set lock") = next;
+        Ok(())
+    }
+
+    /// Whether the serve-set is still tracking the bond record, measured
+    /// against this host's own ingest.
+    ///
+    /// The detector for a refresh that has **stopped**: the P-scan task halts
+    /// into its own log on a chain-exhaustiveness anomaly, and nothing on the
+    /// serving side observes that. Poll this beside the tor posture.
+    ///
+    /// # Errors
+    ///
+    /// Store failure reading the sync tip.
+    pub fn staleness(
+        &self,
+        bound: StalenessBound,
+    ) -> Result<Staleness, shekyl_curve_tree::StoreError> {
+        self.pinned.lock().expect("serve-set lock").staleness(bound)
     }
 
     /// The bound loopback address the onion targets.

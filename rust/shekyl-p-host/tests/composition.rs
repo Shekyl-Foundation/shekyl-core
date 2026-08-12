@@ -26,7 +26,7 @@ use shekyl_curve_tree::{
 };
 use shekyl_p_host::{
     HostError, PersonaServing, PersonaServingHost, PinError, PinReport, PinnedServeSet, ServeSet,
-    ServeSetPinner,
+    ServeSetPinner, Staleness, StalenessBound,
 };
 use shekyl_tor::onion_identity::OnionIdentity;
 use shekyl_tor::service::{
@@ -513,4 +513,163 @@ fn host_errors_name_what_the_operator_must_do() {
     assert!(HostError::NonLoopbackTarget
         .to_string()
         .contains("non-loopback"));
+}
+
+// ---------------------------------------------------------------------------
+// Keeping the serve-set current, and noticing when it stops
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_refresh_pins_shards_gained_since_the_host_started() {
+    // The steady-state hazard, and it needs no reorg and no adversary: §9.6
+    // item 3 has an archiver posting `HoldingsUpdate` continuously to keep
+    // covering newly frozen segments, so an honest persona doing exactly what
+    // the design says gains shards its running host never pinned. A prune in
+    // that window discards bytes no re-pin can restore.
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("freeze segment 0");
+
+    let pinner = StorePinner(Arc::clone(&store));
+    let h0 = holdings(&[0]);
+    let pinned = PinnedServeSet::acquire(&pinner, ServeSet::from_connected_record(&record(&h0), 1))
+        .await
+        .expect("pin the initial set");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let host = PersonaServingHost::start(
+        churning_tor(&dir),
+        PersonaServing {
+            identity: identity(),
+            virtual_port: 80,
+            max_streams: 8,
+        },
+        pinned,
+    )
+    .await
+    .expect("start");
+
+    // Holdings grow to cover segment 1, which then freezes.
+    let h1 = holdings(&[0, 1]);
+    host.refresh(
+        &pinner,
+        ServeSet::from_connected_record(&record(&h1), 20_000),
+    )
+    .await
+    .expect("refresh");
+    let mut second = segment_entries();
+    for (i, e) in second.iter_mut().enumerate() {
+        e.gindex = Gindex(leaves_per_segment() as u64 + i as u64);
+    }
+    store
+        .append_block_deltas(&second, &[], &[], BlockHeight(20_000))
+        .expect("freeze segment 1");
+
+    // The prune that would have cost the shard. The refresh's pin is what
+    // survives it — taken before the freeze, which is the whole point.
+    store.prune_frozen(&[]).expect("prune");
+    let body = fetch(host.serve_addr(), "/x-provisional/v0/shard/1").await;
+    assert_eq!(
+        body_of(&body).len(),
+        leaves_per_segment() * 128,
+        "the gained shard must be servable — an unrefreshed host loses it here"
+    );
+
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn staleness_reads_two_clocks_with_independent_drivers() {
+    // The tripwire for a refresh that has STOPPED. `as_of_height` advances
+    // only on refresh (persona-side P-scan sweep); the store's sync tip
+    // advances on the principal's block scan. Ingest without refresh is
+    // exactly the divergence a halted sweep produces.
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    let pinner = StorePinner(Arc::clone(&store));
+    let h = holdings(&[]);
+    let pinned = PinnedServeSet::acquire(&pinner, ServeSet::from_connected_record(&record(&h), 0))
+        .await
+        .expect("pin");
+
+    let bound = StalenessBound::blocks(100);
+    assert_eq!(
+        pinned.staleness(bound).expect("read staleness"),
+        Staleness::Current { lag: 0 },
+        "a store that has ingested nothing cannot be stale against anything"
+    );
+
+    // Ingest advances the tip; nothing refreshes the serve-set.
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("ingest");
+    let stale = pinned.staleness(bound).expect("read staleness");
+    assert!(stale.is_stale(), "10_000 blocks of ingest, no refresh");
+    assert_eq!(stale.lag(), 10_000);
+    // Rule 82: the message names the check the operator should make.
+    assert!(stale.to_string().contains("P-scan sweep is still running"));
+
+    // And a refresh clears it — the same two clocks, re-aligned.
+    let refreshed = pinned
+        .refreshed(
+            &pinner,
+            ServeSet::from_connected_record(&record(&h), 10_000),
+        )
+        .await
+        .expect("refresh");
+    assert_eq!(
+        refreshed.staleness(bound).expect("read staleness"),
+        Staleness::Current { lag: 0 }
+    );
+}
+
+#[tokio::test]
+async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
+    // Acquire before release: a refresh that cannot pin must not drop the
+    // witness it has. Stale pins retain bytes; missing pins lose them, and
+    // only one of those is recoverable.
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("freeze segment 0");
+    let h = holdings(&[0]);
+    let pinned = PinnedServeSet::acquire(
+        &StorePinner(Arc::clone(&store)),
+        ServeSet::from_connected_record(&record(&h), 1),
+    )
+    .await
+    .expect("pin");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let host = PersonaServingHost::start(
+        churning_tor(&dir),
+        PersonaServing {
+            identity: identity(),
+            virtual_port: 80,
+            max_streams: 8,
+        },
+        pinned,
+    )
+    .await
+    .expect("start");
+
+    let err = host
+        .refresh(&DeadPinner, ServeSet::from_connected_record(&record(&h), 2))
+        .await
+        .expect_err("a dead pinner cannot refresh");
+    assert!(matches!(err, PinError::Pinner { .. }));
+    assert_eq!(
+        host.pinned_serve_set().serve_set().as_of_height(),
+        1,
+        "the previous witness survives a failed refresh"
+    );
+
+    // And the pins it holds are still real.
+    store.prune_frozen(&[]).expect("prune");
+    assert_eq!(
+        body_of(&fetch(host.serve_addr(), "/x-provisional/v0/shard/0").await).len(),
+        leaves_per_segment() * 128
+    );
+
+    host.shutdown().await;
 }
