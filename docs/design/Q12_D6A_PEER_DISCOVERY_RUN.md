@@ -306,6 +306,11 @@ and `address_type` distinguishes i2p (3) from tor (4)
 ([`enums.h:39-46`](../../contrib/epee/include/net/enums.h#L39-L46)) — so outbound
 anon peer count per node needs **no new instrument**.
 
+> **Amended by Q12-R12 (§11.4):** the *production* seeds run testnet and cannot
+> join a stagenet fleet at all. What follows applies unchanged to the **stagenet
+> bootstrap instances** run alongside them on the same six hosts — they are
+> bootstrap targets and gossip participants, and they are not in the histogram.
+
 **The four production seeds are in the graph but not in the histogram.** After
 Q12-R-W2 they run anon zones on the same testnet, so they participate whether or
 not this doc says so — and at `A = 15` four well-known hubs are a quarter of the
@@ -314,6 +319,16 @@ So: seeds serve as **bootstrap targets and gossip participants**, and the
 reported distribution is over **fleet nodes only**. `A` counts fleet nodes.
 (Q12-R5's late joiner answers *"did we measure the bootstrap?"*; this answers
 *"what population is the histogram over?"* — two different confounds.)
+
+> **The readout must never turn a refusal into a zero.** `get_connections` is
+> unavailable in restricted mode (`-32601`), and a reader that does
+> `result.get("connections", [])` reports that refusal as **zero connections** —
+> i.e. as an isolated node, **which is the run's headline claim**. The
+> instrument would then manufacture the finding it exists to test. Caught on the
+> production testnet estate, where all five nodes read `0/0/0` and all five were
+> fine; `utils/fleet/read_anon_histogram.sh` now distinguishes an RPC error, an
+> absent `result`, and an absent `connections` field from an empty list, and
+> exits nonzero naming which.
 
 **Convergence.** Poll until the distribution stops moving. *Time to converge is
 itself a result*, not overhead: "does it converge at all, and how long" is half
@@ -440,9 +455,26 @@ design outright, which is the cheapest thing to learn early.
    cross-`--add-peer`, **keys backed up**. This is **real scope, not
    configuration** — four binaries predating the arc, one host down, no tor
    anywhere.
-3. Ubuntu 24.04 build artifact; fleet image pinned to match.
+3. Ubuntu 24.04 build artifact; fleet image pinned to match. **No isolated
+   variant is built** — the fleet runs this same artifact with `--stagenet`
+   (Q12-R12, §11.4).
+3b. **Stagenet bootstrap instances on the seed hosts** — a second daemon, tor
+   process and hidden service per seed host, up before the fleet, with their
+   onions passed to fleet nodes as `--add-peer`.
+3c. **The suppression fix lands first** (Q12-R13, §§11.5–11.13). Ruled
+   2026-08-12, after the fleet had been provisioned once and destroyed. Under
+   the unfixed constants the histogram measures *suppression dynamics* as much
+   as discovery, and the two are not separable in the readout — the same defect
+   Q12-R10 named for testnet contamination. D6a asks "does the anon graph form
+   at population `A`"; an arm run first would answer "does it form under a
+   1 : 80 timeout-to-suppression ratio at population `A`", which is not the
+   configuration that ships. Running against a configuration already decided to
+   be wrong spends VMs measuring something intended to be replaced.
 4. **Discovery arms** — `A ∈ {15, 30, 60}`, 15 clearnet detectors, converge,
-   record.
+   record. **Per-node time series, not fleet totals** (§11.9): a node steady at
+   20 and a node oscillating across 12 are indistinguishable in a sum, and the
+   floor is per node. **Three readings** (§11.5), and every node's `get_info`
+   must report `stagenet: true` before its readings count (§11.4).
 5. **Late joiner** (Q12-R5) — two runs, one node each: one `--add-peer` at a
    seed, one at an ordinary fleet node.
 6. Teardown; verify no instance survives.
@@ -857,6 +889,11 @@ beside the point. Under it, `A` is not what is being measured: the run would be
 measuring the testnet's Tor population with a fleet attached, and the sweep
 would be meaningless.
 
+> **The REQUIREMENT below stands; its REMEDY is superseded — see §11.4
+> (Q12-R12), 2026-08-11.** Both properties this section demands already exist in
+> the shipped binary as `--stagenet`, so no fleet build is made. The requirement
+> was right; what was missed is that it was already met.
+
 **Ruled: a fleet build with a distinct `NETWORK_ID` and empty compiled seed
 lists.** Verified at source, `--seed-node` alone is **not** sufficient:
 `net_node.inl:1749-1759` appends `get_ip_seed_nodes()` as a *fallback* when no
@@ -970,9 +1007,850 @@ directories. **Q12-R8's two-reading rule earned itself immediately** — 29
 outbound at `t+0` against 62 at `t+240`, so a single reading would have reported
 less than half the converged count.
 
+### 11.4 Q12-R12 — the isolated network already exists; no fleet build is made
+
+**Ruled 2026-08-11. Supersedes §11.1's remedy, not its requirement.** Q12-R10
+demanded two properties — a distinct `NETWORK_ID` and no compiled seed dial
+targets — and then specified a modified build to obtain them. **`--stagenet`
+already has both, in the shipped binary.**
+
+| property R10 requires | stagenet, at source |
+| --- | --- |
+| distinct `NETWORK_ID` | `::config::stagenet::NETWORK_ID` ([`cryptonote_config.h:429-431`](../../src/cryptonote_config.h#L429)) shares no bytes with testnet's at `:418-420` |
+| no compiled IP seeds | `get_ip_seed_nodes()`'s `STAGENET` branch is empty — `else if` at [`net_node.inl:737`](../../src/p2p/net_node.inl#L737), the block `:738-740` holding only the comment at `:739`; the four production seeds are inside the `TESTNET` branch |
+| no compiled anon seeds | `get_seed_nodes()` returns `{}` for `tor` and `i2p` on **every** network ([`:770-772`](../../src/p2p/net_node.inl#L770)) — Q12-R2 has not landed the testnet list yet |
+
+Everything else is the same chain: `stagenet_hard_forks[]` is `{1,1,0,…}`,
+byte-identical to testnet's ([`hardforks.cpp:41-50`](../../src/hardforks/hardforks.cpp#L41)),
+so stagenet is v3-from-genesis with every feature active exactly as testnet is.
+It differs in `NETWORK_ID`, genesis tx, ports (13021/13029) and address prefix —
+and in nothing that peer discovery touches.
+
+**Verified empirically, not only read.** A stock `shekyld --stagenet` on a fresh
+data-dir starts, creates genesis, brings up p2p and RPC, and **dials nothing**:
+no `134.199.*` / `45.7*` appears in its log, because the seed set it is given is
+empty rather than overridden.
+
+#### What this buys beyond convenience
+
+**§11.1's oracle paragraph is discharged by construction rather than by
+argument.** That section had to reason that a modified binary was still a valid
+oracle — "`NETWORK_ID` gates handshake acceptance, not discovery, so the
+quantity under measurement is unchanged." The reasoning was sound, but it was
+reasoning. With stagenet the fleet runs **the same artifact a user installs**,
+and the argument is not needed at all. An assumption that never has to be made
+cannot be wrong.
+
+It also deletes a build: no depends/gitian pass, no second `.deb`, no risk that
+the fleet artifact and the release artifact drift.
+
+#### Four consequences, none of them optional
+
+1. **The production seeds cannot participate.** They run testnet; a stagenet
+   fleet node fails their handshake — which is the point. Each seed host
+   therefore runs a **second** daemon on stagenet with its **own** tor process,
+   `DataDirectory` and hidden service (SPIKE-F-12), giving the fleet six
+   bootstrap hosts that were up before it. §5's rule is unchanged: seeds are
+   **bootstrap targets and gossip participants, and are not in the histogram**.
+2. **The fleet's seed onions stay out of source.** They are passed as
+   `--add-peer` flags at provisioning. Q12-R1's "HS keys are infrastructure the
+   moment they are compiled into source" therefore does **not** attach to them:
+   these are disposable fixtures, destroyed with the fleet, and carry no backup
+   obligation. The *testnet* seed keys in `~/.shekyl/seed-hs-backup/` are a
+   separate thing and still do.
+3. **Bootstrap must use `--add-peer`, not `--seed-node`.** Verified at
+   [`net_node.inl:527-533`](../../src/p2p/net_node.inl#L527): `--seed-node`
+   parses into `public_zone.m_seed_nodes` **only** — it is public-zone by
+   construction and cannot carry an onion into the anonymity zone. `--add-peer`
+   routes by parsed zone (`add_zone(adr->get_zone())` at `:494`), which is the
+   mechanism Q12-D6a already relies on.
+4. **Ports change.** Stagenet defaults are 13021/13029. Templates, configs and
+   any firewall rules written against 12021/12029 must be swept — a hardcoded
+   testnet port is the one way a fleet node could still reach the live network.
+
+#### What the smoke test established before any VM was paid for
+
+Three stagenet daemons on the dev box, each with its own tor process,
+`DataDirectory` and v3 hidden service, chained `A ← B ← C` so that **C is given
+only B's onion and must learn A by gossip**. This tests the thing the run
+measures, on the network the run will use, for the price of one local box.
+
+**And it produced a finding on the first attempt.** The daemons refused to start
+with `--tx-proxy tor,127.0.0.1:<port>,10`:
+
+> `--tx-proxy outbound count 10 is below the floor of 12 that the relay embargo
+> derivation assumes; refusing to start under-provisioned.`
+
+F-8b's floor is **enforced at startup and refuses rather than clamps** — the
+posture Q12-D9 §12.2 requires of the *live* check. Worth recording because
+Q12-R11 says every node sits below the floor by arithmetic at `A ≤ 12`: the
+*configured* floor is enforced, the *achieved* one is not, and the smoke test
+walked into exactly that seam from the enforced side.
+
+### 11.5 Q12-R13 — the backoff is one hour, and the ordering rule was too weak
+
+**Q12-R8 said "two readings separated by longer than the backoff" without
+knowing what the backoff was. It is 3600 seconds**, and the density test's
+240-second separation was short of it by a factor of fifteen.
+
+The smoke test's three nodes sat at **zero connections** with a single dial
+attempt in the log:
+
+> `Timeout on socks connect (127.0.0.1:29051 to y6l247vv….onion:13021)` — at
+> `t+47s`, then nothing for the next hour.
+
+At source, one failed connect is remembered for an hour and suppresses every
+subsequent selection of that address:
+
+| step | site |
+| --- | --- |
+| a failed connect records the address | `record_addr_failed` → `m_conn_fails_cache[addr.host_str()] = now` ([`net_node.inl:1404-1408`](../../src/p2p/net_node.inl#L1404)) |
+| the filter | `is_addr_recently_failed` returns true until `now - t > P2P_FAILED_ADDR_FORGET_SECONDS` ([`:1411-1421`](../../src/p2p/net_node.inl#L1411)) |
+| the constant | `#define P2P_FAILED_ADDR_FORGET_SECONDS (60*60)` ([`cryptonote_config.h:201`](../../src/cryptonote_config.h#L201)) |
+| where it bites | white/gray selection `:1439`, the maintainer's candidate loop `:1698`, and peerlist appending `:2135` — the log line `No available peer in white list filtered by 1` **is** this filter |
+
+**The cache is keyed on `host_str()`, so an onion is filtered by its full
+address** — there is no per-zone exemption, and no way to clear it short of a
+restart.
+
+#### Why the *first* dial failed, and what the ordering rule must actually say
+
+Q12-R8 ruled: all tor and hidden services up **first**, then daemons. The smoke
+test did exactly that — three tor processes at `Bootstrapped 100%` before any
+daemon started — **and the first dial still failed**, because a hidden service
+being *published* is not the same as its descriptor being *fetchable* by another
+client. Reaching the same onion by hand through the same SOCKS port minutes
+later succeeded immediately.
+
+**So the rule is strengthened, not restated:**
+
+| Q12-R8 as written | Q12-R13 |
+| --- | --- |
+| tor + HS up before daemons | every onion **verified reachable through the SOCKS proxy that will dial it** — not through any convenient one — before any daemon starts (`utils/fleet/wait_onions_reachable.sh`, and §11.5.1) |
+| two readings "longer than the backoff" apart | **three readings, or one well after `t + 3600 s`** — see below |
+| — | a fleet whose first dials failed is **restarted**, not waited out: the cache is in-memory and has no other clearing path |
+
+**`> 3600 s` of separation is necessary and not sufficient.** If a node burned
+its addresses at `t+0`, the entries expire at `t+3600` — but the node then has
+to *retry and converge*, and a reading taken at the moment of expiry catches it
+mid-recovery. The second reading must come after that retry has settled, which
+is why the rule is three readings rather than two with a bigger gap. An arm
+whose last two readings disagree is not a measurement (Q12-R8).
+
+**This is the run's largest scheduling fact.** At `A = 60`, a rolling start
+means early nodes dial onions that are not yet fetchable; each such failure
+costs an hour of suppression on the exact quantity being measured, and a
+histogram read at `t + 20 min` would report a sparse graph caused entirely by
+the start procedure. Q12-R8 predicted this shape from the seed estate; R13 gives
+it a number and shows the ordering rule as written does not prevent it.
+
+#### A hidden service can silently never publish, while its own tor reports 100 %
+
+The gate found this on its first real use, and it is **not** the propagation
+window. Of the smoke test's three services, **one was unreachable from both
+other nodes more than an hour after `Bootstrapped 100%`** — while answering from
+*its own* tor, which proves only that the local listener is up, since tor
+short-circuits a request for a service it hosts. Every local indicator said
+healthy: tor bootstrapped, the daemon's anonymity listener bound, the onion
+present in `hostname`.
+
+Running that tor at `info` level named it. A working service logs
+
+> `handle_response_upload_hsdesc(): Uploading hidden service descriptor:
+> finished with status 200 ("HS descriptor stored successfully.")`
+
+once per HSDir, and the broken one had **never logged it at all**. On restart it
+uploaded to every HSDir within **6 seconds** and was reachable on the next probe.
+
+| stage | observable | value |
+| --- | --- | --- |
+| tor bootstrap | `Bootstrapped 100%` | present in **both** cases — says nothing |
+| descriptor upload | `hsdesc … status 200` at `info` | **absent** in the broken case, ~6 s after start in the healthy one |
+| external reachability | another node's SOCKS | the only signal that separates them |
+
+**Three things follow.** The gate is a **health check**, not a settling delay —
+a wait of any length would not have fixed this. The remedy is a **tor restart**,
+and it is reliable. And a node whose onion never publishes would enter an arm as
+an isolated node, biasing the statistic **in the direction of the run's headline
+claim**; such nodes are restarted before the arm, and if a restart does not fix
+one, it is dropped and the drop count reported.
+
+#### The constant, confirmed to within four seconds
+
+The three-node smoke test was left running and polled every 60 s. It is the
+whole finding in one timeline:
+
+| time (UTC) | event |
+| --- | --- |
+| `00:58:25` | three daemons start; `B` holds `--add-peer <A.onion>` |
+| `00:59:12.622` | `B`'s only dial fails: `Timeout on socks connect` |
+| `00:59:12` → `01:59:12` | **zero connections on all three nodes, for sixty minutes**, polled once a minute |
+| `01:59:12.622` | `+3600 s` — the cache entry ages out |
+| `01:59:16.106` | **`B` connects to `A`** — 3.5 s later |
+| `02:00:26` | converged: `A` 2 out / 2 in, `B` 1/2, `C` 2/1 — 5 of 6 possible links |
+
+**Nothing changed except the clock.** Same binaries, same tor processes, same
+configs, no restart, no intervention. The graph the code could not form for an
+hour formed completely in under sixty seconds once the suppression expired, and
+`C` — which was never given `A`'s address — reached it by gossip.
+
+That is `P2P_FAILED_ADDR_FORGET_SECONDS` measured rather than read, and it
+settles the mechanism beyond argument: the hour is not a symptom of a broken
+peer, an unreachable service or a misconfiguration. It is the daemon declining
+to retry.
+
+### 11.5.1 The gate must probe from the proxy that will dial — a correction
+
+**Written after the six-node rehearsal contradicted the first version of this
+section.** That run gated all six onions, *passed*, wired the ring, started the
+daemons — **and dials still failed**:
+
+> `jp` at `01:35:38Z`: `Timeout on socks connect (127.0.0.1:21003 to
+> x5ll6ukod….onion:13021)` — the very onion the gate had passed minutes earlier.
+
+Seven such timeouts across the six nodes (2/1/1/0/1/2) against ~23 successful
+links. **The gate was not wrong; it was asked the wrong question.** It probed
+through *one* tor — the dev box's — and every fleet node dials through **its
+own**, which must fetch the descriptor independently over its own circuits. A
+descriptor published and fetchable by one client says nothing about whether a
+different client can fetch it inside its timeout.
+
+**So the requirement is per-proxy, and it has a second benefit.** Probing onion
+`Y` through node `X`'s SOCKS caches `Y`'s descriptor in `X`'s tor, so `X`'s
+daemon then dials against a warm cache. The gate stops being only a check and
+becomes a **cache primer** — which is why running it from the dialing proxy is
+both the correct test *and* the mitigation.
+
+**And it does not scale to a full graph, which is the finding.** Priming is
+`O(A²)` — 3540 probes at `A = 60` — and **gossip-learned onions cannot be primed
+at all**, because they are not known until the run is under way. Every such
+address is a fresh 45-second gamble against an hour of suppression. Burn-in is
+therefore **not eliminable by procedure** at fleet scale; the run must expect a
+residual, measure it, and report it.
+
+#### The asymmetry, stated as a number
+
+| quantity | value | source |
+| --- | --- | --- |
+| patience for a SOCKS connect | **45 s** | `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT` ([`cryptonote_config.h:191`](../../src/cryptonote_config.h#L191)), applied at [`net_node.cpp:415-419`](../../src/p2p/net_node.cpp#L415) |
+| penalty for exceeding it | **3600 s** | `P2P_FAILED_ADDR_FORGET_SECONDS` ([`:201`](../../src/cryptonote_config.h#L201)) |
+| ratio | **1 : 80** | — |
+
+A node waits 45 seconds for a descriptor fetch and, on missing it, buys an hour
+of blindness to that peer. Neither constant is unreasonable alone; **the ratio
+between them is what makes a transient fetch permanent-ish**, and neither was
+chosen with the other in view.
+
+**Measured first-dial failure rate: ~7 in 30**, on six well-provisioned hosts
+across three providers with every descriptor confirmed published. That is the
+input the derivation in §11.6 needs, and it is not small.
+
+#### Correction to the record
+
+An earlier reading of this rehearsal attributed `use`'s low inbound count to
+suppression left over from **restarting its tor**. That mechanism was wrong: no
+node dialled anything before the gate passed, because the phase-2 daemons are
+peerless and stagenet has no compiled seeds. The real cause is the post-gate
+failure above — `jp` burned `use` at `01:35:38Z` and will not retry it until
+`02:35:38Z`. The *conclusion* survives (a node needing a restart carries
+depressed inbound, and inbound is half the readout); the *reason* was
+misattributed, and the corrected reason is worse, because it needs no restart to
+occur.
+
+**Found for the price of one dev box.** The smoke test existed to check that
+stagenet's anonymity zone forms at all; it found the scheduling defect that
+would have silently corrupted the first paid arm — and then a second one.
+
+### 11.6 Q12-R13 is one onboarding defect, not two findings
+
+**Ruled 2026-08-11.** The suppression window and the publication failure are
+filed together deliberately. **Neither is serious alone**; composed, they
+produce a silent failure at first launch that the operator cannot diagnose:
+
+| ingredient | measured | alone it is |
+| --- | --- | --- |
+| a hidden service that starts, reports healthy, and never publishes | **2 of 2 trials showed one**; ~1 in 5 instances | an annoyance — restart tor |
+| a first dial that misses its 45 s window | **~7 in 30** post-gate | a retry — except there is no retry for an hour |
+
+**Composed, the observed behaviour is: "Tor works after you restart it once."**
+A new node's hidden service fails to publish; it dials its seeds anyway; the
+dials fail; all seed onions are suppressed for 3600 s; the operator sees a node
+with no anonymity peers and — reaching for the standard remedy — restarts it,
+which clears both the tor-side publication failure *and* the daemon-side
+suppression cache at once. **It then works, and nothing in the logs at default
+verbosity says why.** Roughly one operator in five meets this, concludes Tor
+support is flaky, and is right for reasons no one can see.
+
+**The gate this run builds is the fleet's workaround. Mainnet has no operator
+running it.** That is precisely why this is filed as a defect against the daemon
+rather than as a run precondition.
+
+The suppression half is not a property of fleets either. Run the same sequence on
+mainnet with a real new user:
+
+1. A node starts with `--tx-proxy tor` and dials the compiled onion seeds
+   (Q12-R1's list, once it lands).
+2. Its tor is freshly bootstrapped and its circuits are new. Some or all seed
+   descriptors are **published but not yet fetchable through those circuits** —
+   exactly what the smoke test reproduced.
+3. Every dial fails. Every seed onion is now suppressed **for an hour**, keyed on
+   the onion, with no retry path and no clearing path.
+4. The node has no anonymity peers, cannot self-announce, and therefore receives
+   no inbound. **On restart it does the same thing**, because the state that
+   would have made the second attempt succeed is tor's and the state that
+   suppresses it is the daemon's.
+
+**This is Q12-D6a's spiral reached by a mechanism the design did not predict.**
+D6a's spiral is *no outgoing anonymity connection ⇒ no self-announcement ⇒ no
+inbound*. R13 supplies a new entrance to it: **one badly-timed dial round costs
+an hour, and the failure is at the descriptor layer rather than the peer's.**
+The peer is up. The peer is correct. The peer is unreachable for a reason that
+has nothing to do with the peer.
+
+**The constant is inherited from the IP era and its justification does not
+survive the transport change.** `P2P_FAILED_ADDR_FORGET_SECONDS = 3600` is
+reasonable for an IPv4 address: a failed dial usually means a down host, and an
+hour of not retrying a down host is polite and cheap. A failed *onion* dial is
+frequently a transient descriptor fetch against a host that is up, and an hour
+is neither. Same shape as `FORWARD_DELAY` and `peers = 8`
+([`16-architectural-inheritance`](../../.cursor/rules/16-architectural-inheritance.mdc)):
+a constant carried across a boundary its derivation never crossed.
+
+**Ruled: the suppression window is a property of the transport, and the anon-zone
+value is derived, not picked.** The shape is settled here; the number is not
+invented here ([`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+— provisioned at the floor, from a measurement, never at whatever was handy):
+
+- `is_addr_recently_failed` must consult a **per-zone** window rather than one
+  global constant. The public zone keeps 3600 s; its justification is intact.
+- The anonymity-zone window is provisioned from the **descriptor-fetch latency
+  distribution**, which this run can measure directly — the fleet dials 60
+  onions from 60 tor processes and `wait_onions_reachable.sh` already times
+  every one. **The run therefore gains a deliverable it was not built for.**
+- Repeated failures escalate; a *first* failure must not cost an hour.
+- **The two constants are provisioned as a pair, not separately.** §11.5.1's
+  1 : 80 ratio is the defect — 45 s of patience bought with 3600 s of
+  blindness — and it exists because
+  `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT` and `P2P_FAILED_ADDR_FORGET_SECONDS` were
+  each chosen without the other in view. Whatever the anon-zone window becomes,
+  it is derived *against* the connect timeout from the same latency
+  distribution, and a change to either reopens the other.
+
+Deriving it needs the run's own numbers, so the constant lands after the arms.
+That is a named dependency rather than a deferral
+([`22-no-lazy-deferral`](../../.cursor/rules/22-no-lazy-deferral.mdc)): the
+measurement that supplies the input is scheduled, and the finding is registered
+now so the value cannot be quietly picked in the meantime.
+
+#### Consequence for Q12-D9: the below-floor state is stickier than the ruling assumed
+
+§12 ruled `x = 0` — a node below F-8b's floor stops stemming until the floor is
+met. **That rule assumes the node can climb back**, which is the whole reason
+`x = 0` was preferred over holding: the exposure is *bounded* because the node
+recovers.
+
+Under R13 it may not. A node that drops below the floor because a round of dials
+failed has those addresses suppressed for an hour, and the peers it would climb
+back with are precisely the ones it just burned. The below-floor state is
+therefore **stickier than §12.1's trade priced**, and on a young network — where
+Q12-R11 says *every* node is below the floor by arithmetic — the two interact:
+the population is too small to reach the floor, and the retry path that would
+find the few peers there are is suppressed.
+
+**This does not reverse §12's ruling** — `x = 0` remains right, and the
+alternatives are worse under stickiness rather than better. It changes the
+**cost side of the trade**, which §12.1 stated as "the operator's own and
+bounded". The bound is an hour longer than it appeared, and the live floor check
+(§12.2) must be read against a peer count that cannot recover promptly. Recorded
+here rather than silently inherited by the implementation.
+
+### 11.7 The two constants have different derivations — and the suppression one is not a latency question
+
+**Ruled 2026-08-11, correcting §11.6.** That section said the anon-zone window
+is derived from the descriptor-fetch latency distribution. **That is the
+coupling error again**, applied to the fix rather than to the defect: the two
+constants form a ratio that matters, but they are not one decision.
+
+| constant | the question it answers | derived from |
+| --- | --- | --- |
+| `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT` | *how long before concluding this dial failed?* | the fetch-latency **tail** — `P(fetch > t)` on a cold descriptor cache |
+| `P2P_FAILED_ADDR_FORGET_SECONDS` | *how long before retrying a failed address?* | the cost of **retrying** against the cost of **blindness** — no latency in it at all |
+
+On an anonymity zone the cost of retrying is one SOCKS connect over an existing
+circuit. The cost of blindness is a candidate removed from a pool that is small
+by construction and governed by a live floor. Those point at a far shorter
+suppression than 3600 s regardless of what the latency distribution says.
+
+#### The maintainer sweeps the whole pool long before the hour is up
+
+`m_connections_maker_interval` is `once_a_time_seconds<1>`
+([`net_node.h:498`](../../src/p2p/net_node.h#L498)) and `connections_maker`
+loops `while (conn_count < max_out_connection_count)`
+([`net_node.inl:1795`](../../src/p2p/net_node.inl#L1795)) — it keeps dialling
+until the target is met or candidates run out. Failed dials cost up to 45 s
+each and run sequentially, so a pool of a dozen candidates is **fully attempted
+within minutes**, against a suppression measured in hours.
+
+**So the burned set is not accumulated slowly; it is established almost at
+once**, and the node then sits with whatever survived for the rest of the hour.
+
+#### Floor reachability, which is the actual derivation
+
+With `A` anonymity-capable nodes, a node has `A − 1` candidates and needs `F = 12`
+of them. If each dial independently burns its candidate with probability `p`,
+the node reaches the floor only if at most `A − 1 − F` burn:
+
+| `A` | candidates | `p = 0.10` | `p = 0.23` (measured) | `p = 0.35` |
+| --- | --- | --- | --- | --- |
+| 13 | 12 | 0.282 | **0.043** | 0.006 |
+| 15 | 14 | 0.842 | **0.343** | 0.084 |
+| 20 | 19 | 1.000 | 0.950 | 0.666 |
+| 30 | 29 | 1.000 | 1.000 | 0.997 |
+| 60 | 59 | 1.000 | 1.000 | 1.000 |
+
+**At `A = 15` and the measured failure rate, two nodes in three cannot reach the
+floor** — not because the peers are absent, unreachable or refusing, but because
+the node has blacklisted them for an hour.
+
+#### This widens Q12-R11 substantially, and changes its reason
+
+R11 said the floor is unreachable by **arithmetic** at `A ≤ 12`, because
+`12 > A − 1`. This says it is unreachable by **suppression** up to roughly
+`A ≈ 19` — a band half again as wide, for a completely different reason, and one
+that no amount of population growth inside that band fixes. Both bite exactly
+where rule 76 says to provision: at a young network.
+
+**It also confirms the sequencing ruling.** An `A = 15` arm run under the
+current constants would report roughly a third of nodes at the floor and
+two thirds below it — and that would have been written up as a discovery
+finding. It is a suppression finding wearing discovery's clothes.
+
+#### What the fix has to satisfy
+
+`p` cannot be tuned; it is the network's. What can be tuned is **how many
+attempts a candidate gets inside the node's time-to-floor budget**, because
+independent attempts compound: at `p = 0.23`, three attempts leave `p³ ≈ 1.2 %`.
+
+- The suppression must be short enough that each candidate is retried **~3
+  times** within the window in which a node is expected to reach the floor.
+- With a sweep costing minutes, that puts the **first-failure** window at
+  **order 60–120 s**, not 3600 s.
+- **Escalate on repeated failure** — doubling toward the public-zone value — so
+  a genuinely dead peer is not dialled forever while a transient one recovers
+  quickly. This is what makes the short first window safe.
+- The public zone is untouched: 3600 s remains right where a failed dial means
+  a down host.
+
+The exact first-failure value is set once the fetch-latency tail is measured,
+because it must exceed the timeout it is retrying against — that is the only
+place the two constants genuinely couple.
+
+### 11.8 Measured: the timeout is already right, and the whole defect is the suppression
+
+**60 cold descriptor fetches**, from a warm bootstrapped tor to 60 freshly
+provisioned hidden services published 180 s earlier, probed at a **120 s cap** so
+the distribution is observed rather than censored at the 45 s constant under
+test.
+
+| statistic | value |
+| --- | --- |
+| median | **7.9 s** |
+| p85 | 78.3 s |
+| failures | **8 / 60 = 13.3 %** |
+| dials exceeding 45 s | **9 / 60 = 15.0 %** |
+
+**The distribution is bimodal, not heavy-tailed.** Every one of the eight
+failures sat at the 120 s cap — `119.2, 119.4, 119.5, 119.5, 119.5, 119.6,
+119.6, 119.7` — and exactly one success landed between, at 78.3 s. A fetch
+either resolves in **under ~30 s** or it does not resolve at all.
+
+Which makes the timeout question answerable without judgement:
+
+| timeout | dials that fail |
+| --- | --- |
+| 30 s | 15.0 % |
+| **45 s (current)** | **15.0 %** |
+| 60 s | 15.0 % |
+| 75 s | 15.0 % |
+| 90 s | 13.3 % |
+| 120 s | 13.3 % |
+
+**Anything from 30 s to 75 s gives the identical result.** Going to 90 s buys
+one dial in sixty. **So `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT = 45` is not
+changed** — no value in a sane range does better, and a longer one only makes a
+node wait longer to learn the same thing.
+
+**This measurement's value is a negative one, and it should be cited that way.**
+The obvious response to "15 % of dials fail" is *raise the timeout*. Bimodality
+forecloses it, and the single success in the gap is `n = 1`. The measurement
+earns its cost by killing the plausible wrong fix before a round is spent on it,
+leaving the suppression as the entire defect. **Equally, nothing here justifies
+*lowering* 45 s**: `n = 60` through one client tor is far too thin to move a
+constant downward, and the failures are not slow dials that a shorter timeout
+would catch sooner — they are dials that never resolve. The earlier framing of "45 s of
+patience" as the deficient half was wrong: it is generous by six times over the
+median, and the failures are not slow, they are *absent*.
+
+**The entire defect is therefore the suppression.** That is a one-constant
+change plus escalation rather than a re-provisioned pair — smaller, and better
+justified, than §11.7 anticipated.
+
+**And it makes the suppression's disproportion worse, not better.** The failing
+15 % are attempts against services that are *fine*, whose descriptors publish or
+refresh within minutes. The daemon responds to a condition that resolves itself
+in minutes by refusing to look for an hour.
+
+#### Replicated five times, and every intermediate estimate was reported at whatever `n` was to hand
+
+| round | failures |
+| --- | --- |
+| 1 | 8/60 = 13.3 % |
+| 3 | 3/60 = 5.0 % |
+| 5 | 9/60 = 15.0 % |
+| 6 | 5/60 = 8.3 % |
+| 7 | 13/60 = 21.7 % |
+| **pooled** | **38/300 = 12.7 %**, 95 % Wilson CI **[9.4 %, 16.9 %]** |
+
+The single-round spread is 5.0 % to 21.7 %, and this section's estimate moved
+**13.3 % (n = 60) → 9.2 % (n = 120) → 12.7 % (n = 300)** as rounds accumulated.
+
+**Each intermediate figure was reported as though it were the estimate**, and the
+"correction" from 13.3 % to 9.2 % was itself premature — it happened to be a
+second draw from a wide distribution. The eventual value is within a point and a
+half of the first one. **The defect is not any of the numbers; it is publishing a
+point estimate from a sample too small to distinguish it from its neighbours**,
+which is the same shape as reading a latency experiment at 48 of 60. A rate
+quoted without an interval invites exactly this.
+
+Recorded because the conclusion never depended on it: §11.7's reachability table
+is evaluated at 0.10, 0.23 and 0.35 precisely so that no single estimate is
+load-bearing.
+
+**The general form, since this arc produced it twice.** *When a measured rate
+feeds a decision, carry the interval through the decision — do not pick a value
+and then defend it.*
+
+That is what made the correction chain harmless here. The reachability table was
+evaluated across the plausible range before any estimate had settled, so
+13.3 % → 9.2 % → 12.7 % moved no conclusion; the answer at `A = 15` is "the floor
+is not reliably reachable" at every rate in the interval. Had the table been
+computed at one number, each revision would have required re-deriving it, and
+the natural move at that point is to defend the number rather than redo the
+work.
+
+**Precision claimed by revision is the failure mode to watch for.** A sequence of
+restatements reads as convergence even when no estimate in it was
+distinguishable from its neighbours at the sample in hand — the same shape as
+reading a duration experiment at 48 of 60, with the bias source moved: there,
+incompleteness correlated with the quantity; here, a small sample was mistaken
+for a better one because it arrived second.
+
+The same discipline is why `P2P_ANON_FAILED_ADDR_FORGET_SECONDS` **names its
+quantile at the constant** (§11.12). A bare `240` invites a later reader to
+adjust it toward a value that looks more central; `240 = p90 of measured
+recovery` states what would have to be re-measured to move it.
+
+#### The measured rate is a floor, and the ring says by how much
+
+**12.7 %** (CI 9.4–16.9 %) here against **~23 %** in the six-host ring. The gap is the
+self-selection this rig was built with: freshly provisioned, healthy services
+published by one tor on one well-connected host. Real peers may be mid-restart,
+throttled or dead.
+
+**Which rate is used matters, and the two are not interchangeable:**
+
+| rate | population it describes | floor reachable at `A = 15` |
+| --- | --- | --- |
+| 12.7 % (rig) | healthy services on one well-connected host — a **floor** | ~74 % — marginal |
+| ~23 % (ring) | real nodes across three providers — **representative** | **~34 % — decisive** |
+
+So the reachability finding **rests on the ring**, which is why the rig was
+labelled a floor from the outset rather than after the numbers came in. Quoting
+the two as a range would let a later reader take the convenient end; §11.7's
+table is computed at 0.10, 0.23 and 0.35 precisely so the conclusion can be read
+off at whichever rate a reader believes.
+
+**The ring's failures also name the mechanism**: four of its seven timeouts
+targeted the *same* node — the one whose tor had been restarted 3.6 minutes
+earlier — and the failures cluster on **targets**, not on dialers. A restart
+republishes with new introduction points while clients may still hold the old
+descriptor. **So the documented remedy for a service that never published
+(restart tor, §11.5) creates a window in which every node that dials during it
+burns that target for an hour.** The operator's fix propagates suppression to
+everyone else.
+
+#### A methodology error worth recording
+
+At 48 of 60 attempts this experiment read **0 failures, max 29.6 s**, and was
+nearly written up as "the timeout is comfortable". The completed run says 13.3 %
+failure with a p85 of 78 s.
+
+**Fast attempts finish first.** Reading a latency experiment while it is still
+running samples the head of its own distribution, and the incompleteness is
+*correlated with the quantity being measured*. That is the same defect class as
+the rest of this arc — a check sharing a fate with its subject — reached this
+time by reading results that were still being produced.
+
+**The bias is structural, not bad luck**: *any* partial read of a duration
+experiment reads fast. The countermeasure is the one already in
+`read_anon_histogram.sh` — **refuse to report below the expected count** — which
+is now the fourth time refuse-don't-clamp has been the answer in this arc.
+
+### 11.9 Every missing link was a burn, and they all expired on schedule
+
+**The six-host ring was sampled every ~3 minutes for an hour.** The result is the
+strongest confirmation available, because the prediction was made in advance
+from a constant read at source.
+
+| sample (UTC) | total links | `use` inbound |
+| --- | --- | --- |
+| 02:21:52 – 02:34:49 | 21–23 of 30 | **1** |
+| **02:38:05 onward** | **30 of 30** | **5** |
+
+Seven links were missing at 02:34:49. **Seven timeouts appear in the six nodes'
+logs**, every one of them at daemon start:
+
+| dialer → target | burned | expires |
+| --- | --- | --- |
+| jp → use | 01:35:38 | 02:35:38 |
+| eu → use | 01:35:39 | 02:35:39 |
+| usw → brz | 01:35:40 | 02:35:40 |
+| brz → aus | 01:35:43 | 02:35:43 |
+| aus → use | 01:35:44 | 02:35:44 |
+| aus → brz | 01:36:40 | 02:36:40 |
+| brz → use | 01:37:06 | 02:37:06 |
+
+**All seven expire inside an 88-second window, and the very next sample reads a
+complete mesh.** The correspondence is exact: 7 burns, 7 missing links, 30/30
+once they aged out.
+
+**So the plateau was never churn, and it was never discovery.** Discovery had
+finished long before; the graph was being held incomplete by the failure cache
+alone. An earlier reading of this data as "a band of 21–23, not a decline" was
+the **third** premature conclusion of the session — and the per-node series is
+what refutes it, because every node's count is monotone and then flat, which no
+oscillating process produces.
+
+**Which settles a measurement requirement for the arms.** A fleet total hides
+this completely: a node steady at 20 and a node oscillating across 12 are
+indistinguishable in a sum, and at `A = 60` the floor is **per node**. The arms
+record **per-node time series**, not a total with a spread.
+
+#### Steady-state churn, over the full hour — and the contrast that matters
+
+21 samples. After the burns expired the ring held **30 of 30 for the remaining
+50 minutes**, with a single `29` at 03:23:27 recovered by the next sample.
+
+**So genuine churn exists and is small — and it recovers in minutes.** That is
+the contrast worth keeping: an ordinary link loss re-establishes inside one
+three-minute sample, while a *burned* one is gone for an hour. The two are the
+same observation in a total and completely different in a time series, which is
+the second reason the arms need per-node series rather than a fleet sum.
+
+### 11.10 Publication freshness dominates the failure rate — 55 % against 12.7 %
+
+The same 60-service rig, probed with **no publication settle** instead of 180 s:
+
+| | settled 180 s | probed immediately |
+| --- | --- | --- |
+| failure rate | **13.3 %** | **55.0 %** |
+| median success | 7.9 s | 18.4 s |
+| dials exceeding 45 s | 15.0 % | **61.7 %** |
+
+**A freshly published service is four times more likely to be undialable**, and
+this is the mechanism behind §11.5's finding rather than a separate one.
+
+#### The restart loop — the remedy causes the symptom that prompts it
+
+Compose the measurements and a self-reinforcing cycle falls out, with every step
+observed rather than supposed:
+
+1. A node's hidden service **fails to publish** on first start — **1 in 5**
+   (§11.5, two trials).
+2. The operator applies the documented remedy: **restart tor**.
+3. The restart republishes with **new introduction points**, and for a window
+   afterwards dials against it fail at **55 %** (§11.10) while clients may still
+   hold the old descriptor.
+4. Every node that dials during that window **burns the onion for an hour**, so
+   the node's inbound collapses and it looks broken.
+5. The operator restarts again.
+
+**The fix for not publishing is what keeps the node unreachable.** This is
+Q12-D6a's spiral reached from a direction the design was not watching: not *no
+outgoing connection ⇒ no self-announcement ⇒ no inbound*, but *the repair
+sustains the failure*.
+
+**The dress rehearsal reproduced it at n = 1 and it was written up as residue.**
+`use` — the node whose tor was restarted 3.6 minutes before the daemons started
+— took **four of the ring's seven burns** and sat at `anon_in = 1` for the full
+hour. Failures cluster on **targets**, not dialers.
+
+#### Settled: failures do NOT correlate through the dialer
+
+The rig was extended to record each attempt's **start** time, which the first
+version omitted — without it every failure ran to the cap and so was the last
+*completion* by construction, carrying no timing information at all.
+
+**Four settled rounds, 240 attempts, 30 failures**, Wald–Wolfowitz runs test per
+round on the start-ordered sequence:
+
+| round | failures | runs | expected | z |
+| --- | --- | --- | --- | --- |
+| 3 | 3/60 | 7 | 6.7 | +0.45 |
+| 5 | 9/60 | 18 | 16.3 | +0.88 |
+| 6 | 5/60 | 9 | 10.2 | −1.04 |
+| 7 | 13/60 | 22 | 21.4 | +0.24 |
+| **combined (Stouffer)** | | | | **+0.27, `p` = 0.79** |
+
+**No clustering.** Failures are dispersed in start time, which is what
+independent per-dial failure looks like — so the binomial in §11.7 is the right
+model rather than the optimistic one, and the `p³` compounding that justifies
+three retries holds.
+
+**The test carries its own positive control.** Run on the *unsettled* condition
+it returns **z = −5.30, `p` < 0.001** — strongly clustered — because publication
+progress at the targets makes the failure rate decline monotonically across a
+run (94 % → 83 % → 14 % by start-time third). So the instrument detects
+clustering when clustering exists, and finds none once the trend is removed.
+
+**That confound was self-inflicted and worth recording.** The unsettled condition
+was chosen *because* it produces enough failures to have power, and doing so
+imported the very time trend the test was meant to detect. **A powered test of
+the wrong quantity is worse than an underpowered one**, because it yields a
+confident number: reported alone, `z = −5.30, p < 0.001` would have read as the
+session's strongest result and been an artifact of the condition chosen to
+measure it.
+
+### 11.11 Two constraints on the retry design that the derivation missed
+
+**Dialing is serial and blocking.** `make_expected_connections_count` makes **one**
+attempt per call ([`net_node.inl`](../../src/p2p/net_node.inl), the
+`make_new_connection_from_peerlist` branch) and `connections_maker` loops on its
+boolean result. Each failure therefore costs up to the full 45 s **in sequence**,
+so one pass over twelve candidates at a 23 % failure rate already spends minutes
+on failures alone, and three attempts per candidate puts the worst case at the
+order of half an hour.
+
+**Time-to-floor is therefore a constraint in its own right**, and the retry count
+must be derived against it rather than against `p^n` alone. It also composes with
+§12's live check: a node below the floor is out of the anonymity zone for that
+entire window.
+
+**Escalation must reset on a successful handshake.** Doubling toward the
+public-zone value is right for a service that is genuinely gone. But a
+transiently flaky peer — fails, succeeds, fails — would otherwise ratchet up to
+3600 s and arrive at the same defect by a slower road. **The fix decays into the
+thing it replaces unless the counter is cleared on success.**
+
+### 11.12 The first-failure window, measured
+
+**20 hidden services, published and verified dialable, then their tor restarted
+with the same keys** — the documented remedy of §11.5, which is exactly the
+event a dialer walks into. A fresh client polled all 20 until each answered:
+
+```
+20 20 20 21 21 22 25 80 96 96 103 136 136 137 138 139 222 239 259 262   (seconds)
+recovered 20/20   min 20 s   p50 96 s   p90 239 s   max 262 s
+(nearest-rank quantiles, n = 20 — the same estimator the constant is set from)
+```
+
+**Every service came back.** Nothing was permanently broken by the restart — the
+peers were up and correct the whole time, and undialable for between 20 seconds
+and four and a half minutes. Against `P2P_FAILED_ADDR_FORGET_SECONDS = 3600`,
+the daemon answers a four-minute condition with an hour of blindness.
+
+#### Provisioned at the TAIL, not the median
+
+| candidate first window | first retry succeeds | three attempts cost |
+| --- | --- | --- |
+| 120 s | 55 % | 2460 s |
+| 180 s | 80 % | 2880 s |
+| **240 s (p90 = 239 s)** | **90 %** | **3300 s** |
+| 300 s (covers max) | 100 % | 3720 s — **exceeds the hour** |
+
+**Ruled: `P2P_ANON_FAILED_ADDR_FORGET_SECONDS = 240`, the p90 of measured
+post-restart recovery.**
+
+**The asymmetry is one-sided, which is what forces a quantile.** A window that is
+too short retries *into the same dead interval*: it fails, escalates the
+counter, and pushes the next attempt further out. Under-estimating therefore
+**compounds** rather than degrades, while over-estimating costs only a slightly
+slower first retry. An earlier draft of this section argued the opposite — that
+a short first window is "self-correcting" because escalation absorbs it. **That
+was wrong, and wrong in a recognisable way**: the escalation ladder exists for a
+peer that is *genuinely gone*, and using it to absorb a mis-provisioned first
+value is machinery defending a wrong number.
+
+This is `F`'s provisioning shape and `hop`'s missing one: a distribution whose
+tail is more than twice its median (96 s against 262 s) cannot be summarised by
+its centre when the cost of being under is the failure being fixed.
+
+**p90 is also the largest quantile the retry budget admits.** Provisioning at the
+observed maximum would put three attempts at 3720 s — *more than the hour this
+constant exists to avoid spending*. The tail requirement and the time-to-floor
+bound meet at p90 rather than merely coexisting there.
+
+**The quantile is stated at the constant itself**, in `cryptonote_config.h`, so
+the next reader knows the value is a tail figure and does not "correct" it
+toward a central one.
+
+#### Time-to-floor, checked rather than assumed
+
+Dials are serial and blocking (§11.11), so the retry count has a wall-clock cost:
+
+| attempt | window | + 12 serial dials at 45 s | cumulative |
+| --- | --- | --- | --- |
+| 1 | 240 s | 540 s | 780 s |
+| 2 | 480 s | 540 s | 1800 s |
+| 3 | 960 s | 540 s | **3300 s** |
+
+**Three full attempts at every one of twelve candidates costs less than the hour
+the unfixed code spends on a single failure.** That bound is asserted in
+`tests/unit_tests/node_server.cpp` rather than left in prose, so a future
+re-derivation of either constant has to keep it true.
+
+#### Two rates, not one range
+
+These are **different quantities** and folding them together hides the thing the
+fix is for:
+
+| quantity | what it is | measured |
+| --- | --- | --- |
+| **steady-state dial failure** | a dial against a settled, healthy service | 13.3 % (rig), 15 / 25 / 20 % (three restart baselines), ~23 % (the six-host ring) |
+| **post-restart dial failure** | a dial *inside the window the operator just created* | **55 %** |
+
+The first sets the reachability arithmetic in §11.7. **The second is the
+restart-loop's magnitude**, and it is the one that makes the documented remedy
+actively harmful: a *majority* of dials fail during exactly the interval the
+operator opened by applying the fix, and each of them costs an hour under the
+unpatched constant. Reported as a range, the 55 % reads as an outlier in a
+noisy measurement rather than as the mechanism.
+
+### 11.13 The launch condition, stated plainly
+
+Composing §11.7's reachability with §12's below-floor rule: below the floor a
+node does not stem on the anonymity zone. At `p ≈ 0.15–0.23` the floor is
+unreachable up to roughly `A ≈ 19`.
+
+**So under the current constants, on a young network, no Shekyl node anywhere
+stems over Tor** — and the operator sees a working Tor connection, peers,
+traffic, and no indication that the stem is not running.
+
+That is the launch condition, and it is now a number rather than a concern. It is
+also the reason the pairing fix is **pre-genesis**: the constant that makes Tor
+stemming work at launch cannot be one we intend to change after launch.
+
 ---
 
 ## 12. Q12-D9 — the below-floor rule, settled before the run
+
+> **Amended by Q12-R13 (§11.6), 2026-08-11 — the ruling stands, its cost
+> estimate does not.** `x = 0` was chosen because the operator's exposure is
+> *bounded by recovery*. A node that fell below the floor through failed dials
+> has those peers suppressed for an hour and cannot promptly climb back, so the
+> below-floor state is stickier than §12.1 priced. The alternatives are worse
+> under stickiness, not better; what changes is the size of the accepted cost
+> and what the live check in §12.2 must expect to see.
 
 **Ruled 2026-08-11, and deliberately before the arms.** The below-floor rule is
 **not an input to the run — it is the mechanism the run observes.** At `A ≤ 12`
