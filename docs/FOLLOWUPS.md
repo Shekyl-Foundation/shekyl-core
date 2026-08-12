@@ -9277,22 +9277,31 @@ its wake.
   landed. What remains is the witness, which is the part that was always
   blocked.)*
   **Shipped, so no longer owed:** `relay_method::forward` is deleted, an
-  arrival is stemmed whatever transport carried it, R-1's coherence branch
-  executes, and the pool re-relay loop routes by
-  `txpool_tx_meta_t::origin_zone` instead of a `zone::public_` literal — so an
-  anonymity arrival no longer re-emerges on clearnet two minutes later.
-  §89.2's premise ("every remaining hop runs on one transport") is now true
-  rather than assumed, which makes the per-zone `hop` live and measurable
-  (Q12-U3).
+  arrival is stemmed whatever transport carried it, and R-1's coherence branch
+  executes — keeping an anonymity arrival on its arrival zone for the rest of
+  its stem. §89.2's premise ("every remaining hop runs on one transport") is
+  now true rather than assumed, which makes the per-zone `hop` live and
+  measurable (Q12-U3).
+  **Deliberately NOT changed:** the pool re-relay loop, beyond losing its
+  `forward` arm. A `stem` entry reaches it only at embargo expiry, which is the
+  stem→fluff transition, and fluff must leave the anonymity zone or coherence
+  strands the transaction (§59.1). Q12-U2 first rewrote this loop to route
+  stems by recorded origin, on the reading that its `zone::public_` literal was
+  a clearnet leak; that was retracted before push. The literal is the fluff
+  exit. See `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+  **Consequence — `txpool_tx_meta_t::origin_zone` has no production consumer.**
+  It is written at admission and preserved across hard-fork re-validation, and
+  nothing reads it to decide anything. Its named consumer is Q12-U3's per-zone
+  telemetry. **Open disposition, not a defect to sweep:** unlike the dead
+  fields removed in #450 it has a writer and a dated reader, but it should not
+  sit unread indefinitely.
   **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s `private_*` cases
   pin that a stem emits the flag clear and a fluff sets it; (2) the pure gate —
   `r1_coherence_predicate` pins `r1_coherence_keeps_origin` /
   `is_pre_fluff_relay`, shared with the production branch so it cannot drift;
-  (3) the re-relay origin — `daemon_submit_shims` pins that a stemming entry
-  carries its anonymity origin out of the pool, that a clearnet entry does not
-  acquire one, and that an unrecorded origin reports none rather than a
-  reader-invented default. Mutation-verified: pinning the reader back to
-  `zone::public_` reds all three.
+  (3) the record — `txpool_origin_zone` pins that reclaiming `is_forwarding`
+  did not shift `fcmp_verified` or `origin_zone`, and that the zone survives a
+  real LMDB round trip.
   **Still not witnessed:** the arrival-to-record leg — the receiver's
   relay-method assignment, the monotone `upgrade_relay_method`, and the full
   send path through `handle_notify_new_transactions` on a non-public context.

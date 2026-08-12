@@ -772,8 +772,8 @@ correctly: its fate is the same question as `forward`'s (Q12-Q3, Q12-Q7).
 
 | unit | subject | status |
 | --- | --- | --- |
-| **Q12-U1** | the txpool origin-zone field — two reserved bits, `invalid == 0`, no migration | **LANDED** (2026-08-12), with Q12-U2 in one PR: split, it ships a field with no production reader |
-| **Q12-U2** | the receive path — anonymity arrivals relay at arrival instead of being dropped by the forward gate | **LANDED** (2026-08-12). Coherence executes, and the re-relay loop stops routing anonymity-arrived traffic to `zone::public_` |
+| **Q12-U1** | the txpool origin-zone field — two reserved bits, `invalid == 0`, no migration | **LANDED** (2026-08-12), with Q12-U2 in one PR. The field is written by the arrival path and **has no production consumer yet** — Q12-U3's per-zone telemetry is the named one |
+| **Q12-U2** | the receive path — anonymity arrivals relay at arrival instead of being dropped by the forward gate | **LANDED** (2026-08-12). Coherence executes at arrival. The re-relay loop is deliberately **unchanged** beyond the `forward` arm's deletion — see the retraction below |
 | **Q12-U3** | `p` — ship at a stated value, run the Q12-D6a testnet, read precision and latency off `/get_stem_tallies` and `get_connections` | **NEXT, and now unblocked.** §89.2's premise is shipped, so the per-zone `hop` is live and measurable rather than inert |
 | **Q12-U4** | `FORWARD_DELAY_*`'s disposition | **LANDED** with U2 — the forecast held: the constants died with the class, by deletion rather than derivation |
 
@@ -873,24 +873,47 @@ landing in Q12-U2's receive path.
 carried it, `relay_method::forward` is deleted, and the pool's re-relay loop
 routes by the recorded origin instead of a `zone::public_` literal.
 
-### The reader is the point, not a bonus
+### The field has no consumer yet, and the attempt to give it one was wrong
 
-§65.4 specified the field and Q12-U2 was scoped as "the receive path". Taken
-literally that pairing ships a field nothing production reads: coherence at
-**arrival** reads `context.m_remote_address.get_zone()` — the live connection —
-and never consults the record.
+**RETRACTED, same day, before push.** This section first claimed the re-relay
+loop was `origin_zone`'s production reader and that bucketing stems by origin
+closed a clearnet leak. Both halves were false, and the reasoning is kept here
+because the mistake is the useful part.
 
-The reader is the **re-relay**. `core::relay_txpool_transactions` runs minutes
-later from stored state with a nil source and no connection to ask, and handed
-every stem to `zone::public_` as a literal. So an anonymity arrival was held on
-its zone at admission and then moved to the clear internet by the pool timer —
-silently, since the transaction still propagates and nothing errors. Coherence
-without this is undone by its own re-relay loop.
+§65.4 specified the field and Q12-U2 was scoped as "the receive path". That
+pairing ships a field nothing production reads: coherence at **arrival** reads
+`context.m_remote_address.get_zone()` — the live connection — and never
+consults the record. Noticing that is right. The proposed fix was not.
 
-That is why the origin travels with the entry (`relayable_tx`) and stems are
-bucketed by origin zone. An unusable origin still falls through to clearnet,
-which is Q12-D3's ruling and not an omission: relayed traffic's home was always
-clearnet, and originated traffic is the class that fails closed.
+`core::relay_txpool_transactions` sent `stem`-recorded entries in `public_req`
+with `relay_method::fluff`, and only `forward` went to `stem_req` at
+`zone::public_`. **The `zone::public_` literal is the fluff exit, not a leak.**
+A `stem` entry reaches that loop only when `last_relayed_time <= now`, and for
+a stemmed transaction that deadline *is* its embargo — so the only way to
+arrive there is embargo expiry, which is the stem→fluff transition. Fluff must
+leave the anonymity zone or coherence strands the transaction in the anonymity
+subgraph (§59.1). Re-stemming those entries on their arrival zone would let one
+re-stem indefinitely instead of diffusing.
+
+**The leak the #427 tripwire recorded was the `forward` arm** — *still-stemming*
+anonymity traffic stemming on clearnet. Deleting the class closes it, and
+leaves nothing for the origin to route.
+
+> **The generalisable error: the literal named the destination, not the
+> decision.** `zone::public_` sitting next to an anonymity-origin field reads as
+> "everything goes to clearnet regardless of origin". What decides whether that
+> is a leak is not the zone argument but the *relay method* travelling with it,
+> and the method said `fluff` — a deliberate exit. Reading the argument without
+> the method is how a correct exit gets mistaken for a leak, and the fix for the
+> phantom leak was itself a liveness defect. The existing assertion in
+> `daemon_submit_shims` said so in words — *"an expired stem entry rides the
+> fluff request"* — and was edited to compile against the new signature without
+> being read.
+
+**So `origin_zone` is written and preserved, not consumed.** Its only
+non-test read is `tx_pool.cpp`'s hard-fork re-validation, which reads it to
+write it back. Its consumer is **Q12-U3**'s per-zone telemetry. That is a
+disposition this round owes an answer to, not one it has given.
 
 ### §89.2's premise is now shipped
 
@@ -913,11 +936,17 @@ guards fires on whichever adjacent thing moves first.
 
 ### What is tested, and what is still not
 
-Tested: a stemming entry carries its anonymity origin out of the pool to the
-relay loop; a clearnet entry does not acquire one; an entry with no recorded
-origin reports none rather than a reader-invented default. **Verified by
-mutation** — pinning the reader back to `zone::public_` reds all three,
-including the negative control.
+Tested: `relay_method::forward` no longer exists anywhere; the R-1 coherence
+truth table holds without it; the reclaimed bit does not disturb its
+neighbours (`fcmp_verified`, `double_spend_seen`, `pruned`, `origin_zone`)
+across every relay method; the record is still 192 bytes; and the origin zone
+survives a real LMDB round trip.
+
+The three re-relay reader tests that were here are **removed with the code they
+covered** — see the retraction above. They passed, and a mutation check reddened
+all three, which is worth noting as a limit rather than a credential: a
+mutation check confirms a test discriminates the behaviour under it, and says
+nothing about whether that behaviour should exist.
 
 **Still not tested: the arrival-to-record leg.** Q12-U1 recorded this gap and
 assigned it here; it **narrows rather than closes**. `add_tx` runs full input
