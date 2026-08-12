@@ -177,6 +177,14 @@ rust/shekyl-engine-state/src/transfer.rs|spending_tx_hash: Option<[u8; 32]>
 
 # ── tx_meta_block.rs ──────────────────────────────────────────────────
 #
+# `PriorNote.txid` is the public 32-byte transaction hash bound into the
+# single-use note-rollback token (PR-SA-4 review round): it records
+# *which* txid a captured note belongs to so `restore_note` puts the
+# value back exactly where it came from. Same public-tx-hash class as the
+# `tx_keys` / `tx_notes` map keys below — the hash carries no secret, and
+# the token's `value` is a user note (not key material, see `tx_notes`).
+rust/shekyl-engine-state/src/tx_meta_block.rs|txid: [u8; 32]
+#
 # Mirror-struct `TxSecretKeySchema` — compile-only shadow driving the
 # `postcard_schema::Schema` impl for `TxSecretKey`. Same rationale as
 # the `TransferDetailsSchema` block above.
