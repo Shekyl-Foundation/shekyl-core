@@ -1093,12 +1093,63 @@ the round kept trying to add forensics underneath it.
    a service that does not move bulk content — the exact case an archiver
    isn't); (3) rate-limit shard fetches per requester alongside the pinned
    `HiddenServicePoW`, attacking the query count guard discovery needs.
+
+   **Mechanism ruling — PR-C (2026-08-11): build the path-selection half in
+   Rust as typed knobs; do NOT adopt the Python addon; defer the
+   circuit-killing half (Bandguards + Rendguards) entirely.** Four grounds:
+   (a) the upstream `vanguards` addon is a **dropped dependency** — removed
+   from Debian Trixie, disabled by default in Whonix after connection-drop
+   bugs on tor 0.4.8.x — and is not a supply chain to attach a privacy
+   coin's serving path to; (b) the addon runs as a **second process holding
+   full control-port authority** (cookie file, `ADD_ONION`, `SETCONF`),
+   which breaches the crate's no-passthrough control-plane invariant *more
+   thoroughly* than the torrc escape hatch that policy already forbids;
+   (c) two of the addon's three subsystems **fight our traffic profile** —
+   Bandguards' ~100 MB cap is tuned for services that do not move bulk
+   content, and a cap that closes a circuit mid-transfer yields an
+   incomplete read, which under expiry⇒miss is an *unattributed miss that
+   accrues toward a slash*: importing them wholesale installs a self-DoS on
+   the exact path whose failure costs capital; (d) our own supervisor makes
+   *lite* worse — Vanguards-Lite does not persist guards to disk, so a
+   per-incarnation restart (backoff from 1 s, `degrade_after: 5`) re-draws
+   the L2 set every flap, and every re-draw is an independent adversary
+   landing chance — the over-rotation failure named above. Full vanguards
+   persists the selection + rotation timestamps, which fixes this, so
+   **restart-survival is a guard-topology concern, not only an `ADD_ONION`
+   re-publish concern.** A bonded archiver is also the **long-lived** case
+   the spec says lite does not protect (lite targets ≤ ~1 month; full
+   targets services meant to run longer), and the spec sanctions the split:
+   Vanguards-Lite MUST be the default, full SHOULD be available as optional
+   service configuration.
+
+   **PR-C scope, therefore:** a typed `Vanguards` knob on `ManagedTor`; a
+   validated `Command::SetConf` emitting `HSLayer2Nodes`/`HSLayer3Nodes`
+   over the crate's closed-set path (typed `RelayFingerprint`,
+   unrepresentable-invalid, mirroring the `SetEvents` shape — never a
+   free-form key=value); our **own** relay selection (bandwidth-weighted,
+   from the consensus over the control port) and rotation manager with
+   **on-disk persistence** reloaded by the supervisor on restart; and the
+   spec's published parameters as provisional pins the rig re-derives:
+   `NUM_LAYER2_GUARDS = 4`, `NUM_LAYER3_GUARDS = 6`, L2 lifetime uniform
+   over 30–60 days (mean 45). It is us implementing a Tor subsystem —
+   accepted here only because the alternative is a distro-dropped Python
+   package holding a second control connection. **Bandguards and Rendguards
+   stay OUT** (reopen criterion, rule 21): they need CIRC-event parsing and
+   a `CloseCircuit` command the crate does not have, and their thresholds
+   are the **rig's** output — shipping them guess-tuned would arm a
+   circuit-killer against our own bulk transfers. Because it is a
+   multi-week, multi-validation-surface build, PR-C decomposes (rules
+   19/26): **C1** the `SETCONF` wire path (injection-safe, closed-set);
+   **C2** consensus retrieval + weighted L2/L3 selection; **C3** rotation +
+   persistence + supervisor reload + the knob threaded through.
+
    **Accepted residual, recorded so padding is never mistaken for having
    solved it:** active confirmation by an adversary already holding the
-   guard is NOT mitigated; the honest bound is SPIKE-F-19's own (research
-   accuracies under controlled conditions, degraded in the open world) —
-   the claim is that a guard operator who cares can find out cheaply, not
-   that guards know. **Withdrawn:** onion-address rotation (the guard is a
+   guard is NOT mitigated — L2/L3 pinning raises the cost of *reaching* that
+   position, it does not close it; the honest bound is SPIKE-F-19's own
+   (research accuracies under controlled conditions, degraded in the open
+   world) — the claim is that a guard operator who cares can find out
+   cheaply, not that guards know. **Withdrawn:** onion-address rotation (the guard is a
    property of the running Tor client, not the address). **Sequencing:
    TJ-H no longer gates the round** — fork 1 is promoted to first
    position; the Tor-layer hardening runs independently.
