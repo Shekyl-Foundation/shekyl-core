@@ -22,7 +22,7 @@
 //! * `pending_tx_hashes` — txids the *user* has submitted locally but
 //!   that have not yet been observed on-chain by the scanner. Used for
 //!   the UX "pending outgoing" state; reconciled against
-//!   [`LedgerBlock::transfers`] and [`TxMetaBlock::scanned_pool_txs`] at
+//!   [`LedgerBlock::transfers`] and [`TxMetaBlock::scanned_pool_txs`](crate::tx_meta_block::TxMetaBlock::scanned_pool_txs) at
 //!   load time.
 //!
 //! SA-4 deleted three never-wired wallet2-lineage fields at block version
@@ -128,25 +128,28 @@ impl SyncStateBlock {
     }
 
     /// Deserialize from postcard bytes produced by
-    /// [`Self::to_postcard_bytes`]. Refuses any version mismatch.
+    /// [`Self::to_postcard_bytes`].
+    /// **Refuses a version mismatch before decoding the body**, so a blob
+    /// written by another schema version reports its version rather than
+    /// surfacing as a codec error (see [`crate::version_gate`]).
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
-        let block: Self = postcard::from_bytes(bytes)?;
-        block.check_version()?;
-        Ok(block)
+        // Version first, body second — see [`crate::version_gate`]: postcard
+        // carries no framing, so a stale blob decoded under the current
+        // declaration fails as corruption before any post-decode check can
+        // name the version. The gate reads only the leading varint.
+        crate::version_gate::gate_leading_version(bytes, "sync_state", SYNC_STATE_BLOCK_VERSION)?;
+        Ok(postcard::from_bytes(bytes)?)
     }
 
     /// Version gate. Called automatically by [`Self::from_postcard_bytes`];
     /// exposed publicly so [`WalletLedger`](crate::wallet_ledger::WalletLedger)
     /// can fan out the same check.
     pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        if self.block_version != SYNC_STATE_BLOCK_VERSION {
-            return Err(WalletLedgerError::UnsupportedBlockVersion {
-                block: "sync_state",
-                file: self.block_version,
-                binary: SYNC_STATE_BLOCK_VERSION,
-            });
-        }
-        Ok(())
+        crate::version_gate::gate_version(
+            self.block_version,
+            "sync_state",
+            SYNC_STATE_BLOCK_VERSION,
+        )
     }
 }
 

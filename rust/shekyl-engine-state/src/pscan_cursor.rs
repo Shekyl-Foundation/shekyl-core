@@ -120,22 +120,18 @@ impl PScanCursor {
     /// no `known_frontier`; the value is trusted as a resume point (a stale-low
     /// seal merely re-scans more, harmless under SP-4 idempotency).
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
-        let cursor: Self = postcard::from_bytes(bytes)?;
-        cursor.check_version()?;
-        Ok(cursor)
+        // Version first, body second — see [`crate::version_gate`]: postcard
+        // carries no framing, so a stale blob decoded under the current
+        // declaration fails as corruption before any post-decode check can
+        // name the version. The gate reads only the leading varint.
+        crate::version_gate::gate_leading_version(bytes, "pscan_cursor", PSCAN_CURSOR_VERSION)?;
+        Ok(postcard::from_bytes(bytes)?)
     }
 
     /// Version gate. Called automatically by [`Self::from_postcard_bytes`];
     /// exposed so a future composite loader can fan out the same check.
     pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        if self.version != PSCAN_CURSOR_VERSION {
-            return Err(WalletLedgerError::UnsupportedBlockVersion {
-                block: "pscan_cursor",
-                file: self.version,
-                binary: PSCAN_CURSOR_VERSION,
-            });
-        }
-        Ok(())
+        crate::version_gate::gate_version(self.version, "pscan_cursor", PSCAN_CURSOR_VERSION)
     }
 }
 

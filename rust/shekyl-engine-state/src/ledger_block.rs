@@ -47,7 +47,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 
 /// Schema version of the ledger block.
 ///
-/// V3.0 ships version `3`. Versions `2` and `1` are documented for
+/// V3.0 ships version `10`. Every superseded version is documented for
 /// audit-trail purposes:
 ///
 /// - Version `1` (pre-flat-namespace) carried a two-field
@@ -71,10 +71,15 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// - Version `8` adds `TransferDetails::awaiting_confirmation` — the
 ///   F14 persisted awaiting-confirmation lock
 ///   (`DAEMON_SUBMIT_VERDICT.md` §2.6).
-/// - Version `9` (this version) adds
-///   `TransferDetails::spending_tx_hash` — the WI-RPC-3 spend-quadruple
-///   leg (F-9): the confirmed spending txid recorded so `tx_meta.tx_keys`
-///   retention stays I-2-live for no-change outbound transactions.
+/// - Version `9` adds `TransferDetails::spending_tx_hash` — the WI-RPC-3
+///   spend-quadruple leg (F-9): the confirmed spending txid recorded so
+///   `tx_meta.tx_keys` retention stays I-2-live for no-change outbound
+///   transactions.
+/// - Version `10` (this version) removes
+///   `TransferDetails::awaiting_confirmation` (PR-SJ-1b,
+///   `WALLET_SEND_RECORD.md` P3-1a): the F14 lock is a journal-derived
+///   fact (`SendJournalBlock::spend_locks`), no longer persisted on the
+///   scan-derived row.
 ///
 /// Any field addition / removal / renaming inside the block, or any
 /// transitive change in a nested type's serialized shape, bumps this;
@@ -82,10 +87,6 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-/// Version `10` removes `TransferDetails::awaiting_confirmation`
-/// (PR-SJ-1b, `WALLET_SEND_RECORD.md` P3-1a): the F14 lock is a
-/// journal-derived fact (`SendJournalBlock::spend_locks`), no
-/// longer persisted on the scan-derived row.
 pub const LEDGER_BLOCK_VERSION: u32 = 10;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
@@ -258,25 +259,24 @@ impl LedgerBlock {
     }
 
     /// Deserialize from postcard bytes produced by
-    /// [`LedgerBlock::to_postcard_bytes`]. Refuses any version mismatch.
+    /// [`LedgerBlock::to_postcard_bytes`].
+    /// **Refuses a version mismatch before decoding the body**, so a blob
+    /// written by another schema version reports its version rather than
+    /// surfacing as a codec error (see [`crate::version_gate`]).
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
-        let block: Self = postcard::from_bytes(bytes)?;
-        block.check_version()?;
-        Ok(block)
+        // Version first, body second — see [`crate::version_gate`]: postcard
+        // carries no framing, so a stale blob decoded under the current
+        // declaration fails as corruption before any post-decode check can
+        // name the version. The gate reads only the leading varint.
+        crate::version_gate::gate_leading_version(bytes, "ledger", LEDGER_BLOCK_VERSION)?;
+        Ok(postcard::from_bytes(bytes)?)
     }
 
     /// Version gate. Called automatically by [`Self::from_postcard_bytes`];
     /// exposed publicly so the `WalletLedger` aggregator (commit 2g) can
     /// fan out the same check across every block in the bundle.
     pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        if self.block_version != LEDGER_BLOCK_VERSION {
-            return Err(WalletLedgerError::UnsupportedBlockVersion {
-                block: "ledger",
-                file: self.block_version,
-                binary: LEDGER_BLOCK_VERSION,
-            });
-        }
-        Ok(())
+        crate::version_gate::gate_version(self.block_version, "ledger", LEDGER_BLOCK_VERSION)
     }
 
     // -- Read-only queries (moved from RuntimeWalletState) -----------------

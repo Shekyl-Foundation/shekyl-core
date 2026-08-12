@@ -50,6 +50,12 @@ pub mod staking_block;
 pub mod sync_state_block;
 pub mod transfer;
 pub mod tx_meta_block;
+// Public for its *documentation*, not its API: every block's public
+// `from_postcard_bytes` links here for the load-ordering contract it obeys,
+// so the module has to be reachable from the docs those methods generate.
+// The gate functions stay `pub(crate)` — callers reach them only through a
+// block's own loader.
+pub mod version_gate;
 pub mod wallet_ledger;
 
 pub use bookkeeping_block::{AddressBookEntry, BookkeepingBlock, BOOKKEEPING_BLOCK_VERSION};

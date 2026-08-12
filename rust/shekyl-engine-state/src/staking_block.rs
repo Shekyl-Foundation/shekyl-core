@@ -194,25 +194,24 @@ impl StakingBlock {
     }
 
     /// Deserialize from postcard bytes produced by
-    /// [`Self::to_postcard_bytes`]. Refuses any version mismatch.
+    /// [`Self::to_postcard_bytes`].
+    /// **Refuses a version mismatch before decoding the body**, so a blob
+    /// written by another schema version reports its version rather than
+    /// surfacing as a codec error (see [`crate::version_gate`]).
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
-        let block: Self = postcard::from_bytes(bytes)?;
-        block.check_version()?;
-        Ok(block)
+        // Version first, body second — see [`crate::version_gate`]: postcard
+        // carries no framing, so a stale blob decoded under the current
+        // declaration fails as corruption before any post-decode check can
+        // name the version. The gate reads only the leading varint.
+        crate::version_gate::gate_leading_version(bytes, "staking", STAKING_BLOCK_VERSION)?;
+        Ok(postcard::from_bytes(bytes)?)
     }
 
     /// Version gate. Called automatically by [`Self::from_postcard_bytes`];
     /// exposed publicly so [`WalletLedger`](crate::wallet_ledger::WalletLedger)
     /// can fan out the same check.
     pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        if self.block_version != STAKING_BLOCK_VERSION {
-            return Err(WalletLedgerError::UnsupportedBlockVersion {
-                block: "staking",
-                file: self.block_version,
-                binary: STAKING_BLOCK_VERSION,
-            });
-        }
-        Ok(())
+        crate::version_gate::gate_version(self.block_version, "staking", STAKING_BLOCK_VERSION)
     }
 }
 

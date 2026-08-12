@@ -342,14 +342,11 @@ impl SendJournalBlock {
 
     /// Enforce the block version gate at load.
     pub fn check_version(&self) -> Result<(), crate::error::WalletLedgerError> {
-        if self.block_version != SEND_JOURNAL_BLOCK_VERSION {
-            return Err(crate::error::WalletLedgerError::UnsupportedBlockVersion {
-                block: "send_journal",
-                file: self.block_version,
-                binary: SEND_JOURNAL_BLOCK_VERSION,
-            });
-        }
-        Ok(())
+        crate::version_gate::gate_version(
+            self.block_version,
+            "send_journal",
+            SEND_JOURNAL_BLOCK_VERSION,
+        )
     }
 
     /// Birth a dispatch-authored row (pin-1 form: before the bytes can

@@ -547,42 +547,19 @@ impl PendingPostBlock {
     }
 
     /// Deserialize from [`Self::to_postcard_bytes`] output. **Refuses a
-    /// version mismatch.**
-    ///
-    /// The version is gated on the leading `version` prefix **before** the rest
-    /// of the struct is decoded. `version` is this struct's first field and
-    /// postcard serializes fields in declaration order with no framing, so the
-    /// prefix is the first varint of the blob. Gating on it first means a blob
-    /// written by *any* other schema version is refused with a clean
-    /// [`WalletLedgerError::UnsupportedBlockVersion`] (refuse-not-migrate, rules
-    /// 15/60) rather than surfacing as an opaque postcard EOF/layout error when
-    /// the field layout differs across versions (e.g. a v4 blob has no `drains`
-    /// field, so a full v5 decode would EOF instead of naming the version).
+    /// version mismatch before decoding the body** (refuse-not-migrate, rules
+    /// 15/60), so a blob written by any other schema version names its version
+    /// instead of surfacing as an opaque postcard EOF/layout error — e.g. a v4
+    /// blob has no `drains` field, so a full v5 decode would EOF. This block
+    /// was the first to need that ordering; [`crate::version_gate`] now owns it
+    /// for every persisted block.
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
-        let (version, _rest) = postcard::take_from_bytes::<u32>(bytes)?;
-        Self::ensure_supported_version(version)?;
-        let block: Self = postcard::from_bytes(bytes)?;
-        Ok(block)
-    }
-
-    /// Version gate for an already-decoded block.
-    pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        Self::ensure_supported_version(self.version)
-    }
-
-    /// The single version-comparison site, shared by the pre-decode prefix gate
-    /// ([`Self::from_postcard_bytes`]) and the post-decode
-    /// [`Self::check_version`], so the two cannot disagree on what "supported"
-    /// means.
-    fn ensure_supported_version(version: u32) -> Result<(), WalletLedgerError> {
-        if version != PENDING_POST_VERSION {
-            return Err(WalletLedgerError::UnsupportedBlockVersion {
-                block: "pending_post_block",
-                file: version,
-                binary: PENDING_POST_VERSION,
-            });
-        }
-        Ok(())
+        crate::version_gate::gate_leading_version(
+            bytes,
+            "pending_post_block",
+            PENDING_POST_VERSION,
+        )?;
+        Ok(postcard::from_bytes(bytes)?)
     }
 }
 
