@@ -379,8 +379,8 @@ express the gate cleanly.
 | **PR-SA-3a** | Consensus leaf-hash SSOT: `PqcLeafScalar::from_pqc_public_key` wraps `hash_pqc_public_key`; retired dual `DOMAIN_PQC_LEAF` + dual Blake2b/wide_reduce; pinned pre-dedup KAT (empty / 1-byte / full ML-DSA-65 / all-`0xff`). No wire change. | **MERGED #436** |
 | **PR-SA-3b** | Domain registry: single-source [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) census of every production domain string by **mechanism** (not a flat all-pairs collision test — that is a category error, §5); **per-mechanism** distinctness test (`shekyl-crypto-pq/tests/domain_registry.rs`, mech-2 keyed by `salt\|info`) with pinned per-mechanism census counts (the ONLY count copy — TSV headers and prose defer to it) and **test-domain segregation** (test-only rows machine-checked disjoint from production identities per mechanism); CI gate (`scripts/ci/domain_registry_gate.sh`) with comment-stripped row-presence + exact `const <name>:` binding + comment-stripped entry-point count-pins on always-domain mechanisms (cSHAKE / FROST) + frozen-doc cross-check, **anchored on call sites, not the `shekyl/` prefix** (§3.1) — honest scope: new unregistered domains in general-purpose mechanisms (HKDF/Blake2b/keccak/SHA3-256) are a review duty, not a false gate guarantee; frozen consequence markers (mech-3 FROST into [`FROZEN_DOMAIN_SEPARATORS.md`](../FROZEN_DOMAIN_SEPARATORS.md), naming the per-seam break); TSV-only changes run the distinctness test (Rust workflow path re-include); through-line invariant written as a rule (§5); error-band pointer (§6). Mutates **zero** domain values. **Feeds the CBOM domain section.** | **MERGED #438** (carried a review round: `PRODUCTION_PINS` single-count, comment-stripped gate, tab-safe delimiter, frozen-doc cross-check, `signable_header` deleted for zero callers with the B2 forward-guard relocated to `sender_sig`) |
 | **PR-SA-3c** | `SNAPSHOT_ID_CUSTOMIZATION` (`refresh.rs`) retargeted `cn_fast_hash` → cSHAKE256 with the domain as customization (`shekyl/snapshot-id-v1`); this **does** change a domain's bytes — permitted because `SnapshotId` is a wallet-internal reservation-staleness token (no `Serialize`, absent from `shekyl-engine-file`, never wire/cross-node — verified at the call graph), so it is a fresh mint, not a re-spelling (§5). Regression test re-cast to vary the cSHAKE customization; registry row moved mech 5 → mech 1, count-pins + dated snapshots updated; `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §segment-2g marked superseded. No persisted-state change (no rule-42 bump). | **MERGED #443** (carried a review round: `SNAPSHOT_ID_DOMAIN`→`SNAPSHOT_ID_CUSTOMIZATION` rename, the domain-separation test given an independent byte-oracle instead of reusing the production encoder, and the supersession sweep taken repo-wide) |
-| **PR-SA-3d** | `cn_fast_hash` → `keccak256` rename (Rust-internal, byte-identical: 43 call sites across 14 files in 8 crates; the C ABI export keeps the name `shekyl_cn_fast_hash` so no C++ edit and the FFI export list is unchanged); crypto-hash module header already carries the Keccak-256-is-consensus-parity-only / cSHAKE-for-everything-new split, made consistent by the rename | **in flight** (`feat/sa3d-cnfasthash-keccak256-rename`, off dev) |
-| **PR-SA-4** | Dead persisted-field sweep (writer/reader existence per persisted field; tx_notes PR-SJ-2 confirmation) | pending |
+| **PR-SA-3d** | `cn_fast_hash` → `keccak256` rename (Rust-internal, byte-identical: 43 call sites across 14 files in 8 crates; the C ABI export keeps the name `shekyl_cn_fast_hash` so no C++ edit and the FFI export list is unchanged); crypto-hash module header already carries the Keccak-256-is-consensus-parity-only / cSHAKE-for-everything-new split, made consistent by the rename | **MERGED #446** |
+| **PR-SA-4** | Dead persisted-field sweep (§7): a per-field writer/reader census over the 10 schema-snapshotted blocks + `WalletLedger` + the pscan / pending-post staking state. **Deleted** (no live writer *and* no live reader): `TxMetaBlock.attributes` (executing the ratified P3-5), `SyncStateBlock.{scan_completed, confirmations_required, trusted_daemon}`, `PFundingOutputRecord.tx_hash` (+ its dead transform-twin), `PendingEmissionClaim.{p_slot, claimed_epochs}`, `PendingDrain.p_slot`. **Kept, docstrings corrected** (named future vehicle or ratified retention): `creation_anchor_hash`, `scanned_pool_txs`, the SJ-DQ-1 full-row fields (`change_amount` / `SendRecipient.address` / `SendInputRef.amount`), `accruals`, `BondPostRecord.height`, `PFundingOutputRecord.epoch`, `RetiredPersonaRecord.{unbond,retired}_epoch`, `BookkeepingBlock.{primary_label, address_book}`. **Wired** (the tx_notes / PR-SJ-2 confirmation resolved to SJ-DQ-7): the dormant `tx_notes` annotation surface. Per-block version bumps + `WALLET_LEDGER_FORMAT_VERSION` 15→16; refuse-don't-migrate touches only the state-side payloads, never the `.wallet.keys` seed envelope. | **in flight** (`feat/sa4-dead-persisted-fields`, off dev) |
 | **PR-SA-5** | Persona lifecycle: SA-R-6 guard + scan reconstruction; ruling into `ARCHIVAL_P_DERIVE_V1` module doc + operator guide (no-rotation stated as a refusal, clustering rationale named). **Feeds the CBOM persona no-backstop row.** | pending |
 | **PR-SA-6** | CBOM close/formalize (see §4) + infra PQ posture (release-signing paragraph); untrusted-cast sweep + one clamp/reject/None ruling | pending |
 | tail | House conventions (envelope-vs-payload version naming; panic-vs-Option rule; **SA-R-2 distinct-string-per-context**) → `.cursor/rules/`; FOLLOWUPS rewrap as its own mechanical commit | pending |
@@ -514,3 +514,63 @@ checksum-rejected / verify-failed). Consensus-level auth/verify failures (the si
 SA-2 signing surfaces) are **not** in this band at all — they are transaction
 rejections at the daemon/C++ boundary, not wallet-RPC errors, and the CBOM records
 them under the signing-surface inventory, not here.
+
+## 7. PR-SA-4 — the dead persisted-field census (evidence artifact)
+
+The dead-field sweep is a one-time census, not a CI gate (rule-42 schema
+snapshots already guard schema drift, and "every field has a reader" is not
+mechanizable without theater). This table is the evidence: every persisted
+field whose disposition was non-obvious, verified at the call graph.
+
+**Definitions.** A **live writer** inserts non-default data on a production
+path (not `::empty()` / a test constructor / a pass-through `BTreeMap::new()`).
+A **live reader** is a consumer whose output or behavior changes with the
+value (RPC/CLI/scan/consensus/balance/proof/version-gate) — *not* a
+serialization round-trip, a `Debug` impl, an invariant set-membership check,
+or a test. Surface = the 10 schema-snapshotted blocks + `WalletLedger` + the
+pscan / pending-post staking state + the SWSP envelope.
+
+### Deleted (no live writer AND no live reader)
+
+| Field | Block | Why dead | Version bump |
+|---|---|---|---|
+| `attributes` | `TxMetaBlock` | untyped wallet2-lineage bag, ratified delete (P3-5) | `TX_META_BLOCK_VERSION` 2→3 |
+| `scan_completed` | `SyncStateBlock` | never set true, never read; docstring claimed a UX consumer that did not exist | `SYNC_STATE_BLOCK_VERSION` 1→2 |
+| `confirmations_required` | `SyncStateBlock` | zero non-test refs | (same) |
+| `trusted_daemon` | `SyncStateBlock` | zero non-test refs | (same) |
+| `tx_hash` | `PFundingOutputRecord` | re-derivation keys on `index_in_transaction` + ciphertexts; every needed tx hash recomputed fresh at the scan seam. Dead transform-twin `FundingOutputMatch.tx_hash` deleted with it (finishing-third) | `PSCAN_STATE_VERSION` 7→8 |
+| `p_slot` | `PendingEmissionClaim` | every path keys on `persona` (`PCanonicalId`) | `PENDING_POST_VERSION` 6→7 |
+| `claimed_epochs` | `PendingEmissionClaim` | dedup is one-live-claim-per-persona; sealed `tx_bytes` bind the epochs | (same) |
+| `p_slot` | `PendingDrain` | keys on `persona` | (same) |
+
+`WALLET_LEDGER_FORMAT_VERSION` 15→16 (rule-42 pairing for the two
+WalletLedger-internal blocks). Refuse-don't-migrate; all bumps touch only
+the state-side SWSP payloads (`.wallet` / `.wallet.pscan` / `.wallet.pending`,
+rescan-regenerable), never the write-once `.wallet.keys` seed envelope.
+
+### Kept, docstrings corrected (named future vehicle or ratified retention)
+
+| Field(s) | Why kept |
+|---|---|
+| `creation_anchor_hash` (`SyncStateBlock`) | named staking-canonicity "trust floor" concept + pending newtype migration |
+| `scanned_pool_txs` (`TxMetaBlock`) | provisioned for the Stage-4 `MempoolMonitorActor` |
+| `change_amount` / `SendRecipient.address` / `SendInputRef.amount` (`SendRecord`) | SJ-DQ-1 full row: replay cannot recover counterparty + the split; awaiting the OUTGOING detail projection |
+| `accruals` (`PScanState`) | SP-7 `C_min` reader is `#[allow(dead_code)] // transient` |
+| `BondPostRecord.height` | 2d-2 SP-R0 reconcile GC reader is dormant |
+| `PFundingOutputRecord.epoch` | kept alongside `accruals` for SP-7 per-output attribution |
+| `RetiredPersonaRecord.{unbond,retired}_epoch` | ratified done-side authoritative-record provenance (2026-06-29 round); derive-forward keys on `p_slot` |
+| `BookkeepingBlock.{primary_label, address_book}` | reserved future UX surfaces; the address book is an open per-feature question |
+
+`SWSP _reserved` is **not** a finding — const-zero write with a non-zero
+refusal gate is standard forward-compat framing.
+
+### Wired (the tx_notes / PR-SJ-2 confirmation)
+
+`tx_notes` (`TxMetaBlock`) was persisted-but-inert. Rather than delete it, it
+was wired per its ratified SJ-DQ-7 disposition (`WALLET_SEND_RECORD.md`
+§SJ-DQ-7 resolution): `Engine::set_tx_note` writer + `note`-on-`TransferView`
+reader + `set_tx_note` RPC + OpenAPI. Now live.
+
+**Inert-field findings, closed:** `attributes` **deleted**, `tx_notes`
+**wired**, `AddressBookEntry.payment_id` **still pending** its own disposition
+(it rides with the retained `address_book`, an open per-feature question).
