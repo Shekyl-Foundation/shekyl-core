@@ -2401,26 +2401,37 @@ namespace nodetool
 
     if (origin != enet::zone::invalid)
     {
-      /* STILL DORMANT — §89 did not wake this, and §89.7 said it did.
+      /* LIVE as of Q12-U2. Dormant before it, for five links rather than the
+         four §63.8 recorded — and §89.7 wrongly claimed §89 had woken it.
 
-         §63.8 closed it on a four-link chain and §89 breaks link 1 (an
-         anonymity stem clears `dandelionpp_fluff`). But the chain has a fifth
-         link §63.8 never recorded, and it binds on its own: a non-public
-         arrival takes `relay_method::forward`
-         (`cryptonote_protocol_handler.inl:969`), `tx_pool.cpp:360` refuses to
-         propagate `forward` into `tvc.m_relay`, and the batching switch drops
-         it (`// not supposed to happen here`). So `relay_transactions` is
-         never called at arrival with an anonymity origin, and `send_txs`
-         cannot see (anon origin, pre-fluff) whatever link 1 does.
+         §89 broke link 1 (an anonymity stem clears `dandelionpp_fluff`). The
+         fifth link bound on its own: a non-public arrival took
+         `relay_method::forward`, `add_tx` refused to propagate `forward` into
+         `tvc.m_relay`, and the batching switch dropped it. So
+         `relay_transactions` was never called at arrival with an anonymity
+         origin, and this branch could not see (anon origin, pre-fluff)
+         whatever link 1 did. Q12-U2 deleted the class: an arrival is stemmed
+         whatever transport carried it, and reaches here with its real origin.
 
-         Kept, not deleted: it is correct for the world it will run in, and
-         that world is the receive-path change §89.8.2 names. What is wrong is
-         only the claim that it runs now.
+         Two callers now arrive with a non-`invalid` origin, and they are not
+         the same case:
+
+         - the ARRIVAL, from `handle_notify_new_transactions`, whose origin is
+           the live connection's zone;
+         - the RE-RELAY, from `core::relay_txpool_transactions`, whose origin
+           is read back from `txpool_tx_meta_t::origin_zone` (Q12-U1) because
+           the connection is long gone. Its source is nil, which is why the
+           divert roll below excludes it and coherence here does not — a
+           re-relay carries an arrival zone to cohere with, but it is not a
+           new entry to re-roll.
 
          **Witness.** Link 1 is pinned by `levin.cpp`'s `private_*` cases; the
-         pure gate by `r1_coherence_predicate`. The end-to-end arrival needs a
-         `t_core` mock the suite lacks — see §89.8 / FOLLOWUPS, and note that
-         the missing witness is exactly what hid the fifth link. */
+         pure gate by `r1_coherence_predicate`; the re-relay's origin by
+         `daemon_submit_shims`. Still NOT witnessed: the arrival leg
+         end-to-end, which needs the `t_core` harness the suite lacks (§89.8 /
+         FOLLOWUPS). Note what that cost last time — the missing witness is
+         exactly what hid the fifth link, and what let §89.7 assert liveness
+         across it. */
       if (cryptonote::r1_coherence_keeps_origin(tx_relay, origin) &&
           m_network_zones.count(origin))
         return send(*m_network_zones.find(origin)); // coherence: no re-roll

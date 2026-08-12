@@ -67,7 +67,6 @@ bool matches_category(relay_method method, relay_category category) noexcept
   {
     default:
     case relay_method::local:
-    case relay_method::forward:
     case relay_method::stem:
       return false;
     case relay_method::block:
@@ -84,7 +83,7 @@ void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
   kept_by_block = 0;
   do_not_relay = 0;
   is_local = 0;
-  is_forwarding = 0;
+  bf_padding = 0;
   dandelionpp_stem = 0;
 
   switch (method)
@@ -94,9 +93,6 @@ void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
       break;
     case relay_method::local:
       is_local = 1;
-      break;
-    case relay_method::forward:
-      is_forwarding = 1;
       break;
     case relay_method::stem:
       dandelionpp_stem = 1;
@@ -112,11 +108,14 @@ void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
 
 relay_method txpool_tx_meta_t::get_relay_method() const noexcept
 {
+  /* Bit 3 was `is_forwarding` and is now reserved (`bf_padding`). It is left
+     OUT of this sum rather than added as a zero term: a record that somehow
+     carried it set must not decode to a class that no longer exists, and
+     omitting it makes such a record fall to the `default` arm below. */
   const uint8_t state =
     uint8_t(kept_by_block) +
     (uint8_t(do_not_relay) << 1) +
     (uint8_t(is_local) << 2) +
-    (uint8_t(is_forwarding) << 3) +
     (uint8_t(dandelionpp_stem) << 4);
 
   switch (state)
@@ -130,8 +129,6 @@ relay_method txpool_tx_meta_t::get_relay_method() const noexcept
       return relay_method::none;
     case 4:
       return relay_method::local;
-    case 8:
-      return relay_method::forward;
     case 16:
       return relay_method::stem;
   };
@@ -171,8 +168,7 @@ epee::net_utils::zone txpool_tx_meta_t::get_origin_zone() const noexcept
 bool txpool_tx_meta_t::upgrade_relay_method(relay_method method) noexcept
 {
   static_assert(relay_method::none < relay_method::local, "bad relay_method value");
-  static_assert(relay_method::local < relay_method::forward, "bad relay_method value");
-  static_assert(relay_method::forward < relay_method::stem, "bad relay_method value");
+  static_assert(relay_method::local < relay_method::stem, "bad relay_method value");
   static_assert(relay_method::stem < relay_method::fluff, "bad relay_method value");
   static_assert(relay_method::fluff < relay_method::block, "bad relay_method value");
 

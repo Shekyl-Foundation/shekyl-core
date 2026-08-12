@@ -6,7 +6,8 @@
 // by origin instead of inferring it. `relay_method::forward` used to carry that
 // meaning -- it meant "arrived somewhere other than clearnet" and threw away
 // WHICH somewhere -- which is why the fact now has its own storage separate
-// from the routing decision.
+// from the routing decision. Q12-U2 deleted that class outright, so the
+// aliasing matrix below no longer has a `forward` column.
 //
 // What these tests are actually defending is the NO-MIGRATION claim. It rests
 // on `zone::invalid == 0` plus every pre-existing record carrying zero in the
@@ -66,8 +67,8 @@ namespace
     {
       for (const cryptonote::relay_method m : {
              cryptonote::relay_method::none, cryptonote::relay_method::local,
-             cryptonote::relay_method::forward, cryptonote::relay_method::stem,
-             cryptonote::relay_method::fluff, cryptonote::relay_method::block})
+             cryptonote::relay_method::stem, cryptonote::relay_method::fluff,
+             cryptonote::relay_method::block})
       {
         cryptonote::txpool_tx_meta_t a{};
         a.set_origin_zone(z);
@@ -83,6 +84,35 @@ namespace
         EXPECT_EQ(z, b.get_origin_zone());
         EXPECT_EQ(m, b.get_relay_method()) << "set_origin_zone disturbed the relay method";
       }
+    }
+  }
+
+  // Q12-U2 freed the bit that held `is_forwarding` and kept it as reserved
+  // padding rather than removing it, so that the members after it do not shift
+  // position in a persisted record. `fcmp_verified` is the neighbour that would
+  // move, and it is the one where a misread costs something: reading 1 where 0
+  // was written skips a proof re-verification. `set_relay_method` clears the
+  // reserved bit, so this also pins that it clears the RESERVED bit and not a
+  // live one next to it.
+  TEST(txpool_origin_zone, the_reclaimed_bit_does_not_disturb_its_neighbours)
+  {
+    for (const cryptonote::relay_method m : {
+           cryptonote::relay_method::none, cryptonote::relay_method::local,
+           cryptonote::relay_method::stem, cryptonote::relay_method::fluff,
+           cryptonote::relay_method::block})
+    {
+      cryptonote::txpool_tx_meta_t meta{};
+      meta.fcmp_verified = 1;
+      meta.double_spend_seen = 1;
+      meta.pruned = 1;
+      meta.set_origin_zone(zone::tor);
+      meta.set_relay_method(m);
+
+      EXPECT_EQ(1u, meta.fcmp_verified) << "set_relay_method cleared fcmp_verified";
+      EXPECT_EQ(1u, meta.double_spend_seen);
+      EXPECT_EQ(1u, meta.pruned);
+      EXPECT_EQ(zone::tor, meta.get_origin_zone());
+      EXPECT_EQ(m, meta.get_relay_method());
     }
   }
 

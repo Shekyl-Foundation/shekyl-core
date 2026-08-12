@@ -39,13 +39,29 @@ namespace cryptonote
   {
     none = 0, //!< Received via RPC with `do_not_relay` set
     local,    //!< Received via RPC; trying to send over i2p/tor, etc.
-    forward,  //!< Received over i2p/tor; timer delayed before ipv4/6 public broadcast
     stem,     //!< Received/send over network using Dandelion++ stem
     fluff,    //!< Received/sent over network using Dandelion++ fluff
     block     //!< Received in block, takes precedence over others
   };
 
-  /*! \brief Pre-fluff relay methods for R-1 (stem / forward / local).
+  /* `forward` was here, between `local` and `stem`, and Q12-U2 deleted it.
+     It meant "arrived over i2p/tor; hold on a timer, then broadcast to
+     clearnet" — that is, PROVENANCE used as a routing input, and it threw away
+     which anonymity network the transaction came from in the process. Q12-D3
+     rules provenance is not a routing input, so the class had nothing left to
+     express: an arrival is stemmed whatever transport carried it, and the fact
+     of where it came from is recorded in `txpool_tx_meta_t::origin_zone`
+     (Q12-U1) where a fact belongs. Folding the fact into the decision is what
+     made the zone unrecoverable.
+
+     The enum's numeric values are NOT persisted and NOT on the wire — the
+     txpool encodes the method as independent bits and no RPC or levin surface
+     exposes the integer — so removing a middle value renumbers nothing that
+     outlives the process. The ordering the values DO carry is
+     `upgrade_relay_method`'s monotonicity, whose `static_assert`s moved with
+     the deletion. */
+
+  /*! \brief Pre-fluff relay methods for R-1 (stem / local).
 
       Fluff is the deliberate exit from the anonymity zone: once a transaction
       fluffs it must leave, or coherence would strand it in the anonymity
@@ -56,7 +72,6 @@ namespace cryptonote
   constexpr bool is_pre_fluff_relay(const relay_method method) noexcept
   {
     return method == relay_method::stem
-        || method == relay_method::forward
         || method == relay_method::local;
   }
 
@@ -75,11 +90,11 @@ namespace cryptonote
       `stem` or `fluff` moves the entry out of `local` permanently, and the next
       pool re-relay puts the user's own transaction on the clear internet.
 
-      Relayed traffic is excluded deliberately, not by oversight. `stem` and
-      `forward` must record `stem` so the per-zone embargo is drawn (§89.2), and
-      clearnet was always that traffic's home — the roll is eligibility, not a
-      drop commitment (§59.7). Clearnet origins are excluded too: `local` on the
-      public zone has always recorded `stem`, and its home *is* clearnet. */
+      Relayed traffic is excluded deliberately, not by oversight. It records
+      `stem` so the per-zone embargo is drawn (§89.2), and clearnet was always
+      that traffic's home — the roll is eligibility, not a drop commitment
+      (§59.7). Clearnet origins are excluded too: `local` on the public zone has
+      always recorded `stem`, and its home *is* clearnet. */
   constexpr bool originated_stays_in_zone(
     const relay_method tx_relay,
     const epee::net_utils::zone nzone) noexcept

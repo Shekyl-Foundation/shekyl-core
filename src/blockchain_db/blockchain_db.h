@@ -207,7 +207,21 @@ struct txpool_tx_meta_t
   uint8_t pruned: 1;
   uint8_t is_local: 1;
   uint8_t dandelionpp_stem : 1;
-  uint8_t is_forwarding: 1;
+  /* Reserved. Held `is_forwarding` until Q12-U2 deleted `relay_method::forward`
+     (see cryptonote_protocol/enums.h for why the class went).
+
+     Kept as a reserved bit rather than removed, and the reason is layout, not
+     sentiment: the members below it are read from persisted records, so
+     deleting this bit would shift `fcmp_verified` and `origin_zone` down one
+     position and make new code misread old entries — including
+     `fcmp_verified` reading 1 where 0 was written, which is the direction that
+     skips a proof re-verification. Pre-genesis there is no deployed pool for
+     that to happen to, and the txpool is ephemeral node-local state rather
+     than chain history, so both reasons say "harmless" — but a reserved bit
+     costs one line and removes the question instead of arguing it. Zeroed by
+     `set_relay_method`, exactly where `is_forwarding` was, so every bit in
+     this byte is still written by someone. */
+  uint8_t bf_padding: 1;
   uint8_t fcmp_verified: 1;  // set when fcmp_verification_hash is valid
   //! Zone this transaction ARRIVED over. See set_origin_zone/get_origin_zone.
   //

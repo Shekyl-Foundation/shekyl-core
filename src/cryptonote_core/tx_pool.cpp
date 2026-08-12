@@ -1013,7 +1013,6 @@ namespace cryptonote
         switch (tx_relay)
         {
           case relay_method::stem:
-          case relay_method::forward:
             if (meta.last_relayed_time > now)
             {
               next_check = std::min(next_check, meta.last_relayed_time);

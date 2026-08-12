@@ -1279,10 +1279,9 @@ namespace levin
         case relay_method::block:
           return false;
         case relay_method::stem:
-        case relay_method::forward:
         case relay_method::local:
           /* GATE 3 of 3, deleted at §89.5. This was gated on
-             `zone_->nzone == public_`, so stem/forward/local on i2p/tor fell
+             `zone_->nzone == public_`, so stem/local on i2p/tor fell
              through into the fluff arm and the anonymity zone diffused where
              the design said it stemmed (§63). Tor is a transport like the
              clear internet; changing the transport does not change the graph.
@@ -1291,7 +1290,7 @@ namespace levin
              this stem later fluffs — it travels with the zone's `reach`
              (`FluffReach::OutboundOnly`, set from `nzone != public_` in
              `make_relay_zone`), which no stemming decision touches. */
-          // this will change a local/forward tx to stem or fluff ...
+          // this will change a local tx to stem or fluff ...
           boost::asio::dispatch(
             zone_->strand,
             dandelionpp_notify{zone_, core_, std::move(txs), source, tx_relay}
