@@ -8,11 +8,10 @@
 //! settlement.
 //!
 //! Design of record: `ARCHIVAL_CHALLENGE_MECHANISM.md` §3 (nested
-//! measurement) and §7.1 (threshold ratification, 2026-08-11) — **on the
-//! `design/archival-challenge-mechanism` branch**, where the round
-//! iterates until it closes and lands on dev; the dev copy is the round's
-//! opening snapshot and carries a superseded-in-place banner. This module
-//! owns
+//! measurement) and §7.1 (threshold ratification, 2026-08-11). The round
+//! landed on `dev` 2026-08-11, so that file is now the record directly —
+//! the WIP branch and its superseded-in-place banner are retired. This
+//! module owns
 //! **only the settlement-time fold**; admission verifies countersignatures
 //! elsewhere, and by settlement time the signatures are pruned by
 //! construction — the fold reads only counts derived from kept data.
