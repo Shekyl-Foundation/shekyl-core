@@ -51,4 +51,7 @@ pub use onion::{
 };
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
 pub use stream::{parse_stream_event, CircId, StreamEvent, StreamStatus};
-pub use vanguards::{HsLayerPins, RelayFingerprint};
+pub use vanguards::{
+    draw_replacement, select_disjoint, select_hs_layers, HsLayerPins, RelayFingerprint,
+    SelectionError, VanguardRng, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS,
+};

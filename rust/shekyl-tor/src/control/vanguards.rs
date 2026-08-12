@@ -38,9 +38,14 @@ use std::fmt;
 
 use super::consensus::ConsensusRelay;
 
-/// Provisional vanguard set sizes (mechanism ruling §7.4): the published
-/// full-vanguards parameters, which the W₂ rig re-derives against our pull
-/// rate. Named here so C2 selection and C3 rotation share one source.
+/// Vanguard set sizes — **spec-pinned, not provisional** (mechanism ruling
+/// §7.4, corrected). These come from the full-vanguards Sybil rotation table:
+/// with `NUM_LAYER3_GUARDS = 6`, 50 % Sybil success takes ~15.75 days for a
+/// 1 % adversary, ~4 days at 5 %, ~2.62 days at 10 % — a property of the Tor
+/// network's adversary model, not of our traffic. What the W₂ rig derives is
+/// **capacity** (whether a 4-node L2 set comfortably carries a serving
+/// persona's concurrent rendezvous load), a different question with different
+/// parameters. Named here so C2 selection and C3 rotation share one source.
 pub const NUM_LAYER2_GUARDS: usize = 4;
 /// See [`NUM_LAYER2_GUARDS`].
 pub const NUM_LAYER3_GUARDS: usize = 6;
@@ -141,10 +146,9 @@ fn hex_val(b: u8) -> Option<u8> {
 /// Holds **non-empty** L2 and L3 sets by construction ([`Self::new`]) — an
 /// empty set would render `HSLayer2Nodes=` (a *clear*, handing selection
 /// back to tor's built-in vanguards-lite), which is a different operation
-/// this type deliberately cannot express. The set sizes themselves are C2's
-/// concern (the ruling's provisional `NUM_LAYER2_GUARDS = 4` /
-/// `NUM_LAYER3_GUARDS = 6`, which the W₂ rig re-derives); C1 pins whatever
-/// set the caller selected.
+/// this type deliberately cannot express. The set sizes are spec-pinned
+/// ([`NUM_LAYER2_GUARDS`] / [`NUM_LAYER3_GUARDS`]); this type just pins
+/// whatever set the selector produced.
 pub struct HsLayerPins {
     layer2: Vec<RelayFingerprint>,
     layer3: Vec<RelayFingerprint>,
@@ -251,29 +255,66 @@ pub fn select_hs_layers(
     l3: usize,
     rng: &mut impl VanguardRng,
 ) -> Result<HsLayerPins, SelectionError> {
-    // Candidate pool: eligible, actually-selectable (bandwidth > 0).
-    let mut pool: Vec<(RelayFingerprint, u64)> = relays
+    let (layer2, layer3) =
+        select_disjoint(relays, l2, l3, rng).ok_or(SelectionError::TooFewEligible {
+            available: eligible_pool(relays).len(),
+            needed: l2 + l3,
+        })?;
+    // Both non-empty by construction (select_disjoint filled l2 and l3 seats).
+    HsLayerPins::new(layer2, layer3).ok_or(SelectionError::TooFewEligible {
+        available: relays.len(),
+        needed: l2 + l3,
+    })
+}
+
+/// Draw disjoint layer-2 and layer-3 fingerprint sets, bandwidth-weighted —
+/// the selection primitive the rotation manager builds on (it attaches the
+/// per-node timers). `None` if the eligible pool cannot fill `l2 + l3` seats.
+/// L2 is drawn first, L3 from the remainder, so the sets are disjoint.
+#[must_use]
+pub fn select_disjoint(
+    relays: &[ConsensusRelay],
+    l2: usize,
+    l3: usize,
+    rng: &mut impl VanguardRng,
+) -> Option<(Vec<RelayFingerprint>, Vec<RelayFingerprint>)> {
+    let mut pool = eligible_pool(relays);
+    if pool.len() < l2 + l3 {
+        return None;
+    }
+    let layer2 = draw_weighted(&mut pool, l2, rng);
+    let layer3 = draw_weighted(&mut pool, l3, rng);
+    Some((layer2, layer3))
+}
+
+/// Draw **one** replacement relay, bandwidth-weighted, excluding everything
+/// in `exclude` — the primitive the rotation manager uses to swap a
+/// dead-relay or expired node without re-drawing the whole set. `None` if
+/// nothing eligible remains.
+#[must_use]
+pub fn draw_replacement(
+    relays: &[ConsensusRelay],
+    exclude: &[RelayFingerprint],
+    rng: &mut impl VanguardRng,
+) -> Option<RelayFingerprint> {
+    let mut pool: Vec<(RelayFingerprint, u64)> = eligible_pool(relays)
+        .into_iter()
+        .filter(|(fp, _)| !exclude.contains(fp))
+        .collect();
+    if pool.is_empty() {
+        return None;
+    }
+    Some(draw_weighted(&mut pool, 1, rng).remove(0))
+}
+
+/// The candidate pool: eligible relays with positive bandwidth, as
+/// `(fingerprint, weight)` pairs.
+fn eligible_pool(relays: &[ConsensusRelay]) -> Vec<(RelayFingerprint, u64)> {
+    relays
         .iter()
         .filter(|r| r.eligible && r.bandwidth > 0)
         .map(|r| (r.fingerprint, r.bandwidth))
-        .collect();
-
-    let needed = l2 + l3;
-    if pool.len() < needed {
-        return Err(SelectionError::TooFewEligible {
-            available: pool.len(),
-            needed,
-        });
-    }
-
-    let layer2 = draw_weighted(&mut pool, l2, rng);
-    let layer3 = draw_weighted(&mut pool, l3, rng);
-    // Both non-empty by the `needed` check above (l2, l3 ≥ 1 in practice;
-    // an l2 or l3 of 0 would be a caller bug the wire type also rejects).
-    HsLayerPins::new(layer2, layer3).ok_or(SelectionError::TooFewEligible {
-        available: relays.len(),
-        needed,
-    })
+        .collect()
 }
 
 /// Draw `count` fingerprints from `pool` weighted by their bandwidth,
