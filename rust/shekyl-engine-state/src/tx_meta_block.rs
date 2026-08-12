@@ -132,21 +132,31 @@ pub fn check_tx_note_len(note: &str) -> Result<(), TxNoteTooLong> {
     Ok(())
 }
 
-/// The pre-write note value captured by `TxMetaBlock::set_note` and consumed
-/// by [`TxMetaBlock::restore_note`] to undo a write after a failed durable
-/// save (fail closed).
+/// The pre-write note entry captured by `TxMetaBlock::set_note` — the **txid
+/// it belongs to** together with its prior value — consumed by
+/// [`TxMetaBlock::restore_note`] to undo a write after a failed durable save
+/// (fail closed).
 ///
-/// Its inner value is **private**, so the only way to obtain one is from
-/// `set_note`. A caller cannot mint a `PriorNote` from an arbitrary string —
-/// which is what keeps the restore path from re-admitting an unbounded note
-/// the write door refused: restore only ever puts back a value that was
-/// already in the map (hence already validated), never a fresh one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PriorNote(Option<String>);
+/// Both fields are **private**, the token carries its own txid, and it is
+/// deliberately **not `Clone`**. So: the only way to obtain one is from
+/// `set_note`; `restore_note` puts the value back on *that* txid (there is no
+/// caller-supplied destination to redirect); and a token restores at most
+/// once. A caller therefore cannot capture a token from a known transaction
+/// and replay it onto arbitrary txids — which is what keeps the restore path
+/// from re-admitting notes past [`crate::WalletLedger::set_note`]'s membership
+/// gate and re-opening the unbounded note-map amplification.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PriorNote {
+    txid: [u8; 32],
+    value: Option<String>,
+}
 
 /// Result of `TxMetaBlock::set_note`: whether the map changed (and thus
 /// needs a durable save) or the write is already a no-op.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Not `Clone`: the `Applied` arm carries a single-use [`PriorNote`] rollback
+/// token, and duplicating it would let the same restore replay onto the map.
+#[derive(Debug, PartialEq, Eq)]
 pub enum SetTxNoteOutcome {
     /// Map entry changed. `previous` is the pre-write value (an opaque
     /// [`PriorNote`], for fail-closed rollback via [`TxMetaBlock::restore_note`]);
@@ -410,7 +420,10 @@ impl TxMetaBlock {
             return Ok(match self.tx_notes.remove(&txid) {
                 None => SetTxNoteOutcome::Unchanged { stored: None },
                 Some(previous) => SetTxNoteOutcome::Applied {
-                    previous: PriorNote(Some(previous)),
+                    previous: PriorNote {
+                        txid,
+                        value: Some(previous),
+                    },
                     stored: None,
                 },
             });
@@ -424,19 +437,26 @@ impl TxMetaBlock {
 
         let previous = self.tx_notes.insert(txid, note.clone());
         Ok(SetTxNoteOutcome::Applied {
-            previous: PriorNote(previous),
+            previous: PriorNote {
+                txid,
+                value: previous,
+            },
             stored: Some(note),
         })
     }
 
     /// Restore a prior note entry after a failed durable save (fail closed).
     ///
-    /// `previous` is the opaque [`PriorNote`] from `Self::set_note`'s
-    /// [`SetTxNoteOutcome::Applied`] arm — a previously-validated value, so the
-    /// restore cannot re-admit an over-length note. Its `Some` re-inserts, its
-    /// `None` removes.
-    pub fn restore_note(&mut self, txid: [u8; 32], previous: PriorNote) {
-        match previous.0 {
+    /// `previous` is the opaque, single-use [`PriorNote`] from `Self::set_note`'s
+    /// [`SetTxNoteOutcome::Applied`] arm. It carries **its own txid**, so the
+    /// value is put back exactly where it came from — there is no caller-supplied
+    /// destination to redirect, and no way to replay it onto another txid. The
+    /// value was already in the map (hence already validated), so the restore
+    /// cannot re-admit an over-length note. Its `Some` re-inserts, its `None`
+    /// removes.
+    pub fn restore_note(&mut self, previous: PriorNote) {
+        let PriorNote { txid, value } = previous;
+        match value {
             Some(prior) => {
                 self.tx_notes.insert(txid, prior);
             }
@@ -594,7 +614,7 @@ mod tests {
         // Set applies.
         match b.set_note(id, "rent".into()).expect("set") {
             SetTxNoteOutcome::Applied {
-                previous: PriorNote(None),
+                previous: PriorNote { value: None, .. },
                 stored: Some(s),
             } => assert_eq!(s, "rent"),
             other => panic!("expected Applied first set, got {other:?}"),
@@ -612,7 +632,7 @@ mod tests {
         // Overwrite applies with previous.
         match b.set_note(id, "rent — March".into()).expect("overwrite") {
             SetTxNoteOutcome::Applied {
-                previous: PriorNote(Some(p)),
+                previous: PriorNote { value: Some(p), .. },
                 stored: Some(s),
             } => {
                 assert_eq!(p, "rent");
@@ -626,13 +646,13 @@ mod tests {
         let outcome = b.set_note(id, String::new()).expect("clear");
         match &outcome {
             SetTxNoteOutcome::Applied {
-                previous: PriorNote(Some(p)),
+                previous: PriorNote { value: Some(p), .. },
                 stored: None,
             } => assert_eq!(p, "rent — March"),
             other => panic!("expected Applied clear, got {other:?}"),
         }
         if let SetTxNoteOutcome::Applied { previous, .. } = outcome {
-            b.restore_note(id, previous);
+            b.restore_note(previous);
         }
         assert_eq!(b.note(&id), Some("rent — March"));
     }

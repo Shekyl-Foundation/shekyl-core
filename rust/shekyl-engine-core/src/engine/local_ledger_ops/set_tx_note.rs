@@ -118,7 +118,7 @@ impl<
                 // Save under the guard we already hold; on failure the undo
                 // runs before we return, still exclusive.
                 self.save_or_rollback(&mut guard, |state| {
-                    state.ledger.tx_meta.restore_note(key, previous);
+                    state.ledger.tx_meta.restore_note(previous);
                 })?;
                 Ok(stored)
             }
