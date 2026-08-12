@@ -1352,6 +1352,87 @@ bounded". The bound is an hour longer than it appeared, and the live floor check
 (§12.2) must be read against a peer count that cannot recover promptly. Recorded
 here rather than silently inherited by the implementation.
 
+### 11.7 The two constants have different derivations — and the suppression one is not a latency question
+
+**Ruled 2026-08-11, correcting §11.6.** That section said the anon-zone window
+is derived from the descriptor-fetch latency distribution. **That is the
+coupling error again**, applied to the fix rather than to the defect: the two
+constants form a ratio that matters, but they are not one decision.
+
+| constant | the question it answers | derived from |
+| --- | --- | --- |
+| `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT` | *how long before concluding this dial failed?* | the fetch-latency **tail** — `P(fetch > t)` on a cold descriptor cache |
+| `P2P_FAILED_ADDR_FORGET_SECONDS` | *how long before retrying a failed address?* | the cost of **retrying** against the cost of **blindness** — no latency in it at all |
+
+On an anonymity zone the cost of retrying is one SOCKS connect over an existing
+circuit. The cost of blindness is a candidate removed from a pool that is small
+by construction and governed by a live floor. Those point at a far shorter
+suppression than 3600 s regardless of what the latency distribution says.
+
+#### The maintainer sweeps the whole pool long before the hour is up
+
+`m_connections_maker_interval` is `once_a_time_seconds<1>`
+([`net_node.h:498`](../../src/p2p/net_node.h#L498)) and `connections_maker`
+loops `while (conn_count < max_out_connection_count)`
+([`net_node.inl:1795`](../../src/p2p/net_node.inl#L1795)) — it keeps dialling
+until the target is met or candidates run out. Failed dials cost up to 45 s
+each and run sequentially, so a pool of a dozen candidates is **fully attempted
+within minutes**, against a suppression measured in hours.
+
+**So the burned set is not accumulated slowly; it is established almost at
+once**, and the node then sits with whatever survived for the rest of the hour.
+
+#### Floor reachability, which is the actual derivation
+
+With `A` anonymity-capable nodes, a node has `A − 1` candidates and needs `F = 12`
+of them. If each dial independently burns its candidate with probability `p`,
+the node reaches the floor only if at most `A − 1 − F` burn:
+
+| `A` | candidates | `p = 0.10` | `p = 0.23` (measured) | `p = 0.35` |
+| --- | --- | --- | --- | --- |
+| 13 | 12 | 0.282 | **0.043** | 0.006 |
+| 15 | 14 | 0.842 | **0.343** | 0.084 |
+| 20 | 19 | 1.000 | 0.950 | 0.666 |
+| 30 | 29 | 1.000 | 1.000 | 0.997 |
+| 60 | 59 | 1.000 | 1.000 | 1.000 |
+
+**At `A = 15` and the measured failure rate, two nodes in three cannot reach the
+floor** — not because the peers are absent, unreachable or refusing, but because
+the node has blacklisted them for an hour.
+
+#### This widens Q12-R11 substantially, and changes its reason
+
+R11 said the floor is unreachable by **arithmetic** at `A ≤ 12`, because
+`12 > A − 1`. This says it is unreachable by **suppression** up to roughly
+`A ≈ 19` — a band half again as wide, for a completely different reason, and one
+that no amount of population growth inside that band fixes. Both bite exactly
+where rule 76 says to provision: at a young network.
+
+**It also confirms the sequencing ruling.** An `A = 15` arm run under the
+current constants would report roughly a third of nodes at the floor and
+two thirds below it — and that would have been written up as a discovery
+finding. It is a suppression finding wearing discovery's clothes.
+
+#### What the fix has to satisfy
+
+`p` cannot be tuned; it is the network's. What can be tuned is **how many
+attempts a candidate gets inside the node's time-to-floor budget**, because
+independent attempts compound: at `p = 0.23`, three attempts leave `p³ ≈ 1.2 %`.
+
+- The suppression must be short enough that each candidate is retried **~3
+  times** within the window in which a node is expected to reach the floor.
+- With a sweep costing minutes, that puts the **first-failure** window at
+  **order 60–120 s**, not 3600 s.
+- **Escalate on repeated failure** — doubling toward the public-zone value — so
+  a genuinely dead peer is not dialled forever while a transient one recovers
+  quickly. This is what makes the short first window safe.
+- The public zone is untouched: 3600 s remains right where a failed dial means
+  a down host.
+
+The exact first-failure value is set once the fetch-latency tail is measured,
+because it must exceed the timeout it is retrying against — that is the only
+place the two constants genuinely couple.
+
 ---
 
 ## 12. Q12-D9 — the below-floor rule, settled before the run
