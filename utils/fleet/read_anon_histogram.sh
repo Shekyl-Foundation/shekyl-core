@@ -1,13 +1,35 @@
 #!/usr/bin/env bash
 # Copyright (c) 2025-2026, The Shekyl Foundation
 #
-# The run's readout. For every node in the inventory, ask its loopback RPC for
-# `get_connections` and report the OUTBOUND ANONYMITY peer count — the quantity
-# Q12-D6a exists to measure — plus the distribution over nodes.
+# The run's readout. For every node in the inventory, report two DIFFERENT
+# quantities: ACHIEVED outbound anonymity links, and STORED anonymity
+# candidates. Neither substitutes for the other.
 #
-# No new instrument is needed for this: `connection_info` already carries
-# `incoming` and `address_type`, and `address_type` distinguishes i2p (3) from
-# tor (4) (contrib/epee/include/net/enums.h:39-46).
+# `connection_info` already carries `incoming` and `address_type`, and
+# `address_type` distinguishes i2p (3) from tor (4)
+# (contrib/epee/include/net/enums.h:39-46).
+#
+# ---------------------------------------------------------------------------
+# Why two series (Q12, §11.9)
+#
+# The outbound TARGET is `P2P_DEFAULT_OUT_PEERS` = 12 and the F-8b floor is
+# also 12, so at small `A` a healthy node sits at exactly 12 and the link count
+# SATURATES at the value under test: a flat line is consistent both with
+# "nothing ever failed" and with "everything failed and recovered between
+# samples". Links alone therefore cannot separate healthy churn from the
+# suppression failure this run is about.
+#
+#   links  = is the node above the floor D9's live check will gate on
+#   stored = does it have anywhere to RECOVER to
+#
+# A node at 11 links with a full candidate list is churn. The same node with
+# every candidate burned is the failure. Only the pair distinguishes them.
+#
+# Note what the floor is NOT, today: `set_max_out_peers` refuses a CONFIGURED
+# cap below the floor at startup, and nothing checks the ACHIEVED count at
+# runtime. That live check is owed (Q12-U2), so this script measures a quantity
+# nothing currently gates on.
+# ---------------------------------------------------------------------------
 #
 # ---------------------------------------------------------------------------
 # One reading is not a measurement (Q12-R8, Q12-R13)
@@ -28,7 +50,20 @@
 #
 #   <ssh-host> <rpc-port> <label>
 #
-# Usage: read_anon_histogram.sh <inventory-file>
+# Usage: read_anon_histogram.sh [--tsv] <inventory-file>
+#
+# `--tsv` emits a parsing CONTRACT instead of prose, because a consumer that
+# regexes the human format is a defect waiting to happen — one such extractor
+# matched the histogram summary rows as well as the per-node rows and reported
+# nine values for six nodes. Rows:
+#
+#   READ <iso8601>
+#   NODE <label> <anon_out> <anon_in> <public> <white> <gray>
+#   FAIL <label> <reason>
+#   END  <nodes-read> <nodes-failed>
+#
+# `END` is what lets a consumer tell a short reading from a complete one
+# without inferring it from the row count it happened to get.
 #
 # Exit:  0  every node answered
 #        1  at least one node did not answer — the reading is INCOMPLETE and
@@ -37,8 +72,11 @@
 
 set -uo pipefail
 
+TSV=0
+if [ "${1:-}" = "--tsv" ]; then TSV=1; shift; fi
+
 if [ "$#" -ne 1 ]; then
-  echo "usage: $0 <inventory-file>" >&2
+  echo "usage: $0 [--tsv] <inventory-file>" >&2
   exit 2
 fi
 
@@ -51,11 +89,20 @@ INVENTORY="$1"
 command -v python3 >/dev/null || { echo "REFUSE: python3 not found; every node would read as NO ANSWER" >&2; exit 2; }
 command -v ssh     >/dev/null || { echo "REFUSE: ssh not found" >&2; exit 2; }
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -r "$SCRIPT_DIR/anon_readout_parse.py" ] || {
+  echo "REFUSE: anon_readout_parse.py not found next to this script;" >&2
+  echo "        every node would read as NO ANSWER" >&2; exit 2; }
+
 SSH_TIMEOUT="${SSH_TIMEOUT:-30}"
 counts=()
 failed=0
 
-echo "reading at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if [ "$TSV" = 1 ]; then
+  printf 'READ\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+else
+  echo "reading at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
 
 while read -r host port label; do
   case "${host:-}" in ''|'#'*) continue ;; esac
@@ -68,21 +115,25 @@ while read -r host port label; do
   case "${port:-}" in ''|*[!0-9]*) echo "REFUSE: port '${port:-}' for '$label' is not numeric" >&2; exit 2 ;; esac
   [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || { echo "REFUSE: port $port for '$label' is out of range" >&2; exit 2; }
 
-  # TWO instruments, one round trip. `get_connections` omits the `connections`
-  # field entirely when a node has no peers — verified against a node built to
-  # be genuinely isolated, which returns `{"status":"OK","untrusted":false}`.
-  # So absence is ambiguous between "truly zero" and "a response shape we do
-  # not understand", and the ambiguity is NOT resolved by guessing: `get_info`
-  # is fetched alongside and its independent connection counts must corroborate
-  # a zero before one is reported. That also survives a change to the
-  # serializer's treatment of empty containers, which is an epee detail this
-  # script should not depend on.
+  # TWO readings, one round trip, measuring DIFFERENT quantities — not one
+  # quantity twice.
+  #
+  #   get_connections   ACHIEVED outbound anonymity links. This is what the
+  #                     F-8b floor is about: fluff first passage depends on how
+  #                     many peers you actually send to.
+  #   /get_peer_list    STORED anonymity candidates. This is what RECOVERY is
+  #                     about: a node at 11 links with known-good candidates
+  #                     recovers; the same node with every candidate burned
+  #                     cannot, and the link count alone cannot tell them apart.
+  #
+  # `/get_peer_list` is a PATH endpoint, not a json_rpc method — asking for it
+  # over json_rpc returns -32601. Onion entries carry the address in `host`
+  # with `ip`/`port` both 0, so `host` is the only usable key.
   out=$(timeout "$SSH_TIMEOUT" ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$host" \
     "curl -s -m 10 http://127.0.0.1:$port/json_rpc -H 'Content-Type: application/json' \
      -d '{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"get_connections\"}'
      echo '@@SPLIT@@'
-     curl -s -m 10 http://127.0.0.1:$port/json_rpc -H 'Content-Type: application/json' \
-     -d '{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"get_info\"}'" 2>/dev/null)
+     curl -s -m 10 http://127.0.0.1:$port/get_peer_list" 2>/dev/null)
 
   # An RPC ERROR MUST NOT READ AS ZERO CONNECTIONS. `get_connections` is
   # unavailable in restricted mode (-32601), and a `.get("result", {})` turns
@@ -91,98 +142,42 @@ while read -r host port label; do
   # because an isolated node IS the run's headline claim: the instrument would
   # manufacture the result it exists to test. Caught on the production testnet
   # estate, where every node read 0/0/0 and every node was fine.
-  parsed=$(printf '%s' "$out" | python3 -c '
-import sys, json
-
-# A COUNT IS EMITTED ONLY FROM A PATH THAT AFFIRMATIVELY PARSED A LIST OF
-# CONNECTION OBJECTS. Every other shape — an error, a missing field, a field of
-# the wrong type, an element that is not an object, an exception nobody
-# predicted — produces ERR. The class being closed is not "restricted mode": it
-# is ANY unrecognized response collapsing to zero, because zero is this run its
-# headline claim and the instrument must not be able to manufacture it.
-def corroborated_zero(info_raw):
-    """A missing `connections` field is only a zero if a SECOND instrument says so."""
-    try:
-        i = json.loads(info_raw)
-    except Exception:
-        return "ERR no-connections-field:get_info-unparseable"
-    if not isinstance(i, dict) or not isinstance(i.get("result"), dict):
-        return "ERR no-connections-field:get_info-unusable"
-    r = i["result"]
-    inc, outg = r.get("incoming_connections_count"), r.get("outgoing_connections_count")
-    if not isinstance(inc, int) or not isinstance(outg, int):
-        return "ERR no-connections-field:get_info-counts-missing"
-    if inc == 0 and outg == 0:
-        return "OK 0 0 0"
-    # The node HAS peers and still omitted the list: an unknown shape, and
-    # exactly the case that must never be reported as an isolated node.
-    return "ERR no-connections-field:but-get_info-says-in=%d-out=%d" % (inc, outg)
-
-def verdict():
-    raw = sys.stdin.read()
-    conn_raw, _, info_raw = raw.partition("@@SPLIT@@")
-    try:
-        d = json.loads(conn_raw)
-    except Exception as e:
-        return "ERR unparseable:%s" % type(e).__name__
-    if not isinstance(d, dict):
-        return "ERR non-object-response:%s" % type(d).__name__
-    if d.get("error"):
-        e = d["error"]
-        if isinstance(e, dict):
-            return "ERR rpc-error:%s:%s" % (e.get("code"), e.get("message"))
-        return "ERR rpc-error:%s" % (e,)
-    if "result" not in d:
-        return "ERR no-result-field"
-    r = d["result"]
-    if not isinstance(r, dict):
-        return "ERR result-not-an-object:%s" % type(r).__name__
-    if "connections" not in r:
-        return corroborated_zero(info_raw)
-    c = r["connections"]
-    if c is None:
-        return "ERR connections-null"
-    if not isinstance(c, list):
-        return "ERR connections-not-a-list:%s" % type(c).__name__
-    for x in c:
-        if not isinstance(x, dict):
-            return "ERR connection-entry-not-an-object:%s" % type(x).__name__
-        if "address_type" not in x:
-            return "ERR connection-entry-missing-address_type"
-    tor_out = sum(1 for x in c if x.get("address_type") == 4 and not x.get("incoming"))
-    tor_in  = sum(1 for x in c if x.get("address_type") == 4 and x.get("incoming"))
-    pub     = sum(1 for x in c if x.get("address_type") != 4)
-    return "OK %d %d %d" % (tor_out, tor_in, pub)
-
-try:
-    print(verdict())
-except Exception as e:
-    # Even an unforeseen failure names itself rather than vanishing into the
-    # NO ANSWER bucket, which is what hid the escaped-quote defect in the
-    # previous version of this parser.
-    print("ERR unexpected:%s:%s" % (type(e).__name__, e))' 2>/dev/null)
+  # The parser is a FILE next to this script, not an inline `python3 -c`.
+  # See the header of anon_readout_parse.py for why.
+  parsed=$(printf '%s' "$out" | python3 "$SCRIPT_DIR/anon_readout_parse.py" 2>/dev/null)
 
   case "${parsed:-}" in
     'OK '*) parsed="${parsed#OK }" ;;
     ERR*)
-      printf '  %-24s %-14s %s\n' "$label" "$host" "$parsed"
+      if [ "$TSV" = 1 ]; then printf 'FAIL\t%s\t%s\n' "$label" "$parsed"
+      else printf '  %-24s %-14s %s\n' "$label" "$host" "$parsed"; fi
       failed=$((failed + 1))
       continue
       ;;
     *)
-      printf '  %-24s %-14s NO ANSWER\n' "$label" "$host"
+      if [ "$TSV" = 1 ]; then printf 'FAIL\t%s\tNO-ANSWER\n' "$label"
+      else printf '  %-24s %-14s NO ANSWER\n' "$label" "$host"; fi
       failed=$((failed + 1))
       continue
       ;;
   esac
 
   set -- $parsed
-  printf '  %-24s anon_out=%-3s anon_in=%-3s public=%-3s\n' "$label" "$1" "$2" "$3"
+  if [ "$TSV" = 1 ]; then
+    printf 'NODE\t%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$1" "$2" "$3" "$4" "$5"
+  else
+    printf '  %-24s anon_out=%-3s anon_in=%-3s public=%-3s white=%-3s gray=%-3s\n' \
+      "$label" "$1" "$2" "$3" "$4" "$5"
+  fi
   counts+=("$1")
 done < "$INVENTORY"
 
-echo
-if [ "${#counts[@]}" -gt 0 ]; then
+if [ "$TSV" = 1 ]; then
+  # A consumer must be able to tell a short reading from a complete one without
+  # inferring it from the row count it happened to receive.
+  printf 'END\t%s\t%s\n' "${#counts[@]}" "$failed"
+elif [ "${#counts[@]}" -gt 0 ]; then
+  echo
   printf '%s\n' "${counts[@]}" | sort -n | uniq -c | \
     awk '{printf "  anon_out=%-3s %s node(s)\n", $2, $1}'
   printf '%s\n' "${counts[@]}" | awk '{s+=$1} END {printf "\n  total outbound anonymity links: %d across %d nodes\n", s, NR}'
