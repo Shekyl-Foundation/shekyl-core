@@ -461,8 +461,20 @@ design outright, which is the cheapest thing to learn early.
 3b. **Stagenet bootstrap instances on the seed hosts** — a second daemon, tor
    process and hidden service per seed host, up before the fleet, with their
    onions passed to fleet nodes as `--add-peer`.
+3c. **The suppression fix lands first** (Q12-R13, §§11.5–11.13). Ruled
+   2026-08-12, after the fleet had been provisioned once and destroyed. Under
+   the unfixed constants the histogram measures *suppression dynamics* as much
+   as discovery, and the two are not separable in the readout — the same defect
+   Q12-R10 named for testnet contamination. D6a asks "does the anon graph form
+   at population `A`"; an arm run first would answer "does it form under a
+   1 : 80 timeout-to-suppression ratio at population `A`", which is not the
+   configuration that ships. Running against a configuration already decided to
+   be wrong spends VMs measuring something intended to be replaced.
 4. **Discovery arms** — `A ∈ {15, 30, 60}`, 15 clearnet detectors, converge,
-   record.
+   record. **Per-node time series, not fleet totals** (§11.9): a node steady at
+   20 and a node oscillating across 12 are indistinguishable in a sum, and the
+   floor is per node. **Three readings** (§11.5), and every node's `get_info`
+   must report `stagenet: true` before its readings count (§11.4).
 5. **Late joiner** (Q12-R5) — two runs, one node each: one `--add-peer` at a
    seed, one at an ordinary fleet node.
 6. Teardown; verify no instance survives.
@@ -1635,7 +1647,7 @@ three-minute sample, while a *burned* one is gone for an hour. The two are the
 same observation in a total and completely different in a time series, which is
 the second reason the arms need per-node series rather than a fleet sum.
 
-### 11.10 Publication freshness dominates the failure rate — 55 % against 13 %
+### 11.10 Publication freshness dominates the failure rate — 55 % against 12.7 %
 
 The same 60-service rig, probed with **no publication settle** instead of 180 s:
 
@@ -1709,7 +1721,7 @@ confident number: reported alone, `z = −5.30, p < 0.001` would have read as th
 session's strongest result and been an artifact of the condition chosen to
 measure it.
 
-### 11.11 Two constraints on the retry design that the derivation missed### 11.11 Two constraints on the retry design that the derivation missed
+### 11.11 Two constraints on the retry design that the derivation missed
 
 **Dialing is serial and blocking.** `make_expected_connections_count` makes **one**
 attempt per call ([`net_node.inl`](../../src/p2p/net_node.inl), the
