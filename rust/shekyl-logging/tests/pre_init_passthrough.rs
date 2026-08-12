@@ -12,13 +12,14 @@
 //! NOT cover the C++ macro path (that is
 //! `tests/log_file_sink.cpp` mode `pre-init-audible-then-file`).
 //!
-//! Own process: `INITIALIZED` is process-global.
+//! Own process: `INITIALIZED` / `SUBSCRIBER_INSTALLED` are process-global.
 
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
 use shekyl_logging::ffi::{
-    shekyl_log_emit, shekyl_log_init_file, shekyl_log_level_enabled, shekyl_log_shutdown,
+    shekyl_log_emit, shekyl_log_init_file, shekyl_log_install_tracing_forwarder,
+    shekyl_log_level_enabled, shekyl_log_shutdown, SHEKYL_LOG_ERR_NOT_INITIALIZED,
     SHEKYL_LOG_LEVEL_ERROR, SHEKYL_LOG_LEVEL_INFO, SHEKYL_LOG_OK,
 };
 
@@ -51,6 +52,64 @@ fn pre_init_emit_does_not_consume_file_init() {
         !info_on,
         "pre-init INFO must stay silent; the fallback floor is WARNING"
     );
+
+    let bad_tgt = [0xff, 0xfe];
+    // SAFETY: `bad_tgt` is a live byte slice for the duration of the call.
+    let bad_on = unsafe {
+        shekyl_log_level_enabled(
+            SHEKYL_LOG_LEVEL_ERROR,
+            bad_tgt.as_ptr() as *const c_char,
+            bad_tgt.len(),
+        )
+    };
+    assert!(
+        !bad_on,
+        "non-UTF-8 target must not be enabled: emit drops those bytes, so the gate must not promise the event"
+    );
+
+    // Reservation is not install. Raising INITIALIZED without try_init
+    // is the window inside install_subscriber; emit/enabled/forwarder
+    // must still take the pre-init path. This bites against consulting
+    // the reservation flag as if the subscriber were live. It does NOT
+    // cover a real concurrent install (that needs two threads and a
+    // pause inside try_init).
+    shekyl_logging::__test_only_reserve_init();
+    // SAFETY: `tgt` is a live byte slice for the duration of the call.
+    let reserved_err_on = unsafe {
+        shekyl_log_level_enabled(
+            SHEKYL_LOG_LEVEL_ERROR,
+            tgt.as_ptr() as *const c_char,
+            tgt.len(),
+        )
+    };
+    assert!(
+        reserved_err_on,
+        "ERROR must stay audible while init is only reserved, not installed"
+    );
+    // SAFETY: no pointer parameters.
+    let reserved_fwd = unsafe { shekyl_log_install_tracing_forwarder() };
+    assert_eq!(
+        reserved_fwd, SHEKYL_LOG_ERR_NOT_INITIALIZED,
+        "forwarder must not consume its one-shot pin during the reservation window"
+    );
+    let reserved_msg = b"reservation-window probe";
+    // SAFETY: all pointer+length pairs describe live stack buffers, or
+    // are (null, 0).
+    unsafe {
+        shekyl_log_emit(
+            SHEKYL_LOG_LEVEL_ERROR,
+            tgt.as_ptr() as *const c_char,
+            tgt.len(),
+            std::ptr::null(),
+            0,
+            0,
+            std::ptr::null(),
+            0,
+            reserved_msg.as_ptr() as *const c_char,
+            reserved_msg.len(),
+        );
+    }
+    shekyl_logging::__test_only_reset_init_flag();
 
     let msg = b"pre-init probe";
     // SAFETY: all pointer+length pairs describe live stack buffers, or

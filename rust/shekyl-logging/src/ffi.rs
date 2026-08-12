@@ -182,10 +182,10 @@ fn set_last_error(msg: impl Into<String>) {
 
 /// Called by the Rust-side `crate::init` so a Rust caller's install
 /// also registers its reload handle for the FFI `set_categories`
-/// path. `crate::INITIALIZED` has already flipped at this point,
-/// so `FFI_STATE::set()` is racing only against the narrow case
-/// where a C caller concurrently tries to init — which would have
-/// already failed at the atomic exchange.
+/// path. `crate::SUBSCRIBER_INSTALLED` has already flipped at this
+/// point, so `FFI_STATE::set()` is racing only against the narrow
+/// case where a C caller concurrently tries to init — which would
+/// have already failed at the reservation CAS.
 pub(crate) fn __register_reload_handle(handle: FilterReloadHandle) {
     let state = FfiState {
         reload_handle: handle,
@@ -331,7 +331,7 @@ fn install_for_ffi(config: Config) -> i32 {
             // its worker thread shuts down cleanly. This branch is
             // only reachable when `__register_reload_handle` ran
             // first — which means `install_subscriber` above has
-            // already bumped `INITIALIZED`, so we're the real init.
+            // already set `SUBSCRIBER_INSTALLED`, so we're the real init.
             let fresh = mutex_with_state
                 .into_inner()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -406,7 +406,7 @@ pub unsafe extern "C" fn shekyl_log_shutdown() {
 /// No pointer parameters, so no pointer-validity obligations.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_log_install_tracing_forwarder() -> i32 {
-    if !crate::INITIALIZED.load(Ordering::SeqCst) {
+    if !subscriber_installed() {
         set_last_error(
             "shekyl_log_install_tracing_forwarder: no successful \
              shekyl_log_init_* call preceded this install",
@@ -441,8 +441,7 @@ pub unsafe extern "C" fn shekyl_log_install_tracing_forwarder() -> i32 {
 /// still wins.
 ///
 /// After init, returns whether the event would pass the current
-/// filter. Returns `false` when the target bytes are not valid
-/// UTF-8.
+/// filter. Invalid target bytes return `false` in either state.
 ///
 /// # Safety
 ///
@@ -457,13 +456,17 @@ pub unsafe extern "C" fn shekyl_log_level_enabled(
     let Some(level) = level_from_u8(level) else {
         return false;
     };
-    if !logger_initialized() {
-        return pre_init_audible(level);
-    }
+    // Decode the target before the pre-init floor so a non-UTF-8
+    // target returns false in both states. `shekyl_log_emit` rejects
+    // the same bytes; promising `true` here would make the C++
+    // stringstream gate allocate for an event that cannot be emitted.
     // SAFETY: forwarded to caller's contract documented above.
     let Ok(target) = (unsafe { str_from_raw(target_ptr, target_len) }) else {
         return false;
     };
+    if !subscriber_installed() {
+        return pre_init_audible(level);
+    }
     let cs = callsite_for(target, level);
     let meta = cs.static_metadata();
     tracing::dispatcher::get_default(|d| d.enabled(meta))
@@ -507,7 +510,7 @@ pub unsafe extern "C" fn shekyl_log_emit(
     let Ok(target) = (unsafe { str_from_raw(target_ptr, target_len) }) else {
         return;
     };
-    if !logger_initialized() {
+    if !subscriber_installed() {
         if !pre_init_audible(level) {
             return;
         }
@@ -813,8 +816,8 @@ pub fn __test_only_reset_ffi_state() {
 // Helpers
 // -----------------------------------------------------------------
 
-fn logger_initialized() -> bool {
-    crate::INITIALIZED.load(Ordering::SeqCst)
+fn subscriber_installed() -> bool {
+    crate::SUBSCRIBER_INSTALLED.load(Ordering::SeqCst)
 }
 
 /// WARNING and above stay audible before the first `shekyl_log_init_*`.

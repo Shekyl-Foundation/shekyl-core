@@ -200,8 +200,8 @@ int32_t shekyl_log_install_tracing_forwarder(void);
 /// C++ `MERROR` / `MCLOG` calls reach stderr without installing
 /// the process-global subscriber — so a later `shekyl_log_init_file`
 /// still wins. After init, returns whether the event would pass
-/// the current filter. Returns `false` when the target bytes are
-/// not valid UTF-8.
+/// the current filter. Invalid target bytes return `false` in
+/// either state (the matching emit drops them).
 bool shekyl_log_level_enabled(
     uint8_t level,
     const char* target_ptr,
