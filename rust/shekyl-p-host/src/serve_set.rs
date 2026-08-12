@@ -477,12 +477,20 @@ pub enum Staleness {
     },
     /// Past the bound: the serve-set has stopped tracking the bond record.
     ///
-    /// **This is the shape the refresh's own failure takes.** The P-scan task
-    /// halts — loudly, but into its own log — on a chain-exhaustiveness
-    /// anomaly and returns; nothing on the serving side observes that. A host
-    /// whose refresh has stopped keeps serving a frozen serve-set, and a
-    /// shard connected after the freeze is unpinned and prunable. This is the
-    /// only local evidence of it.
+    /// **This is the shape the refresh's own failure takes, and it needs no
+    /// adversary.** The refresh is periodic and lives *outside* the host, so
+    /// anything that stops it stops it silently from here: the task is
+    /// cancelled and nothing restarts it, the task was never started, it
+    /// panics, or every sweep fails and retries forever against a daemon
+    /// that is simply unreachable. A host whose refresh has stopped keeps
+    /// serving a frozen serve-set, and a shard connected after the freeze is
+    /// unpinned and prunable — the same ordinary steady-state hazard
+    /// [`crate::PersonaServingHost::refresh`] exists to close, re-entering
+    /// through the trigger rather than through the pins.
+    ///
+    /// A periodic job that has stopped is invisible to whatever depends on
+    /// it; that is the whole of the argument, and it holds under every
+    /// posture and every threat model. This is the only local evidence.
     Stale {
         /// Blocks ingested since the serve-set was last derived.
         lag: u64,
