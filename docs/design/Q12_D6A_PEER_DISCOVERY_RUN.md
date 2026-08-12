@@ -1563,6 +1563,17 @@ this completely: a node steady at 20 and a node oscillating across 12 are
 indistinguishable in a sum, and at `A = 60` the floor is **per node**. The arms
 record **per-node time series**, not a total with a spread.
 
+#### Steady-state churn, over the full hour — and the contrast that matters
+
+21 samples. After the burns expired the ring held **30 of 30 for the remaining
+50 minutes**, with a single `29` at 03:23:27 recovered by the next sample.
+
+**So genuine churn exists and is small — and it recovers in minutes.** That is
+the contrast worth keeping: an ordinary link loss re-establishes inside one
+three-minute sample, while a *burned* one is gone for an hour. The two are the
+same observation in a total and completely different in a time series, which is
+the second reason the arms need per-node series rather than a fleet sum.
+
 ### 11.10 Publication freshness dominates the failure rate — 55 % against 13 %
 
 The same 60-service rig, probed with **no publication settle** instead of 180 s:
