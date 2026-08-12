@@ -55,6 +55,7 @@ pub async fn dispatch(
         "discard_pending_tx" => send::discard_pending_tx(tenants, params).await,
         "abandon_tx" => send::abandon_tx(tenants, params).await,
         "set_tx_note" => notes::set_tx_note(tenants, params).await,
+        "get_tx_note" => notes::get_tx_note(tenants, params).await,
         // WI-RPC-1 receiving (FA-8d projection; `rid` on the URI — no
         // subaddress/account model exists in Shekyl).
         "create_payment_request" => receiving::create_payment_request(tenants, params).await,
@@ -244,6 +245,40 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::InvalidRecipient);
+    }
+
+    /// Both note methods are routed, not RESERVED.
+    ///
+    /// The pin that matters is `WalletNotOpen` rather than `MethodNotFound`:
+    /// dropping either arm from the table above sends the call to the
+    /// `other =>` fallthrough, and every client loses the ability to annotate
+    /// or read back a transaction while the crate's tests stay green. The
+    /// `set_tx_note` params must be *valid* — parsing and the length bound run
+    /// ahead of the wallet gate, so junk params would answer `InvalidParams`
+    /// and pin nothing about routing.
+    #[tokio::test]
+    async fn tx_note_methods_without_open_wallet_are_wallet_not_open() {
+        let tenants = test_tenants();
+
+        let err = dispatch(
+            &tenants,
+            "set_tx_note",
+            &json!({ "tx_hash": "ab".repeat(32), "note": "rent" }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
+
+        let err = dispatch(
+            &tenants,
+            "get_tx_note",
+            &json!({ "tx_hash": "ab".repeat(32) }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
     }
 
     #[tokio::test]

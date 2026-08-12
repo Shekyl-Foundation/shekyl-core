@@ -14,6 +14,7 @@ use shekyl_engine_core::{
     RefreshError, SendError, SetTxNoteError,
 };
 use shekyl_engine_file::WalletFileError;
+use shekyl_engine_state::TxNoteTooLong;
 use shekyl_rpc_client::{RejectCause, SubmitVerdict};
 use thiserror::Error;
 
@@ -573,11 +574,22 @@ impl From<shekyl_engine_core::AbandonTxError> for WalletRpcError {
     }
 }
 
+impl From<TxNoteTooLong> for WalletRpcError {
+    /// The one place an over-length note becomes a wire error, so the
+    /// boundary's pre-lock fast-fail and the engine's write-path refusal
+    /// cannot answer the same request differently.
+    ///
+    /// Counts only — [`TxNoteTooLong`]'s `Display` never carries the note
+    /// body (rules 35/36).
+    fn from(err: TxNoteTooLong) -> Self {
+        Self::InvalidParams(err.to_string())
+    }
+}
+
 impl From<SetTxNoteError> for WalletRpcError {
     fn from(err: SetTxNoteError) -> Self {
         match err {
-            // Counts only — engine error never carries the note body.
-            SetTxNoteError::TooLong(e) => Self::InvalidParams(e.to_string()),
+            SetTxNoteError::TooLong(e) => e.into(),
             // Fail-closed rollback already ran; category-only message
             // (the detail can carry a filesystem path).
             SetTxNoteError::Persistence(e) => internal_detail("wallet persistence error", e),

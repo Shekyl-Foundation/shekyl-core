@@ -590,6 +590,21 @@ pub struct SetTxNoteResult {
     pub note: Option<String>,
 }
 
+/// `get_tx_note` result (SJ-DQ-7): the note currently stored for a txid.
+///
+/// Deliberately the same shape as [`SetTxNoteResult`] — a read-back answers
+/// in the vocabulary the write echoed, so a client can compare them directly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetTxNoteResult {
+    /// The transaction queried (lowercase hex).
+    pub tx_hash: String,
+    /// The stored note. **Omitted** (not serialized as JSON `null`) when
+    /// there is none — which is also the answer for a txid the wallet has
+    /// never seen; a note carries no existence claim about the transaction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 /// Payment-request lifecycle state (WI-RPC-1 receiving).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

@@ -3,21 +3,39 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Transaction-note JSON-RPC method (PR-SA-4 / SJ-DQ-7).
+//! Transaction-note JSON-RPC methods (PR-SA-4 / SJ-DQ-7).
 //!
 //! Notes are local UX annotations on a bare txid — not part of the send
-//! lifecycle. The handler lives here (not under `send`) so annotation policy
+//! lifecycle. The handlers live here (not under `send`) so annotation policy
 //! does not leak into the pending-tx / abandon surface.
+//!
+//! # The pair is the surface
+//!
+//! `set_tx_note` writes and `get_tx_note` reads the same keyspace. The reader
+//! is not optional convenience: a note may be attached to a txid the wallet
+//! does not yet know — the ratified SJ-DQ-7 shape, so a user can annotate an
+//! incoming payment before the scanner catches up — and such a note appears on
+//! no transfer row, because `TransferView.note` can only annotate rows that
+//! exist. Without `get_tx_note` a note on a not-yet-known txid would be
+//! write-only: acknowledged, persisted, and unreadable until the scanner
+//! happened to catch up.
+//!
+//! **Residual, stated so it is not re-raised as new:** a note written against
+//! a *mistyped* txid is still unrecoverable without retyping the same wrong
+//! txid. That is inherent to id-keyed annotation with no membership
+//! precondition — the same property that lets the ahead-of-the-scanner case
+//! work — and it is bounded: such a note is a stray map entry, never a
+//! misdirected payment.
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_engine_state::TX_NOTE_MAX_BYTES;
+use shekyl_engine_state::{TxNoteTooLong, TX_NOTE_MAX_BYTES};
 use shekyl_types::TxHash;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_hex32, parse_required_object};
 use crate::tenant::{require_open_engine, TenantState};
-use crate::types::SetTxNoteResult;
+use crate::types::{GetTxNoteResult, SetTxNoteResult};
 
 /// Params for `set_tx_note` (SJ-DQ-7). An empty `note` clears the entry.
 #[derive(Debug, Deserialize)]
@@ -26,19 +44,36 @@ struct SetTxNoteParams {
     note: String,
 }
 
-/// Reject a note over [`TX_NOTE_MAX_BYTES`]. Reports byte counts only —
-/// **never the note content** — so counterparty text cannot escape via the
-/// error string (rules 35/36). Extracted so the no-echo property is pinned
-/// by a test, not left to code inspection.
+/// Params for `get_tx_note` (SJ-DQ-7).
+#[derive(Debug, Deserialize)]
+struct GetTxNoteParams {
+    tx_hash: String,
+}
+
+/// Parse the `tx_hash` param shared by both methods.
+fn parse_txid(tx_hash: &str) -> Result<TxHash, WalletRpcError> {
+    parse_hex32(tx_hash).map(TxHash::from_bytes).ok_or_else(|| {
+        WalletRpcError::InvalidParams("tx_hash must be 64 lowercase hex characters".into())
+    })
+}
+
+/// Reject a note over [`TX_NOTE_MAX_BYTES`] **before** taking a lock.
 ///
-/// This is a pre-lock fast-fail; the ledger invariant is also enforced on
-/// the engine write path (`TxMetaBlock::set_note`).
+/// This is a fast-fail, not the invariant: `TxMetaBlock::set_note` is the only
+/// door into the map and enforces the same ceiling. The refusal is built from
+/// the engine's own [`TxNoteTooLong`] rather than a second message written
+/// here, so the wording and the ceiling have exactly one owner — a boundary
+/// that refuses early must not also get to refuse *differently*.
+///
+/// Reports byte counts only — never the note content — so counterparty text
+/// cannot escape via the error string (rules 35/36).
 fn check_note_len(note: &str) -> Result<(), WalletRpcError> {
     if note.len() > TX_NOTE_MAX_BYTES {
-        return Err(WalletRpcError::InvalidParams(format!(
-            "note exceeds the {TX_NOTE_MAX_BYTES}-byte maximum ({} bytes)",
-            note.len()
-        )));
+        return Err(TxNoteTooLong {
+            len: note.len(),
+            max: TX_NOTE_MAX_BYTES,
+        }
+        .into());
     }
     Ok(())
 }
@@ -58,9 +93,7 @@ pub(crate) async fn set_tx_note(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     let p: SetTxNoteParams = parse_required_object(params, "set_tx_note")?;
-    let txid = parse_hex32(&p.tx_hash).ok_or_else(|| {
-        WalletRpcError::InvalidParams("tx_hash must be 64 lowercase hex characters".into())
-    })?;
+    let txid = parse_txid(&p.tx_hash)?;
     // Bound before the note can enter the ledger, and before any lock is
     // taken — a refused note never reaches the engine or its write guard.
     // The same constant is enforced again on the write path.
@@ -68,19 +101,47 @@ pub(crate) async fn set_tx_note(
 
     let shared = require_open_engine(tenants).await?;
     let engine = shared.read().await;
-    let stored = engine.set_tx_note(TxHash::from_bytes(txid), p.note)?;
+    let stored = engine.set_tx_note(txid, p.note)?;
 
     let result = SetTxNoteResult {
-        tx_hash: TxHash::from_bytes(txid).to_string(),
+        tx_hash: txid.to_string(),
         note: stored,
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize set_tx_note: {e}")))
 }
 
+/// `get_tx_note` (`WALLET_SEND_RECORD.md` SJ-DQ-7): read back the note for a
+/// txid, or its absence.
+///
+/// An unknown txid is **not** an error — it answers with the note omitted,
+/// the same shape as a cleared one. There is nothing to distinguish: a note
+/// carries no existence claim about the transaction, so "no note for this
+/// txid" is the whole truth in both cases, and a refusal would additionally
+/// turn this read into an oracle for which txids the wallet has annotated.
+pub(crate) async fn get_tx_note(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    let p: GetTxNoteParams = parse_required_object(params, "get_tx_note")?;
+    let txid = parse_txid(&p.tx_hash)?;
+
+    let shared = require_open_engine(tenants).await?;
+    let engine = shared.read().await;
+
+    let result = GetTxNoteResult {
+        tx_hash: txid.to_string(),
+        note: engine.tx_note(txid),
+    };
+    serde_json::to_value(result)
+        .map_err(|e| WalletRpcError::InternalError(format!("serialize get_tx_note: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::error::WalletRpcErrorCode;
 
     #[test]
     fn note_length_bound_refuses_without_echoing_content() {
@@ -92,9 +153,19 @@ mod tests {
         // byte counts only and must NOT echo the note content, so
         // counterparty text cannot escape through the error string (the
         // property fires if someone later "improves" the message to include
-        // the note).
+        // the note — including via the engine-owned `TxNoteTooLong` Display
+        // this now delegates to).
         let over = format!("CANARY{}", "x".repeat(TX_NOTE_MAX_BYTES));
-        match check_note_len(&over).expect_err("over-length note must be refused") {
+        let err = check_note_len(&over).expect_err("over-length note must be refused");
+
+        // The refusal contract is the wire code, not just the variant:
+        // `-32602` is what the OpenAPI document promises for this case.
+        assert_eq!(
+            err.code(),
+            WalletRpcErrorCode::InvalidParams,
+            "an over-length note must refuse as invalid params"
+        );
+        match err {
             WalletRpcError::InvalidParams(msg) => {
                 assert!(
                     !msg.contains("CANARY"),
