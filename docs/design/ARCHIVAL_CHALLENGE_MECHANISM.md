@@ -1372,6 +1372,18 @@ than repealing it:
    makes **resumability** feel natural — resumability is a *format
    property* with real W₂ consequences, decided on its merits in the
    format round, never inherited from what was convenient to build.
+
+   **The rig MUST run with `VanguardsMode::Managed` (ruled 2026-08-11,
+   written before the rig exists rather than discovered afterward).** Full
+   vanguards adds a guard layer, and the spec is explicit that this costs
+   longer paths and higher latency — latency on exactly the path W₂
+   measures. A rig run against a non-vanguards instance therefore measures a
+   **shorter path than production ships**, and it under-estimates *in the
+   failure-causing direction*: the same shape as the already-pinned
+   forward-delay-vs-RTT rule. The failure mode is silent — the numbers come
+   back looking good. So the measurement's **provenance must record the
+   vanguards mode alongside the Pi-4 floor**, and a run without it is not a
+   W₂ datum.
 4. The two standalone PRs (#433 ordering assert, #434 coverage sim) —
    in flight.
 
