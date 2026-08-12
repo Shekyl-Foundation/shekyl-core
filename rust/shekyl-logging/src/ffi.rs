@@ -21,6 +21,14 @@
 //!   [`tracing_subscriber::reload::Layer`] so later category toggles
 //!   can swap filters without tearing down the subscriber. Subsequent
 //!   init calls return [`SHEKYL_LOG_ERR_ALREADY_INIT`].
+//! - **Pre-init**: C++ `M*` macros can fire before any entry point
+//!   knows the final sink (glibc warning inside `on_startup`, wallet
+//!   missing-config `MERROR`, daemon FAT32 `MERROR`). Those calls
+//!   must stay audible *without* installing the subscriber — doing
+//!   so would recreate the `--log-file` inert bug. Before the first
+//!   successful init, WARNING and above write straight to stderr;
+//!   INFO and below stay silent. That floor matches the fallback
+//!   `mlog_configure` uses.
 //! - **Shutdown**: drops the stashed [`crate::LoggerGuard`], which
 //!   flushes the non-blocking writer thread. Safe to call multiple
 //!   times; additional calls are no-ops.
@@ -33,8 +41,9 @@
 //!   `directives_from_legacy_categories`.
 //! - **Enabled**: the gate the shim calls before building the C++
 //!   `std::stringstream`. Short-circuits ~1,345 suppressed C++ call
-//!   sites before they allocate. Internally routes through
-//!   [`tracing::dispatcher::get_default`] against the same interned
+//!   sites before they allocate. Before init this is the WARNING
+//!   floor above; after init it routes through
+//!   [`tracing::dispatcher::get_default`] against the interned
 //!   callsite pool.
 //! - **Set-categories**: applies a legacy `log-levels=` spec through
 //!   the stateful translator (`current_spec` = last-applied
@@ -68,6 +77,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io::Write;
 use std::os::raw::c_char;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -423,8 +433,16 @@ pub unsafe extern "C" fn shekyl_log_install_tracing_forwarder() -> i32 {
 /// The shim calls this before building the C++ `std::stringstream`
 /// so suppressed events short-circuit before any allocation.
 ///
-/// Returns `false` when the logger is uninitialized or the target
-/// bytes are not valid UTF-8.
+/// Before the first successful `shekyl_log_init_*`, returns `true`
+/// for WARNING and above (the same floor `mlog_configure` uses as
+/// fallback) and `false` for INFO and below. That lets pre-init
+/// C++ `MERROR` / `MCLOG` calls reach stderr without installing
+/// the process-global subscriber, so a later `shekyl_log_init_file`
+/// still wins.
+///
+/// After init, returns whether the event would pass the current
+/// filter. Returns `false` when the target bytes are not valid
+/// UTF-8.
 ///
 /// # Safety
 ///
@@ -439,6 +457,9 @@ pub unsafe extern "C" fn shekyl_log_level_enabled(
     let Some(level) = level_from_u8(level) else {
         return false;
     };
+    if !logger_initialized() {
+        return pre_init_audible(level);
+    }
     // SAFETY: forwarded to caller's contract documented above.
     let Ok(target) = (unsafe { str_from_raw(target_ptr, target_len) }) else {
         return false;
@@ -449,6 +470,11 @@ pub unsafe extern "C" fn shekyl_log_level_enabled(
 }
 
 /// Emit one event.
+///
+/// Before the first successful `shekyl_log_init_*`, WARNING and
+/// above are written to stderr and the subscriber is **not**
+/// installed. After init, the event is dispatched through the
+/// installed subscriber.
 ///
 /// All pointer+length pairs except `msg_ptr`/`msg_len` may be
 /// `(null, 0)` — the event then lands with the corresponding field
@@ -481,6 +507,15 @@ pub unsafe extern "C" fn shekyl_log_emit(
     let Ok(target) = (unsafe { str_from_raw(target_ptr, target_len) }) else {
         return;
     };
+    if !logger_initialized() {
+        if !pre_init_audible(level) {
+            return;
+        }
+        // SAFETY: as above.
+        let msg = unsafe { str_from_raw(msg_ptr, msg_len) }.unwrap_or("");
+        emit_pre_init(target, msg);
+        return;
+    }
     // SAFETY: as above.
     let file = unsafe { str_from_raw(file_ptr, file_len) }.unwrap_or("");
     // SAFETY: as above.
@@ -777,6 +812,33 @@ pub fn __test_only_reset_ffi_state() {
 // -----------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------
+
+fn logger_initialized() -> bool {
+    crate::INITIALIZED.load(Ordering::SeqCst)
+}
+
+/// WARNING and above stay audible before the first `shekyl_log_init_*`.
+/// Matches the fallback `mlog_configure` uses, so C++ `MERROR` /
+/// `MCLOG_RED(..., Warning)` between `on_startup` and the entry
+/// point's final configure still reach the operator without
+/// consuming the first-caller-wins subscriber install.
+fn pre_init_audible(level: Level) -> bool {
+    level <= Level::WARN
+}
+
+fn emit_pre_init(target: &str, msg: &str) {
+    let mut err = std::io::stderr();
+    let wrote = if target.is_empty() {
+        writeln!(err, "{msg}")
+    } else {
+        writeln!(err, "{target}: {msg}")
+    };
+    // Best-effort: if stderr is gone there is nowhere else to put a
+    // pre-init diagnostic.
+    if wrote.is_ok() {
+        drop(err.flush());
+    }
+}
 
 fn level_from_u8(level: u8) -> Option<Level> {
     match level {

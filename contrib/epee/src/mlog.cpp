@@ -232,21 +232,26 @@ void mlog_configure(const std::string &filename_base, bool console, const std::s
   if (rc == SHEKYL_LOG_ERR_ALREADY_INIT && !filename_base.empty())
   {
     // SILENCE IS ONLY CORRECT WHEN NOTHING WAS ASKED FOR. A caller reaching
-    // here with a path asked for a log FILE and is not getting one, and the
-    // note above promises the operator a stderr line to correlate against --
-    // a promise the old condition excluded this exact case from keeping, so
-    // the one outcome that actually occurred was the one that printed
-    // nothing. That is how `--log-file` stayed inert across ten entry points
-    // without a single diagnostic.
+    // here with a path asked for a log FILE and is not getting *this* path,
+    // and the note above promises the operator a stderr line to correlate
+    // against -- a promise the old condition excluded this exact case from
+    // keeping, so the one outcome that actually occurred was the one that
+    // printed nothing. That is how `--log-file` stayed inert across ten
+    // entry points without a single diagnostic.
     //
-    // This stays a warning rather than a hard failure: the process still logs,
-    // to stderr, and refusing to start a daemon over a log sink would trade a
-    // visible degradation for an outage. But it is no longer silent, so a
-    // future re-introduction of an early unconditional init announces itself.
+    // What we know: this call's path and rotation settings were ignored.
+    // What we do not know: what the first init installed. It may have been
+    // stderr-only (the historical `--log-file` defect) or a different file
+    // (SIGHUP-style re-configure, a second in-process entry point). Claiming
+    // "no file will be written" or "stderr only" would lie in the second
+    // case. The existing sink is unchanged; this stays a warning rather
+    // than a hard failure so a log-sink mismatch cannot take the process
+    // down.
     std::fprintf(stderr,
       "mlog_configure: a log file was requested (%s) but logging was already "
-      "initialised earlier in this process; NO FILE WILL BE WRITTEN and log "
-      "rotation settings are inert. Output goes to stderr only.\n",
+      "initialised earlier in this process; the requested path is ignored and "
+      "rotation settings from this call are inert. The sink installed by the "
+      "first init is unchanged.\n",
       filename_base.c_str());
   }
   else if (rc != SHEKYL_LOG_OK && rc != SHEKYL_LOG_ERR_ALREADY_INIT)

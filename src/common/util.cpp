@@ -804,6 +804,11 @@ std::string get_nix_version_display_string()
     // Every entry point now initialises logging exactly once, with its FINAL
     // configuration. Callers that genuinely want stderr only say so themselves
     // (cn_deserialize.cpp, object_sizes.cpp, gen_ssl_cert.cpp).
+    //
+    // M*/MC* calls before that final init (the glibc warning below, the
+    // wallet missing-config MERROR, the daemon FAT32 MERROR) reach stderr
+    // through shekyl_log_emit's pre-init passthrough. They do not install
+    // the subscriber, so they cannot recreate the inert `--log-file` bug.
 
     setup_crash_dump();
 

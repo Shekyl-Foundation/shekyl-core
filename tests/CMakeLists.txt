@@ -141,6 +141,10 @@ add_test(
   NAME    log-file-sink-refusal-is-announced
   COMMAND log-file-sink-tests already-init-warns)
 
+add_test(
+  NAME    log-file-sink-pre-init-stays-audible
+  COMMAND log-file-sink-tests pre-init-audible-then-file)
+
 #
 # Configure wallet crypto benchmark
 #
