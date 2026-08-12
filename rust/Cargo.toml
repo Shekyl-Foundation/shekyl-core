@@ -147,6 +147,12 @@ members = [
     # service (2d-2 serving path; provisional THROWAWAY framing)
     "shekyl-p-serve",
 
+    # The serving host: composes `shekyl-p-serve`'s loopback endpoint with
+    # `shekyl-tor`'s onion supervisor over a serve-set derived from the bond
+    # record (ARCHIVAL_CHALLENGE_MECHANISM.md §9.5 item 3, §9.6 item 4). Holds
+    # the read-only store handle and never a wallet seed — §7.2(iii) custody.
+    "shekyl-p-host",
+
     # Wallet-owned Tor integration: control client + lifecycle (2d-2 SP-T0)
     "shekyl-tor",
 

@@ -4229,6 +4229,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-p-host"
+version = "3.1.0"
+dependencies = [
+ "shekyl-archival-retention",
+ "shekyl-curve-tree",
+ "shekyl-p-serve",
+ "shekyl-tor",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "shekyl-p-serve"
 version = "3.1.0"
 dependencies = [
