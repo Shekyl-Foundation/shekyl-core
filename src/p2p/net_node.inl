@@ -1326,6 +1326,11 @@ namespace nodetool
       return false;
     }
 
+    // A completed handshake proves the address is reachable, so its failure
+    // history is cleared rather than aged out. Both success paths do this; a
+    // peer that recovers must not carry an escalation into its next bad minute.
+    record_addr_success(na);
+
     if(just_take_peerlist)
     {
       zone.m_net_server.get_config_object().close(con->m_connection_id);
@@ -1390,6 +1395,14 @@ namespace nodetool
       return false;
     }
 
+    // Same reset as the white path: this function also completes an outbound
+    // handshake, and an address that answers here has proved itself reachable.
+    // Without it the failure history is WRITE-ONLY on this route -- both its
+    // failure paths record, none of its success paths clear -- so the gray
+    // housekeeping that exists to re-test doubtful peers would accumulate
+    // escalation those peers could never shed.
+    record_addr_success(na);
+
     zone.m_net_server.get_config_object().close(con->m_connection_id);
 
     LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK AND CLOSED.");
@@ -1403,22 +1416,19 @@ namespace nodetool
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::record_addr_failed(const epee::net_utils::network_address& addr)
   {
-    CRITICAL_REGION_LOCAL(m_conn_fails_cache_lock);
-    m_conn_fails_cache[addr.host_str()] = time(NULL);
+    m_conn_fails_cache.record_failure(addr, time(NULL));
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  void node_server<t_payload_net_handler>::record_addr_success(const epee::net_utils::network_address& addr)
+  {
+    m_conn_fails_cache.record_success(addr);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_addr_recently_failed(const epee::net_utils::network_address& addr)
   {
-    CRITICAL_REGION_LOCAL(m_conn_fails_cache_lock);
-    auto it = m_conn_fails_cache.find(addr.host_str());
-    if(it == m_conn_fails_cache.end())
-      return false;
-
-    if(time(NULL) - it->second > P2P_FAILED_ADDR_FORGET_SECONDS)
-      return false;
-    else
-      return true;
+    return m_conn_fails_cache.is_recently_failed(addr, time(NULL));
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>

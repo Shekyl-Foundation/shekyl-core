@@ -130,6 +130,91 @@ namespace nodetool
       enforces this invariant and refuses to start if it is broken. */
   constexpr peerid_type ANON_ZONE_SENTINEL_PEER_ID = 1;
 
+  /*! Which addresses are currently suppressed after failed dials, and for how
+    long (Q12-R13).
+
+    A class rather than a bare map plus two helpers so the schedule can be
+    driven directly by a test: `record_addr_success` is otherwise unreachable
+    from outside `node_server`, and an untested reset is exactly the part that
+    would regress silently -- a transiently flaky peer that never clears its
+    counter ratchets to the public-zone hour and arrives at the very
+    disconnection this exists to prevent.
+
+    `now` is a parameter rather than a call to `time(NULL)` inside, so the
+    window boundary can be asserted without sleeping through it. */
+  class failed_addr_cache
+  {
+  public:
+    /*! How long `zone` suppresses an address after `consecutive` failures.
+
+      The window is a property of the TRANSPORT, not of the peer. On the public
+      zone a failed dial usually means a down host and the hour is justified. On
+      an anonymity zone it is frequently a descriptor that has not propagated --
+      against a peer that is up, correct, and answering everyone else -- so the
+      first failure costs minutes and only a persistent one earns the hour.
+
+      \note NOT a latency. See `P2P_ANON_FAILED_ADDR_FORGET_SECONDS`. */
+    static time_t window(epee::net_utils::zone zone, uint32_t consecutive)
+    {
+      // Tested by NAMING the anonymity zones, not by asking "is it not public".
+      // `epee::net_utils::zone` also has `invalid`, and a not-public test would
+      // hand the SHORT window to an address whose zone could not be determined
+      // -- a behaviour change with no evidence behind it, since the measured
+      // recovery this value comes from is a hidden-service property. Anything
+      // that is not demonstrably an anonymity address keeps the public hour,
+      // which is also the safe default for any zone added later.
+      const bool anonymity_zone =
+        zone == epee::net_utils::zone::tor || zone == epee::net_utils::zone::i2p;
+      if (!anonymity_zone)
+        return P2P_FAILED_ADDR_FORGET_SECONDS;
+
+      uint64_t w = P2P_ANON_FAILED_ADDR_FORGET_SECONDS;
+      for (uint32_t i = 1; i < consecutive && w < P2P_FAILED_ADDR_FORGET_SECONDS; ++i)
+        w *= 2;
+      return time_t(std::min<uint64_t>(w, uint64_t(P2P_FAILED_ADDR_FORGET_SECONDS)));
+    }
+
+    void record_failure(const epee::net_utils::network_address& addr, time_t now)
+    {
+      CRITICAL_REGION_LOCAL(m_lock);
+      record& rec = m_cache[addr.host_str()];
+      rec.when = now;
+      // Saturate rather than wrap: the window is capped anyway, and a counter
+      // that overflowed would silently hand the SHORT window back to a peer
+      // that has failed thousands of times.
+      if (rec.consecutive < 32)
+        ++rec.consecutive;
+    }
+
+    /*! A completed handshake proves the address is reachable, so its history is
+      cleared rather than aged out or decremented. */
+    void record_success(const epee::net_utils::network_address& addr)
+    {
+      CRITICAL_REGION_LOCAL(m_lock);
+      m_cache.erase(addr.host_str());
+    }
+
+    bool is_recently_failed(const epee::net_utils::network_address& addr, time_t now)
+    {
+      CRITICAL_REGION_LOCAL(m_lock);
+      auto it = m_cache.find(addr.host_str());
+      if (it == m_cache.end())
+        return false;
+      // The zone comes from the address itself, so callers need no zone
+      // argument and cannot pass the wrong one.
+      return now - it->second.when <= window(addr.get_zone(), it->second.consecutive);
+    }
+
+  private:
+    struct record
+    {
+      time_t when = 0;
+      uint32_t consecutive = 0;
+    };
+    std::map<std::string, record> m_cache;
+    epee::critical_section m_lock;
+  };
+
   template<class base_type>
   struct p2p_connection_context_t: base_type //t_payload_net_handler::connection_context //public net_utils::connection_context_base
   {
@@ -416,6 +501,8 @@ namespace nodetool
     bool try_get_support_flags(const p2p_connection_context& context, std::function<void(p2p_connection_context&, const uint32_t&)> f);
     bool make_expected_connections_count(network_zone& zone, PeerType peer_type, size_t expected_connections);
     void record_addr_failed(const epee::net_utils::network_address& addr);
+    /*! Clear an address's failure record after a successful handshake. */
+    void record_addr_success(const epee::net_utils::network_address& addr);
     bool is_addr_recently_failed(const epee::net_utils::network_address& addr);
     bool is_priority_node(const epee::net_utils::network_address& na);
     std::set<std::string> get_ip_seed_nodes() const;
@@ -520,8 +607,7 @@ namespace nodetool
     std::map<epee::net_utils::zone, network_zone> m_network_zones;
 
 
-    std::map<std::string, time_t> m_conn_fails_cache;
-    epee::critical_section m_conn_fails_cache_lock;
+    failed_addr_cache m_conn_fails_cache;
 
     epee::critical_section m_blocked_hosts_lock; // for both hosts and subnets
     std::map<std::string, time_t> m_blocked_hosts;

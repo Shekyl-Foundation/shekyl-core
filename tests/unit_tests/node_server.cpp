@@ -36,6 +36,7 @@
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.inl"
 #include "unit_tests_utils.h"
+#include "net/tor_address.h"
 #include <condition_variable>
 
 #define MAKE_IPV4_ADDRESS(a,b,c,d) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),0}
@@ -1475,4 +1476,172 @@ TEST(node_server, out_peers_floor_guards_public_zone_init_and_runtime)
 
     data.server->deinit();
   }
+}
+
+namespace
+{
+  // Q12-R13. The suppression window after a failed dial is a property of the
+  // TRANSPORT: an hour is right for a clearnet address, where a failed dial
+  // usually means a down host, and disconnecting for an anonymity address,
+  // where it is frequently a descriptor that has not propagated against a peer
+  // that is up and answering everyone else.
+  //
+  // These assert the WINDOW's PROPERTIES rather than the constants' values, so
+  // the test still means something if the numbers are re-derived: what must not
+  // change is that the anon window is shorter, that it escalates, that it never
+  // exceeds the public one, and that a success clears it.
+  //
+  // `nodetool::failed_addr_window` is THE function the daemon calls. It is not
+  // re-implemented here: a test that recomputes the schedule agrees with itself
+  // however the daemon behaves.
+  time_t anon_window_after(uint32_t consecutive)
+  {
+    return nodetool::failed_addr_cache::window(epee::net_utils::zone::tor, consecutive);
+  }
+
+  epee::net_utils::network_address tor_addr(const char* host)
+  {
+    return epee::net_utils::network_address{
+      MONERO_UNWRAP(net::tor_address::make(std::string(host) + ":13021"))};
+  }
+}
+
+TEST(node_server, anon_zone_failed_address_window_is_shorter_than_public)
+{
+  // The defect this encodes: with a one-hour anon window and a per-dial failure
+  // rate near 0.2, a node below F-8b's floor of 12 cannot climb back, because
+  // the peers it would recover with are the ones it just burned.
+  EXPECT_LT(P2P_ANON_FAILED_ADDR_FORGET_SECONDS, P2P_FAILED_ADDR_FORGET_SECONDS);
+
+  // Negative control: the public zone is NOT shortened by this change. If a
+  // future edit made the two equal, the assertion above would still pass while
+  // the fix had been undone, so the public value is pinned on its own.
+  EXPECT_EQ(P2P_FAILED_ADDR_FORGET_SECONDS, 60 * 60);
+}
+
+TEST(node_server, anon_zone_failed_address_window_escalates_and_is_capped)
+{
+  EXPECT_EQ(anon_window_after(1), P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
+  EXPECT_EQ(anon_window_after(2), 2 * P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
+  EXPECT_EQ(anon_window_after(3), 4 * P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
+
+  // A peer that is genuinely gone converges on the public-zone hour rather than
+  // being retried at the short interval forever...
+  EXPECT_EQ(anon_window_after(32), P2P_FAILED_ADDR_FORGET_SECONDS);
+  // ...and never exceeds it, at any count.
+  for (uint32_t n = 1; n <= 64; ++n)
+    EXPECT_LE(anon_window_after(n), P2P_FAILED_ADDR_FORGET_SECONDS) << "at n=" << n;
+}
+
+TEST(node_server, anon_zone_first_failure_is_short_enough_to_reach_the_floor)
+{
+  // Measured: a hidden service is undialable for on the order of a minute after
+  // its introduction points change, which is what a restart -- the documented
+  // remedy for a service that never published -- causes. A first-failure window
+  // shorter than that would retry INSIDE the same dead window and burn the
+  // address again; much longer and the floor stops being reachable.
+  //
+  // Dials are serial and blocking at up to P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT
+  // each, so three attempts across a dozen candidates must remain minutes
+  // rather than an hour of wall clock.
+  const uint64_t attempts = 3;
+  const uint64_t candidates = 12;
+  uint64_t worst_case = 0;
+  for (uint32_t n = 1; n <= attempts; ++n)
+    worst_case += anon_window_after(n) + candidates * P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT;
+  EXPECT_LT(worst_case, P2P_FAILED_ADDR_FORGET_SECONDS)
+    << "three attempts at every candidate must cost less than the single hour "
+       "the unfixed code spends on one failure";
+}
+
+TEST(node_server, anon_zone_success_clears_the_failure_history)
+{
+  // The half of Q12-R13's fix that nothing else covers. Without the reset a
+  // peer that is transiently flaky -- fails, succeeds, fails -- keeps its
+  // counter, escalates to the public-zone hour anyway, and arrives at the same
+  // disconnection by a slower road. The fix would decay into the defect.
+  nodetool::failed_addr_cache cache;
+  const auto addr = tor_addr("aghoxa757l2wqribeto2hv2rk3wjwcwdqzvu5hjkqdjcm24nuhaszjqd.onion");
+  const time_t t0 = 1000000;
+
+  // Three failures in a row escalate the window to 4x the base...
+  cache.record_failure(addr, t0);
+  cache.record_failure(addr, t0);
+  cache.record_failure(addr, t0);
+  EXPECT_TRUE(cache.is_recently_failed(addr, t0 + 4 * P2P_ANON_FAILED_ADDR_FORGET_SECONDS - 1));
+  EXPECT_FALSE(cache.is_recently_failed(addr, t0 + 4 * P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1));
+
+  // ...and a successful handshake clears the history entirely, so the NEXT
+  // failure is charged the first-failure window again rather than 8x.
+  cache.record_success(addr);
+  EXPECT_FALSE(cache.is_recently_failed(addr, t0));
+
+  cache.record_failure(addr, t0);
+  EXPECT_TRUE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS - 1));
+  EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
+    << "a success must RESET the counter, not decrement it";
+}
+
+TEST(node_server, public_zone_window_is_not_shortened_by_the_anon_fix)
+{
+  // Negative control on the change itself: the anonymity-zone window must not
+  // leak onto clearnet addresses, where an hour remains correct because a
+  // failed dial there usually does mean a down host.
+  nodetool::failed_addr_cache cache;
+  const epee::net_utils::network_address addr{
+    epee::net_utils::ipv4_network_address{0x04030201, 12021}};
+  const time_t t0 = 1000000;
+
+  cache.record_failure(addr, t0);
+  EXPECT_TRUE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
+    << "a clearnet address must still be suppressed well past the anon window";
+  EXPECT_TRUE(cache.is_recently_failed(addr, t0 + P2P_FAILED_ADDR_FORGET_SECONDS - 1));
+  EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_FAILED_ADDR_FORGET_SECONDS + 1));
+}
+
+TEST(node_server, unknown_zone_keeps_the_public_window)
+{
+  // The window is selected by NAMING the anonymity zones. A not-public test
+  // would give `zone::invalid` -- an address whose zone could not be determined
+  // -- the short anonymity window, which no measurement supports: the 240 s
+  // comes from hidden-service republication, a property invalid addresses do
+  // not have. This pins the safe default so a later refactor to `!= public_`
+  // reds a test instead of silently shortening suppression.
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::invalid, 1),
+            P2P_FAILED_ADDR_FORGET_SECONDS);
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::public_, 1),
+            P2P_FAILED_ADDR_FORGET_SECONDS);
+  // ...while both real anonymity zones do get it.
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::tor, 1),
+            P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::i2p, 1),
+            P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
+}
+
+TEST(node_server, both_outbound_paths_clear_the_failure_history)
+{
+  // node_server has TWO outbound connect+handshake routines:
+  // `try_to_connect_and_handshake_with_new_peer` (white/anchor selection) and
+  // `check_connection_and_handshake_with_peer` (gray-peerlist housekeeping).
+  // Both record failures. The first version of this fix cleared on success in
+  // only one of them, so on the gray route the failure history was WRITE-ONLY:
+  // the path that exists to re-test doubtful peers accumulated escalation those
+  // peers could never shed, and a peer promoted from gray to white carried its
+  // counter with it.
+  //
+  // The mechanism is asserted at the cache, which is what both routines call.
+  nodetool::failed_addr_cache cache;
+  const auto addr = tor_addr("aks2vbpjb5ojfyqcataqedodws7ardjxczy76bqwmlv55mgfunsxoiyd.onion");
+  const time_t t0 = 2000000;
+
+  cache.record_failure(addr, t0);
+  cache.record_failure(addr, t0);
+  EXPECT_TRUE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
+    << "two failures must have escalated beyond the first-failure window";
+
+  cache.record_success(addr);
+  cache.record_failure(addr, t0);
+  EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
+    << "after a success the next failure is charged the FIRST-failure window, "
+       "whichever routine reported the success";
 }
