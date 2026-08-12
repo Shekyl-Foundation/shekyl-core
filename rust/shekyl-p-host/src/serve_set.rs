@@ -256,6 +256,19 @@ pub trait ServeSetPinner {
     fn pin_serve_set(&self) -> impl std::future::Future<Output = Result<PinReport, String>> + Send;
 }
 
+/// A shared reference pins exactly as the value does.
+///
+/// [`crate::PersonaServingHost`] takes its pinner **by value** and keeps it
+/// for life — that ownership is what makes "one host, one pinner, one store"
+/// structural. This impl is how a caller that must also retain the pinner
+/// (a supervisor holding it to observe, a test driving holdings changes)
+/// hands the host a `&P` without a second pinner existing.
+impl<T: ServeSetPinner + Sync> ServeSetPinner for &T {
+    fn pin_serve_set(&self) -> impl std::future::Future<Output = Result<PinReport, String>> + Send {
+        (**self).pin_serve_set()
+    }
+}
+
 /// Proof that a serve-set's pins are in place — the ticket
 /// [`crate::PersonaServingHost::start`] demands.
 ///

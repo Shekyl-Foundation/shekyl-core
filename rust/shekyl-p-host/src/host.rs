@@ -46,6 +46,9 @@ pub enum HostError {
         /// The bind error, verbatim.
         detail: String,
     },
+    /// The serve-set could not be pinned, so nothing is served. See
+    /// [`PinError`] — the two arms differ in remedy (retry vs rebuild).
+    Pin(PinError),
     /// The bound endpoint's address was refused as an `ADD_ONION` target.
     ///
     /// Unreachable in practice — [`PServeEndpoint::bind`] binds
@@ -61,6 +64,7 @@ impl std::fmt::Display for HostError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Bind { detail } => write!(f, "serving endpoint bind failed: {detail}"),
+            Self::Pin(e) => write!(f, "serving host did not start: {e}"),
             Self::NonLoopbackTarget => {
                 f.write_str("serving endpoint address was refused as a non-loopback onion target")
             }
@@ -68,7 +72,14 @@ impl std::fmt::Display for HostError {
     }
 }
 
-impl std::error::Error for HostError {}
+impl std::error::Error for HostError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Pin(e) => Some(e),
+            Self::Bind { .. } | Self::NonLoopbackTarget => None,
+        }
+    }
+}
 
 /// A bonded persona's serving host: the loopback shard server, the onion
 /// that makes it reachable, and the pins that keep its shards alive.
@@ -116,11 +127,15 @@ impl std::error::Error for HostError {}
 /// type of what it can hold, not an address space. Splitting the serving
 /// host into its own process is a stronger form of the same rule and is not
 /// foreclosed by anything here.
-pub struct PersonaServingHost {
+pub struct PersonaServingHost<P: ServeSetPinner> {
     /// Bound once in [`Self::start`]; never rebound. See the type doc.
     endpoint: PServeEndpoint,
     tor: TorService,
     service_id: ServiceId,
+    /// The one pinner this host will ever use. Held rather than taken per
+    /// call so the store the pins land in cannot change between the initial
+    /// acquire and any later refresh — see [`Self::refresh`].
+    pinner: P,
     /// Held, not just consumed: dropping the witness on the floor would
     /// make the pins look like a startup formality rather than a live
     /// property of this host. Behind a `Mutex` because it is exactly that —
@@ -128,7 +143,7 @@ pub struct PersonaServingHost {
     pinned: Mutex<PinnedServeSet>,
 }
 
-impl PersonaServingHost {
+impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// Bind the loopback serving endpoint, point an onion at it, and start
     /// the supervisor.
     ///
@@ -159,8 +174,14 @@ impl PersonaServingHost {
     pub async fn start(
         mut tor: TorServiceConfig,
         serving: PersonaServing,
-        pinned: PinnedServeSet,
+        pinner: P,
     ) -> Result<Self, HostError> {
+        // The pins are taken here, from the pinner this host keeps. Nothing
+        // is handed in already-pinned, so there is no way to start a host
+        // whose pins came from somewhere its refreshes cannot reach.
+        let pinned = PinnedServeSet::acquire(&pinner)
+            .await
+            .map_err(HostError::Pin)?;
         // The reader comes from the witness, not from an argument: the store
         // served must be the store pinned, and the only way to make that
         // unconditional is to leave the caller no way to name a second one.
@@ -187,6 +208,7 @@ impl PersonaServingHost {
             endpoint,
             tor,
             service_id,
+            pinner,
             pinned: Mutex::new(pinned),
         })
     }
@@ -208,7 +230,24 @@ impl PersonaServingHost {
     /// A snapshot of the serve-set these pins cover.
     #[must_use]
     pub fn pinned_serve_set(&self) -> PinnedServeSet {
-        self.pinned.lock().expect("serve-set lock").clone()
+        self.lock_pinned().clone()
+    }
+
+    /// Take the serve-set lock, **tolerating poisoning**.
+    ///
+    /// A poisoned mutex means some task panicked while holding this lock, and
+    /// the standard reflex — propagate — is wrong here for two reasons. The
+    /// critical sections are a `clone` and a single assignment, so there is no
+    /// torn state a panic could have left behind: the witness inside is either
+    /// the old value or the new one, and both are whole. And the cost of
+    /// propagating is paid on a serving host, where every subsequent read
+    /// becoming a panic converts one unrelated fault into a persona that stops
+    /// answering — which is a slash. `expect` here would trade a recoverable
+    /// condition for the exact outcome this crate exists to prevent.
+    fn lock_pinned(&self) -> std::sync::MutexGuard<'_, PinnedServeSet> {
+        self.pinned
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Re-derive the pins from a freshly read bond record.
@@ -227,8 +266,15 @@ impl PersonaServingHost {
     /// serialized; a failure leaves the previous witness in place, which is
     /// the safe direction: stale pins retain bytes, missing pins lose them.
     ///
-    /// The store is **not** re-chosen — see `PinnedServeSet::refreshed` — and
-    /// the *set* is not supplied either: the pinner reports the shards it
+    /// **Takes no pinner, and that is what keeps the pins in the store being
+    /// served.** `refreshed` builds the new witness with *this host's* reader,
+    /// because the endpoint never rebinds and so the served store cannot
+    /// change. If the refresh could be handed a different pinner, its pins
+    /// could land in a different store while the witness claimed they were
+    /// here — a witness asserting safety for a store nobody is serving, which
+    /// is worse than no witness. One host, one pinner, taken at `start`.
+    ///
+    /// The set is not supplied either: the pinner reports the shards it
     /// derived from the connected record. A serving host does not name its
     /// own obligations on any tick, first or later.
     ///
@@ -237,14 +283,14 @@ impl PersonaServingHost {
     /// [`PinError`] as [`PinnedServeSet::acquire`]; the host keeps serving on
     /// its previous pins either way, and the caller should treat a persistent
     /// failure as the [`Staleness::Stale`] condition it will become.
-    pub async fn refresh<P: ServeSetPinner>(&self, pinner: &P) -> Result<(), PinError> {
+    pub async fn refresh(&self) -> Result<(), PinError> {
         // Clone the current witness rather than holding the lock across the
         // await: the pin is an actor round trip, and holding a lock across it
         // is the shape the curve-tree actor's own lock-ordering rule exists
         // to forbid.
         let current = self.pinned_serve_set();
-        let next = current.refreshed(pinner).await?;
-        *self.pinned.lock().expect("serve-set lock") = next;
+        let next = current.refreshed(&self.pinner).await?;
+        *self.lock_pinned() = next;
         Ok(())
     }
 
@@ -307,7 +353,7 @@ impl PersonaServingHost {
     }
 }
 
-impl std::fmt::Debug for PersonaServingHost {
+impl<P: ServeSetPinner> std::fmt::Debug for PersonaServingHost<P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The serving address is the persona's identity on the wire; it is
         // chain-public, but there is nothing here worth printing by default.

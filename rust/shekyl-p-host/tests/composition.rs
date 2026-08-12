@@ -72,6 +72,7 @@ fn segment_entries() -> Vec<LeafEntry> {
 struct StorePinner {
     store: Arc<LeafStore>,
     reported: Mutex<(Vec<u64>, u64)>,
+    fail: Mutex<bool>,
 }
 
 impl StorePinner {
@@ -79,7 +80,13 @@ impl StorePinner {
         Self {
             store,
             reported: Mutex::new((shard_ids.to_vec(), as_of_height)),
+            fail: Mutex::new(false),
         }
+    }
+
+    /// The pinner starts failing — the transport dropped, the actor died.
+    fn fail_next(&self) {
+        *self.fail.lock().expect("lock") = true;
     }
 
     /// Holdings move on-chain: the record now says something else.
@@ -90,6 +97,9 @@ impl StorePinner {
 
 impl ServeSetPinner for StorePinner {
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
+        if *self.fail.lock().expect("lock") {
+            return Err("pinner is down".into());
+        }
         let (shard_ids, as_of_height) = self.reported.lock().expect("lock").clone();
         let outcomes = self
             .store
@@ -334,9 +344,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("append and freeze segment 0");
 
-    let pinned = PinnedServeSet::acquire(&StorePinner::new(Arc::clone(&store), &[0], 10_000))
-        .await
-        .expect("pin");
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], 10_000);
 
     let dir = tempfile::tempdir().expect("tempdir");
     let id = identity();
@@ -348,7 +356,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
             virtual_port: 80,
             max_streams: 8,
         },
-        pinned,
+        &pinner,
     )
     .await
     .expect("host starts without a working tor — the endpoint does not need one");
@@ -407,9 +415,7 @@ async fn shutdown_stops_the_listener() {
     // port it points at); what is observable without a live onion is that
     // the listener is gone once shutdown resolves.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let pinned = PinnedServeSet::acquire(&StorePinner::new(Arc::clone(&store), &[], 0))
-        .await
-        .expect("an empty serve-set pins vacuously");
+    let pinner = StorePinner::new(Arc::clone(&store), &[], 0);
 
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
@@ -419,7 +425,7 @@ async fn shutdown_stops_the_listener() {
             virtual_port: 80,
             max_streams: 8,
         },
-        pinned,
+        &pinner,
     )
     .await
     .expect("start");
@@ -468,9 +474,6 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
         .expect("freeze segment 0");
 
     let pinner = StorePinner::new(Arc::clone(&store), &[0], 1);
-    let pinned = PinnedServeSet::acquire(&pinner)
-        .await
-        .expect("pin the initial set");
 
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
@@ -480,14 +483,14 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
             virtual_port: 80,
             max_streams: 8,
         },
-        pinned,
+        &pinner,
     )
     .await
     .expect("start");
 
     // Holdings grow to cover segment 1, which then freezes.
     pinner.holdings_became(&[0, 1], 20_000);
-    host.refresh(&pinner).await.expect("refresh");
+    host.refresh().await.expect("refresh");
     let mut second = segment_entries();
     for (i, e) in second.iter_mut().enumerate() {
         e.gindex = Gindex(leaves_per_segment() as u64 + i as u64);
@@ -554,9 +557,7 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
     store
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("freeze segment 0");
-    let pinned = PinnedServeSet::acquire(&StorePinner::new(Arc::clone(&store), &[0], 1))
-        .await
-        .expect("pin");
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], 1);
 
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
@@ -566,15 +567,19 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
             virtual_port: 80,
             max_streams: 8,
         },
-        pinned,
+        &pinner,
     )
     .await
     .expect("start");
 
+    // The host holds the pinner it started with, so "a refresh that fails"
+    // is now the pinner failing rather than a different pinner being handed
+    // in — which is the point: there is no second pinner to hand in.
+    pinner.fail_next();
     let err = host
-        .refresh(&DeadPinner)
+        .refresh()
         .await
-        .expect_err("a dead pinner cannot refresh");
+        .expect_err("a failing pinner cannot refresh");
     assert!(matches!(err, PinError::Pinner { .. }));
     assert_eq!(
         host.pinned_serve_set().serve_set().as_of_height(),
