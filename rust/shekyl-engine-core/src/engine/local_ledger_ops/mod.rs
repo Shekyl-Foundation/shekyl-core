@@ -62,17 +62,27 @@ impl<
     /// make that split representable — and would deadlock on a caller that
     /// still holds the guard, which every caller does.
     ///
-    /// `undo` runs **only** on save failure, under that same guard, and must
-    /// restore the pre-mutation shape. `WalletFile::save_state` writes via
-    /// `atomic_write_file` (temp → fsync → `rename(2)` → parent fsync), so a
-    /// failed save leaves the on-disk state byte-unchanged — which is what
-    /// makes an in-memory undo sufficient rather than a partial repair.
+    /// `undo` runs on save failure, under that same guard, and must restore
+    /// the pre-mutation shape — but **only when the failed save left the
+    /// on-disk file unchanged**. `WalletFile::save_state` writes via
+    /// `atomic_write_file` (temp → fsync → `rename(2)` → parent fsync); every
+    /// failure up to and including the `rename` leaves the target
+    /// byte-unchanged, so undo restores the state that is still on disk. The
+    /// **one exception** is a post-rename parent-directory fsync failure: the
+    /// rename already committed the new file, so an undo would diverge memory
+    /// from the now-current disk. In that case the mutation is kept (memory
+    /// still matches disk) and the error is still returned — the write is
+    /// applied but its crash-durability is unconfirmed, and a fail-closed
+    /// retry re-runs the save and re-establishes durability idempotently.
+    /// [`PersistenceError::target_replaced`] draws that line.
     ///
     /// # Errors
     ///
-    /// [`PersistenceError`] when the durable save failed. The undo has
-    /// already run, so the wallet is back at its pre-mutation state and a
-    /// retry starts from there. Callers wrap this in their own
+    /// [`PersistenceError`] when the durable save failed. For a
+    /// target-unchanged failure the undo has run, so the wallet is back at
+    /// its pre-mutation state and a retry starts from there; for the
+    /// post-rename durability failure the mutation stands and a retry
+    /// re-confirms durability. Callers wrap this in their own
     /// `…::Persistence` arm so each op keeps its own refusal vocabulary.
     pub(crate) fn save_or_rollback(
         &self,
@@ -84,8 +94,14 @@ impl<
                 .save_state(self.state_wrap_key(), &guard.ledger),
         );
         if let Err(e) = save_result {
-            undo(guard);
-            return Err(e.into());
+            let e: PersistenceError = e.into();
+            // Undo only when the on-disk file is unchanged; keep the mutation
+            // when the write already reached disk (post-rename fsync failure)
+            // so memory does not diverge from it.
+            if !e.target_replaced() {
+                undo(guard);
+            }
+            return Err(e);
         }
         Ok(())
     }
