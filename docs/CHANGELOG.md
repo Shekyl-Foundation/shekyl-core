@@ -2,7 +2,118 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Pinned crypto vectors: the SA-3a raw-public-key leaf-hash pins moved to
+  a machine-readable fixture** (`docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json`;
+  PR-SA-3a, rule-30 vector-change record). The four byte pins — frozen
+  captures of the pre-dedup `PqcLeafScalar::from_pqc_public_key`
+  implementation, covering the degenerate lengths (empty, 1-byte) the
+  derived-path `PQC_LEAF_HASH_KAT.json` cannot express — are
+  **byte-identical relocations** of the inline hex that briefly lived in
+  `rust/shekyl-fcmp/src/leaf.rs`; no vector was added, removed, or
+  re-minted, so pin continuity is preserved. The consuming test
+  (`pqc_leaf_hash_raw_pk_known_answer_vectors` in `shekyl-crypto-pq`) now
+  asserts each vector through **both** consensus entry points
+  (`hash_pqc_public_key` and the `shekyl-fcmp` wrapper), and the JSON is
+  consumable by cross-language KAT tooling (C++/FFI differential harness).
+
+- **Pinned crypto vectors: the `bond_post` surface is retired from the
+  hybrid-v2 KAT** (`docs/test_vectors/PQC_HYBRID_V2_KAT.json`; PR-SA-2b,
+  rule-30 vector-change record). SA-2b resolved the bond-slot preimage
+  question as "generic wins": the bond vin carries no on-vin signature, its
+  authorization is the generic surface-A `pqc_auths` slot, and the dedicated
+  `SCHEME_DOMAIN_BOND_POST` domain was deleted — so the fixture drops from
+  seven vectors to six. The six surviving vectors and the pinned keypair are
+  **byte-identical** to the previous fixture (the shared `KAT_MESSAGE` bytes
+  are frozen with the pinned signatures; cross-build pin continuity is
+  preserved — no construction change occurred and none is masked).
+
+- **Wallet internals: the in-flight-spend lock is now derived from the
+  send journal instead of being stored on each output row**
+  (`WALLET_SEND_RECORD.md` PR-SJ-1b, `feat/wallet-sj1b-field-retirement`).
+  Runtime send/balance semantics are unchanged for a live wallet;
+  balance computation got measurably faster (~14% fewer instructions
+  on the hot path), and a wallet mid-rescan can no longer lose track
+  of an in-flight send — the journal survives the wipe the old
+  per-row lock did not. **Wallet-file break (pre-genesis):** files
+  written by earlier builds need a re-create (`rm -rf` and restore
+  from seed).
+
+  Two user-facing consequences of the same change:
+
+  - **A send that provably can never confirm now says so.** If a
+    transaction's input turns up spent by a *different* transaction
+    (another device restored from the same seed got there first), or a
+    rescan from a higher block puts the input permanently out of the
+    wallet's view, the send moves to presumed-dead in your history
+    instead of sitting "pending" forever. Its input locks release with
+    it. A late confirmation still flips the row back, loudly.
+  - **Opening a wallet file from an older build gives the right
+    error.** The version check now runs before the file body is parsed,
+    so you get "unsupported wallet format version" — which tells you to
+    re-create from your seed — rather than a parse error that reads
+    like corruption on a wallet whose keys and seed are perfectly fine.
+
+### Fixed
+
+- **The RandomX v2 differential's daily cron is green again: the T8
+  RSS ceiling is re-derived for Arc reach-through residency, and the
+  weekly cargo-mutants gate got its trigger back.** The T8 gate
+  (`--mode=concurrent` RSS bound) had failed every daily cron since
+  its first CI execution (2026-07-08): its 640 MiB ceiling modeled
+  only `CacheStore`'s two slot holdings, but the workload's
+  free-running workers legitimately keep displaced caches resident
+  via their in-flight `Arc` holds — a flat ~1035 MiB drift plateau
+  on the committed runner class, not a leak. The ceiling is now
+  worker-count-derived (`(workers + 1) × 256 MiB + 128 MiB`, R1-D9
+  F4 Round-3 amendment in `RANDOMX_V2_PHASE2G_PLAN.md`); leak
+  detection is preserved (a persistent per-rotation leak still trips
+  the bound within four of the run's 32 rotations). Separately, a
+  prior cleanup commit had accidentally severed the weekly
+  `cargo-mutants` job's header, orphaning its steps into the
+  runtime-modes job — leaving the T18 mutation gate with no trigger
+  at all. The job is restored verbatim with its weekly cadence and
+  360-minute budget.
+
+- **`BlockchainLMDB::reset()` now wipes every table, so an in-place chain
+  reset can no longer resurrect stale consensus state.** The old
+  hand-written drop list omitted 25 Shekyl-added tables (the whole
+  curve-tree and archival families plus block-burn and
+  pending-additions); because a reset chain re-uses heights and hashes, a
+  surviving row at a re-used key was read as the re-added block's state —
+  an actively wrong `curve_tree_root`, silently. `reset()` now enumerates
+  the environment's named tables and empties each one except the
+  keep-list (`table_survives_chain_reset` — txpool only; mempool
+  lifecycle is separate), then re-seeds the version row — the
+  fresh-database state `open()` produces. A future table cannot be missed
+  by construction. `reset_leaves_every_table_fresh` asserts every-table
+  empty against the environment oracle and pins that populated txpool
+  tables survive. No production flow currently reaches `reset()` (test
+  harnesses only); this closes the hazard before any tool adopts in-place
+  reset.
+
 ### Added
+
+- **You can now give up on a stuck send.** The new wallet-RPC method
+  `abandon_tx` marks a dispatched-but-unconfirmed send `ABANDONED` in
+  your history (`WALLET_SEND_RECORD.md` P3-4 / SJ-DQ-8, PR-SJ-3,
+  `feat/wallet-abandon-sj3`). Closes the Phase 4c abandon FOLLOWUP.
+
+  Abandoning is honest about what it does and does not do:
+
+  - The record is kept, not hidden — and if the transaction confirms
+    later anyway, the row flips to `CONFIRMED` loudly rather than
+    staying wrong.
+  - The retained per-transaction secret is kept, so a payment proof
+    (`get_tx_proof`) still works for an abandoned send.
+  - The spent-input locks are **not** released by intent: they release
+    when the wallet's watchdog establishes the network no longer holds
+    the send — the protection that stops two transactions provably
+    spending the same input from linking your wallet.
+  - A `CONFIRMED` or `FAILED` send refuses with `-29108` naming its
+    state; there is deliberately no force override. Re-abandoning is a
+    harmless no-op.
 
 - **Your sent transactions now appear in your transfer history, and they
   say what actually happened to them.** `get_transfers` /
@@ -15402,7 +15513,10 @@
     versioned domain-separation prefix
     (`b"shekyl-snapshot-id-v1"`) permits V3.x migration to
     a wider output or different hash family without cross-
-    stage rebuild.
+    stage rebuild. *(Since superseded by SA-3c, 2026-08-11:
+    the digest is now cSHAKE256 with the domain as the
+    customization, `b"shekyl/snapshot-id-v1"` — see the
+    V3_WALLET_DECISION_LOG SA-3c entry.)*
 
     Sites updated: `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`
     §4 Phase 0b binding, §5.4 R2 sketch + prose, §5.5
@@ -15593,7 +15707,10 @@
   `shekyl-crypto-hash::cn_fast_hash` (original padding,
   consensus-audited) truncated to the first 128 bits with
   versioned domain-separation prefix
-  (`b"shekyl-snapshot-id-v1"`). *(Forward-pointer: the
+  (`b"shekyl-snapshot-id-v1"`). *(Since superseded by
+  SA-3c, 2026-08-11 → cSHAKE256 with the domain as the
+  customization; see the V3_WALLET_DECISION_LOG SA-3c
+  entry.)* *(Forward-pointer: the
   Copilot-fix follow-up entry below revised this binding from
   segment-2g's prior `sha2`-based form to the Keccak-based
   form. The prior `sha2` citation referenced

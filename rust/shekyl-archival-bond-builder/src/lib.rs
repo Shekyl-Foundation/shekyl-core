@@ -7,19 +7,19 @@
 //!
 //! This crate is the **construct** side of the archival bond, the mirror of the
 //! `shekyl-archival-retention` **verify** side. It is deterministic, holds no
-//! async runtime, and runs no actor: it builds the bond-post `vin`, signs it
-//! with the `P` identity hybrid key, and supplies the single-sourced
-//! [`OutputTerm`] for the CT balance. Funding selection, standoff timing, and
-//! broadcast live in the `StakeEngine` (PR 2);
-//! `docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §5 / §7.
+//! async runtime, and runs no actor: it builds the bond-post `vin` (no on-vin
+//! signature — SA-2b) and supplies the single-sourced [`OutputTerm`] for the
+//! CT balance. Surface-A signing of the whole-tx payload happens later in the
+//! assemble path. Funding selection, standoff timing, and broadcast live in
+//! the `StakeEngine` (PR 2); `docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §5 / §7.
 //!
 //! ## What this crate produces (PR 1)
 //!
 //! 1. [`ArchivalBondPostVin`] for [`BondPostKind::JoinMarket`] with
 //!    `bonded_total_atomic == bond_credit == bond_floor(holdings)` and
-//!    `bond_debit == 0` (§7.1), and the hybrid signature over its
-//!    [`ArchivalBondPostVin::signature_preimage`] under the `P` identity key
-//!    (JoinMarket is a credit path; credit paths authorize against `P_pubkey`).
+//!    `bond_debit == 0` (§7.1). The vin carries no signature: its on-chain
+//!    authorization is the transaction-level `pqc_auths` slot (surface A), not
+//!    an on-vin blob (ARCHIVAL_BOND_GATE4.md §3.4.1; SA-2b, SIGNATURE_ALIGNMENT.md §2.2).
 //! 2. The credit balance term: `bond_credit = floor` rides the **output** side
 //!    as an [`OutputTerm`] (the single-sourced cleartext term, §7.2), fed to
 //!    `shekyl-tx-builder::sign_transaction_with_terms` by the engine.
@@ -46,16 +46,15 @@ use shekyl_archival_retention::{
     bond_floor, p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, BondPostKind,
     HoldingsDescriptor,
 };
-use shekyl_crypto_pq::archival_p::ArchivalPKeys;
-use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSignature, SignatureScheme};
+use shekyl_crypto_pq::archival_p::BondPostKeys;
 use shekyl_ct_balance::OutputTerm;
 use shekyl_units::AtomicUnits;
 
-/// A constructed, signed JoinMarket bond-post `vin`.
+/// A constructed JoinMarket bond-post `vin`.
 ///
-/// The signature covers [`ArchivalBondPostVin::signature_preimage`] (which binds
-/// `tx_prefix_hash`, the canonical id, holdings, and the cleartext terms) under
-/// the `P` identity hybrid key.
+/// The vin carries no signature — its on-chain authorization is the
+/// transaction-level `pqc_auths` slot aligned with it (surface A), signed by P's
+/// identity key over the whole-tx payload hash.
 ///
 /// Fields are private: a `JoinMarketVin` can be produced **only** by
 /// [`build_join_market_vin`], which establishes the genesis-frozen JoinMarket
@@ -67,7 +66,6 @@ use shekyl_units::AtomicUnits;
 #[derive(Clone, Debug)]
 pub struct JoinMarketVin {
     vin: ArchivalBondPostVin,
-    signature: HybridSignature,
 }
 
 impl JoinMarketVin {
@@ -75,12 +73,6 @@ impl JoinMarketVin {
     #[must_use]
     pub fn vin(&self) -> &ArchivalBondPostVin {
         &self.vin
-    }
-
-    /// The hybrid (Ed25519 + ML-DSA-65) signature over the post preimage.
-    #[must_use]
-    pub fn signature(&self) -> &HybridSignature {
-        &self.signature
     }
 
     /// The cleartext balance term for this post's `bond_credit`, on the output
@@ -93,23 +85,29 @@ impl JoinMarketVin {
     }
 }
 
-/// Build and sign a JoinMarket bond-post `vin` for persona `P` over the holdings
-/// being bonded (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.1).
+/// Build a JoinMarket bond-post `vin` for persona `P` over the holdings being
+/// bonded (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.1).
 ///
-/// `tx_prefix_hash` is the 32-byte prefix hash of the transaction the post rides
-/// in; it binds the signature to that transaction. The constructed `vin` is
-/// accepted by [`shekyl_archival_retention::verify_join_market_bond_post`] with
-/// `record_exists == false` by construction.
+/// `keys` pairs P's public identity (`hybrid_bond_id` / `hybrid_sign_pk`) with
+/// the GF-1 debit authorizer; its only producer is
+/// `ArchivalPKeys::bond_post_keys`, so the two roles are same-persona and
+/// un-transposable by construction. No secret is required — this constructor
+/// does not sign (surface-A signing is the assemble path).
+///
+/// The constructed `vin` is accepted by
+/// [`shekyl_archival_retention::verify_join_market_bond_post`] with
+/// `record_exists == false` by construction. On-chain authorization is the
+/// caller's surface-A `pqc_auths` slot over the whole-tx payload (SA-2b).
 ///
 /// # Errors
 ///
 /// - [`BondBuildError::BondFloorZero`] if `holdings` are structurally invalid.
-/// - [`BondBuildError::IdentityEncode`] if the identity key fails to serialize.
-/// - [`BondBuildError::Sign`] if hybrid signing fails.
+/// - [`BondBuildError::IdentityEncode`] /
+///   [`BondBuildError::BondSpendEncode`] if the named public key fails to
+///   serialize.
 pub fn build_join_market_vin(
-    keys: &ArchivalPKeys,
+    keys: BondPostKeys<'_>,
     holdings: HoldingsDescriptor,
-    tx_prefix_hash: &[u8; 32],
 ) -> Result<JoinMarketVin, BondBuildError> {
     let floor = bond_floor(&holdings);
     if floor == 0 {
@@ -118,9 +116,10 @@ pub fn build_join_market_vin(
 
     // Identity = P_pubkey; the canonical id is derived from it, never carried
     // independently (`ARCHIVAL_FIREWALL_GATE6.md` §9.4 / id::* over the same
-    // canonical bytes the verify side recomputes).
+    // canonical bytes the verify side recomputes). Public keys only — this
+    // constructor does not sign (SA-2b / rule 36).
     let hybrid_public_key = keys
-        .hybrid_bond_id()
+        .identity_pk()
         .to_canonical_bytes()
         .map_err(BondBuildError::IdentityEncode)?;
     // The producer returns the `PCanonicalId` domain newtype; the wire vin stores
@@ -128,15 +127,24 @@ pub fn build_join_market_vin(
     let p_canonical_id = p_canonical_id_from_hybrid_pubkey(&hybrid_public_key).to_bytes();
 
     // The GF-1 debit authorizer, JoinMarket-coupled on the wire (§9.11) and
-    // committed into the record at connect. The vin carries it, so the §3.4.1
-    // preimage below binds the committed key under the JoinMarket signature.
+    // committed into the record at connect. It rides the signed tx prefix, so
+    // P's surface-A `pqc_auths` signature binds it (SA-2b).
     let bond_spend_pk = keys
-        .bond_spend_pk
+        .bond_spend_pk()
         .to_canonical_bytes()
-        .map_err(BondBuildError::IdentityEncode)?;
+        .map_err(BondBuildError::BondSpendEncode)?;
 
     // JoinMarket is a pure credit path: bonded_total == bond_credit == floor,
     // bond_debit == 0 (the verify side pins this in verify_join_market_bond_post).
+    //
+    // The bond vin carries no signature. Its on-chain authorization is the
+    // transaction-level `pqc_auths` slot aligned with this vin, signed by P's
+    // identity key over the whole-tx payload hash (surface A,
+    // `SCHEME_DOMAIN_PQC_AUTH_TX`) — which binds a strict superset of the fields
+    // a bond-specific preimage would (including `bond_spend_pk`, in the signed
+    // prefix), and the vin type tag distinguishes it from every other P-auth
+    // context. See ARCHIVAL_BOND_GATE4.md §3.4.1 ("not an on-vin signature blob")
+    // and the SA-2b reconciliation ruling (SIGNATURE_ALIGNMENT.md §2.2).
     let vin = ArchivalBondPostVin {
         hybrid_public_key,
         p_canonical_id,
@@ -148,12 +156,7 @@ pub fn build_join_market_vin(
         bond_debit: 0,
     };
 
-    let preimage = vin.signature_preimage(tx_prefix_hash);
-    let signature = HybridEd25519MlDsa
-        .sign(&keys.hybrid_sign_sk, &preimage)
-        .map_err(BondBuildError::Sign)?;
-
-    Ok(JoinMarketVin { vin, signature })
+    Ok(JoinMarketVin { vin })
 }
 
 /// Check the credit-path funding rule for a JoinMarket post (§7.3).

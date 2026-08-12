@@ -21,8 +21,8 @@
 //! - The **error surface** ([`BondAssemblyError`]) for the assemble path's
 //!   named failure modes (§3.6, rule 82).
 //!
-//! The actor-side halves (P spend-bundle derivation, prefix assembly, vin
-//! build + invariant A-1, proving, PQC auth completion, the `PBoundBytes`
+//! The actor-side halves (P spend-bundle derivation, single-sourced vin
+//! build + prefix assembly, proving, PQC auth completion, the `PBoundBytes`
 //! mint) build on these types; secrets never appear in this module's Engine
 //! surface (rule 36).
 
@@ -200,16 +200,6 @@ pub(crate) enum BondAssemblyError {
         /// The global output index the reference tree has no leaf for.
         gindex: u64,
     },
-
-    /// Invariant A-1 (§3.3 step 4, fail closed): the signed vin's
-    /// wire-encoded `BondPost` fields differ from the prefix's `BondPost`
-    /// input. The signature binds a different post than the prefix hash
-    /// covered — a build defect, never a recoverable state.
-    #[error(
-        "bond-post input mismatch: the signed vin does not match the prefix's BondPost \
-         input (invariant A-1) — build defect, nothing was persisted"
-    )]
-    BondPostMismatch,
 
     /// The funding arithmetic (`floor + fee`, change split, balance rule)
     /// overflowed u64 — unreachable with consensus-bounded amounts; fail

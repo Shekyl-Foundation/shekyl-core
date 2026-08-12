@@ -47,6 +47,107 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **F-7 structural gate for the test-only PQC FFI exports (added
+  2026-08-10, PR-SA-2).** Two exports are test-support only:
+  `shekyl_pqc_keypair_generate` (wraps `generate_ephemeral_keypair_for_tests`)
+  and `shekyl_pqc_sign_multisig_participant` (signs under the multisig domain so
+  the C++ tests can assemble genuine multisig containers instead of faking
+  participant sigs through the single-signer FFI). Both are behind the
+  `test-utils` feature in Rust but compiled into the production `shekyl-ffi`
+  archive because the C++ unit tests link the same archive as production —
+  cmake builds one `-p shekyl-ffi`, so there is no test-vs-prod feature split.
+  The Rust doc + the `shekyl_ffi.h` header comments mark them clearly, which is
+  the ratified comment-fallback; the structural gate is a separate test-only
+  Rust archive (or a cmake feature the C++ test target enables and production
+  does not) so neither is present in the shipped cdylib. Not blocking (no
+  production caller; header-marked), but it removes the residual that a
+  production C++ caller could wire a non-derived keypair — or a multisig
+  participant signature — into an unintended path. **Target: V3.0 pre-genesis.**
+
+- **T18 weekly cargo-mutants gate no longer fits its 360-minute budget
+  (surfaced 2026-08-10, dispatch run 31346130482 — the job's first
+  execution after the severed-header restore).** `cargo mutants` found
+  1322 mutants against a debug-mode baseline suite that now takes
+  ~22 min (1334 s test + auto-set 6673 s per-mutant timeout); the job
+  timed out having completed zero mutants in 5.5 h. The suite outgrew
+  the budget while the gate had no trigger (2026-07 severance,
+  restored 477a448b1): T2 un-ignored, the correctness-pins tests, and
+  the harness's growth all multiply through debug-mode interpreted
+  RandomX. The gate's premise (T18, `RANDOMX_V2_PHASE2G_PLAN.md`
+  §5.5.6 + §4.6 M2: survival bounded by the skip-list) is unchanged;
+  its execution shape needs a re-design with real trade-offs, e.g.
+  release-mode per-mutant test runs (`cargo mutants -- --release`:
+  ~40× faster tests, slower per-mutant rebuilds), `--shard` across a
+  runner matrix (weekly runner-cost multiplier), `--in-diff` scoping
+  (loses the whole-crate weekly sweep), and/or additional slow-test
+  skips (each requires a §5.5.6-row plan-doc amendment). Until this
+  lands, the weekly Monday cron will red on the mutants job timeout —
+  a loud, honest red (preferable to the silent no-trigger state it
+  replaced). Target: **V3.0** (the differential test regime is a
+  pre-genesis assurance gate; an inoperative mutation leg weakens the
+  §4.6 M2 mitigation the harness's threat table relies on).
+
+- **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) —
+  REQUIRED BEFORE THE FORMAT FREEZE (added 2026-08-08, escalated from
+  the message-signing round, SM-DQ-7).** Address v1 anchors signatures
+  with Ed25519 only; its PQC segments carry an ML-KEM *encryption* key,
+  so no transferable signature can be post-quantum against a v1
+  address. The message-signing round
+  ([`design/WALLET_MESSAGE_SIGNING.md`](./design/WALLET_MESSAGE_SIGNING.md))
+  surfaced the decision but does not own it: an address-format change
+  touches the GUI, URI handling, the address book, multisig address
+  exchange, and every future exchange integration — and it is
+  genesis-frozen wire, the class ranked first by freeze proximity.
+  **The lane rules on one fork, all inputs measured** (round §SM-DQ-8
+  table, Pi-4-floor benchmarks landed 2026-08-08):
+  - **(i) Agile commitment (+32 B):**
+    `sig_bind_tag = cSHAKE256("shekyl/sig-bind-v1", alg_id ‖ pk)[..32]`
+    as a new classical-segment field; the signature blob carries
+    `alg_id ‖ pk ‖ …`, a future scheme is a new `alg_id`, never an
+    address version bump (the BIP-360 lesson: freeze a commitment
+    structure, not an algorithm — three algorithm churns in a year
+    inside that proposal before it converged on a 32-byte root).
+    32 bytes deliberately, not `ek_bind_tag`'s 16: the ek tag does a
+    detection job, this tag does a *binding security* job (any found
+    preimage signs as the address holder; 16 B is ~64-bit under
+    Grover against a grindable target). Required if the round's
+    algorithm ruling lands on ML-DSA-65 (1952-B pk cannot inline).
+  - **(ii) pk-inline fourth field (+48 B):** SLH-DSA-192s's public key
+    is 48 bytes — small enough to sit in the address literally. No
+    commitment machinery at all (no `alg_id` registry, no
+    tag-strength question, no key-carried-in-signature); verification
+    takes the address at face value. Cost: freezes the *algorithm*
+    into the genesis address — priced against the BIP-360 lesson with
+    two recorded counterweights (the address already freezes Ed25519
+    and ML-KEM-768 literally; SLH-DSA is the conservative endpoint one
+    flees TO under lattice cryptanalysis, not FROM). Only available if
+    the algorithm ruling lands on SLH-DSA.
+  - **(iii) No anchor (status quo):** message signing ships
+    classical-tier-anchored hybrid (or not at all) — rejects the
+    round's premise; recorded for completeness, not recommended by the
+    round. **Named cost (SM-R-2 ratification, 2026-08-08): (iii) is
+    admissible only if the interactive ML-KEM ownership proof is
+    simultaneously committed to** — without an anchor, a frozen v1
+    address can never prove ownership post-quantum via any
+    transferable artifact, so declining the anchor without committing
+    the interactive surface ships a coin with no PQ ownership proof of
+    any kind, permanently. This is a precondition on the fork, not a
+    follow-up.
+  **COLLAPSED 2026-08-08 — SM-R-8 RATIFIED (SLH-DSA-192s, pk-inline):
+  fork (ii) is selected.** The lane's decision reduces from "ratify a
+  commitment scheme" to a **freeze-window sign-off on a 48-byte
+  fourth field** in the classical segment — no commitment scheme, no
+  `alg_id` registry, no tag-strength question. Fork (i) is moot
+  unless SM-R-8's rule-21 clause reopens; fork (iii) is moot, its
+  SM-R-2 precondition retained above for the record. Remaining lane
+  work: the v2 layout sign-off + `ADDRESS_DERIVATION_V1`-successor
+  test vectors, with the 192f UX gate (dated, owned — see
+  `RELEASE_CHECKLIST.md`) closing first. **Named blocker for
+  message-signing implementation:** PR-SM-1 cannot freeze the
+  preimage until the layout sign-off lands, because the bound
+  classical-segment byte layout is the remaining decision. *Target:
+  V3.0, before the genesis format freeze.*
+
 - **FFI *signature* drift has no remedy, unlike FFI *constant* drift
   (added 2026-07-29, from RP-3b step 2; measurement attached).**
   `src/shekyl/shekyl_ffi.h` is hand-written — **sanctioned**, not an oversight
@@ -1238,44 +1339,26 @@ sustainability is unaffected by the recalibration.
 
 - **`BlockchainLMDB::reset()` drops an INCOMPLETE table set — stale Shekyl
   state under an in-place wipe (added 2026-08-04 from credit-wire PR-B2
-  3dee50259; corrected + deduplicated 2026-08-07 after a full drop-list
-  audit).** `reset()` (`src/blockchain_db/lmdb/db_lmdb.cpp`), reached only
-  through `Blockchain::reset_and_set_genesis_block`, wipes in place (drops
-  tables, keeps the env) but its `mdb_drop` list covers only the core
-  block/tx/output tables plus the two credit-wire witness tables PR-B2
-  added. Audited against `db_lmdb.h` (2026-08-07): **29 of 48 tables are
-  not dropped, 25 of them Shekyl-owned** — the whole curve-tree family
-  (`m_curve_tree_roots`/`leaves`/`layers`/`meta`/`checkpoints`,
-  `m_output_to_leaf`, `m_leaf_to_output`, `m_pending_tree_leaves`,
-  `m_pending_tree_drain`), the whole archival family (`m_archival_bond`
-  with its holdings-update/rebond/unbond logs, `m_archival_budget` and
-  `m_archival_budget_accrual`, `m_archival_emission_claim_log`,
-  `m_archival_epoch_close_log`, `m_archival_r_market`,
-  `m_archival_serve_credit`, `m_archival_shard_segment`,
-  `m_archival_sigma_work`, `m_archival_slash_applied`,
-  `m_archival_slash_log`), and `m_block_burn` with
-  `m_block_pending_additions`. The remaining four absentees are
-  inherited-by-design: `m_alt_blocks` is dropped by the caller
-  (`drop_alt_blocks()`), the two txpool tables have their own lifecycle,
-  and `m_txs` is the legacy monolith table. Because reset re-uses heights
-  and hashes, a surviving row at a re-used key reads as *that* block's
-  state: a stale `curve_tree_root` is consensus-wrong and **silent** (no
-  divergence detector exists for the curve-tree family), while the
-  segment-counter family at least fails loudly (#264's O(1) reader
-  divergence abort fires on the next epoch close). Reachability
-  (verified 2026-08-07): **no production or CLI flow calls
-  `reset_and_set_genesis_block`** — the only callers are the core-tests
-  harness (`tests/core_tests/chaingen.h`, fresh per-test DBs) and the
-  CW-2 unit test driving `db.reset()` directly — so the hazard is latent
-  until any tool adopts in-place reset, and must be closed before one
-  does. Fix shape: per-table reset semantics (blanket-drop vs. re-seed —
-  `m_properties` already re-seeds its version row, and `m_curve_tree_meta`
-  likely needs re-init, which is why this is not a mechanical 25-line
-  diff), extending the CW-2 test seat (`archival_substrate_lmdb.cpp`
-  `reset_drops_both_attestation_witness_tables`). Supersedes the #264
-  "follow-on surfaced by the counter" paragraph (single owner). Its own
-  unit. **Target: V3.0** (pre-genesis: consensus-state correctness on
-  chain reset).
+  3dee50259; full drop-list audit 2026-08-07).** Pre-fix: hand-written
+  `mdb_drop` list left **29 of 48 tables** (25 Shekyl-owned: whole
+  curve-tree + archival families, `m_block_burn`,
+  `m_block_pending_additions`). Reset re-uses heights/hashes, so a
+  surviving row at a re-used key was read as that block's state — stale
+  `curve_tree_root` was consensus-wrong and silent. Reachability
+  (2026-08-07): no production/CLI caller of `reset_and_set_genesis_block`
+  (core-tests + unit tests only). **Target: V3.0.** **IMPLEMENTED
+  (2026-08-07, `chore/lmdb-reset-full-drop` / PR #421):** `reset()`
+  enumerates named tables (unnamed main-DB keys) and empties each one
+  except the keep-list (`table_survives_chain_reset` — txpool only;
+  mempool lifecycle is `tx_memory_pool`'s), then re-seeds the version
+  row (exactly what `open()` writes on an empty DB). No other re-seed is
+  required: empty-table readers treat `MDB_NOTFOUND` as fresh (e.g.
+  curve-tree `leaf_count` → 0). A future table cannot be missed by
+  construction. Test seat: `archival_substrate_lmdb.cpp`
+  `reset_leaves_every_table_fresh` — environment oracle via
+  `get_table_entry_counts`, ≥10 populated-tables negative control, and
+  a populated-txpool pin that keep-list tables survive with unchanged
+  counts; CW-2 witness pin stays green beside it.
 
 - **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with
   reopen (d).** The sliding-window m-of-n itself is **BUILT** (PR #368,
@@ -1516,6 +1599,15 @@ sustainability is unaffected by the recalibration.
     that verifiably cannot use the proof surface).
   - **`sign`/`verify` message signing** — blocked on the same Phase 2c
     surface decision (domain-separated message signing under hybrid keys).
+    **Design round CLOSED — all rulings ratified (2026-08-08, A2):**
+    `docs/design/WALLET_MESSAGE_SIGNING.md` — the blocking decision
+    resolved as SM-R-8: SLH-DSA-192s + spend-key classical half,
+    nested, with the 48-byte public key inline in the address (fork
+    (ii); the round-0 hybrid-vk-certified lead was superseded on the
+    record in pass 1). Implementation is in flight as PR-SM-1
+    (crypto + engine + ACVP conformance); the CLI/RPC un-stub is
+    PR-SM-2 per the round's decomposition, gated only on the genesis
+    lane's v2-field sign-off for the address-integrated verify.
   - **Offline cold-signing** (`describe_transfer`, `sign_transfer`,
     `submit_transfer`, `transfer --do-not-relay`) — blocked on Phase 2d
     (`UnsignedTxBundle`/`SignedTxBundle` air-gapped bundles).
@@ -1720,7 +1812,28 @@ sustainability is unaffected by the recalibration.
   is still open — an explicit `Abandoned` edge plus the I-2 reference
   migration (`pending_tx_hashes` → journal row, keys retained) is
   PR-SJ-3, which subsumes the re-evaluation shape above minus the
-  now-moot rescan refusal. *Target: V3.0 / Phase 4d.*
+  now-moot rescan refusal. **Abandon surface CLOSED 2026-08-07
+  (PR-SJ-3, `feat/wallet-abandon-sj3`)**, in the ratified P3-4 shape:
+  `SendState::Abandoned` appended (discriminant KAT pins the v1
+  encodings; `SEND_JOURNAL_BLOCK_VERSION` 2 /
+  `WALLET_LEDGER_FORMAT_VERSION` 14 per rule-42 pairing);
+  `WalletLedger::abandon_send` performs the journal edge
+  `Dispatched | PresumedDead → Abandoned` plus the reference migration
+  under one guard, and I-2 (invariant + retention reconcile) gains the
+  journal leg — a row in a non-terminal-or-abandoned state is itself a
+  live reference, so the retained `TxSecretKey` survives the migration
+  (the entry's named hazard). Locks release on *evidence*, never
+  intent: an abandoned row keeps its baseline, the P3-1 re-application
+  set covers Abandoned (self-link defence across the wipe), and the
+  watchdog's confirmed-absent release clears the baseline without
+  overwriting the user's state. Engine
+  `abandon_tx_persisted` (fail-closed rollback on a failed save) +
+  RPC `abandon_tx` (`-29108 ABANDON_STATE_FORBIDS`; unknown txid
+  `-29400`; idempotent; **no force path** — P3-4 reopen: a blocked
+  flow that discard cannot clear) + the named crash-ordering test
+  (drop-then-confirm: `Abandoned → Confirmed` flips loudly with keys
+  intact). `get_transfers` projects `ABANDONED` as its own wire value.
+  *Was target: V3.0 / Phase 4d.*
 
 - **Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing
   history surface lands** — **CLOSED 2026-08-07 (PR-SJ-2,
@@ -3653,6 +3766,8 @@ sustainability is unaffected by the recalibration.
   `assemble_path` available earlier than planned: **PR 2c-1 (in progress,
   `feat/archival-bond-realtree-kat`)** the real-tree composition KAT --
   `local_pending_tx::join_market_bond_post_signs_and_verifies_over_real_tree`
+  (since renamed `join_market_bond_post_verifies_over_real_tree` — SA-2b
+  deleted on-vin signing and its signature legs)
   drives the bond's cleartext `credit_term` through
   `sign_transaction_with_terms` over a *real* depth-2 `assemble_path` tree (the
   `funded_ledger_and_tree` fixture, the same path
@@ -6318,81 +6433,69 @@ sustainability is unaffected by the recalibration.
   2A edit per "while we're here" — separate small item in the builder crate, not
   the 2A type-design PR.
 
-- **Migrate inherited `cn_fast_hash` (Keccak / CryptoNote padding) to cSHAKE256 /
-  SHA3-family (modern-not-inherited posture).** `cn_fast_hash`
-  ([`shekyl-crypto-hash`](../rust/shekyl-crypto-hash/src/lib.rs)) is **inherited**
-  Keccak-256 with CryptoNote `0x01` padding — a consensus-compat primitive whose
-  purpose is byte-identity with `src/crypto/keccak.c` / upstream Monero. Per
-  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc)'s modern-not-inherited /
-  PQC-hardened posture, **new** derivations should use **cSHAKE256** (FIPS 202 /
-  SP 800-185) — the workspace's already-present PQC-aligned hash (`sha3 = "0.10"`,
-  `CShake256`; used by `shekyl-crypto-pq/handle.rs`'s `derive_output_handle`,
-  `key_actor`, `local_keys`, `traits::key`). The `StakeId` pin
-  (`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §3.3.3) is the first derivation to
-  adopt this; the residual `cn_fast_hash` call sites should be evaluated for the
-  same migration, classified by what the hash is a contract *with*:
+- **Migrate residual consensus-parity Keccak (`keccak256`) call sites to cSHAKE256 /
+  SHA3-family where the contract allows (modern-not-inherited posture).** The
+  Rust primitive is [`shekyl_crypto_hash::keccak256`](../rust/shekyl-crypto-hash/src/lib.rs)
+  — original Keccak-256 with CryptoNote `0x01` padding, for **byte-identity with
+  the C++ daemon** (`src/crypto/hash.c` `cn_fast_hash`; FFI export
+  `shekyl_cn_fast_hash` keeps that ABI name). SA-3d (PR #446) renamed the
+  Rust-internal API `cn_fast_hash` → `keccak256`; it did **not** change bytes or
+  the C++/FFI symbols. Per [`00-mission.mdc`](../.cursor/rules/00-mission.mdc)'s
+  modern-not-inherited posture, **new** derivations use **cSHAKE256** (SP 800-185).
+  Residual `keccak256` sites are classified by what the hash is a contract *with*:
 
-  - **Wallet-local, non-consensus — clear migration candidate.**
-    `derive_snapshot_id` / `SnapshotId`
-    ([`refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs), doc'd in
-    [`pending.rs`](../rust/shekyl-engine-core/src/engine/pending.rs)). It is a
-    runtime dedup key recomputed from the ledger snapshot on load, so the swap is
-    behavior-local with no persisted-format break — the direct analog of the
-    `StakeId` decision. Migrate to cSHAKE256 with a versioned customization
-    (`"shekyl/snapshot-id-v1"`), updating the `STAGE_1_PR_5_PENDING_TX_ENGINE.md`
-    §4 Phase 0b pin.
+  - **Wallet-local, non-consensus — DONE (SA-3c, PR #443).**
+    `derive_snapshot_id` / `SnapshotId` retargeted to cSHAKE256 with customization
+    `shekyl/snapshot-id-v1` ([`refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)).
+    Fresh mint (unpersisted, non-wire); registry row mech 5→1. Do not re-open.
+
+  - **Address fingerprint — already cSHAKE**
+    ([`multisig_address.rs`](../rust/shekyl-address/src/multisig_address.rs)
+    `MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION`). Not a residual Keccak site.
 
   - **Cross-party protocol contracts — migrate *only* via the owning spec, and
-    *only* pre-genesis.** The v31 multisig hashes — `intent_hash`,
-    `fcmp_proof_commitment`
-    ([`multisig/v31/{intent,prover}.rs`](../rust/shekyl-multisig/src/)),
-    the key-container / `prover_index` derivations
-    ([`crypto-pq/multisig.rs`](../rust/shekyl-crypto-pq/src/multisig.rs)), and the
-    address fingerprint
-    ([`shekyl-address/multisig_address.rs`](../rust/shekyl-address/src/multisig_address.rs))
-    — are interop contracts pinned in the PQC_MULTISIG / v31 multisig spec
-    (SS6.3, SS9.4, SS12.2.1). All signers and the human address-verification flow
-    must agree byte-for-byte, so a change is a **spec change** requiring its own
-    review, and is only free pre-genesis (post-genesis it breaks exchanged
-    fingerprints). Flagged here so the multisig spec owners decide deliberately,
-    not as a unilateral swap.
+    *only* pre-genesis.** Still on `keccak256`: `intent_hash` / chain-state
+    fingerprint ([`shekyl-multisig/src/intent.rs`](../rust/shekyl-multisig/src/intent.rs)),
+    `multisig_pqc_leaf_hash`
+    ([`crypto-pq/multisig.rs`](../rust/shekyl-crypto-pq/src/multisig.rs)).
+    Interop contracts pinned in PQC_MULTISIG / v31 multisig specs (SS6.3, SS9.4,
+    SS12.2.1). All signers must agree byte-for-byte — a **spec change**, free only
+    pre-genesis. Spec owners decide deliberately; not a unilateral swap.
 
   - **Consensus primitive — largest scope, its own spec-first pass; *not* excluded.**
     Block id, tx id, `tree_hash` (Merkle), any consensus transcript, and the
-    `shekyl_cn_fast_hash` FFI export
-    ([`shekyl-crypto-hash/lib.rs`](../rust/shekyl-crypto-hash/src/lib.rs),
-    [`shekyl-ffi/lib.rs`](../rust/shekyl-ffi/src/lib.rs)). **Pre-genesis we *are*
-    the hard fork** — there is no deployed consensus to break and nothing is
-    grandfathered, so "genesis-locked, change it later" would be the
-    cost-benefit-defer-to-later anti-pattern
-    ([`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)):
+    `shekyl_cn_fast_hash` FFI export. **Pre-genesis we *are* the hard fork** —
     inheriting Keccak-with-CryptoNote-`0x01`-padding as the consensus hash *is*
-    inheriting architecture from CryptoNote, and the cheap window to modernize is
-    now. **Important scoping nuance:** Keccak-256 is *not* cryptographically weak
-    (it is the SHA-3 permutation; quantum posture is Grover-only, same as
-    SHA3/SHAKE), so this is a **priority-3 standards-alignment / modern-not-inherited**
-    decision, **not** a priority-1 security fix — the inherited smell is the
-    non-FIPS `0x01` padding and the `cn_fast_hash`/CryptoNote lineage, not a
-    vulnerability. Because it is a consensus-rule change across the C++
-    (`src/crypto/keccak.c`, `hash.c`, `tree-hash.c`) **and** Rust + FFI surface, it
-    needs its **own design doc + review** (spec-first, `05-system-thinking.mdc`;
-    `20-rust-vs-cpp-policy.mdc`), candidate being SHA3-256 / cSHAKE256 (FIPS 202).
-    The RandomX PoW is a **separate** hash path (its own internal Blake2b/AES) and
-    is unaffected. The `TestDaemon` tx-hash helper
-    ([`test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs))
-    follows whatever the consensus tx hash becomes; it is test-only scaffolding,
-    not an independent decision.
+    inheriting architecture from CryptoNote
+    ([`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)).
+    **Priority-3** standards-alignment (not a priority-1 crypto weakness — Keccak
+    is the SHA-3 permutation; the smell is non-FIPS padding + CryptoNote lineage).
+    Needs its **own design doc + review** across C++ (`keccak.c`, `hash.c`,
+    `tree-hash.c`) **and** Rust + FFI (`05-system-thinking.mdc`,
+    `20-rust-vs-cpp-policy.mdc`); candidate SHA3-256 / cSHAKE256. RandomX is a
+    separate hash path. `TestDaemon` tx-hash helpers follow consensus.
 
-  **Target.** V3.0 pre-genesis. Pre-genesis is the only free window for *all three*
-  buckets (consensus and cross-party contracts both become forever-cost after
-  genesis), and the modern-not-inherited posture is a genesis-defining property.
-  The three buckets do **not** share a PR: the `SnapshotId` swap is a normal small
-  PR, the multisig-contract migration rides its spec, and the consensus-primitive
-  modernization is its own spec-first consensus-design pass. Surfaced during the
-  Phase 2b `StakeId` derivation pin (§3.3.3) when an intermediate pass wrongly
-  reused `cn_fast_hash` for a new wallet-local id; the correction generalized first
-  to the non-consensus sites, then — once the "we are the hard fork" framing was
-  applied — to the consensus primitive itself.
+  **Naming hygiene — DONE (SA-3d, PR #446).** Rust-internal `cn_fast_hash` →
+  `keccak256` across the workspace; C++ `cn_fast_hash` and FFI `shekyl_cn_fast_hash`
+  retained for source-mapping / ABI stability. The live spec layer is aligned
+  too (review sweep): `SHEKYL_MULTISIG_WIRE_FORMAT.md` §2.4/§6,
+  `PQC_MULTISIG.md` §9.3–§10.4, and `design/FCMP_SPEND_SIGNING_PREIMAGE.md`
+  §4/§6 define the Rust-implemented hashes as `keccak256` with the padding
+  byte spelled out. Remaining `cn_fast_hash` mentions in docs are the C++
+  daemon symbol, the FFI export, or banner-marked Option-D historical text.
+
+  **Adjacent (not the same PR as a mechanism migrate):** collapse the dual
+  public `keccak256` implementations (`shekyl-crypto-hash` +
+  `shekyl-curve-primitives`, plus a private copy in `shekyl-curve-generators`)
+  onto one audited home. SA-3d made the duplication honest (both named
+  `keccak256`); the tx-builder equivalence test pins they agree. Dependency-graph
+  work, not a rename.
+
+  **Target.** V3.0 pre-genesis. The remaining buckets do **not** share a PR:
+  multisig-contract migration rides its spec; consensus-primitive modernization
+  is its own design pass; dual-keccak collapse is structural cleanup. Surfaced
+  during the Phase 2b `StakeId` pin when an intermediate pass wrongly reused
+  consensus-parity Keccak for a new wallet-local id.
 
 - **Multisig FROST spend path needs the single-sig spend-path consensus fixes.**
   PR #193 (first daemon-accepted FCMP++ spend) fixed four spend-path properties on
@@ -9168,6 +9271,72 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
+- **Relay: make an anonymity arrival relay at arrival — the receive-side half
+  of §89.** *(Rewritten 2026-08-10 by §89.8.1: the original entry was filed as
+  "end-to-end witness for R-1's coherence branch, now that it is live". The
+  branch is **not** live, and the missing witness is what hid that.)* §89 broke
+  link 1 of §63.8's dormancy chain — the anonymity zone stems, a stem send
+  clears `dandelionpp_fluff`, so a receiver keeps its `forward` default — but a
+  fifth link §63.8 never recorded still binds: `tx_pool.cpp:360` refuses to
+  propagate `forward` into `tvc.m_relay`, the batching switch in
+  `handle_notify_new_transactions` drops it, and `relay_transactions` is never
+  called at arrival with an anonymity origin. The transaction pools as
+  `forward` and re-emerges at `zone::public_` (`cryptonote_core.cpp:1069,1091`),
+  so its remaining stem hops run on **clearnet**.
+  **Two things ride on closing this**, and both are stated in §89.8: R-1's
+  coherence branch starts firing, and §89.2's "every remaining hop runs on one
+  transport" becomes true rather than assumed — today the anonymity embargo is
+  drawn for a path the transaction leaves after one hop, and no anonymity-zone
+  embargo is armed at all (§89.8.4).
+  **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s six `private_*`
+  cases pin that a stem emits the flag clear and a fluff sets it;
+  (2) the pure gate — `r1_coherence_predicate` pins
+  `cryptonote::r1_coherence_keeps_origin` / `is_pre_fluff_relay` (fluff never
+  coheres; anonymity stem/forward/local does; clearnet/invalid never), shared
+  with the production branch so the predicate cannot drift.
+  **Not witnessed end-to-end:** the receiver's relay-method assignment, the
+  monotone `upgrade_relay_method`, and the full send path through
+  `handle_notify_new_transactions` on a non-public context.
+  **Blocker (rule 22):** that arrival path needs a `t_core` mock the unit
+  suite does not have — the one protocol-handler test that stands up real
+  sockets is `GTEST_SKIP`ped as flaky. Building that harness is its own unit,
+  and it is now the *first* task rather than the verification of a landed one:
+  §89.7 asserted live-ness across this exact gap and was wrong.
+  **Why it matters more than its size suggests:** §59.1 gated coherence
+  because swallowing the fluff case strands anonymity-originated transactions
+  in the anonymity subgraph — "a liveness break that would read as correct."
+  It is also load-bearing for §89.2: the per-zone embargo is well-defined only
+  because a transaction entering the anonymity stem stays there, which is this
+  branch. See `DAEMON_RELAY_PRIVACY.md` §89.8 (and §89.7 for the superseded
+  reading).
+
+- **Wallet: stop holding a relay constant — ask the daemon whether a
+  transaction is still in flight.** `wallet2.cpp` derives its
+  "still unseen → failed" wait from `shekyl_dandelionpp_propagation_timeout_seconds`,
+  which makes a **wallet** safety invariant (do not un-reserve inputs while a
+  spend might still land) a function of a **relay-privacy** constant (the
+  embargo mean). Q11-A's shape — one numeral, two mechanisms, different owners
+  — sitting across a process boundary, which is why it survived Unit 0's
+  `FORWARD_DELAY_*`/`NOISE_*` decoupling.
+  **The concrete failure is remote nodes:** the wallet compiles in its own
+  build's constant and applies it to whatever daemon it is connected to, which
+  may be a different version and may or may not have an anonymity zone. The
+  value was never a constant — it depends on the daemon's *runtime*
+  configuration — so this is wrong in a way nobody can detect, and the failure
+  mode is un-reserving inputs and inviting a re-spend.
+  **The fix is not a per-zone constant** (that synchronises a duplicate that
+  should not exist) but the layered status in §89.6.3: the daemon already holds
+  `dandelionpp_stem`, the embargo deadline in `last_relayed_time`, and
+  StemWatch, so *"in flight / delayed / failed"* needs no constant to cross the
+  boundary at all — and the middle tier ("this may last up to N minutes") is
+  what makes erring long cost nothing.
+  **Interim shipped:** one worst-zone global, `ADOPTED_PROPAGATION_TIMEOUT_SECS
+  = 2297`, deliberately with no zone parameter — chosen because it needs no
+  machinery and is therefore the cheapest thing to delete here. Cost: a
+  clearnet send reports failure at ~38 min instead of ~15.
+  Owned by the wallet rewrite (this constant dies with `wallet2.cpp`); recorded
+  now because the reason is visible now. See `DAEMON_RELAY_PRIVACY.md` §89.6.
+
 - **Relay: populate the 48-cell Pi verification surface, then consume it
   per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first
   (`shekyl-relay-privacy/src/verify_cost.rs`, 2026-08-06) carrying the four
@@ -11130,7 +11299,9 @@ one place to confirm each item's relationship to the wallet stack.
   shape). **The 2c-2b wiring PR is gated on that spec's §6 acceptance criteria.**
   **2c-2b wiring LANDED (2026-07-05): all five §6 criteria.** `plan_entry_seam` single-sources
   the draw consumption (`shekyl-standoff::plan`); the `SignBond` handler consumes both draw
-  values into the plan, replies `SignedBondPost` (vin + plan, never decoupled), and emits to the
+  values into the plan, replies `SignedBondPost` (vin + plan, never decoupled — since renamed
+  `PlanBondPost` / `BondPostPlacement` with an *unsigned* vin, SA-2b; the plan carrier is now
+  the bare `bond_post_offset_blocks` after the GF-7 coin retirement), and emits to the
   injected observer (§6.1/§6.2); `shekyl-staking-sim --gf7-timeline` drives all three axes
   through one recorded timeline with the funding-seam-blind arm first-class (§6.3);
   `ci/gf7-no-emit-guard` asserts the dependency graph + feature containment (§6.4); the

@@ -434,8 +434,10 @@ binding messages** (not one signature checked twice):
 - **`auth_backing`** — binds the **`P`-that-staked** to the bond: the hybrid (Ed25519 +
   ML-DSA-65) attestation over the backing leaf's committed `H(pqc_pk)` (the leaf-bound
   spend-authority gate, §7 / §9.6 / [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md)
-  §7). This is the **C-1 hard gate**; recompute-`H(pqc_pk)`-equals-leaf-then-verify is the built
-  primitive `shekyl_emission_hybrid_auth_verify` (PR-E1). Because the leaf commits the **full
+  §7). This is the **C-1 hard gate**; recompute-`H(pqc_pk)`-equals-leaf-then-verify was built
+  as the PR-E1 primitive `shekyl_emission_hybrid_auth_verify`, since retired (PR-SA-2): the
+  check now lives Rust-side in `emission_verify::emission_vin_verify_auth`, step 8 of the
+  single coarse `shekyl_emission_vin_verify` FFI call. Because the leaf commits the **full
   hybrid** pubkey and the auth exercises both halves, it binds `P` exactly as tightly as the leaf.
 - **`auth_claim`** — binds the **`P`-that-claims** to *this specific emission*: its binding
   message commits to the **payout output(s) minted and the `settlement_epochs`**, so a valid

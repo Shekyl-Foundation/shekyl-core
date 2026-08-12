@@ -2094,6 +2094,64 @@ mode-scoping pin reopens toward binary-wide RSS-bound assertion.
 Future-deferred; substrate trigger is the accumulator
 relocation.
 
+**Round 3 amendment (2026-08): F4 RSS-ceiling re-derivation —
+Arc reach-through residency.** The original F4 numeric pin
+(640 MiB = 2 × 256 MiB CacheStore slot holdings + ~10 MiB
+worker working-set + ~118 MiB headroom) modeled only the
+store's capacity-2 *slot* bound and omitted the Arc
+reach-through residency that Phase 2F §4 F2's own mitigation
+description names ("`Arc` reach-through carrying live
+references"): a cache displaced from the transient slot stays
+resident while any worker's `Arc<PreparedCache>` still
+references it, and the derivation leader's in-progress 256 MiB
+allocation is resident before publication. With 5 free-running
+workers cycling a 16-seedhash corpus (rotation every 8 hashes),
+scheduler drift on the committed 4-vCPU runner class
+legitimately keeps ~4 displaced-generation caches live at
+once — a workload property, not an F2 regression.
+
+*Measurement anchor.* T8's first CI execution (the 2026-07-08
+daily cron — the runtime-mode wiring's first run of
+`--mode=concurrent` on the committed runner class) failed the
+640 MiB pin, and every daily cron through 2026-08-08 failed
+identically on both branches: delta flat at ~1 085 0xx xxx
+bytes (~1035 MiB ≈ 4 × 256 MiB + working set). The flatness
+across 30 runs and two branches is the signature of a
+deterministic drift plateau, not of a retention leak (a
+per-rotation leak accretes ~256 MiB × 32 rotations ≈ 8 GiB per
+run). Pre-wiring local verification passed because
+higher-core-count dev hardware keeps the workers in lockstep —
+the same dev-hardware artifact class the T5 latency baseline
+record documents.
+
+*Amended pin.* Worst-case delta-visible caches = `workers`
+(each worker holds at most one Arc at a time; a leader's
+in-progress allocation occupies its hold slot in the count)
+`+ 1` (the transient slot's occupant when no worker holds it).
+The canonical slot is pre-seeded before the baseline capture
+and is excluded from the delta. Ceiling:
+`rss_ceiling_bytes(workers) = (workers + 1) × 256 MiB +
+128 MiB` (working-set + headroom term, same split as the
+original pin), asserted with the unchanged ×1.10 tolerance
+band. At the default 5 workers: 1664 MiB ceiling, 1830 MiB
+tolerance-inclusive; the recorded plateau sits at ~62% of the
+ceiling and a persistent Arc-retention leak crosses the bound
+within four leaked rotations of the 32 per run — the F2
+backstop's detection capability is preserved. The ceiling is
+worker-count-derived so `--workers=<N>` overrides scale it;
+the numeric pin re-anchors automatically if the R1-D12 runner
+class (and hence the worker-count pin) changes.
+
+*Re-evaluation shape satisfied.* This amendment is the
+reversion clause's named shape: a design-round entry with
+measurement-anchored justification (the 2026-07-08 →
+2026-08-08 cron record) for the RSS-bound numeric pin update.
+Implementation: `mode_concurrent.rs`'s `rss_ceiling_bytes(
+workers)` replaces the `RSS_CEILING_BYTES` constant; the
+`r1_d9_constants_match_plan_doc_pins` and
+`amended_ceiling_admits_plateau_and_catches_leak` tests pin
+the amended values.
+
 ### R1-D10 — `compute_hash_with_trace` decision (per 2f §10.4 pre-pin)
 
 **Decision.** Does 2g add the optional cfg-gated entry point
@@ -2902,7 +2960,8 @@ under F5's 16 GB runner ceiling; if the precondition phase's
 peak silently degraded to ~512 MiB due to a `CacheStore`-leak,
 the precondition tests for a large corpus would push the
 process's RSS past the runner's budget headroom for the
-*other* concurrent test (R1-D9's 640 MiB ceiling). Per §3.15
+*other* concurrent test (R1-D9's RSS ceiling, as re-derived by
+the F4 Round-3 amendment). Per §3.15
 phase-boundary discipline, the precondition phase runs
 sequentially per seedhash and completes before the concurrent
 phase begins; F5's 16 GB headroom comfortably absorbs the

@@ -266,7 +266,7 @@ both version axes, `m`/`n`). Four independent implementers exchange the address
 file and compare the 67-char fingerprint string: same bytes → same fingerprint,
 or the address is wrong.
 
-The former `multisig_group_id` — `cn_fast_hash` over the leaf
+The former `multisig_group_id` — Keccak-256 over the leaf
 `MultisigKeyContainer` — is **deleted**. It had **no consumer** under E′; it
 hashed the container's *per-output* KEM-derived keys, so it produced a different
 value for every output while being named for the group; and its one long-term
@@ -407,8 +407,9 @@ address_fingerprint = cSHAKE256(canonical(MultisigAddressPayload),
 ```
 
 The address is on **no consensus path** (no C++ mirror, no FFI, no leaf), so
-nothing requires byte-identity with the daemon — the only reason `cn_fast_hash`
-(original Keccak-256) exists. The address instead has multiple independent
+nothing requires byte-identity with the daemon — the only reason the
+consensus-parity Keccak-256 primitive (Rust `shekyl_crypto_hash::keccak256`,
+C++ `cn_fast_hash`) exists. The address instead has multiple independent
 implementers, for whom "Keccak-256" is ambiguous (original `0x01` vs SHA3 `0x06`
 padding fail silently); cSHAKE256 has one meaning and its customization string
 makes domain separation structural. This fingerprint is also the group's
@@ -962,7 +963,7 @@ SpendIntent {
 Members must agree on chain state before signing. Each intent commits to:
 
 ```
-chain_state_fingerprint = cn_fast_hash(
+chain_state_fingerprint = keccak256(
     reference_block_hash ||
     sorted_concat(input_global_indices) ||
     sorted_concat(input_eligible_heights) ||
@@ -970,6 +971,12 @@ chain_state_fingerprint = cn_fast_hash(
     sorted_concat(input_assigned_prover_indices)
 )
 ```
+
+Where `keccak256` — here and in every live hash definition below — is
+**original-padding Keccak-256** (`0x01` padding, NOT FIPS-202 SHA3-256's
+`0x06`), implemented as `shekyl_crypto_hash::keccak256` and byte-identical
+to the C++ daemon's `cn_fast_hash` (the C++/ABI side keeps the CryptoNote
+name; see `SHEKYL_MULTISIG_WIRE_FORMAT.md` §2.4).
 
 The proposer computes this. Each verifier independently recomputes from
 their local view. Mismatch indicates state divergence or manipulation:
@@ -982,7 +989,7 @@ itself a state divergence that must be resolved before signing.
 ### 9.4 Intent hash
 
 ```
-intent_hash = cn_fast_hash(canonical_serialize(SpendIntent))
+intent_hash = keccak256(canonical_serialize(SpendIntent))
 ```
 
 `intent_hash` is the durable identifier. All subsequent messages
@@ -1066,10 +1073,10 @@ identical to any other multisig output.
 ### 10.4 Canonical signing payload
 
 ```
-signing_payload = cn_fast_hash(
+signing_payload = keccak256(
     serialize(TransactionPrefixV3) ||
     serialize(RctSigBase) ||
-    cn_fast_hash(serialize(RctSigPrunable_skeleton)) ||
+    keccak256(serialize(RctSigPrunable_skeleton)) ||
     serialize(PqcAuthHeader) ||
     H(hybrid_pubkeys[0]) || ... || H(hybrid_pubkeys[n_total-1])
 )
@@ -1282,7 +1289,15 @@ Each signer in the M-of-N selected subset:
 4. Verifies BP+ proofs match deterministic derivation (I4)
 5. Verifies prover assignment (I5, §11.3)
 6. Computes the final tx_hash (including the prover's proof)
-7. Produces hybrid (Ed25519 + ML-DSA-65) signature over signing_payload
+7. Produces hybrid (Ed25519 + ML-DSA-65) signature over signing_payload —
+   under the **multisig scheme domain** `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`
+   (`shekyl/pqc-auth-tx-multisig-v1`), not the single-signer domain (SA-2 /
+   SA-R-5, `docs/design/SIGNATURE_ALIGNMENT.md`). A participant signature is
+   therefore not interchangeable with a single-signer signature over the same
+   payload. This is a scheme-level signing domain, distinct from the retired
+   group-id separator `DOMAIN_SEP_V31` (§5.3) — it separates the *scheme*, not a
+   *group*. Production participant signing is unbuilt; the primitive is
+   `HybridEd25519MlDsa::sign(sk, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG, signing_payload)`.
 8. Publishes `SignatureShare` (§12.2.1) including the tx_hash and
    proof commitments
 

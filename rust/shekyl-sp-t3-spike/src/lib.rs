@@ -21,15 +21,18 @@
 //! candidate for someone later mistaking it for that frozen format. So:
 //!
 //! - the crate is named `shekyl-sp-t3-spike`, not `shekyl-sp-t3`;
-//! - every byte format it defines is tagged `x-spike/v0` ([`serve`]), a version
-//!   string chosen to be **impossible to mistake** for a shipped one;
-//! - the request/response shape here is a placeholder for *transport
+//! - the wire framing is no longer defined here at all. This crate used to
+//!   carry its own `x-spike/v0` copy of the serving loop; that copy is
+//!   deleted and the framing now comes from `shekyl_p_serve`, whose
+//!   `x-provisional/v0` route is disclaimed in exactly the same terms and
+//!   gets exactly as many votes in the format round: none;
+//! - the request/response shape is a placeholder for *transport
 //!   measurement*, and carries no claim about what TJ-B should freeze.
 //!
 //! # What is disposable and what might survive
 //!
-//! Disposable: everything in this crate. The route, the response framing, the
-//! fixture plumbing, the harness.
+//! Disposable: everything in this crate. The fixture plumbing, the harness,
+//! the measurement binaries.
 //!
 //! Candidates to survive into TJ-B, having been *validated here rather than
 //! designed here*:
@@ -39,9 +42,12 @@
 //! - the **construction** of [`onion_key`]'s derivation — seed-derived,
 //!   `p_slot`-bound, nothing at rest — though not its *location*: see the
 //!   single-source-of-truth finding in that module's docs;
-//! - the inbound hardening shape in [`serve`] (decoupled accept, per-step
-//!   timeouts, pre-allocation request bound), which is the transport plan's §6a
-//!   requirement list made concrete.
+//! - the inbound hardening shape this crate validated (decoupled accept,
+//!   per-step timeouts, pre-allocation request bound) — the transport plan's
+//!   §6a requirement list made concrete. It **has** survived: it is
+//!   `shekyl_p_serve`, which this crate now consumes rather than
+//!   re-implements, so the shape being measured is the shape that ships and
+//!   a fix to one is not a fix to one of two.
 //!
 //! # What this crate deliberately does not do
 //!
@@ -56,4 +62,3 @@ pub mod fixture;
 pub mod harness;
 pub mod measure;
 pub mod onion_key;
-pub mod serve;

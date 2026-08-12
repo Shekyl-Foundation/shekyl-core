@@ -20,12 +20,8 @@
 #![deny(unsafe_code)]
 
 use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_POINT as G_POINT,
-    edwards::{CompressedEdwardsY, EdwardsPoint},
-    scalar::Scalar,
+    constants::ED25519_BASEPOINT_POINT as G_POINT, edwards::CompressedEdwardsY, scalar::Scalar,
 };
-use sha2::{Digest, Sha512};
-use zeroize::Zeroize;
 
 use shekyl_curve_generators::T as T_LAZY;
 
@@ -33,6 +29,7 @@ use crate::dleq::{self, DleqProof};
 use crate::error::ProofError;
 use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::output::ProofSecrets;
+use shekyl_crypto_pq::schnorr;
 
 pub const CURRENT_PROOF_VERSION: u8 = 1;
 
@@ -81,45 +78,12 @@ fn write_per_output(
     buf.extend_from_slice(&dleq_proof.to_bytes());
 }
 
-// ── Schnorr (same pattern as tx_proof, different domain) ────────────
-
-fn schnorr_challenge(public_key: &EdwardsPoint, r_point: &EdwardsPoint, msg: &[u8]) -> Scalar {
-    let mut hasher = Sha512::new();
-    hasher.update(RESERVE_DOMAIN);
-    hasher.update(public_key.compress().as_bytes());
-    hasher.update(r_point.compress().as_bytes());
-    hasher.update(msg);
-    Scalar::from_hash(hasher)
-}
-
-fn schnorr_sign(secret_key: &Scalar, public_key: &EdwardsPoint, msg: &[u8]) -> [u8; 64] {
-    let mut k = Scalar::random(&mut rand_core::OsRng);
-    let r_point = k * G_POINT;
-    let c = schnorr_challenge(public_key, &r_point, msg);
-    let s = k - c * secret_key;
-    k.zeroize();
-
-    let mut sig = [0u8; 64];
-    sig[..32].copy_from_slice(r_point.compress().as_bytes());
-    sig[32..].copy_from_slice(&s.to_bytes());
-    sig
-}
-
-fn schnorr_verify(public_key: &EdwardsPoint, msg: &[u8], sig: &[u8; 64]) -> bool {
-    let r_compressed = CompressedEdwardsY::from_slice(&sig[..32]);
-    let Some(r_point) = r_compressed.ok().and_then(|c| c.decompress()) else {
-        return false;
-    };
-    let mut s_arr = [0u8; 32];
-    s_arr.copy_from_slice(&sig[32..]);
-    let s: Scalar = match Option::from(Scalar::from_canonical_bytes(s_arr)) {
-        Some(s) => s,
-        None => return false,
-    };
-    let c = schnorr_challenge(public_key, &r_point, msg);
-    let check = s * G_POINT + c * public_key;
-    check == r_point
-}
+// ── Schnorr ─────────────────────────────────────────────────────────
+//
+// Owned by `shekyl_crypto_pq::schnorr` (domain-parameterized). This file
+// used to carry its own copy; see that module's docs for why one owner
+// matters more than it looks — the hedged nonce reached only one of the
+// three copies that existed.
 
 fn assemble_proof_message(
     address_bytes: &[u8],
@@ -197,7 +161,7 @@ pub fn generate_reserve_proof(
     }
 
     let msg = assemble_proof_message(address_bytes, user_message, &per_output_blob);
-    let sig = schnorr_sign(&b_scalar, &b_point, &msg);
+    let sig = schnorr::sign(RESERVE_DOMAIN, &b_scalar, &b_point, &msg);
 
     let mut proof = Vec::with_capacity(HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -293,7 +257,7 @@ pub fn verify_reserve_proof(
 
     let msg = assemble_proof_message(address_bytes, user_message, per_output_blob);
 
-    if !schnorr_verify(&b_point, &msg, &sig) {
+    if !schnorr::verify(RESERVE_DOMAIN, &b_point, &msg, &sig) {
         return Err(ProofError::SignatureFailed);
     }
 

@@ -249,3 +249,46 @@ pub unsafe extern "C" fn shekyl_archival_challenge_leaf_chunk_bounds(
         None => 0,
     }
 }
+
+#[cfg(test)]
+mod connect_order_tests {
+    use super::*;
+
+    /// The slash-settle operand for epoch `E` (first block above the
+    /// deadline) must be STRICTLY greater than `E`'s close-fire operand —
+    /// same-height is not enough, because the connect order runs
+    /// `process_archival_slash_at_height` before
+    /// `process_archival_epoch_close_at_height`, so at an equal height the
+    /// slash pass would read settlement state the close has not written yet.
+    ///
+    /// The two derivations are maintained independently
+    /// (`epoch_close_height` in `shekyl-archival-retention`'s
+    /// consensus_state; the deadline here), so this test is the coupling:
+    /// it fires if either function's shape changes, even in a direction
+    /// that stays positive at small epochs. Both are affine in `E` with
+    /// slope `SEB`, so strictness at sampled epochs plus slope equality
+    /// proves the property for every epoch.
+    #[test]
+    fn slash_settle_strictly_follows_close_write_at_every_epoch() {
+        let diff_at = |e: u64| {
+            let close_write = epoch_close_height(e).expect("no overflow at test epochs");
+            let slash_settle = settlement_epoch_slash_deadline_height(e) + 1;
+            assert!(
+                slash_settle > close_write,
+                "epoch {e}: slash settles at {slash_settle} but close writes at \
+                 {close_write} - the slash-then-close connect order would read \
+                 unsettled state"
+            );
+            slash_settle - close_write
+        };
+        let d0 = diff_at(0);
+        for e in [1u64, 2, 25, 10_000] {
+            assert_eq!(
+                d0,
+                diff_at(e),
+                "slash/close derivations diverge in slope at epoch {e} - one of \
+                 the two independently-maintained formulas changed shape"
+            );
+        }
+    }
+}

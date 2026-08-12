@@ -12,7 +12,7 @@ use curve25519_dalek::Scalar;
 use rand_core::RngCore as _;
 use shekyl_archival_bond_builder::build_join_market_vin;
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
-use shekyl_archival_retention::{bond_floor, HoldingsDescriptor};
+use shekyl_archival_retention::HoldingsDescriptor;
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_scanner::extra::Extra;
@@ -38,10 +38,10 @@ use super::types::*;
 
 /// Assemble the **full, broadcast-ready** JoinMarket bond transaction inside
 /// the actor (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3) — the production superset
-/// of [`SignBond`] (which signs the vin only and remains for the composition
+/// of [`PlanBondPost`] (which constructs the vin only and remains for the composition
 /// KAT).
 ///
-/// Carries the same handle + ticket typed contracts as [`SignBond`], plus the
+/// Carries the same handle + ticket typed contracts as [`PlanBondPost`], plus the
 /// **public** funding contexts the Engine-side orchestrator selected (§3.2)
 /// and path-assembled: records, membership paths, and the tree context. The
 /// spend secrets are **not** in the message — they are re-derived from each
@@ -50,7 +50,7 @@ use super::types::*;
 ///
 /// The reply pairs the minted [`PBoundBytes`] with the bond-post placement
 /// offset from this request's entry-gap draw — the same seam discipline as
-/// [`SignedBondPost`]: the caller that receives the bytes to place receives
+/// [`BondPostPlacement`]: the caller that receives the constructed vin receives
 /// where to place them.
 ///
 /// Dead_code allow: the Engine orchestrator is wired; go-live still needs
@@ -104,7 +104,7 @@ impl Message<AssembleBond> for StakeEngine {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         // ── Steps 1–5: the shared bond-handler prologue (identical typed
-        // contracts + guarded draw as `SignBond`); see
+        // contracts + guarded draw as `PlanBondPost`); see
         // `validate_and_draw_bond_offset`. ──────────────────────────────────
         let (handle_slot, bond_post_offset_blocks) =
             self.validate_and_draw_bond_offset(&msg.handle, msg.ticket.p_slot())?;
@@ -116,10 +116,24 @@ impl Message<AssembleBond> for StakeEngine {
             .expect("validate_handle confirmed slot is held")
             .keys();
 
-        // ── Step 7: funding arithmetic (§3.2 balance rule, checked) ──────
+        // ── Step 7: construct the bond vin (public keys only; SA-2b — no
+        // on-vin signature). The constructed value is the SINGLE source of the
+        // JoinMarket post: it feeds the bond floor here, the wire prefix input
+        // (step 12), the credit term, and the later surface-A bond slot — so
+        // the prefix and the post cannot diverge by construction. (The
+        // pre-SA-2b signing circularity forced a second, public-parts
+        // construction plus a runtime A-1 equality check; deleting the on-vin
+        // signature deleted the circularity, and the duplicate with it.)
+        let built = build_join_market_vin(keys.bond_post_keys(), msg.holdings.clone())
+            .map_err(StakeEngineError::BondBuild)?;
+        let hybrid_pk_bytes = built.vin().hybrid_public_key.clone();
+        let persona = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
+        let credit_term = built.credit_term();
+
+        // ── Step 8: funding arithmetic (§3.2 balance rule, checked) ──────
         // `funding == change + fee + credit` exactly; change splits across
         // TWO outputs (daemon prunable-tx floor: `vout.size() < 2` rejects).
-        let floor = bond_floor(&msg.holdings);
+        let floor = built.vin().bond_credit;
         let required = floor
             .checked_add(msg.fee)
             .ok_or(BondAssemblyError::AmountOverflow)?;
@@ -140,7 +154,7 @@ impl Message<AssembleBond> for StakeEngine {
         let change_lo = change / 2;
         let change_hi = change - change_lo;
 
-        // ── Step 8: change outputs to P's own base address ────────────────
+        // ── Step 9: change outputs to P's own base address ────────────────
         // Both return to `P`'s base spend key (the pscan `GuaranteedScanner`
         // claims against `spend_pk` directly), so the change re-enters the
         // funding set on the next sweep.
@@ -162,14 +176,14 @@ impl Message<AssembleBond> for StakeEngine {
             |_, _| {},
         )?;
 
-        // ── Step 9: tx_extra — tx pubkey + per-output KEM blobs + the 0x07
+        // ── Step 10: tx_extra — tx pubkey + per-output KEM blobs + the 0x07
         // PQC leaf hashes (without which the change outputs ingest with a
         // zero `h_pqc` leaf and are unspendable).
         let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
         extra.push_pqc_leaf_hashes(leaf_hash_blob);
         let tx_extra = extra.serialize();
 
-        // ── Step 10 (§3.3 actor step 1): re-derive spend bundles, compute
+        // ── Step 11 (§3.3 actor step 1): re-derive spend bundles, compute
         // key images, build the tx-builder SpendInputs — the shared
         // [`prepare_funding_inputs`] leg (also the emission handler's fee
         // side). Secrets stay inside this frame until they move into the
@@ -180,30 +194,11 @@ impl Message<AssembleBond> for StakeEngine {
         let funding_gindexes: Vec<shekyl_types::GlobalOutputIndex> =
             prepared.iter().map(|p| p.gindex).collect();
 
-        // ── Steps 11–12 (§3.3 actor step 2): the wire BondPost prefix input
-        // from PUBLIC parts, then the prefix hash. No circularity: the wire
-        // input carries no signature, so the prefix is fully determined
-        // before the vin is signed.
-        let hybrid_pk_bytes = keys
-            .hybrid_sign_pk
-            .to_canonical_bytes()
-            .map_err(|e| BondAssemblyError::build("identity encoding", e))?;
-        let bond_spend_pk_bytes = keys
-            .bond_spend_pk
-            .to_canonical_bytes()
-            .map_err(|e| BondAssemblyError::build("identity encoding", e))?;
-        let persona = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
-        let expected_vin = shekyl_archival_retention::ArchivalBondPostVin {
-            hybrid_public_key: hybrid_pk_bytes.clone(),
-            p_canonical_id: *persona.as_bytes(),
-            post_kind: shekyl_archival_retention::BondPostKind::JoinMarket,
-            bond_spend_pk: bond_spend_pk_bytes,
-            holdings: msg.holdings.clone(),
-            bonded_total_atomic: floor,
-            bond_credit: floor,
-            bond_debit: 0,
-        };
-        let prefix_bond_input: Input = wire_bond_post_input(&expected_vin)?;
+        // ── Step 12 (§3.3 actor step 2): the wire BondPost prefix input from
+        // the step-7 constructed vin, then the prefix hash. The wire input
+        // carries no signature, so the prefix is fully determined here; the
+        // later surface-A `pqc_auths` signature covers it whole.
+        let prefix_bond_input: Input = wire_bond_post_input(built.vin())?;
         let extra_inputs = vec![prefix_bond_input];
 
         let prefix_hash = tx_prefix_hash_from_parts_with_extra(
@@ -219,32 +214,7 @@ impl Message<AssembleBond> for StakeEngine {
         )
         .map_err(|e| BondAssemblyError::build("prefix hash", e))?;
 
-        // ── Step 13 (§3.3 actor step 3): build + sign the vin over the now-
-        // fixed prefix hash.
-        let built = build_join_market_vin(keys, msg.holdings.clone(), &prefix_hash)
-            .map_err(StakeEngineError::BondBuild)?;
-
-        // ── Step 14 — invariant A-1 (fail closed): the signed vin's post
-        // fields must equal the prefix's BondPost input. Typed equality on
-        // `ArchivalBondPostVin` implies byte-identity (its wire write is a
-        // deterministic function of the value). A mismatch means the
-        // signature binds a different post than the hash covered — a build
-        // defect, never recoverable.
-        if built.vin() != &expected_vin {
-            // Loud in debug (a build defect, never a recoverable state), fail
-            // closed in release. `debug_assert!(false, …)` — not
-            // `debug_assert_eq!(built.vin(), &expected_vin, …)`, which would be
-            // an always-false assert inside a branch that already established
-            // inequality (it reads as a conditional check but can only panic).
-            debug_assert!(
-                false,
-                "A-1: signed vin diverged from the prefix BondPost input"
-            );
-            return Err(BondAssemblyError::BondPostMismatch.into());
-        }
-        let credit_term = built.credit_term();
-
-        // ── Step 15 (§3.3 actor step 5): offload the CPU-bound proving
+        // ── Step 13 (§3.3 actor step 5): offload the CPU-bound proving
         // (Bp+ + FCMP membership) to `spawn_blocking` — the SP-5 pattern.
         // The SpendInputs (owned secrets) MOVE into the closure and come
         // back for the fast inline PQC signing; `&mut self` is held across
@@ -277,7 +247,7 @@ impl Message<AssembleBond> for StakeEngine {
         let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
             .map_err(|e| BondAssemblyError::build("bulletproof parse", e))?;
 
-        // ── Step 16: assemble the wire input; pqc_auths carries one slot per
+        // ── Step 14: assemble the wire input; pqc_auths carries one slot per
         // prefix input — the spend slots (output-derived keys) then the bond
         // slot (P's identity key), matching prefix input order.
         //
@@ -321,7 +291,7 @@ impl Message<AssembleBond> for StakeEngine {
             fcmp_layers: signed.tree_depth,
         };
 
-        // ── Step 17: PQC auth completion (fast; stays inline). One payload
+        // ── Step 15: PQC auth completion (fast; stays inline). One payload
         // hash per pqc_auths slot; the spend slots sign with output-derived
         // keys, the bond slot signs with P's `hybrid_sign_sk`.
         let payload_hashes = phase1_payload_hashes(&wire)
@@ -341,7 +311,11 @@ impl Message<AssembleBond> for StakeEngine {
             .map_err(|e| BondAssemblyError::build("pqc auth signing", e))?;
         let bond_payload_hash = payload_hashes[spend_inputs.len()];
         let bond_sig = HybridEd25519MlDsa
-            .sign(&keys.hybrid_sign_sk, &bond_payload_hash)
+            .sign(
+                &keys.hybrid_sign_sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                &bond_payload_hash,
+            )
             .map_err(|e| BondAssemblyError::build("bond pqc auth signing", e))?;
         pqc_auths.push(PqcAuth {
             auth_version: 1,
@@ -353,7 +327,7 @@ impl Message<AssembleBond> for StakeEngine {
         wire.pqc_auths = pqc_auths;
         drop(spend_inputs); // secrets end here; nothing below needs them
 
-        // ── Step 18 (§3.3 actor step 6): encode + mint at the P-1 site ────
+        // ── Step 16 (§3.3 actor step 6): encode + mint at the P-1 site ────
         let bound_tx = finalize_bond_tx(persona, &wire)?;
 
         Ok(AssembledBondPost {

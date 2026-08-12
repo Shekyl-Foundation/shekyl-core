@@ -40,6 +40,9 @@ serde_json = { workspace = true }
 # Self-dependency: integration tests / benches build the lib without cfg(test),
 # so the consensus-kat unlock must ride the dev graph explicitly.
 shekyl-archival-retention = { path = ".", features = ["consensus-kat"] }
+# test-utils exposes `generate_ephemeral_keypair_for_tests` (F-7) to the
+# integration KATs, which build the crypto-pq lib without cfg(test).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 serde_json = { workspace = true }
 # ARCHIVAL_P_DERIVE_V1 p_canonical_id cross-check: derive `P` via

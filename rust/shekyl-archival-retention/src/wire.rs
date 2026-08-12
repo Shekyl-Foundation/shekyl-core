@@ -21,7 +21,10 @@ use shekyl_curve_io::{read_byte, read_bytes, read_u32, read_varint, write_varint
 
 /// Canonical single [`HybridSignature`] encoding bound; matches
 /// `config::PQC_HYBRID_SINGLE_SIG_LEN` in `cryptonote_config.h` (not multisig blob).
-const MAX_HYBRID_SIGNATURE_BYTES: usize = 3385;
+/// Aliased from the type that owns the encoding rather than duplicated as a magic
+/// literal (the single-source discipline SA-2 applies everywhere).
+const MAX_HYBRID_SIGNATURE_BYTES: usize =
+    shekyl_crypto_pq::signature::HybridSignature::CANONICAL_LEN;
 
 use crate::challenge::SERVE_CREDIT_RESPONSE_CUSTOMIZATION;
 use crate::path::SegmentPathOpening;
@@ -312,9 +315,15 @@ mod tests {
     fn dummy_hybrid_signature() -> HybridSignature {
         use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
         let scheme = HybridEd25519MlDsa;
-        let (_pk, sk) = scheme.keypair_generate().expect("keypair");
+        let (_pk, sk) = scheme
+            .generate_ephemeral_keypair_for_tests()
+            .expect("keypair");
         scheme
-            .sign(&sk, b"archival-serve-credit-wire-roundtrip")
+            .sign(
+                &sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
+                b"archival-serve-credit-wire-roundtrip",
+            )
             .expect("sign")
     }
 

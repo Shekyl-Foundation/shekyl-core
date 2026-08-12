@@ -3,21 +3,22 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Send-lifecycle JSON-RPC methods (Phase 4b).
+//! Send-lifecycle JSON-RPC methods (Phase 4b; `abandon_tx` PR-SJ-3).
 //!
-//! `build_pending_tx`, `submit_pending_tx`, `discard_pending_tx`.
+//! `build_pending_tx`, `submit_pending_tx`, `discard_pending_tx`,
+//! `abandon_tx`.
 
 use std::num::NonZeroU64;
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_engine_core::{FeePriority, ReservationId, TxRecipient, TxRequest};
+use shekyl_engine_core::{FeePriority, ReservationId, TxHash, TxRecipient, TxRequest};
 
 use crate::error::WalletRpcError;
-use crate::params::{parse_atomic_units, parse_required_object};
+use crate::params::{parse_atomic_units, parse_hex32, parse_required_object};
 use crate::project::{pending_tx_result, submit_pending_tx_result};
 use crate::tenant::{require_open_engine, TenantState};
-use crate::types::DiscardPendingTxResult;
+use crate::types::{AbandonTxResult, DiscardPendingTxResult, TransferState};
 
 /// One recipient in `build_pending_tx` params.
 #[derive(Debug, Deserialize)]
@@ -52,6 +53,12 @@ struct SubmitPendingTxParams {
 #[derive(Debug, Deserialize)]
 struct DiscardPendingTxParams {
     pending_tx_id: String,
+}
+
+/// Params for `abandon_tx`.
+#[derive(Debug, Deserialize)]
+struct AbandonTxParams {
+    tx_hash: String,
 }
 
 pub(crate) async fn build_pending_tx(
@@ -141,6 +148,37 @@ pub(crate) async fn discard_pending_tx(
     let result = DiscardPendingTxResult {};
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize discard_pending_tx: {e}")))
+}
+
+/// `abandon_tx` (`WALLET_SEND_RECORD.md` P3-4 / SJ-DQ-8, PR-SJ-3): the
+/// user-authored give-up on a dispatched send. The journal row moves to
+/// `Abandoned` and its retention reference migrates off the pending set
+/// (keys retained — the OUTBOUND proof still works). Idempotent; there
+/// is deliberately **no force path** (`-29108` names the refusing
+/// state; row hiding is deletion's job, not abandon's).
+pub(crate) async fn abandon_tx(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    let p: AbandonTxParams = parse_required_object(params, "abandon_tx")?;
+    let txid = parse_hex32(&p.tx_hash).ok_or_else(|| {
+        WalletRpcError::InvalidParams("tx_hash must be 64 lowercase hex characters".into())
+    })?;
+
+    let shared = require_open_engine(tenants).await?;
+    // Abandon mutates under the engine's interior ledger lock and drives
+    // its own crash-atomic save; exclusive Engine borrow is not required
+    // (same shape as discard).
+    let engine = shared.read().await;
+    engine.abandon_tx_persisted(TxHash::from_bytes(txid))?;
+    // Both outcomes (fresh abandon, idempotent re-abandon) answer with
+    // the row's resulting state — the same vocabulary `get_transfers`
+    // speaks.
+    let result = AbandonTxResult {
+        state: TransferState::Abandoned,
+    };
+    serde_json::to_value(result)
+        .map_err(|e| WalletRpcError::InternalError(format!("serialize abandon_tx: {e}")))
 }
 
 fn parse_fee_priority(p: FeePriorityParams) -> Result<FeePriority, WalletRpcError> {

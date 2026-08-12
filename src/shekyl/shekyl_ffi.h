@@ -143,12 +143,21 @@ struct ShekylPqcCanonicalLens {
 /// Return the canonical PQC multisig wire lengths (see ShekylPqcCanonicalLens).
 ShekylPqcCanonicalLens shekyl_pqc_canonical_lens();
 
-/// Generate a hybrid ML-DSA + Ed25519 keypair.
-/// Free both buffers with shekyl_buffer_free. Wipe secret_key after use.
+/// TEST-SUPPORT ONLY (F-7): generates a fresh, NON-derived hybrid keypair for
+/// the FFI test suite. Real wallets derive their keys — do NOT call from
+/// production code. Free both buffers with shekyl_buffer_free; wipe secret_key.
 ShekylPqcKeypair shekyl_pqc_keypair_generate();
 
-/// Sign a message with a hybrid ML-DSA secret key.
-/// secret_key_ptr/len: secret key bytes from shekyl_pqc_keypair_generate.
+/// Sign a message with a canonical-encoded hybrid (Ed25519 + ML-DSA-65) secret
+/// key on the **tx per-input PQC auth surface**: the Rust side binds the
+/// surface domain (SCHEME_DOMAIN_PQC_AUTH_TX, SA-R-2) internally — C++ never
+/// carries a domain string — so signatures from this export verify ONLY as tx
+/// per-input auth (shekyl_pqc_verify scheme 1). Do not reach for it from any
+/// other signing surface; each surface gets its own export with its own
+/// Rust-owned domain (see shekyl_pqc_sign_multisig_participant).
+/// secret_key_ptr/len: canonical hybrid secret key bytes. Production keys are
+/// wallet-derived and Rust-held (rule 36) — production C++ never holds one;
+/// tests source keys from the TEST-SUPPORT shekyl_pqc_keypair_generate.
 /// Returns signature blob. Caller frees with shekyl_buffer_free.
 ShekylPqcSignatureResult shekyl_pqc_sign(
     const uint8_t* secret_key_ptr,
@@ -156,7 +165,24 @@ ShekylPqcSignatureResult shekyl_pqc_sign(
     const uint8_t* message_ptr,
     size_t message_len);
 
-/// Verify a hybrid PQC signature.
+/// TEST-SUPPORT ONLY (F-7): sign a message as a multisig participant (scheme 2),
+/// under the multisig-specific domain. A participant signature is NOT
+/// interchangeable with a shekyl_pqc_sign (single-signer) signature over the
+/// same message. Use this — not shekyl_pqc_sign — to assemble multisig
+/// containers in tests. Production multisig participant signing is unbuilt; do
+/// not call from production code. Returns signature blob; free with
+/// shekyl_buffer_free.
+ShekylPqcSignatureResult shekyl_pqc_sign_multisig_participant(
+    const uint8_t* secret_key_ptr,
+    size_t secret_key_len,
+    const uint8_t* message_ptr,
+    size_t message_len);
+
+/// Verify a hybrid PQC signature. The scheme-level domain is Rust-owned
+/// (SA-R-2): scheme_id 1 verifies under the tx per-input auth surface
+/// (SCHEME_DOMAIN_PQC_AUTH_TX — the shekyl_pqc_sign twin), scheme_id 2 under
+/// the multisig participant domain (the shekyl_pqc_sign_multisig_participant
+/// twin). C++ passes no domain string.
 ///
 /// Returns 0 on success, or a nonzero PqcVerifyError discriminant on failure:
 ///   1  = SchemeMismatch         5  = ThresholdMismatch     (9 retired — see below)
@@ -177,7 +203,6 @@ uint8_t shekyl_pqc_verify(
     const uint8_t* message,
     size_t message_len);
 
-/// Verify a hybrid PQC signature with optional group ID binding.
 /// Compute Keccak-256 hash of data_ptr[0..data_len].
 /// out_ptr: 32 writable bytes for the hash output.
 bool shekyl_cn_fast_hash(
@@ -388,8 +413,9 @@ uint8_t shekyl_fcmp_verify(
 
 /// Verify a membership-only FCMP++ proof (reward-emission backing; NO key image).
 /// Mirror of shekyl_fcmp_verify without the key-image array. Anti-replay for this
-/// path is the emission per-epoch dedup, not a key image; the ML-DSA leaf gate is
-/// shekyl_emission_hybrid_auth_verify. po_count must equal pqc_hash_count.
+/// path is the emission per-epoch dedup, not a key image; the hybrid leaf-gated
+/// auth check is step 8 inside the coarse shekyl_emission_vin_verify call.
+/// po_count must equal pqc_hash_count.
 /// po_count must be in 1..=MAX_INPUTS (= 8); 0 or larger is rejected up front.
 /// Returns 0 on success, else the VerifyError discriminant:
 ///   1 = Deserialization (also: null ptr; po_count == 0 or > MAX_INPUTS; po_count*32 usize overflow)
@@ -407,35 +433,6 @@ uint8_t shekyl_fcmp_membership_only_verify(
     const uint8_t* tree_root_ptr,
     uint8_t tree_depth,
     const uint8_t* signable_tx_hash_ptr);
-
-/// Reward-emission hybrid vin-auth verify (PR-E1; the C-1 hard-gate core). C-1 calls
-/// this once per auth (Auth-B backing, Auth-P pseudonym).
-///   (1) recompute hash_pqc_public_key(pubkey) and require equality with the in-circuit
-///       committed leaf_hash (binds the auth to the proven leaf, gate-6 §9.6);
-///   (2) verify the HYBRID (Ed25519 + ML-DSA-65) signature over msg.
-/// The auth is hybrid, matching every other signature in the system — NOT ML-DSA-only.
-/// Ratified for defense-in-depth against a classical break of ML-DSA-65 (Auth-P has no
-/// membership-proof classical fallback). See REWARD_EMISSION_VIN_PLAN.md R1.A(2) retraction.
-/// pubkey_ptr: canonical hybrid public key bytes. sig_ptr: canonical hybrid
-/// signature bytes. leaf_hash_ptr: 32-byte in-circuit committed leaf hash.
-/// pubkey_len / sig_len MUST equal the canonical hybrid pubkey / signature lengths — a
-/// non-canonical length is rejected UP FRONT (before any pointer is read) as PubkeyDeser (2) /
-/// SigDeser (3), NOT NullPtr. Pass the exact canonical byte counts, not a buffer capacity.
-/// LEAF-HASH INPUT — do not get this wrong: despite the pqc_pk naming, the leaf hash is
-/// hash_pqc_public_key over the FULL canonical hybrid pubkey bytes (Ed25519 || ML-DSA-65),
-/// exactly what curve-tree leaves commit (derivation.rs::derive_pqc_leaf_hash). Hashing only
-/// the ML-DSA component yields a different leaf_hash and systematic LeafHashMismatch (code 4).
-/// Returns 0 on success, else:
-///   1 = NullPtr   2 = PubkeyDeser   3 = SigDeser
-///   4 = LeafHashMismatch   5 = Verify (signature did not verify).
-uint8_t shekyl_emission_hybrid_auth_verify(
-    const uint8_t* pubkey_ptr,
-    size_t pubkey_len,
-    const uint8_t* msg_ptr,
-    size_t msg_len,
-    const uint8_t* sig_ptr,
-    size_t sig_len,
-    const uint8_t* leaf_hash_ptr);
 
 /// Convert raw output tuples into serialized 4-scalar leaves.
 ShekylBuffer shekyl_fcmp_outputs_to_leaves(
@@ -3077,19 +3074,47 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 /// so what ships is what was derived and tested. A zero draw does not mean "fire
 /// this instant" — deadlines are whole seconds, so it resolves to the earliest
 /// one that does not under-provision (the next second boundary; see
-/// cryptonote::detail::embargo_deadline). Rounding it down instead would put the
+/// cryptonote::detail::relay_deadline). Rounding it down instead would put the
 /// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
 /// embargo is the privacy-losing direction at every draw value including zero.
-uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
+///
+/// \param zone The relay zone the transaction is embargoed on, as
+/// `epee::net_utils::zone` cast to a byte. The embargo is per-zone since §89.2:
+/// the anonymity zone stems, and a rendezvous hop needs a longer embargo than a
+/// clearnet one. Anything outside 0..=3 resolves to `zone::invalid`, which is
+/// provisioned as the worst case — a corrupt byte costs recovery latency rather
+/// than embargo length. (Masking would send 5 to `public_`, the shortest.)
+uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
 
 /// How long to wait before judging a still-unseen transaction failed, in
 /// seconds — a quantile of the embargo distribution (at most 1 in 100 embargoes
 /// still running), not a multiple of its mean. On the adopted table that is
-/// exactly 874 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
+/// exactly 2297 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
 /// pinned so the wait cannot drift from the distribution. A stem transaction is
 /// invisible to its sender until it fluffs, so a shorter deadline declares
 /// healthy transactions dead while their backstop is still running, and the
 /// sender then releases the inputs it had reserved.
+///
+/// Deliberately takes no zone, though the draw above does: this is a wallet
+/// decision, and the wallet cannot know which zone its transaction took. It
+/// gets the worst zone's wait. The whole export is a deletion target — see
+/// DAEMON_RELAY_PRIVACY.md §89.6.
+/// Draw one i2p/tor -> clearnet forwarding delay, in seconds — memoryless.
+///
+/// Replaces `crypto::random_poisson_seconds{22s}`, whose whole header is
+/// retired with it. The MEAN is unchanged and stays Q-12's to derive
+/// (DAEMON_RELAY_PRIVACY.md sec 22.2); what moves here is the family.
+///
+/// The Poisson was F-2/F-4's signature on the tor->clearnet bridge — the
+/// moment an anonymity-arrived tx becomes clearnet-visible, so the moment
+/// arrival-time inference is worth most. Measured on F-4's own instrument at
+/// +/-1s: 0.2505 -> 0.1248 at phase 0, and the inherited draw climbs to 0.7191
+/// by phase 30 while the memoryless one stays flat, because only a memoryless
+/// family has residual == full.
+///
+/// A 0s draw is legitimate and unclamped, same reasoning as the embargo draw.
+uint64_t shekyl_dandelionpp_forward_delay_seconds(void);
+
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
 
@@ -3183,10 +3208,17 @@ typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel, const st
 #define SHEKYL_RELAY_ZONE_COVERT_ENABLED 2u
 
 //! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
+//! `zone` is the `epee::net_utils::zone` discriminant; it selects the
+//! transport-bound parameters (§89.2) so this zone's stem-observation window
+//! matches the embargo its successors draw. It is NOT a restatement of
+//! `SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY` — fluff reach follows the network,
+//! transit latency follows the transport, and outbound-only fluff on clearnet
+//! is still open (§25.5).
 //! `flags` is a mask of the `SHEKYL_RELAY_ZONE_*` bits above.
 //! Null when a zone cannot be built: SIZE_MAX stems, or a zero epoch — which
 //! would expire at every wake and spin the relay timer. Treat null as fatal.
-RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems,
+RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::uint8_t zone,
+                                       std::size_t stems,
                                        std::uint32_t min_epoch_secs,
                                        std::uint32_t epoch_jitter_secs,
                                        std::uint32_t flags);

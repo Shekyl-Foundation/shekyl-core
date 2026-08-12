@@ -18,9 +18,6 @@ use shekyl_curve_io::{read_byte, read_bytes, read_varint, write_varint};
 /// — the same consensus discriminant.
 pub const VIN_TYPE_ARCHIVAL_BOND_POST: u8 = 0x03;
 
-/// cSHAKE256 customization for bond-post spend-auth preimage (gate-4 §3.4.1).
-pub const BOND_POST_SIG_CUSTOMIZATION: &[u8] = b"shekyl/archival-bond-post-v1";
-
 /// Exact canonical single [`HybridPublicKey`] encoding length; matches
 /// `config::PQC_HYBRID_SINGLE_KEY_LEN` in `cryptonote_config.h` (not multisig
 /// blob). Stays 1996 even when multisig admits N>1: **pseudonym uniformity**
@@ -353,27 +350,6 @@ pub fn read_holdings_descriptor<R: Read>(r: &mut R) -> Result<HoldingsDescriptor
 }
 
 impl ArchivalBondPostVin {
-    /// `cSHAKE256` spend-auth preimage for the bond vin (`tx_prefix_hash` is 32 bytes).
-    ///
-    /// Binds `bond_spend_pk` directly (gate-4 §3.4.1: the JoinMarket signature
-    /// commits the debit authorizer). Injective: the `post_kind` byte precedes
-    /// the key bytes, and the key is exactly canonical-length on JoinMarket and
-    /// empty otherwise, so no two field assignments share an encoding.
-    pub fn signature_preimage(&self, tx_prefix_hash: &[u8; 32]) -> [u8; 32] {
-        let holdings = encode_holdings_descriptor(&self.holdings).expect("encode holdings");
-        let mut input =
-            Vec::with_capacity(32 + 32 + 1 + self.bond_spend_pk.len() + holdings.len() + 24);
-        input.extend_from_slice(tx_prefix_hash);
-        input.extend_from_slice(&self.p_canonical_id);
-        input.push(self.post_kind as u8);
-        input.extend_from_slice(&self.bond_spend_pk);
-        input.extend_from_slice(&holdings);
-        input.extend_from_slice(&self.bonded_total_atomic.to_le_bytes());
-        input.extend_from_slice(&self.bond_credit.to_le_bytes());
-        input.extend_from_slice(&self.bond_debit.to_le_bytes());
-        crate::hash::cshake256_32(BOND_POST_SIG_CUSTOMIZATION, &input)
-    }
-
     pub fn write<W: Write>(&self, w: &mut W) -> Result<(), WireError> {
         if self.hybrid_public_key.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
             return Err(WireError::HybridPubkeyLenNotCanonical {
@@ -536,29 +512,6 @@ mod tests {
         assert!(decoded.holdings.shard_ids.is_empty());
     }
 
-    #[test]
-    fn signature_preimage_is_stable() {
-        let hybrid_pk = vec![0xCD; HYBRID_PUBKEY_CANONICAL_BYTES];
-        let vin = ArchivalBondPostVin {
-            hybrid_public_key: hybrid_pk.clone(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
-            post_kind: BondPostKind::JoinMarket,
-            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
-            holdings: HoldingsDescriptor {
-                kind: HoldingsKind::ShardSetCompact,
-                shard_ids: ShardSet::new(vec![99]).unwrap(),
-            },
-            bonded_total_atomic: 750_000_000,
-            bond_credit: 750_000_000,
-            bond_debit: 0,
-        };
-        let tx_prefix = [0x42u8; 32];
-        let h1 = vin.signature_preimage(&tx_prefix);
-        let h2 = vin.signature_preimage(&tx_prefix);
-        assert_eq!(h1, h2);
-        assert_ne!(h1, [0u8; 32]);
-    }
-
     /// A truncated (or over-long) hybrid pubkey is malformed, not a shorter
     /// valid key — both write and read demand the exact canonical length
     /// (mirrors the emission wire; the C++ oracle enforces the same equality).
@@ -664,18 +617,6 @@ mod tests {
             ArchivalBondPostVin::read_payload(&mut wire.as_slice()),
             Err(WireError::BondSpendPkLenNotCanonical { .. })
         ));
-
-        // The preimage binds the key: two vins differing only in
-        // bond_spend_pk must not share a signature preimage (§3.4.1).
-        let other_key = ArchivalBondPostVin {
-            bond_spend_pk: vec![0xE6; HYBRID_PUBKEY_CANONICAL_BYTES],
-            ..base.clone()
-        };
-        let prefix = [0x42u8; 32];
-        assert_ne!(
-            base.signature_preimage(&prefix),
-            other_key.signature_preimage(&prefix)
-        );
     }
 
     /// Golden byte vector for the shared holdings codec.

@@ -446,23 +446,107 @@ pub const DEFAULT_EMBARGO_TICK_MILLIS: u64 = 250;
 /// un-reserves their inputs. One in a hundred is the point where the deadline
 /// stops being a coin-flip against the backstop it is waiting for.
 ///
-/// On the adopted embargo that rate is exactly
-/// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`] (874 s — was 664 s before F-7 corrected
-/// `fluff_return_ms`; §44). Pin the seconds, not only the
-/// rate: the same F-1 class of defect reappears if the wait is left as a loose
-/// bound that can drift when the table, tick, or rounding changes.
+/// The seconds this rate buys are pinned by
+/// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`] — **2 297 s**, drawn on the *worst
+/// zone's* embargo since §89.2 made the embargo per-zone (it was 874 s when
+/// the wait was the adopted clearnet embargo, and 664 s before F-7 corrected
+/// `fluff_return_ms`; §44). Which zone the quantile is taken over is the
+/// wallet-coupling defect §89.6 records, not a property of this rate.
+///
+/// Pin the seconds, not only the rate: the same F-1 class of defect reappears
+/// if the wait is left as a loose bound that can drift when the table, tick,
+/// or rounding changes.
 pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 
-/// Sender "still unseen → failed" wait on the **adopted** embargo, in seconds,
-/// at [`PROPAGATION_FALSE_FAIL_ONE_IN`].
+/// Sender "still unseen → failed" wait, in seconds, at
+/// [`PROPAGATION_FALSE_FAIL_ONE_IN`] — the **worst zone's**, deliberately.
 ///
-/// This is the exact output of
-/// `EmbargoTimer::adopted(...).judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN)`
-/// today: table survival quantile, tick conversion rounded **up**. It is not a
-/// free-standing timeout and must not be retuned here — change the rate or the
-/// embargo derivation, then update this pin when the test says the seconds
-/// moved. See `DAEMON_RELAY_PRIVACY.md` §17.
-pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 874;
+/// **This constant is a deletion target (§89.6.)** A wallet safety invariant
+/// should not be a function of a relay-privacy constant; the wallet should ask
+/// the daemon whether a transaction is still in flight rather than time it. The
+/// worst-zone global is the interim precisely because it needs no machinery and
+/// is the cheapest thing to remove. Do not make it per-zone, and do not grow it
+/// — the reasoning lives in §89.6, not here.
+///
+/// Cost of the interim, stated: a clearnet send reports failure at ~38 minutes
+/// rather than ~15.
+pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_297;
+
+/// Mean of the i2p/tor → clearnet forwarding delay, in seconds.
+///
+/// **Unchanged at 22 s, deliberately.** This constant is Q-12's to derive and
+/// this module does not derive it — what moves here is the *family*, not the
+/// value. `CRYPTONOTE_FORWARD_DELAY_AVERAGE` remains the C++ mirror of this
+/// number until Q-12 settles whether it survives at all.
+///
+/// Its provenance is unchanged too, and unflattering: inherited, with a stated
+/// objective (*"2+ incoming connections could have sent the tx"*) that no
+/// derivation has been shown to satisfy. Porting the family does not launder
+/// that — see `DAEMON_RELAY_PRIVACY.md` §22.2.
+pub const ADOPTED_FORWARD_DELAY_MEAN_SECS: u32 = 22;
+
+/// The i2p/tor → clearnet forwarding delay, drawn **memoryless**.
+///
+/// # Why this exists, and why it is not a cleanup
+///
+/// The inherited draw is `crypto::random_poisson_seconds{22 s}` — a Poisson,
+/// σ ≈ 4.7 s about a 22 s mean, against σ ≈ 22 s for the memoryless
+/// equivalent. That is the **F-2/F-4 family signature**, and F-4 measured what
+/// it costs: up to 93 % invertibility for a transaction arriving late in a
+/// batching window, ~1.96× more invertible overall.
+///
+/// **The defect is live, and it sits on the worst boundary for it.** This delay
+/// governs the tor→clearnet bridge — the one moment an anonymity-arrived
+/// transaction becomes clearnet-visible, and therefore the moment
+/// arrival-time inference is worth most to an observer.
+///
+/// # What this does and does not change
+///
+/// It is F-4's move, one call site later: **fix the family at the current
+/// mean.** The mean is Q-12's (`ADOPTED_FORWARD_DELAY_MEAN_SECS`); the family
+/// was settled by F-2/F-4 and does not depend on Q-12's open fork at all.
+/// Value-neutral, family-correct, provenance stated — the same shape as
+/// Q-11 Unit 0's decoupling, and it leaves Q-12 free to move the mean later.
+///
+/// **Retiring `crypto::random_poisson_duration` is certain in every branch.**
+/// If Q-12 deletes `relay_method::forward`, the call site goes with it and the
+/// retirement stands; if `forward` survives, the draw is memoryless either way.
+#[derive(Debug, Clone)]
+pub struct ForwardDelay {
+    table: GeometricTable,
+}
+
+impl ForwardDelay {
+    /// The shipped forward delay: memoryless at
+    /// [`ADOPTED_FORWARD_DELAY_MEAN_SECS`], one-second granularity.
+    ///
+    /// Seconds rather than the embargo's 250 ms ticks because the consumer
+    /// stores a whole-second `time_t` (`tx_pool.cpp`'s `last_relayed_time`);
+    /// a finer tick would be discarded at the boundary and would only make the
+    /// table's granularity disagree with the deadline's.
+    #[must_use]
+    pub fn adopted() -> Self {
+        Self {
+            table: GeometricTable::new(ADOPTED_FORWARD_DELAY_MEAN_SECS),
+        }
+    }
+
+    /// Draw one forward delay, in **seconds**.
+    ///
+    /// A 0 s draw is legitimate: a memoryless family has support
+    /// `{0, 1, 2, …}`, and clamping it would ship something other than the
+    /// distribution this type claims to be — the same reasoning the embargo
+    /// draw records for its own zero.
+    pub fn draw<R: RelayRng + ?Sized>(&self, rng: &mut R) -> u64 {
+        self.table.draw(rng)
+    }
+
+    /// The mean this was built at, in seconds.
+    #[must_use]
+    pub const fn mean_secs(&self) -> u32 {
+        ADOPTED_FORWARD_DELAY_MEAN_SECS
+    }
+}
 
 impl EmbargoTimer {
     /// The configuration this crate recommends shipping: exact discrete survival
@@ -938,7 +1022,7 @@ mod tests {
 
     #[test]
     fn propagation_timeout_follows_from_the_shipped_table() {
-        let t = EmbargoTimer::adopted(&DandelionParams::inherited());
+        let t = EmbargoTimer::adopted(&DandelionParams::adopted_for(crate::zone::RelayZone::Tor));
         let secs = t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
 
         // Exact pin: the number and the table must not drift apart. A loose
@@ -965,6 +1049,26 @@ mod tests {
             t.judge_failed_after_secs(1_000) > secs,
             "a 1-in-1000 deadline must wait longer than 1-in-100"
         );
+    }
+
+    #[test]
+    fn the_shipped_wait_clears_every_zones_embargo() {
+        // The one property the worst-zone interim must have: no zone's embargo
+        // outlasts it. A wait that clears only the zone it was derived from is
+        // how 874 s came to be wrong for the anonymity path.
+        for zone in [
+            crate::zone::RelayZone::Public,
+            crate::zone::RelayZone::I2p,
+            crate::zone::RelayZone::Tor,
+            crate::zone::RelayZone::Invalid,
+        ] {
+            let t = EmbargoTimer::adopted(&DandelionParams::adopted_for(zone));
+            assert!(
+                ADOPTED_PROPAGATION_TIMEOUT_SECS
+                    >= t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN),
+                "{zone:?} needs a longer wait than the shipped {ADOPTED_PROPAGATION_TIMEOUT_SECS}s"
+            );
+        }
     }
 
     #[test]

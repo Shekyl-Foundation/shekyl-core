@@ -2,11 +2,16 @@
 //!
 //! Two primitives, two jobs, and the split is the point:
 //!
-//! - [`cn_fast_hash`] / [`tree_hash`] — **Keccak-256, for consensus parity only.**
-//!   Use these *iff* the output must be byte-identical to the Monero-descended C++
-//!   daemon: `prefix_hash`, `tree_hash`, block IDs, `pqc_signing_payload_hashes`,
-//!   `multisig_pqc_leaf_hash`. They are un-domained because the thing they must
-//!   match is un-domained.
+//! - [`keccak256`] / [`tree_hash`] — **Keccak-256, for existing pinned contracts
+//!   only.** Two caller classes, both closed: (a) outputs that must be
+//!   byte-identical to the Monero-descended C++ daemon — `prefix_hash`,
+//!   `tree_hash`, block IDs, `pqc_signing_payload_hashes`,
+//!   `multisig_pqc_leaf_hash`; (b) cross-party multisig contracts with no C++
+//!   mirror but multiple independent signers pinned to these bytes by spec —
+//!   `intent_hash` / the chain-state fingerprint (`shekyl-multisig/src/intent.rs`).
+//!   Class (b) migrates to cSHAKE only via its owning spec, never unilaterally
+//!   (FOLLOWUPS, "residual consensus-parity Keccak"). They are un-domained
+//!   because the thing they must match is un-domained.
 //! - [`cshake256_32`] — **cSHAKE256 (SP 800-185), for everything new.** A new
 //!   artifact on no consensus path takes this, with a customization string, so
 //!   domain separation is structural rather than definitional.
@@ -29,10 +34,11 @@
 //! the same original-Keccak-256, and standardizing on the RustCrypto crate collapses
 //! the codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
 //!
-//! The `cn_fast_hash` *name* is the inherited CryptoNote consensus-primitive name
-//! ("cn" = CryptoNote; the *fast* hash vs. the slow PoW hash), kept for 1:1 source
-//! mapping to the C++ daemon; a rule-93 rename to `keccak256` is a tracked follow-up
-//! (see `60-no-monero-legacy.mdc`).
+//! **Naming.** Rust API is [`keccak256`] (states the primitive). The C++ daemon
+//! function stays `cn_fast_hash` (`src/crypto/hash.c`) for 1:1 consensus
+//! source-mapping; the FFI export stays `shekyl_cn_fast_hash` for C ABI
+//! stability. CryptoNote lineage name on the C++/ABI side only
+//! (`60-no-monero-legacy.mdc`).
 
 #![deny(unsafe_code)]
 
@@ -44,14 +50,21 @@ pub const HASH_SIZE: usize = 32;
 
 pub type Hash = [u8; HASH_SIZE];
 
-/// Compute `cn_fast_hash` — Keccak-256 with original padding, via RustCrypto `sha3`.
+/// Original-padding Keccak-256 (`0x01`, NOT NIST SHA3-256's `0x06`), via RustCrypto
+/// `sha3` — byte-identical to the C++ daemon's `cn_fast_hash`.
 ///
 /// Matches `cn_fast_hash` in `src/crypto/hash.c` (keccak1600 absorb, first 32 bytes;
 /// rate 136 bytes for 256-bit output). `sha3::Keccak256` is the original Keccak
-/// variant (0x01 padding), so this is byte-identical to the prior tiny-keccak impl and
-/// to the C++ daemon — verified by the empty-input KAT below and the live coinbase/
-/// spend hash KATs in shekyl-wire.
-pub fn cn_fast_hash(data: &[u8]) -> Hash {
+/// variant, so this is byte-identical to the prior tiny-keccak impl and to the C++
+/// daemon — verified by the empty-input KAT below and the live coinbase/spend hash
+/// KATs in shekyl-wire.
+///
+/// A second public `keccak256` (same primitive) lives in `shekyl-curve-primitives`
+/// for the oxide-lineage hash-to-point stack; the tx-builder equivalence test
+/// (`crypto_hash_keccak256_equals_curve_primitives_keccak256`) pins that they agree,
+/// and the collapse onto one home is tracked in FOLLOWUPS (dual-keccak). Until it
+/// lands, prose and doc references should qualify which crate they mean.
+pub fn keccak256(data: &[u8]) -> Hash {
     Keccak256::digest(data).into()
 }
 
@@ -60,11 +73,12 @@ pub fn cn_fast_hash(data: &[u8]) -> Hash {
 /// **The default for any new hashed artifact.** The customization string makes
 /// domain separation structural: two contexts cannot collide even over identical
 /// input bytes, without anyone having to remember a convention. Use
-/// [`cn_fast_hash`] only where byte-identity with the C++ daemon is required.
+/// [`keccak256`] only where byte-identity with the C++ daemon is required.
 ///
 /// `customization` follows the house convention `b"shekyl/<domain>-v1"` (see
-/// `shekyl/archival-bond-post-v1`, `shekyl/receive-label-hash-v1`); version it, so
-/// a preimage change is a new domain rather than a silent reinterpretation.
+/// `shekyl/archival-serve-credit-response-v1`, `shekyl/receive-label-hash-v1`);
+/// version it, so a preimage change is a new domain rather than a silent
+/// reinterpretation.
 ///
 /// # Panics
 ///
@@ -78,6 +92,29 @@ pub fn cn_fast_hash(data: &[u8]) -> Hash {
 /// consolidation described above.
 #[must_use]
 pub fn cshake256_32(customization: &[u8], input: &[u8]) -> Hash {
+    cshake256(customization, input)
+}
+
+/// cSHAKE256 (SP 800-185) with a customization string, 64-byte output.
+///
+/// Same primitive and conventions as [`cshake256_32`]; the two differ only in
+/// how much of the XOF stream they take. Use this width where the digest is
+/// itself the *signed content* of a signature scheme: a 32-byte digest caps
+/// collision resistance at 2^128, below ML-DSA-65's Category-3 target, while
+/// 64 bytes restores the full 2^256 (cf. FIPS 204's HashML-DSA, which pairs
+/// ML-DSA-65 with ≥384-bit digests).
+///
+/// # Panics
+///
+/// Panics if `customization` is empty, for the reason documented on
+/// [`cshake256_32`].
+#[must_use]
+pub fn cshake256_64(customization: &[u8], input: &[u8]) -> [u8; 64] {
+    cshake256(customization, input)
+}
+
+/// Shared cSHAKE256 core: one absorb path, `N` bytes of the XOF stream.
+fn cshake256<const N: usize>(customization: &[u8], input: &[u8]) -> [u8; N] {
     // cSHAKE with an empty function-name AND empty customization is defined to be
     // plain SHAKE256 (SP 800-185 §3.3; RustCrypto special-cases it back to SHAKE
     // padding). That would silently strip the domain separation this primitive
@@ -85,14 +122,14 @@ pub fn cshake256_32(customization: &[u8], input: &[u8]) -> Hash {
     // "no domain" request — reject it loudly rather than degrade in release.
     assert!(
         !customization.is_empty(),
-        "cshake256_32 requires a non-empty customization string \
+        "cshake256 requires a non-empty customization string \
          (empty customization degrades to plain SHAKE256, defeating domain separation)"
     );
     let core = CShake256Core::new(customization);
     let mut hasher: CShake256 = CoreWrapper::from_core(core);
     hasher.update(input);
     let mut reader = hasher.finalize_xof();
-    let mut out = [0u8; HASH_SIZE];
+    let mut out = [0u8; N];
     reader.read(&mut out);
     out
 }
@@ -120,7 +157,7 @@ pub fn tree_hash(hashes: &[Hash]) -> Hash {
             let mut buf = [0u8; 2 * HASH_SIZE];
             buf[..HASH_SIZE].copy_from_slice(&hashes[0]);
             buf[HASH_SIZE..].copy_from_slice(&hashes[1]);
-            cn_fast_hash(&buf)
+            keccak256(&buf)
         }
         _ => {
             let mut cnt = tree_hash_cnt(count);
@@ -135,7 +172,7 @@ pub fn tree_hash(hashes: &[Hash]) -> Hash {
                 let mut buf = [0u8; 2 * HASH_SIZE];
                 buf[..HASH_SIZE].copy_from_slice(&hashes[i]);
                 buf[HASH_SIZE..].copy_from_slice(&hashes[i + 1]);
-                ints[j] = cn_fast_hash(&buf);
+                ints[j] = keccak256(&buf);
                 i += 2;
                 j += 1;
             }
@@ -147,14 +184,14 @@ pub fn tree_hash(hashes: &[Hash]) -> Hash {
                     let mut buf = [0u8; 2 * HASH_SIZE];
                     buf[..HASH_SIZE].copy_from_slice(&ints[2 * k]);
                     buf[HASH_SIZE..].copy_from_slice(&ints[2 * k + 1]);
-                    ints[k] = cn_fast_hash(&buf);
+                    ints[k] = keccak256(&buf);
                 }
             }
 
             let mut buf = [0u8; 2 * HASH_SIZE];
             buf[..HASH_SIZE].copy_from_slice(&ints[0]);
             buf[HASH_SIZE..].copy_from_slice(&ints[1]);
-            cn_fast_hash(&buf)
+            keccak256(&buf)
         }
     }
 }
@@ -165,7 +202,7 @@ mod tests {
 
     #[test]
     fn empty_hash() {
-        let h = cn_fast_hash(&[]);
+        let h = keccak256(&[]);
         // Known Keccak-256 of empty input (original padding, NOT SHA3)
         let expected = [
             0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7,
@@ -174,13 +211,13 @@ mod tests {
         ];
         assert_eq!(
             h, expected,
-            "cn_fast_hash of empty input must match Keccak-256"
+            "keccak256 of empty input must match Keccak-256"
         );
     }
 
     #[test]
     fn known_hash() {
-        let h = cn_fast_hash(b"Shekyl");
+        let h = keccak256(b"Shekyl");
         assert_eq!(h.len(), HASH_SIZE);
         assert_ne!(h, [0u8; 32]);
     }
@@ -206,6 +243,31 @@ mod tests {
                 0x0c, 0x48, 0xb8, 0xe4, 0xc8, 0x7b, 0xff, 0x32, 0xc9, 0x69, 0x9d, 0x5b, 0x68, 0x96,
                 0xee, 0xe0, 0xed, 0xd1,
             ],
+        );
+    }
+
+    #[test]
+    fn cshake256_64_nist_sp800_185_kat() {
+        // The same NIST SP 800-185 cSHAKE256 Sample #3 as above, but pinning the
+        // FULL published 512-bit output — `cshake256_64` takes exactly the
+        // sample's requested length, so this fixes the entire 64-byte stream to
+        // the external authority (and, with the test above, pins that the two
+        // widths read one XOF stream: the first 32 bytes must agree).
+        let digest = cshake256_64(b"Email Signature", &[0x00, 0x01, 0x02, 0x03]);
+        assert_eq!(
+            digest,
+            [
+                0xd0, 0x08, 0x82, 0x8e, 0x2b, 0x80, 0xac, 0x9d, 0x22, 0x18, 0xff, 0xee, 0x1d, 0x07,
+                0x0c, 0x48, 0xb8, 0xe4, 0xc8, 0x7b, 0xff, 0x32, 0xc9, 0x69, 0x9d, 0x5b, 0x68, 0x96,
+                0xee, 0xe0, 0xed, 0xd1, 0x64, 0x02, 0x0e, 0x2b, 0xe0, 0x56, 0x08, 0x58, 0xd9, 0xc0,
+                0x0c, 0x03, 0x7e, 0x34, 0xa9, 0x69, 0x37, 0xc5, 0x61, 0xa7, 0x4c, 0x41, 0x2b, 0xb4,
+                0xc7, 0x46, 0x46, 0x95, 0x27, 0x28, 0x1c, 0x8c,
+            ],
+        );
+        assert_eq!(
+            digest[..32],
+            cshake256_32(b"Email Signature", &[0x00, 0x01, 0x02, 0x03]),
+            "the 32- and 64-byte widths must be prefixes of one XOF stream"
         );
     }
 
@@ -239,12 +301,12 @@ mod tests {
 
     #[test]
     fn tree_hash_two() {
-        let a = cn_fast_hash(b"a");
-        let b = cn_fast_hash(b"b");
+        let a = keccak256(b"a");
+        let b = keccak256(b"b");
         let root = tree_hash(&[a, b]);
         let mut combined = [0u8; 64];
         combined[..32].copy_from_slice(&a);
         combined[32..].copy_from_slice(&b);
-        assert_eq!(root, cn_fast_hash(&combined));
+        assert_eq!(root, keccak256(&combined));
     }
 }

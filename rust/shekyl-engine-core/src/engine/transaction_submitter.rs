@@ -152,7 +152,7 @@ pub(crate) enum SubmitSuccess {
 /// The canonical genesis transaction id (`GENESIS_TX_WIRE_FORMAT.md` §11) for a
 /// serialized blob, or `None` if it is not canonical shekyl-wire: parse the blob and
 /// take its 3/4-part `hash()` — **the id the daemon computes**, not a flat
-/// `cn_fast_hash` of the bytes (which only the in-process test doubles ever agreed with).
+/// `keccak256` of the bytes (which only the in-process test doubles ever agreed with).
 pub(crate) fn canonical_tx_id_opt(tx_bytes: &[u8]) -> Option<TxHash> {
     Transaction::from_bytes(tx_bytes)
         .ok()

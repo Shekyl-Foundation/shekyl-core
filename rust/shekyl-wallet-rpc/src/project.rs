@@ -122,10 +122,15 @@ pub fn parse_lookup_id(id: &str) -> Option<TransferLookupId> {
 ///
 /// Shared by [`transfer_view`] and the `get_transfers` filter so both agree on
 /// how a row maps to [`TransferState`] without re-projecting the whole row.
-pub fn transfer_state(td: &TransferDetails) -> TransferState {
+/// `spend_locks` is the journal-derived lock map (PR-SJ-1b): a locked,
+/// unspent receive row is a spend in flight, so it reads `PENDING`.
+pub fn transfer_state(
+    td: &TransferDetails,
+    spend_locks: &shekyl_engine_state::InFlightSpendLocks,
+) -> TransferState {
     if td.spent {
         TransferState::Spent
-    } else if td.awaiting_confirmation.is_some() {
+    } else if spend_locks.contains(td.global_output_index) {
         TransferState::Pending
     } else {
         TransferState::Confirmed
@@ -193,7 +198,11 @@ pub fn attribution_matches(
 }
 
 /// Project a ledger transfer to the RPC view (no key material).
-pub fn transfer_view(td: &TransferDetails) -> TransferView {
+/// `spend_locks` is the journal-derived lock map (PR-SJ-1b).
+pub fn transfer_view(
+    td: &TransferDetails,
+    spend_locks: &shekyl_engine_state::InFlightSpendLocks,
+) -> TransferView {
     TransferView {
         id: transfer_id(td),
         // Ledger rows are receive-side outputs, so this projection is
@@ -205,7 +214,7 @@ pub fn transfer_view(td: &TransferDetails) -> TransferView {
         fee: "0".to_owned(),
         // Ledger rows are scanner-observed, so they are always mined.
         block_height: Some(i64::try_from(td.block_height).unwrap_or(i64::MAX)),
-        state: transfer_state(td),
+        state: transfer_state(td, spend_locks),
         spent_height: td
             .spent_height
             .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
@@ -230,7 +239,10 @@ pub fn outgoing_transfer_id(txid: &TxHash) -> String {
 pub fn outgoing_block_height(row: &SendRecord) -> Option<u64> {
     match row.state {
         SendState::Confirmed { height } => Some(height),
-        SendState::Dispatched | SendState::TerminalRejected | SendState::PresumedDead => None,
+        SendState::Dispatched
+        | SendState::TerminalRejected
+        | SendState::PresumedDead
+        | SendState::Abandoned => None,
     }
 }
 
@@ -247,13 +259,28 @@ pub fn outgoing_block_height(row: &SendRecord) -> Option<u64> {
 ///   the input locks — never collapse into `PENDING`, which would say
 ///   the wallet is still waiting while the same wallet reports those
 ///   funds spendable again).
-pub fn outgoing_transfer_state(row: &SendRecord) -> TransferState {
-    match row.state {
+/// - `Abandoned` → `ABANDONED` (user-authored give-up, P3-4 — never
+///   collapse into `DROPPED`, whose release claim is evidence-backed;
+///   an abandoned send's input locks may still be held).
+///
+/// This is the **single owner** of the journal → wire state map; error
+/// mapping and filters call here (or [`outgoing_transfer_state`]) rather
+/// than re-listing the arms.
+#[must_use]
+pub fn outgoing_transfer_state_of(state: SendState) -> TransferState {
+    match state {
         SendState::Dispatched => TransferState::Pending,
         SendState::Confirmed { .. } => TransferState::Confirmed,
         SendState::TerminalRejected => TransferState::Failed,
         SendState::PresumedDead => TransferState::Dropped,
+        SendState::Abandoned => TransferState::Abandoned,
     }
+}
+
+/// Convenience: [`outgoing_transfer_state_of`] for a full journal row.
+#[must_use]
+pub fn outgoing_transfer_state(row: &SendRecord) -> TransferState {
+    outgoing_transfer_state_of(row.state)
 }
 
 /// Project a send-journal row as an OUTGOING `TransferView` (PR-SJ-2).
@@ -616,6 +643,22 @@ mod tests {
             outgoing_transfer_state(&sample_send_record(SendState::TerminalRejected)),
             TransferState::Failed
         );
+        // ABANDONED is its own value: collapsing it into DROPPED would
+        // claim confirmed-absent evidence the wallet never observed.
+        assert_eq!(
+            outgoing_transfer_state(&sample_send_record(SendState::Abandoned)),
+            TransferState::Abandoned
+        );
+        assert_eq!(
+            outgoing_transfer_state_of(SendState::Abandoned),
+            TransferState::Abandoned
+        );
+        assert_eq!(
+            serde_json::to_value(TransferState::Abandoned).expect("serialize"),
+            serde_json::json!("ABANDONED")
+        );
+        assert_eq!(TransferState::Abandoned.as_str(), "ABANDONED");
+        assert_eq!(TransferState::Dropped.as_str(), "DROPPED");
     }
 
     /// Only a refresh-observed confirmation yields a height. The
@@ -633,6 +676,7 @@ mod tests {
             SendState::Dispatched,
             SendState::TerminalRejected,
             SendState::PresumedDead,
+            SendState::Abandoned,
         ] {
             assert_eq!(
                 outgoing_block_height(&sample_send_record(unmined)),

@@ -49,6 +49,7 @@
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_basic/verification_context.h"
 #include "cryptonote_protocol/enums.h"
+#include "net/enums.h"
 #include "blockchain_db/blockchain_db.h"
 #include "crypto/hash.h"
 #include "rpc/core_rpc_server_commands_defs.h"
@@ -60,20 +61,33 @@ namespace cryptonote
 
   namespace detail
   {
-    /*! The whole-second deadline at which a stem transaction's embargo expires.
+    /*! The whole-second deadline at which a Rust-drawn relay delay expires.
+
+        Used by BOTH delays the pool schedules — the stem embargo and the
+        i2p/tor -> clearnet forward delay. Renamed from `embargo_deadline` when
+        the forward delay became its second caller: the cast and the rounding
+        direction below are policy for any FFI-sourced delay, and duplicating
+        them per call site is how one copy silently acquires a different
+        rounding rule.
 
         `now` carries a sub-second remainder and `last_relayed_time` is a
         whole-second `time_t`, so the conversion has to round — and the direction
-        is a privacy decision, not a formatting one. Under-provisioning the
-        embargo fluffs early (the D-5 asymmetry), so this rounds **away from
-        now**: the returned deadline is never earlier than `now + draw_secs`.
-        Truncating instead would hand back up to ~999ms of every embargo, undoing
-        one layer down what the Rust side's `div_ceil` does one layer up.
+        is a privacy decision, not a formatting one. Under-provisioning either
+        delay is the privacy-losing direction: a short embargo fluffs early (the
+        D-5 asymmetry), and a short forward delay hands back cover at the
+        tor->clearnet bridge. So this rounds **away from now**: the returned
+        deadline is never earlier than `now + draw_secs`. Truncating instead
+        would give back up to ~999 ms of every draw, undoing one layer down what
+        the Rust side's `div_ceil` does one layer up.
+
+        The cast is load-bearing too: the FFI returns `uint64_t` and
+        `seconds::rep` is signed, so list-initialising from it is a narrowing
+        conversion and ill-formed on some standard libraries.
 
         Extracted from `set_relayed` so the rounding is testable on a synthetic
         `now` rather than only on whatever fraction the system clock happens to
-        hold. See docs/design/DAEMON_RELAY_PRIVACY.md sec 17. */
-    std::time_t embargo_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs);
+        hold. See docs/design/DAEMON_RELAY_PRIVACY.md sec 17 and sec 22.2. */
+    std::time_t relay_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs);
   }
   /************************************************************************/
   /*                                                                      */
@@ -454,7 +468,7 @@ namespace cryptonote
      * @param just_broadcasted true if a tx was just broadcasted
      *
      */
-    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, std::vector<bool> &just_broadcasted);
+    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, epee::net_utils::zone zone, std::vector<bool> &just_broadcasted);
 
     /**
      * @brief get the total number of transactions in the pool

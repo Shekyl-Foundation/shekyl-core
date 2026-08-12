@@ -24,18 +24,20 @@
 //! [`shekyl_engine_state`] crate; this crate re-exports them explicitly (no glob)
 //! so existing `use shekyl_scanner::…` imports keep resolving. Scanner-only
 //! methods on those types (`TransferDetails::from_wallet_output`,
-//! `LedgerIndexes::process_scanned_outputs`, `LedgerBlock::balance`)
+//! `LedgerIndexes::process_scanned_outputs`, `WalletLedger::balance`)
 //! are provided by the extension traits in [`ledger_ext`] and require the
 //! trait to be in scope at the call site:
 //!
 //! ```ignore
-//! use shekyl_scanner::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
-//! use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
+//! use shekyl_scanner::{LedgerIndexesExt, TransferDetailsExt, WalletLedgerExt};
+//! use shekyl_engine_state::WalletLedger;
 //!
-//! let mut ledger = LedgerBlock::empty();
+//! let mut wallet = WalletLedger::empty();
 //! let mut indexes = LedgerIndexes::empty();
-//! indexes.process_scanned_outputs(&mut ledger, h, block_hash, outputs);
-//! let balance = ledger.balance(ledger.height());
+//! indexes.process_scanned_outputs(&mut wallet.ledger, h, block_hash, outputs);
+//! // Balance is a whole-wallet query: the journal-derived F14 locks
+//! // come from the same value, so there is no lock map to forget.
+//! let balance = wallet.balance();
 //! ```
 //!
 //! The pair `(LedgerBlock, LedgerIndexes)` replaces the `RuntimeWalletState`
@@ -66,7 +68,7 @@ pub(crate) mod tests;
 
 pub use balance::BalanceSummary;
 pub use extra::{Extra, ExtraField};
-pub use ledger_ext::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
+pub use ledger_ext::{LedgerIndexesExt, TransferDetailsExt, WalletLedgerExt};
 pub use output::WalletOutput;
 pub use scan::{
     GuaranteedScanner, RecoveredWalletOutput, ScanError, ScanOutcome, ScannableBlock, Scanner,

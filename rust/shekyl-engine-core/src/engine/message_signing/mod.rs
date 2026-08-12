@@ -1,0 +1,243 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Wallet message signing workflow (PR-SM-1, A2 /
+//! `WALLET_MESSAGE_SIGNING.md` SM-R-4/R-6).
+//!
+//! # Decomposition shape (`ENGINE_COMPOSITION_DECOMPOSITION.md` §4)
+//!
+//! Workflow functions take an explicit [`MessageSignCtx`], never
+//! `&Engine`: the data dependencies (key handle, wallet file, network)
+//! are visible in the ctx fields, and a new dependency is a reviewable
+//! ctx-field addition rather than a silent `self.foo`. The `Engine`
+//! method in this module is a thin delegator that assembles the ctx and
+//! forwards.
+//!
+//! # Secret locality
+//!
+//! Both postures preserved: the **master seed** is transiently borrowed
+//! from the open `WalletFile` envelope (`extract_rederivation_inputs`)
+//! and never reaches the key actor; the **spend scalar** never leaves
+//! the actor — it signs the public outer bytes (`preimage ‖ σ_pq`) via
+//! [`KeyEngineHandle::sign_message_outer`](super::key_actor::KeyEngineHandle::sign_message_outer).
+//! The SLH identity is derived on demand and its secret half
+//! drops-and-wipes when the PQ half returns (SM-R-4: derived on demand,
+//! zeroized, never persisted, no wallet-file schema change).
+//!
+//! # This work does not run on the executor
+//!
+//! The PQ half is a full SLH-DSA-192s keygen plus sign — ~4.3 s on the
+//! Pi-4 provisioning floor (rule 76), and CPU-bound throughout. It goes
+//! to [`tokio::task::spawn_blocking`], the same disposition Argon2 gets
+//! at wallet open. Running it inline would park the runtime that also
+//! drives the key actor's mailbox and the refresh loop, so on the
+//! single-threaded runtime the engine explicitly supports, signing one
+//! message would freeze the wallet and spuriously time out any
+//! concurrent daemon poll. `block_in_place` is *not* the alternative:
+//! it panics outright on a current-thread runtime.
+//!
+//! Verification is deliberately **not** here: it is session-less
+//! (SM-R-6), a pure function in [`shekyl_crypto_pq::message_signing`] —
+//! refusing a public operation for lack of a wallet session is a
+//! rule-82 lie. That function is also, deliberately, not reachable in
+//! production yet; see `shekyl_crypto_pq::message_signing::SignerIdentity`
+//! for the fork-(ii) address gate it waits on.
+
+use shekyl_address::BoundClassicalSegment;
+use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+use shekyl_crypto_pq::message_signing::{self, MessageSigError};
+use shekyl_engine_file::secrets_transitional::ExtractRederivationInputsError;
+use shekyl_engine_file::WalletFile;
+
+use super::error::KeyEngineError;
+use super::key_actor::KeyEngineHandle;
+use super::lifecycle::network_to_derivation;
+use super::local_ledger::LocalLedger;
+use super::signer::EngineSignerKind;
+use super::traits::key::KeyEngine;
+use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
+use super::Engine;
+
+/// Explicit data dependencies of the message-signing workflow.
+///
+/// Mirrors [`super::proofs::ProofsCtx`]: workflow code names what it
+/// needs, and `Engine` only assembles this bag.
+pub(crate) struct MessageSignCtx<'a> {
+    /// Key-actor handle — classical half of the nested hybrid.
+    pub key: &'a KeyEngineHandle,
+    /// Open wallet file — transient master-seed borrow for the PQ half,
+    /// and the declared seed format the identity derivation is scoped by.
+    pub file: &'a WalletFile,
+    /// Wallet network. Resolved to a [`DerivationNetwork`] here so the
+    /// signing identity and the signing transcript are scoped by the
+    /// same value rather than by two independently-derived bytes.
+    pub network: shekyl_address::Network,
+}
+
+/// Refusals and failures of [`sign_message`] / [`Engine::sign_message`].
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum SignMessageError {
+    /// View-only wallets hold no master seed — there is no signing
+    /// identity to derive (SM-R-3: the deleted view-tier is
+    /// structurally unbuildable, and this is where that surfaces).
+    #[error("view-only wallet cannot sign messages")]
+    ViewOnly,
+    /// Hardware-offload wallets sign elsewhere; the local envelope has
+    /// no seed to derive from.
+    #[error("hardware-offload wallet cannot sign messages locally")]
+    HardwareOffload,
+    /// The key actor has stopped: terminal and non-retryable, because
+    /// its key blob is already zeroized. Its own variant rather than a
+    /// rendered string because it is the one key-engine failure with a
+    /// *different user action* attached — close and reopen, not "try
+    /// again" (rule 82).
+    #[error("wallet session ended — close and reopen the wallet, then sign again")]
+    WalletSessionEnded,
+    /// Any other key-actor refusal, carried as its rendered message
+    /// (`KeyEngineError` is crate-private, the same disposition
+    /// [`super::proofs::ProofsError`] uses).
+    #[error("key engine: {0}")]
+    Key(String),
+    /// The crypto layer refused.
+    #[error("signing failed: {0}")]
+    Crypto(#[from] MessageSigError),
+    /// Address-material assembly or wallet-state read failed —
+    /// wallet-state corruption class, surfaced loudly rather than
+    /// papered over.
+    #[error("internal: {0}")]
+    Internal(String),
+}
+
+impl From<KeyEngineError> for SignMessageError {
+    fn from(e: KeyEngineError) -> Self {
+        match e {
+            KeyEngineError::KeyActorUnavailable => Self::WalletSessionEnded,
+            other => Self::Key(other.to_string()),
+        }
+    }
+}
+
+/// Map the wallet-file seed-extractor refusal into the workflow's typed
+/// errors. Pure so the capability gate is unit-testable without a full
+/// view-only open path (that open path is still NotYetImplemented).
+fn map_extract_error(e: ExtractRederivationInputsError) -> SignMessageError {
+    match e {
+        ExtractRederivationInputsError::ViewOnly => SignMessageError::ViewOnly,
+        ExtractRederivationInputsError::HardwareOffload => SignMessageError::HardwareOffload,
+    }
+}
+
+/// The `(network, seed_format)` pair the signing identity is scoped by —
+/// read from the same places wallet open reads them, so a message
+/// signature is derived under the identical scoping as every other key
+/// this wallet holds.
+fn derivation_scope(
+    ctx: &MessageSignCtx<'_>,
+) -> Result<(DerivationNetwork, SeedFormat), SignMessageError> {
+    let declared = ctx.file.opened_keys().seed_format;
+    let seed_format = SeedFormat::from_u8(declared).ok_or_else(|| {
+        SignMessageError::Internal(format!(
+            "wallet file declares unknown seed format {declared:#04x}"
+        ))
+    })?;
+    Ok((network_to_derivation(ctx.network), seed_format))
+}
+
+/// Assemble the bound classical segment this wallet's signatures bind
+/// (SM-R-3): the same bytes `ShekylAddress::encode` puts in the address,
+/// by construction — `BoundClassicalSegment` owns that layout.
+fn bound_segment(ctx: &MessageSignCtx<'_>) -> Result<BoundClassicalSegment, SignMessageError> {
+    let addr = ctx.key.account_public_address();
+    let ml_kem_ek = addr.ml_kem_encap_key().ok_or_else(|| {
+        SignMessageError::Internal("pqc_public_key shorter than the x25519 prefix".into())
+    })?;
+    BoundClassicalSegment::from_address_parts(&addr.classical_address_bytes, ml_kem_ek)
+        .map_err(|e| SignMessageError::Internal(format!("bound-segment assembly: {e}")))
+}
+
+/// Sign `message` under the ctx's wallet (spend-tier): the ratified
+/// nested hybrid, returned as the armored `shekylmsgsig1.` string.
+///
+/// Multi-second by design — see the module docs for where that work
+/// runs and why. Callers presenting UX should say so rather than hide
+/// it.
+///
+/// # Errors
+///
+/// See [`SignMessageError`]: capability refusals, key-actor failures,
+/// crypto refusals, and wallet-state corruption.
+pub(crate) async fn sign_message(
+    ctx: &MessageSignCtx<'_>,
+    message: &[u8],
+) -> Result<String, SignMessageError> {
+    let (network, seed_format) = derivation_scope(ctx)?;
+    let segment = bound_segment(ctx)?;
+
+    // Transient seed borrow — the same envelope read the open path
+    // performs; FULL capability enforced by the extractor itself.
+    let inputs = ctx
+        .file
+        .extract_rederivation_inputs()
+        .map_err(map_extract_error)?;
+
+    // CPU-bound multi-second work leaves the executor (module docs).
+    // The seed moves into the blocking task and its `Zeroizing` drop
+    // wipes it there; only public bytes come back.
+    let segment_bytes = *segment.as_bytes();
+    let owned_message = message.to_vec();
+    let (preimage, sig_pq) = tokio::task::spawn_blocking(move || {
+        message_signing::sign_message_pq_half(
+            &inputs.master_seed_64,
+            network,
+            seed_format,
+            &segment_bytes,
+            &owned_message,
+        )
+    })
+    .await
+    .map_err(|e| SignMessageError::Internal(format!("message-signing task failed: {e}")))??;
+
+    let outer = message_signing::outer_bytes(&preimage, &sig_pq);
+    let sig_cl = ctx.key.sign_message_outer(outer).await?;
+    Ok(message_signing::assemble_armored(&sig_pq, &sig_cl))
+}
+
+// ── Engine delegator (thin shell; assemble the ctx and forward) ─────
+
+// `L = LocalLedger` and `F = WalletFile`: the workflow reads the open
+// file and the key handle (same specialization shape as `proofs` and
+// `staking_read`).
+#[allow(private_bounds)]
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        E: EconomicsEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > Engine<S, D, LocalLedger, E, R, P, WalletFile>
+{
+    /// Assemble the message-signing workflow context from engine caps.
+    fn message_sign_ctx(&self) -> MessageSignCtx<'_> {
+        MessageSignCtx {
+            key: &self.key,
+            file: self.file(),
+            network: self.network(),
+        }
+    }
+
+    /// Sign `message` as this wallet (spend-tier). See
+    /// [`sign_message`] for the construction, the cost, and the errors.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`sign_message`].
+    pub async fn sign_message(&self, message: &[u8]) -> Result<String, SignMessageError> {
+        sign_message(&self.message_sign_ctx(), message).await
+    }
+}
+
+#[cfg(test)]
+#[path = "message_signing_tests.rs"]
+mod tests;

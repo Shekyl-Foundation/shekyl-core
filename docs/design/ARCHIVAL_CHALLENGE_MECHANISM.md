@@ -1,7 +1,15 @@
 # Archival challenge mechanism — design round (2026-08-07)
 
-**Status:** **Design-round output. Direction ratified; mechanism NOT ratified
-for implementation.** The ruling of record from this round: challenge
+**Status (landed on `dev` 2026-08-11 — this file is now the record; the
+branch snapshot and its superseded-in-place banner are retired):**
+**Design-round output. Direction ratified; the mechanism as a whole is NOT
+ratified for implementation, with one named exception — the §9.5 BUILD list,
+ratified to exactly its scope** (derivation module, persona key hierarchy, the
+Tor inbound half; landed as PRs #442 / #445 / #447). §9.5 *narrows* the
+"do not cut consensus code" gate below rather than repealing it: everything on
+the §9.5 HOLD list — pass-record serialization, the response format,
+`EndpointUpdate` on the bond wire, the settlement writer — still waits on the
+format round. The ruling of record from this round: challenge
 assignment is **derived, not committed** (§2, ruled 2026-08-07 — "the more the
 system regulates itself, the better"; derivation makes challenges verifiable
 by anyone and scope-limited against DDoS). Everything else here is the round's

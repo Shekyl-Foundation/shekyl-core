@@ -32,11 +32,9 @@ pub use tree::{
 pub use shekyl_fcmp_proofs::sal::SpendAuthAndLinkability;
 pub use shekyl_fcmp_proofs::{Input, Output};
 
-/// Domain separator for Shekyl's PQC leaf hash: H(pqc_pk) -> 4th scalar.
-pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";
-
-/// Domain separator for KEM shared-secret derivation.
-pub const DOMAIN_KEM_V1: &[u8] = b"shekyl-kem-v1";
+// Consensus domain constants live in `shekyl-crypto-pq` (SA-3a): the PQC
+// leaf-hash domain at `shekyl_crypto_pq::derivation::DOMAIN_PQC_LEAF`, the
+// KEM salt at `shekyl_crypto_pq::kem::KEM_DOMAIN_SALT`.
 
 /// Maximum inputs per FCMP++ transaction (bounds proof gen time and tx size).
 pub const MAX_INPUTS: usize = 8;

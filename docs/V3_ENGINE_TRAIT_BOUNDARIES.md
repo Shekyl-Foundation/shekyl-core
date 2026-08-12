@@ -984,11 +984,11 @@ the existing `BalanceSummary::compute(&[TransferDetails], height)`
 helper; no `Balance` type is defined, no `BalanceFilter` /
 `TransferFilter` types are defined, and no current consumer
 threads a filter argument through any balance or transfers
-accessor — the in-tree balance API is `LedgerBlockExt::balance`
-(`rust/shekyl-scanner/src/ledger_ext.rs:142`), an extension trait
-on `LedgerBlock` whose signature is
-`fn balance(&self, current_height: u64) -> BalanceSummary` (a
-height parameter, no filter), and consumers reach transfers via
+accessor — the in-tree balance API is `WalletLedgerExt::balance`
+(`rust/shekyl-scanner/src/ledger_ext.rs`), an extension trait on
+`WalletLedger` whose signature is `fn balance(&self) ->
+BalanceSummary` (no filter; `balance_at(height)` is the explicit-
+height sibling), and consumers reach transfers via
 `LedgerBlock::transfers()` on the `WalletLedger.ledger` field
 (`rust/shekyl-engine-state/src/ledger_block.rs:231`) which takes
 no parameters at all.
@@ -5119,8 +5119,10 @@ Worked example: segment 2g's `SnapshotId` hash-primitive binding cited
 `sha2 = "0.10"` at Cargo.toml line 115 as workspace-available, but
 line 115 was `[dev-dependencies]`; production `sha2` at line 33 was
 `optional = true`. The Copilot-fix follow-up switched the binding to
-`shekyl-crypto-hash::cn_fast_hash` (unconditional `[dependencies]`
-entry per Cargo.toml line 28).
+`shekyl-crypto-hash::keccak256` (renamed from `cn_fast_hash` in SA-3d;
+unconditional `[dependencies]` entry per Cargo.toml line 28). The
+`SnapshotId` digest itself later moved off Keccak entirely to a cSHAKE
+customization in SA-3c; the dependency-discipline lesson here stands.
 
 **Inheritance read for PR 6+:** dependency recommendations cite the
 *actual* production-dependency graph, not prose descriptions of it.

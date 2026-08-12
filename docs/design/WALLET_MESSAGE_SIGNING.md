@@ -1,0 +1,967 @@
+# Wallet Message Signing (A2 / rewrite-plan 2c residue) — Design Round
+
+**Status: ROUND CLOSED — ALL RULINGS RATIFIED (2026-08-08).**
+SM-R-2..6 and SM-R-8 are ratified with their amendments folded (§7);
+SM-DQ-1's nested combiner and dual-duty label are binding via SM-R-3;
+SM-DQ-7's escalation **collapsed** with SM-R-8's ratification to a
+genesis-lane freeze-window sign-off on the 48-byte SLH-DSA-192s
+public-key field. **Outstanding (2026-08-08, after PR-SM-1):** (1) the
+genesis lane's layout sign-off — the only external dependency, and now
+the gate on *verification only*: PR-SM-1 landed the construction with
+its verify surface type-gated on that layout (SM-R-6 R6-a), so signing
+ships and verification cannot be reached until the v2 address exists;
+(2) the 192f UX gate (dated, owned — `RELEASE_CHECKLIST.md`) before the
+freeze. Note the ordering constraint SM-R-4 R4-c records: the
+`(network, seed_format)` scoping amendment changes the derived
+public-key bytes and therefore had to land **before** any sign-off on
+the field that carries them. Everything else is implementation.
+History: round 0 opened
+2026-08-08; passes 1–2 folded same day (pass 1 superseded the round-0
+SM-DQ-1 lead and escalated the address question; pass 2 corrected the
+category, measured both hosts, and audited the dependency).
+
+**Scope.** The last unwired 2c method pair:
+`Engine::sign_message(msg)` / `Engine::verify_message(msg, sig, address)`
+([`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) Phase 2 target list),
+projected as the RESERVED `sign_message` / `verify_message` RPC methods
+(error band `-29800..-29899`, [`wallet_rpc.yaml`](../api/wallet_rpc.yaml))
+and the stubbed CLI `sign` / `verify` commands. The rewrite plan parked
+this pair with the annotation "own hybrid-key design decision"
+([`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §rewrite row 2c);
+this round is that decision.
+
+**What the feature is for.** A transferable attestation binding a message
+to a Shekyl address: "the holder of this address's keys signed these
+bytes." Lineage use cases: proving address ownership to a counterparty
+(exchange, pool, dispute), signing a statement from a treasury address.
+It is user-facing surface (rules 80/81 apply to its errors and its size).
+
+---
+
+## §1 Grounded inventory (verified at source, 2026-08-08, dev 2ea0710a1; re-verified pre-PR-SM-1 at dev 2dc1eb645 — the four load-bearing `address.rs` anchors (`CLASSICAL_BOUND_SEGMENT_LEN`, `EK_BIND_TAG_LEN`, the 1023-char compile-time asserts, the `version‖spend‖view‖ek_bind_tag` segment layout) are byte-identical; `shekyl-address` untouched between the two SHAs)
+
+1. **Address v1 carries no post-quantum *signature* anchor.** The
+   classical segment is `version || spend_pk || view_pk || ek_bind_tag`
+   (Ed25519 keys); the two PQC segments carry an **ML-KEM-768
+   encapsulation key** (1184 B) — an *encryption* key, bound to the
+   classical segment by `ek_bind_tag = cSHAKE256("shekyl/ek-bind-v1",
+   ml_kem_ek)[..16]` (`shekyl-address/src/address.rs`). There is no
+   ML-DSA verification key, and no commitment to one, anywhere in the
+   address.
+2. **The wallet holds no wallet-level ML-DSA identity.** The secret
+   inventory is `spend_sk`, `view_sk`, `ml_kem_dk`
+   (`shekyl-engine-file/src/secrets_transitional.rs`). ML-DSA keys exist
+   only per-output, derived from `combined_ss` at spend time
+   (`shekyl-crypto-pq/src/derivation.rs`).
+3. **The machinery to mint one deterministically exists.**
+   `derivation.rs::keygen_from_seed` derives a domain-separated
+   ML-DSA-65 keypair from a seed and index; a wallet-level identity
+   under a fresh domain string is mnemonic-recoverable by construction.
+4. **Hybrid signature primitives exist with versioned canonical
+   encodings.** `HybridEd25519MlDsa` sign/verify, `HYBRID_KEY_VERSION` /
+   `HYBRID_SIG_VERSION` / scheme-id bytes, length-checked
+   `from_canonical_bytes` (`shekyl-crypto-pq/src/signature.rs`).
+5. **Sizes.** Ed25519 signature 64 B. ML-DSA-65 signature 3309 B,
+   verification key 1952 B. A hybrid signature carrying its vk is
+   ~5.3 KB raw, ~7.2 KB base64 — three orders of magnitude larger than
+   the 64 B classical form users paste today.
+
+## §2 The structural fact the round turns on
+
+A **transferable** signature is verified against the address alone, so it
+is at most as strong as the address's signature anchors — and address v1
+anchors only Ed25519 (§1.1). No signature format choice can make a
+transferable proof quantum-resistant against address v1: a quantum
+forger who breaks the spend key can issue fresh signatures of any format
+we define, because the address cannot distinguish our PQ key from theirs.
+
+The inverse also holds and is easy to miss: the ML-KEM ek **is** a
+PQ-secure anchor for an **interactive** proof (verifier encapsulates to
+the address, wallet proves decapsulation). Interactivity, not signature
+composition, is where address-v1 PQ ownership proof actually lives.
+
+**Pass-1 amendment — the asymmetry that dissolves the impasse.** The
+address must carry the *full* 1184-byte ML-KEM ek because a sender
+encapsulates *to* the key — you cannot encapsulate to a digest. A
+signature verification key has no such constraint: the verifier needs
+it only at verification time, and the signature blob can carry it —
+provided the address **commits** to it. So the PQ signing anchor costs
+the address 32 bytes of binding, not a key. The mechanism is already
+in-tree and proven: `ek_bind_tag = cSHAKE256("shekyl/ek-bind-v1",
+ml_kem_ek)[..16]` binds the classical segment to the PQC segments
+(`shekyl-address/src/address.rs:180-187`, verified). A signing-key
+commitment is a second instance of that pattern — with one deliberate
+difference ratified below (SM-DQ-7: 32 bytes, not 16).
+
+And critically: **we are pre-genesis. The address format is not yet
+frozen.** Round 0 analyzed the fork against an unchangeable address v1;
+that framing was too narrow. The real question is what the
+genesis-frozen address commits to — which is SM-DQ-7, and it is not
+A2's decision to make alone.
+
+Every fork below is downstream of these facts.
+
+## §3 Design questions
+
+### SM-DQ-1 — Signature composition (the anchor question)
+
+- **(a) Classical-only.** Ed25519 over the domain-separated preimage,
+  64 B, wallet2-parity shape. Honest about §2, minimal size. But it
+  mints a *new, frozen, pure-classical attestation surface* on a chain
+  whose first mission commitment is hybrid PQC from genesis — and every
+  signature issued before a future upgrade is classical forever.
+- **(b) Hybrid, vk-certified — LEAD.** The signature carries a
+  seed-derived wallet-level ML-DSA-65 vk (§1.3); the Ed25519 half signs
+  `preimage || ml_dsa_vk` (the address-anchored key certifies the PQ
+  key); the ML-DSA half signs the same preimage. Properties, stated
+  without overselling:
+  - Against a classical adversary: strictly ≥ (a) — both halves must
+    verify.
+  - Against a future quantum adversary: *fresh* forgeries remain
+    possible (§2, inherent to address v1) — but signatures issued
+    **before** the break retain PQ non-repudiation for any verifier who
+    archived them (their embedded vk stays unforgeable), and the format
+    survives an address-v2 PQ anchor without redefinition: v2 turns the
+    embedded vk from Ed25519-certified into address-committed.
+  - Cost: ~7.2 KB armored strings (§1.5) — a paste-into-a-form UX, not
+    a read-over-the-phone one.
+- **(c) Defer the pair to address v2.** No new frozen format until the
+  address can anchor it. Rejects A2 rather than deciding it; blocks a
+  parity item on an unscheduled, genesis-adjacent format change.
+
+~~The lead is (b)~~ — **SUPERSEDED by pass 1 (2026-08-08), on the
+record.** Round 0's (b) certified the PQ vk with the Ed25519 key
+*because* it took address v1 as unchangeable; pre-genesis it is not
+(§2 pass-1 amendment), and Ed25519-certification is the weaker binding
+(a quantum forger of the spend key re-certifies its own vk). The
+superseding lead is the **agile commitment** (SM-DQ-7): the address
+commits to `cSHAKE256(DST, alg_id ‖ pk)`, the signature blob carries
+`alg_id ‖ pk ‖ σ_pq ‖ σ_ed25519`, and the *algorithm* becomes a
+second, decoupled decision (SM-DQ-8). BIP-360's history is the
+precedent, verified against the current changelog (bips/bip-0360,
+fetched 2026-08-08): v0.3.0 (2024-10) replaced XMSS with
+CRYSTALS-Dilithium; v0.6.0 (2025-01) removed SLH-DSA on performance
+grounds; v0.8.0 (2025-07) cut the supported set from three to two; and
+the proposal's current form commits to a **32-byte Merkle root** with
+post-quantum signatures explicitly deferred to a separate proposal.
+Three algorithm churns in a year *inside an address proposal*, resolved
+by freezing a commitment structure and moving the algorithm debate out
+— that is the transferable lesson. The timing sharpens it: NIST's
+additional-signatures onramp advanced nine candidates to round 3 on
+2026-05-14 (verified: csrc.nist.gov/projects/pqc-dig-sig), a phase
+expected to run ~2 years, motivated exactly by diversifying away from
+structured lattices and shrinking signatures. Freezing `ml_dsa_pk`
+into the genesis address bets a permanent artifact on a 2024 answer to
+a question that reopens in 2028; committing to `alg_id ‖ pk` costs the
+same 32 bytes and turns a future scheme into a new `alg_id` instead of
+an address-version bump.
+
+**Combiner (pass 1, binding for whatever algorithm wins): nested, not
+parallel.** Plain concatenation is *separable* — a lenient or
+downgrade-tolerant verifier can be shown the classical half alone —
+and third-party verifiers will exist for this surface, so strong
+non-separability is the property that matters. Verified at source:
+Bindel–Hale (ePrint 2023/423) enumerates exactly this property space
+(proof composability, weak/strong separability, backwards
+compatibility, hybrid generality, simultaneous verification) and notes
+few of the goals are achieved by parallel signing or concatenation;
+the nested form is `σ₁ ← Sign₁(label ‖ m)`, `σ₂ ← Sign₂(label ‖ m ‖
+σ₁)`. There is now a machine-checked EUF-CMA proof for hybrid
+Fiat–Shamir (ePrint 2026/1086, EasyCrypt) with two symmetric bounds —
+security holds if *either* component is EUF-CMA — and ML-DSA is
+Fiat–Shamir, so the composition we would build sits close to formal
+support. The round-0 §4 "AND-not-OR" test obligation upgrades
+accordingly: non-separability must be *structural* (nested), not a
+verifier-discipline promise.
+
+### SM-DQ-2 — Interactive KEM ownership proof (separate surface)
+
+§2's inverse: `ml_kem_ek` supports a PQ-secure *interactive*
+challenge-response today. That is a different API contract
+(challenge/response, non-transferable), a different consumer (live
+counterparty vs. archived attestation), and none of wallet2's parity
+surface. Disposition to ratify: **rejected-now, rule 21** — reopen when
+a consumer surface needs live PQ ownership proof (e.g. an exchange
+integration spec) or when address v2 lands and the comparison changes.
+Not a blocker for SM-DQ-1; recorded so the round shows it was seen.
+
+### SM-DQ-3 — Preimage and domain separation
+
+> **SUPERSEDED — the normative form is §7 SM-R-3.** This section is
+> the round-0 *question* preserved as history; the sketch below
+> predates the ratification and differs from it (generic `H` instead
+> of pinned cSHAKE256, `version` instead of `sig_format_version`, no
+> length prefix, v1-only segment). Implementers build from SM-R-3,
+> never from this sketch.
+
+Proposed preimage (rule 30 — no naked hashes, no cross-surface reuse):
+
+```
+preimage = H(domain || version || network_id || mode ||
+             classical_segment || H(message))
+```
+
+- `domain`: a fresh string in the house style (`"shekyl/msg-sign-v1"`);
+  collision-checked against the derivation/binding domains in §1.
+  **Pass-1 amendment:** the label does double duty — it is also the
+  hybrid *binding label* of the nested combiner (the constant-prefix
+  construction Google's hardware-key work adopted from Bindel et al.,
+  ePrint 2022/1225): it encodes the `alg_id` so an adversary cannot
+  derive partial signatures for messages outside this surface. One
+  registered label satisfies both the rule-30 domain-separation
+  requirement and the combiner's binding requirement. Register it
+  once, in the crypto crate, next to the §1 domain inventory.
+- `mode`: 1 byte — `0x01` spend-tier (this round's only mode);
+  future modes append, never renumber. *(A view-tier mode was named
+  here through pass 2 and deleted at SM-R-3 ratification — see the
+  ruling: naming it implied a plan that does not exist.)*
+- Address binding: the **full classical segment** (version + spend +
+  view + ek_bind_tag) so a signature cannot be transplanted between
+  addresses sharing a spend key, and the ek binding rides the preimage.
+  Fork to settle: full canonical address string instead? (Network
+  segregation is already explicit via `network_id`; the segment is the
+  byte-stable form.)
+- `H(message)` not raw message: fixed-size preimage, no
+  length-extension shape, streaming-friendly for large messages. House
+  hash per rule 30 alignment (Blake2b-512 is the derivation-side
+  precedent, cSHAKE256 the binding-side; pick one and pin it).
+
+### SM-DQ-4 — The wallet-level PQ signing identity
+
+New domain-separated derivation from the wallet seed (fresh domain
+string, reserved index) via §1.3's `keygen_from_seed`. Pins to ratify:
+mnemonic-recoverable (no new backup material); never reused by any
+other surface (per-output keys stay per-output; multisig identities
+stay theirs); derived on demand and zeroized (rules 35/36) rather than
+persisted — the wallet file schema does not change.
+
+**Pass-2 amendment — derivability holds for either SM-DQ-8 algorithm,
+and statelessness is load-bearing, not a footnote.**
+
+- *Derivability.* SLH-DSA keygen is fully deterministic from seed
+  material: FIPS 205 separates randomized `slh_keygen` from pure
+  `slh_keygen_internal(SK.seed, SK.prf, PK.seed)` (Algorithm 18), and
+  the `fips205` crate **exports** that shape as
+  `KeyGen::keygen_with_seeds(sk_seed, sk_prf, pk_seed)` (verified in
+  crate source, `traits.rs`). The wallet branch is one more HKDF arm:
+  `master seed ──HKDF("shekyl/slh-dsa-seed-v1")──▶ 3n bytes ──▶
+  keygen_with_seeds`. This is *purer* than the in-tree ML-DSA
+  precedent, which routes a seed through a ChaCha20 RNG shim into
+  `try_keygen_with_rng` (`derivation.rs:40-52`, verified) — the SLH
+  path has no sampling loop and no RNG indirection in the caller.
+- *Statelessness.* SLH-DSA carries no signing state. The stateful
+  hash-based schemes (XMSS/LMS, SP 800-208) are **excluded by
+  construction, recorded here**: their security requires never reusing
+  a one-time key index, and that state lives outside the seed — a
+  wallet restored from its mnemonic cannot know which indices were
+  consumed, so restore-from-seed becomes a key-disclosure event on the
+  next signature. Shekyl just ratified seed-phrase custody as the
+  entire cold-storage story (A4 decision); any signing scheme whose
+  safety does not survive seed-restore contradicts it. SLH-DSA
+  restores completely from the seed, which is exactly the property the
+  rest of the wallet already guarantees.
+
+### SM-DQ-5 — Wire format
+
+Versioned, armored, append-only:
+`ShekylMsgSigV1` + base64(canonical bytes), canonical bytes being a
+length-checked layout in the §1.4 house style (version, scheme,
+mode, vk, ed25519 sig, ml_dsa sig). Reject-don't-truncate on decode,
+explicit DoS ceiling (the decoder sees attacker-supplied strings via
+`verify_message`). The multi-KB size is stated in user-facing docs, not
+hidden.
+
+**Pass-1 verification finding — the Bech32m precedent does not
+transfer at this size.** The WI-RPC-3 proof strings are Bech32m
+(`shekyltxproof` / `shekylreserveproof`,
+`shekyl-engine-core/src/engine/proofs.rs`), and Bech32m framing was
+proposed for the signature blob on that precedent. But BIP-350's
+checksum guarantees hold only to 1023 characters, and our own address
+code *enforces* that bound (`address.rs` compile-time assert splits the
+ML-KEM ek across two PQC segments to stay under it). A 5.3–7.9 KB
+signature blob is ~8.5–12.7k Bech32m characters — far past the bound
+the codebase itself treats as hard. Fork to settle here: (a)
+multi-segment Bech32m in the address's own split style, (b) base64
+with an explicit outer checksum, or (c) single Bech32m accepting
+degraded checksum properties — (c) contradicts the in-tree discipline
+and should be rejected with that reason recorded.
+
+### SM-DQ-6 — API / RPC / CLI contract
+
+- `Engine::sign_message` needs the open wallet (secrets). But
+  **verification needs no secrets**: `verify_message` should be a pure
+  function (crypto crate), callable by the RPC *without an open wallet*
+  and by the CLI offline. Contract question to ratify: does RPC
+  `verify_message` require an open wallet session (tenant model) or is
+  it a session-less method? Lead: session-less — refusing to verify
+  because no wallet is open is a rule-82 lie about a public operation.
+- Errors in the reserved `-29800..-29899` band: malformed signature
+  string vs. well-formed-but-not-verifying are different codes (the
+  `get_transfer_by_id` precedent: formatting problems are `-32602`-class,
+  semantic failure is its own honest code).
+- Idempotent, deterministic signatures? ML-DSA-65 signing is
+  randomized by default ("hedged"); deterministic mode exists. Fork:
+  hedged (side-channel margin, fips204 default) vs. deterministic
+  (reproducible outputs). Lead: hedged — reproducibility of the
+  *signature bytes* is not a contract anyone needs, and hedging is the
+  conservative side-channel posture.
+
+### SM-DQ-7 — The commitment shape, and who owns the address decision (pass 1)
+
+Proposed for ratification, algorithm-independent:
+
+- Address v2 adds a 32-byte
+  `sig_bind_tag = cSHAKE256("shekyl/sig-bind-v1", alg_id ‖ pk)[..32]`.
+- The signature blob carries `alg_id ‖ pk ‖ σ_pq ‖ σ_ed25519`; the
+  verifier recomputes the tag from the carried `alg_id ‖ pk` and
+  matches it against the address. A future scheme is a new `alg_id`,
+  not an address version bump.
+- **32 bytes, deliberately not the ek_bind_tag's 16.** The 16-byte tag
+  does a *detection* job — catching spliced or corrupted segments,
+  where the attacker must additionally produce a usable address. The
+  signing-key commitment does a *binding security* job: anyone who
+  finds any `alg_id ‖ pk` preimage of the tag can sign as the address
+  holder. 16 bytes is 128-bit classical / ~64-bit Grover preimage
+  resistance against a grindable target — not a margin. The precedent's
+  *mechanism* transfers; its *length* must not, and this paragraph is
+  the recorded reason.
+- **Pass-2 amendment — the pk-inline variant, and the tension it
+  creates.** At category parity SLH-DSA-192s's public key is **48
+  bytes** — small enough to go in the address *literally*, as a fourth
+  field. That eliminates the commitment machinery entirely: no
+  key-carried-in-signature, no tag-strength question, no `alg_id`
+  registry to get right — verification takes the address at face
+  value. But it must be priced against pass 1's own BIP-360 lesson:
+  an inline pk **freezes the algorithm** into the genesis address,
+  which is exactly what the commitment shape exists to avoid — a
+  future scheme becomes an address-version bump instead of a new
+  `alg_id`. Two counterweights, on the record: (i) the address
+  already freezes algorithms literally (Ed25519 keys, an ML-KEM-768
+  ek) — algorithm-freezing per se is not novel for this format; (ii)
+  SLH-DSA is the conservative *endpoint* of the diversification
+  argument — the scheme one flees TO under lattice cryptanalysis, not
+  FROM — so the agility being given up is agility we are least likely
+  to need. Neither counterweight is decisive; the fork is now
+  explicitly coupled to SM-DQ-8: **(A) requires the commitment shape;
+  (B) makes it optional.**
+- **Escalation: A2 surfaced the address-version decision; it does not
+  own it.** A v2 address format touches the GUI, URI handling, the
+  address book, multisig address exchange, and every future exchange
+  integration — and it is genesis-frozen wire —
+  the class ranked first by proximity to the genesis format freeze.
+  The commitment *shape* above is
+  what this round sends to the genesis lane for ratification; SM-DQ-8
+  (algorithm) deliberately does not travel with it. Until the genesis
+  lane rules, no implementation PR freezes anything. **Pass-2 note:**
+  if SM-DQ-8 lands on (B) pk-inline, the genesis-lane item simplifies
+  from "ratify a commitment scheme" to "ratify a fourth address field"
+  — a smaller thing to get wrong permanently — but it remains an
+  address-format decision and the escalation stands either way. The
+  Pi 4 measurement (SM-DQ-8's prerequisite) should therefore land
+  before the genesis-lane item is drafted, so the lane rules on the
+  real fork, not both hypotheticals. **Measurement landed 2026-08-08
+  (SM-DQ-8 table); genesis-lane item DRAFTED 2026-08-08** —
+  `FOLLOWUPS.md` §V3.0 "GENESIS ADDRESS FORMAT: PQ signing anchor
+  decision", carried on the pre-launch format-freeze row in
+  `RELEASE_CHECKLIST.md`.
+
+### SM-DQ-8 — The algorithm, chosen second (pass 1)
+
+Constructions priced. **Pass-2 category correction:** the stack is NIST
+category 3 throughout (ML-KEM-768, ML-DSA-65), so the SLH comparison at
+matched security is **SLH-DSA-192s**, not the 128s the pass-1 table
+carried. All non-Ed25519 sizes below are read from crate constants and
+confirmed by execution (scratch bench, 2026-08-08 — see the measured
+row):
+
+| | Address cost | Signature blob | Assumption | Status |
+|---|---|---|---|---|
+| (A) ML-DSA-65 + Ed25519, key committed | +32 B tag | pk 1952 + σ 3309 + 64 ≈ 5.3 KB | module lattice + EC | FIPS 204 final; `fips204 0.4.6` pinned, sizes verified |
+| (B) SLH-DSA-192s + Ed25519, pk inline | +48 B (the pk itself) | σ 16224 + 64 ≈ 16.3 KB | hash functions only | FIPS 205 final; `fips205` NOT pinned (resolves 0.4.1) |
+| (C) Agile commitment, algorithm deferred | +32 B tag | scheme-dependent | — | the SM-DQ-7 shape; composes with (A); (B) can bypass it (see SM-DQ-7 pass-2 amendment) |
+
+**Measured — including on the Pi 4 provisioning floor (prerequisite
+DISCHARGED 2026-08-08).** Same binary both hosts (release, hedged
+signing; averages over 3 sign / 3 keygen / 20 verify iterations; Pi =
+Raspberry Pi 4 Model B Rev 1.4, aarch64, the rule-76 floor):
+
+| | keygen | sign | verify | sig bytes |
+|---|---|---|---|---|
+| SLH-192s — Pi 4 | 415 ms | **3.83 s** | 3.4 ms | 16,224 |
+| SLH-192f — Pi 4 | 6.5 ms | **171 ms** | 9.4 ms | 35,664 |
+| ML-DSA-65 — Pi 4 | 0.69 ms | 1.77 ms | 0.45 ms | 3,309 |
+| SLH-192s — x86 i9 | 47 ms | 517 ms | 0.47 ms | 16,224 |
+| SLH-192f — x86 i9 | 0.73 ms | 21.9 ms | 1.2 ms | 35,664 |
+| ML-DSA-65 — x86 i9 | 0.18 ms | 0.40 ms | 0.11 ms | 3,309 |
+
+What the floor numbers say, without deciding for the round:
+
+- **192s on the floor is ~4.3 s per signing session** (derive-on-demand
+  keygen 415 ms + sign 3.83 s) — human-noticeable, plausibly
+  acceptable for a low-frequency, deliberate operation, and honest to
+  disclose in the UX rather than hide.
+- **192f inverts the trade decisively on latency**: 171 ms sign +
+  6.5 ms keygen is imperceptible even on the floor — at the cost of a
+  **35.7 KB** signature (2.2× the s-variant, ~6.7× construction (A)).
+  The x86→Pi scaling factor measured ~7.4×, not the 10–20× a
+  projection would have guessed — which is why rule 76 forbids
+  guessing.
+- Verification is trivial everywhere (≤ 9.4 ms worst case), so the
+  verifier side constrains nothing.
+
+SM-DQ-8's decision inputs are now complete: (A) 5.3 KB / sub-ms,
+(B-s) 16.3 KB / ~4 s-on-floor, (B-f) 35.7 KB / ~0.2 s-on-floor, all
+under the same hash-only-vs-lattice assumption split and the same
+dependency terms.
+
+Two pulls, both real and both satisfied by (C)'s shape:
+
+- **Consistency pulls toward ML-DSA.** ML-DSA-65 is already
+  load-bearing on-chain — per-input hybrid auth over
+  `prefix ‖ ct_base ‖ H(prunable)` with keys from
+  `OutputSecrets.ml_dsa_seed`
+  (`shekyl-wire/src/transaction.rs`, verified) — so (A) is a second
+  use of an audited path, not a first.
+- **Diversification pulls toward SLH-DSA, and message signing is the
+  surface where its costs don't bite.** The transaction path chose
+  ML-DSA under per-block verification pressure; message signing is
+  low-frequency, off-chain, human-initiated, and consumes no block
+  space. SLH-DSA rests on hash assumptions alone — immune to the
+  lattice-cryptanalysis risk that motivated NIST's diversification
+  onramp — at the cost of a 16 KB signature and measurably slow
+  signing (~0.5 s x86, Pi 4 pending). It would be a mistake to inherit
+  ML-DSA here *merely because* the tx path uses it; that reasoning
+  does not transfer.
+
+**Dependency (pass 2, audited at source).** Choosing (B) adds
+`fips205` — a rule-17 decision, and the audit already has its first
+finding: the crate's deterministic-keygen path
+(`KeyGen::keygen_with_seeds`) is implemented over the **same
+`DummyRng` pattern that forced the `fips203` exact-pin**
+(`fill_bytes = unimplemented!()`; seeds served via `try_fill_bytes`,
+loud panic on over-draw or length mismatch — verified in
+`fips205-0.4.1/src/traits.rs`). Same maintainer (integritychain) as
+the pinned `fips203`/`fips204`. If adopted: exact-pin with the same
+comment rationale, and the KAT battery pins `keygen_with_seeds`
+end-to-end so an upstream RNG-path refactor cannot move underneath us.
+
+No lead is declared for SM-DQ-8 in this pass: what blocks ruling is
+the Pi 4 measurement, and the honest price of (B) includes the
+dependency round above.
+
+## §4 Pre-committed test obligations (whatever SM-DQ-1 resolves to)
+
+- Pinned KATs for preimage construction and full sign/verify vectors
+  (rule 30: fixed seed → fixed vk → pinned signature bytes under
+  deterministic test mode, plus verify-side vectors that must never
+  rot). **Including the R3-a `ctx` pin:** a vector that fails if any
+  non-empty FIPS 204/205 context string is supplied on either half.
+- Tamper battery: every field of the armored format flipped
+  independently → reject (version, scheme, mode, vk, each half,
+  network, address binding, message).
+- Cross-half battery: classical-valid/PQ-invalid and the inverse both
+  reject (the hybrid contract is AND, never OR — §1.4's tx precedent).
+- Decode DoS: oversized strings, truncations, non-base64 — bounded cost
+  refusals.
+- Round-trip through RPC + CLI including the no-open-wallet verify path
+  (SM-DQ-6).
+
+## §5 Proposed PR decomposition
+
+- **PR-SM-1** — crypto + engine: preimage/domain, wallet-level identity
+  derivation, sign/verify functions, armored codec, KATs + batteries.
+- **PR-SM-2** — projection: RPC methods (band allocation), CLI
+  un-stubbing (parity-matrix rows), OpenAPI, user-facing docs
+  (including the size statement), FOLLOWUPS/INDEX closure of the 2c
+  residue.
+
+Small enough to merge if PR-SM-1 lands clean; split pre-committed only
+if review load argues for it.
+
+**Pass-1 scope revision.** This is no longer a one-day spec: SM-DQ-7's
+commitment shape is a genesis-frozen wire decision owned by the genesis
+lane, and PR-SM-1 cannot start until it is ratified there. The
+sequencing is the good news — the shape freezes now while SM-DQ-8
+stays open as long as wanted. Revised order: (0) genesis lane ratifies
+the SM-DQ-7 shape (and the address-v2 carrier), (1) PR-SM-1
+crypto+engine against the ratified shape with the algorithm behind
+`alg_id`, (2) PR-SM-2 projection.
+
+## §6 Pass record
+
+**PASS 1 (2026-08-08).** Review pass folded with source verification:
+
+- The §2 impasse dissolved by the commit-not-carry asymmetry (full ek
+  forced into the address because encapsulation targets the key; a
+  signature vk needs only a 32-byte commitment). Verified in-tree
+  precedent: `ek_bind_tag` (`address.rs:180-187`).
+- Round-0 SM-DQ-1 lead (b) hybrid-vk-certified **superseded on the
+  record** by the agile commitment (SM-DQ-7) + decoupled algorithm
+  (SM-DQ-8); pre-genesis, the address format is not yet frozen and the
+  round-0 framing against an immutable v1 was too narrow.
+- BIP-360 history verified against the current changelog — the
+  round-0 fold initially carried secondhand specifics (SQIsign at
+  v0.6.0; "all PQ stripped" at v0.8.0) that the fetch corrected
+  (XMSS→Dilithium v0.3.0; SLH-DSA removed v0.6.0; three→two v0.8.0;
+  current form = 32-byte Merkle-root commitment, PQ signatures
+  deferred to a separate proposal). The transferable lesson is
+  unchanged and the record carries the verified telling.
+- Nested combiner + registered dual-duty label adopted into SM-DQ-1/3;
+  literature anchors verified at abstract level: Bindel–Hale ePrint
+  2023/423 (property taxonomy; parallel/concatenation achieves few of
+  the goals), ePrint 2026/1086 (machine-checked EUF-CMA, hybrid
+  Fiat–Shamir, symmetric either-component bounds), NIST onramp round 3
+  announced 2026-05-14. Foundational: ePrint 2017/460; the 2022/1225
+  label construction.
+- New verification findings this pass: `fips205` not in workspace
+  (rule-17 round if SLH-DSA chosen); Bech32m framing precedent does
+  not transfer past 1023 chars (SM-DQ-5 re-posed with the in-tree
+  assert as the reason); EK_BIND_TAG_LEN=16 must not transfer
+  (detection vs binding — SM-DQ-7).
+- Escalation recorded: the address-v2 / commitment-shape decision goes
+  to the genesis lane; A2 implements against its ruling.
+
+**PASS 2 (2026-08-08).** Review pass folded with source verification
+and a measurement:
+
+- Category correction (reviewer's own): the pass-1 table quoted
+  SLH-DSA-**128s**; the stack is category 3 throughout, so the honest
+  comparison is **192s** — pk 48 B, σ 16224 B, both read from crate
+  constants and confirmed by execution.
+- Derivability verified *stronger than claimed*: the reviewer expected
+  `slh_keygen_internal` purity from the spec; the `fips205` crate
+  **exports** the 3n-seed shape (`KeyGen::keygen_with_seeds`), so the
+  wallet branch is one HKDF arm plus a library call — purer than the
+  in-tree ML-DSA seeded-RNG shim (`derivation.rs:40-52`).
+- Statelessness folded as load-bearing: XMSS/LMS (SP 800-208) excluded
+  by construction — restore-from-seed cannot recover one-time-key
+  state, so a stateful scheme makes mnemonic restore a key-disclosure
+  event, contradicting the ratified seed-custody cold-storage story.
+- Measured on the dev box (i9, release): SLH-192s sign ≈ 519 ms /
+  verify ≈ 0.45 ms vs ML-DSA-65 sign ≈ 0.27 ms / verify ≈ 0.11 ms.
+  **Pi 4 floor measurement is the named prerequisite** before SM-DQ-8
+  rules (rule 76: no deciding on scaled projections).
+- Dependency audit opened early: `fips205`'s deterministic keygen uses
+  the same `DummyRng` pattern that forced the `fips203` exact-pin
+  (verified in `fips205-0.4.1/src/traits.rs`); adoption terms recorded
+  in SM-DQ-8.
+- SM-DQ-7 gains the pk-inline variant and its recorded tension with
+  the pass-1 BIP-360 lesson; the SM-DQ-7/SM-DQ-8 coupling is now
+  explicit ((A) requires the commitment shape, (B) makes it optional),
+  and the genesis-lane item waits for the Pi measurement so the lane
+  rules on the real fork.
+
+**PASS 2 ADDENDUM (2026-08-08) — the Pi 4 floor measurement, run and
+folded.** Cross-compiled the scratch bench (aarch64, same binary both
+hosts) and ran it on the floor hardware (Pi 4 Model B Rev 1.4):
+SLH-192s sign **3.83 s** / keygen 415 ms; SLH-192f sign **171 ms** /
+sig 35,664 B; ML-DSA-65 sign 1.77 ms. Measured x86→Pi scaling ≈ 7.4×
+(a projection would have guessed 10–20× — rule 76 vindicated in both
+directions). The named prerequisite is DISCHARGED; SM-DQ-8's decision
+inputs are complete and the genesis-lane item is draftable.
+
+## §7 Proposed rulings — PENDING RATIFICATION (drafted 2026-08-08)
+
+Drafted for ratification in one pass; each carries its rule-21 clause
+where it rejects something. SM-DQ-1's combiner (nested, dual-duty
+label) and SM-DQ-7's escalation are already binding-shaped above and
+are not re-proposed here.
+
+**SM-R-2 (rules SM-DQ-2) — interactive KEM ownership proof: REJECT
+now. RATIFIED 2026-08-08, with two amendments folded.** Reopen when a
+named consumer surface requires **liveness / non-transferability** —
+the criterion is the freshness requirement itself, not any particular
+consumer class (exchange integration specs, proof-of-reserves
+attestations, custody audits, and challenge-response login are
+illustrations, not the boundary). **Conditionality amendment (the
+ratification's substantive change):** this rejection is recorded as
+**conditional on the genesis lane not ruling fork (iii)**. Under
+fork (iii) — no PQ signing anchor, address frozen without one —
+Shekyl would have no PQ ownership proof of any kind, permanently, and
+no later round could fix it; that is not a reopening trigger for
+R-2, it is a **precondition on fork (iii) itself**: (iii) is
+admissible only if the interactive proof is simultaneously committed
+to. The cost is priced where the decision is made — the genesis-lane
+item's fork (iii) carries it — rather than referenced forward from a
+document the lane may not read.
+
+**SM-R-3 (rules SM-DQ-3) — preimage, domain, and nesting order.
+RATIFIED 2026-08-08, with three findings folded and the nesting
+rationale strengthened.**
+- Hash: **cSHAKE256 throughout** — this is a binding job, and the
+  binding-side house precedent is cSHAKE (`ek_bind`, and the tag in
+  the SM-DQ-7 shape); the derivation-side Blake2b precedent does not
+  apply. *(Ratified as drafted.)*
+- `preimage = cSHAKE256("shekyl/msg-sign-v1", sig_format_version ‖
+  network_id ‖ mode ‖ len(classical_segment) ‖ classical_segment ‖
+  cSHAKE256("shekyl/msg-hash-v1", message))`, where:
+  - **`sig_format_version`, renamed from `version` (R3-b):** the
+    classical segment already *contains* the address version
+    (`SPEND_OFFSET = VERSION_LEN`, `address.rs`), so the draft had two
+    fields both spelled "version" — the outer one is the
+    message-signing format version and now says so.
+  - **`len(classical_segment)` length prefix (R3-b, second half):**
+    with fork (ii) the segment is variable-length across address
+    versions (v1 vs v2 with an inline SLH key). Concatenation would
+    stay unambiguous anyway — the in-segment address version
+    determines the length, and the message-hash tail is fixed-width —
+    but both of those are load-bearing-by-accident properties.
+    A two-byte LE length prefix makes the framing unambiguous by
+    construction instead of by coincidence.
+  - `classical_segment` is the **full bound form as ruled by the
+    genesis lane** (the byte layout is exactly what SM-DQ-7 freezes;
+    this is why PR-SM-1 blocks on that ruling); `mode = 0x01`
+    spend-tier, future modes append, never renumber.
+- **R3-c — the view-tier forward reference is DELETED, not
+  softened.** The mode byte's append-only discipline is kept — that
+  is cheap, real forward compatibility. But naming view-tier implied
+  a plan, and there isn't one: under the ratified design the address
+  commits to one master-seed-derived key and a view-only wallet has
+  no master seed, so view-tier is structurally unbuildable without an
+  address-format change — reserving a name for that *inside the
+  freeze window* is worse than not reserving it, and it wore the
+  shape of a deferral with no rule-21 criteria, which this project
+  forbids. If a view-tier consumer ever materializes, the honest form
+  is a second signing key committed in the address — decided while
+  v2's layout is open, or never.
+- **R3-a — the FIPS 204/205 `ctx` parameter is PINNED EMPTY
+  (`ctx = ""`), by ruling, not by convention.** All domain separation
+  lives inside the preimage's cSHAKE customization strings; the
+  signing interfaces' context parameter must therefore be the empty
+  string on both halves. "Should be empty" is not enough — an
+  implementation passing the domain string as `ctx` would produce
+  signatures that fail against one passing `""`, silently forking the
+  format. A KAT pins it: the vector must fail if any non-empty
+  context is supplied (same discipline as the label-tag KATs).
+- Nesting order: **PQ inner, classical outer** —
+  `σ_pq = PQ.Sign(preimage)`, `σ_cl = Classical.Sign(preimage ‖ σ_pq)`.
+  **Implementation note (PR-SM-1, 2026-08-08):** the classical half is
+  realized as the **house domain-separated Schnorr over the spend
+  scalar**, not RFC 8032 — the wallet's spend secret is a raw Ed25519
+  scalar (`spend_pk = b·G`, `rederive_account`), and RFC 8032 signing
+  is structurally impossible for a raw-scalar key (`ed25519_dalek`
+  derives its scalar by hashing a seed). The in-tree precedent is the
+  reserve proof, which signs with `b` via exactly this Schnorr; the
+  message-signing copy lives under its own challenge domain
+  (`shekyl/msg-sign-outer-v1`, registered), the accepted per-domain
+  copy pattern. Same 64-byte `R ‖ s` wire slot the ruling priced; the
+  fails-closed separability argument is unchanged. The Schnorr nonce
+  is hedged
+  (`k = H(domain ‖ "nonce" ‖ sk ‖ outer ‖ 32 fresh random bytes)`):
+  the `"nonce"` sub-label separates nonce derivation from the challenge
+  hash under the same domain string. Nonce reuse leaks the scalar, so
+  a dead RNG degrades to a deterministic RFC-6979-style nonce, never
+  to key disclosure — the same fail-safe shape SM-R-6 records for
+  SLH's opt_rand.
+  **Rationale strengthened at ratification — the complete argument,
+  not the half the draft gave:** unforgeability is order-independent
+  (a forger needs both halves over the new preimage either way; the
+  either-component property matches ePrint 2026/1086 in both orders).
+  **Separability is where order matters, and it is asymmetric: the
+  inner component remains a standalone-verifiable artifact; the outer
+  does not.** With PQ inner, stripping to one signature leaves
+  σ_pq — degrading to hash-based security, the *strong* half — and a
+  classical-only lazy verifier **cannot verify at all**, because σ_cl
+  does not check out over the preimage alone: the lazy path is forced
+  through the PQ dependency. With the classical half inner, the lazy
+  path silently
+  yields a *working classical-only verifier* — passes every
+  happy-path test, provides no post-quantum protection, the worst
+  outcome available. **We chose the order whose degenerate
+  implementation fails to verify over the one whose degenerate
+  implementation verifies insecurely.** This paragraph exists to
+  foreclose flipping the order later for convenience.
+- Both domain strings register in the crypto crate's domain inventory
+  beside `shekyl/ek-bind-v1`, collision-checked by test. *(Ratified
+  as drafted.)*
+
+**SM-R-4 (rules SM-DQ-4) — the signing identity. RATIFIED
+2026-08-08, with the algorithm-generic framing dropped and two pins
+added.**
+
+- **The literal domain, not the template.** The draft's
+  `"shekyl/msg-sign-seed-<alg>-v1"` was written before SM-R-8
+  ratified; the scheme has won, and a parameterized domain is a
+  template, not a domain — rule 30's inventory collision-checks
+  literals. Pinned: **`"shekyl/msg-sign-seed-slh-dsa-192s-v1"`**. The
+  ML-DSA arm (the seeded-ChaCha20 shim) is dropped rather than kept as
+  a live branch nothing reaches; if ML-DSA ever returns it is a new
+  domain string and a new address version anyway, since the address
+  commits to the key.
+- **R4-a — the split is 72 bytes, written as a literal because the
+  reflex is wrong.** SLH-DSA-192s has `n = 24` (not the 32 a
+  category-3 reflex suggests), so the derivation is one HKDF expand of
+  **72 bytes, sliced in order into `SK.seed ‖ SK.prf ‖ PK.seed` at 24
+  bytes each** — a single expand sliced into thirds, ruled explicitly
+  because three separate expands with distinct info strings would
+  produce different (equally valid-looking) keys and only one layout
+  can be the spec. A wrong split silently produces a
+  valid-but-different keypair; the pin is a KAT from a fixed master
+  seed to a fixed public key.
+- **R4-b — derive-on-demand's costs, stated rather than discovered.**
+  (1) Keygen runs on every signing call (the top-layer XMSS tree
+  build, unamortized by design). The measurement already covers this:
+  the Pi 4 bench timed keygen (415 ms) and sign (3.83 s) as separate
+  phases, and the ruling's "~4.3 s per signing session" figure is
+  their composition — sign-only is 3.83 s, and the HKDF derive adds
+  microseconds. The UX argument rests on the composed figure and
+  said so. (2) Zeroization of an SLH key is not scalar-shaped:
+  `SK.seed`/`SK.prf` are the secrets, `PK.seed`/`PK.root` public.
+  **Verified at the crate (2026-08-08): `fips205-0.4.1` derives
+  `Zeroize + ZeroizeOnDrop` on `PrivateKey` and its inner types**
+  (`src/types.rs`, `zeroize_derive` feature), so the key type wipes
+  on drop; whether intermediate WOTS+ state inside keygen/sign is
+  wiped is a crate-internals property the caller cannot control —
+  carried as a named item of the rule-17 dependency audit, to be
+  answered before PR-SM-1, not assumed.
+- Ratified as drafted: mnemonic-recoverable with no new backup
+  material (the A4 seed-custody story holds for this surface); never
+  reused by any other surface (per-output and multisig identities
+  stay theirs — the property that makes the domain inventory
+  meaningful); **no wallet-file schema change**.
+- **R4-c — AMENDED 2026-08-08 (PR-SM-1): the expand is scoped by
+  `(network, seed_format)`.** The ruling as drafted put the literal
+  domain in the HKDF **salt** and took no network and no seed format,
+  which every other wallet key does take (`account::salt_for(net, fmt)`
+  → `hkdf_expand_64`, pinned by
+  `same_seed_different_networks_produce_different_scalars` and its
+  seed-format sibling). As drafted, one seed produced **one 48-byte
+  message-signing public key across mainnet, testnet and stagenet**.
+  That is not a replay question — binding `network_id` into the
+  preimage already stops cross-network replay — it is a **linkage**
+  question: the public key is published with every attestation and,
+  under fork (ii), inlined into the address, so a third party holding
+  one mainnet and one testnet attestation from the same human links two
+  addresses whose spend / view / ML-KEM keys were deliberately made
+  unlinkable. Two properties, two mechanisms, both required. Amended
+  shape: **salt = `account::salt_for(network, seed_format)`, info =
+  `"shekyl/msg-sign-seed-slh-dsa-192s-v1"`** — the literal is preserved
+  (rule 30 collision-checks literals) and simply occupies the `info`
+  position every other purpose label does, so this surface now derives
+  under the identical scoping as the rest of the wallet rather than
+  under a shape of its own.
+  - **The 72-byte single-expand slice order is unchanged**, and so is
+    the R4-a rationale for it. Only the salt and info positions move.
+  - **The R4-a KAT is re-pinned**, necessarily: the amendment changes
+    the derived bytes. Its replacement pins `(Testnet, Raw32)` and is
+    joined by an exhaustive `(network × seed_format)` distinctness
+    test — a KAT catches drift, but only the cross-product test states
+    the property the amendment exists for.
+  - **Sequencing:** this lands **before** any genesis-lane sign-off,
+    not after. The bytes it changes are precisely the 48-byte public
+    key field that sign-off is being asked to freeze.
+
+**SM-R-5 (rules SM-DQ-5) — armoring. RATIFIED 2026-08-08, with
+three amendments folded and the padding pinned.** Single-line
+`shekylmsgsig1.<base64url(canonical bytes)>`.
+
+- **R5-a — the `[alg_id ‖ pk]` conditional is DELETED.** It was
+  written before SM-R-8; fork (ii) is selected, the 48-byte key lives
+  in the address, and there is nothing to carry. An optional field
+  whose condition can never be true invites a future implementer to
+  support both shapes — a parsing fork in a format that must outlast
+  us (the same fix as SM-R-4's `<alg>` template). The layout that
+  ships:
+
+  `layout_version ‖ scheme ‖ mode ‖ σ_pq ‖ σ_cl ‖ checksum`
+
+  `scheme` earns its place as the append-only forward-compat byte —
+  one byte, not a conditional branch.
+- **R5-d — the scheme byte's name, and when it is read (PR-SM-1
+  implementation note).** The frozen fact is the **value** `0x01`; the
+  Rust constant is named `MSG_SIG_SCHEME_SLH_192S_SPEND_SCHNORR`, not
+  `…_ED25519`. An independent implementer reading "Ed25519" off the
+  spec reaches for RFC 8032, which rejects **every** signature this
+  wallet produces (RFC 8032 computes `c = H(R ‖ A ‖ M)` with no domain
+  string and checks `s·G == R + c·A`); they would report every honest
+  attestation as a forgery. Renaming a constant is free, and after the
+  freeze it would not be.
+  An unknown scheme is also its own error ("unsupported scheme", not
+  "malformed"), and decode's ordering is conditional on length —
+  deliberately, because the two rule-82 sentences it must keep apart
+  compete:
+  - **At our canonical length the checksum runs first.** The trailer is
+    locatable, so a damaged paste that happened to hit a header byte
+    reads as "your copy is damaged", not as "unknown layout version" or
+    — worse — "this wallet is too old to check it", which would send a
+    user to upgrade over a truncated clipboard. Damage is both the
+    likelier cause of a wrong header byte and the one we can detect.
+  - **At any other length the scheme byte decides.** The trailer cannot
+    be located, and a future scheme carries its own signature size;
+    reporting it as a corrupt paste would spend the forward
+    compatibility this byte exists to buy.
+  Pinned by a test on each side, including the negative control that
+  flips header bytes **without** recomputing the checksum — the
+  assertion that fails if the two branches are ever reordered.
+- **R5-c — two version numbers, disambiguated by ruling.** The
+  prefix's `1` (`shekylmsgsig1.`) is the **envelope/armoring
+  version**: it changes only if the string encoding changes, and it
+  does **not** feed the preimage. The canonical first byte is the
+  **payload `layout_version`** — the same single value bound into the
+  preimage as `sig_format_version` (one value, two appearances: wire
+  and preimage — so a layout bump changes what signatures attest,
+  correctly, while an armoring bump does not). A future reader bumps
+  the one whose thing changed; the doc now says which is which.
+- **Checksum, pinned exactly** (post-ratification precision fix — the
+  trailer was ruled but its construction was not spelled, and
+  independent implementations could have disagreed):
+  `checksum = cSHAKE256("shekyl/msg-sig-ck-v1", layout_version ‖
+  scheme ‖ mode ‖ σ_pq ‖ σ_cl)[..4]` — the customization string is
+  the registered checksum domain, the hashed payload is the entire
+  canonical byte string that precedes the trailer, and the trailer is
+  the first four bytes of the digest. **Not security** (verification
+  is the integrity check) but rule-82 error honesty: decode
+  distinguishes "this paste is corrupted" from "this signature is not
+  from that address". The non-security framing is deliberate: it
+  stops a later "strengthening" of the checksum into something
+  load-bearing.
+- **R5-b — ceiling re-justified against the ratified scheme, and
+  enforced pre-decode.** The real 192s blob is
+  `3 + 16,224 + 64 + 4 = 16,295 B` ≈ **21.7 KB encoded**; the 192f
+  fallback encodes to ~47.7 KB. The **64 KB ceiling is kept and
+  re-justified as covering either parameter set**, so a pre-freeze
+  s→f UX flip does not reopen it — it is headroom over both, not a
+  number sized for a scheme that wasn't chosen. Enforcement is on the
+  **encoded input length, before decoding** — bounding decoded output
+  after decode would allocate an attacker's 64 KB from a shorter
+  input; same pre-allocation discipline `decompress_payload` applies
+  in `shekyl-levin`.
+- **base64url is PINNED UNPADDED, canonical-form-strict.** Decoders
+  reject `=` padding, non-alphabet characters, and non-zero trailing
+  bits in the final character — one signature has exactly one
+  spelling, which is what anything that hashes, logs, or deduplicates
+  the string needs.
+- **Multi-segment Bech32m REJECTED** with the reason recorded: BIP-350
+  checksum guarantees end at 1023 chars, our address code enforces
+  that bound, and a 16–48 KB encoding would need dozens of segments —
+  an interface nobody can paste correctly. Reopen only if a transport
+  emerges that requires Bech32m framing end-to-end.
+
+**SM-R-6 (rules SM-DQ-6) — API contract. RATIFIED 2026-08-08, with
+one fail-safe recorded and one pin added.** `verify_message` is
+**session-less** (pure function in the crypto crate; RPC method
+callable with no wallet open; CLI `verify` works offline) — refusing a
+public operation for lack of a wallet session is a rule-82 lie, not a
+security measure: message, signature, and address are all public and
+all caller-supplied, and gating a pure function behind unrelated state
+would make the CLI useless for the case it exists to serve — checking
+someone else's signature. `sign_message` requires the open wallet (it
+needs the master seed). Errors: malformed signature string / bad
+address = `-32602` (shape-first, the `get_transfer_by_id` precedent);
+well-formed signature that does not verify = its own honest code in
+the `-29800` band, with the checksum separating corruption from
+mismatch in the error detail — a shape error is the caller's bug, a
+verification failure is an *answer*, and conflating them would make
+"not from that address" indistinguishable from "you passed garbage".
+Signing is **hedged** (fips204/205 default; side-channel margin;
+signature-byte reproducibility is not a contract anyone needs).
+**Fail-safe recorded at ratification:** SLH-DSA's hedged mode feeds
+`opt_rand` *on top of* `SK.prf`, so a bad RNG degrades to the
+deterministic construction rather than to catastrophe — worth having
+on the record given this crate family's RNG history (the fips203
+`DummyRng` hazard). **Constant-time pin:** verification is
+constant-time with respect to **nothing** — every input is public.
+Stated so nobody later adds timing hardening to a verify path where
+it buys nothing and costs clarity.
+
+- **R6-a — the verify surface ships gated, not ungated (PR-SM-1
+  implementation note, 2026-08-08).** Verification needs two public
+  keys: the address's Ed25519 spend key and the 48-byte SLH-DSA key.
+  Under fork (ii) **both live in the address** — that is why SM-R-5
+  R5-a could delete the in-blob `[alg_id ‖ pk]` field. But no in-tree
+  address version carries the SLH key: the v2 layout is this round's
+  one outstanding external dependency (§1). Taking the two keys as
+  independent parameters in the meantime would have been the worst
+  available outcome, and specifically the one the nesting order was
+  chosen to foreclose: an adversary who recovered the spend scalar
+  `b` — precisely the adversary the PQ half exists to stop — could
+  generate their own SLH keypair, sign the preimage with it, sign
+  `preimage ‖ σ_pq` with the recovered scalar, and present their own
+  48-byte key alongside the armored string. It would verify. The PQ
+  half would be decoration, and the "degenerate verifier fails closed"
+  property would be false in the shipped code while true in the doc.
+  PR-SM-1 therefore makes the provenance a **type**: `verify_message`
+  takes a `SignerIdentity`, whose only constructor extracts both keys
+  from the address's bound classical segment and today returns
+  `UnboundIdentity` for every segment that exists. Signing ships and is
+  exercised end to end; verification is unreachable in production until
+  the v2 layout lands, at which point that one constructor starts
+  succeeding and every call site works unchanged. **This is what let
+  PR-SM-1 land ahead of the genesis-lane sign-off rather than blocking
+  on it** — the dependency is enforced by the compiler instead of by a
+  sentence in a design doc.
+
+**SM-R-8 (rules SM-DQ-8) — the algorithm: SLH-DSA-192s, pk-inline,
+fork (ii). RATIFIED 2026-08-08**, subject to three pins, all
+discharged below. The reasoning as ratified:
+
+- *The lattice exposures are correlated, and this is the last
+  uncorrelated surface* (sharpened at ratification). ML-KEM-768 and
+  ML-DSA-65 are both Module-LWE/Module-SIS: a structural break in
+  module lattices plausibly hits addresses, tx auth, and archival
+  identities *simultaneously*. Message signing is the only remaining
+  frozen surface where that correlation can be broken — and after
+  genesis it cannot be. This is not "adding diversity"; it is
+  **declining to put the last remaining uncorrelated surface into
+  the same basket**.
+- *The measured floor costs are acceptable, and the asymmetry is the
+  number that justifies `s`.* ~4.3 s per signing session on the Pi 4
+  floor (derive + keygen + sign — **pin 1 discharged:** the bench
+  timed keygen 415 ms and sign 3.83 s as separate phases; the
+  session figure is their composition, and the HKDF derive adds
+  microseconds) against **3.4 ms verification — a ~1,265×
+  asymmetry**. Signing happens once, by a motivated user, with a
+  spinner; verification is unbounded, by third parties, on hardware
+  we do not control, and 3.4 ms on a Pi 4 is free everywhere that
+  matters. The blob size (21.7 KB armored) is a settled consequence
+  of SM-R-5's single-line armoring, not independent support for this
+  ruling.
+- *pk-inline (fork ii) deletes permanent machinery.* No `alg_id`
+  registry to govern forever, no tag-strength argument, no
+  key-in-blob — the smallest possible genesis-frozen surface, which
+  is the right direction for a format that must outlast the team.
+- *The dependency terms are pre-audited, and the implementation risk
+  is stated separately from the algorithm's* (**pin 3 discharged**).
+  The algorithm is FIPS 205 final. The implementation is
+  `fips205 0.4.1`: young, same authorship and vintage as the
+  `fips203` crate whose `DummyRng` hazard forced our exact-pin;
+  **no external audit is known**; constant-time assurance is
+  source-level only (manual review + `dudect` per its README, which
+  itself says "should be considered experimental"); it does ship
+  NIST ACVP vector tests in-tree. Adoption terms: exact-pin with the
+  fips203 rationale, and PR-SM-1's KATs **independently cross-check
+  `keygen_with_seeds` and sign/verify against NIST ACVP vectors
+  imported into our own `test_vectors/`** — not by trusting the
+  crate's copies. That pre-freeze conformance check forecloses the
+  one implementation-defect branch that could not be fixed later: a
+  nonconforming keygen would commit nonconforming public keys into
+  frozen addresses, and a corrected crate could never re-derive
+  them. Post-genesis sign/verify defects, by contrast, are patchable
+  without format impact (the surface is off-chain and conforming
+  keys are unaffected) — which is why the reopen clause below covers
+  cryptanalysis and not implementation defects: a defect never
+  requires reopening the *algorithm*, only fixing the code, once
+  the committed keys are proven conforming before the freeze.
+- **Pin 2 discharged — the 192f fallback has a dated owner.** "If UX
+  testing finds 4 s intolerable" is now a `RELEASE_CHECKLIST.md` row
+  (owner: R. Dawson, release owner) that must close **before the
+  genesis format-freeze row it sits beside**: post-freeze, s→f
+  changes the meaning of the frozen pk field (same 48-byte length,
+  different scheme definition) — a format change even at equal
+  length. An undated trigger would have recreated exactly the rushed
+  call the pre-pricing was done to avoid.
+
+Rule-21 clause as ratified: reopen the algorithm (as a new address
+version, accepted cost of fork (ii)) only on cryptanalytic weakening
+of SHA-2/SHAKE at the SLH-DSA security argument level, or a NIST
+onramp standard offering ≥4× signature-size reduction at equal
+assumption conservatism — not on lattice-scheme improvements, which
+this choice deliberately declines to track, and not on implementation
+defects, which are handled above without reopening the format.
+
+**Ratification order.** SM-R-2..6 are independent of the genesis
+lane. SM-R-8 and the genesis lane's fork are coupled: ratifying
+SM-R-8 (B-s) selects fork (ii); rejecting it in favor of (A) selects
+fork (i) and would re-pose blob-carried `alg_id ‖ pk` fields (deleted
+from SM-R-5 at its ratification, which post-dates SM-R-8's).
+

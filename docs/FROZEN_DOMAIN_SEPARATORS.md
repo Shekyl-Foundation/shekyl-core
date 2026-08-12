@@ -43,7 +43,39 @@ All in `rust/shekyl-curve-generators/src/lib.rs`:
 The Pedersen amount generator `H` is derived from the Ed25519 basepoint (no `"Monero"`
 string) but is equally frozen — also pinned by `frozen_singletons` / `frozen_h_pow_2_head`.
 The Bulletproof(+) tables (`b"bulletproof"` / `b"bulletproof_plus"` prefixes, varint-fed)
-are pinned by `frozen_bulletproof_tables`.
+are pinned by `frozen_bulletproof_tables`, and the Bulletproof+ transcript initializer
+`b"bulletproof_plus_transcript"` (`shekyl-bulletproofs/src/plus/transcript.rs`,
+keccak256 → hash-to-point) is frozen with them — changing it re-seeds every BP+
+transcript challenge and invalidates every existing range proof.
+
+## The list (FROST / multisig transcript DSTs)
+
+Three more inherited byte-strings live in `rust/shekyl-fcmp-proofs/src/sal/multisig.rs`
+(the un-vendored, no-longer-tracked FCMP++ SAL fork). They are frozen for the same
+reason as the generator DSTs — not because we track upstream, but because they are
+baked into proofs and joint signatures that verify against genesis — and each names
+a **distinct** breaking consequence, so the marker is the consequence, not just the
+status:
+
+| DST byte-string | Mechanism | Consequence of changing a single byte |
+|---|---|---|
+| `b"Ed25519 Monero T"` (`Ed25519T::ID`) | FROST ciphersuite id → feeds `hash_to_F` DST | re-derives every FROST nonce/challenge for multisig; participants can no longer produce a joint signature that verifies — **multisig DKG and signing break** |
+| `b"FROST-ED25519-FCMP++-v1"` (`Ed25519T::CONTEXT`) | FROST protocol context | same FROST session-binding change — old and new participants compute different binding factors, so **no multisig session completes** |
+| `b"SpendAuthAndLinkability Multisig"` (`transcript.domain_separate`) | SAL multisig transcript root | re-computes the multisig SAL challenge; **every multisig SAL proof fails to verify → multisig-held funds become unspendable** |
+
+These are marked inline with `// FROZEN DST (inherited)`. They are **not** rule-93
+targets and are skipped by any rebrand sweep. A `MONERO_`→`SHEKYL_` identifier sweep
+does not touch them (they are hash-input bytes, not identifiers).
+
+**Not frozen — the LIVE sibling.** `b"Shekyl FROST SAL v1"`
+(`rust/shekyl-fcmp/src/frost_sal.rs`, `RecommendedTranscript::new`) is
+**Shekyl-authored** (absent from upstream) and is therefore governed by the SA
+through-line rule ([`SIGNATURE_ALIGNMENT.md`](design/SIGNATURE_ALIGNMENT.md) §5), not
+this exclusion list: its bytes are still derivation state (they root the SAL
+multisig transcript), so changing the spelling is a versioned breaking change, but it
+is *ours* to version — it is not inherited and carries no `"Monero"` provenance. The
+distinction this file draws is inherited-frozen vs. Shekyl-live; both are
+byte-load-bearing, only the former is a rebrand-sweep carve-out.
 
 ## Related (not in this list)
 

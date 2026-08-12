@@ -1,0 +1,206 @@
+# Shekyl cryptographic domain-separation registry (SA-3b) — SINGLE SOURCE.
+#
+# Every production domain-separation byte-string in the Rust workspace, grouped
+# by the ONE keyed/hashing mechanism that consumes it. This file is consumed by
+# BOTH:
+#   - scripts/ci/domain_registry_gate.sh  (row-presence + per-mechanism count-pins)
+#   - rust/shekyl-crypto-pq/tests/domain_registry.rs  (intra-mechanism distinctness)
+# so the census cannot silently drift from the code for *registered* rows: a
+# value change, rename, or move breaks row-presence (+ const binding); a new
+# always-domain call site (cSHAKE / FROST) breaks the count-pin; an accidental
+# equality breaks distinctness. New unregistered domains in general-purpose
+# mechanisms (HKDF / Blake2b / keccak / SHA3-256) are a review duty, not a
+# gate guarantee — see the gate header and CBOM §3. Prefix-grep is NOT used —
+# domain spellings share no common prefix (shekyl/, shekyl-, "Shekyl ",
+# "Monero ", bulletproof), which is exactly the SA §3.1 defect class; the
+# mechanism entry point is the only complete anchor.
+#
+# THROUGH-LINE INVARIANT (SA, ratified): a live domain string's BYTES are
+# consensus / derivation state, not a naming convention. Style inconsistency
+# across these rows is intended and permanent. "Aligning" a live string's
+# spelling is the KAT-remint error at consensus stakes — see
+# docs/design/SIGNATURE_ALIGNMENT.md §5. This registry pins the bytes precisely
+# so a future "cleanup" cannot touch them without failing the gate.
+#
+# COLUMNS (tab-separated):
+#   mech    1..6 mechanism id (see below); "x" = excluded-with-reason
+#   literal exact bytes WITHOUT the b"" wrapper (the gate greps for b"<literal>")
+#   file    repo-root-relative path where the literal is DEFINED (the b"..." site)
+#   const   defining constant name, or a short site descriptor in parens
+#   status  shekyl-live | frozen-inherited | excluded | test-only
+#   key     distinctness identity within the mechanism; empty => defaults to <literal>
+#   notes   free text
+#
+# Per-mechanism row counts are NOT annotated here — they are derivable state,
+# pinned once (and checked against the parsed rows) in
+# rust/shekyl-crypto-pq/tests/domain_registry.rs. A second hand-counted copy
+# would drift and then lie.
+#
+# MECHANISMS:
+#   1  cSHAKE256 customization        (shekyl_crypto_hash::cshake256_*, CShake256Core::new)
+#   2  HKDF salt + info               (Hkdf::new(Some(salt)..), .expand(info,..)); distinctness key = salt|info
+#   3  FROST transcript label         (RecommendedTranscript::new, .domain_separate, Curve::CONTEXT/ID)
+#   4  Blake2b DST                    (first Blake2b512::update as a domain; sal_dst-padded tags)
+#   5  keccak / schnorr challenge DST (schnorr sign/verify domain, keccak256(...) hash-to-point/scalar prefix)
+#   6  SHA3-256 direct-prefix         (micro-bucket: a domain prefix fed straight to Sha3_256, outside 1..5)
+#
+# SUB-LABELS ARE OUT OF SCOPE (documented, not rowed): FROST transcript field
+# labels appended via append_message (b"O_tilde", b"r_o", ...), the schnorr
+# nonce/challenge sub-labels (b"nonce", b"R", ...), and HKDF composed-salt
+# sub-components (b"mainnet"/b"testnet"/b"stagenet"/b"fakechain", b"bip39"/b"raw32").
+# These never stand alone as a top-level context; they are structural fields
+# inside one of the mechanisms above.
+#
+# EXCLUDED (named, NOT silently dropped) — real byte-strings that are NOT
+# cryptographic domain separation for our purposes: RandomX Argon salt
+# (RANDOMX_ARGON_SALT, RandomX upstream), Tor SAFECOOKIE HMAC keys, the .onion
+# checksum prefix, file/wire magics (b"SWSP", b"SHEKYLWT/WS", b"SSP1"
+# superscalar-program wire magic, EPEE portable-storage header). Rowed at the
+# bottom with mech=x so the exclusion is auditable. (The C++ epee macros
+# PORTABLE_STORAGE_SIGNATUREA/B in contrib/epee are the same 8-byte magic as
+# the Rust EPEE_HEADER row; the registry is a Rust-workspace census, so only
+# the Rust defining site is rowed.)
+#
+# mech	literal	file	const	status	key	notes
+#
+# ── Mechanism 1 — cSHAKE256 customization ─────────────────────────────
+1	shekyl/genesis-txkey-v1	rust/shekyl-genesis-tool/src/txkey.rs	GENESIS_TXKEY_CUSTOMIZATION	shekyl-live
+1	shekyl/multisig-address-v1	rust/shekyl-address/src/multisig_address.rs	MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION	shekyl-live
+1	shekyl/ek-bind-v1	rust/shekyl-address/src/address.rs	EK_BIND_DST	shekyl-live
+1	shekyl/archival-serve-challenge-leaf-v1	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_LEAF_CUSTOMIZATION	shekyl-live
+1	shekyl/archival-serve-challenge-fire-v1	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_FIRE_CUSTOMIZATION	shekyl-live
+1	shekyl/archival-serve-credit-response-v1	rust/shekyl-archival-retention/src/challenge.rs	SERVE_CREDIT_RESPONSE_CUSTOMIZATION	shekyl-live
+1	shekyl/archival-challenge-assignment-v1	rust/shekyl-archival-retention/src/challenge_assignment.rs	CHALLENGE_ASSIGNMENT_CUSTOMIZATION	shekyl-live		per-draw challenge-assignment stream (PR #435)
+1	shekyl/archival-p-id-v1	rust/shekyl-archival-retention/src/id.rs	P_CANONICAL_ID_CUSTOMIZATION	shekyl-live
+1	shekyl/archival-attestation-nonce-v1	rust/shekyl-archival-retention/src/attestation_wire.rs	ATTESTATION_NONCE_CUSTOMIZATION	shekyl-live
+1	shekyl/archival-attestation-root-v1	rust/shekyl-archival-retention/src/attestation_wire.rs	ATTESTATION_ROOT_CUSTOMIZATION	shekyl-live
+1	shekyl/archival-emission-auth-backing-v2	rust/shekyl-archival-retention/src/emission_wire.rs	EMISSION_AUTH_BACKING_CUSTOMIZATION	shekyl-live
+1	shekyl/archival-emission-auth-claim-v2	rust/shekyl-archival-retention/src/emission_wire.rs	EMISSION_AUTH_CLAIM_CUSTOMIZATION	shekyl-live
+1	shekyl/p-socks-user-v1	rust/shekyl-p-transport/src/lib.rs	SOCKS_USER_CUSTOMIZATION	shekyl-live
+1	shekyl/output-handle-v1	rust/shekyl-crypto-pq/src/handle.rs	OUTPUT_HANDLE_CUSTOMIZATION	shekyl-live
+1	shekyl/receive-label-hash-v1	rust/shekyl-crypto-pq/src/label.rs	RECEIVE_LABEL_DISPLAY_HASH_CUSTOMIZATION	shekyl-live
+1	shekyl/msg-sign-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIGN_DOMAIN	shekyl-live
+1	shekyl/msg-hash-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_HASH_DOMAIN	shekyl-live
+1	shekyl/msg-sig-ck-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIG_CHECKSUM_DOMAIN	shekyl-live
+1	shekyl/pqc-auth-tx-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_PQC_AUTH_TX	shekyl-live
+1	shekyl/pqc-auth-tx-multisig-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG	shekyl-live
+1	shekyl/archival-emission-claim-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_CLAIM	shekyl-live
+1	shekyl/archival-emission-backing-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_BACKING	shekyl-live
+1	shekyl/archival-attestation-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_ATTESTATION	shekyl-live
+1	shekyl/archival-serve-credit-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_SERVE_CREDIT	shekyl-live
+1	shekyl/snapshot-id-v1	rust/shekyl-engine-core/src/engine/refresh.rs	SNAPSHOT_ID_CUSTOMIZATION	shekyl-live		wallet-internal reservation-staleness digest; cSHAKE customization (SA-3c retargeted it off cn_fast_hash — unpersisted, no wire, fresh mint)
+#
+# ── Mechanism 2 — HKDF salt + info ───────────
+# distinctness key = salt|info. The three shared infos (spend/view/kem) are
+# legitimately distinct derivations: const site (account.rs, composed salt_for)
+# vs inline SeedDerivation (kem.rs, salt=shekyl-master-derive-v1). Keyed so.
+2	shekyl-kem-v1	rust/shekyl-crypto-pq/src/kem.rs	KEM_DOMAIN_SALT	shekyl-live	salt:shekyl-kem-v1	salt
+2	shekyl-seed-normalize-v1	rust/shekyl-crypto-pq/src/account.rs	SEED_NORMALIZE_SALT	shekyl-live	salt:shekyl-seed-normalize-v1	salt
+2	shekyl-master-derive-v1	rust/shekyl-crypto-pq/src/kem.rs	HKDF_SALT_MASTER_DERIVE	shekyl-live	salt:shekyl-master-derive-v1	salt
+2	shekyl-master-derive-v1-	rust/shekyl-crypto-pq/src/account.rs	(salt_for prefix)	shekyl-live	salt:shekyl-master-derive-v1-	salt; strict prefix of HKDF_SALT_MASTER_DERIVE, disambiguated by trailing hyphen + composed network/seed-kind suffix
+2	shekyl-output-derive-v1	rust/shekyl-crypto-pq/src/derivation.rs	HKDF_SALT_OUTPUT_DERIVE	shekyl-live	salt:shekyl-output-derive-v1	salt
+2	shekyl-view-tag-prefilter-v1	rust/shekyl-crypto-pq/src/derivation.rs	HKDF_SALT_VIEW_TAG_PREFILTER	shekyl-live	salt:shekyl-view-tag-prefilter-v1	salt
+2	shekyl-output-kem-v1	rust/shekyl-crypto-pq/src/derivation.rs	SALT_KEM_DERIVE_V1	shekyl-live	salt:shekyl-output-kem-v1	salt
+2	shekyl-view-tag-x25519-v1	rust/shekyl-crypto-pq/src/derivation.rs	SALT	shekyl-live	salt:shekyl-view-tag-x25519-v1	salt
+2	shekyl-ed25519-spend	rust/shekyl-crypto-pq/src/account.rs	SPEND_INFO	shekyl-live	salt_for|shekyl-ed25519-spend	info; salt=composed salt_for
+2	shekyl-ed25519-view	rust/shekyl-crypto-pq/src/account.rs	VIEW_INFO	shekyl-live	salt_for|shekyl-ed25519-view	info; salt=composed salt_for
+2	shekyl-ml-kem-768	rust/shekyl-crypto-pq/src/account.rs	KEM_INFO	shekyl-live	salt_for|shekyl-ml-kem-768	info; salt=composed salt_for
+2	shekyl-ed25519-spend	rust/shekyl-crypto-pq/src/kem.rs	(SeedDerivation inline)	shekyl-live	shekyl-master-derive-v1|shekyl-ed25519-spend	info; distinct-by-salt from account.rs SPEND_INFO
+2	shekyl-ed25519-view	rust/shekyl-crypto-pq/src/kem.rs	(SeedDerivation inline)	shekyl-live	shekyl-master-derive-v1|shekyl-ed25519-view	info; distinct-by-salt from account.rs VIEW_INFO
+2	shekyl-ml-kem-768	rust/shekyl-crypto-pq/src/kem.rs	(SeedDerivation inline)	shekyl-live	shekyl-master-derive-v1|shekyl-ml-kem-768	info; distinct-by-salt from account.rs KEM_INFO
+2	shekyl-output-x	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_X	shekyl-live	shekyl-output-derive-v1|shekyl-output-x	info
+2	shekyl-output-y	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_Y	shekyl-live	shekyl-output-derive-v1|shekyl-output-y	info
+2	shekyl-output-mask	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_MASK	shekyl-live	shekyl-output-derive-v1|shekyl-output-mask	info
+2	shekyl-output-amount-key	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_AMOUNT_KEY	shekyl-live	shekyl-output-derive-v1|shekyl-output-amount-key	info
+2	shekyl-output-view-tag-combined	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_VIEW_TAG_COMBINED	shekyl-live	shekyl-output-derive-v1|shekyl-output-view-tag-combined	info
+2	shekyl-output-amount-tag	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_AMOUNT_TAG	shekyl-live	shekyl-output-derive-v1|shekyl-output-amount-tag	info
+2	shekyl-output-label-key	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_LABEL_KEY	shekyl-live	shekyl-output-derive-v1|shekyl-output-label-key	info
+2	shekyl-output-label-tag	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_LABEL_TAG	shekyl-live	shekyl-output-derive-v1|shekyl-output-label-tag	info
+2	shekyl-pqc-output	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_PQC	shekyl-live	shekyl-output-derive-v1|shekyl-pqc-output	info
+2	shekyl-pqc-ed25519	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_PQC_ED25519	shekyl-live	shekyl-output-derive-v1|shekyl-pqc-ed25519	info
+2	shekyl-view-tag-prefilter	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_VIEW_TAG_PREFILTER	shekyl-live	shekyl-view-tag-prefilter-v1|shekyl-view-tag-prefilter	info
+2	shekyl-view-tag-x25519	rust/shekyl-crypto-pq/src/derivation.rs	LABEL	shekyl-live	shekyl-view-tag-x25519-v1|shekyl-view-tag-x25519	info
+2	shekyl-archival-p-ed25519-spend-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_SPEND_INFO	shekyl-live		info
+2	shekyl-archival-p-ed25519-view-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_VIEW_INFO	shekyl-live		info
+2	shekyl-archival-p-ml-kem-768-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_KEM_INFO	shekyl-live		info
+2	shekyl-archival-p-ed25519-account-sign-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_ACCOUNT_SIGN_INFO	shekyl-live		info
+2	shekyl-archival-p-ml-dsa-65-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_ML_DSA_INFO	shekyl-live		info
+2	shekyl-archival-p-bond-spend-ed25519-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_BOND_SPEND_ED_INFO	shekyl-live		info
+2	shekyl-archival-p-bond-spend-ml-dsa-65-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO	shekyl-live		info
+2	shekyl-archival-p-hs-id-ed25519-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_HS_ID_INFO	shekyl-live		info
+2	shekyl-v31-hybrid-sign	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_HYBRID_SIGN	shekyl-live		info
+2	shekyl-v31-classical-spend	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_CLASSICAL_SPEND	shekyl-live		info
+2	shekyl-v31-view-tag	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_VIEW_TAG	shekyl-live		info
+2	shekyl-v31-kem-seed	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_KEM_SEED	shekyl-live		info
+2	shekyl-v31-multisig-kem	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_MULTISIG_KEM	shekyl-live		info
+2	shekyl/msg-sign-seed-slh-dsa-192s-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIGN_SEED_DOMAIN	shekyl-live		info (HKDF expand)
+2	shekyl-prefs-hmac-v1	rust/shekyl-engine-prefs/src/hmac_key.rs	HKDF_INFO_LABEL	shekyl-live		info
+2	shekyl-region1-aead-v1	rust/shekyl-crypto-pq/src/wallet_envelope.rs	HKDF_INFO_REGION1_AEAD_V1	shekyl-live		info
+2	shekyl-region2-aead-v1	rust/shekyl-crypto-pq/src/wallet_envelope.rs	HKDF_INFO_REGION2_AEAD_V1	shekyl-live		info
+2	nonce	rust/shekyl-multisig/src/encryption.rs	(inline info prefix)	shekyl-live		info; also a schnorr sub-label elsewhere (cross-mechanism reuse, safe: different mechanism)
+#
+# ── Mechanism 3 — FROST transcript label ───────────────────────────────
+3	Shekyl FROST SAL v1	rust/shekyl-fcmp/src/frost_sal.rs	(RecommendedTranscript::new)	shekyl-live		LIVE Shekyl domain — through-line rule applies (not frozen: absent from upstream monero-oxide)
+3	SpendAuthAndLinkability Multisig	rust/shekyl-fcmp-proofs/src/sal/multisig.rs	(transcript.domain_separate)	frozen-inherited		byte-identical to monero-oxide fcmp++ sal/multisig.rs:319
+3	FROST-ED25519-FCMP++-v1	rust/shekyl-fcmp-proofs/src/sal/multisig.rs	Ed25519T::CONTEXT	frozen-inherited		byte-identical to monero-oxide fcmp++ sal/multisig.rs:47
+3	Ed25519 Monero T	rust/shekyl-fcmp-proofs/src/sal/multisig.rs	Ed25519T::ID	frozen-inherited		byte-identical to monero-oxide fcmp++ sal/multisig.rs:36
+#
+# ── Mechanism 4 — Blake2b DST ──────────────────────────────────────────
+4	shekyl-pqc-leaf	rust/shekyl-crypto-pq/src/derivation.rs	DOMAIN_PQC_LEAF	shekyl-live		consensus leaf hash; SSOT owner after SA-3a (fcmp wraps it)
+4	Shekyl FCMP++ SAL full v1	rust/shekyl-fcmp-proofs/src/sal/mod.rs	SAL_FULL_DST	shekyl-live
+4	Shekyl FCMP++ SAL membership-only v1	rust/shekyl-fcmp-proofs/src/sal/mod.rs	SAL_MEMBERSHIP_ONLY_DST	shekyl-live
+4	Shekyl FCMP++ MO nonce r_o v1	rust/shekyl-fcmp-proofs/src/sal/membership_only.rs	MO_NONCE_R_O	shekyl-live
+4	Shekyl FCMP++ MO nonce r_i v1	rust/shekyl-fcmp-proofs/src/sal/membership_only.rs	MO_NONCE_R_I	shekyl-live
+4	Shekyl FCMP++ MO nonce r_r_i v1	rust/shekyl-fcmp-proofs/src/sal/membership_only.rs	MO_NONCE_R_R_I	shekyl-live
+4	Shekyl FCMP++ MO nonce r_c v1	rust/shekyl-fcmp-proofs/src/sal/membership_only.rs	MO_NONCE_R_C	shekyl-live
+4	Shekyl FCMP++ MO nonce alpha v1	rust/shekyl-fcmp-proofs/src/sal/membership_only.rs	MO_NONCE_ALPHA	shekyl-live
+4	Shekyl FCMP++ MO nonce r_y v1	rust/shekyl-fcmp-proofs/src/sal/membership_only.rs	MO_NONCE_R_Y	shekyl-live
+#
+# ── Mechanism 5 — keccak / schnorr challenge DST ──────────────────────
+5	shekyl-outbound-tx-proof-v1	rust/shekyl-proofs/src/tx_proof.rs	OUTBOUND_DOMAIN	shekyl-live		schnorr challenge domain
+5	shekyl-inbound-tx-proof-v1	rust/shekyl-proofs/src/tx_proof.rs	INBOUND_DOMAIN	shekyl-live		schnorr challenge domain
+5	shekyl-reserve-proof-v1	rust/shekyl-proofs/src/reserve_proof.rs	RESERVE_DOMAIN	shekyl-live		schnorr challenge domain
+5	shekyl-reserve-proof-dleq-v1	rust/shekyl-proofs/src/dleq.rs	DOMAIN_SEPARATOR	shekyl-live		schnorr/DLEQ challenge domain
+5	shekyl/msg-sign-outer-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIGN_OUTER_DOMAIN	shekyl-live		schnorr outer domain
+5	shekyl-subaddr-v1\0	rust/shekyl-crypto-pq/src/output_claim.rs	CLAIM_DERIVATION_DOMAIN	shekyl-live		keccak256_to_scalar prefix; TRAILING NUL (\0) is load-bearing — part of the hashed bytes, not a C-string terminator
+5	Monero Generator T	rust/shekyl-curve-generators/src/lib.rs	(hash_to_point(keccak256(..)))	frozen-inherited		FCMP++ generator DST; see docs/FROZEN_DOMAIN_SEPARATORS.md
+5	Monero FCMP++ Generator U	rust/shekyl-curve-generators/src/lib.rs	(hash_to_point(keccak256(..)))	frozen-inherited		FCMP++ generator DST
+5	Monero FCMP++ Generator V	rust/shekyl-curve-generators/src/lib.rs	(hash_to_point(keccak256(..)))	frozen-inherited		FCMP++ generator DST
+5	Monero Helios Hash Initializer	rust/shekyl-curve-generators/src/lib.rs	(rejection_sampling_hash_to_curve)	frozen-inherited		FCMP++ generator DST
+5	Monero Selene Hash Initializer	rust/shekyl-curve-generators/src/lib.rs	(rejection_sampling_hash_to_curve)	frozen-inherited		FCMP++ generator DST
+5	bulletproof	rust/shekyl-bulletproofs/build.rs	(BulletproofGenerators DST)	frozen-inherited		Bulletproof generator DST
+5	bulletproof_plus	rust/shekyl-bulletproofs/build.rs	(BulletproofGenerators DST)	frozen-inherited		Bulletproof+ generator DST
+5	bulletproof_plus_transcript	rust/shekyl-bulletproofs/src/plus/transcript.rs	(keccak256 -> hash-to-point)	frozen-inherited		Bulletproof+ transcript DST
+#
+# ── Mechanism 6 — SHA3-256 direct-prefix micro-bucket ──────────────────
+6	shekyl-mlkem-chacha-seed	rust/shekyl-crypto-pq/src/account.rs	MLKEM_CHACHA_SEED_PREFIX	shekyl-live		domain prefix fed straight to Sha3_256 (NOT cSHAKE) to derive a ChaCha seed; kept as its own bucket rather than silently folded into mechanism 1
+#
+# ── TEST-ONLY — domains minted by test/bench code, segregated from production ─
+# Registered so the SEGREGATION is machine-checked: a test-only domain spelled
+# equal to a live production domain in the same mechanism would let a
+# test-minted artifact (signature, KAT vector) verify against the production
+# context — cross-context replay of test artifacts. The distinctness test
+# (test_domains_are_segregated_from_production) asserts every row here is
+# disjoint from the production identities of its mechanism. Test-vs-test
+# collisions are NOT policed (two tests may legitimately share a dummy domain).
+# Completeness has the same review-duty scope as mech 2/4/5/6: register new
+# test domains as they are minted; the census below is as of 2026-08-11.
+# (b"" — cshake256_32's empty-customization compatibility test in
+# shekyl-crypto-hash — is not rowed: the parser requires a non-empty literal,
+# and production domains are non-empty, so it cannot collide.)
+1	shekyl/m3a-feature-flag-smoke-v0	rust/shekyl-crypto-pq/tests/sha3_zeroize_feature.rs	(CShake256Core::new inline)	test-only		feature-flag smoke test customization
+1	shekyl/emission-wire-kat-v1	rust/shekyl-archival-retention/tests/kat_emission_auth_msg.rs	(cshake256_32 inline)	test-only		emission-wire KAT digest customization
+1	Email Signature	rust/shekyl-crypto-hash/src/lib.rs	(NIST SP 800-185 KAT)	test-only		NIST cSHAKE sample customization (cfg(test) KATs)
+1	shekyl/domain-a-v1	rust/shekyl-crypto-hash/src/lib.rs	(cfg(test) inline)	test-only		domain-separation smoke test
+1	shekyl/domain-b-v1	rust/shekyl-crypto-hash/src/lib.rs	(cfg(test) inline)	test-only		domain-separation smoke test
+5	shekyl/schnorr-test-v1	rust/shekyl-crypto-pq/src/schnorr.rs	DOMAIN	test-only		cfg(test) module schnorr domain
+#
+# ── EXCLUDED — named, not domain separation for our purposes ────────────────
+x	RandomX\x03	rust/shekyl-pow-randomx/src/argon2d.rs	RANDOMX_ARGON_SALT	excluded		RandomX upstream Argon2d salt (configuration.md §7.1), byte-identical; not a Shekyl domain
+x	Tor safe cookie authentication server-to-controller hash	rust/shekyl-tor/src/control/safecookie.rs	(SAFECOOKIE HMAC key)	excluded		Tor control-protocol constant, not our DST
+x	.onion checksum	rust/shekyl-tor/src/onion_identity.rs	ONION_CHECKSUM_PREFIX	excluded		Tor v3 onion-address checksum prefix, protocol-fixed
+x	SWSP	rust/shekyl-engine-file/src/payload.rs	(wallet payload magic)	excluded		file magic, not a hash domain
+x	SHEKYLWT	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic
+x	SHEKYLWS	rust/shekyl-crypto-pq/src/wallet_envelope.rs	(envelope magic)	excluded		file magic
+x	SSP1	rust/shekyl-pow-randomx/src/superscalar.rs	SUPERSCALAR_PROGRAM_WIRE_MAGIC	excluded		RandomX superscalar-program wire-format tag (ASCII SSP1 = SuperScalar Program v1); format identity, not a hash domain
+x	\x01\x11\x01\x01\x01\x01\x02\x01\x01	rust/shekyl-engine-core/src/engine/daemon_observability.rs	EPEE_HEADER	excluded		EPEE portable-storage 8-byte header+version magic (also duplicated in shekyl-rpc-client); not a hash domain

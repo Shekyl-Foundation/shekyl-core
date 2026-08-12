@@ -411,8 +411,8 @@ where
             pending_rebuild_total,
             not_yet_spendable_total,
             not_yet_spendable,
-        ) = self.ledger.with_ledger_block(|ledger| {
-            let synced = ledger.height();
+        ) = self.ledger.with_wallet_ledger(|wallet| {
+            let synced = wallet.ledger.height();
             // Gate against the height the *bound* reference anchors to (computed
             // in `build` before the cursor-read `.await`), so the C2 spendability
             // decision and the tx's anchored reference are the same height even
@@ -430,7 +430,7 @@ where
             } else {
                 None
             };
-            let tip_hash = ledger.block_hash_at(synced).copied();
+            let tip_hash = wallet.ledger.block_hash_at(synced).copied();
             let locked: HashSet<OutputId> = state.output_locks.keys().copied().collect();
             // Partition the matured, non-reserved set across three buckets so an
             // insufficiency surfaces as the precise, self-resolving error rather
@@ -447,7 +447,7 @@ where
             // shortfall* rather than just the soonest output (which alone may
             // not suffice — that would underestimate the wait).
             let mut not_yet_spendable: Vec<(u64, u64)> = Vec::new();
-            for (idx, td) in ledger.spendable_outputs(synced, None) {
+            for (idx, td) in wallet.spendable_outputs(synced, None) {
                 if locked.contains(&idx) {
                     continue;
                 }

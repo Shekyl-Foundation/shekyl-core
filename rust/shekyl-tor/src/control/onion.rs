@@ -445,6 +445,56 @@ pub fn parse_service_id(lines: &[String]) -> Option<ServiceId> {
         .and_then(ServiceId::parse)
 }
 
+/// Why an `ADD_ONION` reply is not an acceptable publish of `expected`.
+///
+/// Pure control-protocol knowledge: status + `ServiceID=` field. The
+/// supervisor maps this into its own publish-failure type; it does not re-
+/// interpret the wire shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddOnionReplyError {
+    /// Tor answered with a non-250 status.
+    Rejected {
+        /// The status tor returned.
+        status: u16,
+    },
+    /// A 250 reply with no parseable `ServiceID=` line.
+    NoServiceId,
+    /// Tor published a different address than the one the caller holds.
+    ServiceIdMismatch {
+        /// The address the persona advertises / the held identity implies.
+        expected: ServiceId,
+        /// The address tor reported.
+        published: ServiceId,
+    },
+}
+
+/// Decide whether an `ADD_ONION` reply published the expected service — the
+/// pure core of the publish path, so the non-250 / no-id / mismatch
+/// fail-stops are unit-testable without a tor.
+///
+/// The mismatch check is the load-bearing one: tor returning 250 with a
+/// *different* `ServiceID` than the address the persona's key implies means
+/// the service exists but not at the address the persona advertises —
+/// unreachable to every witness, and invisible from the serving side.
+pub fn evaluate_add_onion_reply(
+    reply: &super::framing::ControlReply,
+    expected: &ServiceId,
+) -> Result<(), AddOnionReplyError> {
+    if reply.status() != 250 {
+        return Err(AddOnionReplyError::Rejected {
+            status: reply.status(),
+        });
+    }
+    match parse_service_id(reply.lines()) {
+        Some(published) if &published == expected => Ok(()),
+        Some(published) => Err(AddOnionReplyError::ServiceIdMismatch {
+            expected: expected.clone(),
+            published,
+        }),
+        None => Err(AddOnionReplyError::NoServiceId),
+    }
+}
+
 /// Standard-alphabet, padded base64 (RFC 4648 §4).
 ///
 /// Hand-rolled rather than adding a dependency to this crate: the single call
@@ -728,6 +778,25 @@ mod tests {
         // No ServiceID= line at all, and a malformed one, both fail closed.
         assert!(parse_service_id(&["OK".to_owned()]).is_none());
         assert!(parse_service_id(&["ServiceID=nope".to_owned()]).is_none());
+    }
+
+    #[test]
+    fn evaluate_add_onion_reply_status_and_id_are_load_bearing() {
+        use super::super::framing::ReplyFramer;
+
+        let expected = ServiceId::parse(&"a".repeat(SERVICE_ID_CHARS)).expect("valid");
+        let mut framer = ReplyFramer::new();
+        framer.push_bytes(format!("250-ServiceID={}\r\n250 OK\r\n", expected.as_str()).as_bytes());
+        let ok = framer.next_reply().expect("framed").expect("reply");
+        assert_eq!(evaluate_add_onion_reply(&ok, &expected), Ok(()));
+
+        let mut framer = ReplyFramer::new();
+        framer.push_bytes(b"550 collision\r\n");
+        let rejected = framer.next_reply().expect("framed").expect("reply");
+        assert_eq!(
+            evaluate_add_onion_reply(&rejected, &expected),
+            Err(AddOnionReplyError::Rejected { status: 550 })
+        );
     }
 
     #[test]

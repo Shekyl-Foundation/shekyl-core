@@ -698,6 +698,7 @@ impl Drop for Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::superscalar::SUPERSCALAR_PROGRAM_WIRE_MAGIC;
     use crate::Seedhash;
 
     /// Test seedhash A — all-`0x01` bytes wrapped in [`Seedhash`]
@@ -922,16 +923,16 @@ mod tests {
     }
 
     /// Feed one SuperscalarProgram into a Blake2b hasher in the wire
-    /// format the C generator uses (magic "SSP1", size u16 LE,
-    /// address_register u8, reserved u8 = 0, then `size` × 8 bytes
-    /// per instruction).
+    /// format the C generator uses ([`SUPERSCALAR_PROGRAM_WIRE_MAGIC`],
+    /// size u16 LE, address_register u8, reserved u8 = 0, then
+    /// `size` × 8 bytes per instruction).
     ///
     /// Mirrors `emit_ss_program_into_blake2b` in
     /// `_generator/phase2c/gen.cpp`. The wire format is documented
     /// in the T1 `.meta.txt` and in the Phase 2c generator README's
     /// "Wire formats" section.
     fn update_blake2b_with_ss_program(hasher: &mut Blake2bVar, prog: &SuperscalarProgram) {
-        hasher.update(b"SSP1");
+        hasher.update(SUPERSCALAR_PROGRAM_WIRE_MAGIC);
 
         let size = u16::try_from(prog.size())
             .expect("SuperscalarProgram::size fits in u16 by SUPERSCALAR_MAX_SIZE = 512 invariant");

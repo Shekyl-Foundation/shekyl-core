@@ -756,28 +756,22 @@ namespace nodetool
     {
     case epee::net_utils::zone::public_:
       return get_ip_seed_nodes();
+    /* GENESIS BLOCKER until Shekyl's own hidden services exist: without seeds
+       here, a node whose only anonymity peers would come from this list has no
+       bootstrap path, and its anonymity zone never forms. An operator can still
+       bootstrap with `--add-peer <address>`, which routes by parsed zone, but
+       that is a manual step and not a default. Q12-R1 generates the addresses
+       and lands them here; nothing about Tor on mainnet works until it does.
+
+       These lists previously held MONERO's onion and i2p seeds, which is worse
+       than empty rather than better. A Shekyl node started with `--tx-proxy
+       tor` dialed six Monero hidden services, failed the network-ID handshake
+       at each, and had nowhere else to go — the same dead zone, reached more
+       slowly, while announcing Shekyl's Tor population to another network's
+       seed operators on the way. An unbootstrapped zone is at least visible as
+       what it is. */
     case epee::net_utils::zone::tor:
-      if (m_nettype == cryptonote::MAINNET)
-      {
-        return {
-          "zbjkbsxc5munw3qusl7j2hpcmikhqocdf4pqhnhtpzw5nt5jrmofptid.onion:18083",
-          "plowsof3t5hogddwabaeiyrno25efmzfxyro2vligremt7sxpsclfaid.onion:18083",
-          "plowsoffjexmxalw73tkjmf422gq6575fc7vicuu4javzn2ynnte6tyd.onion:18083",
-          "plowsofe6cleftfmk2raiw5h2x66atrik3nja4bfd3zrfa2hdlgworad.onion:18083",
-          "aclc4e2jhhtr44guufbnwk5bzwhaecinax4yip4wr4tjn27sjsfg6zqd.onion:18083",
-          "lykcas4tus7mkm4bhsgqe4drtd4awi7gja24goscc47xfgzj54yofyqd.onion:18083",
-        };
-      }
-      return {};
     case epee::net_utils::zone::i2p:
-      if (m_nettype == cryptonote::MAINNET)
-      {
-        return {
-          "uqj3aphckqtjsitz7kxx5flqpwjlq5ppr3chazfued7xucv3nheq.b32.i2p",
-          "vdmnehdjkpkg57nthgnjfuaqgku673r5bpbqg56ix6fyqoywgqrq.b32.i2p",
-          "ugnlcdciyhghh2zert7c3kl4biwkirc43ke33jiy5slnd3mv2trq.b32.i2p",
-        };
-      }
       return {};
     default:
       break;
@@ -835,6 +829,24 @@ namespace nodetool
 
     res = init_config();
     CHECK_AND_ASSERT_MES(res, false, "Failed to init config.");
+
+    /* Every zone this node runs now exists (all `add_zone` calls are made from
+       `handle_command_line` above) and `init_config` has assigned the public
+       zone its random `peer_id`. This is therefore the first point at which
+       the invariant can be checked, and it is downstream of both sites a
+       future change would touch. See `ANON_ZONE_SENTINEL_PEER_ID`. */
+    for (const auto& zone : m_network_zones)
+    {
+      if (zone.first == epee::net_utils::zone::public_)
+        continue;
+      CHECK_AND_ASSERT_MES(
+        zone.second.m_config.m_peer_id == ANON_ZONE_SENTINEL_PEER_ID, false,
+        "Refusing to start: the " << epee::net_utils::zone_to_string(zone.first)
+          << " zone has a non-sentinel peer_id. A per-node peer_id announced on an "
+             "anonymity zone correlates this node's hidden-service address with its "
+             "public IP address."
+      );
+    }
 
     for (auto& zone : m_network_zones)
     {
@@ -2371,27 +2383,36 @@ namespace nodetool
        traffic (below) still fails closed when anonymity cannot take it —
        leaking an origin over clearnet is the first-spy case this arc exists
        to prevent (§30.5). */
-    const bool still_stemming =
-      tx_relay == cryptonote::relay_method::stem ||
-      tx_relay == cryptonote::relay_method::forward ||
-      tx_relay == cryptonote::relay_method::local;
+    /* Pre-fluff = stem | forward | local. Shared with the pure R-1
+       predicate (`cryptonote::is_pre_fluff_relay` / `r1_coherence_keeps_origin`)
+       so the production branch and its unit witness cannot drift. Fluff is the
+       exit — must not cohere (§59.1). */
+    const bool still_stemming = cryptonote::is_pre_fluff_relay(tx_relay);
 
     if (origin != enet::zone::invalid)
     {
-      /* Dormant today, and for the same reason as the two paths below (§63.8).
-         Every anonymity-zone release sets `dandelionpp_fluff`
-         (`levin_notify.cpp:561`, "always send with fluff flag, even over
-         i2p/tor"), so a receiver overrides its `forward` default to `fluff`
-         (`cryptonote_protocol_handler.inl:946`) and `upgrade_relay_method` is
-         monotone upward, never walking it back. A transaction whose `origin`
-         is an anonymity zone therefore always arrives here as `fluff` and
-         `still_stemming` is false.
+      /* STILL DORMANT — §89 did not wake this, and §89.7 said it did.
 
-         Correct for the world it wakes into: with covert on, the covert send
-         clears the flag (`levin_notify.cpp:1195`), the receiver keeps
-         `forward`, and coherence starts firing. Until then R-1 is the entry
-         roll alone. */
-      if (still_stemming && origin != enet::zone::public_ && m_network_zones.count(origin))
+         §63.8 closed it on a four-link chain and §89 breaks link 1 (an
+         anonymity stem clears `dandelionpp_fluff`). But the chain has a fifth
+         link §63.8 never recorded, and it binds on its own: a non-public
+         arrival takes `relay_method::forward`
+         (`cryptonote_protocol_handler.inl:969`), `tx_pool.cpp:360` refuses to
+         propagate `forward` into `tvc.m_relay`, and the batching switch drops
+         it (`// not supposed to happen here`). So `relay_transactions` is
+         never called at arrival with an anonymity origin, and `send_txs`
+         cannot see (anon origin, pre-fluff) whatever link 1 does.
+
+         Kept, not deleted: it is correct for the world it will run in, and
+         that world is the receive-path change §89.8.2 names. What is wrong is
+         only the claim that it runs now.
+
+         **Witness.** Link 1 is pinned by `levin.cpp`'s `private_*` cases; the
+         pure gate by `r1_coherence_predicate`. The end-to-end arrival needs a
+         `t_core` mock the suite lacks — see §89.8 / FOLLOWUPS, and note that
+         the missing witness is exactly what hid the fifth link. */
+      if (cryptonote::r1_coherence_keeps_origin(tx_relay, origin) &&
+          m_network_zones.count(origin))
         return send(*m_network_zones.find(origin)); // coherence: no re-roll
 
       /* The roll fires only on a genuine ARRIVAL — `source` is a real peer.
@@ -2935,6 +2956,18 @@ namespace nodetool
         public_zone->second.m_net_server.get_config_object().del_out_connections(current - count);
       m_payload_handler.set_max_out_peers(epee::net_utils::zone::public_, count);
     }
+  }
+
+  template<class t_payload_net_handler>
+  peerid_type node_server<t_payload_net_handler>::get_announced_peer_id(const epee::net_utils::zone zone) const
+  {
+    /* The quantity `get_local_node_data`, the anonymity-zone self-announcement
+       and `handle_ping` all read verbatim. Named so the invariant in `init`
+       has something a test can observe. */
+    const auto found = m_network_zones.find(zone);
+    if (found == m_network_zones.end())
+      return 0;
+    return found->second.m_config.m_peer_id;
   }
 
   template<class t_payload_net_handler>

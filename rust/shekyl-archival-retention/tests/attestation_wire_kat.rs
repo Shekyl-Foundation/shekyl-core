@@ -62,8 +62,12 @@ const SIG_B_ED_FILL: u8 = 0xB1;
 const SIG_B_ML_FILL: u8 = 0xB2;
 const ROOT_EMPTY_EXPECT_HEX: &str =
     "32b1bcd9532f6f0cad787eeeb126c307cdd6c9712b914fd6ba087d6a36bb7bf2";
+// Moved by the HYBRID_SIG_VERSION 1->2 bump (SA-R-4): the root commits
+// header ‖ signature_canonical pairs, and each dummy signature's canonical
+// encoding now begins with version byte 2. A version bump is a deliberate
+// consensus edit, so it must move this tripwire.
 const ROOT_TWO_EXPECT_HEX: &str =
-    "d0a627303a97197f56db53d1251a9b616f4f834e0ae99871a772ed7e693ea6b1";
+    "90a3f26977797359782c99c284511d4f284225887a2b6a07383494ed690a65c0";
 
 fn header(p_id: [u8; 32], shard_id: u64, settlement_epoch: u64) -> AttestationHeader {
     AttestationHeader {

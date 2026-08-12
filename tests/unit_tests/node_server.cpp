@@ -78,7 +78,7 @@ public:
   bool update_checkpoints(const bool skip_dns = false) { return true; }
   uint64_t get_target_blockchain_height() const { return 1; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
-  virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay) {}
+  virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, epee::net_utils::zone) {}
   cryptonote::network_type get_nettype() const { return cryptonote::MAINNET; }
   bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx_blob, cryptonote::relay_category tx_category) const { return false; }
   bool pool_has_tx(const crypto::hash &txid) const { return false; }
@@ -1050,7 +1050,7 @@ TEST(node_server, race_condition)
     struct core_events_t: cryptonote::i_core_events {
       uint64_t get_current_blockchain_height() const override { return {}; }
       bool is_synchronized() const override { return {}; }
-      void on_transactions_relayed(blobs_t blobs, relay_t relay) override {}
+      void on_transactions_relayed(blobs_t blobs, relay_t relay, epee::net_utils::zone) override {}
     };
     int handle_invoke_map(bool is_notify, int command, const span_t in, byte_stream_t &out, context_t &context, bool &handled) {
       return {};
@@ -1325,6 +1325,82 @@ TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
   const auto omitted = parse("tor,127.0.0.1:9050");
   ASSERT_TRUE(omitted.has_value());
   EXPECT_EQ(-1, omitted->front().max_connections);
+}
+
+TEST(node_server, anonymity_zone_announces_the_sentinel_peer_id)
+{
+  // Q12-R-W3. `peer_id` is announced on EVERY zone the node runs — in the
+  // handshake, in the anonymity-zone self-announcement peerlist entry, and in
+  // `handle_ping`'s response. Only the public zone is given a random value;
+  // an anonymity zone must keep the fixed sentinel, so the value carries no
+  // entropy and links nothing.
+  //
+  // Randomizing an anonymity zone's `peer_id` — which reads as a tidy-up,
+  // since "only the public zone is randomized" looks like an oversight — would
+  // give every node a stable unique identifier announced on both its clearnet
+  // and its Tor connections. Recovering the operator's IP from their `.onion`
+  // would then be a passive lookup with no timing analysis at all.
+  //
+  // The assertion is on the announced value rather than on `init` refusing,
+  // so it survives deletion of the guard in `init` and fails on the edit
+  // itself.
+  struct test_data_t
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+
+    test_data_t(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+  };
+
+  test_data_t data;
+
+  boost::program_options::options_description desc_options("Command line options");
+  cryptonote::core::init_options(desc_options);
+  Server::init_options(desc_options);
+
+  const char* argv[2] = {nullptr, nullptr};
+  boost::program_options::variables_map vm;
+  boost::program_options::store(
+    boost::program_options::parse_command_line(1, argv, desc_options), vm);
+
+  // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
+  vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+    boost::program_options::variable_value(std::string("127.0.0.2"), false);
+  vm.find(nodetool::arg_p2p_bind_port.name)->second =
+    boost::program_options::variable_value(std::string("48085"), false);
+  // 12 outbound connections: the F-8b floor, so the zone is accepted.
+  //
+  // `find` is safe on an option absent from the command line because
+  // `make_semantic` gives every vector-valued arg_descriptor an empty
+  // `default_value` (src/common/command_line.h), so `store` inserts it into the
+  // map regardless. Were that not so this would dereference `end()` rather than
+  // fail an assertion — hence naming it here rather than relying on it quietly.
+  vm.find(nodetool::arg_tx_proxy.name)->second =
+    boost::program_options::variable_value(
+      std::vector<std::string>{"tor,127.0.0.1:9050,12"}, false);
+
+  boost::program_options::notify(vm);
+  ASSERT_TRUE(data.server->init(vm));
+
+  EXPECT_EQ(nodetool::ANON_ZONE_SENTINEL_PEER_ID,
+            data.server->get_announced_peer_id(epee::net_utils::zone::tor))
+    << "an anonymity zone must announce the fixed sentinel: a per-node value here "
+       "correlates this node's hidden-service address with its public IP";
+
+  // Negative control. Without this the assertion above would also pass on a
+  // harness that could not observe a per-zone difference at all — the public
+  // zone IS randomized, and the two must not agree.
+  EXPECT_NE(nodetool::ANON_ZONE_SENTINEL_PEER_ID,
+            data.server->get_announced_peer_id(epee::net_utils::zone::public_))
+    << "the public zone is randomized; if it reads as the sentinel the test is "
+       "not observing the per-zone value";
+
+  data.server->deinit();
 }
 
 TEST(node_server, out_peers_floor_guards_public_zone_init_and_runtime)

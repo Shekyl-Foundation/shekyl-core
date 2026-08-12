@@ -1089,16 +1089,16 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
     // refresh is the settlement authority for `spent`.
     {
         let guard = pending.ledger.read();
+        let spend_locks = guard.ledger.spend_locks();
         let td = guard.ledger.ledger.transfers().first().expect("output 0");
         assert!(!td.spent, "spent stays refresh-authoritative");
-        let lock = td
-            .awaiting_confirmation
-            .as_ref()
-            .expect("submit-accept places the F14 lock");
+        let lock = spend_locks
+            .get(td.global_output_index)
+            .expect("submit-accept arms the journal-derived F14 lock");
         assert_eq!(lock.tx_hash, tx_hash);
         assert!(
-            !td.is_spendable(u64::MAX),
-            "locked output must be excluded from selection"
+            !td.is_spendable(u64::MAX, &spend_locks),
+            "journal-locked output must be excluded from selection"
         );
     }
 }
@@ -1238,13 +1238,8 @@ async fn confirmed_absent_release_keeps_retention_record() {
         "the pending record stays as the secret's I-2 live reference"
     );
     assert!(
-        guard
-            .ledger
-            .ledger
-            .transfers()
-            .iter()
-            .all(|td| td.awaiting_confirmation.is_none()),
-        "all F14 locks for the confirmed-absent tx are cleared"
+        guard.ledger.spend_locks().is_empty(),
+        "all derived F14 locks for the confirmed-absent tx are cleared"
     );
     guard.ledger.check_invariants().expect("I-2 after release");
 }
@@ -1400,8 +1395,8 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
     );
     assert_eq!(pending.outstanding(), 0, "reservation released");
 
-    // The F14 lock is re-derived from the journal baseline (clamped claim);
-    // `spent` stays refresh-written. Journal and field must agree (I-5).
+    // The F14 lock is a view of the journal baseline (clamped claim);
+    // `spent` stays refresh-written and takes precedence over the view.
     {
         let guard = pending.ledger.read();
         let row = guard
@@ -1415,20 +1410,23 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
             Some(20),
             "AlreadyInChain mirrors the clamped baseline into the journal (F40)"
         );
+        let spend_locks = guard.ledger.spend_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
             .transfers()
             .iter()
-            .filter(|td| td.awaiting_confirmation.is_some())
+            .filter(|td| spend_locks.contains(td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
-            "AlreadyInChain must place the F14 lock (F40: no selectable window)"
+            "AlreadyInChain must arm the F14 lock (F40: no selectable window)"
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
+            let lock = spend_locks
+                .get(td.global_output_index)
+                .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert_eq!(
                 lock.accepted_at_height, 20,
@@ -1439,17 +1437,17 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
             assert_eq!(
                 row.lock_baseline,
                 Some(lock.accepted_at_height),
-                "I-5: journal baseline equals the derived F14 lock"
+                "the derived lock carries exactly the journal baseline"
             );
             assert!(
-                !td.is_spendable(u64::MAX),
-                "locked output must be excluded from selection"
+                !td.is_spendable(u64::MAX, &spend_locks),
+                "journal-locked output must be excluded from selection"
             );
         }
         guard
             .ledger
             .check_invariants()
-            .expect("I-5 holds after AlreadyInChain");
+            .expect("invariants hold after AlreadyInChain");
     }
 
     let events = sink.recorded_pending();
@@ -1513,12 +1511,13 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
     // stands, baselined at the claimed height.
     {
         let guard = pending.ledger.read();
+        let spend_locks = guard.ledger.spend_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
             .transfers()
             .iter()
-            .filter(|td| td.awaiting_confirmation.is_some())
+            .filter(|td| spend_locks.contains(td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
@@ -1526,7 +1525,9 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
+            let lock = spend_locks
+                .get(td.global_output_index)
+                .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert_eq!(lock.accepted_at_height, 15);
         }
@@ -1594,24 +1595,27 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
     // `spent` untouched — the kind rode through as data, not dispatch.
     {
         let guard = pending.ledger.read();
+        let spend_locks = guard.ledger.spend_locks();
         let locked: Vec<_> = guard
             .ledger
             .ledger
             .transfers()
             .iter()
-            .filter(|td| td.awaiting_confirmation.is_some())
+            .filter(|td| spend_locks.contains(td.global_output_index))
             .collect();
         assert!(
             !locked.is_empty(),
-            "AlreadyInPool must place the F14 lock exactly as a fresh accept"
+            "AlreadyInPool must arm the F14 lock exactly as a fresh accept"
         );
         for td in &locked {
             assert!(!td.spent, "spent stays refresh-authoritative");
-            let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
+            let lock = spend_locks
+                .get(td.global_output_index)
+                .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert!(
-                !td.is_spendable(u64::MAX),
-                "locked output must be excluded from selection"
+                !td.is_spendable(u64::MAX, &spend_locks),
+                "journal-locked output must be excluded from selection"
             );
         }
     }
@@ -1663,7 +1667,7 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
 
     let held = {
         let guard = pending.ledger.read();
-        held_submits(&guard.ledger.ledger)
+        held_submits(&guard.ledger)
     };
     let held = held.first().expect("the F14 lock is placed (F40)");
     assert_eq!(
@@ -1981,8 +1985,8 @@ async fn concurrent_builds_serialize_on_the_build_permit() {
 /// the retention record — realized fee from the wire bytes (R-4),
 /// recipients as requested, the carried input set with wipe-stable
 /// gindexes, change as the exact remainder, and (after the accept
-/// verdict) a lock_baseline equal to the F14 lock's baseline (the I-5
-/// equivalence, spot-checked here end to end).
+/// verdict) the `lock_baseline` the derived F14 lock reads its baseline
+/// from (spot-checked here end to end).
 #[tokio::test]
 async fn dispatch_writes_the_send_journal_row() {
     use crate::engine::transaction_submitter::wire_fee;
@@ -2021,20 +2025,18 @@ async fn dispatch_writes_the_send_journal_row() {
     );
     assert_eq!(row.state, shekyl_engine_state::SendState::Dispatched);
 
-    // I-5 spot check: the journal baseline equals the F14 lock's.
-    let lock = guard
-        .ledger
-        .ledger
-        .transfers()
-        .iter()
-        .find_map(|td| td.awaiting_confirmation.as_ref())
-        .expect("accept placed the F14 lock");
+    // Derived-view spot check: the accept armed the journal baseline
+    // and the derived lock map carries the row's inputs under it.
+    let spend_locks = guard.ledger.spend_locks();
+    let lock = spend_locks
+        .get(row.inputs[0].gindex)
+        .expect("accept armed the journal-derived F14 lock over the carried input");
     assert_eq!(row.lock_baseline, Some(lock.accepted_at_height));
     assert_eq!(lock.tx_hash, txid);
     guard
         .ledger
         .check_invariants()
-        .expect("I-5 equivalence holds after dispatch+accept");
+        .expect("invariants hold after dispatch+accept");
 }
 
 /// PR-SJ-1: a terminal refusal keeps the row as failed-send history
@@ -2145,18 +2147,18 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
 /// # Accept *and* reject
 ///
 /// Mirrors 2a: the verify side must reject a wrong `bond_credit`, a tampered
-/// commitment, a signature that does not cover the post preimage, and a
-/// replayed post. A round-trip that only asserts "valid accepts" can pass
-/// against a verify that accepts everything.
+/// commitment, and a replayed post. A round-trip that only asserts "valid
+/// accepts" can pass against a verify that accepts everything. (The bond vin
+/// carries no on-chain signature of its own — P's authorization rides the
+/// surface-A `pqc_auths` slot, tested there; SA-2b, SIGNATURE_ALIGNMENT.md §2.2.)
 #[tokio::test]
-async fn join_market_bond_post_signs_and_verifies_over_real_tree() {
+async fn join_market_bond_post_verifies_over_real_tree() {
     use rand_core::OsRng;
     use shekyl_archival_retention::{
         verify_bond_post_ct_balance, verify_join_market_bond_post, BondCtBalanceError,
         BondPostError, BondTerm,
     };
     use shekyl_bulletproofs::Bulletproof;
-    use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
     use shekyl_curve_io::CompressedPoint;
     use shekyl_curve_primitives::Commitment;
     use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
@@ -2170,27 +2172,24 @@ async fn join_market_bond_post_signs_and_verifies_over_real_tree() {
         signed,
         outputs,
         built,
-        p_keys,
         fee,
         floor,
-        signable_tx_hash,
         ..
     } = real_tree_bond_post_proofs().await;
 
-    // ── Verify 1/4: vin semantics, record does not yet exist ─────────
+    // ── Verify 1/3: vin semantics, record does not yet exist ─────────
+    //
+    // The vin carries no on-chain signature of its own: P's authorization
+    // rides the transaction-level `pqc_auths` slot (surface A) over the
+    // whole-tx payload hash — exercised in the daemon submit battery
+    // (`shekyl-daemon-rpc/tests/submit_verifier.rs`:
+    // `bond_slot_tampered_signature_is_rejected`,
+    // `bond_spend_pk_swap_after_signing_is_rejected`), not here
+    // (SA-2b; SIGNATURE_ALIGNMENT.md §2.2).
     verify_join_market_bond_post(built.vin(), false)
         .expect("verify accepts a fresh JoinMarket post");
 
-    // ── Verify 2/4: hybrid signature under P_pubkey over the preimage ─
-    let preimage = built.vin().signature_preimage(&signable_tx_hash);
-    assert!(
-        HybridEd25519MlDsa
-            .verify(p_keys.hybrid_bond_id(), &preimage, built.signature())
-            .expect("verify hybrid signature"),
-        "JoinMarket signature must verify under P_pubkey"
-    );
-
-    // ── Verify 3/4: BP+ over the un-cofactored change commitment ─────
+    // ── Verify 2/3: BP+ over the un-cofactored change commitment ─────
     let bp_commitments: Vec<CompressedPoint> = outputs
         .iter()
         .map(|out| {
@@ -2208,7 +2207,7 @@ async fn join_market_bond_post_signs_and_verifies_over_real_tree() {
         "BP+ verifier must accept the bond-post range proof"
     );
 
-    // ── Verify 4/4 (FCMP++ membership over the REAL root) is deferred ─
+    // ── Verify 3/3 (FCMP++ membership over the REAL root) is deferred ─
     // The construct→prove half already ran in the shared setup:
     // `sign_transaction_with_terms` assembled and proved over genuine
     // depth-2 branch layers from the production `CurveTreeClient`. The
@@ -2263,17 +2262,7 @@ async fn join_market_bond_post_signs_and_verifies_over_real_tree() {
         "a tampered commitment must not satisfy the balance"
     );
 
-    // ── Reject 3: a signature that does not cover the post is rejected ─
-    let mut wrong_preimage = preimage;
-    wrong_preimage[0] ^= 0x01;
-    assert!(
-        !HybridEd25519MlDsa
-            .verify(p_keys.hybrid_bond_id(), &wrong_preimage, built.signature())
-            .expect("verify against tampered preimage"),
-        "the bond signature must not verify against a tampered preimage"
-    );
-
-    // ── Reject 4: a replayed post (record already exists) is rejected ─
+    // ── Reject 3: a replayed post (record already exists) is rejected ─
     assert_eq!(
         verify_join_market_bond_post(built.vin(), true),
         Err(BondPostError::RecordExists),
@@ -2294,7 +2283,6 @@ struct RealTreeBondProofs {
     tree_ctx: shekyl_tx_builder::TreeContext,
     outputs: Vec<shekyl_tx_builder::types::OutputInfo>,
     built: shekyl_archival_bond_builder::JoinMarketVin,
-    p_keys: shekyl_crypto_pq::archival_p::ArchivalPKeys,
     output_key: [u8; 32],
     h_pqc: [u8; 32],
     spend_key_x: [u8; 32],
@@ -2445,7 +2433,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     }];
 
     // ── Build the bond vin + the change output ───────────────────────
-    let built = build_join_market_vin(&p_keys, holdings.clone(), &signable_tx_hash)
+    let built = build_join_market_vin(p_keys.bond_post_keys(), holdings.clone())
         .expect("build JoinMarket vin");
     assert_eq!(built.vin().bond_credit, floor);
     assert_eq!(built.vin().bond_debit, 0);
@@ -2508,7 +2496,6 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         tree_ctx,
         outputs,
         built,
-        p_keys,
         output_key: constructed.output_key,
         h_pqc: constructed.h_pqc,
         spend_key_x: *bundle.spend_key_x,
@@ -3490,16 +3477,17 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
     assert_eq!(daemon.submitted_count(), 1);
 
-    // F14 (§2.6): accept places the awaiting-confirmation lock, not a
-    // durable `spent` write.
+    // F14 (§2.6): accept arms the journal-derived lock, not a durable
+    // `spent` write.
     {
         let guard = pending.ledger.read();
+        let spend_locks = guard.ledger.spend_locks();
         let td = guard.ledger.ledger.transfers().first().expect("output 0");
         assert!(!td.spent, "spent stays refresh-authoritative");
         assert_eq!(
-            td.awaiting_confirmation
-                .as_ref()
-                .expect("submit-accept places the F14 lock")
+            spend_locks
+                .get(td.global_output_index)
+                .expect("submit-accept arms the journal-derived F14 lock")
                 .tx_hash,
             tx_hash
         );

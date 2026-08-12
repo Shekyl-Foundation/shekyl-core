@@ -49,7 +49,7 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
         tor_binary(),
         dir.path().join("tor-data"),
         2,
-        Arc::new(payload.clone()),
+        Arc::from(payload.clone().into_boxed_slice()),
     )
     .await
     .expect("apparatus comes up");

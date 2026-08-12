@@ -60,6 +60,13 @@ use crate::control::{
     BootstrapReadiness, BootstrapState, Command, ControlError, EventSink, ManagedTor, SocksPort,
     TorControl, TorControlConfig, TorExit, TorLaunch,
 };
+use crate::onion_service::{publish_onion, OnionPublishAbort};
+
+// Config/error types for the onion publish surface live in `onion_service`
+// (their own concern). Re-exported here so `TorServiceConfig` consumers can
+// name them next to the supervisor types they configure.
+#[doc(inline)]
+pub use crate::onion_service::{OnionPublishError, OnionServiceSpec};
 
 /// The service-level posture — what the rest of the wallet sees. One long-lived
 /// watch, owned by the supervisor, outliving every incarnation (the §3b
@@ -149,6 +156,12 @@ pub enum ServiceFailure {
     /// its rendered message (the type is neither `Clone` nor `Eq`, so it is kept
     /// as text) rather than masquerading as a tor `Exited`.
     Internal(String),
+    /// `ADD_ONION` for the configured onion service failed — the incarnation
+    /// bootstrapped and has a SOCKS listener, but the persona's serving
+    /// endpoint could not be published, so `Ready` (which means the FULL
+    /// serving posture is up when an onion is configured) is never reached
+    /// on this incarnation.
+    OnionPublish(OnionPublishError),
 }
 
 /// The two retry cadences (§3c restart classification).
@@ -172,7 +185,8 @@ pub fn classify(failure: &ServiceFailure) -> FailureClass {
         | ServiceFailure::NoSocksListener
         | ServiceFailure::BootstrapTimeout
         | ServiceFailure::Exited(_)
-        | ServiceFailure::Internal(_) => FailureClass::Transient,
+        | ServiceFailure::Internal(_)
+        | ServiceFailure::OnionPublish(_) => FailureClass::Transient,
     }
 }
 
@@ -200,6 +214,11 @@ pub struct SupervisorPolicy {
     /// keeps SOCKS discovery from hanging the supervisor (and thus `shutdown()`).
     /// Policy-driven (like the other timeouts) so tests can shrink it.
     pub socks_discovery_deadline: Duration,
+    /// Bound on the `ADD_ONION` reply for the configured onion service.
+    /// `ADD_ONION` loads the key and answers immediately — descriptor
+    /// publication is asynchronous and NOT awaited here — so, like SOCKS
+    /// discovery, a stall means a wedged control port, not a slow network.
+    pub onion_publish_deadline: Duration,
 }
 
 impl Default for SupervisorPolicy {
@@ -212,6 +231,7 @@ impl Default for SupervisorPolicy {
             trust_retry: Duration::from_secs(300),
             bootstrap_deadline: Duration::from_secs(300),
             socks_discovery_deadline: Duration::from_secs(30),
+            onion_publish_deadline: Duration::from_secs(30),
         }
     }
 }
@@ -326,6 +346,14 @@ pub struct TorServiceConfig {
     /// **production always leaves it `false`**. Same typed-knob rationale as
     /// `ManagedTor::disable_network`.
     pub disable_network: bool,
+    /// The persona's onion service, republished on every incarnation's
+    /// `Ready` transition (onions are per-incarnation: `Detach` is
+    /// unrepresentable). When set, `Ready` means the **full** serving
+    /// posture is up — SOCKS discovered *and* the onion published at the
+    /// derived address; a publish failure tears the incarnation down
+    /// through the normal retry/degrade policy instead of publishing a
+    /// half-up `Ready`.
+    pub onion: Option<OnionServiceSpec>,
 }
 
 /// Handle to a running supervisor: the posture watch + shutdown.
@@ -463,15 +491,19 @@ async fn supervise(
             readiness,
         });
 
-        // 3. Drive it: bootstrap → SOCKS discovery → Ready → hold until death.
+        // 3. Drive it: bootstrap → SOCKS discovery → onion publish → Ready →
+        //    hold until death.
         let end = drive_incarnation(
-            &actor,
+            &mut IncarnationCtx {
+                actor: &actor,
+                policy: &config.policy,
+                onion: config.onion.as_ref(),
+                attempt: &mut attempt,
+                degraded: &mut degraded,
+                posture: &posture,
+                shutdown: &mut shutdown,
+            },
             ready_rx,
-            &config.policy,
-            &mut attempt,
-            &mut degraded,
-            &posture,
-            &mut shutdown,
         )
         .await;
 
@@ -570,25 +602,35 @@ async fn wait_or_shutdown(delay: Duration, shutdown: &mut oneshot::Receiver<()>)
     }
 }
 
+/// Shared handles for one incarnation drive — keeps `drive_incarnation`'s
+/// signature a single named context instead of a growing argument bag.
+struct IncarnationCtx<'a> {
+    actor: &'a kameo::actor::ActorRef<TorControl>,
+    policy: &'a SupervisorPolicy,
+    onion: Option<&'a OnionServiceSpec>,
+    attempt: &'a mut u32,
+    degraded: &'a mut bool,
+    posture: &'a watch::Sender<TorPosture>,
+    shutdown: &'a mut oneshot::Receiver<()>,
+}
+
 /// Drive one incarnation from spawn to death: forward bootstrap telemetry,
-/// discover the SOCKS endpoint at `Ready`, then hold until the actor dies, the
-/// bootstrap deadline fires, or the caller shuts down. Clears the sticky alarm
-/// in place once this incarnation has held `Ready` for `stable_reset`.
+/// discover the SOCKS endpoint, publish the configured onion (if any), then
+/// hold until the actor dies, the bootstrap deadline fires, or the caller
+/// shuts down. Clears the sticky alarm in place once this incarnation has
+/// held `Ready` for `stable_reset`.
 async fn drive_incarnation(
-    actor: &kameo::actor::ActorRef<TorControl>,
+    ctx: &mut IncarnationCtx<'_>,
     mut ready_rx: watch::Receiver<BootstrapState>,
-    policy: &SupervisorPolicy,
-    attempt: &mut u32,
-    degraded: &mut bool,
-    posture: &watch::Sender<TorPosture>,
-    shutdown: &mut oneshot::Receiver<()>,
 ) -> IncarnationEnd {
-    let deadline = tokio::time::Instant::now() + policy.bootstrap_deadline;
+    let deadline = tokio::time::Instant::now() + ctx.policy.bootstrap_deadline;
     // Phase 1: to Ready (or death/deadline/shutdown).
     loop {
         tokio::select! {
-            _ = &mut *shutdown => return IncarnationEnd::Shutdown,
-            () = actor.wait_for_shutdown() => return IncarnationEnd::Failed(ServiceFailure::Exited(None)),
+            _ = &mut *ctx.shutdown => return IncarnationEnd::Shutdown,
+            () = ctx.actor.wait_for_shutdown() => {
+                return IncarnationEnd::Failed(ServiceFailure::Exited(None));
+            }
             () = tokio::time::sleep_until(deadline) => {
                 return IncarnationEnd::Failed(ServiceFailure::BootstrapTimeout);
             }
@@ -604,8 +646,10 @@ async fn drive_incarnation(
                         // Suppressed while degraded so a retry's bootstrap does not
                         // flap the alarm; the suppression lifts when a sustained
                         // Ready clears `degraded` below (§3c).
-                        if !*degraded {
-                            posture.send(TorPosture::Connecting { progress }).ok();
+                        if !*ctx.degraded {
+                            ctx.posture
+                                .send(TorPosture::Connecting { progress })
+                                .ok();
                         }
                     }
                     BootstrapState::Failed => {
@@ -623,11 +667,11 @@ async fn drive_incarnation(
     // is not usable whatever bootstrap says — a distinct diagnostic, and the
     // control error is preserved rather than collapsed into a generic exit.
     let reply = tokio::select! {
-        _ = &mut *shutdown => return IncarnationEnd::Shutdown,
-        () = tokio::time::sleep(policy.socks_discovery_deadline) => {
+        _ = &mut *ctx.shutdown => return IncarnationEnd::Shutdown,
+        () = tokio::time::sleep(ctx.policy.socks_discovery_deadline) => {
             return IncarnationEnd::Failed(ServiceFailure::Control(ControlError::Timeout));
         }
-        r = actor.ask(Command::GetInfo(vec!["net/listeners/socks".to_owned()])) => r,
+        r = ctx.actor.ask(Command::GetInfo(vec!["net/listeners/socks".to_owned()])) => r,
     };
     let socks_addr = match reply {
         Ok(reply) => match parse_socks_listeners(&reply) {
@@ -641,13 +685,40 @@ async fn drive_incarnation(
         }
         Err(_) => return IncarnationEnd::Failed(ServiceFailure::Exited(None)),
     };
+    // Phase 2b: publish the persona's onion service, if configured — on
+    // EVERY incarnation, because a published onion dies with its control
+    // connection (`Detach` is unrepresentable). Runs before the `Ready`
+    // posture so `Ready` means the FULL serving posture is up: a persona
+    // whose SOCKS works but whose onion did not publish is unreachable for
+    // challenges, and publishing `Ready` for it would hide exactly the
+    // failure the supervisor exists to surface.
+    if let Some(spec) = ctx.onion {
+        match publish_onion(
+            ctx.actor,
+            spec,
+            ctx.policy.onion_publish_deadline,
+            ctx.shutdown,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(OnionPublishAbort::Shutdown) => return IncarnationEnd::Shutdown,
+            Err(OnionPublishAbort::ActorGone) => {
+                return IncarnationEnd::Failed(ServiceFailure::Exited(None));
+            }
+            Err(OnionPublishAbort::Failed(e)) => {
+                return IncarnationEnd::Failed(ServiceFailure::OnionPublish(e));
+            }
+        }
+    }
+
     // Usable now — published unconditionally (never hide a working transport
     // from SP-T1). While the degraded episode is still open, `recovering: true`
     // keeps the operator incident continuous instead of flapping it closed.
-    posture
+    ctx.posture
         .send(TorPosture::Ready {
             socks_addr,
-            recovering: *degraded,
+            recovering: *ctx.degraded,
         })
         .ok();
 
@@ -657,19 +728,21 @@ async fn drive_incarnation(
     // rather than re-firing `Degraded`, and republish `recovering: false` — the
     // alarm-clear edge. A tor that never reaches a sustained Ready (a genuine
     // flapper) never forgives — it keeps alarming.
-    let reset_deadline = tokio::time::Instant::now() + policy.stable_reset;
+    let reset_deadline = tokio::time::Instant::now() + ctx.policy.stable_reset;
     let mut forgiven = false;
     loop {
         tokio::select! {
-            _ = &mut *shutdown => return IncarnationEnd::Shutdown,
-            () = actor.wait_for_shutdown() => return IncarnationEnd::Failed(ServiceFailure::Exited(None)),
+            _ = &mut *ctx.shutdown => return IncarnationEnd::Shutdown,
+            () = ctx.actor.wait_for_shutdown() => {
+                return IncarnationEnd::Failed(ServiceFailure::Exited(None));
+            }
             () = tokio::time::sleep_until(reset_deadline), if !forgiven => {
-                let was_degraded = *degraded;
-                *attempt = 0;
-                *degraded = false;
+                let was_degraded = *ctx.degraded;
+                *ctx.attempt = 0;
+                *ctx.degraded = false;
                 forgiven = true;
                 if was_degraded {
-                    posture
+                    ctx.posture
                         .send(TorPosture::Ready {
                             socks_addr,
                             recovering: false,
@@ -694,6 +767,7 @@ mod tests {
             trust_retry: Duration::from_millis(20),
             bootstrap_deadline: Duration::from_secs(5),
             socks_discovery_deadline: Duration::from_secs(2),
+            onion_publish_deadline: Duration::from_secs(2),
         }
     }
 
@@ -768,6 +842,16 @@ mod tests {
         );
         assert_eq!(
             classify(&ServiceFailure::Internal("gate task panicked".to_owned())),
+            FailureClass::Transient
+        );
+        // A publish failure is transient: the persona should keep retrying to
+        // get its onion up (a not-yet-published service is a coming slash),
+        // never sit in a give-up state. (Protocol-verdict unit tests live
+        // with `onion_service` / `control::onion`.)
+        assert_eq!(
+            classify(&ServiceFailure::OnionPublish(
+                OnionPublishError::NoServiceId
+            )),
             FailureClass::Transient
         );
     }
@@ -865,6 +949,7 @@ mod tests {
             events: EventSink::new(tx),
             policy: tiny_policy(),
             disable_network: true,
+            onion: None,
         });
         let mut posture = service.posture();
 
@@ -915,6 +1000,7 @@ mod tests {
             events: EventSink::new(tx),
             policy: tiny_policy(),
             disable_network: true,
+            onion: None,
         });
         let mut posture = service.posture();
         service.shutdown().await;
@@ -981,6 +1067,7 @@ mod live_tests {
                 ..SupervisorPolicy::default()
             },
             disable_network: false,
+            onion: None,
         });
         let mut posture = service.posture();
 
@@ -1041,6 +1128,78 @@ mod live_tests {
         while posture.changed().await.is_ok() {}
     }
 
+    /// The onion is republished on **every** incarnation, not just the first —
+    /// the reviewer's concern made a test: a persona that publishes once and
+    /// then serves until its first Tor restart, after which it silently stops,
+    /// is a slow slash. With an onion configured, `Ready` *means the onion is
+    /// published at the derived address* (the publish runs before `Ready` and
+    /// fail-stops on any other outcome), so reaching `Ready` again after a
+    /// SIGKILL is exactly the proof that the second incarnation republished.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
+    async fn onion_is_republished_on_every_incarnation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().join("data");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // A loopback target for the onion's virtual port — it need not be
+        // listening for ADD_ONION to succeed; the publish is what we test.
+        let target = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind loopback target")
+            .local_addr()
+            .expect("local addr");
+        let identity = crate::onion_identity::OnionIdentity::from_hs_id_seed(&[0x5cu8; 32]);
+        // The address the persona advertises is known before spawn (the caller
+        // holds it from the spec), so witnesses can be told where to connect
+        // without waiting on any posture.
+        let spec = OnionServiceSpec::new(identity, 80, target, 8).expect("loopback spec");
+        let _advertised = spec.service_id().clone();
+
+        let service = TorService::spawn(TorServiceConfig {
+            binary: TorBinarySource::UncheckedForTest(tor_binary()),
+            data_dir: data_dir.clone(),
+            events: EventSink::new(tx),
+            policy: SupervisorPolicy {
+                backoff_base: Duration::from_millis(100),
+                backoff_cap: Duration::from_secs(2),
+                ..SupervisorPolicy::default()
+            },
+            disable_network: false,
+            onion: Some(spec),
+        });
+        let mut posture = service.posture();
+
+        // First life: Ready is only published after the onion published at
+        // `expected` (a mismatch or rejection would fail the incarnation).
+        await_posture(&mut posture, 120, "first Ready (onion published)", |p| {
+            matches!(p, TorPosture::Ready { .. })
+        })
+        .await;
+
+        // Crash it; the republish must happen again on the fresh incarnation.
+        let killed = std::process::Command::new("pkill")
+            .arg("-9")
+            .arg("-f")
+            .arg(data_dir.to_str().expect("utf8 tmpdir"))
+            .status()
+            .expect("pkill runs");
+        assert!(killed.success(), "pkill must find the managed tor");
+
+        await_posture(&mut posture, 30, "Restarting after SIGKILL", |p| {
+            matches!(p, TorPosture::Restarting { .. } | TorPosture::Starting)
+        })
+        .await;
+        // Second Ready ⇒ the onion republished on the second incarnation.
+        await_posture(&mut posture, 120, "second Ready (onion republished)", |p| {
+            matches!(p, TorPosture::Ready { .. })
+        })
+        .await;
+
+        service.shutdown().await;
+        while posture.changed().await.is_ok() {}
+    }
+
     /// The degraded-episode continuity (§3c, review round 3): a crash trips the
     /// sticky alarm, the *next* incarnation is usable-but-still-in-episode
     /// (`Ready { recovering: true }`), and once it holds `Ready` for `stable_reset`
@@ -1067,6 +1226,7 @@ mod live_tests {
                 ..SupervisorPolicy::default()
             },
             disable_network: false,
+            onion: None,
         });
         let mut posture = service.posture();
 
@@ -1161,6 +1321,7 @@ mod live_tests {
             // Never bootstraps → every incarnation hits the bootstrap deadline →
             // teardown + respawn into the same DataDirectory.
             disable_network: true,
+            onion: None,
         });
         let mut posture = service.posture();
 

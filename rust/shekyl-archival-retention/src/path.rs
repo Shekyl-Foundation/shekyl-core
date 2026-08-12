@@ -8,6 +8,36 @@
 //! Replays `shekyl-fcmp::tree` grow rules through sibling branches to `R_k`,
 //! matching the layer discipline of `shekyl-curve-tree::AssembledPath` but
 //! terminating at the segment root (gate-2 §5.1).
+//!
+//! # Mechanism status (2026-08-11): this is the RETIRED sampled-leaf mode
+//!
+//! **Do not build against this module.** It implements the fire-beacon
+//! design's *sampled-leaf* proof of retention — replay one derived-index
+//! leaf's opening against `R_k` — which is **superseded** by derived
+//! assignment (`ARCHIVAL_CHALLENGE_MECHANISM.md` §2). Under the ruled
+//! mechanism the witness pulls the **entire shard** and verifies it by
+//! recomputing the sub-root over the received bytes
+//! (`shekyl_curve_tree::recompute_segment_r_k`), which is what the serving
+//! path's axis test actually calls. [`verify_leaf_index`] in particular is
+//! bound to [`crate::challenge::challenge_leaf_index`], the retired
+//! per-pair leaf derivation, and sits on the same deletion surface as the
+//! beacon constants annotated in [`crate::constants`] and
+//! [`crate::challenge`].
+//!
+//! **It is not dead code, which is why it is annotated rather than
+//! deleted.** This module is the live interim serve-credit admission path:
+//! `shekyl-ffi`'s `shekyl_archival_verify_serve_credit_vin` calls
+//! [`verify_segment_path`] and [`verify_leaf_index`], and `blockchain.cpp`
+//! calls that during block verification; [`SegmentPathOpening`] is also
+//! carried by [`crate::wire`]'s `encode_path`. **Named blocker (rule 22):**
+//! the replacement response wire is not yet designed, so until the format
+//! round freezes it this is the only admission path standing. It deletes
+//! wholesale with that round's deletion surface.
+//!
+//! The distinction matters because the two modes are easy to conflate: a
+//! build survey filed [`verify_leaf_index`] as *reusable* for the serving
+//! path, which would have resurrected the sampled design through the
+//! implementation door. Extend the **new** mechanism, never this one.
 
 use crate::error::VerifyError;
 use shekyl_fcmp::tree::{

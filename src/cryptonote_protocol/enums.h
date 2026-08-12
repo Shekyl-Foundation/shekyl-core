@@ -30,6 +30,8 @@
 
 #include <cstdint>
 
+#include "net/enums.h"
+
 namespace cryptonote
 {
   //! Methods tracking how a tx was received and relayed
@@ -42,4 +44,64 @@ namespace cryptonote
     fluff,    //!< Received/sent over network using Dandelion++ fluff
     block     //!< Received in block, takes precedence over others
   };
+
+  /*! \brief Pre-fluff relay methods for R-1 (stem / forward / local).
+
+      Fluff is the deliberate exit from the anonymity zone: once a transaction
+      fluffs it must leave, or coherence would strand it in the anonymity
+      subgraph (§59.1). Extracted so the production branch and its unit
+      witness share one predicate — the suite cannot drive a full
+      `handle_notify_new_transactions` arrival on a non-public context yet
+      (FOLLOWUPS / §89.7), but it can pin this gate. */
+  constexpr bool is_pre_fluff_relay(const relay_method method) noexcept
+  {
+    return method == relay_method::stem
+        || method == relay_method::forward
+        || method == relay_method::local;
+  }
+
+  /*! \brief Originated traffic on an anonymity zone keeps its `local` txpool
+      record, whatever the transport did with it.
+
+      §30.5 forbids the backstop falling out to the public zone: re-broadcasting
+      our own transaction from the origin's own IP is the first-spy case this
+      arc exists to prevent. `local` is the class that prevents it —
+      `relay_txpool_transactions` routes `local` to `private_req` at
+      `zone::invalid`, which `select_anonymity(require_usable=false)` resolves
+      back to the anonymity zone and never to clearnet, so originated traffic
+      fails closed (§59.7). Every other class routes to `public_req`.
+
+      This matters because `upgrade_relay_method` is monotone: one record of
+      `stem` or `fluff` moves the entry out of `local` permanently, and the next
+      pool re-relay puts the user's own transaction on the clear internet.
+
+      Relayed traffic is excluded deliberately, not by oversight. `stem` and
+      `forward` must record `stem` so the per-zone embargo is drawn (§89.2), and
+      clearnet was always that traffic's home — the roll is eligibility, not a
+      drop commitment (§59.7). Clearnet origins are excluded too: `local` on the
+      public zone has always recorded `stem`, and its home *is* clearnet. */
+  constexpr bool originated_stays_in_zone(
+    const relay_method tx_relay,
+    const epee::net_utils::zone nzone) noexcept
+  {
+    return tx_relay == relay_method::local
+        && nzone != epee::net_utils::zone::public_
+        && nzone != epee::net_utils::zone::invalid;
+  }
+
+  /*! \brief R-1 coherence: keep a still-stemming transaction on its arrival
+      anonymity zone (no re-roll).
+
+      True only when the method is pre-fluff **and** the arrival zone is a real
+      anonymity network. Clearnet never coheres to itself via this path; invalid
+      origin never coheres; fluff never coheres (liveness exit). The caller still
+      checks that the zone is present in the local zone map before sending. */
+  constexpr bool r1_coherence_keeps_origin(
+    const relay_method tx_relay,
+    const epee::net_utils::zone origin) noexcept
+  {
+    return is_pre_fluff_relay(tx_relay)
+        && origin != epee::net_utils::zone::public_
+        && origin != epee::net_utils::zone::invalid;
+  }
 }

@@ -14,15 +14,22 @@
   - [ ] Audit artifact links recorded in release notes (report URL or digest, remediation PRs)
 - [ ] Security audit
 - [ ] Code audit
+- [ ] Genesis address format: PQ signing anchor (address v2) — **fork (ii) SELECTED by SM-R-8 ratification 2026-08-08**: a 48-byte SLH-DSA-192s public-key fourth field in the classical segment; no commitment scheme, no alg_id registry (see `docs/FOLLOWUPS.md` §V3.0 "GENESIS ADDRESS FORMAT" and `docs/design/WALLET_MESSAGE_SIGNING.md` SM-R-8)
+  - [ ] **192f UX gate (owner: R. Dawson, release owner) — FIRST, the ordering is load-bearing:** floor-hardware signing-latency UX test of the ~4.3 s session figure; must close before the sign-off below, because post-freeze s→f changes the meaning of the frozen pk field (same length, different scheme) — a format change no later round can make. Fallback pre-priced: 192f = 171 ms floor signing at ~47.7 KB armored.
+  - [ ] Genesis-lane freeze-window sign-off on the v2 layout (the collapsed remainder of the fork decision; only after the gate above closes)
+  - [ ] Address v2 layout + test vectors landed (`ADDRESS_DERIVATION_V1` successor)
+  - [ ] Message-signing round unblocked (PR-SM-2's address-integrated verify freezes against the signed-off layout)
 - [ ] PQC specification frozen
-  - [x] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation
+  - [x] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation — updated in PR-SA-2 to the nested combiner (v2, 64-byte domain-separated preimage), `Result<()>` verify, and the v2/frozen-v1 test-vector split
   - [x] canonical transaction/signature serialization documented
   - [x] signed payload definition documented
   - [x] V4 PQC Privacy Roadmap published
+  - [ ] **Hybrid signature construction frozen (SA-2, `SIGNATURE_ALIGNMENT.md`):** the nested combiner (`HYBRID_SIG_VERSION = 2`, PQ-inner / Ed25519-outer over a domain-separated preimage) and the per-surface `SCHEME_DOMAIN_*` strings are consensus-visible on bonded/settlement surfaces (bond-post auth, attestation witness, emission auth). After genesis a change here is a hard fork; the version byte is the security boundary. Landed pre-genesis in PR-SA-2.
+  - [x] **Bond-preimage reconciliation closed (SA-2b, `SIGNATURE_ALIGNMENT.md` §2.2):** the P-role replay analysis found the surface-A whole-tx hash (which binds the vin type tag) forecloses cross-role replay, so **generic won**. The bond vin's `pqc_auths` slot signs the generic surface-A payload hash; S1 + `signature_preimage` + `SCHEME_DOMAIN_BOND_POST` deleted. No wire change. Landed pre-genesis in PR-SA-2b.
 - [ ] PQC crypto review
   - [ ] hybrid sign/verify implementation reviewed (external audit pending)
   - [ ] FFI ownership / zeroization reviewed (external audit pending)
-  - [x] test vectors generated and archived (4 vectors: 1 positive, 3 negative)
+  - [x] test vectors generated and archived (`PQC_HYBRID_V2_KAT.json`: 6 pinned positives, one per signing surface — bond-post's dropped in SA-2b, §2.2 — with cross-surface rejection; frozen v1 parse-rejection fixture; 3 negative vector integration tests)
 - [ ] PQC interoperability verification
   - [ ] wallet sign/daemon verify path tested
   - [x] malformed hybrid signature rejection tested (3 negative vector integration tests)
@@ -101,7 +108,8 @@ further changes to the interface.
   - [ ] Extract and record `sha256sum` of the **extracted `tor` binary** (not the tarball) into `CURRENT_PIN` for each target `cfg` arm (`hex!("…")` — paste the digest verbatim).
   - [ ] Update the other two pin records so no copy drifts: the "Current pin" paragraph in `docs/design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md` (move the old pin to its "Superseded pin" note **with** its tarball hash) and the "Current pin" line below.
   - [ ] Re-verify: run `SHEKYL_TEST_PINNED_TOR_BINARY=<new extracted tor> cargo test -p shekyl-tor --lib binary -- --ignored` — `bundled_tor_matches_recorded_pin` must pass against the new binary. (The test is not `cfg`-gated: on a target missing its pin arm it fails loudly instead of reporting a vacuous 0-test green.) The `tor-pin-verify` workflow (`.github/workflows/tor-pin-verify.yml`, manual dispatch) runs the same download → GPG-verify → re-verify chain in CI, and against that one verified binary also runs the SP-T0 `--lib` live lifecycle tests (actor + supervisor) — dispatch it after a bump.
-  - Current pin: **Expert Bundle 15.0.17 (tor 0.4.9.11)**, recorded 2026-07-01 (see `CURRENT_PIN` for the gate value — code is canonical; this line is a pointer, not a second source of truth).
+  - Current pin: **Expert Bundle 15.0.19 (tor 0.4.9.11)**, recorded 2026-08-06 (see `CURRENT_PIN` for the gate value — code is canonical; this line is a pointer, not a second source of truth). The extracted-binary digest is **unchanged from the 15.0.17 pin** — same tor version, byte-identical binary — so this bump moved the label and not the gate.
+  - **No `linux-aarch64` pin, and the reason is upstream:** the stable line publishes only `linux-i686` and `linux-x86_64` (the aarch64 builds are `android-` and `macos-`). `linux-aarch64` first appears in the **16.0a1 alpha**. So the rule-76 floor device cannot obtain a `VerifiedTorBinary` today; `discover_and_verify` fails closed with `Unpinned`, which is correct. Revisit when 16.0 goes stable — see `docs/design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md`.
 - [ ] CLI released
   - [ ] Project downloads page updated
   - [ ] Update hashes.txt on website

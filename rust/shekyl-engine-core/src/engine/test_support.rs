@@ -257,7 +257,7 @@ pub(crate) fn normalize_fcmp_wire_shape(tx: &mut shekyl_wire::Transaction) {
 ///   daemon does (first submission → `Submitted { hash }`; every
 ///   subsequent submission of the same `tx_bytes` →
 ///   `AlreadyInPool { hash }`). The hash is derived
-///   deterministically via `shekyl_crypto_hash::cn_fast_hash` over
+///   deterministically via `shekyl_crypto_hash::keccak256` over
 ///   the submitted bytes — the real daemon hashes the tx prefix
 ///   plus signatures, but for `TestDaemon` the byte-keyed dedup
 ///   provides the §5.2 retry-safety semantics tests need without
@@ -756,7 +756,7 @@ impl DaemonEngine for TestDaemon {
             // tests below, which submit arbitrary (non-wire) bytes — those exercise the
             // id-keyed dedup, which is format-agnostic, not the tx format.
             let hash = crate::engine::transaction_submitter::canonical_tx_id_opt(&tx_bytes)
-                .unwrap_or_else(|| TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&tx_bytes)));
+                .unwrap_or_else(|| TxHash::from_bytes(shekyl_crypto_hash::keccak256(&tx_bytes)));
             let mut state = state.lock().expect("TestDaemon state poisoned");
             if let Some(err) = state.submit_errors.pop_front() {
                 return Err(err);
@@ -1073,7 +1073,7 @@ mod tests {
             TxSubmitOutcome::Submitted { hash } => {
                 assert_eq!(
                     hash,
-                    TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&bytes))
+                    TxHash::from_bytes(shekyl_crypto_hash::keccak256(&bytes))
                 );
             }
             other => panic!("expected Submitted, got {other:?}"),
@@ -1094,7 +1094,7 @@ mod tests {
         let second = daemon.submit_transaction(bytes.clone()).await.unwrap();
         let third = daemon.submit_transaction(bytes.clone()).await.unwrap();
 
-        let expected = TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&bytes));
+        let expected = TxHash::from_bytes(shekyl_crypto_hash::keccak256(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
         assert!(matches!(second, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
         assert!(matches!(third, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
@@ -1149,7 +1149,7 @@ mod tests {
         let bytes = b"tx-delta".to_vec();
         let first = daemon.submit_transaction(bytes.clone()).await.unwrap();
         let second_via_clone = clone.submit_transaction(bytes.clone()).await.unwrap();
-        let expected = TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&bytes));
+        let expected = TxHash::from_bytes(shekyl_crypto_hash::keccak256(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
         assert!(
             matches!(second_via_clone, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected)

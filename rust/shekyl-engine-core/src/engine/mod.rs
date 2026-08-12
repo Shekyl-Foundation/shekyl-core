@@ -154,14 +154,14 @@
 //! - **Address** — [`Engine::primary_address`] returns the wallet's
 //!   one reusable [`ShekylAddress`] (End-state 5; no subaddresses).
 //!   Render with `.encode()` / `.encode_classical_display()`.
-//! - **Balance** — borrow the ledger and project the scanner-derived
-//!   [`LedgerBlock`](shekyl_engine_state::LedgerBlock) through the
-//!   scanner's extension trait:
+//! - **Balance** — borrow the wallet and project it through the
+//!   scanner's extension trait — whole-wallet by design (PR-SJ-1b),
+//!   because balance needs the journal's F14 locks too:
 //!
 //!   ```ignore
-//!   use shekyl_scanner::LedgerBlockExt;
+//!   use shekyl_scanner::WalletLedgerExt;
 //!   let guard = engine.ledger(); // derefs to &WalletLedger
-//!   let balance = guard.ledger.balance(guard.ledger.height());
+//!   let balance = guard.balance();
 //!   drop(guard);
 //!   ```
 //!
@@ -176,7 +176,7 @@
 //! "where is `Engine::balance()`?": a thin wrapper would freeze a
 //! signature before the Phase 2 filtered-query design settles, so the
 //! pattern is documented instead (reopen at Phase 2 ops).
-
+pub mod abandon_tx; // PR-SJ-3 (WALLET_SEND_RECORD P3-4)
 pub mod capability;
 // CT-5 curve-tree actor + handle (`docs/design/CT5_ENGINE_WIRING.md` §3.1).
 // Mirrors `key_actor`: a `kameo` actor owns the wallet's `CurveTreeClient`
@@ -320,6 +320,7 @@ pub mod local_pending_tx;
 pub(crate) mod local_persistence;
 pub(crate) mod local_refresh;
 pub mod merge;
+pub mod message_signing;
 pub mod network;
 pub mod output_selector;
 pub mod payment_requests;
@@ -353,7 +354,7 @@ pub(crate) mod signing_assembly;
 pub(crate) mod stake_engine;
 /// PR 2c-2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, typed contract #1): the
 /// `PersistedBondTicket` persist-before-use typestate and its sole producer
-/// `Engine::persist_bond_record`. Inert until 2c-2b's `sign_bond` consumes the
+/// `Engine::persist_bond_record`. Inert until 2c-2b's `plan_bond_post` consumes the
 /// ticket; produced here so the cross-split contract is an unforgeable type.
 pub(crate) mod stake_persist;
 /// Bond-PR 2c-2b (Round 2): typed timing-seam newtypes — `BlockSpan`, `SebSpan`,
@@ -1039,7 +1040,10 @@ impl<
         spend_key.copy_from_slice(&addr.classical_address_bytes[1..33]);
         let mut view_key = [0u8; 32];
         view_key.copy_from_slice(&addr.classical_address_bytes[33..65]);
-        let ml_kem_encap_key = addr.pqc_public_key[32..].to_vec();
+        let ml_kem_encap_key = addr
+            .ml_kem_encap_key()
+            .expect("key-actor projection always carries the x25519 prefix")
+            .to_vec();
 
         ShekylAddress::new(self.network, spend_key, view_key, ml_kem_encap_key)
     }

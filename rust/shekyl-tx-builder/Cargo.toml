@@ -56,7 +56,8 @@ rand = "0.8"
 criterion = { version = "0.5", features = ["html_reports"] }
 gungraun = "0.19"
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# test-utils for the transfer_e2e bench keypair (F-7)
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 rand_core = { version = "0.6", features = ["std"] }
 
 [[bench]]

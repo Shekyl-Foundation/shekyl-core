@@ -88,12 +88,13 @@ unsafe fn with_bond_post_u8_slice<R>(
 ///
 /// `bond_spend_pk` is marshaled for real, NOT placeholdered: the §9.11 coupling
 /// (JoinMarket iff exact-canonical-length key) is structural in
-/// [`ArchivalBondPostVin`] — `serialize()` refuses a violating vin and
-/// `signature_preimage()` binds the key bytes — and unlike the consensus-side
-/// placeholders above, an empty key is a *valid* wire shape for the debit
-/// kinds, so a placeholder would silently satisfy the wrong invariant. The
-/// marshaler enforces the coupling (`ERR_BOND_SPEND_PK_COUPLING`) instead of
-/// constructing a violating vin.
+/// [`ArchivalBondPostVin`] — `serialize()` refuses a violating vin — and unlike
+/// the consensus-side placeholders above, an empty key is a *valid* wire shape
+/// for the debit kinds, so a placeholder would silently satisfy the wrong
+/// invariant. The marshaler enforces the coupling (`ERR_BOND_SPEND_PK_COUPLING`)
+/// instead of constructing a violating vin. (The key is authorized on-chain by
+/// P's surface-A `pqc_auths` signature over the whole-tx payload, not by an
+/// on-vin blob — SA-2b, SIGNATURE_ALIGNMENT.md §2.2.)
 ///
 /// # Safety
 /// `shard_ids_ptr` must be valid for `shard_ids_len` `u64`s, or null when the len is 0;

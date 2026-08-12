@@ -5,14 +5,27 @@
 
 use serde::Serialize;
 
-/// Genesis-pinned cluster (2026-06-07). Do not diverge from ARCHIVAL_TIMING_CONSTANTS.md.
-pub const SETTLEMENT_EPOCH_BLOCKS: u64 = 10_000;
-pub const MAX_SETTLEMENT_EPOCHS_PER_EMISSION: u64 = 15;
-pub const MAX_CLAIM_AGE_W: u64 = 26;
-pub const RETENTION_HORIZON_BLOCKS: u64 = 420_000;
-pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = 720;
-pub const RELEASE_COOLDOWN_EPOCHS: u64 = 2;
-pub const CHALLENGE_RESOLUTION_BLOCKS: u64 = 10_000;
+// Genesis-pinned cluster (2026-06-07), read from the canonical crate rather
+// than mirrored: a local copy under a "do not diverge" comment has no gate —
+// a crate re-pin would leave this harness silently verifying stale values.
+// Importing means the coupling checks below run against the LIVE cluster, so
+// a re-pin that breaks an inequality fails this sim's test.
+//
+// Timing values that live in `config/consensus_constants.json` reach Rust via
+// `shekyl-archival-retention`'s build-generated bond-floor module (W, reorg
+// depth, release cooldown, retention horizon). `SETTLEMENT_EPOCH_BLOCKS` and
+// `CHALLENGE_RESOLUTION_BLOCKS` are still hand-pinned in that crate's
+// `constants.rs` (JSON has them too; dual-source cleanup is a separate pass).
+pub use shekyl_archival_retention::{
+    ARCHIVAL_REORG_DEPTH_BLOCKS, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W,
+    RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
+};
+
+/// Canonical owner is `emission_wire`'s `usize` bound; this cluster does
+/// block arithmetic in `u64` (usize → u64 is lossless on every supported
+/// target).
+pub const MAX_SETTLEMENT_EPOCHS_PER_EMISSION: u64 =
+    shekyl_archival_retention::MAX_SETTLEMENT_EPOCHS_PER_EMISSION as u64;
 
 pub const BLOCK_TIME_SEC: u64 = 120;
 pub const JOIN_LAG_BLOCKS: u64 = SETTLEMENT_EPOCH_BLOCKS;

@@ -1406,6 +1406,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fips205"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f5626bf5534df4ebdbd2536465d7eaa8a9dc2cdeb7e036e0ecf291dcc80ffb6"
+dependencies = [
+ "rand_core 0.6.4",
+ "sha2",
+ "sha3",
+ "zeroize",
+]
+
+[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3752,6 +3764,7 @@ name = "shekyl-crypto-pq"
 version = "3.1.0"
 dependencies = [
  "argon2",
+ "base64",
  "bip39",
  "blake2",
  "chacha20poly1305",
@@ -3761,6 +3774,7 @@ dependencies = [
  "ed25519-dalek",
  "fips203",
  "fips204",
+ "fips205",
  "helioselene",
  "hex",
  "hkdf",
@@ -3774,6 +3788,7 @@ dependencies = [
  "sha3",
  "shekyl-address",
  "shekyl-crypto-hash",
+ "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-curve-primitives",
  "shekyl-fcmp",
@@ -4055,7 +4070,6 @@ dependencies = [
 name = "shekyl-fcmp"
 version = "3.1.0"
 dependencies = [
- "blake2",
  "ciphersuite",
  "curve25519-dalek",
  "dalek-ff-group 0.5.0",
@@ -4212,6 +4226,14 @@ dependencies = [
  "shekyl-wire",
  "thiserror 2.0.18",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-p-serve"
+version = "3.1.0"
+dependencies = [
+ "shekyl-curve-tree",
+ "tokio",
 ]
 
 [[package]]
@@ -4380,19 +4402,16 @@ dependencies = [
 name = "shekyl-sp-t3-spike"
 version = "3.1.0"
 dependencies = [
- "ed25519-dalek",
  "kameo",
- "sha2",
- "sha3",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
+ "shekyl-p-serve",
  "shekyl-p-transport",
  "shekyl-tor",
  "shekyl-types",
  "tempfile",
  "tokio",
  "ureq",
- "zeroize",
 ]
 
 [[package]]
@@ -4421,6 +4440,7 @@ version = "3.1.0"
 name = "shekyl-tor"
 version = "3.1.0"
 dependencies = [
+ "ed25519-dalek",
  "futures-core",
  "getrandom 0.2.17",
  "hex-literal",
@@ -4428,6 +4448,7 @@ dependencies = [
  "kameo",
  "libc",
  "sha2",
+ "sha3",
  "shekyl-p-transport",
  "shekyl-types",
  "tempfile",

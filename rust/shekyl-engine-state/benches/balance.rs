@@ -49,7 +49,6 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         spent: (seed & 0x7) == 0,
         spent_height: None,
         key_image: None,
-        awaiting_confirmation: None,
         spending_tx_hash: None,
         source_ciphertext: None,
         output_handle: None,
@@ -82,10 +81,16 @@ fn hot_path_bench_balance_compute(c: &mut Criterion) {
             BenchmarkId::from_parameter(n),
             &transfers,
             |b, transfers| {
+                // PR-SJ-1b: locks are journal-derived and caller-supplied.
+                // Empty map = the baseline-comparable workload (the retired
+                // field was `None` on every fixture row); derivation cost is
+                // O(live sends), measured at its consumer, not per-row here.
+                let spend_locks = shekyl_engine_state::SendJournalBlock::empty().spend_locks();
                 b.iter(|| {
                     black_box(BalanceSummary::compute(
                         black_box(transfers),
                         current_height,
+                        black_box(&spend_locks),
                     ))
                 });
             },

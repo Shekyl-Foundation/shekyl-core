@@ -240,6 +240,36 @@ impl Message<SignTransaction> for KeyActor {
     }
 }
 
+/// Actor message for the classical half of a wallet message signature
+/// (PR-SM-1). `outer` is `preimage ‖ σ_pq` — **public bytes**, length
+/// fixed by type ([`OUTER_MSG_LEN`](shekyl_crypto_pq::message_signing::OUTER_MSG_LEN))
+/// — so nothing secret crosses into or out of the mailbox: the master
+/// seed stays at the engine (its transient borrow never reaches the
+/// actor, the same posture the stake personas pin), and the spend
+/// scalar never leaves the actor. Wrong-shape payloads cannot be
+/// constructed; the type is the signing-oracle gate.
+pub(crate) struct SignMessageOuter {
+    pub outer: Box<[u8; shekyl_crypto_pq::message_signing::OUTER_MSG_LEN]>,
+}
+
+impl Message<SignMessageOuter> for KeyActor {
+    type Reply = Result<[u8; shekyl_crypto_pq::message_signing::CLASSICAL_SIG_LEN], KeyEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: SignMessageOuter,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        shekyl_crypto_pq::message_signing::sign_outer_with_spend_scalar(
+            self.local.keys.spend_sk.as_canonical_bytes(),
+            msg.outer.as_ref(),
+        )
+        .map_err(|_| KeyEngineError::Primitive {
+            detail: "spend-scalar Schnorr signing failed",
+        })
+    }
+}
+
 /// Actor message for INBOUND tx-proof generation (WI-RPC-3). The request
 /// carries public data only (stored ciphertexts, vout indices, address
 /// bytes, challenge message); the actor signs with its view secret and
@@ -448,6 +478,20 @@ impl KeyEngineHandle {
     ) -> Result<Vec<u8>, KeyEngineError> {
         self.actor
             .ask(GenerateReserveProof { req })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Sign the classical half of a wallet message signature (PR-SM-1).
+    /// Same inherent-method disposition as the proof methods above: one
+    /// production caller, no `LocalKeys` equivalence oracle to abstract.
+    /// Outer length is compile-time fixed — see [`SignMessageOuter`].
+    pub(crate) async fn sign_message_outer(
+        &self,
+        outer: Box<[u8; shekyl_crypto_pq::message_signing::OUTER_MSG_LEN]>,
+    ) -> Result<[u8; shekyl_crypto_pq::message_signing::CLASSICAL_SIG_LEN], KeyEngineError> {
+        self.actor
+            .ask(SignMessageOuter { outer })
             .await
             .map_err(collapse_send_error)
     }

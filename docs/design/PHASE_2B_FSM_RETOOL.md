@@ -801,7 +801,12 @@ would invert that rationale and silently flip landed `HU`-add.)
 ### Pin 5 — ≤ 1 open bad interval (the same-epoch coalescing fix; consensus-halt vector)
 
 **Landed defect, found grounding this round:** `challenge_fire_height` always fires per
-(P, shard, epoch), `CHALLENGES_PER_EPOCH = 1`, and the per-epoch slash pass iterates a
+(P, shard, epoch), `CHALLENGES_PER_EPOCH = 1` *(as it stood when this defect was
+found; the constant is now `CHALLENGES_PER_PAIR_PER_EPOCH = 3` under the 2-of-3
+ruling — **the Pin 5 fix is count-independent and does not reopen this vector**,
+verified 2026-08-11: the coalescing guard appends `[E, MAX)` only when no open
+interval exists, so 3N same-epoch failures still append exactly one)*, and the
+per-epoch slash pass iterates a
 **stale** pre-scan record copy — so an offline N-shard record fails all N challenges in one
 epoch and appends **N identical open intervals** `[E, MAX)`. With `MAX_HOLDINGS_SHARDS = 4096`
 against `kMaxBadIntervals = 256`, the 257th append throws in `ArchivalBondValue::encode`
@@ -937,8 +942,10 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   landed in one change with the discriminating KATs (committed key accepts:
   **Unbond verifies end-to-end**; identity/foreign/no-key all reject
   fail-closed). The wallet seam simplified (the vin carries the key;
-  `wire_bond_post_input` takes it from the vin; A-1 now pins the key
-  byte-for-byte between prefix input and signed vin). **`HoldingsUpdate` is
+  `wire_bond_post_input` takes it from the vin; A-1 then pinned the key
+  byte-for-byte between prefix input and vin — since retired: SA-2b deleted
+  on-vin signing and single-sourced the constructed vin into the prefix
+  input, making the equality structural). **`HoldingsUpdate` is
   unblocked** — its drop-path auth rides the same selection.
 - **2026-07-13 (d):** **`Unbond` release-gate hardening (review round).** Added
   the slash-settlement predicate to the release verify — the scheduler's settled

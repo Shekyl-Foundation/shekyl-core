@@ -51,7 +51,6 @@
 #include "warnings.h"
 #include "common/perf_timer.h"
 #include "crypto/hash.h"
-#include "crypto/duration.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "txpool"
@@ -89,7 +88,6 @@ namespace cryptonote
     //! Max DB check interval for relayable txes
     constexpr const std::chrono::minutes max_relayable_check{2};
 
-    constexpr const std::chrono::seconds forward_delay_average{CRYPTONOTE_FORWARD_DELAY_AVERAGE};
 
     // a kind of increasing backoff within min/max bounds
     uint64_t get_relay_delay(time_t last_relay, time_t received)
@@ -124,11 +122,34 @@ namespace cryptonote
 
   namespace detail
   {
-    std::time_t embargo_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs)
+    std::time_t relay_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs)
     {
-      // Cast: the FFI returns uint64_t; seconds::rep is signed, so list-init
-      // would be a narrowing conversion on some standard libraries.
-      const auto delay = std::chrono::seconds{static_cast<std::chrono::seconds::rep>(draw_secs)};
+      using rep = std::chrono::seconds::rep;
+
+      /* SATURATE, never wrap. The FFI returns `uint64_t` and `rep` is signed:
+         an out-of-range draw would cast to a NEGATIVE delay — a deadline in the
+         past — which SHORTENS the delay, and shortening is the privacy-losing
+         direction for both callers (a short embargo fluffs early; a short
+         forward delay gives back cover at the tor->clearnet bridge). Overflowing
+         `now + delay` past the clock's range is the same failure by another
+         route.
+
+         Saturating instead is liveness-visible: the transaction sits rather
+         than relaying early, and a stuck transaction gets noticed. That is the
+         same preference F-8b records for its cap of 0 — loud beats quiet when
+         the quiet direction is the unsafe one.
+
+         No shipped draw can reach this. Both tables are truncated orders of
+         magnitude below it, so this is a boundary guard on the FFI's DECLARED
+         type rather than a live path; it exists because the declared type is
+         what a future caller will read. */
+      const auto headroom = std::chrono::floor<std::chrono::seconds>(
+                              std::chrono::system_clock::time_point::max() - now)
+                            - std::chrono::seconds{1}; // margin for the ceil below
+      const std::uint64_t max_safe =
+        headroom.count() > 0 ? static_cast<std::uint64_t>(headroom.count()) : 0;
+
+      const auto delay = std::chrono::seconds{static_cast<rep>(std::min(draw_secs, max_safe))};
       // ceil, not to_time_t's truncation — the header explains why the direction
       // is a privacy decision rather than a formatting one.
       return std::chrono::system_clock::to_time_t(
@@ -309,7 +330,16 @@ namespace cryptonote
           auto last_relayed_time = std::numeric_limits<decltype(meta.last_relayed_time)>::max();
           if (tx_relay == relay_method::forward)
           {
-            last_relayed_time = clock::to_time_t(clock::now() + crypto::random_poisson_seconds{forward_delay_average}());
+            /* Memoryless, not Poisson (Q-12's family half; the mean is
+               unchanged and stays Q-12's to derive). The inherited
+               `random_poisson_seconds{22s}` was F-2/F-4's signature sitting on
+               the tor->clearnet bridge — the moment an anonymity-arrived tx
+               becomes clearnet-visible, so the moment arrival-time inference
+               pays most. Measured on F-4's instrument: 2.01x more invertible
+               at phase 0, and 0.72 vs 0.12 late in the window, because only a
+               memoryless family has residual == full. */
+            last_relayed_time =
+              detail::relay_deadline(clock::now(), shekyl_dandelionpp_forward_delay_seconds());
             set_if_less(m_next_check, time_t(last_relayed_time));
           }
           // else the `set_relayed` function will adjust the time accordingly later
@@ -1029,7 +1059,7 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------------------------
-  void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, std::vector<bool> &just_broadcasted)
+  void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, const epee::net_utils::zone zone, std::vector<bool> &just_broadcasted)
   {
     just_broadcasted.clear();
 
@@ -1055,7 +1085,7 @@ namespace cryptonote
           if (meta.dandelionpp_stem)
           {
             meta.last_relayed_time =
-              detail::embargo_deadline(now, shekyl_dandelionpp_embargo_draw_seconds());
+              detail::relay_deadline(now, shekyl_dandelionpp_embargo_draw_seconds(static_cast<std::uint8_t>(zone)));
             next_relay = std::min(next_relay, meta.last_relayed_time);
           }
           else

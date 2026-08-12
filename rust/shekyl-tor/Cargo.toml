@@ -17,6 +17,14 @@ publish = false
 # supply-chain surface, new internal consumers.
 hmac = { version = "0.12", default-features = false }
 sha2 = { version = "0.10", default-features = false }
+# The v3 onion identity (`onion_identity.rs`, relocated from the SP-T3 spike
+# per its own SPIKE-F-4 note — "transport surface, not key derivation"): RFC
+# 8032 seed expansion to tor's ED25519-V3 blob needs the public-key half
+# (ed25519-dalek, the same crate/features shekyl-crypto-pq uses for every
+# other ed25519 key) and the rend-spec-v3 §6 address checksum (SHA3-256, the
+# same sha3 the archival crates carry). No new supply-chain edge.
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"] }
+sha3 = { version = "0.10", default-features = false }
 # Compile-time hex → [u8; N] for the pinned tor-binary SHA-256 (`binary.rs`
 # CURRENT_PIN) and the hash KAT vectors. Rule-17 weighing: already resolved in
 # the workspace lockfile (shekyl-bulletproofs pins the same version), a

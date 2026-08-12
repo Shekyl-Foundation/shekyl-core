@@ -41,8 +41,19 @@
 //! continue, because for a bonded archival staker an unattended node that
 //! *stopped* retrying is a guaranteed sliding-window slash.
 
+//! [`onion_identity`] is the serving-identity encoding: it expands a
+//! **derived** 32-byte GF-9 HS-identity seed into tor's `ED25519-V3` blob
+//! and the `.onion` address it implies. The seed dies at expansion; the
+//! value that reaches the supervisor is an [`onion_identity::OnionIdentity`].
+//! [`onion_service`] is the publish config and per-incarnation `ADD_ONION`
+//! orchestration — [`onion_service::OnionServiceSpec`] takes that identity
+//! (never a seed), so the §7.2(iii) custody boundary is the type system,
+//! not a convention.
+
 pub mod binary;
 pub mod control;
+pub mod onion_identity;
+pub mod onion_service;
 pub mod service;
 
 #[cfg(test)]

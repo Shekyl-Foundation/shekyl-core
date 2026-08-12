@@ -379,7 +379,7 @@ pub(crate) fn key_image_from_spend_key_x(
 /// 0.17 % — rare enough to fire on a stuck RNG without triggering excessive
 /// retries on a correct one.
 ///
-/// **False-positive handling:** the caller (the `SignBond` handler) surfaces
+/// **False-positive handling:** the caller (the `PlanBondPost` handler) surfaces
 /// `RngDegeneracy` and the user retries. A single false positive in 601 bond
 /// requests is acceptable; multiple consecutive false positives signal a
 /// broken entropy source.

@@ -92,6 +92,19 @@ bin/
 # al.) that are part of the crate's tracked source tree, not build
 # artifacts.
 !rust/shekyl-randomx-differential/src/bin/
+# Cargo's conventional binary location, un-ignored for EVERY crate.
+#
+# The bare `bin/` above targets build output, but it also swallows
+# `<crate>/src/bin/` -- where Cargo expects binary targets. That bit once
+# already (SPIKE-F-9): a source file that builds locally and vanishes in CI,
+# with no error at the point of the mistake.
+#
+# The line above it fixed that ONE crate. This fixes the class: without it,
+# every future crate with a `src/bin/` silently loses its sources until
+# somebody notices and adds a fourth per-crate exception. A rule that needs
+# re-application per crate is rot that regenerates -- the same reason the
+# push gate became a script rather than a habit.
+!**/src/bin/
 tmp/
 *.tmp
 *.bak

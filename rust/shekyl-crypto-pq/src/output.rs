@@ -955,9 +955,15 @@ impl std::fmt::Debug for PqcAuthSignature {
 ///
 /// Returns the hybrid (Ed25519 + ML-DSA-65) public key and signature in
 /// canonical encoding.
+///
+/// `domain` is the scheme-level domain-separation string for the calling
+/// surface (SA-R-2): `SCHEME_DOMAIN_PQC_AUTH_TX` for a tx spend auth,
+/// `SCHEME_DOMAIN_EMISSION_BACKING` for the emission backing role. It is
+/// threaded through to the nested combiner, not applied here.
 pub fn sign_pqc_auth_for_output(
     combined_ss: &[u8; 64],
     output_index: u64,
+    domain: &[u8],
     message: &[u8],
 ) -> Result<PqcAuthSignature, CryptoError> {
     use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, SignatureScheme};
@@ -988,7 +994,7 @@ pub fn sign_pqc_auth_for_output(
     };
 
     let scheme = HybridEd25519MlDsa;
-    let sig = scheme.sign(&hybrid_sk, message)?;
+    let sig = scheme.sign(&hybrid_sk, domain, message)?;
 
     let pk_bytes = hybrid_pk.to_canonical_bytes()?;
     let sig_bytes = sig.to_canonical_bytes()?;
@@ -1820,7 +1826,8 @@ mod tests {
         let combined_ss = combine_shared_secrets(&x25519_raw_ss.0, &ml_ss.into_bytes()).unwrap();
 
         let msg = b"test signing message";
-        let auth = sign_pqc_auth_for_output(&combined_ss.0, 0, msg)
+        let domain = crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
+        let auth = sign_pqc_auth_for_output(&combined_ss.0, 0, domain, msg)
             .expect("sign_pqc_auth_for_output must succeed");
 
         // Verify the signature
@@ -1830,10 +1837,9 @@ mod tests {
             .expect("hybrid sig must be parseable");
 
         let scheme = HybridEd25519MlDsa;
-        let ok = scheme
-            .verify(&hybrid_pk, msg, &hybrid_sig)
-            .expect("verify must not error");
-        assert!(ok, "signature must verify");
+        scheme
+            .verify(&hybrid_pk, domain, msg, &hybrid_sig)
+            .expect("signature must verify");
 
         // h_pqc from construct/scan must match what the verifier computes
         // from the signing path's hybrid public key.

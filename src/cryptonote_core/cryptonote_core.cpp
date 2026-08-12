@@ -1121,7 +1121,7 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
-  void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay)
+  void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay, const epee::net_utils::zone zone)
   {
     // lock ensures duplicate txs aren't notified twice
     CRITICAL_REGION_LOCAL(m_incoming_tx_lock);
@@ -1144,7 +1144,7 @@ namespace cryptonote
     std::vector<bool> just_broadcasted{};
     just_broadcasted.reserve(tx_hashes.size());
 
-    m_mempool.set_relayed(epee::to_span(tx_hashes), tx_relay, just_broadcasted);
+    m_mempool.set_relayed(epee::to_span(tx_hashes), tx_relay, zone, just_broadcasted);
 
     if (matches_category(tx_relay, relay_category::legacy))
       notify_txpool_event(tx_blobs, epee::to_span(tx_hashes), epee::to_span(txs), just_broadcasted);

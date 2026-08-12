@@ -7,6 +7,17 @@ rust-version.workspace = true
 license.workspace = true
 autoexamples = false
 
+[features]
+# Exposes test-support helpers (F-7): `generate_ephemeral_keypair_for_tests`,
+# `sign_with_ml_dsa_seed`. Names announce test-only intent; a non-derived
+# keypair must never reach a wallet. Prefer enabling under `[dev-dependencies]`
+# (benches, integration tests). **Exception:** `shekyl-ffi` enables this in its
+# normal dependency graph so the C++ unit tests can link the same archive as
+# production — cargo feature unification keeps the symbols in that artifact.
+# That is comment-gated only; the structural gate (separate test-only archive
+# or cmake feature) is FOLLOWUPS F-7, not this feature flag.
+test-utils = []
+
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
@@ -24,11 +35,24 @@ ciphersuite = "0.4"
 curve25519-dalek = { version = "4", features = ["zeroize"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
-fips204 = "0.4.6"
+# Pinned exact for the same reason as fips203/fips205 below: fips204's
+# seeded signing path (try_sign_with_seed) is built on the same
+# DummyRng { fill_bytes = unimplemented!() } pattern, safe only while the
+# internals stick to try_fill_bytes — a "will be refactored" upstream
+# comment says they may not. Bump deliberately, re-reading traits.rs.
+fips204 = "=0.4.6"
+# Pinned exact: fips205's deterministic-keygen path (KeyGen::keygen_with_seeds)
+# is built on the same DummyRng pattern that bit fips203 below —
+# fill_bytes = unimplemented!(), seeds served via try_fill_bytes, loud panic on
+# over-draw. An upstream refactor that starts calling fill_bytes is a runtime
+# panic, so the version moves only by deliberate bump with the KAT battery
+# re-run (WALLET_MESSAGE_SIGNING.md SM-R-8 adoption terms).
+fips205 = "=0.4.1"
 # Pinned exact: fips203 uses DummyRng::fill_bytes = unimplemented!() internally;
 # a minor-version bump could panic at runtime. Exact pin + KEM_DERIVE_V1_KAT.json
 # tripwire + Cargo.lock = three layers of defense against silent behavior changes.
 fips203 = "=0.4.3"
+base64 = "0.22"
 hkdf = "0.12"
 sha2 = "0.10"
 blake2 = "0.10"
@@ -144,6 +168,11 @@ serde_json = "1"
 postcard-schema = { version = "0.2", default-features = false, features = ["derive", "use-std"] }
 
 [dev-dependencies]
+# Self-reference enabling `test-utils` for this crate's own integration tests
+# and benches (F-7): `generate_ephemeral_keypair_for_tests` is gated behind
+# that feature, and a separate integration-test crate cannot see the in-crate
+# `cfg(test)` gate. Standard cargo idiom for feature-enabling one's own tests.
+shekyl-crypto-pq = { path = ".", features = ["test-utils"] }
 hex = "0.4"
 # Note: the ARCHIVAL_P_DERIVE_V1 KAT computes its p_canonical_id via an inline
 # cSHAKE256 (so the `shekyl-archival-retention` cross-check proves the two

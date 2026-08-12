@@ -400,7 +400,11 @@ jobs:
         # job): 4+1 workers × 256 hashes each over the per-PR-size
         # random corpus against a capacity-2 CacheStore — T7 asserts
         # cross-worker determinism plus rust/C byte-equality, T8
-        # asserts the 640 MiB × 1.10 RSS ceiling via /proc/self/statm
+        # asserts the (workers+1)×256 MiB + 128 MiB (×1.10) RSS
+        # ceiling (R1-D9 F4 Round-3 amendment; the original 640 MiB
+        # slot-only pin failed every daily cron 2026-07-08 →
+        # 2026-08-08 at a flat ~1035 MiB drift plateau — see
+        # rss_ceiling_bytes in mode_concurrent.rs) via /proc/self/statm
         # (Linux runner, so the T8 leg is live, not the cross-platform
         # no-op). The daemon verifies blocks on multiple threads: a
         # divergence here is a plausible REAL consensus finding —
@@ -430,6 +434,36 @@ jobs:
         run: |
           cargo run --release --locked -p shekyl-randomx-differential \
             --bin shekyl-randomx-differential -- --mode=latency
+
+  mutants:
+    # Weekly cargo-mutants run per §5.5.6 + §4.6 M2 (Round-3
+    # substrate-completeness amendment). Mutation testing is
+    # nightly-only (not per-PR) per the F5 budget — `cargo mutants`
+    # against the harness + verifier surfaces is multi-hour work; the
+    # weekly cadence balances substrate signal against runner cost.
+    #
+    # Skip-list discipline lives in `.cargo/mutants.toml`
+    # (`exclude_globs` for the tooling binaries + canonical-output
+    # data file per §5.5.6 row). Each entry in the skip list is a
+    # substrate-anchored carve-out; new skip-list entries require a
+    # §5.5.6-row plan-doc amendment.
+    #
+    # RESTORED 2026-08: this job's header (name/runs-on/timeout/if +
+    # checkout) was accidentally severed by 5736453c8's T5-step
+    # simplification, which orphaned the job's remaining steps into
+    # the tail of runtime-modes. The severed state (a) left T18 with
+    # NO trigger — the Monday 06:00 cron ran no mutants job at all
+    # (armed-gate instance five) — and (b) would have run multi-hour
+    # mutation work inside runtime-modes' 90-minute timeout on every
+    # daily cron had T8 not been failing first.
+    name: 'weekly: cargo-mutants (T18)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - name: Install Rust toolchain
         # Composite action (.github/actions/install-rust); see the
         # structural-validate job's step comment.

@@ -10,17 +10,43 @@
 //!
 //! Used by reserve proofs to prove `key_image = x * Hp(O)` where
 //! `x = ho + b` and `x * G = O - y * T`.
+//!
+//! # The nonce is hedged, and it binds the full statement
+//!
+//! `k = H(domain ‖ "nonce" ‖ x ‖ G ‖ base2 ‖ pub1 ‖ pub2 ‖ msg ‖ 32 fresh
+//! random bytes)`, with the fresh block drawn through
+//! [`shekyl_crypto_pq::rng::hedged_fresh32`] (fail-safe: all-zeros on RNG
+//! failure, never a panic — this scalar is the output spend key, and the
+//! module previously drew its nonce bare from the OS RNG while the
+//! sibling Schnorr signature in the same reserve-proof flow was hedged).
+//!
+//! The nonce hashes **every statement input the challenge hashes**
+//! (`G`, `base2`, `pub1`, `pub2`, `msg` — plus the secret `x`). That is
+//! load-bearing, not thoroughness: under a failed RNG the construction
+//! degrades to its deterministic form, and a deterministic `k` bound to
+//! fewer inputs than the challenge repeats across distinct statements
+//! that share the bound subset. Two challenges under one `k` are two
+//! linear equations in `x` — the secret falls out. Same statement twice
+//! → same proof (harmless); any input differs → `k` differs. Do not
+//! "simplify" the nonce hash to fewer inputs.
+//!
+//! `R1`/`R2` are **not** in the nonce hash: they are `k·G` / `k·base2`,
+//! so including them would be circular. The challenge still binds them
+//! after `k` is fixed.
 
 #![deny(unsafe_code)]
 
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT as G, edwards::EdwardsPoint, scalar::Scalar,
 };
-use rand_core::OsRng;
 use sha2::{Digest, Sha512};
 use zeroize::Zeroize;
 
 const DOMAIN_SEPARATOR: &[u8] = b"shekyl-reserve-proof-dleq-v1";
+
+/// Sub-label separating nonce derivation from the challenge hash under
+/// the same domain string (the `schnorr.rs` idiom).
+const NONCE_LABEL: &[u8] = b"nonce";
 
 /// A DLEQ proof: challenge `c` and response `s`, each 32 bytes.
 #[derive(Clone)]
@@ -92,7 +118,7 @@ pub fn prove_dleq(
     pub2: &EdwardsPoint,
     msg: &[u8],
 ) -> DleqProof {
-    let mut k = Scalar::random(&mut OsRng);
+    let mut k = hedged_nonce(x, base2, pub1, pub2, msg);
     let r1 = k * G;
     let r2 = k * base2;
 
@@ -105,6 +131,46 @@ pub fn prove_dleq(
         c: c.to_bytes(),
         s: s.to_bytes(),
     }
+}
+
+/// Hedged nonce — see the module docs for why it binds every statement
+/// input and why RNG failure is fail-safe rather than fail-stop.
+fn hedged_nonce(
+    x: &Scalar,
+    base2: &EdwardsPoint,
+    pub1: &EdwardsPoint,
+    pub2: &EdwardsPoint,
+    msg: &[u8],
+) -> Scalar {
+    let mut fresh = shekyl_crypto_pq::rng::hedged_fresh32();
+    let k = nonce_from_fresh(x, base2, pub1, pub2, msg, &fresh);
+    fresh.zeroize();
+    k
+}
+
+/// Pure half of the hedged nonce: statement + secret + caller-supplied
+/// fresh block. Separated so tests can pin the fail-safe (zero-fresh)
+/// form without controlling the OS RNG — the full-statement binding is
+/// load-bearing only on that path (module docs).
+fn nonce_from_fresh(
+    x: &Scalar,
+    base2: &EdwardsPoint,
+    pub1: &EdwardsPoint,
+    pub2: &EdwardsPoint,
+    msg: &[u8],
+    fresh: &[u8; 32],
+) -> Scalar {
+    let mut hasher = Sha512::new();
+    hasher.update(DOMAIN_SEPARATOR);
+    hasher.update(NONCE_LABEL);
+    hasher.update(x.as_bytes());
+    hasher.update(G.compress().as_bytes());
+    hasher.update(base2.compress().as_bytes());
+    hasher.update(pub1.compress().as_bytes());
+    hasher.update(pub2.compress().as_bytes());
+    hasher.update(msg);
+    hasher.update(fresh);
+    Scalar::from_hash(hasher)
 }
 
 /// Verify a DLEQ proof.
@@ -144,6 +210,7 @@ pub fn verify_dleq(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand_core::OsRng;
 
     #[test]
     fn dleq_round_trip() {
@@ -158,9 +225,75 @@ mod tests {
             verify_dleq(&base2, &pub1, &pub2, msg, &proof),
             "valid DLEQ proof must verify"
         );
+    }
 
-        eprintln!("[dleq] round-trip: proof.c = {}", hex::encode(proof.c));
-        eprintln!("[dleq] round-trip: proof.s = {}", hex::encode(proof.s));
+    /// The nonce is hedged, not deterministic: two proofs of the same
+    /// statement under a working RNG differ. (The deterministic fallback
+    /// is only reached when the OS RNG fails, which no test can induce
+    /// here — the property asserted is that the healthy path does not
+    /// collapse to one nonce, i.e. the bare-RNG→hedged fix did not land
+    /// as fully-deterministic.)
+    #[test]
+    fn healthy_rng_produces_distinct_proofs() {
+        let x = Scalar::random(&mut OsRng);
+        let base2 = Scalar::random(&mut OsRng) * G;
+        let pub1 = x * G;
+        let pub2 = x * base2;
+        let msg = b"same statement";
+
+        let a = prove_dleq(&x, &base2, &pub1, &pub2, msg);
+        let b = prove_dleq(&x, &base2, &pub1, &pub2, msg);
+        assert_ne!(a.c, b.c, "challenge must differ — nonce is hedged");
+        assert!(verify_dleq(&base2, &pub1, &pub2, msg, &a));
+        assert!(verify_dleq(&base2, &pub1, &pub2, msg, &b));
+    }
+
+    /// Under fixed (zero) fresh entropy the nonce is deterministic and
+    /// must still differ when any statement input differs — the property
+    /// that keeps the fail-safe path from repeating `k` across statements
+    /// (and thereby leaking `x`). Healthy-path tests cannot see this;
+    /// pin it here so a "simplify the nonce hash" edit fails CI.
+    #[test]
+    fn zero_fresh_nonce_binds_full_statement() {
+        let zero = [0u8; 32];
+        let x = Scalar::from(7u64);
+        let base2 = Scalar::from(11u64) * G;
+        let base2_alt = Scalar::from(13u64) * G;
+        let pub1 = x * G;
+        let pub2 = x * base2;
+        let pub2_alt = x * base2_alt;
+        let msg = b"ctx-a";
+        let msg_alt = b"ctx-b";
+
+        let base = nonce_from_fresh(&x, &base2, &pub1, &pub2, msg, &zero);
+        // Same statement → same k (stable deterministic form).
+        assert_eq!(
+            base,
+            nonce_from_fresh(&x, &base2, &pub1, &pub2, msg, &zero),
+            "identical inputs under zero fresh must yield the same nonce"
+        );
+        // Each statement input that the challenge also binds must move k.
+        assert_ne!(
+            base,
+            nonce_from_fresh(&x, &base2, &pub1, &pub2, msg_alt, &zero),
+            "msg must enter the nonce"
+        );
+        assert_ne!(
+            base,
+            nonce_from_fresh(&x, &base2_alt, &pub1, &pub2_alt, msg, &zero),
+            "base2 must enter the nonce"
+        );
+        assert_ne!(
+            base,
+            nonce_from_fresh(&x, &base2, &pub1, &pub2_alt, msg, &zero),
+            "pub2 must enter the nonce"
+        );
+        let x_alt = Scalar::from(17u64);
+        assert_ne!(
+            base,
+            nonce_from_fresh(&x_alt, &base2, &(x_alt * G), &(x_alt * base2), msg, &zero),
+            "secret x must enter the nonce"
+        );
     }
 
     #[test]

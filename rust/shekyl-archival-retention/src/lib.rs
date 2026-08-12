@@ -18,11 +18,13 @@
 //! # Public surface
 //!
 //! - [`challenge`] — `challenge_leaf_index`, `challenge_fire_height`, domain labels.
+//! - [`challenge_assignment`] — exact-min derived assignment urn
+//!   ([`ChallengeUrn`], [`assign_epoch`]); pure, no wire surface.
 //! - [`path`] — [`SegmentPathOpening`], [`verify_segment_path`] (requires the
 //!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
-//! - [`attestation`] — settlement fold over kept kinds (`settle_epoch`).
+//! - [`attestation`] — settlement fold over challenge outcome counts (`settle_epoch`, absolute-2).
 //! - [`attestation_wire`] — header, nonce, `PassRecord`, root, pass verify.
 //!
 //! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
@@ -41,6 +43,7 @@ pub mod bond_floor;
 pub mod bond_post;
 pub mod bond_wire;
 pub mod challenge;
+pub mod challenge_assignment;
 pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
@@ -67,7 +70,9 @@ pub use admission::{
     credited_work_at_admission, parent_state_shards_from_gather, AdmissionError, AdmissionShard,
     ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
 };
-pub use attestation::{settle_epoch, AttestationKind, EpochSettlement};
+pub use attestation::{
+    settle_epoch, AttestationKind, EpochSettlement, SettleError, SERVE_THRESHOLD_PASSES,
+};
 pub use attestation_wire::{
     attestation_nonce, attestation_root, empty_attestation_root,
     pass_records_from_headers_and_witness, verify_pass_countersignature, AttestationHeader,
@@ -88,7 +93,7 @@ pub use bond_duration::{bond_duration, ShardAgeAtAdd};
 pub use bond_floor::{
     bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
     ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS,
-    MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
+    MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS,
 };
 pub use bond_post::{
     bond_post_block_unique, verify_holdings_update_add, verify_holdings_update_drop,
@@ -96,13 +101,17 @@ pub use bond_post::{
 };
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
-    HoldingsKind, ShardSet, ShardSetError, BOND_POST_SIG_CUSTOMIZATION,
-    HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS, VIN_TYPE_ARCHIVAL_BOND_POST,
+    HoldingsKind, ShardSet, ShardSetError, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
+    VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
+};
+pub use challenge_assignment::{
+    assign_epoch, AssignmentError, ChallengeUrn, DrawablePair, FeedError,
+    CHALLENGE_ASSIGNMENT_CUSTOMIZATION,
 };
 pub use claimed_epochs::{
     claim_window_floor, claimed_epochs_check_and_set, claimed_epochs_contains,
@@ -122,7 +131,7 @@ pub use constants::{
     arm_settlement_epoch_override_for_regtest, effective_settlement_epoch_blocks,
     parse_settlement_epoch_override, settlement_epoch_blocks_overridden,
     settlement_epoch_override_ignored, settlement_epoch_override_present,
-    SettlementEpochOverrideError, CHALLENGES_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
+    SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
     CHALLENGE_RESOLUTION_BLOCKS, CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};

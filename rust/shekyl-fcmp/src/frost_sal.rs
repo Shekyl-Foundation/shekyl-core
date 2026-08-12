@@ -113,9 +113,20 @@ impl FrostSalSession {
         let crate_input = rerand.input();
         let pseudo_out = crate_input.C_tilde().to_bytes();
 
-        let mut seed = [0u8; 32];
-        rand_core::RngCore::fill_bytes(&mut OsRng, &mut seed);
-        let rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+        // This seed is the entire state of the session's nonce RNG:
+        // recovering it recovers the FROST nonces, so it is wiped like key
+        // material. Scoped so the named buffer dies immediately after
+        // `from_seed` (which takes the array by value into the ChaCha).
+        let rng = {
+            let mut seed = Zeroizing::new([0u8; 32]);
+            rand_core::RngCore::fill_bytes(&mut OsRng, seed.as_mut());
+            rand_chacha::ChaCha20Rng::from_seed(*seed)
+        };
+        // LIVE domain (Shekyl-authored, not inherited). Its bytes are derivation
+        // state: they root every FROST SAL multisig transcript, so changing the
+        // spelling re-derives every multisig challenge — a versioned breaking
+        // change, not a rename. See the SA through-line rule (SIGNATURE_ALIGNMENT.md
+        // §5) and its registry row (CRYPTO_DOMAIN_REGISTRY.tsv, mechanism 3).
         let transcript = RecommendedTranscript::new(b"Shekyl FROST SAL v1");
 
         let algorithm = SalAlgorithm::new(
