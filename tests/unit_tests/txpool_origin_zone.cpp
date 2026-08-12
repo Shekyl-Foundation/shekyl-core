@@ -116,6 +116,21 @@ namespace
     }
   }
 
+  // The method-upgrade path is how a stem becomes fluff (loop detection,
+  // out-of-order). It must not revise the origin — that fact belongs to the
+  // first arrival, and `add_tx` is what enforces first-writer by not calling
+  // the setter on an existing entry. This pins the setter/upgrade half.
+  TEST(txpool_origin_zone, upgrade_relay_method_does_not_revise_origin)
+  {
+    cryptonote::txpool_tx_meta_t meta{};
+    meta.set_origin_zone(zone::tor);
+    meta.set_relay_method(cryptonote::relay_method::stem);
+    ASSERT_TRUE(meta.upgrade_relay_method(cryptonote::relay_method::fluff));
+    EXPECT_EQ(zone::tor, meta.get_origin_zone())
+      << "upgrade_relay_method revised the first-arrival origin";
+    EXPECT_EQ(cryptonote::relay_method::fluff, meta.get_relay_method());
+  }
+
   // Negative control on this suite: a field that always returned `invalid`
   // would pass the migration test and the zeroed-record test. It must not pass
   // this one.

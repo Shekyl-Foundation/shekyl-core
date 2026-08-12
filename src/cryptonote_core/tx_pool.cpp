@@ -339,7 +339,6 @@ namespace cryptonote
              latency the path does cost is priced by the zone's own `hop`
              (§89.2, `ANON_ZONE_TRANSIT_ASSUMPTION_MS`), which is where a
              per-zone cost belongs. `set_relayed` adjusts the time later. */
-          using clock = std::chrono::system_clock;
           auto last_relayed_time = std::numeric_limits<decltype(meta.last_relayed_time)>::max();
 
           //update transactions container
@@ -354,7 +353,13 @@ namespace cryptonote
           meta.relayed = relayed;
           meta.double_spend_seen = false;
           meta.pruned = tx.pruned;
-          meta.set_origin_zone(origin_zone);  // see above
+          // First arrival wins. Origin is a fact about where the bytes first
+          // came from, not a routing decision: an upgrade (stem→fluff loop
+          // detection, out-of-order fluff) revises the method, not the
+          // provenance. Overwriting here would hand Q12-U3 the second peer's
+          // zone after a normal Dandelion++ re-delivery.
+          if (!existing_tx)
+            meta.set_origin_zone(origin_zone);
           memset(meta.padding, 0, sizeof(meta.padding));
 
           if (tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc)
@@ -2123,11 +2128,10 @@ namespace cryptonote
 
         cryptonote::tx_verification_context tvc{};
         relay_method tx_relay = e.meta.get_relay_method();
-        // Re-validation is not a new arrival, so the recorded origin must
-        // SURVIVE the round trip. Passing `invalid` here would quietly erase a
-        // transaction's provenance at every hard-fork re-validation -- the tx
-        // would still propagate and nothing would error, and the only symptom
-        // would be anonymity-arrived traffic losing the fact that it was.
+        // take_tx removed the entry, so add_tx sees a fresh insert and will
+        // write whatever origin we pass. First-writer-wins means this is the
+        // write. Passing `invalid` would replace a recorded anonymity origin
+        // with "unknown" at every hard-fork re-validation.
         if (!add_tx(tx, e.txid, blob, e.meta.weight, tvc, tx_relay, relayed, version,
               e.meta.get_origin_zone()))
         {

@@ -2393,56 +2393,47 @@ namespace nodetool
        traffic (below) still fails closed when anonymity cannot take it —
        leaking an origin over clearnet is the first-spy case this arc exists
        to prevent (§30.5). */
-    /* Pre-fluff = stem | forward | local. Shared with the pure R-1
-       predicate (`cryptonote::is_pre_fluff_relay` / `r1_coherence_keeps_origin`)
-       so the production branch and its unit witness cannot drift. Fluff is the
+    /* Pre-fluff = stem | local. Shared with the pure R-1 predicate
+       (`cryptonote::is_pre_fluff_relay` / `r1_coherence_keeps_origin`) so the
+       production branch and its unit witness cannot drift. Fluff is the
        exit — must not cohere (§59.1). */
     const bool still_stemming = cryptonote::is_pre_fluff_relay(tx_relay);
 
     if (origin != enet::zone::invalid)
     {
-      /* LIVE as of Q12-U2. Dormant before it, for five links rather than the
-         four §63.8 recorded — and §89.7 wrongly claimed §89 had woken it.
+      /* LIVE as of Q12-U2. One caller reaches here with a real origin: the
+         ARRIVAL, from `handle_notify_new_transactions`, whose origin is the
+         live connection's zone. Coherence holds a still-stemming arrival on
+         that zone.
 
-         §89 broke link 1 (an anonymity stem clears `dandelionpp_fluff`). The
-         fifth link bound on its own: a non-public arrival took
-         `relay_method::forward`, `add_tx` refused to propagate `forward` into
-         `tvc.m_relay`, and the batching switch dropped it. So
-         `relay_transactions` was never called at arrival with an anonymity
-         origin, and this branch could not see (anon origin, pre-fluff)
-         whatever link 1 did. Q12-U2 deleted the class: an arrival is stemmed
-         whatever transport carried it, and reaches here with its real origin.
+         The pool re-relay does NOT read `origin_zone` and does not come here
+         as a stem. Expired stems leave as `fluff` at `zone::public_` — the
+         Dandelion++ exit. Re-reading that literal as a leak, and re-stemming
+         those entries on their recorded origin, is the retracted U2-b path:
+         a liveness defect that strands the tx in the anonymity subgraph
+         (§59.1).
 
-         Two callers now arrive with a non-`invalid` origin, and they are not
-         the same case:
+         Dormant before U2 for five links rather than the four §63.8 recorded
+         — a non-public arrival took `relay_method::forward`, `add_tx` refused
+         to propagate it into `tvc.m_relay`, and the batching switch dropped
+         it. Q12-U2 deleted the class: an arrival is stemmed whatever
+         transport carried it, and reaches here with its real origin.
 
-         - the ARRIVAL, from `handle_notify_new_transactions`, whose origin is
-           the live connection's zone;
-         - the RE-RELAY, from `core::relay_txpool_transactions`, whose origin
-           is read back from `txpool_tx_meta_t::origin_zone` (Q12-U1) because
-           the connection is long gone. Its source is nil, which is why the
-           divert roll below excludes it and coherence here does not — a
-           re-relay carries an arrival zone to cohere with, but it is not a
-           new entry to re-roll.
-
-         **Witness.** Link 1 is pinned by `levin.cpp`'s `private_*` cases; the
-         pure gate by `r1_coherence_predicate`; the re-relay's origin by
-         `daemon_submit_shims`. Still NOT witnessed: the arrival leg
-         end-to-end, which needs the `t_core` harness the suite lacks (§89.8 /
-         FOLLOWUPS). Note what that cost last time — the missing witness is
-         exactly what hid the fifth link, and what let §89.7 assert liveness
-         across it. */
+         Witness: link 1 by `levin.cpp`'s `private_*` cases; the pure gate by
+         `r1_coherence_predicate`. Still NOT witnessed: the arrival leg
+         end-to-end (`t_core` harness, FOLLOWUPS). That gap hid the fifth
+         link last time, and let §89.7 assert liveness across it. */
       if (cryptonote::r1_coherence_keeps_origin(tx_relay, origin) &&
           m_network_zones.count(origin))
         return send(*m_network_zones.find(origin)); // coherence: no re-roll
 
       /* The roll fires only on a genuine ARRIVAL — `source` is a real peer.
          A mempool re-relay passes a nil source (and `origin == public_`,
-         which is why coherence above cannot see it), and re-rolling those
-         would break the design in two ways at once: the same transaction
-         could be diverted on one pass and sent to clearnet on the next,
-         and the effective rate over `k` re-relays would be
-         `1 - (1-p)^k` rather than the `p` §59.2 states and pins.
+         because expired stems leave as fluff, not as a recorded origin),
+         and re-rolling those would break the design in two ways at once:
+         the same transaction could be diverted on one pass and sent to
+         clearnet on the next, and the effective rate over `k` re-relays
+         would be `1 - (1-p)^k` rather than the `p` §59.2 states and pins.
 
          One roll at entry means one roll per entry. Re-relays are not
          entries — they carry no arrival zone to cohere with, and they go to

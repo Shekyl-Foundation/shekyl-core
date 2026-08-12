@@ -198,7 +198,7 @@ struct txpool_tx_meta_t
   uint64_t max_used_block_height;
   uint64_t last_failed_height;
   uint64_t receive_time;
-  uint64_t last_relayed_time; //!< If received over i2p/tor, randomized forward time. If Dandelion++stem, randomized embargo time. Otherwise, last relayed timestamp
+  uint64_t last_relayed_time; //!< If Dandelion++ stem, randomized embargo time. Otherwise, last relayed timestamp.
   // 112 bytes
   uint8_t kept_by_block;
   uint8_t relayed;
@@ -260,6 +260,10 @@ struct txpool_tx_meta_t
   // from; folding the fact into the decision is what made the zone
   // unrecoverable in the first place -- `relay_method::forward` meant "arrived
   // somewhere other than clearnet" and threw away which somewhere.
+  //
+  // The setter itself is last-write. First-arrival is `add_tx`'s rule: it
+  // calls this only on a fresh insert, so a stem→fluff upgrade does not
+  // revise the provenance.
   void set_origin_zone(epee::net_utils::zone zone) noexcept;
 
   //! The zone this transaction arrived over, or `zone::invalid` if unknown.
