@@ -1058,16 +1058,46 @@ impl TorControl {
         self.budget.restore_ordinary();
     }
 
-    /// Record the command now on the wire and set the framer's allowance to match.
-    /// The single place `pending` is armed, so the budget cannot drift out of step
-    /// with what is actually in flight.
-    fn set_in_flight(&mut self, tx: ReplySender<CommandResult>, in_flight: InFlight) {
+    /// Put an already-validated command line on the wire and take ownership of
+    /// its reply. The single place a command is dispatched, so the framer's
+    /// allowance cannot drift out of step with what is actually in flight.
+    ///
+    /// **The allowance is armed before the write, not after.** The reply can
+    /// begin arriving the instant the bytes land, and the [`ReplyStream`] that
+    /// charges against the budget is polled on its own task — so arming
+    /// afterwards leaves a window in which the legitimate multi-megabyte
+    /// `ns/all` reply is charged against [`ORDINARY_REPLY_BYTES`] and trips
+    /// `ReplyTooLarge`, which the actor treats as a desync it will not reconnect
+    /// into. Arming first is not merely earlier, it is *provably* before any byte
+    /// of that reply can exist: one command is on the wire at a time, so the
+    /// reply cannot precede the command that asks for it.
+    ///
+    /// `Err` means the wire is disturbed and every pending caller has already
+    /// been failed (which withdraws the allowance again) — the caller stops the
+    /// actor.
+    async fn dispatch(
+        &mut self,
+        line: &str,
+        tx: ReplySender<CommandResult>,
+        in_flight: InFlight,
+    ) -> Result<(), ControlError> {
         if in_flight.bulk {
             self.budget.arm_bulk();
         } else {
             self.budget.restore_ordinary();
         }
-        self.pending = Some((tx, in_flight));
+        match write_line(&mut self.writer, line).await {
+            Ok(()) => {
+                self.pending = Some((tx, in_flight));
+                Ok(())
+            }
+            // An Io failure mid-write disturbs the wire; fail the actor.
+            Err(e) => {
+                tx.send(Err(e.clone()));
+                self.fail_all_pending(&e);
+                Err(e)
+            }
+        }
     }
 }
 
@@ -1099,15 +1129,11 @@ impl Message<Command> for TorControl {
                 // + one-on-the-wire.
                 Ok(line) if self.pending.is_some() => self.queue.push_back((line, tx, in_flight)),
                 // The wire is free — write the line now.
-                Ok(line) => match write_line(&mut self.writer, &line).await {
-                    Ok(()) => self.set_in_flight(tx, in_flight),
-                    // An Io failure mid-write disturbs the wire; fail the actor.
-                    Err(e) => {
-                        tx.send(Err(e.clone()));
-                        self.fail_all_pending(&e);
+                Ok(line) => {
+                    if self.dispatch(&line, tx, in_flight).await.is_err() {
                         ctx.stop();
                     }
-                },
+                }
             }
         }
         delegated
@@ -1157,13 +1183,12 @@ impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl
                     }
                     tx.send(Ok(reply));
                     if let Some((next_line, next_tx, next_in_flight)) = self.queue.pop_front() {
-                        match write_line(&mut self.writer, &next_line).await {
-                            Ok(()) => self.set_in_flight(next_tx, next_in_flight),
-                            Err(e) => {
-                                next_tx.send(Err(e.clone()));
-                                self.fail_all_pending(&e);
-                                ctx.stop();
-                            }
+                        if self
+                            .dispatch(&next_line, next_tx, next_in_flight)
+                            .await
+                            .is_err()
+                        {
+                            ctx.stop();
                         }
                     }
                 }

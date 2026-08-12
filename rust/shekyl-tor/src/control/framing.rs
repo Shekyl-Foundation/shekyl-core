@@ -258,6 +258,12 @@ impl std::error::Error for FramingError {}
 ///
 /// Cloning shares the cell: the framer reads it while the actor writes it from
 /// its own task, which is why it is an atomic and not a plain field.
+///
+/// The writer arms the allowance **before** putting the bulk command on the
+/// wire, so the store precedes the existence of any byte it governs. `Release`
+/// / `Acquire` is what makes that ordering a guarantee rather than an
+/// observation about how fast a task gets rescheduled — and on the platforms
+/// this runs on it costs nothing over `Relaxed`.
 #[derive(Clone, Debug)]
 pub struct ReplyBudget(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
@@ -270,11 +276,11 @@ impl ReplyBudget {
         )))
     }
 
-    /// Raise the cap to [`BULK_REPLY_BYTES`] for the bulk command now on the
-    /// wire.
+    /// Raise the cap to [`BULK_REPLY_BYTES`] for the bulk command about to go on
+    /// the wire.
     pub fn arm_bulk(&self) {
         self.0
-            .store(BULK_REPLY_BYTES, std::sync::atomic::Ordering::Relaxed);
+            .store(BULK_REPLY_BYTES, std::sync::atomic::Ordering::Release);
     }
 
     /// Drop back to [`ORDINARY_REPLY_BYTES`] — called as soon as the bulk reply
@@ -282,12 +288,12 @@ impl ReplyBudget {
     /// one round trip that earned it.
     pub fn restore_ordinary(&self) {
         self.0
-            .store(ORDINARY_REPLY_BYTES, std::sync::atomic::Ordering::Relaxed);
+            .store(ORDINARY_REPLY_BYTES, std::sync::atomic::Ordering::Release);
     }
 
     /// The cap in force right now.
     fn limit(&self) -> usize {
-        self.0.load(std::sync::atomic::Ordering::Relaxed)
+        self.0.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
