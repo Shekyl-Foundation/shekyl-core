@@ -1488,21 +1488,35 @@ justified, than §11.7 anticipated.
 refresh within minutes. The daemon responds to a condition that resolves itself
 in minutes by refusing to look for an hour.
 
-#### Replicated, and the first estimate was the high half of it
+#### Replicated five times, and every intermediate estimate was reported at whatever `n` was to hand
 
-The rig was run again under identical conditions. **Round 1: 8/60. Round 3:
-3/60.** Fisher exact two-sided `p = 0.204` — consistent with a single rate, so
-this is sampling rather than drift, and the pooled estimate over `n = 120` is
-**9.2 %**.
+| round | failures |
+| --- | --- |
+| 1 | 8/60 = 13.3 % |
+| 3 | 3/60 = 5.0 % |
+| 5 | 9/60 = 15.0 % |
+| 6 | 5/60 = 8.3 % |
+| 7 | 13/60 = 21.7 % |
+| **pooled** | **38/300 = 12.7 %**, 95 % Wilson CI **[9.4 %, 16.9 %]** |
 
-**The earlier 13.3 % was therefore the high half of its own distribution quoted
-as the estimate.** Recorded because the correction runs the other way from every
-other figure in this section: the rig's population is healthier than first
-reported, which widens rather than narrows the gap to the ring.
+The single-round spread is 5.0 % to 21.7 %, and this section's estimate moved
+**13.3 % (n = 60) → 9.2 % (n = 120) → 12.7 % (n = 300)** as rounds accumulated.
+
+**Each intermediate figure was reported as though it were the estimate**, and the
+"correction" from 13.3 % to 9.2 % was itself premature — it happened to be a
+second draw from a wide distribution. The eventual value is within a point and a
+half of the first one. **The defect is not any of the numbers; it is publishing a
+point estimate from a sample too small to distinguish it from its neighbours**,
+which is the same shape as reading a latency experiment at 48 of 60. A rate
+quoted without an interval invites exactly this.
+
+Recorded because the conclusion never depended on it: §11.7's reachability table
+is evaluated at 0.10, 0.23 and 0.35 precisely so that no single estimate is
+load-bearing.
 
 #### The measured rate is a floor, and the ring says by how much
 
-**9.2 %** here against **~23 %** in the six-host ring. The gap is the
+**12.7 %** (CI 9.4–16.9 %) here against **~23 %** in the six-host ring. The gap is the
 self-selection this rig was built with: freshly provisioned, healthy services
 published by one tor on one well-connected host. Real peers may be mid-restart,
 throttled or dead.
@@ -1511,7 +1525,7 @@ throttled or dead.
 
 | rate | population it describes | floor reachable at `A = 15` |
 | --- | --- | --- |
-| 9.2 % (rig) | healthy services on one well-connected host — a **floor** | ~84 % — marginal |
+| 12.7 % (rig) | healthy services on one well-connected host — a **floor** | ~74 % — marginal |
 | ~23 % (ring) | real nodes across three providers — **representative** | **~34 % — decisive** |
 
 So the reachability finding **rests on the ring**, which is why the rig was
@@ -1635,24 +1649,43 @@ sustains the failure*.
 — took **four of the ring's seven burns** and sat at `anon_in = 1` for the full
 hour. Failures cluster on **targets**, not dialers.
 
-#### What this rig cannot tell us, stated rather than implied
+#### Settled: failures do NOT correlate through the dialer
 
-Whether failures also correlate *through the dialer* — one node having a bad few
-minutes and burning much of its candidate set at once — **is not testable from
-this data.** Every failure ran to the 120 s cap, so all eight are the last eight
-*completions* by construction; completion order carries no information about
-when they started, and the rig records duration and result but **not start
-time**. The ring's target-clustering is real evidence for the target-side
-mechanism; this rig neither corroborates nor contradicts a dialer-side one.
-Recording per-attempt start timestamps is a one-line change and is owed before
-the question is answered either way.
+The rig was extended to record each attempt's **start** time, which the first
+version omitted — without it every failure ran to the cap and so was the last
+*completion* by construction, carrying no timing information at all.
 
-**It matters because the binomial in §11.7 assumes independence.** If failures
-correlate through the dialer, the binomial is the *optimistic* model and the
-`p³` compounding that justifies three retries does not hold, because attempts
-inside 60–120 s would share the circuit state that caused them.
+**Four settled rounds, 240 attempts, 30 failures**, Wald–Wolfowitz runs test per
+round on the start-ordered sequence:
 
-### 11.11 Two constraints on the retry design that the derivation missed
+| round | failures | runs | expected | z |
+| --- | --- | --- | --- | --- |
+| 3 | 3/60 | 7 | 6.7 | +0.45 |
+| 5 | 9/60 | 18 | 16.3 | +0.88 |
+| 6 | 5/60 | 9 | 10.2 | −1.04 |
+| 7 | 13/60 | 22 | 21.4 | +0.24 |
+| **combined (Stouffer)** | | | | **+0.27, `p` = 0.79** |
+
+**No clustering.** Failures are dispersed in start time, which is what
+independent per-dial failure looks like — so the binomial in §11.7 is the right
+model rather than the optimistic one, and the `p³` compounding that justifies
+three retries holds.
+
+**The test carries its own positive control.** Run on the *unsettled* condition
+it returns **z = −5.30, `p` < 0.001** — strongly clustered — because publication
+progress at the targets makes the failure rate decline monotonically across a
+run (94 % → 83 % → 14 % by start-time third). So the instrument detects
+clustering when clustering exists, and finds none once the trend is removed.
+
+**That confound was self-inflicted and worth recording.** The unsettled condition
+was chosen *because* it produces enough failures to have power, and doing so
+imported the very time trend the test was meant to detect. **A powered test of
+the wrong quantity is worse than an underpowered one**, because it yields a
+confident number: reported alone, `z = −5.30, p < 0.001` would have read as the
+session's strongest result and been an artifact of the condition chosen to
+measure it.
+
+### 11.11 Two constraints on the retry design that the derivation missed### 11.11 Two constraints on the retry design that the derivation missed
 
 **Dialing is serial and blocking.** `make_expected_connections_count` makes **one**
 attempt per call ([`net_node.inl`](../../src/p2p/net_node.inl), the
