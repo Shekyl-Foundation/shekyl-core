@@ -1650,7 +1650,66 @@ transiently flaky peer — fails, succeeds, fails — would otherwise ratchet up
 3600 s and arrive at the same defect by a slower road. **The fix decays into the
 thing it replaces unless the counter is cleared on success.**
 
-### 11.12 The launch condition, stated plainly
+### 11.12 The first-failure window, measured
+
+**20 hidden services, published and verified dialable, then their tor restarted
+with the same keys** — the documented remedy of §11.5, which is exactly the
+event a dialer walks into. A fresh client polled all 20 until each answered:
+
+```
+20 20 20 21 21 22 25 80 96 96 103 136 136 137 138 139 222 239 259 262   (seconds)
+recovered 20/20   min 20 s   p50 103 s   p90 259 s   max 262 s
+```
+
+**Every service came back.** Nothing was permanently broken by the restart — the
+peers were up and correct the whole time, and undialable for between 20 seconds
+and four and a half minutes. Against `P2P_FAILED_ADDR_FORGET_SECONDS = 3600`,
+the daemon answers a four-minute condition with an hour of blindness.
+
+#### Deriving the window rather than choosing it
+
+| candidate first window | first retry succeeds | second retry (at `3w`) covers |
+| --- | --- | --- |
+| 60 s | 35 % | 16/20 |
+| **120 s** | **55 %** | **20/20** |
+| 180 s | 80 % | 20/20 |
+| 300 s | 100 % | 20/20 |
+
+**Ruled: `P2P_ANON_FAILED_ADDR_FORGET_SECONDS = 120`** — the smallest round value
+above the **measured median** recovery of 103 s. The first retry then succeeds
+more often than not, and **escalation covers the tail by construction**: the
+second retry falls at `120 + 240 = 360 s`, past the 262 s maximum observed.
+Choosing 300 s to catch every case on the first attempt would trade a tail that
+escalation already handles for a window two and a half times longer on *every*
+address, which is the wrong side of the floor-reachability trade.
+
+A first window that is occasionally too short is **self-correcting**; one that is
+too long is the defect being fixed.
+
+#### Time-to-floor, checked rather than assumed
+
+Dials are serial and blocking (§11.11), so the retry count has a wall-clock cost:
+
+| attempt | window | + 12 serial dials at 45 s | cumulative |
+| --- | --- | --- | --- |
+| 1 | 120 s | 540 s | 660 s |
+| 2 | 240 s | 540 s | 1440 s |
+| 3 | 480 s | 540 s | **2460 s** |
+
+**Three full attempts at every one of twelve candidates costs less than the hour
+the unfixed code spends on a single failure.** That bound is asserted in
+`tests/unit_tests/node_server.cpp` rather than left in prose, so a future
+re-derivation of either constant has to keep it true.
+
+#### Measured three times, and the rate is stable
+
+The baselines of the three restart runs give an independent read of the
+publication failure rate, by a different method than §11.8's parallel rig:
+**17/20, 15/20, 16/20 dialable** after a 240 s settle — 15 %, 25 %, 20 %.
+Consistent with the rig's 13.3 % and the ring's ~23 %, and above the level at
+which §11.7's reachability table fails at `A = 15` under any of them.
+
+### 11.13 The launch condition, stated plainly
 
 Composing §11.7's reachability with §12's below-floor rule: below the floor a
 node does not stem on the anonymity zone. At `p ≈ 0.15–0.23` the floor is
