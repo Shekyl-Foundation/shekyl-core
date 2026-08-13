@@ -620,7 +620,9 @@ int relay_tx(tx_memory_pool& pool, i_cryptonote_protocol& protocol,
     // `public_`, which `send_txs` sends on clearnet *by design* — not as
     // a fallback from an unusable chosen zone. Pool re-relays of `local`
     // keep passing `invalid` and do not come through this function, so
-    // they cannot re-roll.
+    // they cannot re-roll. A missed nudge is a second chooser (the pool
+    // then first-decides always-anon) — D5a in miniature, FOLLOWUPS —
+    // not a reason to roll on the pool path.
     NOTIFY_NEW_TRANSACTIONS::request r;
     r.txs.push_back(std::move(txblob));
     protocol.relay_transactions(

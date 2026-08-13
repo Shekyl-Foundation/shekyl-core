@@ -231,11 +231,15 @@ struct txpool_tx_meta_t
   // bump (rule 42 governs `rust/shekyl-engine-{state,file}/**`; this is
   // daemon-side C++ LMDB, re-verified at pre-flight rather than inherited).
   //
-  // TELEMETRY, not a routing field. Q12-D3 deleted the class this was scoped
-  // to route (`relay_method::forward`); a later attempt to bucket the pool
-  // re-relay by origin was retracted (it was not a leak fix). Production
-  // routing does not read this. Q12-U3's origin-classified / zone-labelled
-  // readout is the named consumer — it verifies coherence holds.
+  // TELEMETRY, not a routing field. Three scoped consumers, none delivered:
+  // U1 pool-loop routing — deleted with `relay_method::forward` (Q12-D3);
+  // U2 re-relay origin bucketing — retracted (`2cd0fb72`, not a leak fix);
+  // U3 zone-labelled `/get_stem_tallies` — collection zone, not this field.
+  // Fourth consumer, named 2026-08-13: the Q12-D6a isolation arm
+  // (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6) — distinguish originated-on-anon
+  // from relayed-on-anon. Production routing does not read this. Reopen
+  // for rule-15 deletion if that run ships without a `get_origin_zone`
+  // reader besides the HF preservation path.
   //
   // NO MIGRATION, and the reason is load-bearing: `zone::invalid == 0`, and a
   // record written before this field existed has these bits zero, so it
@@ -277,8 +281,9 @@ struct txpool_tx_meta_t
   // `invalid` is returned for every record written before this field existed,
   // and for locally originated transactions, which did not arrive over
   // anything. Callers must treat it as "origin unknown" rather than as a
-  // fourth transport. Nothing production-routes on this value; it is the
-  // isolation arm's instrument and the coherence-verification readout.
+  // fourth transport. Nothing production-routes on this value. Named
+  // consumer: Q12-D6a isolation arm (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6).
+  // The HF re-validation read is preservation, not that consumer.
   epee::net_utils::zone get_origin_zone() const noexcept;
 
   //! \return True if `get_relay_method()` now returns `method`.

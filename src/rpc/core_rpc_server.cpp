@@ -2846,7 +2846,15 @@ namespace cryptonote
       cryptonote::blobdata txblob;
       if ((broadcasted = m_core.get_pool_transaction(txid, txblob, relay_category::broadcasted)) || (!restricted && m_core.get_pool_transaction(txid, txblob, relay_category::all)))
       {
-        // The settings below always choose i2p/tor if enabled. Otherwise, do fluff iff previously relayed else dandelion++ stem.
+        // Q12-D5a residual absorption. Always passes `invalid`. Anything not
+        // yet fluff/block (`local` AND `stem` — stem is outside
+        // `relay_category::broadcasted`) is remapped to `local`, so
+        // `once_at_origin_route` fail-closes onto the anonymity zone. A
+        // transaction that rolled clearnet and is still stemming is
+        // therefore re-decided onto anon: the zone chosen again after
+        // origination, which once-at-origin forbids. Closing it needs the
+        // pool meta at this RPC (TODO above). Until then this is a named
+        // residual, not a silent p_own=1. FOLLOWUPS.
         NOTIFY_NEW_TRANSACTIONS::request r;
         r.txs.push_back(std::move(txblob));
         const auto tx_relay = broadcasted ? relay_method::fluff : relay_method::local;

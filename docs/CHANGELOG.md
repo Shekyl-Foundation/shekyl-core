@@ -66,7 +66,11 @@
   does so by design and is distinguishable at the site from fail-closed
   (chose anonymity, zone unusable, send nothing). `/get_stem_tallies`
   rows now carry a `zone` label; the endpoint stays admin-only.
-  `origin_zone` is still not a routing field.
+  `origin_zone` is still not a routing field. Named consumer: the
+  Q12-D6a isolation arm. `on_relay_tx` and a missed submit nudge are
+  residual absorption paths (zone re-decided after origination) and
+  are recorded, not closed here. `send_txs` requires a `zone_route`
+  token only `once_at_origin_route` can construct.
 
 - **Daemon relay: anonymity arrivals stem at arrival, and the txpool
   records which zone they arrived over** (Q12-U1 / Q12-U2 / Q12-U4,

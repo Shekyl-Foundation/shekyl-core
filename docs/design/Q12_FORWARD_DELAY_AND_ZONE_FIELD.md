@@ -1237,9 +1237,24 @@ the §30.5 fail-closed reversal. The deleted divert was
 `originated_zone_from_anonymity_roll`: `true` → `invalid` (fail-closed onto
 anonymity), `false` → `public_` (clearnet **by design**). `send_txs` switches
 on `once_at_origin_route`. Pool local re-relays keep passing `invalid` and
-do not re-roll. A missed submit nudge still goes out as `invalid`+`local`
-(always anon for that tx) — recorded, not "fixed" by rolling on the pool
-path.
+do not re-roll.
+
+**Residual absorption — two paths, same shape.** Once-at-origin forbids a
+second chooser. Two sites still choose after origination:
+
+1. **Missed submit nudge.** The roll lives in `daemon_submit::relay_tx`.
+   If that nudge never runs, the pool still holds `local` and later
+   sends `invalid`+`local` — fail-closed onto anon. That is not "always
+   anon for that tx" as a harmless edge; it is a first decision made
+   after origination, with `p = 1`. Indistinguishable here from the
+   fail-closed backstop for a tx that *did* choose anon and stayed
+   `local`. Do not fix by rolling on the pool path (`source.is_nil()`
+   reversal).
+2. **`on_relay_tx`.** Always passes `invalid`. Non-broadcasted traffic
+   (`local` *and* `stem` — stem is outside `relay_category::broadcasted`)
+   is remapped to `local`, so a clearnet origination that is still
+   stemming is re-decided onto anon. Closing it needs the pool meta at
+   that RPC. FOLLOWUPS.
 
 **`p = 0.5`.** `MIXED_ELIGIBILITY_PCT_HUNDREDTHS = 5000`. Indifference
 point on a linear trade, not a measured optimum; not operator-configurable.
@@ -1256,14 +1271,23 @@ the merge (`public` / `i2p` / `tor` / `invalid` via `zone_to_string`).
 (`Visibility::AdminOnly`). This verifies which zone produced the stem
 observation; it does **not** read `txpool_tx_meta_t::origin_zone`.
 
-**`origin_zone` is still not a routing field.** One production read: HF
-re-validation in `tx_pool.cpp` (`e.meta.get_origin_zone()`), preservation
-only. First-writer-wins (`if (!existing_tx) meta.set_origin_zone`) holds.
-Do not delete the field.
+**`origin_zone` is not a routing field. Fourth consumer named 2026-08-13.**
+Three scoped, zero delivered: U1 pool-loop routing (deleted with
+`forward`), U2 re-relay origin bucketing (retracted, `2cd0fb72`), U3
+zone-labelled tallies (collection zone, not this field). The named
+consumer is the Q12-D6a isolation arm
+(`Q12_D6A_PEER_DISCOVERY_RUN.md` §6): distinguish originated-on-anon
+from relayed-on-anon. One production read remains: HF re-validation
+preservation (`e.meta.get_origin_zone()`). First-writer-wins holds.
+Reopen for rule-15 deletion if that run ships without a reader besides
+the preservation path. Do not delete it in the meantime — two bits
+are cheap; re-deriving this history is not.
 
-**Witness.** `once_at_origin_route.table` shares the helper `send_txs`
-calls. Negative control observed: returning `public_clearnet` from the
-`keep_arrival` arm reds `(stem, tor)` expected `keep_arrival`, got
-`public_clearnet`. Restored; green. **Still not witnessed:** the arrival
+**Witness.** `once_at_origin_route.table` pins the decision function.
+`send_txs` requires a `zone_route` token only that helper can
+construct, so bypassing it is a compile error (same device as `f`
+refusing a timing parameter). Negative control of the table: returning
+`public_clearnet` from the `keep_arrival` arm reds `(stem, tor)`.
+Restored; green. **Still not witnessed:** the arrival
 leg through `handle_notify_new_transactions` on a non-public context
 (`t_core` / valid FCMP++ proof — FOLLOWUPS).

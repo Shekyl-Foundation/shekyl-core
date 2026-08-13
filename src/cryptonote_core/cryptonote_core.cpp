@@ -1099,6 +1099,12 @@ namespace cryptonote
       if (!public_req.txs.empty())
         get_protocol()->relay_transactions(public_req, source, epee::net_utils::zone::public_, relay_method::fluff);
       if (!private_req.txs.empty())
+        /* `invalid`+`local` is the fail-closed backstop for originated
+           traffic that chose anonymity and kept its `local` record. It is
+           ALSO the first send of a missed submit nudge, whose origination
+           roll never ran — a second chooser, D5a in miniature. Those two
+           are indistinguishable here without persisting the roll, and
+           rolling here is the `source.is_nil()` reversal. FOLLOWUPS. */
         get_protocol()->relay_transactions(private_req, source, epee::net_utils::zone::invalid, relay_method::local);
     }
     return true;
