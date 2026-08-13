@@ -790,6 +790,15 @@ impl RefreshEngine for LocalRefresh {
                             spent_key_images.clear();
                             block_leaves.clear();
                             block_curve_tree_roots.clear();
+                            // Bond sightings from the abandoned fork must go
+                            // with it: their heights sit inside the final
+                            // processed range, so a stale row would pass the
+                            // merge's O5 contract checks and be ADOPTED as
+                            // chain evidence — wrongly re-arming staking and
+                            // permanently burning cursor slots (the raise is
+                            // monotone by design). The canonical chain's posts
+                            // are re-sighted by the re-scan from the fork.
+                            bond_sightings.clear();
 
                             h = fork_height;
                             continue;
@@ -1567,35 +1576,32 @@ mod producer_property_tests {
         LedgerSnapshot::from_ledger(&ledger)
     }
 
-    /// The producer's bond watch: a scanned block carrying two bond posts —
-    /// one whose canonical id is in the watch map, one a stranger's — yields
-    /// exactly one slot-resolved sighting at the right height; and a producer
-    /// with an EMPTY watch (every existing caller) yields none.
-    #[tokio::test(start_paused = true)]
-    async fn bond_watch_emits_sightings_for_watched_ids_only() {
+    /// A persona derived from the test wallet seed at `slot`.
+    fn test_persona(slot: u32) -> shekyl_crypto_pq::archival_p::ArchivalPKeys {
+        shekyl_crypto_pq::archival_p::derive_archival_p_keys(
+            &PROPERTY_TEST_MASTER_SEED,
+            DerivationNetwork::Fakechain,
+            SeedFormat::Raw32,
+            slot,
+        )
+        .expect("derive test persona")
+    }
+
+    fn test_persona_id(
+        keys: &shekyl_crypto_pq::archival_p::ArchivalPKeys,
+    ) -> shekyl_types::PCanonicalId {
+        crate::engine::stake_engine::persona_canonical_id(keys).expect("canonical id")
+    }
+
+    /// A structurally-null non-miner tx carrying one JoinMarket bond post
+    /// (the scanner recovers nothing from zero outputs; the watch reads only
+    /// the input).
+    fn test_bond_tx(
+        keys: &shekyl_crypto_pq::archival_p::ArchivalPKeys,
+    ) -> shekyl_wire::transaction::Transaction {
         use shekyl_wire::transaction::{BondPost, BondPostKind, Transaction, TxPrefix};
         use shekyl_wire::{Ct, CtBase, Holdings};
-
-        // Two personas from the test wallet seed; only slot 0's id is watched.
-        let persona = |slot: u32| {
-            shekyl_crypto_pq::archival_p::derive_archival_p_keys(
-                &PROPERTY_TEST_MASTER_SEED,
-                DerivationNetwork::Fakechain,
-                SeedFormat::Raw32,
-                slot,
-            )
-            .expect("derive test persona")
-        };
-        let id_of = |keys: &shekyl_crypto_pq::archival_p::ArchivalPKeys| {
-            crate::engine::stake_engine::persona_canonical_id(keys).expect("canonical id")
-        };
-        let mine = persona(0);
-        let stranger = persona(1);
-
-        // A structurally-null non-miner tx carrying one bond post (the
-        // scanner recovers nothing from zero outputs; the watch reads only
-        // the input).
-        let bond_tx = |keys: &shekyl_crypto_pq::archival_p::ArchivalPKeys| Transaction {
+        Transaction {
             prefix: TxPrefix {
                 unlock_time: 0,
                 inputs: vec![shekyl_wire::Input::BondPost(Box::new(BondPost {
@@ -1603,7 +1609,7 @@ mod producer_property_tests {
                         .hybrid_bond_id()
                         .to_canonical_bytes()
                         .expect("encode hybrid id"),
-                    p_canonical_id: id_of(keys).to_bytes(),
+                    p_canonical_id: test_persona_id(keys).to_bytes(),
                     kind: BondPostKind::JoinMarket {
                         bond_spend_pk: Vec::new(),
                     },
@@ -1620,21 +1626,32 @@ mod producer_property_tests {
                 enc_labels: vec![],
                 commitments: vec![],
             }),
-        };
+        }
+    }
+
+    /// The producer's bond watch: a scanned block carrying two bond posts —
+    /// one whose canonical id is in the watch map, one a stranger's — yields
+    /// exactly one slot-resolved sighting at the right height; and a producer
+    /// with an EMPTY watch (every existing caller) yields none.
+    #[tokio::test(start_paused = true)]
+    async fn bond_watch_emits_sightings_for_watched_ids_only() {
+        // Two personas from the test wallet seed; only slot 0's id is watched.
+        let mine = test_persona(0);
+        let stranger = test_persona(1);
 
         // Chain: anchor at h0; h1 carries both bond posts. Mutate BEFORE
         // reading hashes so the parent chaining stays consistent.
         let b0 = make_synthetic_block(0, [0u8; 32]);
         let mut b1 = make_synthetic_block(1, b0.block.hash());
-        b1.transactions.push(bond_tx(&mine));
+        b1.transactions.push(test_bond_tx(&mine));
         b1.block.transaction_hashes.push([0xA1; 32]);
-        b1.transactions.push(bond_tx(&stranger));
+        b1.transactions.push(test_bond_tx(&stranger));
         b1.block.transaction_hashes.push([0xA2; 32]);
 
         let daemon =
             TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![b0.clone(), b1.clone()]);
         let snapshot = snapshot_at_anchor(0, b0.block.hash());
-        let watch = std::collections::BTreeMap::from([(id_of(&mine), 4u32)]);
+        let watch = std::collections::BTreeMap::from([(test_persona_id(&mine), 4u32)]);
 
         let blob = rederive_account(
             &PROPERTY_TEST_MASTER_SEED,
@@ -1665,6 +1682,73 @@ mod producer_property_tests {
             "slot-resolved from the watch"
         );
         assert_eq!(result.bond_sightings[0].block_height, 1);
+    }
+
+    /// An intra-attempt reorg discards abandoned-fork bond sightings with the
+    /// rest of the attempt's accumulators. Chain A carries a bond post at the
+    /// fork height; the daemon reorgs to chain B (no bond posts) mid-attempt.
+    /// A stale sighting would sit inside the final processed range, pass the
+    /// merge's O5 contract checks, and be ADOPTED as chain evidence — wrongly
+    /// re-arming staking and permanently burning cursor slots.
+    #[tokio::test(start_paused = true)]
+    async fn reorg_discards_abandoned_fork_bond_sightings() {
+        const TIP: u64 = 6;
+        const FORK: u64 = 2; // chain A's bond post lives here
+        const TRIGGER: u64 = 3; // daemon reorgs right after serving this fetch
+
+        let mine = test_persona(0);
+
+        // Chain A built by hand so the injected bond tx is inside the hash
+        // chaining (mutate BEFORE reading each block's hash).
+        let mut chain_a = Vec::new();
+        let mut parent = [0u8; 32];
+        for h in 0..TIP {
+            let mut b = make_synthetic_block(h, parent);
+            if h == FORK {
+                b.transactions.push(test_bond_tx(&mine));
+                b.block.transaction_hashes.push([0xB0; 32]);
+            }
+            parent = b.block.hash();
+            chain_a.push(b);
+        }
+        let tail_b = divergent_tail(&chain_a, FORK, TIP); // no bond posts on B
+        let anchor = chain_a[0].block.hash();
+
+        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain_a.clone());
+        daemon.replace_chain_after_fetch(TRIGGER, FORK, tail_b);
+
+        let blob = rederive_account(
+            &PROPERTY_TEST_MASTER_SEED,
+            DerivationNetwork::Fakechain,
+            SeedFormat::Raw32,
+        )
+        .expect("rederive");
+        let vm = ViewMaterial::try_from_keys(&blob).expect("view material");
+        let watch = std::collections::BTreeMap::from([(test_persona_id(&mine), 4u32)]);
+        let refresh = LocalRefresh::new(vm, 0, watch);
+
+        let sink = AssertionSink::new();
+        let (progress_tx, _progress_rx) = fresh_progress_channel();
+        let result = refresh
+            .produce_scan_result(
+                snapshot_at_anchor(0, anchor),
+                &daemon,
+                RefreshOptions::default(),
+                CancellationToken::new(),
+                progress_tx,
+                &sink,
+            )
+            .await
+            .expect("straddled scan completes via rewind");
+
+        assert!(
+            result.reorg_rewind.is_some(),
+            "the mid-attempt chain swap must be detected as a reorg"
+        );
+        assert!(
+            result.bond_sightings.is_empty(),
+            "a sighting from the abandoned fork must not survive the rewind"
+        );
     }
 
     /// Construct a `(height, parent_hash)`-chained linear chain of `n`
