@@ -3942,6 +3942,21 @@ sustainability is unaffected by the recalibration.
     per `ARCHIVAL_FIREWALL_GATE6.md` §9.2). **Reopen if** rotation ever becomes
     policy-driven to arbitrary slots — the derive-ahead set must then widen to
     cover the reachable slots. No such design is known. **Target: V3.x.**
+  - **In-order defunding — the retire-below-live precondition.** The open-time
+    reconstruction (`reconcile_staking_at_open`, SP-R0 arms #2/#4) relies on
+    `retired_slots` being a prefix `{0..=r}` strictly **below** every live bond:
+    arm #2 burns the cursor to `highest_retired + 1` and arm #4's lookahead walk
+    starts there, so a live dormant bond sitting *below* a higher retired slot
+    would be stepped over and lost under Model D. That state is unrepresentable
+    under the lifecycle invariant — **slots are used in order and a slot is not
+    retired until it is defunded** — so a retired slot never sits above a live
+    bond. Retirement is driven only by scanned on-chain unbond posts
+    (`record_unbond`). **Reopen the moment the drain/unbond path can defund out
+    of lifecycle order** (an RPC/CLI that unbonds an arbitrary held slot while an
+    older funded one remains bonded): it must either enforce in-order defunding
+    or the reconstruction must widen to inspect every slot below the cursor, not
+    just the burned-cursor lookahead. The drain RPC entry is not yet built.
+    **Target: V3.0** (must hold before genesis freezes the reconstruction shape).
   - **Re-auth without reopen (rule-21 polish).** Lookahead exhaustion / first-stake
     mid-session currently resolve via wallet **reopen** (re-runs `assemble()` with
     the transient seed) — correct and root-free, but a one-time UX friction. A

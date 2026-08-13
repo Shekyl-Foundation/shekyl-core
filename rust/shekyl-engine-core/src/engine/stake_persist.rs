@@ -387,6 +387,25 @@ pub(crate) fn adopt_chain_bonds_and_raise_cursor<E>(
 ///   cursor above the lookahead tail
 ///   ([`adopt_chain_bonds_and_raise_cursor`]).
 ///
+/// # Precondition — retired slots sit below every live bond
+///
+/// This pass relies on the persona-lifecycle invariant that **slots are used in
+/// strictly increasing order and a slot is not retired until it is defunded**.
+/// Together those make `retired_slots` a prefix `{0..=r}` lying strictly *below*
+/// every slot that still holds a live bond: a persona is retired only after its
+/// own bond is drained, and use is in order, so a live bond never sits under a
+/// retired slot. Arm #2 therefore burns the cursor to `highest_retired + 1`
+/// knowing no live bond sits at or below it, so arm #4's lookahead walk — which
+/// starts at the burned cursor — cannot step over a live bond.
+///
+/// The inverse (a live dormant bond at a slot *below* a higher retired slot) is
+/// **unrepresentable**: it requires retiring a persona out of lifecycle order,
+/// before an older funded one is drained. Retirement is driven solely by
+/// scanned on-chain unbond posts (`record_unbond`), and the drain/unbond path
+/// that produces those posts must never defund out of order. If a future path
+/// makes it reachable, that path is the bug — not this reconstruction;
+/// `FOLLOWUPS.md` carries the reopen the drain/retire lane owes.
+///
 /// **The burn precedes the drop.** `retain` is destructive: once a retired slot
 /// leaves `bonded_slots`, `monotone_current_slot_from_record` can no longer see
 /// it, so a cursor that rolled back below a retired slot would be free to
