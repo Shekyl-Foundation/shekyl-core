@@ -568,7 +568,7 @@ mod tests {
         assert_eq!(
             st.bonded_slots,
             vec![0, 1],
-            "slot 1 is back in the derive-forward set — its bond stays unbondable"
+            "slot 1 is back in the derive-forward set — its bond can still be unbonded"
         );
         assert!(st.staking_enabled);
         assert_eq!(st.p_slot, 2, "cursor lifted to one past the observed bond");

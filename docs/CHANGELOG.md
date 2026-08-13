@@ -7,9 +7,11 @@
 - **`stake` gains a fourth refusal: `-29503 STAKE_RECORD_MOVED`** (PR-SA-5,
   `docs/api/wallet_rpc.yaml`). The RPC reads its persona slot from the open
   engine *before* the credentialed reopen, and that reopen runs the SP-R0
-  open-time reconcile — which can adopt a chain-proven bond, burn a retired
-  persona into the monotone cursor, or collect a phantom, any of which makes the
-  earlier read stale. `Engine::first_stake` already refused fail-closed; the
+  open-time reconcile — which can collect that slot as a phantom (arm #3) or
+  burn the monotone cursor past it for a retired persona (arm #2), either of
+  which makes the earlier read stale. A reconcile that *adopts* a chain-proven
+  bond resolves to `-29502 AlreadyStaked` instead, and that precedence is
+  correct: the wallet has just proved it holds a confirmed bond. `Engine::first_stake` already refused fail-closed; the
   refusal was merely **mis-surfaced as `-32603` InternalError**. It is a
   legitimate domain state (nothing durable written, a plain re-invoke reads the
   reconciled record) and now reads as one, per rule 82. The code carries **no

@@ -3885,13 +3885,45 @@ sustainability is unaffected by the recalibration.
     (rule 19: it changes what a non-staker open derives and scans, not how the
     reconcile arms compose), not on reachability. The ruling lives in
     `shekyl-crypto-pq` `archival_p` module docs and CBOM §5.
+  - **Persona slot-space exhaustion is not represented, and the binding gate
+    does not refuse it.** `StakingBlock::monotone_current_slot` uses
+    `saturating_add(1)`, which correctly prevents a wrap to slot 0 but makes
+    `u32::MAX` a **fixed point**: once slot `u32::MAX` is used, the function
+    still reports `u32::MAX` as "current". After arm #2 retires that persona and
+    drops it from `bonded_slots`, `first_stake`'s non-staker guard
+    (`slot.index() != cursor`) accepts `u32::MAX` and re-binds the retired
+    persona — the SA-R-6 reuse the monotone mark exists to forbid. Found by
+    Copilot on PR #458 (`staking_block.rs:181`); **pre-existing on `dev`**, not
+    introduced by SA-5, which only documented the function.
+    **Unreached by construction:** slots are handed out one per bond, densely
+    from 0, and every bond is an on-chain transaction — occupying this state
+    costs ~4.3 billion sequential bonds. It is also not genesis-freeze-sensitive
+    (`p_slot` is wallet-local, no wire or consensus surface).
+    **Fix when reopened:** represent exhaustion (reserve `u32::MAX` as the
+    "no free slot" sentinel, or return `Option<u32>` from a dedicated
+    next-bindable-slot selector distinct from the saturating *burn* primitive)
+    and make the binding gate refuse with its own domain refusal rather than
+    silently offering a used slot. **Named blocker:** that is the binding gate
+    and its refusal taxonomy — a different validation surface from SA-5's
+    reconcile arms (rule 19), reached only through a state no wallet can
+    occupy, so building it now is the pre-provisioned flexibility rule 21
+    rejects. **Reopen immediately** if any path ever makes a high slot index
+    reachable other than by sequential binding (an operator-chosen slot, a
+    derived-from-entropy slot, or an import that trusts a foreign `p_slot`).
+    The saturation test `monotone_cursor_saturates_at_u32_max` asserts only the
+    no-wrap property and explicitly marks the fixed point as a limit rather than
+    a guarantee, so a future fix deletes that line rather than fighting it.
   - **`stake` resolves its persona slot BEFORE the reconcile that can move it.**
     `wallet-rpc` `lifecycle::stake` reads the slot from the open engine, then
     reopens with a `FirstStakeIntent` carrying that slot; the reopen's SP-R0
-    reconcile may adopt, burn, or GC, leaving the read stale. `Engine::first_stake`
+    reconcile may GC that slot as a phantom (arm #3) or burn the cursor past it
+    for a retired persona (arm #2), leaving the read stale. `Engine::first_stake`
     re-validates and refuses fail-closed — surfaced since SA-5 as the `-29503`
     `STAKE_RECORD_MOVED` domain code (re-invoke; nothing durable written), not the
-    `-32603` internal fault it was mapped to. **Reopen to delete the staleness
+    `-32603` internal fault it was mapped to. An arm #4 *adoption* does not reach
+    that code: it re-arms `staking_enabled` with a slot carrying a matching bond
+    post, so the already-staked scan refuses `-29502` first — the correct answer,
+    and a precedence a later edit must not "fix". **Reopen to delete the staleness
     outright:** resolve the elect slot *after* reconciliation, which means the
     intent stops carrying a slot (`open_full_with_first_stake_intent`) and
     `spawn_stake_engine_if_staker` derives the elect from the reconciled cursor.

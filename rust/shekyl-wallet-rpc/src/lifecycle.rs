@@ -721,10 +721,12 @@ pub(crate) async fn stake(
     //
     // This read is deliberately PRE-reconcile and therefore defeasible: the
     // credentialed reopen below runs the SP-R0 open-time reconcile, which may
-    // move the record (adopt a chain-proven bond, burn a retired persona,
-    // collect a phantom). The engine re-validates against its own reconciled
-    // state and refuses `WrongSlot`, surfaced as the `-29503` domain code
-    // (re-invoke, nothing written) — never as an internal fault. Resolving the
+    // move the record: collect this slot as a phantom (arm #3) or burn the
+    // cursor past it (arm #2). The engine re-validates against its own
+    // reconciled state and refuses `WrongSlot`, surfaced as the `-29503`
+    // domain code (re-invoke, nothing written) — never as an internal fault.
+    // (Arm #4 adoption resolves to `-29502 AlreadyStaked` instead: the wallet
+    // discovered it already holds a confirmed bond.) Resolving the
     // slot *after* reconciliation would delete the staleness outright, but the
     // elect tag is applied at spawn from the intent, so that is a change to
     // the intent's shape (`open_full_with_first_stake_intent`) and the spawn
@@ -797,12 +799,17 @@ pub(crate) async fn stake(
             }
             // NOT an internal fault: the slot above is read from the engine
             // BEFORE the credentialed reopen, and that reopen runs the SP-R0
-            // open-time reconcile — which can adopt a chain-proven bond, burn
-            // a retired persona into the cursor, or GC a phantom, any of which
-            // moves the record out from under the read. The engine refuses
-            // fail-closed; the operator's remedy is to call `stake` again,
-            // which reads the reconciled record. Rule 82: a legitimate domain
-            // state gets a domain code, never `-32603`.
+            // open-time reconcile — which can GC the picked slot as a phantom
+            // (arm #3) or burn the cursor past it for a retired persona
+            // (arm #2), either of which moves the record out from under the
+            // read. The engine refuses fail-closed; the operator's remedy is to
+            // call `stake` again, which reads the reconciled record. Rule 82: a
+            // legitimate domain state gets a domain code, never `-32603`.
+            //
+            // Arm #4 adoption lands on `-29502 AlreadyStaked` instead, not
+            // here: it re-arms `staking_enabled` with a slot that has a
+            // matching bond post, so `first_stake`'s already-staked scan wins
+            // the race to refuse — and it is the right answer.
             E::WrongSlot { .. } => WalletRpcError::StakeRecordMoved,
             // W2: durable slot may exist without a post — a `stake` re-invoke
             // resumes. Say so in the operator-facing text (rule 82).

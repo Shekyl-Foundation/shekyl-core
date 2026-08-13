@@ -179,6 +179,22 @@ impl StakingBlock {
     /// anti-rollback, so a stored counter alone can reset and re-offer a
     /// slot with on-chain activity. [`Self::monotone_current_slot_from_record`]
     /// is the hint-fed feed for the record's own bonded set.
+    ///
+    /// # Known limit — the guarantee degenerates at `u32::MAX`
+    ///
+    /// `saturating_add` stops the wrap to slot 0, but it makes `u32::MAX` a
+    /// **fixed point**: once `u32::MAX` has been used, this still returns
+    /// `u32::MAX`, so the value it reports as "current" is a slot the wallet
+    /// already bound. Nothing here represents *slot-space exhaustion*, and the
+    /// binding gate does not refuse it — so at that single point the SA-R-6
+    /// no-reuse guarantee does not hold.
+    ///
+    /// Unreached by construction: slots are handed out one per bond, densely
+    /// from 0 (`monotone_selection_is_dense_no_gap_reachable`), and every bond
+    /// is an on-chain transaction — so occupying this state costs ~4.3 billion
+    /// sequential bonds. Representing exhaustion and refusing at the binding
+    /// gate is filed in `FOLLOWUPS.md`; **reopen immediately** if any path ever
+    /// makes a high slot index reachable other than by sequential binding.
     pub fn monotone_current_slot(&self, highest_bonded_slot_seen: Option<u32>) -> u32 {
         match highest_bonded_slot_seen {
             Some(highest) => self.p_slot.max(highest.saturating_add(1)),
@@ -351,9 +367,28 @@ mod tests {
 
     #[test]
     fn monotone_cursor_saturates_at_u32_max() {
-        // A bonded slot at u32::MAX must not wrap to 0.
+        // The asserted property is NO WRAP: a bonded slot at u32::MAX must not
+        // send the cursor back to 0, where it would re-offer slot 0 and hand
+        // the operator a persona they rotated past 4 billion bonds ago.
         let b = StakingBlock::new(true, 0, vec![u32::MAX]);
-        assert_eq!(b.monotone_current_slot_from_record(), u32::MAX);
+        assert_ne!(
+            b.monotone_current_slot_from_record(),
+            0,
+            "saturation must never wrap the cursor to a low slot"
+        );
+
+        // Deliberately NOT asserted as correct: the returned value is u32::MAX,
+        // which is itself the bonded slot — i.e. at this one fixed point the
+        // cursor names a USED slot, and SA-R-6 no-reuse does not hold. That is
+        // a known, unreached limit (see `monotone_current_slot`'s docs and the
+        // FOLLOWUPS entry), not a property. Pinned here only so the saturation
+        // value is visible; an edit that made this refuse instead would be a
+        // FIX, and this line is the one to delete.
+        assert_eq!(
+            b.monotone_current_slot_from_record(),
+            u32::MAX,
+            "current saturation behaviour — a limit, not a guarantee"
+        );
     }
 
     #[test]

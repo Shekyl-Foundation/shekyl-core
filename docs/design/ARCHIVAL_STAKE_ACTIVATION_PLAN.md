@@ -377,9 +377,11 @@ Landed exactly as ratified, plus one composition fact §5.0 left implicit:
   transport; drives the close→reopen-with-intent Tenant dance; refusal taxonomy
   `-29500 StakeNotReady` (W1-clean) / `-29501 StakeInFlight` (W3) / `-29502
   AlreadyStaked` / `-29503 StakeRecordMoved` (PR-SA-5: the slot is read from the
-  open engine BEFORE the credentialed reopen, whose SP-R0 reconcile may adopt a
-  chain-proven bond, burn a retired persona into the cursor, or GC a phantom —
-  `first_stake` then refuses `WrongSlot` fail-closed. Nothing durable is written
+  open engine BEFORE the credentialed reopen, whose SP-R0 reconcile may GC that
+  slot as a phantom (arm #3) or burn the cursor past it for a retired persona
+  (arm #2) — `first_stake` then refuses `WrongSlot` fail-closed. An arm #4
+  adoption lands on `-29502` instead, correctly: the already-staked scan sees
+  the adopted slot's bond post first. Nothing durable is written
   and a re-invoke reads the reconciled record, so it is a domain refusal, never
   the `-32603` internal fault it was first mapped to; no slot index rides the
   payload, rule 81), mid-flow failures name the W2 resume in their message

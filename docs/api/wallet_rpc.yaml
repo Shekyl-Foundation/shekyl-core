@@ -472,11 +472,16 @@ components:
                                           refusal)
           -29503 STAKE_RECORD_MOVED       stake: the wallet's own staking
                                           record was reconciled during the
-                                          credentialed reopen, so the slot
+                                          credentialed reopen (a phantom slot
+                                          collected, or the cursor burned past
+                                          a retired persona), so the slot
                                           picked before it is stale; nothing
                                           durable was written — call stake
                                           again (no payload: persona
-                                          numbering is wallet-internal)
+                                          numbering is wallet-internal).
+                                          A reconcile that ADOPTS a
+                                          chain-proven bond returns -29502
+                                          instead, not this code
           -29900 TENANT_UNAVAILABLE       server: wallet-dir tenancy (reserved
                                           for the multi-tenant sub-PR)
 
