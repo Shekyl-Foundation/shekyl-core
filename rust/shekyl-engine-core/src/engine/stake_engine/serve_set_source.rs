@@ -32,17 +32,27 @@
 //!
 //! # Transport
 //!
-//! The fetch rides the caller-supplied [`Rpc`], which for a persona **must**
-//! be its own `PTorClient`/`PRpc` — never the principal's daemon session
-//! (§7.4 transport pin). This type does not create transports; it takes one,
-//! so the enforcement stays where the persona's identity is known.
+//! `R` is bound to [`PersonaIsolatedTransport`], not to bare `Rpc`: the §7.4
+//! transport pin is the bound itself, not a note asking the wiring to be
+//! careful. A persona's claim-source query must ride its own `PRpc` and never
+//! the principal's daemon session, and SH-2b wires this pinner from the
+//! lifecycle code that is *holding* the principal's handle — the one place the
+//! wrong transport is closest to hand, and the reason prose was not enough.
+//!
+//! [`orchestrate_emission_claim`](crate::engine::claim_orchestrator::orchestrate_emission_claim)
+//! carries the same bound for the same reason. It reads the epoch set where
+//! this reads `bond.holdings`, so a transport audit has to see both — and both
+//! now refuse the wrong transport at compile time rather than documenting it.
+//!
+//! This type still does not create transports; it takes one. The bound decides
+//! *which kind*, the construction site decides *whose*.
 
 use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
-use shekyl_rpc_client::Rpc;
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
 use crate::engine::emission_source::fetch_emission_claim_source;
+use crate::engine::prpc::PersonaIsolatedTransport;
 
 /// Derives a persona's serve-set from its connected bond record and pins it.
 // Inert until the lifecycle slice starts a `PersonaServingHost` and drives its
@@ -56,14 +66,14 @@ use crate::engine::emission_source::fetch_emission_claim_source;
 // `StakeEngine` message. A `serve_set_source` at the engine root would have been
 // a module the composition root declares and nothing else near it uses.
 #[allow(dead_code)]
-pub(crate) struct EngineServeSetPinner<R: Rpc> {
+pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
     curve_tree: CurveTreeHandle,
     rpc: R,
     p_id: [u8; 32],
 }
 
 #[allow(dead_code)]
-impl<R: Rpc> EngineServeSetPinner<R> {
+impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     /// Bind a pinner to one persona's canonical id and its own transport.
     pub(crate) fn new(curve_tree: CurveTreeHandle, rpc: R, p_id: [u8; 32]) -> Self {
         Self {
@@ -74,7 +84,7 @@ impl<R: Rpc> EngineServeSetPinner<R> {
     }
 }
 
-impl<R: Rpc + Sync> ServeSetPinner for EngineServeSetPinner<R> {
+impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner<R> {
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
         let source = fetch_emission_claim_source(&self.rpc, &self.p_id)
             .await
@@ -136,7 +146,7 @@ mod tests {
         settlement_epoch_at_height, HoldingsDescriptor, HoldingsKind, ShardSet,
     };
     use shekyl_curve_tree::CurveTreeClient;
-    use shekyl_rpc_client::RpcError;
+    use shekyl_rpc_client::{Rpc, RpcError};
     use shekyl_types::ChainCount;
     use std::sync::Arc;
 
@@ -164,6 +174,13 @@ mod tests {
             }
         }
     }
+
+    // The §7.4 marker, asserted for the fixture exactly as
+    // `claim_orchestrator`'s test daemon asserts it. The bound is what the
+    // production wiring must satisfy, so the test transport has to satisfy it
+    // too — a fixture exempt from the pin would test a signature nothing else
+    // can call.
+    impl PersonaIsolatedTransport for ClaimSourceDaemon {}
 
     /// A claim-source reply at `chain_height`, holding `shard_ids` (or no
     /// bond record at all when `shard_ids` is `None`).

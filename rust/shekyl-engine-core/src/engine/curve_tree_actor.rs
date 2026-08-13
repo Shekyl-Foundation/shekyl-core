@@ -646,6 +646,27 @@ impl CurveTreeHandle {
     /// The close→reopen race that [`Self::open_and_spawn`] still polls for
     /// is a *wallet* close/open race (a previous process still holding the
     /// file). It is not a respawn concern: respawn never closes the file.
+    ///
+    /// # Rests on refresh single-flight
+    ///
+    /// Step 2 mints a writer and step 1 is what retires the old one, so two
+    /// respawns interleaving would leave two live clients on one store, each
+    /// with its own in-memory tree state. Nothing *here* prevents that: this
+    /// handle is `Clone`, and two clones would read the same dead actor out of
+    /// the shared cell and both proceed.
+    ///
+    /// What prevents it is the caller. The only production reach is
+    /// [`curve_tree_ingest_scan_result_with_respawn`](super::merge::curve_tree_ingest_scan_result_with_respawn),
+    /// and both of its call sites run inside a held
+    /// [`SlotGuard`](super::refresh::SlotGuard) — the engine's `RefreshSlot`
+    /// admits one refresh per engine and returns `AlreadyRunning` otherwise.
+    ///
+    /// This is recorded rather than enforced because a lease here would be
+    /// machinery guarding a path that cannot currently be walked. A future
+    /// respawn caller outside that slot is the thing that changes the answer,
+    /// and it must bring its own mutual exclusion — re-checking the cell after
+    /// acquiring it, so the loser adopts the winner's actor instead of minting
+    /// a second writer.
     pub(crate) async fn respawn(&self) -> Result<(), ClientError> {
         let old = self.actor_ref();
         old.kill();

@@ -321,6 +321,29 @@ impl WriterRecovery {
     /// [`ClientError::ResumeFromCorruptStore`], store I/O) — the store's
     /// contents are re-read, so a store that has become unreadable is
     /// reported here rather than at the next write.
+    ///
+    /// # One writer at a time — the caller's obligation, not this type's
+    ///
+    /// `resume` mints a writer; it does **not** retire the previous one. redb
+    /// serializes the transactions themselves, so two live clients cannot
+    /// corrupt the file — but they carry independent in-memory tree state, and
+    /// the loser's view of the accumulator is wrong from the first write the
+    /// winner makes. Retirement is the caller's to pay.
+    ///
+    /// Today's only production reach pays it: `CurveTreeHandle::respawn` kills
+    /// the actor and awaits its shutdown — which drops the sole
+    /// [`CurveTreeClient`], since the actor owns it — before resuming, and the
+    /// single path that reaches `respawn` runs under the engine's per-refresh
+    /// single-flight slot, so two respawns cannot interleave.
+    ///
+    /// That is a fact about callers, not a property of this function, and it is
+    /// stated here because this is where the next caller will look. A second
+    /// recovery path outside that slot must bring its own mutual exclusion.
+    /// Enforcement was deliberately not put here: "the previous writer is gone"
+    /// is a fact about a task's lifetime that this type cannot observe, so a
+    /// flag maintained on this side would be asserting something it cannot
+    /// check — and would fail open exactly when a task aborted, which is the
+    /// case recovery exists for.
     pub fn resume(&self) -> Result<CurveTreeClient, ClientError> {
         CurveTreeClient::resume(Arc::clone(&self.store))
     }
