@@ -447,6 +447,41 @@ pool and no clearnet node's. **Reverse arm**: originate clearnet-only and
 confirm arrival at Tor-capable nodes — the easy direction, serving as the
 control.
 
+#### 6.3.1 Second readout — origin class, added 2026-08-13
+
+**Amendment, and its provenance is weaker than §6.3's: this is a scope change
+argued from text, not a finding anchored in code.** Read it as a requirement
+added to the arm, not as something the arm already implied.
+
+**Why it is needed.** `6af23439` names this arm as
+`txpool_tx_meta_t::origin_zone`'s consumer — *"distinguish originated-on-anon
+from relayed-on-anon"* — with a rule-15 reopen if the run ships without a
+reader. **No such measurement exists in §6.** The readout above is arrival
+fraction and time-to-arrival at the clearnet-only set, keyed by txid; the zone
+is fixed by the arm's construction rather than observed, and nothing in the arm
+reads the field. As written, the arm runs, produces its result, reads
+`origin_zone` nowhere, and the reopen fires at teardown **by default**.
+
+**And it cannot be recovered afterwards.** The arm originates on one node and
+measures at another, and both origin classes produce the same pool-membership
+event. Arrival fraction is not disaggregable by origin class after the fact, so
+this must be a second readout with its own failure signature rather than a
+different way of reading the first.
+
+**Second readout.** On each anon-capable node, partition its pool entries by
+recorded `origin_zone` — anonymity-arrived against clearnet-arrived and
+locally-originated — and report the split alongside arrival fraction.
+
+**Failure signature.** Anonymity-arrived entries at or near zero on nodes that
+demonstrably received anonymity traffic. That is the field failing to record,
+or coherence failing to hold, and it is distinct from §6.3's signature: a
+transaction can arrive everywhere it should (§6.3 green) while every entry
+carries the wrong origin.
+
+**Scope, not consequence.** Whatever the arm needs to produce this split is the
+arm's work and belongs in §7's order. Leaving it to fall out of the run is what
+makes the reopen fire on a technicality rather than on evidence.
+
 **Why discovery goes first.** The testnet is at height 1 with difficulty 1:
 **no spendable outputs exist.** The isolation arm needs mining
 (`skl-miner-test`), coinbase maturity and funded wallets on top of U1/U2.
