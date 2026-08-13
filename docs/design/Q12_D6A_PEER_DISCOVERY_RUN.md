@@ -2004,3 +2004,54 @@ trigger, a stated cost, and a stated recovery condition**, where the original
 was an unexamined default nobody had noticed.
 
 **Q12-U2 is unblocked.**
+
+### 12.5 Q12-D9 stands. The retraction that was owed was mine, and it was wrong
+
+**2026-08-13.** A conclusion had been carried since the A = 15 arm that §12.2's
+*live* below-floor check should be **dropped**, on the ground that *"no
+per-node form of the floor condition exists"*. **That is retracted. The check
+stands as ruled.**
+
+**The error was the axis, not the arithmetic.** The measurement behind the
+dropped-check conclusion asked whether one below-floor node moves *network*
+first passage. It does not, materially. But §12.1 does not justify the floor on
+the network's behalf — it justifies it on the node's own:
+
+> *"its fluff return is slower, so `F` is under-provisioned in the
+> privacy-losing direction, and **its own** transactions carry an embargo too
+> short for the graph they traverse."*
+
+So the rule is per-node **and self-regarding**, and a network-axis reading
+cannot settle it. Measuring the wrong axis and concluding about the rule is the
+same defect class as "assert on the axis where the defect lives": the number
+was real, and it answered a question nobody had asked.
+
+**Re-measured on both axes, and the placement is the whole variable**
+(`tests/d9_floor_locality.rs`, 60 nodes, 400 trials, 8 seeds, `OutboundOnly`,
+degree 10 against a floor of 12):
+
+| arm | mean first passage | vs. baseline |
+| --- | --- | --- |
+| baseline — every node at the floor | 1613 ms | — |
+| **SELF — the below-floor node is the source** | **1736 ms** | **+7.63 %** |
+| NETWORK — one below-floor node, elsewhere | 1634 ms | +1.30 % |
+| control — every node below the floor | 2095 ms | +29.83 % |
+
+**A single below-floor node slows its own transaction's propagation by roughly
+six times what it costs the network.** A per-node form of the condition exists,
+it is exactly the form §12.1 argues for, and the live check is the mechanism
+that acts on it.
+
+**What the numbers are and are not.** They are a seed-averaged reading of this
+instrument at these parameters, reported so the direction and the ~6× ratio
+rest on running code rather than on a remembered figure (Q12-D8). They are
+**not** a provisioning target: the test asserts only that the instrument
+discriminates (whole-network degradation must move the number) and that the two
+axes are distinguishable. Pinning a percentage would pin a seed-dependent draw,
+which is the defect the `fluff_return_ms` sweep already caught once.
+
+**Why this was worth rebuilding rather than quoting.** The original simulation
+did not survive its session, so the conclusion rested on a number nothing could
+re-run — and re-running it is what showed the axis was wrong. A design rule
+about to be deleted on the strength of an unreproducible measurement is exactly
+what Q12-D8's test is for.
