@@ -149,7 +149,8 @@ namespace cryptonote
      */
     bool add_tx(transaction &tx, const crypto::hash &id, const cryptonote::blobdata &blob,
       size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-      uint8_t version, uint8_t nic_verified_hf_version = 0);
+      uint8_t version, epee::net_utils::zone origin_zone,
+      uint8_t nic_verified_hf_version = 0);
 
     /**
      * @brief add a transaction to the transaction pool
@@ -175,7 +176,8 @@ namespace cryptonote
      * @return true if the transaction passes validations, otherwise false
      */
     bool add_tx(transaction &tx, tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-      uint8_t version, uint8_t nic_verified_hf_version = 0);
+      uint8_t version, epee::net_utils::zone origin_zone,
+      uint8_t nic_verified_hf_version = 0);
 
     /**
      * @brief RPC-submit commit tail: insert an engine-verified transaction

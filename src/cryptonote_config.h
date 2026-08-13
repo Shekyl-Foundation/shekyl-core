@@ -135,34 +135,28 @@
 #define CRYPTONOTE_NOISE_BYTES                          3*1024 // 3 KiB
 #define CRYPTONOTE_NOISE_CHANNELS                       2      // Max outgoing connections per zone used for noise/covert sending
 
-// Both below are in seconds. The idea is to delay forwarding from i2p/tor
-// to ipv4/6, such that 2+ incoming connections _could_ have sent the tx.
-//
-// DECOUPLED from CRYPTONOTE_NOISE_* (Q-11 Unit 0, 2026-07-31), value-neutrally:
-// the inherited definitions derived these from the covert-cadence constants
-// (BASE = NOISE_MIN_DELAY + NOISE_DELAY_RANGE; AVERAGE = BASE + BASE/2), which
-// welded two mechanisms with two different adversaries to one numeral — the
-// forward delay defends the peer/sybil observer at the tor->clearnet boundary,
-// the covert cadence defends the wire observer — so re-deriving either would
-// have silently rewritten the other. DO NOT re-couple these to NOISE_*.
-//
-// The values are inherited, not derived: the stated objective above is an
-// anonymity-set claim ("2+ incoming connections could have sent it") that no
-// derivation has ever been shown to satisfy, and the draw that consumes
-// AVERAGE (tx_pool.cpp, crypto::random_poisson_seconds) carries the F-2/F-4
-// family defect (Poisson, not memoryless). Both are Q-12
-// (docs/design/DAEMON_RELAY_PRIVACY.md §22.2) — derive from the stated
-// anonymity-set objective, fix the family from measurement. Do not change
-// these numerals except through that derivation.
-//
-// BASE currently has NO CONSUMER: it was the derivation input for AVERAGE
-// (22 ~= 15 * 3/2) until the decoupling above replaced both with literals.
-// Kept rather than swept, because it is half of a registered open item and
-// deleting it would delete the record of the pair -- zero consumers is not
-// the same as safe to delete when a constant is a pending derivation's other
-// half. If Q-12 concludes AVERAGE alone is the parameter, BASE goes then.
-#define CRYPTONOTE_FORWARD_DELAY_BASE    15
-#define CRYPTONOTE_FORWARD_DELAY_AVERAGE 22
+/* CRYPTONOTE_FORWARD_DELAY_BASE / _AVERAGE were here, and Q12-U2 deleted them
+   with the mechanism they timed.
+
+   They delayed forwarding from i2p/tor to ipv4/6 "such that 2+ incoming
+   connections could have sent the tx" — a delay on the tor->clearnet bridge.
+   Q12-D3 removes the bridge from the admission path: an arrival stems on the
+   zone it arrived over rather than crossing to clearnet on a timer, so there
+   is no longer a boundary here for a delay to blur. The latency the anonymity
+   path does cost is carried by the per-zone `hop` (§89.2,
+   ANON_ZONE_TRANSIT_ASSUMPTION_MS), which is where a per-zone cost belongs.
+
+   This is the disposition Q12-U4 was reserved for, and it is the deletion
+   branch rather than a derivation: the pending Q-12 item was "derive AVERAGE
+   from the stated anonymity-set objective, fix the family from measurement",
+   and a constant whose mechanism no longer exists is not derived, it is
+   removed. BASE goes with it — it had no consumer and was kept only as the
+   record of the pair, which is exactly the reason that expires when the pair
+   does.
+
+   The Q-11 Unit 0 warning that governed them (DO NOT re-couple to NOISE_*)
+   dies with them and is not inherited by anything: the covert cadence defends
+   the wire observer and keeps its own constants below, untouched. */
 
 #define CRYPTONOTE_MAX_FRAGMENTS                        20 // ~20 * NOISE_BYTES max payload size for covert/noise send
 

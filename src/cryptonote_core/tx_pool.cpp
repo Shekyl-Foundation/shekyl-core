@@ -174,7 +174,8 @@ namespace cryptonote
   bool tx_memory_pool::add_tx(transaction &tx, /*const crypto::hash& tx_prefix_hash,*/
     const crypto::hash &id, const cryptonote::blobdata &blob, size_t tx_weight,
     tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-    uint8_t version, uint8_t nic_verified_hf_version)
+    uint8_t version, epee::net_utils::zone origin_zone,
+    uint8_t nic_verified_hf_version)
   {
     const bool kept_by_block = (tx_relay == relay_method::block);
 
@@ -271,7 +272,11 @@ namespace cryptonote
         meta.double_spend_seen = have_tx_keyimges_as_spent(tx, id);
         meta.pruned = tx.pruned;
         meta.fcmp_verified = 0;
-        meta.bf_padding = 0;
+        // The zone the bytes actually arrived over, carried from the protocol
+        // handler rather than inferred from the relay method. `invalid` here
+        // means the caller had no arrival to report (block-sourced, or locally
+        // originated), which is a different statement from "clearnet".
+        meta.set_origin_zone(origin_zone);
         meta.fcmp_verification_hash = null_hash;
         memset(meta.padding, 0, sizeof(meta.padding));
         try
@@ -326,23 +331,15 @@ namespace cryptonote
 
         if (meta.upgrade_relay_method(tx_relay) || !existing_tx) // synchronize with embargo timer or stem/fluff out-of-order messages
         {
-          using clock = std::chrono::system_clock;
+          /* Q12-U2 deleted the bridge delay along with the class that used it.
+             The randomized hold existed to blur the moment an anonymity
+             arrival became clearnet-visible; under Q12-D3 the arrival does not
+             cross to clearnet at admission at all — it stems on the zone it
+             arrived over — so there is no bridge left here to delay. The
+             latency the path does cost is priced by the zone's own `hop`
+             (§89.2, `ANON_ZONE_TRANSIT_ASSUMPTION_MS`), which is where a
+             per-zone cost belongs. `set_relayed` adjusts the time later. */
           auto last_relayed_time = std::numeric_limits<decltype(meta.last_relayed_time)>::max();
-          if (tx_relay == relay_method::forward)
-          {
-            /* Memoryless, not Poisson (Q-12's family half; the mean is
-               unchanged and stays Q-12's to derive). The inherited
-               `random_poisson_seconds{22s}` was F-2/F-4's signature sitting on
-               the tor->clearnet bridge — the moment an anonymity-arrived tx
-               becomes clearnet-visible, so the moment arrival-time inference
-               pays most. Measured on F-4's instrument: 2.01x more invertible
-               at phase 0, and 0.72 vs 0.12 late in the window, because only a
-               memoryless family has residual == full. */
-            last_relayed_time =
-              detail::relay_deadline(clock::now(), shekyl_dandelionpp_forward_delay_seconds());
-            set_if_less(m_next_check, time_t(last_relayed_time));
-          }
-          // else the `set_relayed` function will adjust the time accordingly later
 
           //update transactions container
           meta.last_relayed_time = last_relayed_time;
@@ -356,7 +353,13 @@ namespace cryptonote
           meta.relayed = relayed;
           meta.double_spend_seen = false;
           meta.pruned = tx.pruned;
-          meta.bf_padding = 0;
+          // First arrival wins. Origin is a fact about where the bytes first
+          // came from, not a routing decision: an upgrade (stem→fluff loop
+          // detection, out-of-order fluff) revises the method, not the
+          // provenance. Overwriting here would hand Q12-U3 the second peer's
+          // zone after a normal Dandelion++ re-delivery.
+          if (!existing_tx)
+            meta.set_origin_zone(origin_zone);
           memset(meta.padding, 0, sizeof(meta.padding));
 
           if (tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc)
@@ -386,8 +389,15 @@ namespace cryptonote
         return false;
       }
 
+      /* Q12-U2 removed the `tx_relay != relay_method::forward` conjunct that
+         used to sit here. It was the fifth link in the chain that held
+         coherence dormant: an anonymity arrival was classed `forward`, this
+         refused to propagate it into `tvc.m_relay`, the caller's batching
+         switch therefore dropped it, and `relay_transactions` was never
+         reached with an anonymity origin. The class is gone and so is the
+         suppression — an arrival now relays at arrival. */
       static_assert(unsigned(relay_method::none) == 0, "expected relay_method::none value to be zero");
-      if(meta.fee > 0 && tx_relay != relay_method::forward)
+      if(meta.fee > 0)
         tvc.m_relay = tx_relay;
     }
 
@@ -405,7 +415,8 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::add_tx(transaction &tx, tx_verification_context& tvc, relay_method tx_relay,
-    bool relayed, uint8_t version, uint8_t nic_verified_hf_version)
+    bool relayed, uint8_t version, epee::net_utils::zone origin_zone,
+    uint8_t nic_verified_hf_version)
   {
     crypto::hash h = null_hash;
     cryptonote::blobdata bl;
@@ -413,7 +424,7 @@ namespace cryptonote
     if (bl.size() == 0 || !get_transaction_hash(tx, h))
       return false;
     return add_tx(tx, h, bl, get_transaction_weight(tx, bl.size()), tvc, tx_relay, relayed, version,
-      nic_verified_hf_version);
+      origin_zone, nic_verified_hf_version);
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::insert_attested_tx(transaction &tx, const crypto::hash &id,
@@ -463,7 +474,11 @@ namespace cryptonote
     meta.do_not_relay = 0;
     meta.double_spend_seen = false;
     meta.pruned = tx.pruned;
-    meta.bf_padding = 0;
+    // A locally originated transaction did not ARRIVE over anything, so
+    // `invalid` here is the permanent answer rather than a value awaiting the
+    // seam. Origin-unknown and origin-none are the same statement to every
+    // consumer: do not route this by a provenance it does not have.
+    meta.set_origin_zone(epee::net_utils::zone::invalid);
     memset(meta.padding, 0, sizeof(meta.padding));
 
     // §3.5 attestation: same derivation as the P2P path above. The
@@ -1003,7 +1018,6 @@ namespace cryptonote
         switch (tx_relay)
         {
           case relay_method::stem:
-          case relay_method::forward:
             if (meta.last_relayed_time > now)
             {
               next_check = std::min(next_check, meta.last_relayed_time);
@@ -2114,7 +2128,12 @@ namespace cryptonote
 
         cryptonote::tx_verification_context tvc{};
         relay_method tx_relay = e.meta.get_relay_method();
-        if (!add_tx(tx, e.txid, blob, e.meta.weight, tvc, tx_relay, relayed, version))
+        // take_tx removed the entry, so add_tx sees a fresh insert and will
+        // write whatever origin we pass. First-writer-wins means this is the
+        // write. Passing `invalid` would replace a recorded anonymity origin
+        // with "unknown" at every hard-fork re-validation.
+        if (!add_tx(tx, e.txid, blob, e.meta.weight, tvc, tx_relay, relayed, version,
+              e.meta.get_origin_zone()))
         {
           MINFO("Failed to re-validate tx " << e.txid << " for v" << (unsigned)version << ", dropped");
           continue;
