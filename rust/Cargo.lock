@@ -3985,6 +3985,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
  "shekyl-multisig",
+ "shekyl-p-host",
  "shekyl-p-transport",
  "shekyl-proofs",
  "shekyl-rpc-client",
@@ -4232,7 +4233,6 @@ dependencies = [
 name = "shekyl-p-host"
 version = "3.1.0"
 dependencies = [
- "shekyl-archival-retention",
  "shekyl-curve-tree",
  "shekyl-p-serve",
  "shekyl-tor",

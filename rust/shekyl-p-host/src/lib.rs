@@ -16,12 +16,14 @@
 //!
 //! | Hazard | Closed by |
 //! |---|---|
-//! | Serve-set drifts from the consensus bond record → own node prunes bonded bytes → slash (§9.6 item 4) | [`ServeSet`] has no constructor from a bare id list |
-//! | Serving starts before the pins are applied | [`PersonaServingHost::start`] takes a [`PinnedServeSet`] witness |
+//! | Serve-set drifts from the consensus bond record → own node prunes bonded bytes → slash (§9.6 item 4) | [`ServeSet`] has no public constructor; the pinner reports it |
+//! | Serving starts before the pins are applied | [`PersonaServingHost::start`] takes a pinner and acquires the witness itself |
 //! | Pins land on one store while another is served | The witness carries its own reader; `start` takes no store argument |
 //! | Loopback endpoint rebinds under an unchanged onion mapping → published address answers nothing | The host binds once and owns the endpoint for its life |
 //! | A serving persona runs on vanguards-lite | `ServingPosture::Serving` carries the onion *and* `Managed` as one value |
 //! | Teardown leaves a live descriptor at a closed port | [`PersonaServingHost::shutdown`] stops tor before the listener |
+//! | Holdings move on-chain and the pins do not follow | [`PersonaServingHost::refresh`] re-pins the whole set, unconditionally |
+//! | The refresh itself stops firing | [`PersonaServingHost::staleness`] reads two clocks with independent drivers |
 //!
 //! Every one of those failures has the same signature: the persona looks
 //! healthy, publishes at its advertised address, and learns otherwise from
@@ -37,22 +39,34 @@
 //! instance. Nothing in this path crosses the FFI boundary.
 //!
 //! What the host can hold is deliberately narrow — an expanded
-//! `OnionIdentity`, a read-only `ServingReader`, and a list of shard ids.
-//! No seed, no bond spend authority, no store write handle. §7.2(iii)'s
-//! custody boundary is *which secret crosses into the serving side*, and
-//! here it is enforced by the types of the inputs; see
-//! [`PersonaServingHost`] for the assumption that framing carries when the
-//! serving side is in-process rather than a separate address space.
+//! `OnionIdentity`, a read-only `ServingReader` (via the live pin
+//! witness), and the one [`ServeSetPinner`] taken at start. No seed, no
+//! bond spend authority, no store write handle of its own: pinning writes
+//! go through the pinner to the curve-tree actor. §7.2(iii)'s custody
+//! boundary is *which secret crosses into the serving side*, and here it
+//! is enforced by the types of the inputs; see [`PersonaServingHost`] for
+//! the assumption that framing carries when the serving side is
+//! in-process rather than a separate address space.
 //!
 //! # What is not here
 //!
 //! The pass-record axis, the response wire format, and the countersignature
 //! are all format-round decisions, and the provisional framing this host
 //! serves over (`x-provisional/v0`) is **THROWAWAY and gets no vote** in
-//! that round. Refreshing the serve-set as holdings change and segments
-//! freeze is the wiring slice's job, on the crate that owns the claim-source
-//! decode and the curve-tree actor; this crate provides the seam
-//! ([`ServeSetPinner`]) it plugs into.
+//! that round. Calling [`PersonaServingHost::refresh`] from the P-scan
+//! sweep is the wiring slice's job (SH-2b), on the crate that owns the
+//! claim-source decode and the curve-tree actor; this crate owns the
+//! refresh *behaviour* and the seam ([`ServeSetPinner`]) the sweep plugs
+//! into.
+//!
+//! # One rule the seam keeps applying
+//!
+//! [`ServeSetPinner`] reports three things and takes none: which shards the
+//! persona owes, whether they are pinned, and which store they are pinned in.
+//! **The host does not choose anything about its own duty** — each of those
+//! was once a parameter, and each removal closed a real call-site defect of
+//! the same shape. What a caller cannot supply, a caller cannot get wrong;
+//! what is left is one engine-side implementor, reviewable by reading it.
 
 #![forbid(unsafe_code)]
 
@@ -60,4 +74,6 @@ pub mod host;
 pub mod serve_set;
 
 pub use host::{HostError, PersonaServing, PersonaServingHost};
-pub use serve_set::{PinError, PinReport, PinnedServeSet, ServeSet, ServeSetPinner};
+pub use serve_set::{
+    PinError, PinReport, PinnedServeSet, ServeSet, ServeSetPinner, Staleness, StalenessBound,
+};

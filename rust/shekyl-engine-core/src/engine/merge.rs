@@ -312,7 +312,7 @@ impl<
     }
 
     /// Ingest a scan result into the curve tree, healing a single fail-stop /
-    /// poison with a drop-and-reopen respawn-and-retry (R1-Q4, §3.3 happy path).
+    /// poison with a resume-over-held-store respawn-and-retry (R1-Q4, §3.3 happy path).
     ///
     /// It drains `result.block_leaves` once into an `Arc`-shared, height-keyed
     /// map and delegates to `curve_tree_ingest_scan_result_with_respawn`. On
@@ -321,7 +321,7 @@ impl<
     /// [`CurveTreeHandle::respawn`](super::curve_tree_actor::CurveTreeHandle::respawn)
     /// and re-runs the cursor-driven ingest **once** against the *same* drained
     /// leaves (the `Arc` map is retained across the retry, R1-Q4). The retry is
-    /// correct because the reopened client resumes from the persisted store
+    /// correct because the resumed client rebuilds from the persisted store
     /// cursor (D2): the loop skips already-ingested heights and continues from
     /// the tree's own tip, so a re-run never double-ingests. Re-invoking
     /// [`ingest_scan_result_into_curve_tree`](Self::ingest_scan_result_into_curve_tree)
@@ -343,13 +343,10 @@ impl<
         &self,
         result: &mut ScanResult,
     ) -> Result<(), RefreshError> {
-        let store_path =
-            shekyl_engine_file::paths::curve_tree_store_path_from(self.persistence.base_path());
         let producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
         curve_tree_ingest_scan_result_with_respawn(
             &self.curve_tree,
             &self.daemon,
-            &store_path,
             result,
             &producer_leaves,
         )
@@ -363,10 +360,10 @@ impl<
 ///
 /// - A fail-stopped actor ([`CurveTreeHandleError::Unavailable`]) and a
 ///   poisoned client ([`ClientError::Poisoned`] — whose own documented
-///   recovery is "drop this object and re-open") are
+///   recovery is "drop this object and resume over the same store") are
 ///   `recoverable_by_respawn = true`: [`Engine::ingest_scan_result_with_respawn`]
 ///   respawns the actor and retries the cursor-driven ingest once, which
-///   resumes from the reopened store's persisted tip (D2).
+///   resumes from the held store's persisted tip (D2).
 /// - Every other client error (e.g.
 ///   [`ClientError::NonConsecutiveBlockHeight`], a producer-contract or
 ///   store-state fault) is `false`: a reopen resumes the same cursor and
@@ -405,7 +402,6 @@ fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
 pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits::DaemonEngine>(
     curve_tree: &CurveTreeHandle,
     daemon: &D,
-    store_path: &std::path::Path,
     result: &ScanResult,
     producer_leaves: &BTreeMap<u64, Arc<Vec<OwnedTxLeaves>>>,
 ) -> Result<(), RefreshError> {
@@ -418,10 +414,10 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
             // Engine-side respawn (clause 2): runs after the failed `ask`
             // returned, never inside a handler under the engine guard.
             curve_tree
-                .respawn(store_path)
+                .respawn()
                 .await
                 .map_err(|_| RefreshError::CurveTreeIngest {
-                    context: "curve-tree respawn reopen failed",
+                    context: "curve-tree respawn resume failed",
                     recoverable_by_respawn: false,
                 })?;
             curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await

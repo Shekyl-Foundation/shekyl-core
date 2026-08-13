@@ -170,6 +170,58 @@ both have the same disposition default — "the
 architecturally-integral-now answer is correct unless cost is
 genuinely prohibitive."
 
+## The "comment that outlived its architecture" anti-pattern
+
+A doc comment describing a mechanism the architecture has since removed
+does not merely become false. **It stays actionable, and the action is
+wrong** — which is why this is an inheritance problem rather than a
+tidiness one. A reader cannot tell a description of the system from a
+description of a system that used to exist; both read as authoritative,
+and the stale one instructs them to rebuild what was deleted.
+
+**The tell is a comment that answers "why not X" with a mechanism, not a
+principle.** Principles survive re-architecture; mechanisms do not. When
+the mechanism a comment names has been removed, its conclusion is
+unsupported even when the conclusion happens to still be right.
+
+Worked instance (SH-2, 2026-08-12). `derive_p_hs_id_seed` was documented
+as *"serving-only, and deliberately **not** an `ArchivalPKeys` field …
+rederived from `(master_seed, net, fmt, p_slot)` on each serve."* That is
+a coherent design **for a serving path co-resident with the wallet**,
+which is the architecture that existed when it was written. Model D then
+moved the serving host to the far side of a boundary the master seed does
+not cross, and the comment did not move with it. The damage ran in **both
+directions from one stale premise**:
+
+- It described a mechanism that **could not run** — there is no master
+  seed at serve time, so "rederive on each serve" is not a slower path,
+  it is not a reachable one. A persona following it could not publish the
+  `.onion` its bond obligates it to answer on.
+- Read literally, it **invited the hazard it appeared to guard** —
+  handing `master_seed_64` to the serving process to satisfy the
+  rederivation it prescribed, which is exactly the custody exposure the
+  architecture had already closed.
+
+So the practice:
+
+1. **A comment that names a mechanism is invalidated by that mechanism's
+   removal**, not only by its own statement becoming false. When a slice
+   deletes or relocates a mechanism, the comments that reason *from* it
+   are part of the deletion surface (`15-deletion-and-debt.mdc`).
+2. **Refuted, not superseded.** Record which premise failed and why, so
+   the next reader can tell a decision that was reconsidered from one
+   whose ground disappeared. "Superseded" invites re-litigation of a
+   conclusion; "premise refuted" closes it.
+3. **Re-audit the call sites in the same slice.** A comment that
+   prescribed a wrong mechanism has usually been *followed* somewhere.
+   Enumerate the callers and state which are legitimate; a surviving one
+   is the hazard the comment invited, not a coincidence.
+4. **Pin the constraint forward past the code that motivated it.** Where
+   the offending call site sits in disposable code, the deletion does not
+   carry the constraint — its replacement is written against a working
+   system and will reach for the same convenience. Write the constraint
+   where the replacement's author will read it.
+
 ## Discovery cadence
 
 Each adversarial pass against design changes compounds the substrate's

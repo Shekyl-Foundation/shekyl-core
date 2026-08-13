@@ -49,7 +49,9 @@ pub mod segment;
 pub mod store;
 pub mod types;
 
-pub use client::{BlockLeaves, ClientError, CurveTreeClient, RawOutput, TxLeafInputs};
+pub use client::{
+    BlockLeaves, ClientError, CurveTreeClient, RawOutput, TxLeafInputs, WriterRecovery,
+};
 pub use reference::{
     proof_expired, proof_submittable, reference_block_age, select_reference_height,
     should_reanchor, two_sided_reference_height, TwoSidedRefusal, PROOF_VALIDITY_HORIZON,

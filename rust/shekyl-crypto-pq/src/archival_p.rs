@@ -323,13 +323,53 @@ pub fn derive_p_bond_spend_ml_dsa_seed(
 /// `P` serving-side v3 onion (HS) identity Ed25519 RFC 8032 seed (32 B) — GF-9.
 ///
 /// `p_slot`-bound and seed-derived (`ARCHIVAL_FIREWALL_GATE6.md` §10.7), so the
-/// persona's `.onion` rotates with the slot. **Serving-only, and deliberately
-/// *not* an [`ArchivalPKeys`] field** — §9.4's persona bundle carries no HS key,
-/// its consumer is the (forthcoming, 2d-2 SP-T3) serving path, which calls this on
-/// demand and expands the seed to tor's `ED25519-V3` expanded-private key for
-/// `ADD_ONION`; today only the disposable SP-T3 spike does so. Not persisted;
-/// rederived from `(master_seed, net, fmt, p_slot)` on each serve, exactly like
-/// the other secrets.
+/// persona's `.onion` rotates with the slot. Its consumer expands it to tor's
+/// `ED25519-V3` expanded-private key for `ADD_ONION`.
+///
+/// **Premise REFUTED 2026-08-12 (SH-2) — this IS an [`ArchivalPKeys`] field
+/// now.** The prior ruling was "serving-only, deliberately *not* an
+/// `ArchivalPKeys` field … rederived from `(master_seed, net, fmt, p_slot)` on
+/// each serve, exactly like the other secrets". That is a coherent design for a
+/// serving path co-resident with the wallet, which is the architecture that
+/// existed when it was written. Model D then put the serving host on the far
+/// side of a boundary the master seed does not cross — `StakeEngine::on_start`
+/// says it outright, "the seed never reaches the actor under Model D" — and the
+/// comment did not move with it. Rederive-on-each-serve is not a slower path or
+/// a worse one; it is **not a reachable path**, and a persona that cannot
+/// re-derive its serving identity cannot publish the `.onion` its bond
+/// obligates it to answer on.
+///
+/// **Wrong in both directions from one stale premise, which is the case worth
+/// keeping.** Read literally, the comment also invited an implementer to hand
+/// `master_seed_64` to the serving process alongside `bond_spend_ed` /
+/// `bond_spend_ml_dsa` — so it pointed at a custody hazard the architecture had
+/// already closed while describing a mechanism the architecture had already
+/// removed. It read as authoritative and the code it described could not run.
+/// A comment that survives the architecture it documents is not a stale note;
+/// it is an instruction to rebuild the thing that was deleted.
+///
+/// The line the bundle drew was one label short of what serving needs, so the
+/// fix moves the line rather than crossing it: the seed is derived with every
+/// other persona secret, while the master still exists, and travels in the same
+/// per-slot bundle. §7.2(iii)'s custody boundary is untouched — it governs
+/// StakeEngine→serving-host, and the host still receives only an expanded
+/// `OnionIdentity`, never this seed.
+///
+/// # Callers
+///
+/// **One legitimate production caller: bundle assembly**
+/// ([`derive_archival_p_keys`]). Any other production call site is, by
+/// construction, a path taking the master seed for serving purposes — the
+/// hazard above. The one that survives is
+/// `shekyl-sp-t3-spike/src/onion_key.rs`, which takes `master_seed_64` because
+/// it was written against the architecture this note refutes; it is on the
+/// spike's own deletion surface (rule 15, "deleted or fully rewritten before
+/// TJ-B") and goes with it. **The W₂ rig that replaces the spike must take an
+/// `OnionIdentity` from a bundle, not a master seed.**
+///
+/// The KATs call this directly and *should*: deriving the value independently
+/// of the bundle is what makes the bundle's field assertable against the same
+/// pinned vector, so the two producers cannot drift.
 ///
 /// The derived Ed25519 **public** key (`SigningKey::from_bytes(seed)
 /// .verifying_key()`) is the v3 onion address's public key; the
@@ -400,7 +440,7 @@ fn build_hybrid(
 /// `Zeroize` (and carry no secret). Instead every secret-bearing field is
 /// individually `ZeroizeOnDrop` — `spend_sk` / `view_sk` ([`SpendSecret`] /
 /// [`ViewSecret`]), `ml_kem_dk` ([`MlKem768DecapKey`]), and `hybrid_sign_sk` /
-/// `bond_spend_sk` ([`HybridSecretKey`]) — so each wipes on drop via its own
+/// `bond_spend_sk` ([`HybridSecretKey`]) and `hs_id_seed` ([`Zeroizing`]) — so each wipes on drop via its own
 /// destructor. This is the rule-35 per-field discipline applied to a struct that
 /// also holds non-`Zeroize` public material.
 ///
@@ -436,6 +476,24 @@ pub struct ArchivalPKeys {
     pub bond_spend_pk: HybridPublicKey,
     /// GF-1 bond-debit authorizer hybrid secret.
     pub bond_spend_sk: HybridSecretKey,
+
+    /// GF-9 serving-side v3 onion identity **seed** (32 B), from
+    /// [`derive_p_hs_id_seed`].
+    ///
+    /// **The seed, deliberately — not the expanded key.** RFC 8032 expansion
+    /// to tor's `ED25519-V3` blob is `shekyl-tor`'s format and it already owns
+    /// that step (`OnionIdentity::from_hs_id_seed`), so the 32-byte seed is the
+    /// correct boundary object: it keeps this crate ignorant of Tor's key
+    /// encoding, and keeps the expansion in exactly one place rather than two
+    /// that can disagree. The bundle stopping one step short of something
+    /// directly usable is the point, not an omission.
+    ///
+    /// Carried here because a serving persona must be able to publish its
+    /// `.onion` for the life of its bond, and under Model D the master seed is
+    /// gone after derivation — see [`derive_p_hs_id_seed`] for the refuted
+    /// "rederive on each serve" premise and the caller discipline that follows
+    /// from it.
+    pub hs_id_seed: Zeroizing<[u8; 32]>,
 }
 
 impl ArchivalPKeys {
@@ -536,6 +594,9 @@ pub fn derive_archival_p_keys(
     let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, fmt, p_slot);
     let (hybrid_sign_pk, hybrid_sign_sk) = build_hybrid(&account_sign_seed, &ml_dsa_seed)?;
 
+    // --- GF-9 serving-side onion identity seed (expanded by shekyl-tor) ---
+    let hs_id_seed = derive_p_hs_id_seed(master_seed, net, fmt, p_slot);
+
     // --- GF-1 bond-debit authorizer hybrid (seed consumers) ---
     let bond_ed_seed = derive_p_bond_spend_ed_seed(master_seed, net, fmt, p_slot);
     let bond_ml_dsa_seed = derive_p_bond_spend_ml_dsa_seed(master_seed, net, fmt, p_slot);
@@ -554,6 +615,7 @@ pub fn derive_archival_p_keys(
         hybrid_sign_sk,
         bond_spend_pk,
         bond_spend_sk,
+        hs_id_seed,
     })
 }
 
