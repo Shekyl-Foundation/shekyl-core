@@ -47,6 +47,7 @@
 //! This type still does not create transports; it takes one. The bound decides
 //! *which kind*, the construction site decides *whose*.
 
+use shekyl_archival_retention::HoldingsKind;
 use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
 
@@ -59,6 +60,14 @@ use crate::engine::prpc::PersonaIsolatedTransport;
 // refresh from the P-scan sweep. Landed with the seam it implements rather
 // than after it, so the one place a serve-set can come from exists before
 // anything can be wired to a second one.
+//
+// SH-2b inherits an open question this refusal makes visible: whether
+// `start_pscan_if_staker` should start a serving host **at all** for a
+// `CompleteTree` persona. `first_stake` hardcodes that posture today — a named
+// PR-4c deviation, since no wallet entry posts a market bond yet — so wiring
+// the host unconditionally would make every first-stake wallet fail to start
+// one. A host that reliably refuses to start is correct and is not a finished
+// answer; the caller decides, and the caller is the next slice.
 //
 // Lives under `stake_engine/` rather than at `engine/` top level because both
 // halves of its input are already this tree's: the bond record it reads is what
@@ -90,17 +99,52 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             .await
             .map_err(|e| format!("claim-source fetch failed: {e}"))?;
 
-        // No connected record is **not** an error and **not** an empty
-        // serve-set by default — it is a persona with no bond, which owes
-        // nothing and pins nothing. Reported as the empty set so the host's
-        // witness still describes reality (and its staleness clock still
-        // advances) rather than the refresh failing forever on a wallet that
-        // simply has not bonded yet.
-        let shard_ids: Vec<u64> = source
-            .bond
-            .as_ref()
-            .map(|bond| bond.holdings.shard_ids.as_slice().to_vec())
-            .unwrap_or_default();
+        // Two different empties reach this line, and conflating them is the
+        // defect this match exists to prevent. `shard_ids` must never be read
+        // without its discriminant.
+        //
+        // **Owing nothing.** No connected record is not an error — a persona
+        // with no bond owes nothing and pins nothing. Reported as the empty
+        // set so the host's witness still describes reality (and its
+        // staleness clock still advances) rather than the refresh failing
+        // forever on a wallet that simply has not bonded yet. A
+        // `ShardSetCompact` record with an empty list is the same statement,
+        // made by a record that exists.
+        //
+        // **Owing everything, in the same bytes.** `CompleteTree` carries no
+        // shard list *by wire rule* — `BondPostError::CompleteTreeWithShardIds`
+        // rejects one, and the daemon's own vin builder writes
+        // `ShardSet::empty()` for it — and it means the persona owes the whole
+        // corpus, holdings that "grow forever by definition"
+        // (`ARCHIVAL_CHALLENGE_MECHANISM.md`, Foundation CompleteTree nodes).
+        // Reading `shard_ids` blind would pin nothing and report a `Current`
+        // witness for a persona owing everything: §9.6 item 4's silent slash,
+        // produced by the refresh built to close it. Foundation nodes sit
+        // outside the reward market but are explicitly **not** exempt from the
+        // slash side (examined and closed 2026-08-07), so the loss is live.
+        //
+        // **Refused rather than approximated.** `ServeSet` is a shard-id list
+        // with no representation of "all", so this seam cannot express the
+        // obligation at all. Whole-corpus pinning would need a store
+        // enumeration that does not exist and an unbounded-growth policy that
+        // is a different validation surface. Failing here fails
+        // `PinnedServeSet::acquire`, so the host does not start — loud and
+        // early, instead of a witness that is wrong in the dangerous
+        // direction.
+        let shard_ids: Vec<u64> = match source.bond.as_ref() {
+            None => Vec::new(),
+            Some(bond) => match bond.holdings.kind {
+                HoldingsKind::ShardSetCompact => bond.holdings.shard_ids.as_slice().to_vec(),
+                HoldingsKind::CompleteTree => {
+                    return Err(
+                        "connected bond has CompleteTree holdings: this persona owes the \
+                                whole corpus, which a shard-id serve-set cannot express — \
+                                refusing rather than serving the empty set it decodes to"
+                            .to_string(),
+                    )
+                }
+            },
+        };
 
         let (outcomes, reader): (Vec<(u64, SegmentPin)>, ServingReader) = self
             .curve_tree
@@ -185,6 +229,16 @@ mod tests {
     /// A claim-source reply at `chain_height`, holding `shard_ids` (or no
     /// bond record at all when `shard_ids` is `None`).
     fn daemon(chain_height: u64, shard_ids: Option<Vec<u64>>) -> ClaimSourceDaemon {
+        daemon_of_kind(chain_height, shard_ids, HoldingsKind::ShardSetCompact)
+    }
+
+    /// The same reply with the holdings **kind** chosen, so the two empties —
+    /// an empty `ShardSetCompact` and a `CompleteTree` — are both reachable.
+    fn daemon_of_kind(
+        chain_height: u64,
+        shard_ids: Option<Vec<u64>>,
+        kind: HoldingsKind,
+    ) -> ClaimSourceDaemon {
         ClaimSourceDaemon(Arc::new(source_json(&EmissionClaimSource {
             chain_height: ChainCount::from_raw(chain_height),
             // The decoder cross-checks this against `chain_height` — the
@@ -195,7 +249,7 @@ mod tests {
             bond: shard_ids.map(|ids| BondContext {
                 join_settlement_epoch: 0,
                 holdings: HoldingsDescriptor {
-                    kind: HoldingsKind::ShardSetCompact,
+                    kind,
                     shard_ids: ShardSet::new(ids).expect("fixture shard set"),
                 },
                 claimed_settlement_epochs: Vec::new(),
@@ -270,6 +324,50 @@ mod tests {
         assert!(report.shard_ids.is_empty());
         assert!(report.outcomes.is_empty());
         assert_eq!(report.as_of_height, BlockHeight(30_000));
+    }
+
+    /// **The two empties, asserted together, because the pair is the
+    /// contract.** `CompleteTree` carries no shard list by wire rule
+    /// (`BondPostError::CompleteTreeWithShardIds`), so it decodes to the same
+    /// bytes as a persona owing nothing while meaning the exact opposite — the
+    /// whole corpus. Pinning that empty set would report a `Current` witness
+    /// for a persona serving none of its obligation.
+    ///
+    /// Both arms live in one test on purpose: a `CompleteTree`-only assertion
+    /// would also pass against an implementation that refused on
+    /// `shard_ids.is_empty()`, which is the *wrong* fix — it would break the
+    /// legitimately-empty `ShardSetCompact` case in the same stroke. The
+    /// discriminant is the thing under test, not the emptiness.
+    #[tokio::test]
+    async fn complete_tree_holdings_refuse_while_an_empty_shard_set_reports_empty() {
+        let (_dir_a, curve_tree_a) = handle();
+        let complete_tree = EngineServeSetPinner::new(
+            curve_tree_a,
+            daemon_of_kind(30_001, Some(Vec::new()), HoldingsKind::CompleteTree),
+            [7; 32],
+        );
+        let err = complete_tree
+            .pin_serve_set()
+            .await
+            .expect_err("a whole-corpus obligation must refuse, not pin the empty set");
+        assert!(
+            err.contains("CompleteTree"),
+            "the refusal must name the holdings kind so the operator can act on it: {err}"
+        );
+
+        // Same empty list, opposite meaning, and it must still succeed.
+        let (_dir_b, curve_tree_b) = handle();
+        let owes_nothing = EngineServeSetPinner::new(
+            curve_tree_b,
+            daemon_of_kind(30_001, Some(Vec::new()), HoldingsKind::ShardSetCompact),
+            [7; 32],
+        );
+        let report = owes_nothing
+            .pin_serve_set()
+            .await
+            .expect("an empty ShardSetCompact owes nothing and is not an error");
+        assert!(report.shard_ids.is_empty());
+        assert!(report.outcomes.is_empty());
     }
 
     /// An empty chain has no tip. `ChainCount(0).tip()` is `None`, and the
