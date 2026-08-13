@@ -234,21 +234,38 @@ async fn a_pruned_member_refuses_the_whole_serve_set_and_names_every_one() {
     // restore bytes, so the host refuses to start — and it lists every
     // pruned member, because the remedy is a chain-replay rebuild and the
     // operator wants its extent in one message.
+    //
+    // TWO members are pruned, deliberately: with one, "lists every pruned
+    // member" and "lists the first pruned member" are the same assertion,
+    // and the contract this test is named for would go unverified.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    let mut both = segment_entries();
+    let mut second = segment_entries();
+    for (i, e) in second.iter_mut().enumerate() {
+        e.gindex = Gindex(leaves_per_segment() as u64 + i as u64);
+    }
+    both.extend(second);
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
-        .expect("append and freeze segment 0");
+        .append_block_deltas(&both, &[], &[], BlockHeight(10_000))
+        .expect("append and freeze segments 0 and 1");
     store.prune_frozen(&[]).expect("prune without pinning");
 
     let err = PinnedServeSet::acquire(&StorePinner::new(
         Arc::clone(&store),
-        &[0, 1],
+        &[0, 1, 2],
         BlockHeight(10_000),
     ))
     .await
     .expect_err("a pruned member must refuse the set");
 
-    assert_eq!(err, PinError::MembersAlreadyPruned { shard_ids: vec![0] });
+    assert_eq!(
+        err,
+        PinError::MembersAlreadyPruned {
+            shard_ids: vec![0, 1]
+        },
+        "every pruned member, not just the first — the remedy is a rebuild \
+         and the operator wants its extent in one message"
+    );
     // The message names the remedy, not just the fault (rule 82).
     assert!(err.to_string().contains("rebuilt by chain replay"));
 }

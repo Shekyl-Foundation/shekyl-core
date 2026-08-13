@@ -324,17 +324,6 @@ impl WriterRecovery {
     pub fn resume(&self) -> Result<CurveTreeClient, ClientError> {
         CurveTreeClient::resume(Arc::clone(&self.store))
     }
-
-    /// A read-only handle on the store recovery would resume over.
-    ///
-    /// Deriving a reader from the recovery is safe in the direction that
-    /// matters — a write capability already implies the read — and it is
-    /// what lets a holder assert "the writer I can rebuild is the store
-    /// that host is serving" via [`ServingReader::same_store`].
-    #[must_use]
-    pub fn serving_reader(&self) -> ServingReader {
-        ServingReader::new(Arc::clone(&self.store))
-    }
 }
 
 impl std::fmt::Debug for WriterRecovery {
