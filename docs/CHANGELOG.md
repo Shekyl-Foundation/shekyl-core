@@ -4,6 +4,20 @@
 
 ### Changed
 
+- **`stake` gains a fourth refusal: `-29503 STAKE_RECORD_MOVED`** (PR-SA-5,
+  `docs/api/wallet_rpc.yaml`). The RPC reads its persona slot from the open
+  engine *before* the credentialed reopen, and that reopen runs the SP-R0
+  open-time reconcile — which can adopt a chain-proven bond, burn a retired
+  persona into the monotone cursor, or collect a phantom, any of which makes the
+  earlier read stale. `Engine::first_stake` already refused fail-closed; the
+  refusal was merely **mis-surfaced as `-32603` InternalError**. It is a
+  legitimate domain state (nothing durable written, a plain re-invoke reads the
+  reconciled record) and now reads as one, per rule 82. The code carries **no
+  payload**: persona slot numbering is wallet-internal and the operator's remedy
+  does not depend on it (rule 81). Deleting the staleness outright — resolving
+  the elect slot *after* reconciliation — reshapes the first-stake intent and the
+  spawn gate, a distinct validation surface tracked in `FOLLOWUPS.md`.
+
 - **Pinned crypto vectors: the SA-3a raw-public-key leaf-hash pins moved to
   a machine-readable fixture** (`docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json`;
   PR-SA-3a, rule-30 vector-change record). The four byte pins — frozen

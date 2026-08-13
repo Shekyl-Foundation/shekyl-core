@@ -338,6 +338,13 @@ pub(crate) fn adopt_chain_bonds_and_raise_cursor<E>(
         chain_high = Some(slot);
         // Adopt unless the wallet durably retired this persona: a retired
         // slot burns the cursor (below) but never re-enters the hint.
+        //
+        // `push` keeps `bonded_slots` ascending without a sort: the walk
+        // starts at `monotone_current_slot_from_record()`, which is already
+        // strictly above every recorded slot, so an adopted slot is strictly
+        // greater than every entry the vec holds. That matters because the
+        // vec is PERSISTED — an out-of-order append would let two wallets in
+        // the same logical state serialize to different bytes.
         if !retired_slots.contains(&slot) && !staking.bonded_slots.contains(&slot) {
             staking.bonded_slots.push(slot);
             adopted.push(slot);
@@ -582,6 +589,32 @@ mod tests {
         assert!(
             st.derive_forward_slots(2).contains(&1),
             "an adopted bond must be derived at the next spawn, or it is lost"
+        );
+    }
+
+    /// Adoption appends in ascending order without sorting, because the walk
+    /// begins strictly above every recorded slot. `bonded_slots` is persisted,
+    /// so an out-of-order append would let two wallets in the same logical
+    /// state serialize to different bytes. Pinned against a hint whose highest
+    /// entry sits well below the cursor.
+    #[test]
+    fn adoption_keeps_the_persisted_hint_ascending() {
+        let mut st = staking(&[0, 5]);
+        st.p_slot = 0; // from_record = max(0, 5 + 1) = 6, so the walk is {6,7,8}
+        let ev = evidence(100, vec![match_for(id(6), 10)]);
+        let chain = adopt_chain_bonds_and_raise_cursor(&mut st, &ev, &no_retired(), 2, |slot| {
+            Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
+        })
+        .expect("raise");
+        assert_eq!(chain.adopted, vec![6]);
+        assert_eq!(
+            st.bonded_slots,
+            vec![0, 5, 6],
+            "an adopted slot is always above every recorded slot — no sort needed"
+        );
+        assert!(
+            st.bonded_slots.windows(2).all(|w| w[0] < w[1]),
+            "persisted hint must stay ascending"
         );
     }
 
