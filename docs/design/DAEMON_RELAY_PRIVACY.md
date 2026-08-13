@@ -10062,6 +10062,14 @@ first means deciding it against a severity that is about to change.**
 
 ## 59. R-1 built — mixed eligibility, one roll at entry
 
+> **Present tense (Q12-U3, 2026-08-13).** Once-at-origin: the origin rolls
+> at `daemon_submit::relay_tx`; relayed traffic does not. Constant:
+> `MIXED_ELIGIBILITY_PCT_HUNDREDTHS = 5000` (`p = 0.5`, indifference point,
+> not a measured optimum, not operator-configurable). FFI:
+> `shekyl_relay_zone_divert_originated_tx`. The per-hop / "at entry"
+> arithmetic in this section is the **deleted** mechanism. As-built:
+> `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md` §Q12-U3.
+
 **2026-08-03.** F-6's omission half, specified since §30 and the longest-unbuilt
 item in the arc. §58.3 verified it was still unbuilt: configuration B's
 deletion removed the noise flag and left the zone-selection oracle untouched.
@@ -10095,6 +10103,10 @@ already treats together.
 
 ### 59.2 `p` is per-hop, and that is the number that gets misquoted
 
+> **Historical (R-1 as shipped).** Deleted by Q12-U3. Current constant:
+> `MIXED_ELIGIBILITY_PCT_HUNDREDTHS = 5000` (once-at-origin, indifference).
+> The arithmetic below is the mechanism that no longer runs.
+
 `MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS = 200` — **2 % per hop.** Every node
 receiving a relayed transaction over clearnet rolls independently, so over a
 stem of `1/q ≈ 5` hops the **network-level** rate is `1 − (1−p)^5 ≈ 9.6 %`.
@@ -10119,6 +10131,7 @@ network-level arm.
 ### 59.3 What crosses the boundary
 
 **A verdict, not a probability.** `shekyl_relay_zone_divert_relayed_tx()`
+(renamed `shekyl_relay_zone_divert_originated_tx` at Q12-U3)
 answers yes/no; the rate, its per-hop meaning and the reasoning stay in Rust.
 Handing C++ the probability would put the draw — and a second place to get the
 rate wrong — on the wrong side of the seam.
@@ -10189,11 +10202,12 @@ clearnet on the next, **and the effective rate over `k` re-relays becomes
 `1 − (1−p)^k` rather than the `p` §59.2 states and pins.**
 
 `source` is the clean discriminator — a real connection on arrival, nil on a
-pool re-relay — so the roll is now gated on `!source.is_nil()`. **One roll at
+pool re-relay — so the roll was gated on `!source.is_nil()`. **One roll at
 entry means one roll per entry, and a re-relay is not an entry**: it carries no
 arrival zone to cohere with, and it goes to clearnet exactly as it did before
-R-1. That bounds R-1's scope honestly: diversion and coherence act on the
-arrival path, and the pool path is unchanged.
+R-1. That bounded R-1's scope honestly: diversion and coherence acted on the
+arrival path, and the pool path was unchanged. Q12-U3 then moved the (only)
+roll to origination; `!source.is_nil()` is no longer the gate.
 
 **The two-zone divert could not fall through to clearnet.**
 `select_anonymity` returned `rbegin()` unconditionally when

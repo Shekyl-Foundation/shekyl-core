@@ -9388,22 +9388,25 @@ its wake.
   stems by recorded origin, on the reading that its `zone::public_` literal was
   a clearnet leak; that was retracted before push. The literal is the fluff
   exit. See `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
-  **Consequence — `txpool_tx_meta_t::origin_zone` has no production consumer.**
+  **Consequence — `txpool_tx_meta_t::origin_zone` has no routing consumer.**
   It is written at first arrival (`add_tx` does not revise it on a
-  stem→fluff upgrade) and preserved across hard-fork re-validation, and
-  nothing reads it to decide anything. Its named consumer is Q12-U3's
-  origin-classified telemetry — **whose purpose changed when Q12-D5a was ruled
-  once-at-origin (2026-08-12, PR #460): it VERIFIES that coherence holds rather
-  than gating `p`, which needs no instrument under that ruling.** Do not re-file
-  it as a precondition for setting `p`; the next unit is implementing
-  once-at-origin, not building the telemetry. **Open disposition, not a defect to sweep:**
-  unlike the dead fields removed in #450 it has a writer and a dated reader,
-  but it should not sit unread indefinitely.
+  stem→fluff upgrade) and preserved across hard-fork re-validation. The one
+  production read is that preservation path (`e.meta.get_origin_zone()` in
+  the HF re-validation loop). Q12-U3 (2026-08-13) landed once-at-origin and
+  zone-labelled `/get_stem_tallies`; those rows carry the **collection**
+  zone of the stem snapshot, not this field. **Open disposition, not a
+  defect to sweep:** unlike the dead fields removed in #450 it has a writer
+  and a dated reader, but it should not sit unread indefinitely. Do not
+  delete it — it is the isolation arm's instrument. Do not re-file
+  origin-classified telemetry as a precondition for `p`; U3 shipped `p`
+  without reading this field.
   **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s `private_*` cases
   pin that a stem emits the flag clear and a fluff sets it; (2) the pure gate —
   `r1_coherence_predicate` pins `r1_coherence_keeps_origin` /
-  `is_pre_fluff_relay`, shared with the production branch so it cannot drift;
-  (3) the record — `txpool_origin_zone` pins that reclaiming `is_forwarding`
+  `is_pre_fluff_relay`; (3) Q12-U3's `once_at_origin_route.table` — production
+  `send_txs` switches on the same helper, and returning `public_clearnet` from
+  the `keep_arrival` arm was observed to red `(stem, tor)`; (4) the record —
+  `txpool_origin_zone` pins that reclaiming `is_forwarding`
   did not shift `fcmp_verified` or `origin_zone`, and that the zone survives a
   real LMDB round trip.
   **Still not witnessed:** the arrival-to-record leg — the receiver's
