@@ -770,9 +770,12 @@ exercised by a KAT (O3, §5).
 > **every** clone at once (including the `LocalPendingTx` spend-gate clone —
 > without the shared cell a respawn heals refresh but leaves spends on a
 > dead actor, a partial heal). SH-2a (2026-08-12) stopped path-reopening
-> on respawn: the handle keeps the store `Arc`, so a serving host's
-> `ServingReader` stays on the same database and recovery cannot mint a
-> second store. The 2 s-bounded reopen poll remains on `open_and_spawn`
+> on respawn: the handle keeps a `WriterRecovery` over the store `Arc`, so a
+> serving host's `ServingReader` stays on the same database and recovery
+> cannot mint a second store. Recovery is a capability distinct from the
+> reader — the reader is cloned out to the persona serving crates, and
+> resuming from it would have let any of those copies mint a second writer
+> beside the actor. The 2 s-bounded reopen poll remains on `open_and_spawn`
 > only (wallet close → open). `RefreshError::CurveTreeIngest`
 > carries `recoverable_by_respawn: bool` (`true` = fail-stopped actor /
 > `ClientError::Poisoned`; `false` = non-consecutive-height / root-mismatch /

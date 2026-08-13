@@ -78,7 +78,7 @@ use kameo::message::{Context, Message};
 
 use shekyl_curve_tree::{
     AssembleInput, AssembledPath, BlockHeight, BlockLeaves, ClientError, CurveTreeClient,
-    ReferenceBlock, SegmentPin, ServingReader, TxLeafInputs,
+    ReferenceBlock, SegmentPin, ServingReader, TxLeafInputs, WriterRecovery,
 };
 
 use crate::scan::OwnedTxLeaves;
@@ -490,10 +490,15 @@ pub(crate) struct CurveTreeHandle {
     /// propagates the fresh actor to every holder. `ActorRef` is
     /// `Clone + Send + Sync`; the [`Mutex`] guard is never held across `.await`.
     actor: Arc<Mutex<ActorRef<CurveTreeActor>>>,
-    /// Store the actor writes, held so fail-stop can
-    /// [`CurveTreeClient::resume_from_reader`] rather than path-reopen
-    /// (a serving host already holds this `Arc`; a second open is refused).
-    store: ServingReader,
+    /// Authority to rebuild the writer over the store the actor writes,
+    /// taken once at spawn and outliving every actor incarnation.
+    ///
+    /// A [`WriterRecovery`] rather than a [`ServingReader`]: both name the
+    /// same open database, but only this one is a write capability, and the
+    /// reader is `Clone`d out to the persona serving crates. Recovering from
+    /// the reader would have made every one of those copies able to mint a
+    /// second writer beside the actor — see [`WriterRecovery`].
+    recovery: WriterRecovery,
 }
 
 impl CurveTreeHandle {
@@ -512,10 +517,10 @@ impl CurveTreeHandle {
     ///
     /// Panics if called with no ambient Tokio runtime; the message names the fix.
     pub(crate) fn spawn(client: CurveTreeClient) -> Self {
-        let store = client.serving_reader();
+        let recovery = client.writer_recovery();
         Self {
             actor: Arc::new(Mutex::new(Self::spawn_actor(client))),
-            store,
+            recovery,
         }
     }
 
@@ -617,7 +622,7 @@ impl CurveTreeHandle {
     /// engine guard.
     ///
     /// Recovery rebuilds in-memory client state from the store this handle
-    /// already holds ([`CurveTreeClient::resume_from_reader`]). It does
+    /// already holds ([`WriterRecovery::resume`]). It does
     /// **not** reopen the file. A serving host's [`ServingReader`] is a
     /// clone of the same `Arc`; a path-reopen would be
     /// `DatabaseAlreadyOpen` for the host's life, and a successful reopen
@@ -646,7 +651,7 @@ impl CurveTreeHandle {
         old.kill();
         old.wait_for_shutdown().await;
 
-        let client = CurveTreeClient::resume_from_reader(&self.store)?;
+        let client = self.recovery.resume()?;
         let fresh = Self::spawn_actor(client);
         *self
             .actor
@@ -739,8 +744,8 @@ impl CurveTreeHandle {
     /// simulating a fail-stop (the `on_panic → Break` path) without a real
     /// panic. After this returns the actor is gone and every handle call
     /// collapses to [`CurveTreeHandleError::Unavailable`] until a
-    /// [`Self::respawn`]. The store `Arc` stays on the handle, so resume
-    /// does not wait for the file lock.
+    /// [`Self::respawn`]. The [`WriterRecovery`] stays on the handle, so
+    /// resume does not wait for the file lock.
     #[cfg(test)]
     pub(crate) async fn kill_and_wait_for_test(&self) {
         let actor = self.actor_ref();

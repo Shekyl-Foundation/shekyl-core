@@ -249,9 +249,9 @@ pub struct CurveTreeClient {
     /// open database rather than opening a second one (redb takes an
     /// exclusive file lock, so a second open would simply be refused).
     /// The `Arc` leaves this client only as that read-only wrapper, or
-    /// as the store a [`Self::resume`] rebuilds a writer over — so a
-    /// fail-stop recovery does not open a second database beside a
-    /// serving host that is still holding the first.
+    /// inside a [`WriterRecovery`] — so a fail-stop recovery does not open
+    /// a second database beside a serving host that is still holding the
+    /// first, and the read-only wrapper stays unable to mint a writer.
     store: Arc<LeafStore>,
     // `pub(crate)` so the sibling `assemble` module and unit tests read leaf
     // candidates. Drained leaves are mirrored into `store` on each ingest.
@@ -271,10 +271,76 @@ pub struct CurveTreeClient {
     /// fails before rebuilding in-memory state, leaving memory inconsistent
     /// with the authoritative store. While set, load-bearing public methods
     /// fail fast with [`ClientError::Poisoned`]; the only recovery is to
-    /// drop this client and [`Self::resume`] over the same store (or
-    /// [`Self::open`] a path when nothing else holds it). See the
+    /// drop this client and [`WriterRecovery::resume`] over the same store
+    /// (or [`Self::open`] a path when nothing else holds it). See the
     /// `rollback_to_fork` poison contract.
     poisoned: bool,
+}
+
+/// The authority to rebuild the single writer over an already-open store —
+/// the fail-stop recovery capability, separate from the serving read.
+///
+/// # Why this is not a [`ServingReader`]
+///
+/// Both wrap the same open database, and it is tempting to recover from the
+/// reader the actor handle is already holding. That would make
+/// [`ServingReader`] *write-minting*: it is `Clone`, and copies of it are
+/// handed to the persona serving crates, which would then each be one call
+/// away from a second, unsynchronized writer on a store whose single writer
+/// is the whole point of the actor layer. The read-only guarantee
+/// [`CurveTreeClient::serving_reader`] documents would become a convention.
+///
+/// So recovery is its own capability, and the boundary is **obtainability**:
+/// the only way to get one is [`CurveTreeClient::writer_recovery`], which
+/// needs a `&CurveTreeClient` — a thing no serving crate has or can build,
+/// because nothing hands one out. `Clone` is deliberately left on: copying a
+/// recovery mints no writer (only [`Self::resume`] does), so restricting it
+/// would be ceremony rather than a guarantee, and the actor handle needs to
+/// be `Clone` anyway.
+///
+/// # Why recovery does not reopen the path
+///
+/// [`CurveTreeClient::open`] opens a *new* database. Once a serving host
+/// holds a [`ServingReader`] on the live one, a second open is redb's
+/// `DatabaseAlreadyOpen` for the host's whole life — and if it ever did
+/// succeed it would be a *different* store, so pins applied through the
+/// recovered writer would not cover the bytes the host is serving. Recovery
+/// therefore keeps the `Arc` and rebuilds only the in-memory writer state.
+#[derive(Clone)]
+pub struct WriterRecovery {
+    store: Arc<LeafStore>,
+}
+
+impl WriterRecovery {
+    /// Rebuild a write client over the held store.
+    ///
+    /// # Errors
+    ///
+    /// The same resume refusals `CurveTreeClient::open` surfaces
+    /// ([`ClientError::ResumeFromPrunedStore`],
+    /// [`ClientError::ResumeFromCorruptStore`], store I/O) — the store's
+    /// contents are re-read, so a store that has become unreadable is
+    /// reported here rather than at the next write.
+    pub fn resume(&self) -> Result<CurveTreeClient, ClientError> {
+        CurveTreeClient::resume(Arc::clone(&self.store))
+    }
+
+    /// A read-only handle on the store recovery would resume over.
+    ///
+    /// Deriving a reader from the recovery is safe in the direction that
+    /// matters — a write capability already implies the read — and it is
+    /// what lets a holder assert "the writer I can rebuild is the store
+    /// that host is serving" via [`ServingReader::same_store`].
+    #[must_use]
+    pub fn serving_reader(&self) -> ServingReader {
+        ServingReader::new(Arc::clone(&self.store))
+    }
+}
+
+impl std::fmt::Debug for WriterRecovery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WriterRecovery").finish_non_exhaustive()
+    }
 }
 
 /// In-memory state reconstructed from a [`LeafStore`] snapshot.
@@ -418,22 +484,7 @@ impl CurveTreeClient {
     /// `leaf_count` — cannot arise from pruning and is reported distinctly
     /// as [`ClientError::ResumeFromCorruptStore`] so a corrupt store is
     /// not misdiagnosed as a pruned one.
-    /// Rebuild a write client over a store that is already open.
-    ///
-    /// This is the fail-stop recovery constructor. [`Self::open`] opens a
-    /// *new* database on a path; a serving host's [`ServingReader`] already
-    /// holds the live one, and a second open is `DatabaseAlreadyOpen` for
-    /// the host's life. Recovery therefore keeps that `Arc` and rebuilds
-    /// only the in-memory writer state from the store's tables.
-    ///
-    /// Prefer [`Self::resume_from_reader`] at the actor-handle seam: the
-    /// handle holds a [`ServingReader`], not a write `Arc`.
-    ///
-    /// # Errors
-    ///
-    /// The same resume refusals as [`Self::open`] (`ResumeFromPrunedStore`,
-    /// `ResumeFromCorruptStore`, store I/O).
-    pub fn resume(store: Arc<LeafStore>) -> Result<Self, ClientError> {
+    fn resume(store: Arc<LeafStore>) -> Result<Self, ClientError> {
         let rebuilt = Self::rebuild_from_store(&store)?;
 
         Ok(Self {
@@ -447,17 +498,19 @@ impl CurveTreeClient {
         })
     }
 
-    /// Rebuild a write client over the store this reader holds.
+    /// The authority to rebuild this client's writer after a fail-stop, as
+    /// a value that can be held somewhere the client itself cannot be.
     ///
-    /// The serving host and the curve-tree handle both keep a
-    /// [`ServingReader`]; fail-stop recovery uses this so the new writer
-    /// is the same open database the host is already serving.
-    ///
-    /// # Errors
-    ///
-    /// Exactly [`Self::resume`]'s.
-    pub fn resume_from_reader(reader: &ServingReader) -> Result<Self, ClientError> {
-        Self::resume(reader.store_arc())
+    /// The actor's handle needs to survive its own actor: when the actor
+    /// fail-stops, the [`CurveTreeClient`] dies with the task, and recovery
+    /// must rebuild a writer over the **same** open database. Handing the
+    /// handle a [`ServingReader`] for that would have been the wrong
+    /// capability — see [`WriterRecovery`] for why.
+    #[must_use]
+    pub fn writer_recovery(&self) -> WriterRecovery {
+        WriterRecovery {
+            store: Arc::clone(&self.store),
+        }
     }
 
     /// Rebuild the in-memory state from the store's drained and pending
