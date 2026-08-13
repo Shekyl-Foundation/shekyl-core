@@ -649,7 +649,7 @@ TEST(cryptonote_protocol_handler, race_condition)
     virtual bool unblock_host(const address_t&) override {
       return {};
     }
-    virtual zone_t send_txs(blobs_t, const zone_t, const uuid_t&, relay_t) override {
+    virtual zone_t send_txs(blobs_t, const zone_t, const uuid_t&, relay_t, cryptonote::zone_route) override {
       return {};
     }
     virtual void record_tx_arrivals(blobs_t, const uuid_t&) override {}
@@ -1094,7 +1094,8 @@ TEST(node_server, race_condition)
         std::move(txs),
         epee::net_utils::zone::public_,
         {},
-        relay_t::fluff
+        relay_t::fluff,
+        cryptonote::once_at_origin_route(relay_t::fluff, epee::net_utils::zone::public_)
       );
       worker.join();
       return {};

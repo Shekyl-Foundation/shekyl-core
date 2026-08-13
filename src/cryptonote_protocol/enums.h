@@ -82,9 +82,9 @@ namespace cryptonote
       our own transaction from the origin's own IP is the first-spy case this
       arc exists to prevent. `local` is the class that prevents it —
       `relay_txpool_transactions` routes `local` to `private_req` at
-      `zone::invalid`, which `select_anonymity(require_usable=false)` resolves
-      back to the anonymity zone and never to clearnet, so originated traffic
-      fails closed (§59.7). Every other class routes to `public_req`.
+      `zone::invalid`, which `once_at_origin_route` maps to
+      `anonymity_fail_closed` — take the zone, send nothing if unusable.
+      Every other class routes to `public_req`.
 
       This matters because `upgrade_relay_method` is monotone: one record of
       `stem` or `fluff` moves the entry out of `local` permanently, and the next
@@ -123,14 +123,38 @@ namespace cryptonote
   /*! \brief Where `node_server::send_txs` should place a transaction under
       Q12-D5a once-at-origin.
 
-      Production and the unit table call this. Deleting `keep_arrival` here
-      is the edit that reds the coherence witness — not a copy of the
-      branch in `net_node.inl`. */
-  enum class zone_route : std::uint8_t
+      A token only `once_at_origin_route` can construct. `send_txs` requires
+      one to select a zone, so a caller that bypasses the helper is a
+      compile error — same device as `f` refusing a timing parameter
+      (`DAEMON_RELAY_PRIVACY.md` §77.4) and the depth table refusing an
+      unpopulated tier (§83.3). Sharing the helper with the unit table is
+      necessary and not sufficient; this is the liveness half the table
+      cannot supply.
+
+      What edit reds the table: return `decision::public_clearnet` from
+      the `keep_arrival` arm. What edit fails to compile: constructing a
+      `zone_route` anywhere except `once_at_origin_route`, or calling
+      `send_txs` without one. */
+  class zone_route
   {
-    keep_arrival,          //!< still-stemming on a real anonymity origin
-    anonymity_fail_closed, //!< originated chose anon, or local re-relay backstop
-    public_clearnet        //!< clearnet inherit, fluff exit, or originated chose clearnet
+  public:
+    enum class decision : std::uint8_t
+    {
+      keep_arrival,          //!< still-stemming on a real anonymity origin
+      anonymity_fail_closed, //!< originated chose anon, or local re-relay backstop
+      public_clearnet        //!< clearnet inherit, fluff exit, or originated chose clearnet
+    };
+
+    constexpr decision get() const noexcept { return k_; }
+
+    constexpr bool operator==(zone_route const& o) const noexcept { return k_ == o.k_; }
+    constexpr bool operator!=(zone_route const& o) const noexcept { return k_ != o.k_; }
+
+  private:
+    decision k_;
+    explicit constexpr zone_route(decision k) noexcept : k_(k) {}
+    friend constexpr zone_route once_at_origin_route(
+      const relay_method, const epee::net_utils::zone) noexcept;
   };
 
   constexpr zone_route once_at_origin_route(
@@ -138,10 +162,10 @@ namespace cryptonote
     const epee::net_utils::zone origin) noexcept
   {
     if (r1_coherence_keeps_origin(tx_relay, origin))
-      return zone_route::keep_arrival;
+      return zone_route(zone_route::decision::keep_arrival);
     if (origin == epee::net_utils::zone::invalid && is_pre_fluff_relay(tx_relay))
-      return zone_route::anonymity_fail_closed;
-    return zone_route::public_clearnet;
+      return zone_route(zone_route::decision::anonymity_fail_closed);
+    return zone_route(zone_route::decision::public_clearnet);
   }
 
   /*! \brief Map the origination roll onto the zone argument `send_txs` reads.

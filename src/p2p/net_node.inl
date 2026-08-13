@@ -2266,7 +2266,7 @@ namespace nodetool
   }
 
   template<class t_payload_net_handler>
-  epee::net_utils::zone node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay)
+  epee::net_utils::zone node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay, const cryptonote::zone_route route)
   {
     namespace enet = epee::net_utils;
     using zone_entry = std::pair<const enet::zone, network_zone>;
@@ -2351,9 +2351,10 @@ namespace nodetool
        of coherence, and composing the two was the one-way absorption that
        destroyed Q12-D4's cancellation.
 
-       The decision is `once_at_origin_route` (enums.h), shared with the
-       unit table, so deleting `keep_arrival` there is the edit that reds
-       the witness. Fluff is the exit and must not cohere (§59.1).
+       The decision is a `zone_route` token only `once_at_origin_route`
+       can construct. This function requires one; a caller that bypasses
+       the helper is a compile error. Fluff is the exit and must not
+       cohere (§59.1).
 
        Two paths put originated traffic on clearnet and they are different
        events (B-3). A reader who cannot tell which produced it reads the
@@ -2369,9 +2370,9 @@ namespace nodetool
        Pool re-relays of `local` keep passing `invalid` and do not re-roll.
        They share arm 2's fail-closed path, which is why the roll is at
        first origination rather than on every nil-source call. */
-    switch (cryptonote::once_at_origin_route(tx_relay, origin))
+    switch (route.get())
     {
-      case cryptonote::zone_route::keep_arrival:
+      case cryptonote::zone_route::decision::keep_arrival:
         /* LIVE as of Q12-U2. One caller reaches here with a real origin: the
            ARRIVAL, from `handle_notify_new_transactions`, whose origin is the
            live connection's zone. Coherence holds a still-stemming arrival on
@@ -2384,24 +2385,31 @@ namespace nodetool
            a liveness defect that strands the tx in the anonymity subgraph
            (§59.1).
 
-           Witness: `once_at_origin_route` / `r1_coherence_predicate`. Still
-           NOT witnessed: the arrival leg end-to-end (`t_core` harness,
-           FOLLOWUPS). */
+           Witness: the token type. Still NOT witnessed: the arrival leg
+           end-to-end (`t_core` harness, FOLLOWUPS). */
         if (m_network_zones.count(origin))
           return send(*m_network_zones.find(origin));
         MWARNING("Unable to send " << txs.size() << " transaction(s): arrival zone is not configured");
         return enet::zone::invalid;
-      case cryptonote::zone_route::anonymity_fail_closed:
-        /* ORIGINATED, roll said anonymity — or a local re-relay of a tx that
-           already chose anonymity (or whose first send missed). Take the
-           zone regardless of current usability; falling back to clearnet
-           would put our own transaction on the public network (§30.5).
-           Better to send nothing. */
+      case cryptonote::zone_route::decision::anonymity_fail_closed:
+        /* ORIGINATED, roll said anonymity — or a local re-relay of a tx
+           that already chose anonymity. Take the zone regardless of
+           current usability; falling back to clearnet would put our own
+           transaction on the public network (§30.5). Better to send
+           nothing.
+
+           ALSO reached by a missed submit nudge: the origination roll
+           never ran, the pool still holds `local`, and this arm
+           first-decides the zone as always-anon. That is D5a in
+           miniature — a second chooser after origination — not a
+           harmless "always anon for that tx". Recorded in FOLLOWUPS.
+           Do not "fix" by rolling here; that is the `source.is_nil()`
+           reversal. */
         if (zone_entry* anonymity = select_anonymity())
           return send(*anonymity);
         MWARNING("Unable to send " << txs.size() << " transaction(s): anonymity networks had no outgoing connections");
         return enet::zone::invalid;
-      case cryptonote::zone_route::public_clearnet:
+      case cryptonote::zone_route::decision::public_clearnet:
         return send(*m_network_zones.begin());
     }
     return enet::zone::invalid;

@@ -2757,8 +2757,17 @@ skip:
        identify how the transaction is going to be relayed, and then update the
        local mempool before doing the relay. The code was already updating the
        DB twice on received transactions - it is difficult to workaround this
-       due to the internal design. */
-    return m_p2p->send_txs(std::move(arg.txs), zone, source, tx_relay) != epee::net_utils::zone::invalid;
+       due to the internal design.
+
+       The `once_at_origin_route` token is constructed here, the only
+       production caller of `send_txs`. Bypassing the helper is a compile
+       error: `zone_route` has no public constructor. */
+    return m_p2p->send_txs(
+      std::move(arg.txs),
+      zone,
+      source,
+      tx_relay,
+      once_at_origin_route(tx_relay, zone)) != epee::net_utils::zone::invalid;
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
