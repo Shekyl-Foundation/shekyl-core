@@ -24,16 +24,26 @@
 //! - `tx_meta.tx_notes`
 //! - bookkeeping rows (primary label, address book, payment-request
 //!   **records** — matches are unwound so replay can re-match)
-//! - `staking.staking_enabled`, `p_slot`, **and `bonded_slots`**.
-//!   `bonded_slots` is a durable bond record, not a scan hint: its only
-//!   writer is [`Engine::persist_bond_record`](super::Engine) at bond-commit
-//!   time, and the scan path never adds a slot
-//!   ([`reconcile_phantom_bonded_slots`](super::stake_persist::reconcile_phantom_bonded_slots)
-//!   only *removes* confirmed-absent ones). Clearing it would orphan a live
-//!   on-chain bond from the wallet's record with no path back — every later
-//!   `stake` would refuse `WrongSlot` against an empty set while the burned
-//!   monotone cursor forbids re-adopting the slot. Phantom GC stays where it
-//!   belongs: the open-time sweep, which is `absence-≠-unscanned` gated.
+//! - `staking.staking_enabled`, `p_slot`, `bonded_slots`, **and the bond
+//!   watch's `persona_id_cache` / `bond_sightings`**. `bonded_slots` is a
+//!   durable bond record whose writers are all *additive from real
+//!   evidence*: [`Engine::persist_bond_record`](super::Engine) at
+//!   bond-commit time, and — since the SA-R-6 bond watch — the scan merge,
+//!   which **adopts** a slot when it observes that slot's bond post
+//!   on-chain (`merge::adopt_bond_sightings`; positive evidence only, so
+//!   the replay this reset triggers can only re-add what the chain
+//!   actually shows). Clearing any of them would orphan a live on-chain
+//!   bond from the wallet's record — every later `stake` would refuse
+//!   `WrongSlot` against an empty set while the burned monotone cursor
+//!   forbids re-adopting the slot — and clearing the sightings would drop
+//!   the bridge that keeps a probe-adopted bond safe from the phantom GC
+//!   until the P-scan corroborates it. The id cache is derive-once state
+//!   (a pure function of the seed): clearing it would force a reopen to
+//!   re-pay W PQ keygens for identical bytes, and the very rescan this
+//!   reset starts is the bond watch's main consumer. Phantom GC stays
+//!   where it belongs: the open-time sweep, which is
+//!   `absence-≠-unscanned` gated (and sighting-height gated for
+//!   probe-adopted slots).
 //!
 //! **Clear / reset (scan-derived — the replay rebuilds all of it):**
 //! - the whole [`LedgerBlock`] (transfers, tip, reorg window) — replaced

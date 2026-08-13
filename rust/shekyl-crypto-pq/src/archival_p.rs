@@ -114,9 +114,18 @@
 //! buys both. The single exception is a **durably retired** persona — already
 //! rotated past on purpose, so it burns the mark and is never re-adopted.
 //!
-//! A restore-from-seed reconstruction (the wallet opens as a non-staker and
-//! derives nothing, so no scan evidence exists to heal from) is a separate
-//! wallet-layer slice (`ARCHIVAL_BOND_CONSTRUCTION.md` §11; `FOLLOWUPS.md`).
+//! The restore-from-seed reconstruction is the principal scan's **bond
+//! watch**: at open, while the seed is transiently in scope, the wallet
+//! derives the public persona canonical ids for a probe window of slots
+//! (cached once — ids are a pure function of the seed and never
+//! invalidate), and the ordinary refresh/rescan then matches on-chain
+//! `Input::BondPost` observations against them. A sighting adopts the slot
+//! back into the bonded record and raises the mark — unconditional for
+//! every wallet (a never-staked wallet's watch simply never fires), so any
+//! full rescan reconstructs a lost staking history from slot 0 without a
+//! staking-specific recovery flow (engine-side: `StakingBlock`'s
+//! `persona_id_cache` / `bond_sightings`, `engine::bond_watch`,
+//! `merge::adopt_bond_sightings`).
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use ed25519_dalek::SigningKey;

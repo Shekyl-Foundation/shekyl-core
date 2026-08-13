@@ -335,12 +335,17 @@ pub(crate) struct ChainBondAdoption {
 /// Phantoms are [`ReconcileVerdict::AbsentWithinCovered`], disjoint from
 /// `Present`, so they can neither adopt nor raise regardless of apply order.
 ///
-/// Scope: a record rolled back within the lookahead. Because the selection
-/// sequence is dense and a sealed `StakingBlock` rolls back as a unit, the
-/// slots a k-step rollback loses begin exactly at the rolled-back cursor —
-/// which is why the walk is the tail and not a widening probe. A restore
-/// from seed (nothing derived or scanned) still needs that probe:
-/// `ARCHIVAL_BOND_CONSTRUCTION.md` §11, `FOLLOWUPS.md`.
+/// Scope: a record rolled back within the lookahead, healed from the sealed
+/// pscan evidence. Because the selection sequence is dense and a sealed
+/// `StakingBlock` rolls back as a unit, the slots a k-step rollback loses
+/// begin exactly at the rolled-back cursor — which is why the walk is the
+/// tail and not a widening probe. The **from-seed** case (nothing derived or
+/// scanned — no pscan evidence at all) is owned by the principal scan's
+/// **bond watch**: the open-built probe-id cache
+/// (`StakingBlock::persona_id_cache`, width `ARCHIVAL_PERSONA_PROBE_WINDOW`)
+/// plus the refresh/rescan sighting → merge adoption
+/// (`merge::adopt_bond_sightings`), whose sighting rows this module's arm #3
+/// then honors via the height-gated verdict.
 pub(crate) fn adopt_chain_bonds_and_raise_cursor<E>(
     staking: &mut StakingBlock,
     evidence: &PReconcileSet,

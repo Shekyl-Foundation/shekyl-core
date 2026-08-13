@@ -3878,13 +3878,31 @@ sustainability is unaffected by the recalibration.
     pending seal. Bond posting is production-reachable today, so SA-R-6 holes are
     live rather than future; the two above were fixed as found (rule 22) instead
     of deferred behind an inertness that does not hold.
-    **What remains in this reopen:** the *from-seed* reconstruction — a cursor
-    rolled back beyond the lookahead, where the wallet opens as a non-staker and
-    derives/scans nothing — needs a widening derive-and-scan forward probe under
-    Model D. Deferred on the **named blocker of a distinct validation surface**
-    (rule 19: it changes what a non-staker open derives and scans, not how the
-    reconcile arms compose), not on reachability. The ruling lives in
-    `shekyl-crypto-pq` `archival_p` module docs and CBOM §5.
+    **From-seed reconstruction DISCHARGED (2026-08-13, the bond-watch build):**
+    the deferred surface was built as the principal scan's **bond watch** —
+    at open the wallet derives the public persona canonical ids for
+    `{bonded} ∪ {cursor..=cursor+W}` (`ARCHIVAL_PERSONA_PROBE_WINDOW = 32`)
+    into the persisted `StakingBlock::persona_id_cache` (derive-once: ids are
+    a pure function of the seed; `STAKING_BLOCK_VERSION` 2), the ordinary
+    refresh/rescan producer matches on-chain `Input::BondPost` observations
+    against the cache (shared lift: `engine::bond_watch`), and the merge
+    adopts each sighted slot + records its first-sighting height
+    (`bond_sightings`) + raises the monotone cursor
+    (`merge::adopt_bond_sightings`) — positive evidence only, so no
+    exhaustiveness token is needed and the raise is sound on any coverage.
+    Two soundness bridges landed with it: arm #3 evaluates a sighted slot
+    with the **height-gated** verdict (a stale pscan seal cannot GC a
+    probe-adopted real bond as phantom), and the first-stake W2 resume guard
+    treats a persisted sighting as `AlreadyStaked` (no duplicate JoinMarket
+    post while the P-scan lags). Unconditional for every wallet — a
+    never-staked wallet's watch simply never fires — so any full rescan
+    reconstructs a lost staking history from slot 0. **Residual, not a
+    reopen:** a history deeper than `W` slots converges across open+rescan
+    cycles (`ceil(depth / W)`; each merge raises the cursor, the next open
+    derives the window above it), and the watch sees only what the principal
+    scan covers — a restore whose `restore_from_height` postdates its bonds
+    reconstructs nothing until a lower-floor rescan (the same birthday
+    semantics every fund has).
   - **Persona slot-space exhaustion is not represented, and the binding gate
     does not refuse it.** `StakingBlock::monotone_current_slot` uses
     `saturating_add(1)`, which correctly prevents a wrap to slot 0 but makes
