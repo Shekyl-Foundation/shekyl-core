@@ -4,6 +4,18 @@
 
 ### Changed
 
+- **Daemon relay: anonymity arrivals stem at arrival, and the txpool
+  records which zone they arrived over** (Q12-U1 / Q12-U2 / Q12-U4,
+  `feat/q12-u1-u2-arrival-zone-and-coherence`). `relay_method::forward`
+  — "arrived over i2p/tor; hold, then broadcast to clearnet" — is
+  deleted, along with the delay it timed. An arrival is now stemmed
+  on the transport it arrived over, so R-1 coherence can keep it there
+  for the rest of the stem. The pool still fluffs an expired stem to
+  clearnet; that is the Dandelion++ exit, not a leak. The new
+  `origin_zone` field is written at first arrival (and not revised
+  when a later peer upgrades the relay method) so Q12-U3 can measure
+  per-zone hop; nothing production-reads it yet.
+
 - **Pinned crypto vectors: the SA-3a raw-public-key leaf-hash pins moved to
   a machine-readable fixture** (`docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json`;
   PR-SA-3a, rule-30 vector-change record). The four byte pins — frozen

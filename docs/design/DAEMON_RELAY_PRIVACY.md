@@ -9642,6 +9642,13 @@ fix is an integration test that links the FFI; recorded as owed.
   safe to delete when a constant is a pending derivation's other half.** The
   zero-consumer fact is now recorded at the site, since Q-12's derivation
   needs it.
+  > **CLOSED 2026-08-12 by Q12-U4 — and the rule held rather than failed.**
+  > Both constants are now deleted, because Q12-D3 deleted
+  > `relay_method::forward` and the delay had no mechanism left to time. That
+  > is not "we should have swept it in §55.3": the reason for keeping it was
+  > that it was half of a pending derivation, and it stayed exactly until that
+  > derivation resolved. It resolved by **deletion** rather than by producing a
+  > number — which is one of the three closes §55.3 left open, not a surprise.
 
 ## 56. Q-11 Unit 2 — the shape, measured; and the metronome is disqualified
 
@@ -13677,6 +13684,13 @@ constant, and the honest reading is that §89.2's mechanism is verified by
 argument and by link 1, not by execution.
 
 ## 89.8 Correction — coherence did not wake, and the origin was leaking to clearnet
+
+> **HISTORICAL as of Q12-U2 (2026-08-12).** This section is the #427
+> diagnosis. Link 5 is closed: an arrival is stemmed whatever transport
+> carried it, `relay_method::forward` is deleted, and coherence executes
+> on the live connection's zone. The pool re-relay does **not** read
+> `origin_zone`; expired stems leave as fluff at `zone::public_`, which
+> is the exit, not a leak. See `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
 
 **2026-08-10, review round on #427.** Three findings, all in §89's own
 territory, and the first two are the same mistake §63.9 named: reasoning from

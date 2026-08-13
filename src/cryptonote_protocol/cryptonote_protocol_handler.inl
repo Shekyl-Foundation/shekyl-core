@@ -956,18 +956,29 @@ namespace cryptonote
        proves the successor relayed it (propagation, not admission). */
     m_p2p->record_tx_arrivals(std::vector<blobdata>{arg.txs.begin(), arg.txs.end()}, context.m_connection_id);
 
-    /* If the txes were received over i2p/tor, the default is to "forward"
-       with a randomized delay to further enhance the "white noise" behavior,
-       potentially making it harder for ISP-level spies to determine which
-       inbound link sent the tx. If the sender disabled "white noise" over
-       i2p/tor, then the sender is "fluffing" (to only outbound) i2p/tor
-       connections with the `dandelionpp_fluff` flag set. The receiver (hidden
-       service) will immediately fluff in that scenario (i.e. this assumes that a
-       sybil spy will be unable to link an IP to an i2p/tor connection). */
+    /* Q12-U2: an arrival is stemmed, whatever transport it arrived on.
+
+       The inherited rule classed a non-public arrival `relay_method::forward`
+       — hold it on a randomized timer, then broadcast to clearnet. That made
+       the transport a routing input, and Q12-D3 rules it is not: the zone is a
+       selectable path with a latency price, not a property a transaction
+       inherits from the peer that handed it over.
+
+       The class change is what makes coherence execute. `forward` was refused
+       propagation into `tvc.m_relay` (tx_pool.cpp), so the batching switch
+       below dropped it and `relay_transactions` was never called at arrival
+       with an anonymity origin — leaving the coherence branch in
+       `net_node.inl` correct but unreachable (it said so, at §89.8.5). As
+       `stem`, the arrival flows to `relay_transactions` with its real origin,
+       and coherence keeps it on the zone it arrived over.
+
+       `dandelionpp_fluff` is unchanged and still overrides below: a sender who
+       disabled white noise over i2p/tor is fluffing, and the receiving hidden
+       service fluffs immediately — that is the deliberate exit from the
+       anonymity zone (§59.1), not a routing inference about the transport. */
 
     const epee::net_utils::zone zone = context.m_remote_address.get_zone();
-    relay_method tx_relay = zone == epee::net_utils::zone::public_ ?
-      relay_method::stem : relay_method::forward;
+    relay_method tx_relay = relay_method::stem;
 
     std::vector<blobdata> stem_txs{};
     std::vector<blobdata> fluff_txs{};
@@ -982,7 +993,11 @@ namespace cryptonote
     for (auto& tx : arg.txs)
     {
       tx_verification_context tvc{};
-      if (!m_core.handle_incoming_tx(tx, tvc, tx_relay, true) && !tvc.m_no_drop_offense)
+      // `zone` is the arrival transport, computed above. It is passed ALONGSIDE
+      // `tx_relay` rather than folded into it: the relay method is a routing
+      // decision that may be revised, the zone is a fact about where the bytes
+      // came from that must not be.
+      if (!m_core.handle_incoming_tx(tx, tvc, tx_relay, true, zone) && !tvc.m_no_drop_offense)
       {
         LOG_PRINT_CCONTEXT_L1("Tx verification failed, dropping connection");
         drop_connection(context, false, false);
@@ -1000,7 +1015,6 @@ namespace cryptonote
           fluff_txs.push_back(std::move(tx));
           break;
         default:
-        case relay_method::forward: // not supposed to happen here
         case relay_method::none:
           break;
       }

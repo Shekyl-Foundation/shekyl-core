@@ -35,7 +35,7 @@
 //! marshalling, including peer bytes).
 
 use shekyl_relay_privacy::params::DandelionParams;
-use shekyl_relay_privacy::schedule::{EmbargoTimer, ForwardDelay, PROPAGATION_FALSE_FAIL_ONE_IN};
+use shekyl_relay_privacy::schedule::{EmbargoTimer, PROPAGATION_FALSE_FAIL_ONE_IN};
 use shekyl_relay_privacy::RelayZone;
 use std::sync::OnceLock;
 
@@ -187,40 +187,6 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
             embargo_timer(RelayZone::Tor).judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN),
         )
     })
-}
-
-/// Draw one i2p/tor → clearnet forwarding delay, in **seconds**.
-///
-/// Replaces `crypto::random_poisson_seconds{22 s}` at `tx_pool.cpp`'s forward
-/// arm. **The mean is unchanged**; what moves is the family.
-///
-/// # Why the family was wrong, and why it matters here specifically
-///
-/// The inherited draw was a Poisson — σ ≈ 4.7 s about a 22 s mean, against
-/// σ ≈ 22 s memoryless. That is F-2/F-4's signature, and F-4 measured the
-/// cost: ~1.96× more invertible overall, and far worse for a transaction
-/// arriving late in its window, because only a memoryless family has
-/// residual ≡ full. A Poisson's inversion number computed at phase 0 does not
-/// describe most arrivals.
-///
-/// **This delay governs the tor→clearnet bridge** — the moment an
-/// anonymity-arrived transaction becomes clearnet-visible, and therefore the
-/// moment arrival-time inference is worth most. Measured on F-4's own
-/// instrument at ±1 s: 0.2505 → 0.1248 at phase 0, and the inherited draw
-/// climbs to 0.7191 by phase 30 while the memoryless one stays flat
-/// (`tests/forward_delay_family.rs`).
-///
-/// A 0 s draw is legitimate and unclamped, for the reason the embargo draw
-/// records for its own zero: the table is the distribution, and flooring the
-/// boundary would ship something else.
-///
-/// The mean stays Q-12's to derive (`DAEMON_RELAY_PRIVACY.md` §22.2). Porting
-/// the family does not launder its provenance.
-#[no_mangle]
-pub extern "C" fn shekyl_dandelionpp_forward_delay_seconds() -> u64 {
-    static FORWARD: OnceLock<ForwardDelay> = OnceLock::new();
-    let mut rng = SecureRelayRng;
-    FORWARD.get_or_init(ForwardDelay::adopted).draw(&mut rng)
 }
 
 #[cfg(test)]

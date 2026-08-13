@@ -810,7 +810,8 @@ Offset  Size  Field
 113      1    uint8_t relayed
 114      1    uint8_t do_not_relay
 115      1    bitfield: double_spend_seen:1, pruned:1, is_local:1,
-               dandelionpp_stem:1, is_forwarding:1, fcmp_verified:1, bf_padding:2
+               dandelionpp_stem:1, bf_padding:1 (reserved; was is_forwarding),
+               fcmp_verified:1, origin_zone:2
 116     32    crypto::hash fcmp_verification_hash
 148     44    uint8_t padding[44]
 ```
