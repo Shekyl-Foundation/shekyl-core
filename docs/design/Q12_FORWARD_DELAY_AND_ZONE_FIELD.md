@@ -990,11 +990,16 @@ was written. Pre-genesis there is no deployed pool, and the txpool is ephemeral
 node-local state rather than chain history — but the bit is kept reserved
 anyway, because one line removes the question instead of arguing it.
 
-## Q12-U3 pre-flight — Q12-D5a's condition became true on 2026-08-12
+## Q12-U3 pre-flight — Q12-D5a's condition became true on 2026-08-12, and is RULED
 
 **Opened 2026-08-12, immediately after Q12-U2 merged (#459). Nothing
-implemented. This section states a finding and asks for a ruling; it derives
-no numbers, for the reason §Q12-D5/D6 gives twice over.**
+implemented. It derives no numbers, for the reason §Q12-D5/D6 gives twice
+over.**
+
+The section opened as a finding and a request for a ruling; **the ruling was
+taken the same day — once-at-origin.** The finding is kept in the order it was
+made, because the order is the argument: the process had to start running
+before the fork had a consequence worth deciding.
 
 ### The finding: Q12-U2 turned the absorbing process on
 
@@ -1040,7 +1045,15 @@ table is computed for the **unified** rule (`p` appears in
 clearnet at all. Re-deriving the shipped configuration's figures in passing is
 precisely the move this round has retracted twice, so it is left to the ruling.
 
-### The blocking check: U3's instrument cannot measure U3's quantity
+### The check below is DISSOLVED by the ruling, not answered by it
+
+**Read the next section knowing it no longer blocks.** It is kept because the
+observation is true and because what it turned out to depend on is the point:
+the absorbed fraction is an artifact of **per-arrival rolling**. Under the
+ruling there is no absorption, so there is no `α` to measure and no telemetry
+gate. See *Q12-D5a — RULED* below.
+
+### The check: U3's instrument cannot measure the absorbed fraction
 
 Q12-U3 is scoped as *"ship `p` at a stated value, run the Q12-D6a testnet, read
 precision and latency off `/get_stem_tallies` and `get_connections`"*. Verified
@@ -1075,18 +1088,108 @@ it legible. An origin-classified, zone-partitioned tally is **strictly more
 disclosive** than what is there now. The extension must inherit that gate, and
 any proposal to move it to the restricted listener answers §55 first.
 
+### Q12-D5a — RULED: once-at-origin. 2026-08-12
+
+**The redundancy is the defect.** Per-hop rolling and coherence are two
+mechanisms doing the same job. Coherence says *the zone is decided and held*; a
+per-arrival roll says *the zone is decided repeatedly*. Composed, the second
+keeps re-deciding a question the first declared closed, and **the accumulated
+re-decisions are exactly the one-way absorption Q12-D5a analysed.**
+
+So once-at-origin is **not a third option** — it is coherence with the
+duplicate deleted. The origin decides, coherence holds, no node re-rolls.
+
+**And it is the only form under which Q12-D4's cancellation holds.** Under
+once-at-origin a node originates at rate `p·A` on the anonymity zone and
+relays `p·A/q` there, because every origin rolled the same `p`. Precision is
+`q/(1+q)` on both zones at any `p` — the round's central result, and the only
+version of it that survives Q12-U2 turning absorption on.
+
+#### It dissolves the instrument gap rather than answering it
+
+Under once-at-origin a transaction's zone is a **property of its origin**,
+fixed for the life of its stem. Nothing accumulates, so there is no absorbed
+fraction — nothing to measure, and `stem_tallies_json`'s missing zone label
+**stops being blocking for Q12-U3**.
+
+> **The sequencing is conditional on the ruling, not a standing gate.** An
+> earlier draft of this section filed *"telemetry before value"* as holding
+> whichever way the fork went. It does not:
+>
+> | ruling | sequencing |
+> | --- | --- |
+> | per-hop | telemetry **first** — `α` decides whether Q12-D4 holds and is unobservable today |
+> | **once-at-origin** (ruled) | **no telemetry gate.** `p` is a deployment parameter with no privacy content, and indifference at `p = 0.5` stands |
+>
+> Filing it unconditionally would have left Q12-U3 blocked on an extension it
+> does not need.
+
+**The zone-labelled telemetry is still worth building**, and its purpose
+changes rather than disappears: it is how you verify **coherence actually
+holds** — the claim this ruling rests on — and it is the isolation arm's
+instrument. That is *verification of the mechanism*, not *derivation of the
+constant*, and the two have different urgency. `origin_zone` remains its
+reader.
+
+#### The consequence that must not land silently
+
+**Once-at-origin with a single `p` means originated traffic rolls too:
+`p_own = p`, not 1.** That turns the `require_usable=false` caller at
+`net_node.inl` from unconditional into conditional — and the comment there is
+itself a recorded ruling (§30.5), so it must be amended deliberately rather
+than drift.
+
+**Fail-closed survives, and the distinction is precise.** §30.5 governs what
+happens when the **chosen** zone is unusable — never fall back to clearnet. It
+does **not** govern whether the roll happens. So there are two paths to
+originated traffic on clearnet and they are not the same event:
+
+| path | meaning |
+| --- | --- |
+| roll says anon → zone unusable | **fail closed.** Send nothing. §30.5 intact, unchanged. |
+| roll says clearnet | **clearnet by design**, not by fallback. |
+
+> **These must be distinguishable in the code, or the site lies by omission.**
+> A future reader who sees originated traffic on clearnet and cannot tell which
+> path produced it reads the reversal §89.8.5 warns about — a fail-closed rule
+> quietly turned into a fall-through. **The site must say which of the two
+> produced it.** That is a requirement on the implementing unit, recorded here
+> so it cannot be satisfied by whichever branch is written first.
+
+**Originating on clearnet at `1−p` is not new exposure.** The node already
+relays on clearnet at `(1−p)·A/q` — `1/q` times larger than its own
+origination rate. Its IP is a visible clearnet participant either way, and its
+originations arrive indistinguishable from the relay traffic already there.
+That is the cancellation restated in IP terms, and it is why `p_own = 1` is not
+load-bearing for the operator's protection the way it looks.
+
+#### Why the ruling is taken now rather than when Q12-D5a was written
+
+**The fork was unobservable before #459.** Both branches produced identical
+behaviour, because a diverted transaction came back to clearnet after one hop
+either way — so the choice cost nothing at the time and there was nothing to
+decide between.
+
+That is **not a criticism of Q12-D5a**: it analysed the process correctly, and
+the process simply was not running. It is the same shape as §63's finding that
+an analysis had been written against a stem that never existed — and it is why
+the ruling belongs to the round that made the process real.
+
 ### What is owed, and by whom
 
-1. **A ruling on Q12-D5a** — once-at-origin versus per-hop. It is no longer a
-   question about a hypothetical: per-hop is what ships, and as of #459 it
-   absorbs. **Not taken here.** It is genesis-adjacent, it has a retraction
-   chain behind it, and this section changes the fact base it rests on rather
-   than settling it.
-2. **Telemetry before value.** Whatever D5a rules, U3 cannot read its own
-   result until the tallies can partition by zone and classify by recorded
-   origin. That is a unit, and it precedes "ship `p` at a stated value".
-3. **The `p` banner is corrected in this change** (below), because it currently
-   points a reader the wrong way.
+1. **Implement once-at-origin** — `p_own = p`, the `require_usable=false`
+   caller made conditional, and the by-design / by-fallback distinction
+   explicit at the site. That is the next unit, and it carries the §30.5
+   comment amendment with it.
+2. **The constant's name stops describing what it does.**
+   `MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS` is not per-hop under this ruling.
+   Renaming rides with the implementation, not after it — a name that says
+   `PER_HOP` beside a once-at-origin roll is the disagreement that hides the
+   next re-derivation.
+3. **`p` is unblocked.** No telemetry precondition; indifference at `p = 0.5`
+   stands, as a deployment choice rather than a privacy one.
+4. **The `p` banner is corrected in this change** (below), because it pointed a
+   reader at the hazard #459 created.
 
 ### The `p` banner was pointing at the new hazard
 

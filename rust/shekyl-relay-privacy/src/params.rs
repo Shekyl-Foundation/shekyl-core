@@ -84,13 +84,37 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// onto the other zone. Before Q12-U2 a diverted transaction returned to
 /// clearnet after one hop, so nothing absorbed and the question was moot.
 ///
-/// **So there is again a cost to raising `p`, and it is not §63.5's.** Do not
-/// read "§63.5 no longer applies" as "higher `p` is free" — that is the
-/// reading this note exists to block. Whether the absorbing semantics survive
-/// at all is the open fork (Q12-D5a: once-at-origin vs per-hop), and it is
-/// unsettled **in shipped code**, not in a hypothetical. Q12-U3 owes the
-/// ruling, and owes telemetry that can observe the absorbed fraction before
-/// any value moves — today's `/get_stem_tallies` cannot.
+/// **RULED 2026-08-12 (Q12-D5a): once-at-origin.** The absorption above is an
+/// artifact of rolling per arrival, and per-arrival rolling duplicates what
+/// coherence already does — coherence decides the zone and holds it, so a
+/// second roll re-decides a settled question and the accumulated re-decisions
+/// *are* the absorption. Once-at-origin is coherence with the duplicate
+/// deleted: the origin rolls, and no node re-rolls.
+///
+/// **Under that rule `p` carries no privacy content.** Both zones sit at
+/// `q/(1+q)` for every `p` (Q12-D4's cancellation, which holds exactly under
+/// once-at-origin and only there), so this is a **deployment** parameter and
+/// there is no value to get wrong. The absorption hazard above describes the
+/// semantics being replaced; it is kept because the shipped code still rolls
+/// per arrival until the implementing unit lands.
+///
+/// **Until then, do not read "§63.5 no longer applies" as "higher `p` is
+/// free"** — that is the reading this note exists to block, and while per-hop
+/// rolling ships it is a live hazard rather than a historical one.
+///
+/// # What the implementing unit owes
+///
+/// `p_own` becomes `p` rather than 1, which makes the `require_usable=false`
+/// caller conditional. **§30.5's fail-closed rule survives**: it governs what
+/// happens when the *chosen* zone is unusable, not whether the roll happens.
+/// The two paths to originated traffic on clearnet — *roll said anon, zone
+/// unusable* (fail closed, send nothing) and *roll said clearnet* (by design)
+/// — must be distinguishable at the site, or a reader sees originated traffic
+/// on clearnet and reads a fail-closed reversal that did not happen.
+///
+/// **This constant's name goes with it.** `PER_HOP` stops describing what it
+/// does under once-at-origin, and a name that disagrees with the mechanism
+/// beside it is what hides the next re-derivation.
 ///
 /// Design history (pre-§89 diffusion premise, precision figures, retraction
 /// chain) lives in `docs/design/DAEMON_RELAY_PRIVACY.md` §59–§64 / §89 and
