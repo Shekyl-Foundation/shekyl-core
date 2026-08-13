@@ -9292,8 +9292,12 @@ its wake.
   **Consequence — `txpool_tx_meta_t::origin_zone` has no production consumer.**
   It is written at first arrival (`add_tx` does not revise it on a
   stem→fluff upgrade) and preserved across hard-fork re-validation, and
-  nothing reads it to decide anything. Its named consumer is Q12-U3's per-zone
-  telemetry, which is the next PR. **Open disposition, not a defect to sweep:**
+  nothing reads it to decide anything. Its named consumer is Q12-U3's
+  origin-classified telemetry -- **whose purpose changed when Q12-D5a was ruled
+  once-at-origin (2026-08-12, PR #460): it VERIFIES that coherence holds rather
+  than gating `p`, which needs no instrument under that ruling.** Do not re-file
+  it as a precondition for setting `p`; the next unit is implementing
+  once-at-origin, not building the telemetry. **Open disposition, not a defect to sweep:**
   unlike the dead fields removed in #450 it has a writer and a dated reader,
   but it should not sit unread indefinitely.
   **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s `private_*` cases

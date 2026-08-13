@@ -77,11 +77,18 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// **This once read "so 2 % is the conservative value, not the justified
 /// one", and that inference has expired.** It was sound while §63.5's cost was
 /// the only one. Q12-U2 (#459) made R-1's coherence branch live, and per-hop
-/// rolling plus coherence is a **one-way absorbing process**: a transaction
-/// moves clearnet→anon and never back, so raising `p` raises the absorbed
-/// fraction. Q12-D5a's analysis has that direction reproducing the origin
-/// oracle **on clearnet** — the defect this arc exists to remove, mirrored
-/// onto the other zone. Before Q12-U2 a diverted transaction returned to
+/// rolling plus coherence is a **one-way absorbing process within the stem
+/// phase**: a transaction moves clearnet→anon and never back *for the rest of
+/// its stem*, so raising `p` raises the absorbed fraction. It still leaves on
+/// fluff — that exit is deliberate (§59.1), and it is what bounds the
+/// absorption; "never back" describes the stem, not the transaction's life.
+/// The distinction is load-bearing rather than pedantic: Q12-D5a's model is
+/// about skew in STEM POSITION, so an unbounded reading would describe a
+/// different process from the one measured.
+///
+/// Q12-D5a's analysis has that direction reproducing the origin oracle **on
+/// clearnet** — the defect this arc exists to remove, mirrored onto the other
+/// zone. Before Q12-U2 a diverted transaction returned to
 /// clearnet after one hop, so nothing absorbed and the question was moot.
 ///
 /// **RULED 2026-08-12 (Q12-D5a): once-at-origin.** The absorption above is an

@@ -1063,12 +1063,23 @@ at source, `/get_stem_tallies` cannot do it.
 distinct_sources}`, and `node_server::stem_tallies_json` collects rows from
 **every zone into one flat array sorted by peer id**. So:
 
-- **There is no zone label.** A row's zone is implicit in the peer id and never
-  emitted, so the readout cannot even partition by zone.
-- **There is no origin classification.** The counters are per-successor
-  *propagation outcomes* — did this peer relay onward — not per-transaction
-  provenance. Precision is `P(a transaction on zone Z is the sender's own)`,
-  which these counters do not distinguish and cannot be post-processed into.
+- **There is no zone label** — but the zone is **recoverable**, and an earlier
+  draft of this section wrongly said it was not. `peer` is documented at
+  `relay_zone_ffi/mod.rs` as *the 16-byte connection id*, and
+  `connection_info` carries both `connection_id` and `address_type`
+  (`i2p = 3`, `tor = 4`). So the rows join against `get_connections` to give a
+  zone classification — which is exactly why Q12-U3's scope names
+  `/get_stem_tallies` **and `get_connections`** rather than the tallies alone.
+  The claim that the readout "cannot partition by zone" contradicted the
+  round's own instrument spec.
+  The real limit is narrower: the join only classifies **currently connected**
+  peers, so a row for a peer that has since departed cannot be placed. Lossy at
+  the edges, not blind.
+- **There is no origin classification, and this is the blocker.** The counters
+  are per-successor *propagation outcomes* — did this peer relay onward — not
+  per-transaction provenance. Precision is
+  `P(a transaction on zone Z is the sender's own)`, which these counters do not
+  distinguish and cannot be post-processed into, by any join.
 
 **So `α` — now the parameter that decides whether Q12-D4's cancellation holds —
 is not observable on the shipped telemetry.** U3 as written would ship a value
@@ -1084,7 +1095,7 @@ running network attached to it.
 **Privacy constraint on the extension, stated before anyone designs it.**
 `/get_stem_tallies` is `AdminOnly` because *it is the anonymity graph* — §55's
 argument is that the peer set is the sensitive part and the counts merely make
-it legible. An origin-classified, zone-partitioned tally is **strictly more
+it legible. An origin-classified tally is **strictly more
 disclosive** than what is there now. The extension must inherit that gate, and
 any proposal to move it to the restricted listener answers §55 first.
 
@@ -1124,7 +1135,7 @@ fraction — nothing to measure, and `stem_tallies_json`'s missing zone label
 > Filing it unconditionally would have left Q12-U3 blocked on an extension it
 > does not need.
 
-**The zone-labelled telemetry is still worth building**, and its purpose
+**The origin-classified telemetry is still worth building**, and its purpose
 changes rather than disappears: it is how you verify **coherence actually
 holds** — the claim this ruling rests on — and it is the isolation arm's
 instrument. That is *verification of the mechanism*, not *derivation of the
