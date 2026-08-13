@@ -408,10 +408,16 @@ impl EmissionClaimSource {
 /// serve history. Persona-side callers pass the persona transport
 /// (`PRpc`), never the principal's daemon session (§7.4).
 ///
-/// Sole production caller:
-/// [`orchestrate_emission_claim`](super::claim_orchestrator::orchestrate_emission_claim),
-/// step 1 of the claim pipeline (the consumer the PR-1/PR-2 staging allows
-/// named; the last of them dies here).
+/// Production callers, both persona-side and both bound by the §7.4
+/// transport pin above:
+///
+/// - [`orchestrate_emission_claim`](super::claim_orchestrator::orchestrate_emission_claim),
+///   step 1 of the claim pipeline (the consumer the PR-1/PR-2 staging allows
+///   named; the last of them dies here).
+/// - [`EngineServeSetPinner`](super::stake_engine::serve_set_source::EngineServeSetPinner),
+///   which derives a serving persona's shard obligations from the same
+///   connected record (SH-2). It reads `bond.holdings` where the claim
+///   pipeline reads the epoch set, so a transport audit has to see both.
 pub async fn fetch_emission_claim_source<R: Rpc>(
     rpc: &R,
     p_id: &[u8; 32],

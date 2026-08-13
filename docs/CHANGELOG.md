@@ -5,12 +5,42 @@
 ### Changed
 
 - **Curve-tree actor fail-stop now resumes over the held store, not a
-  path-reopen** (SH-2a). `CurveTreeHandle` keeps the `ServingReader` for
-  the wallet's life and `respawn` rebuilds the writer with
-  `CurveTreeClient::resume_from_reader`. A live serving host already
-  holds that `Arc`; reopening the file would be `DatabaseAlreadyOpen`
-  (or, if it succeeded, a second store the host is not serving). The
-  wallet-close/open reopen poll stays on `open_and_spawn` only.
+  path-reopen** (SH-2a). `CurveTreeHandle` keeps a `WriterRecovery` for
+  the wallet's life and `respawn` rebuilds the writer over the same open
+  store. A live serving host already holds that `Arc`; reopening the file
+  would be `DatabaseAlreadyOpen` (or, if it succeeded, a second store the
+  host is not serving). The wallet-close/open reopen poll stays on
+  `open_and_spawn` only. Recovery is its own capability rather than a
+  method on `ServingReader`: the reader is `Clone`d out to the persona
+  serving crates, and resuming from it would have made every one of those
+  copies able to mint a second writer beside the actor.
+
+- **The serve-set staleness tripwire reads one clock twice** (SH-2a). The
+  lag is the store's own `sync_tip_height` stamped when a `PinnedServeSet`
+  is minted, subtracted from the same reading later — not the record's
+  `as_of_height`, which is the *daemon's* tip over RPC. Differencing those
+  measured how far the wallet trailed its daemon, and reported
+  `Current { lag: 0 }` for the whole of a catch-up: exactly the window in
+  which holdings move and a gained shard goes unpinned. A tip *below* the
+  stamp is now `Staleness::RolledBack` rather than a saturated zero — the
+  sync tip is not monotonic, and the rollbacks that move it backwards also
+  delete pinned-segment rows. And `PersonaServingHost` counts consecutive
+  failed refreshes (`Staleness::RefreshFailing`), because a curve-tree
+  actor that fail-stops and cannot be resumed freezes ingest and pinning
+  together — a common mode no store-derived reading can see.
+
+- **A terminally-pruned serve-set member no longer wedges every later
+  refresh** (SH-2a). `PinnedServeSet::acquire` still refuses to start over
+  one (nothing is serving; the remedy is a store rebuild by chain replay),
+  but `refreshed` records it on `already_pruned()` and installs the pins
+  that succeeded. Refusing the whole report on refresh froze the witness
+  for the life of the host, leaving every shard connected afterwards
+  unpinned and prunable — `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 4's
+  slash, re-entering through the error path of the refresh built to close
+  it. `not_yet_frozen()` is renamed `not_yet_frozen_at_last_pin()`: it is a
+  point-in-time diagnostic, and servability has one live authority
+  (`open_frozen_segment_body`) that the serving loop already asks per
+  request.
 
 - **Pinned crypto vectors: the SA-3a raw-public-key leaf-hash pins moved to
   a machine-readable fixture** (`docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json`;
