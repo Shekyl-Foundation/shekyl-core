@@ -206,6 +206,9 @@ pub(crate) mod bond_assembly;
 /// WI-2 §3.3 Engine-side `assemble_bond_post` orchestrator (public halves +
 /// persist-before-return via an independent `PendingPostStore`).
 pub(crate) mod bond_orchestrator;
+/// Single owner of the cleartext `Input::BondPost` observation lift, shared by
+/// the P-scan dual extractor and the principal scan's bond watch (SA-R-6).
+pub(crate) mod bond_watch;
 /// PR-4's CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8): the Engine-side
 /// emission-claim **request path** — activate the claimant slot, assemble via
 /// `claim_orchestrator`, dispatch through the audited posture→submitter choke

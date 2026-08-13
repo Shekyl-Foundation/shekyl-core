@@ -59,7 +59,9 @@ use shekyl_engine_state::transfer::eligible_height;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::{BondPostKind, Input, Transaction};
+use shekyl_wire::transaction::{Input, Transaction};
+
+use crate::engine::bond_watch::bond_post_observations;
 
 /// Hard ceiling on the blocks one [`ScanStep`] may carry — the **enforced** form
 /// of DQ6's "bounded per message" (the actor holds `&mut self` across the offload,
@@ -545,18 +547,6 @@ impl std::error::Error for DualExtractError {
     }
 }
 
-/// The wire post-kind byte (JoinMarket's dense tag is `0x00`,
-/// `shekyl_wire::transaction` §9.11). Single-sourced from the wire crate's own
-/// [`BOND_POST_KIND_JOINMARKET`](shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET)
-/// so the recorded byte and the confirmation filter in [`PScanAccrual`] cannot
-/// drift from the wire definition.
-fn post_kind_byte(kind: &BondPostKind) -> u8 {
-    match kind {
-        BondPostKind::JoinMarket { .. } => shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
-        BondPostKind::Other(b) => *b,
-    }
-}
-
 /// GF-4b rung-1 classifier (C-1, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §5
 /// item 2): per tx, the set of *our* persona slots whose **own** emission
 /// vin the tx carries — the structural proof that lifts the tx's recovered
@@ -752,6 +742,11 @@ pub(crate) fn run_dual_extractor(
         );
 
         // (b) public bond-post match — reads inputs, no secret, no clone.
+        // The observation lift (wire→domain id + post-kind byte) is the
+        // shared [`bond_post_observations`] owner, so this extractor and the
+        // principal scan's bond watch cannot disagree on what a bond-post
+        // observation is; the *matching* (against the bonded-persona set
+        // here, the probe-id cache there) stays with each consumer.
         // (c) rides the same pass: spent-key-image match against the
         // actor-derived watch-set (SP-R0 arm #1) — a hit is a confirmed spend
         // of a held funding output, pruned by the task on ingest.
@@ -765,19 +760,16 @@ pub(crate) fn run_dual_extractor(
                         trailing_key_images.insert(*key_image);
                     }
                 }
-                if let Input::BondPost(bp) = input {
-                    // Lift the wire `[u8; 32]` into the domain id once, at the
-                    // wire→domain boundary, then match + carry the typed value.
-                    let id = PCanonicalId::from_bytes(bp.p_canonical_id);
-                    if let Some(slot) = known_personas.get(&id) {
-                        bond_post_matches.push(BondPostMatch {
-                            height,
-                            p_canonical_id: id,
-                            post_kind: post_kind_byte(&bp.kind),
-                        });
-                        if let Some(tx_hash) = block.block.transaction_hashes.get(j) {
-                            bond_post_slots.entry(*tx_hash).or_default().insert(*slot);
-                        }
+            }
+            for obs in bond_post_observations(tx) {
+                if let Some(slot) = known_personas.get(&obs.p_canonical_id) {
+                    bond_post_matches.push(BondPostMatch {
+                        height,
+                        p_canonical_id: obs.p_canonical_id,
+                        post_kind: obs.post_kind,
+                    });
+                    if let Some(tx_hash) = block.block.transaction_hashes.get(j) {
+                        bond_post_slots.entry(*tx_hash).or_default().insert(*slot);
                     }
                 }
             }
@@ -886,7 +878,7 @@ mod tests {
     use shekyl_scanner::bench_fixtures::{
         build_typical_case_scannable_block, scannable_block_for_recipient,
     };
-    use shekyl_wire::transaction::BondPost;
+    use shekyl_wire::transaction::{BondPost, BondPostKind};
     use shekyl_wire::Holdings;
 
     use crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona;
