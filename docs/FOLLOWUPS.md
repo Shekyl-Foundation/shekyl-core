@@ -3846,6 +3846,90 @@ sustainability is unaffected by the recalibration.
     SA-DQ-3); **production-firing** gated on the activation round (#332). A bare
     "discharged" is forbidden (DQ-F Guard 2).
     **Target: V3.0** (must land before genesis freezes the absence of GC).
+    **SA-5 update (2026-08-12):** the *raising* side of this reconcile is
+    SA-R-6's **scan-derivable `p_slot` high-water mark** — the privacy guard
+    against re-offering a rotated-past slot (reusing a retired persona clusters
+    the operator's personas onto their principal). SA-5 **wired the rollback
+    case**: SP-R0 **arm #4** (`stake_persist::adopt_chain_bonds_and_raise_cursor`)
+    applies the hint-fed `monotone_current_slot_from_record` heal, then walks
+    only the lookahead tail for chain-observed `Present` bonds, **adopting** each
+    back into `bonded_slots` before raising the cursor past it. Density is pinned
+    on `StakingBlock` (`monotone_selection_is_dense_no_gap_reachable`), on the
+    allocation sequence rather than the GC'd hint. The from-seed probe is the
+    same `highest_present` idea over a wider candidate set.
+    **Review round 2026-08-12 — two SA-R-6 holes closed in-PR:**
+    (i) *the raise must adopt, not merely burn.* `bonded_slots` is the only input
+    that holds a persona in `derive_forward_slots`, and Model D drops the seed
+    after `assemble`, so raising past a `Present` slot without adopting it left a
+    live on-chain bond outside the derived set — un-unbondable for the wallet's
+    life — while the `PScanState::bond_post_matches` row proving it stayed
+    durable in the same seal the raise had just read. A durably-RETIRED slot is
+    the sole adopt refusal (re-arming it is the forever-derive problem arm #2
+    kills); it still burns the cursor.
+    (ii) *arm #2 must burn before it drops.* `retain` is destructive, so a cursor
+    rolled back below a retired slot **outside** the lookahead could re-offer it,
+    and arm #4 cannot reach that far. The high-water mark is now taken from
+    `retired_slots` before the drop.
+    **Reachability correction (same round):** the earlier text deferred the
+    from-seed probe as "unreachable until bond posting is production-reachable."
+    That premise is **false** — `handlers.rs` routes `"stake"` (no `cfg`, gated
+    only on `Capability::Full`) → `Engine::first_stake` (`pub async fn`, no
+    `cfg`) → `persist_bond_record` (`bond_orchestrator.rs:667`) → assemble +
+    pending seal. Bond posting is production-reachable today, so SA-R-6 holes are
+    live rather than future; the two above were fixed as found (rule 22) instead
+    of deferred behind an inertness that does not hold.
+    **What remains in this reopen:** the *from-seed* reconstruction — a cursor
+    rolled back beyond the lookahead, where the wallet opens as a non-staker and
+    derives/scans nothing — needs a widening derive-and-scan forward probe under
+    Model D. Deferred on the **named blocker of a distinct validation surface**
+    (rule 19: it changes what a non-staker open derives and scans, not how the
+    reconcile arms compose), not on reachability. The ruling lives in
+    `shekyl-crypto-pq` `archival_p` module docs and CBOM §5.
+  - **Persona slot-space exhaustion is not represented, and the binding gate
+    does not refuse it.** `StakingBlock::monotone_current_slot` uses
+    `saturating_add(1)`, which correctly prevents a wrap to slot 0 but makes
+    `u32::MAX` a **fixed point**: once slot `u32::MAX` is used, the function
+    still reports `u32::MAX` as "current". After arm #2 retires that persona and
+    drops it from `bonded_slots`, `first_stake`'s non-staker guard
+    (`slot.index() != cursor`) accepts `u32::MAX` and re-binds the retired
+    persona — the SA-R-6 reuse the monotone mark exists to forbid. Found by
+    Copilot on PR #458 (`staking_block.rs:181`); **pre-existing on `dev`**, not
+    introduced by SA-5, which only documented the function.
+    **Unreached by construction:** slots are handed out one per bond, densely
+    from 0, and every bond is an on-chain transaction — occupying this state
+    costs ~4.3 billion sequential bonds. It is also not genesis-freeze-sensitive
+    (`p_slot` is wallet-local, no wire or consensus surface).
+    **Fix when reopened:** represent exhaustion (reserve `u32::MAX` as the
+    "no free slot" sentinel, or return `Option<u32>` from a dedicated
+    next-bindable-slot selector distinct from the saturating *burn* primitive)
+    and make the binding gate refuse with its own domain refusal rather than
+    silently offering a used slot. **Named blocker:** that is the binding gate
+    and its refusal taxonomy — a different validation surface from SA-5's
+    reconcile arms (rule 19), reached only through a state no wallet can
+    occupy, so building it now is the pre-provisioned flexibility rule 21
+    rejects. **Reopen immediately** if any path ever makes a high slot index
+    reachable other than by sequential binding (an operator-chosen slot, a
+    derived-from-entropy slot, or an import that trusts a foreign `p_slot`).
+    The saturation test `monotone_cursor_saturates_at_u32_max` asserts only the
+    no-wrap property and explicitly marks the fixed point as a limit rather than
+    a guarantee, so a future fix deletes that line rather than fighting it.
+  - **`stake` resolves its persona slot BEFORE the reconcile that can move it.**
+    `wallet-rpc` `lifecycle::stake` reads the slot from the open engine, then
+    reopens with a `FirstStakeIntent` carrying that slot; the reopen's SP-R0
+    reconcile may GC that slot as a phantom (arm #3) or burn the cursor past it
+    for a retired persona (arm #2), leaving the read stale. `Engine::first_stake`
+    re-validates and refuses fail-closed — surfaced since SA-5 as the `-29503`
+    `STAKE_RECORD_MOVED` domain code (re-invoke; nothing durable written), not the
+    `-32603` internal fault it was mapped to. An arm #4 *adoption* does not reach
+    that code: it re-arms `staking_enabled` with a slot carrying a matching bond
+    post, so the already-staked scan refuses `-29502` first — the correct answer,
+    and a precedence a later edit must not "fix". **Reopen to delete the staleness
+    outright:** resolve the elect slot *after* reconciliation, which means the
+    intent stops carrying a slot (`open_full_with_first_stake_intent`) and
+    `spawn_stake_engine_if_staker` derives the elect from the reconciled cursor.
+    **Named blocker:** that is the RPC/engine open-surface (a `pub` signature plus
+    the spawn gate and four call sites), a different validation surface from the
+    reconcile arms — rule 19. **Target: with the next stake-entry round.**
   - **Broadcast / re-anchor wiring activates the CT-5d persona-pin.** The CT-5d
     finding (persona signature binds `tx_prefix_hash`, not the proof, so a
     content-changing re-anchor re-signs the persona — the *common* path over a
@@ -3858,6 +3942,21 @@ sustainability is unaffected by the recalibration.
     per `ARCHIVAL_FIREWALL_GATE6.md` §9.2). **Reopen if** rotation ever becomes
     policy-driven to arbitrary slots — the derive-ahead set must then widen to
     cover the reachable slots. No such design is known. **Target: V3.x.**
+  - **In-order defunding — the retire-below-live precondition.** The open-time
+    reconstruction (`reconcile_staking_at_open`, SP-R0 arms #2/#4) relies on
+    `retired_slots` being a prefix `{0..=r}` strictly **below** every live bond:
+    arm #2 burns the cursor to `highest_retired + 1` and arm #4's lookahead walk
+    starts there, so a live dormant bond sitting *below* a higher retired slot
+    would be stepped over and lost under Model D. That state is unrepresentable
+    under the lifecycle invariant — **slots are used in order and a slot is not
+    retired until it is defunded** — so a retired slot never sits above a live
+    bond. Retirement is driven only by scanned on-chain unbond posts
+    (`record_unbond`). **Reopen the moment the drain/unbond path can defund out
+    of lifecycle order** (an RPC/CLI that unbonds an arbitrary held slot while an
+    older funded one remains bonded): it must either enforce in-order defunding
+    or the reconstruction must widen to inspect every slot below the cursor, not
+    just the burned-cursor lookahead. The drain RPC entry is not yet built.
+    **Target: V3.0** (must hold before genesis freezes the reconstruction shape).
   - **Re-auth without reopen (rule-21 polish).** Lookahead exhaustion / first-stake
     mid-session currently resolve via wallet **reopen** (re-runs `assemble()` with
     the transient seed) — correct and root-free, but a one-time UX friction. A

@@ -99,6 +99,9 @@ pub enum WalletRpcErrorCode {
     StakeInFlight = -29501,
     /// Stake: the wallet already holds a confirmed bond (idempotency).
     AlreadyStaked = -29502,
+    /// Stake: the wallet's persona record moved during the credentialed
+    /// reopen; nothing was written — re-invoke `stake`.
+    StakeRecordMoved = -29503,
     /// Server: wallet-dir tenancy unavailable.
     TenantUnavailable = -29900,
 }
@@ -256,6 +259,29 @@ pub enum WalletRpcError {
     /// Stake: the wallet already staked (a confirmed bond exists).
     #[error("already staking")]
     AlreadyStaked,
+    /// Stake: the wallet's own persona record advanced between the request
+    /// and the credentialed reopen, so the slot chosen before it is stale.
+    ///
+    /// Two SP-R0 open-time reconcile outcomes reach this code:
+    /// - **arm #3 (phantom GC)** collected the slot the request had picked,
+    ///   while other bonded slots survive;
+    /// - **arm #2 (retired burn)** advanced the monotone cursor past the
+    ///   pre-read value.
+    ///
+    /// **Arm #4 adoption does NOT reach this code**, and the distinction is
+    /// load-bearing: adoption re-arms `staking_enabled` and puts a slot with a
+    /// matching bond post into `bonded_slots`, so `first_stake`'s
+    /// already-staked scan fires first and the answer is
+    /// [`Self::AlreadyStaked`] (`-29502`) — which is the correct one, since the
+    /// wallet just proved it holds a confirmed bond. Do not "fix" that
+    /// precedence.
+    ///
+    /// A **domain** refusal, not a fault: nothing durable was written and a
+    /// plain re-invoke picks up the reconciled record. Deliberately carries
+    /// no slot index — persona numbering is wallet-internal (rule 81) and
+    /// the operator's remedy does not depend on it.
+    #[error("staking record changed while opening; nothing was written — call stake again")]
+    StakeRecordMoved,
 }
 
 impl WalletRpcError {
@@ -295,6 +321,7 @@ impl WalletRpcError {
             Self::StakeNotReady { .. } => WalletRpcErrorCode::StakeNotReady,
             Self::StakeInFlight => WalletRpcErrorCode::StakeInFlight,
             Self::AlreadyStaked => WalletRpcErrorCode::AlreadyStaked,
+            Self::StakeRecordMoved => WalletRpcErrorCode::StakeRecordMoved,
         }
     }
 

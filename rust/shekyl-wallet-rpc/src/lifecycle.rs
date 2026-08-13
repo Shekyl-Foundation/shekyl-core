@@ -690,7 +690,7 @@ struct StakeParams {
 ///    `.wallet.pending` seal. **No broadcast** — the bond dispatch driver
 ///    sends at its GF-7 offset (SA-DQ-5, hold-across-reopen).
 ///
-/// A refusal (`-29500..-29502`) leaves the wallet open and, for `-29500`,
+/// A refusal (`-29500..-29503`) leaves the wallet open and, for `-29500`,
 /// wrote nothing durable — fund/sync and call `stake` again. A mid-flow
 /// failure after the durable point is the W2 window; re-invoking `stake`
 /// resumes it (the engine detects the durable-but-postless slot).
@@ -717,9 +717,20 @@ pub(crate) async fn stake(
     // wallet; the password is consumed only when a credentialed reopen is
     // actually needed. Slot note: the resume pick is the FIRST bonded slot —
     // the single-slot genesis case; a multi-slot W2 resume re-invokes after
-    // the arm-#3 open-time GC has collected the true phantoms. The engine
-    // re-validates the slot against its own state either way (`WrongSlot`),
-    // so a stale read here refuses loudly rather than acting.
+    // the arm-#3 open-time GC has collected the true phantoms.
+    //
+    // This read is deliberately PRE-reconcile and therefore defeasible: the
+    // credentialed reopen below runs the SP-R0 open-time reconcile, which may
+    // move the record: collect this slot as a phantom (arm #3) or burn the
+    // cursor past it (arm #2). The engine re-validates against its own
+    // reconciled state and refuses `WrongSlot`, surfaced as the `-29503`
+    // domain code (re-invoke, nothing written) — never as an internal fault.
+    // (Arm #4 adoption resolves to `-29502 AlreadyStaked` instead: the wallet
+    // discovered it already holds a confirmed bond.) Resolving the
+    // slot *after* reconciliation would delete the staleness outright, but the
+    // elect tag is applied at spawn from the intent, so that is a change to
+    // the intent's shape (`open_full_with_first_stake_intent`) and the spawn
+    // gate — a different validation surface, tracked in `FOLLOWUPS.md`.
     let (shared, name, has_scan) = {
         let state = tenants.lock().await;
         let shared = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
@@ -786,7 +797,20 @@ pub(crate) async fn stake(
             E::NoStakeEngine => {
                 WalletRpcError::InternalError("stake: no stake engine after intent open".into())
             }
-            E::WrongSlot { .. } => WalletRpcError::InternalError(format!("stake: {e}")),
+            // NOT an internal fault: the slot above is read from the engine
+            // BEFORE the credentialed reopen, and that reopen runs the SP-R0
+            // open-time reconcile — which can GC the picked slot as a phantom
+            // (arm #3) or burn the cursor past it for a retired persona
+            // (arm #2), either of which moves the record out from under the
+            // read. The engine refuses fail-closed; the operator's remedy is to
+            // call `stake` again, which reads the reconciled record. Rule 82: a
+            // legitimate domain state gets a domain code, never `-32603`.
+            //
+            // Arm #4 adoption lands on `-29502 AlreadyStaked` instead, not
+            // here: it re-arms `staking_enabled` with a slot that has a
+            // matching bond post, so `first_stake`'s already-staked scan wins
+            // the race to refuse — and it is the right answer.
+            E::WrongSlot { .. } => WalletRpcError::StakeRecordMoved,
             // W2: durable slot may exist without a post — a `stake` re-invoke
             // resumes. Say so in the operator-facing text (rule 82).
             E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(

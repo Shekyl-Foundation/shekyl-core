@@ -756,7 +756,7 @@ impl Engine<SoloSigner> {
     /// Internal field-by-field assembly used by [`Self::create`] and
     /// [`Self::open_full`]. Pulled out so the cache invariants
     /// (network, capability) are established in exactly one place, and the
-    /// arm-#3 phantom GC runs before the persona derive on every open path.
+    /// SP-R0 staking reconcile runs before the persona derive on every open path.
     #[allow(clippy::too_many_arguments)]
     fn assemble(
         mut file: WalletFile,
@@ -773,105 +773,62 @@ impl Engine<SoloSigner> {
     ) -> Result<Self, OpenError> {
         let state_wrap_key = super::sealing_keys::state_wrap_key_from_wallet_file(&file);
 
-        // SP-R0 arm #3 — open-time phantom `bonded_slots` GC, BEFORE the
-        // persona derive (the `StakingBlock` hint design's own locus: the
-        // hint is reconciled where it is consumed). A phantom slot — durable
-        // record, no pending post, persona confirmed-absent over the sealed
-        // scan evidence — is dropped here, so a crashed activation (the
-        // SA-DQ-3 window, un-resumed) reopens as a clean non-staker instead
-        // of deriving and scanning a persona "for nothing". The drop is
-        // in-memory (persisted by the normal save discipline; a lost drop
-        // re-GCs at the next open — idempotent). Wrongful-GC safety rests on
-        // the pending-record bridge; see `reconcile_phantom_bonded_slots`.
+        // SP-R0 open-time staking reconciliation (arms #2 retired GC, #3
+        // phantom GC, #4 SA-5 monotone raise) — before the persona derive.
+        // The raise's interesting slots sit *outside* the bonded hint (a
+        // rolled-back record is missing them), so this runs whenever a
+        // pscan seal exists, not only when the hint is non-empty. Drops
+        // stay no-ops on an empty hint. Mutations are in-memory (persisted
+        // by the normal save discipline; a lost pass re-runs at the next
+        // open — idempotent).
         //
-        // A seal read/decode failure DEGRADES to skipping the GC (keep
-        // every slot, warn loud) rather than failing the open: the seals
-        // are auxiliary, re-derivable scan state, and a corrupt one must
-        // not brick wallet open (the user could no longer even spend
-        // principal). Keeping is the conservative direction — a wrongly
-        // kept phantom costs one persona derive; a wrongful drop is the
-        // forbidden stuck-funds failure. The staker's scan path still fails
-        // loud on the same corrupt seal at `start_pscan` (fail-closed for
-        // the scan, not for the open).
-        if !ledger.staking.bonded_slots.is_empty() {
-            match load_phantom_gc_evidence(&file, &state_wrap_key) {
-                Ok(Some(PhantomGcEvidence {
-                    evidence,
-                    pending_slots,
-                    retired_slots,
-                })) => {
-                    // SP-R0 arm #2 — "stop deriving slot N": drop durably
-                    // RETIRED slots from the live hint before anything
-                    // derives (records-driven, the wallet's own ledger — no
-                    // absence inference, so no evidence gate needed). The
-                    // derive-forward subtraction follows for free: the
-                    // lookahead starts at the monotone cursor, which the
-                    // persist path keeps strictly above every observed
-                    // bonded slot, so a cleaned hint means no path
-                    // re-derives a retired persona. An emptied hint reverts
-                    // the wallet to a non-staker (a fully-retired wallet
-                    // must not spawn an actor "for nothing" every open —
-                    // the forever-derive problem the ledger exists to fix).
-                    if !retired_slots.is_empty() {
-                        let before = ledger.staking.bonded_slots.len();
-                        ledger
-                            .staking
-                            .bonded_slots
-                            .retain(|s| !retired_slots.contains(s));
-                        let dropped = before - ledger.staking.bonded_slots.len();
-                        if dropped > 0 {
-                            if ledger.staking.bonded_slots.is_empty() {
-                                ledger.staking.staking_enabled = false;
-                            }
-                            tracing::info!(
-                                dropped,
-                                reverted = !ledger.staking.staking_enabled,
-                                "SP-R0 arm #2: retired slots cleaned from the live hint at open"
-                            );
-                        }
-                    }
-                    let derivation_network = network_to_derivation(network);
-                    let sweep = super::stake_persist::reconcile_phantom_bonded_slots(
-                        &mut ledger.staking,
-                        &evidence,
-                        &pending_slots,
-                        |slot| -> Result<_, OpenError> {
-                            let keys = derive_archival_p_keys(
-                                master_seed,
-                                derivation_network,
-                                seed_format,
-                                slot,
-                            )
+        // A seal read/decode failure DEGRADES to skipping the reconcile
+        // rather than failing the open: the seals are auxiliary. Skipping
+        // the drops is conservative for funds (keep, don't drop). Skipping
+        // the raise cannot heal a rolled-back cursor from chain evidence;
+        // spawn still applies the hint-fed `monotone_current_slot_from_record`.
+        // The staker's scan path still fails loud on the same corrupt seal
+        // at `start_pscan`.
+        match load_open_staking_evidence(&file, &state_wrap_key) {
+            Ok(Some(OpenStakingEvidence {
+                evidence,
+                pending_slots,
+                retired_slots,
+            })) => {
+                let derivation_network = network_to_derivation(network);
+                let id_of_slot = |slot: u32| -> Result<shekyl_types::PCanonicalId, OpenError> {
+                    let keys =
+                        derive_archival_p_keys(master_seed, derivation_network, seed_format, slot)
                             .map_err(|e| {
                                 OpenError::Key(KeyError::Primitive {
                                     detail: rederivation_failure_detail(&e),
                                 })
                             })?;
-                            super::stake_engine::persona_canonical_id(&keys).map_err(|_| {
-                                OpenError::Key(KeyError::Primitive {
-                                    detail: "persona canonical id encode failed",
-                                })
-                            })
-                        },
-                    )?;
-                    if !sweep.dropped.is_empty() {
-                        tracing::info!(
-                            dropped = sweep.dropped.len(),
-                            staking_disabled = sweep.staking_disabled,
-                            "SP-R0 arm #3: phantom bonded_slots collected at open"
-                        );
-                    }
-                }
-                // No sealed scan state yet — nothing to reconcile against.
-                Ok(None) => {}
-                Err(detail) => {
-                    tracing::warn!(
-                        %detail,
-                        "SP-R0 arm #3: phantom bonded_slots GC skipped — sealed scan \
-                         evidence unreadable; keeping every recorded slot (the wallet \
-                         opens; a staker's scan will fail loud on the same seal)"
-                    );
-                }
+                    super::stake_engine::persona_canonical_id(&keys).map_err(|_| {
+                        OpenError::Key(KeyError::Primitive {
+                            detail: "persona canonical id encode failed",
+                        })
+                    })
+                };
+                super::stake_persist::reconcile_staking_at_open(
+                    &mut ledger.staking,
+                    &evidence,
+                    &pending_slots,
+                    &retired_slots,
+                    ARCHIVAL_PERSONA_LOOKAHEAD,
+                    id_of_slot,
+                )?;
+            }
+            // No sealed scan state yet — nothing to reconcile against.
+            Ok(None) => {}
+            Err(detail) => {
+                tracing::warn!(
+                    %detail,
+                    "SP-R0: open-time staking reconcile skipped — sealed scan \
+                     evidence unreadable; bonded hint kept as-is and the \
+                     chain-fed cursor raise does not run (the wallet opens; \
+                     a staker's scan will fail loud on the same seal)"
+                );
             }
         }
 
@@ -1034,7 +991,7 @@ impl Engine<SoloSigner> {
     /// `None` for a non-staker (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2).
     ///
     /// The derive-forward set is
-    /// `{persisted bonded slots} ∪ {cursor ..= cursor + ARCHIVAL_PERSONA_LOOKAHEAD}`,
+    /// [`StakingBlock::derive_forward_slots`] — `{bonded} ∪ {cursor ..= cursor+k}`,
     /// where `cursor` is the **scan-reconciled monotone** persona cursor
     /// ([`StakingBlock::monotone_current_slot_from_record`]) — never at or below
     /// an observed bonded slot, so a stale/rolled-back `p_slot` can never re-derive
@@ -1098,23 +1055,7 @@ impl Engine<SoloSigner> {
             );
         }
 
-        let cursor = staking.monotone_current_slot_from_record();
-
-        // Union the persisted bonded hint with the lookahead window. A `BTreeSet`
-        // dedups the overlap (a bonded slot inside the window appears once) and
-        // keeps the derive order deterministic.
-        let mut slots: std::collections::BTreeSet<u32> =
-            staking.bonded_slots.iter().copied().collect();
-        for offset in 0..=ARCHIVAL_PERSONA_LOOKAHEAD {
-            // `cursor + offset` can saturate at `u32::MAX` only for a wallet that
-            // has advanced ~4 billion slots; `checked_add` drops the out-of-range
-            // tail rather than wrapping to slot 0 (which would re-derive a
-            // moved-past persona — the exact unlinkability break the monotone
-            // cursor prevents).
-            if let Some(slot) = cursor.checked_add(offset) {
-                slots.insert(slot);
-            }
-        }
+        let mut slots = staking.derive_forward_slots(ARCHIVAL_PERSONA_LOOKAHEAD);
         // SA-R1-a: the intent slot rides the derive set (`{S} ∪ lookahead`,
         // plan §5.0 step 3) — normally already inside the lookahead window
         // (the monotone cursor IS the next slot), but unioned explicitly so
@@ -1335,26 +1276,24 @@ impl<
     }
 }
 
-/// Read + decode the sealed evidence the arm-#3 phantom GC consumes: the
-/// pscan seal (reconcile evidence) and the pending-post seal (the W3 /
-/// scan-lag bridge). `Ok(None)` if no pscan seal exists yet; `Err(detail)`
-/// on ANY read/decode failure — including a pending seal that cannot be
-/// read while the pscan seal can, because a GC run without the pending
-/// bridge could wrongfully drop a W3 slot. The caller degrades an `Err` to
-/// skipping the GC (keep every slot, warn loud), never to an open failure.
-/// The sealed evidence the open-time SP-R0 sweeps consume, as one named
-/// bundle (arm #3's reconcile evidence + the W3 pending bridge + arm #2's
-/// done-side retired slots).
-struct PhantomGcEvidence {
+/// Sealed evidence the open-time SP-R0 reconcile consumes: arm #3's
+/// reconcile set, the W3 pending bridge, and arm #2's done-side retired
+/// slots. `Ok(None)` if no pscan seal exists yet; `Err(detail)` on ANY
+/// read/decode failure — including a pending seal that cannot be read
+/// while the pscan seal can, because a GC run without the pending bridge
+/// could wrongfully drop a W3 slot. The caller degrades an `Err` to
+/// skipping the reconcile (keep the hint, skip the chain-fed raise),
+/// never to an open failure.
+struct OpenStakingEvidence {
     evidence: super::pscan::reconcile::PReconcileSet,
     pending_slots: std::collections::BTreeSet<u32>,
     retired_slots: std::collections::BTreeSet<u32>,
 }
 
-fn load_phantom_gc_evidence(
+fn load_open_staking_evidence(
     file: &WalletFile,
     state_wrap_key: &super::sealing_keys::StateWrapKey,
-) -> Result<Option<PhantomGcEvidence>, String> {
+) -> Result<Option<OpenStakingEvidence>, String> {
     let Some(bytes) = file
         .open_pscan_state(state_wrap_key.as_bytes())
         .map_err(|e| format!("pscan seal read failed: {e}"))?
@@ -1385,7 +1324,7 @@ fn load_phantom_gc_evidence(
         }
         None => std::collections::BTreeSet::new(),
     };
-    Ok(Some(PhantomGcEvidence {
+    Ok(Some(OpenStakingEvidence {
         evidence,
         pending_slots,
         retired_slots,
