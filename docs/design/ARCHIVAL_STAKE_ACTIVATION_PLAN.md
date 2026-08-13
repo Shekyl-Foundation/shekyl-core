@@ -376,7 +376,16 @@ Landed exactly as ratified, plus one composition fact §5.0 left implicit:
   (`-29005` otherwise), password consumed into `Zeroizing` and crossing only the local
   transport; drives the close→reopen-with-intent Tenant dance; refusal taxonomy
   `-29500 StakeNotReady` (W1-clean) / `-29501 StakeInFlight` (W3) / `-29502
-  AlreadyStaked`, mid-flow failures name the W2 resume in their message (rule 82).
+  AlreadyStaked` / `-29503 StakeRecordMoved` (PR-SA-5: the slot is read from the
+  open engine BEFORE the credentialed reopen, whose SP-R0 reconcile may GC that
+  slot as a phantom (arm #3) or burn the cursor past it for a retired persona
+  (arm #2) — `first_stake` then refuses `WrongSlot` fail-closed. An arm #4
+  adoption lands on `-29502` instead, correctly: the already-staked scan sees
+  the adopted slot's bond post first. Nothing durable is written
+  and a re-invoke reads the reconciled record, so it is a domain refusal, never
+  the `-32603` internal fault it was first mapped to; no slot index rides the
+  payload, rule 81), mid-flow failures name the W2 resume in their message
+  (rule 82).
 - **Retired:** the GF4b rule-21 dead-code half **(b)** on all five witness consumers
   (and the arm-#1 witness constructor's own allow) — the entry chain is their
   production caller; the compiler re-adjudicated every site.
@@ -461,5 +470,6 @@ regression test:
   `Zeroizing` immediately after parse (the continue path and every early error
   previously dropped a plain `String`).
 - **Spec caught up.** `docs/api/wallet_rpc.yaml` now specifies `stake` (params,
-  result, `-29500..-29502`) — the code's error-code enum claims the yaml as its
-  source of truth, and the method had landed without it.
+  result, `-29500..-29502`; extended to `-29503` by PR-SA-5) — the code's
+  error-code enum claims the yaml as its source of truth, and the method had
+  landed without it.

@@ -42,6 +42,22 @@
   (`open_frozen_segment_body`) that the serving loop already asks per
   request.
 
+- **`stake` gains a fourth refusal: `-29503 STAKE_RECORD_MOVED`** (PR-SA-5,
+  `docs/api/wallet_rpc.yaml`). The RPC reads its persona slot from the open
+  engine *before* the credentialed reopen, and that reopen runs the SP-R0
+  open-time reconcile — which can collect that slot as a phantom (arm #3) or
+  burn the monotone cursor past it for a retired persona (arm #2), either of
+  which makes the earlier read stale. A reconcile that *adopts* a chain-proven
+  bond resolves to `-29502 AlreadyStaked` instead, and that precedence is
+  correct: the wallet has just proved it holds a confirmed bond. `Engine::first_stake` already refused fail-closed; the
+  refusal was merely **mis-surfaced as `-32603` InternalError**. It is a
+  legitimate domain state (nothing durable written, a plain re-invoke reads the
+  reconciled record) and now reads as one, per rule 82. The code carries **no
+  payload**: persona slot numbering is wallet-internal and the operator's remedy
+  does not depend on it (rule 81). Deleting the staleness outright — resolving
+  the elect slot *after* reconciliation — reshapes the first-stake intent and the
+  spawn gate, a distinct validation surface tracked in `FOLLOWUPS.md`.
+
 - **Daemon relay: anonymity arrivals stem at arrival, and the txpool
   records which zone they arrived over** (Q12-U1 / Q12-U2 / Q12-U4,
   `feat/q12-u1-u2-arrival-zone-and-coherence`). `relay_method::forward`

@@ -93,6 +93,8 @@
 //! [`SyncStateBlock`]: crate::sync_state_block::SyncStateBlock
 //! [`WalletLedger`]: crate::wallet_ledger::WalletLedger
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::WalletLedgerError;
@@ -171,6 +173,28 @@ impl StakingBlock {
     /// rolled-back persisted cursor cannot re-activate a retired
     /// persona and link its activities. `saturating_add` keeps the
     /// `u32::MAX` edge total rather than wrapping into a low slot.
+    ///
+    /// `Some(highest)` is the chain-fed form (SA-R-6's scan-derivable
+    /// half): a sealed blob has confidentiality and integrity, but not
+    /// anti-rollback, so a stored counter alone can reset and re-offer a
+    /// slot with on-chain activity. [`Self::monotone_current_slot_from_record`]
+    /// is the hint-fed feed for the record's own bonded set.
+    ///
+    /// # Known limit — the guarantee degenerates at `u32::MAX`
+    ///
+    /// `saturating_add` stops the wrap to slot 0, but it makes `u32::MAX` a
+    /// **fixed point**: once `u32::MAX` has been used, this still returns
+    /// `u32::MAX`, so the value it reports as "current" is a slot the wallet
+    /// already bound. Nothing here represents *slot-space exhaustion*, and the
+    /// binding gate does not refuse it — so at that single point the SA-R-6
+    /// no-reuse guarantee does not hold.
+    ///
+    /// Unreached by construction: slots are handed out one per bond, densely
+    /// from 0 (`monotone_selection_is_dense_no_gap_reachable`), and every bond
+    /// is an on-chain transaction — so occupying this state costs ~4.3 billion
+    /// sequential bonds. Representing exhaustion and refusing at the binding
+    /// gate is filed in `FOLLOWUPS.md`; **reopen immediately** if any path ever
+    /// makes a high slot index reachable other than by sequential binding.
     pub fn monotone_current_slot(&self, highest_bonded_slot_seen: Option<u32>) -> u32 {
         match highest_bonded_slot_seen {
             Some(highest) => self.p_slot.max(highest.saturating_add(1)),
@@ -186,6 +210,24 @@ impl StakingBlock {
     /// lands.
     pub fn monotone_current_slot_from_record(&self) -> u32 {
         self.monotone_current_slot(self.bonded_slots.iter().copied().max())
+    }
+
+    /// The Model-D derive-forward set:
+    /// `{bonded_slots} ∪ {cursor ..= cursor + lookahead}`, where `cursor`
+    /// is [`Self::monotone_current_slot_from_record`].
+    ///
+    /// `checked_add` drops the `u32::MAX` tail rather than wrapping to
+    /// slot 0 (which would re-derive a moved-past persona — the
+    /// unlinkability break the monotone cursor exists to prevent).
+    pub fn derive_forward_slots(&self, lookahead: u32) -> BTreeSet<u32> {
+        let cursor = self.monotone_current_slot_from_record();
+        let mut slots: BTreeSet<u32> = self.bonded_slots.iter().copied().collect();
+        for offset in 0..=lookahead {
+            if let Some(slot) = cursor.checked_add(offset) {
+                slots.insert(slot);
+            }
+        }
+        slots
     }
 
     /// Serialize to postcard bytes.
@@ -325,9 +367,88 @@ mod tests {
 
     #[test]
     fn monotone_cursor_saturates_at_u32_max() {
-        // A bonded slot at u32::MAX must not wrap to 0.
+        // The asserted property is NO WRAP: a bonded slot at u32::MAX must not
+        // send the cursor back to 0, where it would re-offer slot 0 and hand
+        // the operator a persona they rotated past 4 billion bonds ago.
         let b = StakingBlock::new(true, 0, vec![u32::MAX]);
-        assert_eq!(b.monotone_current_slot_from_record(), u32::MAX);
+        assert_ne!(
+            b.monotone_current_slot_from_record(),
+            0,
+            "saturation must never wrap the cursor to a low slot"
+        );
+
+        // Deliberately NOT asserted as correct: the returned value is u32::MAX,
+        // which is itself the bonded slot — i.e. at this one fixed point the
+        // cursor names a USED slot, and SA-R-6 no-reuse does not hold. That is
+        // a known, unreached limit (see `monotone_current_slot`'s docs and the
+        // FOLLOWUPS entry), not a property. Pinned here only so the saturation
+        // value is visible; an edit that made this refuse instead would be a
+        // FIX, and this line is the one to delete.
+        assert_eq!(
+            b.monotone_current_slot_from_record(),
+            u32::MAX,
+            "current saturation behaviour — a limit, not a guarantee"
+        );
+    }
+
+    #[test]
+    fn derive_forward_slots_is_bonded_union_monotone_lookahead() {
+        // cursor = max(4, 3+1) = 4; set = {1,3} ∪ {4,5,6} for lookahead=2.
+        let b = StakingBlock::new(true, 4, vec![1, 3]);
+        assert_eq!(
+            b.derive_forward_slots(2).into_iter().collect::<Vec<_>>(),
+            vec![1, 3, 4, 5, 6]
+        );
+    }
+
+    /// Density invariant on the **allocation sequence**: the slots this
+    /// wallet ever selects are `0, 1, 2, …` with no skip. That — not the
+    /// live `bonded_slots` hint — is what the deferred from-seed
+    /// reconstruction's "terminate at the first empty slot" rule rests on:
+    /// the probe reads *on-chain history*, and it may stop at the first
+    /// unused slot only if allocation never left a hole behind it.
+    ///
+    /// The live hint is explicitly **not** contiguous and must not be
+    /// asserted to be: SP-R0 arms #2 and #3 delete rows from it (retired and
+    /// phantom slots), so it is a GC'd view, not the allocation record. The
+    /// second half of this test is the load-bearing part — it shows the
+    /// sequence stays dense *despite* that GC, because `p_slot` carries the
+    /// high-water mark independently of the hint. Drop the `p_slot` term
+    /// from [`StakingBlock::monotone_current_slot`] and this fails.
+    ///
+    /// This bites against a sparse selection edit (a future `+k` rotation);
+    /// it does NOT cover the chain-fed raise itself (that lives with the
+    /// scan-evidence consumer).
+    #[test]
+    fn monotone_selection_is_dense_no_gap_reachable() {
+        let mut st = StakingBlock::empty();
+        let mut ever_selected = Vec::new();
+        for expected in 0..64u32 {
+            let slot = st.monotone_current_slot_from_record();
+            assert_eq!(
+                slot, expected,
+                "selection must be dense (contiguous), never skip a slot"
+            );
+            ever_selected.push(slot);
+            st.bonded_slots.push(slot);
+            st.p_slot = st.monotone_current_slot_from_record();
+        }
+        assert_eq!(
+            ever_selected,
+            (0..64).collect::<Vec<u32>>(),
+            "the allocation sequence is a gap-free contiguous prefix"
+        );
+
+        // Now GC the hint the way arms #2/#3 do — drop every row but one,
+        // including the highest. Allocation must not rewind or skip: the
+        // next slot is still 64, so the from-seed probe's termination rule
+        // survives a hint that no longer lists the history.
+        st.bonded_slots.retain(|s| *s == 7);
+        assert_eq!(
+            st.monotone_current_slot_from_record(),
+            64,
+            "hint GC must not rewind the cursor onto an already-used slot"
+        );
     }
 
     proptest! {
