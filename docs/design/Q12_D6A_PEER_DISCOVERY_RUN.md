@@ -2055,3 +2055,81 @@ did not survive its session, so the conclusion rested on a number nothing could
 re-run — and re-running it is what showed the axis was wrong. A design rule
 about to be deleted on the strength of an unreproducible measurement is exactly
 what Q12-D8's test is for.
+
+#### 12.5.1 The quantity exists at the decision site and is destroyed on the line that reads it
+
+**Verified at source, `eb1fd6d4e`.** The anchor for D9 is **not** in
+`net_node.inl`. It is `levin_notify.cpp`, `notify::get_status()`:
+
+```cpp
+bool has_outgoing = zone_->p2p->get_out_connections_count();
+```
+
+That is the per-zone **achieved** outbound count — D9's quantity exactly —
+assigned to a `bool`, so it is truncated to *nonzero*. `select_anonymity()`
+accepts on `network->second.m_connect && status.has_outgoing`, so **one live
+outbound peer is sufficient**: the zone stems at degree 1 against an embargo
+derived at degree 12.
+
+**The configured-axis gates are a different quantity that shares a numeral.**
+`set_max_out_peers` refuses a configured cap; `change_max_out_public_peers`
+clamps one. `MIN_PROVISIONED_OUT_PEERS = 12` equals `P2P_DEFAULT_OUT_PEERS = 12`,
+so **every default operator satisfies the startup gate by construction**, while
+the A = 15 fleet measured the condition it stands for as false ~30 % of the
+time.
+
+**And the anonymity zone has no runtime path at all.** `set_max_out_peers` has
+exactly two callers — `net_node.inl:588` (public, `--out-peers`) and `:625`
+(anonymity, `--tx-proxy`) — both inside `handle_command_line`.
+`change_max_out_public_peers` has exactly one caller
+(`core_rpc_server.cpp:2797`) and resolves `zone::public_` only. So the
+anonymity zone's cap is written once, at `:625`, and never again by any path in
+the tree. The one function holding `get_out_connections_count()` spends it
+*shedding* connections down to a cap — the count is in hand and used to move
+away from the floor.
+
+**§12.2 is therefore building a mechanism, not tightening one:** no live check,
+and no live path to put one on.
+
+#### 12.5.2 D9 and §30.5 do not collide — the bands are disjoint
+
+They read as rival answers only if both are taken as *zone* verbs. They are not.
+`send_txs` decides **which zone** and has no vocabulary for stem-or-fluff — it
+forwards `tx_relay` unchanged. The stem-or-fluff decision is one layer down, at
+`levin_notify.cpp`'s `dandelionpp_notify` dispatch (*"this will change a local
+tx to stem or fluff"*). So a node that rolls anon while below the floor executes
+both in sequence without conflict: `send_txs` puts it on the zone,
+`dandelionpp_notify` fluffs it there instead of stemming.
+
+The predicates nest rather than overlap:
+
+| achieved anon out-degree | behaviour | ruling |
+| --- | --- | --- |
+| `0` | zone unusable → send nothing | §30.5 fail-closed |
+| `0 < d < 12` | usable, below floor → **fluff in zone, do not stem** | D9 `x = 0`, reading (b) |
+| `d >= 12` | stem normally | — |
+
+Disjoint, total, ordered. "Below the floor" covering both the first and second
+band is what made one condition look like two answers.
+
+**Placement, pinned before §12.2 is drafted.** The check is **scoped to
+origination**, **tested at the stem/fluff decision**, and **never in
+`select_anonymity()` or any arm of `send_txs`**. The third clause is the
+load-bearing one: refusing the zone there is reading (a) — the §30.5 reversal —
+and `select_anonymity()` is the function whose entire comment block explains
+why originated traffic fails closed rather than falling to clearnet.
+
+Two consequences follow from the placement. `dandelionpp_notify` is also
+reached by **relayed** traffic through the coherence arm, so a check placed on
+the shared stem path would change relay behaviour on a **network-axis** warrant
+that §12.5's own table prices at roughly a sixth of the self-axis one. And it
+would catch the local pool re-relay and the missed submit nudge, which reach
+`anonymity_fail_closed` from three different producers.
+
+**Shelved, blocked on the mechanism (rule 7):** what a below-floor node should
+do at achieved degree 1, where its fluff has out-degree one. `x = 0` is right
+against the embargo argument, but whether a degree-1 *fluff* beats a degree-1
+*stem* is a quantitative question about a path that does not run. The
+instrument that could answer it now exists and is named:
+`simulate_fluff_return_mixed`, which takes a per-node degree vector. Settling it
+in §12.2's prose instead would be the failure Q12-D8 names.
