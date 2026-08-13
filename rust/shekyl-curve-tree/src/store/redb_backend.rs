@@ -230,6 +230,17 @@ impl ServingReader {
         self.store.sync_tip_height()
     }
 
+    /// Which claimed members the store no longer holds pins for — see
+    /// [`LeafStore::members_missing_pins`] for the full contract (this is a
+    /// pure forward).
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`LeafStore::members_missing_pins`]'s.
+    pub fn members_missing_pins(&self, shard_ids: &[u64]) -> Result<Vec<u64>, StoreError> {
+        self.store.members_missing_pins(shard_ids)
+    }
+
     /// Whether `other` is a handle on the **same open database**.
     ///
     /// This is allocation identity, and that is store identity: a
@@ -613,6 +624,48 @@ impl LeafStore {
         Ok(BlockHeight(
             meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0),
         ))
+    }
+
+    /// Which of `shard_ids` no longer have a pin row — the members a serve-set
+    /// witness claims are retained but the store would now prune.
+    ///
+    /// **The direct question, asked directly.** A pin is deleted only by
+    /// [`Self::truncate_from_tree_position`] / [`Self::rollback_to_fork`]
+    /// (the F9 pinned-segment rollback), and **nothing recreates it except a
+    /// re-pin** — block ingest does not. So a holder cannot infer this from
+    /// the sync tip: the tip is explicitly not monotonic, it climbs back past
+    /// its old value on re-ingest, and the pins do not come back with it. Any
+    /// tip-derived signal therefore self-clears while the exposure persists.
+    /// Asking the pin table removes the inference.
+    ///
+    /// Both pinned outcomes are checked, not just the servable ones:
+    /// [`Self::pin_ids_within`] writes a row for `PinnedNotYetFrozen` too, so
+    /// a missing row means the pin was dropped rather than never taken. Ids a
+    /// segment id cannot represent are reported as missing — such a member was
+    /// never pinnable, so treating it as retained would be the optimistic
+    /// direction on exactly the question this answers.
+    ///
+    /// One read transaction for the whole set: a serve-set may hold up to
+    /// `MAX_HOLDINGS_SHARDS` = 4096 members, and this is polled beside tor
+    /// posture.
+    ///
+    /// # Errors
+    ///
+    /// Store I/O opening the read transaction or the pinned-segment table.
+    pub fn members_missing_pins(&self, shard_ids: &[u64]) -> Result<Vec<u64>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
+        let mut missing = Vec::new();
+        for &shard_id in shard_ids {
+            let retained = match u32::try_from(shard_id) {
+                Ok(id) => pinned.get(SegmentId(id))?.is_some(),
+                Err(_) => false,
+            };
+            if !retained {
+                missing.push(shard_id);
+            }
+        }
+        Ok(missing)
     }
 
     /// Test-only wrapper for appending drained leaves and advancing sync tip.

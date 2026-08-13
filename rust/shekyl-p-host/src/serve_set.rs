@@ -618,7 +618,56 @@ impl PinnedServeSet {
     /// # Errors
     ///
     /// Store failure reading the sync tip.
+    /// The members this witness asserts are pinned: the reported set minus the
+    /// terminally pruned ones.
+    ///
+    /// `already_pruned` members are excluded because they never had a pin row
+    /// — `pin_ids_within` writes one for every outcome *except*
+    /// `AlreadyPruned` — so counting them as claimed would report a permanent
+    /// drop on a witness that is behaving exactly as documented.
+    fn claimed_members(&self) -> Vec<u64> {
+        self.set
+            .shard_ids()
+            .iter()
+            .copied()
+            .filter(|id| !self.already_pruned.contains(id))
+            .collect()
+    }
+
+    /// Which claimed members the store no longer holds pins for.
+    ///
+    /// The diagnostic behind [`Staleness::PinsDropped`], which carries only a
+    /// ratio so it can stay `Copy`. Call this when an operator needs the ids —
+    /// a log line, a CLI report — rather than on every poll.
+    ///
+    /// # Errors
+    ///
+    /// Store failure reading the pinned-segment table.
+    pub fn dropped_pins(&self) -> Result<Vec<u64>, StoreError> {
+        self.reader.members_missing_pins(&self.claimed_members())
+    }
+
     pub fn staleness(&self, bound: StalenessBound) -> Result<Staleness, StoreError> {
+        // Checked before any tip arithmetic, because it is the only reading
+        // here that reports an exposure rather than a risk of one — and
+        // because the tip cannot answer it. A member whose pin row is gone is
+        // prunable now, whatever the tip says, and re-ingest moves the tip
+        // back above the stamp without restoring a single pin. Ordering this
+        // second would let the arithmetic below return `Current` over it.
+        //
+        // The claimed set is every member except the terminally pruned ones:
+        // `pin_ids_within` writes a row for `PinnedNotYetFrozen` as well as
+        // `PinnedServable`, and `already_pruned` members never had one, so
+        // including them would report a permanent false positive.
+        let claimed = self.claimed_members();
+        let dropped = self.reader.members_missing_pins(&claimed)?;
+        if !dropped.is_empty() {
+            return Ok(Staleness::PinsDropped {
+                dropped: u32::try_from(dropped.len()).unwrap_or(u32::MAX),
+                claimed: u32::try_from(claimed.len()).unwrap_or(u32::MAX),
+            });
+        }
+
         let tip = self.reader.sync_tip_height()?;
         let Some(lag) = tip.0.checked_sub(self.minted_at_tip.0) else {
             return Ok(Staleness::RolledBack {
@@ -741,15 +790,54 @@ pub enum Staleness {
     /// re-stamps. Sending an operator to debug a healthy refresh loop is a
     /// false alarm, and false alarms are how a tripwire gets ignored.
     ///
-    /// It is not benign, though: `truncate_from_tree_position` and
-    /// `rollback_to_fork` delete pinned-segment rows above the truncation
-    /// point, so during this window the witness names pins the store no
-    /// longer holds. It reads as not-current for exactly that reason.
+    /// **This arm does not answer the pin question, and must not be read as
+    /// if it did.** It is a statement about the tip only. An earlier version
+    /// of this doc said a rollback means "during this window the witness names
+    /// pins the store no longer holds" — true, and the trap is the phrase
+    /// *this window*: the tip is not monotonic, so re-ingest lifts it back
+    /// above the stamp and closes the window while the deleted pin rows stay
+    /// deleted. Whether pins are actually gone is measured by
+    /// [`Self::PinsDropped`], which is checked first and has no window.
     RolledBack {
         /// The ingest tip stamped when the witness was minted.
         minted_at_tip: u64,
         /// The ingest tip now — below `minted_at_tip`.
         tip: u64,
+    },
+    /// Members this witness claims are pinned **are no longer pinned in the
+    /// store**, so `prune_frozen` is free to discard their bytes.
+    ///
+    /// The most serious arm, and the only one that reports an exposure that
+    /// has already happened rather than a signal that one might be developing.
+    ///
+    /// **Measured, not inferred, and that is the whole point.** Pins are
+    /// deleted by `truncate_from_tree_position` / `rollback_to_fork` (the F9
+    /// pinned-segment rollback) and **nothing recreates them but a re-pin** —
+    /// block ingest does not. [`Self::RolledBack`] can only see the window
+    /// where the tip is still below the stamp, and the tip is not monotonic:
+    /// once the principal re-ingests past that height the subtraction goes
+    /// positive again and every tip-derived arm reports `Current` while the
+    /// pins stay gone. A host whose refresh trigger is the failed component
+    /// would return to an affirmative healthy reading while serving shards
+    /// nothing retains. Asking the pin table directly has no such window.
+    ///
+    /// **It cannot self-clear.** The condition is re-read from the store on
+    /// every call, so it persists until a refresh actually re-pins — which
+    /// mints a new witness. That is the latch, and it is structural rather
+    /// than a flag someone has to remember to reset.
+    /// A ratio rather than the id list, so this stays `Copy` like every other
+    /// arm — it is polled beside the tor posture and folded into one operator
+    /// alarm, and a status value that allocates would be the odd one out.
+    /// `dropped` against `claimed` also separates the two cases that differ in
+    /// remedy: a partial loss is a reorg above some members, while
+    /// `dropped == claimed` is a store-wide event. The ids themselves are a
+    /// diagnostic rather than a status, and live on
+    /// [`PinnedServeSet::dropped_pins`].
+    PinsDropped {
+        /// Claimed members with no pin row.
+        dropped: u32,
+        /// Members this witness claims are pinned — the denominator.
+        claimed: u32,
     },
     /// The last refresh attempt **failed**, and this many have failed in a
     /// row since the last success.
@@ -800,7 +888,9 @@ impl Staleness {
     pub fn lag(self) -> Option<u64> {
         match self {
             Self::Current { lag } | Self::Stale { lag, .. } => Some(lag),
-            Self::RolledBack { .. } | Self::RefreshFailing { .. } => None,
+            Self::RolledBack { .. } | Self::RefreshFailing { .. } | Self::PinsDropped { .. } => {
+                None
+            }
         }
     }
 }
@@ -828,6 +918,14 @@ impl std::fmt::Display for Staleness {
                  list is not being re-derived, so a shard connected since the last success is \
                  unpinned and can be pruned before it is served — check the persona's daemon \
                  transport and the curve-tree actor"
+            ),
+            Self::PinsDropped { dropped, claimed } => write!(
+                f,
+                "{dropped} of {claimed} serve-set members are no longer pinned in the store: \
+                 their bytes can be pruned now, and this persona would fail a challenge on \
+                 them. A rollback drops pinned rows and block ingest does not restore them, \
+                 so this clears only when a refresh re-pins — check that refresh is still \
+                 succeeding"
             ),
         }
     }

@@ -752,24 +752,104 @@ async fn a_store_rollback_beneath_the_pins_is_its_own_reading() {
         .truncate_from_tree_position(TreePosition(0))
         .expect("rollback");
 
+    // The truncation deleted this member's pin row, so the reading is the
+    // measured condition rather than the inferred one: `PinsDropped` outranks
+    // `RolledBack` because it reports an exposure that exists now, and a tip
+    // that happens to be low is only evidence that one might.
     let reading = pinned.staleness(bound).expect("read staleness");
     assert_eq!(
         reading,
-        Staleness::RolledBack {
-            minted_at_tip: 10_000,
-            tip: 0
+        Staleness::PinsDropped {
+            dropped: 1,
+            claimed: 1
         },
-        "a tip below the baseline is a rollback, never a saturated zero"
+        "the rollback dropped the pin, and that is what must be reported"
     );
-    assert!(reading.is_stale(), "the pins it names may be gone");
+    assert!(reading.is_stale(), "the pins it named are gone");
     assert_eq!(
         reading.lag(),
         None,
         "the store un-ingested; there is no lag to report and 0 would be a lie"
     );
-    // Rule 82: the message separates "a reorg happened" from "your refresh
-    // is broken", which are the same action and very different diagnoses.
-    assert!(reading.to_string().contains("rolled back"));
+    assert_eq!(
+        pinned.dropped_pins().expect("list dropped pins"),
+        vec![0],
+        "the ids stay available for a log line even though the status is a ratio"
+    );
+    // Rule 82: the message must say the bytes are prunable now, not that a
+    // reorg happened and will sort itself out.
+    assert!(reading.to_string().contains("no longer pinned"));
+}
+
+#[tokio::test]
+async fn re_ingest_past_the_baseline_does_not_clear_a_dropped_pin() {
+    // The tip is not monotonic, and it is not evidence about pins. A rollback
+    // deletes pinned-segment rows; block ingest afterwards climbs the tip back
+    // past the stamped baseline and restores **no** pin rows. Any reading
+    // derived from the tip therefore self-clears — `checked_sub` goes positive
+    // again and reports `Current` — while the members stay prunable.
+    //
+    // That is the silent-slash shape this whole slice exists to close, arriving
+    // through the tripwire itself: a host whose refresh trigger is the failed
+    // component would return to an affirmative healthy reading while serving
+    // shards nothing retains.
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("freeze segment 0");
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight(10_000));
+    let pinned = PinnedServeSet::acquire(&pinner).await.expect("pin");
+
+    let bound = StalenessBound::blocks(100);
+    assert_eq!(
+        pinned.staleness(bound).expect("read staleness"),
+        Staleness::Current { lag: 0 }
+    );
+
+    // Reorg: the pin row for segment 0 goes with it.
+    store
+        .truncate_from_tree_position(TreePosition(0))
+        .expect("rollback");
+
+    // The chain re-converges and the principal ingests straight back past the
+    // height the witness was stamped at. Nothing here re-pins.
+    let mut replayed = segment_entries();
+    for (i, e) in replayed.iter_mut().enumerate() {
+        e.gindex = Gindex(i as u64);
+    }
+    store
+        // Just past the baseline and well inside the bound, so a tip-derived
+        // reading lands on `Current` rather than merely on the wrong arm.
+        // That is the finding's actual hazard: not a bad number, an
+        // affirmative all-clear.
+        .append_block_deltas(&replayed, &[], &[], BlockHeight(10_050))
+        .expect("re-ingest past the baseline");
+    assert!(
+        store.sync_tip_height().expect("tip") > BlockHeight(10_000),
+        "the premise of this test is that the tip climbed back ABOVE the baseline"
+    );
+
+    let reading = pinned.staleness(bound).expect("read staleness");
+    assert_eq!(
+        reading,
+        Staleness::PinsDropped {
+            dropped: 1,
+            claimed: 1
+        },
+        "a tip-derived reading reports Current with lag 50 here; the pin is still gone"
+    );
+    assert!(
+        reading.is_stale(),
+        "returning to healthy on re-ingest is the defect this test exists for"
+    );
+
+    // And it clears only by actually re-pinning — the structural latch.
+    let refreshed = pinned.refreshed(&pinner).await.expect("re-pin");
+    assert_eq!(
+        refreshed.staleness(bound).expect("read staleness"),
+        Staleness::Current { lag: 0 },
+        "a successful re-pin is the one thing that restores a healthy reading"
+    );
 }
 
 #[tokio::test]
