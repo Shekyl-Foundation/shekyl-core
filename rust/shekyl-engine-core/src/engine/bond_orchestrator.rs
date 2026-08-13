@@ -581,6 +581,16 @@ where
                 .map(|s| s.bond_post_matches().to_vec())
                 .unwrap_or_default();
             for &bonded in &staking.bonded_slots {
+                // A bond-watch sighting is confirmed on-chain evidence at the
+                // same tier as a pscan match — the principal scan OBSERVED
+                // this slot's bond post. A probe-adopted slot's pscan seal
+                // lags until the P-scan catches up, so without this check the
+                // resume path would read "durable slot, no match" (the W2
+                // phantom shape) and mint a DUPLICATE JoinMarket post for an
+                // already-bonded persona. Checked first: no actor round-trip.
+                if staking.bond_sightings.contains_key(&bonded) {
+                    return Err(FirstStakeError::AlreadyStaked);
+                }
                 let id = stake
                     .persona_canonical_id(PSlot::from_raw(bonded))
                     .await
@@ -996,5 +1006,57 @@ mod tests {
                 "slot {slot}: got {err:?}"
             );
         }
+    }
+
+    /// A **probe-adopted** slot (bond-watch sighting, SA-R-6) refuses
+    /// `first_stake` as `AlreadyStaked` even while the pscan seal still lags
+    /// (no `bond_post_matches` row yet). Pre-fix, this shape read as the W2
+    /// phantom — durable slot, no match — and the resume path would mint a
+    /// DUPLICATE JoinMarket post for a persona whose bond the principal scan
+    /// had already observed on-chain.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn probe_adopted_slot_refuses_first_stake_before_pscan_corroboration() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"probe adopted refusal");
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+        let network = params.network;
+        let engine =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        // Simulate the merge-time probe adoption: the principal scan sighted
+        // an on-chain bond post for slot 0 (fresh-restore shape — no pscan
+        // seal exists, so the reopen reconcile has nothing to drop).
+        {
+            let mut g = engine.ledger.write();
+            crate::engine::merge::adopt_bond_sightings(
+                &mut g.ledger.staking,
+                &[crate::scan::BondSightingObserved {
+                    block_height: 10,
+                    slot: 0,
+                }],
+            );
+        }
+        engine.close(&creds).expect("close persists the adoption");
+
+        let opened = Engine::<SoloSigner>::open_full(
+            &base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("reopen the adopted staker")
+        .into_wallet();
+        assert!(
+            opened.ledger().staking.bond_sightings.contains_key(&0),
+            "the sighting bridge survives the reopen (no seal to refute it)"
+        );
+        let arc = StdArc::new(TokioRwLock::new(opened));
+        let err = Engine::first_stake(arc, 0)
+            .await
+            .expect_err("a sighted slot is already staked, never a W2 resume");
+        assert!(matches!(err, FirstStakeError::AlreadyStaked), "got {err:?}");
     }
 }
