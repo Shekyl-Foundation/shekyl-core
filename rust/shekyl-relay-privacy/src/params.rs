@@ -66,16 +66,67 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// origin oracle (§29), and it is the half configuration B's deletion did
 /// **not** close (§58.3).
 ///
-/// # Current posture (§89)
+/// # Current posture (§89, and Q12-U2 as of 2026-08-12)
 ///
 /// The anonymity zone **stems**. A diverted transaction continues on a stem
-/// rather than terminating in a diffusion. Consequently §63.5's stem-shortening
-/// cost (the measured reason for rejecting higher `p`) no longer applies, so
-/// **2 % is the conservative value, not the justified one**. Re-deriving `p`
-/// is §64.1's eligibility decision. Design history (pre-§89 diffusion premise,
-/// precision figures, retraction chain) lives in
-/// `docs/design/DAEMON_RELAY_PRIVACY.md` §59–§64 / §89 — not restated here so
-/// present-tense source does not re-teach a retired posture.
+/// rather than terminating in a diffusion. Consequently §63.5's
+/// stem-shortening cost — for a long time *the* measured reason for rejecting
+/// higher `p` — no longer applies. Re-deriving `p` is §64.1's eligibility
+/// decision.
+///
+/// **This once read "so 2 % is the conservative value, not the justified
+/// one", and that inference has expired.** It was sound while §63.5's cost was
+/// the only one. Q12-U2 (#459) made R-1's coherence branch live, and per-hop
+/// rolling plus coherence is a **one-way absorbing process within the stem
+/// phase**: a transaction moves clearnet→anon and never back *for the rest of
+/// its stem*, so raising `p` raises the absorbed fraction. It still leaves on
+/// fluff — that exit is deliberate (§59.1), and it is what bounds the
+/// absorption; "never back" describes the stem, not the transaction's life.
+/// The distinction is load-bearing rather than pedantic: Q12-D5a's model is
+/// about skew in STEM POSITION, so an unbounded reading would describe a
+/// different process from the one measured.
+///
+/// Q12-D5a's analysis has that direction reproducing the origin oracle **on
+/// clearnet** — the defect this arc exists to remove, mirrored onto the other
+/// zone. Before Q12-U2 a diverted transaction returned to
+/// clearnet after one hop, so nothing absorbed and the question was moot.
+///
+/// **RULED 2026-08-12 (Q12-D5a): once-at-origin.** The absorption above is an
+/// artifact of rolling per arrival, and per-arrival rolling duplicates what
+/// coherence already does — coherence decides the zone and holds it, so a
+/// second roll re-decides a settled question and the accumulated re-decisions
+/// *are* the absorption. Once-at-origin is coherence with the duplicate
+/// deleted: the origin rolls, and no node re-rolls.
+///
+/// **Under that rule `p` carries no privacy content.** Both zones sit at
+/// `q/(1+q)` for every `p` (Q12-D4's cancellation, which holds exactly under
+/// once-at-origin and only there), so this is a **deployment** parameter and
+/// there is no value to get wrong. The absorption hazard above describes the
+/// semantics being replaced; it is kept because the shipped code still rolls
+/// per arrival until the implementing unit lands.
+///
+/// **Until then, do not read "§63.5 no longer applies" as "higher `p` is
+/// free"** — that is the reading this note exists to block, and while per-hop
+/// rolling ships it is a live hazard rather than a historical one.
+///
+/// # What the implementing unit owes
+///
+/// `p_own` becomes `p` rather than 1, which makes the `require_usable=false`
+/// caller conditional. **§30.5's fail-closed rule survives**: it governs what
+/// happens when the *chosen* zone is unusable, not whether the roll happens.
+/// The two paths to originated traffic on clearnet — *roll said anon, zone
+/// unusable* (fail closed, send nothing) and *roll said clearnet* (by design)
+/// — must be distinguishable at the site, or a reader sees originated traffic
+/// on clearnet and reads a fail-closed reversal that did not happen.
+///
+/// **This constant's name goes with it.** `PER_HOP` stops describing what it
+/// does under once-at-origin, and a name that disagrees with the mechanism
+/// beside it is what hides the next re-derivation.
+///
+/// Design history (pre-§89 diffusion premise, precision figures, retraction
+/// chain) lives in `docs/design/DAEMON_RELAY_PRIVACY.md` §59–§64 / §89 and
+/// `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md` — not restated here so present-tense
+/// source does not re-teach a retired posture.
 ///
 /// # Per-hop, and the distinction is not cosmetic
 ///
