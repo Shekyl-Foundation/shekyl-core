@@ -66,16 +66,36 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// origin oracle (§29), and it is the half configuration B's deletion did
 /// **not** close (§58.3).
 ///
-/// # Current posture (§89)
+/// # Current posture (§89, and Q12-U2 as of 2026-08-12)
 ///
 /// The anonymity zone **stems**. A diverted transaction continues on a stem
-/// rather than terminating in a diffusion. Consequently §63.5's stem-shortening
-/// cost (the measured reason for rejecting higher `p`) no longer applies, so
-/// **2 % is the conservative value, not the justified one**. Re-deriving `p`
-/// is §64.1's eligibility decision. Design history (pre-§89 diffusion premise,
-/// precision figures, retraction chain) lives in
-/// `docs/design/DAEMON_RELAY_PRIVACY.md` §59–§64 / §89 — not restated here so
-/// present-tense source does not re-teach a retired posture.
+/// rather than terminating in a diffusion. Consequently §63.5's
+/// stem-shortening cost — for a long time *the* measured reason for rejecting
+/// higher `p` — no longer applies. Re-deriving `p` is §64.1's eligibility
+/// decision.
+///
+/// **This once read "so 2 % is the conservative value, not the justified
+/// one", and that inference has expired.** It was sound while §63.5's cost was
+/// the only one. Q12-U2 (#459) made R-1's coherence branch live, and per-hop
+/// rolling plus coherence is a **one-way absorbing process**: a transaction
+/// moves clearnet→anon and never back, so raising `p` raises the absorbed
+/// fraction. Q12-D5a's analysis has that direction reproducing the origin
+/// oracle **on clearnet** — the defect this arc exists to remove, mirrored
+/// onto the other zone. Before Q12-U2 a diverted transaction returned to
+/// clearnet after one hop, so nothing absorbed and the question was moot.
+///
+/// **So there is again a cost to raising `p`, and it is not §63.5's.** Do not
+/// read "§63.5 no longer applies" as "higher `p` is free" — that is the
+/// reading this note exists to block. Whether the absorbing semantics survive
+/// at all is the open fork (Q12-D5a: once-at-origin vs per-hop), and it is
+/// unsettled **in shipped code**, not in a hypothetical. Q12-U3 owes the
+/// ruling, and owes telemetry that can observe the absorbed fraction before
+/// any value moves — today's `/get_stem_tallies` cannot.
+///
+/// Design history (pre-§89 diffusion premise, precision figures, retraction
+/// chain) lives in `docs/design/DAEMON_RELAY_PRIVACY.md` §59–§64 / §89 and
+/// `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md` — not restated here so present-tense
+/// source does not re-teach a retired posture.
 ///
 /// # Per-hop, and the distinction is not cosmetic
 ///
