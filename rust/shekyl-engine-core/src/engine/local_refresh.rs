@@ -159,7 +159,10 @@ use std::time::Duration;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use shekyl_rpc_client::RpcError;
 use shekyl_scanner::{ScanError, ScanOutcome, ScannableBlock, Scanner, ViewPair, MAX_OUTPUTS};
+use shekyl_types::PCanonicalId;
 use shekyl_wire::Input;
+use std::collections::BTreeMap;
+
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
@@ -174,7 +177,11 @@ use super::refresh::{LedgerSnapshot, RefreshOptions, RefreshPhase, RefreshProgre
 use super::traits::daemon::DaemonEngine;
 use super::traits::refresh::RefreshEngine;
 use super::view_material::ViewMaterial;
-use crate::scan::{DetectedTransfer, KeyImageObserved, OwnedTxLeaves, ReorgRewind, ScanResult};
+use crate::engine::bond_watch::bond_post_observations;
+use crate::scan::{
+    BondSightingObserved, DetectedTransfer, KeyImageObserved, OwnedTxLeaves, ReorgRewind,
+    ScanResult,
+};
 
 /// Maximum retries for transient per-block RPC failures.
 ///
@@ -238,10 +245,10 @@ const MAX_REORG_REWINDS_PER_ATTEMPT: u32 = 8;
 ///
 /// # `#[non_exhaustive]` not used
 ///
-/// `LocalRefresh` has exactly one field, and that field is
-/// private (`view_material`). External callers cannot construct
-/// or pattern-match against the struct shape regardless of the
-/// outer `pub` visibility — they reach the type only through
+/// Every `LocalRefresh` field is private (`view_material`,
+/// `scan_start_floor`, `bond_watch`). External callers cannot
+/// construct or pattern-match against the struct shape regardless
+/// of the outer `pub` visibility — they reach the type only through
 /// [`Self::new`]. Future revisions add fields through
 /// `Self::new` API revisions; the public-API surface is the
 /// constructor signature plus the (`pub(crate)`)
@@ -272,20 +279,36 @@ pub struct LocalRefresh {
     /// when this exceeds `synced_height + 1` before taking a
     /// snapshot; see [`super::scan_floor`].
     scan_start_floor: u64,
+    /// The bond watch's candidate set (SA-R-6): persona canonical id →
+    /// slot, inverted from the open-built `StakingBlock::persona_id_cache`
+    /// (durably-retired slots already excluded at open). Public
+    /// identifiers, no secret, no zeroize burden — but the id↔slot
+    /// association is persona history, so the map never renders through
+    /// `Debug` (the enclosing engine's hand-written `Debug` skips the
+    /// refresh aggregate entirely). Empty for a wallet whose window has
+    /// no cached ids; the per-block cost of a populated watch is a map
+    /// lookup only for transactions that carry `Input::BondPost` (rare).
+    bond_watch: BTreeMap<PCanonicalId, u32>,
 }
 
 impl LocalRefresh {
     /// Construct a new [`LocalRefresh`] from owned
-    /// [`ViewMaterial`].
+    /// [`ViewMaterial`], the scan floor, and the bond watch's
+    /// candidate map.
     ///
     /// The view material is held for `LocalRefresh`'s lifetime
     /// per §5.4.7 R4 a-instance-scoped; on drop the embedded
     /// [`ViewMaterial`]'s [`ZeroizeOnDrop`](zeroize::ZeroizeOnDrop)
     /// chain wipes the secret bytes.
-    pub const fn new(view_material: ViewMaterial, scan_start_floor: u64) -> Self {
+    pub const fn new(
+        view_material: ViewMaterial,
+        scan_start_floor: u64,
+        bond_watch: BTreeMap<PCanonicalId, u32>,
+    ) -> Self {
         Self {
             view_material,
             scan_start_floor,
+            bond_watch,
         }
     }
 
@@ -627,6 +650,7 @@ impl RefreshEngine for LocalRefresh {
             let mut block_hashes: Vec<(u64, [u8; 32])> = Vec::new();
             let mut new_transfers: Vec<DetectedTransfer> = Vec::new();
             let mut spent_key_images: Vec<KeyImageObserved> = Vec::new();
+            let mut bond_sightings: Vec<BondSightingObserved> = Vec::new();
             // The rewind target carried out to the merge (the *latest* fork, which
             // is always the correct one — `find_fork_point` re-measures divergence
             // from the fixed persisted window each call). `reorg_rewinds` bounds how
@@ -855,6 +879,20 @@ impl RefreshEngine for LocalRefresh {
                             });
                         }
                     }
+                    // Bond watch (SA-R-6): cleartext match of the block's
+                    // bond posts against the cached probe ids — the same
+                    // observation lift the P-scan extractor uses (shared
+                    // owner, `engine::bond_watch`), matched against this
+                    // wallet's candidate map. Emitted slot-resolved; the
+                    // merge adopts + raises under the write guard.
+                    for obs in bond_post_observations(tx) {
+                        if let Some(&slot) = self.bond_watch.get(&obs.p_canonical_id) {
+                            bond_sightings.push(BondSightingObserved {
+                                block_height: h,
+                                slot,
+                            });
+                        }
+                    }
                 }
 
                 // CT-5 §3.2 (R1-Q2/Q3): materialize the full per-block leaf
@@ -956,6 +994,7 @@ impl RefreshEngine for LocalRefresh {
                 reorg_rewind,
                 block_leaves,
                 block_curve_tree_roots,
+                bond_sightings,
             })
         }
     }
@@ -1475,6 +1514,7 @@ mod producer_property_tests {
         rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
     };
     use shekyl_engine_state::LedgerBlock;
+
     use tokio::sync::watch;
     use tokio_util::sync::CancellationToken;
 
@@ -1517,7 +1557,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        LocalRefresh::new(vm, 0)
+        LocalRefresh::new(vm, 0, std::collections::BTreeMap::new())
     }
 
     fn snapshot_at_anchor(synced: u64, hash: [u8; 32]) -> LedgerSnapshot {
@@ -1525,6 +1565,106 @@ mod producer_property_tests {
         crate::engine::scan_floor::anchor_ledger_block(&mut ledger, synced, hash)
             .expect("test anchor");
         LedgerSnapshot::from_ledger(&ledger)
+    }
+
+    /// The producer's bond watch: a scanned block carrying two bond posts —
+    /// one whose canonical id is in the watch map, one a stranger's — yields
+    /// exactly one slot-resolved sighting at the right height; and a producer
+    /// with an EMPTY watch (every existing caller) yields none.
+    #[tokio::test(start_paused = true)]
+    async fn bond_watch_emits_sightings_for_watched_ids_only() {
+        use shekyl_wire::transaction::{BondPost, BondPostKind, Transaction, TxPrefix};
+        use shekyl_wire::{Ct, CtBase, Holdings};
+
+        // Two personas from the test wallet seed; only slot 0's id is watched.
+        let persona = |slot: u32| {
+            shekyl_crypto_pq::archival_p::derive_archival_p_keys(
+                &PROPERTY_TEST_MASTER_SEED,
+                DerivationNetwork::Fakechain,
+                SeedFormat::Raw32,
+                slot,
+            )
+            .expect("derive test persona")
+        };
+        let id_of = |keys: &shekyl_crypto_pq::archival_p::ArchivalPKeys| {
+            crate::engine::stake_engine::persona_canonical_id(keys).expect("canonical id")
+        };
+        let mine = persona(0);
+        let stranger = persona(1);
+
+        // A structurally-null non-miner tx carrying one bond post (the
+        // scanner recovers nothing from zero outputs; the watch reads only
+        // the input).
+        let bond_tx = |keys: &shekyl_crypto_pq::archival_p::ArchivalPKeys| Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![shekyl_wire::Input::BondPost(Box::new(BondPost {
+                    hybrid_public_key: keys
+                        .hybrid_bond_id()
+                        .to_canonical_bytes()
+                        .expect("encode hybrid id"),
+                    p_canonical_id: id_of(keys).to_bytes(),
+                    kind: BondPostKind::JoinMarket {
+                        bond_spend_pk: Vec::new(),
+                    },
+                    holdings: Holdings::CompleteTree,
+                    bonded_total_atomic: 1_000,
+                    bond_credit: 1_000,
+                    bond_debit: 0,
+                }))],
+                outputs: vec![],
+                extra: vec![],
+            },
+            ct: Ct::Null(CtBase {
+                enc_amounts: vec![],
+                enc_labels: vec![],
+                commitments: vec![],
+            }),
+        };
+
+        // Chain: anchor at h0; h1 carries both bond posts. Mutate BEFORE
+        // reading hashes so the parent chaining stays consistent.
+        let b0 = make_synthetic_block(0, [0u8; 32]);
+        let mut b1 = make_synthetic_block(1, b0.block.hash());
+        b1.transactions.push(bond_tx(&mine));
+        b1.block.transaction_hashes.push([0xA1; 32]);
+        b1.transactions.push(bond_tx(&stranger));
+        b1.block.transaction_hashes.push([0xA2; 32]);
+
+        let daemon =
+            TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![b0.clone(), b1.clone()]);
+        let snapshot = snapshot_at_anchor(0, b0.block.hash());
+        let watch = std::collections::BTreeMap::from([(id_of(&mine), 4u32)]);
+
+        let blob = rederive_account(
+            &PROPERTY_TEST_MASTER_SEED,
+            DerivationNetwork::Fakechain,
+            SeedFormat::Raw32,
+        )
+        .expect("rederive");
+        let vm = ViewMaterial::try_from_keys(&blob).expect("view material");
+        let refresh = LocalRefresh::new(vm, 0, watch);
+
+        let sink = AssertionSink::new();
+        let (progress_tx, _progress_rx) = fresh_progress_channel();
+        let result = refresh
+            .produce_scan_result(
+                snapshot,
+                &daemon,
+                RefreshOptions::default(),
+                CancellationToken::new(),
+                progress_tx,
+                &sink,
+            )
+            .await
+            .expect("scan completes");
+
+        assert_eq!(result.bond_sightings.len(), 1, "stranger's post is ignored");
+        assert_eq!(
+            result.bond_sightings[0].slot, 4,
+            "slot-resolved from the watch"
+        );
+        assert_eq!(result.bond_sightings[0].block_height, 1);
     }
 
     /// Construct a `(height, parent_hash)`-chained linear chain of `n`
@@ -1607,7 +1747,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, 0);
+        let refresh = LocalRefresh::new(vm, 0, std::collections::BTreeMap::new());
 
         let chain_a = linear_chain(TIP);
         let tail_b = divergent_tail(&chain_a, FORK, TIP);
@@ -1690,7 +1830,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, 0);
+        let refresh = LocalRefresh::new(vm, 0, std::collections::BTreeMap::new());
 
         let chain_a = linear_chain(TIP);
         let tail_b = divergent_tail(&chain_a, FORK, TIP);
@@ -1774,7 +1914,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, 0);
+        let refresh = LocalRefresh::new(vm, 0, std::collections::BTreeMap::new());
 
         let chain_a = linear_chain(TIP);
         // Chain B: A below FORK1, divergent tail at/above it.
@@ -1905,7 +2045,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, FLOOR);
+        let refresh = LocalRefresh::new(vm, FLOOR, std::collections::BTreeMap::new());
         let chain = linear_chain(TIP);
         let parent_at_999 = chain[usize::try_from(FLOOR - 1).unwrap()].block.hash();
         let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
@@ -1950,7 +2090,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, FLOOR);
+        let refresh = LocalRefresh::new(vm, FLOOR, std::collections::BTreeMap::new());
         let chain = linear_chain(TIP);
         let parent = chain[usize::try_from(SYNCED).unwrap()].block.hash();
         let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);

@@ -182,6 +182,16 @@ pub struct ScanResult {
     /// verify lands in CT-5b. This is a deliberate write-but-not-read transit
     /// field, not dead code; do not remove it (CT-5 §6 E6b note).
     pub block_curve_tree_roots: Vec<(u64, [u8; 32])>,
+
+    /// Bond-post sightings from the principal scan's **bond watch**
+    /// (SA-R-6 from-seed reconstruction): slots whose cached persona
+    /// canonical id was observed posting a bond in a scanned block, with
+    /// the observation height. The merge adopts each sighted slot into
+    /// `StakingBlock::bonded_slots`, records the first-sighting height,
+    /// and raises the monotone `p_slot` cursor — positive evidence only,
+    /// so the raise is sound on any coverage. Slot-resolved on purpose:
+    /// no persona canonical id rides this channel.
+    pub bond_sightings: Vec<BondSightingObserved>,
 }
 
 /// A scanner-detected output: the recovered output material plus
@@ -260,6 +270,30 @@ impl ScanResult {
             reorg_rewind: None,
             block_leaves: Vec::new(),
             block_curve_tree_roots: Vec::new(),
+            bond_sightings: Vec::new(),
         }
+    }
+}
+
+/// One bond-post sighting from the principal scan's bond watch: the sighted
+/// slot (already resolved from its cached persona canonical id at the
+/// producer — the id itself never rides the channel) and the block height
+/// the `Input::BondPost` was observed at.
+///
+/// `Debug` is redacted: a slot↔height pair is a row of `P`'s bond-post
+/// history (the `BondPostRecord` discipline) — transit values must not leak
+/// through a log or error `{:?}` path either.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct BondSightingObserved {
+    /// Block height the bond post was observed in. Must be a height in the
+    /// enclosing [`ScanResult::processed_height_range`].
+    pub block_height: u64,
+    /// The persona slot whose cached canonical id matched.
+    pub slot: u32,
+}
+
+impl std::fmt::Debug for BondSightingObserved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BondSightingObserved(<redacted persona-history>)")
     }
 }

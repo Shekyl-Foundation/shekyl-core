@@ -898,9 +898,24 @@ impl Engine<SoloSigner> {
         // consumes it below. This is the (6-i) construction-time projection;
         // the full blob then lives only in the actor.
         let merge_view_secret = super::key_actor::HandleDerivationViewSecret::from_keys(&keys);
+        // The bond watch's candidate map: the open-built probe-id cache,
+        // inverted (id → slot) for the producer's per-observation lookup.
+        // Durably-retired slots were excluded when the cache was built; a
+        // cache row from an *earlier* open whose slot has since retired is
+        // filtered here with the same refusal set (SA-R-6 — the watch must
+        // not churn re-adopting a retired persona; on an unreadable seal the
+        // set is empty and arm #2 heals any re-adoption at the next open).
+        let bond_watch: std::collections::BTreeMap<shekyl_types::PCanonicalId, u32> = ledger
+            .staking
+            .persona_id_cache
+            .iter()
+            .filter(|(slot, _)| !probe_retired.contains(slot))
+            .map(|(slot, id)| (*id, *slot))
+            .collect();
         let refresh = std::sync::Arc::new(super::local_refresh::LocalRefresh::new(
             view_material,
             scan_start_floor,
+            bond_watch,
         ));
 
         // §6 step 3(b): spawn the `KeyActor`, which takes the `AllKeysBlob` by
@@ -1679,8 +1694,8 @@ mod tests {
         let at_create = created.ledger().staking.persona_id_cache.clone();
         assert!(!created.ledger().staking.staking_enabled, "non-staker");
         assert_eq!(
-            at_create.len() as u32,
-            w + 1,
+            at_create.len(),
+            (w + 1) as usize,
             "create derives ids for the full 0..=W window"
         );
         assert!(at_create.contains_key(&0) && at_create.contains_key(&w));
