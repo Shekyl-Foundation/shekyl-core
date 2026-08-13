@@ -194,26 +194,34 @@ impl ServingReader {
         self.store.open_frozen_segment_body(id)
     }
 
-    /// How far this store has ingested — the serving host's **independent
-    /// clock**.
+    /// How far this store has ingested — the serving host's staleness clock.
     ///
-    /// A serving host's serve-set is re-derived on the persona-side P-scan
-    /// sweep, and its `as_of_height` advances only when that refresh runs.
-    /// This tip advances on a *different* driver: the principal's block scan,
-    /// which feeds `CurveTreeClient::ingest_block` through the curve-tree
-    /// actor. Two independent drivers is exactly what makes the pair usable
-    /// as a liveness signal — if the refresh stops (the P-scan task halts
-    /// loudly on a chain-exhaustiveness anomaly and returns), `as_of_height`
-    /// freezes while this keeps climbing, and the gap is local evidence that
-    /// the serve-set has stopped tracking the record. A tripwire built on one
-    /// clock, or on two clocks the same driver advances, would read zero
-    /// forever.
+    /// A serving host reads this **twice**: once when it mints a serve-set
+    /// witness, and again whenever it is asked how stale that witness is.
+    /// One quantity read at two times, so the difference is exactly "blocks
+    /// this wallet has ingested since it last re-derived its holdings".
     ///
-    /// It also measures the right quantity. The gap is "blocks I have
-    /// ingested since I last re-derived my holdings" — not wall-clock, and
-    /// not a remote tip. A wallet that is simply offline freezes both, and
-    /// correctly reports no staleness: it has learned nothing its serve-set
-    /// could be stale against.
+    /// The independence that makes the reading a *liveness* signal is
+    /// between the two **drivers**, not between two quantities: the stamp is
+    /// taken by the persona-side P-scan refresh, while the value it stamps is
+    /// advanced by the principal's block scan through
+    /// `CurveTreeClient::ingest_block`. Stop the refresh and the stamp
+    /// freezes while this keeps climbing. Pairing this against a *remote*
+    /// height instead — the daemon's tip, say — would measure how far behind
+    /// the daemon this wallet is, which reads healthy for a wallet that is
+    /// simply catching up, precisely across the window in which holdings move.
+    ///
+    /// A wallet that is merely offline freezes both readings and correctly
+    /// reports no staleness: it has learned nothing its serve-set could be
+    /// stale against.
+    ///
+    /// **Not monotonic.** [`Self::truncate_from_tree_position`] resets it to
+    /// zero and [`Self::rollback_to_fork`] moves it back to the fork height,
+    /// and both also delete pinned-segment rows above the truncation point.
+    /// A reader that stamped this value and later sees a *lower* one is
+    /// therefore looking at a store that rolled back beneath its pins — a
+    /// distinct condition from lag, and not one a saturating subtraction may
+    /// quietly report as zero.
     ///
     /// # Errors
     ///
@@ -235,14 +243,6 @@ impl ServingReader {
     #[must_use]
     pub fn same_store(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.store, &other.store)
-    }
-
-    /// The live store this reader holds. Crate-private so
-    /// [`crate::CurveTreeClient::resume_from_reader`] can rebuild a writer
-    /// over the same database without publishing a write `Arc` on the
-    /// serving surface.
-    pub(crate) fn store_arc(&self) -> Arc<LeafStore> {
-        Arc::clone(&self.store)
     }
 }
 

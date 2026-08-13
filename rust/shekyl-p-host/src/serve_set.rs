@@ -45,13 +45,20 @@ use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader, StoreError};
 /// A serve-set is a snapshot: holdings change on-chain (`HoldingsUpdate`),
 /// and new segments freeze continuously — §9.6 item 3's point that `D` is a
 /// moving number, not a plateau. [`Self::as_of_height`] records the chain
-/// height the record was read at, so a stale set is *distinguishable* from a
-/// current one rather than merely being out of date. Nothing here expires a
-/// set, and nothing here decides whether to refresh: refresh is
-/// unconditional (pinning is idempotent; a "did holdings change?" gate is
-/// the question §9.6 item 4 exists because nobody answers it reliably).
-/// The stamp is the tripwire for a refresh that has *stopped* — see
-/// [`Staleness`].
+/// height the record was read at, so a set carries the provenance of the
+/// claim it makes: *these shards, as the daemon's database had them at that
+/// height*. Nothing here expires a set, and nothing here decides whether to
+/// refresh: refresh is unconditional (pinning is idempotent; a "did holdings
+/// change?" gate is the question §9.6 item 4 exists because nobody answers
+/// it reliably).
+///
+/// **This stamp is provenance, not the staleness clock.** It is the
+/// *daemon's* height, read over RPC, and the wallet's own ingest is
+/// routinely far behind it — a wallet catching up after a week offline is
+/// thousands of blocks below a record stamped at the daemon's tip.
+/// Subtracting the two would measure how far this wallet trails its daemon,
+/// which reads healthy for exactly as long as the catch-up lasts. The
+/// tripwire is built from one clock read twice instead; see [`Staleness`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeSet {
     shard_ids: Vec<u64>,
@@ -105,9 +112,17 @@ pub enum PinError {
         /// Every serve-set member whose bytes are gone.
         shard_ids: Vec<u64>,
     },
-    /// The pinner failed (store I/O, a dead actor, a poisoned client). The
-    /// serve-set's state is unknown, so the host does not start; pinning is
-    /// idempotent, so a retry re-covers whatever was already applied.
+    /// The pinner failed (store I/O, a dead actor, a poisoned client), or
+    /// the store could not be read for the witness's own staleness baseline.
+    /// Either way the serve-set's state is unknown, so the host does not
+    /// start; pinning is idempotent, so a retry re-covers whatever was
+    /// already applied.
+    ///
+    /// The baseline read shares this variant rather than getting its own
+    /// because this enum splits on **remedy**, not on origin, and the remedy
+    /// is the same one: retry. A witness minted without a baseline could not
+    /// answer [`PinnedServeSet::staleness`] at all, so there is nothing
+    /// weaker to fall back to.
     Pinner {
         /// Local diagnostic; never on the wire.
         detail: String,
@@ -181,11 +196,14 @@ pub struct PinReport {
     /// record's own order — the set the implementor pinned.
     pub shard_ids: Vec<u64>,
     /// The chain height that record was read at; becomes
-    /// [`ServeSet::as_of_height`], the tripwire's first clock. A
-    /// [`BlockHeight`], not a raw count: the other clock
-    /// ([`ServingReader::sync_tip_height`]) is a height, and a
-    /// `ChainCount` laundered in here would cry wolf by one block
-    /// forever.
+    /// [`ServeSet::as_of_height`], the set's **provenance** stamp.
+    ///
+    /// Not an operand of the staleness reading — that is
+    /// [`ServingReader::sync_tip_height`] read twice, so no remote height
+    /// is ever subtracted from a local one. A [`BlockHeight`] rather than a
+    /// raw chain count all the same: the value answers "at what height was
+    /// this shard list true", and a count is one more than the height it
+    /// describes.
     pub as_of_height: BlockHeight,
     /// Each member's outcome paired with its shard id, in `shard_ids` order.
     pub outcomes: Vec<(u64, SegmentPin)>,
@@ -334,7 +352,12 @@ impl<T: ServeSetPinner + Sync> ServeSetPinner for &T {
 #[derive(Debug, Clone)]
 pub struct PinnedServeSet {
     set: ServeSet,
-    not_yet_frozen: Vec<u64>,
+    not_yet_frozen_at_last_pin: Vec<u64>,
+    already_pruned: Vec<u64>,
+    /// The store's ingest tip when this witness was minted — the staleness
+    /// baseline, read from [`Self::reader`] so the later reading is the
+    /// same quantity from the same store. See [`Staleness`].
+    minted_at_tip: BlockHeight,
     /// The store these pins are in — carried, never supplied, so the host
     /// cannot serve a different one. No `PartialEq`/`Eq` on this type as a
     /// result; nothing needs them, and a store handle has no meaningful
@@ -348,22 +371,37 @@ impl PinnedServeSet {
     /// Members that have not frozen yet are pinned and **accepted**: bonding
     /// before a segment freezes is legal by design, and pinning ahead is
     /// what stops a prune from landing in the window between the freeze and
-    /// the next re-pin. They are recorded in [`Self::not_yet_frozen`] because
-    /// they are not servable *yet* — a shard read for one is an honest miss
-    /// until the freeze boundary crosses it, and an operator looking at a
-    /// non-zero miss count should be able to tell that apart from a fault.
+    /// the next re-pin. They are recorded in
+    /// [`Self::not_yet_frozen_at_last_pin`] because they are not servable
+    /// *yet* — a shard read for one is an honest miss until the freeze
+    /// boundary crosses it, and an operator looking at a non-zero miss count
+    /// should be able to tell that apart from a fault.
+    ///
+    /// **A pruned member refuses the start, and that decision lives here
+    /// rather than in [`Self::from_report`].** Nothing is serving yet, so
+    /// refusing costs nothing and the remedy — rebuild the store by chain
+    /// replay — wants to be paid before the persona advertises itself.
+    /// [`Self::refreshed`] deliberately does *not* refuse: see its doc.
     ///
     /// # Errors
     ///
     /// [`PinError::MembersAlreadyPruned`] if any member's bytes are already
-    /// gone, and [`PinError::Pinner`] if the pin could not be applied.
+    /// gone, [`PinError::PinnerCoverageMismatch`] if the report's outcomes do
+    /// not describe the set it claims, and [`PinError::Pinner`] if the pin
+    /// could not be applied or the store's ingest tip could not be read.
     pub async fn acquire<P: ServeSetPinner>(pinner: &P) -> Result<Self, PinError> {
         let report = pinner
             .pin_serve_set()
             .await
             .map_err(|detail| PinError::Pinner { detail })?;
         let reader = report.reader.clone();
-        Self::from_report(report, reader)
+        let pinned = Self::from_report(report, reader)?;
+        if !pinned.already_pruned.is_empty() {
+            return Err(PinError::MembersAlreadyPruned {
+                shard_ids: pinned.already_pruned,
+            });
+        }
+        Ok(pinned)
     }
 
     /// Re-pin `set` through `pinner`, **keeping this witness's store**.
@@ -377,9 +415,30 @@ impl PinnedServeSet {
     /// nobody pinned. Refresh therefore changes *which shards*, never *which
     /// store*.
     ///
+    /// **A terminally-pruned member does not refuse the refresh.** This is
+    /// the one place the refresh's checks deliberately diverge from
+    /// [`Self::acquire`]'s, and the asymmetry is the point:
+    /// [`SegmentPin::AlreadyPruned`] is terminal by the store's own contract
+    /// (chain replay, not retry), so a whole-set refusal here would make
+    /// *every* later refresh fail for the life of the host. The witness
+    /// would freeze, and every shard connected afterwards would go unpinned
+    /// and prunable — §9.6 item 4's slash, re-entering through the error
+    /// path of the very refresh that exists to close it. One member whose
+    /// bytes are already gone must not cost the other members their pins.
+    /// The pins the report *did* apply are already committed in the store
+    /// regardless (the pinner writes them in one transaction and reports
+    /// `AlreadyPruned` rather than raising it), so installing the new
+    /// witness records what is true; the unrecoverable members stay visible
+    /// on [`Self::already_pruned`].
+    ///
     /// # Errors
     ///
-    /// Exactly [`Self::acquire`]'s.
+    /// [`PinError::Pinner`] if the pin could not be applied or the ingest
+    /// tip could not be read, [`PinError::PinnerCoverageMismatch`] if the
+    /// report's outcomes do not describe the set it claims, and
+    /// [`PinError::PinnerStoreMismatch`] if the pins landed in a different
+    /// open store. Never [`PinError::MembersAlreadyPruned`] — that refusal
+    /// is `acquire`-only, per the paragraph above.
     pub async fn refreshed<P: ServeSetPinner>(&self, pinner: &P) -> Result<Self, PinError> {
         let report = pinner
             .pin_serve_set()
@@ -398,9 +457,16 @@ impl PinnedServeSet {
         Self::from_report(report, self.reader.clone())
     }
 
-    /// Validate a report's internal coherence and mint the witness. The one
-    /// place the checks live, so `acquire` and `refreshed` cannot drift apart
-    /// on what a witness requires.
+    /// Validate a report's internal **coherence** and mint the witness. The
+    /// one place those checks live, so `acquire` and `refreshed` cannot drift
+    /// apart on what a witness requires.
+    ///
+    /// Coherence only: this function decides whether the report describes
+    /// itself, never whether the resulting witness is fit to start serving.
+    /// That is a policy question, it differs between the two callers, and it
+    /// therefore lives in the caller — `acquire` refuses a pruned member,
+    /// `refreshed` records it. Splitting on that line is what keeps this
+    /// function free of a mode flag.
     fn from_report(report: PinReport, reader: ServingReader) -> Result<Self, PinError> {
         let PinReport {
             shard_ids,
@@ -438,23 +504,39 @@ impl PinnedServeSet {
             });
         }
 
-        let pruned: Vec<u64> = outcomes
+        let already_pruned: Vec<u64> = outcomes
             .iter()
             .filter(|(_, pin)| *pin == SegmentPin::AlreadyPruned)
             .map(|(shard_id, _)| *shard_id)
             .collect();
-        if !pruned.is_empty() {
-            return Err(PinError::MembersAlreadyPruned { shard_ids: pruned });
-        }
-
-        let not_yet_frozen = outcomes
+        let not_yet_frozen_at_last_pin = outcomes
             .iter()
             .filter(|(_, pin)| *pin == SegmentPin::PinnedNotYetFrozen)
             .map(|(shard_id, _)| *shard_id)
             .collect();
+
+        // THE STALENESS BASELINE, TAKEN FROM THE SAME STORE THE PINS ARE IN.
+        // Stamping it here rather than accepting it in the report is what
+        // makes the later reading a difference of one quantity: `staleness`
+        // re-reads this exact call on this exact reader, so there is no
+        // second clock to mismatch. It is deliberately *not* the record's
+        // `as_of_height`, which is the daemon's height over RPC.
+        //
+        // The stamp is taken after the pin commits, so ingest can advance in
+        // between and land it a round trip high — which understates lag by
+        // however many blocks arrived during one actor `ask`. Named rather
+        // than corrected: the bound this feeds is measured in blocks of
+        // ingest, and a bound that could not absorb a single round trip
+        // would be reporting the scheduler, not the serve-set.
+        let minted_at_tip = reader.sync_tip_height().map_err(|e| PinError::Pinner {
+            detail: format!("staleness baseline read failed: {e:?}"),
+        })?;
+
         Ok(Self {
             set,
-            not_yet_frozen,
+            not_yet_frozen_at_last_pin,
+            already_pruned,
+            minted_at_tip,
             reader,
         })
     }
@@ -465,11 +547,39 @@ impl PinnedServeSet {
         &self.set
     }
 
-    /// Pinned members that have not frozen yet, so are not servable until
-    /// they do.
+    /// Members that had not frozen yet **when this witness was minted**, so
+    /// were pinned but not servable at that moment.
+    ///
+    /// The name carries the tense on purpose. This is a snapshot taken at
+    /// the last pin and never re-evaluated: a segment that freezes a block
+    /// later stays on this list until the next successful refresh replaces
+    /// the witness. It is a *diagnostic* — the thing that lets an operator
+    /// read a non-zero miss count as "bonded ahead of the freeze" rather
+    /// than "faulty" — and it must not be used to decide whether a shard is
+    /// servable.
+    ///
+    /// Servability has exactly one authority and it is live: the store
+    /// answers it on every read, because
+    /// [`ServingReader::open_frozen_segment_body`] returns `Ok(None)` for a
+    /// segment with no committed `R_k`. The serving loop already asks it
+    /// there, per request. A second, staler answer to the same question is
+    /// the kind of duplicate that only ever drifts, so this one is scoped by
+    /// its name to the question it can actually answer.
     #[must_use]
-    pub fn not_yet_frozen(&self) -> &[u64] {
-        &self.not_yet_frozen
+    pub fn not_yet_frozen_at_last_pin(&self) -> &[u64] {
+        &self.not_yet_frozen_at_last_pin
+    }
+
+    /// Members whose leaf bytes were already gone at the last pin.
+    ///
+    /// Always empty on a witness from [`Self::acquire`], which refuses to
+    /// start over one. Non-empty only on a [`Self::refreshed`] witness,
+    /// where refusing would wedge every later refresh — the operator-facing
+    /// record of a store that needs rebuilding by chain replay while the
+    /// persona keeps serving everything it still has.
+    #[must_use]
+    pub fn already_pruned(&self) -> &[u64] {
+        &self.already_pruned
     }
 
     /// A reader on the store these pins are in — the store the host serves
@@ -479,25 +589,37 @@ impl PinnedServeSet {
         &self.reader
     }
 
-    /// How far this serve-set has fallen behind the store's own ingest.
+    /// How much this wallet has ingested since this serve-set was derived.
     ///
-    /// Both operands come from here: `as_of_height` from the record this set
-    /// was derived from, the tip from the store the pins are in. See
-    /// [`Staleness`] for why the two clocks' independence is what makes the
-    /// reading meaningful.
+    /// **One clock, read twice.** Both operands are
+    /// [`ServingReader::sync_tip_height`] on this witness's own store: the
+    /// baseline stamped when the witness was minted, and the tip now. See
+    /// [`Staleness`] for why that pair is a liveness signal and why a remote
+    /// height is not.
     ///
-    /// A tip *below* `as_of_height` reads as zero lag rather than as an
-    /// error: the wallet's own ingest trailing the daemon's reported height
-    /// is ordinary (the record is read over RPC, the tip is local), and it is
-    /// not a staleness condition — nothing has been ingested that the
-    /// serve-set has not seen.
+    /// A tip *below* the baseline is [`Staleness::RolledBack`], never a
+    /// saturating zero. Once both operands are the same clock, going
+    /// backwards can only be a store event — `truncate_from_tree_position`
+    /// or `rollback_to_fork` — and those delete pinned-segment rows above
+    /// the truncation point, so the witness is claiming pins the store may
+    /// have just dropped. Reporting that as "zero blocks behind" would be an
+    /// affirmative all-clear on the one store event that can unpin a member.
+    ///
+    /// This reading cannot see a refresh that is *failing* rather than
+    /// stopped; that is host state, and
+    /// [`crate::PersonaServingHost::staleness`] folds it in.
     ///
     /// # Errors
     ///
     /// Store failure reading the sync tip.
     pub fn staleness(&self, bound: StalenessBound) -> Result<Staleness, StoreError> {
         let tip = self.reader.sync_tip_height()?;
-        let lag = tip.0.saturating_sub(self.set.as_of_height().0);
+        let Some(lag) = tip.0.checked_sub(self.minted_at_tip.0) else {
+            return Ok(Staleness::RolledBack {
+                minted_at_tip: self.minted_at_tip.0,
+                tip: tip.0,
+            });
+        };
         Ok(if lag > bound.get() {
             Staleness::Stale {
                 lag,
@@ -538,14 +660,41 @@ impl StalenessBound {
     }
 }
 
-/// How far a host's serve-set has fallen behind its own ingest.
+/// Whether a host's serve-set is still tracking its bond record.
 ///
-/// Read from two clocks with **different drivers**: `as_of_height` advances
-/// only when the refresh runs (the persona-side P-scan sweep), while the
-/// store's sync tip advances on the principal's block scan. That
-/// independence is the whole point — a refresh that has stopped freezes one
-/// and not the other. Two clocks the same driver advances would read
-/// `Current` forever, which is the failure the tripwire exists to catch.
+/// # One clock read twice, and two drivers
+///
+/// The lag is [`ServingReader::sync_tip_height`] now, minus the same value
+/// stamped when the witness was minted. That is deliberately *one* quantity:
+/// a difference of two different quantities is only a lag when they happen
+/// to agree, and the two available here do not — the record's
+/// [`ServeSet::as_of_height`] is the daemon's tip over RPC, and a wallet
+/// catching up sits thousands of blocks below it. Subtracting those would
+/// read `Current { lag: 0 }` for the whole catch-up, which is exactly the
+/// window in which holdings move and a gained shard goes unpinned.
+///
+/// What makes one clock a *liveness* signal is that the reader and the
+/// writer of the stamp are different: the stamp is taken by the persona-side
+/// P-scan refresh, and the value it stamps is advanced by the principal's
+/// block scan. Stop the refresh and the stamp freezes while ingest keeps
+/// climbing. A quantity the same driver moved on both sides would read
+/// `Current` forever, which is the failure this exists to catch.
+///
+/// # What it cannot see
+///
+/// A wallet where the block scan **and** the refresh have both stopped —
+/// most concretely a curve-tree actor that fail-stopped and could not be
+/// resumed — freezes ingest and the stamp together, and the lag stays
+/// constant. [`Self::RefreshFailing`] is the arm that covers it, and it is
+/// host state rather than store state precisely so that a common-mode store
+/// fault cannot silence it: a refresh that keeps being *attempted* and keeps
+/// failing is evidence no store reading can supply.
+///
+/// The residual, stated rather than left implicit: if the refresh loop is
+/// itself gone *and* ingest is stopped, nothing is attempted and nothing
+/// advances, so there is no local evidence at all. That is a wallet in which
+/// no task is running, and it is out of reach of any signal this host can
+/// produce from inside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Staleness {
     /// Within the bound.
@@ -575,20 +724,77 @@ pub enum Staleness {
         /// The bound that was exceeded.
         bound: u64,
     },
+    /// The store's ingest tip is **below** where it was when this witness
+    /// was minted: the tree rolled back beneath these pins.
+    ///
+    /// Its own arm rather than a saturating zero, and rather than folding
+    /// into [`Self::Stale`], because the diagnosis differs completely even
+    /// though the next action is the same. `Stale` says the refresh
+    /// machinery has stopped and should be investigated; this says a reorg
+    /// happened, nothing is broken, and the next refresh tick re-pins and
+    /// re-stamps. Sending an operator to debug a healthy refresh loop is a
+    /// false alarm, and false alarms are how a tripwire gets ignored.
+    ///
+    /// It is not benign, though: `truncate_from_tree_position` and
+    /// `rollback_to_fork` delete pinned-segment rows above the truncation
+    /// point, so during this window the witness names pins the store no
+    /// longer holds. It reads as not-current for exactly that reason.
+    RolledBack {
+        /// The ingest tip stamped when the witness was minted.
+        minted_at_tip: u64,
+        /// The ingest tip now — below `minted_at_tip`.
+        tip: u64,
+    },
+    /// The last refresh attempt **failed**, and this many have failed in a
+    /// row since the last success.
+    ///
+    /// Produced by [`crate::PersonaServingHost::staleness`], never by
+    /// [`PinnedServeSet::staleness`]: it is a fact about attempts, not about
+    /// the store, and that is what makes it the one arm a store-wide fault
+    /// cannot suppress. When ingest and the refresh stop together — the
+    /// fail-stopped curve-tree actor — the lag arms freeze and this one
+    /// keeps counting.
+    ///
+    /// **No threshold, deliberately.** Reporting the first failure is not a
+    /// verdict that the host is broken; it is the fact that the last attempt
+    /// did not succeed, and `consecutive` is what separates a transient RPC
+    /// blip from a refresh that has been failing for four hundred ticks.
+    /// Inventing a "how many failures is too many" constant here would be
+    /// the number-first, justification-after move this round refuses
+    /// elsewhere — and unlike [`StalenessBound`], there is no injection site
+    /// that would make it anyone else's to choose yet.
+    RefreshFailing {
+        /// Failed refresh attempts since the last successful one; at least 1.
+        consecutive: u32,
+    },
 }
 
 impl Staleness {
-    /// Whether the bound was exceeded.
+    /// Whether the serve-set is **not** known to be tracking the record.
+    ///
+    /// True for every arm but [`Self::Current`]. Note that a single failed
+    /// refresh already reads stale: the arms report what is known, and what
+    /// is known after a failed attempt is that the set was not re-derived.
+    /// A caller that wants to tolerate a blip should match
+    /// [`Self::RefreshFailing`] and read `consecutive` rather than ask this
+    /// question.
     #[must_use]
     pub fn is_stale(self) -> bool {
-        matches!(self, Self::Stale { .. })
+        !matches!(self, Self::Current { .. })
     }
 
-    /// Blocks ingested since the serve-set was last derived.
+    /// Blocks ingested since the serve-set was last derived, where that is a
+    /// meaningful number.
+    ///
+    /// `None` for [`Self::RolledBack`] (the store un-ingested; the
+    /// difference is not a lag) and [`Self::RefreshFailing`] (no store
+    /// reading was taken). Returning `0` for those would be the same
+    /// false all-clear this reading exists to avoid, one layer up.
     #[must_use]
-    pub fn lag(self) -> u64 {
+    pub fn lag(self) -> Option<u64> {
         match self {
-            Self::Current { lag } | Self::Stale { lag, .. } => lag,
+            Self::Current { lag } | Self::Stale { lag, .. } => Some(lag),
+            Self::RolledBack { .. } | Self::RefreshFailing { .. } => None,
         }
     }
 }
@@ -602,6 +808,20 @@ impl std::fmt::Display for Staleness {
                 "serve-set has not been re-derived for {lag} blocks of ingest (bound {bound}): \
                  a shard connected since then is unpinned and can be pruned before it is \
                  served — check that refresh is still succeeding"
+            ),
+            Self::RolledBack { minted_at_tip, tip } => write!(
+                f,
+                "the curve-tree store rolled back beneath this serve-set (ingest tip {tip}, \
+                 pinned at {minted_at_tip}): a rollback drops pinned-segment rows above the \
+                 fork, so these shards may no longer be pinned. The next refresh re-pins them; \
+                 no action is needed unless this persists"
+            ),
+            Self::RefreshFailing { consecutive } => write!(
+                f,
+                "the serve-set refresh has failed {consecutive} time(s) in a row: the shard \
+                 list is not being re-derived, so a shard connected since the last success is \
+                 unpinned and can be pruned before it is served — check the persona's daemon \
+                 transport and the curve-tree actor"
             ),
         }
     }

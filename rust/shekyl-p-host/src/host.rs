@@ -6,6 +6,7 @@
 //! [`PersonaServingHost`]: the loopback serving loop and the onion that
 //! publishes it, composed into one object with one lifetime.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shekyl_p_serve::{PServeEndpoint, StoreShardProvider};
@@ -144,6 +145,20 @@ pub struct PersonaServingHost<P: ServeSetPinner> {
     /// property of this host. Behind a `Mutex` because it is exactly that —
     /// live — and [`Self::refresh`] replaces it as holdings change.
     pinned: Mutex<PinnedServeSet>,
+    /// Failed [`Self::refresh`] attempts since the last successful one.
+    ///
+    /// **Host state on purpose, because every store-derived signal shares a
+    /// failure mode with the thing it is watching.** The lag arms of
+    /// [`Staleness`] read the curve-tree store; a fail-stopped curve-tree
+    /// actor that cannot be resumed stops block ingest *and* fails every
+    /// pin, so the stamp and the tip freeze together and the lag stays
+    /// constant — an affirmative healthy reading on a wallet that is
+    /// comprehensively broken. A count of attempts is the one local fact
+    /// that fault cannot suppress, because the attempts keep happening.
+    ///
+    /// Relaxed ordering throughout: this is a counter read for a human, with
+    /// no other state ordered against it.
+    refresh_failures: AtomicU32,
 }
 
 impl<P: ServeSetPinner> PersonaServingHost<P> {
@@ -214,6 +229,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
             service_id,
             pinner,
             pinned: Mutex::new(pinned),
+            refresh_failures: AtomicU32::new(0),
         })
     }
 
@@ -282,28 +298,56 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// derived from the connected record. A serving host does not name its
     /// own obligations on any tick, first or later.
     ///
+    /// **Every attempt is counted, and that is what makes the tripwire
+    /// whole.** A failure here is recorded on the host, so
+    /// [`Self::staleness`] can report it even when the same fault has frozen
+    /// the store-derived clocks — see [`Staleness::RefreshFailing`]. The
+    /// caller still gets the error; it does not have to keep the tally to
+    /// get an honest reading back.
+    ///
     /// # Errors
     ///
-    /// [`PinError`] as [`PinnedServeSet::acquire`]; the host keeps serving on
-    /// its previous pins either way, and the caller should treat a persistent
-    /// failure as the [`Staleness::Stale`] condition it will become.
+    /// [`PinError`] as [`PinnedServeSet::refreshed`]; the host keeps serving
+    /// on its previous pins either way.
     pub async fn refresh(&self) -> Result<(), PinError> {
         // Clone the current witness rather than holding the lock across the
         // await: the pin is an actor round trip, and holding a lock across it
         // is the shape the curve-tree actor's own lock-ordering rule exists
         // to forbid.
         let current = self.pinned_serve_set();
-        let next = current.refreshed(&self.pinner).await?;
-        *self.lock_pinned() = next;
-        Ok(())
+        match current.refreshed(&self.pinner).await {
+            Ok(next) => {
+                *self.lock_pinned() = next;
+                self.refresh_failures.store(0, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(e) => {
+                self.refresh_failures.fetch_add(1, Ordering::Relaxed);
+                Err(e)
+            }
+        }
     }
 
-    /// Whether the serve-set is still tracking the bond record, measured
-    /// against this host's own ingest.
+    /// Whether the serve-set is still tracking the bond record.
     ///
-    /// The detector for a refresh that has **stopped**: the P-scan task halts
-    /// into its own log on a chain-exhaustiveness anomaly, and nothing on the
-    /// serving side observes that. Poll this beside the tor posture.
+    /// The detector for a refresh that is no longer keeping up, in either of
+    /// the two shapes that has. Poll this beside the tor posture.
+    ///
+    /// - **Stopped.** The P-scan task halts into its own log on a
+    ///   chain-exhaustiveness anomaly, is cancelled, panics, or was never
+    ///   started. Nothing on the serving side observes that, so the evidence
+    ///   is the store's ingest climbing past the tip stamped at the last
+    ///   successful refresh.
+    /// - **Failing.** Refresh keeps being attempted and keeps returning
+    ///   [`PinError`]. This arm is checked **first**, and it is checked
+    ///   before any store read, because the fault that produces it may be
+    ///   the same fault that has frozen the store's clocks — a curve-tree
+    ///   actor that fail-stopped and could not be resumed stops ingest and
+    ///   fails every pin at once. Asking the store first would let that case
+    ///   answer `Current`.
+    ///
+    /// A store read failure while refresh is failing therefore does not mask
+    /// the reading: there is nothing to read.
     ///
     /// # Errors
     ///
@@ -312,6 +356,10 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         &self,
         bound: StalenessBound,
     ) -> Result<Staleness, shekyl_curve_tree::StoreError> {
+        let consecutive = self.refresh_failures.load(Ordering::Relaxed);
+        if consecutive > 0 {
+            return Ok(Staleness::RefreshFailing { consecutive });
+        }
         self.lock_pinned().staleness(bound)
     }
 

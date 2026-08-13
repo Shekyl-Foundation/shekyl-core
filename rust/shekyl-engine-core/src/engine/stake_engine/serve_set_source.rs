@@ -100,20 +100,23 @@ impl<R: Rpc + Sync> ServeSetPinner for EngineServeSetPinner<R> {
 
         Ok(PinReport {
             shard_ids,
-            // The height the daemon read the record at — the tripwire's
-            // record-side clock. Deliberately the reply's own height rather
-            // than anything measured locally: it is the height the shard list
-            // is true *as of*, and pairing it with a locally-observed tip
-            // would compare two facts about different moments.
+            // The height the daemon read the record at — the set's
+            // provenance, and deliberately the reply's own height rather than
+            // anything measured locally: it says at what height this shard
+            // list was true, which is a fact about the record and not about
+            // this wallet.
             //
-            // `tip()`, not the raw count. `chain_height` is a ChainCount (the
-            // daemon's `db.height()`), and the value it is compared against —
-            // `LeafStore::sync_tip_height` — is a block *height*. Passing the
-            // count would make a perfectly current serve-set read as one block
-            // stale forever, a permanent off-by-one in the direction that
-            // cries wolf. An empty chain has no tip and reads 0, which is also
-            // what an un-ingested store reports, so the lag is 0 and the
-            // tripwire correctly stays quiet.
+            // It is **not** an operand of the host's staleness reading, and
+            // must not become one. This is the daemon's height over RPC while
+            // the store's ingest tip is local, and a wallet catching up sits
+            // far below it; differencing the two would measure the catch-up
+            // and read healthy right through it. `PinnedServeSet` stamps the
+            // local ingest tip instead and compares that one clock to itself.
+            //
+            // `tip()`, not the raw count: `chain_height` is a ChainCount (the
+            // daemon's `db.height()`), one more than the height of the block
+            // it counts, and this field is a height. An empty chain has no
+            // tip and reads 0.
             as_of_height: source
                 .chain_height
                 .tip()
@@ -121,5 +124,165 @@ impl<R: Rpc + Sync> ServeSetPinner for EngineServeSetPinner<R> {
             outcomes,
             reader,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::emission_claim::test_fixtures::source_json;
+    use crate::engine::emission_source::{BondContext, EmissionClaimSource};
+    use shekyl_archival_retention::{
+        settlement_epoch_at_height, HoldingsDescriptor, HoldingsKind, ShardSet,
+    };
+    use shekyl_curve_tree::CurveTreeClient;
+    use shekyl_rpc_client::RpcError;
+    use shekyl_types::ChainCount;
+    use std::sync::Arc;
+
+    /// A daemon serving one canned claim-source reply through the real
+    /// `json_rpc_call` envelope (only the transport is canned, so the decode
+    /// this pinner depends on runs unmocked).
+    #[derive(Clone)]
+    struct ClaimSourceDaemon(Arc<serde_json::Value>);
+
+    impl Rpc for ClaimSourceDaemon {
+        fn post(
+            &self,
+            route: &str,
+            _body: Vec<u8>,
+        ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
+            let reply = serde_json::to_vec(&serde_json::json!({ "result": *self.0 }))
+                .expect("fixture result encodes");
+            let ok = route == "json_rpc";
+            async move {
+                if ok {
+                    Ok(reply)
+                } else {
+                    Err(RpcError::InternalError("unexpected route".into()))
+                }
+            }
+        }
+    }
+
+    /// A claim-source reply at `chain_height`, holding `shard_ids` (or no
+    /// bond record at all when `shard_ids` is `None`).
+    fn daemon(chain_height: u64, shard_ids: Option<Vec<u64>>) -> ClaimSourceDaemon {
+        ClaimSourceDaemon(Arc::new(source_json(&EmissionClaimSource {
+            chain_height: ChainCount::from_raw(chain_height),
+            // The decoder cross-checks this against `chain_height` — the
+            // daemon derives both from one `db.height()` read — so the
+            // fixture derives it the same way rather than pinning a literal
+            // that would rot the moment the epoch length moves.
+            current_settled_epoch: settlement_epoch_at_height(chain_height),
+            bond: shard_ids.map(|ids| BondContext {
+                join_settlement_epoch: 0,
+                holdings: HoldingsDescriptor {
+                    kind: HoldingsKind::ShardSetCompact,
+                    shard_ids: ShardSet::new(ids).expect("fixture shard set"),
+                },
+                claimed_settlement_epochs: Vec::new(),
+            }),
+            epochs: Vec::new(),
+        })))
+    }
+
+    fn handle() -> (tempfile::TempDir, CurveTreeHandle) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let client = CurveTreeClient::open(dir.path().join("curve_tree.redb"))
+            .expect("open fresh curve-tree client");
+        (dir, CurveTreeHandle::spawn(client))
+    }
+
+    /// **The production pinner's own KAT.** Every `shekyl-p-host` test drives
+    /// a test-side pinner, so the mapping this function performs — record →
+    /// `shard_ids`, `chain_height` → `as_of_height`, actor round trip →
+    /// outcomes + reader — is the one part of the seam no host-side test can
+    /// reach. Without this it could be wrong in any of those four places
+    /// while the whole suite stayed green.
+    #[tokio::test]
+    async fn the_report_is_derived_from_the_connected_record() {
+        let (_dir, curve_tree) = handle();
+        let pinner =
+            EngineServeSetPinner::new(curve_tree, daemon(30_001, Some(vec![4, 9])), [7; 32]);
+
+        let report = pinner.pin_serve_set().await.expect("pin");
+
+        assert_eq!(
+            report.shard_ids,
+            vec![4, 9],
+            "the set is the connected record's holdings, not anything held locally"
+        );
+        assert_eq!(
+            report.as_of_height,
+            BlockHeight(30_000),
+            "chain_height is a COUNT; the stamp is the tip it describes, one lower"
+        );
+        assert_eq!(
+            report
+                .outcomes
+                .iter()
+                .map(|(shard_id, _)| *shard_id)
+                .collect::<Vec<_>>(),
+            vec![4, 9],
+            "outcomes come back covering the reported set, in the record's order"
+        );
+        assert!(
+            report
+                .outcomes
+                .iter()
+                .all(|(_, pin)| *pin == SegmentPin::PinnedNotYetFrozen),
+            "an empty store has frozen nothing, so bonding is ahead of the freeze"
+        );
+    }
+
+    /// No bond record is a persona that owes nothing — not a failure, and not
+    /// a serve-set the host has to guess at. It must still report a height,
+    /// so a wallet that has not bonded yet keeps a witness that describes
+    /// reality instead of failing every refresh forever.
+    #[tokio::test]
+    async fn an_unbonded_persona_reports_the_empty_set_rather_than_failing() {
+        let (_dir, curve_tree) = handle();
+        let pinner = EngineServeSetPinner::new(curve_tree, daemon(30_001, None), [7; 32]);
+
+        let report = pinner
+            .pin_serve_set()
+            .await
+            .expect("no bond is not an error");
+
+        assert!(report.shard_ids.is_empty());
+        assert!(report.outcomes.is_empty());
+        assert_eq!(report.as_of_height, BlockHeight(30_000));
+    }
+
+    /// An empty chain has no tip. `ChainCount(0).tip()` is `None`, and the
+    /// stamp must land on 0 rather than underflow or refuse — 0 is also what
+    /// an un-ingested store reports, so the host's lag reads zero and the
+    /// tripwire correctly stays quiet on a wallet at genesis.
+    #[tokio::test]
+    async fn an_empty_chain_stamps_height_zero() {
+        let (_dir, curve_tree) = handle();
+        let pinner = EngineServeSetPinner::new(curve_tree, daemon(0, None), [7; 32]);
+
+        let report = pinner.pin_serve_set().await.expect("pin");
+        assert_eq!(report.as_of_height, BlockHeight(0));
+    }
+
+    /// The reader that comes back must be a handle on the store the pins
+    /// landed in — the trait contract `PinnedServeSet::refreshed` enforces
+    /// with `same_store`. One actor `ask` returns both, so they cannot
+    /// diverge; this pins that they do not.
+    #[tokio::test]
+    async fn the_reader_is_the_store_the_pins_landed_in() {
+        let (_dir, curve_tree) = handle();
+        let pinner = EngineServeSetPinner::new(curve_tree, daemon(30_001, Some(vec![1])), [7; 32]);
+
+        let first = pinner.pin_serve_set().await.expect("pin");
+        let second = pinner.pin_serve_set().await.expect("pin again");
+
+        assert!(
+            first.reader.same_store(&second.reader),
+            "two pins through one handle are two pins in one store"
+        );
     }
 }
