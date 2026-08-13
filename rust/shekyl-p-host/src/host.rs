@@ -159,6 +159,32 @@ pub struct PersonaServingHost<P: ServeSetPinner> {
     /// Relaxed ordering throughout: this is a counter read for a human, with
     /// no other state ordered against it.
     refresh_failures: AtomicU32,
+    /// Serializes a whole [`Self::refresh`] attempt — read the witness, pin,
+    /// install, update the tally — rather than each of its writes.
+    ///
+    /// The witness `Mutex` makes every individual assignment atomic and does
+    /// nothing about the sequence they belong to. Two overlapping refreshes
+    /// are a read-modify-write race on serving state: the slower attempt
+    /// installs its older witness *after* the faster one has installed a
+    /// newer, and a late failure can `fetch_add` a tally that a newer success
+    /// has already cleared (or a late success `store(0)` over a newer
+    /// failure). The result is a tripwire reporting the wrong thing in both
+    /// directions — `RefreshFailing` on a host that is refreshing, and silence
+    /// on one that is not, which is the direction that ends in a slash.
+    ///
+    /// A `tokio::sync::Mutex` rather than the `std` one because it is held
+    /// across the pin's actor round trip. That is exactly the shape
+    /// [`Self::lock_pinned`]'s lock must never take, and the two are
+    /// deliberately different locks for that reason: this one spans the await,
+    /// that one spans an assignment.
+    ///
+    /// Callers wait rather than being turned away, which keeps the contract
+    /// worth having: when `refresh` returns `Ok`, the pins are current as of a
+    /// moment at or after the call. A "someone else is already refreshing, so
+    /// this was a no-op" success would be indistinguishable from a real one at
+    /// the call site, and the caller most likely to hit it is the retry after
+    /// a failure.
+    refresh_gate: tokio::sync::Mutex<()>,
 }
 
 impl<P: ServeSetPinner> PersonaServingHost<P> {
@@ -230,6 +256,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
             pinner,
             pinned: Mutex::new(pinned),
             refresh_failures: AtomicU32::new(0),
+            refresh_gate: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -314,6 +341,12 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         // await: the pin is an actor round trip, and holding a lock across it
         // is the shape the curve-tree actor's own lock-ordering rule exists
         // to forbid.
+        //
+        // Taken before the witness is read, not just around the install: the
+        // whole attempt is one read-modify-write on serving state, and gating
+        // only the write would still let a slow attempt overwrite a newer
+        // witness with one derived from a staler read. See `refresh_gate`.
+        let _gate = self.refresh_gate.lock().await;
         let current = self.pinned_serve_set();
         match current.refreshed(&self.pinner).await {
             Ok(next) => {

@@ -121,6 +121,48 @@ impl ServeSetPinner for StorePinner {
     }
 }
 
+/// A pinner that is slow on its **second** call and immediate afterwards,
+/// reporting a distinguishable set and stamp per call.
+///
+/// Call 1 is the host's startup acquire. Calls 2 and 3 are the two concurrent
+/// refreshes, and making the earlier of them the slow one is what orders the
+/// race: without a gate spanning the whole attempt, call 3 installs its newer
+/// witness first and call 2 then overwrites it with the older one derived from
+/// a staler read.
+struct SlowSecondCallPinner {
+    store: Arc<LeafStore>,
+    calls: Mutex<u64>,
+}
+
+impl ServeSetPinner for SlowSecondCallPinner {
+    async fn pin_serve_set(&self) -> Result<PinReport, String> {
+        let generation = {
+            let mut calls = self.calls.lock().expect("lock");
+            *calls += 1;
+            *calls
+        };
+        if generation == 2 {
+            // Long enough that the other refresh completes inside it when the
+            // two are not serialized, and irrelevant when they are.
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        // The set grows on the third call, so the *newest* report is the one
+        // covering both shards. A final witness of `[0]` means an older report
+        // won.
+        let shard_ids: Vec<u64> = if generation >= 3 { vec![0, 1] } else { vec![0] };
+        let outcomes = self
+            .store
+            .pin_serve_set(&shard_ids)
+            .map_err(|e| format!("{e:?}"))?;
+        Ok(PinReport {
+            shard_ids,
+            as_of_height: BlockHeight(generation * 1_000),
+            outcomes,
+            reader: ServingReader::new(Arc::clone(&self.store)),
+        })
+    }
+}
+
 /// A pinner that always fails, for the "the witness is not minted" arm.
 struct DeadPinner;
 
@@ -495,6 +537,64 @@ fn host_errors_name_what_the_operator_must_do() {
 // ---------------------------------------------------------------------------
 // Keeping the serve-set current, and noticing when it stops
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
+    // `refresh` is a read-modify-write on serving state: read the witness,
+    // pin, install. The witness `Mutex` makes each write atomic and says
+    // nothing about the sequence, so two overlapping attempts can finish out
+    // of order and leave the *older* report installed — a host serving a
+    // stale serve-set while its own witness claims to be current, which is
+    // §9.6 item 4's silent slash arriving through the refresh built to close
+    // it.
+    //
+    // This is a live axis rather than a hypothetical: `refresh` is `pub`, has
+    // no production caller yet, and its own doc tells the SH-2b wiring to call
+    // it on every tick.
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("freeze segment 0");
+
+    let pinner = SlowSecondCallPinner {
+        store: Arc::clone(&store),
+        calls: Mutex::new(0),
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let host = PersonaServingHost::start(
+        churning_tor(&dir),
+        PersonaServing {
+            identity: identity(),
+            virtual_port: 80,
+            max_streams: 8,
+        },
+        &pinner,
+    )
+    .await
+    .expect("start");
+
+    // Both attempts must succeed — serializing them must not turn the loser
+    // into an error the caller has to interpret.
+    let (first, second) = tokio::join!(host.refresh(), host.refresh());
+    first.expect("first refresh");
+    second.expect("second refresh");
+
+    let witness = host.pinned_serve_set();
+    assert_eq!(
+        witness.serve_set().shard_ids(),
+        &[0, 1],
+        "the newest report must be the installed one; `[0]` is the older \
+         attempt finishing last and overwriting it"
+    );
+    assert_eq!(
+        witness.serve_set().as_of_height(),
+        BlockHeight(3_000),
+        "the stamp must come from the last attempt to run, not the last to finish"
+    );
+
+    host.shutdown().await;
+}
 
 #[tokio::test]
 async fn a_refresh_pins_shards_gained_since_the_host_started() {
