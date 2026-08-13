@@ -3216,7 +3216,7 @@ bool shekyl_relay_zone_covert_enabled(const RelayZoneHandle* handle);
 //! One roll, at origination (Q12-D5a). A verdict crosses, not a probability
 //! -- the rate stays in Rust. Relayed traffic does not call this; it
 //! inherits its arrival zone. Callers own the pre-fluff test.
-bool shekyl_relay_zone_divert_relayed_tx();
+bool shekyl_relay_zone_divert_originated_tx();
 
 //! The outbound floor the embargo provisioning assumes (F-8b): counts below
 //! this put real fluff first-passage above the provisioned value.

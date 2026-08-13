@@ -627,7 +627,7 @@ int relay_tx(tx_memory_pool& pool, i_cryptonote_protocol& protocol,
       r,
       boost::uuids::nil_uuid(),
       cryptonote::originated_zone_from_anonymity_roll(
-        shekyl_relay_zone_divert_relayed_tx()),
+        shekyl_relay_zone_divert_originated_tx()),
       relay_method::local);
     return SHEKYL_SUBMIT_OK;
   }

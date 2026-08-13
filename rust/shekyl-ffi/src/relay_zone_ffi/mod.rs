@@ -701,11 +701,8 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_in_flight(handle: *const RelayZo
 /// not *whether the transaction is still stemming*. A transaction that has
 /// fluffed must leave the zone, or one that entered over Tor never reaches
 /// the public network.
-///
-/// The symbol still says `divert_relayed`; the rename rides with the constant
-/// in the next commit of this unit. Behaviour is originated, not relayed.
 #[no_mangle]
-pub extern "C" fn shekyl_relay_zone_divert_relayed_tx() -> bool {
+pub extern "C" fn shekyl_relay_zone_divert_originated_tx() -> bool {
     let mut rng = SecureRelayRng;
     shekyl_relay_privacy::divert_to_anonymity_zone(&mut rng)
 }
