@@ -187,9 +187,11 @@ pub(crate) struct PhantomSlotSweep {
 /// derivation "for nothing").
 ///
 /// A slot is phantom **iff** it has **no pending post** AND its persona is
-/// [`ReconcileVerdict::AbsentWithinCovered`] over the sealed scan evidence.
-/// The two conditions are jointly airtight against wrongful GC of a *real*
-/// bond (the stuck-funds failure this design forbids):
+/// [`ReconcileVerdict::AbsentWithinCovered`] over the sealed scan evidence —
+/// where a slot with a **bond-watch sighting** (`StakingBlock::bond_sightings`)
+/// is evaluated with the height-gated verdict at its first-sighting height,
+/// not the whole-covered form. The conditions are jointly airtight against
+/// wrongful GC of a *real* bond (the stuck-funds failure this design forbids):
 ///
 /// - pre-broadcast and pre-confirmation, the signed post sits durably in
 ///   `.wallet.pending` — the pending guard skips it (W3);
@@ -197,7 +199,13 @@ pub(crate) struct PhantomSlotSweep {
 ///   exists** — dispatch releases it only on the scan's own reorg-deep
 ///   `BondPostMatch` (never on a daemon claim), so the pending record is the
 ///   bridge across the scan lag; once released, the match is in the evidence
-///   and the verdict is `Present`.
+///   and the verdict is `Present`;
+/// - a **probe-adopted** bond (principal-scan sighting, SA-R-6 from-seed
+///   reconstruction) has no pending record — its sighting row is its bridge:
+///   evidence short of the sighted height reads `OutsideCovered` (kept);
+///   coverage past it with no match means the sighted block reorged out
+///   (dropped, correctly). A `Present` verdict prunes the sighting — the
+///   seal's own match row supersedes it.
 ///
 /// `OutsideCovered` (nothing scanned / frontier at zero) keeps every slot —
 /// absence-≠-unscanned is [`PReconcileSet`]'s type-level gate. The `p_slot`
@@ -227,23 +235,47 @@ pub(crate) fn reconcile_phantom_bonded_slots<E>(
     mut id_of_slot: impl FnMut(u32) -> Result<PCanonicalId, E>,
 ) -> Result<PhantomSlotSweep, E> {
     let mut dropped = Vec::new();
+    let mut pruned_sightings = Vec::new();
     for &slot in &staking.bonded_slots {
         if pending_slots.contains(&slot) {
             continue; // W3 / scan-lag bridge: a pending post is never phantom.
         }
         let id = id_of_slot(slot)?;
-        // The whole-covered absence form; `OutsideCovered` (including the
-        // nothing-scanned case) keeps the slot — the type's
-        // absence-≠-unscanned gate does the work.
-        if matches!(
-            evidence.reconcile_full_scan(id),
-            ReconcileVerdict::AbsentWithinCovered
-        ) {
-            dropped.push(slot);
+        // A slot the principal scan's bond watch sighted is evaluated with
+        // the **height-gated** verdict at its first-sighting height: a
+        // P-scan seal whose coverage has not reached the sighted block reads
+        // `OutsideCovered` and keeps the slot — a probe-adopted real bond
+        // must not be GC'd as phantom against evidence that predates it
+        // (restore-path bonds have no pending record, so the W3 bridge
+        // above cannot protect them; the sighting row is their bridge).
+        // Coverage past the sighting with no match means the sighted block
+        // reorged out — the drop is then correct, and the sighting row goes
+        // with it. `Present` supersedes the sighting: the P-scan's own
+        // evidence now carries the match, so the bridge is pruned.
+        let verdict = match staking.bond_sightings.get(&slot) {
+            Some(&sighted_at) => evidence.reconcile(id, sighted_at),
+            None => evidence.reconcile_full_scan(id),
+        };
+        match verdict {
+            ReconcileVerdict::AbsentWithinCovered => {
+                dropped.push(slot);
+                if staking.bond_sightings.contains_key(&slot) {
+                    pruned_sightings.push(slot);
+                }
+            }
+            ReconcileVerdict::Present { .. } => {
+                if staking.bond_sightings.contains_key(&slot) {
+                    pruned_sightings.push(slot);
+                }
+            }
+            ReconcileVerdict::OutsideCovered => {}
         }
     }
     if !dropped.is_empty() {
         staking.bonded_slots.retain(|s| !dropped.contains(s));
+    }
+    for slot in pruned_sightings {
+        staking.bond_sightings.remove(&slot);
     }
     let staking_disabled = staking.bonded_slots.is_empty() && !dropped.is_empty();
     if staking_disabled {
@@ -435,6 +467,13 @@ pub(crate) fn reconcile_staking_at_open<E>(
 
         let before = staking.bonded_slots.len();
         staking.bonded_slots.retain(|s| !retired_slots.contains(s));
+        // A retired slot's bond-watch sighting goes with it: the sighting is
+        // the not-yet-corroborated bridge for a LIVE adoption, and a retired
+        // slot must not look adopted to any sighting consumer (the W2 resume
+        // guard, arm #3's height-gated verdict).
+        staking
+            .bond_sightings
+            .retain(|s, _| !retired_slots.contains(s));
         let dropped = before - staking.bonded_slots.len();
         if dropped > 0 {
             if staking.bonded_slots.is_empty() {
@@ -555,6 +594,65 @@ mod tests {
         assert!(sweep.dropped.is_empty());
         assert_eq!(st.bonded_slots, vec![7], "unscanned absence never GCs");
         assert!(st.staking_enabled);
+    }
+
+    /// The stale-seal survival case (the mandatory bond-watch fix): a
+    /// probe-adopted slot with a sighting at height 50 must survive arm #3
+    /// against a pscan seal whose coverage stops at 20 — the whole-covered
+    /// verdict would read `AbsentWithinCovered` (covered, no match) and
+    /// permanently GC a real bond that has no pending record to bridge it.
+    /// Greenable only by the height-gated verdict: coverage short of the
+    /// sighting reads `OutsideCovered` and keeps the slot.
+    #[test]
+    fn phantom_sweep_keeps_a_sighted_slot_the_seal_has_not_covered() {
+        let mut st = staking(&[3]);
+        st.record_first_sighting(3, BlockHeight::from_raw(50));
+        let ev = evidence(20, Vec::new()); // covered [0,20): predates the sighting
+        let sweep =
+            reconcile_phantom_bonded_slots(&mut st, &ev, &no_retired(), |_| Ok::<_, ()>(id(3)))
+                .expect("sweep");
+        assert!(sweep.dropped.is_empty(), "sighted slot must survive");
+        assert_eq!(st.bonded_slots, vec![3]);
+        assert!(
+            st.bond_sightings.contains_key(&3),
+            "the bridge stays until the seal covers or refutes it"
+        );
+    }
+
+    /// Coverage PAST the sighting with no match: the sighted block reorged
+    /// out — the drop is then correct, and the sighting row goes with it.
+    #[test]
+    fn phantom_sweep_drops_a_sighted_slot_the_seal_covered_and_refuted() {
+        let mut st = staking(&[3]);
+        st.record_first_sighting(3, BlockHeight::from_raw(50));
+        let ev = evidence(100, Vec::new()); // covered [0,100): past the sighting, no match
+        let sweep =
+            reconcile_phantom_bonded_slots(&mut st, &ev, &no_retired(), |_| Ok::<_, ()>(id(3)))
+                .expect("sweep");
+        assert_eq!(sweep.dropped, vec![3], "reorged-out sighting drops");
+        assert!(st.bonded_slots.is_empty());
+        assert!(
+            !st.bond_sightings.contains_key(&3),
+            "a refuted sighting is pruned with its slot"
+        );
+    }
+
+    /// `Present` supersedes the sighting: once the P-scan's own evidence
+    /// carries the match, the bridge row is pruned and the slot stays.
+    #[test]
+    fn phantom_sweep_prunes_a_sighting_the_seal_now_corroborates() {
+        let mut st = staking(&[3]);
+        st.record_first_sighting(3, BlockHeight::from_raw(50));
+        let ev = evidence(100, vec![match_for(id(3), 50)]);
+        let sweep =
+            reconcile_phantom_bonded_slots(&mut st, &ev, &no_retired(), |_| Ok::<_, ()>(id(3)))
+                .expect("sweep");
+        assert!(sweep.dropped.is_empty());
+        assert_eq!(st.bonded_slots, vec![3], "corroborated slot stays");
+        assert!(
+            !st.bond_sightings.contains_key(&3),
+            "the seal's own match row supersedes the sighting bridge"
+        );
     }
 
     /// The empty retired set, spelled once.

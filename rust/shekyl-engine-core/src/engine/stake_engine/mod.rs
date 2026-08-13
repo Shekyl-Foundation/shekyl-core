@@ -113,5 +113,5 @@ pub(crate) use actor::StakeEngine;
 pub(crate) use helpers::derive_p_source_secrets_bundle;
 pub(crate) use types::{
     FundedSlots, PSlot, PersonaHandle, RetireOutcome, RetirementWitness, StakeEngineError,
-    ARCHIVAL_PERSONA_LOOKAHEAD,
+    ARCHIVAL_PERSONA_LOOKAHEAD, ARCHIVAL_PERSONA_PROBE_WINDOW,
 };

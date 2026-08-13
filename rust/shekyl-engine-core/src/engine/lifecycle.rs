@@ -789,35 +789,42 @@ impl Engine<SoloSigner> {
         // spawn still applies the hint-fed `monotone_current_slot_from_record`.
         // The staker's scan path still fails loud on the same corrupt seal
         // at `start_pscan`.
+        let derivation_network = network_to_derivation(network);
+        let id_of_slot = |slot: u32| -> Result<shekyl_types::PCanonicalId, OpenError> {
+            let keys = derive_archival_p_keys(master_seed, derivation_network, seed_format, slot)
+                .map_err(|e| {
+                OpenError::Key(KeyError::Primitive {
+                    detail: rederivation_failure_detail(&e),
+                })
+            })?;
+            super::stake_engine::persona_canonical_id(&keys).map_err(|_| {
+                OpenError::Key(KeyError::Primitive {
+                    detail: "persona canonical id encode failed",
+                })
+            })
+        };
+        // The bond watch's retired refusal set: probe ids for durably-retired
+        // slots are excluded from the watch (their cursor burn is arm #2's,
+        // from the same seal), so a rescan cannot churn re-adopting them.
+        // Empty when the seal is absent (fresh restore — nothing retired) or
+        // unreadable (degrade: worst case a retired slot is re-adopted by a
+        // sighting and arm #2 re-drops it at the next open — converging).
+        let mut probe_retired: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         match load_open_staking_evidence(&file, &state_wrap_key) {
             Ok(Some(OpenStakingEvidence {
                 evidence,
                 pending_slots,
                 retired_slots,
             })) => {
-                let derivation_network = network_to_derivation(network);
-                let id_of_slot = |slot: u32| -> Result<shekyl_types::PCanonicalId, OpenError> {
-                    let keys =
-                        derive_archival_p_keys(master_seed, derivation_network, seed_format, slot)
-                            .map_err(|e| {
-                                OpenError::Key(KeyError::Primitive {
-                                    detail: rederivation_failure_detail(&e),
-                                })
-                            })?;
-                    super::stake_engine::persona_canonical_id(&keys).map_err(|_| {
-                        OpenError::Key(KeyError::Primitive {
-                            detail: "persona canonical id encode failed",
-                        })
-                    })
-                };
                 super::stake_persist::reconcile_staking_at_open(
                     &mut ledger.staking,
                     &evidence,
                     &pending_slots,
                     &retired_slots,
                     ARCHIVAL_PERSONA_LOOKAHEAD,
-                    id_of_slot,
+                    &id_of_slot,
                 )?;
+                probe_retired = retired_slots;
             }
             // No sealed scan state yet — nothing to reconcile against.
             Ok(None) => {}
@@ -830,6 +837,29 @@ impl Engine<SoloSigner> {
                      a staker's scan will fail loud on the same seal)"
                 );
             }
+        }
+
+        // Bond-watch probe cache (SA-R-6 from-seed reconstruction): derive
+        // the public persona ids for the probe window while the seed is
+        // transiently in scope — once per slot for the wallet's life (ids are
+        // a pure function of the seed and never invalidate), so every later
+        // open and the credential-less `rescan_blockchain` have candidates
+        // without re-paying the keygen. Runs AFTER the reconcile so the
+        // window sits above the (possibly raised) cursor, and UNCONDITIONALLY
+        // — a never-staked wallet derives the `0..=W` window once and its
+        // principal scan watches for a staking history this seed may have
+        // elsewhere; that is what makes the rescan-time pointer
+        // reconstruction hold for every wallet, not only known stakers.
+        for slot in ledger
+            .staking
+            .derive_forward_slots(super::stake_engine::ARCHIVAL_PERSONA_PROBE_WINDOW)
+        {
+            if probe_retired.contains(&slot) || ledger.staking.persona_id_cache.contains_key(&slot)
+            {
+                continue;
+            }
+            let id = id_of_slot(slot)?;
+            ledger.staking.persona_id_cache.insert(slot, id);
         }
 
         let prefs_hmac_key = shekyl_engine_prefs::PrefsHmacKey::derive(
@@ -1628,6 +1658,48 @@ mod tests {
         let wallet = opened.into_wallet();
         assert_eq!(wallet.network(), network);
         assert_eq!(wallet.capability(), Capability::Full);
+    }
+
+    /// The bond-watch probe cache is built **unconditionally** — a
+    /// never-staked wallet's create derives the public persona ids for the
+    /// `0..=W` window (SA-R-6 from-seed reconstruction: the principal scan
+    /// and the credential-less `rescan_blockchain` always have candidates),
+    /// and a reopen loads the persisted map bit-identically instead of
+    /// re-paying the derivation.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_and_open_build_the_bond_watch_probe_cache_unconditionally() {
+        let fix = make_create_fixture();
+        let creds = Credentials::password_only(b"probe cache unconditional");
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let network = params.network;
+        let created = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create");
+        let w = super::super::stake_engine::ARCHIVAL_PERSONA_PROBE_WINDOW;
+        let at_create = created.ledger().staking.persona_id_cache.clone();
+        assert!(!created.ledger().staking.staking_enabled, "non-staker");
+        assert_eq!(
+            at_create.len() as u32,
+            w + 1,
+            "create derives ids for the full 0..=W window"
+        );
+        assert!(at_create.contains_key(&0) && at_create.contains_key(&w));
+        created.close(&creds).expect("close");
+
+        let reopened = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("reopen")
+        .into_wallet();
+        assert_eq!(
+            reopened.ledger().staking.persona_id_cache,
+            at_create,
+            "the persisted cache reloads identically (derive-once semantics)"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
