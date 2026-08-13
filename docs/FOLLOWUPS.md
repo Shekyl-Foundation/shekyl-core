@@ -9293,7 +9293,7 @@ its wake.
   It is written at first arrival (`add_tx` does not revise it on a
   stem→fluff upgrade) and preserved across hard-fork re-validation, and
   nothing reads it to decide anything. Its named consumer is Q12-U3's
-  origin-classified telemetry -- **whose purpose changed when Q12-D5a was ruled
+  origin-classified telemetry — **whose purpose changed when Q12-D5a was ruled
   once-at-origin (2026-08-12, PR #460): it VERIFIES that coherence holds rather
   than gating `p`, which needs no instrument under that ruling.** Do not re-file
   it as a precondition for setting `p`; the next unit is implementing
