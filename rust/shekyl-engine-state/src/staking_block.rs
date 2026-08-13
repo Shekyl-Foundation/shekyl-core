@@ -366,31 +366,53 @@ mod tests {
         );
     }
 
-    /// Density invariant: selecting the next slot from a contiguous prefix
-    /// `{0..=n}` yields exactly `n + 1`, never a skip. The open-time raise
-    /// and the "terminate at the first empty slot" reconstruction both
-    /// depend on `bonded_slots` being contiguous; this pins that against
-    /// the real selection function so a future `+k` rotation fails here
-    /// rather than silently breaking the reconstruction.
+    /// Density invariant on the **allocation sequence**: the slots this
+    /// wallet ever selects are `0, 1, 2, …` with no skip. That — not the
+    /// live `bonded_slots` hint — is what the deferred from-seed
+    /// reconstruction's "terminate at the first empty slot" rule rests on:
+    /// the probe reads *on-chain history*, and it may stop at the first
+    /// unused slot only if allocation never left a hole behind it.
     ///
-    /// This bites against a sparse selection edit; it does NOT cover the
-    /// chain-fed raise itself (that lives with the scan-evidence consumer).
+    /// The live hint is explicitly **not** contiguous and must not be
+    /// asserted to be: SP-R0 arms #2 and #3 delete rows from it (retired and
+    /// phantom slots), so it is a GC'd view, not the allocation record. The
+    /// second half of this test is the load-bearing part — it shows the
+    /// sequence stays dense *despite* that GC, because `p_slot` carries the
+    /// high-water mark independently of the hint. Drop the `p_slot` term
+    /// from [`StakingBlock::monotone_current_slot`] and this fails.
+    ///
+    /// This bites against a sparse selection edit (a future `+k` rotation);
+    /// it does NOT cover the chain-fed raise itself (that lives with the
+    /// scan-evidence consumer).
     #[test]
     fn monotone_selection_is_dense_no_gap_reachable() {
         let mut st = StakingBlock::empty();
+        let mut ever_selected = Vec::new();
         for expected in 0..64u32 {
             let slot = st.monotone_current_slot_from_record();
             assert_eq!(
                 slot, expected,
                 "selection must be dense (contiguous), never skip a slot"
             );
+            ever_selected.push(slot);
             st.bonded_slots.push(slot);
             st.p_slot = st.monotone_current_slot_from_record();
         }
         assert_eq!(
-            st.bonded_slots,
+            ever_selected,
             (0..64).collect::<Vec<u32>>(),
-            "the whole reachable bonded set is a gap-free contiguous prefix"
+            "the allocation sequence is a gap-free contiguous prefix"
+        );
+
+        // Now GC the hint the way arms #2/#3 do — drop every row but one,
+        // including the highest. Allocation must not rewind or skip: the
+        // next slot is still 64, so the from-seed probe's termination rule
+        // survives a hint that no longer lists the history.
+        st.bonded_slots.retain(|s| *s == 7);
+        assert_eq!(
+            st.monotone_current_slot_from_record(),
+            64,
+            "hint GC must not rewind the cursor onto an already-used slot"
         );
     }
 

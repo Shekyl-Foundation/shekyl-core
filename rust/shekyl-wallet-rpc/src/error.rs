@@ -99,6 +99,9 @@ pub enum WalletRpcErrorCode {
     StakeInFlight = -29501,
     /// Stake: the wallet already holds a confirmed bond (idempotency).
     AlreadyStaked = -29502,
+    /// Stake: the wallet's persona record moved during the credentialed
+    /// reopen; nothing was written — re-invoke `stake`.
+    StakeRecordMoved = -29503,
     /// Server: wallet-dir tenancy unavailable.
     TenantUnavailable = -29900,
 }
@@ -256,6 +259,17 @@ pub enum WalletRpcError {
     /// Stake: the wallet already staked (a confirmed bond exists).
     #[error("already staking")]
     AlreadyStaked,
+    /// Stake: the wallet's own persona record advanced between the request
+    /// and the credentialed reopen — the SP-R0 open-time reconcile adopted a
+    /// chain-proven bond, burned a retired persona into the cursor, or
+    /// collected a phantom, so the slot chosen before the reopen is stale.
+    ///
+    /// A **domain** refusal, not a fault: nothing durable was written and a
+    /// plain re-invoke picks up the reconciled record. Deliberately carries
+    /// no slot index — persona numbering is wallet-internal (rule 81) and
+    /// the operator's remedy does not depend on it.
+    #[error("staking record changed while opening; nothing was written — call stake again")]
+    StakeRecordMoved,
 }
 
 impl WalletRpcError {
@@ -295,6 +309,7 @@ impl WalletRpcError {
             Self::StakeNotReady { .. } => WalletRpcErrorCode::StakeNotReady,
             Self::StakeInFlight => WalletRpcErrorCode::StakeInFlight,
             Self::AlreadyStaked => WalletRpcErrorCode::AlreadyStaked,
+            Self::StakeRecordMoved => WalletRpcErrorCode::StakeRecordMoved,
         }
     }
 

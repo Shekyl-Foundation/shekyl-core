@@ -255,76 +255,141 @@ pub(crate) fn reconcile_phantom_bonded_slots<E>(
     })
 }
 
-/// SP-R0 **arm #4** (SA-5, SA-R-6) — raise `p_slot` from chain-observed
-/// bond posts in the lookahead tail so a rolled-back sealed cursor cannot
-/// re-offer a slot that already has on-chain activity.
+/// What one open-time chain-evidence pass did to the staking record
+/// (SP-R0 **arm #4**).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChainBondAdoption {
+    /// Slots ADOPTED into `bonded_slots` from a chain-observed bond post
+    /// the live hint had lost. Ascending.
+    pub(crate) adopted: Vec<u32>,
+    /// The highest walked `Present` slot, when it moved `p_slot` beyond the
+    /// hint-fed heal. `None` when the tail held no `Present`, or the cursor
+    /// already sat above it.
+    pub(crate) raised_above: Option<u32>,
+}
+
+/// SP-R0 **arm #4** (SA-5, SA-R-6) — reconcile the persona record against
+/// chain-observed bond posts in the lookahead tail, so a rolled-back sealed
+/// cursor can neither re-offer a slot that already has on-chain activity
+/// **nor strand the bond that proves it**.
 ///
-/// A `Present` hit inside `bonded_slots` cannot move the cursor past
-/// [`StakingBlock::monotone_current_slot_from_record`]; this applies that
-/// hint-fed heal first, then walks **only** `{cursor ..= cursor + lookahead}`.
-/// The unique work is a `Present` *outside* the rolled-back hint. Phantoms
-/// are [`ReconcileVerdict::AbsentWithinCovered`], so they cannot raise —
-/// the verdicts are disjoint; this does not depend on running after the GC.
+/// Two effects, in order, over the same walk:
 ///
-/// Scope: a cursor rolled back within the lookahead. A restore-from-seed
-/// (nothing derived or scanned) needs a widening forward probe — separate
-/// slice (`ARCHIVAL_BOND_CONSTRUCTION.md` §11; `FOLLOWUPS.md`).
+/// 1. **Adopt.** A `Present` slot the live hint has lost is pushed back into
+///    `bonded_slots` (and `staking_enabled` re-armed). This is the half that
+///    keeps the raise from being a fund-loss: `bonded_slots` is the only
+///    input that holds a persona in
+///    [`StakingBlock::derive_forward_slots`], and under Model D the seed is
+///    gone after `assemble`, so a persona outside that set is unreachable
+///    for the wallet's life — its bond un-unbondable. Raising the cursor
+///    past a `Present` slot without adopting it would do exactly that, and
+///    the on-chain bond that would justify healing is *durable* evidence
+///    (`PScanState::bond_post_matches` survives every open until arm #2's
+///    retire-time prune), so a wallet that skipped the adopt would keep
+///    proof of a bond it can no longer spend.
+/// 2. **Burn.** `p_slot` is lifted above the highest walked `Present`. For an
+///    adopted slot this is implied by the hint-fed heal, but the explicit
+///    [`StakingBlock::monotone_current_slot`] call is **load-bearing for the
+///    refused ones**: a durably-RETIRED slot must burn the cursor and must
+///    NOT be adopted (re-arming a retired persona is the forever-derive
+///    problem arm #2 exists to kill). Do not "simplify" this call away.
 ///
-/// Returns `Some(high)` **only when the cursor actually increased** (`high`
-/// is the highest `Present` slot that caused the raise). `None` if the tail
-/// had no `Present`, or the cursor was already at or above `high + 1`.
-pub(crate) fn raise_cursor_from_scan_evidence<E>(
+/// `retired_slots` is the adopt-refusal set. Arm #2's retire prune drops a
+/// retired persona's match rows in the same seal that writes its
+/// `RetiredPersonaRecord`, so a retired slot should already read
+/// `AbsentWithinCovered` — this guard does not lean on that other module's
+/// atomicity promise.
+///
+/// Phantoms are [`ReconcileVerdict::AbsentWithinCovered`], disjoint from
+/// `Present`, so they can neither adopt nor raise regardless of apply order.
+///
+/// Scope: a record rolled back within the lookahead. Because the selection
+/// sequence is dense and a sealed `StakingBlock` rolls back as a unit, the
+/// slots a k-step rollback loses begin exactly at the rolled-back cursor —
+/// which is why the walk is the tail and not a widening probe. A restore
+/// from seed (nothing derived or scanned) still needs that probe:
+/// `ARCHIVAL_BOND_CONSTRUCTION.md` §11, `FOLLOWUPS.md`.
+pub(crate) fn adopt_chain_bonds_and_raise_cursor<E>(
     staking: &mut StakingBlock,
     evidence: &PReconcileSet,
+    retired_slots: &std::collections::BTreeSet<u32>,
     lookahead: u32,
     mut id_of_slot: impl FnMut(u32) -> Result<PCanonicalId, E>,
-) -> Result<Option<u32>, E> {
+) -> Result<ChainBondAdoption, E> {
     staking.p_slot = staking.monotone_current_slot_from_record();
     let cursor = staking.p_slot;
 
+    let mut adopted = Vec::new();
     let mut chain_high: Option<u32> = None;
     for offset in 0..=lookahead {
+        // `checked_add` drops the out-of-range tail rather than wrapping to
+        // slot 0 (which would re-walk a moved-past persona).
         let Some(slot) = cursor.checked_add(offset) else {
             break;
         };
         let id = id_of_slot(slot)?;
-        if matches!(
+        if !matches!(
             evidence.reconcile_full_scan(id),
             ReconcileVerdict::Present { .. }
         ) {
-            chain_high = Some(chain_high.map_or(slot, |c| c.max(slot)));
+            continue;
+        }
+        // The walk is ascending, so the last `Present` is the highest.
+        chain_high = Some(slot);
+        // Adopt unless the wallet durably retired this persona: a retired
+        // slot burns the cursor (below) but never re-enters the hint.
+        if !retired_slots.contains(&slot) && !staking.bonded_slots.contains(&slot) {
+            staking.bonded_slots.push(slot);
+            adopted.push(slot);
         }
     }
 
-    let Some(high) = chain_high else {
-        return Ok(None);
-    };
-    let raised = staking.monotone_current_slot(Some(high));
-    if raised > staking.p_slot {
-        staking.p_slot = raised;
-        Ok(Some(high))
-    } else {
-        Ok(None)
+    if !adopted.is_empty() {
+        // A chain-proven bond makes this wallet a staker again: the actor
+        // must spawn or the adopted persona is never derived.
+        staking.staking_enabled = true;
     }
+
+    let mut raised_above = None;
+    if let Some(high) = chain_high {
+        let raised = staking.monotone_current_slot(Some(high));
+        // The walk starts AT the cursor, so any `Present` it finds sits at or
+        // above it and `high + 1` clears it — except at the `u32::MAX`
+        // saturation edge, where the cursor is already total and cannot move.
+        // That edge is the only way this stays `None` with a `Present` in hand.
+        if raised > staking.p_slot {
+            staking.p_slot = raised;
+            raised_above = Some(high);
+        }
+    }
+    Ok(ChainBondAdoption {
+        adopted,
+        raised_above,
+    })
 }
 
 /// Run the SP-R0 open-time staking reconciliation over sealed scan `evidence`.
 ///
-/// - **arm #2** (retired GC): drop durably-RETIRED `retired_slots` from the live
-///   hint (records-driven — the wallet's own ledger — so no absence gate needed);
-///   an emptied hint reverts the wallet to a non-staker (a fully-retired wallet
-///   must not spawn an actor "for nothing" every open).
+/// - **arm #2** (retired GC): burn the retired slots into the cursor, then drop
+///   them from the live hint (records-driven — the wallet's own ledger — so no
+///   absence gate needed); an emptied hint reverts the wallet to a non-staker (a
+///   fully-retired wallet must not spawn an actor "for nothing" every open).
 /// - **arm #3** (phantom GC): drop confirmed-absent, unpended phantom slots
 ///   ([`reconcile_phantom_bonded_slots`]).
-/// - **arm #4** (SA-5 monotone raise): hint-fed heal, then lift the cursor
-///   above any `Present` in the lookahead tail
-///   ([`raise_cursor_from_scan_evidence`]).
+/// - **arm #4** (SA-5): adopt chain-proven bonds the hint lost and lift the
+///   cursor above the lookahead tail
+///   ([`adopt_chain_bonds_and_raise_cursor`]).
 ///
-/// `Present` and `AbsentWithinCovered` are disjoint, so a phantom cannot
-/// raise regardless of apply order. `id_of_slot` is shared by arms #3 and
-/// #4; arm #4 does not re-walk `bonded_slots` (those slots cannot move the
-/// cursor past `from_record`), so each remaining bonded slot is derived
-/// once in this pass.
+/// **The burn precedes the drop.** `retain` is destructive: once a retired slot
+/// leaves `bonded_slots`, `monotone_current_slot_from_record` can no longer see
+/// it, so a cursor that rolled back below a retired slot would be free to
+/// re-offer it — the exact SA-R-6 reuse this pass exists to prevent, and one
+/// arm #4 cannot repair whenever the retired slot sits outside the lookahead.
+///
+/// `Present` and `AbsentWithinCovered` are disjoint, so a phantom can neither
+/// raise nor be adopted regardless of apply order. `id_of_slot` is shared by
+/// arms #3 and #4; arm #4 walks only the lookahead tail, so each remaining
+/// bonded slot is derived once in this pass.
 pub(crate) fn reconcile_staking_at_open<E>(
     staking: &mut StakingBlock,
     evidence: &PReconcileSet,
@@ -336,7 +401,12 @@ pub(crate) fn reconcile_staking_at_open<E>(
     // arm #2 — drop durably-retired slots before anything derives. The
     // derive-forward subtraction follows for free: the lookahead starts at the
     // monotone cursor, kept strictly above every observed bonded slot.
-    if !retired_slots.is_empty() {
+    if let Some(&highest_retired) = retired_slots.iter().next_back() {
+        // Burn FIRST (see the fn docs): a `RetiredPersonaRecord` is durable
+        // proof this wallet bonded that slot, so the high-water mark is owed
+        // whether or not the live hint still lists it.
+        staking.p_slot = staking.monotone_current_slot(Some(highest_retired));
+
         let before = staking.bonded_slots.len();
         staking.bonded_slots.retain(|s| !retired_slots.contains(s));
         let dropped = before - staking.bonded_slots.len();
@@ -346,6 +416,7 @@ pub(crate) fn reconcile_staking_at_open<E>(
             }
             tracing::info!(
                 dropped,
+                cursor = staking.p_slot,
                 reverted = !staking.staking_enabled,
                 "SP-R0 arm #2: retired slots cleaned from the live hint at open"
             );
@@ -362,10 +433,21 @@ pub(crate) fn reconcile_staking_at_open<E>(
         );
     }
 
-    // arm #4 — monotone raise (SA-5, SA-R-6): SAME evidence, AFTER the drops.
-    if let Some(high) =
-        raise_cursor_from_scan_evidence(staking, evidence, lookahead, &mut id_of_slot)?
-    {
+    // arm #4 — adopt + raise (SA-5, SA-R-6): SAME evidence, AFTER the drops.
+    let chain = adopt_chain_bonds_and_raise_cursor(
+        staking,
+        evidence,
+        retired_slots,
+        lookahead,
+        &mut id_of_slot,
+    )?;
+    if !chain.adopted.is_empty() {
+        tracing::info!(
+            adopted = chain.adopted.len(),
+            "SP-R0 arm #4: chain-proven bonds re-adopted into the live hint at open"
+        );
+    }
+    if let Some(high) = chain.raised_above {
         tracing::info!(
             chain_high = high,
             cursor = staking.p_slot,
@@ -449,82 +531,145 @@ mod tests {
         assert!(st.staking_enabled);
     }
 
-    /// Arm #4 (SA-5): the load-bearing rollback — later slot is *missing*
-    /// from the hint (the sealed `StakingBlock` rolled back as a unit) and
-    /// is found only in the lookahead tail. This bites against a raise that
-    /// only heals `from_record`; it does NOT cover a beyond-lookahead
-    /// restore-from-seed (separate slice).
+    /// The empty retired set, spelled once.
+    fn no_retired() -> std::collections::BTreeSet<u32> {
+        std::collections::BTreeSet::new()
+    }
+
+    /// Arm #4 (SA-5): the load-bearing rollback — a later slot is *missing*
+    /// from the hint (the sealed `StakingBlock` rolled back as a unit) and is
+    /// found only in the lookahead tail. The bond is ADOPTED, not merely
+    /// burned past: burning alone would raise the cursor over a live on-chain
+    /// bond and, since `bonded_slots` is the only thing that holds a persona
+    /// in the derive-forward set under Model D, strand it forever.
     #[test]
-    fn raise_lifts_cursor_above_a_lookahead_present_missing_from_the_hint() {
+    fn raise_adopts_a_lookahead_present_missing_from_the_hint() {
         // Reality was bonded {0,1} cursor 2; rolled back to bonded {0} cursor 1.
         let mut st = staking(&[0]);
         st.p_slot = 1;
         let ev = evidence(100, vec![match_for(id(1), 10)]);
-        let high = raise_cursor_from_scan_evidence(&mut st, &ev, 2, |slot| {
+        let chain = adopt_chain_bonds_and_raise_cursor(&mut st, &ev, &no_retired(), 2, |slot| {
             Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
         })
         .expect("raise");
-        assert_eq!(high, Some(1));
+        assert_eq!(chain.raised_above, Some(1));
+        assert_eq!(
+            chain.adopted,
+            vec![1],
+            "the chain-proven bond is re-adopted"
+        );
+        assert_eq!(
+            st.bonded_slots,
+            vec![0, 1],
+            "slot 1 is back in the derive-forward set — its bond stays unbondable"
+        );
+        assert!(st.staking_enabled);
         assert_eq!(st.p_slot, 2, "cursor lifted to one past the observed bond");
     }
 
-    /// A Present already in `bonded_slots` cannot move the cursor past
-    /// `from_record`, so the raise returns `None` (no false "raised" log).
+    /// The adopted slot must actually reach the derive-forward set — the
+    /// property that makes the bond spendable. Asserted against the real
+    /// selection function, not a restatement of `bonded_slots`.
     #[test]
-    fn raise_returns_none_when_hint_already_covers_the_present() {
-        let mut st = staking(&[0, 1]);
-        st.p_slot = 2;
+    fn adopted_slot_reaches_the_derive_forward_set() {
+        let mut st = staking(&[0]);
+        st.p_slot = 1;
         let ev = evidence(100, vec![match_for(id(1), 10)]);
-        let high = raise_cursor_from_scan_evidence(&mut st, &ev, 2, |slot| {
+        adopt_chain_bonds_and_raise_cursor(&mut st, &ev, &no_retired(), 2, |slot| {
             Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
         })
         .expect("raise");
-        assert_eq!(high, None, "hint already accounts for the Present");
+        assert!(
+            st.derive_forward_slots(2).contains(&1),
+            "an adopted bond must be derived at the next spawn, or it is lost"
+        );
+    }
+
+    /// A durably-RETIRED slot is the one `Present` arm #4 refuses to adopt:
+    /// re-arming a retired persona is the forever-derive problem arm #2
+    /// exists to kill. It still burns the cursor. This bites against
+    /// dropping the `retired_slots` guard.
+    #[test]
+    fn raise_burns_past_a_retired_present_without_adopting_it() {
+        let mut st = staking(&[]); // non-staker: hint empty, flag off
+        st.p_slot = 1;
+        let ev = evidence(100, vec![match_for(id(1), 10)]);
+        let retired: std::collections::BTreeSet<u32> = [1u32].into_iter().collect();
+        let chain = adopt_chain_bonds_and_raise_cursor(&mut st, &ev, &retired, 2, |slot| {
+            Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
+        })
+        .expect("raise");
+        assert!(
+            chain.adopted.is_empty(),
+            "a retired persona is never re-armed"
+        );
+        assert!(!st.staking_enabled, "and the wallet stays a non-staker");
+        assert_eq!(chain.raised_above, Some(1));
+        assert_eq!(st.p_slot, 2, "but the retired slot still burns the cursor");
+    }
+
+    /// A `Present` already in `bonded_slots` is neither re-adopted (no
+    /// duplicate row) nor a second raise — the hint already accounts for it,
+    /// and it sits below the walked tail.
+    #[test]
+    fn raise_is_a_noop_when_the_hint_already_covers_the_present() {
+        let mut st = staking(&[0, 1]);
+        st.p_slot = 2;
+        let ev = evidence(100, vec![match_for(id(1), 10)]);
+        let chain = adopt_chain_bonds_and_raise_cursor(&mut st, &ev, &no_retired(), 2, |slot| {
+            Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
+        })
+        .expect("raise");
+        assert_eq!(chain.raised_above, None, "hint already accounts for it");
+        assert!(chain.adopted.is_empty(), "no duplicate hint row");
+        assert_eq!(st.bonded_slots, vec![0, 1]);
         assert_eq!(st.p_slot, 2);
     }
 
-    /// A phantom (absent-within-covered) contributes no chain raise: arm #4
-    /// keys on `Present`, so a slot with no real bond cannot burn the cursor
-    /// forward. The hint-fed heal still applies (`from_record`).
+    /// A phantom (absent-within-covered) contributes no chain raise and no
+    /// adoption: arm #4 keys on `Present`, so a slot with no real bond can
+    /// neither burn the cursor forward nor re-enter the hint.
     #[test]
     fn raise_ignores_phantom_slots() {
         let mut st = staking(&[0, 1]);
         st.p_slot = 0;
         let ev = evidence(100, Vec::new()); // covered, but no match → AbsentWithinCovered
-        let high = raise_cursor_from_scan_evidence(&mut st, &ev, 2, |slot| {
+        let chain = adopt_chain_bonds_and_raise_cursor(&mut st, &ev, &no_retired(), 2, |slot| {
             Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
         })
         .expect("raise");
-        assert_eq!(high, None, "no lookahead Present → no chain raise");
+        assert_eq!(chain.raised_above, None, "no lookahead Present → no raise");
+        assert!(chain.adopted.is_empty());
         assert_eq!(
             st.p_slot, 2,
             "hint-fed heal still applies; a phantom does not push further"
         );
     }
 
-    /// Unscanned evidence (`high == 0` ⇒ `OutsideCovered`) never chain-raises —
-    /// absence-≠-unscanned holds on the raise side too.
+    /// Unscanned evidence (`high == 0` ⇒ `OutsideCovered`) never chain-raises
+    /// and never adopts — absence-≠-unscanned holds on the raise side too.
     #[test]
     fn raise_does_nothing_when_unscanned() {
         let mut st = staking(&[5]);
         st.p_slot = 3;
         let ev = evidence(0, Vec::new());
-        let high = raise_cursor_from_scan_evidence(&mut st, &ev, 2, |slot| {
+        let chain = adopt_chain_bonds_and_raise_cursor(&mut st, &ev, &no_retired(), 2, |slot| {
             Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
         })
         .expect("raise");
-        assert_eq!(high, None);
+        assert_eq!(chain.raised_above, None);
+        assert!(chain.adopted.is_empty());
         assert_eq!(
             st.p_slot, 6,
             "unscanned evidence does not chain-raise; hint-fed heal still applies"
         );
     }
 
-    /// Orchestrator: retired drop + phantom drop + lookahead-only raise.
-    /// This bites against a compose that skips the raise after emptying the
-    /// hint, or that requires the later slot to still be in `bonded_slots`.
+    /// Orchestrator: retired drop + phantom drop + lookahead-only adoption.
+    /// This bites against a compose that skips arm #4 after emptying the
+    /// hint, or that burns past the chain-proven bond instead of adopting it.
     #[test]
-    fn reconcile_at_open_drops_and_raises_from_lookahead_only_present() {
+    fn reconcile_at_open_drops_phantoms_and_adopts_the_chain_proven_bond() {
         // Rolled-back hint {0, 2}, cursor 1.
         // Slot 0 retired; slot 2 phantom; slot 1 Present on chain, missing
         // from the hint — the SA-5 case.
@@ -539,11 +684,40 @@ mod tests {
         .expect("reconcile");
         assert_eq!(
             st.bonded_slots,
-            Vec::<u32>::new(),
-            "0 retired, 2 phantom — hint emptied"
+            vec![1],
+            "0 retired and 2 phantom drop; 1 is adopted from the chain"
         );
-        assert!(!st.staking_enabled, "emptied hint reverts to non-staker");
+        assert!(
+            st.staking_enabled,
+            "a chain-proven bond makes this wallet a staker again"
+        );
         assert_eq!(st.p_slot, 2, "lookahead Present at 1 lifts the cursor");
+    }
+
+    /// Arm #2 burns BEFORE it drops: a cursor rolled back below a retired
+    /// slot that sits outside the lookahead is still forbidden from
+    /// re-offering it. This bites against reordering the `retain` ahead of
+    /// the burn — the ordering arm #4 cannot repair at that distance.
+    #[test]
+    fn reconcile_at_open_burns_a_retired_slot_beyond_the_lookahead() {
+        // Retired slot 9; the record rolled back to bonded {} cursor 1.
+        let mut st = staking(&[9]);
+        st.p_slot = 1;
+        let ev = evidence(100, Vec::new());
+        let pending = std::collections::BTreeSet::new();
+        let retired: std::collections::BTreeSet<u32> = [9u32].into_iter().collect();
+        reconcile_staking_at_open(&mut st, &ev, &pending, &retired, 2, |slot| {
+            Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
+        })
+        .expect("reconcile");
+        assert!(
+            st.bonded_slots.is_empty(),
+            "the retired slot leaves the hint"
+        );
+        assert_eq!(
+            st.p_slot, 10,
+            "the retired slot burned the cursor before the drop erased it"
+        );
     }
 
     /// Emptying `bonded_slots` reverts the wallet to a non-staker, and the

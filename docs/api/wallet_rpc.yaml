@@ -349,6 +349,7 @@ components:
         - -29500   # STAKE_NOT_READY
         - -29501   # STAKE_IN_FLIGHT
         - -29502   # ALREADY_STAKED
+        - -29503   # STAKE_RECORD_MOVED
         - -29900   # TENANT_UNAVAILABLE
       description: |
         Allocated codes (this commit). Per-method additions extend this enum
@@ -469,6 +470,13 @@ components:
           -29502 ALREADY_STAKED           stake: a confirmed bond exists
                                           for a bonded persona (idempotent
                                           refusal)
+          -29503 STAKE_RECORD_MOVED       stake: the wallet's own staking
+                                          record was reconciled during the
+                                          credentialed reopen, so the slot
+                                          picked before it is stale; nothing
+                                          durable was written — call stake
+                                          again (no payload: persona
+                                          numbering is wallet-internal)
           -29900 TENANT_UNAVAILABLE       server: wallet-dir tenancy (reserved
                                           for the multi-tenant sub-PR)
 

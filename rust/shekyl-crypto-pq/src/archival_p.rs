@@ -99,11 +99,24 @@
 //! (`current = max(persisted p_slot, highest_bonded_slot_seen + 1)`). The mark
 //! is **scan-derivable, not merely cached**: a sealed blob has confidentiality
 //! and integrity, but not anti-rollback, so a stored counter alone can reset
-//! and re-offer a slot with on-chain activity. The wallet heals the mark from
-//! its sealed bonded-slot hint and from chain-observed bond posts at open.
+//! and re-offer a slot with on-chain activity. The wallet heals the mark at
+//! open from three durable sources — its sealed bonded-slot hint, its retired-
+//! persona records (burned into the mark *before* those slots are GC'd out of
+//! the hint), and chain-observed bond posts.
+//!
+//! *The mark is raised WITH the record, never over it.* Chain evidence that
+//! moves the mark forward is evidence of a bond the wallet must still be able
+//! to spend, so the same pass **adopts** that slot back into the live bonded
+//! record. Under Model D the seed is gone once the wallet is open, so a persona
+//! outside the derive-forward set is unreachable for the wallet's life: a mark
+//! raised past a chain-proven bond without adopting it would trade the
+//! operator's collateral for the unlinkability guard, when the evidence in hand
+//! buys both. The single exception is a **durably retired** persona — already
+//! rotated past on purpose, so it burns the mark and is never re-adopted.
+//!
 //! A restore-from-seed reconstruction (the wallet opens as a non-staker and
-//! derives nothing) is a separate wallet-layer slice
-//! (`ARCHIVAL_BOND_CONSTRUCTION.md` §11; `FOLLOWUPS.md`).
+//! derives nothing, so no scan evidence exists to heal from) is a separate
+//! wallet-layer slice (`ARCHIVAL_BOND_CONSTRUCTION.md` §11; `FOLLOWUPS.md`).
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use ed25519_dalek::SigningKey;

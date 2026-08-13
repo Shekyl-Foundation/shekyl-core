@@ -3850,18 +3850,54 @@ sustainability is unaffected by the recalibration.
     SA-R-6's **scan-derivable `p_slot` high-water mark** — the privacy guard
     against re-offering a rotated-past slot (reusing a retired persona clusters
     the operator's personas onto their principal). SA-5 **wired the rollback
-    case**: SP-R0 **arm #4** (`stake_persist::raise_cursor_from_scan_evidence`)
+    case**: SP-R0 **arm #4** (`stake_persist::adopt_chain_bonds_and_raise_cursor`)
     applies the hint-fed `monotone_current_slot_from_record` heal, then walks
-    only the lookahead tail for chain-observed `Present` bonds (a `Present`
-    already in `bonded_slots` cannot move the cursor past `from_record`).
-    Density is pinned on `StakingBlock`
-    (`monotone_selection_is_dense_no_gap_reachable`). The from-seed probe is
-    the same `highest_present` idea over a wider candidate set.
+    only the lookahead tail for chain-observed `Present` bonds, **adopting** each
+    back into `bonded_slots` before raising the cursor past it. Density is pinned
+    on `StakingBlock` (`monotone_selection_is_dense_no_gap_reachable`), on the
+    allocation sequence rather than the GC'd hint. The from-seed probe is the
+    same `highest_present` idea over a wider candidate set.
+    **Review round 2026-08-12 — two SA-R-6 holes closed in-PR:**
+    (i) *the raise must adopt, not merely burn.* `bonded_slots` is the only input
+    that holds a persona in `derive_forward_slots`, and Model D drops the seed
+    after `assemble`, so raising past a `Present` slot without adopting it left a
+    live on-chain bond outside the derived set — un-unbondable for the wallet's
+    life — while the `PScanState::bond_post_matches` row proving it stayed
+    durable in the same seal the raise had just read. A durably-RETIRED slot is
+    the sole adopt refusal (re-arming it is the forever-derive problem arm #2
+    kills); it still burns the cursor.
+    (ii) *arm #2 must burn before it drops.* `retain` is destructive, so a cursor
+    rolled back below a retired slot **outside** the lookahead could re-offer it,
+    and arm #4 cannot reach that far. The high-water mark is now taken from
+    `retired_slots` before the drop.
+    **Reachability correction (same round):** the earlier text deferred the
+    from-seed probe as "unreachable until bond posting is production-reachable."
+    That premise is **false** — `handlers.rs` routes `"stake"` (no `cfg`, gated
+    only on `Capability::Full`) → `Engine::first_stake` (`pub async fn`, no
+    `cfg`) → `persist_bond_record` (`bond_orchestrator.rs:667`) → assemble +
+    pending seal. Bond posting is production-reachable today, so SA-R-6 holes are
+    live rather than future; the two above were fixed as found (rule 22) instead
+    of deferred behind an inertness that does not hold.
     **What remains in this reopen:** the *from-seed* reconstruction — a cursor
     rolled back beyond the lookahead, where the wallet opens as a non-staker and
-    derives/scans nothing — needs a widening forward probe under Model D and is
-    unreachable until bond posting is production-reachable. The ruling lives in
+    derives/scans nothing — needs a widening derive-and-scan forward probe under
+    Model D. Deferred on the **named blocker of a distinct validation surface**
+    (rule 19: it changes what a non-staker open derives and scans, not how the
+    reconcile arms compose), not on reachability. The ruling lives in
     `shekyl-crypto-pq` `archival_p` module docs and CBOM §5.
+  - **`stake` resolves its persona slot BEFORE the reconcile that can move it.**
+    `wallet-rpc` `lifecycle::stake` reads the slot from the open engine, then
+    reopens with a `FirstStakeIntent` carrying that slot; the reopen's SP-R0
+    reconcile may adopt, burn, or GC, leaving the read stale. `Engine::first_stake`
+    re-validates and refuses fail-closed — surfaced since SA-5 as the `-29503`
+    `STAKE_RECORD_MOVED` domain code (re-invoke; nothing durable written), not the
+    `-32603` internal fault it was mapped to. **Reopen to delete the staleness
+    outright:** resolve the elect slot *after* reconciliation, which means the
+    intent stops carrying a slot (`open_full_with_first_stake_intent`) and
+    `spawn_stake_engine_if_staker` derives the elect from the reconciled cursor.
+    **Named blocker:** that is the RPC/engine open-surface (a `pub` signature plus
+    the spawn gate and four call sites), a different validation surface from the
+    reconcile arms — rule 19. **Target: with the next stake-entry round.**
   - **Broadcast / re-anchor wiring activates the CT-5d persona-pin.** The CT-5d
     finding (persona signature binds `tx_prefix_hash`, not the proof, so a
     content-changing re-anchor re-signs the persona — the *common* path over a
