@@ -43,6 +43,7 @@
 #include <limits>
 #include <memory>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "version.h"
@@ -2212,42 +2213,37 @@ namespace nodetool
     /* §55 TRANSIT, NOT STRUCTURE. Collects published rows from every zone
        (a peer belongs to exactly one; zones do not share connection ids),
        sorts globally by peer id so operator diffs are content-stable, and
-       emits one JSON array. Serialisation lives here — once — rather than
-       on the relay hot path or as multi-zone array splicing. Disappears
-       with the p2p migration. */
+       emits one JSON array. Each row carries the zone it was collected
+       from -- verification of coherence / the isolation arm, not a `p`
+       instrument. Serialisation lives in `format_stem_tally_row_json` so
+       the unit table and this merge cannot disagree on the label.
+
+       The endpoint remains AdminOnly (`Visibility::AdminOnly` on
+       `/get_stem_tallies`); a zone label is strictly more disclosive
+       than the flattened peer list, so the gate does not move.
+
+       Disappears with the p2p migration. */
     using row_t = cryptonote::levin::notify::stem_tally_row;
-    std::vector<row_t> rows;
+    std::vector<std::pair<row_t, epee::net_utils::zone>> rows;
     for (const auto& zone : m_network_zones)
     {
       auto part = zone.second.m_notifier.stem_snapshot();
-      rows.insert(rows.end(), part.begin(), part.end());
+      for (auto& r : part)
+        rows.emplace_back(std::move(r), zone.first);
     }
     std::sort(rows.begin(), rows.end(),
-      [](const row_t& a, const row_t& b) {
+      [](const auto& a, const auto& b) {
         return std::lexicographical_compare(
-          std::begin(a.peer), std::end(a.peer),
-          std::begin(b.peer), std::end(b.peer));
+          std::begin(a.first.peer), std::end(a.first.peer),
+          std::begin(b.first.peer), std::end(b.first.peer));
       });
 
-    static constexpr char HEX[] = "0123456789abcdef";
     std::string out = "[";
     for (std::size_t i = 0; i < rows.size(); ++i)
     {
       if (i)
         out += ',';
-      out += "{\"peer\":\"";
-      for (std::uint8_t b : rows[i].peer)
-      {
-        out += HEX[b >> 4];
-        out += HEX[b & 0xf];
-      }
-      out += "\",\"propagated\":";
-      out += std::to_string(rows[i].propagated);
-      out += ",\"silent\":";
-      out += std::to_string(rows[i].silent);
-      out += ",\"distinct_sources\":";
-      out += std::to_string(rows[i].distinct_sources);
-      out += '}';
+      out += cryptonote::levin::format_stem_tally_row_json(rows[i].first, rows[i].second);
     }
     out += ']';
     return out;
@@ -2270,7 +2266,7 @@ namespace nodetool
   }
 
   template<class t_payload_net_handler>
-  epee::net_utils::zone node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay)
+  epee::net_utils::zone node_server<t_payload_net_handler>::send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, const cryptonote::relay_method tx_relay, const cryptonote::zone_route route)
   {
     namespace enet = epee::net_utils;
     using zone_entry = std::pair<const enet::zone, network_zone>;
@@ -2285,50 +2281,38 @@ namespace nodetool
     if (m_network_zones.empty())
       return enet::zone::invalid;
 
-    /* Anonymity-zone selection — one function for originated traffic and for
-       R-1 divert. The mix is only a mix if both classes land on the same zone:
-       a divert path that always took rbegin() (tor) while dual-stack origins
-       preferred i2p would leave i2p carrying originated traffic only — F-6's
-       oracle, still, on the preferred zone (§30.1 / §59.6).
+    /* Anonymity-zone selection for originated traffic that chose the zone.
+       The mix is only a mix if originated and relayed (coherence-held)
+       classes land on the same zone: a helper that always took rbegin()
+       (tor) while dual-stack origins preferred i2p would leave i2p carrying
+       originated traffic only — F-6's oracle, still, on the preferred zone
+       (§30.1 / §59.6).
 
        Order is pinned: public_ < i2p < tor. With one anonymity zone, rbegin()
-       is that zone. With both, i2p wins when usable (noise-filled, else
-       outbound), then tor. m_network_zones is a sorted map. */
+       is that zone. With both, i2p wins when noise-filled, else outbound,
+       then tor. m_network_zones is a sorted map. */
     static_assert(std::is_same<std::underlying_type<enet::zone>::type, std::uint8_t>{}, "expected uint8_t zone");
     static_assert(unsigned(enet::zone::invalid) == 0, "invalid expected to be 0");
     static_assert(unsigned(enet::zone::public_) == 1, "public_ expected to be 1");
     static_assert(unsigned(enet::zone::i2p) == 2, "i2p expected to be 2");
     static_assert(unsigned(enet::zone::tor) == 3, "tor expected to be 3");
 
-    /* `require_usable` splits two callers whose correct behaviour differs when
-       the anonymity zone cannot currently send.
+    /* Anonymity-zone pick for originated traffic that chose the zone (or a
+       local re-relay of one that did). Fail closed: take the zone even when
+       it cannot currently send. Falling back to clearnet would put our own
+       transaction on the public network, which is the first-spy case this
+       arc exists to prevent (§30.5). Better to send nothing.
 
-       ORIGINATED traffic (false) takes the zone regardless and fails closed:
-       falling back to clearnet would put our own transaction on the public
-       network, which is the first-spy case this arc exists to prevent (§30.5).
-       Better to send nothing.
-
-       RELAYED traffic diverted by R-1's roll (true) must NOT fail closed. Its
-       home was always clearnet, the roll is eligibility rather than a drop
-       commitment, and dropping a transaction that is not ours protects nobody
-       while costing the network a relay. So an unusable zone yields nullptr
-       and the caller falls through.
-
-       Without the split the two-zone case is silently wrong: `size() <= 2`
-       returned the zone unconditionally, so a divert onto a zone with no
-       outbound connections lost the transaction — while the same zone would
-       have been rejected on a three-zone node by the readiness loop below. */
-    const auto select_anonymity = [this](const bool require_usable) -> zone_entry*
+       The `require_usable=true` caller died with the per-arrival divert.
+       Relayed traffic no longer asks this helper — it inherits its arrival
+       zone or stays on clearnet. Do not resurrect a usable-or-fall-through
+       path here; that was the divert's eligibility semantics, and once-at-
+       origin has no relayed roll for them to apply to. */
+    const auto select_anonymity = [this]() -> zone_entry*
     {
       if (m_network_zones.size() <= 2)
       {
         auto candidate = m_network_zones.rbegin();
-        if (require_usable && candidate->first != enet::zone::public_)
-        {
-          const auto status = candidate->second.m_notifier.get_status();
-          if (!candidate->second.m_connect || !status.has_outgoing)
-            return nullptr;
-        }
         return std::addressof(*candidate); // public alone, or the one anonymity zone
       }
 
@@ -2340,14 +2324,10 @@ namespace nodetool
         const auto status = network->second.m_notifier.get_status();
         if (!status.has_noise || !status.connections_filled)
           continue;
-        /* `require_usable` gates this tier as well as the one below it.
-           Noise-priority says which zone is PREFERRED, not that it can send:
-           a diverted relayed transaction handed to a zone with no outbound
-           connections is lost, and relayed traffic must fall through to
-           clearnet instead (§59.7). Dormant today -- `has_noise` is false
-           everywhere since §41 -- and live the moment covert returns. */
-        if (require_usable && (!network->second.m_connect || !status.has_outgoing))
-          continue;
+        /* Noise-priority says which zone is PREFERRED. Dormant today --
+           `has_noise` is false everywhere since §41 -- and live the moment
+           covert returns. Unusable is still returned: fail closed, not
+           fall through. */
         return std::addressof(*network);
       }
 
@@ -2364,114 +2344,74 @@ namespace nodetool
       return nullptr;
     };
 
-    /* R-1 mixed eligibility (§59). The inherited rule sent every RELAYED
-       transaction to clearnet and every ORIGINATED one to the anonymity zone,
-       so a peer holding a stem slot there knew everything it saw was the
-       sender's own — F-6's origin oracle (§29), and the half configuration
-       B's deletion did not close (§58.3).
+    /* Q12-D5a once-at-origin. The zone is chosen once, by the originating
+       node; every subsequent hop respects the arrival zone. Relayed traffic
+       does not roll — the per-arrival divert that used to sit here
+       (`still_stemming && !source.is_nil() && divert()`) was the duplicate
+       of coherence, and composing the two was the one-way absorption that
+       destroyed Q12-D4's cancellation.
 
-       Two changes, and the second is not a second decision:
+       The decision is a `zone_route` token only `once_at_origin_route`
+       can construct. This function requires one; a caller that bypasses
+       the helper is a compile error. Fluff is the exit and must not
+       cohere (§59.1).
 
-       1. A relayed transaction still stemming is diverted onto the anonymity
-          zone with probability p (Rust owns the rate; this asks for a
-          verdict). Placement uses select_anonymity — same zone originated
-          traffic would take — so the preferred zone receives the mix.
-       2. A transaction that ARRIVED over an anonymity zone and is still
-          stemming stays on it — no re-roll. Rolling per hop would return it
-          to clearnet after one step, leaving the zone carrying originated
-          traffic only, which is the oracle we are removing. Coherence is the
-          absence of a second roll, not a policy beside it.
+       Two paths put originated traffic on clearnet and they are different
+       events (B-3). A reader who cannot tell which produced it reads the
+       §30.5 fail-closed reversal this arc has already recorded:
 
-       `tx_relay` is the exit. Once a transaction fluffs it leaves the zone
-       and goes public — this line is what carries an anonymity-originated
-       transaction to the clearnet network at all, and swallowing it into
-       coherence would strand those transactions in the anonymity subgraph.
+         1. Roll said clearnet. `daemon_submit::relay_tx` passed `public_`
+            via `originated_zone_from_anonymity_roll(false)`. This arm.
+            By design — the node already relays on clearnet at (1−p)·A/q.
+         2. Roll said anon, zone unusable. That is the
+            `anonymity_fail_closed` arm: `select_anonymity()` then
+            send nothing. Never this arm.
 
-       If the roll says divert but no anonymity zone is currently usable,
-       fall through to clearnet: the roll is eligibility, not a drop
-       commitment. Relayed traffic's home was always clearnet; originated
-       traffic (below) still fails closed when anonymity cannot take it —
-       leaking an origin over clearnet is the first-spy case this arc exists
-       to prevent (§30.5). */
-    /* Pre-fluff = stem | local. Shared with the pure R-1 predicate
-       (`cryptonote::is_pre_fluff_relay` / `r1_coherence_keeps_origin`) so the
-       production branch and its unit witness cannot drift. Fluff is the
-       exit — must not cohere (§59.1). */
-    const bool still_stemming = cryptonote::is_pre_fluff_relay(tx_relay);
-
-    if (origin != enet::zone::invalid)
+       Pool re-relays of `local` keep passing `invalid` and do not re-roll.
+       They share arm 2's fail-closed path, which is why the roll is at
+       first origination rather than on every nil-source call. */
+    switch (route.get())
     {
-      /* LIVE as of Q12-U2. One caller reaches here with a real origin: the
-         ARRIVAL, from `handle_notify_new_transactions`, whose origin is the
-         live connection's zone. Coherence holds a still-stemming arrival on
-         that zone.
+      case cryptonote::zone_route::decision::keep_arrival:
+        /* LIVE as of Q12-U2. One caller reaches here with a real origin: the
+           ARRIVAL, from `handle_notify_new_transactions`, whose origin is the
+           live connection's zone. Coherence holds a still-stemming arrival on
+           that zone.
 
-         The pool re-relay does NOT read `origin_zone` and does not come here
-         as a stem. Expired stems leave as `fluff` at `zone::public_` — the
-         Dandelion++ exit. Re-reading that literal as a leak, and re-stemming
-         those entries on their recorded origin, is the retracted U2-b path:
-         a liveness defect that strands the tx in the anonymity subgraph
-         (§59.1).
+           The pool re-relay does NOT read `origin_zone` and does not come here
+           as a stem. Expired stems leave as `fluff` at `zone::public_` — the
+           Dandelion++ exit. Re-reading that literal as a leak, and re-stemming
+           those entries on their recorded origin, is the retracted U2-b path:
+           a liveness defect that strands the tx in the anonymity subgraph
+           (§59.1).
 
-         Dormant before U2 for five links rather than the four §63.8 recorded
-         — a non-public arrival took `relay_method::forward`, `add_tx` refused
-         to propagate it into `tvc.m_relay`, and the batching switch dropped
-         it. Q12-U2 deleted the class: an arrival is stemmed whatever
-         transport carried it, and reaches here with its real origin.
+           Witness: the token type. Still NOT witnessed: the arrival leg
+           end-to-end (`t_core` harness, FOLLOWUPS). */
+        if (m_network_zones.count(origin))
+          return send(*m_network_zones.find(origin));
+        MWARNING("Unable to send " << txs.size() << " transaction(s): arrival zone is not configured");
+        return enet::zone::invalid;
+      case cryptonote::zone_route::decision::anonymity_fail_closed:
+        /* ORIGINATED, roll said anonymity — or a local re-relay of a tx
+           that already chose anonymity. Take the zone regardless of
+           current usability; falling back to clearnet would put our own
+           transaction on the public network (§30.5). Better to send
+           nothing.
 
-         Witness: link 1 by `levin.cpp`'s `private_*` cases; the pure gate by
-         `r1_coherence_predicate`. Still NOT witnessed: the arrival leg
-         end-to-end (`t_core` harness, FOLLOWUPS). That gap hid the fifth
-         link last time, and let §89.7 assert liveness across it. */
-      if (cryptonote::r1_coherence_keeps_origin(tx_relay, origin) &&
-          m_network_zones.count(origin))
-        return send(*m_network_zones.find(origin)); // coherence: no re-roll
-
-      /* The roll fires only on a genuine ARRIVAL — `source` is a real peer.
-         A mempool re-relay passes a nil source (and `origin == public_`,
-         because expired stems leave as fluff, not as a recorded origin),
-         and re-rolling those would break the design in two ways at once:
-         the same transaction could be diverted on one pass and sent to
-         clearnet on the next, and the effective rate over `k` re-relays
-         would be `1 - (1-p)^k` rather than the `p` §59.2 states and pins.
-
-         One roll at entry means one roll per entry. Re-relays are not
-         entries — they carry no arrival zone to cohere with, and they go to
-         clearnet exactly as they did before R-1. */
-      if (still_stemming && !source.is_nil() && m_network_zones.size() > 1 &&
-          shekyl_relay_zone_divert_relayed_tx())
-      {
-        if (zone_entry* anonymity = select_anonymity(/*require_usable=*/true))
-        {
-          /* `send` MOVES `txs`, so a failed diverted send would otherwise
-             drop the batch: there is nothing left to hand to clearnet. Keep a
-             copy across the attempt and restore it on failure, so "the roll is
-             eligibility, not a drop commitment" holds for a send error and not
-             only for an unusable zone.
-
-             The copy is paid only on the diverted path -- ~2 % of relayed
-             traffic at the current rate -- and never on the clearnet path
-             below, which keeps the move.
-
-             Dormant today: the reachable failure is the covert
-             fragment-oversize check in `notify::send_txs`, and covert has been
-             off since §41. It goes live with the §30 composition, which is
-             scheduled work -- so this is a latent drop a planned change
-             activates, fixed now rather than left for it to surface. */
-          std::vector<cryptonote::blobdata> fallback = txs;
-          if (const auto placed = send(*anonymity); placed != enet::zone::invalid)
-            return placed;
-          txs = std::move(fallback);
-        }
-      }
-
-      return send(*m_network_zones.begin()); // relayed → clearnet, and every fluff
+           ALSO reached by a missed submit nudge: the origination roll
+           never ran, the pool still holds `local`, and this arm
+           first-decides the zone as always-anon. That is D5a in
+           miniature — a second chooser after origination — not a
+           harmless "always anon for that tx". Recorded in FOLLOWUPS.
+           Do not "fix" by rolling here; that is the `source.is_nil()`
+           reversal. */
+        if (zone_entry* anonymity = select_anonymity())
+          return send(*anonymity);
+        MWARNING("Unable to send " << txs.size() << " transaction(s): anonymity networks had no outgoing connections");
+        return enet::zone::invalid;
+      case cryptonote::zone_route::decision::public_clearnet:
+        return send(*m_network_zones.begin());
     }
-
-    if (zone_entry* anonymity = select_anonymity(/*require_usable=*/false))
-      return send(*anonymity);
-
-    MWARNING("Unable to send " << txs.size() << " transaction(s): anonymity networks had no outgoing connections");
     return enet::zone::invalid;
   }
   //-----------------------------------------------------------------------------------

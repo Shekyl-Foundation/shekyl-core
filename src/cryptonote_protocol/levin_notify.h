@@ -31,6 +31,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/uuid/uuid.hpp>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "byte_slice.h"
@@ -173,6 +174,14 @@ namespace levin
     //! the strand.
     std::size_t stem_in_flight() const;
   };
+
+  //! One stem-tally JSON object, including the zone it was collected from.
+  //! Production `node_server::stem_tallies_json` and the unit table call this
+  //! so the label cannot drift from the merge. What edit reds the zone field:
+  //! omit `"zone"` here. `ShekylStemTallyRow` stays 40 bytes -- the zone is
+  //! known at C++ merge time, not on the FFI row.
+  std::string format_stem_tally_row_json(
+    const notify::stem_tally_row& row, epee::net_utils::zone z);
 
   //! §46/§48: canonical tx hashes for the stem-observation watch (F-9).
   //! Parsed once at the fan-out boundary; blob bytes are not a stable identity

@@ -669,6 +669,110 @@ TEST(r1_coherence_predicate, table)
     EXPECT_FALSE(cryptonote::is_pre_fluff_relay(relay_method::fluff));
 }
 
+/* Q12-D5a once-at-origin routing. Production `send_txs` requires a token
+   only this helper can construct. What edit reds the table: return
+   `decision::public_clearnet` from the `keep_arrival` arm (coherence
+   removed) — `(stem, tor)` below fails. What edit fails to compile:
+   constructing a `zone_route` outside this helper, or calling `send_txs`
+   without one. The table still does not drive `handle_notify_new_transactions`
+   on a non-public context (FOLLOWUPS / `t_core`). */
+TEST(once_at_origin_route, table)
+{
+    using cryptonote::relay_method;
+    using cryptonote::zone_route;
+    using epee::net_utils::zone;
+
+    // Coherence: still-stemming on a real anonymity origin stays there.
+    EXPECT_EQ(zone_route::decision::keep_arrival,
+              cryptonote::once_at_origin_route(relay_method::stem, zone::tor).get());
+    EXPECT_EQ(zone_route::decision::keep_arrival,
+              cryptonote::once_at_origin_route(relay_method::stem, zone::i2p).get());
+    EXPECT_EQ(zone_route::decision::keep_arrival,
+              cryptonote::once_at_origin_route(relay_method::local, zone::tor).get());
+
+    // Relayed clearnet inherit — no roll. This is the deleted divert.
+    EXPECT_EQ(zone_route::decision::public_clearnet,
+              cryptonote::once_at_origin_route(relay_method::stem, zone::public_).get());
+
+    // Originated, roll said anon (`invalid`) — fail closed, never clearnet.
+    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
+              cryptonote::once_at_origin_route(relay_method::local, zone::invalid).get());
+    EXPECT_EQ(zone_route::decision::anonymity_fail_closed,
+              cryptonote::once_at_origin_route(relay_method::stem, zone::invalid).get());
+
+    // Originated, roll said clearnet (`public_`) — by design, not a fallback.
+    EXPECT_EQ(zone_route::decision::public_clearnet,
+              cryptonote::once_at_origin_route(relay_method::local, zone::public_).get());
+
+    // Fluff is the exit on every origin.
+    EXPECT_EQ(zone_route::decision::public_clearnet,
+              cryptonote::once_at_origin_route(relay_method::fluff, zone::tor).get());
+    EXPECT_EQ(zone_route::decision::public_clearnet,
+              cryptonote::once_at_origin_route(relay_method::fluff, zone::invalid).get());
+}
+
+/* The origination roll's two outcomes must stay distinguishable from each
+   other and from "chose anon, zone unusable". What edit reds it: swap the
+   ternary in `originated_zone_from_anonymity_roll`. */
+TEST(originated_zone_from_anonymity_roll, the_two_outcomes_are_distinct)
+{
+    using epee::net_utils::zone;
+
+    EXPECT_EQ(zone::invalid, cryptonote::originated_zone_from_anonymity_roll(true));
+    EXPECT_EQ(zone::public_, cryptonote::originated_zone_from_anonymity_roll(false));
+    EXPECT_NE(
+      cryptonote::originated_zone_from_anonymity_roll(true),
+      cryptonote::originated_zone_from_anonymity_roll(false));
+
+    // Fail-closed (unusable chosen zone) never produces `public_`.
+    EXPECT_EQ(
+      cryptonote::zone_route::decision::anonymity_fail_closed,
+      cryptonote::once_at_origin_route(
+        cryptonote::relay_method::local,
+        cryptonote::originated_zone_from_anonymity_roll(true)).get());
+    EXPECT_EQ(
+      cryptonote::zone_route::decision::public_clearnet,
+      cryptonote::once_at_origin_route(
+        cryptonote::relay_method::local,
+        cryptonote::originated_zone_from_anonymity_roll(false)).get());
+}
+
+/* Zone-labelled stem tally. Production `stem_tallies_json` calls this.
+   What edit reds it: omit the `"zone"` key from `format_stem_tally_row_json`.
+   A test that only grepped the merge loop could pass if the helper never
+   ran; sharing the function is the witness. */
+TEST(stem_tally_json, row_carries_zone_from_the_merge)
+{
+    cryptonote::levin::notify::stem_tally_row row{};
+    row.peer[0] = 0xab;
+    row.peer[1] = 0xcd;
+    row.propagated = 3;
+    row.silent = 1;
+    row.distinct_sources = 2;
+
+    const std::string tor =
+      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::tor);
+    EXPECT_NE(std::string::npos, tor.find("\"zone\":\"tor\""));
+    EXPECT_NE(std::string::npos, tor.find("\"peer\":\"abcd"));
+    EXPECT_NE(std::string::npos, tor.find("\"propagated\":3"));
+    EXPECT_NE(std::string::npos, tor.find("\"silent\":1"));
+    EXPECT_NE(std::string::npos, tor.find("\"distinct_sources\":2"));
+
+    const std::string i2p =
+      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::i2p);
+    EXPECT_NE(std::string::npos, i2p.find("\"zone\":\"i2p\""));
+    EXPECT_EQ(std::string::npos, i2p.find("\"zone\":\"tor\""));
+
+    EXPECT_NE(
+      std::string::npos,
+      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::public_)
+        .find("\"zone\":\"public\""));
+    EXPECT_NE(
+      std::string::npos,
+      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::invalid)
+        .find("\"zone\":\"invalid\""));
+}
+
 /* §89 private stemming posture: the anonymity zone STEMS. Outbound-only fluff
    reach is asserted every round inside `run_private_round`. Cases differ only
    by method and padding. */

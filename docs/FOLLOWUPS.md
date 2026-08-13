@@ -9388,22 +9388,31 @@ its wake.
   stems by recorded origin, on the reading that its `zone::public_` literal was
   a clearnet leak; that was retracted before push. The literal is the fluff
   exit. See `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
-  **Consequence — `txpool_tx_meta_t::origin_zone` has no production consumer.**
+  **Consequence — `txpool_tx_meta_t::origin_zone` has no routing consumer.
+  Fourth consumer named 2026-08-13: the Q12-D6a isolation arm.**
+  Three scoped, zero delivered: U1 pool-loop routing (deleted with
+  `forward`), U2 re-relay origin bucketing (retracted, `2cd0fb72`), U3
+  zone-labelled `/get_stem_tallies` (collection zone, not this field).
   It is written at first arrival (`add_tx` does not revise it on a
-  stem→fluff upgrade) and preserved across hard-fork re-validation, and
-  nothing reads it to decide anything. Its named consumer is Q12-U3's
-  origin-classified telemetry — **whose purpose changed when Q12-D5a was ruled
-  once-at-origin (2026-08-12, PR #460): it VERIFIES that coherence holds rather
-  than gating `p`, which needs no instrument under that ruling.** Do not re-file
-  it as a precondition for setting `p`; the next unit is implementing
-  once-at-origin, not building the telemetry. **Open disposition, not a defect to sweep:**
-  unlike the dead fields removed in #450 it has a writer and a dated reader,
-  but it should not sit unread indefinitely.
+  stem→fluff upgrade) and preserved across hard-fork re-validation. The one
+  production read is that preservation path (`e.meta.get_origin_zone()` in
+  the HF re-validation loop). **Decision, not a residual comment:** keep
+  the field for the isolation arm (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6) —
+  distinguish originated-on-anon from relayed-on-anon. Reopen for
+  rule-15 deletion if that run ships without a reader besides the
+  preservation path. Do not delete it in the meantime; do not re-file
+  origin-classified telemetry as a precondition for `p`. **Target: the
+  Q12-D6a isolation-arm run** (pre-genesis; `Q12_D6A_PEER_DISCOVERY_RUN.md`
+  §6 step 11). Reopening for deletion is that run's closing PR.
   **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s `private_*` cases
   pin that a stem emits the flag clear and a fluff sets it; (2) the pure gate —
   `r1_coherence_predicate` pins `r1_coherence_keeps_origin` /
-  `is_pre_fluff_relay`, shared with the production branch so it cannot drift;
-  (3) the record — `txpool_origin_zone` pins that reclaiming `is_forwarding`
+  `is_pre_fluff_relay`; (3) Q12-U3's `once_at_origin_route.table` — the
+  decision function; `send_txs` requires a `zone_route` token only that
+  helper can construct, so bypassing it is a compile error; returning
+  `public_clearnet` from the `keep_arrival` arm was observed to red
+  `(stem, tor)`; (4) the record —
+  `txpool_origin_zone` pins that reclaiming `is_forwarding`
   did not shift `fcmp_verified` or `origin_zone`, and that the zone survives a
   real LMDB round trip.
   **Still not witnessed:** the arrival-to-record leg — the receiver's
@@ -9427,6 +9436,23 @@ its wake.
   rather than driving an arrival, so it pinned the class and would have fired
   only when the class was deleted. See `DAEMON_RELAY_PRIVACY.md` §89.8 and
   `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+
+- **Relay: `on_relay_tx` and a missed submit nudge re-decide the zone after
+  origination.** *(Surfaced 2026-08-13, Q12-U3 review.)* Once-at-origin
+  forbids a second chooser. Two sites still choose:
+  (1) A missed `daemon_submit::relay_tx` nudge leaves the pool holding
+  `local`; the pool loop then sends `invalid`+`local` and fail-closes
+  onto anon — a first decision with `p = 1`, aliased with the fail-closed
+  backstop for a tx that *did* choose anon. Do not fix by rolling on the
+  pool path (that is the `source.is_nil()` reversal).
+  (2) `core_rpc_server::on_relay_tx` always passes `invalid` and remaps
+  every non-broadcasted method (`local` *and* `stem` — stem is outside
+  `relay_category::broadcasted`) to `local`, so a clearnet origination
+  that is still stemming is re-decided onto anon. **Blocker (rule 22):**
+  closing (2) needs the pool meta at that RPC (the TODO already at the
+  site). **Target: V3.0 pre-genesis.** Reopening: the PR that gives
+  `on_relay_tx` the stored method and origin, or that persists the
+  origination roll so a missed nudge cannot first-decide.
 
 - **Wallet: stop holding a relay constant — ask the daemon whether a
   transaction is still in flight.** `wallet2.cpp` derives its

@@ -52,7 +52,7 @@ namespace nodetool
   struct i_p2p_endpoint
   {
     virtual bool relay_notify_to_list(int command, epee::levin::message_writer message, std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections)=0;
-    virtual epee::net_utils::zone send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay)=0;
+    virtual epee::net_utils::zone send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay, cryptonote::zone_route route)=0;
     //! §46: hand every arrived tx to every zone's stem-observation watch,
     //! BEFORE pool admission — a returned tx that the pool then rejects still
     //! proves the successor relayed it. Implementation parses to canonical
@@ -81,7 +81,7 @@ namespace nodetool
     {
       return false;
     }
-    virtual epee::net_utils::zone send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay)
+    virtual epee::net_utils::zone send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay, cryptonote::zone_route route)
     {
       return epee::net_utils::zone::invalid;
     }

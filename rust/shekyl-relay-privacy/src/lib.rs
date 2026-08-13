@@ -178,7 +178,7 @@ pub use derive::{
 pub use geometric::GeometricTable;
 pub use params::{
     divert_to_anonymity_zone, DandelionParams, StemGraph, EMBARGO_FULL_TRAVEL_PROBABILITY,
-    MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS,
+    MIXED_ELIGIBILITY_PCT_HUNDREDTHS,
 };
 pub use poisson::PoissonTable;
 pub use rng::{bernoulli, bounded_uniform, RelayRng, SplitMix64};

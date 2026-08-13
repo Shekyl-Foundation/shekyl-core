@@ -54,6 +54,7 @@
 #include <deque>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "byte_slice.h"
@@ -1203,6 +1204,28 @@ namespace levin
       need = wrote;
     }
     out.clear();
+    return out;
+  }
+
+  std::string format_stem_tally_row_json(
+    const notify::stem_tally_row& row, epee::net_utils::zone z)
+  {
+    static constexpr char HEX[] = "0123456789abcdef";
+    std::string out = "{\"peer\":\"";
+    for (std::uint8_t b : row.peer)
+    {
+      out += HEX[b >> 4];
+      out += HEX[b & 0xf];
+    }
+    out += "\",\"zone\":\"";
+    out += epee::net_utils::zone_to_string(z);
+    out += "\",\"propagated\":";
+    out += std::to_string(row.propagated);
+    out += ",\"silent\":";
+    out += std::to_string(row.silent);
+    out += ",\"distinct_sources\":";
+    out += std::to_string(row.distinct_sources);
+    out += '}';
     return out;
   }
 

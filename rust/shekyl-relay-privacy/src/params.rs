@@ -54,117 +54,48 @@
 /// the design round can move it and watch the embargo follow.
 pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 
-/// R-1 mixed eligibility: the **per-hop** chance a *relayed* transaction is
-/// diverted onto the anonymity zone instead of the public one, in hundredths
-/// of a percent (so `100` = 1.00 %).
+/// R-1 mixed eligibility: the chance an *originated* transaction takes the
+/// anonymity zone instead of the public one, in hundredths of a percent
+/// (so `100` = 1.00 %, `5000` = 50 %). One roll, at origination (Q12-D5a).
+/// Relayed traffic does not consult this; it inherits its arrival zone.
 ///
-/// # What this fixes
+/// **This is an indifference point on a linear trade, not a measured
+/// optimum.** Transport privacy gained and propagation latency paid are
+/// both linear in `p` with no threshold on either side, so the midpoint
+/// is the point of indifference. Precision is `q/(1+q)` at every value
+/// (Q12-D4's cancellation, which holds under once-at-origin and only
+/// there), so nothing about privacy varies with `p`.
 ///
-/// Without it, `net_node`'s routing sends every relayed transaction to
-/// clearnet and every *originated* one to the anonymity zone — so a peer on
-/// that zone knows everything it sees is the sender's own. That is F-6's
-/// origin oracle (§29), and it is the half configuration B's deletion did
-/// **not** close (§58.3).
+/// **What would replace it:** a measured asymmetry in either term —
+/// latency that is not linear in `p`, or a privacy cost that appears on
+/// one side of some threshold. Until that measurement exists, do not
+/// re-derive this number from prose. Four prior derivations in this arc
+/// reasoned about a code path that was dormant.
 ///
-/// # Current posture (§89, and Q12-U2 as of 2026-08-12)
+/// **Fixed, not operator-configurable.** A per-operator `p` is weakly
+/// observable to peers (the fraction of that node's originations that
+/// arrive on each zone) and would partition the node population into
+/// distinguishable classes. That is *privacy is never a setting* in a
+/// new place.
 ///
-/// The anonymity zone **stems**. A diverted transaction continues on a stem
-/// rather than terminating in a diffusion. Consequently §63.5's
-/// stem-shortening cost — for a long time *the* measured reason for rejecting
-/// higher `p` — no longer applies. Re-deriving `p` is §64.1's eligibility
-/// decision.
-///
-/// **This once read "so 2 % is the conservative value, not the justified
-/// one", and that inference has expired.** It was sound while §63.5's cost was
-/// the only one. Q12-U2 (#459) made R-1's coherence branch live, and per-hop
-/// rolling plus coherence is a **one-way absorbing process within the stem
-/// phase**: a transaction moves clearnet→anon and never back *for the rest of
-/// its stem*, so raising `p` raises the absorbed fraction. It still leaves on
-/// fluff — that exit is deliberate (§59.1), and it is what bounds the
-/// absorption; "never back" describes the stem, not the transaction's life.
-/// The distinction is load-bearing rather than pedantic: Q12-D5a's model is
-/// about skew in STEM POSITION, so an unbounded reading would describe a
-/// different process from the one measured.
-///
-/// Q12-D5a's analysis has that direction reproducing the origin oracle **on
-/// clearnet** — the defect this arc exists to remove, mirrored onto the other
-/// zone. Before Q12-U2 a diverted transaction returned to
-/// clearnet after one hop, so nothing absorbed and the question was moot.
-///
-/// **RULED 2026-08-12 (Q12-D5a): once-at-origin.** The absorption above is an
-/// artifact of rolling per arrival, and per-arrival rolling duplicates what
-/// coherence already does — coherence decides the zone and holds it, so a
-/// second roll re-decides a settled question and the accumulated re-decisions
-/// *are* the absorption. Once-at-origin is coherence with the duplicate
-/// deleted: the origin rolls, and no node re-rolls.
-///
-/// **Under that rule `p` carries no privacy content.** Both zones sit at
-/// `q/(1+q)` for every `p` (Q12-D4's cancellation, which holds exactly under
-/// once-at-origin and only there), so this is a **deployment** parameter and
-/// there is no value to get wrong. The absorption hazard above describes the
-/// semantics being replaced; it is kept because the shipped code still rolls
-/// per arrival until the implementing unit lands.
-///
-/// **Until then, do not read "§63.5 no longer applies" as "higher `p` is
-/// free"** — that is the reading this note exists to block, and while per-hop
-/// rolling ships it is a live hazard rather than a historical one.
-///
-/// # What the implementing unit owes
-///
-/// `p_own` becomes `p` rather than 1, which makes the `require_usable=false`
-/// caller conditional. **§30.5's fail-closed rule survives**: it governs what
-/// happens when the *chosen* zone is unusable, not whether the roll happens.
-/// The two paths to originated traffic on clearnet — *roll said anon, zone
-/// unusable* (fail closed, send nothing) and *roll said clearnet* (by design)
-/// — must be distinguishable at the site, or a reader sees originated traffic
-/// on clearnet and reads a fail-closed reversal that did not happen.
-///
-/// **This constant's name goes with it.** `PER_HOP` stops describing what it
-/// does under once-at-origin, and a name that disagrees with the mechanism
-/// beside it is what hides the next re-derivation.
-///
-/// Design history (pre-§89 diffusion premise, precision figures, retraction
-/// chain) lives in `docs/design/DAEMON_RELAY_PRIVACY.md` §59–§64 / §89 and
-/// `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md` — not restated here so present-tense
-/// source does not re-teach a retired posture.
-///
-/// # Per-hop, and the distinction is not cosmetic
-///
-/// Every node that receives a relayed transaction over clearnet rolls
-/// independently, so over a stem of `1/q ≈ 5` hops the **network-level**
-/// diversion rate is `1 − (1 − p)^5`, not `p`:
-///
-/// | per-hop | network-level |
-/// | --- | --- |
-/// | 0.01 | 0.049 |
-/// | **0.02** | **0.096** |
-/// | 0.05 | 0.226 |
-///
-/// **This constant is the per-hop figure.** Reading it as the network rate
-/// overstates diversion fivefold; reading the network rate as this one
-/// understates it the same way.
-///
-/// What ships diverts **pre-fluff traffic only** (`still_stemming` at the
-/// routing site) — ~20 transactions per node per day against ~20 000 fluff
-/// relays. **State the eligible population's SIZE beside any rate that reads
-/// from it.** Set against an origination rate of one transaction per node per
-/// day (§34's Monero-like envelope).
-pub const MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS: u32 = 200;
+/// Formerly `MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS = 200`. The name
+/// described the deleted per-arrival divert; the 2 % was conservative
+/// under a stem-shortening cost that no longer applies. History:
+/// `DAEMON_RELAY_PRIVACY.md` §59–§64 / §89,
+/// `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+pub const MIXED_ELIGIBILITY_PCT_HUNDREDTHS: u32 = 5000;
 
-/// Should this *relayed* transaction be diverted onto the anonymity zone's
-/// stem? One roll, at entry.
+/// Should this *originated* transaction take the anonymity zone?
 ///
-/// **The roll is at entry only, and that is what makes R-1 work rather than
-/// a second decision.** A transaction already travelling the anonymity zone's
-/// stem must stay on it — re-rolling per hop would send it back to clearnet
-/// after one step, leaving the zone carrying originated traffic only, which
-/// is the oracle R-1 exists to remove. Coherence is not a separate policy;
-/// it is the absence of a second roll.
+/// **Once-at-origin (Q12-D5a).** The origin rolls; no node re-rolls.
+/// Relayed traffic inherits its arrival zone and coherence holds it.
+/// Re-rolling per arrival plus coherence was the one-way absorbing
+/// process that destroyed Q12-D4's cancellation.
 ///
-/// Callers own the pre-fluff test: this answers *whether to divert*, not
-/// *whether the transaction is still stemming*. Once it fluffs it leaves the
-/// zone, which is what keeps a transaction that entered over Tor reaching the
-/// public network at all.
+/// Callers own the pre-fluff test: this answers *whether to take
+/// anonymity*, not *whether the transaction is still stemming*. Once it
+/// fluffs it leaves the zone, which is what keeps a transaction that
+/// entered over Tor reaching the public network at all.
 #[must_use]
 pub fn divert_to_anonymity_zone<R: crate::rng::RelayRng + ?Sized>(rng: &mut R) -> bool {
     // `bounded_uniform` rather than `% 10_000` for consistency with every
@@ -173,7 +104,7 @@ pub fn divert_to_anonymity_zone<R: crate::rng::RelayRng + ?Sized>(rng: &mut R) -
     // samples to observe. Stated rather than implied, because a comment
     // claiming a bias defence invites a test that cannot fail — one was
     // written here and deleted for exactly that reason.
-    crate::rng::bounded_uniform(rng, 9_999) < u64::from(MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS)
+    crate::rng::bounded_uniform(rng, 9_999) < u64::from(MIXED_ELIGIBILITY_PCT_HUNDREDTHS)
 }
 
 /// Outbound connections a node opens per zone by default — the deployed
@@ -709,15 +640,19 @@ mod r1_tests {
     use super::*;
     use crate::rng::SplitMix64;
 
-    /// The roll fires at the configured per-hop rate, and the *network-level*
-    /// rate it implies is the one that must be quoted.
+    /// Pins the indifference point and that production's sampler uses it.
     ///
-    /// Both arms matter. The first pins the constant's meaning; the second
-    /// pins the thing that is easy to state wrongly — a per-hop 2 % is a
-    /// ~10 % network-level diversion over a `1/q ≈ 5` stem, and a reader who
-    /// takes 2 % as the network figure is off by five.
+    /// What edit reds the value: change `MIXED_ELIGIBILITY_PCT_HUNDREDTHS`.
+    /// What edit reds the sampler: make `divert_to_anonymity_zone` ignore
+    /// the constant (hardcode a different threshold). Deleting this test
+    /// is not the edit that reds either.
     #[test]
-    fn the_roll_is_per_hop_and_the_network_rate_is_five_times_it() {
+    fn the_roll_matches_the_indifference_point() {
+        assert_eq!(
+            MIXED_ELIGIBILITY_PCT_HUNDREDTHS, 5000,
+            "p = 0.5 is the indifference point; do not re-derive from prose"
+        );
+
         const N: u32 = 200_000;
         let mut rng = SplitMix64::new(0x5211);
         let mut hits = 0_u32;
@@ -726,19 +661,11 @@ mod r1_tests {
                 hits += 1;
             }
         }
-        let per_hop = f64::from(hits) / f64::from(N);
-        let target = f64::from(MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS) / 10_000.0;
+        let observed = f64::from(hits) / f64::from(N);
+        let target = f64::from(MIXED_ELIGIBILITY_PCT_HUNDREDTHS) / 10_000.0;
         assert!(
-            (per_hop - target).abs() < 0.002,
-            "per-hop rate {per_hop:.4} should be {target:.4}"
-        );
-
-        // 1 - (1-p)^5 at p = 0.02 is ~0.096.
-        let network = 1.0 - (1.0 - target).powi(5);
-        assert!(
-            (0.09..0.11).contains(&network),
-            "network-level rate {network:.3} — this is the figure to quote, \
-             not the per-hop one"
+            (observed - target).abs() < 0.01,
+            "sampler rate {observed:.4} should be {target:.4}"
         );
     }
 }

@@ -58,6 +58,20 @@
   the elect slot *after* reconciliation — reshapes the first-stake intent and the
   spawn gate, a distinct validation surface tracked in `FOLLOWUPS.md`.
 
+- **Daemon relay: the anonymity zone is chosen once, at origination**
+  (Q12-U3). Relayed traffic inherits its arrival zone; coherence holds
+  it. `p = 0.5` (`MIXED_ELIGIBILITY_PCT_HUNDREDTHS = 5000`) is the
+  indifference point on a linear trade, not a measured optimum, and is
+  not operator-configurable. Originated traffic that rolls clearnet
+  does so by design and is distinguishable at the site from fail-closed
+  (chose anonymity, zone unusable, send nothing). `/get_stem_tallies`
+  rows now carry a `zone` label; the endpoint stays admin-only.
+  `origin_zone` is still not a routing field. Named consumer: the
+  Q12-D6a isolation arm. `on_relay_tx` and a missed submit nudge are
+  residual absorption paths (zone re-decided after origination) and
+  are recorded, not closed here. `send_txs` requires a `zone_route`
+  token only `once_at_origin_route` can construct.
+
 - **Daemon relay: anonymity arrivals stem at arrival, and the txpool
   records which zone they arrived over** (Q12-U1 / Q12-U2 / Q12-U4,
   `feat/q12-u1-u2-arrival-zone-and-coherence`). `relay_method::forward`
@@ -65,10 +79,12 @@
   deleted, along with the delay it timed. An arrival is now stemmed
   on the transport it arrived over, so R-1 coherence can keep it there
   for the rest of the stem. The pool still fluffs an expired stem to
-  clearnet; that is the Dandelion++ exit, not a leak. The new
+  clearnet; that is the Dandelion++ exit, not a leak. The
   `origin_zone` field is written at first arrival (and not revised
-  when a later peer upgrades the relay method) so Q12-U3 can measure
-  per-zone hop; nothing production-reads it yet.
+  when a later peer upgrades the relay method). Q12-U3 later chose
+  the zone at origination and labelled stem tallies by zone; this
+  field remains a telemetry / isolation-arm instrument, not a
+  routing input.
 
 - **Pinned crypto vectors: the SA-3a raw-public-key leaf-hash pins moved to
   a machine-readable fixture** (`docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json`;

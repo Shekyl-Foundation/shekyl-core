@@ -5,12 +5,13 @@
 multi-round, FFI boundary, persisted-layout change. Cited explicitly, as that
 rule requires.
 
-**Status: PARTLY LANDED (2026-08-12).** Q12-U1 + Q12-U2 + Q12-U4 shipped;
-Q12-U3 is next. The opening text below is the design as opened and is
-kept as the record of the questions; the as-built sections at the end
-are what the code does now. Every numeric claim in the opening is
-subject to verification at pre-flight (rule 26's B6/B9). Where a number
-is inherited rather than derived, it says so.
+**Status: LANDED (as of 2026-08-13).** Q12-U1 + Q12-U2 + Q12-U4 shipped
+2026-08-12 (#459); Q12-U3 once-at-origin shipped 2026-08-13. The opening
+text below is the design as opened and is kept as the record of the
+questions; the as-built sections at the end are what the code does now.
+Every numeric claim in the opening is subject to verification at
+pre-flight (rule 26's B6/B9). Where a number is inherited rather than
+derived, it says so.
 
 ---
 
@@ -775,9 +776,9 @@ correctly: its fate is the same question as `forward`'s (Q12-Q3, Q12-Q7).
 
 | unit | subject | status |
 | --- | --- | --- |
-| **Q12-U1** | the txpool origin-zone field — two reserved bits, `invalid == 0`, no migration | **LANDED** (2026-08-12), with Q12-U2 in one PR. The field is written by the arrival path and **has no production consumer yet** — Q12-U3's per-zone telemetry is the named one |
+| **Q12-U1** | the txpool origin-zone field — two reserved bits, `invalid == 0`, no migration | **LANDED** (2026-08-12), with Q12-U2 in one PR. The field is written by the arrival path and **has no routing consumer** — Q12-U3 labelled `/get_stem_tallies` by collection zone, not this field |
 | **Q12-U2** | the receive path — anonymity arrivals relay at arrival instead of being dropped by the forward gate | **LANDED** (2026-08-12). Coherence executes at arrival. The re-relay loop is deliberately **unchanged** beyond the `forward` arm's deletion — see the retraction below |
-| **Q12-U3** | `p` — ship at a stated value, run the Q12-D6a testnet, read precision and latency off `/get_stem_tallies` and `get_connections` | **NEXT, and now unblocked.** §89.2's premise is shipped, so the per-zone `hop` is live and measurable rather than inert |
+| **Q12-U3** | `p` — ship at a stated value; zone-labelled `/get_stem_tallies` verifies coherence, it does not gate `p` | **LANDED** (2026-08-13). Once-at-origin; `p = 0.5` (indifference); see as-built below |
 | **Q12-U4** | `FORWARD_DELAY_*`'s disposition | **LANDED** with U2 — the forecast held: the constants died with the class, by deletion rather than derivation |
 
 The Poisson primitive's retirement is **not** a unit here; it is split out per
@@ -926,17 +927,19 @@ wins: `add_tx` calls the setter only on a fresh insert, so a stem→fluff
 upgrade does not replace a tor origin with the looping peer's zone. Its only
 non-test read is `tx_pool.cpp`'s hard-fork re-validation, which reads it to
 write it back (`take_tx` makes that a new insert, so the stored origin must
-be passed in). Its consumer is **Q12-U3**'s per-zone telemetry, which is the
-next PR. That is a disposition this round owes an answer to, not one it has
-given.
+be passed in). Q12-U3 labelled `/get_stem_tallies` by **collection** zone;
+that is not a reader of this field. Do not delete it — isolation-arm
+instrument, not a routing input.
 
 ### §89.2's premise is now shipped
 
 The per-zone `hop` was derived on the premise that a transaction entering an
 anonymity stem completes it there, and §89.8.4 recorded the constant as inert
-because the premise was not shipped. It is shipped now. The constant becomes
-**live rather than derived** — measuring it is Q12-U3, and
-`ANON_ZONE_TRANSIT_ASSUMPTION_MS` keeps its interim banner until then.
+because the premise was not shipped. It is shipped now. Q12-D5a then
+dissolved the measure-`p`-first gate; U3 shipped `p = 0.5` without
+measuring `α`. The per-zone hop constant is live for coherence
+verification. `ANON_ZONE_TRANSIT_ASSUMPTION_MS` keeps its interim
+banner until a measured transit replaces it.
 
 ### What the #427 tripwire actually pinned
 
@@ -1215,3 +1218,76 @@ reject higher `p` — a different one from §63.5's, and one created by #459.**
 The docstring is corrected in place rather than deleted: the §63.5 fact is
 still true and still worth knowing, and what was wrong was the inference drawn
 from it being the *only* cost.
+
+## Q12-U3 as built — once-at-origin, 2026-08-13
+
+The ruling (Q12-D5a) landed as specified, with one audit finding that
+changed the call site.
+
+**The roll is at first origination, not on `source.is_nil()`.** Verified at
+source: originated traffic is `origin == zone::invalid` (`daemon_submit::relay_tx`
+and pool `private_req`). Pool re-relays of `local` also pass `nil_uuid` +
+`invalid` + `relay_method::local` after `MIN_RELAY_TIME`. Rolling on
+`source.is_nil()` would re-roll originated-on-anon traffic onto clearnet —
+the §30.5 fail-closed reversal. The deleted divert was
+`still_stemming && !source.is_nil() && m_network_zones.size() > 1 && divert()`.
+
+**What ships.** `daemon_submit::relay_tx` rolls via
+`shekyl_relay_zone_divert_originated_tx` and maps through
+`originated_zone_from_anonymity_roll`: `true` → `invalid` (fail-closed onto
+anonymity), `false` → `public_` (clearnet **by design**). `send_txs` switches
+on `once_at_origin_route`. Pool local re-relays keep passing `invalid` and
+do not re-roll.
+
+**Residual absorption — two paths, same shape.** Once-at-origin forbids a
+second chooser. Two sites still choose after origination:
+
+1. **Missed submit nudge.** The roll lives in `daemon_submit::relay_tx`.
+   If that nudge never runs, the pool still holds `local` and later
+   sends `invalid`+`local` — fail-closed onto anon. That is not "always
+   anon for that tx" as a harmless edge; it is a first decision made
+   after origination, with `p = 1`. Indistinguishable here from the
+   fail-closed backstop for a tx that *did* choose anon and stayed
+   `local`. Do not fix by rolling on the pool path (`source.is_nil()`
+   reversal).
+2. **`on_relay_tx`.** Always passes `invalid`. Non-broadcasted traffic
+   (`local` *and* `stem` — stem is outside `relay_category::broadcasted`)
+   is remapped to `local`, so a clearnet origination that is still
+   stemming is re-decided onto anon. Closing it needs the pool meta at
+   that RPC. FOLLOWUPS.
+
+**`p = 0.5`.** `MIXED_ELIGIBILITY_PCT_HUNDREDTHS = 5000`. Indifference
+point on a linear trade, not a measured optimum; not operator-configurable.
+Formerly `MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS = 200`.
+
+**Fail-closed survives and is distinguishable.** Roll-said-anon + unusable
+zone: `anonymity_fail_closed`, send nothing. Roll-said-clearnet:
+`public_clearnet`, this arm, by design. A node that relays on clearnet at
+all is already a visible clearnet participant at rate `(1−p)·A/q`.
+
+**Zone-labelled tallies.** `/get_stem_tallies` rows carry `"zone"` from
+the merge (`public` / `i2p` / `tor` / `invalid` via `zone_to_string`).
+`ShekylStemTallyRow` is still 40 bytes. AdminOnly is unchanged
+(`Visibility::AdminOnly`). This verifies which zone produced the stem
+observation; it does **not** read `txpool_tx_meta_t::origin_zone`.
+
+**`origin_zone` is not a routing field. Fourth consumer named 2026-08-13.**
+Three scoped, zero delivered: U1 pool-loop routing (deleted with
+`forward`), U2 re-relay origin bucketing (retracted, `2cd0fb72`), U3
+zone-labelled tallies (collection zone, not this field). The named
+consumer is the Q12-D6a isolation arm
+(`Q12_D6A_PEER_DISCOVERY_RUN.md` §6): distinguish originated-on-anon
+from relayed-on-anon. One production read remains: HF re-validation
+preservation (`e.meta.get_origin_zone()`). First-writer-wins holds.
+Reopen for rule-15 deletion if that run ships without a reader besides
+the preservation path. Do not delete it in the meantime — two bits
+are cheap; re-deriving this history is not.
+
+**Witness.** `once_at_origin_route.table` pins the decision function.
+`send_txs` requires a `zone_route` token only that helper can
+construct, so bypassing it is a compile error (same device as `f`
+refusing a timing parameter). Negative control of the table: returning
+`public_clearnet` from the `keep_arrival` arm reds `(stem, tor)`.
+Restored; green. **Still not witnessed:** the arrival
+leg through `handle_notify_new_transactions` on a non-public context
+(`t_core` / valid FCMP++ proof — FOLLOWUPS).

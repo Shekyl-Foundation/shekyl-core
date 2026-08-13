@@ -686,24 +686,23 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_in_flight(handle: *const RelayZo
     }
 }
 
-/// R-1: should this *relayed* transaction be diverted onto the anonymity
-/// zone's stem? One roll, at entry (§59).
+/// R-1: should this *originated* transaction take the anonymity zone?
+/// One roll, at origination (Q12-D5a). Relayed traffic does not call this.
 ///
-/// **A verdict crosses, not a probability.** The rate, its per-hop meaning and
-/// the reasoning behind it stay in Rust; C++ asks a yes/no question at the one
-/// routing site and acts on the answer. Handing C++ the probability would put
-/// the draw — and a second place to get the rate wrong — on the wrong side of
-/// the boundary.
+/// **A verdict crosses, not a probability.** The rate and its reasoning stay
+/// in Rust; C++ asks a yes/no question at the one origination site and acts
+/// on the answer. Handing C++ the probability would put the draw — and a
+/// second place to get the rate wrong — on the wrong side of the boundary.
 ///
 /// Handle-free: the roll is a property of the policy, not of any zone
 /// instance, and it draws from the process CSPRNG exactly as the embargo does.
 ///
-/// **Callers own the pre-fluff test.** This says *whether to divert*, not
-/// *whether the transaction is still stemming*. A transaction that has
+/// **Callers own the pre-fluff test.** This says *whether to take anonymity*,
+/// not *whether the transaction is still stemming*. A transaction that has
 /// fluffed must leave the zone, or one that entered over Tor never reaches
 /// the public network.
 #[no_mangle]
-pub extern "C" fn shekyl_relay_zone_divert_relayed_tx() -> bool {
+pub extern "C" fn shekyl_relay_zone_divert_originated_tx() -> bool {
     let mut rng = SecureRelayRng;
     shekyl_relay_privacy::divert_to_anonymity_zone(&mut rng)
 }

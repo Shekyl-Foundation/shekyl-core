@@ -82,9 +82,9 @@ namespace cryptonote
       our own transaction from the origin's own IP is the first-spy case this
       arc exists to prevent. `local` is the class that prevents it —
       `relay_txpool_transactions` routes `local` to `private_req` at
-      `zone::invalid`, which `select_anonymity(require_usable=false)` resolves
-      back to the anonymity zone and never to clearnet, so originated traffic
-      fails closed (§59.7). Every other class routes to `public_req`.
+      `zone::invalid`, which `once_at_origin_route` maps to
+      `anonymity_fail_closed` — take the zone, send nothing if unusable.
+      Every other class routes to `public_req`.
 
       This matters because `upgrade_relay_method` is monotone: one record of
       `stem` or `fluff` moves the entry out of `local` permanently, and the next
@@ -118,5 +118,72 @@ namespace cryptonote
     return is_pre_fluff_relay(tx_relay)
         && origin != epee::net_utils::zone::public_
         && origin != epee::net_utils::zone::invalid;
+  }
+
+  /*! \brief Where `node_server::send_txs` should place a transaction under
+      Q12-D5a once-at-origin.
+
+      A token only `once_at_origin_route` can construct. `send_txs` requires
+      one to select a zone, so a caller that bypasses the helper is a
+      compile error — same device as `f` refusing a timing parameter
+      (`DAEMON_RELAY_PRIVACY.md` §77.4) and the depth table refusing an
+      unpopulated tier (§83.3). Sharing the helper with the unit table is
+      necessary and not sufficient; this is the liveness half the table
+      cannot supply.
+
+      What edit reds the table: return `decision::public_clearnet` from
+      the `keep_arrival` arm. What edit fails to compile: constructing a
+      `zone_route` anywhere except `once_at_origin_route`, or calling
+      `send_txs` without one. */
+  class zone_route
+  {
+  public:
+    enum class decision : std::uint8_t
+    {
+      keep_arrival,          //!< still-stemming on a real anonymity origin
+      anonymity_fail_closed, //!< originated chose anon, or local re-relay backstop
+      public_clearnet        //!< clearnet inherit, fluff exit, or originated chose clearnet
+    };
+
+    constexpr decision get() const noexcept { return k_; }
+
+    constexpr bool operator==(zone_route const& o) const noexcept { return k_ == o.k_; }
+    constexpr bool operator!=(zone_route const& o) const noexcept { return k_ != o.k_; }
+
+  private:
+    decision k_;
+    explicit constexpr zone_route(decision k) noexcept : k_(k) {}
+    friend constexpr zone_route once_at_origin_route(
+      const relay_method, const epee::net_utils::zone) noexcept;
+  };
+
+  constexpr zone_route once_at_origin_route(
+    const relay_method tx_relay,
+    const epee::net_utils::zone origin) noexcept
+  {
+    if (r1_coherence_keeps_origin(tx_relay, origin))
+      return zone_route(zone_route::decision::keep_arrival);
+    if (origin == epee::net_utils::zone::invalid && is_pre_fluff_relay(tx_relay))
+      return zone_route(zone_route::decision::anonymity_fail_closed);
+    return zone_route(zone_route::decision::public_clearnet);
+  }
+
+  /*! \brief Map the origination roll onto the zone argument `send_txs` reads.
+
+      `true` (take anonymity) → `invalid`, which `once_at_origin_route` treats
+      as fail-closed. `false` (clearnet **by design**) → `public_`.
+
+      These two must stay distinguishable from "chose anon, zone unusable":
+      that path never produces a `public_` origin argument, it sends nothing.
+      Pool re-relays of `local` keep passing `invalid` and do **not** re-roll
+      — they share this mapping's fail-closed arm, which is why the roll
+      lives at first origination (`daemon_submit::relay_tx`) rather than on
+      every `source.is_nil()` call into `send_txs`. */
+  constexpr epee::net_utils::zone originated_zone_from_anonymity_roll(
+    const bool take_anonymity) noexcept
+  {
+    return take_anonymity
+      ? epee::net_utils::zone::invalid
+      : epee::net_utils::zone::public_;
   }
 }
