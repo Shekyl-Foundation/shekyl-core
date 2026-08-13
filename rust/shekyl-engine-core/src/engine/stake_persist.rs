@@ -272,7 +272,12 @@ pub(crate) fn reconcile_phantom_bonded_slots<E>(
         }
     }
     if !dropped.is_empty() {
-        staking.bonded_slots.retain(|s| !dropped.contains(s));
+        // `dropped` is ascending (built walking the ascending `bonded_slots`),
+        // so the membership test is a binary search — the sweep stays
+        // O(n log n) on large histories instead of quadratic.
+        staking
+            .bonded_slots
+            .retain(|s| dropped.binary_search(s).is_err());
     }
     for slot in pruned_sightings {
         staking.bond_sightings.remove(&slot);

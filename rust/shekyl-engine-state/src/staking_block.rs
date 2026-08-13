@@ -364,7 +364,7 @@ mod tests {
                 (3, PCanonicalId::from_bytes([0x33; 32])),
                 (5, PCanonicalId::from_bytes([0x55; 32])),
             ]),
-            bond_sightings: BTreeMap::from([(3, BlockHeight::from_raw(41))]),
+            bond_sightings: BTreeMap::from([(3, BlockHeight::from_raw(987_654_321))]),
         }
     }
 
@@ -397,7 +397,7 @@ mod tests {
         // and no sighting height may appear.
         assert!(!rendered.contains("34, 34"), "{rendered}");
         assert!(!rendered.contains("2222"), "{rendered}");
-        assert!(!rendered.contains("41"), "{rendered}");
+        assert!(!rendered.contains("987654321"), "{rendered}");
         // Scalars stay legible.
         assert!(rendered.contains("p_slot: 7"), "{rendered}");
     }

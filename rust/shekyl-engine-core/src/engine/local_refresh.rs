@@ -651,6 +651,8 @@ impl RefreshEngine for LocalRefresh {
             let mut new_transfers: Vec<DetectedTransfer> = Vec::new();
             let mut spent_key_images: Vec<KeyImageObserved> = Vec::new();
             let mut bond_sightings: Vec<BondSightingObserved> = Vec::new();
+            let mut sighted_slots: std::collections::BTreeSet<u32> =
+                std::collections::BTreeSet::new();
             // The rewind target carried out to the merge (the *latest* fork, which
             // is always the correct one — `find_fork_point` re-measures divergence
             // from the fixed persisted window each call). `reorg_rewinds` bounds how
@@ -797,8 +799,11 @@ impl RefreshEngine for LocalRefresh {
                             // chain evidence — wrongly re-arming staking and
                             // permanently burning cursor slots (the raise is
                             // monotone by design). The canonical chain's posts
-                            // are re-sighted by the re-scan from the fork.
+                            // are re-sighted by the re-scan from the fork
+                            // (the dedup set resets with it, else the re-sight
+                            // would be suppressed as a duplicate).
                             bond_sightings.clear();
+                            sighted_slots.clear();
 
                             h = fork_height;
                             continue;
@@ -893,13 +898,20 @@ impl RefreshEngine for LocalRefresh {
                     // observation lift the P-scan extractor uses (shared
                     // owner, `engine::bond_watch`), matched against this
                     // wallet's candidate map. Emitted slot-resolved; the
-                    // merge adopts + raises under the write guard.
+                    // merge adopts + raises under the write guard. One row
+                    // per slot per attempt: the scan walks heights ascending,
+                    // so the first occurrence is the earliest height — the
+                    // one the merge's first-sighting semantics would keep
+                    // anyway — and duplicates (an unbond post in the same
+                    // history, repeated posts) stay off the channel.
                     for obs in bond_post_observations(tx) {
                         if let Some(&slot) = self.bond_watch.get(&obs.p_canonical_id) {
-                            bond_sightings.push(BondSightingObserved {
-                                block_height: h,
-                                slot,
-                            });
+                            if sighted_slots.insert(slot) {
+                                bond_sightings.push(BondSightingObserved {
+                                    block_height: h,
+                                    slot,
+                                });
+                            }
                         }
                     }
                 }

@@ -104,12 +104,23 @@ pub(crate) fn watch_map(
     staking: &shekyl_engine_state::StakingBlock,
     retired: &std::collections::BTreeSet<u32>,
 ) -> std::collections::BTreeMap<PCanonicalId, u32> {
-    staking
-        .persona_id_cache
-        .iter()
-        .filter(|(slot, _)| !retired.contains(slot))
-        .map(|(slot, id)| (*id, *slot))
-        .collect()
+    let mut map = std::collections::BTreeMap::new();
+    for (slot, id) in &staking.persona_id_cache {
+        if retired.contains(slot) {
+            continue;
+        }
+        let previous = map.insert(*id, *slot);
+        // Two slots sharing a canonical id would mean a collision in the
+        // persona derivation (cSHAKE over distinct derived pubkeys) — not a
+        // state this map may paper over with a silent overwrite, since the
+        // sighting would then resolve to the wrong slot. Fail loudly in
+        // debug; in release the later (higher) slot wins deterministically.
+        debug_assert!(
+            previous.is_none(),
+            "duplicate persona canonical id across probe-cache slots"
+        );
+    }
+    map
 }
 
 /// O5 untrusted-`ScanResult` contract checks for the bond-watch sightings,
