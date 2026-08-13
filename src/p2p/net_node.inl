@@ -2393,45 +2393,47 @@ namespace nodetool
        traffic (below) still fails closed when anonymity cannot take it —
        leaking an origin over clearnet is the first-spy case this arc exists
        to prevent (§30.5). */
-    /* Pre-fluff = stem | forward | local. Shared with the pure R-1
-       predicate (`cryptonote::is_pre_fluff_relay` / `r1_coherence_keeps_origin`)
-       so the production branch and its unit witness cannot drift. Fluff is the
+    /* Pre-fluff = stem | local. Shared with the pure R-1 predicate
+       (`cryptonote::is_pre_fluff_relay` / `r1_coherence_keeps_origin`) so the
+       production branch and its unit witness cannot drift. Fluff is the
        exit — must not cohere (§59.1). */
     const bool still_stemming = cryptonote::is_pre_fluff_relay(tx_relay);
 
     if (origin != enet::zone::invalid)
     {
-      /* STILL DORMANT — §89 did not wake this, and §89.7 said it did.
+      /* LIVE as of Q12-U2. One caller reaches here with a real origin: the
+         ARRIVAL, from `handle_notify_new_transactions`, whose origin is the
+         live connection's zone. Coherence holds a still-stemming arrival on
+         that zone.
 
-         §63.8 closed it on a four-link chain and §89 breaks link 1 (an
-         anonymity stem clears `dandelionpp_fluff`). But the chain has a fifth
-         link §63.8 never recorded, and it binds on its own: a non-public
-         arrival takes `relay_method::forward`
-         (`cryptonote_protocol_handler.inl:969`), `tx_pool.cpp:360` refuses to
-         propagate `forward` into `tvc.m_relay`, and the batching switch drops
-         it (`// not supposed to happen here`). So `relay_transactions` is
-         never called at arrival with an anonymity origin, and `send_txs`
-         cannot see (anon origin, pre-fluff) whatever link 1 does.
+         The pool re-relay does NOT read `origin_zone` and does not come here
+         as a stem. Expired stems leave as `fluff` at `zone::public_` — the
+         Dandelion++ exit. Re-reading that literal as a leak, and re-stemming
+         those entries on their recorded origin, is the retracted U2-b path:
+         a liveness defect that strands the tx in the anonymity subgraph
+         (§59.1).
 
-         Kept, not deleted: it is correct for the world it will run in, and
-         that world is the receive-path change §89.8.2 names. What is wrong is
-         only the claim that it runs now.
+         Dormant before U2 for five links rather than the four §63.8 recorded
+         — a non-public arrival took `relay_method::forward`, `add_tx` refused
+         to propagate it into `tvc.m_relay`, and the batching switch dropped
+         it. Q12-U2 deleted the class: an arrival is stemmed whatever
+         transport carried it, and reaches here with its real origin.
 
-         **Witness.** Link 1 is pinned by `levin.cpp`'s `private_*` cases; the
-         pure gate by `r1_coherence_predicate`. The end-to-end arrival needs a
-         `t_core` mock the suite lacks — see §89.8 / FOLLOWUPS, and note that
-         the missing witness is exactly what hid the fifth link. */
+         Witness: link 1 by `levin.cpp`'s `private_*` cases; the pure gate by
+         `r1_coherence_predicate`. Still NOT witnessed: the arrival leg
+         end-to-end (`t_core` harness, FOLLOWUPS). That gap hid the fifth
+         link last time, and let §89.7 assert liveness across it. */
       if (cryptonote::r1_coherence_keeps_origin(tx_relay, origin) &&
           m_network_zones.count(origin))
         return send(*m_network_zones.find(origin)); // coherence: no re-roll
 
       /* The roll fires only on a genuine ARRIVAL — `source` is a real peer.
          A mempool re-relay passes a nil source (and `origin == public_`,
-         which is why coherence above cannot see it), and re-rolling those
-         would break the design in two ways at once: the same transaction
-         could be diverted on one pass and sent to clearnet on the next,
-         and the effective rate over `k` re-relays would be
-         `1 - (1-p)^k` rather than the `p` §59.2 states and pins.
+         because expired stems leave as fluff, not as a recorded origin),
+         and re-rolling those would break the design in two ways at once:
+         the same transaction could be diverted on one pass and sent to
+         clearnet on the next, and the effective rate over `k` re-relays
+         would be `1 - (1-p)^k` rather than the `p` §59.2 states and pins.
 
          One roll at entry means one roll per entry. Re-relays are not
          entries — they carry no arrival zone to cohere with, and they go to

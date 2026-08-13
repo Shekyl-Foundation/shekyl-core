@@ -472,81 +472,33 @@ pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 /// rather than ~15.
 pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_297;
 
-/// Mean of the i2p/tor → clearnet forwarding delay, in seconds.
-///
-/// **Unchanged at 22 s, deliberately.** This constant is Q-12's to derive and
-/// this module does not derive it — what moves here is the *family*, not the
-/// value. `CRYPTONOTE_FORWARD_DELAY_AVERAGE` remains the C++ mirror of this
-/// number until Q-12 settles whether it survives at all.
-///
-/// Its provenance is unchanged too, and unflattering: inherited, with a stated
-/// objective (*"2+ incoming connections could have sent the tx"*) that no
-/// derivation has been shown to satisfy. Porting the family does not launder
-/// that — see `DAEMON_RELAY_PRIVACY.md` §22.2.
-pub const ADOPTED_FORWARD_DELAY_MEAN_SECS: u32 = 22;
+/* `ADOPTED_FORWARD_DELAY_MEAN_SECS` and `ForwardDelay` were here, and Q12-U2
+deleted them with `relay_method::forward`.
 
-/// The i2p/tor → clearnet forwarding delay, drawn **memoryless**.
-///
-/// # Why this exists, and why it is not a cleanup
-///
-/// The inherited draw is `crypto::random_poisson_seconds{22 s}` — a Poisson,
-/// σ ≈ 4.7 s about a 22 s mean, against σ ≈ 22 s for the memoryless
-/// equivalent. That is the **F-2/F-4 family signature**, and F-4 measured what
-/// it costs: up to 93 % invertibility for a transaction arriving late in a
-/// batching window, ~1.96× more invertible overall.
-///
-/// **The defect is live, and it sits on the worst boundary for it.** This delay
-/// governs the tor→clearnet bridge — the one moment an anonymity-arrived
-/// transaction becomes clearnet-visible, and therefore the moment
-/// arrival-time inference is worth most to an observer.
-///
-/// # What this does and does not change
-///
-/// It is F-4's move, one call site later: **fix the family at the current
-/// mean.** The mean is Q-12's (`ADOPTED_FORWARD_DELAY_MEAN_SECS`); the family
-/// was settled by F-2/F-4 and does not depend on Q-12's open fork at all.
-/// Value-neutral, family-correct, provenance stated — the same shape as
-/// Q-11 Unit 0's decoupling, and it leaves Q-12 free to move the mean later.
-///
-/// **Retiring `crypto::random_poisson_duration` is certain in every branch.**
-/// If Q-12 deletes `relay_method::forward`, the call site goes with it and the
-/// retirement stands; if `forward` survives, the draw is memoryless either way.
-#[derive(Debug, Clone)]
-pub struct ForwardDelay {
-    table: GeometricTable,
-}
+They were F-4's family fix for the i2p/tor -> clearnet forwarding delay:
+memoryless rather than the inherited Poisson, at an unchanged 22 s mean.
+`ForwardDelay`'s own docstring called this outcome in advance -- "if Q-12
+deletes `relay_method::forward`, the call site goes with it and the
+retirement stands" -- and Q12-D3 deleted it. An arrival now stems on the zone
+it arrived over instead of crossing to clearnet on a timer, so the bridge the
+delay blurred is not on the admission path at all.
 
-impl ForwardDelay {
-    /// The shipped forward delay: memoryless at
-    /// [`ADOPTED_FORWARD_DELAY_MEAN_SECS`], one-second granularity.
-    ///
-    /// Seconds rather than the embargo's 250 ms ticks because the consumer
-    /// stores a whole-second `time_t` (`tx_pool.cpp`'s `last_relayed_time`);
-    /// a finer tick would be discarded at the boundary and would only make the
-    /// table's granularity disagree with the deadline's.
-    #[must_use]
-    pub fn adopted() -> Self {
-        Self {
-            table: GeometricTable::new(ADOPTED_FORWARD_DELAY_MEAN_SECS),
-        }
-    }
+The FINDING outlives the constant and is not carried by this file: the
+residual-inversion result (only a memoryless family has residual identical to
+the full draw; a Poisson is near-fully invertible late in its window) is
+asserted independently in `tests/propagation_measurement/fluff_delay.rs`,
+against the embargo family that does still ship.
 
-    /// Draw one forward delay, in **seconds**.
-    ///
-    /// A 0 s draw is legitimate: a memoryless family has support
-    /// `{0, 1, 2, …}`, and clamping it would ship something other than the
-    /// distribution this type claims to be — the same reasoning the embargo
-    /// draw records for its own zero.
-    pub fn draw<R: RelayRng + ?Sized>(&self, rng: &mut R) -> u64 {
-        self.table.draw(rng)
-    }
-
-    /// The mean this was built at, in seconds.
-    #[must_use]
-    pub const fn mean_secs(&self) -> u32 {
-        ADOPTED_FORWARD_DELAY_MEAN_SECS
-    }
-}
+One methodological note went with the deleted `forward_delay_family.rs` and
+is recorded here because nothing else holds it: a residual-inversion sweep
+must stop while the table still carries mass. Past that point it conditions
+on an event that essentially never happens and every family -- memoryless
+included -- climbs toward 1.0, so an unbounded sweep measures TRUNCATION
+rather than the distribution. That file caught itself doing exactly this and
+reported a spurious 0.875 phase drift for the memoryless draw. No remaining
+sweep is unbounded (`fluff_delay.rs` samples fixed phases well inside its
+table), which is why the guard is a note here and not a constant with no
+consumer. */
 
 impl EmbargoTimer {
     /// The configuration this crate recommends shipping: exact discrete survival

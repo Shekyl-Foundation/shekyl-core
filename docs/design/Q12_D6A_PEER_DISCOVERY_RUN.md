@@ -356,6 +356,18 @@ failing to reach clearnet-only nodes.
 
 ### 6.1 There is nothing for the detector to detect today
 
+> **SUPERSEDED 2026-08-12 by Q12-U2.** This subsection is the 2026-08-11
+> snapshot: a non-public arrival was classed `forward` and the pool cycle
+> put still-stemming anonymity traffic on clearnet, so isolation was
+> unreachable by construction. Q12-U2 deleted `forward`. An arrival now
+> stems on the zone it arrived over, relays at arrival, and R-1 coherence
+> keeps it there for the rest of the stem. Isolation is now a real
+> detector for the stem phase (does the tx stay on the anon zone until it
+> fluffs?). The pool cycle is unchanged beyond losing its `forward` arm:
+> expired stems leave as fluff at `zone::public_`, which is the
+> Dandelion++ exit, not a leak. The table below is historical — `forward`
+> no longer exists, and the line numbers it cites have moved.
+
 The arm would report a **trivial pass**, and that is worse than not running it.
 
 Verified at source on 2026-08-11. **The pool cycle sends every class except

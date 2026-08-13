@@ -120,6 +120,31 @@ add_test(
   NAME    hash-target
   COMMAND hash-target-tests)
 
+# Regression guard for `--log-file` writing no file. Its own executable, and
+# one ctest invocation per mode, because subscriber installation is
+# process-global and first-caller-wins: sharing a binary with other tests would
+# make the result depend on link order rather than on the behaviour under test.
+monero_add_minimal_executable(log-file-sink-tests log_file_sink.cpp)
+target_link_libraries(log-file-sink-tests
+  PRIVATE
+    common
+    epee
+    ${Boost_FILESYSTEM_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY})
+set_property(TARGET log-file-sink-tests PROPERTY FOLDER "${folder}")
+
+add_test(
+  NAME    log-file-sink-installs-after-on-startup
+  COMMAND log-file-sink-tests file-after-on-startup)
+
+add_test(
+  NAME    log-file-sink-refusal-is-announced
+  COMMAND log-file-sink-tests already-init-warns)
+
+add_test(
+  NAME    log-file-sink-pre-init-stays-audible
+  COMMAND log-file-sink-tests pre-init-audible-then-file)
+
 #
 # Configure wallet crypto benchmark
 #

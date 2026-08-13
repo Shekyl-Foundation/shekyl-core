@@ -9271,44 +9271,59 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
-- **Relay: make an anonymity arrival relay at arrival — the receive-side half
-  of §89.** *(Rewritten 2026-08-10 by §89.8.1: the original entry was filed as
-  "end-to-end witness for R-1's coherence branch, now that it is live". The
-  branch is **not** live, and the missing witness is what hid that.)* §89 broke
-  link 1 of §63.8's dormancy chain — the anonymity zone stems, a stem send
-  clears `dandelionpp_fluff`, so a receiver keeps its `forward` default — but a
-  fifth link §63.8 never recorded still binds: `tx_pool.cpp:360` refuses to
-  propagate `forward` into `tvc.m_relay`, the batching switch in
-  `handle_notify_new_transactions` drops it, and `relay_transactions` is never
-  called at arrival with an anonymity origin. The transaction pools as
-  `forward` and re-emerges at `zone::public_` (`cryptonote_core.cpp:1069,1091`),
-  so its remaining stem hops run on **clearnet**.
-  **Two things ride on closing this**, and both are stated in §89.8: R-1's
-  coherence branch starts firing, and §89.2's "every remaining hop runs on one
-  transport" becomes true rather than assumed — today the anonymity embargo is
-  drawn for a path the transaction leaves after one hop, and no anonymity-zone
-  embargo is armed at all (§89.8.4).
-  **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s six `private_*`
-  cases pin that a stem emits the flag clear and a fluff sets it;
-  (2) the pure gate — `r1_coherence_predicate` pins
-  `cryptonote::r1_coherence_keeps_origin` / `is_pre_fluff_relay` (fluff never
-  coheres; anonymity stem/forward/local does; clearnet/invalid never), shared
-  with the production branch so the predicate cannot drift.
-  **Not witnessed end-to-end:** the receiver's relay-method assignment, the
-  monotone `upgrade_relay_method`, and the full send path through
-  `handle_notify_new_transactions` on a non-public context.
-  **Blocker (rule 22):** that arrival path needs a `t_core` mock the unit
-  suite does not have — the one protocol-handler test that stands up real
-  sockets is `GTEST_SKIP`ped as flaky. Building that harness is its own unit,
-  and it is now the *first* task rather than the verification of a landed one:
-  §89.7 asserted live-ness across this exact gap and was wrong.
-  **Why it matters more than its size suggests:** §59.1 gated coherence
-  because swallowing the fluff case strands anonymity-originated transactions
-  in the anonymity subgraph — "a liveness break that would read as correct."
-  It is also load-bearing for §89.2: the per-zone embargo is well-defined only
-  because a transaction entering the anonymity stem stays there, which is this
-  branch. See `DAEMON_RELAY_PRIVACY.md` §89.8 (and §89.7 for the superseded
-  reading).
+- **Relay: the `t_core` arrival harness — the witness this path has never
+  had.** *(Rewritten 2026-08-12 by Q12-U2, which shipped the mechanism. The
+  entry is no longer "make an anonymity arrival relay at arrival" — that
+  landed. What remains is the witness, which is the part that was always
+  blocked.)*
+  **Shipped, so no longer owed:** `relay_method::forward` is deleted, an
+  arrival is stemmed whatever transport carried it, and R-1's coherence branch
+  executes — keeping an anonymity arrival on its arrival zone for the rest of
+  its stem. §89.2's premise ("every remaining hop runs on one transport") is
+  now true rather than assumed, which makes the per-zone `hop` live and
+  measurable (Q12-U3).
+  **Deliberately NOT changed:** the pool re-relay loop, beyond losing its
+  `forward` arm. A `stem` entry reaches it only at embargo expiry, which is the
+  stem→fluff transition, and fluff must leave the anonymity zone or coherence
+  strands the transaction (§59.1). Q12-U2 first rewrote this loop to route
+  stems by recorded origin, on the reading that its `zone::public_` literal was
+  a clearnet leak; that was retracted before push. The literal is the fluff
+  exit. See `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+  **Consequence — `txpool_tx_meta_t::origin_zone` has no production consumer.**
+  It is written at first arrival (`add_tx` does not revise it on a
+  stem→fluff upgrade) and preserved across hard-fork re-validation, and
+  nothing reads it to decide anything. Its named consumer is Q12-U3's per-zone
+  telemetry, which is the next PR. **Open disposition, not a defect to sweep:**
+  unlike the dead fields removed in #450 it has a writer and a dated reader,
+  but it should not sit unread indefinitely.
+  **Witnessed:** (1) link 1 — `tests/unit_tests/levin.cpp`'s `private_*` cases
+  pin that a stem emits the flag clear and a fluff sets it; (2) the pure gate —
+  `r1_coherence_predicate` pins `r1_coherence_keeps_origin` /
+  `is_pre_fluff_relay`, shared with the production branch so it cannot drift;
+  (3) the record — `txpool_origin_zone` pins that reclaiming `is_forwarding`
+  did not shift `fcmp_verified` or `origin_zone`, and that the zone survives a
+  real LMDB round trip.
+  **Still not witnessed:** the arrival-to-record leg — the receiver's
+  relay-method assignment, the monotone `upgrade_relay_method`, and the full
+  send path through `handle_notify_new_transactions` on a non-public context.
+  **Blocker (rule 22), now confirmed at two sites:** that path needs a `t_core`
+  mock the unit suite does not have — the one protocol-handler test that stands
+  up real sockets is `GTEST_SKIP`ped as flaky. Q12-U2 tried to reach it from
+  the other end, through `add_tx` directly, and got three fixture obstacles
+  down (encoded fee, output count, reference block) before hitting one that
+  does not fall to fixture work: `add_tx` runs full input verification, so an
+  arrival needs a **valid FCMP++ proof** and the shim fixture builds shape-only
+  transactions. So the harness is not a convenience — it is the only way in.
+  **Why it matters more than its size suggests:** §59.1 gated coherence because
+  swallowing the fluff case strands anonymity-originated transactions in the
+  anonymity subgraph — "a liveness break that would read as correct." And the
+  missing witness has already cost once: §89.7 asserted this branch was live
+  across the exact gap the witness would have covered, and was wrong for a
+  fifth dormancy link nobody had recorded. The #427 tripwire meant to catch
+  that could not reach the path either — it constructed the `forward` state
+  rather than driving an arrival, so it pinned the class and would have fired
+  only when the class was deleted. See `DAEMON_RELAY_PRIVACY.md` §89.8 and
+  `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
 
 - **Wallet: stop holding a relay constant — ask the daemon whether a
   transaction is still in flight.** `wallet2.cpp` derives its

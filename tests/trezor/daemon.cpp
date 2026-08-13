@@ -50,7 +50,7 @@ bool mock_rpc_daemon::on_submit_transaction_2(const cryptonote::COMMAND_RPC_SUBM
   }
 
   cryptonote::tx_verification_context tvc{};
-  const bool accepted = m_core_ref.handle_incoming_tx(tx_blob, tvc, cryptonote::relay_method::none, false)
+  const bool accepted = m_core_ref.handle_incoming_tx(tx_blob, tvc, cryptonote::relay_method::none, false, epee::net_utils::zone::invalid)
       && !tvc.m_verifivation_failed;
   if (accepted)
   {

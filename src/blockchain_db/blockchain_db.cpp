@@ -67,7 +67,6 @@ bool matches_category(relay_method method, relay_category category) noexcept
   {
     default:
     case relay_method::local:
-    case relay_method::forward:
     case relay_method::stem:
       return false;
     case relay_method::block:
@@ -84,7 +83,7 @@ void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
   kept_by_block = 0;
   do_not_relay = 0;
   is_local = 0;
-  is_forwarding = 0;
+  bf_padding = 0;
   dandelionpp_stem = 0;
 
   switch (method)
@@ -94,9 +93,6 @@ void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
       break;
     case relay_method::local:
       is_local = 1;
-      break;
-    case relay_method::forward:
-      is_forwarding = 1;
       break;
     case relay_method::stem:
       dandelionpp_stem = 1;
@@ -112,11 +108,17 @@ void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
 
 relay_method txpool_tx_meta_t::get_relay_method() const noexcept
 {
+  /* Bit 3 was `is_forwarding` and is now reserved (`bf_padding`). It is left
+     OUT of this sum rather than added as a zero term, so it cannot decode to
+     a class that no longer exists. An is_forwarding-only record — the only
+     shape `set_relay_method` ever wrote — now has state 0 and returns fluff,
+     which is the exit those entries were waiting to become. The reserved bit
+     is not consulted: treating padding as a live decoder input would make it
+     load-bearing again. */
   const uint8_t state =
     uint8_t(kept_by_block) +
     (uint8_t(do_not_relay) << 1) +
     (uint8_t(is_local) << 2) +
-    (uint8_t(is_forwarding) << 3) +
     (uint8_t(dandelionpp_stem) << 4);
 
   switch (state)
@@ -130,19 +132,58 @@ relay_method txpool_tx_meta_t::get_relay_method() const noexcept
       return relay_method::none;
     case 4:
       return relay_method::local;
-    case 8:
-      return relay_method::forward;
     case 16:
       return relay_method::stem;
   };
   return relay_method::fluff;
 }
 
+void txpool_tx_meta_t::set_origin_zone(epee::net_utils::zone zone) noexcept
+{
+  // THE MIGRATION-FREE CLAIM LIVES HERE. A record written before this field
+  // existed carries zero in these bits, and `zone::invalid == 0`, so it decodes
+  // to "origin unknown" with no migration step. If `invalid` ever stopped being
+  // zero, every pre-existing record would silently re-read as some real
+  // transport -- anonymity-arrived traffic could then be indistinguishable from
+  // clearnet in the direction that loses privacy. That is why this is a
+  // compile-time assertion and not a comment.
+  static_assert(
+    static_cast<uint8_t>(epee::net_utils::zone::invalid) == 0,
+    "zone::invalid must be 0: pre-upgrade txpool records rely on zeroed spare "
+    "bits decoding to 'origin unknown', and no migration exists to fix them");
+  static_assert(static_cast<uint8_t>(epee::net_utils::zone::public_) == 1,
+    "zone::public_ must stay 1 so the two-bit field maps 1:1");
+  static_assert(static_cast<uint8_t>(epee::net_utils::zone::i2p) == 2,
+    "zone::i2p must stay 2 so the two-bit field maps 1:1");
+  static_assert(static_cast<uint8_t>(epee::net_utils::zone::tor) == 3,
+    "zone::tor must stay 3 so the two-bit field maps 1:1");
+
+  // Exhaustive: -Werror=switch fails the build if a fifth enumerator is added.
+  // The two-bit field cannot hold it. A mask (`& 0x3`) would have silently
+  // aliased a new real zone onto an existing one — `5 → public_`, `6 → i2p` —
+  // which is the failure this function exists to refuse. An unrecognised value
+  // (a cast from outside the enumerators) leaves the field unchanged rather
+  // than inventing a transport.
+  switch (zone)
+  {
+    case epee::net_utils::zone::invalid:
+    case epee::net_utils::zone::public_:
+    case epee::net_utils::zone::i2p:
+    case epee::net_utils::zone::tor:
+      origin_zone = static_cast<uint8_t>(zone);
+      break;
+  }
+}
+
+epee::net_utils::zone txpool_tx_meta_t::get_origin_zone() const noexcept
+{
+  return static_cast<epee::net_utils::zone>(origin_zone);
+}
+
 bool txpool_tx_meta_t::upgrade_relay_method(relay_method method) noexcept
 {
   static_assert(relay_method::none < relay_method::local, "bad relay_method value");
-  static_assert(relay_method::local < relay_method::forward, "bad relay_method value");
-  static_assert(relay_method::forward < relay_method::stem, "bad relay_method value");
+  static_assert(relay_method::local < relay_method::stem, "bad relay_method value");
   static_assert(relay_method::stem < relay_method::fluff, "bad relay_method value");
   static_assert(relay_method::fluff < relay_method::block, "bad relay_method value");
 
