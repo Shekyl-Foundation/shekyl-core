@@ -109,9 +109,12 @@ void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
 relay_method txpool_tx_meta_t::get_relay_method() const noexcept
 {
   /* Bit 3 was `is_forwarding` and is now reserved (`bf_padding`). It is left
-     OUT of this sum rather than added as a zero term: a record that somehow
-     carried it set must not decode to a class that no longer exists, and
-     omitting it makes such a record fall to the `default` arm below. */
+     OUT of this sum rather than added as a zero term, so it cannot decode to
+     a class that no longer exists. An is_forwarding-only record — the only
+     shape `set_relay_method` ever wrote — now has state 0 and returns fluff,
+     which is the exit those entries were waiting to become. The reserved bit
+     is not consulted: treating padding as a live decoder input would make it
+     load-bearing again. */
   const uint8_t state =
     uint8_t(kept_by_block) +
     (uint8_t(do_not_relay) << 1) +

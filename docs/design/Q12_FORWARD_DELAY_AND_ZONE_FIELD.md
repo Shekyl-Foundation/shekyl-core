@@ -804,12 +804,15 @@ read anywhere**, and its only writes were three explicit `= 0` assignments in
 construction*, so the fallback is a property of the data rather than a
 convention it happens to follow.
 
-**Both `static_assert`s guard silent failures**, which is why they are
-assertions and not comments. If `zone::invalid` stopped being 0, every existing
-record would re-read as a *real* transport and anonymity-arrived traffic would
-become indistinguishable from clearnet — the privacy-losing direction, with no
-error anywhere. If the enum outgrew two bits, `tor` (3) would truncate to `i2p`
-(2): one real zone silently becoming another.
+**The value pins and the exhaustive switch guard silent failures**, which
+is why they are assertions and not comments. If `zone::invalid` stopped being
+0, every existing record would re-read as a *real* transport and
+anonymity-arrived traffic would become indistinguishable from clearnet — the
+privacy-losing direction, with no error anywhere. `tor` is 3 and already fits
+two bits; it cannot truncate to `i2p`. The silent failure a *future*
+enumerator would have caused — `4` or `5` aliasing an existing zone under a
+mask — is what the exhaustive switch refuses: `-Werror=switch` fails the
+build instead of writing a truncated value.
 
 ### The gap: the spec specifies the field and is silent on the seam
 
