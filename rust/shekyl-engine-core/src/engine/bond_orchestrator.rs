@@ -1030,7 +1030,7 @@ mod tests {
         // seal exists, so the reopen reconcile has nothing to drop).
         {
             let mut g = engine.ledger.write();
-            crate::engine::merge::adopt_bond_sightings(
+            crate::engine::bond_watch::adopt_bond_sightings(
                 &mut g.ledger.staking,
                 &[crate::scan::BondSightingObserved {
                     block_height: 10,

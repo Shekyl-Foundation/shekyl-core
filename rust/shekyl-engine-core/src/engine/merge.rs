@@ -212,7 +212,7 @@ impl<
         // block, which `apply_scan_result_to_state` (LedgerBlock-scoped)
         // cannot reach — so they are validated and taken here, and applied
         // below after the merge body's invariant checks accept the result.
-        validate_bond_sightings(&result)?;
+        super::bond_watch::validate_bond_sightings(&result)?;
         let bond_sightings = std::mem::take(&mut result.bond_sightings);
 
         let mut guard = self.ledger.write();
@@ -255,7 +255,7 @@ impl<
         // the whole `WalletLedger` serializes atomically at every save site,
         // so no save can persist a synced tip past a sighted block without
         // its adoption.
-        adopt_bond_sightings(&mut state.ledger.staking, &bond_sightings);
+        super::bond_watch::adopt_bond_sightings(&mut state.ledger.staking, &bond_sightings);
         // WI-RPC-3 retention reconciler (`docs/api/wallet_rpc.yaml`
         // OUTBOUND PREREQUISITE pins 2–3 + PR-SJ-1 P3-1: after the merge
         // and the post-passes, retire retention orphans the chain now
@@ -623,79 +623,6 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             .map_err(|e| map_curve_tree_handle_error(&e))?;
     }
     Ok(())
-}
-
-/// O5 untrusted-`ScanResult` contract checks for the bond-watch sightings,
-/// mirroring the per-height-vector checks the merge body applies: an empty
-/// range carries no sightings, and every sighting height sits inside the
-/// processed range.
-pub(crate) fn validate_bond_sightings(result: &ScanResult) -> Result<(), RefreshError> {
-    if result.processed_height_range.start == result.processed_height_range.end
-        && !result.bond_sightings.is_empty()
-    {
-        return Err(RefreshError::MalformedScanResult {
-            reason: "bond_sightings non-empty for empty processed_height_range",
-        });
-    }
-    if result
-        .bond_sightings
-        .iter()
-        .any(|s| !result.processed_height_range.contains(&s.block_height))
-    {
-        return Err(RefreshError::MalformedScanResult {
-            reason: "bond_sighting height outside processed_height_range",
-        });
-    }
-    Ok(())
-}
-
-/// Bond watch (SA-R-6): adopt each sighted slot into the staking record and
-/// raise the monotone `p_slot` cursor — the merge-side half of the from-seed
-/// reconstruction.
-///
-/// **Positive evidence only.** A sighting is a bond post actually observed in
-/// a scanned block, so the raise is sound on any coverage — no absence claim
-/// is made, no exhaustiveness token consulted. Adoption is what keeps the
-/// persona derivable under Model D: `bonded_slots` is the only derive-forward
-/// input, so raising past a sighted slot without adopting it would strand the
-/// bond (the arm-#4 adopt-before-raise lesson, applied here).
-///
-/// Sightings survive a later reorg of the sighted block: a burned slot is the
-/// privacy-correct direction, and the sighting-aware arm #3 drops a refuted
-/// row at the next open once the P-scan's coverage passes it.
-///
-/// Sorted insert: `bonded_slots` stays ascending (persisted-byte determinism
-/// — two wallets in the same logical state serialize identically), and a
-/// sighted slot may sit *below* existing entries after a partial rollback.
-pub(crate) fn adopt_bond_sightings(
-    staking: &mut shekyl_engine_state::StakingBlock,
-    sightings: &[crate::scan::BondSightingObserved],
-) {
-    if sightings.is_empty() {
-        return;
-    }
-    let mut sighted_high: Option<u32> = None;
-    for s in sightings {
-        staking.record_first_sighting(s.slot, shekyl_types::BlockHeight::from_raw(s.block_height));
-        if let Err(pos) = staking.bonded_slots.binary_search(&s.slot) {
-            staking.bonded_slots.insert(pos, s.slot);
-        }
-        sighted_high = Some(sighted_high.map_or(s.slot, |m| m.max(s.slot)));
-    }
-    // A chain-proven bond makes this wallet a staker: the next open spawns
-    // the actor and the P-scan corroborates (then supersedes) the sightings.
-    staking.staking_enabled = true;
-    if let Some(high) = sighted_high {
-        let raised = staking.monotone_current_slot(Some(high));
-        if raised > staking.p_slot {
-            staking.p_slot = raised;
-        }
-    }
-    tracing::info!(
-        sighted = sightings.len(),
-        cursor = staking.p_slot,
-        "bond watch: chain-observed bond posts adopted at merge"
-    );
 }
 
 /// Merge body shared between [`Engine::apply_scan_result`] and the
@@ -1125,10 +1052,7 @@ mod tests {
     use crate::engine::RefreshError;
     use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
 
-    use super::{
-        adopt_bond_sightings, apply_scan_result_to_state, index_block_leaves,
-        validate_bond_sightings,
-    };
+    use super::{apply_scan_result_to_state, index_block_leaves};
 
     fn make_recovered_output(seed: u8, global_index: u64) -> RecoveredWalletOutput {
         let mut bytes = [0u8; 32];
@@ -1152,94 +1076,6 @@ mod tests {
 
     fn empty_state() -> (LedgerBlock, LedgerIndexes) {
         (LedgerBlock::empty(), LedgerIndexes::empty())
-    }
-
-    fn sighting(slot: u32, height: u64) -> crate::scan::BondSightingObserved {
-        crate::scan::BondSightingObserved {
-            block_height: height,
-            slot,
-        }
-    }
-
-    /// The from-seed reconstruction's merge half: sighting a bond for a slot
-    /// the record lost ADOPTS it (sorted), records the first-sighting height,
-    /// re-arms staking, and raises the monotone cursor above the highest
-    /// sighted slot — on a fresh (restored) staking block starting from zero.
-    #[test]
-    fn adopt_bond_sightings_adopts_raises_and_rearms_from_zero() {
-        let mut staking = shekyl_engine_state::StakingBlock::empty();
-        adopt_bond_sightings(
-            &mut staking,
-            &[sighting(0, 100), sighting(2, 130), sighting(1, 120)],
-        );
-        assert_eq!(staking.bonded_slots, vec![0, 1, 2], "adopted, ascending");
-        assert!(
-            staking.staking_enabled,
-            "a chain-proven bond re-arms staking"
-        );
-        assert_eq!(
-            staking.p_slot, 3,
-            "cursor raised one past the highest sighting"
-        );
-        assert_eq!(
-            staking.bond_sightings.get(&2).map(|h| h.to_raw()),
-            Some(130),
-            "first-sighting height recorded"
-        );
-    }
-
-    /// A sighted slot below existing entries (partial rollback shape) inserts
-    /// in sorted position; an already-bonded slot neither duplicates nor
-    /// disturbs; the cursor never lowers.
-    #[test]
-    fn adopt_bond_sightings_sorted_insert_no_dup_never_lowers() {
-        let mut staking = shekyl_engine_state::StakingBlock::new(true, 6, vec![5]);
-        adopt_bond_sightings(&mut staking, &[sighting(3, 90), sighting(5, 95)]);
-        assert_eq!(
-            staking.bonded_slots,
-            vec![3, 5],
-            "sorted insert below, no dup"
-        );
-        assert_eq!(
-            staking.p_slot, 6,
-            "cursor already above every sighting stays put (never lowered)"
-        );
-    }
-
-    /// Duplicate sightings of the same slot keep the FIRST height — the
-    /// evidence bar arm #3 reads must not advance on a re-observation.
-    #[test]
-    fn adopt_bond_sightings_first_height_wins() {
-        let mut staking = shekyl_engine_state::StakingBlock::empty();
-        adopt_bond_sightings(&mut staking, &[sighting(0, 50)]);
-        adopt_bond_sightings(&mut staking, &[sighting(0, 80)]);
-        assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(50));
-        assert_eq!(staking.bonded_slots, vec![0]);
-    }
-
-    /// O5 contract: an empty processed range must carry no sightings, and a
-    /// sighting height outside the range is malformed.
-    #[test]
-    fn validate_bond_sightings_rejects_contract_violations() {
-        let mut empty_range = ScanResult::empty_at(1, None);
-        empty_range.bond_sightings.push(sighting(0, 5));
-        assert!(matches!(
-            validate_bond_sightings(&empty_range),
-            Err(RefreshError::MalformedScanResult { .. })
-        ));
-
-        let mut out_of_range = ScanResult::empty_at(1, None);
-        out_of_range.processed_height_range = 10..20;
-        out_of_range.bond_sightings.push(sighting(0, 25));
-        assert!(matches!(
-            validate_bond_sightings(&out_of_range),
-            Err(RefreshError::MalformedScanResult { .. })
-        ));
-
-        let mut ok = ScanResult::empty_at(1, None);
-        ok.processed_height_range = 10..20;
-        ok.bond_sightings.push(sighting(0, 15));
-        assert!(validate_bond_sightings(&ok).is_ok());
     }
 
     #[test]

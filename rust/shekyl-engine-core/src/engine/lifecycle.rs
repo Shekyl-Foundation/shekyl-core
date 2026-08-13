@@ -841,26 +841,17 @@ impl Engine<SoloSigner> {
 
         // Bond-watch probe cache (SA-R-6 from-seed reconstruction): derive
         // the public persona ids for the probe window while the seed is
-        // transiently in scope — once per slot for the wallet's life (ids are
-        // a pure function of the seed and never invalidate), so every later
-        // open and the credential-less `rescan_blockchain` have candidates
-        // without re-paying the keygen. Runs AFTER the reconcile so the
-        // window sits above the (possibly raised) cursor, and UNCONDITIONALLY
-        // — a never-staked wallet derives the `0..=W` window once and its
-        // principal scan watches for a staking history this seed may have
-        // elsewhere; that is what makes the rescan-time pointer
+        // transiently in scope. Runs AFTER the reconcile so the window sits
+        // above the (possibly raised) cursor, and UNCONDITIONALLY — a
+        // never-staked wallet derives its `0..=W` window once (derive-once:
+        // ids never invalidate), which is what makes the rescan-time pointer
         // reconstruction hold for every wallet, not only known stakers.
-        for slot in ledger
-            .staking
-            .derive_forward_slots(super::stake_engine::ARCHIVAL_PERSONA_PROBE_WINDOW)
-        {
-            if probe_retired.contains(&slot) || ledger.staking.persona_id_cache.contains_key(&slot)
-            {
-                continue;
-            }
-            let id = id_of_slot(slot)?;
-            ledger.staking.persona_id_cache.insert(slot, id);
-        }
+        super::bond_watch::extend_probe_cache(
+            &mut ledger.staking,
+            &probe_retired,
+            super::stake_engine::ARCHIVAL_PERSONA_PROBE_WINDOW,
+            &id_of_slot,
+        )?;
 
         let prefs_hmac_key = shekyl_engine_prefs::PrefsHmacKey::derive(
             &file.opened_keys().file_kek,
@@ -898,24 +889,12 @@ impl Engine<SoloSigner> {
         // consumes it below. This is the (6-i) construction-time projection;
         // the full blob then lives only in the actor.
         let merge_view_secret = super::key_actor::HandleDerivationViewSecret::from_keys(&keys);
-        // The bond watch's candidate map: the open-built probe-id cache,
-        // inverted (id → slot) for the producer's per-observation lookup.
-        // Durably-retired slots were excluded when the cache was built; a
-        // cache row from an *earlier* open whose slot has since retired is
-        // filtered here with the same refusal set (SA-R-6 — the watch must
-        // not churn re-adopting a retired persona; on an unreadable seal the
-        // set is empty and arm #2 heals any re-adoption at the next open).
-        let bond_watch: std::collections::BTreeMap<shekyl_types::PCanonicalId, u32> = ledger
-            .staking
-            .persona_id_cache
-            .iter()
-            .filter(|(slot, _)| !probe_retired.contains(slot))
-            .map(|(slot, id)| (*id, *slot))
-            .collect();
         let refresh = std::sync::Arc::new(super::local_refresh::LocalRefresh::new(
             view_material,
             scan_start_floor,
-            bond_watch,
+            // The watch map: the probe-id cache inverted, since-retired
+            // slots filtered (see `bond_watch::watch_map`).
+            super::bond_watch::watch_map(&ledger.staking, &probe_retired),
         ));
 
         // §6 step 3(b): spawn the `KeyActor`, which takes the `AllKeysBlob` by
