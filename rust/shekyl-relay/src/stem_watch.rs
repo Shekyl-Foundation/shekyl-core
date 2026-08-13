@@ -48,17 +48,20 @@
 //! Baking any of them in would freeze a decision the round has explicitly left
 //! open, and would do it in the layer hardest to change later.
 //!
-//! # Scope: this observes the clearnet zone, and only that (§63.6)
+//! # Scope: every zone that stems is observed
 //!
-//! Nothing on this side chooses which zones are observed; the caller does,
-//! and the whole chain is C++-gated at its head:
+//! Nothing on this side chooses which zones are observed; the caller does.
+//! Since §89.5 (GATE 3 of 3 deleted) Dandelion++ runs on **every** zone, not
+//! only clearnet -- `dandelionpp_notify` is no longer gated on
+//! `nzone == public_`. An i2p/tor zone that stems produces stem observations
+//! like any other. Q12-U3's `/get_stem_tallies` row carries a `zone` label
+//! at the C++ merge so those observations are distinguishable.
 //!
 //! ```text
-//! levin_notify.cpp  dandelionpp_notify        <- dispatched ONLY when
-//!                                                nzone == public_
-//!         |                                      (levin_notify.cpp:1222)
+//! levin_notify.cpp  dandelionpp_notify        <- every zone, noise-off
+//!         |
 //!         v
-//! levin_notify.cpp  record_stem_observation   <- the C++ helper, :126
+//! levin_notify.cpp  record_stem_observation
 //!         |
 //!         v
 //! shekyl-ffi        shekyl_relay_zone_record_stem
@@ -67,16 +70,13 @@
 //! shekyl-relay      Zone::record_stem  ->  StemWatch::stemmed
 //! ```
 //!
-//! An i2p/tor zone does not run Dandelion++ at all — it diffuses to its
-//! outbound set — so **no anonymity zone has ever produced a stem
-//! observation**, and none will until the design change §63.6 scopes.
-//!
-//! **An empty tally for such a zone therefore means "no stems", not "no
-//! drops".** The two read identically off [`StemTally`] and mean opposite
-//! things: the first is the mechanism being absent, the second is it running
-//! clean. Nothing consumes these tallies as evidence yet, which is the only
-//! reason this is a labelling note rather than a defect — a consumer that
-//! read zero drops as zone health would be reading an oracle that cannot fire.
+//! **An empty tally for a zone that is not configured still means "no
+//! stems", not "no drops".** The two read identically off [`StemTally`] and
+//! mean opposite things. The zone label is how an operator tells a zone
+//! that is not running from one that is running clean. The endpoint stays
+//! AdminOnly: a per-successor tally set is the node's anonymity-graph
+//! edge set, and a zone label is strictly more disclosive than the
+//! flattened list.
 
 use std::collections::HashMap;
 

@@ -43,6 +43,7 @@
 #include <limits>
 #include <memory>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "version.h"
@@ -2212,42 +2213,37 @@ namespace nodetool
     /* §55 TRANSIT, NOT STRUCTURE. Collects published rows from every zone
        (a peer belongs to exactly one; zones do not share connection ids),
        sorts globally by peer id so operator diffs are content-stable, and
-       emits one JSON array. Serialisation lives here — once — rather than
-       on the relay hot path or as multi-zone array splicing. Disappears
-       with the p2p migration. */
+       emits one JSON array. Each row carries the zone it was collected
+       from -- verification of coherence / the isolation arm, not a `p`
+       instrument. Serialisation lives in `format_stem_tally_row_json` so
+       the unit table and this merge cannot disagree on the label.
+
+       The endpoint remains AdminOnly (`Visibility::AdminOnly` on
+       `/get_stem_tallies`); a zone label is strictly more disclosive
+       than the flattened peer list, so the gate does not move.
+
+       Disappears with the p2p migration. */
     using row_t = cryptonote::levin::notify::stem_tally_row;
-    std::vector<row_t> rows;
+    std::vector<std::pair<row_t, epee::net_utils::zone>> rows;
     for (const auto& zone : m_network_zones)
     {
       auto part = zone.second.m_notifier.stem_snapshot();
-      rows.insert(rows.end(), part.begin(), part.end());
+      for (auto& r : part)
+        rows.emplace_back(std::move(r), zone.first);
     }
     std::sort(rows.begin(), rows.end(),
-      [](const row_t& a, const row_t& b) {
+      [](const auto& a, const auto& b) {
         return std::lexicographical_compare(
-          std::begin(a.peer), std::end(a.peer),
-          std::begin(b.peer), std::end(b.peer));
+          std::begin(a.first.peer), std::end(a.first.peer),
+          std::begin(b.first.peer), std::end(b.first.peer));
       });
 
-    static constexpr char HEX[] = "0123456789abcdef";
     std::string out = "[";
     for (std::size_t i = 0; i < rows.size(); ++i)
     {
       if (i)
         out += ',';
-      out += "{\"peer\":\"";
-      for (std::uint8_t b : rows[i].peer)
-      {
-        out += HEX[b >> 4];
-        out += HEX[b & 0xf];
-      }
-      out += "\",\"propagated\":";
-      out += std::to_string(rows[i].propagated);
-      out += ",\"silent\":";
-      out += std::to_string(rows[i].silent);
-      out += ",\"distinct_sources\":";
-      out += std::to_string(rows[i].distinct_sources);
-      out += '}';
+      out += cryptonote::levin::format_stem_tally_row_json(rows[i].first, rows[i].second);
     }
     out += ']';
     return out;

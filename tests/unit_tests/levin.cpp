@@ -735,6 +735,42 @@ TEST(originated_zone_from_anonymity_roll, the_two_outcomes_are_distinct)
         cryptonote::originated_zone_from_anonymity_roll(false)));
 }
 
+/* Zone-labelled stem tally. Production `stem_tallies_json` calls this.
+   What edit reds it: omit the `"zone"` key from `format_stem_tally_row_json`.
+   A test that only grepped the merge loop could pass if the helper never
+   ran; sharing the function is the witness. */
+TEST(stem_tally_json, row_carries_zone_from_the_merge)
+{
+    cryptonote::levin::notify::stem_tally_row row{};
+    row.peer[0] = 0xab;
+    row.peer[1] = 0xcd;
+    row.propagated = 3;
+    row.silent = 1;
+    row.distinct_sources = 2;
+
+    const std::string tor =
+      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::tor);
+    EXPECT_NE(std::string::npos, tor.find("\"zone\":\"tor\""));
+    EXPECT_NE(std::string::npos, tor.find("\"peer\":\"abcd"));
+    EXPECT_NE(std::string::npos, tor.find("\"propagated\":3"));
+    EXPECT_NE(std::string::npos, tor.find("\"silent\":1"));
+    EXPECT_NE(std::string::npos, tor.find("\"distinct_sources\":2"));
+
+    const std::string i2p =
+      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::i2p);
+    EXPECT_NE(std::string::npos, i2p.find("\"zone\":\"i2p\""));
+    EXPECT_EQ(std::string::npos, i2p.find("\"zone\":\"tor\""));
+
+    EXPECT_NE(
+      std::string::npos,
+      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::public_)
+        .find("\"zone\":\"public\""));
+    EXPECT_NE(
+      std::string::npos,
+      cryptonote::levin::format_stem_tally_row_json(row, epee::net_utils::zone::invalid)
+        .find("\"zone\":\"invalid\""));
+}
+
 /* §89 private stemming posture: the anonymity zone STEMS. Outbound-only fluff
    reach is asserted every round inside `run_private_round`. Cases differ only
    by method and padding. */
