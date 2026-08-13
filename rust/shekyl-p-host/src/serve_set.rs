@@ -377,8 +377,7 @@ impl PinnedServeSet {
     /// boundary crosses it, and an operator looking at a non-zero miss count
     /// should be able to tell that apart from a fault.
     ///
-    /// **A pruned member refuses the start, and that decision lives here
-    /// rather than in [`Self::from_report`].** Nothing is serving yet, so
+    /// **A pruned member refuses the start.** Nothing is serving yet, so
     /// refusing costs nothing and the remedy — rebuild the store by chain
     /// replay — wants to be paid before the persona advertises itself.
     /// [`Self::refreshed`] deliberately does *not* refuse: see its doc.
@@ -396,6 +395,13 @@ impl PinnedServeSet {
             .map_err(|detail| PinError::Pinner { detail })?;
         let reader = report.reader.clone();
         let pinned = Self::from_report(report, reader)?;
+        // The refusal lives here rather than inside `from_report`, which both
+        // constructors share. `refreshed` must be able to mint a witness that
+        // *records* terminally-pruned members without failing (see its doc), so
+        // a check pushed down into the shared constructor could not tell the two
+        // callers apart without being handed a flag saying which one it was —
+        // which is this `if` with extra steps, one level further from the
+        // asymmetry it encodes.
         if !pinned.already_pruned.is_empty() {
             return Err(PinError::MembersAlreadyPruned {
                 shard_ids: pinned.already_pruned,
