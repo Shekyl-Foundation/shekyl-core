@@ -3212,10 +3212,10 @@ RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::uint8_t zone,
 //! Frozen at construction, so this is a plain read. False for a null handle.
 bool shekyl_relay_zone_covert_enabled(const RelayZoneHandle* handle);
 
-//! R-1: should this RELAYED transaction be diverted onto the anonymity zone's
-//! stem? One roll, at entry. A verdict crosses, not a probability -- the rate
-//! and its per-hop meaning stay in Rust. Callers own the pre-fluff test: a
-//! transaction that has fluffed must leave the zone.
+//! R-1: should this ORIGINATED transaction take the anonymity zone?
+//! One roll, at origination (Q12-D5a). A verdict crosses, not a probability
+//! -- the rate stays in Rust. Relayed traffic does not call this; it
+//! inherits its arrival zone. Callers own the pre-fluff test.
 bool shekyl_relay_zone_divert_relayed_tx();
 
 //! The outbound floor the embargo provisioning assumes (F-8b): counts below

@@ -1080,7 +1080,10 @@ TEST(daemon_submit_shims, relay_nudge_dispatches_local_pool_blob)
     << "the nudge must fetch the local-state blob (relay_category::all)";
   EXPECT_EQ(protocol.method, relay_method::local)
     << "local dispatch is the entry point that arms the D++ embargo";
-  EXPECT_EQ(protocol.zone, epee::net_utils::zone::invalid);
+  EXPECT_TRUE(protocol.zone == epee::net_utils::zone::invalid ||
+              protocol.zone == epee::net_utils::zone::public_)
+    << "the origination roll maps onto send_txs' two originated origins; "
+       "a named anonymity zone here would skip select_anonymity";
 }
 
 TEST(daemon_submit_shims, relay_nudge_on_absent_tx_is_a_skipped_fault_without_dispatch)

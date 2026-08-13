@@ -119,4 +119,47 @@ namespace cryptonote
         && origin != epee::net_utils::zone::public_
         && origin != epee::net_utils::zone::invalid;
   }
+
+  /*! \brief Where `node_server::send_txs` should place a transaction under
+      Q12-D5a once-at-origin.
+
+      Production and the unit table call this. Deleting `keep_arrival` here
+      is the edit that reds the coherence witness — not a copy of the
+      branch in `net_node.inl`. */
+  enum class zone_route : std::uint8_t
+  {
+    keep_arrival,          //!< still-stemming on a real anonymity origin
+    anonymity_fail_closed, //!< originated chose anon, or local re-relay backstop
+    public_clearnet        //!< clearnet inherit, fluff exit, or originated chose clearnet
+  };
+
+  constexpr zone_route once_at_origin_route(
+    const relay_method tx_relay,
+    const epee::net_utils::zone origin) noexcept
+  {
+    if (r1_coherence_keeps_origin(tx_relay, origin))
+      return zone_route::keep_arrival;
+    if (origin == epee::net_utils::zone::invalid && is_pre_fluff_relay(tx_relay))
+      return zone_route::anonymity_fail_closed;
+    return zone_route::public_clearnet;
+  }
+
+  /*! \brief Map the origination roll onto the zone argument `send_txs` reads.
+
+      `true` (take anonymity) → `invalid`, which `once_at_origin_route` treats
+      as fail-closed. `false` (clearnet **by design**) → `public_`.
+
+      These two must stay distinguishable from "chose anon, zone unusable":
+      that path never produces a `public_` origin argument, it sends nothing.
+      Pool re-relays of `local` keep passing `invalid` and do **not** re-roll
+      — they share this mapping's fail-closed arm, which is why the roll
+      lives at first origination (`daemon_submit::relay_tx`) rather than on
+      every `source.is_nil()` call into `send_txs`. */
+  constexpr epee::net_utils::zone originated_zone_from_anonymity_roll(
+    const bool take_anonymity) noexcept
+  {
+    return take_anonymity
+      ? epee::net_utils::zone::invalid
+      : epee::net_utils::zone::public_;
+  }
 }

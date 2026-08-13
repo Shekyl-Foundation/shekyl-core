@@ -669,6 +669,72 @@ TEST(r1_coherence_predicate, table)
     EXPECT_FALSE(cryptonote::is_pre_fluff_relay(relay_method::fluff));
 }
 
+/* Q12-D5a once-at-origin routing. Production `send_txs` switches on this.
+   What edit reds it: return `public_clearnet` from the `keep_arrival` arm
+   (coherence removed) — `(stem, tor)` below fails. A test that only
+   asserted `r1_coherence_keeps_origin` would still pass if `send_txs`
+   stopped calling it; sharing the function is the witness. */
+TEST(once_at_origin_route, table)
+{
+    using cryptonote::relay_method;
+    using cryptonote::zone_route;
+    using epee::net_utils::zone;
+
+    // Coherence: still-stemming on a real anonymity origin stays there.
+    EXPECT_EQ(zone_route::keep_arrival,
+              cryptonote::once_at_origin_route(relay_method::stem, zone::tor));
+    EXPECT_EQ(zone_route::keep_arrival,
+              cryptonote::once_at_origin_route(relay_method::stem, zone::i2p));
+    EXPECT_EQ(zone_route::keep_arrival,
+              cryptonote::once_at_origin_route(relay_method::local, zone::tor));
+
+    // Relayed clearnet inherit — no roll. This is the deleted divert.
+    EXPECT_EQ(zone_route::public_clearnet,
+              cryptonote::once_at_origin_route(relay_method::stem, zone::public_));
+
+    // Originated, roll said anon (`invalid`) — fail closed, never clearnet.
+    EXPECT_EQ(zone_route::anonymity_fail_closed,
+              cryptonote::once_at_origin_route(relay_method::local, zone::invalid));
+    EXPECT_EQ(zone_route::anonymity_fail_closed,
+              cryptonote::once_at_origin_route(relay_method::stem, zone::invalid));
+
+    // Originated, roll said clearnet (`public_`) — by design, not a fallback.
+    EXPECT_EQ(zone_route::public_clearnet,
+              cryptonote::once_at_origin_route(relay_method::local, zone::public_));
+
+    // Fluff is the exit on every origin.
+    EXPECT_EQ(zone_route::public_clearnet,
+              cryptonote::once_at_origin_route(relay_method::fluff, zone::tor));
+    EXPECT_EQ(zone_route::public_clearnet,
+              cryptonote::once_at_origin_route(relay_method::fluff, zone::invalid));
+}
+
+/* The origination roll's two outcomes must stay distinguishable from each
+   other and from "chose anon, zone unusable". What edit reds it: swap the
+   ternary in `originated_zone_from_anonymity_roll`. */
+TEST(originated_zone_from_anonymity_roll, the_two_outcomes_are_distinct)
+{
+    using epee::net_utils::zone;
+
+    EXPECT_EQ(zone::invalid, cryptonote::originated_zone_from_anonymity_roll(true));
+    EXPECT_EQ(zone::public_, cryptonote::originated_zone_from_anonymity_roll(false));
+    EXPECT_NE(
+      cryptonote::originated_zone_from_anonymity_roll(true),
+      cryptonote::originated_zone_from_anonymity_roll(false));
+
+    // Fail-closed (unusable chosen zone) never produces `public_`.
+    EXPECT_EQ(
+      cryptonote::zone_route::anonymity_fail_closed,
+      cryptonote::once_at_origin_route(
+        cryptonote::relay_method::local,
+        cryptonote::originated_zone_from_anonymity_roll(true)));
+    EXPECT_EQ(
+      cryptonote::zone_route::public_clearnet,
+      cryptonote::once_at_origin_route(
+        cryptonote::relay_method::local,
+        cryptonote::originated_zone_from_anonymity_roll(false)));
+}
+
 /* §89 private stemming posture: the anonymity zone STEMS. Outbound-only fluff
    reach is asserted every round inside `run_private_round`. Cases differ only
    by method and padding. */

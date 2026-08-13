@@ -236,10 +236,13 @@ int shekyl_submit_commit_tx(core_rpc_handle* h,
 // relay_transactions(relay_method::local) dispatch, the same entry point
 // the deleted legacy on_send_raw_tx handler used (§9.3), so Dandelion++
 // embargo arming is inherited, not
-// re-implemented (§5.2 item 2). Fire and forget: the nudge is latency; the
-// embargo + periodic loop are the guarantee. Returns SHEKYL_SUBMIT_OK /
-// SHEKYL_SUBMIT_INTERNAL_FAULT (callers may ignore; a miss means the tx
-// raced away post-commit and the periodic loop owns whatever remains).
+// re-implemented (§5.2 item 2). This is also the Q12-D5a origination roll:
+// the zone argument is `invalid` (fail-closed onto anonymity) or `public_`
+// (clearnet by design), never a silent fallback. Fire and forget: the
+// nudge is latency; the embargo + periodic loop are the guarantee. Returns
+// SHEKYL_SUBMIT_OK / SHEKYL_SUBMIT_INTERNAL_FAULT (callers may ignore; a
+// miss means the tx raced away post-commit and the periodic loop owns
+// whatever remains — that fallback does not re-roll).
 int shekyl_submit_relay_tx(core_rpc_handle* h, const uint8_t* txid);
 
 // ── §4.5 round-trip test hooks (no production callers) ─────────────────────
