@@ -2204,30 +2204,67 @@ gossip works it reaches 12. If only seeds matter it reaches 1 and stops."*
 
 ### 13.2 The result
 
-Eight samples at ~4-minute intervals. Sample 1 is the settling sample and is
-excluded from the per-node statistics; it is kept in the series because
-excluding it silently is how a settling artifact becomes a result.
+Twelve samples at ~4-minute intervals, 720 node-samples. Sample 1 is the
+settling sample and is excluded from the per-node statistics; it is kept in the
+series because excluding it silently is how a settling artifact becomes a
+result.
 
-| sample | min | at-or-above floor | distribution (`links × nodes`) |
-| --- | --- | --- | --- |
-| 04:26:24 | **1** | 49 | 1×1, 9×2, 10×1, 11×7, 12×49 |
-| 04:30:26 | 10 | 55 | 10×1, 11×4, 12×55 |
-| 04:34:28 | 11 | 52 | 11×8, 12×52 |
-| 04:38:30 | 11 | 49 | 11×11, 12×49 |
-| 04:42:33 | 11 | 54 | 11×6, 12×54 |
-| 04:46:35 | 9 | 56 | 9×1, 11×3, 12×56 |
-| 04:50:37 | 11 | 54 | 11×6, 12×52, 13×2 |
-| 04:54:39 | 11 | 50 | 11×10, 12×49, 13×1 |
+| sample | min | at-or-above floor |
+| --- | --- | --- |
+| 04:26:24 | **1** | 49 |
+| 04:30:26 | 10 | 55 |
+| 04:34:28 | 11 | 52 |
+| 04:38:30 | 11 | 49 |
+| 04:42:33 | 11 | 54 |
+| 04:46:35 | 9 | 56 |
+| 04:50:37 | 11 | 54 |
+| 04:54:39 | 11 | 50 |
+| 04:58:42 | 10 | 49 |
+| 05:02:44 | 10 | 47 |
+| 05:06:47 | 8 | 50 |
+| 05:10:50 | 11 | 46 |
 
-**Per node, over the seven settled samples:**
+**Per node, over the eleven settled samples:**
 
 | | nodes |
 | --- | --- |
-| always at or above the floor | 26 |
-| dips below and recovers | 34 |
+| always at or above the floor | 10 |
+| dips below and recovers | 50 |
 | **never reaches the floor** | **0** |
 
-Observation-level, 370 of 420 node-samples (**88.1 %**) at or above 12.
+Observation-level, 562 of 660 node-samples (**85.2 %**) at or above 12, and
+**every node's maximum is 12 or 13** — there is no node the floor is out of
+reach for.
+
+#### "Always above the floor" is not a sample-count-stable statistic
+
+An interim read of this same run at **eight** samples reported *26* nodes
+always above the floor and 88.1 % of observations; at **twelve** it is *10* and
+85.2 %. The observation rate barely moved. The "always" count more than
+halved — and it must, because it is a conjunction over samples: every added
+sample is another chance for a node to dip, so the count **decreases
+monotonically in sample count** and is not comparable between runs of different
+length.
+
+Recorded because the interim figure was written down before the run finished,
+which is the same defect as reading a constant off one seed. The statistics to
+compare across arms are the **observation-level rate** and **"never reaches the
+floor"**; the "always" column is descriptive of this run's length only.
+
+#### An unresolved downward drift
+
+At-floor counts run 55, 52, 49, 54, 56, 54, 50, 49, 47, 50, **46** — the last
+third sits lower than the first. Over 40 minutes that is either slow
+degradation or the low end of ordinary churn, and **eleven samples cannot
+separate them**. §11.9 settled the analogous question on the six-host ring only
+by running a full hour and matching every missing link to a specific burn with
+a specific expiry.
+
+**Not asserted either way here.** The claim this arm supports is the one the
+drift does not touch: no node is structurally below the floor, and every node
+reaches it. Whether the settled level is flat at ~50 or slowly falling needs a
+longer arm, and that is left owed in §13.7 rather than resolved by picking the
+reading that suits.
 
 **The single node reading `1` in the first sample is the finding, not noise.**
 That is the bootstrap-only state the control was designed to detect — one
@@ -2302,6 +2339,7 @@ the host rather than assumed.
 
 ### 13.7 Still owed
 
+- **A longer `A = 60` arm** — 11 settled samples cannot separate the observed downward drift (55 → 46 at-floor) from ordinary churn; §11.9 needed a full hour and per-burn attribution to settle the analogous question.
 - **The `A = 15` arm**, which is the one §11.13's launch condition turns on.
 - **Q12-R5's late-joiner control**, both variants — one new node pointed at a
   *seed* and one pointed at an *ordinary node*. The difference prices how much
