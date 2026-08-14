@@ -67,7 +67,12 @@ sustainability is unaffected by the recalibration.
   `bounded_capacity(count, stride, remaining_bytes)` helper wire-count
   allocations must route through, plus a source-scan/grep gate forbidding
   raw `with_capacity` on a non-`.len()`-derived, non-const argument in the
-  FFI boundary crates. Rides the same tail commit as the
+  FFI boundary crates. Scope extended (#470 review round): the same gate
+  polices raw `std::slice::from_raw_parts` outside the
+  `legacy_util::slice_from_ptr` seam — the seam now enforces the
+  `from_raw_parts` language-level `isize::MAX` byte bound (and absorbed
+  `wallet_envelope_ffi`'s byte-identical private clone), but ~10 direct
+  call sites bypass it and each re-owns that precondition by hand. Rides the same tail commit as the
   `set -o pipefail`/`PIPESTATUS` gate convention (four pipe-exit-swallow
   instances this round). The SA round closes structurally only when this
   lands (`SIGNATURE_ALIGNMENT.md` §2.3 + §3 tail row).

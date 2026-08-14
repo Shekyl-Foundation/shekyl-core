@@ -44,7 +44,37 @@ pub(crate) unsafe fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'
     if ptr.is_null() {
         return None;
     }
+    // `from_raw_parts` has a LANGUAGE-LEVEL precondition that the byte
+    // length not exceed `isize::MAX` — violating it is UB even if the
+    // caller really provided that much memory, so "hostile caller = UB
+    // anyway" does not excuse it. This is the single seam that calls
+    // `from_raw_parts` for FFI reads; guarding here covers every caller,
+    // including direct ABI lengths that were never multiplied.
+    if len > isize::MAX as usize {
+        return None;
+    }
     Some(std::slice::from_raw_parts(ptr, len))
+}
+
+#[cfg(test)]
+mod slice_from_ptr_tests {
+    use super::*;
+
+    /// The `isize::MAX` byte bound is refused BEFORE `from_raw_parts` is
+    /// reached (the guard returns `None` without constructing the slice,
+    /// so the dangling pointer is never dereferenced or blessed).
+    #[test]
+    fn oversized_len_is_refused_before_slice_construction() {
+        let dangling = std::ptr::NonNull::<u8>::dangling().as_ptr();
+        let too_big = (isize::MAX as usize) + 1;
+        assert!(unsafe { slice_from_ptr(dangling, too_big) }.is_none());
+        // Control: a small length over real bytes still works.
+        let bytes = [7u8; 4];
+        assert_eq!(
+            unsafe { slice_from_ptr(bytes.as_ptr(), 4) },
+            Some(&bytes[..])
+        );
+    }
 }
 
 // ─── Generic Buffer Helpers ──────────────────────────────────────────────────

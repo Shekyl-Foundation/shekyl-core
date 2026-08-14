@@ -168,18 +168,11 @@ const _: () = assert!(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Safely reconstruct a byte slice from an FFI (ptr, len). Returns `None`
-/// on null-with-nonzero-len combinations; zero-length with either ptr
-/// returns an empty slice (never dereferences the pointer).
-unsafe fn make_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
-    if len == 0 {
-        return Some(&[]);
-    }
-    if ptr.is_null() {
-        return None;
-    }
-    Some(std::slice::from_raw_parts(ptr, len))
-}
+// Byte-slice reconstruction is `legacy_util::slice_from_ptr` — this file
+// carried a byte-identical private clone (`make_slice`) that silently
+// missed the seam's `isize::MAX` byte-bound guard when it landed there;
+// one owner, one contract (SA-R-7 review round).
+use crate::legacy_util::slice_from_ptr as make_slice;
 
 /// Zero `len` bytes at `ptr` if non-null. Used on every failure path that
 /// would otherwise leave junk in a caller-visible secret buffer.
