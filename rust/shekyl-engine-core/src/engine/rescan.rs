@@ -47,7 +47,13 @@
 //!   reset deliberately leaves untouched may hold coverage gathered before
 //!   a rescan-adopted persona ever entered the scan union, and that
 //!   coverage makes no absence claim about it
-//!   (`PReconcileSet::reconcile`'s provenance gate).
+//!   (`PReconcileSet::reconcile`'s provenance gate). The symmetric corner
+//!   — a sighting whose post was reorged out while the wallet was closed,
+//!   which this replay therefore cannot re-sight OR invalidate (no old tip
+//!   means no rewind, and "replayed and unseen" is not absence: the scan
+//!   floor may sit above the row) — is retained in the same funds-safe
+//!   direction until the pscan absence oracle clears it; the named
+//!   FOLLOWUPS residual on the watch-floor backfill covers both paths.
 //!
 //! **Clear / reset (scan-derived — the replay rebuilds all of it):**
 //! - the whole [`LedgerBlock`] (transfers, tip, reorg window) — replaced

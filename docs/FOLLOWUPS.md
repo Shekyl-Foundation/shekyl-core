@@ -3943,9 +3943,23 @@ sustainability is unaffected by the recalibration.
     its watch floor is *retained indefinitely* (`OutsideCovered`), never
     corroborated or refuted, until a P-scan covers that range with the
     persona watched — which today never happens for an already-advanced
-    frontier (the pscan has no floor-lowering backfill). Funds-safe (retention,
-    never GC) and the flagship restore path is unaffected (a fresh restore
-    has no seal, so floors start at 0). **Reopen when** a pscan backfill /
+    frontier (the pscan has no floor-lowering backfill). The same residual
+    has a second entry path (Copilot, PR #463 review): an **explicit full
+    rescan cannot invalidate** a sighting whose post was reorged out while
+    the wallet was closed — the reset leaves no old tip for the replay to
+    diverge from, so the merge sees no rewind and
+    `discard_sightings_at_or_above` never runs; the orphan row is retained
+    (and `first_stake` keeps refusing on it) until the pscan absence oracle
+    clears it under the same floor conditions. The wallet-scan replay is
+    deliberately NOT that oracle: its floor (`restore_from_height`) may sit
+    above the sighting, so "replayed and unseen" is not absence — and a
+    discard-then-re-sight at rescan start would reopen the arm-#3 stale-seal
+    hole if the wallet crashed between the discard persist and the re-sight
+    (the "only when the replay succeeds" condition IS the exhaustiveness
+    machinery). Funds-safe both ways (retention/refusal, never GC of a live
+    bond) and the flagship restore path is unaffected (a fresh restore
+    has no seal, so floors start at 0 — a seed-restore also heals both
+    residual paths unconditionally). **Reopen when** a pscan backfill /
     frontier-lowering scan mode is designed — that is a new producer scan
     mode over the exhaustiveness machinery, a distinct validation surface
     (rule 19), not a patch on the reconcile arms.
