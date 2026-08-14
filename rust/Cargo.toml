@@ -84,6 +84,11 @@ members = [
     # inert until the scheduled p2p cutover (IMPLEMENTATION_INDEX.md LV row).
     "shekyl-levin",
 
+    # LV-2a: binary portable_storage codec. Limits are a parameter so HTTP
+    # `.bin` RPC and Levin share one decoder. Typed command maps are LV-2b
+    # in shekyl-levin. See docs/design/LV2_PORTABLE_STORAGE.md.
+    "shekyl-portable-storage",
+
     "shekyl-archival-retention",
 
     # Phase 4 Engine-native wallet RPC (docs/api/wallet_rpc.yaml). Replaces

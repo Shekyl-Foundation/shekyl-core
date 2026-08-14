@@ -224,6 +224,9 @@ kameo = { workspace = true }
 # (no silently-skipped `required-features` lane).
 shekyl-engine-core = { path = ".", features = ["test-helpers"] }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+# LV-2a: replaces the hand-rolled `get_blocks_by_height.bin` codec in the
+# SP-T2 daemon-observability harness (this module is `#[cfg(test)]` only).
+shekyl-portable-storage = { path = "../shekyl-portable-storage" }
 # PR 7 C4 `EconomicsEngine` differential
 # (`engine::economics_differential`): deserialize the sim-recorded
 # `RecordedChainFixture` (`docs/test_vectors/economics/*.json`, §5.4) and

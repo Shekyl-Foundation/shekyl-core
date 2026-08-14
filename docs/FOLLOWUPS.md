@@ -9607,20 +9607,29 @@ its wake.
   `shekyl_levin_*` FFI and the system-libzstd dependency is deleted
   (single-owner libzstd; zstd decision 2026-08-06). Still inert until
   LV-3: the read side (`BucketReader`) and the plain
-  notification/request/response builders. The remaining work is
-  **rejected-now with named reopening criteria** (rule 21):
+  notification/request/response builders. LV-2's build-vs-vendor question
+  is **closed** (2026-08-13 pin below); implementation of that pin is
+  in-scope. LV-3 remains **rejected-now with named reopening criteria**
+  (rule 21):
 
-  - **LV-2 — epee portable_storage payload codec + command schemas.** The
-    framing crate carries payloads as opaque bytes; speaking live
-    handshake/timed-sync/notify bodies needs the portable_storage binary
-    codec plus the ~25 KV maps in `src/p2p/p2p_protocol_defs.h` and
-    `src/cryptonote_protocol/cryptonote_protocol_defs.h`. Build-or-vendor
-    is an open rule-17/rule-10 decision — Cuprate's `epee-encoding` exists
-    but is vendoring-only (`DAEMON_RELAY_PRIVACY.md` §8). Reopens when
-    either (a) the p2p migration track is scheduled, or (b) any Rust
-    component needs live Levin command interop with the C++ node (e.g. a
-    relay readout that would otherwise add a third entry to the index's
-    relay-layer C++ dependency inventory).
+  - **LV-2 — epee portable_storage payload codec + command schemas.**
+    UPDATE 2026-08-13: build-vs-vendor **closed** — first-party
+    `shekyl-portable-storage` (codec) + typed maps in `shekyl-levin` (schemas);
+    Cuprate is reference-not-dependency. Pin:
+    [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md).
+    Split **LV-2a** (codec + KATs + delete the
+    `get_o_indexes.bin` / `get_blocks_by_height.bin` one-offs) then
+    **LV-2b** (handshake/timed-sync/ping/support-flags first, then 2002
+    and the remaining notifies including 2010). Census is 27
+    `BEGIN_KV_SERIALIZE_MAP`s in the two protocol-defs headers, of which
+    the Levin-wire subset plus the `network_address` union are LV-2b;
+    RPC maps stay out. Reopening criterion (a) of the 2026-08-05
+    deferral (p2p migration track scheduled) is met by that pin;
+    implementation is in-scope, not V3.0-gating. UPDATE 2026-08-13:
+    **LV-2a landed** — `rust/shekyl-portable-storage`,
+    `docs/PORTABLE_STORAGE.md` completed, the two homegrown HTTP `.bin`
+    parsers deleted. The framing crate still carries payloads as opaque
+    bytes until LV-2b lands.
   - **LV-3 — connection-path cutover.** Replace the C++ Levin read/write
     path at the `levin_notify.cpp` / `net_node.inl` seam with the Rust
     crate. Cost basis: the index's "Relay layer → C++ dependency

@@ -39,7 +39,10 @@
 //!
 //! - the epee `portable_storage` payload codec and the p2p/cryptonote
 //!   command schemas (handshake bodies, peerlist entries, …) — payloads
-//!   here are opaque bytes;
+//!   here are opaque bytes until LV-2b. The codec decision is
+//!   `docs/design/LV2_PORTABLE_STORAGE.md` (first-party `shekyl-portable-storage`,
+//!   LV-2a); this crate grows typed command structs on top of that, it
+//!   does not absorb the codec;
 //! - connection management, peerlists, timeouts, and invoke/response
 //!   correlation (the `async_protocol_handler` layer).
 //!
