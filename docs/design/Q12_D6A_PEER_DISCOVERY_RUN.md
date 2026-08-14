@@ -6,8 +6,9 @@ registered as **Q12-D6a** in
 *"the most expensive measurement the arc has proposed and the only one that
 cannot be faked."*
 
-**Status: the `A = 60` arm is RUN (§13, 2026-08-14) and its readout is
-committed. `A = 15` and Q12-R5's late-joiner control remain unrun.**
+**Status: the `A = 60` (§13) and `A = 15` (§14) arms are RUN, 2026-08-14, and
+their readouts are committed. `A = 30` and Q12-R5's late-joiner control remain
+unrun.**
 
 Corrected 2026-08-14. This line previously read *"No VM stood up, no arm run"*,
 which its own body had already outgrown before §13 existed: §§10–11.13 record a
@@ -2340,7 +2341,7 @@ the host rather than assumed.
 ### 13.7 Still owed
 
 - **A longer `A = 60` arm** — 11 settled samples cannot separate the observed downward drift (55 → 46 at-floor) from ordinary churn; §11.9 needed a full hour and per-burn attribution to settle the analogous question.
-- **The `A = 15` arm**, which is the one §11.13's launch condition turns on.
+- **The `A = 30` arm**, the remaining point of the `{15, 30, 60}` sweep.
 - **Q12-R5's late-joiner control**, both variants — one new node pointed at a
   *seed* and one pointed at an *ordinary node*. The difference prices how much
   of discovery is hub-mediated, and this arm's one-seed bootstrap makes the
@@ -2351,3 +2352,97 @@ the host rather than assumed.
   topology is uniform-at-the-floor, and a population sitting at the cap is
   exactly that. **3500 ms stands as the lower bound, now with a measured
   population behind the assumption it rested on.**
+
+---
+
+## 14. The `A = 15` arm — and §11.13's prediction is too strong
+
+**Status: RUN 2026-08-14**, immediately after §13 on the same fleet, reduced to
+15 anon nodes. Readouts in
+[`data/q12-d6a-a15-2026-08-14/`](data/q12-d6a-a15-2026-08-14/) — **both** the
+clean series and the contaminated one, because the contaminated run is a
+finding rather than an embarrassment.
+
+### 14.1 What changed, and what deliberately did not
+
+The 15 were chosen **spread across all nine hosts**, not as indices 0–14, which
+would have concentrated the arm on two machines and confounded population with
+locality. Clearnet stayed at 15 — it is fixed across arms by design (Q12-R3),
+so it is the one thing that must not scale with `A`.
+
+Seeds dropped 5 → 2. Holding 5 would make the seed set a **third** of the
+population, which is §7's own distortion warning ("at `A = 15` four well-known
+hubs are a quarter of the population") applied to our harness. 2/15 = 13.3 %
+against 5/60 = 8.3 % is the closest a cross-peerable seed set gets.
+
+### 14.2 The result
+
+| arm | at-or-above floor | per-node max | `stored` |
+| --- | --- | --- | --- |
+| `A = 60` (§13) | 85.2 % | 12–13 | — |
+| `A = 15`, **contaminated** | **0.0 %** (0/180) | 4–8 | **60** |
+| **`A = 15`, clean** | **52.1 %** (86/165 settled) | **12, all 15 nodes** | **14–15** |
+
+**Every one of the 15 nodes reaches the floor; none sustains it.** Per-node
+means run 10.25–11.67 against a floor of 12 and a ceiling of 14.
+
+### 14.3 §11.13's prediction is directionally right and too strong
+
+§11.13 concluded that at `p ≈ 0.15–0.23` **"the floor is unreachable up to
+roughly `A ≈ 19`"**, and therefore that on a young network *no Shekyl node
+anywhere stems over Tor*.
+
+**Measured at `A = 15`: the floor is reachable — every node touches 12 — but
+held only about half the time.** So the strong form is wrong. The *useful* form
+survives and is now quantified: crossing 12 is a **coin-flip per sample** at
+`A = 15` against a near-certainty at `A = 60`, so a below-floor rule that
+suppresses stemming will fire on roughly half of a small network's samples
+rather than on all of them.
+
+That is a materially different launch condition from "no node stems", and it is
+the difference between a network that cannot stem and one that stems
+intermittently — which the arm can distinguish and the arithmetic could not.
+
+### 14.4 The contaminated run, kept deliberately
+
+The first `A = 15` attempt read **0.0 % at floor and 4–8 links**, and it was
+wrong. Reducing `A = 60` → 15 left every surviving node holding a **60-address
+peerlist**, two-thirds of it now dead hosts, so nodes spent their dial budget on
+corpses and burned each into the failure cache.
+
+**The `stored` column is what caught it** — 60 stored candidates in a 15-node
+population is arithmetically impossible for a clean run. That column exists for
+exactly this ("a node at 11 links with a full white list is churn, the same node
+with every candidate burned is the failure"), and it earned its place: nothing
+in the *achieved-links* series looked anomalous. A 4–8 plateau is entirely
+plausible as a small-population result, and would have been reported as one.
+
+**A second attempt was still not clean**, at 45–60 stored: the wipe raced the
+shutdown. Killing the daemon, sleeping 6 s and removing the data directory lets
+a daemon still flushing `p2pstate.bin` write the old list back out *after* the
+removal, and one surviving node re-gossips it to the whole arm. The third
+attempt waits for actual process exit, removes, **verifies removal**, and only
+then starts — `stored` reads 14–15, and the result moves from 0.0 % to 52.1 %.
+
+**Recorded as a standing requirement: an arm that changes `A` must start from
+verified-empty peerlists, and `stored ≤ A` is the check that it did.**
+
+### 14.5 A caveat the arm surfaced about the floor itself
+
+`peer_id` is randomised **only on the public zone**
+([`net_node.inl:147`](../../src/p2p/net_node.inl#L147)); `config_t` default-constructs it to
+`1` ([`net_node.h:157`](../../src/p2p/net_node.h#L157)) and `add_zone` never touches it. So
+**every node announces `peer_id = 1` on its Tor zone** — deliberately, since a
+unique id there would be a correlation handle (§8.1).
+
+The consequence for F-8b: a node can dedupe its anonymity peerlist only **by
+address**, never by identity. **"12 outbound anonymity links" therefore means
+twelve addresses, not twelve distinct peers**, and nothing in the anon zone can
+tell the difference. An adversary running one node behind twelve hidden services
+satisfies the floor while supplying one peer.
+
+This does not affect §13 or §14 — one hidden service per instance, by
+construction — but it means the floor's *security* reading ("12 independent
+paths") is not what the floor measures. Whether that matters is a question for
+the below-floor rule's threat model, and it is **not** settled here; it is
+recorded because the arm is what made it concrete.
