@@ -49,7 +49,11 @@ pub use value::{Array, Section, Value};
 
 /// 9-byte header: `SIGNATUREA` `0x01011101`, `SIGNATUREB` `0x01020101`,
 /// version `1`. Little-endian on the wire: `01 11 01 01 01 01 02 01 01`.
-pub const HEADER: [u8; 9] = [0x01, 0x11, 0x01, 0x01, 0x01, 0x01, 0x02, 0x01, 0x01];
+///
+/// Spelled as a byte-string so the SA-3b domain-registry gate can grep
+/// the literal at this defining site (`CRYPTO_DOMAIN_REGISTRY.tsv` mech-x
+/// row).
+pub const HEADER: [u8; 9] = *b"\x01\x11\x01\x01\x01\x01\x02\x01\x01";
 
 /// `MAX_STRING_LEN_POSSIBLE` — decode rejects `len >=` this.
 pub const MAX_STRING_LEN_POSSIBLE: u64 = 2_000_000_000;
