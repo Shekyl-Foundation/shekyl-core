@@ -61,7 +61,7 @@ pub async fn dispatch(
         "create_payment_request" => receiving::create_payment_request(tenants, params).await,
         "list_payment_requests" => receiving::list_payment_requests(tenants, params).await,
         "make_uri" => receiving::make_uri(tenants, params).await,
-        "parse_uri" => receiving::parse_uri(tenants, params).await,
+        "parse_uri" => receiving::parse_uri(tenants, params),
         // WI-RPC-1 fees (projection of the one Phase-2a byte/fee model).
         "estimate_tx_size_and_weight" => fees::estimate_tx_size_and_weight(tenants, params).await,
         "get_default_fee_priority" => fees::get_default_fee_priority(tenants, params).await,

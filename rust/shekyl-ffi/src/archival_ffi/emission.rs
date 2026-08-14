@@ -633,6 +633,9 @@ pub unsafe extern "C" fn shekyl_archival_claimed_epochs_check_and_set(
         return SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID;
     }
     let len = unsafe { *set_len_ptr };
+    // Value-preserving: MAX_CLAIMED_EPOCH_ENTRIES is const-asserted == 32,
+    // which fits in usize on every supported target.
+    #[allow(clippy::cast_possible_truncation)]
     if len > set_cap || set_cap > MAX_CLAIMED_EPOCH_ENTRIES as usize {
         return SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID;
     }

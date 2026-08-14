@@ -499,13 +499,13 @@ where
 /// [`assemble`]'s tests; the boolean itself is covered only by review.
 pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
     assemble(state.restricted, handler_for)
-        .layer(RequestBodyLimitLayer::new(state.body_limit()))
+        .layer(RequestBodyLimitLayer::new(AppState::body_limit()))
         .layer(cors_layer(cors_origins))
         .with_state(state)
 }
 
 impl AppState {
-    fn body_limit(&self) -> usize {
+    fn body_limit() -> usize {
         DEFAULT_BODY_LIMIT
     }
 }

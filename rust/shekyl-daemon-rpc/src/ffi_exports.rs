@@ -102,13 +102,12 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
         None => return std::ptr::null_mut(),
     };
 
-    let rt = match tokio::runtime::Builder::new_multi_thread()
+    let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("daemon-rpc")
         .build()
-    {
-        Ok(r) => r,
-        Err(_) => return std::ptr::null_mut(),
+    else {
+        return std::ptr::null_mut();
     };
 
     let config = crate::server::ServerConfig {
@@ -148,7 +147,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
 
     let handle = Box::new(ShekylDaemonRpcHandle {
         shutdown: std::sync::Arc::into_raw(shutdown),
-        rt: Box::into_raw(Box::new(rt)) as *const _,
+        rt: Box::into_raw(Box::new(rt)).cast_const(),
         serve: Box::into_raw(Box::new(serve)),
     });
 
@@ -177,7 +176,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHand
     }
 
     if !handle.rt.is_null() {
-        let rt = Box::from_raw(handle.rt as *mut tokio::runtime::Runtime);
+        let rt = Box::from_raw(handle.rt.cast_mut());
         // Block until the serve task's graceful drain finishes BEFORE the
         // runtime is dropped and control returns to C++ (which then destroys
         // the core_rpc_server / core the in-flight handlers reference).
@@ -186,7 +185,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHand
         // into the C++ pool/blockchain, potentially mid-commit.
         if !handle.serve.is_null() {
             let serve = *Box::from_raw(handle.serve);
-            let _ = rt.block_on(serve);
+            let _joined = rt.block_on(serve);
         }
         drop(rt);
     } else if !handle.serve.is_null() {
@@ -222,6 +221,10 @@ fn submit_facts_field_value(seed: u64, field: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+// Deliberate low-byte truncation on every `as u8`: the values must stay
+// byte-identical to `submit_facts_test_fill` in daemon_submit_ffi.cpp, whose
+// u64-to-u8 field assignments truncate the same way (§4.5 parity hooks).
+#[allow(clippy::cast_possible_truncation)]
 fn submit_facts_filled(seed: u64) -> crate::ffi::SubmitFactsFfi {
     let mut root = [0u8; 32];
     let root_word = submit_facts_field_value(seed, 5);
@@ -314,11 +317,17 @@ mod tests {
     fn rust_fill_check_round_trips() {
         for seed in [0u64, 1, 0xDEAD_BEEF_CAFE_F00D, u64::MAX] {
             let mut pod = crate::ffi::SubmitFactsFfi::zeroed();
-            unsafe { shekyl_submit_facts_rust_fill(&mut pod, seed) };
-            assert_eq!(unsafe { shekyl_submit_facts_rust_check(&pod, seed) }, 0);
+            unsafe { shekyl_submit_facts_rust_fill(&raw mut pod, seed) };
+            assert_eq!(
+                unsafe { shekyl_submit_facts_rust_check(&raw const pod, seed) },
+                0
+            );
             // A single-byte perturbation anywhere must fail the check.
             pod.root[31] ^= 0x01;
-            assert_eq!(unsafe { shekyl_submit_facts_rust_check(&pod, seed) }, -1);
+            assert_eq!(
+                unsafe { shekyl_submit_facts_rust_check(&raw const pod, seed) },
+                -1
+            );
         }
     }
 }

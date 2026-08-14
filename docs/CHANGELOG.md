@@ -4,6 +4,28 @@
 
 ### Changed
 
+- **Untrusted numeric conversions: one live over-reservation fixed, the
+  cast gate made real at the trust boundary (SA-6, SA-R-7 proposed).** The
+  census behind the ruling (298 non-test `as` casts across the exposed
+  crates) found the reject-via-`try_from` convention already lint-enforced
+  and the decode crates cast-free — and three gate defects: (1)
+  `shekyl-ffi::parse_prove_witness` reserved `Vec` capacity directly from
+  three C-ABI wire counts, so a hostile 4-byte count could demand up to
+  ~412 GB and abort the whole C++ host process on allocation failure — now
+  capped before the reserve by the bytes that must back the elements (the
+  same guard the function already applied to sibling counts), with a pinned
+  refusal test; (2) `shekyl-ffi`'s crate-root
+  `#![allow(clippy::cast_possible_truncation, cast_sign_loss)]` silently
+  overrode the workspace deny on the one crate sitting on the C++ trust
+  boundary — narrowed to site-level allows, each with a value-preserving
+  rationale; (3) `shekyl-daemon-rpc`, `shekyl-wallet-rpc`, `shekyl-cli`,
+  and `shekyl-relay` never inherited the workspace lint table (`-D
+  warnings` cannot enable an allow-by-default lint) — wired in via
+  `[lints] workspace = true`, with ~100 latent lint sites fixed
+  (every surveyed lossy cast proved construction-time value-preserving; no
+  behavior, wire, or public-API change). The rule is codified as
+  `SIGNATURE_ALIGNMENT.md` §2.3 SA-R-7, pending ratification.
+
 - **The cryptographic inventory is closed (SA-6).**
   `docs/CRYPTOGRAPHIC_INVENTORY.md` now carries every section the SA round
   owed it: §1 primitive pins + the RNG-source map (two-policy split:

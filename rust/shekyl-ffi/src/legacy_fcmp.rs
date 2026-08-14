@@ -324,6 +324,15 @@ pub(crate) fn parse_prove_witness(
         let chunk_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
         offset += 4;
 
+        // Cap BEFORE the reserve: each chunk consumes 128 bytes below, so a
+        // count the remaining blob cannot back is malformed — refuse it here
+        // rather than letting a hostile 4-byte count reserve up to ~412 GB
+        // (`Vec::with_capacity` on allocation failure aborts the whole C++
+        // host process). Same pattern as the `sib_count` guard below and
+        // `shekyl-fcmp`'s `num_inputs` arity cap.
+        if chunk_count > (data.len() - offset) / 128 {
+            return None;
+        }
         let mut leaf_chunk_outputs = Vec::with_capacity(chunk_count);
         let mut leaf_chunk_h_pqc = Vec::with_capacity(chunk_count);
         for _ in 0..chunk_count {
@@ -350,6 +359,11 @@ pub(crate) fn parse_prove_witness(
         let c1_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
         offset += 4;
 
+        // Cap BEFORE the reserve (see the leaf-chunk guard above): every
+        // layer consumes at least its 4-byte `sib_count` header.
+        if c1_count > (data.len() - offset) / 4 {
+            return None;
+        }
         let mut c1_branch_layers = Vec::with_capacity(c1_count);
         for _ in 0..c1_count {
             if offset + 4 > data.len() {
@@ -378,6 +392,10 @@ pub(crate) fn parse_prove_witness(
         let c2_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
         offset += 4;
 
+        // Cap BEFORE the reserve (see the leaf-chunk guard above).
+        if c2_count > (data.len() - offset) / 4 {
+            return None;
+        }
         let mut c2_branch_layers = Vec::with_capacity(c2_count);
         for _ in 0..c2_count {
             if offset + 4 > data.len() {
@@ -673,4 +691,46 @@ pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
 
     let serialized = shekyl_fcmp::tree::leaves_to_bytes(&leaves);
     ShekylBuffer::from_vec(serialized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hostile count field must be refused BEFORE any reservation: the
+    /// wire counts (`chunk_count`, `c1_count`, `c2_count`) come from the
+    /// C-ABI witness blob (daemon-traceable material), and pre-cap a
+    /// 4-byte `u32::MAX` drove `Vec::with_capacity` reservations of up to
+    /// ~412 GB — allocation failure aborts the whole C++ host process.
+    /// Post-cap, a count the remaining bytes cannot back is malformed
+    /// input and parses to `None` like every other truncation.
+    #[test]
+    fn hostile_witness_counts_are_refused_before_any_reservation() {
+        // Leaf-chunk count claims u32::MAX with zero backing bytes.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Valid empty leaf chunk, hostile C1 layer count.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Valid empty leaf chunk + C1, hostile C2 layer count.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Control: the same three counts at 0 with no further bytes parse
+        // (structurally empty input set is the caller's concern, not a
+        // truncation) — proves the caps refuse the COUNT, not the shape.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_some());
+    }
 }

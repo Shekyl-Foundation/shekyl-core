@@ -88,7 +88,11 @@ pub async fn handle(
     }
 
     let params_str = if request.params.is_null()
-        || request.params.is_object() && request.params.as_object().is_none_or(|m| m.is_empty())
+        || request.params.is_object()
+            && request
+                .params
+                .as_object()
+                .is_none_or(serde_json::Map::is_empty)
     {
         String::new()
     } else {

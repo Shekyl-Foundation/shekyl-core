@@ -475,7 +475,7 @@ impl Zone {
     pub fn update_stems<R: RelayRng + ?Sized>(&mut self, outbound: Vec<ConnectionId>, rng: &mut R) {
         // `StemMap::update` still returns `StemSetChange` for its own callers
         // and tests; the zone no longer surfaces it — nothing re-points on push.
-        let _ = self.map.update(outbound, rng);
+        let _change = self.map.update(outbound, rng);
     }
 
     /// Draw a wholly new stem set over `outbound` — what an epoch rollover does.

@@ -118,7 +118,7 @@ impl DaemonClient {
             .post(&rpc_url)
             .header("Content-Type", "application/json")
             .send(body.to_string().as_bytes())
-            .map_err(classify_ureq_error)?;
+            .map_err(|e| classify_ureq_error(&e))?;
 
         let body_str = response
             .body_mut()
@@ -129,7 +129,10 @@ impl DaemonClient {
             .map_err(|e| DaemonError::MalformedResponse(e.to_string()))?;
 
         if let Some(err) = parsed.get("error") {
-            let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+            let code = err
+                .get("code")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(-1);
             let message = err
                 .get("message")
                 .and_then(|m| m.as_str())
@@ -150,7 +153,7 @@ impl DaemonClient {
     }
 }
 
-fn classify_ureq_error(err: ureq::Error) -> DaemonError {
+fn classify_ureq_error(err: &ureq::Error) -> DaemonError {
     let msg = err.to_string();
     let lower = msg.to_lowercase();
 

@@ -57,18 +57,15 @@ pub async fn submit_transaction(State(state): State<Arc<AppState>>, body: String
     // Condvar wait did the latter, exhausting the blocking pool under exactly
     // the flood the cap exists to bound). One semaphore across every bind ⇒
     // the cap is per-daemon, not per-endpoint.
-    let permit = match phase_c_semaphore().acquire_owned().await {
-        Ok(permit) => permit,
-        Err(_) => {
-            // The process-global semaphore is never closed; a closed gate is
-            // an internal fault, never a verdict.
-            tracing::error!("phase-C semaphore closed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "submit gate unavailable".to_string(),
-            )
-                .into_response();
-        }
+    let Ok(permit) = phase_c_semaphore().acquire_owned().await else {
+        // The process-global semaphore is never closed; a closed gate is
+        // an internal fault, never a verdict.
+        tracing::error!("phase-C semaphore closed");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "submit gate unavailable".to_string(),
+        )
+            .into_response();
     };
 
     // The engine blocks (short FFI lock scopes + the Phase-C crypto battery),

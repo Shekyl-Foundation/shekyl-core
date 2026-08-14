@@ -87,14 +87,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Some(Commands::DerivationFreezeSelfCheck) => run_derivation_freeze_self_check(),
+        Some(Commands::DerivationFreezeSelfCheck) => {
+            run_derivation_freeze_self_check();
+            Ok(())
+        }
         Some(Commands::Create(args)) => {
             run_scripted(&cli.repl, |rpc| commands::scripted::run_create(rpc, args))
         }
         Some(Commands::Restore(args)) => {
             run_scripted(&cli.repl, |rpc| commands::scripted::run_restore(rpc, args))
         }
-        None => run_repl(cli.repl),
+        None => run_repl(&cli.repl),
     }
 }
 
@@ -200,12 +203,9 @@ where
     Ok(())
 }
 
-fn run_derivation_freeze_self_check() -> Result<(), Box<dyn std::error::Error>> {
+fn run_derivation_freeze_self_check() {
     match shekyl_crypto_pq::address_derivation_freeze::address_derivation_manifest_self_check() {
-        Ok(()) => {
-            println!("ADDRESS_DERIVATION_V1 corpus OK");
-            Ok(())
-        }
+        Ok(()) => println!("ADDRESS_DERIVATION_V1 corpus OK"),
         Err(e) => {
             eprintln!("derivation freeze self-check failed: {e}");
             std::process::exit(1);
@@ -235,12 +235,12 @@ fn daemon_url(daemon_address: &str) -> String {
     }
 }
 
-fn run_repl(cli: ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
 
-    disclose_network_posture(&cli, true);
+    disclose_network_posture(cli, true);
 
-    let rpc = build_session(&cli)?;
+    let rpc = build_session(cli)?;
 
     let daemon_client = match daemon::DaemonClient::new(
         &cli.daemon_address,
@@ -275,5 +275,5 @@ fn run_repl(cli: ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    commands::repl(rpc, daemon_client)
+    commands::repl(rpc, daemon_client.as_ref())
 }

@@ -5,13 +5,18 @@
 
 // FFI boundary code has structural patterns that trigger clippy lints:
 // - extern "C" functions take raw pointers (not_unsafe_ptr_arg_deref)
-// - C-compatible APIs require specific cast patterns
 // - Mathematical variable names follow cryptographic notation (non_snake_case)
+//
+// The cast lints are deliberately NOT allowed here (SA-6 untrusted-cast
+// ruling): this crate sits directly on the C++ trust boundary, which is
+// exactly where the workspace `cast_possible_truncation`/`cast_sign_loss`
+// denials earn their keep. A crate-root allow silently overrode the
+// workspace manifest deny and turned every site-level `#[allow(...)]` in
+// the crate into dead documentation; lossy casts now carry a site-level
+// allow with a rationale, or use `try_from`.
 #![allow(
     clippy::not_unsafe_ptr_arg_deref,
     clippy::missing_safety_doc,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
     clippy::manual_let_else,
     clippy::ptr_as_ptr,
     non_snake_case

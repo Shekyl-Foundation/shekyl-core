@@ -20,3 +20,6 @@ repository.workspace = true
 # §18.1).
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 
+
+[lints]
+workspace = true

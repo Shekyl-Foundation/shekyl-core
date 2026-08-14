@@ -53,7 +53,9 @@ fn session_serves_over_private_uds_and_cleans_up() {
 
     let version = rpc.call("get_version", json!({})).expect("get_version");
     assert_eq!(
-        version.get("api_version").and_then(|v| v.as_i64()),
+        version
+            .get("api_version")
+            .and_then(serde_json::Value::as_i64),
         Some(i64::from(shekyl_wallet_rpc::API_VERSION)),
     );
     assert!(version.get("version").and_then(|v| v.as_str()).is_some());

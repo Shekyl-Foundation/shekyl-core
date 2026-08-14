@@ -90,7 +90,7 @@ pub fn cmd_get_reserve_proof(rpc: &RpcSession, amount: Option<u64>, message: Opt
             let total = opt_amount(&val, "total");
             let count = val
                 .get("output_count")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
             println!("Proved reserve: {total} SKL across {count} output(s)");
             println!("{proof}");
@@ -126,7 +126,10 @@ pub fn cmd_check_tx_proof(
     );
     match result {
         Ok(val) => {
-            let valid = val.get("valid").and_then(|v| v.as_bool()).unwrap_or(false);
+            let valid = val
+                .get("valid")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
             if !valid {
                 println!("BAD proof: the proof does NOT verify for this txid/address/message.");
                 return;
@@ -141,7 +144,7 @@ pub fn cmd_check_tx_proof(
                 for out in outputs {
                     let idx = out
                         .get("output_index")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                     println!("  output {idx}: {} SKL", opt_amount(out, "amount"));
                 }
@@ -168,14 +171,17 @@ pub fn cmd_check_reserve_proof(
     );
     match result {
         Ok(val) => {
-            let valid = val.get("valid").and_then(|v| v.as_bool()).unwrap_or(false);
+            let valid = val
+                .get("valid")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
             if !valid {
                 println!("BAD proof: the proof does NOT verify for this address/message.");
                 return;
             }
             let count = val
                 .get("output_count")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
             println!("Good proof ({count} output(s)).");
             println!("Total proven:  {} SKL", opt_amount(&val, "total"));
@@ -223,11 +229,11 @@ fn raw_amount(v: &Value, key: &str) -> Option<u64> {
 fn print_confirmations(val: &Value) {
     let in_pool = val
         .get("in_pool")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     if in_pool {
         println!("The transaction is in the pool (0 confirmations).");
-    } else if let Some(c) = val.get("confirmations").and_then(|v| v.as_u64()) {
+    } else if let Some(c) = val.get("confirmations").and_then(serde_json::Value::as_u64) {
         println!("Confirmations: {c}");
     }
 }

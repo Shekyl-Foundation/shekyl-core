@@ -211,6 +211,10 @@ impl RpcSession {
     }
 
     /// Perform a JSON-RPC call and return the `result` value.
+    // By-value `params` is the call-boundary contract: every command site
+    // hands ownership of its request object here; taking `&Value` would
+    // churn all of them for no behavior change.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
         let id = self.next_id.get();
         self.next_id.set(id.wrapping_add(1));
@@ -304,8 +308,8 @@ fn http_post_uds(path: &Path, body: &Value) -> Result<String, RpcError> {
     // Bound an infinite hang against an untrusted `uds://` server that accepts
     // the request but never replies (self-hosted mode is trusted; this guards
     // the external `--rpc-url uds://` path).
-    let _ = stream.set_read_timeout(Some(UDS_IO_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(UDS_IO_TIMEOUT));
+    let _set = stream.set_read_timeout(Some(UDS_IO_TIMEOUT));
+    let _set = stream.set_write_timeout(Some(UDS_IO_TIMEOUT));
 
     let request = format!(
         "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\

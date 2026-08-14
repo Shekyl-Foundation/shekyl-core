@@ -92,7 +92,10 @@ fn print_request_row(r: &Value) {
     let id = r.get("id").and_then(|v| v.as_str()).unwrap_or("?");
     let state = r.get("state").and_then(|v| v.as_str()).unwrap_or("?");
     let amount = opt_amount(r, "amount");
-    let created = r.get("created_at").and_then(|v| v.as_i64()).unwrap_or(0);
+    let created = r
+        .get("created_at")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
     // Free-form label: neutralize control chars so a crafted value cannot
     // inject terminal escape sequences.
     let label = crate::display::sanitize_for_terminal(
@@ -102,7 +105,7 @@ fn print_request_row(r: &Value) {
     if let Some(tx) = r.get("matched_tx_hash").and_then(|v| v.as_str()) {
         println!("{:<16} matched by tx {tx}", "");
     }
-    if let Some(expiry) = r.get("expiry").and_then(|v| v.as_i64()) {
+    if let Some(expiry) = r.get("expiry").and_then(serde_json::Value::as_i64) {
         println!("{:<16} expires at height {expiry}", "");
     }
 }
@@ -155,7 +158,7 @@ pub fn cmd_parse_uri(rpc: &RpcSession, uri: &str) {
             if let Some(rid) = val.get("rid").and_then(|v| v.as_str()) {
                 println!("Request: {}", safe(rid));
             }
-            if let Some(expiry) = val.get("expiry").and_then(|v| v.as_i64()) {
+            if let Some(expiry) = val.get("expiry").and_then(serde_json::Value::as_i64) {
                 println!("Expiry:  height {expiry}");
             }
         }
