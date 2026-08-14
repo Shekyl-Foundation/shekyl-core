@@ -6,10 +6,21 @@ registered as **Q12-D6a** in
 *"the most expensive measurement the arc has proposed and the only one that
 cannot be faked."*
 
-**Status: DESIGN, with Q12-R-W2 part-built (§9). No VM stood up, no arm run.**
-The seed estate now carries a current binary and four hidden services; the
-privileged install is blocked (§9.4). Ground findings below are verified at
-source and against the live estate on 2026-08-11 at pin
+**Status: the `A = 60` arm is RUN (§13, 2026-08-14) and its readout is
+committed. `A = 15` and Q12-R5's late-joiner control remain unrun.**
+
+Corrected 2026-08-14. This line previously read *"No VM stood up, no arm run"*,
+which its own body had already outgrown before §13 existed: §§10–11.13 record a
+six-host ring sampled for an hour across three providers, a 60-service
+dialability rig, and 20 hidden services restarted and polled to recovery — all
+on VMs. **A status line that disagrees with its own document is the failure
+rule 94 exists to catch**, and this one was read as current in a later session
+and used to justify a claim about what had been measured.
+
+Read §§10–12 as instrument-building and dress rehearsal, and §13 as the first
+arm. The seed estate carries a current binary and hidden services. Ground
+findings below are verified at source and against the live estate on 2026-08-11
+at pin
 [`14c2ee599`](https://github.com/Shekyl-Foundation/shekyl-core/commit/14c2ee599).
 Identifiers `Q12-R1…R7` extend the already-registered `Q12-` family (rule 94 §1;
 no new prefix is minted).
@@ -2168,3 +2179,137 @@ against the embargo argument, but whether a degree-1 *fluff* beats a degree-1
 instrument that could answer it now exists and is named:
 `simulate_fluff_return_mixed`, which takes a per-node degree vector. Settling it
 in §12.2's prose instead would be the failure Q12-D8 names.
+
+---
+
+## 13. The `A = 60` arm — RUN 2026-08-14, and the graph forms
+
+**Status: RUN. The arm's readout is in
+[`data/q12-d6a-a60-2026-08-14/series.tsv`](data/q12-d6a-a60-2026-08-14/series.tsv),
+committed with this section.** Every previous number in this document came from
+a dress rehearsal or a rig; this is the first arm.
+
+### 13.1 What was stood up
+
+| | |
+| --- | --- |
+| anon population `A` | **60** |
+| clearnet detector | **15** (fixed, Q12-R3) |
+| hosts / regions / providers | 9 / 9 / 3 |
+| binary | one artifact, `sha256 18984a08…`, on all nine hosts |
+| bootstrap | 5 seeds cross-peered; **every other node got exactly ONE seed onion** |
+
+The one-seed bootstrap is the discriminator §11.2 (Q12-R5) specifies: *"If
+gossip works it reaches 12. If only seeds matter it reaches 1 and stops."*
+
+### 13.2 The result
+
+Eight samples at ~4-minute intervals. Sample 1 is the settling sample and is
+excluded from the per-node statistics; it is kept in the series because
+excluding it silently is how a settling artifact becomes a result.
+
+| sample | min | at-or-above floor | distribution (`links × nodes`) |
+| --- | --- | --- | --- |
+| 04:26:24 | **1** | 49 | 1×1, 9×2, 10×1, 11×7, 12×49 |
+| 04:30:26 | 10 | 55 | 10×1, 11×4, 12×55 |
+| 04:34:28 | 11 | 52 | 11×8, 12×52 |
+| 04:38:30 | 11 | 49 | 11×11, 12×49 |
+| 04:42:33 | 11 | 54 | 11×6, 12×54 |
+| 04:46:35 | 9 | 56 | 9×1, 11×3, 12×56 |
+| 04:50:37 | 11 | 54 | 11×6, 12×52, 13×2 |
+| 04:54:39 | 11 | 50 | 11×10, 12×49, 13×1 |
+
+**Per node, over the seven settled samples:**
+
+| | nodes |
+| --- | --- |
+| always at or above the floor | 26 |
+| dips below and recovers | 34 |
+| **never reaches the floor** | **0** |
+
+Observation-level, 370 of 420 node-samples (**88.1 %**) at or above 12.
+
+**The single node reading `1` in the first sample is the finding, not noise.**
+That is the bootstrap-only state the control was designed to detect — one
+`add-peer`, nothing gossiped yet — and it left that state by the next sample.
+Every node reached the out-peer target. **Gossip carries the anonymity graph at
+`A = 60`; the seeds are not doing the work.**
+
+### 13.3 What the number is NOT
+
+**12 is the configured target, not merely the floor.** `tx-proxy=…,12` caps
+outbound anonymity links at 12, so the ~52 nodes sitting at 12 are *saturated*,
+not comfortably clear of the floor. The two nodes reading 13 are inbound-side
+artifacts of the same cap. A reader must not take "88 % at or above the floor"
+as headroom — the arm shows the floor is **reachable**, not that it is
+**exceeded**.
+
+**The dips are churn, and the per-node view is what says so.** A fleet total
+cannot distinguish 34 nodes each dipping once from 5 nodes permanently at 11 —
+§11.9's requirement, and it earns its keep here: the aggregate oscillates
+between 49 and 56 while **no node is ever structurally below**. Every dip
+recovers within one sample, which is §11.9's contrast between an ordinary link
+loss and a burned onion.
+
+### 13.4 The isolation control passed
+
+All 15 clearnet detector nodes read **0 anonymity links** (`END 15 0`). The
+anonymity graph did not leak into the detector set, so Q12-R10's confound —
+fleet nodes discovering each other by a route that is not the one under test —
+is excluded by measurement rather than by assumption.
+
+### 13.5 Consequence for §11.13's launch condition
+
+§11.13 composed §11.7's reachability with the below-floor rule and concluded
+that *"at `p ≈ 0.15–0.23` the floor is unreachable up to roughly `A ≈ 19`"*,
+and that on a young network **no Shekyl node anywhere stems over Tor**.
+
+**That bound is not contradicted, and this arm does not test it.** `A = 60` is
+far above 19, and the arm measures the regime where the floor *should* be
+reachable — it confirms the upper half of §11.13's own claim. The launch
+condition concerns small `A`, and the arm that would settle it is `A = 15`,
+which is still unrun.
+
+**What this arm does settle** is that the mechanism works when the population
+supports it: the graph is not held below the floor by discovery, by the failure
+cache, or by hub dependence. A failure at small `A` is therefore a population
+effect and not a broken gossip path — which is what makes the `A = 15` arm worth
+running rather than a formality.
+
+### 13.6 Three harness findings, all of which would have produced a wrong reading
+
+**Q12-R14 — startup peak is ~2× steady state, and simultaneous starts OOM.** A
+fleet instance settles at ~**274 MB** `RssAnon`, but the kernel killed one at
+**520 MB** during genesis processing. Sizing a host on steady state and starting
+every instance at once killed **exactly one daemon on each 8 GB host** at 15
+concurrent starts, and none at 11. A silently-lost instance reduces `A` — the
+independent variable — and the arm would report the smaller population's result
+under the larger population's label. Instances are now started with a stagger
+(`run_arm.sh`), and the phase verifies `alive == want` before continuing.
+
+**Q12-R7 reproduced, from the other direction.** The first build of this arm
+defaulted to `ARCH=native` on the dev box and emitted AVX-512; six of the nine
+hosts lack it. §9.1 records this exact failure, and the default reintroduced it
+the moment a build was made outside the recorded recipe. A rule written in prose
+did not survive contact with `cmake -B build`; the portable flags now live in
+the container recipe beside the binary they produce.
+
+**The tor expert bundle carries its own libraries.** `tor` ships beside
+`libevent-2.1.so.7`, `libssl.so.3` and `libcrypto.so.3` and will not start
+without `LD_LIBRARY_PATH` pointing into the bundle — and the bundle sits at
+`/home/shekyl/...` on some hosts and `/opt/shekyl/...` on others. Resolved on
+the host rather than assumed.
+
+### 13.7 Still owed
+
+- **The `A = 15` arm**, which is the one §11.13's launch condition turns on.
+- **Q12-R5's late-joiner control**, both variants — one new node pointed at a
+  *seed* and one pointed at an *ordinary node*. The difference prices how much
+  of discovery is hub-mediated, and this arm's one-seed bootstrap makes the
+  comparison meaningful rather than notional.
+- **A degree distribution for `fluff_return_ms`.** This arm's series is a
+  distribution at `A = 60`, but it is degree-at-target (the cap binds), so it
+  raises `F′` by nothing: `DAEMON_RELAY_PRIVACY.md` §90.3 shows the conservative
+  topology is uniform-at-the-floor, and a population sitting at the cap is
+  exactly that. **3500 ms stands as the lower bound, now with a measured
+  population behind the assumption it rested on.**
