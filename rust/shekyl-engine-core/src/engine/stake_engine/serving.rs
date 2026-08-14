@@ -47,26 +47,6 @@
 //! question — "is the wallet caught up" — and comparing the wallet's ingest to
 //! the chain is exactly what that means.)
 //!
-//! # What is still missing, and why it is not guessed here
-//!
-//! [`PersonaServingHost::start`] needs a `TorServiceConfig`: a
-//! `TorBinarySource`, a `DataDirectory` path, and a `SupervisorPolicy`. **The
-//! wallet has no configuration surface for any of them** — nothing in
-//! `shekyl-engine-core`, `shekyl-wallet-rpc` or `shekyl-engine-prefs` names one
-//! — so this module builds the lifecycle and stops at the point where it would
-//! have to invent that surface.
-//!
-//! That is a named blocker rather than a deferral (rule 22), and the reason it
-//! is not a small gap: the data directory is constrained by **DQ-T0.7**, which
-//! ruled it **persistent** (the dir carries the entry-guard identity, and
-//! per-session rotation is itself a deviation-from-defaults signature) and
-//! requires a "wallet-adjacent, wallet-controlled, non-world-writable
-//! placement". The binary source is constrained by rule 17's reuse-don't-own
-//! ruling — a hash-pinned Tor Expert Bundle, with a release-checklist
-//! obligation attached. Both are operator-visible decisions with a threat-model
-//! basis; picking a path here would be inventing an answer to a question this
-//! slice was not asked.
-//!
 //! # 3. Every condition reports through OA-1, and one of them is terminal
 //!
 //! [`Staleness`] and the pin report are projected onto the operator alarm board.
@@ -76,12 +56,6 @@
 //! need durable acknowledgment, because it re-derives at every start more
 //! loudly than an alarm: `PinnedServeSet::acquire` refuses outright, so the
 //! host does not start at all.
-
-// Inert until the wallet gains a Tor configuration surface — see the
-// "What is still missing" section above. Everything here is exercised by this
-// module's tests; what has no caller is the *production* construction, because
-// `TorServiceConfig` has no wallet-side home yet.
-#![allow(dead_code)]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -115,6 +89,23 @@ pub(crate) const STALENESS_BOUND_REFRESHES: u64 = 10;
 /// depth is the natural unit — below it the wallet is inside the window the
 /// chain itself treats as unsettled.
 pub(crate) const CAUGHT_UP_SLACK_BLOCKS: u64 = 64;
+
+/// Virtual port the persona's onion publishes — the port a witness dials.
+///
+/// 80 because it is the onion-service convention and carries no information: a
+/// non-default port is a per-operator distinguisher on an address whose whole
+/// purpose is to be indistinguishable. Not a setting, for that reason.
+pub(crate) const SERVING_VIRTUAL_PORT: u16 = 80;
+
+/// Per-rendezvous-circuit stream cap. **Carried placeholder (SPIKE-PIN-1), not
+/// a derivation** — the W₂ rig chooses it, and the value here is the one the
+/// composition tests already use. Named rather than inlined so the rig's answer
+/// lands in one place.
+pub(crate) const SERVING_MAX_STREAMS: u16 = 8;
+
+/// Timeout for the claim-source round trip the serve-set is derived from.
+/// Matches the loopback claim transport the regtest composition builds.
+pub(crate) const CLAIM_SOURCE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Serving lifecycle settings. Parameterized rather than hardcoded so tests can
 /// collapse the standoff and the cadence; production takes
@@ -457,7 +448,7 @@ mod tests {
 /// accrue misses and end in a slash, and the operator cannot see it happening.
 /// Opening with serving dark is opening into an accruing loss.
 #[derive(Debug)]
-pub(crate) enum TorConfigError {
+pub enum TorConfigError {
     /// The derived `<P>.tor/` directory could not be created.
     DataDirUnusable {
         /// The path that could not be established.
@@ -521,7 +512,7 @@ impl std::error::Error for TorConfigError {
 /// operator holds information the wallet cannot.
 ///
 /// 1. **`data_dir` is derived, never configured** —
-///    [`tor_data_dir_from`](shekyl_engine_prefs::paths::tor_data_dir_from)
+///    [`tor_data_dir_from`](shekyl_engine_file::paths::tor_data_dir_from)
 ///    gives DQ-T0.7's three placement requirements by construction, and
 ///    forecloses the cross-wallet guard linkage a shared directory would create.
 /// 2. **`binary` is discovery by default**, with one override
@@ -564,7 +555,7 @@ pub(crate) fn tor_service_config(
     wallet_state_path: &std::path::Path,
     device: &shekyl_engine_prefs::DevicePrefs,
 ) -> Result<TorServiceConfig, TorConfigError> {
-    let data_dir = shekyl_engine_prefs::paths::tor_data_dir_from(wallet_state_path);
+    let data_dir = shekyl_engine_file::paths::tor_data_dir_from(wallet_state_path);
     establish_data_dir(&data_dir)?;
 
     Ok(TorServiceConfig {
@@ -678,11 +669,11 @@ mod tor_config_tests {
     }
 
     #[test]
-    fn the_data_dir_is_derived_from_the_wallet_stem_and_created() {
+    fn the_data_dir_is_derived_from_the_wallet_path_and_created() {
         let tmp = tempfile::tempdir().expect("tmp");
         let wallet = tmp.path().join("alice.wallet");
         let cfg = tor_service_config(&wallet, &device("")).expect("config");
-        assert_eq!(cfg.data_dir, tmp.path().join("alice.tor"));
+        assert_eq!(cfg.data_dir, tmp.path().join("alice.wallet.tor"));
         assert!(
             cfg.data_dir.is_dir(),
             "the directory is established at open"
@@ -750,7 +741,7 @@ mod tor_config_tests {
         use std::os::unix::fs::PermissionsExt as _;
         let tmp = tempfile::tempdir().expect("tmp");
         let wallet = tmp.path().join("loose.wallet");
-        let dir = tmp.path().join("loose.tor");
+        let dir = tmp.path().join("loose.wallet.tor");
         std::fs::create_dir(&dir).expect("mkdir");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).expect("chmod");
 
@@ -777,9 +768,187 @@ mod tor_config_tests {
     fn a_private_directory_is_accepted() {
         use std::os::unix::fs::PermissionsExt as _;
         let tmp = tempfile::tempdir().expect("tmp");
-        let dir = tmp.path().join("tight.tor");
+        let dir = tmp.path().join("tight.wallet.tor");
         std::fs::create_dir(&dir).expect("mkdir");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod");
         assert!(tor_service_config(&tmp.path().join("tight.wallet"), &device("")).is_ok());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The construction site
+// ---------------------------------------------------------------------------
+
+/// Why a staker's serving host could not be started.
+#[derive(Debug)]
+pub enum ServingStartError {
+    /// No stake engine is resident.
+    NoStakeEngine,
+    /// `staking_enabled` with no resident actor — the mid-session bond-watch
+    /// recovery state. Names the reopen remedy rather than reporting a generic
+    /// "not a staker" over a wallet that just recovered its staking history
+    /// (rule 82), mirroring `PScanStartError::RecoveredPendingReopen`.
+    RecoveredPendingReopen,
+    /// The wallet's Tor configuration could not be established.
+    TorConfig(TorConfigError),
+    /// The persona's serving identity could not be read from the stake engine.
+    Identity(String),
+    /// The daemon this wallet talks to is not on loopback, so there is no
+    /// persona-isolated transport to derive the serve-set over.
+    ///
+    /// Serving currently requires an **own node** — which is the documented
+    /// privacy default (SP-T2: "run-your-own-node is the privacy default"), and
+    /// the ② remote posture that would lift this is the unbuilt 2c
+    /// config-source slice. Refused loudly with the remedy named rather than
+    /// silently serving a set derived over the principal's shared connection.
+    DaemonNotLoopback {
+        /// What the transport refused, for the operator-facing message.
+        detail: String,
+    },
+}
+
+impl std::fmt::Display for ServingStartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoStakeEngine => write!(f, "this wallet is not staking"),
+            Self::RecoveredPendingReopen => write!(
+                f,
+                "this wallet recovered staking history this session; reopen it to start serving"
+            ),
+            Self::TorConfig(e) => write!(f, "the wallet's Tor configuration is unusable: {e}"),
+            Self::Identity(e) => write!(f, "the persona's serving identity is unavailable: {e}"),
+            Self::DaemonNotLoopback { detail } => write!(
+                f,
+                "serving derives its shard set over a persona-isolated transport, which \
+                 currently requires your own node on loopback; this wallet's daemon was \
+                 refused: {detail}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ServingStartError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TorConfig(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+// Same Engine-trait privacy posture as `start_pscan_with`: the engine traits are
+// `pub(crate)` and the entry point is re-exported for the embedder, exactly as
+// `PScanHandle`'s is.
+#[allow(private_bounds)]
+impl<S, D, L, E, R, P> crate::engine::Engine<S, D, L, E, R, P, shekyl_engine_file::WalletFile>
+where
+    S: crate::engine::EngineSignerKind + Send + Sync + 'static,
+    D: crate::engine::traits::DaemonEngine,
+    L: crate::engine::traits::LedgerEngine,
+    E: crate::engine::traits::EconomicsEngine,
+    R: crate::engine::traits::RefreshEngine,
+    P: crate::engine::traits::PendingTxEngine,
+    Self: Send + Sync,
+{
+    /// Start the persona serving host **iff this wallet is a staker with an
+    /// active persona** — the lifecycle auto-start, sibling to
+    /// [`start_pscan_if_staker`](Self::start_pscan_if_staker).
+    ///
+    /// Returns `Ok(None)` for a non-staker, and for a staker with no *active*
+    /// persona: there is nothing to serve until one is activated, and
+    /// first-stake mid-session already collapses onto reopen under Model D, so
+    /// the serving start follows the same rule rather than inventing a
+    /// mid-session activation hook.
+    ///
+    /// The returned [`ServingHandle`] is **embedder-held** for the wallet's open
+    /// lifetime, exactly as `PScanHandle` is, and shutting it down is what
+    /// unpublishes the onion in the right order.
+    ///
+    /// # The daemon endpoint is the caller's
+    ///
+    /// The serve-set is derived over a persona-isolated transport, and the
+    /// wallet's daemon address lives with the embedder rather than on the
+    /// `Engine` — the same shape `submit_emission_claim` already uses for the
+    /// claim path. The caller passes the address it already holds; this method
+    /// builds the ① local-posture transport from it and refuses anything that
+    /// is not loopback.
+    ///
+    /// # Errors
+    ///
+    /// [`ServingStartError`] — see its variants. Every arm is fail-closed at
+    /// open: a staker that cannot serve accrues misses toward a slash, and the
+    /// operator cannot see it happening.
+    pub async fn start_serving_if_staker(
+        self_arc: std::sync::Arc<tokio::sync::RwLock<Self>>,
+        daemon_address: &str,
+    ) -> Result<Option<ServingHandle>, ServingStartError> {
+        // Brief read borrow: clone the spawn inputs, exactly as `spawn_pscan` does.
+        let (stake, curve_tree, tor) = {
+            let g = self_arc.read().await;
+            let stake = match g.stake_handle() {
+                Some(stake) => stake,
+                None if g.ledger.staking_enabled() => {
+                    return Err(ServingStartError::RecoveredPendingReopen)
+                }
+                None => return Ok(None),
+            };
+            let tor = tor_service_config(g.persistence().base_path(), &g.prefs().device)
+                .map_err(ServingStartError::TorConfig)?;
+            (stake, g.curve_tree.clone(), tor)
+        };
+
+        let Some(active) = stake
+            .active_persona()
+            .await
+            .map_err(|e| ServingStartError::Identity(e.to_string()))?
+        else {
+            // A staker with no active persona has nothing to serve yet.
+            return Ok(None);
+        };
+
+        let identity = stake
+            .persona_onion_identity(active.p_slot)
+            .await
+            .map_err(|e| ServingStartError::Identity(e.to_string()))?;
+        let p_id = shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey(
+            &active
+                .bond_id
+                .to_canonical_bytes()
+                .map_err(|e| ServingStartError::Identity(e.to_string()))?,
+        );
+
+        // ① local posture. `LocalNodeRpc` refuses a non-loopback URL by
+        // construction, so the refusal below is the type's, not a check here.
+        let claim_rpc =
+            crate::engine::prpc::LocalNodeRpc::new(daemon_address.to_owned(), CLAIM_SOURCE_TIMEOUT)
+                .await
+                .map_err(|e| ServingStartError::DaemonNotLoopback {
+                    detail: e.to_string(),
+                })?;
+
+        let pinner = super::serve_set_source::EngineServeSetPinner::new(
+            curve_tree,
+            claim_rpc,
+            p_id.to_bytes(),
+        );
+
+        Ok(Some(spawn_serving_task(
+            tor,
+            PersonaServing {
+                identity,
+                virtual_port: SERVING_VIRTUAL_PORT,
+                max_streams: SERVING_MAX_STREAMS,
+            },
+            pinner,
+            std::sync::Arc::new(shekyl_operator_alarm::OperatorAlarms::new()),
+            ServingConfig::production(
+                crate::engine::pscan::start::DEFAULT_PSCAN_CADENCE,
+                // Single-sourced from the same place the submit driver's
+                // watchdog horizon comes from, rather than taken as an
+                // embedder argument: the block target is a consensus
+                // parameter, not a wallet setting.
+                shekyl_economics::EconomicParams::default().daa_target_seconds,
+            ),
+        )))
     }
 }

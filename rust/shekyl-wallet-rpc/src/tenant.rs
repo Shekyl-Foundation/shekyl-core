@@ -25,7 +25,7 @@
 //! Multi-tenant `--wallet-dir` exchanges extend this seam later
 //! (`WALLET_REWRITE_PLAN.md`).
 
-use shekyl_engine_core::{Engine, PScanHandle, SoloSigner};
+use shekyl_engine_core::{Engine, PScanHandle, ServingHandle, SoloSigner};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -34,6 +34,45 @@ use crate::error::WalletRpcError;
 
 /// Shared handle to the open Engine (read/write under the inner lock).
 pub type SharedEngine = Arc<RwLock<Engine<SoloSigner>>>;
+
+/// The background tasks an open wallet owns.
+///
+/// Bundled rather than carried as separate positional handles: they have one
+/// lifetime (the wallet's open span), they are created together and torn down
+/// together, and every lifecycle signature that carries one carries all of
+/// them. A third task — and there will be one — then costs a field here rather
+/// than another parameter on `set_open` / `take_open` / `restore_open` and
+/// every call site of each.
+///
+/// Both are `None` for a non-staker.
+#[derive(Default)]
+pub struct OpenTasks {
+    /// The driving P-scan task (WI-1).
+    pub pscan: Option<PScanHandle>,
+    /// The persona serving lifecycle (SH-2b-2): the §10.9 launch standoff, the
+    /// serve-set refresh cadence, and the ordered teardown that stops tor
+    /// before its listener.
+    pub serving: Option<ServingHandle>,
+}
+
+impl OpenTasks {
+    /// Wind both tasks down, awaiting each.
+    ///
+    /// **Serving first.** Stopping the advertisement before stopping the scan
+    /// is the right order for the same reason the host stops tor before its
+    /// listener: a published descriptor must never outlive the ability to
+    /// answer at it. The P-scan then winds down and releases its clone of the
+    /// engine arc, which is what makes the close path's `Arc::try_unwrap`
+    /// possible.
+    pub async fn shutdown(self) {
+        if let Some(serving) = self.serving {
+            serving.shutdown().await;
+        }
+        if let Some(pscan) = self.pscan {
+            pscan.shutdown().await;
+        }
+    }
+}
 
 /// One wallet-bearing tenant inside the RPC process.
 ///
@@ -59,7 +98,7 @@ pub struct Tenant {
     /// use." The handle is carried atomically with the engine through
     /// [`take_open`](Self::take_open) / [`restore_open`](Self::restore_open) so
     /// no lifecycle transition can strand one without the other.
-    pscan: Option<PScanHandle>,
+    tasks: OpenTasks,
     /// True while `create_wallet` / `open_wallet` is doing slow work
     /// (daemon connect, Argon2) *outside* the tenant mutex. Prevents a
     /// concurrent create/open from racing past `is_open` while the first
@@ -129,12 +168,7 @@ impl Tenant {
     ///
     /// Panics if a wallet is already open — callers must check
     /// [`Self::is_open`] and return `-29000` first.
-    pub fn set_open(
-        &mut self,
-        name: impl Into<String>,
-        engine: SharedEngine,
-        pscan: Option<PScanHandle>,
-    ) {
+    pub fn set_open(&mut self, name: impl Into<String>, engine: SharedEngine, tasks: OpenTasks) {
         assert!(
             self.engine.is_none(),
             "set_open called while a wallet is already open"
@@ -143,7 +177,7 @@ impl Tenant {
         self.closing = false;
         self.open_name = Some(name.into());
         self.engine = Some(engine);
-        self.pscan = pscan;
+        self.tasks = tasks;
     }
 
     /// Take the open engine (for [`Engine::close`]), clearing the tenant slot.
@@ -167,13 +201,13 @@ impl Tenant {
     /// clones still exist afterward (e.g. an in-flight refresh), the caller must
     /// [`restore_open`](Self::restore_open) all three — name, engine, and P-scan
     /// handle — and fail loud rather than evicting the still-live wallet.
-    pub fn take_open(&mut self) -> Option<(String, SharedEngine, Option<PScanHandle>)> {
+    pub fn take_open(&mut self) -> Option<(String, SharedEngine, OpenTasks)> {
         match (self.open_name.take(), self.engine.take()) {
             (Some(name), Some(engine)) => {
                 self.closing = true;
                 // The P-scan handle rides out with the engine so the two never
                 // separate across a lifecycle transition.
-                Some((name, engine, self.pscan.take()))
+                Some((name, engine, std::mem::take(&mut self.tasks)))
             }
             (None, None) => None,
             (name, engine) => {
@@ -205,7 +239,7 @@ impl Tenant {
     ///
     /// Panics if a wallet is already open — the slot must be empty, which it is
     /// on the close path that just called `take_open`.
-    pub fn restore_open(&mut self, name: String, engine: SharedEngine, pscan: Option<PScanHandle>) {
+    pub fn restore_open(&mut self, name: String, engine: SharedEngine, tasks: OpenTasks) {
         assert!(
             self.engine.is_none(),
             "restore_open called while a wallet is already open"
@@ -213,7 +247,7 @@ impl Tenant {
         self.closing = false;
         self.open_name = Some(name);
         self.engine = Some(engine);
-        self.pscan = pscan;
+        self.tasks = tasks;
     }
 
     /// Clear the in-flight close reservation after the engine has been
@@ -233,7 +267,7 @@ impl Tenant {
     /// WI-1 lifecycle test asserting a staker open parks a handle (the
     /// behavioral check that survives `pub`).
     pub(crate) fn has_pscan(&self) -> bool {
-        self.pscan.is_some()
+        self.tasks.pscan.is_some()
     }
 }
 
@@ -242,7 +276,11 @@ impl std::fmt::Debug for Tenant {
         f.debug_struct("Tenant")
             .field("open_name", &self.open_name)
             .field("engine", &self.engine.as_ref().map(|_| "<engine>"))
-            .field("pscan", &self.pscan.as_ref().map(|_| "<pscan-task>"))
+            .field("pscan", &self.tasks.pscan.as_ref().map(|_| "<pscan-task>"))
+            .field(
+                "serving",
+                &self.tasks.serving.as_ref().map(|_| "<serving-task>"),
+            )
             .field("opening", &self.opening)
             .field("closing", &self.closing)
             .finish()

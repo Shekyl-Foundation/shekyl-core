@@ -23,7 +23,7 @@ use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES}
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     Capability, CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network,
-    OpenedEngine, PScanHandle, SoloSigner,
+    OpenedEngine, SoloSigner,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
@@ -34,7 +34,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_required_object, require_empty_object};
-use crate::tenant::{require_open_engine, DaemonEndpoint, SharedEngine, TenantState};
+use crate::tenant::{require_open_engine, DaemonEndpoint, OpenTasks, SharedEngine, TenantState};
 use crate::types::{capability_mode_str, WalletHandle};
 
 /// Params for `create_wallet`.
@@ -122,14 +122,14 @@ pub(crate) async fn create_wallet(
     // A freshly created wallet is a non-staker (no bond record), so
     // `start_pscan_if_staker` parks `None` here; the call is unconditional so
     // the embedder never branches on staking state (`81-no-protocol-knowledge`).
-    let (shared, pscan) = match wrap_and_start_pscan(engine).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon.address).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
             return Err(e);
         }
     };
-    tenants.lock().await.tenant.set_open(p.name, shared, pscan);
+    tenants.lock().await.tenant.set_open(p.name, shared, tasks);
 
     let mut result = json!({ "wallet": handle });
     match backup {
@@ -258,14 +258,14 @@ pub(crate) async fn restore_wallet(
 
     let restore_hint = (restore_height > 0).then_some(i64::from(restore_height));
     let handle = wallet_handle(&p.name, &engine, restore_hint);
-    let (shared, pscan) = match wrap_and_start_pscan(engine).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon.address).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
             return Err(e);
         }
     };
-    tenants.lock().await.tenant.set_open(p.name, shared, pscan);
+    tenants.lock().await.tenant.set_open(p.name, shared, tasks);
 
     // No seed backup in the result: the caller supplied the mnemonic.
     Ok(json!({ "wallet": handle }))
@@ -385,14 +385,14 @@ pub(crate) async fn open_wallet(
     // Auto-start the P-scan task for a staker (WI-1); a non-staker parks `None`.
     // A corrupt sealed P-scan state fails the open closed (see
     // `wrap_and_start_pscan`).
-    let (shared, pscan) = match wrap_and_start_pscan(engine).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon.address).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
             return Err(e);
         }
     };
-    tenants.lock().await.tenant.set_open(p.name, shared, pscan);
+    tenants.lock().await.tenant.set_open(p.name, shared, tasks);
     Ok(json!({ "wallet": handle }))
 }
 
@@ -445,8 +445,9 @@ async fn take_and_close_tenant(
     tenants: &tokio::sync::Mutex<TenantState>,
     expected_name: Option<&str>,
 ) -> Result<String, WalletRpcError> {
-    let (name, shared, pscan) = {
+    let (name, shared, tasks, daemon_address) = {
         let mut state = tenants.lock().await;
+        let daemon_address = state.daemon.address.clone();
         if let Some(expected) = expected_name {
             // Same mutex hold as `take_open`: check-then-take is atomic.
             if state.tenant.open_name() != Some(expected) {
@@ -457,23 +458,22 @@ async fn take_and_close_tenant(
                 ));
             }
         }
-        state
+        let (name, shared, tasks) = state
             .tenant
             .take_open()
-            .ok_or(WalletRpcError::WalletNotOpen)?
+            .ok_or(WalletRpcError::WalletNotOpen)?;
+        (name, shared, tasks, daemon_address)
     };
-    if let Some(handle) = pscan {
-        handle.shutdown().await;
-    }
+    tasks.shutdown().await;
     let lock = match Arc::try_unwrap(shared) {
         Ok(lock) => lock,
         Err(shared) => {
-            let pscan = restart_pscan(&shared).await;
+            let tasks = restart_tasks(&shared, &daemon_address).await;
             tenants
                 .lock()
                 .await
                 .tenant
-                .restore_open(name, shared, pscan);
+                .restore_open(name, shared, tasks);
             return Err(WalletRpcError::InternalError(
                 "cannot close: wallet engine still in use by another task".into(),
             ));
@@ -482,8 +482,8 @@ async fn take_and_close_tenant(
     let engine = lock.into_inner();
     if let Err(e) = tokio::task::block_in_place(|| engine.persist_for_close()) {
         let shared: SharedEngine = Arc::new(RwLock::new(engine));
-        let pscan = restart_pscan(&shared).await;
-        tenants.lock().await.tenant.set_open(name, shared, pscan);
+        let tasks = restart_tasks(&shared, &daemon_address).await;
+        tenants.lock().await.tenant.set_open(name, shared, tasks);
         return Err(WalletRpcError::from(e));
     }
     drop(engine);
@@ -642,9 +642,10 @@ pub(crate) async fn make_daemon(daemon: &DaemonEndpoint) -> Result<DaemonClient,
 /// (`PScanStartError::LoadFailed` → the caller aborts the open): a staker must
 /// not open into a state where its firewall scan is silently not running
 /// (`00-mission` priority 2 — privacy is not a degraded mode).
-async fn wrap_and_start_pscan(
+async fn wrap_and_start_tasks(
     engine: Engine<SoloSigner>,
-) -> Result<(SharedEngine, Option<PScanHandle>), WalletRpcError> {
+    daemon_address: &str,
+) -> Result<(SharedEngine, OpenTasks), WalletRpcError> {
     let shared: SharedEngine = Arc::new(RwLock::new(engine));
     let pscan = match Engine::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
@@ -661,7 +662,26 @@ async fn wrap_and_start_pscan(
             return Err(e.into());
         }
     };
-    Ok((shared, pscan))
+
+    // SH-2b-2: the serving lifecycle, spawned beside the P-scan and parked with
+    // it. Fail-closed for the same reason (`00-mission` priority 2, and §9.6
+    // item 4): a staker that cannot serve accrues misses toward a slash, and
+    // the operator cannot see it happening — so a staker whose serving path
+    // will not configure does not open. The task itself does not publish
+    // immediately; it waits the gate-6 §10.9 launch standoff first, precisely
+    // so the onion does not reanimate in lockstep with this open.
+    let serving = match Engine::start_serving_if_staker(shared.clone(), daemon_address).await {
+        Ok(handle) => handle,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "a staker's serving host could not be started; aborting the open \
+                 (fail-closed — holdings that are not served accrue misses toward a slash)"
+            );
+            return Err(WalletRpcError::InternalError(e.to_string()));
+        }
+    };
+    Ok((shared, OpenTasks { pscan, serving }))
 }
 
 /// Params for `stake` (the wallet-level first-stake entry,
@@ -908,13 +928,13 @@ async fn reopen_with_first_stake_intent(
             let restored = async {
                 let pw = Zeroizing::new(password.as_slice().to_vec());
                 let (engine, _hint) = open_wallet_engine(&base, network, &endpoint, pw).await?;
-                wrap_and_start_pscan(engine).await
+                wrap_and_start_tasks(engine, &endpoint.address).await
             }
             .await;
             let mut state = tenants.lock().await;
             match restored {
-                Ok((shared, pscan)) => {
-                    state.tenant.set_open(expected_name, shared, pscan);
+                Ok((shared, tasks)) => {
+                    state.tenant.set_open(expected_name, shared, tasks);
                     tracing::warn!(
                         error = %e,
                         "first-stake intent reopen failed; the wallet was restored open \
@@ -950,11 +970,28 @@ async fn reopen_with_first_stake_intent(
     let shared: SharedEngine = Arc::new(RwLock::new(engine));
     match Engine::start_pscan(shared.clone()).await {
         Ok(handle) => {
-            tenants
-                .lock()
+            // The scan is the fail-closed one on this path (above); serving is
+            // best-effort here because a serving failure must not block the
+            // stake the operator is in the middle of. It re-arms on the next
+            // open like any other.
+            let serving = Engine::start_serving_if_staker(shared.clone(), &endpoint.address)
                 .await
-                .tenant
-                .set_open(name, shared.clone(), Some(handle));
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "first-stake intent reopen: the serving host did not start; the \
+                         next open re-attempts it"
+                    );
+                    None
+                });
+            tenants.lock().await.tenant.set_open(
+                name,
+                shared.clone(),
+                OpenTasks {
+                    pscan: Some(handle),
+                    serving,
+                },
+            );
             Ok(shared)
         }
         Err(e) => {
@@ -963,7 +1000,11 @@ async fn reopen_with_first_stake_intent(
                 "first-stake intent reopen: on-demand P-scan failed to start; the next \
                  stake retry will reopen and re-attempt it"
             );
-            tenants.lock().await.tenant.set_open(name, shared, None);
+            tenants
+                .lock()
+                .await
+                .tenant
+                .set_open(name, shared, OpenTasks::default());
             Err(WalletRpcError::InternalError(format!(
                 "stake: persona scan failed to start ({e}); wallet remains open — retry"
             )))
@@ -979,8 +1020,8 @@ async fn reopen_with_first_stake_intent(
 /// dark-scan window lasts only until the next successful close / reopen (the
 /// `stake` entry also self-heals it: a resident actor with no parked scan
 /// takes the intent reopen, which re-arms the scan).
-async fn restart_pscan(shared: &SharedEngine) -> Option<PScanHandle> {
-    match Engine::start_pscan_if_staker(shared.clone()).await {
+async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks {
+    let pscan = match Engine::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
             tracing::warn!(
@@ -991,7 +1032,25 @@ async fn restart_pscan(shared: &SharedEngine) -> Option<PScanHandle> {
             );
             None
         }
-    }
+    };
+    // Re-arming serving is *not* fail-closed here, unlike at open. The wallet
+    // is already open and staying open — refusing would leave it in a state
+    // with no close path — so this degrades with a warning exactly as the
+    // P-scan re-arm above does. A fresh standoff is drawn either way, so the
+    // re-armed host does not republish in lockstep with the failed close.
+    let serving = match Engine::start_serving_if_staker(shared.clone(), daemon_address).await {
+        Ok(handle) => handle,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "failed to re-arm the serving host while restoring an open wallet after a \
+                 non-completing close; the wallet stays open but this persona is not \
+                 serving until the next close/reopen"
+            );
+            None
+        }
+    };
+    OpenTasks { pscan, serving }
 }
 
 #[cfg(test)]
