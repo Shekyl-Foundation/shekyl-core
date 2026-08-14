@@ -72,8 +72,9 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # `--toggle-collect=*::__gungraun_wrapper_mod::*`, which records
 # `instructions=0` when that wrapper is inlined (see
 # `docs/investigation/2026-05-09-bench-baseline-flake.md`). Needs
-# Valgrind headers at compile time (`/usr/include/valgrind`); clippy
-# `--all-targets` therefore installs `valgrind` in CI.
+# Valgrind headers at compile time (`/usr/include/valgrind`) and
+# libclang (bindgen of `valgrind-requests`). clippy `--all-targets`
+# therefore installs `valgrind` + `libclang-dev` + `clang` in CI.
 gungraun = { version = "0.19", features = ["client_requests"] }
 
 # Used only by `benches/balance.rs` — the canonical `BalanceSummary::compute`

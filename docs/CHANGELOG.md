@@ -253,6 +253,15 @@
 
 ### Fixed
 
+- **`ci/gh-actions/rust` clippy compiles `ledger_iai` again after
+  the client-request change.** `gungraun`'s `client_requests` feature
+  pulls `valgrind-requests`, whose bindgen step needs `libclang.so`.
+  The rust gate runs in a bare `ubuntu:24.04` container that had
+  Valgrind headers but not libclang; `ci/benchmarks` stayed green
+  because GitHub's hosted image already ships clang. Still gungraun
+  — no harness swap. The container now installs `libclang-dev` and
+  `clang`.
+
 - **`ci/benchmarks` capture no longer dies on `ledger_iai`
   `instructions=0`.** The six postcard cells were one-liners under
   gungraun's default `--toggle-collect=*::__gungraun_wrapper_mod::*`;
