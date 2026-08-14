@@ -26,6 +26,9 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use shekyl_curve_io::*;
+use shekyl_portable_storage::{
+    load_from_binary, store_to_binary, Array, Limits, Section, Value as StorageValue,
+};
 // Number of blocks the fee estimate will be valid for
 // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c
 //   /src/wallet/wallet2.cpp#L121
@@ -518,192 +521,31 @@ pub trait Rpc: Sync + Clone {
         hash: [u8; 32],
     ) -> impl Send + Future<Output = Result<Vec<u64>, RpcError>> {
         async move {
-            // Given the immaturity of Rust epee libraries, this is a homegrown one which is only
-            // validated to work against this specific function
-
-            // Header for EPEE, an 8-byte magic and a version
-            const EPEE_HEADER: &[u8] = b"\x01\x11\x01\x01\x01\x01\x02\x01\x01";
-
-            // Read an EPEE VarInt, distinct from the VarInts used throughout the rest of the protocol
-            fn read_epee_vi<R: io::Read>(reader: &mut R) -> io::Result<u64> {
-                let vi_start = read_byte(reader)?;
-                let len = match vi_start & 0b11 {
-                    0 => 1,
-                    1 => 2,
-                    2 => 4,
-                    3 => 8,
-                    _ => unreachable!(),
-                };
-                let mut vi = u64::from(vi_start >> 2);
-                for i in 1..len {
-                    vi |= u64::from(read_byte(reader)?) << (((i - 1) * 8) + 6);
-                }
-                Ok(vi)
-            }
-
-            let mut request = EPEE_HEADER.to_vec();
-            // Number of fields (shifted over 2 bits as the 2 LSBs are reserved for metadata)
-            request.push(1 << 2);
-            // Length of field name
-            request.push(4);
-            // Field name
-            request.extend(b"txid");
-            // Type of field
-            request.push(10);
-            // Length of string, since this byte array is technically a string
-            request.push(32 << 2);
-            // The "string"
-            request.extend(hash);
+            let mut root = Section::new();
+            root.insert("txid", StorageValue::Bytes(hash.to_vec()));
+            let request =
+                store_to_binary(&root).map_err(|e| RpcError::InternalError(e.to_string()))?;
 
             let indexes_buf = self.bin_call("get_o_indexes.bin", request).await?;
-            let mut indexes = indexes_buf.as_slice();
+            let decoded = load_from_binary(&indexes_buf, Limits::HTTP_BIN)
+                .map_err(|e| RpcError::InvalidNode(format!("invalid binary response: {e}")))?;
 
-            (|| {
-                let mut res = None;
-                let mut has_status = false;
-
-                if read_bytes::<_, { EPEE_HEADER.len() }>(&mut indexes)? != EPEE_HEADER {
-                    Err(io::Error::other("invalid header"))?;
+            match decoded.get("status") {
+                Some(StorageValue::Bytes(status)) if status.as_slice() == b"OK" => {}
+                _ => {
+                    return Err(RpcError::InvalidNode(
+                        "invalid binary response: missing or non-OK status".into(),
+                    ));
                 }
+            }
 
-                let read_object = |reader: &mut &[u8]| -> io::Result<Vec<u64>> {
-                    // Read the amount of fields
-                    let fields = read_byte(reader)? >> 2;
-
-                    for _ in 0..fields {
-                        // Read the length of the field's name
-                        let name_len = read_byte(reader)?;
-                        // Read the name of the field
-                        let name = read_raw_vec(read_byte, name_len.into(), reader)?;
-
-                        let type_with_array_flag = read_byte(reader)?;
-                        // The type of this field, without the potentially set array flag
-                        let kind = type_with_array_flag & (!0x80);
-                        let has_array_flag = type_with_array_flag != kind;
-
-                        // Read this many instances of the field
-                        let iters = if has_array_flag {
-                            read_epee_vi(reader)?
-                        } else {
-                            1
-                        };
-
-                        // Check the field type
-                        {
-                            #[allow(clippy::match_same_arms)]
-                            let (expected_type, expected_array_flag) = match name.as_slice() {
-                                b"o_indexes" => (5, true),
-                                b"status" => (10, false),
-                                b"untrusted" => (11, false),
-                                b"credits" => (5, false),
-                                b"top_hash" => (10, false),
-                                // On-purposely prints name as a byte vector to prevent printing arbitrary strings
-                                // This is a self-describing format so we don't have to error here, yet we don't
-                                // claim this to be a complete deserialization function
-                                // To ensure it works for this specific use case, it's best to ensure it's limited
-                                // to this specific use case (ensuring we have less variables to deal with)
-                                _ => Err(io::Error::other(format!(
-                                    "unrecognized field in get_o_indexes: {name:?}"
-                                )))?,
-                            };
-                            if (expected_type != kind) || (expected_array_flag != has_array_flag) {
-                                let fmt_array_bool =
-                                    |array_bool| if array_bool { "array" } else { "not array" };
-                                Err(io::Error::other(format!(
-                                    "field {name:?} was {kind} ({}), expected {expected_type} ({})",
-                                    fmt_array_bool(has_array_flag),
-                                    fmt_array_bool(expected_array_flag)
-                                )))?;
-                            }
-                        }
-
-                        let read_field_as_bytes = match kind {
-                            /*
-                            // i64
-                            1 => |reader: &mut &[u8]| read_raw_vec(read_byte, 8, reader),
-                            // i32
-                            2 => |reader: &mut &[u8]| read_raw_vec(read_byte, 4, reader),
-                            // i16
-                            3 => |reader: &mut &[u8]| read_raw_vec(read_byte, 2, reader),
-                            // i8
-                            4 => |reader: &mut &[u8]| read_raw_vec(read_byte, 1, reader),
-                            */
-                            // u64
-                            5 => |reader: &mut &[u8]| read_raw_vec(read_byte, 8, reader),
-                            /*
-                            // u32
-                            6 => |reader: &mut &[u8]| read_raw_vec(read_byte, 4, reader),
-                            // u16
-                            7 => |reader: &mut &[u8]| read_raw_vec(read_byte, 2, reader),
-                            // u8
-                            8 => |reader: &mut &[u8]| read_raw_vec(read_byte, 1, reader),
-                            // double
-                            9 => |reader: &mut &[u8]| read_raw_vec(read_byte, 8, reader),
-                            */
-                            // string, or any collection of bytes
-                            10 => |reader: &mut &[u8]| {
-                                let len = read_epee_vi(reader)?;
-                                read_raw_vec(
-                                    read_byte,
-                                    len.try_into().map_err(|_| {
-                                        io::Error::other("u64 length exceeded usize")
-                                    })?,
-                                    reader,
-                                )
-                            },
-                            // bool
-                            11 => |reader: &mut &[u8]| read_raw_vec(read_byte, 1, reader),
-                            /*
-                            // object, errors here as it shouldn't be used on this call
-                            12 => {
-                              |_: &mut &[u8]| Err(io::Error::other("node used object in reply to get_o_indexes"))
-                            }
-                            // array, so far unused
-                            13 => |_: &mut &[u8]| Err(io::Error::other("node used the unused array type")),
-                            */
-                            _ => |_: &mut &[u8]| Err(io::Error::other("node used an invalid type")),
-                        };
-
-                        let mut bytes_res = vec![];
-                        for _ in 0..iters {
-                            bytes_res.push(read_field_as_bytes(reader)?);
-                        }
-
-                        let mut actual_res = Vec::with_capacity(bytes_res.len());
-                        match name.as_slice() {
-                            b"o_indexes" => {
-                                for o_index in bytes_res {
-                                    actual_res.push(read_u64(&mut o_index.as_slice())?);
-                                }
-                                res = Some(actual_res);
-                            }
-                            b"status" => {
-                                if bytes_res
-                                    .first()
-                                    .ok_or_else(|| io::Error::other("status was a 0-length array"))?
-                                    .as_slice()
-                                    != b"OK"
-                                {
-                                    Err(io::Error::other("response wasn't OK"))?;
-                                }
-                                has_status = true;
-                            }
-                            b"untrusted" | b"credits" | b"top_hash" => continue,
-                            _ => Err(io::Error::other("unrecognized field in get_o_indexes"))?,
-                        }
-                    }
-
-                    if !has_status {
-                        Err(io::Error::other("response didn't contain a status"))?;
-                    }
-
-                    // If the Vec was empty, it would've been omitted, hence the unwrap_or
-                    Ok(res.unwrap_or(vec![]))
-                };
-
-                read_object(&mut indexes)
-            })()
-            .map_err(|e| RpcError::InvalidNode(format!("invalid binary response: {e:?}")))
+            match decoded.get("o_indexes") {
+                None => Ok(vec![]),
+                Some(StorageValue::Array(Array::UInt64(indexes))) => Ok(indexes.clone()),
+                Some(_) => Err(RpcError::InvalidNode(
+                    "invalid binary response: o_indexes was not a uint64 array".into(),
+                )),
+            }
         }
     }
 }

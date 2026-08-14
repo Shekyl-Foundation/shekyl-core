@@ -61,6 +61,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+use shekyl_portable_storage::{
+    load_from_binary, store_to_binary, Array, Limits, Section, Value as StorageValue,
+};
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
 use shekyl_wire::Block;
@@ -68,187 +71,26 @@ use shekyl_wire::Block;
 use super::regtest_e2e::RegtestDaemon;
 
 // ---------------------------------------------------------------------------
-// EPEE (portable storage) — hand-rolled, mirroring the `get_o_indexes.bin`
-// codec in `shekyl-rpc-client` (there is no epee crate). We only need the two
-// shapes `get_blocks_by_height.bin` uses: a request `{ heights: [u64] }` and a
-// response `{ blocks: [ { block: <blob>, .. }, .. ], .. }`.
+// portable_storage — `shekyl-portable-storage` (LV-2a). The two shapes
+// `get_blocks_by_height.bin` uses: request `{ heights: [u64] }` and a
+// response whose `block` STRING fields we collect.
 // ---------------------------------------------------------------------------
-
-/// EPEE stream header: an 8-byte magic + a 1-byte format version.
-const EPEE_HEADER: &[u8] = b"\x01\x11\x01\x01\x01\x01\x02\x01\x01";
-
-// EPEE scalar type tags (the low 6 bits; bit 0x80 flags an array-of-that-type).
-const T_INT64: u8 = 1;
-const T_INT32: u8 = 2;
-const T_INT16: u8 = 3;
-const T_INT8: u8 = 4;
-const T_UINT64: u8 = 5;
-const T_UINT32: u8 = 6;
-const T_UINT16: u8 = 7;
-const T_UINT8: u8 = 8;
-const T_DOUBLE: u8 = 9;
-const T_STRING: u8 = 10;
-const T_BOOL: u8 = 11;
-const T_OBJECT: u8 = 12;
-const ARRAY_FLAG: u8 = 0x80;
-
-/// Max object-nesting depth the decoder will follow before erroring. The real
-/// `get_blocks_by_height.bin` response nests ~2 levels (top section → `blocks`
-/// array → block object); this bounds the `walk_section`→`read_scalar`→
-/// `walk_section` recursion so a malformed/adversarial response returns `Err`
-/// rather than overflowing the stack (keeps the decoder panic-free as documented).
-const MAX_EPEE_DEPTH: usize = 32;
-
-/// Append an EPEE varint: the 2 LSBs encode the byte-width (0→1, 1→2, 2→4,
-/// 3→8), the value occupies the remaining bits. Inverse of the reader's
-/// `read_epee_vi`.
-// Each narrowing cast is guarded by the branch's range check (`v <= 0x3F`
-// etc.), so truncation is impossible by construction.
-#[allow(clippy::cast_possible_truncation)]
-fn write_epee_vi(out: &mut Vec<u8>, v: u64) {
-    if v <= 0x3F {
-        out.push((v as u8) << 2);
-    } else if v <= 0x3FFF {
-        out.extend_from_slice(&(((v as u16) << 2) | 1).to_le_bytes());
-    } else if v <= 0x3FFF_FFFF {
-        out.extend_from_slice(&(((v as u32) << 2) | 2).to_le_bytes());
-    } else {
-        out.extend_from_slice(&((v << 2) | 3).to_le_bytes());
-    }
-}
 
 /// Serialize the `get_blocks_by_height.bin` request `{ heights: [u64] }`.
 fn build_get_blocks_by_height_req(heights: &[u64]) -> Vec<u8> {
-    let mut r = EPEE_HEADER.to_vec();
-    write_epee_vi(&mut r, 1); // one top-level field
-    r.push(7); // name length
-    r.extend_from_slice(b"heights");
-    r.push(ARRAY_FLAG | T_UINT64);
-    write_epee_vi(&mut r, heights.len() as u64);
-    for &h in heights {
-        r.extend_from_slice(&h.to_le_bytes());
-    }
-    r
-}
-
-/// A minimal forward cursor over an EPEE blob.
-struct Epee<'a> {
-    b: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Epee<'a> {
-    fn new(b: &'a [u8]) -> Result<Self, String> {
-        if b.len() < EPEE_HEADER.len() || &b[..EPEE_HEADER.len()] != EPEE_HEADER {
-            return Err("bad EPEE header".into());
-        }
-        Ok(Epee {
-            b,
-            pos: EPEE_HEADER.len(),
-        })
-    }
-
-    fn byte(&mut self) -> Result<u8, String> {
-        let x = *self.b.get(self.pos).ok_or("EPEE truncated")?;
-        self.pos += 1;
-        Ok(x)
-    }
-
-    fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let end = self.pos.checked_add(n).ok_or("EPEE length overflow")?;
-        let s = self.b.get(self.pos..end).ok_or("EPEE truncated")?;
-        self.pos = end;
-        Ok(s)
-    }
-
-    fn vi(&mut self) -> Result<u64, String> {
-        let start = self.byte()?;
-        let len = 1usize << (start & 0b11);
-        let mut v = u64::from(start >> 2);
-        for i in 1..len {
-            v |= u64::from(self.byte()?) << (((i - 1) * 8) + 6);
-        }
-        Ok(v)
-    }
-
-    /// Walk one object (section): a field count, then `name/type/value` triples.
-    /// Every `block` string value encountered anywhere in the tree is pushed to
-    /// `blocks` — the only such field in this response is the one we want, and
-    /// string *values* (block/tx blobs) are read opaquely, never re-parsed for
-    /// field names, so a blob byte-pattern can't be mistaken for a key.
-    fn walk_section(&mut self, blocks: &mut Vec<Vec<u8>>, depth: usize) -> Result<(), String> {
-        if depth > MAX_EPEE_DEPTH {
-            return Err("EPEE nesting exceeds MAX_EPEE_DEPTH".into());
-        }
-        let fields = self.vi()?;
-        for _ in 0..fields {
-            let name_len = self.byte()? as usize;
-            let name = self.take(name_len)?.to_vec();
-            let ty = self.byte()?;
-            self.read_value(ty, &name, blocks, depth)?;
-        }
-        Ok(())
-    }
-
-    fn read_value(
-        &mut self,
-        ty: u8,
-        name: &[u8],
-        blocks: &mut Vec<Vec<u8>>,
-        depth: usize,
-    ) -> Result<(), String> {
-        if ty & ARRAY_FLAG != 0 {
-            let count = self.vi()?;
-            for _ in 0..count {
-                self.read_scalar(ty & !ARRAY_FLAG, name, blocks, depth)?;
-            }
-        } else {
-            self.read_scalar(ty, name, blocks, depth)?;
-        }
-        Ok(())
-    }
-
-    fn read_scalar(
-        &mut self,
-        base: u8,
-        name: &[u8],
-        blocks: &mut Vec<Vec<u8>>,
-        depth: usize,
-    ) -> Result<(), String> {
-        match base {
-            T_STRING => {
-                let len = usize::try_from(self.vi()?).map_err(|_| "EPEE string too long")?;
-                let bytes = self.take(len)?;
-                if name == b"block" {
-                    blocks.push(bytes.to_vec());
-                }
-            }
-            T_OBJECT => self.walk_section(blocks, depth + 1)?,
-            T_BOOL | T_UINT8 | T_INT8 => {
-                self.take(1)?;
-            }
-            T_UINT16 | T_INT16 => {
-                self.take(2)?;
-            }
-            T_UINT32 | T_INT32 => {
-                self.take(4)?;
-            }
-            T_UINT64 | T_INT64 | T_DOUBLE => {
-                self.take(8)?;
-            }
-            other => return Err(format!("unhandled EPEE type {other}")),
-        }
-        Ok(())
-    }
+    let mut root = Section::new();
+    root.insert(
+        "heights",
+        StorageValue::Array(Array::UInt64(heights.to_vec())),
+    );
+    store_to_binary(&root).expect("encode get_blocks_by_height request")
 }
 
 /// Decode a `get_blocks_by_height.bin` response into its raw block blobs, in
 /// order.
 fn decode_block_blobs(resp: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-    let mut e = Epee::new(resp)?;
-    let mut blocks = Vec::new();
-    e.walk_section(&mut blocks, 0)?;
-    Ok(blocks)
+    let decoded = load_from_binary(resp, Limits::HTTP_BIN).map_err(|e| e.to_string())?;
+    Ok(decoded.collect_bytes_named("block"))
 }
 
 // ---------------------------------------------------------------------------

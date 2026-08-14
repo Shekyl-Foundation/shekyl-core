@@ -58,6 +58,35 @@ pub(crate) use shekyl_types::PSlot;
 ///   against this rationale.
 pub(crate) const ARCHIVAL_PERSONA_LOOKAHEAD: u32 = 2;
 
+/// The bond watch's **probe window** (SA-R-6 from-seed reconstruction): how
+/// many slots past the monotone cursor get a persona canonical id derived
+/// into `StakingBlock::persona_id_cache` at open, so the principal
+/// refresh/rescan can sight on-chain bond posts for slots the wallet's
+/// record has lost.
+///
+/// Distinct knob from [`ARCHIVAL_PERSONA_LOOKAHEAD`], different cost model:
+/// a lookahead slot is a **resident key bundle** (memory + a full keygen per
+/// open for stakers); a probe slot is a **32-byte cached public id** derived
+/// once per slot for the wallet's life (the cache never invalidates), so the
+/// steady-state cost of the window is a map load. The one-time derivation
+/// (~W PQ keygens) is paid at wallet create / first open after upgrade — a
+/// moment that already runs full PQ account keygen, sized to stay small at
+/// the rule-76 device floor.
+///
+/// - **Width.** A restore-from-seed recovers at most `W` slots of staking
+///   history per open+rescan cycle (`ceil(depth / W)` cycles for deeper
+///   histories — each cycle's merge raises the cursor, and the next open
+///   derives the window above it). Bonds are epoch-scale and sequential, so
+///   realistic depths are far below `32`; one cycle is the expected case.
+/// - Must exceed the lookahead: the watch must at minimum cover every slot
+///   the wallet could bind in-session (compile-checked below).
+pub(crate) const ARCHIVAL_PERSONA_PROBE_WINDOW: u32 = 32;
+
+const _: () = assert!(
+    ARCHIVAL_PERSONA_PROBE_WINDOW > ARCHIVAL_PERSONA_LOOKAHEAD,
+    "the bond watch must cover at least every slot bindable in-session"
+);
+
 /// A held persona bundle tagged by whether it carries a **live bond**.
 ///
 /// This is **typed contract #4** ([`ARCHIVAL_BOND_CONSTRUCTION.md`] §10.2):

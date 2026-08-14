@@ -25,6 +25,16 @@
 //!   {current ..= current+k}` — after a reopen so a persona that was
 //!   rotated past but still holds a bond stays reachable for
 //!   unbonding. See "Why a hint, not a source of truth" below.
+//! * `persona_id_cache` — the bond watch's **probe-id cache**: public
+//!   persona canonical ids for the probe window, derived once while the
+//!   seed is transiently in scope at open and cached so every later open
+//!   (and the credential-less `rescan_blockchain`) has candidates without
+//!   re-paying the PQ keygen. See the field docs.
+//! * `bond_sightings` — chain-observed bond posts from the principal
+//!   scan's bond watch (slot → first sighted height): the durable bridge
+//!   that keeps a probe-adopted bond safe from the phantom GC until the
+//!   P-scan's own evidence covers it, and the first-stake resume guard's
+//!   already-staked witness. See the field docs.
 //!
 //! # Why this lives in `WalletLedger` (not `SettingsBlock`/`WalletPrefs`)
 //!
@@ -93,21 +103,27 @@
 //! [`SyncStateBlock`]: crate::sync_state_block::SyncStateBlock
 //! [`WalletLedger`]: crate::wallet_ledger::WalletLedger
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
+use shekyl_types::{BlockHeight, PCanonicalId};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the staking block. V3.0 ships version `1`.
+/// Schema version of the staking block. V3.0 ships version `2`
+/// (`1` + the bond-watch probe-id cache and sighting rows).
 /// Any field addition / removal / renaming bumps this; loads that see
 /// a different version refuse rather than migrate.
-pub const STAKING_BLOCK_VERSION: u32 = 1;
+pub const STAKING_BLOCK_VERSION: u32 = 2;
 
 /// Archival-firewall persona bookkeeping. See module docs for scope,
 /// versioning, the hint-not-truth `bonded_slots` semantics, and the
 /// monotone-cursor rule on `p_slot`.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+///
+/// `Debug` is hand-written: `persona_id_cache` and `bond_sightings` are
+/// persona-history-class rows (slot ↔ id / slot ↔ height associations), the
+/// same no-clear-`Debug` discipline as `BondPostRecord` in the pscan state.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct StakingBlock {
     /// Per-block schema version. Always [`STAKING_BLOCK_VERSION`] on
     /// construction; rejected on load if it does not match.
@@ -128,6 +144,58 @@ pub struct StakingBlock {
     /// scans actual bond state and rewrites this set, dropping phantoms.
     #[serde(default)]
     pub bonded_slots: Vec<u32>,
+
+    /// The bond-watch **probe-id cache**: persona canonical ids for the
+    /// probe window `{bonded_slots} ∪ {cursor ..= cursor + W}`, keyed by
+    /// slot. Ids are a deterministic pure function of `(seed, network,
+    /// format, slot)` and never invalidate, so they are derived **once**
+    /// (at the first open whose seed-in-scope window covers the slot) and
+    /// cached here; every later open loads the map instead of paying the
+    /// per-slot PQ keygen — that is what makes the principal scan's
+    /// unconditional bond watch free at the rule-76 device floor. Public
+    /// identifiers by function (`P` is public; the firewall protects only
+    /// the `P`↔principal edge), but the slot↔id *association* is
+    /// persona history — hence the redacted `Debug` and the AEAD seal.
+    /// `BTreeMap` keeps serialization order canonical (two wallets in the
+    /// same logical state produce identical bytes).
+    #[serde(default)]
+    pub persona_id_cache: BTreeMap<u32, PCanonicalId>,
+
+    /// Chain-observed bond-post **sightings** from the principal scan's
+    /// bond watch: slot → height of the first sighted `Input::BondPost`
+    /// carrying that slot's canonical id. Written at refresh/rescan merge
+    /// when a watched id is observed on-chain (the adoption that makes a
+    /// restored persona derivable again); consumed by the open-time
+    /// reconcile — arm #3 evaluates a sighted slot with the height-gated
+    /// verdict (`reconcile(id, sighting_height)`), so a P-scan seal whose
+    /// coverage predates the sighting reads `OutsideCovered` and cannot
+    /// GC a real probe-adopted bond as phantom — and by the first-stake
+    /// W2 resume guard (a sighted slot is already-staked). A row is
+    /// pruned once the P-scan's own evidence carries the match
+    /// (`Present`), which supersedes it, or dropped when a reorg orphans
+    /// the sighted block ([`Self::discard_sightings_at_or_above`] at the
+    /// merge) — the two exits that keep every surviving row naming a
+    /// block on the wallet's canonical chain.
+    #[serde(default)]
+    pub bond_sightings: BTreeMap<u32, BlockHeight>,
+}
+
+impl std::fmt::Debug for StakingBlock {
+    /// Redacts `persona_id_cache` and `bond_sightings` — slot↔id and
+    /// slot↔height rows are `P`'s history, kept off any log / error /
+    /// `{:?}` path (the `BondPostRecord` discipline). The scalar fields
+    /// stay rendered: they are the same slot ordinals the reconcile arms
+    /// already log.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StakingBlock")
+            .field("block_version", &self.block_version)
+            .field("staking_enabled", &self.staking_enabled)
+            .field("p_slot", &self.p_slot)
+            .field("bonded_slots", &self.bonded_slots)
+            .field("persona_id_cache", &"<redacted persona-history>")
+            .field("bond_sightings", &"<redacted persona-history>")
+            .finish()
+    }
 }
 
 impl Default for StakingBlock {
@@ -138,25 +206,76 @@ impl Default for StakingBlock {
 
 impl StakingBlock {
     /// Fresh, empty staking block pinned to the current version:
-    /// staking disabled, cursor at slot 0, no bonded slots.
+    /// staking disabled, cursor at slot 0, no bonded slots, empty
+    /// probe cache, no sightings.
     pub fn empty() -> Self {
         Self {
             block_version: STAKING_BLOCK_VERSION,
             staking_enabled: false,
             p_slot: 0,
             bonded_slots: Vec::new(),
+            persona_id_cache: BTreeMap::new(),
+            bond_sightings: BTreeMap::new(),
         }
     }
 
-    /// Construct a staking block with explicit fields, pinning the
-    /// current version.
+    /// Construct a staking block with explicit scalar fields, pinning the
+    /// current version. The probe cache and sightings start empty (they
+    /// are scan-derived state, filled by the open path and the merge).
     pub fn new(staking_enabled: bool, p_slot: u32, bonded_slots: Vec<u32>) -> Self {
         Self {
             block_version: STAKING_BLOCK_VERSION,
             staking_enabled,
             p_slot,
             bonded_slots,
+            persona_id_cache: BTreeMap::new(),
+            bond_sightings: BTreeMap::new(),
         }
+    }
+
+    /// Record a bond-post sighting for `slot`. A **committed row is never
+    /// rewritten**: the stored height is merge-committed chain evidence, and
+    /// arm #3's verdict at it can only err toward `OutsideCovered` (kept —
+    /// the funds-safe direction). Letting a later merge *lower* it would let
+    /// one `ScanResult` (untrusted at merge, O5) pull the evidence bar into
+    /// already-covered range and turn a real probe-adopted bond into an
+    /// `AbsentWithinCovered` GC. The one legitimate invalidator is a reorg
+    /// that orphans the sighted block — that path goes through
+    /// [`Self::discard_sightings_at_or_above`], which removes the row so the
+    /// re-scan's sighting re-inserts at its new canonical height. The caller
+    /// owns within-batch order-independence (it records each slot's batch
+    /// minimum once). Returns `true` if this call inserted the row.
+    pub fn record_first_sighting(&mut self, slot: u32, height: BlockHeight) -> bool {
+        match self.bond_sightings.entry(slot) {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(height);
+                true
+            }
+            std::collections::btree_map::Entry::Occupied(_) => false,
+        }
+    }
+
+    /// Drop every sighting row at or above `fork_height` — the merge-side
+    /// reorg edge for the bond watch. A sighting names a block; once a reorg
+    /// orphans that block the row's evidence claim is unsupported, and
+    /// keeping it would poison arm #3's height-gated verdict with a height
+    /// the canonical chain never carried (a re-mined post sits elsewhere).
+    /// The re-scan from the fork re-sights every canonical post, so a
+    /// surviving bond gets a fresh row at its true height in the same merge;
+    /// a post that never re-mines leaves its adopted slot to the open-time
+    /// sweep, and a later re-mine is re-adopted by the next refresh (adoption
+    /// is re-entrant). Returns the slots whose rows were dropped.
+    pub fn discard_sightings_at_or_above(&mut self, fork_height: BlockHeight) -> Vec<u32> {
+        let dropped: Vec<u32> = self
+            .bond_sightings
+            .iter()
+            .filter(|(_, h)| **h >= fork_height)
+            .map(|(slot, _)| *slot)
+            .collect();
+        for slot in &dropped {
+            self.bond_sightings.remove(slot);
+        }
+        dropped
     }
 
     /// The reconciled active slot: `max(p_slot, highest_bonded_slot_seen + 1)`.
@@ -272,6 +391,12 @@ mod tests {
             staking_enabled: true,
             p_slot: 7,
             bonded_slots: vec![2, 3, 5],
+            persona_id_cache: BTreeMap::from([
+                (2, PCanonicalId::from_bytes([0x22; 32])),
+                (3, PCanonicalId::from_bytes([0x33; 32])),
+                (5, PCanonicalId::from_bytes([0x55; 32])),
+            ]),
+            bond_sightings: BTreeMap::from([(3, BlockHeight::from_raw(987_654_321))]),
         }
     }
 
@@ -282,9 +407,72 @@ mod tests {
         assert!(!b.staking_enabled);
         assert_eq!(b.p_slot, 0);
         assert!(b.bonded_slots.is_empty());
+        assert!(b.persona_id_cache.is_empty());
+        assert!(b.bond_sightings.is_empty());
         let bytes = b.to_postcard_bytes().expect("serialize");
         let back = StakingBlock::from_postcard_bytes(&bytes).expect("deserialize");
         assert_eq!(back, b);
+    }
+
+    /// The `Debug` impl must never render the persona-history rows — no id
+    /// byte and no slot↔height pair may reach a log via `{:?}`. Scalars
+    /// stay visible (same class the reconcile arms already log).
+    #[test]
+    fn debug_redacts_persona_history_rows() {
+        let b = populated();
+        let rendered = format!("{b:?}");
+        assert!(
+            rendered.contains("<redacted persona-history>"),
+            "{rendered}"
+        );
+        // No byte of any cached id (0x22... etc. render as "34, 34" or hex)
+        // and no sighting height may appear.
+        assert!(!rendered.contains("34, 34"), "{rendered}");
+        assert!(!rendered.contains("2222"), "{rendered}");
+        assert!(!rendered.contains("987654321"), "{rendered}");
+        // Scalars stay legible.
+        assert!(rendered.contains("p_slot: 7"), "{rendered}");
+    }
+
+    /// A committed sighting row is immutable under `record_first_sighting`:
+    /// a later call can neither advance the evidence bar (which would let a
+    /// duplicate erode the `OutsideCovered` protection) nor LOWER it (which
+    /// would let one untrusted `ScanResult` pull the bar into already-covered
+    /// range and turn a real probe-adopted bond into a wrongful
+    /// `AbsentWithinCovered` GC). This bites against re-introducing a
+    /// min-wins overwrite; the reorg path invalidates rows via
+    /// `discard_sightings_at_or_above`, tested below.
+    #[test]
+    fn committed_sighting_row_is_never_rewritten() {
+        let mut b = StakingBlock::empty();
+        assert!(b.record_first_sighting(4, BlockHeight::from_raw(100)));
+        assert!(!b.record_first_sighting(4, BlockHeight::from_raw(200)));
+        assert_eq!(b.bond_sightings.get(&4), Some(&BlockHeight::from_raw(100)));
+        // A LOWER height in a later call must not pull a committed bar back.
+        assert!(!b.record_first_sighting(4, BlockHeight::from_raw(40)));
+        assert_eq!(b.bond_sightings.get(&4), Some(&BlockHeight::from_raw(100)));
+        // A different slot inserts independently.
+        assert!(b.record_first_sighting(5, BlockHeight::from_raw(200)));
+    }
+
+    /// The reorg edge: rows at or above the fork are orphaned evidence and
+    /// go; rows strictly below it name still-canonical blocks and stay. A
+    /// dropped slot can be re-recorded at its re-mined height — the
+    /// drop-then-reinsert path is what replaces the (removed) height
+    /// overwrite.
+    #[test]
+    fn discard_sightings_at_or_above_drops_orphaned_rows_only() {
+        let mut b = StakingBlock::empty();
+        b.record_first_sighting(1, BlockHeight::from_raw(30));
+        b.record_first_sighting(2, BlockHeight::from_raw(50));
+        b.record_first_sighting(3, BlockHeight::from_raw(80));
+        let dropped = b.discard_sightings_at_or_above(BlockHeight::from_raw(50));
+        assert_eq!(dropped, vec![2, 3], "fork at 50 orphans 50 and 80");
+        assert_eq!(b.bond_sightings.get(&1), Some(&BlockHeight::from_raw(30)));
+        assert!(!b.bond_sightings.contains_key(&2));
+        // The re-scan re-sights the re-mined post at its canonical height.
+        assert!(b.record_first_sighting(2, BlockHeight::from_raw(80)));
+        assert_eq!(b.bond_sightings.get(&2), Some(&BlockHeight::from_raw(80)));
     }
 
     #[test]
@@ -457,12 +645,22 @@ mod tests {
             enabled in any::<bool>(),
             p_slot in any::<u32>(),
             bonded in proptest::collection::vec(any::<u32>(), 0..8),
+            cache in proptest::collection::btree_map(any::<u32>(), any::<[u8; 32]>(), 0..8),
+            sightings in proptest::collection::btree_map(any::<u32>(), any::<u64>(), 0..8),
         ) {
             let b = StakingBlock {
                 block_version: STAKING_BLOCK_VERSION,
                 staking_enabled: enabled,
                 p_slot,
                 bonded_slots: bonded,
+                persona_id_cache: cache
+                    .into_iter()
+                    .map(|(k, v)| (k, PCanonicalId::from_bytes(v)))
+                    .collect(),
+                bond_sightings: sightings
+                    .into_iter()
+                    .map(|(k, v)| (k, BlockHeight::from_raw(v)))
+                    .collect(),
             };
             let bytes = b.to_postcard_bytes().expect("serialize");
             let back = StakingBlock::from_postcard_bytes(&bytes).expect("deserialize");

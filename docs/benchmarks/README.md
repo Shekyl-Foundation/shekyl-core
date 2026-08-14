@@ -57,8 +57,9 @@ the measurement.
 ## Capturing the Rust baseline
 
 On the same class of reference machine, additionally requires
-`valgrind` and `iai-callgrind-runner` on `PATH`
-(`cargo install iai-callgrind-runner`):
+`valgrind` (headers as well as the binary — `ledger_iai` enables
+gungraun `client_requests`) and `gungraun-runner` on `PATH`
+(`cargo install gungraun-runner --version '=0.19.3' --locked`):
 
 ```bash
 ./scripts/bench/capture_rust_baseline.sh

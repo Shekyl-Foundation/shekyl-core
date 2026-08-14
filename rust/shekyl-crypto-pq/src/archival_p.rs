@@ -114,9 +114,18 @@
 //! buys both. The single exception is a **durably retired** persona — already
 //! rotated past on purpose, so it burns the mark and is never re-adopted.
 //!
-//! A restore-from-seed reconstruction (the wallet opens as a non-staker and
-//! derives nothing, so no scan evidence exists to heal from) is a separate
-//! wallet-layer slice (`ARCHIVAL_BOND_CONSTRUCTION.md` §11; `FOLLOWUPS.md`).
+//! The restore-from-seed reconstruction is the principal scan's **bond
+//! watch**: at open, while the seed is transiently in scope, the wallet
+//! derives the public persona canonical ids for a probe window of slots
+//! (cached once — ids are a pure function of the seed and never
+//! invalidate), and the ordinary refresh/rescan then matches on-chain
+//! `Input::BondPost` observations against them. A sighting adopts the slot
+//! back into the bonded record and raises the mark — unconditional for
+//! every wallet (a never-staked wallet's watch simply never fires), so any
+//! full rescan reconstructs a lost staking history from slot 0 without a
+//! staking-specific recovery flow (engine-side: `StakingBlock`'s
+//! `persona_id_cache` / `bond_sightings`, `engine::bond_watch`,
+//! `merge::adopt_bond_sightings`).
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use ed25519_dalek::SigningKey;
@@ -619,6 +628,39 @@ pub fn derive_archival_p_keys(
     })
 }
 
+/// Derive **only** the persona's public identity key (`hybrid_sign_pk`) for
+/// slot `p_slot` — the sole input to the public canonical id
+/// (`p_canonical_id_from_hybrid_pubkey` hashes exactly this key's canonical
+/// bytes; pinned by `hybrid_bond_id_is_the_identity_key`).
+///
+/// Byte-identical to `derive_archival_p_keys(..)?.hybrid_bond_id()` — the
+/// **same** KDF labels (`derive_p_account_sign_seed` / `derive_p_ml_dsa_seed`)
+/// feed the same [`build_hybrid`], so no new domain separator exists and the
+/// two paths cannot diverge (pinned by
+/// `identity_pk_matches_the_full_bundle`). What it skips is the rest of the
+/// bundle: the ML-KEM-768 keygen, the receive spend/view scalar mults +
+/// X25519 conversion, the onion seed, and the GF-1 bond-spend hybrid keygen —
+/// the cost that made the probe-window id derivation heavy at the rule-76
+/// device floor. The secret half of the identity hybrid is still derived
+/// (keygen is seed→keypair) but is dropped here — `HybridSecretKey` is
+/// `ZeroizeOnDrop`, so nothing secret outlives the call.
+pub fn derive_archival_p_identity_pk(
+    master_seed: &[u8; MASTER_SEED_BYTES],
+    net: DerivationNetwork,
+    fmt: SeedFormat,
+    p_slot: u32,
+) -> Result<HybridPublicKey, CryptoError> {
+    if !net.permitted_seed_format(fmt) {
+        return Err(CryptoError::InvalidInput(format!(
+            "{net:?} does not permit {fmt:?} seed format"
+        )));
+    }
+    let account_sign_seed = derive_p_account_sign_seed(master_seed, net, fmt, p_slot);
+    let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, fmt, p_slot);
+    let (hybrid_sign_pk, _hybrid_sign_sk) = build_hybrid(&account_sign_seed, &ml_dsa_seed)?;
+    Ok(hybrid_sign_pk)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -628,6 +670,50 @@ mod tests {
     fn keys() -> ArchivalPKeys {
         derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
             .expect("derive P keys")
+    }
+
+    /// The identity-only fast path is byte-identical to the full bundle's
+    /// `hybrid_bond_id` — same KDF labels, same build, no new domain. This
+    /// bites against either path changing its seed derivation alone (the
+    /// probe cache and the resident actor would then disagree on a persona's
+    /// public id and the bond watch would sight nothing).
+    #[test]
+    fn identity_pk_matches_the_full_bundle() {
+        for slot in [0u32, 1, 7, 4_000_000] {
+            let full = derive_archival_p_keys(
+                &MASTER,
+                DerivationNetwork::Mainnet,
+                SeedFormat::Bip39,
+                slot,
+            )
+            .expect("full bundle");
+            let fast = derive_archival_p_identity_pk(
+                &MASTER,
+                DerivationNetwork::Mainnet,
+                SeedFormat::Bip39,
+                slot,
+            )
+            .expect("identity-only");
+            assert_eq!(
+                fast.to_canonical_bytes().expect("encode fast"),
+                full.hybrid_bond_id()
+                    .to_canonical_bytes()
+                    .expect("encode full"),
+                "slot {slot}: identity-only derivation diverged from the bundle"
+            );
+        }
+    }
+
+    /// The identity-only path keeps the permitted-seed-format gate.
+    #[test]
+    fn identity_pk_refuses_a_forbidden_seed_format() {
+        assert!(derive_archival_p_identity_pk(
+            &MASTER,
+            DerivationNetwork::Mainnet,
+            SeedFormat::Raw32,
+            0
+        )
+        .is_err());
     }
 
     #[test]

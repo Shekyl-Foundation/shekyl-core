@@ -1451,6 +1451,10 @@ They would remove the single largest obstacle to ever moving the *full* relay
 path into Rust — that this workspace has no epee or levin implementation. Both
 are MIT with light dependency lists. That belongs to its own decision, not to
 this document, and it is not on the path for RP-2…RP-4.
+**UPDATE 2026-08-13:** that decision landed in
+[`LV2_PORTABLE_STORAGE.md`](LV2_PORTABLE_STORAGE.md) — first-party
+`shekyl-portable-storage`, Cuprate as reference-not-dependency. Do not re-open §8's
+vendoring question from this document.
 
 ---
 

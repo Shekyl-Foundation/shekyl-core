@@ -28,6 +28,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # Match rust-audit-test.yml: `ledger_iai` enables gungraun
+      # `client_requests`, which needs Valgrind headers plus libclang
+      # (bindgen of `valgrind-requests`) to compile under clippy
+      # `--all-targets`.
+      - name: install valgrind headers + libclang
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind libclang-dev clang
       # `cargo +stable` overrides the 1.94.0 pin in rust/rust-toolchain.toml for
       # this advisory run. The vendored-crypto `ignore` in rustfmt.toml still
       # applies, so the canary reformats only first-party code, same as the gate.

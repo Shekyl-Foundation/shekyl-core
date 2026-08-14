@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Levin p2p framing layer (bucket header, fragments, noise, compression). See docs/LEVIN_PROTOCOL.md."
+description = "Levin p2p framing layer and typed command maps (LV-2b). See docs/LEVIN_PROTOCOL.md."
 
 [features]
 # Codec gate for pure-Rust builds of this crate. Default-on: the production
@@ -19,6 +19,7 @@ zstd = ["dep:zstd"]
 
 [dependencies]
 thiserror = { workspace = true }
+shekyl-portable-storage = { path = "../shekyl-portable-storage" }
 # This vendored, pinned libzstd (zstd-sys `cc`-compiles the copy in the
 # crate; the non-default `pkg-config` feature is NOT enabled) is the
 # binary's SINGLE zstd implementation since the compression-shim cut

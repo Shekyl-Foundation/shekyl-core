@@ -71,7 +71,15 @@ jobs:
         run: apt update
       - name: install dependencies
         # ripgrep: hard-required by scripts/lint_cpp_clamp_ban.sh below.
-        run: apt -y install build-essential git curl pkg-config libssl-dev ripgrep
+        # valgrind: headers required to compile `shekyl-engine-state`'s
+        # `ledger_iai` bench (`gungraun` `client_requests` / `act`).
+        # libclang-dev + clang: `valgrind-requests` bindgens those
+        # headers; a bare `ubuntu:24.04` container has neither
+        # libclang.so nor clang. GitHub's hosted `ubuntu-latest`
+        # (`ci/benchmarks`) already ships clang, so the capture job
+        # stayed green while this gate failed. Still gungraun — no
+        # harness swap. clippy `--all-targets` builds benches.
+        run: apt -y install build-essential git curl pkg-config libssl-dev ripgrep valgrind libclang-dev clang
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
@@ -232,6 +240,7 @@ jobs:
         run: >-
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
           -p shekyl-tor -p shekyl-p-serve -p shekyl-p-host
+          -p shekyl-operator-alarm
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp

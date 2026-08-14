@@ -3885,13 +3885,84 @@ sustainability is unaffected by the recalibration.
     pending seal. Bond posting is production-reachable today, so SA-R-6 holes are
     live rather than future; the two above were fixed as found (rule 22) instead
     of deferred behind an inertness that does not hold.
-    **What remains in this reopen:** the *from-seed* reconstruction — a cursor
-    rolled back beyond the lookahead, where the wallet opens as a non-staker and
-    derives/scans nothing — needs a widening derive-and-scan forward probe under
-    Model D. Deferred on the **named blocker of a distinct validation surface**
-    (rule 19: it changes what a non-staker open derives and scans, not how the
-    reconcile arms compose), not on reachability. The ruling lives in
-    `shekyl-crypto-pq` `archival_p` module docs and CBOM §5.
+    **From-seed reconstruction DISCHARGED (2026-08-13, the bond-watch build):**
+    the deferred surface was built as the principal scan's **bond watch** —
+    at open the wallet derives the public persona canonical ids for
+    `{bonded} ∪ {cursor..=cursor+W}` (`ARCHIVAL_PERSONA_PROBE_WINDOW = 32`)
+    into the persisted `StakingBlock::persona_id_cache` (derive-once: ids are
+    a pure function of the seed; `STAKING_BLOCK_VERSION` 2), the ordinary
+    refresh/rescan producer matches on-chain `Input::BondPost` observations
+    against the cache (shared lift: `engine::bond_watch`), and the merge
+    adopts each sighted slot + records its first-sighting height
+    (`bond_sightings`) + raises the monotone cursor
+    (`merge::adopt_bond_sightings`) — positive evidence only, so no
+    exhaustiveness token is needed and the raise is sound on any coverage.
+    Two soundness bridges landed with it: arm #3 evaluates a sighted slot
+    with the **height-gated** verdict (a stale pscan seal cannot GC a
+    probe-adopted real bond as phantom), and the first-stake W2 resume guard
+    treats a persisted sighting as `AlreadyStaked` (no duplicate JoinMarket
+    post while the P-scan lags). Unconditional for every wallet — a
+    never-staked wallet's watch simply never fires — so any full rescan
+    reconstructs a lost staking history from slot 0. **Residual, not a
+    reopen:** a history deeper than `W` slots converges across open+rescan
+    cycles (`ceil(depth / W)`; each merge raises the cursor, the next open
+    derives the window above it), and the watch sees only what the principal
+    scan covers — a restore whose `restore_from_height` postdates its bonds
+    reconstructs nothing until a lower-floor rescan (the same birthday
+    semantics every fund has).
+    **UPDATE 2026-08-13 (review round on the bond-watch build — the absence
+    evidence is now per-persona):** the review found the height-gated bridge
+    alone was not airtight: the P-scan seal's match set is complete only over
+    personas **watched while coverage advanced**, so a probe-adopted bond
+    whose sighted height sat below an already-advanced frontier (restore →
+    stake a new slot → pscan seals `[0, tip)` → lower-floor rescan sights the
+    old bonds; or a mid-session adoption the spawn-time actor never watches)
+    read `AbsentWithinCovered` and was permanently GC'd — stuck funds. Fixed
+    structurally: the seal now records per-persona **watch floors**
+    (`PScanState::watch_floors`, `PSCAN_STATE_VERSION` 8→9;
+    `ScanStepResult::watched_personas` feeds them at ingest) and
+    `PReconcileSet::reconcile` refuses to convert "no match row" into absence
+    below a persona's floor or for an unfloored persona (`Present` is never
+    gated). Companion hardening from the same round: a reorg rewind now
+    **discards sighting rows at/above the fork at the merge**
+    (`StakingBlock::discard_sightings_at_or_above` — the re-scan re-sights a
+    re-mined post at its canonical height; also the in-session healing edge
+    for the first-stake `AlreadyStaked` guard), a committed sighting row is
+    **immutable** (no cross-batch height lowering; within-batch min is owned
+    by `adopt_bond_sightings`), the refresh producer **aborts as
+    `ReorgStorm`** when a divergence lands after the rewind budget instead of
+    scanning blind (monotone adoptions cannot self-heal the way ledger state
+    does), `sightings_in` adopts **JoinMarket posts only** (the same
+    confirmation filter as the P-scan), and a mid-session recovery is a
+    first-class surfaced state: `StakingReadView::recovery_pending_reopen` /
+    `staking_info.recovery_pending_reopen`, with `first_stake`/`start_pscan`
+    refusing `-29504 STAKE_RECOVERED_PENDING_REOPEN` ("close and reopen")
+    rather than an internal fault — Model D derives persona keys only at
+    open, so a mid-session adoption cannot spawn or extend the actor.
+    **Known residual (safe direction):** a persona whose sighting sits below
+    its watch floor is *retained indefinitely* (`OutsideCovered`), never
+    corroborated or refuted, until a P-scan covers that range with the
+    persona watched — which today never happens for an already-advanced
+    frontier (the pscan has no floor-lowering backfill). The same residual
+    has a second entry path (Copilot, PR #463 review): an **explicit full
+    rescan cannot invalidate** a sighting whose post was reorged out while
+    the wallet was closed — the reset leaves no old tip for the replay to
+    diverge from, so the merge sees no rewind and
+    `discard_sightings_at_or_above` never runs; the orphan row is retained
+    (and `first_stake` keeps refusing on it) until the pscan absence oracle
+    clears it under the same floor conditions. The wallet-scan replay is
+    deliberately NOT that oracle: its floor (`restore_from_height`) may sit
+    above the sighting, so "replayed and unseen" is not absence — and a
+    discard-then-re-sight at rescan start would reopen the arm-#3 stale-seal
+    hole if the wallet crashed between the discard persist and the re-sight
+    (the "only when the replay succeeds" condition IS the exhaustiveness
+    machinery). Funds-safe both ways (retention/refusal, never GC of a live
+    bond) and the flagship restore path is unaffected (a fresh restore
+    has no seal, so floors start at 0 — a seed-restore also heals both
+    residual paths unconditionally). **Reopen when** a pscan backfill /
+    frontier-lowering scan mode is designed — that is a new producer scan
+    mode over the exhaustiveness machinery, a distinct validation surface
+    (rule 19), not a patch on the reconcile arms.
   - **Persona slot-space exhaustion is not represented, and the binding gate
     does not refuse it.** `StakingBlock::monotone_current_slot` uses
     `saturating_add(1)`, which correctly prevents a wrap to slot 0 but makes
@@ -8983,37 +9054,28 @@ sustainability is unaffected by the recalibration.
   (668b0b0bb) — correct, since those paths *do* leak on `socks5://` even though the
   scan does not.
 
-- **Retire the iai-callgrind→gungraun bench-flake bisect harness once gungraun
-  proves out (spawned by the gungraun 0.19 migration, 2026-06-16).** The
-  migration from `iai-callgrind 0.16` to `gungraun 0.19`
-  (`docs/investigation/2026-05-09-bench-baseline-flake.md`) was justified on
-  supported-upstream / debt grounds; whether it *also* fixes the
-  `instructions=0` capture flake is **speculative** (root cause unknown,
-  §3.3). Two artifacts exist only to bridge that uncertainty and should be
-  removed once it resolves:
-  - `.github/workflows/bench-runner-bisect.yml` — a `workflow_dispatch`-only,
-    deliberately-`iai-callgrind 0.16`-pinned runner-bisection harness for the
-    *original* flake. Post-migration it pins a dependency the tree no longer
-    uses; it gates nothing and pushes nowhere.
-  - The per-bench capture retry (`GUNGRAUN_CAPTURE_ATTEMPTS`, default 3) in
-    `scripts/bench/capture_rust_baseline.sh` — a belt-and-suspenders absorber
-    for the transient zero; harmless to keep but redundant if the flake is
-    genuinely gone.
-  **Trigger:** retire the bisect workflow (and reconsider the retry) once
-  gungraun has run **~100 capture/CI cycles** (per-PR `capture-pr` + post-merge
-  `update-baseline` runs) with **zero `instructions=0` recurrences** — at which
-  point the upgrade is empirically the fix, not a speculative one. *Reopen /
-  escalate sooner if:* a zero recurs under gungraun, which would reopen §3.3's
-  candidate list (cause is runner-host- or Callgrind-side, not the crate) with
-  fresh evidence and argue for *keeping* both artifacts.
-  **Watch item — baseline drift on first regeneration:** the post-merge
-  `update-baseline` job reseeds `bench-baseline` wholesale under gungraun, so
-  steady-state comparison is gungraun-vs-gungraun (no cross-tool diff). Local
-  spot-check shows gungraun 0.19.2 instruction counts within <1% of the
-  iai-callgrind 0.16 numbers (e.g. ledger serialize 4,416,897 vs ~4.45M), far
-  inside the ±10% slowdown gate — but the bench set has grown since the
-  original cross-check, so confirm the first full gungraun baseline lands
-  clean across *all* current entries before trusting the gate.
+- **Retire the iai-callgrind→gungraun bench-flake bisect harness (spawned
+  by the gungraun 0.19 migration, 2026-06-16; cause closed 2026-08-14).**
+  UPDATE 2026-08-14: the `instructions=0` capture flake is the default
+  Callgrind `--toggle-collect=*::__gungraun_wrapper_mod::*` missing an
+  inlined wrapper on the six `ledger_iai` postcard cells. Disposition
+  landed in-tree: those benches use Callgrind client requests
+  (`EntryPoint::None`, `--instr-atstart=no`) so collection is
+  position-based. The gungraun 0.19 migration did not fix it (same
+  toggle scheme). Remaining delete-now work, not a new investigation:
+  - `.github/workflows/bench-runner-bisect.yml` — still pins
+    `iai-callgrind 0.16`; gates nothing; delete in a follow-up commit.
+  - `GUNGRAUN_CAPTURE_ATTEMPTS` (default 3) in
+    `scripts/bench/capture_rust_baseline.sh` — keep until a few
+    post-fix `capture-pr` / `update-baseline` cycles are clean, then
+    drop. *Reopen if:* a zero recurs on `ledger_iai` after the
+    client-request wrap, which would mean the client-request bound
+    itself is being compiled out and needs a different Callgrind
+    control (not a return to symbol toggles).
+  **Watch item — baseline drift on first regeneration:** the next
+  `update-baseline` on `dev` reseeds `bench-baseline`. Client-request
+  sequences add a handful of instructions against millions of postcard
+  work, inside the `hot_path` ±5% warn band.
 
 - **rand 0.9 migration and curve25519-dalek 5 cascade.**
   Seven Dependabot alerts on `shekyl-core` cite
@@ -9552,25 +9614,49 @@ its wake.
   byte-identical against the C++ gtests) landed 2026-08-05, deliberately
   inert — the scoping decision was "exact, fully-tested skeleton now;
   cutover scheduled for the future" (shekyl-levin plan, 2026-08-05; index
-  row `LV-1…LV-N`). UPDATE 2026-08-06: the crate's **compression half is
-  production-live** — the C++ `epee::levin` compression path is a
-  marshaling shim over the `shekyl_levin_*` FFI and the system-libzstd
-  dependency is deleted (single-owner libzstd; zstd decision 2026-08-06).
-  The framing half (builders, `BucketReader`) stays inert until LV-3. The
-  remaining work is **rejected-now with named reopening criteria**
+  row `LV-1…LV-N`). UPDATE 2026-08-13: the **white-noise emitters are
+  production-live** — `make_noise_notify` / `make_fragmented_notify` are
+  forwarding shims over `shekyl_levin_noise_notify` /
+  `shekyl_levin_fragmented_notify`, deleting the C++ fragment-padding
+  algorithm; the byte-exact `make_fragment.*` gtests now run through the
+  FFI, so the cross-language oracle executes in CI. UPDATE 2026-08-06:
+  the crate's **compression half is production-live** — the C++
+  `epee::levin` compression path is a marshaling shim over the
+  `shekyl_levin_*` FFI and the system-libzstd dependency is deleted
+  (single-owner libzstd; zstd decision 2026-08-06). Still inert until
+  LV-3: the read side (`BucketReader`) and the plain
+  notification/request/response builders. LV-2's build-vs-vendor question
+  is **closed** (2026-08-13 pin below); implementation of that pin is
+  in-scope. LV-3 remains **rejected-now with named reopening criteria**
   (rule 21):
 
-  - **LV-2 — epee portable_storage payload codec + command schemas.** The
-    framing crate carries payloads as opaque bytes; speaking live
-    handshake/timed-sync/notify bodies needs the portable_storage binary
-    codec plus the ~25 KV maps in `src/p2p/p2p_protocol_defs.h` and
-    `src/cryptonote_protocol/cryptonote_protocol_defs.h`. Build-or-vendor
-    is an open rule-17/rule-10 decision — Cuprate's `epee-encoding` exists
-    but is vendoring-only (`DAEMON_RELAY_PRIVACY.md` §8). Reopens when
-    either (a) the p2p migration track is scheduled, or (b) any Rust
-    component needs live Levin command interop with the C++ node (e.g. a
-    relay readout that would otherwise add a third entry to the index's
-    relay-layer C++ dependency inventory).
+  - **LV-2 — epee portable_storage payload codec + command schemas.**
+    UPDATE 2026-08-13: build-vs-vendor **closed** — first-party
+    `shekyl-portable-storage` (codec) + typed maps in `shekyl-levin` (schemas);
+    Cuprate is reference-not-dependency. Pin:
+    [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md).
+    Split **LV-2a** (codec + KATs + delete the
+    `get_o_indexes.bin` / `get_blocks_by_height.bin` one-offs) then
+    **LV-2b** (handshake/timed-sync/ping/support-flags first, then 2002
+    and the remaining notifies including 2010). Census is 27
+    `BEGIN_KV_SERIALIZE_MAP`s in the two protocol-defs headers, of which
+    the Levin-wire subset plus the `network_address` union are LV-2b;
+    RPC maps stay out. Reopening criterion (a) of the 2026-08-05
+    deferral (p2p migration track scheduled) is met by that pin;
+    implementation is in-scope, not V3.0-gating. UPDATE 2026-08-13:
+    **LV-2a landed** — `rust/shekyl-portable-storage`,
+    `docs/PORTABLE_STORAGE.md` completed, the two homegrown HTTP `.bin`
+    parsers deleted. UPDATE 2026-08-14: **LV-2b first drop landed** —
+    handshake / timed-sync / ping / support-flags (1001 / 1002 / 1003 /
+    1007) plus `network_address` in `shekyl-levin`; in-crate consumer is
+    encode → `invoke()` → `BucketReader`. UPDATE 2026-08-14: **LV-2b maps
+    landed** — notifies 2001–2004 / 2006–2010 (including 2002) in
+    `shekyl-levin`; in-crate consumer is encode → `notify()` →
+    `BucketReader` (`tests/notify_kats.rs`). Empty STL containers omit
+    the key (C++ `serialize_stl_container_*`). UPDATE 2026-08-14: live
+    `shekyld` dual-stack landed as `#[ignore]` harness
+    `rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`; default crate
+    tests still spawn no daemon). Not a FOLLOWUPS dump of this PR's maps.
   - **LV-3 — connection-path cutover.** Replace the C++ Levin read/write
     path at the `levin_notify.cpp` / `net_node.inl` seam with the Rust
     crate. Cost basis: the index's "Relay layer → C++ dependency

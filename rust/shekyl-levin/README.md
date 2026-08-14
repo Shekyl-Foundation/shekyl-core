@@ -34,18 +34,26 @@ chunk boundaries, and noise sizes.
 
 ## What this crate is not
 
-- **Not the payload codec.** Command bodies (handshake, timed sync, notify
-  payloads) are epee `portable_storage` blobs; this crate treats them as
-  opaque bytes. A portable_storage codec (or a vendoring decision) is a
-  separate, tracked work item.
+- **Not the payload codec.** Command bodies are epee `portable_storage`
+  blobs; the codec is first-party `shekyl-portable-storage` (LV-2a). This
+  crate owns the typed maps (LV-2b): handshake / timed-sync /
+  ping / support-flags (1001 / 1002 / 1003 / 1007) plus `network_address`
+  and notifies 2001–2004 / 2006–2010. Cryptonote blobs stay opaque bytes.
+  Live `shekyld` dual-stack is the `#[ignore]` harness
+  `tests/dual_stack.rs` (`SHEKYLD_BIN`); default crate tests spawn no daemon.
 - **Not the connection stack.** No sockets, timeouts, invoke/response
   correlation, or peer management.
-- **Framing not wired; compression is.** Since 2026-08-06 the daemon's
-  compression path runs through this crate: `contrib/epee`'s
+- **Emit side and compression wired; read side is not.** Since 2026-08-06
+  the daemon's compression path runs through this crate (`contrib/epee`'s
   `levin_compression.cpp` is a marshaling shim over the `shekyl_levin_*`
-  FFI (`rust/shekyl-ffi/src/levin_ffi.rs`), and the vendored libzstd here
-  is the binary's single zstd (no system libzstd, no `HAVE_ZSTD` gate).
-  The framing path — builders, `BucketReader` — stays C++
+  FFI; the vendored libzstd here is the binary's single zstd — no system
+  libzstd, no `HAVE_ZSTD` gate), and since 2026-08-13 the white-noise
+  emitters do too: `epee::levin::make_noise_notify` /
+  `make_fragmented_notify` forward to this crate's `noise_notify` /
+  `fragmented_notify`, so the fragment-padding algorithm has exactly one
+  implementation and the byte-exact `make_fragment.*` gtests exercise it
+  live across the boundary. The read side — `BucketReader`, and the C++
+  `handle_recv` machinery it will one day replace — stays C++
   (`contrib/epee`, `src/p2p/`, `src/cryptonote_protocol/levin_notify.*`)
   until the scheduled p2p cutover. This crate is the verified foundation
   that cutover starts from.
@@ -58,12 +66,10 @@ It is deliberately kept in exactly one place: a second copy drifts from the
 code and then lies about it, which is the failure this crate is least able to
 afford.
 
-In summary, and without restating it: every divergence is *stricter* than the
-C++ — none accepts anything the oracle rejects. Five are read-side (three
-about fragment reassembly and response classification, one bounding a
-decompressed payload by the packet limit in force, one latching the reader
-after a fatal error); one is emit-side, where `try_compress_message` returns
-malformed input unchanged rather than re-framing it.
+In summary, and without restating it: every divergence is *stricter* than
+the remaining C++ oracles (`make_header`, `handle_recv`) — none accepts
+anything those reject. The list itself is in the crate docs; do not count
+or classify it here.
 
 All are unreachable for a conforming sender, and **two stopped being
 divergences at all** at the 2026-08-06 compression cut — kept in the census

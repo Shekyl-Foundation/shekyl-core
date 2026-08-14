@@ -124,6 +124,13 @@ pub enum PScanStartError {
     /// [`StakeEngine`]: crate::engine::stake_engine::StakeEngine
     #[error("no archival-bond stake engine is running; nothing to scan as P")]
     NoStakeEngine,
+    /// The bond watch recovered a staked slot this session; the persona is
+    /// derivable only at open (Model D), so the staking scan can start only
+    /// after the wallet is closed and reopened.
+    #[error(
+        "staking recovered this session: close and reopen the wallet, then the staking scan starts"
+    )]
+    RecoveredPendingReopen,
     /// A `P`-scan task is already running for this wallet — the single-flight slot
     /// ([`PScanSlot`](super::task::PScanSlot)) is held. Two tasks would race the
     /// read-modify-seal of the same `.wallet.pscan`.
@@ -664,7 +671,17 @@ where
         // slot guard is RAII, so any error below releases it on the early return.
         let (daemon, stake, pending_write_lock, slot_guard) = {
             let g = self_arc.read().await;
-            let stake = g.stake_handle().ok_or(PScanStartError::NoStakeEngine)?;
+            let stake = match g.stake_handle() {
+                Some(stake) => stake,
+                // `staking_enabled` with no resident actor = the mid-session
+                // bond-watch recovery state (rule 82: name the reopen remedy,
+                // not a generic "not a staker" over a wallet that just
+                // recovered its staking history).
+                None if g.ledger.staking_enabled() => {
+                    return Err(PScanStartError::RecoveredPendingReopen);
+                }
+                None => return Err(PScanStartError::NoStakeEngine),
+            };
             let slot_guard = g
                 .pscan_slot
                 .try_claim()
@@ -876,6 +893,16 @@ mod tests {
             ],
             Vec::new(),
             Vec::new(),
+            std::collections::BTreeMap::from([
+                (
+                    PCanonicalId::from_bytes([0xAB; 32]),
+                    BlockHeight::from_raw(0),
+                ),
+                (
+                    PCanonicalId::from_bytes([0xCD; 32]),
+                    BlockHeight::from_raw(0),
+                ),
+            ]),
         );
         store.save(&state_a).await.expect("save A");
         assert!(pscan_path.exists(), ".wallet.pscan written by the seal");
@@ -893,6 +920,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            std::collections::BTreeMap::new(),
         );
         store.save(&state_b).await.expect("save B");
         assert_eq!(
