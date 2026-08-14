@@ -51,6 +51,74 @@
   `ARCHIVAL_FIREWALL_GATE6.md` sites still calling the C-1 vin-layer
   ML-DSA equality check "not yet landed" corrected to DISCHARGED (#277).
 
+- **The wallet has an operator alarm channel, and the tor supervisor is
+  its first producer** (OA-1). `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` §3c calls
+  `TorPosture::Degraded` "the operator-alarm hook (`82`)" and specifies
+  how an alarm layer must render it; no alarm layer existed, so the
+  supervisor has been publishing alarm-shaped edges into nothing.
+  The new `shekyl-operator-alarm` crate is that layer, re-exported
+  from `shekyl-engine-core`'s root. Its primary surface is a
+  `watch<AlarmBoard>` snapshot rather than an event stream, because the
+  requirement that decides the shape is that a check which is **not
+  running** must read as *disarmed* and never as healthy — and a stream
+  cannot say that, since a disarmed check and a clean one both emit
+  nothing. Its `tor_posture` module maps posture to board: the §3c
+  episode rule (a degraded tor that briefly recovers and degrades again is
+  **one** `IncidentId`, ending only at `Ready { recovering: false }`), one
+  cause tag per `ServiceFailure` with no collapsing, and vanguard
+  integrity marked `Disarmed` off `Ready` because the `warning` field
+  exists on that variant and no other. It takes the posture *receiver*,
+  not a `TorService`, so it is testable without a tor binary. It is a leaf
+  crate rather than an engine module because it names no engine type: rule 82
+  makes failure-mode UX first-class, and a GUI matching on `OperatorAlarm`
+  should not have to link the wallet orchestrator to render a board.
+
+- **Alarms are classified by whether their observable outlives their
+  condition, not by a severity ladder** (OA-1). `AlarmLifetime::Episode`
+  leaves the board when its producer reports the condition gone;
+  `LatchedRederived` is held for acknowledgment, because the evidence
+  disappears while the damage stands — a vanguard set that was re-drawn
+  stays re-drawn after the next write succeeds and the warning clears. The
+  latch is also what makes a *coalescing* channel safe: a `watch` keeps
+  only the latest value, so an unlatched raise-and-clear inside one tick
+  would vanish. A severity ladder could express the split but nothing
+  would enforce it; here the class comes from an exhaustive match, so a
+  new alarm does not compile until someone classifies it.
+  Acknowledgment names the `IncidentId` the operator actually read, so a
+  fault that arrived while they were reading cannot be dismissed unseen.
+
+- **Live status and outstanding faults are separate shapes on the alarm
+  board** (OA-1). `ConditionState` carries at most one *live* alarm —
+  which is all a producer can report, since the tor supervisor's
+  `warning` is one `Option<ServiceWarning>` — and resolved latches go to
+  `AlarmBoard::unacknowledged`, a queue ordered oldest incident first.
+  A single per-condition slot was wrong: the vanguard set has three
+  distinct integrity faults on one `AlarmCondition` and only one of them
+  latches, so a later unrelated fault would have evicted the
+  unacknowledged record of a guard-set re-draw — silently losing exactly
+  what latching exists to retain. The split also turns two previously
+  runtime-checked properties structural: a latch survives its condition
+  being disarmed because it does not live on that condition's row, and
+  `acknowledge` cannot silence a fault that is still happening because a
+  live alarm is not in the queue to acknowledge. A recurrence *reclaims*
+  its queued incident rather than duplicating beside it —
+  `LatchedRederived` means the producer re-detects the same unfixed
+  problem on every start, which is one fault, not two.
+
+- **The tor control `EventSink` is not, and was never going to be, the
+  alarm channel's input** (OA-1, grounded correction). The plan of record
+  had a translator consuming it. No production call site issues
+  `SETEVENTS` — the DQ-T0.4 `STREAM` subscription is a harness, and §3c's
+  own retraction settled that bootstrap readiness is a `GETINFO` poll,
+  "a command, not a subscription" — so in production the sink receives
+  nothing at all, and `ControlReply` is a deliberately forensic surface
+  ("parse it, never log it") rather than an alarm vocabulary. The wallet's
+  honest production value is the new `EventSink::unsubscribed()`, which
+  states that at the construction site instead of leaving it as an
+  anonymous dropped receiver that reads like an accident. The alarm input
+  is the posture watch, where the supervisor's liveness policy actually
+  publishes.
+
 - **A full rescan now reconstructs a lost staking history — the principal
   scan's bond watch** (SA-R-6 from-seed reconstruction,
   `feat/rescan-slot-reconstruction`). At open, while the seed is transiently
@@ -232,6 +300,16 @@
 
 ### Fixed
 
+- **`ci/benchmarks` capture no longer dies on `ledger_iai`
+  `instructions=0`.** The six postcard cells were one-liners under
+  gungraun's default `--toggle-collect=*::__gungraun_wrapper_mod::*`;
+  when rustc inlined that wrapper, Callgrind recorded 0 and the
+  producer guard rejected the run (PR #467 / `dev` from 2026-08-14).
+  Those benches now bound the measured region with Callgrind client
+  requests (`EntryPoint::None`, `--instr-atstart=no`) so collection
+  does not depend on the wrapper symbol. See
+  `docs/investigation/2026-05-09-bench-baseline-flake.md`.
+
 - **The RandomX v2 differential's daily cron is green again: the T8
   RSS ceiling is re-derived for Arc reach-through residency, and the
   weekly cargo-mutants gate got its trigger back.** The T8 gate
@@ -269,6 +347,30 @@
   reset.
 
 ### Added
+
+- **LV-2b notifies — 2001–2004 / 2006–2010.** Typed Levin maps in
+  `shekyl-levin` for `NOTIFY_NEW_BLOCK` through `NOTIFY_GET_TXPOOL_COMPLEMENT`,
+  including `block_complete_entry` (pruned vs unpruned `txs`,
+  `attestation_witness` transport cap `32 + 8 + 256 * 3385`). Empty STL
+  containers omit the key (C++ match, including handshake peerlists).
+  `dandelionpp_fluff` OPT default true; `CONTAINER_POD_AS_BLOB` for hash
+  and `uint64` lists. In-crate consumer: encode → `notify()` →
+  `BucketReader` (`tests/notify_kats.rs`). Does not wire the daemon
+  (`handle_recv` / `net_node` remain LV-3).
+
+- **LV-2b dual-stack handshake against `shekyld`.** Ignored integration
+  harness `rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`) speaks
+  handshake / ping / timed-sync / support-flags with a live `--regtest`
+  daemon over Levin. Default `cargo test -p shekyl-levin` still spawns
+  no daemon (`LV2_PORTABLE_STORAGE.md` §12 step 4).
+
+- **LV-2b first drop — handshake / timed-sync / ping / support-flags.**
+  Typed Levin maps in `shekyl-levin` on `shekyl-portable-storage`
+  (1001 / 1002 / 1003 / 1007 plus the `network_address` union).
+  OPT-omit, `cumulative_difficulty_top64` store-always / load-OPT, and
+  encode → `invoke()` → `BucketReader` round-trips in
+  `tests/payload_kats.rs`. Does not wire the daemon
+  (`handle_recv` / `net_node` remain LV-3).
 
 - **LV-2 portable_storage decision** (`docs/design/LV2_PORTABLE_STORAGE.md`).
   First-party `shekyl-portable-storage` codec (LV-2a) then typed Levin command

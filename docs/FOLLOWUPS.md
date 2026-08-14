@@ -9084,37 +9084,28 @@ sustainability is unaffected by the recalibration.
   (668b0b0bb) — correct, since those paths *do* leak on `socks5://` even though the
   scan does not.
 
-- **Retire the iai-callgrind→gungraun bench-flake bisect harness once gungraun
-  proves out (spawned by the gungraun 0.19 migration, 2026-06-16).** The
-  migration from `iai-callgrind 0.16` to `gungraun 0.19`
-  (`docs/investigation/2026-05-09-bench-baseline-flake.md`) was justified on
-  supported-upstream / debt grounds; whether it *also* fixes the
-  `instructions=0` capture flake is **speculative** (root cause unknown,
-  §3.3). Two artifacts exist only to bridge that uncertainty and should be
-  removed once it resolves:
-  - `.github/workflows/bench-runner-bisect.yml` — a `workflow_dispatch`-only,
-    deliberately-`iai-callgrind 0.16`-pinned runner-bisection harness for the
-    *original* flake. Post-migration it pins a dependency the tree no longer
-    uses; it gates nothing and pushes nowhere.
-  - The per-bench capture retry (`GUNGRAUN_CAPTURE_ATTEMPTS`, default 3) in
-    `scripts/bench/capture_rust_baseline.sh` — a belt-and-suspenders absorber
-    for the transient zero; harmless to keep but redundant if the flake is
-    genuinely gone.
-  **Trigger:** retire the bisect workflow (and reconsider the retry) once
-  gungraun has run **~100 capture/CI cycles** (per-PR `capture-pr` + post-merge
-  `update-baseline` runs) with **zero `instructions=0` recurrences** — at which
-  point the upgrade is empirically the fix, not a speculative one. *Reopen /
-  escalate sooner if:* a zero recurs under gungraun, which would reopen §3.3's
-  candidate list (cause is runner-host- or Callgrind-side, not the crate) with
-  fresh evidence and argue for *keeping* both artifacts.
-  **Watch item — baseline drift on first regeneration:** the post-merge
-  `update-baseline` job reseeds `bench-baseline` wholesale under gungraun, so
-  steady-state comparison is gungraun-vs-gungraun (no cross-tool diff). Local
-  spot-check shows gungraun 0.19.2 instruction counts within <1% of the
-  iai-callgrind 0.16 numbers (e.g. ledger serialize 4,416,897 vs ~4.45M), far
-  inside the ±10% slowdown gate — but the bench set has grown since the
-  original cross-check, so confirm the first full gungraun baseline lands
-  clean across *all* current entries before trusting the gate.
+- **Retire the iai-callgrind→gungraun bench-flake bisect harness (spawned
+  by the gungraun 0.19 migration, 2026-06-16; cause closed 2026-08-14).**
+  UPDATE 2026-08-14: the `instructions=0` capture flake is the default
+  Callgrind `--toggle-collect=*::__gungraun_wrapper_mod::*` missing an
+  inlined wrapper on the six `ledger_iai` postcard cells. Disposition
+  landed in-tree: those benches use Callgrind client requests
+  (`EntryPoint::None`, `--instr-atstart=no`) so collection is
+  position-based. The gungraun 0.19 migration did not fix it (same
+  toggle scheme). Remaining delete-now work, not a new investigation:
+  - `.github/workflows/bench-runner-bisect.yml` — still pins
+    `iai-callgrind 0.16`; gates nothing; delete in a follow-up commit.
+  - `GUNGRAUN_CAPTURE_ATTEMPTS` (default 3) in
+    `scripts/bench/capture_rust_baseline.sh` — keep until a few
+    post-fix `capture-pr` / `update-baseline` cycles are clean, then
+    drop. *Reopen if:* a zero recurs on `ledger_iai` after the
+    client-request wrap, which would mean the client-request bound
+    itself is being compiled out and needs a different Callgrind
+    control (not a return to symbol toggles).
+  **Watch item — baseline drift on first regeneration:** the next
+  `update-baseline` on `dev` reseeds `bench-baseline`. Client-request
+  sequences add a handful of instructions against millions of postcard
+  work, inside the `hot_path` ±5% warn band.
 
 - **rand 0.9 migration and curve25519-dalek 5 cascade.**
   Seven Dependabot alerts on `shekyl-core` cite
@@ -9658,8 +9649,17 @@ its wake.
     implementation is in-scope, not V3.0-gating. UPDATE 2026-08-13:
     **LV-2a landed** — `rust/shekyl-portable-storage`,
     `docs/PORTABLE_STORAGE.md` completed, the two homegrown HTTP `.bin`
-    parsers deleted. The framing crate still carries payloads as opaque
-    bytes until LV-2b lands.
+    parsers deleted. UPDATE 2026-08-14: **LV-2b first drop landed** —
+    handshake / timed-sync / ping / support-flags (1001 / 1002 / 1003 /
+    1007) plus `network_address` in `shekyl-levin`; in-crate consumer is
+    encode → `invoke()` → `BucketReader`. UPDATE 2026-08-14: **LV-2b maps
+    landed** — notifies 2001–2004 / 2006–2010 (including 2002) in
+    `shekyl-levin`; in-crate consumer is encode → `notify()` →
+    `BucketReader` (`tests/notify_kats.rs`). Empty STL containers omit
+    the key (C++ `serialize_stl_container_*`). UPDATE 2026-08-14: live
+    `shekyld` dual-stack landed as `#[ignore]` harness
+    `rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`; default crate
+    tests still spawn no daemon). Not a FOLLOWUPS dump of this PR's maps.
   - **LV-3 — connection-path cutover.** Replace the C++ Levin read/write
     path at the `levin_notify.cpp` / `net_node.inl` seam with the Rust
     crate. Cost basis: the index's "Relay layer → C++ dependency

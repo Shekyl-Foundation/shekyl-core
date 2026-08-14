@@ -1,5 +1,30 @@
 # Bench-baseline `instructions=0` flake — investigation (2026-05-09)
 
+> **Update (2026-08-14) — cause identified; `ledger_iai` now uses
+> Callgrind client requests.** The six `hot_path_bench_ledger_postcard_*`
+> cells that the producer guard rejects (`instructions=0` while
+> wall-clock is healthy) miss Callgrind's default collection toggle.
+> Gungraun library benches collect via
+> `--toggle-collect=*::__gungraun_wrapper_mod::*` with
+> `--collect-at-start=no`. Collection starts only when that wrapper
+> symbol is *entered*. The macros already put `#[inline(never)]` on the
+> wrapper; rustc sometimes still inlines or ICF-folds it, and Callgrind
+> then records 0. These six cells are one-liners under
+> `#[benches::with_setup]` — uniquely small among the `_iai` suite —
+> which is why `balance_iai` (same macro, heavier body) never flaked.
+> Same-VM retry cannot help: the compiled wrapper is already gone.
+> A second `--toggle-collect` on `__gungraun_wrapper_id_mod` would
+> nest-invert collection; replacing Default with Custom on id-mod
+> would zero the *successful* path if id-mod inlines and wrapper-mod
+> does not. The load-bearing fix is position-based: enable gungraun
+> `client_requests` (the `act` path — `client_requests_defs` is a
+> no-op), wrap the measured work in
+> `callgrind::{start,stop}_instrumentation`, and set
+> `EntryPoint::None` plus `--instr-atstart=no` so setup stays
+> uninstrumented. First post-merge `update-baseline` on `dev` refreshes
+> `bench-baseline`; the extra client-request sequences are a handful of
+> instructions against millions of postcard work.
+
 > **Update (2026-06-25) — gungraun did NOT fix the flake; an in-run
 > auto-rerun was tried and reverted as architecturally racy.** The capture
 > still flakes to `instructions=0` under the latest gungraun (`0.19.2`, the
@@ -45,12 +70,15 @@
 > The flake-fix remains **speculative** (§3.3 cause unknown) — the trajectory /
 > debt argument (§4) is what justifies the upgrade regardless.
 
-**Status:** **cause unknown.** Initial smoking-gun hypothesis (iai-
-callgrind issue #19) was withdrawn after source verification — see
-§3 for the retraction. Eliminations in §2 stand. Disposition in §4
-recommends a gungraun 0.17.x / 0.18.x upgrade on debt-reduction
-grounds with speculative incidental flake-mitigation; the upgrade
-is **not** a targeted fix because there is no confirmed target.
+**Status (as of 2026-08-14):** cause identified — Callgrind's default
+wrapper-symbol toggle records 0 when `__gungraun_wrapper_mod` is
+inlined; fixed in `ledger_iai` via client requests. See the
+2026-08-14 banner. Historical status below is the 2026-05-09 /
+2026-06-16 record: initial smoking-gun hypothesis (iai-callgrind
+issue #19) was withdrawn after source verification — see §3 for the
+retraction. Eliminations in §2 stand. Disposition in §4 was the
+gungraun upgrade on debt-reduction grounds, which did **not** fix
+the flake (2026-06-25 banner).
 
 **Branch:** `chore/investigate-bench-baseline-flake-2026-05-09`.
 
