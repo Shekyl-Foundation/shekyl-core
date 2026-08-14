@@ -9488,6 +9488,31 @@ its wake.
   Owned by the wallet rewrite (this constant dies with `wallet2.cpp`); recorded
   now because the reason is visible now. See `DAEMON_RELAY_PRIVACY.md` §89.6.
 
+- **Relay: re-derive `fluff_return_ms` once, when a degree distribution
+  exists.** The convergence criterion landed 2026-08-13
+  (`conformance::converged_fluff_return_mixed`, §90), and it says the shipped
+  `fluff_return_ms = 3250` is **the second-lowest of six draws** at a trial
+  count too small to have collapsed: converged, the reading is **3500 ms**
+  (6 seeds at 64 trials and 10 seeds at 512 trials, both spread 0). Low is the
+  privacy-losing direction — it under-provisions the embargo.
+
+  **Deliberately not landed with the criterion.** `F′` is re-derived *once*,
+  with both corrections applied together — the converged trial count **and** a
+  heterogeneous-degree graph — because moving it is a conformance-vector event
+  that carries the 190 s embargo, the 874 s wallet timeout and the §44 pins.
+
+  **Named blocker: the degree distribution was never measured, and the built
+  estate could not have measured it.** The six-host ring saturates at degree 5
+  (`A = 6`), its steady-state churn is near zero (30/30 for 50 minutes), and
+  the `A = 60` arm — the only one where degree 12 is unsaturated and the floor
+  is per-node — was never run (`Q12_D6A_PEER_DISCOVERY_RUN.md` §§11.9–11.13
+  and its status line). The instrument side is ready:
+  `simulate_fluff_return_mixed` already takes per-node degrees.
+
+  **Reopen when** a run at `A ≥ 60` yields a degree distribution. Then one
+  change: re-derive through the criterion, and carry the embargo, the wallet
+  timeout and the §44 pins with it.
+
 - **Relay: populate the 48-cell Pi verification surface, then consume it
   per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first
   (`shekyl-relay-privacy/src/verify_cost.rs`, 2026-08-06) carrying the four

@@ -13905,3 +13905,92 @@ argument no longer describes what it justifies.
 That is **Q-12**, registered since Q-11 Unit 0 and still untouched. **The zone
 field and Q-12 are one round**, or the forward delay is left justifying a bridge
 that no longer works the way its comment describes.
+
+---
+
+## 90. The first-passage readings get a convergence criterion — and the shipped `F′` is a low draw
+
+**2026-08-13.** `fluff_return_ms = 3250` was read off **one** `(seed, trials)`
+pair: `f7_directed.rs` builds `SplitMix64::new(0xF7_0000 + peers)`, runs 24
+trials, and reports what comes back. Nothing in that procedure can distinguish
+*the distribution's answer* from *this seed's*, and the constant feeds the
+embargo derivation.
+
+### 90.1 The criterion
+
+`conformance::converged_fluff_return_mixed` re-runs the measurement at
+independent seeds, doubles the trial count until the seeds agree, and
+**refuses to return a number** if they never do. Each escalation builds fresh
+RNGs from the seeds rather than extending the previous run, so the rungs are
+independent samples and not a longer version of one.
+
+Two refusals, deliberately separate:
+
+- `Spread` — the budget ran out with the seeds still disagreeing. More trials
+  is the right response.
+- `Stranded` — a seed's p90 is `u64::MAX` because the topology stranded >10 %
+  of nodes. **More trials cannot fix this**, so it must not be reported as a
+  spread; folding the two would send the next reader to widen a budget when
+  the degrees are what is wrong.
+
+The default tolerance is one `FLOOD_TICK_MS` (250 ms), because every delay the
+instrument draws is a whole number of ticks: **a difference below one tick is
+the grid, not a measurement**, and demanding finer agreement asks for precision
+the model cannot express.
+
+The reported reading is the **maximum** across seeds, for the reason
+`FloodSummary::unreached` already gives — an `F′` biased low under-provisions
+the embargo, which is the privacy-losing direction.
+
+### 90.2 What it says about the shipped value
+
+At the shipped topology (`OutboundOnly`, degree 12, 512 nodes,
+`mean_quarter_secs = 20`, `Geometric`):
+
+| run | seeds | trials/seed | readings (ms) | spread |
+| --- | --- | --- | --- | --- |
+| converged | 6 | 64 | all 3500 | **0** |
+| converged (wider) | 10 | 512 | all 3500 | **0** |
+| below convergence | 6 | 8 | 3000, 3250, 3500, 3250, 3750, 3750 | 750 ms |
+
+**The distribution's answer is 3500 ms. The shipped 3250 is the second-lowest
+of six draws at a trial count too small to have collapsed** — and it is low,
+which is the direction that under-provisions.
+
+The eight-trial row is not decoration: it is the negative control that shows
+the criterion had work to do, and it is the shape the original measurement was
+taken in.
+
+### 90.3 The constant is NOT moved here, and why
+
+The standing instruction is to re-derive `F′` **once**, with both corrections
+applied together and never composed arithmetically: the converged trial count
+**and** a heterogeneous-degree graph. Only the first exists. Landing 3500 now
+would spend the derivation on half the correction and force the other half to
+re-open it.
+
+Moving `F′` is also a **conformance-vector event**, not a constant edit — it
+carries the 190 s embargo, the 874 s wallet timeout, and the §44 pins with it.
+
+**The second correction has no measured input, and the fleet could not have
+supplied one.** `Q12_D6A_PEER_DISCOVERY_RUN.md` records the estate's
+measurements in §§11.9–11.13, and none of them is a degree distribution at the
+scale this needs:
+
+- The six-host ring is `A = 6`, so its degree saturates at 5. A graph whose
+  out-degree target is 12 cannot be observed on it at all — §11.9's own
+  saturation caveat is the same point.
+- Its measured steady-state churn is near zero (30 of 30 links held for 50
+  minutes, one transient 29), which is the opposite of a churn-degraded graph.
+- The `A = 60` arm is the only one where degree 12 is unsaturated and the
+  floor is per-node (§11.9), and **no arm was ever run** — the doc's own
+  status line says so.
+
+So the missing input is *unmeasured*, not *lost*. `simulate_fluff_return_mixed`
+already accepts the per-node degrees, so the instrument is waiting on the
+distribution, not the other way round.
+
+**Reopening criterion.** When a run supplies a degree distribution at
+`A ≥ 60`, re-derive `F′` once through `converged_fluff_return_mixed` with that
+distribution, and carry the embargo, the wallet timeout and the §44 pins in the
+same change.

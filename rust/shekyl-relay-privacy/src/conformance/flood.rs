@@ -125,6 +125,15 @@ pub struct FloodSummary {
     pub p90_ms: u64,
 }
 
+/// The flood's time quantum. Every delay these instruments draw is a whole
+/// number of ticks, so **no reading they produce can be finer than this** — a
+/// difference below one tick is the grid, not a measurement.
+///
+/// Named because [`ConvergenceBudget::tolerance_ms`] is defined against it: the
+/// point of the convergence check is to stop reporting differences the
+/// instrument cannot resolve.
+pub const FLOOD_TICK_MS: u64 = 250;
+
 /// Build the flood adjacency shared by the instruments below: each node
 /// initiates `peers` *distinct* non-self edges (redraw on a self-hit or a
 /// repeat), so every node's effective degree is fixed by [`FloodParams`], not
@@ -251,7 +260,7 @@ pub fn simulate_fluff_return_mixed<R: RelayRng + ?Sized>(
     );
 
     let table = DelayTable::build(mean_quarter_secs, family);
-    let draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(250) };
+    let draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(FLOOD_TICK_MS) };
 
     let mut arrivals: Vec<u64> = Vec::with_capacity(trials * flood.nodes);
 
@@ -334,7 +343,7 @@ pub fn simulate_diffusion_first_spy<R: RelayRng + ?Sized>(
     );
 
     let table = DelayTable::build(mean_quarter_secs, family);
-    let draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(250) };
+    let draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(FLOOD_TICK_MS) };
 
     // Scaled Bernoulli, compared with `<=` (not `<`) so `spy_fraction == 1.0`
     // (threshold == u32::MAX) marks every candidate node, per the `(0, 1]` contract.
@@ -393,5 +402,219 @@ pub fn simulate_diffusion_first_spy<R: RelayRng + ?Sized>(
         observed,
         precision: correct as f64 / observed as f64,
         mean_first_spy_hops: first_spy_hops_total as f64 / observed as f64,
+    }
+}
+
+/// How hard to try before **refusing** to report a first-passage reading.
+///
+/// # Why a budget rather than a trial count
+///
+/// A single `(seed, trials)` pair yields one draw from a distribution, and
+/// nothing in the reading says how wide that distribution is. `fluff_return_ms`
+/// was set from such a reading; so was the `3250` in `f7_directed.rs`, which
+/// takes `SplitMix64::new(0xF7_0000 + peers)` at one trial count and reports
+/// whatever comes back. The number may be right — the *procedure* cannot tell,
+/// and re-running it at another seed is how you find out, not an optional
+/// robustness check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConvergenceBudget {
+    /// Trials per seed on the first pass. Doubles until convergence or
+    /// `max_trials`.
+    pub start_trials: usize,
+    /// The refusal point. Reaching it without collapsing the spread is an
+    /// [`ConvergenceRefusal::Spread`], **never** a reported number.
+    pub max_trials: usize,
+    /// The spread across seeds that counts as converged, in milliseconds.
+    ///
+    /// Defaults to [`FLOOD_TICK_MS`]: below one tick the seeds disagree by less
+    /// than the instrument's own grid, so further trials buy resolution the
+    /// simulation does not have. Tightening this past a tick asks for precision
+    /// the model cannot express.
+    pub tolerance_ms: u64,
+}
+
+impl Default for ConvergenceBudget {
+    fn default() -> Self {
+        Self {
+            start_trials: 64,
+            max_trials: 8192,
+            tolerance_ms: FLOOD_TICK_MS,
+        }
+    }
+}
+
+/// A first-passage reading that survived [`ConvergenceBudget`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Converged {
+    /// The reading to consume, taken as the **maximum** across seeds.
+    ///
+    /// Max rather than mean or median for the reason
+    /// [`FloodSummary::unreached`] gives: a `fluff_return_ms` biased low
+    /// under-provisions the embargo, which is the privacy-losing direction.
+    /// Once converged the choice moves the answer by under a tick, but the rule
+    /// is stated so it is not re-decided by whoever reads this next.
+    pub p90_ms: u64,
+    /// What it took, so the cost is visible and the run is reproducible.
+    pub trials_per_seed: usize,
+    /// The surviving disagreement — necessarily `<= tolerance_ms`.
+    pub spread_ms: u64,
+    /// Every seed's reading, in the order the seeds were given.
+    pub readings_ms: Vec<u64>,
+}
+
+/// Why a reading was refused. **There is no third state**: the instrument
+/// either converges or declines to answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConvergenceRefusal {
+    /// At least one seed stranded more than 10 % of nodes, so its p90 is
+    /// `u64::MAX`.
+    ///
+    /// Separated from [`Self::Spread`] because **more trials cannot fix it** —
+    /// stranding is a property of the topology, not of the sample size, so
+    /// escalating the budget would burn it against a question it cannot
+    /// answer. The input degrees are what is wrong.
+    Stranded {
+        trials_per_seed: usize,
+        seeds_stranded: usize,
+        seeds: usize,
+    },
+    /// The budget ran out with the seeds still disagreeing by more than
+    /// `tolerance_ms`.
+    Spread {
+        trials_per_seed: usize,
+        spread_ms: u64,
+        tolerance_ms: u64,
+        readings_ms: Vec<u64>,
+    },
+}
+
+impl std::fmt::Display for ConvergenceRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stranded {
+                trials_per_seed,
+                seeds_stranded,
+                seeds,
+            } => write!(
+                f,
+                "REFUSE: {seeds_stranded} of {seeds} seeds stranded >10 % of nodes at \
+                 {trials_per_seed} trials — p90 is unreached, and more trials will not \
+                 change that. Fix the degrees, not the budget."
+            ),
+            Self::Spread {
+                trials_per_seed,
+                spread_ms,
+                tolerance_ms,
+                readings_ms,
+            } => write!(
+                f,
+                "REFUSE: seeds still spread {spread_ms} ms (tolerance {tolerance_ms} ms) at \
+                 {trials_per_seed} trials/seed — readings {readings_ms:?}. Reporting any one \
+                 of these would be reporting a draw as a measurement."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConvergenceRefusal {}
+
+/// Measure the fluff-return p90 across several seeds, escalating trials until
+/// the seeds agree — or **refuse to report a number**.
+///
+/// This is [`simulate_fluff_return_mixed`] with the missing half attached. The
+/// simulator answers *"what did this draw give?"*; a constant derived from it
+/// needs *"is that the distribution's answer or this seed's?"*, and only
+/// re-running at independent seeds can say. Each escalation builds **fresh**
+/// RNGs from the seeds rather than extending the previous run, so the passes
+/// are independent samples and not a longer version of the same one.
+///
+/// # Errors
+///
+/// [`ConvergenceRefusal::Spread`] when the budget is exhausted with the seeds
+/// still disagreeing, and [`ConvergenceRefusal::Stranded`] when the topology
+/// leaves a seed's p90 unreached. Both are refusals to report, deliberately:
+/// the failure mode this exists to stop is a plausible number with no claim on
+/// the distribution behind it.
+///
+/// # Panics
+///
+/// Panics if fewer than two seeds are given (one reading has no spread), or if
+/// the budget is degenerate (`start_trials` zero, or above `max_trials`).
+pub fn converged_fluff_return_mixed<R, F>(
+    flood: FloodParams,
+    degrees: &[usize],
+    mean_quarter_secs: u32,
+    family: DelayFamily,
+    seeds: &[u64],
+    budget: ConvergenceBudget,
+    mut make_rng: F,
+) -> Result<Converged, ConvergenceRefusal>
+where
+    R: RelayRng,
+    F: FnMut(u64) -> R,
+{
+    assert!(
+        seeds.len() >= 2,
+        "convergence needs at least two seeds — one reading has no spread to check"
+    );
+    assert!(budget.start_trials > 0, "start_trials must be positive");
+    assert!(
+        budget.start_trials <= budget.max_trials,
+        "start_trials {} exceeds max_trials {}",
+        budget.start_trials,
+        budget.max_trials
+    );
+
+    let mut trials = budget.start_trials;
+    loop {
+        let readings_ms: Vec<u64> = seeds
+            .iter()
+            .map(|seed| {
+                let mut rng = make_rng(*seed);
+                simulate_fluff_return_mixed(
+                    flood,
+                    degrees,
+                    mean_quarter_secs,
+                    family,
+                    trials,
+                    &mut rng,
+                )
+                .p90_ms
+            })
+            .collect();
+
+        let seeds_stranded = readings_ms.iter().filter(|p| **p == u64::MAX).count();
+        if seeds_stranded > 0 {
+            return Err(ConvergenceRefusal::Stranded {
+                trials_per_seed: trials,
+                seeds_stranded,
+                seeds: seeds.len(),
+            });
+        }
+
+        // Unwraps are total: `seeds.len() >= 2` is asserted above, so the
+        // iterator is non-empty.
+        let hi = *readings_ms.iter().max().unwrap();
+        let lo = *readings_ms.iter().min().unwrap();
+        let spread_ms = hi - lo;
+
+        if spread_ms <= budget.tolerance_ms {
+            return Ok(Converged {
+                p90_ms: hi,
+                trials_per_seed: trials,
+                spread_ms,
+                readings_ms,
+            });
+        }
+
+        if trials >= budget.max_trials {
+            return Err(ConvergenceRefusal::Spread {
+                trials_per_seed: trials,
+                spread_ms,
+                tolerance_ms: budget.tolerance_ms,
+                readings_ms,
+            });
+        }
+        trials = (trials * 2).min(budget.max_trials);
     }
 }
