@@ -168,9 +168,30 @@ impl ServingConfig {
 pub struct ServingHandle {
     cancel_token: CancellationToken,
     join: Option<JoinHandle<()>>,
+    alarms: Arc<OperatorAlarms>,
 }
 
 impl ServingHandle {
+    /// The operator alarm board this lifecycle reports through.
+    ///
+    /// **Held here because this is what the embedder holds.** The board's
+    /// lifetime is the serving lifetime — the tor-posture producer attaches to
+    /// *this* host's supervisor, and the serve-set conditions describe *this*
+    /// host's pins — so parking it beside the task that feeds it is what keeps
+    /// a wallet's alarms reachable for exactly as long as they mean anything.
+    ///
+    /// Reachable even when the host never started: a start failure is reported
+    /// onto this board and the handle is still returned, so the embedder can
+    /// render *why* rather than seeing a wallet that silently is not serving.
+    ///
+    /// Subscribe with [`OperatorAlarms::subscribe`] for the snapshot stream,
+    /// [`OperatorAlarms::board`] for a one-shot read, and
+    /// [`OperatorAlarms::acknowledge`] to clear a resolved latch.
+    #[must_use]
+    pub fn alarms(&self) -> Arc<OperatorAlarms> {
+        Arc::clone(&self.alarms)
+    }
+
     /// Fire the cancel token. Idempotent. The task observes it at its next
     /// await point — including *during* the launch standoff, so a wallet closed
     /// inside the standoff window never publishes at all.
@@ -215,13 +236,14 @@ where
         tor,
         serving,
         pinner,
-        alarms,
+        Arc::clone(&alarms),
         config,
         cancel_token.clone(),
     ));
     ServingHandle {
         cancel_token,
         join: Some(join),
+        alarms,
     }
 }
 
@@ -261,10 +283,20 @@ async fn run_serving_task<P>(
     );
 
     let bound = config.staleness_bound;
+
+    // The host is live *now*, and the board still says `NotServing` from the
+    // standoff. Reporting the start witness immediately closes a window in
+    // which an operator reads "not serving" while the onion is published —
+    // which is precisely the misreading this channel exists to prevent, and it
+    // would have lasted a full refresh cadence. Read rather than refresh:
+    // `start` just pinned, so a refresh here would be a redundant actor round
+    // trip to re-derive what the witness already holds.
+    report(&alarms, read(&host, bound));
+
     let mut ticker = tokio::time::interval(config.refresh_cadence);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // The first tick completes immediately; the host was just started and its
-    // pins are fresh, so skip straight to the cadence.
+    // The first tick completes immediately, and the line above already reported
+    // that state; consume it so the loop starts one cadence out.
     ticker.tick().await;
 
     loop {
@@ -302,7 +334,19 @@ where
             },
         };
     }
+    read(host, bound)
+}
 
+/// Read the current witness without refreshing.
+///
+/// Split from [`observe`] for the post-start report: the host has just pinned,
+/// so the state is known and a refresh would only re-derive it. Keeping the two
+/// separate is also what stops "report the current state" from silently
+/// acquiring a network round trip later.
+fn read<P>(host: &PersonaServingHost<P>, bound: StalenessBound) -> ServeSetObservation
+where
+    P: ServeSetPinner,
+{
     let pinned = host.pinned_serve_set();
     match caught_up(&pinned) {
         Some(false) => return ServeSetObservation::CatchingUp,
@@ -950,5 +994,181 @@ where
                 shekyl_economics::EconomicParams::default().daa_target_seconds,
             ),
         )))
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use shekyl_curve_tree::{BlockHeight, LeafStore, ServingReader};
+    use shekyl_operator_alarm::{AlarmCondition, Arming, ConditionState, DisarmedReason};
+    use shekyl_p_host::PinReport as HostPinReport;
+    use shekyl_tor::onion_identity::OnionIdentity;
+
+    /// A pinner over a real (empty) store. An empty serve-set is a legitimate
+    /// production state — an unbonded persona reports exactly this — so the
+    /// lifecycle can be driven end to end without fabricating segments.
+    struct EmptySetPinner {
+        store: Arc<LeafStore>,
+        fail: bool,
+    }
+
+    impl ServeSetPinner for EmptySetPinner {
+        async fn pin_serve_set(&self) -> Result<HostPinReport, String> {
+            if self.fail {
+                return Err("pinner is down".into());
+            }
+            Ok(HostPinReport {
+                shard_ids: Vec::new(),
+                as_of_height: BlockHeight(0),
+                outcomes: Vec::new(),
+                reader: ServingReader::new(Arc::clone(&self.store)),
+            })
+        }
+    }
+
+    fn pinner(fail: bool) -> EmptySetPinner {
+        EmptySetPinner {
+            store: Arc::new(LeafStore::open_ephemeral().expect("store")),
+            fail,
+        }
+    }
+
+    /// A tor config whose binary cannot pass the hash gate. `start` returns as
+    /// soon as the supervisor is spawned (it does not await readiness), so this
+    /// drives a *successful* host start without a real tor.
+    fn churning_tor(dir: &tempfile::TempDir) -> TorServiceConfig {
+        let bogus = dir.path().join("not-tor");
+        std::fs::write(&bogus, b"not a tor binary").expect("write");
+        TorServiceConfig {
+            binary: shekyl_tor::service::TorBinarySource::At(bogus),
+            data_dir: dir.path().join("data"),
+            events: shekyl_tor::control::EventSink::unsubscribed(),
+            policy: shekyl_tor::service::SupervisorPolicy::default(),
+            disable_network: true,
+            posture: shekyl_tor::service::ServingPosture::Client,
+        }
+    }
+
+    fn serving_identity() -> PersonaServing {
+        PersonaServing {
+            identity: OnionIdentity::from_hs_id_seed(&[7u8; 32]),
+            virtual_port: SERVING_VIRTUAL_PORT,
+            max_streams: SERVING_MAX_STREAMS,
+        }
+    }
+
+    /// No standoff and a cadence far longer than the test: the board must be
+    /// correct on the strength of the post-start report alone, never because a
+    /// refresh tick rescued it.
+    fn immediate() -> ServingConfig {
+        ServingConfig {
+            launch_window: Duration::ZERO,
+            refresh_cadence: Duration::from_secs(3_600),
+            staleness_bound: StalenessBound::blocks(10),
+        }
+    }
+
+    async fn settle_until(
+        alarms: &OperatorAlarms,
+        want: impl Fn(&shekyl_operator_alarm::AlarmBoard) -> bool,
+    ) -> bool {
+        for _ in 0..200 {
+            if want(&alarms.board()) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    }
+
+    /// The board must not read "not serving" while the onion is live.
+    ///
+    /// Without the post-start report the board keeps the standoff's
+    /// `NotServing` until the first refresh tick — up to a full cadence of an
+    /// operator being told the persona is down while it is published. The
+    /// cadence here is an hour, so only the immediate report can satisfy this.
+    #[tokio::test]
+    async fn the_board_stops_saying_not_serving_as_soon_as_the_host_is_up() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let alarms = Arc::new(OperatorAlarms::new());
+        let handle = spawn_serving_task(
+            churning_tor(&dir),
+            serving_identity(),
+            pinner(false),
+            Arc::clone(&alarms),
+            immediate(),
+        );
+
+        // `is_some_and`, not `!=`: the row does not exist until the spawned
+        // task's first write, and `None != Some(..)` is *true* — so a `!=`
+        // predicate is satisfied by the board being empty, before anything has
+        // happened at all. That version passed with the post-start report
+        // deleted, which is the definition of a test that proves nothing.
+        let armed = settle_until(&alarms, |b| {
+            b.condition(AlarmCondition::ServeSetIntegrity)
+                .map(ConditionState::arming)
+                .is_some_and(|a| a != Arming::Disarmed(DisarmedReason::TransportStopped))
+        })
+        .await;
+        assert!(
+            armed,
+            "the serve-set row still reads as a stopped transport after the host \
+             started; nothing would correct it for a whole refresh cadence",
+        );
+        handle.shutdown().await;
+    }
+
+    /// The channel is reachable. Without this the whole of OA-1 is write-only
+    /// in production: alarms are raised onto a board nothing can subscribe to.
+    #[tokio::test]
+    async fn the_handle_exposes_the_board_it_reports_through() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let alarms = Arc::new(OperatorAlarms::new());
+        let handle = spawn_serving_task(
+            churning_tor(&dir),
+            serving_identity(),
+            pinner(false),
+            Arc::clone(&alarms),
+            immediate(),
+        );
+
+        // The embedder's only reference is the handle.
+        let from_handle = handle.alarms();
+        let seen = {
+            let board = from_handle.subscribe();
+            let b = board.borrow().clone();
+            b.conditions().count()
+        };
+        assert!(
+            seen > 0 || settle_until(&from_handle, |b| b.conditions().count() > 0).await,
+            "the handle's board must be the one the task writes to",
+        );
+        handle.shutdown().await;
+    }
+
+    /// A start failure is reported *and* the handle still comes back, so the
+    /// embedder can render why rather than seeing a wallet that silently is
+    /// not serving.
+    #[tokio::test]
+    async fn a_failed_start_lands_on_the_board_reachable_from_the_handle() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let alarms = Arc::new(OperatorAlarms::new());
+        let handle = spawn_serving_task(
+            churning_tor(&dir),
+            serving_identity(),
+            pinner(true),
+            Arc::clone(&alarms),
+            immediate(),
+        );
+
+        let reported = settle_until(&handle.alarms(), |b| {
+            b.condition(AlarmCondition::ServeSetIntegrity)
+                .and_then(ConditionState::live)
+                .is_some()
+        })
+        .await;
+        assert!(reported, "a pinner that is down must reach the operator");
+        handle.shutdown().await;
     }
 }

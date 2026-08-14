@@ -673,6 +673,18 @@ async fn wrap_and_start_tasks(
     let serving = match Engine::start_serving_if_staker(shared.clone(), daemon_address).await {
         Ok(handle) => handle,
         Err(e) => {
+            // The P-scan is already spawned at this point, so the aborted open
+            // must take it down *and await it* before returning. `Drop` alone
+            // would cancel the token but not observe the exit, leaving a sweep
+            // in flight free to seal `.wallet.pscan` for a wallet the tenant
+            // never recorded as open — a write from a session that, as far as
+            // every other layer is concerned, never happened.
+            OpenTasks {
+                pscan,
+                serving: None,
+            }
+            .shutdown()
+            .await;
             tracing::warn!(
                 error = %e,
                 "a staker's serving host could not be started; aborting the open \
