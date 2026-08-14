@@ -66,6 +66,12 @@ pub const PREFS_TOML_SUFFIX: &str = ".prefs.toml";
 /// Suffix appended to the base stem for the HMAC companion file.
 pub const PREFS_HMAC_SUFFIX: &str = ".prefs.toml.hmac";
 
+/// Suffix appended to the base stem for this wallet's Tor `DataDirectory`.
+///
+/// A directory rather than a file, and **derived rather than configured** — see
+/// [`tor_data_dir_from`] for why it is not a setting.
+pub const TOR_DATA_DIR_SUFFIX: &str = ".tor";
+
 /// Strip a single trailing `".wallet"` from `base`, if present.
 /// Returns the stem as an [`OsString`] so Windows paths with
 /// non-UTF-8 segments survive the round-trip unchanged.
@@ -130,6 +136,42 @@ pub fn prefs_hmac_path_from(base: &Path) -> PathBuf {
     PathBuf::from(stem)
 }
 
+/// Derive this wallet's Tor `DataDirectory` — `<P>.tor/` beside `<P>.wallet`.
+///
+/// # Why this is derived and not a setting
+///
+/// **DQ-T0.7's three placement requirements are satisfied by construction.**
+/// That ruling requires a "wallet-adjacent, wallet-controlled,
+/// non-world-writable" directory, held **persistently** across sessions because
+/// the directory carries the entry-guard identity and per-session rotation is
+/// itself a deviation-from-defaults signature. Deriving the path from the wallet
+/// stem gives all three for free; a configurable path lets an operator put
+/// entry-guard state on a network share or in a world-readable temp dir, with no
+/// compensating benefit.
+///
+/// **The stronger reason is linkage.** A shared Tor `DataDirectory` means shared
+/// entry guards, and shared guards link every persona served through them. Two
+/// wallets pointed at one directory would be cross-linked *at the guard* — the
+/// exact linkage the persona architecture exists to prevent. Per-wallet
+/// derivation forecloses that structurally, where a configurable path actively
+/// invites an operator to "save disk" by sharing one.
+///
+/// # Examples
+///
+/// ```
+/// use shekyl_engine_prefs::paths::tor_data_dir_from;
+/// use std::path::Path;
+/// assert_eq!(
+///     tor_data_dir_from(Path::new("/tmp/alice.wallet")),
+///     Path::new("/tmp/alice.tor"),
+/// );
+/// ```
+pub fn tor_data_dir_from(base: &Path) -> PathBuf {
+    let mut stem = strip_wallet_suffix(base);
+    stem.push(TOR_DATA_DIR_SUFFIX);
+    PathBuf::from(stem)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,11 +202,35 @@ mod tests {
     }
 
     #[test]
+    fn tor_data_dir_joins_the_cluster_convention() {
+        assert_eq!(
+            tor_data_dir_from(Path::new("/home/alice/w/main.wallet")),
+            Path::new("/home/alice/w/main.tor"),
+        );
+        // Same stem rule as every other companion: no `.wallet` means append.
+        assert_eq!(
+            tor_data_dir_from(Path::new("/tmp/bare")),
+            Path::new("/tmp/bare.tor"),
+        );
+    }
+
+    /// Two wallets must never derive the same Tor directory: a shared
+    /// `DataDirectory` is a shared entry-guard set, which links every persona
+    /// served through it.
+    #[test]
+    fn distinct_wallets_derive_distinct_tor_dirs() {
+        let a = tor_data_dir_from(Path::new("/home/alice/w/main.wallet"));
+        let b = tor_data_dir_from(Path::new("/home/alice/w/second.wallet"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
     fn toml_and_hmac_live_in_same_dir() {
         let base = Path::new("/home/alice/w/main.wallet");
         let toml = prefs_toml_path_from(base);
         let hmac = prefs_hmac_path_from(base);
         assert_eq!(toml.parent(), hmac.parent());
+        assert_eq!(toml.parent(), tor_data_dir_from(base).parent());
     }
 
     #[test]
