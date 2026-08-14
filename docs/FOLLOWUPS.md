@@ -47,6 +47,17 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Release-artifact signing policy owed before the first non-RC release
+  tag (added 2026-08-14, SA-6 CBOM close — rule-21 reopen).** The gitian
+  workflow builds deterministically and publishes release assets with **no
+  maintainer-key signature step** (`--detach-sign` produces builder assert
+  files only). The policy — classical GPG, SLH-DSA-192s via the in-tree
+  message-signing stack, or both — is the release owner's ruling; what must
+  not happen is the first release shipping unsigned **by omission rather
+  than decision**. Enforcement surface: the dated `RELEASE_CHECKLIST.md`
+  row (unchecked until ruled + wired); inventory record:
+  `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
+
 - **F-7 structural gate for the test-only PQC FFI exports (added
   2026-08-10, PR-SA-2).** Two exports are test-support only:
   `shekyl_pqc_keypair_generate` (wraps `generate_ephemeral_keypair_for_tests`)

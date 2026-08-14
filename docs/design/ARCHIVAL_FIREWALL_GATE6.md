@@ -780,7 +780,7 @@ checks each against a different key.
 |-------------|-------------------------------|------------------------------------------|----------|
 | **bond-post, collateral-in** (gate 4 `txin_archival_bond_post`: `JoinMarket` / `Rebond` / **top-up**) | `P_pubkey` **identity** — creates/keys the bond record by `P_canonical_id` | **per-output** (funding inputs; key image present) | create/lookup `ArchivalBondRecord`; funding inputs via standard key-image path; `bond_credit` term-rigidity + floor-equality ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5) |
 | **bond-post, collateral-out** (gate 4 `txin_archival_bond_post`: full **`Unbond`** / **`HoldingsUpdate`** partial-unbond) | `P_pubkey` **identity** on the bond vin — record lookup + mutation keying (**never** the debit authorizer) | **single bond vin** authorizes the `bond_debit` against the record's committed **`bond_spend_pk`** (dedicated debit key, §9.3 labels; gate-4 §3.5 step 5 + §4.1). **GF-1-carve RESOLVED (2026-06-16):** gate-4 §3.5 step 5 re-worded to verify debit paths against `bond_spend_pk`, not `P_pubkey` — identity stays identity-only, bond-debit authority compromise-isolated. `bond_debit == bonded_total` (full) or partial; **P-attributed refund output(s)** | §3.5 verify order; bond-debit auth = committed `bond_spend_pk` (resolved at gate-4 source before the verifier lands) |
-| **reward emission** ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3) | `P_pubkey` **identity** on the emission vin — bond lookup + dedup keying | **backing inputs:** ML-DSA verifies against the **`pqc_pk` committed in the *same proven leaf, at the same input index*** — the membership proof commits `H(pqc_pk)` as an in-circuit extra leaf scalar (`with_extra_scalars`, index-bound), and the vin recomputes `H(pqc_pk)` from the supplied key and demands equality with **that** leaf's committed scalar ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7), **no key image**. **fee inputs** (`txin_to_key`): **per-output**, key image present | §7.1 emission order; backing auth is membership-only + the vin-layer ML-DSA equality check (**C-1 carried dependency, §9.8** — not yet landed); fee inputs standard |
+| **reward emission** ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3) | `P_pubkey` **identity** on the emission vin — bond lookup + dedup keying | **backing inputs:** ML-DSA verifies against the **`pqc_pk` committed in the *same proven leaf, at the same input index*** — the membership proof commits `H(pqc_pk)` as an in-circuit extra leaf scalar (`with_extra_scalars`, index-bound), and the vin recomputes `H(pqc_pk)` from the supplied key and demands equality with **that** leaf's committed scalar ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7), **no key image**. **fee inputs** (`txin_to_key`): **per-output**, key image present | §7.1 emission order; backing auth is membership-only + the vin-layer ML-DSA equality check (**C-1 carried dependency, §9.8 — DISCHARGED #277**, landed at `emission_verify.rs::emission_vin_verify_auth`); fee inputs standard |
 | **ordinary transfer / terminal drain / reward-output spend** | **none on wire** | **per-output**, key image present | standard FCMP++ path — **no `P`-typing** |
 
 **Bond-post is the recurring self-identifying class (Round-2 scope; rebond/unbond at genesis).**
@@ -896,10 +896,12 @@ this ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7, ver
 input index (§4.2/§8.2); the vin layer recomputes `H(pqc_pk)` from the supplied key and demands
 equality with *that leaf's* committed scalar. An attacker who proves membership of a victim's
 leaf cannot substitute their own `pqc_pk` (its hash would not match the leaf-committed scalar),
-and cannot forge ML-DSA under the victim's `pqc_pk`. **Caveat (C-1):** the in-circuit half is
-implemented in `FcmpMembershipOnly`; the **vin-layer ML-DSA equality check is a not-yet-landed
-hard merge blocker** (§9.8 carried dependency). Until it lands, backing ownership reduces to
-classical security. Only the bond-record **identity** (`P_pubkey`) is `P`'s account-level hybrid
+and cannot forge ML-DSA under the victim's `pqc_pk`. **Caveat (C-1) — DISCHARGED (#277; stale
+"not-yet-landed" wording corrected by SA-6):** the in-circuit half is implemented in
+`FcmpMembershipOnly`, and the **vin-layer ML-DSA equality check is landed consensus** —
+`emission_verify.rs::emission_vin_verify_auth` recomputes `H(pqc_pk)` from the supplied key and
+demands equality with the leaf-committed scalar (the CBOM §5 surface-2 evidence). Only the
+bond-record **identity** (`P_pubkey`) is `P`'s account-level hybrid
 material; the spend authority is per-output, per the table above.
 
 **"Classical security only" is accurate — there *is* a classical spend-authority belt
@@ -955,10 +957,11 @@ note).
   [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9):** the in-circuit
   `H(pqc_pk)` extra-leaf-scalar binding (`with_extra_scalars`) is index-bound and **implemented**
   in `FcmpMembershipOnly`; the **vin-layer ML-DSA equality check** (recompute `H(pqc_pk)` from
-  the supplied key, demand equality with the leaf-committed scalar) is a **hard merge blocker**
-  named in `FCMP_MEMBERSHIP_ONLY.md` §7/§9 and `REWARD_EMISSION_LEG.md` §12 — **not yet landed**.
-  **Obligation:** the emission vin verifier must implement and test this equality check before
-  the `archival_p` impl is wired into emission construction; until it lands, no quantum
+  the supplied key, demand equality with the leaf-committed scalar) was a **hard merge blocker**
+  named in `FCMP_MEMBERSHIP_ONLY.md` §7/§9 and `REWARD_EMISSION_LEG.md` §12 — **DISCHARGED
+  (#277; stale wording corrected by SA-6)**: it is landed, tested consensus at
+  `emission_verify.rs::emission_vin_verify_auth`. The obligation below is kept as the historical
+  record of what the landing had to satisfy; before #277, no quantum
   spend-authority guarantee exists on the backing path (classical security only — the
   `MembershipSpendAuth` `R_O` leg still proves classical spend-secret knowledge per
   `FCMP_MEMBERSHIP_ONLY.md` §5.1; "membership-only" omits the key image, not the authority). This
@@ -3685,8 +3688,9 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   at source ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9) that the membership
   proof and ML-DSA check bind the **same proven leaf at the same input index** (in-circuit
   `H(pqc_pk)` extra scalar, index-bound — implemented), and that the **vin-layer ML-DSA equality
-  check is a not-yet-landed hard merge blocker** that must precede the `archival_p` impl + emission
-  verifier; sharpened the §9.6 emission row and membership-only paragraph accordingly. **C-2** —
+  check is a hard merge blocker** preceding the `archival_p` impl + emission
+  verifier *(both since DISCHARGED — #277 landed the check; wording corrected by SA-6)*;
+  sharpened the §9.6 emission row and membership-only paragraph accordingly. **C-2** —
   re-anchored the GF-2 ownership boundary: the dual-scan pipeline is the authoritative §2.1 genesis
   pin, but `StakeEngine`'s sole ownership of `P.view_sk` is a Gate-6 **forward requirement on the
   PHASE_2B FSM retool**, not inherited from claim-era §4.6 (flagged STRATUM); the crypto basis

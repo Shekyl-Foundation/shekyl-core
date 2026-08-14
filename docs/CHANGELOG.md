@@ -4,6 +4,24 @@
 
 ### Changed
 
+- **The cryptographic inventory is closed (SA-6).**
+  `docs/CRYPTOGRAPHIC_INVENTORY.md` now carries every section the SA round
+  owed it: §1 primitive pins + the RNG-source map (two-policy split:
+  fail-safe hedged nonces, fail-loud key material) and §2 the six-surface
+  signing inventory, both transcribed from `SIGNATURE_ALIGNMENT.md` with
+  every pin and scheme-domain constant re-verified at source; §4, the
+  curve-based ZK risk register §5 had cited before the section existed
+  (perfectly-hiding commitments keep recorded amounts private retroactively;
+  proof soundness is the quantum-exposed property, co-signed by hybrid PQC
+  auths and owned by the V4 transition); and §6, the close — the honest
+  audit-status column (exact-pinned FIPS crates, no external audit until
+  Phase 9) and the infrastructure survey, which found **release assets are
+  published with no maintainer-key signature step**: filed as a rule-21
+  reopen with a dated `RELEASE_CHECKLIST.md` enforcement row so the first
+  release cannot ship unsigned by omission. Four stale
+  `ARCHIVAL_FIREWALL_GATE6.md` sites still calling the C-1 vin-layer
+  ML-DSA equality check "not yet landed" corrected to DISCHARGED (#277).
+
 - **A full rescan now reconstructs a lost staking history — the principal
   scan's bond watch** (SA-R-6 from-seed reconstruction,
   `feat/rescan-slot-reconstruction`). At open, while the seed is transiently
