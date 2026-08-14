@@ -134,7 +134,7 @@ pub struct FloodSummary {
 /// (F-7).
 fn build_adjacency<R: RelayRng + ?Sized>(flood: FloodParams, rng: &mut R) -> Vec<Vec<usize>> {
     let degrees = vec![flood.peers; flood.nodes];
-    build_adjacency_from_degrees(flood.nodes, &degrees, flood.reach, rng)
+    build_adjacency_from_degrees(&degrees, flood.reach, rng)
 }
 
 /// Wire a graph where each node initiates its **own** out-degree.
@@ -142,13 +142,27 @@ fn build_adjacency<R: RelayRng + ?Sized>(flood: FloodParams, rng: &mut R) -> Vec
 /// Extracted from `build_adjacency` so a degree can differ per node. The
 /// uniform case delegates here with a constant vector, so there is one wiring
 /// rule rather than two that must be kept in step.
+///
+/// **`degrees.len()` IS the node count**, deliberately: an earlier form took
+/// `nodes` alongside and could be handed a slice that disagreed with it,
+/// panicking on an index rather than saying so. Two values that must agree are
+/// one value.
 fn build_adjacency_from_degrees<R: RelayRng + ?Sized>(
-    nodes: usize,
     degrees: &[usize],
     reach: FloodReach,
     rng: &mut R,
 ) -> Vec<Vec<usize>> {
-    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); nodes];
+    let nodes = degrees.len();
+    // Per-node capacity, not `vec![Vec::with_capacity(d); nodes]`. That form
+    // reads as pre-sizing every row and does not: `vec![elem; n]` CLONES, and
+    // `Vec::clone` allocates for the length it copies, so only the seed row
+    // keeps its capacity and the rest start empty. Under `OutboundOnly` each
+    // row takes exactly its own degree, so sizing it here is exact rather than
+    // a guess.
+    let mut adjacency: Vec<Vec<usize>> = degrees
+        .iter()
+        .map(|d| Vec::with_capacity((*d).min(nodes.saturating_sub(1))))
+        .collect();
     for node in 0..nodes {
         let peers = degrees[node].min(nodes - 1);
         let mut initiated: Vec<usize> = Vec::with_capacity(peers);
@@ -242,7 +256,7 @@ pub fn simulate_fluff_return_mixed<R: RelayRng + ?Sized>(
     let mut arrivals: Vec<u64> = Vec::with_capacity(trials * flood.nodes);
 
     for _ in 0..trials {
-        let adjacency = build_adjacency_from_degrees(flood.nodes, degrees, flood.reach, rng);
+        let adjacency = build_adjacency_from_degrees(degrees, flood.reach, rng);
 
         let mut best = vec![u64::MAX; flood.nodes];
         let mut frontier = std::collections::BinaryHeap::new();

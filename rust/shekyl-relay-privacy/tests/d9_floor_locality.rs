@@ -208,11 +208,19 @@ fn uniform_is_the_mixed_form_at_a_constant_degree() {
         &mut b,
     );
 
-    // Bit-equality is the contract here, not an epsilon comparison: both sides
-    // run the same arithmetic on the same seed, so any difference at all means
-    // the two paths diverged.
-    assert!(
-        (uniform.mean_ms - mixed.mean_ms).abs() < f64::EPSILON,
+    // Bit-equality is the contract, and it is compared as bits. Both sides run
+    // the same arithmetic on the same seed, so ANY difference means the paths
+    // diverged and there is no tolerance to allow.
+    //
+    // This read `(a - b).abs() < f64::EPSILON` while claiming bit-equality in
+    // this comment — written to satisfy `clippy::float_cmp` and describing
+    // something the code did not do. `EPSILON` is the gap above 1.0, not an
+    // exact-equality threshold: at larger magnitudes it accepts genuinely
+    // different values, and it is not the contract in any case. `to_bits`
+    // states the contract, needs no `allow`, and cannot drift from its comment.
+    assert_eq!(
+        uniform.mean_ms.to_bits(),
+        mixed.mean_ms.to_bits(),
         "uniform and mixed diverged at the same degree and seed: {} vs {}",
         uniform.mean_ms,
         mixed.mean_ms
