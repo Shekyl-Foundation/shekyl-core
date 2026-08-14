@@ -85,7 +85,10 @@ Naming convention:
 
 **Crate.** `shekyl-engine-state`.
 **Binaries.** `benches/ledger.rs` (criterion), `benches/ledger_iai.rs`
-(iai-callgrind).
+(gungraun / Callgrind). `ledger_iai` bounds the measured region with
+Callgrind client requests (`EntryPoint::None`, `--instr-atstart=no`)
+so collection does not depend on gungraun's default wrapper-symbol
+toggle (see `docs/investigation/2026-05-09-bench-baseline-flake.md`).
 
 **What it measures.** Serialize + deserialize round-trip of
 `WalletLedger` through `to_postcard_bytes` and `from_postcard_bytes`

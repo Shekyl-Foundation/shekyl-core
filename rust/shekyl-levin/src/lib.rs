@@ -37,11 +37,16 @@
 //!
 //! Deliberate **non-goals** of this crate:
 //!
-//! - the epee `portable_storage` payload codec and the p2p/cryptonote
-//!   command schemas (handshake bodies, peerlist entries, …) — payloads
-//!   here are opaque bytes;
-//! - connection management, peerlists, timeouts, and invoke/response
-//!   correlation (the `async_protocol_handler` layer).
+//! - the epee `portable_storage` **codec** — that is
+//!   `shekyl-portable-storage` (LV-2a). This crate owns the typed Levin
+//!   maps on top of it (LV-2b): handshake / timed-sync / ping /
+//!   support-flags (1001 / 1002 / 1003 / 1007), `network_address`, and
+//!   notifies 2001–2004 / 2006–2010. Cryptonote blobs stay opaque bytes
+//!   (`shekyl-wire`); RPC maps stay out. Live `shekyld` dual-stack is
+//!   the `#[ignore]` harness `tests/dual_stack.rs` (`SHEKYLD_BIN`; no
+//!   daemon in default crate tests).
+//! - connection management, timeouts, and invoke/response correlation
+//!   (the `async_protocol_handler` layer).
 //!
 //! # Parity oracle
 //!
@@ -150,6 +155,7 @@ mod error;
 mod fragment;
 mod header;
 mod message;
+mod payload;
 mod reader;
 
 pub use compress::{
@@ -164,4 +170,17 @@ pub use header::{
     LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
 };
 pub use message::{invoke, notify, response};
+pub use payload::Error as PayloadError;
+pub use payload::{
+    BasicNodeData, BlockCompleteEntry, CoreSyncData, GetTxpoolComplement, HandshakeRequest,
+    HandshakeResponse, NetworkAddress, NewBlock, NewFluffyBlock, NewTransactions, PeerlistEntry,
+    PingRequest, PingResponse, PortableMap, RequestChain, RequestFluffyMissingTx,
+    RequestGetObjects, ResponseChainEntry, ResponseGetObjects, SupportFlagsRequest,
+    SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse, TxBlobEntry, ADDR_I2P, ADDR_IPV4,
+    ADDR_IPV6, ADDR_TOR, ATTESTATION_WITNESS_MAX_BYTES, COMMAND_HANDSHAKE, COMMAND_PING,
+    COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
+    NOTIFY_NEW_BLOCK, NOTIFY_NEW_FLUFFY_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN,
+    NOTIFY_REQUEST_FLUFFY_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY,
+    NOTIFY_RESPONSE_GET_OBJECTS, PING_OK,
+};
 pub use reader::{BucketReader, Received};

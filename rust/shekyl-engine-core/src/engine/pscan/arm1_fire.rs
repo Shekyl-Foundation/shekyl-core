@@ -361,9 +361,19 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
         .map_err(|e| format!("exhaustiveness: {e}"))?;
     let range =
         BlockRange::new(BlockHeight::from_raw(0), BlockHeight::from_raw(2)).ok_or("range")?;
+    // The persona rides BOTH extractor inputs, as `bonded_scan_inputs`
+    // produces them (one loop fills scanners and `known_personas` together —
+    // they cannot diverge in production). The pairing is load-bearing since
+    // the watch-floor provenance: `known_personas` is what records the
+    // persona as watched-over-this-coverage, and absence evidence gathered
+    // without it makes no claim (`OutsideCovered`) — a scanner-only harness
+    // shape would model a scan the reconcile rightly refuses to GC on.
+    let persona_id = crate::engine::stake_engine::persona_canonical_id(&keys)
+        .map_err(|e| format!("persona id: {e}"))?;
+    let known_personas = std::collections::BTreeMap::from([(persona_id, SLOT)]);
     let out = crate::engine::pscan::scan_step::run_dual_extractor(
         vec![(SLOT, scanner)],
-        &std::collections::BTreeMap::new(),
+        &known_personas,
         range,
         &blocks,
         &crate::engine::pscan::scan_step::KeyImageWatchSet::new(),

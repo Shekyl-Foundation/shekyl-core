@@ -1451,6 +1451,10 @@ They would remove the single largest obstacle to ever moving the *full* relay
 path into Rust — that this workspace has no epee or levin implementation. Both
 are MIT with light dependency lists. That belongs to its own decision, not to
 this document, and it is not on the path for RP-2…RP-4.
+**UPDATE 2026-08-13:** that decision landed in
+[`LV2_PORTABLE_STORAGE.md`](LV2_PORTABLE_STORAGE.md) — first-party
+`shekyl-portable-storage`, Cuprate as reference-not-dependency. Do not re-open §8's
+vendoring question from this document.
 
 ---
 
@@ -13905,3 +13909,128 @@ argument no longer describes what it justifies.
 That is **Q-12**, registered since Q-11 Unit 0 and still untouched. **The zone
 field and Q-12 are one round**, or the forward delay is left justifying a bridge
 that no longer works the way its comment describes.
+
+---
+
+## 90. The first-passage readings get a convergence criterion — and the shipped `F′` is a low draw
+
+**2026-08-13.** `fluff_return_ms = 3250` was read off **one** `(seed, trials)`
+pair: `f7_directed.rs` builds `SplitMix64::new(0xF7_0000 + peers)`, runs 24
+trials, and reports what comes back. Nothing in that procedure can distinguish
+*the distribution's answer* from *this seed's*, and the constant feeds the
+embargo derivation.
+
+### 90.1 The criterion
+
+`conformance::converged_fluff_return_mixed` re-runs the measurement at
+independent seeds, doubles the trial count until the seeds agree, and
+**refuses to return a number** if they never do.
+
+**The independence that matters is across seeds, not across rungs.** Each
+escalation rebuilds the RNGs from the *same* seeds, so a rung's draws begin
+with the previous rung's — the ladder is **nested**, and a higher rung is a
+longer run of the same stream rather than a fresh sample of it. An earlier
+draft of this section claimed the opposite; the implementation was always
+nested, and the claim was the thing that was wrong.
+
+**Nested is the correct shape.** The question is *"at this trial count, do
+independent seeds agree?"*, which needs the seeds independent **of each other**
+at a given rung — they are, being distinct `SplitMix64` streams. Independence
+*between* rungs would actively hurt: each rung would be a fresh lottery, so the
+ladder could terminate on a rung where the seeds happened to agree, and
+stopping early on luck is precisely the failure this criterion exists to
+prevent. Nesting makes more trials strictly more information about the same
+estimate, so agreement at a higher rung is stronger evidence rather than
+another roll.
+
+Two refusals, deliberately separate:
+
+- `Spread` — the budget ran out with the seeds still disagreeing. More trials
+  is the right response.
+- `Stranded` — a seed's p90 is `u64::MAX` because the topology stranded >10 %
+  of nodes. **More trials cannot fix this**, so it must not be reported as a
+  spread; folding the two would send the next reader to widen a budget when
+  the degrees are what is wrong.
+
+The default tolerance is one `FLOOD_TICK_MS` (250 ms). Every delay the
+instrument draws is a whole number of ticks, so **achievable spreads are exact
+multiples of the tick** and the meaningful settings are coarse: one tick admits
+a single tick of disagreement, and anything below it demands *exact* agreement.
+Exact agreement is a stricter bar, **not an impossible one** — the shipped
+topology reaches spread 0 by 64 trials, which is why the default is stated as a
+choice rather than as a limit of the model.
+
+The reported reading is the **maximum** across seeds, for the reason
+`FloodSummary::unreached` already gives — an `F′` biased low under-provisions
+the embargo, which is the privacy-losing direction.
+
+### 90.2 What it says about the shipped value
+
+At the shipped topology (`OutboundOnly`, degree 12, 512 nodes,
+`mean_quarter_secs = 20`, `Geometric`):
+
+| run | seeds | trials/seed | readings (ms) | spread |
+| --- | --- | --- | --- | --- |
+| converged | 6 | 64 | all 3500 | **0** |
+| converged (wider) | 10 | 512 | all 3500 | **0** |
+| below convergence | 6 | 8 | 3000, 3250, 3500, 3250, 3750, 3750 | 750 ms |
+
+**The distribution's answer is 3500 ms. The shipped 3250 is the second-lowest
+of six draws at a trial count too small to have collapsed** — and it is low,
+which is the direction that under-provisions.
+
+The eight-trial row is not decoration: it is the negative control that shows
+the criterion had work to do, and it is the shape the original measurement was
+taken in.
+
+### 90.3 3500 ms is a FLOOR on `F′`, not a placeholder
+
+The re-derivation was queued as *"apply both corrections together"* — the
+converged trial count **and** a churn-realistic degree distribution — and filed
+as blocked because the second input does not exist. **That framing was wrong,
+and the second correction has a known sign**, which makes it a refinement
+rather than a blocker.
+
+Under `OutboundOnly` first passage is a minimum over directed paths, and raising
+a node's out-degree only *adds* paths. So a graph at or above the F-8b floor
+cannot flood more slowly than the uniform floor graph, and heterogeneity above
+the floor can only pull the reading **down**. Below-floor nodes remove paths and
+can only push it **up** — the same self-harm direction Q12-D9's check is
+justified on (§12.1), and the condition §11.13 says a young network is in.
+
+**Measured rather than argued** (`uniform_at_the_floor_is_the_conservative_topology`),
+because that is exactly the kind of argument that sounds airtight with a sign
+reversed:
+
+| degree distribution | converged p90 |
+| --- | --- |
+| one third at 16, rest at 12 | 3000 ms |
+| **uniform at the floor (12)** | **3500 ms** |
+| one third at 8, rest at 12 | 4750 ms |
+
+So uniform-at-the-floor is the **conservative** topology, and a measured
+distribution can only raise `F′` above 3500. The record says *"3500 is a lower
+bound"*, not *"blocked pending a distribution"* — which is strictly the stronger
+statement, and it retires an input that was never a measurement.
+
+**Provenance of the retired input, recorded because it nearly hardened into
+one.** *"Churn-realistic, ~30 % of nodes at degree 11"* appears in no document,
+commit or ref in this repository. It was not a fleet reading, and the built
+estate could not have produced it: the six-host ring is `A = 6` so its degree
+saturates at 5, and its measured steady-state churn is near zero (30 of 30
+links held for 50 minutes, one transient 29 — §11.9). No `A ≥ 60` readout
+exists anywhere in the tree, which is the anchor for this claim; the arms were
+specified and the estate was built, but no arm's output was ever recorded.
+
+### 90.4 What still gates landing 3500
+
+Not an input — a **blast radius**. Moving `F′` is a conformance-vector event,
+not a constant edit: it carries the 190 s embargo, the 874 s wallet timeout and
+the §44 pins with it. That is a maintainer decision about when to spend the
+re-baselining, not a question waiting on a measurement.
+
+**Reopening criterion.** Land 3500 (or higher, if an `A ≥ 60` degree
+distribution has arrived by then) through `converged_fluff_return_mixed`, and
+carry the embargo, the wallet timeout and the §44 pins in the same change.
+Until then the shipped 3250 is known to be low by one tick against the
+conservative topology, and low is the under-provisioning direction.

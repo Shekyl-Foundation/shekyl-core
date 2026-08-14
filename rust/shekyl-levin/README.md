@@ -34,10 +34,13 @@ chunk boundaries, and noise sizes.
 
 ## What this crate is not
 
-- **Not the payload codec.** Command bodies (handshake, timed sync, notify
-  payloads) are epee `portable_storage` blobs; this crate treats them as
-  opaque bytes. A portable_storage codec (or a vendoring decision) is a
-  separate, tracked work item.
+- **Not the payload codec.** Command bodies are epee `portable_storage`
+  blobs; the codec is first-party `shekyl-portable-storage` (LV-2a). This
+  crate owns the typed maps (LV-2b): handshake / timed-sync /
+  ping / support-flags (1001 / 1002 / 1003 / 1007) plus `network_address`
+  and notifies 2001–2004 / 2006–2010. Cryptonote blobs stay opaque bytes.
+  Live `shekyld` dual-stack is the `#[ignore]` harness
+  `tests/dual_stack.rs` (`SHEKYLD_BIN`); default crate tests spawn no daemon.
 - **Not the connection stack.** No sockets, timeouts, invoke/response
   correlation, or peer management.
 - **Emit side and compression wired; read side is not.** Since 2026-08-06

@@ -10,18 +10,22 @@ cannot be faked."*
 (§15.2) are RUN, 2026-08-14, and every readout is committed. §16 settles what
 the floor actually counts, and CLOSES the distinctness question.**
 
-Corrected 2026-08-14. This line previously read *"No VM stood up, no arm run"*,
-which its own body had already outgrown before §13 existed: §§10–11.13 record a
-six-host ring sampled for an hour across three providers, a 60-service
-dialability rig, and 20 hidden services restarted and polled to recovery — all
-on VMs. **A status line that disagrees with its own document is the failure
+Corrected twice, and the second correction supersedes the first. This line
+originally read *"No VM stood up, no arm run"*, which its own body had already
+outgrown: §§10–11.13 record a six-host ring sampled for an hour across three
+providers, a 60-service dialability rig, and 20 hidden services restarted and
+polled to recovery — all on VMs, and all after §9.4's privileged install
+cleared. **A status line that disagrees with its own document is the failure
 rule 94 exists to catch**, and this one was read as current in a later session
-and used to justify a claim about what had been measured.
+(`DAEMON_RELAY_PRIVACY.md` §90.3) and used to justify a claim about what had
+been measured.
 
-Read §§10–12 as instrument-building and dress rehearsal, and §13 as the first
-arm. The seed estate carries a current binary and hidden services. Ground
-findings below are verified at source and against the live estate on 2026-08-11
-at pin
+The 2026-08-13 correction kept *"no arm run"*, which was true when it was
+written and is no longer: §§13–15 ran the arms the next day. Read §§10–12 as
+instrument-building and dress rehearsal, §§13–15 as the arms, and §16 as what
+the floor's number means. The seed estate carries a current binary and four
+hidden services. Ground findings below are verified at source and against the
+live estate on 2026-08-11 at pin
 [`14c2ee599`](https://github.com/Shekyl-Foundation/shekyl-core/commit/14c2ee599).
 Identifiers `Q12-R1…R7` extend the already-registered `Q12-` family (rule 94 §1;
 no new prefix is minted).

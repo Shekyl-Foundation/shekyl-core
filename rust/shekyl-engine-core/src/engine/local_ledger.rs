@@ -105,6 +105,15 @@ pub(crate) struct LedgerState {
     /// `ledger` under the write guard; rebuilt on every
     /// `Engine::open*`.
     pub(crate) indexes: LedgerIndexes,
+    /// Slots the bond watch adopted into `bonded_slots` **this session**
+    /// (SA-R-6). Session-scoped, never persisted: Model D drops the seed
+    /// after `assemble`, so a mid-session adoption cannot derive its
+    /// persona or reach the StakeEngine actor's spawn-time held set — the
+    /// recovered bond becomes operational only at the next open, and this
+    /// set is what lets the staking status surface say so (rule 82)
+    /// instead of leaving the wallet claiming staker-hood while every
+    /// staking op fails. Empties naturally at reopen (fresh state).
+    pub(crate) slots_adopted_this_session: std::collections::BTreeSet<u32>,
 }
 
 /// Stage 1 implementor of [`LedgerEngine`](super::traits::LedgerEngine).
@@ -150,7 +159,11 @@ impl LocalLedger {
     /// freshly-loaded persisted state.
     pub(crate) fn new(ledger: WalletLedger, indexes: LedgerIndexes) -> Self {
         Self {
-            state: RwLock::new(LedgerState { ledger, indexes }),
+            state: RwLock::new(LedgerState {
+                ledger,
+                indexes,
+                slots_adopted_this_session: std::collections::BTreeSet::new(),
+            }),
         }
     }
 
@@ -343,6 +356,10 @@ impl LedgerEngine for LocalLedger {
         // One guard: journal-derived F14 locks + ledger summary (PR-SJ-1b).
         guard.ledger.balance()
     }
+
+    fn staking_enabled(&self) -> bool {
+        self.read().ledger.staking.staking_enabled
+    }
 }
 
 impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
@@ -358,5 +375,9 @@ impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
 
     fn balance(&self) -> BalanceSummary {
         (**self).balance()
+    }
+
+    fn staking_enabled(&self) -> bool {
+        (**self).staking_enabled()
     }
 }

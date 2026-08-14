@@ -1275,6 +1275,165 @@
             }
           }
         }
+      },
+      {
+        "name": "watch_floors",
+        "ty": {
+          "name": "BTreeMap<K, V>",
+          "ty": {
+            "Map": {
+              "key": {
+                "name": "PCanonicalId",
+                "ty": {
+                  "NewtypeStruct": {
+                    "name": "[T; N]",
+                    "ty": {
+                      "Tuple": [
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              "val": {
+                "name": "BlockHeight",
+                "ty": {
+                  "NewtypeStruct": {
+                    "name": "u64",
+                    "ty": "U64"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     ]
   }

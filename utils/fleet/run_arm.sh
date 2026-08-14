@@ -53,6 +53,11 @@
 #                                    <clearnet-count> <clearnet-start>
 #   <phase>      configs | tor | onions | daemons | gate | peers | status
 #
+#   PEER_MAP     required by the `peers` phase only. One line per anon node:
+#                  <ssh-host>\t<index>\t<comma-separated onion addresses>
+#                Which nodes are seeds is a topology decision (§7, Q12-R5), so
+#                it is an input here rather than something this script invents.
+#
 # Exit:  0  phase completed and was verified
 #        1  phase ran but verification failed — the caller must NOT continue
 #        2  bad invocation
@@ -64,6 +69,7 @@ BIN="${BIN:-/home/shekyl/shekyld-fleet}"
 PORT_BASE="${PORT_BASE:-21000}"
 VPORT="${VPORT:-13021}"
 START_STAGGER="${START_STAGGER:-6}"
+PEER_MAP="${PEER_MAP:-}"
 
 if [ "$#" -ne 2 ]; then
   echo "usage: $0 <spec-file> <phase>" >&2
@@ -76,6 +82,20 @@ case "$PHASE" in
   configs|tor|onions|daemons|gate|peers|status) ;;
   *) echo "REFUSE: unknown phase '$PHASE'" >&2; exit 2 ;;
 esac
+
+# The `peers` phase without a map would write no add-peer lines, restart every
+# daemon, and report success — an arm that never forms the graph it is
+# measuring. A phase that cannot do its job refuses rather than no-ops.
+if [ "$PHASE" = peers ]; then
+  [ -n "$PEER_MAP" ] || { echo "REFUSE: phase 'peers' needs PEER_MAP=<file>" >&2; exit 2; }
+  [ -r "$PEER_MAP" ] || { echo "REFUSE: cannot read PEER_MAP '$PEER_MAP'" >&2; exit 2; }
+  while IFS=$'\t' read -r _h _i _p; do
+    case "${_h:-}" in ''|'#'*) continue ;; esac
+    case "${_h}" in -*) echo "REFUSE: peer-map host '${_h}' starts with '-'" >&2; exit 2 ;; esac
+    case "${_i:-}" in ''|*[!0-9]*) echo "REFUSE: peer-map index '${_i:-}' is not numeric" >&2; exit 2 ;; esac
+    [ -n "${_p:-}" ] || { echo "REFUSE: peer-map row for index ${_i} has no peers" >&2; exit 2; }
+  done < "$PEER_MAP"
+fi
 
 # A spec line that does not parse would silently contribute zero instances and
 # shrink `A` without saying so.
@@ -247,12 +267,76 @@ while read -r host an as cn cs; do
     case "$out" in *"alive=$want"*) ;; *) echo "  ^ expected alive=$want — a lost instance shrinks A" >&2; fail=1 ;; esac
     ;;
 
-  peers|status)
+  peers)
+    # Phase 4, and the reason the restart is here rather than left to the
+    # operator: `m_conn_fails_cache` is IN-MEMORY, so a node that dialled
+    # anything during phases 2-3 carries an hour-long suppression for that
+    # address (Q12-R13). Restarting begins with a clean cache, and by now every
+    # onion is already fetchable, so the fresh dials succeed. The restart is the
+    # design, not recovery from a mistake.
+    #
+    # The peer map is an INPUT, not something this script can derive: which
+    # nodes are seeds is a topology decision (§7 / Q12-R5), and deriving it here
+    # would bury the arm's independent variable in a shell script.
+    map=$(awk -F'\t' -v H="$host" '$1==H{print $2"\t"$3}' "$PEER_MAP")
+    if [ -z "$map" ]; then
+      echo "REFUSE: no peer-map rows for '$host'" >&2; fail=1; echo; continue
+    fi
+    out=$(remote "$host" "
+      $PROC_COUNT
+      # Strip first, so a re-run is idempotent rather than accumulating a denser
+      # graph than the design specifies.
+      for cf in $FLEET_ROOT/etc/node-*.conf; do
+        [ -e \"\$cf\" ] || continue
+        sed -i '/^add-peer=/d' \"\$cf\"
+      done
+      wrote=0
+      while IFS=\$'\t' read -r i peers; do
+        [ -n \"\${i:-}\" ] || continue
+        [ -e $FLEET_ROOT/etc/node-\$i.conf ] || { echo \"NO-CONFIG-\$i\"; continue; }
+        IFS=, ; for p in \$peers; do
+          echo \"add-peer=\$p:$VPORT\" >> $FLEET_ROOT/etc/node-\$i.conf
+        done ; unset IFS
+        wrote=\$((wrote+1))
+      done <<'MAP'
+$map
+MAP
+      for _p in \$(pgrep -x \$(basename $BIN) 2>/dev/null); do kill \$_p 2>/dev/null; done
+      for w in \$(seq 1 60); do
+        [ \"\$(count_proc \$(basename $BIN) $FLEET_ROOT/etc/)\" -eq 0 ] && break
+        sleep 2
+      done
+      d=0
+      for cf in $FLEET_ROOT/etc/node-*.conf; do
+        [ -e \"\$cf\" ] || continue
+        i=\$(basename \"\$cf\" .conf); i=\${i#node-}
+        nohup setsid $BIN --config-file \"\$cf\" --non-interactive \\
+          >$FLEET_ROOT/log/node-\$i.out 2>&1 </dev/null &
+        d=\$((d+1))
+        sleep $START_STAGGER
+      done
+      sleep 15
+      alive=0
+      for cf in $FLEET_ROOT/etc/node-*.conf; do
+        [ -e \"\$cf\" ] || continue
+        [ \"\$(count_proc \$(basename $BIN) \"\$cf\")\" -ge 1 ] && alive=\$((alive+1))
+      done
+      printf 'wrote=%s restarted=%s alive=%s' \"\$wrote\" \"\$d\" \"\$alive\"")
+    want=$((an + cn))
+    echo "$out"
+    case "$out" in
+      *"wrote=$an restarted=$want alive=$want"*) ;;
+      *) echo "  ^ expected wrote=$an restarted=$want alive=$want" >&2; fail=1 ;;
+    esac
+    ;;
+
+  status)
     out=$(remote "$host" "
       $PROC_COUNT
       want=\$(ls $FLEET_ROOT/etc/node-*.conf 2>/dev/null | wc -l)
       dead=''; alive=0
       for cf in $FLEET_ROOT/etc/node-*.conf; do
+        [ -e \"\$cf\" ] || continue
         i=\$(basename \"\$cf\" .conf); i=\${i#node-}
         if [ \"\$(count_proc \$(basename $BIN) \"\$cf\")\" -ge 1 ]; then
           alive=\$((alive+1))

@@ -145,10 +145,11 @@
 //! now — and doing it before the removal would buy the seam and pay for it until
 //! the C++ leaves.
 //!
-//! Cuprate's `net/levin` and `net/epee-encoding` are a genuinely different
-//! question — they would remove the single largest obstacle to ever moving the
-//! *full* relay path into Rust, which is that this workspace has no epee or
-//! levin implementation. That belongs to a later decision, not to this crate.
+//! Cuprate's `net/levin` and `net/epee-encoding` were a genuinely different
+//! question. The levin half is LV-1 (`shekyl-levin`). The epee half is LV-2
+//! (`docs/design/LV2_PORTABLE_STORAGE.md`): first-party `shekyl-portable-storage`,
+//! Cuprate as reference-not-dependency. Do not re-open vendoring from this
+//! crate.
 //!
 //! # Scope boundary
 //!

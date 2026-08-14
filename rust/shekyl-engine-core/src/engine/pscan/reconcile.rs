@@ -31,6 +31,8 @@
 //! 2d-2 multi-source), so "GC on exhaustive-but-uncanonical evidence" stays
 //! unrepresentable at the boundary (see the trust-anchor resolution in the 2d-1 plan).
 
+use std::collections::BTreeMap;
+
 use shekyl_types::{BlockHeight, PCanonicalId};
 
 use super::exhaustiveness::VerifiedRange;
@@ -58,30 +60,53 @@ pub(crate) enum ReconcileVerdict {
 }
 
 /// The reconcile evidence `P` hands 2d-2: every matched bond-post **plus** the
-/// [`VerifiedRange`] they were gathered over. Constructible only via
+/// [`VerifiedRange`] they were gathered over **plus** the per-persona watch
+/// floors that scope the match set's completeness. Constructible only via
 /// [`from_verified_scan`](Self::from_verified_scan), which takes a [`VerifiedRange`]
 /// (producible only by the verification-gated path, never by hand), so the match set can
 /// never be divorced from the verified range its absence is valid over.
+///
+/// The floors are the third leg of the absence gate: the sweep scans every
+/// block in `covered`, but it *watches* only the personas in its scan union —
+/// a persona that joined the union after coverage advanced (the bond-watch
+/// probe-adoption path) has no match rows for the blocks scanned before it
+/// joined, and treating that gap as absence permanently GC'd a real bond.
+/// A persona's absence is concludable only over `[floor, high)`; a persona
+/// with no floor row was never watched and gets no absence claim at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // transient — producer is the SP-5 sweep; consumer is 2d-2 SP-R0.
 pub(crate) struct PReconcileSet {
     covered: VerifiedRange,
     matches: Vec<BondPostMatch>,
+    watch_floors: BTreeMap<PCanonicalId, BlockHeight>,
 }
 
 #[allow(dead_code)] // transient — exercised by the SP-5 sweep + 2d-2 SP-R0 once they land.
 impl PReconcileSet {
-    /// Build from a completed verified scan: the verified `covered` range and **every**
-    /// bond-post match found within it.
+    /// Build from a completed verified scan: the verified `covered` range, **every**
+    /// bond-post match found within it, and each watched persona's floor (the
+    /// first scanned height it was watched at).
     ///
-    /// Two obligations, split by who can keep them. *Completeness* is the caller's (the
-    /// SP-5 sweep): it scans every block in `covered`, so it sees every match — the type
-    /// cannot check that. *Verification* is the type's: `covered` is a [`VerifiedRange`],
-    /// so it cannot be a hand-built or source-claimed range. The split is the point —
-    /// the half the type can enforce (you may not pair matches with an *unverified*
-    /// range) is exactly the half a withholding source would attack.
-    pub(crate) fn from_verified_scan(covered: VerifiedRange, matches: Vec<BondPostMatch>) -> Self {
-        Self { covered, matches }
+    /// Three obligations, split by who can keep them. *Completeness-per-persona*
+    /// is the caller's (the SP-5 sweep): from each persona's floor onward it
+    /// scans every block in `covered` with that persona watched, so it sees
+    /// every match — the type cannot check that. *Verification* is the type's:
+    /// `covered` is a [`VerifiedRange`], so it cannot be a hand-built or
+    /// source-claimed range. *Provenance* is the query gate's:
+    /// [`reconcile`](Self::reconcile) refuses to convert "no match row" into an
+    /// absence claim below a persona's floor or for an unfloored persona. The
+    /// split is the point — the halves the type can enforce are exactly the
+    /// halves a withholding source (or an incomplete watch) would attack.
+    pub(crate) fn from_verified_scan(
+        covered: VerifiedRange,
+        matches: Vec<BondPostMatch>,
+        watch_floors: BTreeMap<PCanonicalId, BlockHeight>,
+    ) -> Self {
+        Self {
+            covered,
+            matches,
+            watch_floors,
+        }
     }
 
     /// The exhaustively-verified range the matches are complete over.
@@ -124,7 +149,11 @@ impl PReconcileSet {
     ///
     /// The three-valued [`ReconcileVerdict`] makes absence-≠-unscanned unrepresentable: a
     /// caller **cannot** obtain `AbsentWithinCovered` for a height the scan did not cover
-    /// — it gets `OutsideCovered` and must not GC.
+    /// — it gets `OutsideCovered` and must not GC. The same rule holds per persona:
+    /// a height covered while the persona was **not watched** (below its floor, or a
+    /// persona with no floor row at all) is unscanned *for that persona* and reads
+    /// `OutsideCovered` — the gate that keeps a probe-adopted bond, whose blocks were
+    /// scanned before its persona joined the union, out of the wrongful-GC path.
     pub(crate) fn reconcile(
         &self,
         persona: PCanonicalId,
@@ -139,13 +168,25 @@ impl PReconcileSet {
         // Presence = the persona posted *anywhere* in `covered`, NOT only at/before
         // `evidence_height` (see the docstring: a temporal filter here would wrongly GC a
         // real persona that posted later). `find` returns the earliest match in scan
-        // order, reported as the representative post.
-        match self.matches.iter().find(|m| m.p_canonical_id == persona) {
-            Some(m) => ReconcileVerdict::Present {
+        // order, reported as the representative post. Checked BEFORE the
+        // provenance gate: a match row is positive evidence regardless of when
+        // the persona joined the watch, so `Present` is never suppressed.
+        if let Some(m) = self.matches.iter().find(|m| m.p_canonical_id == persona) {
+            return ReconcileVerdict::Present {
                 height: m.height,
                 post_kind: m.post_kind,
-            },
-            None => ReconcileVerdict::AbsentWithinCovered,
+            };
+        }
+        // Provenance gate: absence is only meaningful where this persona was
+        // WATCHED while the scan covered it. A persona with no floor row was
+        // never in the scan union — its match rows cannot exist, so "no match"
+        // is not evidence. Below its floor, coverage advanced unwatched — the
+        // probe-adoption shape where a real bond's blocks were scanned before
+        // the persona joined; same rule.
+        match self.watch_floors.get(&persona) {
+            None => ReconcileVerdict::OutsideCovered,
+            Some(floor) if evidence_height < *floor => ReconcileVerdict::OutsideCovered,
+            Some(_) => ReconcileVerdict::AbsentWithinCovered,
         }
     }
 }
@@ -187,10 +228,23 @@ mod tests {
         }
     }
 
+    /// Watch floors for the given `(id byte, floor height)` pairs — the
+    /// provenance rows a real sweep would have recorded for personas watched
+    /// from those heights.
+    fn floors(rows: &[(u8, u64)]) -> BTreeMap<PCanonicalId, BlockHeight> {
+        rows.iter()
+            .map(|(b, h)| (persona(*b), BlockHeight::from_raw(*h)))
+            .collect()
+    }
+
     #[test]
     fn binds_matches_to_their_verified_covered_range() {
         let covered = covered_range(100, 3); // [100, 103)
-        let set = PReconcileSet::from_verified_scan(covered, vec![post(101, 0xAA, 0)]);
+        let set = PReconcileSet::from_verified_scan(
+            covered,
+            vec![post(101, 0xAA, 0)],
+            floors(&[(0xAA, 0)]),
+        );
         assert_eq!(set.covered(), covered);
         assert_eq!(set.matches().len(), 1);
         assert_eq!(set.matches()[0].p_canonical_id, persona(0xAA));
@@ -198,8 +252,11 @@ mod tests {
 
     #[test]
     fn present_for_a_persona_matched_within_covered() {
-        let set =
-            PReconcileSet::from_verified_scan(covered_range(100, 3), vec![post(101, 0xAA, 7)]);
+        let set = PReconcileSet::from_verified_scan(
+            covered_range(100, 3),
+            vec![post(101, 0xAA, 7)],
+            floors(&[(0xAA, 0)]),
+        );
         assert_eq!(
             set.reconcile(persona(0xAA), BlockHeight::from_raw(101)),
             ReconcileVerdict::Present {
@@ -213,8 +270,11 @@ mod tests {
     fn absent_within_covered_for_an_unmatched_persona() {
         // Persona 0xBB has no post; queried at a height inside [100, 103) → provably
         // absent, because the range was exhaustively scanned.
-        let set =
-            PReconcileSet::from_verified_scan(covered_range(100, 3), vec![post(101, 0xAA, 0)]);
+        let set = PReconcileSet::from_verified_scan(
+            covered_range(100, 3),
+            vec![post(101, 0xAA, 0)],
+            floors(&[(0xAA, 0), (0xBB, 0)]),
+        );
         assert_eq!(
             set.reconcile(persona(0xBB), BlockHeight::from_raw(102)),
             ReconcileVerdict::AbsentWithinCovered
@@ -229,6 +289,7 @@ mod tests {
         let set = PReconcileSet::from_verified_scan(
             covered_range(100, 3), // [100, 103)
             vec![post(101, 0xAA, 0)],
+            floors(&[(0xAA, 0), (0xBB, 0)]),
         );
         let unmatched = persona(0xBB);
         assert_eq!(
@@ -252,6 +313,7 @@ mod tests {
         let set = PReconcileSet::from_verified_scan(
             covered_range(0, 10),   // [0, 10)
             vec![post(7, 0xAA, 0)], // the persona's post is at height 7
+            floors(&[(0xAA, 0)]),
         );
         assert_eq!(
             set.reconcile(persona(0xAA), BlockHeight::from_raw(2)), // asserted as of height 2
@@ -270,7 +332,8 @@ mod tests {
 
     #[test]
     fn covered_boundaries_are_half_open() {
-        let set = PReconcileSet::from_verified_scan(covered_range(100, 3), vec![]); // [100,103)
+        let set =
+            PReconcileSet::from_verified_scan(covered_range(100, 3), vec![], floors(&[(0xCC, 0)])); // [100,103)
         let p = persona(0xCC);
         // low (100) is inside; low-1 (99) is outside.
         assert_eq!(
@@ -301,6 +364,7 @@ mod tests {
         let empty = PReconcileSet::from_verified_scan(
             VerifiedBatch::for_test(0, 0, [1; 32]).range(),
             Vec::new(),
+            floors(&[(9, 0)]),
         );
         assert_eq!(
             empty.reconcile_full_scan(persona),
@@ -309,6 +373,7 @@ mod tests {
         let covered = PReconcileSet::from_verified_scan(
             VerifiedBatch::for_test(0, 42, [1; 32]).range(),
             Vec::new(),
+            floors(&[(9, 0)]),
         );
         assert_eq!(
             covered.reconcile_full_scan(persona),
@@ -317,6 +382,62 @@ mod tests {
         assert_eq!(
             covered.reconcile_full_scan(persona),
             ReconcileVerdict::AbsentWithinCovered
+        );
+    }
+
+    /// The provenance gate (SA-R-6 bond-watch review): "no match row" for a
+    /// persona that was never watched, or below the height it entered the
+    /// watch, is NOT absence — it reads `OutsideCovered`. This is the exact
+    /// probe-adoption shape: coverage advanced over the bond's blocks before
+    /// the persona joined the scan union, so the match set cannot contain its
+    /// post and an absence verdict would GC a real bond.
+    #[test]
+    fn absence_requires_the_persona_watched_over_the_queried_height() {
+        let set = PReconcileSet::from_verified_scan(
+            covered_range(0, 200),  // [0, 200) — coverage well past the bond
+            vec![],                 // no match rows: the bond was never watched-scanned
+            floors(&[(0xAA, 150)]), // 0xAA joined the union at 150
+        );
+        // Below the floor: covered, but unwatched for this persona → unknown.
+        assert_eq!(
+            set.reconcile(persona(0xAA), BlockHeight::from_raw(50)),
+            ReconcileVerdict::OutsideCovered,
+            "covered-but-unwatched must not read as absent"
+        );
+        // At/above the floor: watched and covered → a real absence claim.
+        assert_eq!(
+            set.reconcile(persona(0xAA), BlockHeight::from_raw(150)),
+            ReconcileVerdict::AbsentWithinCovered
+        );
+        // A persona with no floor row at all was never watched → unknown at
+        // every height, including via the full-scan form.
+        assert_eq!(
+            set.reconcile(persona(0xBB), BlockHeight::from_raw(50)),
+            ReconcileVerdict::OutsideCovered
+        );
+        assert_eq!(
+            set.reconcile_full_scan(persona(0xBB)),
+            ReconcileVerdict::OutsideCovered,
+            "the full-scan form must not manufacture absence for an unwatched persona"
+        );
+    }
+
+    /// `Present` is positive evidence and is never suppressed by the
+    /// provenance gate: a match row proves the post regardless of when the
+    /// persona joined the watch.
+    #[test]
+    fn presence_is_not_gated_by_the_watch_floor() {
+        let set = PReconcileSet::from_verified_scan(
+            covered_range(0, 200),
+            vec![post(30, 0xAA, 0)],
+            floors(&[(0xAA, 150)]),
+        );
+        assert_eq!(
+            set.reconcile(persona(0xAA), BlockHeight::from_raw(50)),
+            ReconcileVerdict::Present {
+                height: BlockHeight::from_raw(30),
+                post_kind: 0,
+            }
         );
     }
 }

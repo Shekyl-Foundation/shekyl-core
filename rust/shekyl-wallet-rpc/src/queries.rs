@@ -256,6 +256,10 @@ pub(crate) async fn get_wallet_info(
             let staking_enabled = wallet.staking.staking_enabled;
             (balance, wallet_height, restore_height, staking_enabled)
         };
+        // After the guard above is dropped (non-reentrant lock): the
+        // session-adoption flag rides the same aggregate so a wallet whose
+        // staking history was recovered mid-session reports it.
+        let recovery_pending_reopen = engine.staking_recovery_pending_reopen();
 
         let address = engine
             .primary_address()
@@ -269,7 +273,11 @@ pub(crate) async fn get_wallet_info(
         }
         .to_owned();
 
-        let staking_view = crate::staking::read_view_with_enabled(&engine, staking_enabled)?;
+        let staking_view = crate::staking::read_view_with_snapshot(
+            &engine,
+            staking_enabled,
+            recovery_pending_reopen,
+        )?;
         let staking = StakingInfoResult {
             staking_enabled: staking_view.staking_enabled,
             balance: GetStakedBalanceResult {
@@ -287,6 +295,7 @@ pub(crate) async fn get_wallet_info(
             pscan_synced_height: staking_view
                 .pscan_synced_height
                 .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
+            recovery_pending_reopen: staking_view.recovery_pending_reopen,
         };
 
         let daemon = engine.daemon().clone();

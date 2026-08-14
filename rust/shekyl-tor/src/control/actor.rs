@@ -207,6 +207,36 @@ impl EventSink {
         Self(sender)
     }
 
+    /// A sink with no consumer — **the correct production value today**, and a
+    /// place to notice when it stops being one.
+    ///
+    /// Async `650` events arrive only after a `SETEVENTS`
+    /// ([`Command::SetEvents`]), and no production call site issues one: the
+    /// DQ-T0.4 `STREAM` measurement is a harness, and §3c's retraction settled
+    /// that bootstrap readiness is a `GETINFO` **poll**, not a subscription
+    /// ("a `GETINFO` poll is a command, not a subscription, so it never touches
+    /// `SETEVENTS`"). So in production this sink receives nothing, ever, and
+    /// wiring a consumer to it would be wiring a consumer to silence.
+    ///
+    /// This exists rather than an inline `let (tx, _rx) = unbounded_channel()`
+    /// because that shape is indistinguishable from a caller who dropped the
+    /// receiver by accident. Whoever adds the first production `SETEVENTS` has
+    /// to replace a call named `unsubscribed`, which is a question a reviewer
+    /// can see; deleting an anonymous `_rx` is not.
+    ///
+    /// The returned sink drops every event, and nothing accumulates: routing
+    /// treats a closed receiver as "the consumer is gone" and discards. (Stated
+    /// rather than linked — the routing method is private, and a public doc
+    /// that links into it fails the crate's `rustdoc -D warnings` gate.)
+    #[must_use]
+    pub fn unsubscribed() -> Self {
+        // The receiver is dropped here on purpose, which is what closes the
+        // channel and makes every later send a no-op. Named constructor, so
+        // the drop is the documented behaviour rather than a caller's slip.
+        let (tx, _rx) = mpsc::unbounded_channel();
+        Self(tx)
+    }
+
     /// Route an async event to the consumer. A closed receiver means the consumer
     /// is gone, so dropping the event is correct — not a failure the actor acts on.
     fn route(&self, reply: ControlReply) {

@@ -1,5 +1,17 @@
 # Portable Storage Format
 
+**Production codec:** `rust/shekyl-portable-storage` (LV-2a). Typed Levin
+command maps are LV-2b in `shekyl-levin`. Decision pin:
+[`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md).
+
+Shekyl integers on this format are **little-endian**. Encode order is
+lexicographic (`std::map` / `BTreeMap`). Known-answer tests for the
+codec live in `rust/shekyl-portable-storage/tests/oracle_kats.rs`.
+Handshake / timed-sync / ping / support-flags / `network_address`
+round-trips live in `rust/shekyl-levin/tests/payload_kats.rs`.
+Notify maps (2001–2004 / 2006–2010) live in
+`rust/shekyl-levin/tests/notify_kats.rs` (LV-2b).
+
 ## Background
 
 Shekyl makes use of a set of helper classes from a small library named
@@ -19,8 +31,9 @@ document.
 
 ### Integers
 
-With few exceptions, integers serialized in epee portable storage format are serialized
-as little-endian.
+Integers in Shekyl portable_storage are little-endian. The inherited
+sketch's "implementations may choose big-endian" hedge is false for
+this chain and is not a decoder option.
 
 ### Varints
 
@@ -140,16 +153,30 @@ value<sub>1</sub>, value<sub>2</sub>,..., value<sub>n</sub></p>
 
 #### Entry values
 
-It's important to understand that entry *values* can be encoded any way in which
-an implementation chooses. For example, the integers can be in either big or
-little endian byte order.
+POD integers and doubles are little-endian, with no padding. Bool is a
+single byte that must be `0` or `1`. Strings are a varint length then
+that many bytes; there is no UTF-8 requirement on *values* (hashes,
+tx blobs, and other PODs travel as `SERIALIZE_TYPE_STRING`).
 
-Entry values which are objects (i.e. `SERIALIZE_TYPE_OBJECT`), are stored as
+Entry values which are objects (`SERIALIZE_TYPE_OBJECT`) are stored as
 [sections](#Section).
 
-Note, I have not yet seen the type `SERIALIZE_TYPE_ARRAY` in use. My assumption
-is this would be used for *untyped* arrays and so subsequent entries could be of
-any type.
+`SERIALIZE_TYPE_ARRAY` (tag 13, untyped) and array-of-array are **a
+hard decode error** until a captured C++ body emits one. Production
+arrays use `(inner_type | SERIALIZE_FLAG_ARRAY)`.
+
+#### Decode vs encode details
+
+- **Trailing bytes** after the root section are ignored (`load_from_binary`
+  does not require consuming the whole buffer).
+- **Duplicate keys** in one section are rejected.
+- **Encode** walks keys in lexicographic order. Decode accepts any order.
+- **Encode** rejects empty keys and keys longer than 254 bytes. Decode
+  accepts key lengths 1..=255 (C++ asymmetry).
+- **Section keys** in the Rust decoder must be UTF-8. Production maps
+  use ASCII identifiers.
+- A header-only blob is truncated: C++ rejects a root with `sz == 0`
+  after a successful header read.
 
 ### Overall example
 
@@ -173,6 +200,50 @@ This would translate to:
 
 ![Epee binary storage format example](images/storage_binary_example.png)
 
+## Limits
+
+`portable_storage::limits_t` is a **decode parameter**, not a format
+constant. Encode does not consult limits. The Rust crate takes a
+`Limits { objects, fields, strings }`:
+
+| Caller | objects | fields | strings | C++ source |
+|--------|---------|--------|---------|------------|
+| Levin invoke/notify | 8192 | 16384 | 16384 | `default_levin_limits` (`levin_abstract_invoke2.h`) |
+| HTTP `.bin` RPC | 196608 | 196608 | 196608 | `default_http_bin_limits` = 65536×3 (`http_abstract_invoke.h`) |
+| Null limits pointer | `usize::MAX` | `usize::MAX` | `usize::MAX` | `load_from_binary` unrestricted |
+
+- **objects** — nested sections. The root section is not counted.
+- **fields** — sum of per-section field counts.
+- **strings** — scalar strings plus reserved string-array slots
+  (a string array of *n* elements bumps the string budget by *n* once).
+- Recursion: C++ `EPEE_PORTABLE_STORAGE_RECURSION_LIMIT` is 100, counted
+  on almost every `read` (including raw `memcpy`). The Rust decoder
+  counts nested section/entry/array **structural** depth against the
+  same 100. Deep primitive-only blobs that would trip C++ but not
+  structural depth are not a production shape.
+- String length must be `< MAX_STRING_LEN_POSSIBLE` (2_000_000_000).
+
+## Schema layer (not the codec)
+
+The binary codec has optional keys and `SERIALIZE_TYPE_STRING` blobs.
+The C++ `KV_SERIALIZE*` macros are a typed overlay. LV-2b owns that
+overlay for Levin command maps. Notes so the codec is not asked to
+invent them:
+
+- **`KV_SERIALIZE_OPT`.** Store omits the field when the value equals
+  the default; load uses the default when the field is absent. Missing
+  this is how handshake peerlists and `dandelionpp_fluff` diverge. The
+  codec just encodes whatever keys are present.
+- **`KV_SERIALIZE_VAL_POD_AS_BLOB`.** A POD is one `SERIALIZE_TYPE_STRING`
+  of `sizeof` bytes, not a section. The codec sees a blob.
+- **`KV_SERIALIZE_CONTAINER_POD_AS_BLOB`.** A vector/list of PODs is
+  *one* string of concatenated elements, not a typed array. Used by
+  hash lists (commands 2003/2006/2007/2009/2010).
+- **`network_address` union**, including ipv4's store-time `SWAP32LE`,
+  plus `block_complete_entry` pruned vs unpruned `txs` and
+  `attestation_witness` `OPT`, are LV-2b. See
+  [`LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md) §6.
+
 ## Shekyl / CryptoNote specifics
 
 ### Entry values
@@ -184,14 +255,24 @@ These are stored as strings, `SERIALIZE_TYPE_STRING`.
 #### STL containers (vector, list)
 
 These can be arrays of standard integer types, strings or
-`SERIALIZE_TYPE_OBJECT`'s for structs.
+`SERIALIZE_TYPE_OBJECT`'s for structs. When the C++ map uses
+`CONTAINER_POD_AS_BLOB`, the wire is one concatenated STRING instead
+(see Schema layer above).
 
 #### Links to struct definitions in this repository
 
-- [Core RPC
-  definitions](https://github.com/monero-project/monero/blob/master/src/rpc/core_rpc_server_commands_defs.h) (upstream; see `src/rpc/core_rpc_server_commands_defs.h` in Shekyl)
-- [CryptoNote protocol
-  definitions](https://github.com/monero-project/monero/blob/master/src/cryptonote_protocol/cryptonote_protocol_defs.h) (upstream; see `src/cryptonote_protocol/` in Shekyl)
+- Core RPC definitions: `src/rpc/core_rpc_server_commands_defs.h`
+  (~343 KV maps; **not** LV-2b — HTTP JSON/binary RPC stays C++).
+- CryptoNote protocol definitions: `src/cryptonote_protocol/cryptonote_protocol_defs.h`
+  and `src/p2p/net_node_common.h` (Levin-wire subset is LV-2b).
+
+## Known-answer tests
+
+Codec KATs (empty section, C++ `two_keys` / `duplicate_key` from
+`tests/unit_tests/epee_serialization.cpp`, nested object, uint64
+array, tag-13 hard error, HTTP `.bin` request shape) live in
+`rust/shekyl-portable-storage/tests/oracle_kats.rs`. Captured handshake
+and `NOTIFY_NEW_TRANSACTIONS` bodies are LV-2b.
 
 
 

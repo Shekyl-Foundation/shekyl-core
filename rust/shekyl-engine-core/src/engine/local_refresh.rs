@@ -159,7 +159,10 @@ use std::time::Duration;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use shekyl_rpc_client::RpcError;
 use shekyl_scanner::{ScanError, ScanOutcome, ScannableBlock, Scanner, ViewPair, MAX_OUTPUTS};
+use shekyl_types::PCanonicalId;
 use shekyl_wire::Input;
+use std::collections::BTreeMap;
+
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
@@ -174,7 +177,11 @@ use super::refresh::{LedgerSnapshot, RefreshOptions, RefreshPhase, RefreshProgre
 use super::traits::daemon::DaemonEngine;
 use super::traits::refresh::RefreshEngine;
 use super::view_material::ViewMaterial;
-use crate::scan::{DetectedTransfer, KeyImageObserved, OwnedTxLeaves, ReorgRewind, ScanResult};
+use crate::engine::bond_watch::sightings_in;
+use crate::scan::{
+    BondSightingObserved, DetectedTransfer, KeyImageObserved, OwnedTxLeaves, ReorgRewind,
+    ScanResult,
+};
 
 /// Maximum retries for transient per-block RPC failures.
 ///
@@ -202,15 +209,23 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 const PER_BLOCK_CEILING: u32 = 1;
 
 /// Upper bound on intra-attempt reorg rewinds absorbed by a single
-/// `produce_scan_result` call before it stops re-checking linkage and
-/// lets any residual self-heal on the next refresh. Each detected reorg
-/// rewinds `h` backward, so an *unbounded* count would let a daemon that
-/// reorgs between every pair of fetches — a reorg storm, or a hostile
-/// daemon deliberately spinning the wallet — stall one attempt forever.
-/// The common real case is a single reorg per attempt; this budget covers
-/// legitimate multi-reorg bursts while the bound guarantees termination.
-/// Reaching it is **not** a torn splice: the between-attempts linkage
-/// check rewinds any residual on the next refresh.
+/// `produce_scan_result` call. Each detected reorg rewinds `h` backward,
+/// so an *unbounded* count would let a daemon that reorgs between every
+/// pair of fetches — a reorg storm, or a hostile daemon deliberately
+/// spinning the wallet — stall one attempt forever. The common real case
+/// is a single reorg per attempt; this budget covers legitimate
+/// multi-reorg bursts while the bound guarantees termination.
+///
+/// Detection stays armed past the budget; only *rewinding* is bounded. A
+/// reorg detected with the budget spent **fails the attempt**
+/// ([`LocalRefreshError::ReorgStorm`]) rather than scanning on with
+/// detection disarmed: blocks accumulated blind would merge, and while
+/// ledger state is reorg-rewindable at the next refresh, the bond watch's
+/// sightings are not — adoption raises the monotone cursor permanently,
+/// so a stale abandoned-fork sighting collected in a blind region would
+/// pass the merge's O5 checks and burn cursor slots on fork-only
+/// evidence. Failing the attempt keeps every consumer consistent; the
+/// retry starts clean once the chain calms.
 const MAX_REORG_REWINDS_PER_ATTEMPT: u32 = 8;
 
 // ============================================================================
@@ -230,21 +245,21 @@ const MAX_REORG_REWINDS_PER_ATTEMPT: u32 = 8;
 /// # Construction
 ///
 /// [`Self::new`] consumes a [`ViewMaterial`] by move (the type is
-/// not [`Clone`]) and is the only constructor. Once constructed,
-/// `LocalRefresh` is shared `&LocalRefresh` for the
-/// orchestrator's lifetime — calls are `&self`, with all
+/// not [`Clone`]) and is the empty-watch constructor. The assemble
+/// path uses [`Self::with_bond_watch`] to arm the probe-id map.
+/// Once constructed, `LocalRefresh` is shared `&LocalRefresh` for
+/// the orchestrator's lifetime — calls are `&self`, with all
 /// per-attempt state living in local variables of
 /// [`Self::produce_scan_result`].
 ///
 /// # `#[non_exhaustive]` not used
 ///
-/// `LocalRefresh` has exactly one field, and that field is
-/// private (`view_material`). External callers cannot construct
-/// or pattern-match against the struct shape regardless of the
-/// outer `pub` visibility — they reach the type only through
-/// [`Self::new`]. Future revisions add fields through
-/// `Self::new` API revisions; the public-API surface is the
-/// constructor signature plus the (`pub(crate)`)
+/// Every `LocalRefresh` field is private (`view_material`,
+/// `scan_start_floor`, `bond_watch`). External callers cannot
+/// construct or pattern-match against the struct shape regardless
+/// of the outer `pub` visibility — they reach the type only through
+/// [`Self::new`] / [`Self::with_bond_watch`]. The public-API surface
+/// is the constructor signatures plus the (`pub(crate)`)
 /// [`RefreshEngine`] impl, not the struct shape itself.
 ///
 /// # Trait-implementation visibility
@@ -272,26 +287,62 @@ pub struct LocalRefresh {
     /// when this exceeds `synced_height + 1` before taking a
     /// snapshot; see [`super::scan_floor`].
     scan_start_floor: u64,
+    /// The bond watch's candidate set (SA-R-6): persona canonical id →
+    /// slot, inverted from the open-built `StakingBlock::persona_id_cache`
+    /// (durably-retired slots already excluded at open). Public
+    /// identifiers, no secret, no zeroize burden — but the id↔slot
+    /// association is persona history, so the map never renders through
+    /// `Debug` (the enclosing engine's hand-written `Debug` skips the
+    /// refresh aggregate entirely). Empty for a wallet whose window has
+    /// no cached ids; the per-block cost of a populated watch is a map
+    /// lookup only for transactions that carry `Input::BondPost` (rare).
+    bond_watch: BTreeMap<PCanonicalId, u32>,
 }
 
 impl LocalRefresh {
-    /// Construct a new [`LocalRefresh`] from owned
-    /// [`ViewMaterial`].
+    /// Construct a [`LocalRefresh`] from owned [`ViewMaterial`] and the
+    /// scan floor, with an empty bond watch. Test doubles and wrappers
+    /// that do not reconstruct staking use this; assemble uses
+    /// [`Self::with_bond_watch`] — EXCEPT when the sealed staking
+    /// evidence is unreadable, where assemble deliberately falls back
+    /// here: the retired refusal set is unknown, so an armed watch could
+    /// re-adopt durably retired slots (see the open-time reconcile in
+    /// `lifecycle.rs`).
     ///
     /// The view material is held for `LocalRefresh`'s lifetime
     /// per §5.4.7 R4 a-instance-scoped; on drop the embedded
     /// [`ViewMaterial`]'s [`ZeroizeOnDrop`](zeroize::ZeroizeOnDrop)
     /// chain wipes the secret bytes.
     pub const fn new(view_material: ViewMaterial, scan_start_floor: u64) -> Self {
+        Self::with_bond_watch(view_material, scan_start_floor, BTreeMap::new())
+    }
+
+    /// Arm the principal scan's bond watch (SA-R-6): `id → slot` inverted
+    /// from the open-built probe-id cache. The only production caller is
+    /// `assemble`, the seam that already holds the cache.
+    pub const fn with_bond_watch(
+        view_material: ViewMaterial,
+        scan_start_floor: u64,
+        bond_watch: BTreeMap<PCanonicalId, u32>,
+    ) -> Self {
         Self {
             view_material,
             scan_start_floor,
+            bond_watch,
         }
     }
 
     /// Persisted/session scan floor wired at wallet open.
     pub(crate) const fn scan_start_floor(&self) -> u64 {
         self.scan_start_floor
+    }
+
+    /// Test-only oracle for the open path's watch gating: whether this
+    /// instance was armed with a non-empty watch map. Production code
+    /// never branches on this — the empty map already behaves as "off".
+    #[cfg(test)]
+    pub(crate) fn bond_watch_is_armed(&self) -> bool {
+        !self.bond_watch.is_empty()
     }
 
     /// Build a fresh [`Scanner`](shekyl_scanner::Scanner) from
@@ -385,6 +436,14 @@ pub(crate) enum LocalRefreshError {
     #[error("daemon returned a structurally malformed block")]
     Malformed,
 
+    /// A further reorg was detected after the per-attempt rewind budget
+    /// (`MAX_REORG_REWINDS_PER_ATTEMPT`) was spent. The attempt aborts
+    /// rather than scanning on with detection disarmed — see the budget
+    /// constant's docs for why merging a blind region is unsound for the
+    /// bond watch's monotone adoptions.
+    #[error("reorg storm: rewind budget exhausted and the chain diverged again")]
+    ReorgStorm,
+
     /// Internal invariant violation; not reachable from
     /// adversarial input.
     #[error("internal invariant violation during refresh")]
@@ -400,6 +459,11 @@ impl From<LocalRefreshError> for RefreshError {
             }),
             LocalRefreshError::Malformed => RefreshError::Io(IoError::Scanner {
                 detail: "LocalRefresh: daemon returned a structurally malformed block".to_string(),
+            }),
+            LocalRefreshError::ReorgStorm => RefreshError::Io(IoError::Daemon {
+                detail: "LocalRefresh: reorg storm — the chain served by the daemon diverged \
+                         again after the per-attempt rewind budget; retry when it stabilizes"
+                    .to_string(),
             }),
             LocalRefreshError::Internal => RefreshError::InternalInvariantViolation {
                 context: "LocalRefresh: scanner construction failed against view material",
@@ -627,6 +691,9 @@ impl RefreshEngine for LocalRefresh {
             let mut block_hashes: Vec<(u64, [u8; 32])> = Vec::new();
             let mut new_transfers: Vec<DetectedTransfer> = Vec::new();
             let mut spent_key_images: Vec<KeyImageObserved> = Vec::new();
+            let mut bond_sightings: Vec<BondSightingObserved> = Vec::new();
+            let mut sighted_slots: std::collections::BTreeSet<u32> =
+                std::collections::BTreeSet::new();
             // The rewind target carried out to the merge (the *latest* fork, which
             // is always the correct one — `find_fork_point` re-measures divergence
             // from the fixed persisted window each call). `reorg_rewinds` bounds how
@@ -677,11 +744,14 @@ impl RefreshEngine for LocalRefresh {
                 // empties the accumulators on every reorg, and the re-scan
                 // re-derives `effective_start`, keeping the result
                 // internally consistent no matter how many times detection
-                // fires. The counter bounds only *how many* rewinds,
-                // guaranteeing termination against a daemon that reorgs on
-                // every fetch; a residual beyond the budget self-heals on
-                // the next refresh's between-attempts linkage check.
-                if reorg_rewinds < MAX_REORG_REWINDS_PER_ATTEMPT && h > 1 {
+                // fires. Detection itself is NEVER disarmed: the counter
+                // bounds only how many *rewinds* the attempt absorbs, and a
+                // detection past the budget aborts the attempt (`ReorgStorm`
+                // below) — scanning on blind would merge blocks no linkage
+                // check vouched for, which the bond watch's monotone
+                // sighting adoption cannot survive (a stale fork sighting
+                // would pass O5 and burn cursor slots permanently).
+                if h > 1 {
                     let expected_parent = match block_hashes.last() {
                         Some(&(prev_h, prev_hash)) if prev_h + 1 == h => Some(prev_hash),
                         _ => snapshot.block_hash_at(h - 1).or(if h == effective_start {
@@ -692,6 +762,19 @@ impl RefreshEngine for LocalRefresh {
                     };
                     if let Some(expected_parent) = expected_parent {
                         if expected_parent != scannable.block.header.previous {
+                            // Budget check FIRST: a further divergence with the
+                            // rewind budget spent is the reorg-storm abort. The
+                            // attempt merges nothing (all-or-nothing result), so
+                            // no consumer sees the blind region.
+                            if reorg_rewinds == MAX_REORG_REWINDS_PER_ATTEMPT {
+                                warn!(
+                                    height = h,
+                                    max = MAX_REORG_REWINDS_PER_ATTEMPT,
+                                    "LocalRefresh: reorg detected after the rewind budget was \
+                                     spent; aborting the attempt (reorg storm)",
+                                );
+                                return Err(LocalRefreshError::ReorgStorm);
+                            }
                             warn!(
                                 height = h,
                                 "LocalRefresh: chain reorg detected at parent of {h}, walking fork point",
@@ -744,8 +827,8 @@ impl RefreshEngine for LocalRefresh {
                                 warn!(
                                     fork_height,
                                     max = MAX_REORG_REWINDS_PER_ATTEMPT,
-                                    "LocalRefresh: reorg-rewind budget exhausted; deferring \
-                                     residual linkage detection to the next refresh",
+                                    "LocalRefresh: reorg-rewind budget spent; a further \
+                                     divergence this attempt aborts as a reorg storm",
                                 );
                             }
                             effective_start = fork_height;
@@ -766,6 +849,18 @@ impl RefreshEngine for LocalRefresh {
                             spent_key_images.clear();
                             block_leaves.clear();
                             block_curve_tree_roots.clear();
+                            // Bond sightings from the abandoned fork must go
+                            // with it: their heights sit inside the final
+                            // processed range, so a stale row would pass the
+                            // merge's O5 contract checks and be ADOPTED as
+                            // chain evidence — wrongly re-arming staking and
+                            // permanently burning cursor slots (the raise is
+                            // monotone by design). The canonical chain's posts
+                            // are re-sighted by the re-scan from the fork
+                            // (the dedup set resets with it, else the re-sight
+                            // would be suppressed as a duplicate).
+                            bond_sightings.clear();
+                            sighted_slots.clear();
 
                             h = fork_height;
                             continue;
@@ -853,6 +948,17 @@ impl RefreshEngine for LocalRefresh {
                                     ),
                                 containing_tx_hash: shekyl_types::TxHash::from_bytes(*tx_hash),
                             });
+                        }
+                    }
+                    // Bond watch (SA-R-6): match against the probe-id map
+                    // (`bond_watch::sightings_in`). One row per slot per
+                    // attempt: the scan walks heights ascending, so the
+                    // first occurrence is the earliest height — the one
+                    // the merge's first-sighting semantics would keep —
+                    // and duplicates stay off the channel.
+                    for sighting in sightings_in(tx, h, &self.bond_watch) {
+                        if sighted_slots.insert(sighting.slot) {
+                            bond_sightings.push(sighting);
                         }
                     }
                 }
@@ -956,6 +1062,7 @@ impl RefreshEngine for LocalRefresh {
                 reorg_rewind,
                 block_leaves,
                 block_curve_tree_roots,
+                bond_sightings,
             })
         }
     }
@@ -1193,243 +1300,8 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
 // ============================================================================
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::diagnostics::NoopDiagnosticSink;
-
-    /// `LocalRefreshError → RefreshError` mapping is total and
-    /// preserves the discriminant classes per the §2.3
-    /// unit-variant-only binding.
-    #[test]
-    fn local_refresh_error_maps_to_refresh_error() {
-        assert!(matches!(
-            RefreshError::from(LocalRefreshError::Cancelled),
-            RefreshError::Cancelled
-        ));
-        assert!(matches!(
-            RefreshError::from(LocalRefreshError::Io),
-            RefreshError::Io(IoError::Daemon { .. })
-        ));
-        assert!(matches!(
-            RefreshError::from(LocalRefreshError::Malformed),
-            RefreshError::Io(IoError::Scanner { .. })
-        ));
-        assert!(matches!(
-            RefreshError::from(LocalRefreshError::Internal),
-            RefreshError::InternalInvariantViolation { .. }
-        ));
-    }
-
-    /// `EmitState::try_emit` honours the per-block ceiling and
-    /// the F13-S latch.
-    #[test]
-    fn emit_state_first_breach_emits_suppressed_notice() {
-        use std::sync::Mutex;
-
-        #[derive(Default)]
-        struct RecordingSink {
-            events: Mutex<Vec<RefreshDiagnostic>>,
-        }
-        impl DiagnosticSink for RecordingSink {
-            fn emit(&self, event: RefreshDiagnostic) {
-                self.events.lock().unwrap().push(event);
-            }
-        }
-
-        let sink = RecordingSink::default();
-        let mut state = EmitState::new();
-
-        // First emission: passes (counter 0 → 1, within ceiling).
-        state.try_emit(
-            &sink,
-            RefreshDiagnostic::DaemonMalformed {
-                kind: MalformedKind::InvalidBlockStructure,
-            },
-        );
-        // Second emission: over ceiling, latch unset → emit
-        // SuppressedRateLimit notice and latch.
-        state.try_emit(
-            &sink,
-            RefreshDiagnostic::DaemonMalformed {
-                kind: MalformedKind::InvalidBlockStructure,
-            },
-        );
-        // Third emission: over ceiling, latch set → silent drop.
-        state.try_emit(
-            &sink,
-            RefreshDiagnostic::DaemonMalformed {
-                kind: MalformedKind::InvalidBlockStructure,
-            },
-        );
-
-        let events = sink.events.lock().unwrap().clone();
-        assert_eq!(events.len(), 2);
-        assert!(matches!(
-            events[0],
-            RefreshDiagnostic::DaemonMalformed {
-                kind: MalformedKind::InvalidBlockStructure
-            }
-        ));
-        assert!(matches!(
-            events[1],
-            RefreshDiagnostic::SuppressedRateLimit {
-                class: SuppressedClass::DaemonMalformed
-            }
-        ));
-    }
-
-    /// Per-block counter resets at block boundary; F13-S latch
-    /// persists.
-    #[test]
-    fn emit_state_block_reset_clears_counter_not_latch() {
-        let mut state = EmitState::new();
-
-        // First emission: passes.
-        state.try_emit(
-            &NoopDiagnosticSink,
-            RefreshDiagnostic::ScanProgress {
-                height: 1,
-                candidates: 0,
-            },
-        );
-        // Second emission: over ceiling, latch sets.
-        state.try_emit(
-            &NoopDiagnosticSink,
-            RefreshDiagnostic::ScanProgress {
-                height: 1,
-                candidates: 0,
-            },
-        );
-        assert!(state.scan_progress.notice_emitted);
-
-        // Block boundary: counter resets, latch stays.
-        state.reset_block();
-        assert_eq!(state.scan_progress.counter, 0);
-        assert!(state.scan_progress.notice_emitted);
-    }
-
-    /// `SuppressedRateLimit` events are NOT rate-limited
-    /// themselves (they exist to signal suppression; rate-limiting
-    /// them would defeat the purpose).
-    #[test]
-    fn suppressed_rate_limit_event_itself_is_not_rate_limited() {
-        use std::sync::Mutex;
-
-        #[derive(Default)]
-        struct RecordingSink {
-            events: Mutex<Vec<RefreshDiagnostic>>,
-        }
-        impl DiagnosticSink for RecordingSink {
-            fn emit(&self, event: RefreshDiagnostic) {
-                self.events.lock().unwrap().push(event);
-            }
-        }
-
-        let sink = RecordingSink::default();
-        let mut state = EmitState::new();
-
-        for _ in 0..3 {
-            state.try_emit(
-                &sink,
-                RefreshDiagnostic::SuppressedRateLimit {
-                    class: SuppressedClass::ScanProgress,
-                },
-            );
-        }
-
-        assert_eq!(sink.events.lock().unwrap().len(), 3);
-    }
-
-    /// `scanner_error_to_malformed_kind` returns
-    /// `InvalidBlockStructure` for all scanner errors at C4.
-    #[test]
-    fn scanner_error_classified_as_invalid_block_structure() {
-        // We can't easily construct a `ScanError` here without
-        // pulling in the full scanner; assert against the function's
-        // const return shape instead.
-        const fn _classifies(err: &ScanError) -> MalformedKind {
-            scanner_error_to_malformed_kind(err)
-        }
-        // The function is const fn — calling it at compile time
-        // would require an InvalidScannableBlock instance.
-        // Coverage is provided by C7's `AssertionSink` property
-        // tests once they land.
-    }
-
-    /// `classify_rpc_error` maps each refresh-reachable
-    /// [`RpcError`] variant to the Round-4-audit-confirmed
-    /// [`ProtocolErrorKind`] tag per §4 Phase 0e.
-    ///
-    /// The String payloads on `InternalError` / `ConnectionError`
-    /// / `InvalidNode` are NOT inspected by the classifier — the
-    /// §5.4.7 R6 memory-amplifier closure binds this site.
-    #[test]
-    fn classify_rpc_error_refresh_reachable_subset() {
-        assert_eq!(
-            classify_rpc_error(&RpcError::ConnectionError(String::new())),
-            ProtocolErrorKind::ConnectionError
-        );
-        assert_eq!(
-            classify_rpc_error(&RpcError::InternalError(String::new())),
-            ProtocolErrorKind::InternalError
-        );
-        assert_eq!(
-            classify_rpc_error(&RpcError::InvalidNode(String::new())),
-            ProtocolErrorKind::InvalidNode
-        );
-        assert_eq!(
-            classify_rpc_error(&RpcError::InvalidTransaction([0u8; 32])),
-            ProtocolErrorKind::InvalidTransaction
-        );
-        assert_eq!(
-            classify_rpc_error(&RpcError::PrunedTransaction),
-            ProtocolErrorKind::PrunedTransaction
-        );
-    }
-
-    /// `classify_rpc_error` defensively maps the non-refresh-
-    /// reachable upstream variants (`TransactionsNotFound` /
-    /// `InvalidFee` / `InvalidPriority`) to
-    /// [`ProtocolErrorKind::InvalidNode`] per the rustdoc
-    /// disposition. These variants belong to PR 5's
-    /// `PendingTxEngine` send-tx path; if PR 5 needs distinct
-    /// tagging, [`ProtocolErrorKind`] grows additively under
-    /// `#[non_exhaustive]`.
-    #[test]
-    fn classify_rpc_error_non_refresh_reachable_subset_falls_back_to_invalid_node() {
-        assert_eq!(
-            classify_rpc_error(&RpcError::TransactionsNotFound(vec![])),
-            ProtocolErrorKind::InvalidNode
-        );
-        assert_eq!(
-            classify_rpc_error(&RpcError::InvalidFee),
-            ProtocolErrorKind::InvalidNode
-        );
-        assert_eq!(
-            classify_rpc_error(&RpcError::InvalidPriority),
-            ProtocolErrorKind::InvalidNode
-        );
-    }
-
-    /// The Round-4-audited `ProtocolErrorKind` set is exhaustive
-    /// over the refresh-reachable upstream subset. Adding a
-    /// variant to upstream [`RpcError`] must not produce a
-    /// silently-falling-through case at the classifier — the
-    /// classifier's `match` is exhaustive (no `_` arm) so a new
-    /// upstream variant breaks the build until C5b's
-    /// classification is extended deliberately.
-    #[test]
-    fn classify_rpc_error_is_exhaustive_at_the_match_arm() {
-        // This compiles only because `classify_rpc_error` is
-        // exhaustive against every `RpcError` variant. If
-        // upstream grows a new variant the build fails here
-        // (and at `classify_rpc_error`'s definition site) until
-        // the new variant is given an explicit classification.
-        fn _exhaustive(e: &RpcError) -> ProtocolErrorKind {
-            classify_rpc_error(e)
-        }
-    }
-}
+#[path = "local_refresh_tests.rs"]
+mod tests;
 
 // ============================================================================
 // Producer property tests (§5.4.6: emission/return coherence +
@@ -1467,1229 +1339,5 @@ mod tests {
 /// [`§5.4.6 emission/return coherence pin`]: ../../../../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
 /// [`§5.4.6 producer-panic-safety pin`]: ../../../../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
 #[cfg(test)]
-mod producer_property_tests {
-    use super::*;
-
-    use proptest::prelude::*;
-    use shekyl_crypto_pq::account::{
-        rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
-    };
-    use shekyl_engine_state::LedgerBlock;
-    use tokio::sync::watch;
-    use tokio_util::sync::CancellationToken;
-
-    use crate::engine::diagnostics::{AssertionSink, PanickingSink, PanickingSinkTrigger};
-    use crate::engine::test_support::{make_synthetic_block, TestDaemon, DEFAULT_TEST_SEED};
-    use crate::engine::view_material::ViewMaterial;
-
-    /// Real wallet master seed (64 bytes). Drives `rederive_account`
-    /// against the same key-derivation path `Engine::create` uses
-    /// internally, producing structurally-valid `ViewMaterial` for the
-    /// producer's `build_scanner`. Distinct from the daemon-side
-    /// `DEFAULT_TEST_SEED` (32-byte daemon-driver seed).
-    const PROPERTY_TEST_MASTER_SEED: [u8; MASTER_SEED_BYTES] = {
-        // Construct a deterministic 64-byte seed at compile time:
-        // `seed[i] = (i * 7) ^ 0xC7`. Distinct from
-        // `DEFAULT_TEST_SEED` (32 zero bytes) so producer-side
-        // property tests do not share derivation state with any
-        // existing test fixture. `MASTER_SEED_BYTES = 64`, so the
-        // `u8` index loop never overflows.
-        let mut seed = [0u8; MASTER_SEED_BYTES];
-        let mut i: u8 = 0;
-        while (i as usize) < MASTER_SEED_BYTES {
-            seed[i as usize] = i.wrapping_mul(7) ^ 0xC7;
-            i += 1;
-        }
-        seed
-    };
-
-    /// Build a [`LocalRefresh`] against a deterministic test wallet
-    /// seed. The view material derives via the same
-    /// [`rederive_account`] path `Engine::create` uses internally
-    /// (`DerivationNetwork::Fakechain` + `SeedFormat::Raw32`), so
-    /// `build_scanner` lands in the structurally-valid branch.
-    fn make_local_refresh() -> LocalRefresh {
-        let blob = rederive_account(
-            &PROPERTY_TEST_MASTER_SEED,
-            DerivationNetwork::Fakechain,
-            SeedFormat::Raw32,
-        )
-        .expect("rederive_account against fakechain raw32 seed");
-        let vm = ViewMaterial::try_from_keys(&blob)
-            .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        LocalRefresh::new(vm, 0)
-    }
-
-    fn snapshot_at_anchor(synced: u64, hash: [u8; 32]) -> LedgerSnapshot {
-        let mut ledger = LedgerBlock::empty();
-        crate::engine::scan_floor::anchor_ledger_block(&mut ledger, synced, hash)
-            .expect("test anchor");
-        LedgerSnapshot::from_ledger(&ledger)
-    }
-
-    /// Construct a `(height, parent_hash)`-chained linear chain of `n`
-    /// synthetic blocks `[chain[0], chain[1], ..., chain[n-1]]` with
-    /// `chain[h].block.header.previous = chain[h-1].block.hash()`.
-    /// `chain[0]`'s parent is `[0u8; 32]`. Real-daemon convention:
-    /// `chain[h] = block at height h`.
-    fn linear_chain(n: u64) -> Vec<ScannableBlock> {
-        let mut chain =
-            Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
-        let mut parent = [0u8; 32];
-        for h in 0..n {
-            let block = make_synthetic_block(h, parent);
-            parent = block.block.hash();
-            chain.push(block);
-        }
-        chain
-    }
-
-    /// A divergent continuation of `base`: internally-linked blocks for
-    /// heights `fork_h..len`, built on `base[fork_h - 1]` with a
-    /// different nonce so every hash diverges from `base`'s at the same
-    /// height. Feed to [`TestDaemon::replace_chain_from`] /
-    /// `replace_chain_after_fetch` to model a competing chain.
-    fn divergent_tail(base: &[ScannableBlock], fork_h: u64, len: u64) -> Vec<ScannableBlock> {
-        divergent_tail_nonce(base, fork_h, len, 1)
-    }
-
-    /// [`divergent_tail`] with an explicit `nonce`, so two competing tails off
-    /// the *same* parent still diverge from each other (a second reorg must fork
-    /// away from the first reorg's chain, not reproduce it). `nonce = 1` is the
-    /// canonical divergent tail; a distinct nonce yields a distinct chain sharing
-    /// the same `fork_h - 1` parent.
-    fn divergent_tail_nonce(
-        base: &[ScannableBlock],
-        fork_h: u64,
-        len: u64,
-        nonce: u32,
-    ) -> Vec<ScannableBlock> {
-        let mut parent = base[usize::try_from(fork_h - 1).expect("test fork height fits in usize")]
-            .block
-            .hash();
-        let mut tail = Vec::new();
-        for h in fork_h..len {
-            let mut block = make_synthetic_block(h, parent);
-            block.block.header.nonce = nonce; // diverge from the canonical chain
-            parent = block.block.hash();
-            tail.push(block);
-        }
-        tail
-    }
-
-    // ── Intra-attempt straddle (SP-T2 sequence-coherence keystone) ──
-
-    /// A reorg landing *between* two consecutive single-height fetches
-    /// within one attempt is detected by the running prev-hash linkage
-    /// check and rewound — never silently spliced. Each fetch is
-    /// atomic; this is the sequence-coherence half of the pair (P-SH
-    /// makes reads atomic; this check makes the *sequence* coherent).
-    ///
-    /// Setup: wallet synced to 4 on chain A (tip 12). The attempt scans
-    /// 5..12; after the daemon serves the fetch at height 7 it reorgs
-    /// to chain B (diverging at height 6), so the fetch at 8 returns a
-    /// B-block whose `previous` is B7's hash — not the A7 the attempt
-    /// just fetched. Pre-fix, the check consulted only the persisted
-    /// window (≤ synced 4) and skipped every intra-attempt pair,
-    /// splicing A6/A7 against B8+ silently.
-    #[tokio::test(start_paused = true)]
-    async fn intra_attempt_reorg_is_detected_and_rewound() {
-        const SYNCED: u64 = 4;
-        const TIP: u64 = 12;
-        const FORK: u64 = 6; // first divergent height (above the persisted window)
-        const TRIGGER: u64 = 7; // daemon reorgs right after serving this fetch
-
-        let blob = rederive_account(
-            &PROPERTY_TEST_MASTER_SEED,
-            DerivationNetwork::Fakechain,
-            SeedFormat::Raw32,
-        )
-        .expect("rederive_account against fakechain raw32 seed");
-        let vm = ViewMaterial::try_from_keys(&blob)
-            .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, 0);
-
-        let chain_a = linear_chain(TIP);
-        let tail_b = divergent_tail(&chain_a, FORK, TIP);
-        let anchor = chain_a[usize::try_from(SYNCED).unwrap()].block.hash();
-
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain_a.clone());
-        daemon.replace_chain_after_fetch(TRIGGER, FORK, tail_b.clone());
-
-        let snapshot = snapshot_at_anchor(SYNCED, anchor);
-        let sink = AssertionSink::new();
-        let cancel = CancellationToken::new();
-        let (progress_tx, _progress_rx) = fresh_progress_channel();
-
-        let result = refresh
-            .produce_scan_result(
-                snapshot,
-                &daemon,
-                RefreshOptions::default(),
-                cancel,
-                progress_tx,
-                &sink,
-            )
-            .await
-            .expect("straddled scan completes via rewind");
-
-        // Detected and rewound to the attempt boundary — the
-        // conservative fork point when the true fork (6) sits above
-        // the persisted window (≤ 4), where `find_fork_point` cannot
-        // locate it precisely.
-        assert_eq!(
-            result.reorg_rewind.map(|r| r.fork_height),
-            Some(SYNCED + 1),
-            "intra-attempt straddle must be detected and rewound"
-        );
-
-        // The final sequence is the post-reorg chain, fully linked: A
-        // below the fork, B at and above it. No old-chain block above
-        // the fork survives — the pre-fix behavior (A6/A7 spliced
-        // against B8..B11) is exactly what this rules out.
-        let expected: Vec<(u64, [u8; 32])> = (SYNCED + 1..FORK)
-            .map(|h| (h, chain_a[usize::try_from(h).unwrap()].block.hash()))
-            .chain((FORK..TIP).map(|h| {
-                let idx = usize::try_from(h - FORK).unwrap();
-                (h, tail_b[idx].block.hash())
-            }))
-            .collect();
-        assert_eq!(
-            result.block_hashes, expected,
-            "scan result must carry the post-reorg chain only, never a torn splice"
-        );
-    }
-
-    /// The seam case: an intra-attempt reorg whose fork sits at **exactly**
-    /// `synced_height` — the boundary between the two expected-parent
-    /// lookups (running tail owns heights > `synced_height`, the persisted
-    /// window owns heights ≤ it). This is the one height where "disjoint by
-    /// construction" is asserted rather than obvious; an off-by-one at the
-    /// seam would splice a fork landing precisely on the boundary.
-    ///
-    /// Setup: wallet synced to 4 on chain A (window anchor = A4); the daemon
-    /// reorgs from height **4** (replacing the window-top block itself) right
-    /// after serving the fetch at 6. The fetch at 7 returns B7, whose
-    /// `previous` (B6's hash) mismatches the running tail's A6 → the walk
-    /// enters the persisted window at its top (4), finds the stored A4 also
-    /// replaced (daemon serves B4), continues below the window (no stored
-    /// hash at 3) and resolves the conservative fork at 4 — rewinding
-    /// *through* the seam, refetching the replaced window-top block.
-    #[tokio::test(start_paused = true)]
-    async fn intra_attempt_reorg_at_exact_synced_height_rewinds_through_seam() {
-        const SYNCED: u64 = 4;
-        const TIP: u64 = 12;
-        const FORK: u64 = SYNCED; // fork at exactly the persisted-window top
-        const TRIGGER: u64 = 6; // daemon reorgs right after serving this fetch
-
-        let blob = rederive_account(
-            &PROPERTY_TEST_MASTER_SEED,
-            DerivationNetwork::Fakechain,
-            SeedFormat::Raw32,
-        )
-        .expect("rederive_account against fakechain raw32 seed");
-        let vm = ViewMaterial::try_from_keys(&blob)
-            .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, 0);
-
-        let chain_a = linear_chain(TIP);
-        let tail_b = divergent_tail(&chain_a, FORK, TIP);
-        let anchor = chain_a[usize::try_from(SYNCED).unwrap()].block.hash();
-
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain_a);
-        daemon.replace_chain_after_fetch(TRIGGER, FORK, tail_b.clone());
-
-        let snapshot = snapshot_at_anchor(SYNCED, anchor);
-        let sink = AssertionSink::new();
-        let cancel = CancellationToken::new();
-        let (progress_tx, _progress_rx) = fresh_progress_channel();
-
-        let result = refresh
-            .produce_scan_result(
-                snapshot,
-                &daemon,
-                RefreshOptions::default(),
-                cancel,
-                progress_tx,
-                &sink,
-            )
-            .await
-            .expect("seam-straddled scan completes via rewind");
-
-        // The rewind lands AT the fork (the replaced window-top height), not
-        // one above it — the seam is rewound through, not spliced around.
-        assert_eq!(
-            result.reorg_rewind.map(|r| r.fork_height),
-            Some(FORK),
-            "a fork at exactly synced_height must rewind to it, not splice"
-        );
-
-        // Every height from the fork up carries the B-chain hash — including
-        // height 4 itself (the window-top block the reorg replaced) and
-        // heights 5/6 (fetched as A before the swap, purged, refetched as B).
-        let expected: Vec<(u64, [u8; 32])> = (FORK..TIP)
-            .map(|h| {
-                let idx = usize::try_from(h - FORK).unwrap();
-                (h, tail_b[idx].block.hash())
-            })
-            .collect();
-        assert_eq!(
-            result.block_hashes, expected,
-            "the seam height must carry the post-reorg hash, never the stale window-top"
-        );
-    }
-
-    /// **Two** reorgs within a single attempt, each landing between two
-    /// consecutive fetches. The first is detected and rewound; then, during the
-    /// post-rewind re-scan, a *second* reorg lands — and it too must be detected
-    /// so the returned sequence is the final chain, fully linked, never a torn
-    /// splice of the first-reorg chain below and the second-reorg chain above.
-    ///
-    /// This is the revert-proof for lifting the one-reorg-per-attempt bound: the
-    /// pre-fix `reorg_rewind.is_none()` gate disables detection after the first
-    /// fork, so the second reorg slips through and the result splices B8/B9
-    /// (first-reorg chain) against C10/C11 (second-reorg chain) with a broken
-    /// link at 10. The bounded-multi-reorg fix catches the second straddle and
-    /// re-scans to C8..C11.
-    ///
-    /// Setup: wallet synced to 4 on chain A (tip 12). Reorg 1 forks at 6 (chain
-    /// B), firing after the fetch at 7. Reorg 2 forks at 8 (chain C, a *distinct*
-    /// nonce so it diverges from B), firing after the re-scan's fetch at 9. Both
-    /// forks sit above the persisted window (≤ 4), so each `find_fork_point`
-    /// resolves the conservative attempt-boundary fork at `synced + 1 = 5`.
-    #[tokio::test(start_paused = true)]
-    async fn two_reorgs_in_one_attempt_are_both_detected_never_spliced() {
-        const SYNCED: u64 = 4;
-        const TIP: u64 = 12;
-        const FORK1: u64 = 6; // first divergent height (chain B), above the window
-        const TRIGGER1: u64 = 7; // daemon reorgs to B right after serving this
-        const FORK2: u64 = 8; // second divergent height (chain C)
-        const TRIGGER2: u64 = 9; // daemon reorgs to C right after serving this
-
-        let blob = rederive_account(
-            &PROPERTY_TEST_MASTER_SEED,
-            DerivationNetwork::Fakechain,
-            SeedFormat::Raw32,
-        )
-        .expect("rederive_account against fakechain raw32 seed");
-        let vm = ViewMaterial::try_from_keys(&blob)
-            .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, 0);
-
-        let chain_a = linear_chain(TIP);
-        // Chain B: A below FORK1, divergent tail at/above it.
-        let tail_b = divergent_tail(&chain_a, FORK1, TIP);
-        let chain_b: Vec<ScannableBlock> = chain_a[..usize::try_from(FORK1).unwrap()]
-            .iter()
-            .cloned()
-            .chain(tail_b.iter().cloned())
-            .collect();
-        // Chain C: forks off chain B at FORK2 with a distinct nonce, so it
-        // diverges from B (not a reproduction of it) at and above FORK2.
-        let tail_c = divergent_tail_nonce(&chain_b, FORK2, TIP, 2);
-        let anchor = chain_a[usize::try_from(SYNCED).unwrap()].block.hash();
-
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain_a.clone());
-        // Queue both reorgs; they fire in FIFO order as their triggers are served
-        // (TRIGGER1 in the first pass, TRIGGER2 in the post-rewind re-scan).
-        daemon.replace_chain_after_fetch(TRIGGER1, FORK1, tail_b.clone());
-        daemon.replace_chain_after_fetch(TRIGGER2, FORK2, tail_c.clone());
-
-        let snapshot = snapshot_at_anchor(SYNCED, anchor);
-        let sink = AssertionSink::new();
-        let cancel = CancellationToken::new();
-        let (progress_tx, _progress_rx) = fresh_progress_channel();
-
-        let result = refresh
-            .produce_scan_result(
-                snapshot,
-                &daemon,
-                RefreshOptions::default(),
-                cancel,
-                progress_tx,
-                &sink,
-            )
-            .await
-            .expect("double-straddled scan completes via two rewinds");
-
-        // Both forks sit above the window, so each walk resolves the conservative
-        // attempt boundary (`synced + 1`). The final rewind target is that same
-        // boundary — the merge rolls persisted state back to it and re-ingests.
-        assert_eq!(
-            result.reorg_rewind.map(|r| r.fork_height),
-            Some(SYNCED + 1),
-            "the second intra-attempt straddle must also rewind, not slip through"
-        );
-
-        // The final sequence is the fully-linked post-*double*-reorg chain: A
-        // below FORK1, B between the forks, C at and above FORK2. The pre-fix
-        // behavior — B8/B9 spliced against C10/C11 with a broken link at 10 — is
-        // exactly what this rules out.
-        let expected: Vec<(u64, [u8; 32])> = (SYNCED + 1..FORK1)
-            .map(|h| (h, chain_a[usize::try_from(h).unwrap()].block.hash()))
-            .chain((FORK1..FORK2).map(|h| {
-                let idx = usize::try_from(h - FORK1).unwrap();
-                (h, tail_b[idx].block.hash())
-            }))
-            .chain((FORK2..TIP).map(|h| {
-                let idx = usize::try_from(h - FORK2).unwrap();
-                (h, tail_c[idx].block.hash())
-            }))
-            .collect();
-        assert_eq!(
-            result.block_hashes, expected,
-            "both reorgs must be absorbed: the result is the final chain (C above \
-             the second fork), never a torn B→C splice"
-        );
-    }
-
-    /// Fresh empty [`LedgerSnapshot`] anchored at `synced_height = 0`
-    /// with an empty reorg window. Matches the
-    /// `EngineCreateParams::for_test_full` starting state used across
-    /// the integration tests in `engine/refresh.rs`.
-    fn empty_snapshot() -> LedgerSnapshot {
-        LedgerSnapshot::from_ledger(&LedgerBlock::empty())
-    }
-
-    /// A `watch::Sender<RefreshProgress>` whose receiver is held alive
-    /// in the test scope. The producer's per-block progress
-    /// emissions go to this sender; the receiver is read only when a
-    /// test specifically asserts against progress state.
-    fn fresh_progress_channel() -> (
-        watch::Sender<RefreshProgress>,
-        watch::Receiver<RefreshProgress>,
-    ) {
-        watch::channel(RefreshProgress::initial())
-    }
-
-    /// True iff `event` is one of the error-attributed diagnostic
-    /// classes per the §5.4.6 phantom-error pin: a producer that
-    /// emits one of these classes MUST return `Err(_)`. Conversely,
-    /// the absence of these classes in the sink stream is the
-    /// no-phantom-error signal that the producer reached a clean
-    /// `Ok(_)` outcome.
-    fn is_error_class(event: &RefreshDiagnostic) -> bool {
-        matches!(
-            event,
-            RefreshDiagnostic::DaemonProtocolError { .. }
-                | RefreshDiagnostic::DaemonMalformed { .. }
-                | RefreshDiagnostic::DaemonTimeout { .. }
-        )
-    }
-
-    /// True iff `event` is a [`RefreshDiagnostic::DaemonProtocolError`].
-    /// Used by the `LocalRefreshError::Io` coherence check.
-    fn is_daemon_protocol_error(event: &RefreshDiagnostic) -> bool {
-        matches!(event, RefreshDiagnostic::DaemonProtocolError { .. })
-    }
-
-    /// True iff `event` is a [`RefreshDiagnostic::DaemonMalformed`].
-    /// Used by the `LocalRefreshError::Malformed` coherence check.
-    fn is_daemon_malformed(event: &RefreshDiagnostic) -> bool {
-        matches!(event, RefreshDiagnostic::DaemonMalformed { .. })
-    }
-
-    // ── Birthday floor (P2 producer start-height) ───────────────
-
-    /// Wallet birthday floor 1000 with ledger anchored at 999: producer
-    /// scans only `1000..tip`, not from genesis.
-    #[tokio::test(start_paused = true)]
-    async fn produce_scan_respects_birthday_floor_when_ledger_anchored() {
-        const FLOOR: u64 = 1000;
-        const TIP: u64 = 1010;
-        let blob = rederive_account(
-            &PROPERTY_TEST_MASTER_SEED,
-            DerivationNetwork::Fakechain,
-            SeedFormat::Raw32,
-        )
-        .expect("rederive_account against fakechain raw32 seed");
-        let vm = ViewMaterial::try_from_keys(&blob)
-            .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, FLOOR);
-        let chain = linear_chain(TIP);
-        let parent_at_999 = chain[usize::try_from(FLOOR - 1).unwrap()].block.hash();
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
-        let snapshot = snapshot_at_anchor(FLOOR - 1, parent_at_999);
-        let sink = AssertionSink::new();
-        let cancel = CancellationToken::new();
-        let (progress_tx, _progress_rx) = fresh_progress_channel();
-
-        let result = refresh
-            .produce_scan_result(
-                snapshot,
-                &daemon,
-                RefreshOptions::default(),
-                cancel,
-                progress_tx,
-                &sink,
-            )
-            .await
-            .expect("anchored birthday scan succeeds");
-
-        assert_eq!(result.processed_height_range.start, FLOOR);
-        assert_eq!(result.processed_height_range.end, TIP);
-        assert_eq!(
-            result.block_hashes.len(),
-            usize::try_from(TIP - FLOOR).unwrap()
-        );
-        assert_eq!(result.parent_hash, Some(parent_at_999));
-    }
-
-    /// When the wallet is already synced past the floor, scanning
-    /// continues incrementally from `synced_height + 1`.
-    #[tokio::test(start_paused = true)]
-    async fn produce_scan_floor_noop_when_synced_past_birthday() {
-        const FLOOR: u64 = 100;
-        const SYNCED: u64 = 500;
-        const TIP: u64 = 505;
-        let blob = rederive_account(
-            &PROPERTY_TEST_MASTER_SEED,
-            DerivationNetwork::Fakechain,
-            SeedFormat::Raw32,
-        )
-        .expect("rederive_account against fakechain raw32 seed");
-        let vm = ViewMaterial::try_from_keys(&blob)
-            .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, FLOOR);
-        let chain = linear_chain(TIP);
-        let parent = chain[usize::try_from(SYNCED).unwrap()].block.hash();
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
-        let snapshot = snapshot_at_anchor(SYNCED, parent);
-        let sink = AssertionSink::new();
-        let cancel = CancellationToken::new();
-        let (progress_tx, _progress_rx) = fresh_progress_channel();
-
-        let result = refresh
-            .produce_scan_result(
-                snapshot,
-                &daemon,
-                RefreshOptions::default(),
-                cancel,
-                progress_tx,
-                &sink,
-            )
-            .await
-            .expect("incremental scan past floor succeeds");
-
-        assert_eq!(result.processed_height_range, (SYNCED + 1)..TIP);
-    }
-
-    // ── Coherence: clean path (Ok → no error-class events) ─────
-
-    /// Clean chain, no failure injection: the producer scans the
-    /// chain end-to-end, returns `Ok(_)`, and the assertion sink
-    /// records ONLY non-error-class events (per-block `ScanProgress`,
-    /// no `DaemonProtocolError` / `DaemonMalformed` / `DaemonTimeout`).
-    ///
-    /// Pins the §5.4.6 no-phantom-error contract on the success
-    /// path: an implementation that emits a spurious `DaemonMalformed`
-    /// alongside a clean `Ok` return would fail this assertion.
-    #[tokio::test(start_paused = true)]
-    async fn coherence_clean_chain_returns_ok_with_no_error_events() {
-        let refresh = make_local_refresh();
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
-        let snapshot = empty_snapshot();
-        let sink = AssertionSink::new();
-        let cancel = CancellationToken::new();
-        let (progress_tx, _progress_rx) = fresh_progress_channel();
-
-        let result = refresh
-            .produce_scan_result(
-                snapshot,
-                &daemon,
-                RefreshOptions::default(),
-                cancel,
-                progress_tx,
-                &sink,
-            )
-            .await;
-
-        match &result {
-            Ok(_) => {}
-            Err(e) => panic!("clean chain should produce Ok(_), got Err({e:?})"),
-        }
-        let recorded = sink.recorded();
-        let error_class_events: Vec<_> = recorded.iter().filter(|e| is_error_class(e)).collect();
-        assert!(
-            error_class_events.is_empty(),
-            "clean Ok return MUST NOT be preceded by error-class diagnostics; \
-             phantom-error pin violation. Recorded error-class events: {error_class_events:?}",
-        );
-    }
-
-    // ── Coherence: get_height failure → Io + DaemonProtocolError ──
-
-    /// Persistent `get_height` failure: the producer's first daemon
-    /// call fails with `RpcError::ConnectionError`. `get_height` has
-    /// no retry loop at the producer; the failure surfaces directly
-    /// as `LocalRefreshError::Io`, preceded by exactly one
-    /// `DaemonProtocolError { kind: ConnectionError }` emission.
-    ///
-    /// Pins the §5.4.6 coherence contract on the `Io` branch from
-    /// `get_height`: removing the emission at line 545 of
-    /// `produce_scan_result` would fail this assertion.
-    #[tokio::test(start_paused = true)]
-    async fn coherence_get_height_failure_emits_protocol_error_then_returns_io() {
-        let refresh = make_local_refresh();
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
-        // `get_height` has no retry — one queued error is enough.
-        daemon.set_height_error_for_next_n_calls(
-            1,
-            &RpcError::ConnectionError("test: get_height down".into()),
-        );
-        let snapshot = empty_snapshot();
-        let sink = AssertionSink::new();
-        let cancel = CancellationToken::new();
-        let (progress_tx, _progress_rx) = fresh_progress_channel();
-
-        let result = refresh
-            .produce_scan_result(
-                snapshot,
-                &daemon,
-                RefreshOptions::default(),
-                cancel,
-                progress_tx,
-                &sink,
-            )
-            .await;
-
-        match &result {
-            Err(LocalRefreshError::Io) => {}
-            Err(e) => {
-                panic!("get_height failure should surface as LocalRefreshError::Io, got Err({e:?})")
-            }
-            Ok(_) => {
-                panic!("get_height failure should surface as LocalRefreshError::Io, got Ok(_)")
-            }
-        }
-        let recorded = sink.recorded();
-        let protocol_errors: Vec<_> = recorded
-            .iter()
-            .filter(|e| is_daemon_protocol_error(e))
-            .collect();
-        assert!(
-            !protocol_errors.is_empty(),
-            "Io error MUST be preceded by ≥1 DaemonProtocolError emission; \
-             silent-error pin violation. Recorded events: {recorded:?}",
-        );
-    }
-
-    // ── Coherence: malformed block → Malformed + DaemonMalformed ──
-
-    /// Persistent malformed block at scan height 1 (the first block
-    /// the producer fetches against an empty-snapshot ledger). The
-    /// scanner rejects the block with `InvalidScannableBlock`; the
-    /// producer emits one `DaemonMalformed { InvalidBlockStructure }`
-    /// and returns `LocalRefreshError::Malformed`.
-    ///
-    /// Pins the §5.4.6 coherence contract on the `Malformed` branch
-    /// from the scanner-rejection path: removing the emission at
-    /// line 729 would fail this assertion.
-    #[tokio::test(start_paused = true)]
-    async fn coherence_malformed_block_emits_daemon_malformed_then_returns_malformed() {
-        let refresh = make_local_refresh();
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
-        // Mark height 1 as persistently malformed: every fetch at
-        // height 1 returns `RpcError::InvalidNode`. The producer's
-        // `fetch_block_with_retry` runs MAX_BLOCK_FETCH_RETRIES
-        // attempts (all fail) and surfaces `LocalRefreshError::Io`
-        // with one DaemonProtocolError per attempt (rate-limited by
-        // the per-block ceiling + F13-S latch).
-        //
-        // To exercise the *scanner-side* malformed path (not the
-        // RPC-side classification path), we need a block the daemon
-        // serves successfully but the scanner rejects. The TestDaemon
-        // doesn't currently surface that distinction — `make_malformed_scannable`
-        // is the corresponding helper but it's not in scope here at C7. The
-        // RPC-classified malformed path goes through `DaemonProtocolError`
-        // (not `DaemonMalformed`), so this test covers the RPC-side
-        // coherence at the fetch-failure → `Io` branch.
-        daemon.set_block_returns_malformed(1);
-        let snapshot = empty_snapshot();
-        let sink = AssertionSink::new();
-        let cancel = CancellationToken::new();
-        let (progress_tx, _progress_rx) = fresh_progress_channel();
-
-        let result = refresh
-            .produce_scan_result(
-                snapshot,
-                &daemon,
-                RefreshOptions::default(),
-                cancel,
-                progress_tx,
-                &sink,
-            )
-            .await;
-
-        // The RPC-classified malformed path: TestDaemon returns
-        // `RpcError::InvalidNode` for every fetch at height 1. The
-        // fetch-with-retry loop exhausts its budget and returns
-        // `LocalRefreshError::Io` with one DaemonProtocolError per
-        // attempt (subject to the per-class rate-limit).
-        match &result {
-            Err(LocalRefreshError::Io) => {}
-            Err(e) => panic!(
-                "RPC-classified malformed at height 1 should surface as Io \
-                 (fetch_with_retry-exhausted), got Err({e:?})"
-            ),
-            Ok(_) => panic!(
-                "RPC-classified malformed at height 1 should surface as Io \
-                 (fetch_with_retry-exhausted), got Ok(_)"
-            ),
-        }
-        let recorded = sink.recorded();
-        let protocol_errors: Vec<_> = recorded
-            .iter()
-            .filter(|e| is_daemon_protocol_error(e))
-            .collect();
-        assert!(
-            !protocol_errors.is_empty(),
-            "Io from fetch_with_retry MUST be preceded by ≥1 DaemonProtocolError; \
-             silent-error pin violation. Recorded: {recorded:?}",
-        );
-    }
-
-    // ── Coherence: ExcessiveOutputs pre-pass → Malformed + DaemonMalformed ──
-
-    /// The producer's `ExcessiveOutputs` pre-pass is the dedicated
-    /// `LocalRefreshError::Malformed` path with a `DaemonMalformed
-    /// { ExcessiveOutputs }` emission. The default `make_synthetic_block`
-    /// blocks carry single-output miner txns with no regular txns,
-    /// well under the `MAX_OUTPUTS = 16` ceiling — i.e., this branch
-    /// is unreachable via the standard test harness.
-    ///
-    /// Direct coverage of the `DaemonMalformed` emission path lives
-    /// in the existing `emit_state_first_breach_emits_suppressed_notice`
-    /// test, which constructs the diagnostic in isolation. Building
-    /// a `ScannableBlock` with `>MAX_OUTPUTS` would require either an
-    /// upstream `make_excessive_outputs_block` helper (V3.1 work per
-    /// FOLLOWUPS) or `unsafe` test-harness construction; deferred.
-    ///
-    /// This placeholder test documents the deferral so future
-    /// readers do not assume the producer-side `DaemonMalformed
-    /// { ExcessiveOutputs }` path is uncovered by accident — the
-    /// coherence property still holds (the path emits before
-    /// returning), it just isn't end-to-end exercised here.
-    #[test]
-    fn coherence_excessive_outputs_branch_deferred_to_v31_helper() {
-        // Placeholder; the assertion exists to keep the test name in
-        // `cargo test` output as a discoverable deferral marker.
-        let kind = MalformedKind::ExcessiveOutputs;
-        assert!(matches!(kind, MalformedKind::ExcessiveOutputs));
-    }
-
-    // ── Coherence: cancellation → Cancelled, no requirement ────
-
-    /// Pre-fetch cancellation: the cancel token is fired before
-    /// `produce_scan_result` runs. Checkpoint 2 (pre-fetch) returns
-    /// `Cancelled` immediately. Per §5.4.6, the coherence pin
-    /// **excludes** `Cancelled` returns from the emission requirement
-    /// — cancelled paths intentionally elide diagnostics to avoid
-    /// emitting context that the cancelling caller doesn't need.
-    ///
-    /// This test pins the cancellation-elision exception: no
-    /// emission requirement, but if any diagnostic IS emitted on the
-    /// cancelled path, it must be observation-class (e.g., the
-    /// hypothetical `ScanProgress` from a partial-block-scan
-    /// cancellation), not error-class.
-    #[tokio::test(start_paused = true)]
-    async fn coherence_cancelled_before_fetch_returns_cancelled() {
-        let refresh = make_local_refresh();
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
-        let snapshot = empty_snapshot();
-        let sink = AssertionSink::new();
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-        let (progress_tx, _progress_rx) = fresh_progress_channel();
-
-        let result = refresh
-            .produce_scan_result(
-                snapshot,
-                &daemon,
-                RefreshOptions::default(),
-                cancel,
-                progress_tx,
-                &sink,
-            )
-            .await;
-
-        match &result {
-            Err(LocalRefreshError::Cancelled) => {}
-            Err(e) => panic!(
-                "pre-fetch cancel should surface as LocalRefreshError::Cancelled, got Err({e:?})"
-            ),
-            Ok(_) => {
-                panic!("pre-fetch cancel should surface as LocalRefreshError::Cancelled, got Ok(_)")
-            }
-        }
-        // Per §5.4.6, cancelled paths are NOT required to emit. The
-        // weaker invariant — "no error-class events on a path that
-        // never reached a daemon failure" — still holds.
-        let recorded = sink.recorded();
-        let error_class_events: Vec<_> = recorded.iter().filter(|e| is_error_class(e)).collect();
-        assert!(
-            error_class_events.is_empty(),
-            "cancelled-before-fetch should not emit error-class events: {error_class_events:?}",
-        );
-    }
-
-    // ── Proptest: coherence over chain length × failure injection ──
-
-    /// Discriminator for failure-injection scenarios in the
-    /// `coherence_proptest_fuzz_chain_and_injection` proptest. The
-    /// space is intentionally finite — proptest's value here is
-    /// covering the `(chain_length, scenario)` cross product, not
-    /// enumerating `RpcError` payload values (which the §5.4.7 R6
-    /// memory-amplifier closure deliberately drops from the
-    /// diagnostic stream).
-    #[derive(Debug, Clone, Copy)]
-    enum InjectionScenario {
-        /// No failure injection. Coherence requires the result to be
-        /// `Ok(_)` with no error-class diagnostics.
-        Clean,
-        /// One-shot `RpcError::ConnectionError` on `get_height`.
-        /// Coherence requires `Err(Io)` with ≥1 `DaemonProtocolError`.
-        GetHeightFails,
-        /// Persistently-malformed block at height 1 (every fetch
-        /// returns `RpcError::InvalidNode`). Coherence requires
-        /// `Err(Io)` (fetch-with-retry exhausted) with ≥1
-        /// `DaemonProtocolError`.
-        BlockFetchFails,
-    }
-
-    /// Proptest fuzzes `(chain_length, scenario)` and asserts the
-    /// §5.4.6 emission/return coherence contract holds across the
-    /// cross product. The proptest is **the executable definition**
-    /// of coherence; if this test fails, the producer's contract
-    /// has been violated and the design doc's prose must be
-    /// re-examined (per the §5.4.6 canonical-reference pin).
-    ///
-    /// **Why this state space:** the `InjectionScenario` enum names
-    /// every distinct error-emission path the producer reaches under
-    /// the TestDaemon's failure-injection API (`get_height` failure
-    /// → `DaemonProtocolError` then `Io`; block-fetch failure →
-    /// `DaemonProtocolError` per retry attempt then `Io`). The
-    /// `ExcessiveOutputs` and scanner-side `InvalidBlockStructure`
-    /// branches require V3.1 test-harness extensions (per the
-    /// `coherence_excessive_outputs_branch_deferred_to_v31_helper`
-    /// placeholder).
-    ///
-    /// Configured `ProptestConfig { cases: 32, .. }` — small enough
-    /// to keep `cargo test` wall-clock bounded (each case spawns a
-    /// fresh `tokio` runtime via `#[tokio::test]`; `start_paused =
-    /// true` makes the per-block-retry backoff sleep wall-free).
-    /// 32 cases over a 3-variant scenario × 5-length chain gives
-    /// roughly 2× coverage of every `(scenario, length)` pair.
-    fn coherence_property_holds(chain_length: u64, scenario: InjectionScenario) {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .start_paused(true)
-            .build()
-            .expect("tokio runtime for property test case");
-        rt.block_on(async move {
-            let refresh = make_local_refresh();
-            let daemon =
-                TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(chain_length));
-            match scenario {
-                InjectionScenario::Clean => {}
-                InjectionScenario::GetHeightFails => {
-                    daemon.set_height_error_for_next_n_calls(
-                        1,
-                        &RpcError::ConnectionError("proptest: get_height fault".into()),
-                    );
-                }
-                InjectionScenario::BlockFetchFails => {
-                    // Only meaningful when the chain has ≥2 blocks
-                    // (so scan starts at height 1, which is the
-                    // marked height). Shorter chains short-circuit
-                    // at the empty-range branch in `produce_scan_result`.
-                    if chain_length >= 2 {
-                        daemon.set_block_returns_malformed(1);
-                    }
-                }
-            }
-
-            let snapshot = empty_snapshot();
-            let sink = AssertionSink::new();
-            let cancel = CancellationToken::new();
-            let (progress_tx, _progress_rx) = fresh_progress_channel();
-
-            let result = refresh
-                .produce_scan_result(
-                    snapshot,
-                    &daemon,
-                    RefreshOptions::default(),
-                    cancel,
-                    progress_tx,
-                    &sink,
-                )
-                .await;
-
-            let recorded = sink.recorded();
-            // Project the result into a Debug-friendly summary; the
-            // raw `Result<ScanResult, _>` is not `Debug` because
-            // `ScanResult` deliberately suppresses it (§5.4.7 R6).
-            let result_summary: Result<&'static str, &LocalRefreshError> =
-                result.as_ref().map(|_| "ScanResult{..}");
-            match (scenario, &result) {
-                // Clean path: Ok required, no error-class events
-                // permitted (no-phantom-error pin).
-                (InjectionScenario::Clean, Ok(_)) => {
-                    assert!(
-                        !recorded.iter().any(is_error_class),
-                        "Clean scenario, chain_length={chain_length}: Ok return MUST NOT \
-                         emit error-class events. Recorded: {recorded:?}",
-                    );
-                }
-                (InjectionScenario::Clean, Err(_)) => {
-                    panic!(
-                        "Clean scenario, chain_length={chain_length}: expected Ok, \
-                         got {result_summary:?}. Recorded: {recorded:?}",
-                    );
-                }
-                // get_height failure: Io required with ≥1
-                // DaemonProtocolError (coherence pin).
-                (InjectionScenario::GetHeightFails, Err(LocalRefreshError::Io)) => {
-                    assert!(
-                        recorded.iter().any(is_daemon_protocol_error),
-                        "GetHeightFails scenario, chain_length={chain_length}: Io return \
-                         MUST be preceded by ≥1 DaemonProtocolError. Recorded: {recorded:?}",
-                    );
-                }
-                (InjectionScenario::GetHeightFails, _) => {
-                    panic!(
-                        "GetHeightFails scenario, chain_length={chain_length}: expected \
-                         Err(Io), got {result_summary:?}. Recorded: {recorded:?}",
-                    );
-                }
-                // BlockFetchFails with chain_length < 2: scan range
-                // is empty, no fetch happens — equivalent to Clean.
-                (InjectionScenario::BlockFetchFails, Ok(_)) if chain_length < 2 => {
-                    assert!(
-                        !recorded.iter().any(is_error_class),
-                        "BlockFetchFails (no-op short chain), chain_length={chain_length}: \
-                         Ok return MUST NOT emit error-class events. Recorded: {recorded:?}",
-                    );
-                }
-                // BlockFetchFails with chain_length ≥ 2: producer
-                // exhausts MAX_BLOCK_FETCH_RETRIES and returns Io
-                // with ≥1 DaemonProtocolError.
-                (InjectionScenario::BlockFetchFails, Err(LocalRefreshError::Io)) => {
-                    assert!(
-                        recorded.iter().any(is_daemon_protocol_error),
-                        "BlockFetchFails scenario, chain_length={chain_length}: Io return \
-                         MUST be preceded by ≥1 DaemonProtocolError. Recorded: {recorded:?}",
-                    );
-                }
-                (InjectionScenario::BlockFetchFails, _) => {
-                    panic!(
-                        "BlockFetchFails scenario, chain_length={chain_length}: expected \
-                         Err(Io) (or Ok for short chains), got {result_summary:?}. \
-                         Recorded: {recorded:?}",
-                    );
-                }
-            }
-        });
-    }
-
-    // Fuzz the §5.4.6 emission/return coherence contract over the
-    // `(chain_length, scenario)` state space.
-    //
-    // Wall-clock bound: each case constructs a fresh
-    // single-threaded `start_paused` tokio runtime; the producer's
-    // per-block-retry `tokio::time::sleep` calls auto-advance under
-    // `start_paused`, so the `BlockFetchFails` cases (which would
-    // otherwise consume `INITIAL_RETRY_DELAY × 2^attempt` real time
-    // per attempt) complete in microseconds. 32 cases × ~1ms each ≈
-    // 32ms total proptest wall-clock.
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-        #[test]
-        fn coherence_proptest_fuzz_chain_and_injection(
-            chain_length in 1u64..=5,
-            scenario_tag in 0u8..3,
-        ) {
-            let scenario = match scenario_tag {
-                0 => InjectionScenario::Clean,
-                1 => InjectionScenario::GetHeightFails,
-                2 => InjectionScenario::BlockFetchFails,
-                _ => unreachable!("scenario_tag generator bound at 0..3"),
-            };
-            coherence_property_holds(chain_length, scenario);
-        }
-    }
-
-    // ── Producer panic-safety: PanickingSink unwinds cleanly ──
-
-    /// `PanickingSink` configured to panic on the first
-    /// `ScanProgress` emission. The producer scans the chain, emits
-    /// `ScanProgress` after processing block 1, and the sink panics
-    /// in `emit`. The panic propagates out of `produce_scan_result`
-    /// as a `JoinError::Panic`; the producer's `Scanner` (carried
-    /// in stack-local state) is dropped via the unwind, exercising
-    /// the `Drop` chain on `ViewMaterial` (which is
-    /// `ZeroizeOnDrop`).
-    ///
-    /// Asserts the §5.4.6 producer-panic-safety property at the
-    /// orchestrator boundary:
-    ///
-    /// 1. The producer's future resolves to a `JoinError::Panic`
-    ///    when driven through `tokio::spawn`.
-    /// 2. The cancellation token remains unfired across the panic
-    ///    (no producer-side `cancel.cancel()` in the panic path).
-    ///
-    /// Direct observation of `ViewMaterial` zeroization requires the
-    /// V3.x memory-witness counter or instrumented Scanner type per
-    /// the §5.4.6 prose — the orchestrator-boundary properties this
-    /// test asserts are necessary but not sufficient. The structural
-    /// property (`Drop` chain runs to completion) is inherited from
-    /// Rust's panic-unwind semantics and the `ZeroizeOnDrop` derive
-    /// on `ViewMaterial`.
-    #[tokio::test(start_paused = true)]
-    async fn panic_safety_panicking_sink_on_scan_progress_unwinds_cleanly() {
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
-        let cancel = CancellationToken::new();
-
-        // Spawn the producer on a separate task so the panic
-        // surfaces as `JoinError::Panic` rather than aborting the
-        // test runtime.
-        let cancel_clone = cancel.clone();
-        let join = tokio::spawn(async move {
-            let refresh = make_local_refresh();
-            let snapshot = empty_snapshot();
-            let sink = PanickingSink::new(PanickingSinkTrigger::OnScanProgress);
-            let (progress_tx, _progress_rx) = fresh_progress_channel();
-            refresh
-                .produce_scan_result(
-                    snapshot,
-                    &daemon,
-                    RefreshOptions::default(),
-                    cancel_clone,
-                    progress_tx,
-                    &sink,
-                )
-                .await
-        });
-
-        // `ScanResult` is deliberately not `Debug` (per the
-        // §5.4.6 R6 memory-amplifier closure — `ScanResult` can
-        // carry secret-shaped detected-transfer payloads); the
-        // `JoinHandle`'s `Result<Result<ScanResult, _>, _>` is
-        // therefore not `Debug` either. Inspect the join result
-        // directly without debug-printing.
-        let join_outcome = join.await;
-        let Err(join_err) = join_outcome else {
-            panic!(
-                "producer task MUST resolve to JoinError::Panic when sink panics on emit; \
-                 instead the producer returned a typed Result. This is a panic-safety pin \
-                 violation: the sink's panic should propagate through the await boundary."
-            )
-        };
-        assert!(
-            join_err.is_panic(),
-            "producer task error MUST be a panic, got {join_err:?}",
-        );
-        // Cancellation token unfired across the unwind: the producer
-        // never reaches a `cancel.cancel()` call on the emit panic
-        // path; an external observer sees a consistent unfired
-        // state. A regression where the producer fired the token in
-        // a `Drop` impl on its frame would flip this assertion.
-        assert!(
-            !cancel.is_cancelled(),
-            "cancellation token MUST NOT fire across an emission-induced panic",
-        );
-    }
-
-    /// `PanickingSink` configured to panic on the first
-    /// `DaemonProtocolError` emission. The producer's `get_height`
-    /// call fails (injected `ConnectionError`); the producer emits
-    /// `DaemonProtocolError` for the §5.4.7 R6 classification; the
-    /// sink panics. The panic propagates out before the producer
-    /// reaches the `return Err(LocalRefreshError::Io)` line — i.e.,
-    /// the §5.4.6 emission/return coherence contract is consistent
-    /// with the panic-safety contract (emission happens before the
-    /// return; a sink that panics on emit prevents the typed
-    /// `Err(_)` from propagating).
-    #[tokio::test(start_paused = true)]
-    async fn panic_safety_panicking_sink_on_protocol_error_unwinds_cleanly() {
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
-        daemon.set_height_error_for_next_n_calls(
-            1,
-            &RpcError::ConnectionError("panic-safety: get_height down".into()),
-        );
-        let cancel = CancellationToken::new();
-
-        let cancel_clone = cancel.clone();
-        let join = tokio::spawn(async move {
-            let refresh = make_local_refresh();
-            let snapshot = empty_snapshot();
-            let sink = PanickingSink::new(PanickingSinkTrigger::OnDaemonProtocolError);
-            let (progress_tx, _progress_rx) = fresh_progress_channel();
-            refresh
-                .produce_scan_result(
-                    snapshot,
-                    &daemon,
-                    RefreshOptions::default(),
-                    cancel_clone,
-                    progress_tx,
-                    &sink,
-                )
-                .await
-        });
-
-        let Err(join_err) = join.await else {
-            panic!(
-                "producer task MUST panic when DaemonProtocolError sink panics; \
-                 instead the producer returned a typed Result. Panic-safety pin violation."
-            )
-        };
-        assert!(
-            join_err.is_panic(),
-            "producer task error MUST be a panic, got {join_err:?}",
-        );
-        assert!(
-            !cancel.is_cancelled(),
-            "cancellation token MUST NOT fire across an emission-induced panic",
-        );
-    }
-
-    /// `PanickingSink::Any` panics on the first emission of any
-    /// class. Against a clean 3-block chain the first emission is
-    /// `ScanProgress` after block 1 succeeds; the sink panics. This
-    /// is the most-general producer-panic-safety scenario: the test
-    /// asserts the property without binding to a specific
-    /// emission-class code path inside the producer (which makes the
-    /// test robust against future producer refactors that may
-    /// reorder emission sites).
-    #[tokio::test(start_paused = true)]
-    async fn panic_safety_panicking_sink_any_unwinds_cleanly() {
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
-        let cancel = CancellationToken::new();
-
-        let cancel_clone = cancel.clone();
-        let join = tokio::spawn(async move {
-            let refresh = make_local_refresh();
-            let snapshot = empty_snapshot();
-            let sink = PanickingSink::new(PanickingSinkTrigger::Any);
-            let (progress_tx, _progress_rx) = fresh_progress_channel();
-            refresh
-                .produce_scan_result(
-                    snapshot,
-                    &daemon,
-                    RefreshOptions::default(),
-                    cancel_clone,
-                    progress_tx,
-                    &sink,
-                )
-                .await
-        });
-
-        let Err(join_err) = join.await else {
-            panic!(
-                "producer task MUST panic when Any sink panics on first emission; \
-                 instead the producer returned a typed Result. Panic-safety pin violation."
-            )
-        };
-        assert!(
-            join_err.is_panic(),
-            "producer task error MUST be a panic, got {join_err:?}",
-        );
-        assert!(
-            !cancel.is_cancelled(),
-            "cancellation token MUST NOT fire across an emission-induced panic",
-        );
-    }
-
-    /// Recovery-after-panic: after a panic-induced producer failure
-    /// against one [`LocalRefresh`] instance, a *fresh*
-    /// `LocalRefresh` (mirroring the post-panic engine-rebuild flow
-    /// a real orchestrator would perform) drives a clean refresh
-    /// against the same daemon. Asserts the §5.4.6
-    /// no-half-state-leakage property at the orchestrator boundary:
-    /// the panic did not corrupt the daemon's queryable state, and
-    /// a fresh producer instance reaches `Ok(_)` cleanly.
-    #[tokio::test(start_paused = true)]
-    async fn panic_safety_recovery_after_panic_succeeds() {
-        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
-
-        // First refresh: produces a panic via PanickingSink.
-        let daemon_for_panic = daemon.clone();
-        let cancel_panic = CancellationToken::new();
-        let cancel_panic_clone = cancel_panic.clone();
-        let panic_join = tokio::spawn(async move {
-            let refresh = make_local_refresh();
-            let snapshot = empty_snapshot();
-            let sink = PanickingSink::new(PanickingSinkTrigger::Any);
-            let (progress_tx, _progress_rx) = fresh_progress_channel();
-            refresh
-                .produce_scan_result(
-                    snapshot,
-                    &daemon_for_panic,
-                    RefreshOptions::default(),
-                    cancel_panic_clone,
-                    progress_tx,
-                    &sink,
-                )
-                .await
-        });
-        let Err(panic_err) = panic_join.await else {
-            panic!(
-                "first refresh MUST panic via PanickingSink::Any; \
-                 instead the producer returned a typed Result."
-            )
-        };
-        assert!(panic_err.is_panic(), "first refresh MUST be a panic");
-
-        // Second refresh: fresh LocalRefresh, AssertionSink, against
-        // the same daemon. Must reach Ok(_) cleanly.
-        let refresh = make_local_refresh();
-        let snapshot = empty_snapshot();
-        let sink = AssertionSink::new();
-        let cancel = CancellationToken::new();
-        let (progress_tx, _progress_rx) = fresh_progress_channel();
-        let result = refresh
-            .produce_scan_result(
-                snapshot,
-                &daemon,
-                RefreshOptions::default(),
-                cancel,
-                progress_tx,
-                &sink,
-            )
-            .await;
-
-        match &result {
-            Ok(_) => {}
-            Err(e) => panic!(
-                "recovery refresh MUST succeed after panic-induced first refresh; \
-                 daemon state not corrupted. Got Err({e:?})"
-            ),
-        }
-        let recorded = sink.recorded();
-        assert!(
-            !recorded.iter().any(is_error_class),
-            "recovery refresh MUST NOT emit error-class diagnostics on the clean path. \
-             Recorded: {recorded:?}",
-        );
-    }
-
-    /// Coverage of the [`is_daemon_malformed`] discriminator. The
-    /// `DaemonMalformed` emission path is exercised in
-    /// `engine/diagnostics.rs::tests::assertion_sink_records_events_in_emission_order`
-    /// and across the C7 panic-safety tests; this test pins that
-    /// `is_daemon_malformed` correctly classifies the event class
-    /// against a synthesized event.
-    #[test]
-    fn is_daemon_malformed_classifies_event_correctly() {
-        let event = RefreshDiagnostic::DaemonMalformed {
-            kind: MalformedKind::InvalidBlockStructure,
-        };
-        assert!(is_daemon_malformed(&event));
-        let non_malformed = RefreshDiagnostic::ScanProgress {
-            height: 1,
-            candidates: 0,
-        };
-        assert!(!is_daemon_malformed(&non_malformed));
-    }
-}
+#[path = "local_refresh_property_tests.rs"]
+mod producer_property_tests;
