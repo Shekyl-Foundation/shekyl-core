@@ -168,18 +168,7 @@ const _: () = assert!(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Safely reconstruct a byte slice from an FFI (ptr, len). Returns `None`
-/// on null-with-nonzero-len combinations; zero-length with either ptr
-/// returns an empty slice (never dereferences the pointer).
-unsafe fn make_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
-    if len == 0 {
-        return Some(&[]);
-    }
-    if ptr.is_null() {
-        return None;
-    }
-    Some(std::slice::from_raw_parts(ptr, len))
-}
+use crate::legacy_util::slice_from_ptr;
 
 /// Zero `len` bytes at `ptr` if non-null. Used on every failure path that
 /// would otherwise leave junk in a caller-visible secret buffer.
@@ -245,7 +234,7 @@ pub unsafe extern "C" fn shekyl_wallet_keys_inspect(
         return false;
     }
     std::ptr::write_bytes(out_view, 0u8, 1);
-    let bytes = match make_slice(bytes_ptr, bytes_len) {
+    let bytes = match slice_from_ptr(bytes_ptr, bytes_len) {
         Some(s) => s,
         None => {
             set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
@@ -316,14 +305,14 @@ pub unsafe extern "C" fn shekyl_wallet_keys_seal(
     // writes on the failure path cannot leak state.
     zero_out(out_buf, out_cap);
 
-    let password = match make_slice(password_ptr, password_len) {
+    let password = match slice_from_ptr(password_ptr, password_len) {
         Some(s) => s,
         None => {
             set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
             return false;
         }
     };
-    let cap_content = match make_slice(cap_content_ptr, cap_content_len) {
+    let cap_content = match slice_from_ptr(cap_content_ptr, cap_content_len) {
         Some(s) => s,
         None => {
             set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
@@ -448,14 +437,14 @@ pub unsafe extern "C" fn shekyl_wallet_keys_open(
     std::ptr::write_bytes(out_info, 0u8, 1);
     zero_out(cap_content_buf, cap_content_cap);
 
-    let password = match make_slice(password_ptr, password_len) {
+    let password = match slice_from_ptr(password_ptr, password_len) {
         Some(s) => s,
         None => {
             set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
             return false;
         }
     };
-    let bytes = match make_slice(bytes_ptr, bytes_len) {
+    let bytes = match slice_from_ptr(bytes_ptr, bytes_len) {
         Some(s) => s,
         None => {
             set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
@@ -519,15 +508,15 @@ pub unsafe extern "C" fn shekyl_wallet_keys_rewrap_password(
     set_len(out_len_required, 0);
     zero_out(out_buf, out_cap);
 
-    let Some(old_pw) = make_slice(old_password_ptr, old_password_len) else {
+    let Some(old_pw) = slice_from_ptr(old_password_ptr, old_password_len) else {
         set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
         return false;
     };
-    let Some(new_pw) = make_slice(new_password_ptr, new_password_len) else {
+    let Some(new_pw) = slice_from_ptr(new_password_ptr, new_password_len) else {
         set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
         return false;
     };
-    let Some(bytes) = make_slice(bytes_ptr, bytes_len) else {
+    let Some(bytes) = slice_from_ptr(bytes_ptr, bytes_len) else {
         set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
         return false;
     };
@@ -572,15 +561,15 @@ pub unsafe extern "C" fn shekyl_engine_state_seal(
     set_len(out_len_required, 0);
     zero_out(out_buf, out_cap);
 
-    let Some(pw) = make_slice(password_ptr, password_len) else {
+    let Some(pw) = slice_from_ptr(password_ptr, password_len) else {
         set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
         return false;
     };
-    let Some(keys) = make_slice(keys_file_ptr, keys_file_len) else {
+    let Some(keys) = slice_from_ptr(keys_file_ptr, keys_file_len) else {
         set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
         return false;
     };
-    let Some(state) = make_slice(state_plain_ptr, state_plain_len) else {
+    let Some(state) = slice_from_ptr(state_plain_ptr, state_plain_len) else {
         set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
         return false;
     };
@@ -611,15 +600,15 @@ pub unsafe extern "C" fn shekyl_engine_state_open(
     set_len(out_len_required, 0);
     zero_out(out_buf, out_cap);
 
-    let Some(pw) = make_slice(password_ptr, password_len) else {
+    let Some(pw) = slice_from_ptr(password_ptr, password_len) else {
         set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
         return false;
     };
-    let Some(keys) = make_slice(keys_file_ptr, keys_file_len) else {
+    let Some(keys) = slice_from_ptr(keys_file_ptr, keys_file_len) else {
         set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
         return false;
     };
-    let Some(state) = make_slice(state_file_ptr, state_file_len) else {
+    let Some(state) = slice_from_ptr(state_file_ptr, state_file_len) else {
         set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
         return false;
     };

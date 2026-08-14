@@ -1259,6 +1259,8 @@ fn epoch_close_compute_ffi_rejects_bad_indices_and_zeroes_outputs() {
 
 #[test]
 fn claimed_epochs_check_and_set_ffi_write_back_and_polarity() {
+    // Value-preserving: MAX_CLAIMED_EPOCH_ENTRIES is const-asserted == 32.
+    #[allow(clippy::cast_possible_truncation)]
     const CAP: usize = MAX_CLAIMED_EPOCH_ENTRIES as usize;
     let mut buf = [0u64; CAP];
     let mut len: usize = 0;

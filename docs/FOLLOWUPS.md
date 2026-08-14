@@ -47,6 +47,33 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Release-artifact signing policy owed before the first non-RC release
+  tag (added 2026-08-14, SA-6 CBOM close — rule-21 reopen).** The gitian
+  workflow builds deterministically and publishes release assets with **no
+  maintainer-key signature step** (`--detach-sign` produces builder assert
+  files only). The policy — classical GPG, SLH-DSA-192s via the in-tree
+  message-signing stack, or both — is the release owner's ruling; what must
+  not happen is the first release shipping unsigned **by omission rather
+  than decision**. Enforcement surface: the dated `RELEASE_CHECKLIST.md`
+  row (unchecked until ruled + wired); inventory record:
+  `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
+
+- **SA-R-7 cap-before-reserve source-scan gate (added 2026-08-14, the
+  ratification's filed residual — lands in the SA conventions tail).**
+  The `bounded_capacity(count, stride, remaining_bytes)` helper landed in
+  the #470 review round (`legacy_util`); `parse_prove_witness` (leaf-chunk,
+  C1/C2 layer counts, sibling counts) routes through it. Still owed: a
+  source-scan/grep gate forbidding raw `with_capacity` on a
+  non-`.len()`-derived, non-const argument in the FFI boundary crates.
+  Same gate polices raw `std::slice::from_raw_parts` outside the
+  `legacy_util::slice_from_ptr` seam — the seam now enforces the
+  `from_raw_parts` language-level `isize::MAX` byte bound (and absorbed
+  `wallet_envelope_ffi`'s private clone), but ~10 direct call sites bypass
+  it and each re-owns that precondition by hand. Rides the same tail
+  commit as the `set -o pipefail`/`PIPESTATUS` gate convention. The SA
+  round closes structurally only when this lands
+  (`SIGNATURE_ALIGNMENT.md` §2.3 + §3 tail row).
+
 - **F-7 structural gate for the test-only PQC FFI exports (added
   2026-08-10, PR-SA-2).** Two exports are test-support only:
   `shekyl_pqc_keypair_generate` (wraps `generate_ephemeral_keypair_for_tests`)

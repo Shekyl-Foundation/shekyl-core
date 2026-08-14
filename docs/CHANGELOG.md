@@ -4,6 +4,56 @@
 
 ### Changed
 
+- **Untrusted numeric conversions: one live over-reservation fixed, the
+  cast gate made real at the trust boundary (SA-6, SA-R-7 — ratified
+  2026-08-14).** The
+  census behind the ruling (298 non-test `as` casts across the exposed
+  crates) found the reject-via-`try_from` convention already lint-enforced
+  and the decode crates cast-free — and three gate defects: (1)
+  `shekyl-ffi::parse_prove_witness` reserved `Vec` capacity directly from
+  three C-ABI wire counts, so a hostile 4-byte count could demand up to
+  ~412 GB and abort the whole C++ host process on allocation failure — now
+  capped before the reserve by the bytes that must back the elements (the
+  same guard the function already applied to sibling counts), with a pinned
+  refusal test; (2) `shekyl-ffi`'s crate-root
+  `#![allow(clippy::cast_possible_truncation, cast_sign_loss)]` silently
+  overrode the workspace deny on the one crate sitting on the C++ trust
+  boundary — narrowed to site-level allows, each with a value-preserving
+  rationale; (3) `shekyl-daemon-rpc`, `shekyl-wallet-rpc`, `shekyl-cli`,
+  and `shekyl-relay` never inherited the workspace lint table (`-D
+  warnings` cannot enable an allow-by-default lint) — wired in via
+  `[lints] workspace = true`, with ~100 latent lint sites fixed
+  (every surveyed lossy cast proved construction-time value-preserving; no
+  behavior, wire, or public-API change). The rule is codified as
+  `SIGNATURE_ALIGNMENT.md` §2.3 SA-R-7 — **ratified 2026-08-14** after a
+  reviewer-driven completeness check over every `with_capacity` in the FFI
+  crate (30 sites: the three fixed wire-embedded counts were the only ones;
+  ptr+len ABI-pair counts are guarded, with one unchecked multiply brought
+  up to the crate's own pattern; `.len()`-derived counts safe by
+  construction). `legacy_util::bounded_capacity` now owns those reserves
+  (including sibling counts); C1/C2 share one parser. Ratification's
+  remaining residual — a mechanical source-scan gate on raw
+  `with_capacity` / bare `from_raw_parts` — lands in the SA conventions
+  tail.
+
+- **The cryptographic inventory is closed (SA-6).**
+  `docs/CRYPTOGRAPHIC_INVENTORY.md` now carries every section the SA round
+  owed it: §1 primitive pins + the RNG-source map (two-policy split:
+  fail-safe hedged nonces, fail-loud key material) and §2 the six-surface
+  signing inventory, both transcribed from `SIGNATURE_ALIGNMENT.md` with
+  every pin and scheme-domain constant re-verified at source; §4, the
+  curve-based ZK risk register §5 had cited before the section existed
+  (perfectly-hiding commitments keep recorded amounts private retroactively;
+  proof soundness is the quantum-exposed property, co-signed by hybrid PQC
+  auths and owned by the V4 transition); and §6, the close — the honest
+  audit-status column (exact-pinned FIPS crates, no external audit until
+  Phase 9) and the infrastructure survey, which found **release assets are
+  published with no maintainer-key signature step**: filed as a rule-21
+  reopen with a dated `RELEASE_CHECKLIST.md` enforcement row so the first
+  release cannot ship unsigned by omission. Four stale
+  `ARCHIVAL_FIREWALL_GATE6.md` sites still calling the C-1 vin-layer
+  ML-DSA equality check "not yet landed" corrected to DISCHARGED (#277).
+
 - **The wallet has an operator alarm channel, and the tor supervisor is
   its first producer** (OA-1). `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` §3c calls
   `TorPosture::Degraded` "the operator-alarm hook (`82`)" and specifies

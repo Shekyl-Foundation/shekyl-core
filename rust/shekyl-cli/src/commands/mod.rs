@@ -108,7 +108,7 @@ fn reserved(cmd: &str, gate: &str) {
 
 pub fn repl(
     rpc: RpcSession,
-    daemon_client: Option<DaemonClient>,
+    daemon_client: Option<&DaemonClient>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::resolve::{self, ResolvedCommand};
 
@@ -133,7 +133,7 @@ pub fn repl(
 
                 let first_token = line.split_whitespace().next().unwrap_or("");
                 if !crate::display::is_secret_command(first_token) {
-                    let _ = rl.add_history_entry(line);
+                    drop(rl.add_history_entry(line));
                 }
 
                 match resolve::parse(line) {
@@ -229,7 +229,7 @@ pub fn repl(
                     } => fees::cmd_fee(&rpc, n_inputs, n_outputs),
 
                     ResolvedCommand::ChainHealth => {
-                        chain::cmd_chain_health(daemon_client.as_ref());
+                        chain::cmd_chain_health(daemon_client);
                     }
 
                     // Proofs (WI-RPC-3 surface)
@@ -299,7 +299,7 @@ pub fn repl(
         }
     }
 
-    let _ = rl.save_history(&hist);
+    drop(rl.save_history(&hist));
     // Closes any open wallet and stops the self-hosted server (removing its
     // private UDS socket directory).
     rpc.shutdown();
@@ -313,7 +313,10 @@ fn cmd_version(rpc: &RpcSession) {
     match rpc.call("get_version", serde_json::json!({})) {
         Ok(val) => {
             let server = val.get("version").and_then(|v| v.as_str()).unwrap_or("?");
-            let api = val.get("api_version").and_then(|v| v.as_i64()).unwrap_or(0);
+            let api = val
+                .get("api_version")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
             println!("shekyl-wallet-rpc {server} (api v{api})");
         }
         Err(e) => eprintln!("wallet RPC unreachable: {e}"),
@@ -327,7 +330,7 @@ fn cmd_version(rpc: &RpcSession) {
 /// Standard confirmation: "Type 'yes' to confirm: "
 pub(crate) fn confirm(prompt: &str) -> bool {
     eprint!("{prompt} Type 'yes' to confirm: ");
-    let _ = std::io::Write::flush(&mut std::io::stderr());
+    drop(std::io::Write::flush(&mut std::io::stderr()));
     let mut input = String::new();
     if std::io::stdin().read_line(&mut input).is_err() {
         return false;
@@ -342,7 +345,7 @@ pub(crate) fn confirm(prompt: &str) -> bool {
 fn history_path() -> Option<String> {
     dirs::data_local_dir().map(|mut p| {
         p.push("shekyl-cli");
-        let _ = std::fs::create_dir_all(&p);
+        drop(std::fs::create_dir_all(&p));
         p.push("history.txt");
         p.to_string_lossy().into_owned()
     })
@@ -416,7 +419,7 @@ pub(crate) fn opt_amount(v: &serde_json::Value, key: &str) -> String {
 pub fn parse_amount(s: &str) -> Option<u64> {
     shekyl_units::AtomicUnits::from_skl_str(s)
         .ok()
-        .map(|a| a.to_raw())
+        .map(shekyl_units::AtomicUnits::to_raw)
 }
 
 #[cfg(test)]

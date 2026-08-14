@@ -71,7 +71,7 @@ pub fn cmd_transfer(
     // wrong seen_gen guarantees a CONTENT_GEN_MISMATCH on submit (leaving the
     // reservation live), and a missing fee would ask the user to confirm a
     // send without its real cost. Treat either as malformed → discard + abort.
-    let Some(seen_gen) = built.get("content_gen").and_then(|v| v.as_i64()) else {
+    let Some(seen_gen) = built.get("content_gen").and_then(serde_json::Value::as_i64) else {
         eprintln!("Malformed build_pending_tx response (missing content_gen).");
         discard_reservation(rpc, &pending_tx_id);
         return;
@@ -262,7 +262,7 @@ pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) {
             println!("  Amount:    {} SKL", format_amount_str(s("amount")));
             println!("  Fee:       {} SKL", format_amount_str(s("fee")));
             println!("  Height:    {}", format_height(t));
-            if let Some(spent) = t.get("spent_height").and_then(|v| v.as_i64()) {
+            if let Some(spent) = t.get("spent_height").and_then(serde_json::Value::as_i64) {
                 println!("  Spent at:  {spent}");
             }
             if let Some(attr) = t.get("attribution") {

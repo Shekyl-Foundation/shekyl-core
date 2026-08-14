@@ -197,7 +197,10 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "restore" => {
             if args.len() >= 2 {
                 let filename = args[0].to_string();
-                let seed_words = args[1..].iter().map(|s| s.to_string()).collect();
+                let seed_words = args[1..]
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
                 ResolvedCommand::Restore {
                     filename,
                     seed_words,
@@ -286,7 +289,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 diag("requests list: too many arguments (usage: requests list [pending|matched|all])")
             } else {
                 ResolvedCommand::RequestsList {
-                    filter: args.get(1).map(|s| s.to_string()),
+                    filter: args.get(1).map(std::string::ToString::to_string),
                 }
             }
         }

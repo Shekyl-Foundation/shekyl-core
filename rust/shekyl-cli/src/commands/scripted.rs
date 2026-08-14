@@ -86,7 +86,7 @@ pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> Result<(), BoxErr> {
     let val = match result {
         Ok(v) => v,
         Err(e) => {
-            let _ = std::fs::remove_file(&args.seed_out);
+            drop(std::fs::remove_file(&args.seed_out));
             return Err(format!("create_wallet failed: {e}").into());
         }
     };
@@ -100,7 +100,7 @@ pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> Result<(), BoxErr> {
             .to_owned(),
     );
     if let Err(e) = write_seed(&mut seed_file, &backup) {
-        let _ = std::fs::remove_file(&args.seed_out);
+        drop(std::fs::remove_file(&args.seed_out));
         return Err(format!("failed to write seed to {}: {e}", args.seed_out.display()).into());
     }
 

@@ -103,8 +103,8 @@ impl CoreRpc {
                 c_uri.as_ptr(),
                 body.as_ptr(),
                 body.len(),
-                &mut out_buf,
-                &mut out_len,
+                &raw mut out_buf,
+                &raw mut out_len,
             );
             if rc != 0 || out_buf.is_null() {
                 return Err(rc);

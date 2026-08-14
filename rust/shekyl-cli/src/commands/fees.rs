@@ -66,8 +66,14 @@ pub fn cmd_fee(rpc: &RpcSession, n_inputs: Option<i64>, n_outputs: Option<i64>) 
         json!({ "n_inputs": shape_in, "n_outputs": shape_out }),
     ) {
         Ok(est) => {
-            let size = est.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
-            let weight = est.get("weight").and_then(|v| v.as_i64()).unwrap_or(0);
+            let size = est
+                .get("size")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            let weight = est
+                .get("weight")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
             println!("Estimated size: {size} bytes (fee weight {weight})");
         }
         Err(e) => rpc.report("Failed to estimate transaction size", &e),

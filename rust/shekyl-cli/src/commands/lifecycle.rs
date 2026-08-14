@@ -119,7 +119,7 @@ pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
     };
 
     eprint!("Restore height (block height the wallet existed at; 0 = scan from genesis): ");
-    let _ = std::io::Write::flush(&mut std::io::stderr());
+    drop(std::io::Write::flush(&mut std::io::stderr()));
     let mut height_input = String::new();
     if std::io::stdin().read_line(&mut height_input).is_err() {
         mnemonic.zeroize();
@@ -265,12 +265,12 @@ pub fn cmd_status(rpc: &RpcSession) {
         Ok(val) => {
             let wallet = val
                 .get("wallet_height")
-                .and_then(|v| v.as_i64())
+                .and_then(serde_json::Value::as_i64)
                 .unwrap_or(0);
             println!("Wallet height: {wallet}");
             // daemon_height is null when the daemon is unreachable; still show
             // the wallet height rather than reporting a total failure.
-            match val.get("daemon_height").and_then(|v| v.as_i64()) {
+            match val.get("daemon_height").and_then(serde_json::Value::as_i64) {
                 Some(daemon) => {
                     println!("Daemon height: {daemon}");
                     if daemon > wallet {

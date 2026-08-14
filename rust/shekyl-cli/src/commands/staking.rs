@@ -38,10 +38,13 @@ pub fn cmd_stake(rpc: &RpcSession) {
 
     match result {
         Ok(val) => {
-            let slot = val.get("slot").and_then(|v| v.as_i64()).unwrap_or(-1);
+            let slot = val
+                .get("slot")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(-1);
             let resumed = val
                 .get("resumed")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             if resumed {
                 println!("Resumed an in-flight stake (slot {slot}).");
@@ -99,8 +102,14 @@ pub fn cmd_staked_outputs(rpc: &RpcSession) {
             for o in outputs {
                 let gindex = o.get("gindex").and_then(|v| v.as_str()).unwrap_or("?");
                 let amount = opt_amount(o, "amount");
-                let slot = o.get("p_slot").and_then(|v| v.as_i64()).unwrap_or(-1);
-                let unlock = o.get("unlock_height").and_then(|v| v.as_i64()).unwrap_or(0);
+                let slot = o
+                    .get("p_slot")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(-1);
+                let unlock = o
+                    .get("unlock_height")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0);
                 println!("{gindex:<14} {amount:>18} {slot:>6} {unlock:>14}");
             }
         }
@@ -116,7 +125,7 @@ pub fn cmd_staking_info(rpc: &RpcSession) {
         Ok(val) => {
             let enabled = val
                 .get("staking_enabled")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             println!("Staking enabled: {}", if enabled { "yes" } else { "no" });
             if !enabled {
@@ -129,10 +138,13 @@ pub fn cmd_staking_info(rpc: &RpcSession) {
             }
             let count = val
                 .get("staked_output_count")
-                .and_then(|v| v.as_i64())
+                .and_then(serde_json::Value::as_i64)
                 .unwrap_or(0);
             println!("Staked outputs:  {count}");
-            match val.get("pscan_synced_height").and_then(|v| v.as_i64()) {
+            match val
+                .get("pscan_synced_height")
+                .and_then(serde_json::Value::as_i64)
+            {
                 Some(h) => println!("Staking scan height: {h}"),
                 None => println!("Staking scan height: not yet scanned"),
             }

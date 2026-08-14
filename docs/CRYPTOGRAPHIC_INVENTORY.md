@@ -13,16 +13,85 @@ formalizes* (audit-status column, infra PQ posture); it does not discover.
 
 | § | Content | Owed by | State |
 |---|---|---|---|
-| 1 | Primitive pins + RNG-source map | SA-1 (merged #426) | **owed** — content lives in [`SIGNATURE_ALIGNMENT.md`](design/SIGNATURE_ALIGNMENT.md) §1.5 (RNG audit) and the "seed content" list in §4; not yet transcribed here |
-| 2 | Six-surface signing inventory (which key signs which surface) | SA-2 (merged #428) | **owed** — content lives in [`SIGNATURE_ALIGNMENT.md`](design/SIGNATURE_ALIGNMENT.md) §2.1 |
+| 1 | Primitive pins + RNG-source map | SA-1 (merged #426) | **FILED (SA-6, below)** — transcribed from [`SIGNATURE_ALIGNMENT.md`](design/SIGNATURE_ALIGNMENT.md) §1.5/§4, every pin re-verified at source 2026-08-14 |
+| 2 | Six-surface signing inventory (which key signs which surface) | SA-2 (merged #428) | **FILED (SA-6, below)** — transcribed from [`SIGNATURE_ALIGNMENT.md`](design/SIGNATURE_ALIGNMENT.md) §2.1, scheme-domain consts re-verified at source 2026-08-14 |
 | 3 | **Domain / DST registry (by mechanism)** | SA-3b | **FILED (below)** |
+| 4 | Known non-PQ surfaces (curve-based ZK risk register) | SA-6 | **FILED (below)** — §5 referenced this section before it existed; SA-6 wrote it |
 | 5 | Persona no-classical-backstop row | SA-5 | **FILED (below)** — surveyed negative: no persona surface is ML-DSA-only |
-| 6 | Close + formalize (audit-status, infra posture) | SA-6 | pending |
+| 6 | Close + formalize (audit-status, infra posture, release signing) | SA-6 | **CLOSED (below)** |
 
-The §1/§2 rows are recorded as **owed with a named source**, not silently dropped:
-the enumerations exist and are cited; back-filling them here is bounded transcription
-tracked against SA-6's close. (SA-1/SA-2 merged before this file was created; that is
-the gap being flagged, not hidden.)
+---
+
+## § 1 — Primitives, pins, and the RNG-source map — FILED (SA-6, from SA-1)
+
+Enumerated by SA-1 (PR #426, `SIGNATURE_ALIGNMENT.md` §1.5 + §4 seed list);
+transcribed and **re-verified at source 2026-08-14** (crate manifests +
+`shekyl-crypto-pq/src/rng.rs`). The workspace toolchain is pinned at
+**Rust 1.94.0** (`rust-toolchain.toml`; version pins in the workspace
+`Cargo.toml` carry their own rationale comments).
+
+| Primitive | Crate / pin | Role | Audit status |
+|---|---|---|---|
+| ML-KEM-768 | `fips203 =0.4.3` (**exact**) | Output encryption / address `ek` (hybrid KEM with X25519) | No external audit. Exact-pinned: the crate's internal `DummyRng { fill_bytes = unimplemented!() }` pattern makes silent minor-version drift a panic hazard (rationale at the pin) |
+| ML-DSA-65 | `fips204 =0.4.6` (**exact**) | PQ half of `HybridEd25519MlDsa` (all six §2 surfaces); per-persona archival signing key | No external audit. Same exact-pin rationale |
+| SLH-DSA-192s | `fips205 =0.4.1` (**exact**) | Wallet message signing (SM round; the last Module-LWE/SIS-**uncorrelated** signature surface) and the ratified address-v2 48-byte pk field | No external audit; **ACVP cross-check KATs vendored in our own `test_vectors/`** (NIST ACVP-Server `a7f283cdc`), which forecloses the unfixable nonconforming-keygen branch |
+| Ed25519 | `ed25519-dalek 2.2.0` / `curve25519-dalek` | Classical half of every hybrid signature; the **house Schnorr** (`crate::schnorr`, raw spend scalar — dalek `SigningKey` structurally cannot sign for it) for reserve proofs and the message-signing outer half | RustCrypto/dalek lineage (community-audited upstream); house Schnorr is ours, hedged-nonce |
+| cSHAKE256 | `sha3 0.10` | Every domain-separated derivation/preimage (mechanism 1 of §3; 25 domains) | RustCrypto audited lineage |
+| Keccak-256 | `sha3 0.10` (`shekyl_crypto_hash::keccak256`; single implementation, empty-input KAT pins byte-identity; C ABI export keeps the `shekyl_cn_fast_hash` name) | Consensus content identity (txid / block / leaf / fingerprint) — **identity, never separation** (`keccak=identity, cSHAKE=separation`) | Same |
+| SHA-512, Blake2b512 | `sha2` / `blake2 0.10` | HKDF backbone (mech 2); Blake2b DSTs incl. `DOMAIN_PQC_LEAF` (mech 4) | Same |
+| Bulletproof+ / FCMP++ curve stack | Vendored, manifest-gated (`check_vendored_crypto_manifest.sh`, 59 files) | Range proofs; membership + SAL | **The known non-PQ surface — see §4** |
+
+**RNG-source map (the F-8 audit, PR-SA-1).** Verdict at audit:
+**inconsistent-only** — no test-double RNG, dummy RNG, or deterministic seed
+reachable from any production key/nonce/signing path; every generic
+`<R: RngCore>` seam closed by an OsRng(-seeded) production wrapper. The
+structural close is a deliberate **two-policy split**, owned by
+`shekyl-crypto-pq::rng`:
+
+- **Nonces / hedging — fail-safe:** `hedged_fresh32()` degrades to the
+  deterministic hedge on entropy failure instead of panicking (bad RNG must
+  never become nonce reuse; dead RNG must never become a crash loop). The
+  DLEQ nonce (F-1, the one bare `Scalar::random` the audit found protecting a
+  full spend scalar) now binds every challenge input through this seam.
+- **Key material — fail-loud:** master seeds, transaction keys, and keygen
+  draw `OsRng` directly at their call sites and panic/error on entropy
+  failure — a key silently minted from a degraded source is the worse
+  outcome, so this path deliberately does **not** route through the hedge.
+
+F-1..F-8 dispositions all landed in PR-SA-1 (F-7's test-keygen gating rode
+PR-SA-2 with the trait rewrite, as recorded); the per-finding table stays in
+`SIGNATURE_ALIGNMENT.md` §1.5 — this section records the *standing policy*,
+the alignment doc records how it was reached.
+
+---
+
+## § 2 — Six-surface signing inventory — FILED (SA-6, from SA-2)
+
+Enumerated by SA-2 (PR #428, `SIGNATURE_ALIGNMENT.md` §2.1); scheme-domain
+constants **re-verified at source 2026-08-14** (`shekyl-crypto-pq/src/signature.rs`).
+Every surface signs with `HybridEd25519MlDsa` — the **nested combiner**
+(`HYBRID_SIG_VERSION = 2`: ML-DSA inner over the 64-byte cSHAKE preimage,
+Ed25519 outer over `inner ‖ σ_pq`; a frozen v1 parallel-combiner fixture is
+pinned to **reject**), `verify → Result<()>` fail-closed (the F1
+`Ok(false)`-falls-through class is unrepresentable), and a required
+scheme-level domain (`preimage = cshake256_64(domain, scheme_id ‖ msg)` — the
+scheme id inside the signed preimage is SA-R-5's cross-scheme-confusion
+close):
+
+| # | Surface | Signs | Verifies | Scheme domain (verified const) |
+|---|---|---|---|---|
+| A | Tx per-input PQC auth (whole-payload hash) | bond / emission-prefix / spend paths | submit verifier + C++ `tx_pqc_verify` | `shekyl/pqc-auth-tx-v1` (multisig participants: `shekyl/pqc-auth-tx-multisig-v1` — same surface, distinct scheme) |
+| B | Archival bond-post vin | **rides surface A** (SA-2b ruling: the whole-tx hash binds the vin type tag, cross-role replay structurally foreclosed; the parked dedicated preimage S1 was **deleted**) | as A | as A |
+| C | Emission auth — claim | `stake_engine/claim.rs` | `emission_verify` claim leg | `shekyl/archival-emission-claim-scheme-v1` |
+| D | Emission auth — backing | `stake_engine/claim.rs` (Auth-B) | `emission_verify` backing leg (the §5 surface-2 triple) | `shekyl/archival-emission-backing-scheme-v1` |
+| E | Attestation countersignature | no in-repo signer (C++ side) | `attestation_wire` | `shekyl/archival-attestation-scheme-v1` |
+| F | Serve-credit response | no in-repo signer | `serve_credit` | `shekyl/archival-serve-credit-scheme-v1` |
+
+The pinned-positive KAT battery (`PQC_HYBRID_V2_KAT.json`: one verified
+vector per surface, cross-surface rejection, domain-string tripwires) is the
+executable form of this table; a surface added without a row fails the KAT
+writers' cross-surface sweep, and the §3 registry gate pins the domain
+literals themselves.
 
 ---
 
@@ -124,6 +193,44 @@ at test/gate time (visibility stays a real boundary), it does not import the con
 
 ---
 
+## § 4 — Known non-PQ surfaces: the curve-based ZK risk register — FILED (SA-6)
+
+§5 has cited this section since it was written; SA-6 makes the reference
+true. This is the **recorded, accepted** quantum exposure — the one the
+mission hierarchy's "hybrid PQC from genesis" deliberately does *not* cover,
+because no production-ready lattice ZK stack existed to cover it with:
+
+| Surface | Construction | What a CRQC gets | What it does NOT get |
+|---|---|---|---|
+| Range proofs | Bulletproof+ (Pedersen commitments, discrete log) | **Binding/soundness**: forge a proof over an unbalanced commitment — inflation risk. An *online* attack against the live chain | **Hiding**: Pedersen commitments are perfectly hiding — recorded amounts stay private *retroactively*, even against a future CRQC |
+| Membership + spend-auth linkage | FCMP++ (curve trees + SAL, discrete log) | **Soundness** (online): forge membership for a leaf not in the tree. **Retroactive linkability is the harvest-now axis**: any recorded artifact whose *unlinkability* rests on computational DL hardness (the SAL linking-tag layer) is exposed to a future CRQC replaying the chain — unlike amounts, this is not information-theoretically protected | Theft on the proof alone — the per-input **hybrid PQC auth (§2 surface A) co-signs every spend**, so spend forgery additionally requires breaking ML-DSA-65. And the *view/scanning* layer does not fall with DL: per-output key derivation is hybrid-KEM (X25519 ‖ ML-KEM-768) from genesis |
+
+Posture, stated precisely — two different "V4"s must not be conflated:
+
+- **Signatures:** hybrid from genesis; the V4 **lattice-only** step (the
+  mission's third evaluation horizon) retires the *classical halves* of the
+  hybrid signatures. It is a signature-layer transition.
+- **The ZK/anonymity layer:** FCMP++ is the chosen primitive **from genesis
+  by decision, with no planned lattice replacement** — the V4-A..D
+  "lattice-based ring signature survey" is **retired**
+  (`POST_QUANTUM_CRYPTOGRAPHY.md` §V4 Roadmap). This register is therefore
+  the standing record of an *accepted* exposure, not a bridge to a
+  scheduled fix: proof soundness (inflation/forgery) is an online-CRQC
+  risk mitigated by the hybrid co-signature on spends, and the
+  retroactive-linkability axis above is the recorded residual the
+  hybrid-KEM view layer and perfectly-hiding amounts deliberately narrow
+  but do not close.
+
+**Reopen (rule 21):** two triggers, either suffices — (a) a
+production-credible post-quantum membership/range proof stack becomes
+available (re-opens the retired survey with a concrete candidate; the
+decision is the upgrade lane's, this inventory only records it); (b) a
+CRQC-credibility reassessment moves the harvest-now horizon inside the
+chain's expected privacy lifetime, which would make the retroactive
+linkability row above the binding constraint rather than a residual.
+
+---
+
 ## § 5 — Persona PQ posture: the no-classical-backstop survey (SA-5)
 
 The archival staking persona `P` is the **first account-level ML-DSA** in the
@@ -192,7 +299,44 @@ action with an ML-DSA-only signature (no Ed25519 co-signature and no
 hybrid-committed leaf), **that** is the reopen: it must be recorded here before
 it ships.
 
-(Note: `ARCHIVAL_FIREWALL_GATE6.md` §7.1/§9.8 still carries stale
-"not-yet-landed" prose for the C-1 leaf check alongside its own "discharged
-(#277)" reconciliation notes; the code at `emission_verify.rs` is the ground
-truth — the check is landed.)
+(Note: `ARCHIVAL_FIREWALL_GATE6.md` §7.1/§9.8 carried stale "not-yet-landed"
+prose for the C-1 leaf check alongside its own "discharged (#277)"
+reconciliation notes; **SA-6 corrected all four sites** — the code at
+`emission_verify.rs` was always the ground truth, and the doc now agrees
+with it.)
+
+---
+
+## § 6 — Close: audit status and infrastructure PQ posture (SA-6)
+
+**This inventory is closed as of 2026-08-14** — every section owed by the SA
+round is filed, each against a dated at-source verification. The accretion
+duty continues (a new primitive, surface, or domain lands with its row in the
+same PR — §3's "review duty" scope applies file-wide); what ends here is the
+*backlog*.
+
+### Audit status (the honest column)
+
+| Artifact | Status |
+|---|---|
+| FIPS crates (`fips203/204/205`) | Exact-pinned; **no external audit**; ACVP conformance vendored for SLH-DSA-192s (§1) |
+| In-house constructions (nested combiner, house Schnorr, hedged RNG seam, domain registry) | Internally verified: pinned-positive KATs, frozen negative fixtures, CI gates (§1–§3); **no external audit** |
+| External audit | **Owed at Phase 9** (`RELEASE_CHECKLIST.md`: 4-scalar leaf circuit audit + security/code audits, gated after the stressnet run). This document is the auditor's index; a CycloneDX JSON view can be emitted from it if the engagement wants one |
+
+### Infrastructure PQ posture (surveyed 2026-08-14)
+
+| Surface | Today | PQ posture |
+|---|---|---|
+| Release artifacts | Gitian deterministic multi-OS builds on tags (`.github/workflows/gitian.yml`); `--detach-sign` produces builder assert files, and the release job packages and publishes assets — **no maintainer-key signature step over the published assets exists in the workflow** | **Named gap, classical and PQ alike.** Reopen below |
+| Bundled Tor (expert bundle) | Upstream GPG fingerprint pin (`TOR_SIGNING_KEY_FPR`) + byte-pin re-verification chain (`tor-pin-verify` workflow, `RELEASE_CHECKLIST.md` rows) | Classical, upstream-controlled; the durable pin is the key fingerprint, and the in-tree byte pin bounds a compromised download to a loud test failure |
+| Commit signing | House discipline: GPG-signed commits, verified before push | Classical; process-level, not CI-enforced — recorded as-is |
+
+**Reopen (rule 21) — release-artifact signing policy is owed before the
+first public release tag.** The decision is the release owner's, and the
+in-tree SLH-DSA-192s message-signing stack (§1) means a PQ or
+classical+PQ-hybrid release signature is *implementable* the day it is
+ruled; what must not happen is the first release shipping with the current
+default (unsigned published assets) by omission rather than decision. Trigger:
+cutting the first non-RC release tag with this row unresolved is the failure;
+the `RELEASE_CHECKLIST.md` is the enforcement surface once the policy is
+ruled.

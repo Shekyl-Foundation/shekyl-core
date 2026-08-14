@@ -236,8 +236,8 @@ impl SubmitStateShim for FfiSubmitShim {
                 emission_probe.map_or(std::ptr::null(), |(id, _)| id.as_ptr()),
                 emission_probe.map_or(std::ptr::null(), |(_, epochs)| const_ptr_or_null(epochs)),
                 emission_probe.map_or(0, |(_, epochs)| epochs.len()),
-                &mut emission_handle,
-                &mut pod,
+                &raw mut emission_handle,
+                &raw mut pod,
                 mut_ptr_or_null(ki_conflicts.as_mut_slice()),
             )
         };
@@ -319,7 +319,7 @@ impl SubmitStateShim for FfiSubmitShim {
                 cert.reference_block().as_bytes().as_ptr(),
                 cert.ref_height().to_raw(),
                 cert.root().as_ptr(),
-                &mut fresh_pod,
+                &raw mut fresh_pod,
                 mut_ptr_or_null(fresh_ki.as_mut_slice()),
                 n_key_images,
             )
