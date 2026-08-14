@@ -172,7 +172,9 @@ pub(crate) fn peerlist_from_section(
     key: &'static str,
 ) -> Result<Vec<PeerlistEntry>, Error> {
     match get::require(section, key)? {
-        Value::Array(Array::Object(secs)) => secs.iter().map(PeerlistEntry::from_section).collect(),
+        Value::Array(Array::Object(secs)) => {
+            secs.iter().map(PeerlistEntry::from_section).collect()
+        }
         _ => Err(get::mismatch(key, "array of object")),
     }
 }

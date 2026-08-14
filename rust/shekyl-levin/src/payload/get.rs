@@ -77,7 +77,10 @@ pub(crate) fn opt_i64(section: &Section, key: &'static str, default: i64) -> Res
     }
 }
 
-pub(crate) fn blob<const N: usize>(section: &Section, key: &'static str) -> Result<[u8; N], Error> {
+pub(crate) fn blob<const N: usize>(
+    section: &Section,
+    key: &'static str,
+) -> Result<[u8; N], Error> {
     match require(section, key)? {
         Value::Bytes(b) => <[u8; N]>::try_from(b.as_slice()).map_err(|_| Error::InvalidLength {
             field: key,

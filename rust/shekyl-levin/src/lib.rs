@@ -167,7 +167,6 @@ pub use header::{
     LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
 };
 pub use message::{invoke, notify, response};
-pub use payload::Error as PayloadError;
 pub use payload::{
     BasicNodeData, CoreSyncData, HandshakeRequest, HandshakeResponse, NetworkAddress,
     PeerlistEntry, PingRequest, PingResponse, PortableMap, SupportFlagsRequest,
@@ -175,4 +174,5 @@ pub use payload::{
     ADDR_TOR, COMMAND_HANDSHAKE, COMMAND_PING, COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC,
     PING_OK,
 };
+pub use payload::Error as PayloadError;
 pub use reader::{BucketReader, Received};
