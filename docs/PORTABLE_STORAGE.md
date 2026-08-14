@@ -1,5 +1,13 @@
 # Portable Storage Format
 
+**Production gaps and the LV-2 codec decision** live in
+[`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)
+(§7 lists what this sketch still omits: limits, `KV_SERIALIZE_OPT`,
+POD-as-blob / container-as-blob, the `network_address` union,
+`attestation_witness`, KATs). LV-2a writes those into this document
+alongside the crate; until then this is a format sketch, not a complete
+spec. Shekyl integers on this format are little-endian.
+
 ## Background
 
 Shekyl makes use of a set of helper classes from a small library named

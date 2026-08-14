@@ -36,8 +36,9 @@ chunk boundaries, and noise sizes.
 
 - **Not the payload codec.** Command bodies (handshake, timed sync, notify
   payloads) are epee `portable_storage` blobs; this crate treats them as
-  opaque bytes. A portable_storage codec (or a vendoring decision) is a
-  separate, tracked work item.
+  opaque bytes until LV-2b. The codec is first-party `shekyl-portable-storage`
+  (LV-2a); see `docs/design/LV2_PORTABLE_STORAGE.md`. This crate will
+  grow typed command structs on that codec — it does not absorb it.
 - **Not the connection stack.** No sockets, timeouts, invoke/response
   correlation, or peer management.
 - **Framing not wired; compression is.** Since 2026-08-06 the daemon's

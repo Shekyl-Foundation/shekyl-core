@@ -177,6 +177,15 @@
 
 ### Added
 
+- **LV-2 portable_storage decision** (`docs/design/LV2_PORTABLE_STORAGE.md`).
+  First-party `shekyl-portable-storage` codec (LV-2a) then typed Levin command
+  schemas in `shekyl-levin` (LV-2b). Cuprate `epee-encoding` is
+  reference-not-dependency, closing the question
+  `DAEMON_RELAY_PRIVACY.md` §8 deferred. Command inventory in
+  `LEVIN_PROTOCOL.md` drops the non-existent 1004–1006 and adds live
+  2010 `NOTIFY_GET_TXPOOL_COMPLEMENT`. Implementation is not in this
+  change.
+
 - **You can now give up on a stuck send.** The new wallet-RPC method
   `abandon_tx` marks a dispatched-but-unconfirmed send `ABANDONED` in
   your history (`WALLET_SEND_RECORD.md` P3-4 / SJ-DQ-8, PR-SJ-3,
