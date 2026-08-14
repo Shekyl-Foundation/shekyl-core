@@ -9705,7 +9705,28 @@ its wake.
   **Target: V3.2+** (rides the daemon Rust-forward track alongside the
   wallet_rpc_server cutover bucket). Not V3.0-gating: genesis ships on the
   C++ p2p path per `DAEMON_REDB_STORE.md` ("P2P and levin remain C++ at
-  genesis").
+  genesis"). The DPV track (`DAEMON_P2P_VERIFY_CUTOVER.md`) moves
+  *verification* onto `DaemonTxVerifier`; it does not reopen LV-2/LV-3.
+
+- **Daemon P2P / block-connect verify cutover onto `DaemonTxVerifier`
+  (DPV-1…DPV-8, DPV-H).** Homed in
+  [`docs/design/DAEMON_P2P_VERIFY_CUTOVER.md`](./design/DAEMON_P2P_VERIFY_CUTOVER.md)
+  (Round 1 drafted 2026-08-14). RPC submit is already a closed in-process
+  Rust path; P2P still orchestrates the same crates via fine `shekyl_*`
+  FFI inside `check_tx_inputs`. C++ stays fact-gather (`SubmitStateShim`),
+  pool insert, and relay. **Not genesis-gating:** the C++ battery is
+  correct; this is opportunistic boundary-advancement (rule 20), not a
+  store or p2p-stack rewrite (not DRS, not LV-3).
+  **Blocking design rounds before DPV-5–DPV-8:** DPV-3 (how `fcmp_verified`
+  crosses the shim without moving the 190 s embargo) and DPV-4
+  (`ver_non_input_consensus` fold vs keep-C++-for-batch). DPV-1 (this
+  file's PQC-payload item, immediately below), DPV-2 (dead `hf_version`
+  local), and DPV-H (header PoW coarse FFI) may open after Round-1
+  closure.
+  **Target: V3.0+** (rides the daemon Rust-forward track; not a genesis
+  gate). **Reopen for genesis-gating** only if a dual-impl on the P2P
+  path is shown to be a present-day consensus split rather than
+  drift-on-change.
 
 - **Daemon PQC phase-1 payload assembly duplicates
   `shekyl_wire::Transaction::pqc_signing_payload_hashes` — route through a
@@ -9736,7 +9757,9 @@ its wake.
   **Closure point / target: V3.0+** (rides the daemon Rust-forward track; the
   duplicated assembly is tested against the Rust side by the existing
   end-to-end spend tests in the interim, so the risk is drift-on-change, not
-  present-day divergence).
+  present-day divergence). **Carrier:** `DAEMON_P2P_VERIFY_CUTOVER.md` DPV-1
+  (byte-parity KATs before the C++ copy is deleted; `fcmp.cpp` retargeted
+  at the FFI entry in the same PR).
 
 - **FCMP++ sender-side output verification — inherited `wallet2::sanity_check`
   receipt check is non-functional; cryptographic re-derivation belongs in

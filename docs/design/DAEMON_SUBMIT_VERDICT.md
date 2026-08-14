@@ -1532,12 +1532,20 @@ deletes clean. PR-5's re-grep remains the backstop.
 
 ### 9.4 Explicitly kept
 
+UPDATE 2026-08-14: the KEEP-P2P dispositions below are the starting
+point of [`DAEMON_P2P_VERIFY_CUTOVER.md`](DAEMON_P2P_VERIFY_CUTOVER.md)
+(DPV-1…DPV-8), which reopens them as a planned verify-path cutover.
+This series still does not perform that cutover. The historical claim
+that P2P ingestion is "untouched" remains true of *this* series.
+
 - **`tx_verification_context`** — the P2P ingestion contract
-  (`handle_incoming_txs`, protocol handler, `relay_method` machinery) is
+  (`handle_incoming_tx`, protocol handler, `relay_method` machinery) is
   untouched by this series. `tvc` stops being a wallet-facing surface and
-  remains an internal P2P one.
+  remains an internal P2P one. (F-8 of the P2P-verify cutover: the
+  function is singular; `handle_incoming_txs` does not exist.)
 - The **P2P `add_tx` path** including its own `ver_non_input_consensus` +
-  `check_tx_inputs` verification — unchanged (§3.5).
+  `check_tx_inputs` verification — unchanged by this series (§3.5).
+  Reopened as DPV-4 / DPV-8 in `DAEMON_P2P_VERIFY_CUTOVER.md`.
 - **Dandelion++ / levin relay machinery** — inherited by shim 3, not
   modified (§5.2).
 - **`on_relay_tx`** (`core_rpc_server.cpp:3047-3096`) — kept, with its

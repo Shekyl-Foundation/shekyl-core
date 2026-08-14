@@ -195,6 +195,15 @@
 
 ### Added
 
+- **Daemon P2P / block-connect verify cutover specified**
+  (`DAEMON_P2P_VERIFY_CUTOVER.md`, DPV-1…DPV-8 + DPV-H). RPC submit is
+  already a closed in-process Rust path; this track points P2P and
+  block-connect at the same `DaemonTxVerifier`, with C++ remaining
+  fact-gather. Round 1 drafted; no implementation until that round
+  closes. The embargo skip (`can_skip_fcmp`) and
+  `ver_non_input_consensus` are named blocking design rounds, not
+  throughput footnotes.
+
 - **You can now give up on a stuck send.** The new wallet-RPC method
   `abandon_tx` marks a dispatched-but-unconfirmed send `ABANDONED` in
   your history (`WALLET_SEND_RECORD.md` P3-4 / SJ-DQ-8, PR-SJ-3,
