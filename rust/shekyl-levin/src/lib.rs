@@ -17,16 +17,23 @@
 //! stream reader ([`BucketReader`]) that demultiplexes socket bytes into
 //! complete messages.
 //!
-//! **Wiring status (2026-08-06):** the compression half is
-//! **production-live** — the C++ `epee::levin` compression path is a
-//! marshaling shim over the `shekyl_levin_*` FFI
-//! (`rust/shekyl-ffi/src/levin_ffi.rs`), and the Rust-pinned libzstd is the
-//! binary's single zstd (the system-libzstd link and `HAVE_ZSTD` gate are
-//! gone). The seam is whole-message on the way out
-//! ([`compress_message`], which `epee::levin::try_compress_message`
-//! forwards to) and frame-level on the way in ([`inflated_size`] +
-//! [`decompress_into`], which `epee::levin::decompress_payload` forwards
-//! to). No compression policy is left in C++.
+//! **Wiring status (2026-08-13):** the **entire emit side and the
+//! compression path are production-live** through the `shekyl_levin_*` FFI
+//! (`rust/shekyl-ffi/src/levin_ffi.rs`):
+//!
+//! - compression (2026-08-06): whole-message [`compress_message`] out,
+//!   frame-level [`inflated_size`] + [`decompress_into`] in; the
+//!   Rust-pinned libzstd is the binary's single zstd and no compression
+//!   policy is left in C++;
+//! - white-noise emit (2026-08-13): [`noise_notify`] and
+//!   [`fragmented_notify`] back `epee::levin::make_noise_notify` /
+//!   `make_fragmented_notify`, so the fragment-padding algorithm — the
+//!   privacy-load-bearing emit logic — has exactly one implementation,
+//!   and the byte-exact `make_fragment.*` gtests exercise this crate live.
+//!
+//! Still inert until LV-3: the read side ([`BucketReader`]) and the plain
+//! notification/request/response builders (the C++ `message_writer` keeps
+//! the hot finalize path).
 //!
 //! The framing half — builders and [`BucketReader`] — stays inert until the
 //! LV-3 cutover; the C++ path in `contrib/epee` remains the live framing
