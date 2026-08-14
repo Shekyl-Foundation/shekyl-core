@@ -139,14 +139,19 @@ sustainability is unaffected by the recalibration.
   fourth field** in the classical segment — no commitment scheme, no
   `alg_id` registry, no tag-strength question. Fork (i) is moot
   unless SM-R-8's rule-21 clause reopens; fork (iii) is moot, its
-  SM-R-2 precondition retained above for the record. Remaining lane
-  work: the v2 layout sign-off + `ADDRESS_DERIVATION_V1`-successor
-  test vectors, with the 192f UX gate (dated, owned — see
-  `RELEASE_CHECKLIST.md`) closing first. **Named blocker for
-  message-signing implementation:** PR-SM-1 cannot freeze the
-  preimage until the layout sign-off lands, because the bound
-  classical-segment byte layout is the remaining decision. *Target:
-  V3.0, before the genesis format freeze.*
+  SM-R-2 precondition retained above for the record. **SIGNED
+  2026-08-13 (release owner, `RELEASE_CHECKLIST.md`):** the 192f UX
+  gate closed by ruling — 192s stands; no UX test was run, and the
+  gate reopens only if pre-freeze UX testing is actually run and
+  finds the ~4.3 s latency intolerable — and the freeze-window
+  sign-off is recorded: the 48-byte SLH-DSA-192s public-key field is
+  the committed frozen wire field, as ratified. Remaining lane work
+  is implementation only: the v2 layout +
+  `ADDRESS_DERIVATION_V1`-successor test vectors. The named PR-SM-1
+  blocker is discharged — PR-SM-1 landed (#425) with a
+  segment-agnostic (length-prefixed) preimage and its verify surface
+  type-gated; the sign-off unblocks the address-integrated verify in
+  PR-SM-2. *Target: V3.0, before the genesis format freeze.*
 
 - **FFI *signature* drift has no remedy, unlike FFI *constant* drift
   (added 2026-07-29, from RP-3b step 2; measurement attached).**
@@ -1604,10 +1609,12 @@ sustainability is unaffected by the recalibration.
     resolved as SM-R-8: SLH-DSA-192s + spend-key classical half,
     nested, with the 48-byte public key inline in the address (fork
     (ii); the round-0 hybrid-vk-certified lead was superseded on the
-    record in pass 1). Implementation is in flight as PR-SM-1
-    (crypto + engine + ACVP conformance); the CLI/RPC un-stub is
-    PR-SM-2 per the round's decomposition, gated only on the genesis
-    lane's v2-field sign-off for the address-integrated verify.
+    record in pass 1). PR-SM-1 MERGED (#425, 2026-08-09: crypto +
+    engine + ACVP conformance); the CLI/RPC un-stub is PR-SM-2 per
+    the round's decomposition. The genesis lane's v2-field sign-off
+    landed 2026-08-13 (`RELEASE_CHECKLIST.md`), so PR-SM-2 is
+    unblocked — its address-integrated verify freezes against the
+    signed-off 48-byte field once the v2 layout lands in code.
   - **Offline cold-signing** (`describe_transfer`, `sign_transfer`,
     `submit_transfer`, `transfer --do-not-relay`) — blocked on Phase 2d
     (`UnsignedTxBundle`/`SignedTxBundle` air-gapped bundles).
