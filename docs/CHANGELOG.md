@@ -4,6 +4,24 @@
 
 ### Changed
 
+- **Levin white-noise emit routed through Rust; the fragment algorithm has
+  one implementation.** `epee::levin::make_noise_notify` and
+  `make_fragmented_notify` are now forwarding shims over two new
+  `shekyl_levin_*` FFI exports backed by `shekyl-levin`'s KAT'd
+  `noise_notify` / `fragmented_notify` — the C++ fragment-padding
+  algorithm (the privacy-load-bearing emit logic: constant on-wire size is
+  the property white-noise exists to provide) is deleted rather than kept
+  as a parity twin. The byte-exact `make_noise.*` / `make_fragment.*`
+  gtests now execute through the FFI, turning the hand-mirrored KAT
+  oracle into a live cross-language identity check in CI. With
+  compression already Rust-owned, the entire Levin emit-transform surface
+  (`IMPLEMENTATION_INDEX.md` LV row) is single-sourced in Rust; still C++
+  until LV-3: the read-side state machine and the plain
+  notification/request/response finalize path. Emit also refuses a bucket
+  whose `m_cb` would exceed the Levin packet limit, checked in
+  `shekyl-levin` before any allocation (the on-wire body, not the inner
+  payload fragmentation exists to split); the FFI wrappers are marshaling.
+
 - **Curve-tree actor fail-stop now resumes over the held store, not a
   path-reopen** (SH-2a). `CurveTreeHandle` keeps a `WriterRecovery` for
   the wallet's life and `respawn` rebuilds the writer over the same open

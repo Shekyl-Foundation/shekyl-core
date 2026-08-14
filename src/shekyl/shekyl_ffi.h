@@ -3339,7 +3339,7 @@ void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms
 void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    const std::uint8_t* outbound, std::size_t n);
 
-// ── Levin payload compression (IMPLEMENTATION_INDEX.md LV row) ─────────────
+// ── Levin emit framing + compression (IMPLEMENTATION_INDEX.md LV row) ──────
 //
 // The epee::levin compression path is a marshaling shim over these exports
 // (emit: contrib/epee/src/levin_base.cpp try_compress_message; receive:
@@ -3365,13 +3365,12 @@ void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms
 // — a corrupt or hostile peer versus an honest peer whose batch outgrew the
 // per-command cap — and the receive path closes the connection on both.
 //
-// Decompression writes into CALLER storage: size it with
-// shekyl_levin_inflated_size, then inflate with shekyl_levin_decompress_into.
-// Nothing is allocated on the Rust side and nothing is copied across the
-// boundary, which matters during IBD where these are multi-megabyte block
-// batches once per packet per connection. Only compression returns a
-// Rust-allocated ShekylBuffer (its output size is not knowable in advance),
-// and that buffer MUST be freed with shekyl_buffer_free.
+// Variable-length emit (compress, noise, fragment) returns a Rust-allocated
+// ShekylBuffer that MUST be freed with shekyl_buffer_free. Receive is
+// direct-write: size with shekyl_levin_inflated_size, then inflate with
+// shekyl_levin_decompress_into — nothing is allocated on the Rust side on
+// that path, which matters during IBD where these are multi-megabyte block
+// batches once per packet per connection.
 
 //! Compress one finalized Levin message — header and payload together.
 //! 0 = out holds the re-framed COMPRESSED message (free with
@@ -3397,6 +3396,23 @@ int32_t shekyl_levin_inflated_size(const uint8_t* input, size_t input_len,
 int32_t shekyl_levin_decompress_into(const uint8_t* input, size_t input_len,
                                      uint8_t* out, size_t out_cap,
                                      size_t* out_written);
+//! Build a dummy ("noise") message of exactly noise_bytes total length —
+//! command 0, B|E set, zeroed payload; the white-noise cover-traffic unit.
+//! 0 = out set (free with shekyl_buffer_free); -3 when noise_bytes cannot
+//! hold a bucket header or would produce an m_cb above the Levin packet
+//! limit (the epee shim returns a null slice, the historical contract).
+//! Size policy lives in rust/shekyl-levin; this export is marshaling.
+int32_t shekyl_levin_noise_notify(size_t noise_bytes, ShekylBuffer* out);
+//! Emit a notification for `command` as one or more messages, each exactly
+//! noise_size bytes on the wire — a single zero-padded notification when it
+//! fits, B/middle/E fragments when it does not. The fragment padding
+//! algorithm lives only in rust/shekyl-levin now. 0 = out set (free with
+//! shekyl_buffer_free); -3 when noise_size cannot hold two headers or
+//! would produce an m_cb above the Levin packet limit. The inner payload
+//! may itself be larger — that is why this path fragments.
+int32_t shekyl_levin_fragmented_notify(size_t noise_size, uint32_t command,
+                                       const uint8_t* payload, size_t payload_len,
+                                       ShekylBuffer* out);
 
 } // extern "C"
 

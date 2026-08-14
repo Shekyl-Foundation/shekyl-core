@@ -9525,13 +9525,19 @@ its wake.
   byte-identical against the C++ gtests) landed 2026-08-05, deliberately
   inert — the scoping decision was "exact, fully-tested skeleton now;
   cutover scheduled for the future" (shekyl-levin plan, 2026-08-05; index
-  row `LV-1…LV-N`). UPDATE 2026-08-06: the crate's **compression half is
-  production-live** — the C++ `epee::levin` compression path is a
-  marshaling shim over the `shekyl_levin_*` FFI and the system-libzstd
-  dependency is deleted (single-owner libzstd; zstd decision 2026-08-06).
-  The framing half (builders, `BucketReader`) stays inert until LV-3. The
-  remaining work is **rejected-now with named reopening criteria**
-  (rule 21):
+  row `LV-1…LV-N`). UPDATE 2026-08-13: the **white-noise emitters are
+  production-live** — `make_noise_notify` / `make_fragmented_notify` are
+  forwarding shims over `shekyl_levin_noise_notify` /
+  `shekyl_levin_fragmented_notify`, deleting the C++ fragment-padding
+  algorithm; the byte-exact `make_fragment.*` gtests now run through the
+  FFI, so the cross-language oracle executes in CI. UPDATE 2026-08-06:
+  the crate's **compression half is production-live** — the C++
+  `epee::levin` compression path is a marshaling shim over the
+  `shekyl_levin_*` FFI and the system-libzstd dependency is deleted
+  (single-owner libzstd; zstd decision 2026-08-06). Still inert until
+  LV-3: the read side (`BucketReader`) and the plain
+  notification/request/response builders. The remaining work is
+  **rejected-now with named reopening criteria** (rule 21):
 
   - **LV-2 — epee portable_storage payload codec + command schemas.** The
     framing crate carries payloads as opaque bytes; speaking live
