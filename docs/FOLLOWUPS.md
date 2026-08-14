@@ -9550,6 +9550,33 @@ its wake.
   Owned by the wallet rewrite (this constant dies with `wallet2.cpp`); recorded
   now because the reason is visible now. See `DAEMON_RELAY_PRIVACY.md` §89.6.
 
+- **Relay: re-derive `fluff_return_ms` once, when a degree distribution
+  exists.** The convergence criterion landed 2026-08-13
+  (`conformance::converged_fluff_return_mixed`, §90), and it says the shipped
+  `fluff_return_ms = 3250` is **the second-lowest of six draws** at a trial
+  count too small to have collapsed: converged, the reading is **3500 ms**
+  (6 seeds at 64 trials and 10 seeds at 512 trials, both spread 0). Low is the
+  privacy-losing direction — it under-provisions the embargo.
+
+  **3500 is a lower bound, not a placeholder.** This was queued as blocked on a
+  "churn-realistic" degree distribution; that input appears in no document,
+  commit or ref, and the second correction turns out to have a known sign, so
+  it is a refinement rather than a blocker. Measured
+  (`uniform_at_the_floor_is_the_conservative_topology`): a third of nodes above
+  the floor reads 3000 ms, uniform-at-floor 3500 ms, a third below 4750 ms.
+  Under `OutboundOnly` first passage is a min over paths and out-edges only add
+  paths, so **uniform-at-the-floor is the conservative topology and a real
+  distribution can only raise `F′`.**
+
+  **What actually gates landing it is blast radius, not data.** Moving `F′` is
+  a conformance-vector event carrying the 190 s embargo, the 874 s wallet
+  timeout and the §44 pins — a decision about when to spend the re-baselining.
+
+  **Do when** that is authorized: re-derive through
+  `converged_fluff_return_mixed` (with an `A ≥ 60` degree distribution if one
+  has arrived by then, which can only raise the answer), and carry the embargo,
+  the wallet timeout and the §44 pins in the same change.
+
 - **Relay: populate the 48-cell Pi verification surface, then consume it
   per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first
   (`shekyl-relay-privacy/src/verify_cost.rs`, 2026-08-06) carrying the four

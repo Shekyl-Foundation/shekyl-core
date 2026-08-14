@@ -6,10 +6,26 @@ registered as **Q12-D6a** in
 *"the most expensive measurement the arc has proposed and the only one that
 cannot be faked."*
 
-**Status: DESIGN, with Q12-R-W2 part-built (§9). No VM stood up, no arm run.**
-The seed estate now carries a current binary and four hidden services; the
-privileged install is blocked (§9.4). Ground findings below are verified at
-source and against the live estate on 2026-08-11 at pin
+**Status: DESIGN for the arms; the estate and the rigs were built and measured.
+No arm has been run, and no `A ≥ 60` readout exists.**
+
+Corrected 2026-08-13. This line previously read *"No VM stood up, no arm run"*,
+which its own body had outgrown: §§10–11.13 record a six-host ring sampled for
+an hour across three providers, a 60-service dialability rig, and 20 hidden
+services restarted and polled to recovery — all on VMs, and all after §9.4's
+privileged install cleared. "No arm run" survives that correction; "no VM stood
+up" did not. **A status line that disagrees with its own document is the
+failure rule 94 exists to catch**, and it was read as current in a later
+session (`DAEMON_RELAY_PRIVACY.md` §90.3) before being checked against the body.
+
+What the distinction buys a later reader: the *instruments* are built and their
+findings (§§11.5–11.13) are real measurements, while the *arms* — the `A`
+sweep the run exists for — have produced nothing. Any claim needing a degree
+distribution at `A ≥ 60` is therefore unmeasured, not mislaid.
+
+The seed estate carries a current binary and four hidden services. Ground
+findings below are verified at source and against the live estate on 2026-08-11
+at pin
 [`14c2ee599`](https://github.com/Shekyl-Foundation/shekyl-core/commit/14c2ee599).
 Identifiers `Q12-R1…R7` extend the already-registered `Q12-` family (rule 94 §1;
 no new prefix is minted).
