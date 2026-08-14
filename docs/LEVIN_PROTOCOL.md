@@ -31,10 +31,12 @@ lives at `rust/shekyl-levin` (LV-1, KAT'd against the C++ unit tests, with
 deliberately unwired until the scheduled p2p cutover. Where it is
 deliberately stricter than the C++, the authoritative list is the crate's
 own docs (`rust/shekyl-levin/src/lib.rs`) — kept in one place on purpose.
-Command *bodies* are epee portable_storage; the Rust codec is LV-2
-([`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)),
-not yet implemented. See also `docs/design/IMPLEMENTATION_INDEX.md` (LV
-row) and the `docs/FOLLOWUPS.md` "Levin p2p migration" entry.
+Command *bodies* are epee portable_storage. The binary codec is
+`rust/shekyl-portable-storage` (LV-2a, landed). Typed Levin command
+maps in `shekyl-levin` are LV-2b and not yet implemented. Decision:
+[`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md).
+See also `docs/design/IMPLEMENTATION_INDEX.md` (LV row) and the
+`docs/FOLLOWUPS.md` "Levin p2p migration" entry.
 
 
 ## Header
