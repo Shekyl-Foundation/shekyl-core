@@ -6,9 +6,8 @@ registered as **Q12-D6a** in
 *"the most expensive measurement the arc has proposed and the only one that
 cannot be faked."*
 
-**Status: the `A = 60` (§13) and `A = 15` (§14) arms are RUN, 2026-08-14, and
-their readouts are committed. `A = 30` and Q12-R5's late-joiner control remain
-unrun.**
+**Status: the `{15, 30, 60}` sweep (§§13–15) and Q12-R5's late-joiner control
+(§15.2) are RUN, 2026-08-14, and every readout is committed.**
 
 Corrected 2026-08-14. This line previously read *"No VM stood up, no arm run"*,
 which its own body had already outgrown before §13 existed: §§10–11.13 record a
@@ -2341,7 +2340,6 @@ the host rather than assumed.
 ### 13.7 Still owed
 
 - **A longer `A = 60` arm** — 11 settled samples cannot separate the observed downward drift (55 → 46 at-floor) from ordinary churn; §11.9 needed a full hour and per-burn attribution to settle the analogous question.
-- **The `A = 30` arm**, the remaining point of the `{15, 30, 60}` sweep.
 - **Q12-R5's late-joiner control**, both variants — one new node pointed at a
   *seed* and one pointed at an *ordinary node*. The difference prices how much
   of discovery is hub-mediated, and this arm's one-seed bootstrap makes the
@@ -2446,3 +2444,84 @@ construction — but it means the floor's *security* reading ("12 independent
 paths") is not what the floor measures. Whether that matters is a question for
 the below-floor rule's threat model, and it is **not** settled here; it is
 recorded because the arm is what made it concrete.
+
+---
+
+## 15. The sweep closes — `A = 30`, and Q12-R5's late-joiner control
+
+**Status: RUN 2026-08-14.** With §13 and §14 this completes the `{15, 30, 60}`
+sweep and the bootstrap control. Readouts in
+[`data/q12-d6a-a30-2026-08-14/`](data/q12-d6a-a30-2026-08-14/) and
+[`data/q12-r5-late-joiner-2026-08-14/`](data/q12-r5-late-joiner-2026-08-14/).
+
+`A = 30` ran on the six permanent seed hosts alone — no VMs were provisioned,
+because 30 anon + 15 clearnet fits inside 24.8 GB once the startup peak is
+staggered (Q12-R14). Three seeds, 10 % of the population, bracketing 8.3 % at
+`A = 60` and 13.3 % at `A = 15`. **`stored ≤ A` was checked at the second
+sample** (29–30 in a 30-node population) before any of this was believed —
+§14.4's standing requirement, on its first use.
+
+### 15.1 The sweep
+
+| `A` | at-or-above floor (settled) | never reaches it | min after settling |
+| --- | --- | --- | --- |
+| 15 | 52.1 % | 0/15 | 11 |
+| **30** | **84.2 %** | **0/30** | 11 |
+| 60 | 85.2 % | 0/60 | 11 |
+
+**The transition is between 15 and 30, and it is saturated by 30.** Going from
+30 to 60 buys 1.1 points; going from 15 to 30 buys 32. In all three arms **no
+node is ever structurally below the floor** — every node reaches 12 — so what
+`A` changes is how *reliably* the floor is held, not whether it is attainable.
+
+**This is the number §11.13's launch condition actually needs.** The concern was
+that a young network cannot stem over Tor. Measured: at 15 anon nodes the
+below-floor rule fires on about half of samples; by 30 it fires on one in six;
+past 30 it stops improving. The operational reading is **~30 anonymity-capable
+nodes**, not the `A ≈ 19` the arithmetic implied and not "unreachable".
+
+### 15.2 Q12-R5 — the late joiner, both variants
+
+One new node, **exactly one `--add-peer`**, joining the converged `A = 30`
+network from a verified-empty peerlist. Run sequentially, not together: run
+concurrently they could peer with each other, which is neither variant.
+
+| variant | its one peer | time to floor |
+| --- | --- | --- |
+| **seed** | a cross-peered hub | **56 s** |
+| **ordinary** | an ordinary fleet node | **247 s** |
+
+**Both reach the floor, so discovery is not hub-dependent** — the thing Q12-R5
+existed to test. A node that knows one ordinary peer converges on its own.
+
+**The difference is ~4.4×, and that is the price of hub mediation.** It is not
+in peerlist acquisition: both variants held ~30 candidates within 30 seconds,
+because the handshake hands over a peerlist immediately either way. It is in
+*link establishment* — the seed variant went 2 → 9 → 12, while the ordinary
+variant climbed 0 → 2 → 5 → 6 → 6 → 9 → 9 → 10 → 11 → 12 with visible plateaus,
+the shape of dial failures and retries against a 240 s window.
+
+**Why the plateaus differ is NOT isolated by this rig** and is not claimed. Both
+variants had the same candidate set within 30 s, so the gap is in which
+candidates were tried and how many dials failed, and the rig records neither
+per-dial outcome. Stated as an observation with its mechanism open.
+
+### 15.3 A measurement error worth recording
+
+The first late-joiner run reported **`anon_out = 0` for 21 minutes** while
+`stored` climbed 1 → 31 — a node that learned the whole network and connected to
+none of it. That would have been a striking finding. **It was wrong**: the
+validated reader put the same node at **12**.
+
+The cause was a hand-rolled `get_connections` filter written inline for the
+poll loop, sitting beside `read_anon_histogram.sh` — the instrument with a test
+suite, written because *"a consumer that regexes the human format is a defect
+waiting to happen"* after an earlier extractor "reported nine values for six
+nodes". The same mistake, in the same run, against the same warning.
+
+**Recorded because the failure mode is seductive**: the bad number was
+*interesting*. A late joiner that learns 31 peers and links to none is a better
+story than one that reaches the floor in 56 seconds, and it survived twenty-one
+minutes of polling without once looking implausible. The rule the arc keeps
+re-learning is that a second instrument must be validated against the first
+before its disagreement is treated as a result rather than a bug.
