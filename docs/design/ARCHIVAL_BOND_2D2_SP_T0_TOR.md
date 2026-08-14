@@ -777,3 +777,30 @@ serving-layer miss accounting (transport plan §5/§6) — both consume the post
   at-rest half on a wallet-controlled encrypted mount **or the §10 arti anchor** (in-process guard
   state could live inside the wallet's encrypted store — a second benefit of that anchor). With
   DQ-T0.6 (§3c) built, this closes the last open DQ in the SP-T0 series.
+- **2026-08-14 (§3c's operator-alarm hook is wired — OA-1; and the `EventSink` premise is corrected):**
+  §3c has said since it was pinned that `Degraded` is "the operator-alarm hook (`82`)" and that an
+  operator layer must render `Degraded ∪ Ready { recovering: true }` as **one continuous incident**.
+  Nothing consumed it: the supervisor has been publishing alarm-shaped edges into no alarm layer.
+  The new `shekyl-operator-alarm` crate is now that layer (OA-1), and it lives wallet-side exactly as
+  §3c assigns — "the wallet layer consumes posture and owns only the UX mapping (`82`)". Three
+  consequences worth recording here, because they are constraints this doc's contract imposed:
+  (1) the channel is a **snapshot** (`watch<AlarmBoard>`), not an event stream, because the `warning`
+  field exists on `Ready` and on no other variant — so off `Ready` the wallet does not *know* whether
+  the guard topology is intact, and "not checking" has to be a value rather than an absence;
+  (2) `Degraded`'s episode rule is enforced by a stable `IncidentId` rather than by raise/clear edges,
+  since a `watch` coalesces and a subscriber otherwise cannot tell a continuing incident from a
+  re-raise; (3) the translator takes the posture **receiver**, not a `TorService`, so the mapping is
+  testable without a verified tor binary on the test machine.
+  **Correction (`21`-style honesty, and it retires a planned slice):** the plan of record had a
+  wallet-side translator consuming the control `EventSink`. It cannot do anything, and the reason is
+  in this doc: async `650` events arrive only after a `SETEVENTS`, **no production call site issues
+  one** (the DQ-T0.4 `STREAM` subscription is a harness), and the §3b retraction above settled that
+  bootstrap readiness is a `GETINFO` poll — "a command, not a subscription, so it never touches
+  `SETEVENTS`". So in production the sink receives nothing at all, and `ControlReply` is in any case a
+  deliberately forensic surface ("parse it, never log it"), not an alarm vocabulary. The wallet's
+  correct production value is the new `EventSink::unsubscribed()`, which states that at the
+  construction site rather than leaving an anonymous dropped receiver that reads like an accident;
+  whoever adds the first production `SETEVENTS` has to replace a call by that name. **Reopen:** if a
+  production subscription ever lands (a `STATUS_CLIENT` consumer, a `STREAM`-based measurement outside
+  the harness), the sink acquires a real consumer and its stalled-consumer residual — documented on
+  `EventSink` — becomes live for the first time.
