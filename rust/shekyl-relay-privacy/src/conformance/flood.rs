@@ -527,9 +527,23 @@ impl std::error::Error for ConvergenceRefusal {}
 /// This is [`simulate_fluff_return_mixed`] with the missing half attached. The
 /// simulator answers *"what did this draw give?"*; a constant derived from it
 /// needs *"is that the distribution's answer or this seed's?"*, and only
-/// re-running at independent seeds can say. Each escalation builds **fresh**
-/// RNGs from the seeds rather than extending the previous run, so the passes
-/// are independent samples and not a longer version of the same one.
+/// re-running at independent seeds can say.
+///
+/// # The independence that matters is ACROSS SEEDS, not across rungs
+///
+/// Each escalation rebuilds the RNGs from the **same** seeds, so a rung's draws
+/// begin with the previous rung's: the ladder is **nested**, and a higher rung
+/// is a longer run of the same stream, not a fresh sample of it.
+///
+/// **That is the correct shape, not a limitation.** The question being asked is
+/// *"at this trial count, do independent seeds agree?"* — which needs the seeds
+/// to be independent **of each other** at a given rung, and they are, being
+/// distinct `SplitMix64` streams. Independence *between rungs* would actively
+/// hurt: it would make each rung a fresh lottery, so the ladder could terminate
+/// on a rung where the seeds happened to agree, and stopping early on luck is
+/// the failure this whole type exists to prevent. Nesting means more trials is
+/// strictly more information about the same estimate, so agreement at a higher
+/// rung is stronger evidence rather than another roll.
 ///
 /// # Errors
 ///
@@ -618,6 +632,12 @@ where
                 readings_ms,
             });
         }
-        trials = (trials * 2).min(budget.max_trials);
+        // `saturating_mul`, not `*`: the loop only reaches here with
+        // `trials < max_trials`, so doubling overflows exactly when a caller
+        // passes `max_trials > usize::MAX / 2`. In release that wraps to a
+        // SMALL trial count, which never reaches `max_trials` — an infinite
+        // ladder rather than a refusal, which is the one outcome this type
+        // must not have.
+        trials = trials.saturating_mul(2).min(budget.max_trials);
     }
 }

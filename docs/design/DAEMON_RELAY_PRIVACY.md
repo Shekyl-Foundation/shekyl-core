@@ -13924,9 +13924,24 @@ embargo derivation.
 
 `conformance::converged_fluff_return_mixed` re-runs the measurement at
 independent seeds, doubles the trial count until the seeds agree, and
-**refuses to return a number** if they never do. Each escalation builds fresh
-RNGs from the seeds rather than extending the previous run, so the rungs are
-independent samples and not a longer version of one.
+**refuses to return a number** if they never do.
+
+**The independence that matters is across seeds, not across rungs.** Each
+escalation rebuilds the RNGs from the *same* seeds, so a rung's draws begin
+with the previous rung's — the ladder is **nested**, and a higher rung is a
+longer run of the same stream rather than a fresh sample of it. An earlier
+draft of this section claimed the opposite; the implementation was always
+nested, and the claim was the thing that was wrong.
+
+**Nested is the correct shape.** The question is *"at this trial count, do
+independent seeds agree?"*, which needs the seeds independent **of each other**
+at a given rung — they are, being distinct `SplitMix64` streams. Independence
+*between* rungs would actively hurt: each rung would be a fresh lottery, so the
+ladder could terminate on a rung where the seeds happened to agree, and
+stopping early on luck is precisely the failure this criterion exists to
+prevent. Nesting makes more trials strictly more information about the same
+estimate, so agreement at a higher rung is stronger evidence rather than
+another roll.
 
 Two refusals, deliberately separate:
 
