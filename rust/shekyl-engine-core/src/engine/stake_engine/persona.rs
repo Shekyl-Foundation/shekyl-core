@@ -9,6 +9,7 @@ use kameo::message::{Context, Message};
 
 use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
 use shekyl_archival_retention::HoldingsDescriptor;
+use shekyl_tor::onion_identity::OnionIdentity;
 
 use crate::engine::{Network, ShekylAddress};
 
@@ -127,6 +128,56 @@ impl Message<PersonaIdentityOf> for StakeEngine {
                 requested: msg.p_slot,
             })
         }
+    }
+}
+
+/// Mint the persona's **onion serving credential** — the SH-2b handoff.
+///
+/// Returns an [`OnionIdentity`], never the seed, and that asymmetry is the
+/// custody ruling rather than a convenience. §7.2(iii): the wallet's HKDF
+/// siblings all descend from `master_seed`, so a serving role holding
+/// `hs_id_seed` is one edit away from holding `bond_spend`'s authority. The
+/// expansion therefore runs **here**, inside the secret owner, and what
+/// crosses the actor boundary is a value authorizing exactly one thing:
+/// publishing this onion.
+///
+/// **The guarantee is the boundary, not the seed's lifetime**, and the two are
+/// easy to conflate. This call does not shorten the seed's life or wipe it:
+/// `hs_id_seed` stays in the actor's [`ArchivalPKeys`] for the persona's life,
+/// under that field's `Zeroizing` and the `on_stop` wipe, and
+/// [`OnionIdentity::from_hs_id_seed`] borrows it and retains nothing. What
+/// makes the custody property hold is narrower and stronger: no caller of this
+/// message can obtain the seed, only the expanded credential.
+///
+/// Minted per request rather than cached, because [`OnionIdentity`] is
+/// deliberately not `Clone`: holding the expanded bytes *is* the persona on
+/// the network, so the actor keeps the seed (already in its `ArchivalPKeys`)
+/// and re-derives, rather than keeping a second copy of the serving secret
+/// alive for the session.
+///
+/// A read-only projection like [`PersonaIdentityOf`]: no activation, no
+/// retired-slot wipe, no generation advance. An unheld slot is
+/// [`StakeEngineError::LookaheadExhausted`], as at every other slot boundary.
+#[allow(dead_code)] // inert until SH-2b-2 starts a `PersonaServingHost`
+pub(crate) struct PersonaOnionIdentityOf {
+    pub p_slot: PSlot,
+}
+
+impl Message<PersonaOnionIdentityOf> for StakeEngine {
+    type Reply = Result<OnionIdentity, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: PersonaOnionIdentityOf,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let held = self
+            .held
+            .get(&msg.p_slot)
+            .ok_or(StakeEngineError::LookaheadExhausted {
+                requested: msg.p_slot,
+            })?;
+        Ok(OnionIdentity::from_hs_id_seed(&held.keys().hs_id_seed))
     }
 }
 

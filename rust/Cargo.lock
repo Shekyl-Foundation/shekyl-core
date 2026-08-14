@@ -3992,6 +3992,7 @@ dependencies = [
  "shekyl-rpc-transport",
  "shekyl-scanner",
  "shekyl-standoff",
+ "shekyl-tor",
  "shekyl-tx-builder",
  "shekyl-tx-weight",
  "shekyl-types",
