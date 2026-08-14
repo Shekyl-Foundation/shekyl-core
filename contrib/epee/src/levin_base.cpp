@@ -73,6 +73,24 @@ namespace levin
     return head;
   }
 
+  namespace
+  {
+    //! Copy a Rust-allocated FFI buffer into a byte_slice, freeing it on
+    //! *every* exit — reserve/write can throw (std::bad_alloc), and the
+    //! connection machinery catches and survives handler exceptions, so a
+    //! throw would otherwise leak the buffer rather than end the process.
+    byte_slice adopt_ffi_buffer(ShekylBuffer& buf)
+    {
+      const auto buf_guard = misc_utils::create_scope_leave_handler(
+          [&buf] { shekyl_buffer_free(buf.ptr, buf.len); });
+
+      byte_stream out;
+      out.reserve(buf.len);
+      out.write(buf.ptr, buf.len);
+      return byte_slice{std::move(out)};
+    }
+  } // anonymous
+
   // Forwarding shim over shekyl_levin_compress_message (rule 20). Every
   // decision — is this already compressed, is it exactly one message, is it
   // the noise/fragment class whose constant on-wire size is the point of
@@ -94,83 +112,41 @@ namespace levin
     if (shekyl_levin_compress_message(data.data(), data.size(), &buf) != 0)
       return input;
 
-    // The Rust allocation must be freed on *every* exit from here on —
-    // reserve/write below can throw (std::bad_alloc), and the connection
-    // machinery catches and survives handler exceptions, so a throw would
-    // otherwise leak the buffer rather than end the process.
-    const auto buf_guard = misc_utils::create_scope_leave_handler(
-        [&buf] { shekyl_buffer_free(buf.ptr, buf.len); });
-
-    byte_stream out;
-    out.reserve(buf.len);
-    out.write(buf.ptr, buf.len);
-    return byte_slice{std::move(out)};
+    return adopt_ffi_buffer(buf);
   }
 
+  // Forwarding shim over shekyl_levin_noise_notify (rule 20): the noise
+  // shape — command 0, B|E, zeroed body, exact total size — lives in
+  // rust/shekyl-levin, where the read side that discards it already lives.
+  // Invalid sizes come back as a null slice, the historical contract.
   byte_slice make_noise_notify(const std::size_t noise_bytes)
   {
-    static constexpr const std::uint32_t flags =
-        LEVIN_PACKET_BEGIN | LEVIN_PACKET_END;
-
-    if (noise_bytes < sizeof(bucket_head2))
+    ShekylBuffer buf{};
+    if (shekyl_levin_noise_notify(noise_bytes, &buf) != 0)
       return nullptr;
 
-    std::string buffer(noise_bytes, char(0));
-    const bucket_head2 head = make_header(0, noise_bytes - sizeof(bucket_head2), flags, false);
-    std::memcpy(std::addressof(buffer[0]), std::addressof(head), sizeof(head));
-
-    return byte_slice{std::move(buffer)};
+    return adopt_ffi_buffer(buf);
   }
 
+  // Forwarding shim over shekyl_levin_fragmented_notify (rule 20). The
+  // pad-to-noise-or-fragment decision, the B/middle/E header sequence, and
+  // the padding discipline — the privacy-load-bearing piece, since constant
+  // on-wire size is the entire property white-noise buys — now have exactly
+  // one implementation, in rust/shekyl-levin. Only the writer's payload
+  // bytes cross; the inner notification header is rebuilt byte-identically
+  // on the Rust side from (command, payload).
   byte_slice make_fragmented_notify(const std::size_t noise_size, const int command, message_writer message)
   {
-    if (noise_size < sizeof(bucket_head2) * 2)
+    if (message.buffer.size() < sizeof(bucket_head2))
+      return nullptr; // finalize already consumed the writer
+
+    ShekylBuffer buf{};
+    if (shekyl_levin_fragmented_notify(noise_size, static_cast<uint32_t>(command),
+                                       message.buffer.data() + sizeof(bucket_head2),
+                                       message.payload_size(), &buf) != 0)
       return nullptr;
 
-    if (message.buffer.size() <= noise_size)
-    {
-      /* The entire message can be sent at once, and the levin binary parser
-         will ignore extra bytes. So just pad with zeroes and otherwise send
-         a "normal", not fragmented message. */
-
-      message.buffer.put_n(0, noise_size - message.buffer.size());
-      return message.finalize_notify(command);
-    }
-
-    // fragment message
-    const byte_slice payload_bytes = message.finalize_notify(command);
-    span<const std::uint8_t> payload = to_span(payload_bytes);
-
-    const size_t payload_space = noise_size - sizeof(bucket_head2);
-    const size_t expected_fragments = ((payload.size() - 2) / payload_space) + 1;
-
-    byte_stream buffer{};
-    buffer.reserve(expected_fragments * noise_size);
-
-    bucket_head2 head = make_header(0, payload_space, LEVIN_PACKET_BEGIN, false);
-    buffer.write(as_byte_span(head));
-
-    // internal levin header is in payload already
-
-    size_t copy_size = payload.remove_prefix(payload_space);
-    buffer.write(payload.data() - copy_size, copy_size);
-
-    head.m_flags = 0;
-    while (!payload.empty())
-    {
-      copy_size = payload.remove_prefix(payload_space);
-
-      if (payload.empty())
-        head.m_flags = LEVIN_PACKET_END;
-
-      buffer.write(as_byte_span(head));
-      buffer.write(payload.data() - copy_size, copy_size);
-    }
-
-    const size_t padding = noise_size - copy_size - sizeof(bucket_head2);
-    buffer.put_n(0, padding);
-
-    return byte_slice{std::move(buffer)};
+    return adopt_ffi_buffer(buf);
   }
 } // levin
 } // epee

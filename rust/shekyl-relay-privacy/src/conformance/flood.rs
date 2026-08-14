@@ -133,16 +133,45 @@ pub struct FloodSummary {
 /// omitting that reciprocal under [`FloodReach::OutboundOnly`] IS the rule
 /// (F-7).
 fn build_adjacency<R: RelayRng + ?Sized>(flood: FloodParams, rng: &mut R) -> Vec<Vec<usize>> {
-    let peers = flood.peers.min(flood.nodes - 1);
-    let mut adjacency: Vec<Vec<usize>> = vec![Vec::with_capacity(peers); flood.nodes];
-    for node in 0..flood.nodes {
+    let degrees = vec![flood.peers; flood.nodes];
+    build_adjacency_from_degrees(&degrees, flood.reach, rng)
+}
+
+/// Wire a graph where each node initiates its **own** out-degree.
+///
+/// Extracted from `build_adjacency` so a degree can differ per node. The
+/// uniform case delegates here with a constant vector, so there is one wiring
+/// rule rather than two that must be kept in step.
+///
+/// **`degrees.len()` IS the node count**, deliberately: an earlier form took
+/// `nodes` alongside and could be handed a slice that disagreed with it,
+/// panicking on an index rather than saying so. Two values that must agree are
+/// one value.
+fn build_adjacency_from_degrees<R: RelayRng + ?Sized>(
+    degrees: &[usize],
+    reach: FloodReach,
+    rng: &mut R,
+) -> Vec<Vec<usize>> {
+    let nodes = degrees.len();
+    // Per-node capacity, not `vec![Vec::with_capacity(d); nodes]`. That form
+    // reads as pre-sizing every row and does not: `vec![elem; n]` CLONES, and
+    // `Vec::clone` allocates for the length it copies, so only the seed row
+    // keeps its capacity and the rest start empty. Under `OutboundOnly` each
+    // row takes exactly its own degree, so sizing it here is exact rather than
+    // a guess.
+    let mut adjacency: Vec<Vec<usize>> = degrees
+        .iter()
+        .map(|d| Vec::with_capacity((*d).min(nodes.saturating_sub(1))))
+        .collect();
+    for node in 0..nodes {
+        let peers = degrees[node].min(nodes - 1);
         let mut initiated: Vec<usize> = Vec::with_capacity(peers);
         while initiated.len() < peers {
-            let other = usize_from(bounded_uniform(rng, (flood.nodes - 1) as u64));
+            let other = usize_from(bounded_uniform(rng, (nodes - 1) as u64));
             if other != node && !initiated.contains(&other) {
                 initiated.push(other);
                 adjacency[node].push(other);
-                if flood.reach == FloodReach::EveryPeer {
+                if reach == FloodReach::EveryPeer {
                     adjacency[other].push(node);
                 }
             }
@@ -166,9 +195,60 @@ pub fn simulate_fluff_return<R: RelayRng + ?Sized>(
     trials: usize,
     rng: &mut R,
 ) -> FloodSummary {
+    assert!(flood.peers >= 1, "a flood needs at least one peer per node");
+    let degrees = vec![flood.peers; flood.nodes];
+    simulate_fluff_return_mixed(flood, &degrees, mean_quarter_secs, family, trials, rng)
+}
+
+/// [`simulate_fluff_return`] with a **per-node** out-degree.
+///
+/// # What this exists to answer, and why the uniform form cannot
+///
+/// F-8b's floor is justified as a condition on the topology the embargo
+/// constants were derived under (`OutboundOnly@12`). A node below it has a
+/// slower fluff return, so its own embargo is under-provisioned. Whether that
+/// is a **per-node** condition or a **network** one decides whether a live
+/// per-node check can exist at all — and the uniform simulator cannot tell
+/// them apart, because moving `peers` moves every node at once.
+///
+/// **Node 0 is the flood source and is excluded from the arrival sample**, so
+/// the two questions are asked by *where the degraded node is placed*:
+///
+/// - `degrees[0]` reduced — the degraded node is the **source**, so the sample
+///   is its own fluff return. This is the self-harm axis the floor is
+///   justified on.
+/// - some `degrees[k]`, `k != 0`, reduced — the degraded node is a peer, so
+///   the sample is the rest of the network's first passage. This is the
+///   network axis.
+///
+/// Reading one and concluding about the other is the error this signature
+/// exists to make hard to commit.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero, if `nodes` is under two, if `degrees` is not
+/// exactly `nodes` long, or if any degree is zero.
+#[must_use]
+pub fn simulate_fluff_return_mixed<R: RelayRng + ?Sized>(
+    flood: FloodParams,
+    degrees: &[usize],
+    mean_quarter_secs: u32,
+    family: DelayFamily,
+    trials: usize,
+    rng: &mut R,
+) -> FloodSummary {
     assert!(trials > 0, "simulation needs at least one trial");
     assert!(flood.nodes >= 2, "a flood needs at least two nodes");
-    assert!(flood.peers >= 1, "a flood needs at least one peer per node");
+    assert!(
+        degrees.len() == flood.nodes,
+        "degrees must name every node: got {}, nodes {}",
+        degrees.len(),
+        flood.nodes
+    );
+    assert!(
+        degrees.iter().all(|d| *d >= 1),
+        "a flood needs at least one peer per node"
+    );
 
     let table = DelayTable::build(mean_quarter_secs, family);
     let draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(250) };
@@ -176,7 +256,7 @@ pub fn simulate_fluff_return<R: RelayRng + ?Sized>(
     let mut arrivals: Vec<u64> = Vec::with_capacity(trials * flood.nodes);
 
     for _ in 0..trials {
-        let adjacency = build_adjacency(flood, rng);
+        let adjacency = build_adjacency_from_degrees(degrees, flood.reach, rng);
 
         let mut best = vec![u64::MAX; flood.nodes];
         let mut frontier = std::collections::BinaryHeap::new();
