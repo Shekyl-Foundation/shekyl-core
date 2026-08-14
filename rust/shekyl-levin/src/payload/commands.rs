@@ -10,7 +10,7 @@ use shekyl_portable_storage::{Section, Value};
 use super::error::Error;
 use super::get;
 use super::types::{
-    peerlist_from_section, peerlist_to_value, BasicNodeData, CoreSyncData, PeerlistEntry,
+    insert_peerlist, peerlist_from_section, BasicNodeData, CoreSyncData, PeerlistEntry,
 };
 use super::PortableMap;
 
@@ -68,10 +68,7 @@ pub struct HandshakeResponse {
 impl PortableMap for HandshakeResponse {
     fn to_section(&self) -> Result<Section, Error> {
         let mut section = Section::new();
-        section.insert(
-            "local_peerlist_new",
-            peerlist_to_value(&self.local_peerlist_new)?,
-        );
+        insert_peerlist(&mut section, "local_peerlist_new", &self.local_peerlist_new)?;
         section.insert("node_data", Value::Object(self.node_data.to_section()?));
         section.insert(
             "payload_data",
@@ -125,10 +122,7 @@ pub struct TimedSyncResponse {
 impl PortableMap for TimedSyncResponse {
     fn to_section(&self) -> Result<Section, Error> {
         let mut section = Section::new();
-        section.insert(
-            "local_peerlist_new",
-            peerlist_to_value(&self.local_peerlist_new)?,
-        );
+        insert_peerlist(&mut section, "local_peerlist_new", &self.local_peerlist_new)?;
         section.insert(
             "payload_data",
             Value::Object(self.payload_data.to_section()?),

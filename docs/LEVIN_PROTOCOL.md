@@ -33,9 +33,12 @@ deliberately stricter than the C++, the authoritative list is the crate's
 own docs (`rust/shekyl-levin/src/lib.rs`) — kept in one place on purpose.
 Command *bodies* are epee portable_storage. The binary codec is
 `rust/shekyl-portable-storage` (LV-2a, landed). Typed Levin command
-maps in `shekyl-levin` are LV-2b: first drop (handshake / timed-sync /
-ping / support-flags, plus `network_address`) is landed; remaining
-notifies (2001–2004, 2006–2010) stay opaque bytes. Decision:
+maps in `shekyl-levin` are LV-2b (landed): handshake / timed-sync /
+ping / support-flags, `network_address`, and notifies 2001–2004 /
+2006–2010. Cryptonote blobs stay opaque bytes (`shekyl-wire`). Live
+`shekyld` dual-stack is the named remaining of
+[`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)
+§12 step 4. Decision:
 [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md).
 See also `docs/design/IMPLEMENTATION_INDEX.md` (LV row) and the
 `docs/FOLLOWUPS.md` "Levin p2p migration" entry.
@@ -238,10 +241,9 @@ Carries a list of transaction hashes (`CONTAINER_POD_AS_BLOB`). Live in
 by `handle_notify_get_txpool_complement`. Command 2005 was never
 allocated.
 
-Command-body field layouts for 1001 / 1002 / 1003 / 1007 live in
-`shekyl-levin` (`payload`). Remaining notifies are specified by the
-C++ KV maps until the rest of LV-2b; see `LV2_PORTABLE_STORAGE.md`
-§5–§6.
+Command-body field layouts for 1001 / 1002 / 1003 / 1007 and
+notifies 2001–2004 / 2006–2010 live in `shekyl-levin` (`payload`).
+See `LV2_PORTABLE_STORAGE.md` §5–§6.
 
 ### Wire Data Privacy Summary
 

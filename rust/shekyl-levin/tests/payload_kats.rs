@@ -7,7 +7,8 @@
 //!
 //! Round-trips pin OPT-omit, the `network_address` union, and
 //! `cumulative_difficulty_top64` store-always. Empty ping/support-flags
-//! requests match the LV-2a empty-section encoding.
+//! requests match the LV-2a empty-section encoding. Empty peerlists
+//! omit the key (C++ STL-container store).
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -221,6 +222,16 @@ fn timed_sync_round_trip() {
         payload_data: sync_data(),
         local_peerlist_new: Vec::new(),
     });
+}
+
+#[test]
+fn empty_peerlist_omitted() {
+    let rsp = TimedSyncResponse {
+        payload_data: sync_data(),
+        local_peerlist_new: Vec::new(),
+    };
+    let section = rsp.to_section().expect("section");
+    assert!(section.get("local_peerlist_new").is_none());
 }
 
 #[test]

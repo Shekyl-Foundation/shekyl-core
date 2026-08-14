@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Levin p2p framing layer and typed command maps (LV-2b first drop). See docs/LEVIN_PROTOCOL.md."
+description = "Levin p2p framing layer and typed command maps (LV-2b). See docs/LEVIN_PROTOCOL.md."
 
 [features]
 # Codec gate for pure-Rust builds of this crate. Default-on: the production

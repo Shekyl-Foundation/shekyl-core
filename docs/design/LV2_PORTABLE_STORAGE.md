@@ -1,11 +1,12 @@
 # LV-2 — portable_storage codec (decision)
 
 **Status.** **Pinned** (2026-08-13). LV-2a landed in
-`rust/shekyl-portable-storage`. LV-2b first drop (1001 / 1002 / 1003 /
-1007 plus `network_address`) landed in `shekyl-levin` (2026-08-14).
-This document remains authoritative for build-vs-vendor, the crate
-split, and the LV-2b census. Remaining notifies (2001–2004, 2006–2010)
-are the rest of LV-2b. **Not authoritative for:** the binary layout itself
+`rust/shekyl-portable-storage`. LV-2b maps (1001 / 1002 / 1003 / 1007,
+`network_address`, and notifies 2001–2004 / 2006–2010) landed in
+`shekyl-levin` (2026-08-14). This document remains authoritative for
+build-vs-vendor, the crate split, and the LV-2b census. Live `shekyld`
+dual-stack is the named remaining of §12 step 4 (no daemon in crate
+unit tests). **Not authoritative for:** the binary layout itself
 ([`docs/PORTABLE_STORAGE.md`](../PORTABLE_STORAGE.md), completed by
 LV-2a) or Levin framing ([`docs/LEVIN_PROTOCOL.md`](../LEVIN_PROTOCOL.md),
 [`rust/shekyl-levin`](../../rust/shekyl-levin)).
@@ -71,9 +72,8 @@ plus the `network_address` type-tagged union in
 [`contrib/epee/include/net/net_utils_base.h`](../../contrib/epee/include/net/net_utils_base.h)
 and the Tor/I2P address maps. Not all 27 appear on the Levin wire (§6).
 
-Payloads in `shekyl-levin` for the first-drop commands are typed
-builders on LV-2a. Remaining notify bodies stay opaque bytes until the
-rest of LV-2b.
+Payloads in `shekyl-levin` for the Levin-wire maps are typed builders
+on LV-2a. Cryptonote blobs stay opaque `Vec<u8>`.
 
 ---
 
@@ -379,8 +379,11 @@ another name.
    (LV-2b first drop). **Landed 2026-08-14** with in-crate
    encode → `invoke()` → `BucketReader` KATs. A live dual-stack
    interop test against `shekyld` is the named remaining of this step
-   (no daemon in crate unit tests) and rides with the rest of LV-2b.
+   (no daemon in crate unit tests).
 5. Land 2002, then the remaining notifies including 2010.
+   **Landed 2026-08-14** (`tests/notify_kats.rs`: fluff OPT, empty-container
+   omit, `CONTAINER_POD_AS_BLOB`, pruned vs unpruned `txs`, witness cap,
+   encode → `notify()` → `BucketReader`).
 
 LV-3 stays its own design round against the index's two-dependency
 inventory. This document does not scope it.

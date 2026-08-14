@@ -36,9 +36,9 @@ chunk boundaries, and noise sizes.
 
 - **Not the payload codec.** Command bodies are epee `portable_storage`
   blobs; the codec is first-party `shekyl-portable-storage` (LV-2a). This
-  crate owns the typed maps (LV-2b). First drop: handshake / timed-sync /
-  ping / support-flags (1001 / 1002 / 1003 / 1007) plus `network_address`.
-  Remaining notifies stay opaque bytes until the rest of LV-2b.
+  crate owns the typed maps (LV-2b): handshake / timed-sync /
+  ping / support-flags (1001 / 1002 / 1003 / 1007) plus `network_address`
+  and notifies 2001–2004 / 2006–2010. Cryptonote blobs stay opaque bytes.
 - **Not the connection stack.** No sockets, timeouts, invoke/response
   correlation, or peer management.
 - **Emit side and compression wired; read side is not.** Since 2026-08-06

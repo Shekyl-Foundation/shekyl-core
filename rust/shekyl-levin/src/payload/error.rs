@@ -33,6 +33,24 @@ pub enum Error {
         /// Observed width.
         got: usize,
     },
+    /// A `CONTAINER_POD_AS_BLOB` string was not a multiple of the element size.
+    #[error("field {field} is {got} bytes, not a multiple of {element}")]
+    PodBlobLength {
+        /// KV key.
+        field: &'static str,
+        /// `sizeof` of one POD.
+        element: usize,
+        /// Observed blob width.
+        got: usize,
+    },
+    /// `attestation_witness` exceeded the transport cap.
+    #[error("attestation_witness is {got} bytes, max {max}")]
+    WitnessTooLarge {
+        /// Observed length.
+        got: usize,
+        /// `ATTESTATION_WITNESS_MAX_BYTES`.
+        max: usize,
+    },
     /// `network_address.type` was not 1–4.
     #[error("unknown network_address type {0}")]
     UnknownAddressType(u8),

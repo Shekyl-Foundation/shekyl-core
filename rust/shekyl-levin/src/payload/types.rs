@@ -159,22 +159,32 @@ impl PortableMap for PeerlistEntry {
     }
 }
 
-pub(crate) fn peerlist_to_value(list: &[PeerlistEntry]) -> Result<Value, Error> {
+pub(crate) fn insert_peerlist(
+    section: &mut Section,
+    key: &'static str,
+    list: &[PeerlistEntry],
+) -> Result<(), Error> {
+    // C++ `serialize_stl_container_t_obj`: empty containers omit the key.
+    if list.is_empty() {
+        return Ok(());
+    }
     let mut objs = Vec::with_capacity(list.len());
     for entry in list {
         objs.push(entry.to_section()?);
     }
-    Ok(Value::Array(Array::Object(objs)))
+    section.insert(key, Value::Array(Array::Object(objs)));
+    Ok(())
 }
 
 pub(crate) fn peerlist_from_section(
     section: &Section,
     key: &'static str,
 ) -> Result<Vec<PeerlistEntry>, Error> {
-    match get::require(section, key)? {
-        Value::Array(Array::Object(secs)) => {
+    match section.get(key) {
+        None => Ok(Vec::new()),
+        Some(Value::Array(Array::Object(secs))) => {
             secs.iter().map(PeerlistEntry::from_section).collect()
         }
-        _ => Err(get::mismatch(key, "array of object")),
+        Some(_) => Err(get::mismatch(key, "array of object")),
     }
 }
