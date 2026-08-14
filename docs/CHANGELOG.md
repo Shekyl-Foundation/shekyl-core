@@ -24,7 +24,13 @@
   `[lints] workspace = true`, with ~100 latent lint sites fixed
   (every surveyed lossy cast proved construction-time value-preserving; no
   behavior, wire, or public-API change). The rule is codified as
-  `SIGNATURE_ALIGNMENT.md` §2.3 SA-R-7, pending ratification.
+  `SIGNATURE_ALIGNMENT.md` §2.3 SA-R-7 — **ratified 2026-08-14** after a
+  reviewer-driven completeness check over every `with_capacity` in the FFI
+  crate (30 sites: the three fixed wire-embedded counts were the only ones;
+  ptr+len ABI-pair counts are guarded, with one unchecked multiply brought
+  up to the crate's own pattern; `.len()`-derived counts safe by
+  construction). Ratification's filed residual — a mechanical
+  cap-before-reserve pattern gate — lands in the SA conventions tail.
 
 - **The cryptographic inventory is closed (SA-6).**
   `docs/CRYPTOGRAPHIC_INVENTORY.md` now carries every section the SA round

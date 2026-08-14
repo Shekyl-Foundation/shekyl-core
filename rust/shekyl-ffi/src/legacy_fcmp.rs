@@ -678,7 +678,13 @@ pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
     outputs_ptr: *const u8,
     count: usize,
 ) -> ShekylBuffer {
-    let total = count * 128;
+    // `count` is the ABI-declared element count of the caller's buffer; the
+    // multiply must not wrap (a wrap-scale count would desync the declared
+    // byte length from the element count below — the checked-mul guard every
+    // other ptr+len count in this crate already carries).
+    let Some(total) = count.checked_mul(128) else {
+        return ShekylBuffer::null();
+    };
     let Some(bytes) = (unsafe { slice_from_ptr(outputs_ptr, total) }) else {
         return ShekylBuffer::null();
     };
