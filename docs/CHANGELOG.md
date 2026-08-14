@@ -183,8 +183,16 @@
   reference-not-dependency, closing the question
   `DAEMON_RELAY_PRIVACY.md` §8 deferred. Command inventory in
   `LEVIN_PROTOCOL.md` drops the non-existent 1004–1006 and adds live
-  2010 `NOTIFY_GET_TXPOOL_COMPLEMENT`. Implementation is not in this
-  change.
+  2010 `NOTIFY_GET_TXPOOL_COMPLEMENT`.
+
+- **LV-2a `shekyl-portable-storage`.** First-party binary portable_storage
+  codec, KAT'd against C++ `epee_serialization.cpp` (`two_keys`,
+  `duplicate_key`) plus encode/decode limits as a parameter (Levin vs
+  HTTP `.bin`). Completes `docs/PORTABLE_STORAGE.md`. Rewires
+  `get_o_indexes.bin` (`shekyl-rpc-client`) and the test-only
+  `get_blocks_by_height.bin` harness (`shekyl-engine-core`) onto the
+  crate and deletes both homegrown parsers. LV-2b (typed Levin maps)
+  is not in this change.
 
 - **You can now give up on a stuck send.** The new wallet-RPC method
   `abandon_tx` marks a dispatched-but-unconfirmed send `ABANDONED` in

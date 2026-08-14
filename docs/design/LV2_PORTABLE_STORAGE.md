@@ -1,11 +1,11 @@
 # LV-2 — portable_storage codec (decision)
 
-**Status.** **Pinned** (2026-08-13). Design only — this document does not
-implement the codec. **Authoritative for:** build-vs-vendor, crate split,
-the p2p/cryptonote schema census, and the spec gaps `PORTABLE_STORAGE.md`
-must close before LV-2a lands. **Not authoritative for:** the binary layout
-itself (that remains [`docs/PORTABLE_STORAGE.md`](../PORTABLE_STORAGE.md),
-which LV-2a completes) or Levin framing ([`docs/LEVIN_PROTOCOL.md`](../LEVIN_PROTOCOL.md),
+**Status.** **Pinned** (2026-08-13). LV-2a landed in
+`rust/shekyl-portable-storage`; this document remains authoritative for
+build-vs-vendor, the crate split, and the LV-2b census. **Not
+authoritative for:** the binary layout itself
+([`docs/PORTABLE_STORAGE.md`](../PORTABLE_STORAGE.md), completed by
+LV-2a) or Levin framing ([`docs/LEVIN_PROTOCOL.md`](../LEVIN_PROTOCOL.md),
 [`rust/shekyl-levin`](../../rust/shekyl-levin)).
 
 **Tracked in.** Identifier family `LV-1…LV-N`
@@ -31,9 +31,9 @@ usual Rust gates.
 
 - **Now.** The live daemon speaks this binary on every handshake, timed
   sync, and notify. A Rust peer that cannot encode/decode it cannot talk
-  to `shekyld`. Two Rust sites already speak a fragment of it by hand
-  (`shekyl-rpc-client` `get_o_indexes.bin`,
-  `shekyl-engine-core` `get_blocks_by_height.bin`).
+  to `shekyld`. The two former hand-rolled HTTP `.bin` sites
+  (`get_o_indexes.bin`, `get_blocks_by_height.bin`) now call
+  `shekyl-portable-storage`.
 - **Mining-era end.** The format is cryptography-agnostic. Blob *contents*
   grow with PQC (`TransactionV3` + ~5.4 KiB `pqc_auth` per user tx; see
   `LEVIN_PROTOCOL.md`), but the KV envelope does not.

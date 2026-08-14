@@ -9547,8 +9547,11 @@ its wake.
     the Levin-wire subset plus the `network_address` union are LV-2b;
     RPC maps stay out. Reopening criterion (a) of the 2026-08-05
     deferral (p2p migration track scheduled) is met by that pin;
-    implementation is in-scope, not V3.0-gating. The framing crate still
-    carries payloads as opaque bytes until LV-2b lands.
+    implementation is in-scope, not V3.0-gating. UPDATE 2026-08-13:
+    **LV-2a landed** — `rust/shekyl-portable-storage`,
+    `docs/PORTABLE_STORAGE.md` completed, the two homegrown HTTP `.bin`
+    parsers deleted. The framing crate still carries payloads as opaque
+    bytes until LV-2b lands.
   - **LV-3 — connection-path cutover.** Replace the C++ Levin read/write
     path at the `levin_notify.cpp` / `net_node.inl` seam with the Rust
     crate. Cost basis: the index's "Relay layer → C++ dependency
