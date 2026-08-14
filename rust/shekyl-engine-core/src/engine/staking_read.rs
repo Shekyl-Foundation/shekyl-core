@@ -135,6 +135,14 @@ pub struct StakingReadView {
     /// The P-scan's sealed frontier height (`None` when the wallet has never
     /// scanned as `P` — a non-staker, or a staker before its first sweep).
     pub pscan_synced_height: Option<BlockHeight>,
+    /// Whether the bond watch recovered (adopted) a staked slot **this
+    /// session** that cannot become operational until the wallet is next
+    /// opened. Model D drops the seed after open, so a mid-session adoption
+    /// cannot derive its persona or reach the StakeEngine actor — staking
+    /// operations against the recovered slot fail until reopen, and this is
+    /// the surface that tells the embedder to say so (rule 82) instead of
+    /// leaving a wallet that claims staker-hood but cannot stake.
+    pub recovery_pending_reopen: bool,
 }
 
 impl std::fmt::Debug for StakingReadView {
@@ -146,6 +154,7 @@ impl std::fmt::Debug for StakingReadView {
             .field("balance", &self.balance)
             .field("outputs", &"<redacted funding-history>")
             .field("pscan_synced_height", &self.pscan_synced_height)
+            .field("recovery_pending_reopen", &self.recovery_pending_reopen)
             .finish()
     }
 }
@@ -316,15 +325,31 @@ impl<
     ///
     /// [`StakingReadError`] on seal-open failure, codec/version refusal, or
     /// money-sum overflow.
+    /// Whether the bond watch adopted a recovered staked slot this session
+    /// (see [`StakingReadView::recovery_pending_reopen`]). Takes a brief
+    /// ledger read guard — callers already holding a
+    /// [`crate::engine::LedgerReadGuard`] must drop it first (non-reentrant
+    /// lock).
+    pub fn staking_recovery_pending_reopen(&self) -> bool {
+        !self.ledger.read().slots_adopted_this_session.is_empty()
+    }
+
     pub fn staking_read_view(&self) -> Result<StakingReadView, StakingReadError> {
-        let staking_enabled = self.ledger.read().ledger.staking.staking_enabled;
-        self.staking_read_view_with_enabled(staking_enabled)
+        let (staking_enabled, recovery_pending_reopen) = {
+            let guard = self.ledger.read();
+            (
+                guard.ledger.staking.staking_enabled,
+                !guard.slots_adopted_this_session.is_empty(),
+            )
+        };
+        self.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
     }
 
     /// Like [`Self::staking_read_view`], but uses a caller-supplied
-    /// `staking_enabled` instead of taking the ledger lock.
+    /// ledger snapshot (`staking_enabled` + the session-adoption flag)
+    /// instead of taking the ledger lock.
     ///
-    /// Use this when the caller already observed the flag under a
+    /// Use this when the caller already observed the flags under a
     /// [`crate::engine::LedgerReadGuard`] and has dropped that guard —
     /// the sealed-file opens do not need the ledger lock, and nesting a
     /// second `ledger.read()` under a live guard deadlocks.
@@ -333,9 +358,10 @@ impl<
     ///
     /// [`StakingReadError`] on seal-open failure, codec/version refusal, or
     /// money-sum overflow.
-    pub fn staking_read_view_with_enabled(
+    pub fn staking_read_view_with_snapshot(
         &self,
         staking_enabled: bool,
+        recovery_pending_reopen: bool,
     ) -> Result<StakingReadView, StakingReadError> {
         // No key copy: the region-2 wrap key is borrowed straight from its
         // owner for the two seal opens (same shape as `pscan/start.rs`'s
@@ -362,6 +388,7 @@ impl<
             balance,
             outputs,
             pscan_synced_height,
+            recovery_pending_reopen,
         })
     }
 }
@@ -426,6 +453,7 @@ mod tests {
             matches,
             outputs,
             retired,
+            BTreeMap::new(),
         )
     }
 
@@ -656,6 +684,7 @@ mod tests {
             balance: StakedBalance::ZERO,
             outputs: outs,
             pscan_synced_height: Some(BlockHeight::from_raw(5_000)),
+            recovery_pending_reopen: false,
         };
         let rendered = format!("{view:?}");
         assert!(

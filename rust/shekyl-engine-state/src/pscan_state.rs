@@ -40,7 +40,13 @@ use shekyl_units::AtomicUnits;
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. **v8** removes the dead
+/// Schema version of the durable P-scan state. **v9** adds the per-persona
+/// `watch_floors` map (SA-R-6 bond-watch review): the provenance half of the
+/// SP-6 reconcile evidence — `bond_post_matches` is complete only over the
+/// personas watched while coverage advanced, and without the floors an
+/// absence verdict for a probe-adopted persona whose bond predates its watch
+/// read `AbsentWithinCovered` and permanently GC'd a real bond.
+/// **v8** removes the dead
 /// `tx_hash` field from [`PFundingOutputRecord`] (SA-4 dead persisted-field
 /// sweep, rule-15): no consumer read it — spend/claim re-derivation keys on
 /// `index_in_transaction` + the ciphertexts, and every needed tx hash is
@@ -64,7 +70,7 @@ use crate::pscan_cursor::PScanCursor;
 /// migration at any step: pre-genesis, a version mismatch means re-scan (rule 15).
 /// Distinct from the inner [`PScanCursor`]'s own version (nested, like the wallet
 /// ledger over its sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 8;
+pub const PSCAN_STATE_VERSION: u32 = 9;
 
 /// The GF-4b mint-lineage ladder for a `P`-owned funding output — the
 /// scan-provenance classification (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
@@ -352,6 +358,18 @@ pub struct PScanState {
     /// the token-corroborated retire-time prune. Append-only; bounded by
     /// `P`'s own retired-persona count. See [`RetiredPersonaRecord`].
     retired_records: Vec<RetiredPersonaRecord>,
+    /// Per-persona **watch floors**: [`PCanonicalId`] → the frontier height at
+    /// which the persona entered the scan union (the first scanned height it
+    /// was watched at). The provenance half of the SP-6 reconcile evidence:
+    /// `bond_post_matches` is complete only over the personas that were
+    /// *watched while coverage advanced*, so an absence claim for a persona
+    /// is sound only over `[floor, frontier)` — a persona adopted after
+    /// coverage passed its bond (the bond-watch restore path) must read
+    /// "unscanned", never "absent". Written once per persona at its first
+    /// scan step, never updated (the watch only grows within a wallet's
+    /// life; a retired persona's row is inert). Persona-history class —
+    /// redacted `Debug`, bounded by `P`'s own persona count.
+    watch_floors: BTreeMap<PCanonicalId, BlockHeight>,
 }
 
 impl std::fmt::Debug for PScanState {
@@ -368,6 +386,7 @@ impl std::fmt::Debug for PScanState {
             .field("bond_post_matches", &"<redacted persona-history>")
             .field("funding_outputs", &"<redacted funding-history>")
             .field("retired_records", &"<redacted persona-history>")
+            .field("watch_floors", &"<redacted persona-history>")
             .finish()
     }
 }
@@ -384,6 +403,7 @@ impl PScanState {
             bond_post_matches: Vec::new(),
             funding_outputs: Vec::new(),
             retired_records: Vec::new(),
+            watch_floors: BTreeMap::new(),
         }
     }
 
@@ -405,6 +425,7 @@ impl PScanState {
         bond_post_matches: Vec<BondPostRecord>,
         funding_outputs: Vec<PFundingOutputRecord>,
         retired_records: Vec<RetiredPersonaRecord>,
+        watch_floors: BTreeMap<PCanonicalId, BlockHeight>,
     ) -> Self {
         Self {
             version: PSCAN_STATE_VERSION,
@@ -414,12 +435,20 @@ impl PScanState {
             bond_post_matches,
             funding_outputs,
             retired_records,
+            watch_floors,
         }
     }
 
     /// The scan frontier cursor.
     pub fn cursor(&self) -> &PScanCursor {
         &self.cursor
+    }
+
+    /// Per-persona watch floors — the height each persona entered the scan
+    /// union at (see the field docs: the provenance half of the reconcile
+    /// evidence).
+    pub fn watch_floors(&self) -> &BTreeMap<PCanonicalId, BlockHeight> {
+        &self.watch_floors
     }
 
     /// The frontier height (`cursor.synced_height()`).
@@ -563,6 +592,7 @@ mod tests {
             bond_posts(&[(12_345, 0xAB, 0), (39_000, 0xCD, 2)]),
             vec![funding_output(3, 77, 100, 12_400)],
             Vec::new(),
+            BTreeMap::from([(PCanonicalId::from_bytes([0xAB; 32]), BlockHeight::ZERO)]),
         );
         let bytes = state.to_postcard_bytes().expect("serialize");
         let back = PScanState::from_postcard_bytes(&bytes).expect("deserialize");
@@ -593,6 +623,18 @@ mod tests {
             &[funding_output(3, 77, 100, 12_400)],
             "the funding-output discovery records round-trip through the seal"
         );
+        assert_eq!(
+            back.watch_floors()
+                .get(&PCanonicalId::from_bytes([0xAB; 32])),
+            Some(&BlockHeight::ZERO),
+            "the per-persona watch floors round-trip through the seal"
+        );
+        // The floors are persona-history: redacted from the state's Debug.
+        let rendered = format!("{back:?}");
+        assert!(
+            !rendered.contains("watch_floors: {"),
+            "watch floors must be redacted in the state's Debug: {rendered}"
+        );
     }
 
     #[test]
@@ -620,6 +662,7 @@ mod tests {
                 funding_output(3, 78, 200, 12_401),
             ],
             Vec::new(),
+            BTreeMap::new(),
         );
         let rendered = format!("{state:?}");
         assert!(
@@ -654,6 +697,7 @@ mod tests {
             bond_posts(&[(123_456, 0xAB, 2), (789_012, 0xCD, 0)]),
             vec![],
             Vec::new(),
+            BTreeMap::new(),
         );
         let rendered = format!("{state:?}");
         assert!(
@@ -685,6 +729,7 @@ mod tests {
             bond_posts(&[]),
             vec![],
             Vec::new(),
+            BTreeMap::new(),
         );
         assert_eq!(
             state.accrual_for(SettlementEpoch::from_raw(4)),
@@ -705,6 +750,7 @@ mod tests {
             bond_posts(&[]),
             vec![],
             Vec::new(),
+            BTreeMap::new(),
         );
         assert_eq!(state.total_accrued(), Some(AtomicUnits::from_raw(60)));
     }
@@ -718,6 +764,7 @@ mod tests {
             bond_posts(&[]),
             vec![],
             Vec::new(),
+            BTreeMap::new(),
         );
         assert_eq!(state.total_accrued(), None, "must not wrap a money total");
     }
@@ -734,6 +781,7 @@ mod tests {
             pending_unbonds: BTreeMap::new(),
             bond_post_matches: Vec::new(),
             funding_outputs: Vec::new(),
+            watch_floors: BTreeMap::new(),
         };
         let forged = wrong
             .to_postcard_bytes()

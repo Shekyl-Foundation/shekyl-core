@@ -797,6 +797,7 @@ pub(crate) async fn stake(
             E::NoStakeEngine => {
                 WalletRpcError::InternalError("stake: no stake engine after intent open".into())
             }
+            E::RecoveredPendingReopen => WalletRpcError::StakeRecoveredPendingReopen,
             // NOT an internal fault: the slot above is read from the engine
             // BEFORE the credentialed reopen, and that reopen runs the SP-R0
             // open-time reconcile — which can GC the picked slot as a phantom

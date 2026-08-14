@@ -241,6 +241,14 @@ number", and never need to: keep one wallet as the source of truth for your
 staking and back up its seed. Treat that wallet as the record of which personas
 you have used -- the same care you already give a wallet that holds funds.
 
+If you ever restore that wallet from its seed, a **full rescan** rediscovers
+your staking history along with your funds -- your bonds become reachable
+again and the no-reuse guarantee re-establishes itself automatically, with no
+staking-specific recovery step. One caveat, the same one your funds have: a
+rescan only sees what it scans. If you restored with a start height *later*
+than your staking activity, rescan again from an earlier height (or from the
+wallet's creation date) so the history is inside the scanned range.
+
 ---
 
 ## Further reading

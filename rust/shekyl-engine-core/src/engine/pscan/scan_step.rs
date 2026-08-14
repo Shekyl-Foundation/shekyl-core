@@ -59,7 +59,9 @@ use shekyl_engine_state::transfer::eligible_height;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::{BondPostKind, Input, Transaction};
+use shekyl_wire::transaction::{Input, Transaction};
+
+use crate::engine::bond_watch::match_watch;
 
 /// Hard ceiling on the blocks one [`ScanStep`] may carry — the **enforced** form
 /// of DQ6's "bounded per message" (the actor holds `&mut self` across the offload,
@@ -488,6 +490,14 @@ pub(crate) struct ScanStepResult {
     /// (SP-R0 arm #1; includes the handler's in-step trailing merges). The
     /// task removes the matching records on ingest, before the seal.
     pub(crate) spent_funding: Vec<SpentFundingMatch>,
+    /// The persona canonical ids this step scanned FOR (the bonded scan
+    /// union's public ids). The provenance half of the reconcile evidence:
+    /// `bond_post_matches` is complete only over these personas, so the
+    /// accrual records each persona's **watch floor** (the first scanned
+    /// height it was watched at) from this set — an absence claim is sound
+    /// only over `[floor, frontier)`. Public ids; the slot association stays
+    /// behind the redacted-Debug persisted map.
+    pub(crate) watched_personas: Vec<PCanonicalId>,
 }
 
 /// Why a dual-extraction failed. All arms fail **closed** — a corrupted scan
@@ -542,18 +552,6 @@ impl std::error::Error for DualExtractError {
             | Self::StepTooLarge { .. }
             | Self::InflowOverflow { .. } => None,
         }
-    }
-}
-
-/// The wire post-kind byte (JoinMarket's dense tag is `0x00`,
-/// `shekyl_wire::transaction` §9.11). Single-sourced from the wire crate's own
-/// [`BOND_POST_KIND_JOINMARKET`](shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET)
-/// so the recorded byte and the confirmation filter in [`PScanAccrual`] cannot
-/// drift from the wire definition.
-fn post_kind_byte(kind: &BondPostKind) -> u8 {
-    match kind {
-        BondPostKind::JoinMarket { .. } => shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
-        BondPostKind::Other(b) => *b,
     }
 }
 
@@ -752,9 +750,15 @@ pub(crate) fn run_dual_extractor(
         );
 
         // (b) public bond-post match — reads inputs, no secret, no clone.
-        // (c) rides the same pass: spent-key-image match against the
-        // actor-derived watch-set (SP-R0 arm #1) — a hit is a confirmed spend
-        // of a held funding output, pruned by the task on ingest.
+        // The lift + id→slot match live in [`match_watch`]; this extractor
+        // and the principal scan's bond watch cannot disagree on what a
+        // bond-post observation is. The *map* (bonded-persona set here,
+        // probe-id cache there) stays with each consumer.
+        // (c) spent-key-image match against the actor-derived watch-set
+        // (SP-R0 arm #1) — a hit is a confirmed spend of a held funding
+        // output, pruned by the task on ingest. Inputs are few; the two
+        // walks (key images, then bond posts) stay separate so each
+        // consumer of the shared lift stays a one-liner.
         for (j, tx) in block.transactions.iter().enumerate() {
             for input in &tx.prefix.inputs {
                 if let Input::ToKey { key_image, .. } = input {
@@ -765,20 +769,15 @@ pub(crate) fn run_dual_extractor(
                         trailing_key_images.insert(*key_image);
                     }
                 }
-                if let Input::BondPost(bp) = input {
-                    // Lift the wire `[u8; 32]` into the domain id once, at the
-                    // wire→domain boundary, then match + carry the typed value.
-                    let id = PCanonicalId::from_bytes(bp.p_canonical_id);
-                    if let Some(slot) = known_personas.get(&id) {
-                        bond_post_matches.push(BondPostMatch {
-                            height,
-                            p_canonical_id: id,
-                            post_kind: post_kind_byte(&bp.kind),
-                        });
-                        if let Some(tx_hash) = block.block.transaction_hashes.get(j) {
-                            bond_post_slots.entry(*tx_hash).or_default().insert(*slot);
-                        }
-                    }
+            }
+            for (obs, slot) in match_watch(tx, known_personas) {
+                bond_post_matches.push(BondPostMatch {
+                    height,
+                    p_canonical_id: obs.p_canonical_id,
+                    post_kind: obs.post_kind,
+                });
+                if let Some(tx_hash) = block.block.transaction_hashes.get(j) {
+                    bond_post_slots.entry(*tx_hash).or_default().insert(slot);
                 }
             }
         }
@@ -866,6 +865,7 @@ pub(crate) fn run_dual_extractor(
             bond_post_matches,
             funding_outputs,
             spent_funding,
+            watched_personas: known_personas.keys().copied().collect(),
         },
         trailing_key_images,
     })
@@ -886,7 +886,7 @@ mod tests {
     use shekyl_scanner::bench_fixtures::{
         build_typical_case_scannable_block, scannable_block_for_recipient,
     };
-    use shekyl_wire::transaction::BondPost;
+    use shekyl_wire::transaction::{BondPost, BondPostKind};
     use shekyl_wire::Holdings;
 
     use crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona;

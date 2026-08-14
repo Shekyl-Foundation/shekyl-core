@@ -72,6 +72,7 @@ pub(crate) async fn staking_info(
         pscan_synced_height: view
             .pscan_synced_height
             .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
+        recovery_pending_reopen: view.recovery_pending_reopen,
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize staking_info: {e}")))
@@ -89,7 +90,7 @@ pub(crate) async fn staking_info(
 /// `staking_enabled`; nesting that under a held guard deadlocks on
 /// non-reentrant `std::sync::RwLock`. Callers that already observed the flag
 /// under a ledger guard must drop that guard and use
-/// [`read_view_with_enabled`] instead (`get_wallet_info` is the exemplar).
+/// [`read_view_with_snapshot`] instead (`get_wallet_info` is the exemplar).
 ///
 /// `staking_read_view` opens and decrypts the sealed `.wallet.pscan` /
 /// `.wallet.pending` files inline (envelope KDF + AEAD + postcard decode), so
@@ -112,18 +113,19 @@ pub(crate) fn read_view_under_guard(
     map_staking_read(tokio::task::block_in_place(|| engine.staking_read_view()))
 }
 
-/// Like [`read_view_under_guard`], but uses a caller-supplied
-/// `staking_enabled` so the sealed-file path never re-enters the ledger lock.
+/// Like [`read_view_under_guard`], but uses a caller-supplied ledger
+/// snapshot so the sealed-file path never re-enters the ledger lock.
 ///
-/// `get_wallet_info` snapshots the flag under its ledger guard, drops that
-/// guard, then calls this — keeping the enabled bit coherent with the rest of
+/// `get_wallet_info` snapshots the flags under its ledger guard, drops that
+/// guard, then calls this — keeping the bits coherent with the rest of
 /// the aggregate without nesting `RwLock` reads.
-pub(crate) fn read_view_with_enabled(
+pub(crate) fn read_view_with_snapshot(
     engine: &Engine<SoloSigner>,
     staking_enabled: bool,
+    recovery_pending_reopen: bool,
 ) -> Result<StakingReadView, WalletRpcError> {
     map_staking_read(tokio::task::block_in_place(|| {
-        engine.staking_read_view_with_enabled(staking_enabled)
+        engine.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
     }))
 }
 
