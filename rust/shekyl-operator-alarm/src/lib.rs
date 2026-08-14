@@ -83,6 +83,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod serve_set;
 pub mod tor_posture;
 
 use std::collections::BTreeMap;
@@ -105,6 +106,12 @@ pub enum AlarmCondition {
     /// Whether the persona's vanguard set — the guard topology behind every
     /// circuit it builds — is intact and will survive a restart.
     VanguardIntegrity,
+    /// Whether the shards this persona is bonded to serve are still pinned in
+    /// the wallet's store, and whether the set is still being refreshed against
+    /// the chain. A drifting or unrefreshed serve-set ends in the wallet's own
+    /// node pruning bonded bytes — `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6
+    /// item 4's slash, which is silent until it happens.
+    ServeSetIntegrity,
 }
 
 /// Whether a condition's tripwire can currently fire.
@@ -145,6 +152,17 @@ pub enum DisarmedReason {
     /// defines as the clean-shutdown signal. Nothing is being watched, and
     /// nothing will be until a supervisor is spawned again.
     TransportStopped,
+    /// The wallet is still catching up to the chain, so the serve-set staleness
+    /// tripwire is not armed.
+    ///
+    /// The tripwire measures ingest since the last successful refresh, and
+    /// during catch-up that advances at whatever rate the wallet can ingest —
+    /// far faster than the steady-state rate the bound is sized for, so an
+    /// armed check would fire on every healthy catch-up. Arming only in steady
+    /// state is what makes the bound derivable at all. **Rendered as "not
+    /// checking yet", never as healthy** — that distinction is the entire
+    /// reason this channel is a snapshot.
+    CatchingUp,
 }
 
 /// How a raised alarm's **observable** behaves once the condition is raised.
@@ -229,6 +247,64 @@ pub enum OperatorAlarm {
         /// Entries the consensus reply announced.
         announced: usize,
     },
+    /// The serve-set has not been refreshed within its bound: the wallet has
+    /// ingested `lag` blocks since the pins were last established. The refresh
+    /// loop has stopped or is wedged — holdings that move now go unpinned, and
+    /// unpinned bonded bytes are prunable.
+    ServeSetStale {
+        /// Blocks ingested since the last successful re-pin.
+        lag: u64,
+    },
+    /// Consecutive refresh attempts are failing. Distinct from
+    /// [`Self::ServeSetStale`]: that one is "nothing is trying", this one is
+    /// "something is trying and not succeeding" — the curve-tree actor
+    /// fail-stopping freezes ingest and pinning together, a common mode no
+    /// store-derived reading can see.
+    ServeSetRefreshFailing {
+        /// Consecutive failed refresh attempts.
+        consecutive: u32,
+    },
+    /// Pin rows for bonded members are gone from the store — a tree rollback
+    /// deleted them (`truncate_from_tree_position`). **Recoverable:** the next
+    /// successful refresh re-pins them, and the leaf bytes are still present.
+    /// It is an alarm because the store's own reading self-clears the moment
+    /// refresh runs, so a slow consumer could otherwise miss the window in
+    /// which the bytes were prunable.
+    ServeSetPinsDropped {
+        /// Members with no pin row.
+        dropped: u32,
+        /// Members the serve-set claims.
+        claimed: u32,
+    },
+    /// The wallet's ingest tip moved **below** the height the pins were minted
+    /// at — a chain rollback (`rollback_to_fork`). Recoverable: re-ingest past
+    /// the fork and the next refresh re-pins. It is reported rather than folded
+    /// into [`Self::ServeSetStale`] because the two want different operator
+    /// responses — a rollback resolves itself, a stale set means nothing is
+    /// refreshing — and because the rollback is what *deletes* pin rows, so
+    /// this is the precursor to [`Self::ServeSetPinsDropped`] rather than
+    /// another way of saying it.
+    ServeSetRolledBack {
+        /// The ingest tip when the pins were established.
+        minted_at_tip: u64,
+        /// The ingest tip now.
+        tip: u64,
+    },
+    /// Bonded leaf bytes are **gone** — frozen and already pruned, so no pin
+    /// can bring them back. The store must be rebuilt by chain replay before
+    /// this persona can serve those shards.
+    ///
+    /// The one irreversible condition on this board, and the reason it can be
+    /// [`AlarmLifetime::LatchedRederived`] rather than needing durable state:
+    /// it re-derives at every start, *more loudly than an alarm*.
+    /// `PinnedServeSet::acquire` refuses outright
+    /// (`PinError::MembersAlreadyPruned`) so the host does not start, while
+    /// `refreshed` records it so one dead member cannot wedge every later
+    /// refresh for the members that are still fine.
+    ServeSetBytesPruned {
+        /// Members whose leaf bytes were already gone at the last pin.
+        members: u32,
+    },
 }
 
 impl OperatorAlarm {
@@ -244,15 +320,28 @@ impl OperatorAlarm {
     #[must_use]
     pub fn lifetime(&self) -> AlarmLifetime {
         match self {
-            // The one whose damage outlives its evidence: the set has already
-            // been drawn fresh, and the next successful write makes the warning
-            // disappear while that rotation stands.
-            Self::VanguardStateRedrawn => AlarmLifetime::LatchedRederived,
+            // The two whose damage outlives their evidence. The vanguard set
+            // has already been drawn fresh, and the next successful write makes
+            // the warning disappear while that rotation stands; pruned leaf
+            // bytes are gone until a chain replay, and a re-pin reports success
+            // for every member it *could* pin. Both re-derive at the next start
+            // — the vanguard load fails again, and `acquire` refuses outright —
+            // so an in-memory latch is a convenience, not the record.
+            Self::VanguardStateRedrawn | Self::ServeSetBytesPruned { .. } => {
+                AlarmLifetime::LatchedRederived
+            }
             // The rest genuinely end when their condition does — sustained
             // recovery, a successful write, a complete consensus view.
+            // The rest genuinely end when their condition does — sustained
+            // recovery, a successful write, a complete consensus view, a
+            // refresh that runs and re-pins.
             Self::TransportDegraded { .. }
             | Self::VanguardStateUnpersisted
-            | Self::VanguardRepairSkipped { .. } => AlarmLifetime::Episode,
+            | Self::VanguardRepairSkipped { .. }
+            | Self::ServeSetStale { .. }
+            | Self::ServeSetRefreshFailing { .. }
+            | Self::ServeSetPinsDropped { .. }
+            | Self::ServeSetRolledBack { .. } => AlarmLifetime::Episode,
         }
     }
 
@@ -264,6 +353,11 @@ impl OperatorAlarm {
             Self::VanguardStateRedrawn
             | Self::VanguardStateUnpersisted
             | Self::VanguardRepairSkipped { .. } => AlarmCondition::VanguardIntegrity,
+            Self::ServeSetStale { .. }
+            | Self::ServeSetRefreshFailing { .. }
+            | Self::ServeSetPinsDropped { .. }
+            | Self::ServeSetRolledBack { .. }
+            | Self::ServeSetBytesPruned { .. } => AlarmCondition::ServeSetIntegrity,
         }
     }
 }
@@ -716,6 +810,59 @@ mod tests {
             .lifetime(),
             AlarmLifetime::Episode,
         );
+        assert_eq!(
+            OperatorAlarm::ServeSetStale { lag: 12 }.lifetime(),
+            AlarmLifetime::Episode,
+            "a refresh that runs again re-pins and ends it",
+        );
+        assert_eq!(
+            OperatorAlarm::ServeSetRefreshFailing { consecutive: 3 }.lifetime(),
+            AlarmLifetime::Episode,
+        );
+        assert_eq!(
+            OperatorAlarm::ServeSetPinsDropped {
+                dropped: 2,
+                claimed: 9
+            }
+            .lifetime(),
+            AlarmLifetime::Episode,
+            "a rollback deleted pin rows, not leaf bytes: the next re-pin recovers",
+        );
+        assert_eq!(
+            OperatorAlarm::ServeSetRolledBack {
+                minted_at_tip: 9,
+                tip: 4
+            }
+            .lifetime(),
+            AlarmLifetime::Episode,
+            "re-ingest past the fork and the next refresh re-pins",
+        );
+        assert_eq!(
+            OperatorAlarm::ServeSetBytesPruned { members: 1 }.lifetime(),
+            AlarmLifetime::LatchedRederived,
+            "pruned leaf bytes are gone until a chain replay; a re-pin cannot restore them",
+        );
+    }
+
+    /// The serving conditions are one condition row, not four — an operator
+    /// asking "can I still serve what I am bonded for" wants one answer.
+    #[test]
+    fn every_serve_set_alarm_reports_on_one_condition() {
+        for alarm in [
+            OperatorAlarm::ServeSetStale { lag: 1 },
+            OperatorAlarm::ServeSetRefreshFailing { consecutive: 1 },
+            OperatorAlarm::ServeSetPinsDropped {
+                dropped: 1,
+                claimed: 2,
+            },
+            OperatorAlarm::ServeSetBytesPruned { members: 1 },
+            OperatorAlarm::ServeSetRolledBack {
+                minted_at_tip: 9,
+                tip: 4,
+            },
+        ] {
+            assert_eq!(alarm.condition(), AlarmCondition::ServeSetIntegrity);
+        }
     }
 
     #[test]

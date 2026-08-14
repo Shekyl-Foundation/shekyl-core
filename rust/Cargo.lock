@@ -4301,6 +4301,7 @@ dependencies = [
 name = "shekyl-operator-alarm"
 version = "3.1.0"
 dependencies = [
+ "shekyl-p-host",
  "shekyl-tor",
  "tokio",
 ]
