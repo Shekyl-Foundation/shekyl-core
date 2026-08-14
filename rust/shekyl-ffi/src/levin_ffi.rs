@@ -19,14 +19,19 @@
 //!
 //! The two directions sit at **different levels, on purpose**.
 //!
-//! Emit is **message-level** ([`shekyl_levin_compress_message`]): whether a
-//! buffer may be compressed at all is a property of its bucket header, not
-//! its payload bytes — is it already compressed, is it exactly one message,
-//! is it the noise/fragment class whose constant on-wire size is the entire
-//! point of it. A payload-level seam would have to leave those questions on
-//! the C++ side, which is exactly how the C++ came to carry a second,
-//! weaker copy of the policy. `shekyl-levin` owns all of it;
-//! `epee::levin::try_compress_message` forwards.
+//! Emit is **message-level** ([`shekyl_levin_compress_message`],
+//! [`shekyl_levin_noise_notify`], [`shekyl_levin_fragmented_notify`]):
+//! whether a buffer may be compressed at all is a property of its bucket
+//! header, not its payload bytes — is it already compressed, is it exactly
+//! one message, is it the noise/fragment class whose constant on-wire size
+//! is the entire point of it. A payload-level seam would have to leave
+//! those questions on the C++ side, which is exactly how the C++ came to
+//! carry a second, weaker copy of the policy. `shekyl-levin` owns all of
+//! it; `epee::levin::{try_compress_message, make_noise_notify,
+//! make_fragmented_notify}` forward. The noise/fragment cut also collapses
+//! the last dual implementation of the fragment padding algorithm — the
+//! privacy-load-bearing piece the constant-parity gate could never cover
+//! (it pins constants, not algorithms).
 //!
 //! Receive is **frame-level** ([`shekyl_levin_inflated_size`] +
 //! [`shekyl_levin_decompress_into`]): by then the C++ handler has already
@@ -145,6 +150,91 @@ pub unsafe extern "C" fn shekyl_levin_compress_message(
             SHEKYL_LEVIN_OK
         }
         None => SHEKYL_LEVIN_DECLINED,
+    }
+}
+
+/// Build a dummy ("noise") message of exactly `noise_bytes` total length:
+/// command 0, `B|E` set, zeroed payload — the white-noise cover-traffic
+/// unit. Byte-identical to the C++ `make_noise_notify` it replaces, pinned
+/// by the `make_noise.*` gtests now running through this export.
+///
+/// Returns [`SHEKYL_LEVIN_OK`] with `out` set (free with
+/// `shekyl_buffer_free`), or [`SHEKYL_LEVIN_ERR_FORMAT`] when `noise_bytes`
+/// cannot hold a bucket header or exceeds the Levin packet limit (the C++
+/// shim returns a null slice for both, matching the historical contract).
+///
+/// # Safety
+///
+/// `out` must be a valid writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_levin_noise_notify(
+    noise_bytes: usize,
+    out: *mut ShekylBuffer,
+) -> i32 {
+    if out.is_null() {
+        return SHEKYL_LEVIN_ERR_NULL;
+    }
+    // SAFETY: caller guarantees `out` is writable (checked non-null above).
+    unsafe { *out = ShekylBuffer::null() };
+    if u64::try_from(noise_bytes).is_ok_and(|len| len > shekyl_levin::DEFAULT_MAX_PACKET_SIZE) {
+        return SHEKYL_LEVIN_ERR_TOO_LARGE;
+    }
+    match shekyl_levin::noise_notify(noise_bytes) {
+        Ok(noise) => {
+            // SAFETY: `out` checked non-null above.
+            unsafe { *out = ShekylBuffer::from_vec(noise) };
+            SHEKYL_LEVIN_OK
+        }
+        Err(err) => code_for(&err),
+    }
+}
+
+/// Emit a notification for `command` as one or more messages, each exactly
+/// `noise_size` bytes on the wire — a single zero-padded notification when
+/// it fits, `B`/middle/`E` fragments when it does not. This is the
+/// white-noise fragmentation path; constant on-wire size is the property
+/// the feature exists to provide, and the algorithm (padding discipline
+/// included) now has exactly one implementation. Byte-identical to the C++
+/// `make_fragmented_notify` it replaces, pinned by the `make_fragment.*`
+/// gtests now running through this export.
+///
+/// Returns [`SHEKYL_LEVIN_OK`] with `out` set (free with
+/// `shekyl_buffer_free`), [`SHEKYL_LEVIN_ERR_FORMAT`] when `noise_size`
+/// cannot hold two headers, or [`SHEKYL_LEVIN_ERR_TOO_LARGE`] above the
+/// Levin packet limit.
+///
+/// # Safety
+///
+/// `payload` must point to `payload_len` readable bytes; `out` must be a
+/// valid writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_levin_fragmented_notify(
+    noise_size: usize,
+    command: u32,
+    payload: *const u8,
+    payload_len: usize,
+    out: *mut ShekylBuffer,
+) -> i32 {
+    if out.is_null() {
+        return SHEKYL_LEVIN_ERR_NULL;
+    }
+    // SAFETY: caller guarantees `out` is writable (checked non-null above).
+    unsafe { *out = ShekylBuffer::null() };
+    let Some(payload) = (unsafe { slice_from_ptr(payload, payload_len) }) else {
+        return SHEKYL_LEVIN_ERR_NULL;
+    };
+    // Bounded deserialization (rule 40): nothing framed under the Levin
+    // packet limit can legitimately be larger than this.
+    if u64::try_from(payload_len).is_ok_and(|len| len > shekyl_levin::DEFAULT_MAX_PACKET_SIZE) {
+        return SHEKYL_LEVIN_ERR_TOO_LARGE;
+    }
+    match shekyl_levin::fragmented_notify(noise_size, command, payload) {
+        Ok(stream) => {
+            // SAFETY: `out` checked non-null above.
+            unsafe { *out = ShekylBuffer::from_vec(stream) };
+            SHEKYL_LEVIN_OK
+        }
+        Err(err) => code_for(&err),
     }
 }
 
@@ -350,6 +440,65 @@ mod tests {
         let rc = unsafe {
             shekyl_levin_compress_message(tiny.as_ptr(), tiny.len(), std::ptr::null_mut())
         };
+        assert_eq!(rc, SHEKYL_LEVIN_ERR_NULL);
+    }
+
+    /// The noise/fragment emitters must hand back exactly the bytes the
+    /// library functions produce — these exports exist so the C++ shims are
+    /// pure marshaling, and a marshaling defect (length, offset, code
+    /// mapping) is what this bites. The byte *content* oracle is the C++
+    /// gtest suite (`make_noise.*` / `make_fragment.*`), which runs through
+    /// these exports after the cut.
+    #[test]
+    fn noise_and_fragment_exports_match_the_library() {
+        let mut out = ShekylBuffer::null();
+        // SAFETY: valid out pointer.
+        let rc = unsafe { shekyl_levin_noise_notify(1024, &raw mut out) };
+        assert_eq!(rc, SHEKYL_LEVIN_OK);
+        // SAFETY: buffer returned by the export above.
+        let got = unsafe { std::slice::from_raw_parts(out.ptr, out.len) };
+        assert_eq!(got, shekyl_levin::noise_notify(1024).unwrap());
+        // SAFETY: freeing exactly the buffer the export returned.
+        unsafe { crate::shekyl_buffer_free(out.ptr, out.len) };
+
+        let payload: Vec<u8> = (0u32..2922)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let mut out = ShekylBuffer::null();
+        // SAFETY: valid slice + out pointer.
+        let rc = unsafe {
+            shekyl_levin_fragmented_notify(1024, 114, payload.as_ptr(), payload.len(), &raw mut out)
+        };
+        assert_eq!(rc, SHEKYL_LEVIN_OK);
+        // SAFETY: buffer returned by the export above.
+        let got = unsafe { std::slice::from_raw_parts(out.ptr, out.len) };
+        assert_eq!(
+            got,
+            shekyl_levin::fragmented_notify(1024, 114, &payload).unwrap()
+        );
+        assert_eq!(got.len() % 1024, 0, "wire is noise-granular");
+        // SAFETY: freeing exactly the buffer the export returned.
+        unsafe { crate::shekyl_buffer_free(out.ptr, out.len) };
+    }
+
+    /// Invalid sizes map to the codes the C++ shim turns into the
+    /// historical null-slice contract; a null out pointer is its own code.
+    #[test]
+    fn noise_and_fragment_reject_invalid_sizes() {
+        let mut out = ShekylBuffer::null();
+        // SAFETY: valid out pointer.
+        let rc = unsafe { shekyl_levin_noise_notify(HEADER_SIZE - 1, &raw mut out) };
+        assert_eq!(rc, SHEKYL_LEVIN_ERR_FORMAT);
+        assert!(out.ptr.is_null());
+
+        // SAFETY: valid slice + out pointer.
+        let rc =
+            unsafe { shekyl_levin_fragmented_notify(0, 0, [0u8; 1].as_ptr(), 1, &raw mut out) };
+        assert_eq!(rc, SHEKYL_LEVIN_ERR_FORMAT);
+        assert!(out.ptr.is_null());
+
+        // SAFETY: null out pointer is the case under test.
+        let rc = unsafe { shekyl_levin_noise_notify(1024, std::ptr::null_mut()) };
         assert_eq!(rc, SHEKYL_LEVIN_ERR_NULL);
     }
 
