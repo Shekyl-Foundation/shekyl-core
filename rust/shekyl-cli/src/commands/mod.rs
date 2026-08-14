@@ -133,7 +133,7 @@ pub fn repl(
 
                 let first_token = line.split_whitespace().next().unwrap_or("");
                 if !crate::display::is_secret_command(first_token) {
-                    let _added = rl.add_history_entry(line);
+                    drop(rl.add_history_entry(line));
                 }
 
                 match resolve::parse(line) {
@@ -299,7 +299,7 @@ pub fn repl(
         }
     }
 
-    let _saved = rl.save_history(&hist);
+    drop(rl.save_history(&hist));
     // Closes any open wallet and stops the self-hosted server (removing its
     // private UDS socket directory).
     rpc.shutdown();
@@ -330,7 +330,7 @@ fn cmd_version(rpc: &RpcSession) {
 /// Standard confirmation: "Type 'yes' to confirm: "
 pub(crate) fn confirm(prompt: &str) -> bool {
     eprint!("{prompt} Type 'yes' to confirm: ");
-    let _flushed = std::io::Write::flush(&mut std::io::stderr());
+    drop(std::io::Write::flush(&mut std::io::stderr()));
     let mut input = String::new();
     if std::io::stdin().read_line(&mut input).is_err() {
         return false;
@@ -345,7 +345,7 @@ pub(crate) fn confirm(prompt: &str) -> bool {
 fn history_path() -> Option<String> {
     dirs::data_local_dir().map(|mut p| {
         p.push("shekyl-cli");
-        let _created = std::fs::create_dir_all(&p);
+        drop(std::fs::create_dir_all(&p));
         p.push("history.txt");
         p.to_string_lossy().into_owned()
     })

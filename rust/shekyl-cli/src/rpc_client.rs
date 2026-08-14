@@ -308,8 +308,8 @@ fn http_post_uds(path: &Path, body: &Value) -> Result<String, RpcError> {
     // Bound an infinite hang against an untrusted `uds://` server that accepts
     // the request but never replies (self-hosted mode is trusted; this guards
     // the external `--rpc-url uds://` path).
-    let _set = stream.set_read_timeout(Some(UDS_IO_TIMEOUT));
-    let _set = stream.set_write_timeout(Some(UDS_IO_TIMEOUT));
+    drop(stream.set_read_timeout(Some(UDS_IO_TIMEOUT)));
+    drop(stream.set_write_timeout(Some(UDS_IO_TIMEOUT)));
 
     let request = format!(
         "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\

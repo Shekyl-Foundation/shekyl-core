@@ -119,7 +119,7 @@ pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
     };
 
     eprint!("Restore height (block height the wallet existed at; 0 = scan from genesis): ");
-    let _flushed = std::io::Write::flush(&mut std::io::stderr());
+    drop(std::io::Write::flush(&mut std::io::stderr()));
     let mut height_input = String::new();
     if std::io::stdin().read_line(&mut height_input).is_err() {
         mnemonic.zeroize();

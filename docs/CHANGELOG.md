@@ -30,8 +30,11 @@
   crate (30 sites: the three fixed wire-embedded counts were the only ones;
   ptr+len ABI-pair counts are guarded, with one unchecked multiply brought
   up to the crate's own pattern; `.len()`-derived counts safe by
-  construction). Ratification's filed residual — a mechanical
-  cap-before-reserve pattern gate — lands in the SA conventions tail.
+  construction). `legacy_util::bounded_capacity` now owns those reserves
+  (including sibling counts); C1/C2 share one parser. Ratification's
+  remaining residual — a mechanical source-scan gate on raw
+  `with_capacity` / bare `from_raw_parts` — lands in the SA conventions
+  tail.
 
 - **The cryptographic inventory is closed (SA-6).**
   `docs/CRYPTOGRAPHIC_INVENTORY.md` now carries every section the SA round
@@ -299,6 +302,14 @@
     like corruption on a wallet whose keys and seed are perfectly fine.
 
 ### Fixed
+
+- **`ci/gh-actions/rust` clippy compiles `ledger_iai` again after
+  the client-request change.** `gungraun`'s `client_requests` feature
+  pulls `valgrind-requests`, whose bindgen step needs `libclang.so`.
+  The rust gate runs in a bare `ubuntu:24.04` container that had
+  Valgrind headers but not libclang; `ci/benchmarks` stayed green
+  because GitHub's hosted image already ships clang. The container now
+  installs `libclang-dev` and `clang`.
 
 - **`ci/benchmarks` capture no longer dies on `ledger_iai`
   `instructions=0`.** The six postcard cells were one-liners under

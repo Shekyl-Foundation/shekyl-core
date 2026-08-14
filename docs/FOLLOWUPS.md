@@ -58,24 +58,21 @@ sustainability is unaffected by the recalibration.
   row (unchecked until ruled + wired); inventory record:
   `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
 
-- **SA-R-7 cap-before-reserve pattern gate (added 2026-08-14, the
+- **SA-R-7 cap-before-reserve source-scan gate (added 2026-08-14, the
   ratification's filed residual — lands in the SA conventions tail).**
-  SA-R-7's clause 2 (a wire-embedded count is capped by the message's own
-  remaining bytes before `Vec::with_capacity`) is enforced-by-review only:
-  the pinned test covers the fixed `parse_prove_witness` site, not the
-  pattern, and clippy has no built-in lint for it. Owed: a
-  `bounded_capacity(count, stride, remaining_bytes)` helper wire-count
-  allocations must route through, plus a source-scan/grep gate forbidding
-  raw `with_capacity` on a non-`.len()`-derived, non-const argument in the
-  FFI boundary crates. Scope extended (#470 review round): the same gate
-  polices raw `std::slice::from_raw_parts` outside the
+  The `bounded_capacity(count, stride, remaining_bytes)` helper landed in
+  the #470 review round (`legacy_util`); `parse_prove_witness` (leaf-chunk,
+  C1/C2 layer counts, sibling counts) routes through it. Still owed: a
+  source-scan/grep gate forbidding raw `with_capacity` on a
+  non-`.len()`-derived, non-const argument in the FFI boundary crates.
+  Same gate polices raw `std::slice::from_raw_parts` outside the
   `legacy_util::slice_from_ptr` seam — the seam now enforces the
   `from_raw_parts` language-level `isize::MAX` byte bound (and absorbed
-  `wallet_envelope_ffi`'s byte-identical private clone), but ~10 direct
-  call sites bypass it and each re-owns that precondition by hand. Rides the same tail commit as the
-  `set -o pipefail`/`PIPESTATUS` gate convention (four pipe-exit-swallow
-  instances this round). The SA round closes structurally only when this
-  lands (`SIGNATURE_ALIGNMENT.md` §2.3 + §3 tail row).
+  `wallet_envelope_ffi`'s private clone), but ~10 direct call sites bypass
+  it and each re-owns that precondition by hand. Rides the same tail
+  commit as the `set -o pipefail`/`PIPESTATUS` gate convention. The SA
+  round closes structurally only when this lands
+  (`SIGNATURE_ALIGNMENT.md` §2.3 + §3 tail row).
 
 - **F-7 structural gate for the test-only PQC FFI exports (added
   2026-08-10, PR-SA-2).** Two exports are test-support only:

@@ -475,6 +475,8 @@ impl Zone {
     pub fn update_stems<R: RelayRng + ?Sized>(&mut self, outbound: Vec<ConnectionId>, rng: &mut R) {
         // `StemMap::update` still returns `StemSetChange` for its own callers
         // and tests; the zone no longer surfaces it — nothing re-points on push.
+        // Named bind: the value is `Copy + must_use`, so neither `drop` nor
+        // `let _ =` is available under the workspace lint table.
         let _change = self.map.update(outbound, rng);
     }
 

@@ -185,7 +185,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHand
         // into the C++ pool/blockchain, potentially mid-commit.
         if !handle.serve.is_null() {
             let serve = *Box::from_raw(handle.serve);
-            let _joined = rt.block_on(serve);
+            drop(rt.block_on(serve));
         }
         drop(rt);
     } else if !handle.serve.is_null() {

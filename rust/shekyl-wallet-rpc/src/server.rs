@@ -189,7 +189,7 @@ struct UdsCleanup(PathBuf);
 
 impl Drop for UdsCleanup {
     fn drop(&mut self) {
-        let _removed = std::fs::remove_file(&self.0);
+        drop(std::fs::remove_file(&self.0));
     }
 }
 
@@ -301,7 +301,7 @@ fn private_socket_dir() -> std::io::Result<PathBuf> {
     let n = SPAWN_COUNTER.fetch_add(1, Ordering::Relaxed);
     let dir = base.join(format!("shekyl-rpc-{}-{n}", std::process::id()));
     // Stale leftover from a crashed run with a recycled pid: remove if ours.
-    let _removed = std::fs::remove_dir_all(&dir);
+    drop(std::fs::remove_dir_all(&dir));
     std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
     Ok(dir)
 }
@@ -335,7 +335,7 @@ impl InProcessHandle {
         // The serve task's UdsCleanup already unlinked the socket; remove
         // the private dir that held it.
         if let Some(dir) = &self.socket_dir {
-            let _removed = std::fs::remove_dir(dir);
+            drop(std::fs::remove_dir(dir));
         }
         Ok(())
     }

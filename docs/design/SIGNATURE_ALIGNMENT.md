@@ -7,8 +7,9 @@ MERGED; **PR-SA-6 in flight** (`feat/sa6-cbom-close`: CBOM §1/§2/§4/§6
 filed and closed; untrusted-cast census done — one live cap-before-reserve
 bug fixed, the FFI crate-root cast-allow narrowed, four ungated crates wired
 into the workspace lints — and the §2.3 SA-R-7 ruling RATIFIED 2026-08-14;
-residual = the cap-before-reserve pattern gate, filed to the conventions
-tail).
+`bounded_capacity` now owns the live wire-count reserves; residual = the
+source-scan pattern gate + bare-`from_raw_parts` police, filed to the
+conventions tail).
 **Family:** `SA-*` (registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) at birth, rule 94).
 **Trigger:** the message-signing round (SM, [`WALLET_MESSAGE_SIGNING.md`](WALLET_MESSAGE_SIGNING.md))
@@ -444,21 +445,23 @@ the census actually found:
 (reject on lossy conversion) is **lint-enforced** — the workspace cast deny,
 now inherited by every untrusted-input crate; clause 3 (no crate-root
 cast-allows) is **structurally enforced** — narrowed to reviewed site
-allows; clause 2 (cap-before-reserve) is **enforced-by-review only** — the
-pinned test covers the fixed site, not the pattern, so the next
-`with_capacity(wire_count)` would land ungated.
+allows; clause 2 (cap-before-reserve) is **helper-enforced at the live
+sites, gate-pending** — `legacy_util::bounded_capacity` is the reservation
+seam; `parse_prove_witness` (leaf-chunk, C1/C2 layer counts, and
+sibling counts) routes through it. A source-scan gate forbidding raw
+`with_capacity` on a non-`.len()`-derived, non-const argument is still
+the conventions-tail residual.
 
-**Filed residual (the ratification's one condition, not blocking this PR):
-the cap-before-reserve pattern gate.** A `bounded_capacity(count, stride,
-remaining_bytes)` helper that wire-count allocations must route through,
-plus a gate (source-scan test or grep) forbidding raw `with_capacity` on a
+**Filed residual (the ratification's one remaining condition): the
+cap-before-reserve source-scan gate.** The `bounded_capacity(count, stride,
+remaining_bytes)` helper landed in this review round. Still owed: a gate
+(source-scan test or grep) forbidding raw `with_capacity` on a
 non-`.len()`-derived, non-const argument in the FFI boundary crates — the
 cap must derive from the message's own bounded size, never a global
-constant. **Lands in the SA conventions tail** (the `.cursor/rules` item,
-alongside the `set -o pipefail` gate convention that has now cost real
-debugging time four times this round). Until it lands, clause 2 is a
-remembered rule — the exact state this round exists to eliminate — so the
-SA round does not close until the tail does.
+constant — and the same gate polices raw `std::slice::from_raw_parts`
+outside `slice_from_ptr`. **Lands in the SA conventions tail** (the
+`.cursor/rules` item, alongside the `set -o pipefail` gate convention).
+The SA round does not close until the tail does.
 
 ---
 
@@ -475,8 +478,8 @@ SA round does not close until the tail does.
 | **PR-SA-3d** | `cn_fast_hash` → `keccak256` rename (Rust-internal, byte-identical: 43 call sites across 14 files in 8 crates; the C ABI export keeps the name `shekyl_cn_fast_hash` so no C++ edit and the FFI export list is unchanged); crypto-hash module header already carries the Keccak-256-is-consensus-parity-only / cSHAKE-for-everything-new split, made consistent by the rename | **MERGED #446** |
 | **PR-SA-4** | Dead persisted-field sweep (§7): a per-field writer/reader census over the 10 schema-snapshotted blocks + `WalletLedger` + the pscan / pending-post staking state. **Deleted** (no live writer *and* no live reader): `TxMetaBlock.attributes` (executing the ratified P3-5), `SyncStateBlock.{scan_completed, confirmations_required, trusted_daemon}`, `PFundingOutputRecord.tx_hash` (+ its dead transform-twin), `PendingEmissionClaim.{p_slot, claimed_epochs}`, `PendingDrain.p_slot`. **Kept, docstrings corrected** (named future vehicle or ratified retention): `creation_anchor_hash`, `scanned_pool_txs`, the SJ-DQ-1 full-row fields (`change_amount` / `SendRecipient.address` / `SendInputRef.amount`), `accruals`, `BondPostRecord.height`, `PFundingOutputRecord.epoch`, `RetiredPersonaRecord.{unbond,retired}_epoch`, `BookkeepingBlock.{primary_label, address_book}`. **Wired** (the tx_notes / PR-SJ-2 confirmation resolved to SJ-DQ-7): the dormant `tx_notes` annotation surface. Per-block version bumps + `WALLET_LEDGER_FORMAT_VERSION` 15→16; refuse-don't-migrate touches only the state-side payloads, never the `.wallet.keys` seed envelope. | **MERGED #450** (carried six review rounds: the durability contract moved into an `atomic_write_file` `Durability` return rather than a leaky applied-but-error variant; the `tx_notes` amplification vector closed structurally — `WalletLedger::set_note` membership precondition + `pub(crate)` write door + a txid-bound single-use `PriorNote` rollback token; the OpenAPI/module-doc contract aligned to the membership rule) |
 | **PR-SA-5** | Persona lifecycle: SA-R-6 guard + scan reconstruction; ruling into `ARCHIVAL_P_DERIVE_V1` module doc + operator guide (no-rotation stated as a refusal, clustering rationale named). **Feeds the CBOM persona no-backstop row** — which resolved to a **surveyed negative** (no persona surface is ML-DSA-only; Auth-B is hybrid and the committed leaf hashes the full `HybridPublicKey`). | **in flight** (`feat/sa5-persona-lifecycle`, off dev) — review round closed two live SA-R-6 holes (arm #4 adopts chain-proven bonds instead of burning past them; arm #2 burns retired slots into the cursor before the destructive `retain`), corrected the CBOM row from a claimed exposure to a surveyed negative, and retired the false "bond posting is inert in production" premise the from-seed deferral rested on (`stake` RPC → `first_stake` → `persist_bond_record` is live) |
-| **PR-SA-6** | CBOM close/formalize (see §4) + infra PQ posture (release-signing paragraph); untrusted-cast sweep + one clamp/reject/None ruling | **in flight** (`feat/sa6-cbom-close`) — CBOM close half done: §1 primitives+RNG and §2 six-surface tables transcribed with at-source re-verification, §4 (the curve-based ZK risk register §5 had cited before it existed) written, §6 closed with the audit-status column and the infra survey; the release-artifact signing gap (gitian publishes unsigned assets) filed as a rule-21 reopen with a `RELEASE_CHECKLIST.md` enforcement row; the four stale GATE6 C-1 "not-yet-landed" sites corrected to DISCHARGED (#277). **Untrusted-cast sweep DONE (census: 298 non-test casts, 4 in scope):** the one live finding — `parse_prove_witness` unbounded `Vec` reservations from C-ABI counts (up to ~412 GB, host-process abort on allocation failure) — fixed cap-before-reserve with a pinned refusal test; `shekyl-ffi`'s crate-root cast-allow (which silently overrode the workspace deny at the C++ trust boundary) narrowed to site-level allows with rationales; `shekyl-daemon-rpc`/`shekyl-wallet-rpc`/`shekyl-cli`/`shekyl-relay` wired into `[lints] workspace = true` (~100 latent lint sites fixed; every lossy cast surveyed proved construction-time value-preserving — no untrusted site needed conversion). Ruling codified as §2.3 **SA-R-7 — RATIFIED 2026-08-14** after the reviewer-driven completeness check (full 30-site `with_capacity` census; the backed-vs-unbacked count distinction encoded; one uniformity gap fixed — `outputs_to_leaves` unchecked multiply). Filed residual: the cap-before-reserve **pattern gate** (helper + source-scan) lands in the conventions tail, which is now the round's closing item |
-| tail | House conventions (envelope-vs-payload version naming; panic-vs-Option rule; **SA-R-2 distinct-string-per-context**) → `.cursor/rules/`; **the SA-R-7 cap-before-reserve pattern gate** (`bounded_capacity` helper + source-scan/grep gate on raw `with_capacity` in FFI boundary crates — the §2.3 filed residual; scope extended by the #470 review round to also police raw `std::slice::from_raw_parts` outside the guarded `slice_from_ptr` seam, since the seam's new `isize::MAX` byte-bound guard only covers its own callers and ~10 direct-call sites bypass it; the round closes structurally only when this lands); **`set -o pipefail` / PIPESTATUS gate convention** (four pipe-exit-swallow instances this round, incl. the one that masked the #469 libm link break); FOLLOWUPS rewrap as its own mechanical commit | pending — **now the round's closing item** |
+| **PR-SA-6** | CBOM close/formalize (see §4) + infra PQ posture (release-signing paragraph); untrusted-cast sweep + one clamp/reject/None ruling | **in flight** (`feat/sa6-cbom-close`) — CBOM close half done: §1 primitives+RNG and §2 six-surface tables transcribed with at-source re-verification, §4 (the curve-based ZK risk register §5 had cited before it existed) written, §6 closed with the audit-status column and the infra survey; the release-artifact signing gap (gitian publishes unsigned assets) filed as a rule-21 reopen with a `RELEASE_CHECKLIST.md` enforcement row; the four stale GATE6 C-1 "not-yet-landed" sites corrected to DISCHARGED (#277). **Untrusted-cast sweep DONE (census: 298 non-test casts, 4 in scope):** the one live finding — `parse_prove_witness` unbounded `Vec` reservations from C-ABI counts (up to ~412 GB, host-process abort on allocation failure) — fixed cap-before-reserve with a pinned refusal test; `shekyl-ffi`'s crate-root cast-allow (which silently overrode the workspace deny at the C++ trust boundary) narrowed to site-level allows with rationales; `shekyl-daemon-rpc`/`shekyl-wallet-rpc`/`shekyl-cli`/`shekyl-relay` wired into `[lints] workspace = true` (~100 latent lint sites fixed; every lossy cast surveyed proved construction-time value-preserving — no untrusted site needed conversion). Ruling codified as §2.3 **SA-R-7 — RATIFIED 2026-08-14** after the reviewer-driven completeness check (full 30-site `with_capacity` census; the backed-vs-unbacked count distinction encoded; one uniformity gap fixed — `outputs_to_leaves` unchecked multiply). `bounded_capacity` now owns the live wire-count reserves (leaf-chunk, C1/C2, sibling counts); filed residual: the cap-before-reserve **source-scan gate** (plus bare-`from_raw_parts` police) lands in the conventions tail, which is now the round's closing item |
+| tail | House conventions (envelope-vs-payload version naming; panic-vs-Option rule; **SA-R-2 distinct-string-per-context**) → `.cursor/rules/`; **the SA-R-7 cap-before-reserve source-scan gate** (the `bounded_capacity` helper landed in the #470 review round; still owed: source-scan/grep forbidding raw `with_capacity` on a non-`.len()`-derived, non-const argument in FFI boundary crates, and the same gate policing raw `std::slice::from_raw_parts` outside `slice_from_ptr` — ~10 direct-call sites still re-own that bound; the round closes structurally only when this lands); **`set -o pipefail` / PIPESTATUS gate convention** (four pipe-exit-swallow instances this round, incl. the one that masked the #469 libm link break); FOLLOWUPS rewrap as its own mechanical commit | pending — **now the round's closing item** |
 
 **Out of scope:** tx_extra canonical form (padding, ordering, duplicate tags,
 tag-specific READ_LEN caps) stays in the **credit-wire lane** (PR-B2) — named

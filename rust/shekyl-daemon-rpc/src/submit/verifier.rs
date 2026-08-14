@@ -589,7 +589,9 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
     // mirroring the C++ oracle's single `shekyl_emission_vin_verify`
     // crossing; the outputs (total reward, epochs to commit) are the
     // connect arm's operands and unused at submit.
-    let _witness = shekyl_archival_retention::emission_vin_verify(claims, backing, auth);
+    drop(shekyl_archival_retention::emission_vin_verify(
+        claims, backing, auth,
+    ));
 
     // ── E11: fee-input FCMP++ over the ToKey subset (blockchain.cpp:
     // 4046-4108 — the bond-arm funding shape; the full prefix hash, not
