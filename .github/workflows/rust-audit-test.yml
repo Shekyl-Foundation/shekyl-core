@@ -232,6 +232,7 @@ jobs:
         run: >-
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
           -p shekyl-tor -p shekyl-p-serve -p shekyl-p-host
+          -p shekyl-operator-alarm
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp

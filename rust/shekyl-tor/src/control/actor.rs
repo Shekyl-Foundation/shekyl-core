@@ -224,10 +224,15 @@ impl EventSink {
     /// to replace a call named `unsubscribed`, which is a question a reviewer
     /// can see; deleting an anonymous `_rx` is not.
     ///
-    /// The returned sink drops every event: [`Self::route`] treats a closed
-    /// receiver as "the consumer is gone" and discards, so nothing accumulates.
+    /// The returned sink drops every event, and nothing accumulates: routing
+    /// treats a closed receiver as "the consumer is gone" and discards. (Stated
+    /// rather than linked — the routing method is private, and a public doc
+    /// that links into it fails the crate's `rustdoc -D warnings` gate.)
     #[must_use]
     pub fn unsubscribed() -> Self {
+        // The receiver is dropped here on purpose, which is what closes the
+        // channel and makes every later send a no-op. Named constructor, so
+        // the drop is the documented behaviour rather than a caller's slip.
         let (tx, _rx) = mpsc::unbounded_channel();
         Self(tx)
     }
