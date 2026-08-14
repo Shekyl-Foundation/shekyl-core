@@ -42,8 +42,9 @@ pub use analysis::{
     coefficient_of_variation, inference_precision, residual_masses, sample_poisson, sample_uniform,
 };
 pub use flood::{
-    simulate_diffusion_first_spy, simulate_fluff_return, simulate_fluff_return_mixed,
-    FirstSpyPrecision, FloodParams, FloodReach, FloodSummary,
+    converged_fluff_return_mixed, simulate_diffusion_first_spy, simulate_fluff_return,
+    simulate_fluff_return_mixed, Converged, ConvergenceBudget, ConvergenceRefusal,
+    FirstSpyPrecision, FloodParams, FloodReach, FloodSummary, FLOOD_TICK_MS,
 };
 pub use grade::{grade_bernoulli, grade_poisson, grade_stem_balance, grade_uniform, Grade};
 pub use reshape::{
