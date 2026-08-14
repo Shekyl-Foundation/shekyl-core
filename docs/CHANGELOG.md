@@ -301,6 +301,30 @@
 
 ### Added
 
+- **LV-2b notifies — 2001–2004 / 2006–2010.** Typed Levin maps in
+  `shekyl-levin` for `NOTIFY_NEW_BLOCK` through `NOTIFY_GET_TXPOOL_COMPLEMENT`,
+  including `block_complete_entry` (pruned vs unpruned `txs`,
+  `attestation_witness` transport cap `32 + 8 + 256 * 3385`). Empty STL
+  containers omit the key (C++ match, including handshake peerlists).
+  `dandelionpp_fluff` OPT default true; `CONTAINER_POD_AS_BLOB` for hash
+  and `uint64` lists. In-crate consumer: encode → `notify()` →
+  `BucketReader` (`tests/notify_kats.rs`). Does not wire the daemon
+  (`handle_recv` / `net_node` remain LV-3).
+
+- **LV-2b dual-stack handshake against `shekyld`.** Ignored integration
+  harness `rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`) speaks
+  handshake / ping / timed-sync / support-flags with a live `--regtest`
+  daemon over Levin. Default `cargo test -p shekyl-levin` still spawns
+  no daemon (`LV2_PORTABLE_STORAGE.md` §12 step 4).
+
+- **LV-2b first drop — handshake / timed-sync / ping / support-flags.**
+  Typed Levin maps in `shekyl-levin` on `shekyl-portable-storage`
+  (1001 / 1002 / 1003 / 1007 plus the `network_address` union).
+  OPT-omit, `cumulative_difficulty_top64` store-always / load-OPT, and
+  encode → `invoke()` → `BucketReader` round-trips in
+  `tests/payload_kats.rs`. Does not wire the daemon
+  (`handle_recv` / `net_node` remain LV-3).
+
 - **LV-2 portable_storage decision** (`docs/design/LV2_PORTABLE_STORAGE.md`).
   First-party `shekyl-portable-storage` codec (LV-2a) then typed Levin command
   schemas in `shekyl-levin` (LV-2b). Cuprate `epee-encoding` is

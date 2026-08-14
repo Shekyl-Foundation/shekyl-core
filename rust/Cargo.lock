@@ -4260,6 +4260,7 @@ name = "shekyl-levin"
 version = "3.1.0"
 dependencies = [
  "proptest",
+ "shekyl-portable-storage",
  "thiserror 2.0.18",
  "zstd",
 ]
