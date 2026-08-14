@@ -73,10 +73,13 @@ jobs:
         # ripgrep: hard-required by scripts/lint_cpp_clamp_ban.sh below.
         # valgrind: headers required to compile `shekyl-engine-state`'s
         # `ledger_iai` bench (`gungraun` `client_requests` / `act`).
-        # clippy `--all-targets` builds benches; without the headers
-        # the workspace lint gate fails. Same package the
-        # `ci/benchmarks` workflow already installs for the capture run.
-        run: apt -y install build-essential git curl pkg-config libssl-dev ripgrep valgrind
+        # libclang-dev + clang: `valgrind-requests` bindgens those
+        # headers; a bare `ubuntu:24.04` container has neither
+        # libclang.so nor clang. GitHub's hosted `ubuntu-latest`
+        # (`ci/benchmarks`) already ships clang, so the capture job
+        # stayed green while this gate failed. clippy `--all-targets`
+        # builds benches.
+        run: apt -y install build-essential git curl pkg-config libssl-dev ripgrep valgrind libclang-dev clang
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
