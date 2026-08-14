@@ -56,27 +56,6 @@ pub(crate) unsafe fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'
     Some(std::slice::from_raw_parts(ptr, len))
 }
 
-#[cfg(test)]
-mod slice_from_ptr_tests {
-    use super::*;
-
-    /// The `isize::MAX` byte bound is refused BEFORE `from_raw_parts` is
-    /// reached (the guard returns `None` without constructing the slice,
-    /// so the dangling pointer is never dereferenced or blessed).
-    #[test]
-    fn oversized_len_is_refused_before_slice_construction() {
-        let dangling = std::ptr::NonNull::<u8>::dangling().as_ptr();
-        let too_big = (isize::MAX as usize) + 1;
-        assert!(unsafe { slice_from_ptr(dangling, too_big) }.is_none());
-        // Control: a small length over real bytes still works.
-        let bytes = [7u8; 4];
-        assert_eq!(
-            unsafe { slice_from_ptr(bytes.as_ptr(), 4) },
-            Some(&bytes[..])
-        );
-    }
-}
-
 // ─── Generic Buffer Helpers ──────────────────────────────────────────────────
 
 impl ShekylBuffer {
@@ -128,5 +107,26 @@ pub unsafe extern "C" fn shekyl_buffer_free(ptr: *mut u8, len: usize) {
         use zeroize::Zeroize;
         std::slice::from_raw_parts_mut(ptr, len).zeroize();
         drop(Vec::from_raw_parts(ptr, len, len));
+    }
+}
+
+#[cfg(test)]
+mod slice_from_ptr_tests {
+    use super::*;
+
+    /// The `isize::MAX` byte bound is refused BEFORE `from_raw_parts` is
+    /// reached (the guard returns `None` without constructing the slice,
+    /// so the dangling pointer is never dereferenced or blessed).
+    #[test]
+    fn oversized_len_is_refused_before_slice_construction() {
+        let dangling = std::ptr::NonNull::<u8>::dangling().as_ptr();
+        let too_big = (isize::MAX as usize) + 1;
+        assert!(unsafe { slice_from_ptr(dangling, too_big) }.is_none());
+        // Control: a small length over real bytes still works.
+        let bytes = [7u8; 4];
+        assert_eq!(
+            unsafe { slice_from_ptr(bytes.as_ptr(), 4) },
+            Some(&bytes[..])
+        );
     }
 }
