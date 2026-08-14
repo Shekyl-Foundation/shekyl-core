@@ -300,7 +300,13 @@ add_dependencies(shekyl_daemon_image shekyl_daemon_image_rust)
 set(_shekyl_rust_image "$<IF:$<BOOL:$<TARGET_PROPERTY:SHEKYL_RUST_IMAGE_DAEMON>>,shekyl_daemon_image,shekyl_ffi>")
 
 if(UNIX AND NOT APPLE)
-    set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};pthread;dl" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
+    # `m` (libm): the Rust archives contain `f64` math the compiler lowers to
+    # libm calls (e.g. `log10` in shekyl-relay-privacy, reachable from the
+    # relay FFI exports' link closure). C++ binaries usually inherit libm
+    # through libstdc++, but plain-C consumers (tests/crypto) do not — the
+    # dependency belongs here, on the archive that owns it, not on each
+    # consumer's link line.
+    set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};m;pthread;dl" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 elseif(APPLE)
     set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 else()
