@@ -77,8 +77,8 @@ jobs:
         # headers; a bare `ubuntu:24.04` container has neither
         # libclang.so nor clang. GitHub's hosted `ubuntu-latest`
         # (`ci/benchmarks`) already ships clang, so the capture job
-        # stayed green while this gate failed. clippy `--all-targets`
-        # builds benches.
+        # stayed green while this gate failed. Still gungraun — no
+        # harness swap. clippy `--all-targets` builds benches.
         run: apt -y install build-essential git curl pkg-config libssl-dev ripgrep valgrind libclang-dev clang
       - name: configure git
         run: git config --global --add safe.directory '*'
