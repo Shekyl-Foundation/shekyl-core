@@ -34,11 +34,11 @@ chunk boundaries, and noise sizes.
 
 ## What this crate is not
 
-- **Not the payload codec.** Command bodies (handshake, timed sync, notify
-  payloads) are epee `portable_storage` blobs; this crate treats them as
-  opaque bytes until LV-2b. The codec is first-party `shekyl-portable-storage`
-  (LV-2a); see `docs/design/LV2_PORTABLE_STORAGE.md`. This crate will
-  grow typed command structs on that codec — it does not absorb it.
+- **Not the payload codec.** Command bodies are epee `portable_storage`
+  blobs; the codec is first-party `shekyl-portable-storage` (LV-2a). This
+  crate owns the typed maps (LV-2b). First drop: handshake / timed-sync /
+  ping / support-flags (1001 / 1002 / 1003 / 1007) plus `network_address`.
+  Remaining notifies stay opaque bytes until the rest of LV-2b.
 - **Not the connection stack.** No sockets, timeouts, invoke/response
   correlation, or peer management.
 - **Emit side and compression wired; read side is not.** Since 2026-08-06

@@ -37,14 +37,13 @@
 //!
 //! Deliberate **non-goals** of this crate:
 //!
-//! - the epee `portable_storage` payload codec and the p2p/cryptonote
-//!   command schemas (handshake bodies, peerlist entries, …) — payloads
-//!   here are opaque bytes until LV-2b. The codec decision is
-//!   `docs/design/LV2_PORTABLE_STORAGE.md` (first-party `shekyl-portable-storage`,
-//!   LV-2a); this crate grows typed command structs on top of that, it
-//!   does not absorb the codec;
-//! - connection management, peerlists, timeouts, and invoke/response
-//!   correlation (the `async_protocol_handler` layer).
+//! - the epee `portable_storage` **codec** — that is
+//!   `shekyl-portable-storage` (LV-2a). This crate owns the typed Levin
+//!   maps on top of it (LV-2b). First drop: handshake / timed-sync / ping
+//!   / support-flags (1001 / 1002 / 1003 / 1007) plus `network_address`.
+//!   Remaining notifies (2001–2004, 2006–2010) are still opaque bytes;
+//! - connection management, timeouts, and invoke/response correlation
+//!   (the `async_protocol_handler` layer).
 //!
 //! # Parity oracle
 //!
@@ -153,6 +152,7 @@ mod error;
 mod fragment;
 mod header;
 mod message;
+mod payload;
 mod reader;
 
 pub use compress::{
@@ -167,4 +167,12 @@ pub use header::{
     LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
 };
 pub use message::{invoke, notify, response};
+pub use payload::Error as PayloadError;
+pub use payload::{
+    BasicNodeData, CoreSyncData, HandshakeRequest, HandshakeResponse, NetworkAddress,
+    PeerlistEntry, PingRequest, PingResponse, PortableMap, SupportFlagsRequest,
+    SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse, ADDR_I2P, ADDR_IPV4, ADDR_IPV6,
+    ADDR_TOR, COMMAND_HANDSHAKE, COMMAND_PING, COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC,
+    PING_OK,
+};
 pub use reader::{BucketReader, Received};

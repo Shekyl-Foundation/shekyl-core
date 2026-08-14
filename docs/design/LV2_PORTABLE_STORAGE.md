@@ -1,9 +1,11 @@
 # LV-2 — portable_storage codec (decision)
 
 **Status.** **Pinned** (2026-08-13). LV-2a landed in
-`rust/shekyl-portable-storage`; this document remains authoritative for
-build-vs-vendor, the crate split, and the LV-2b census. **Not
-authoritative for:** the binary layout itself
+`rust/shekyl-portable-storage`. LV-2b first drop (1001 / 1002 / 1003 /
+1007 plus `network_address`) landed in `shekyl-levin` (2026-08-14).
+This document remains authoritative for build-vs-vendor, the crate
+split, and the LV-2b census. Remaining notifies (2001–2004, 2006–2010)
+are the rest of LV-2b. **Not authoritative for:** the binary layout itself
 ([`docs/PORTABLE_STORAGE.md`](../PORTABLE_STORAGE.md), completed by
 LV-2a) or Levin framing ([`docs/LEVIN_PROTOCOL.md`](../LEVIN_PROTOCOL.md),
 [`rust/shekyl-levin`](../../rust/shekyl-levin)).
@@ -69,8 +71,9 @@ plus the `network_address` type-tagged union in
 [`contrib/epee/include/net/net_utils_base.h`](../../contrib/epee/include/net/net_utils_base.h)
 and the Tor/I2P address maps. Not all 27 appear on the Levin wire (§6).
 
-Payloads in `shekyl-levin` stay opaque until LV-2b lands typed builders
-on top of LV-2a.
+Payloads in `shekyl-levin` for the first-drop commands are typed
+builders on LV-2a. Remaining notify bodies stay opaque bytes until the
+rest of LV-2b.
 
 ---
 
@@ -146,13 +149,13 @@ Do **not** start LV-2b until LV-2a has byte-identity KATs against C++
 | Slice | What | First live consumer |
 | --- | --- | --- |
 | **LV-2a** | `shekyl-portable-storage`: encode/decode + Levin-default limits + KATs. Completes `PORTABLE_STORAGE.md` (§7). | Delete the `get_o_indexes.bin` / `get_blocks_by_height.bin` one-offs. Unblocks every later schema. |
-| **LV-2b** | The Levin-wire maps in `shekyl-levin`, starting with 1001/1002/1003/1007, then 2002. | A Rust test peer that can handshake with `shekyld`; then `store_t_to_binary(NOTIFY_NEW_TRANSACTIONS)` can leave `levin_notify.cpp`. |
+| **LV-2b** | The Levin-wire maps in `shekyl-levin`, starting with 1001/1002/1003/1007, then 2002. | First drop: in-crate encode → `invoke()` → `BucketReader`. A live `shekyld` dual-stack peer is the named remaining of this consumer (no daemon in crate unit tests). Then `store_t_to_binary(NOTIFY_NEW_TRANSACTIONS)` can leave `levin_notify.cpp`. |
 
-Handshake first: small, no blob nesting, unblocks a dual-stack interop
-harness, and is what lets a future LV-3 caller invoke
-`BucketReader::complete_handshake` from decoded command 1001 rather than
-from a side channel. 2002 next: first blob-wrapping notify, the relay
-path, wraps `shekyl-wire` tx blobs inside KV.
+Handshake first: small, no blob nesting, and is what lets a future
+LV-3 caller invoke `BucketReader::complete_handshake` from decoded
+command 1001 rather than from a side channel. 2002 next: first
+blob-wrapping notify, the relay path, wraps `shekyl-wire` tx blobs
+inside KV.
 
 The remaining cryptonote notifies (2001, 2003–2004, 2006–2010) ride the
 same derive and land with 2002 or immediately after; they are not a
@@ -373,7 +376,10 @@ another name.
 3. Rewire `shekyl-rpc-client` / `daemon_observability` onto it; delete
    the one-offs.
 4. Land handshake/timed-sync/ping/support-flags in `shekyl-levin`
-   (LV-2b first drop) with a dual-stack interop test against `shekyld`.
+   (LV-2b first drop). **Landed 2026-08-14** with in-crate
+   encode → `invoke()` → `BucketReader` KATs. A live dual-stack
+   interop test against `shekyld` is the named remaining of this step
+   (no daemon in crate unit tests) and rides with the rest of LV-2b.
 5. Land 2002, then the remaining notifies including 2010.
 
 LV-3 stays its own design round against the index's two-dependency

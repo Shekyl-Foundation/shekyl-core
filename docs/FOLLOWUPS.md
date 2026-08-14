@@ -9628,8 +9628,14 @@ its wake.
     implementation is in-scope, not V3.0-gating. UPDATE 2026-08-13:
     **LV-2a landed** — `rust/shekyl-portable-storage`,
     `docs/PORTABLE_STORAGE.md` completed, the two homegrown HTTP `.bin`
-    parsers deleted. The framing crate still carries payloads as opaque
-    bytes until LV-2b lands.
+    parsers deleted. UPDATE 2026-08-14: **LV-2b first drop landed** —
+    handshake / timed-sync / ping / support-flags (1001 / 1002 / 1003 /
+    1007) plus `network_address` in `shekyl-levin`; in-crate consumer is
+    encode → `invoke()` → `BucketReader`. Remaining notifies (2001–2004,
+    2006–2010 including 2002) are the rest of LV-2b and stay opaque
+    bytes. Live `shekyld` dual-stack is the named remaining of §12
+    step 4 (no daemon in crate unit tests), not a FOLLOWUPS dump of
+    this drop's maps.
   - **LV-3 — connection-path cutover.** Replace the C++ Levin read/write
     path at the `levin_notify.cpp` / `net_node.inl` seam with the Rust
     crate. Cost basis: the index's "Relay layer → C++ dependency

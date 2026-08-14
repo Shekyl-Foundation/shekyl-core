@@ -223,6 +223,15 @@
 
 ### Added
 
+- **LV-2b first drop — handshake / timed-sync / ping / support-flags.**
+  Typed Levin maps in `shekyl-levin` on `shekyl-portable-storage`
+  (1001 / 1002 / 1003 / 1007 plus the `network_address` union).
+  OPT-omit, `cumulative_difficulty_top64` store-always / load-OPT, and
+  encode → `invoke()` → `BucketReader` round-trips in
+  `tests/payload_kats.rs`. Remaining notifies (2001–2004, 2006–2010)
+  stay opaque bytes until the rest of LV-2b. Does not wire the daemon
+  (`handle_recv` / `net_node` remain LV-3).
+
 - **LV-2 portable_storage decision** (`docs/design/LV2_PORTABLE_STORAGE.md`).
   First-party `shekyl-portable-storage` codec (LV-2a) then typed Levin command
   schemas in `shekyl-levin` (LV-2b). Cuprate `epee-encoding` is
