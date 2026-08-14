@@ -238,6 +238,14 @@ pub(crate) struct PScanAccrual {
     /// DQ-F observer; not persisted — the durable record is the
     /// retired-record row plus the pruned rows' absence from the seal).
     retired_pruned_total: u64,
+    /// Per-persona **watch floors** — id → the first scanned height the
+    /// persona was watched at (the frontier when it entered the scan union).
+    /// The provenance half of the reconcile evidence: `bond_post_matches` is
+    /// complete only over the personas watched while `covered` advanced, so
+    /// an absence claim for a persona is sound only over `[floor, high)`.
+    /// Written once per persona at its first ingested step, never updated;
+    /// durable via [`PScanState::watch_floors`].
+    watch_floors: BTreeMap<PCanonicalId, BlockHeight>,
 }
 
 impl std::fmt::Debug for PScanAccrual {
@@ -256,6 +264,7 @@ impl std::fmt::Debug for PScanAccrual {
             .field("spent_pruned_total", &self.spent_pruned_total)
             .field("retired", &self.retired)
             .field("retired_pruned_total", &self.retired_pruned_total)
+            .field("watch_floors", &"<redacted persona-history>")
             .finish()
     }
 }
@@ -275,6 +284,7 @@ impl PScanAccrual {
             spent_pruned_total: 0,
             retired: RetiredLedger::default(),
             retired_pruned_total: 0,
+            watch_floors: BTreeMap::new(),
         }
     }
 
@@ -312,6 +322,7 @@ impl PScanAccrual {
             spent_pruned_total: 0,
             retired: RetiredLedger::from_records(state.retired_records().to_vec()),
             retired_pruned_total: 0,
+            watch_floors: state.watch_floors().clone(),
         }
     }
 
@@ -412,6 +423,15 @@ impl PScanAccrual {
             self.funding_outputs.retain(|m| !spent.contains(&m.gindex));
             self.spent_pruned_total += (before - self.funding_outputs.len()) as u64;
         }
+        // Watch provenance: a persona entering the scan union is floored at
+        // this step's start — the first height its absence evidence is valid
+        // from. Insert-once (the floor never moves); rides the all-or-nothing
+        // commit section (infallible).
+        for persona in &result.watched_personas {
+            self.watch_floors
+                .entry(*persona)
+                .or_insert_with(|| result.range.start());
+        }
         self.synced_height = result.range.end();
         self.frontier_hash = verified.frontier_hash();
         self.covered = new_covered;
@@ -505,6 +525,7 @@ impl PScanAccrual {
                 .map(PFundingOutputRecord::from)
                 .collect(),
             self.retired.records().to_vec(),
+            self.watch_floors.clone(),
         )
     }
 
@@ -636,13 +657,21 @@ impl PScanAccrual {
     }
 
     /// The SP-6 reconcile evidence: the matched bond-posts bound to the verified
-    /// `covered` range they were gathered over. Constructible only here, from the
-    /// accrual's own verification-gated `covered` — so 2d-2 SP-R0 receives a match set
-    /// it cannot reason about absence beyond (`absence ≠ unscanned`). The matches are
-    /// complete over `covered` because the scan is exhaustive across it.
+    /// `covered` range they were gathered over, **plus the per-persona watch
+    /// floors** that scope the completeness claim. Constructible only here, from
+    /// the accrual's own verification-gated `covered` — so 2d-2 SP-R0 receives a
+    /// match set it cannot reason about absence beyond (`absence ≠ unscanned`,
+    /// and per-persona: absence ≠ scanned-unwatched). The matches are complete
+    /// over `covered` *for each persona only from its floor onward*, because the
+    /// scan is exhaustive across `covered` but watched only the union it held at
+    /// each step.
     #[allow(dead_code)] // transient — the consumer is 2d-2 SP-R0's reconcile GC.
     pub(crate) fn reconcile_set(&self) -> PReconcileSet {
-        PReconcileSet::from_verified_scan(self.covered, self.bond_post_matches.clone())
+        PReconcileSet::from_verified_scan(
+            self.covered,
+            self.bond_post_matches.clone(),
+            self.watch_floors.clone(),
+        )
     }
 }
 
@@ -658,6 +687,7 @@ mod tests {
     /// A funding-only scan-step result over `[start, end)` carrying `deltas`.
     fn step(start: u64, end: u64, deltas: &[(u64, u64)]) -> ScanStepResult {
         ScanStepResult {
+            watched_personas: Vec::new(),
             spent_funding: Vec::new(),
             range: BlockRange::new(BlockHeight::from_raw(start), BlockHeight::from_raw(end))
                 .expect("range"),
@@ -823,9 +853,13 @@ mod tests {
         }
     }
 
-    /// A scan step over `[start, end)` carrying `matches` (no funding).
+    /// A scan step over `[start, end)` carrying `matches` (no funding). The
+    /// step's watch union is the matched personas — a real sweep can only
+    /// match a persona it watches.
     fn match_step(start: u64, end: u64, matches: Vec<BondPostMatch>) -> ScanStepResult {
+        let watched_personas = matches.iter().map(|m| m.p_canonical_id).collect();
         ScanStepResult {
+            watched_personas,
             spent_funding: Vec::new(),
             range: BlockRange::new(BlockHeight::from_raw(start), BlockHeight::from_raw(end))
                 .expect("range"),
@@ -864,13 +898,16 @@ mod tests {
                 post_kind: 0,
             }
         );
-        // A persona never matched, queried in-range → provably absent.
+        // A persona this scan never WATCHED cannot be read as absent — the
+        // provenance gate returns unknown (its match rows could not exist).
+        // The watched-but-unmatched → absent case is pinned in the
+        // reconcile-type tests.
         assert_eq!(
             set.reconcile(
                 PCanonicalId::from_bytes([0xEE; 32]),
                 BlockHeight::from_raw(3)
             ),
-            ReconcileVerdict::AbsentWithinCovered
+            ReconcileVerdict::OutsideCovered
         );
     }
 

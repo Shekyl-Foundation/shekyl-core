@@ -3903,6 +3903,45 @@ sustainability is unaffected by the recalibration.
     scan covers — a restore whose `restore_from_height` postdates its bonds
     reconstructs nothing until a lower-floor rescan (the same birthday
     semantics every fund has).
+    **UPDATE 2026-08-13 (review round on the bond-watch build — the absence
+    evidence is now per-persona):** the review found the height-gated bridge
+    alone was not airtight: the P-scan seal's match set is complete only over
+    personas **watched while coverage advanced**, so a probe-adopted bond
+    whose sighted height sat below an already-advanced frontier (restore →
+    stake a new slot → pscan seals `[0, tip)` → lower-floor rescan sights the
+    old bonds; or a mid-session adoption the spawn-time actor never watches)
+    read `AbsentWithinCovered` and was permanently GC'd — stuck funds. Fixed
+    structurally: the seal now records per-persona **watch floors**
+    (`PScanState::watch_floors`, `PSCAN_STATE_VERSION` 8→9;
+    `ScanStepResult::watched_personas` feeds them at ingest) and
+    `PReconcileSet::reconcile` refuses to convert "no match row" into absence
+    below a persona's floor or for an unfloored persona (`Present` is never
+    gated). Companion hardening from the same round: a reorg rewind now
+    **discards sighting rows at/above the fork at the merge**
+    (`StakingBlock::discard_sightings_at_or_above` — the re-scan re-sights a
+    re-mined post at its canonical height; also the in-session healing edge
+    for the first-stake `AlreadyStaked` guard), a committed sighting row is
+    **immutable** (no cross-batch height lowering; within-batch min is owned
+    by `adopt_bond_sightings`), the refresh producer **aborts as
+    `ReorgStorm`** when a divergence lands after the rewind budget instead of
+    scanning blind (monotone adoptions cannot self-heal the way ledger state
+    does), `sightings_in` adopts **JoinMarket posts only** (the same
+    confirmation filter as the P-scan), and a mid-session recovery is a
+    first-class surfaced state: `StakingReadView::recovery_pending_reopen` /
+    `staking_info.recovery_pending_reopen`, with `first_stake`/`start_pscan`
+    refusing `-29504 STAKE_RECOVERED_PENDING_REOPEN` ("close and reopen")
+    rather than an internal fault — Model D derives persona keys only at
+    open, so a mid-session adoption cannot spawn or extend the actor.
+    **Known residual (safe direction):** a persona whose sighting sits below
+    its watch floor is *retained indefinitely* (`OutsideCovered`), never
+    corroborated or refuted, until a P-scan covers that range with the
+    persona watched — which today never happens for an already-advanced
+    frontier (the pscan has no floor-lowering backfill). Funds-safe (retention,
+    never GC) and the flagship restore path is unaffected (a fresh restore
+    has no seal, so floors start at 0). **Reopen when** a pscan backfill /
+    frontier-lowering scan mode is designed — that is a new producer scan
+    mode over the exhaustiveness machinery, a distinct validation surface
+    (rule 19), not a patch on the reconcile arms.
   - **Persona slot-space exhaustion is not represented, and the binding gate
     does not refuse it.** `StakingBlock::monotone_current_slot` uses
     `saturating_add(1)`, which correctly prevents a wrap to slot 0 but makes

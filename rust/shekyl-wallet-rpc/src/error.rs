@@ -102,6 +102,9 @@ pub enum WalletRpcErrorCode {
     /// Stake: the wallet's persona record moved during the credentialed
     /// reopen; nothing was written — re-invoke `stake`.
     StakeRecordMoved = -29503,
+    /// Stake: this session's scan recovered a staked slot; staking becomes
+    /// operational at the next wallet open — close and reopen, then retry.
+    StakeRecoveredPendingReopen = -29504,
     /// Server: wallet-dir tenancy unavailable.
     TenantUnavailable = -29900,
 }
@@ -282,6 +285,17 @@ pub enum WalletRpcError {
     /// the operator's remedy does not depend on it.
     #[error("staking record changed while opening; nothing was written — call stake again")]
     StakeRecordMoved,
+
+    /// `stake` (`-29504`): the wallet's scan recovered a previously-staked
+    /// slot **this session** (the from-seed bond watch), and a recovered
+    /// slot becomes operational only when the wallet is next opened — the
+    /// keys it needs are derived at open, never mid-session. A **domain**
+    /// refusal with a self-contained remedy (rule 82): close and reopen the
+    /// wallet, then retry; no protocol knowledge required (rule 81).
+    #[error(
+        "staking was recovered during this session's scan; close and reopen          the wallet to finish recovery, then retry"
+    )]
+    StakeRecoveredPendingReopen,
 }
 
 impl WalletRpcError {
@@ -322,6 +336,7 @@ impl WalletRpcError {
             Self::StakeInFlight => WalletRpcErrorCode::StakeInFlight,
             Self::AlreadyStaked => WalletRpcErrorCode::AlreadyStaked,
             Self::StakeRecordMoved => WalletRpcErrorCode::StakeRecordMoved,
+            Self::StakeRecoveredPendingReopen => WalletRpcErrorCode::StakeRecoveredPendingReopen,
         }
     }
 
@@ -480,6 +495,9 @@ impl From<PScanStartError> for WalletRpcError {
             PScanStartError::NoStakeEngine => {
                 Self::InternalError("p-scan start: no stake engine".into())
             }
+            // A mid-session bond-watch recovery: a domain state with a
+            // user-doable remedy (reopen), never an internal fault.
+            PScanStartError::RecoveredPendingReopen => Self::StakeRecoveredPendingReopen,
             PScanStartError::AlreadyRunning => {
                 Self::InternalError("p-scan start: task already running".into())
             }

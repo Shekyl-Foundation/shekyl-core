@@ -762,6 +762,11 @@ pub struct StakingInfoResult {
     /// never scanned as a staker).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pscan_synced_height: Option<i64>,
+    /// `true` when this session's scan recovered a staked slot that becomes
+    /// operational at the next wallet open — close and reopen the wallet to
+    /// finish staking recovery. `false` in the steady state.
+    #[serde(default)]
+    pub recovery_pending_reopen: bool,
 }
 
 /// `get_tx_proof` result (WI-RPC-3 proofs).

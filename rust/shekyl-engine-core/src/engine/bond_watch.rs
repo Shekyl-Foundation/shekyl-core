@@ -94,14 +94,27 @@ pub(crate) fn match_watch<'a>(
 /// Slot-resolved sightings in `tx` at `height` against the principal scan's
 /// probe-id watch. The producer owns per-attempt dedup and the reorg rewind;
 /// this is just the per-tx match.
+///
+/// **JoinMarket posts only** — the same confirmation filter as
+/// [`PScanAccrual::confirmed_join_market_personas`](super::pscan::accrual::PScanAccrual::confirmed_join_market_personas),
+/// so the two consumers agree on the post-kind byte as the module docs
+/// require. A sighting *adopts* the slot as live-bonded; only the
+/// bond-establishing kind is evidence of that. A future non-establishing
+/// kind (unbond/close) observed here must not re-adopt a slot whose bond
+/// that very post says is gone — the P-scan would refuse to corroborate and
+/// the sighting bridge would wedge.
 pub(crate) fn sightings_in<'a>(
     tx: &'a Transaction,
     height: u64,
     watch: &'a BTreeMap<PCanonicalId, u32>,
 ) -> impl Iterator<Item = BondSightingObserved> + 'a {
-    match_watch(tx, watch).map(move |(_, slot)| BondSightingObserved {
-        block_height: height,
-        slot,
+    match_watch(tx, watch).filter_map(move |(obs, slot)| {
+        (obs.post_kind == shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET).then_some(
+            BondSightingObserved {
+                block_height: height,
+                slot,
+            },
+        )
     })
 }
 
@@ -208,24 +221,53 @@ pub(crate) fn validate_bond_sightings(
 /// input, so raising past a sighted slot without adopting it would strand the
 /// bond (the arm-#4 adopt-before-raise lesson, applied here).
 ///
-/// Sightings survive a later reorg of the sighted block: a burned slot is the
-/// privacy-correct direction, and the sighting-aware arm #3 drops a refuted
-/// row at the next open once the P-scan's coverage passes it.
+/// A later reorg of the sighted block drops the row at that merge
+/// (`StakingBlock::discard_sightings_at_or_above`) and the re-scan re-sights
+/// any re-mined post — adoption is re-entrant, so a slot dropped by the
+/// open-time sweep in between is simply re-adopted. The burned cursor is the
+/// privacy-correct direction either way and is never lowered.
 ///
-/// Sorted insert: `bonded_slots` stays ascending (persisted-byte determinism
-/// — two wallets in the same logical state serialize identically), and a
-/// sighted slot may sit *below* existing entries after a partial rollback.
-pub(crate) fn adopt_bond_sightings(staking: &mut StakingBlock, sightings: &[BondSightingObserved]) {
+/// Per-slot **batch minimum** first: a committed sighting row is immutable
+/// (`record_first_sighting`), so within-batch order-independence — an
+/// untrusted `ScanResult` can list the same slot high-then-low — is owned
+/// here, by collapsing the batch to each slot's earliest height before
+/// recording.
+///
+/// Membership before position on the `bonded_slots` insert: the vec is kept
+/// ascending by its writers (persisted-byte determinism — two wallets in the
+/// same logical state serialize identically), but a deserialized hint that
+/// lost its order (corrupt file, older writer — the same shape the phantom
+/// sweep defends against) would make an order-assuming `binary_search`
+/// misreport membership and insert a duplicate. `contains` decides; the
+/// sorted position is only where the new entry goes.
+/// Returns the slots **newly inserted** into `bonded_slots` by this call —
+/// the session-adoption record the merge keeps so the staking status surface
+/// can report "recovered; finishes at next open" (a mid-session adoption
+/// cannot reach the actor under Model D).
+pub(crate) fn adopt_bond_sightings(
+    staking: &mut StakingBlock,
+    sightings: &[BondSightingObserved],
+) -> Vec<u32> {
     if sightings.is_empty() {
-        return;
+        return Vec::new();
     }
-    let mut sighted_high: Option<u32> = None;
+    let mut batch_first: BTreeMap<u32, u64> = BTreeMap::new();
     for s in sightings {
-        staking.record_first_sighting(s.slot, shekyl_types::BlockHeight::from_raw(s.block_height));
-        if let Err(pos) = staking.bonded_slots.binary_search(&s.slot) {
-            staking.bonded_slots.insert(pos, s.slot);
+        batch_first
+            .entry(s.slot)
+            .and_modify(|h| *h = (*h).min(s.block_height))
+            .or_insert(s.block_height);
+    }
+    let mut newly_adopted = Vec::new();
+    let mut sighted_high: Option<u32> = None;
+    for (&slot, &height) in &batch_first {
+        staking.record_first_sighting(slot, shekyl_types::BlockHeight::from_raw(height));
+        if !staking.bonded_slots.contains(&slot) {
+            let pos = staking.bonded_slots.partition_point(|&b| b < slot);
+            staking.bonded_slots.insert(pos, slot);
+            newly_adopted.push(slot);
         }
-        sighted_high = Some(sighted_high.map_or(s.slot, |m| m.max(s.slot)));
+        sighted_high = Some(sighted_high.map_or(slot, |m| m.max(slot)));
     }
     // A chain-proven bond makes this wallet a staker: the next open spawns
     // the actor and the P-scan corroborates (then supersedes) the sightings.
@@ -241,6 +283,7 @@ pub(crate) fn adopt_bond_sightings(staking: &mut StakingBlock, sightings: &[Bond
         cursor = staking.p_slot,
         "bond watch: chain-observed bond posts adopted at merge"
     );
+    newly_adopted
 }
 
 #[cfg(test)]
@@ -315,20 +358,40 @@ mod tests {
         );
     }
 
-    /// Duplicate sightings of the same slot keep the EARLIEST height —
-    /// including when a later call (or a later row in the same untrusted
-    /// batch) lists a lower height. The evidence bar arm #3 reads must
-    /// not depend on producer order.
+    /// Within one untrusted batch the slot's EARLIEST height is recorded
+    /// regardless of row order; across batches a committed row is immutable
+    /// — a later result must not advance the bar (eroding `OutsideCovered`
+    /// protection) nor lower it (pulling a real bond's bar into covered
+    /// range, the wrongful-GC direction). Only the reorg path
+    /// (`discard_sightings_at_or_above`) replaces a committed row.
     #[test]
-    fn adopt_bond_sightings_first_height_wins() {
+    fn adopt_bond_sightings_batch_min_then_committed_row_is_immutable() {
         let mut staking = shekyl_engine_state::StakingBlock::empty();
-        adopt_bond_sightings(&mut staking, &[sighting(0, 50)]);
-        adopt_bond_sightings(&mut staking, &[sighting(0, 80)]);
-        assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(50));
-        // One batch, high then low: the min wins, not the first row.
+        // One batch, high then low: the batch min wins, not the first row.
         adopt_bond_sightings(&mut staking, &[sighting(0, 90), sighting(0, 40)]);
         assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(40));
         assert_eq!(staking.bonded_slots, vec![0]);
+        // Later batches — higher OR lower — leave the committed row alone.
+        adopt_bond_sightings(&mut staking, &[sighting(0, 80)]);
+        assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(40));
+        adopt_bond_sightings(&mut staking, &[sighting(0, 10)]);
+        assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(40));
+        assert_eq!(staking.bonded_slots, vec![0]);
+    }
+
+    /// The membership check is `contains`, not an order-assuming
+    /// `binary_search`: on a deserialized hint that lost its order (the
+    /// corrupt-file / older-writer shape the phantom sweep also defends
+    /// against) a re-sighted slot must not be inserted a second time.
+    #[test]
+    fn adopt_bond_sightings_never_duplicates_on_an_unsorted_hint() {
+        let mut staking = shekyl_engine_state::StakingBlock::new(true, 3, vec![2, 0]);
+        adopt_bond_sightings(&mut staking, &[sighting(2, 100)]);
+        assert_eq!(
+            staking.bonded_slots,
+            vec![2, 0],
+            "slot 2 is already a member — no duplicate, no reorder"
+        );
     }
 
     /// O5 contract: an empty processed range must carry no sightings, and a

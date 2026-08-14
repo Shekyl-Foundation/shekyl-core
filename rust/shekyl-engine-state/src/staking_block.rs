@@ -172,7 +172,10 @@ pub struct StakingBlock {
     /// GC a real probe-adopted bond as phantom — and by the first-stake
     /// W2 resume guard (a sighted slot is already-staked). A row is
     /// pruned once the P-scan's own evidence carries the match
-    /// (`Present`), which supersedes it.
+    /// (`Present`), which supersedes it, or dropped when a reorg orphans
+    /// the sighted block ([`Self::discard_sightings_at_or_above`] at the
+    /// merge) — the two exits that keep every surviving row naming a
+    /// block on the wallet's canonical chain.
     #[serde(default)]
     pub bond_sightings: BTreeMap<u32, BlockHeight>,
 }
@@ -230,26 +233,49 @@ impl StakingBlock {
         }
     }
 
-    /// Record a bond-post sighting for `slot`, keeping the **earliest**
-    /// height (the sighting's consumer — arm #3's height-gated verdict —
-    /// needs the earliest height whose coverage proves or refutes the
-    /// bond). A later duplicate must not advance the evidence bar; an
-    /// earlier one must pull it back — `ScanResult` is untrusted at
-    /// merge, so this must not depend on producer order. Returns `true`
-    /// if this call inserted the row.
+    /// Record a bond-post sighting for `slot`. A **committed row is never
+    /// rewritten**: the stored height is merge-committed chain evidence, and
+    /// arm #3's verdict at it can only err toward `OutsideCovered` (kept —
+    /// the funds-safe direction). Letting a later merge *lower* it would let
+    /// one `ScanResult` (untrusted at merge, O5) pull the evidence bar into
+    /// already-covered range and turn a real probe-adopted bond into an
+    /// `AbsentWithinCovered` GC. The one legitimate invalidator is a reorg
+    /// that orphans the sighted block — that path goes through
+    /// [`Self::discard_sightings_at_or_above`], which removes the row so the
+    /// re-scan's sighting re-inserts at its new canonical height. The caller
+    /// owns within-batch order-independence (it records each slot's batch
+    /// minimum once). Returns `true` if this call inserted the row.
     pub fn record_first_sighting(&mut self, slot: u32, height: BlockHeight) -> bool {
         match self.bond_sightings.entry(slot) {
             std::collections::btree_map::Entry::Vacant(v) => {
                 v.insert(height);
                 true
             }
-            std::collections::btree_map::Entry::Occupied(mut o) => {
-                if height.to_raw() < o.get().to_raw() {
-                    o.insert(height);
-                }
-                false
-            }
+            std::collections::btree_map::Entry::Occupied(_) => false,
         }
+    }
+
+    /// Drop every sighting row at or above `fork_height` — the merge-side
+    /// reorg edge for the bond watch. A sighting names a block; once a reorg
+    /// orphans that block the row's evidence claim is unsupported, and
+    /// keeping it would poison arm #3's height-gated verdict with a height
+    /// the canonical chain never carried (a re-mined post sits elsewhere).
+    /// The re-scan from the fork re-sights every canonical post, so a
+    /// surviving bond gets a fresh row at its true height in the same merge;
+    /// a post that never re-mines leaves its adopted slot to the open-time
+    /// sweep, and a later re-mine is re-adopted by the next refresh (adoption
+    /// is re-entrant). Returns the slots whose rows were dropped.
+    pub fn discard_sightings_at_or_above(&mut self, fork_height: BlockHeight) -> Vec<u32> {
+        let dropped: Vec<u32> = self
+            .bond_sightings
+            .iter()
+            .filter(|(_, h)| **h >= fork_height)
+            .map(|(slot, _)| *slot)
+            .collect();
+        for slot in &dropped {
+            self.bond_sightings.remove(slot);
+        }
+        dropped
     }
 
     /// The reconciled active slot: `max(p_slot, highest_bonded_slot_seen + 1)`.
@@ -408,22 +434,45 @@ mod tests {
         assert!(rendered.contains("p_slot: 7"), "{rendered}");
     }
 
-    /// `record_first_sighting` keeps the earliest height: a later duplicate
-    /// must not advance the evidence bar, and an earlier one must pull it
-    /// back (O5: a single untrusted batch can list the same slot high-then-
-    /// low). This bites against an order-dependent first-call-wins; it does
-    /// NOT cover the merge's cache-membership refusal.
+    /// A committed sighting row is immutable under `record_first_sighting`:
+    /// a later call can neither advance the evidence bar (which would let a
+    /// duplicate erode the `OutsideCovered` protection) nor LOWER it (which
+    /// would let one untrusted `ScanResult` pull the bar into already-covered
+    /// range and turn a real probe-adopted bond into a wrongful
+    /// `AbsentWithinCovered` GC). This bites against re-introducing a
+    /// min-wins overwrite; the reorg path invalidates rows via
+    /// `discard_sightings_at_or_above`, tested below.
     #[test]
-    fn first_sighting_wins_and_duplicates_are_ignored() {
+    fn committed_sighting_row_is_never_rewritten() {
         let mut b = StakingBlock::empty();
         assert!(b.record_first_sighting(4, BlockHeight::from_raw(100)));
         assert!(!b.record_first_sighting(4, BlockHeight::from_raw(200)));
         assert_eq!(b.bond_sightings.get(&4), Some(&BlockHeight::from_raw(100)));
-        // An earlier height in a later call pulls the bar back.
+        // A LOWER height in a later call must not pull a committed bar back.
         assert!(!b.record_first_sighting(4, BlockHeight::from_raw(40)));
-        assert_eq!(b.bond_sightings.get(&4), Some(&BlockHeight::from_raw(40)));
+        assert_eq!(b.bond_sightings.get(&4), Some(&BlockHeight::from_raw(100)));
         // A different slot inserts independently.
         assert!(b.record_first_sighting(5, BlockHeight::from_raw(200)));
+    }
+
+    /// The reorg edge: rows at or above the fork are orphaned evidence and
+    /// go; rows strictly below it name still-canonical blocks and stay. A
+    /// dropped slot can be re-recorded at its re-mined height — the
+    /// drop-then-reinsert path is what replaces the (removed) height
+    /// overwrite.
+    #[test]
+    fn discard_sightings_at_or_above_drops_orphaned_rows_only() {
+        let mut b = StakingBlock::empty();
+        b.record_first_sighting(1, BlockHeight::from_raw(30));
+        b.record_first_sighting(2, BlockHeight::from_raw(50));
+        b.record_first_sighting(3, BlockHeight::from_raw(80));
+        let dropped = b.discard_sightings_at_or_above(BlockHeight::from_raw(50));
+        assert_eq!(dropped, vec![2, 3], "fork at 50 orphans 50 and 80");
+        assert_eq!(b.bond_sightings.get(&1), Some(&BlockHeight::from_raw(30)));
+        assert!(!b.bond_sightings.contains_key(&2));
+        // The re-scan re-sights the re-mined post at its canonical height.
+        assert!(b.record_first_sighting(2, BlockHeight::from_raw(80)));
+        assert_eq!(b.bond_sightings.get(&2), Some(&BlockHeight::from_raw(80)));
     }
 
     #[test]

@@ -42,8 +42,12 @@
 //!   re-pay W PQ keygens for identical bytes, and the very rescan this
 //!   reset starts is the bond watch's main consumer. Phantom GC stays
 //!   where it belongs: the open-time sweep, which is
-//!   `absence-≠-unscanned` gated (and sighting-height gated for
-//!   probe-adopted slots).
+//!   `absence-≠-unscanned` gated, sighting-height gated for probe-adopted
+//!   slots, and **per-persona watch-floor gated** — the P-scan seal this
+//!   reset deliberately leaves untouched may hold coverage gathered before
+//!   a rescan-adopted persona ever entered the scan union, and that
+//!   coverage makes no absence claim about it
+//!   (`PReconcileSet::reconcile`'s provenance gate).
 //!
 //! **Clear / reset (scan-derived — the replay rebuilds all of it):**
 //! - the whole [`LedgerBlock`] (transfers, tip, reorg window) — replaced

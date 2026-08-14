@@ -133,6 +133,15 @@ pub enum FirstStakeError {
     /// defect at the caller, not a user refusal.
     #[error("no stake engine resident: first-stake requires the open-with-intent path")]
     NoStakeEngine,
+    /// The bond watch recovered (adopted) a staked slot **this session**
+    /// (`staking_enabled` with no resident actor — the only way to occupy
+    /// that state, since a staker session spawns its actor at open): the
+    /// recovered persona's keys are derivable only at open under Model D,
+    /// so staking becomes operational at the next open. A **domain**
+    /// refusal with a self-contained remedy: close and reopen the wallet,
+    /// then retry.
+    #[error("staking recovered this session: close and reopen the wallet to finish recovery")]
+    RecoveredPendingReopen,
     /// A signed bond post is already sealed and awaiting dispatch (W3): the
     /// stake is in flight; the dispatch driver will broadcast it.
     #[error("a signed bond post is already awaiting dispatch")]
@@ -540,7 +549,17 @@ where
         let slot = PSlot::from_raw(slot);
         let (daemon, stake, curve_tree, pending_write_lock, chain_tip, tip_hash_at, staking) = {
             let g = self_arc.read().await;
-            let stake = g.stake_handle().ok_or(FirstStakeError::NoStakeEngine)?;
+            let stake = match g.stake_handle() {
+                Some(stake) => stake,
+                // `staking_enabled` with no resident actor is exactly the
+                // mid-session bond-watch recovery state — name the remedy
+                // (reopen) rather than reporting an internal sequencing
+                // fault over a healthy wallet.
+                None if g.ledger.read().ledger.staking.staking_enabled => {
+                    return Err(FirstStakeError::RecoveredPendingReopen);
+                }
+                None => return Err(FirstStakeError::NoStakeEngine),
+            };
             let snap = g.ledger.snapshot();
             let chain_tip = g.ledger.synced_height();
             let tip_hash_at = move |h: u64| snap.block_hash_at(h);
@@ -982,6 +1001,7 @@ mod tests {
                 }],
                 Vec::new(),
                 Vec::new(),
+                std::collections::BTreeMap::from([(persona_3, BlockHeight::ZERO)]),
             );
             let bytes = state.to_postcard_bytes().expect("encode state");
             file.save_pscan_state(key.as_bytes(), &bytes)
@@ -1124,6 +1144,144 @@ mod tests {
         assert!(
             engine.ledger().staking.bonded_slots.is_empty(),
             "a refused sighting must not adopt"
+        );
+    }
+
+    /// A mid-session bond-watch recovery (adoption flips `staking_enabled`
+    /// with no resident actor — Model D cannot spawn one without the seed)
+    /// is a typed domain refusal naming the remedy, not an internal fault:
+    /// `first_stake` reads `RecoveredPendingReopen` (RPC `-29504`, "reopen
+    /// the wallet"), and the staking read surface reports
+    /// `recovery_pending_reopen` so the embedder can say so unprompted.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn recovered_mid_session_first_stake_names_the_reopen_remedy() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"recovered pending reopen");
+        let seed = fixed_seed();
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+        let engine =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        assert!(
+            !engine.has_stake_engine(),
+            "fixture: a fresh non-staker session has no actor"
+        );
+        assert!(
+            !engine.staking_recovery_pending_reopen(),
+            "fixture: nothing recovered yet"
+        );
+
+        engine
+            .apply_scan_result(one_block_scan_result(vec![
+                crate::scan::BondSightingObserved {
+                    block_height: 1,
+                    slot: 0,
+                },
+            ]))
+            .expect("adoption merge");
+        assert!(
+            engine.staking_recovery_pending_reopen(),
+            "adoption must surface the pending-reopen state"
+        );
+        let view = engine.staking_read_view().expect("staking read view");
+        assert!(view.recovery_pending_reopen);
+
+        let arc = std::sync::Arc::new(tokio::sync::RwLock::new(engine));
+        let err = Engine::first_stake(arc, 0)
+            .await
+            .expect_err("no actor is resident this session");
+        assert!(
+            matches!(err, FirstStakeError::RecoveredPendingReopen),
+            "got {err:?}"
+        );
+    }
+
+    /// The merge's reorg edge for sighting rows: a rewind discards every
+    /// stored row at/above the fork BEFORE adopting the re-scan's sightings,
+    /// so (a) a re-mined post replaces its orphaned row at the new canonical
+    /// height — the old min-height rule would have kept the orphaned height
+    /// and let a lagging P-scan read the real re-mined bond as
+    /// AbsentWithinCovered — and (b) a post that did not re-mine loses its
+    /// row (its adopted slot stays for the open-time sweep, and a later
+    /// re-mine is re-adopted), while (c) rows below the fork survive
+    /// untouched. Also the in-session healing edge for the first-stake
+    /// AlreadyStaked guard: the orphaned row no longer wedges it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn apply_scan_result_reorg_replaces_orphaned_sighting_rows() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"reorg sighting hygiene");
+        let seed = fixed_seed();
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+        let engine =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+
+        // First merge: blocks 1..3; slot 0 sighted at 1 (below the coming
+        // fork), slots 1 and 2 sighted at 2 (at the fork — orphaned).
+        engine
+            .apply_scan_result(crate::scan::ScanResult {
+                processed_height_range: 1..3,
+                parent_hash: None,
+                block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+                new_transfers: Vec::new(),
+                spent_key_images: Vec::new(),
+                reorg_rewind: None,
+                block_leaves: Vec::new(),
+                block_curve_tree_roots: Vec::new(),
+                bond_sightings: vec![
+                    crate::scan::BondSightingObserved {
+                        block_height: 1,
+                        slot: 0,
+                    },
+                    crate::scan::BondSightingObserved {
+                        block_height: 2,
+                        slot: 1,
+                    },
+                    crate::scan::BondSightingObserved {
+                        block_height: 2,
+                        slot: 2,
+                    },
+                ],
+            })
+            .expect("first merge");
+
+        // Reorg forking at 2: slot 1's post re-mines at 3; slot 2's does not.
+        engine
+            .apply_scan_result(crate::scan::ScanResult {
+                processed_height_range: 2..4,
+                parent_hash: Some([0x11; 32]),
+                block_hashes: vec![(2, [0xB2; 32]), (3, [0xB3; 32])],
+                new_transfers: Vec::new(),
+                spent_key_images: Vec::new(),
+                reorg_rewind: Some(crate::scan::ReorgRewind { fork_height: 2 }),
+                block_leaves: Vec::new(),
+                block_curve_tree_roots: Vec::new(),
+                bond_sightings: vec![crate::scan::BondSightingObserved {
+                    block_height: 3,
+                    slot: 1,
+                }],
+            })
+            .expect("reorg merge");
+
+        let staking = engine.ledger().staking.clone();
+        assert_eq!(
+            staking.bond_sightings.get(&0).map(|h| h.to_raw()),
+            Some(1),
+            "a row below the fork survives untouched"
+        );
+        assert_eq!(
+            staking.bond_sightings.get(&1).map(|h| h.to_raw()),
+            Some(3),
+            "a re-mined post's row moves to its new canonical height"
+        );
+        assert!(
+            !staking.bond_sightings.contains_key(&2),
+            "an orphaned, un-re-mined row is discarded"
+        );
+        assert_eq!(
+            staking.bonded_slots,
+            vec![0, 1, 2],
+            "adoption is never rewound — slot 2 stays for the open-time sweep"
         );
     }
 

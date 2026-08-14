@@ -790,18 +790,40 @@ impl Engine<SoloSigner> {
         // The staker's scan path still fails loud on the same corrupt seal
         // at `start_pscan`.
         let derivation_network = network_to_derivation(network);
-        let id_of_slot = |slot: u32| -> Result<shekyl_types::PCanonicalId, OpenError> {
-            let keys = derive_archival_p_keys(master_seed, derivation_network, seed_format, slot)
-                .map_err(|e| {
+        // Cache-first, identity-only on miss: persona ids are pure functions
+        // of the seed and never invalidate, so a slot already in the sealed
+        // `persona_id_cache` costs zero keygens here (the reconcile re-reads
+        // ids for bonded + lookahead slots on EVERY open — re-deriving them
+        // was pure waste), and a miss derives only the identity hybrid
+        // (`derive_archival_p_identity_pk` — byte-identical to the full
+        // bundle's `hybrid_bond_id`, pinned in `shekyl-crypto-pq`), skipping
+        // the ML-KEM / receive / bond-spend work no id consumer needs.
+        // Cache-consistency note: a sighted slot was matched against the
+        // CACHED id at scan time, so evaluating arm #3 with the same cached
+        // id is the self-consistent read; the cache rides the AEAD-sealed
+        // ledger, which is what guards its integrity.
+        let cached_probe_ids = ledger.staking.persona_id_cache.clone();
+        let id_of_slot = move |slot: u32| -> Result<shekyl_types::PCanonicalId, OpenError> {
+            if let Some(id) = cached_probe_ids.get(&slot) {
+                return Ok(*id);
+            }
+            let identity_pk = shekyl_crypto_pq::archival_p::derive_archival_p_identity_pk(
+                master_seed,
+                derivation_network,
+                seed_format,
+                slot,
+            )
+            .map_err(|e| {
                 OpenError::Key(KeyError::Primitive {
                     detail: rederivation_failure_detail(&e),
                 })
             })?;
-            super::stake_engine::persona_canonical_id(&keys).map_err(|_| {
+            let bytes = identity_pk.to_canonical_bytes().map_err(|_| {
                 OpenError::Key(KeyError::Primitive {
                     detail: "persona canonical id encode failed",
                 })
-            })
+            })?;
+            Ok(shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(&bytes))
         };
         // The bond watch's retired refusal set: probe ids for durably-retired
         // slots are excluded from the watch (their cursor burn is arm #2's,
@@ -1937,6 +1959,7 @@ mod tests {
                         retired_epoch: SettlementEpoch::from_raw(30),
                     })
                     .collect(),
+                std::collections::BTreeMap::new(),
             );
             file.save_pscan_state(key.as_bytes(), &state.to_postcard_bytes().expect("encode"))
                 .expect("seal");

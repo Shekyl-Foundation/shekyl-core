@@ -909,6 +909,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            BTreeMap::new(),
         );
         store.save(&seeded).await.expect("seed");
         let mut accrual = PScanAccrual::from_state(&seeded);
@@ -1005,6 +1006,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            BTreeMap::new(),
         );
         let mut accrual = PScanAccrual::from_state(&state);
         assert_eq!(
@@ -1084,6 +1086,7 @@ mod tests {
             Vec::new(),
             funding,
             Vec::new(),
+            BTreeMap::new(),
         ));
         assert_eq!(
             accrual.settled_epoch(),
@@ -1136,6 +1139,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            BTreeMap::new(),
         ));
         let stake = spawn_stake(&[0]);
         let mut retired = BTreeSet::new();
@@ -1180,6 +1184,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            BTreeMap::new(),
         ));
         assert_eq!(
             accrual.settled_epoch(),

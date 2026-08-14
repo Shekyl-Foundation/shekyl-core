@@ -209,15 +209,23 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 const PER_BLOCK_CEILING: u32 = 1;
 
 /// Upper bound on intra-attempt reorg rewinds absorbed by a single
-/// `produce_scan_result` call before it stops re-checking linkage and
-/// lets any residual self-heal on the next refresh. Each detected reorg
-/// rewinds `h` backward, so an *unbounded* count would let a daemon that
-/// reorgs between every pair of fetches — a reorg storm, or a hostile
-/// daemon deliberately spinning the wallet — stall one attempt forever.
-/// The common real case is a single reorg per attempt; this budget covers
-/// legitimate multi-reorg bursts while the bound guarantees termination.
-/// Reaching it is **not** a torn splice: the between-attempts linkage
-/// check rewinds any residual on the next refresh.
+/// `produce_scan_result` call. Each detected reorg rewinds `h` backward,
+/// so an *unbounded* count would let a daemon that reorgs between every
+/// pair of fetches — a reorg storm, or a hostile daemon deliberately
+/// spinning the wallet — stall one attempt forever. The common real case
+/// is a single reorg per attempt; this budget covers legitimate
+/// multi-reorg bursts while the bound guarantees termination.
+///
+/// Detection stays armed past the budget; only *rewinding* is bounded. A
+/// reorg detected with the budget spent **fails the attempt**
+/// ([`LocalRefreshError::ReorgStorm`]) rather than scanning on with
+/// detection disarmed: blocks accumulated blind would merge, and while
+/// ledger state is reorg-rewindable at the next refresh, the bond watch's
+/// sightings are not — adoption raises the monotone cursor permanently,
+/// so a stale abandoned-fork sighting collected in a blind region would
+/// pass the merge's O5 checks and burn cursor slots on fork-only
+/// evidence. Failing the attempt keeps every consumer consistent; the
+/// retry starts clean once the chain calms.
 const MAX_REORG_REWINDS_PER_ATTEMPT: u32 = 8;
 
 // ============================================================================
@@ -416,6 +424,14 @@ pub(crate) enum LocalRefreshError {
     #[error("daemon returned a structurally malformed block")]
     Malformed,
 
+    /// A further reorg was detected after the per-attempt rewind budget
+    /// (`MAX_REORG_REWINDS_PER_ATTEMPT`) was spent. The attempt aborts
+    /// rather than scanning on with detection disarmed — see the budget
+    /// constant's docs for why merging a blind region is unsound for the
+    /// bond watch's monotone adoptions.
+    #[error("reorg storm: rewind budget exhausted and the chain diverged again")]
+    ReorgStorm,
+
     /// Internal invariant violation; not reachable from
     /// adversarial input.
     #[error("internal invariant violation during refresh")]
@@ -431,6 +447,11 @@ impl From<LocalRefreshError> for RefreshError {
             }),
             LocalRefreshError::Malformed => RefreshError::Io(IoError::Scanner {
                 detail: "LocalRefresh: daemon returned a structurally malformed block".to_string(),
+            }),
+            LocalRefreshError::ReorgStorm => RefreshError::Io(IoError::Daemon {
+                detail: "LocalRefresh: reorg storm — the chain served by the daemon diverged \
+                         again after the per-attempt rewind budget; retry when it stabilizes"
+                    .to_string(),
             }),
             LocalRefreshError::Internal => RefreshError::InternalInvariantViolation {
                 context: "LocalRefresh: scanner construction failed against view material",
@@ -711,11 +732,14 @@ impl RefreshEngine for LocalRefresh {
                 // empties the accumulators on every reorg, and the re-scan
                 // re-derives `effective_start`, keeping the result
                 // internally consistent no matter how many times detection
-                // fires. The counter bounds only *how many* rewinds,
-                // guaranteeing termination against a daemon that reorgs on
-                // every fetch; a residual beyond the budget self-heals on
-                // the next refresh's between-attempts linkage check.
-                if reorg_rewinds < MAX_REORG_REWINDS_PER_ATTEMPT && h > 1 {
+                // fires. Detection itself is NEVER disarmed: the counter
+                // bounds only how many *rewinds* the attempt absorbs, and a
+                // detection past the budget aborts the attempt (`ReorgStorm`
+                // below) — scanning on blind would merge blocks no linkage
+                // check vouched for, which the bond watch's monotone
+                // sighting adoption cannot survive (a stale fork sighting
+                // would pass O5 and burn cursor slots permanently).
+                if h > 1 {
                     let expected_parent = match block_hashes.last() {
                         Some(&(prev_h, prev_hash)) if prev_h + 1 == h => Some(prev_hash),
                         _ => snapshot.block_hash_at(h - 1).or(if h == effective_start {
@@ -726,6 +750,19 @@ impl RefreshEngine for LocalRefresh {
                     };
                     if let Some(expected_parent) = expected_parent {
                         if expected_parent != scannable.block.header.previous {
+                            // Budget check FIRST: a further divergence with the
+                            // rewind budget spent is the reorg-storm abort. The
+                            // attempt merges nothing (all-or-nothing result), so
+                            // no consumer sees the blind region.
+                            if reorg_rewinds == MAX_REORG_REWINDS_PER_ATTEMPT {
+                                warn!(
+                                    height = h,
+                                    max = MAX_REORG_REWINDS_PER_ATTEMPT,
+                                    "LocalRefresh: reorg detected after the rewind budget was \
+                                     spent; aborting the attempt (reorg storm)",
+                                );
+                                return Err(LocalRefreshError::ReorgStorm);
+                            }
                             warn!(
                                 height = h,
                                 "LocalRefresh: chain reorg detected at parent of {h}, walking fork point",
@@ -778,8 +815,8 @@ impl RefreshEngine for LocalRefresh {
                                 warn!(
                                     fork_height,
                                     max = MAX_REORG_REWINDS_PER_ATTEMPT,
-                                    "LocalRefresh: reorg-rewind budget exhausted; deferring \
-                                     residual linkage detection to the next refresh",
+                                    "LocalRefresh: reorg-rewind budget spent; a further \
+                                     divergence this attempt aborts as a reorg storm",
                                 );
                             }
                             effective_start = fork_height;
@@ -1609,7 +1646,21 @@ mod producer_property_tests {
     fn test_bond_tx(
         keys: &shekyl_crypto_pq::archival_p::ArchivalPKeys,
     ) -> shekyl_wire::transaction::Transaction {
-        use shekyl_wire::transaction::{BondPost, BondPostKind, Transaction, TxPrefix};
+        test_bond_tx_kind(
+            keys,
+            shekyl_wire::transaction::BondPostKind::JoinMarket {
+                bond_spend_pk: Vec::new(),
+            },
+        )
+    }
+
+    /// [`test_bond_tx`] with an explicit post kind, for the sighting
+    /// filter's non-establishing-kind edge.
+    fn test_bond_tx_kind(
+        keys: &shekyl_crypto_pq::archival_p::ArchivalPKeys,
+        kind: shekyl_wire::transaction::BondPostKind,
+    ) -> shekyl_wire::transaction::Transaction {
+        use shekyl_wire::transaction::{BondPost, Transaction, TxPrefix};
         use shekyl_wire::{Ct, CtBase, Holdings};
         Transaction {
             prefix: TxPrefix {
@@ -1620,9 +1671,7 @@ mod producer_property_tests {
                         .to_canonical_bytes()
                         .expect("encode hybrid id"),
                     p_canonical_id: test_persona_id(keys).to_bytes(),
-                    kind: BondPostKind::JoinMarket {
-                        bond_spend_pk: Vec::new(),
-                    },
+                    kind,
                     holdings: Holdings::CompleteTree,
                     bonded_total_atomic: 1_000,
                     bond_credit: 1_000,
@@ -1649,14 +1698,24 @@ mod producer_property_tests {
         let mine = test_persona(0);
         let stranger = test_persona(1);
 
-        // Chain: anchor at h0; h1 carries both bond posts. Mutate BEFORE
-        // reading hashes so the parent chaining stays consistent.
+        // Chain: anchor at h0; h1 carries three bond posts — the watched
+        // JoinMarket one, a stranger's, and a watched-id post of a
+        // NON-establishing kind (which must not sight: only the
+        // bond-establishing kind is adoption evidence — the same filter as
+        // the P-scan's confirmation set, so the two consumers agree on the
+        // post-kind byte). Mutate BEFORE reading hashes so the parent
+        // chaining stays consistent.
         let b0 = make_synthetic_block(0, [0u8; 32]);
         let mut b1 = make_synthetic_block(1, b0.block.hash());
         b1.transactions.push(test_bond_tx(&mine));
         b1.block.transaction_hashes.push([0xA1; 32]);
         b1.transactions.push(test_bond_tx(&stranger));
         b1.block.transaction_hashes.push([0xA2; 32]);
+        b1.transactions.push(test_bond_tx_kind(
+            &mine,
+            shekyl_wire::transaction::BondPostKind::Other(0x7F),
+        ));
+        b1.block.transaction_hashes.push([0xA3; 32]);
 
         let daemon =
             TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![b0.clone(), b1.clone()]);
@@ -1686,7 +1745,11 @@ mod producer_property_tests {
             .await
             .expect("scan completes");
 
-        assert_eq!(result.bond_sightings.len(), 1, "stranger's post is ignored");
+        assert_eq!(
+            result.bond_sightings.len(),
+            1,
+            "the stranger's post and the non-JoinMarket kind are both ignored"
+        );
         assert_eq!(
             result.bond_sightings[0].slot, 4,
             "slot-resolved from the watch"
@@ -2075,6 +2138,58 @@ mod producer_property_tests {
             "both reorgs must be absorbed: the result is the final chain (C above \
              the second fork), never a torn B→C splice"
         );
+    }
+
+    /// A divergence detected after the rewind budget is spent ABORTS the
+    /// attempt (`ReorgStorm`) — it must not scan on with detection disarmed
+    /// and merge a blind region. The ledger could rewind stale blocks at the
+    /// next refresh, but the bond watch's sighting adoption is monotone:
+    /// an abandoned-fork sighting collected blind passes the merge's O5
+    /// checks and burns cursor slots permanently. This bites against
+    /// re-introducing the pre-fix `reorg_rewinds < MAX` *detection* gate,
+    /// which silently disarmed linkage checking for the rest of the attempt.
+    #[tokio::test(start_paused = true)]
+    async fn reorg_past_the_rewind_budget_aborts_as_reorg_storm() {
+        const SYNCED: u64 = 4;
+        const TIP: u64 = 12;
+        const FORK: u64 = 6; // every fork above the window → boundary rewind
+        const TRIGGER: u64 = 7; // each swap fires when 7 is (re-)served
+
+        let refresh = make_local_refresh();
+        let chain_a = linear_chain(TIP);
+        let anchor = chain_a[usize::try_from(SYNCED).unwrap()].block.hash();
+
+        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain_a.clone());
+        // Script MAX + 1 reorgs, each a distinct-nonce tail off the same
+        // parent (A5). Every cycle: the swap fires at the re-served TRIGGER,
+        // the next fetch's parent linkage breaks, the producer rewinds to
+        // the boundary and re-scans — until the budget is spent and the
+        // (MAX+1)th divergence must abort instead of rewinding again.
+        for nonce in 1..=(MAX_REORG_REWINDS_PER_ATTEMPT + 1) {
+            daemon.replace_chain_after_fetch(
+                TRIGGER,
+                FORK,
+                divergent_tail_nonce(&chain_a, FORK, TIP, nonce),
+            );
+        }
+
+        let sink = AssertionSink::new();
+        let (progress_tx, _progress_rx) = fresh_progress_channel();
+        let outcome = refresh
+            .produce_scan_result(
+                snapshot_at_anchor(SYNCED, anchor),
+                &daemon,
+                RefreshOptions::default(),
+                CancellationToken::new(),
+                progress_tx,
+                &sink,
+            )
+            .await;
+        match outcome {
+            Err(LocalRefreshError::ReorgStorm) => {}
+            Err(other) => panic!("expected ReorgStorm, got {other:?}"),
+            Ok(_) => panic!("a divergence past the rewind budget must abort the attempt"),
+        }
     }
 
     /// Fresh empty [`LedgerSnapshot`] anchored at `synced_height = 0`

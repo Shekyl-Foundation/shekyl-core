@@ -72,6 +72,10 @@ mod tests;
 // `#[allow(unused_imports)]`: a re-export that stops being consumed must fail
 // rule 45's `-D warnings` gate, which is the only thing that keeps the
 // statement true as handlers come and go.
+// The open path derives ids via the cache-first identity-only route
+// (`derive_archival_p_identity_pk`); the remaining in-crate consumers of this
+// re-export are the arm-#3 fire harness (production-compiled `__test_helpers`)
+// and the bond-watch producer tests.
 pub(crate) use actor::persona_canonical_id;
 pub(crate) use bond::AssembledBondPost;
 pub(crate) use claim::{AssembleEmissionClaim, AssembledEmissionClaim};

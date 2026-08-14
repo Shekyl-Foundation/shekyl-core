@@ -251,11 +251,37 @@ impl<
             &label_residue,
             &inserted,
         );
-        // Bond watch (SA-R-6): adopt + raise under the same write guard —
-        // the whole `WalletLedger` serializes atomically at every save site,
-        // so no save can persist a synced tip past a sighted block without
-        // its adoption.
-        super::bond_watch::adopt_bond_sightings(&mut state.ledger.staking, &bond_sightings);
+        // Bond watch (SA-R-6): reorg hygiene, then adopt + raise, under the
+        // same write guard — the whole `WalletLedger` serializes atomically
+        // at every save site, so no save can persist a synced tip past a
+        // sighted block without its adoption.
+        //
+        // A rewind first invalidates every stored sighting at/above the fork:
+        // those rows name orphaned blocks, and a stale height would poison
+        // arm #3's height-gated verdict (a re-mined post sits elsewhere) and
+        // wedge the first-stake AlreadyStaked guard on a bond the canonical
+        // chain no longer carries. The re-scan's own sightings — adopted
+        // next — re-insert every surviving post at its canonical height.
+        if let Some(fork) = reorg_fork_height {
+            let dropped = state
+                .ledger
+                .staking
+                .discard_sightings_at_or_above(shekyl_types::BlockHeight::from_raw(fork));
+            if !dropped.is_empty() {
+                tracing::info!(
+                    dropped = dropped.len(),
+                    fork_height = fork,
+                    "bond watch: reorg orphaned sighting rows discarded at merge"
+                );
+            }
+        }
+        let newly_adopted =
+            super::bond_watch::adopt_bond_sightings(&mut state.ledger.staking, &bond_sightings);
+        // Session record for the status surface: an adopted persona cannot
+        // become operational this session (Model D — no seed, no actor
+        // respawn), so the wallet reports staking recovery as pending until
+        // the next open re-derives and spawns over the updated record.
+        state.slots_adopted_this_session.extend(newly_adopted);
         // WI-RPC-3 retention reconciler (`docs/api/wallet_rpc.yaml`
         // OUTBOUND PREREQUISITE pins 2–3 + PR-SJ-1 P3-1: after the merge
         // and the post-passes, retire retention orphans the chain now
@@ -644,18 +670,31 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
 /// (O(n)) — closing the FOLLOWUPS V3.0 entry on
 /// `populate_engine_handle_fields` cost.
 ///
-/// The empty-range fast path returns `Ok(Vec::new())`. Trait-impl
-/// wrappers that don't run the engine post-pass
-/// (`LocalLedger::apply_scan_result`,
-/// `EngineFixture::apply_scan_result`) discard the Vec via
-/// `.map(|_| ())` at their respective call sites — the trait surface
-/// stays `Result<(), RefreshError>`.
+/// The empty-range fast path returns `Ok(Vec::new())`.
+///
+/// **This function is `LedgerBlock`-scoped by design** — it cannot reach the
+/// staking block, so it does not (and must not) process `bond_sightings`.
+/// [`Engine::apply_scan_result`] validates and takes them under the same
+/// write guard before calling here; a result arriving with sightings still
+/// attached is a caller that skipped that seam, refused loudly below rather
+/// than silently dropping chain evidence.
 pub(crate) fn apply_scan_result_to_state(
     ledger: &mut LedgerBlock,
     indexes: &mut LedgerIndexes,
     result: ScanResult,
 ) -> Result<Vec<usize>, RefreshError> {
     let synced = ledger.height();
+
+    // Bond sightings mutate the STAKING block, which this LedgerBlock-scoped
+    // body cannot reach — the caller (`Engine::apply_scan_result`) validates
+    // and takes them first. A populated field here means a direct caller
+    // bypassed that seam; refusing turns what would be a silent drop of
+    // chain evidence (an unadopted real bond) into a loud contract error.
+    if !result.bond_sightings.is_empty() {
+        return Err(RefreshError::MalformedScanResult {
+            reason: "bond_sightings must be taken by the engine seam before the ledger apply",
+        });
+    }
 
     // Fork-height well-formedness. A `fork_height` of 0 would have
     // `handle_reorg` drop ledger/index state at-and-above genesis (a full
@@ -729,7 +768,7 @@ pub(crate) fn apply_scan_result_to_state(
         block_curve_tree_roots: _,
         // Taken by the outer `apply_scan_result` before this call (they
         // mutate the staking block, out of this fn's LedgerBlock scope);
-        // empty here by construction.
+        // enforced empty by the refusal at the top of this function.
         bond_sightings: _,
     } = result;
 
@@ -1106,6 +1145,31 @@ mod tests {
         let result = ScanResult::empty_at(1, None);
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("empty result merges");
         assert_eq!(ledger.height(), 0);
+    }
+
+    /// A `ScanResult` reaching the LedgerBlock-scoped body with sightings
+    /// still attached is a caller that bypassed the engine seam (validate +
+    /// take + adopt) — refused loudly, tip untouched. This bites against a
+    /// future direct caller silently discarding chain evidence; it does NOT
+    /// cover the seam's own validate/adopt behavior (engine-level tests).
+    #[test]
+    fn apply_refuses_a_result_with_attached_bond_sightings() {
+        let (mut ledger, mut indexes) = empty_state();
+        let mut result = ScanResult::empty_at(1, None);
+        result.processed_height_range = 1..2;
+        result.block_hashes = vec![(1, [0x11; 32])];
+        result
+            .bond_sightings
+            .push(crate::scan::BondSightingObserved {
+                block_height: 1,
+                slot: 0,
+            });
+        let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
+        assert!(
+            matches!(err, RefreshError::MalformedScanResult { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(ledger.height(), 0, "refusal must not advance the tip");
     }
 
     #[test]

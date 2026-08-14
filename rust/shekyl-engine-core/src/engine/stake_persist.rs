@@ -202,10 +202,14 @@ pub(crate) struct PhantomSlotSweep {
 ///   and the verdict is `Present`;
 /// - a **probe-adopted** bond (principal-scan sighting, SA-R-6 from-seed
 ///   reconstruction) has no pending record — its sighting row is its bridge:
-///   evidence short of the sighted height reads `OutsideCovered` (kept);
-///   coverage past it with no match means the sighted block reorged out
-///   (dropped, correctly). A `Present` verdict prunes the sighting — the
-///   seal's own match row supersedes it.
+///   evidence short of the sighted height reads `OutsideCovered` (kept), and
+///   so does evidence whose coverage was gathered **without the persona
+///   watched** over the sighted height (the [`PReconcileSet`] per-persona
+///   watch floor — a restore-path seal that advanced past the bond while
+///   watching only other personas makes no absence claim about this one).
+///   Coverage past the sighting *with the persona watched* and no match
+///   means the sighted block reorged out (dropped, correctly). A `Present`
+///   verdict prunes the sighting — the seal's own match row supersedes it.
 ///
 /// `OutsideCovered` (nothing scanned / frontier at zero) keeps every slot —
 /// absence-≠-unscanned is [`PReconcileSet`]'s type-level gate. The `p_slot`
@@ -553,11 +557,19 @@ mod tests {
         PCanonicalId::from_bytes([b; 32])
     }
 
-    /// Evidence covering `[0, high)` carrying `matches`.
+    /// Evidence covering `[0, high)` carrying `matches`, with every test
+    /// persona (`id(0)..id(9)`) watched from genesis — the classic
+    /// staker-from-birth shape, so the arm matrix below exercises the
+    /// covered/absent/present axes without the provenance gate interfering.
+    /// The provenance axis has its own test
+    /// (`phantom_sweep_keeps_a_sighted_slot_its_persona_was_never_watched_for`).
     fn evidence(high: u64, matches: Vec<BondPostMatch>) -> PReconcileSet {
         PReconcileSet::from_verified_scan(
             VerifiedBatch::for_test(0, high, [1; 32]).range(),
             matches,
+            (0..10u8)
+                .map(|b| (id(b), BlockHeight::from_raw(0)))
+                .collect(),
         )
     }
 
@@ -651,6 +663,39 @@ mod tests {
         assert!(
             st.bond_sightings.contains_key(&3),
             "the bridge stays until the seal covers or refutes it"
+        );
+    }
+
+    /// The provenance route (the review's stuck-funds finding): a
+    /// probe-adopted slot whose sighting sits BELOW an already-advanced seal
+    /// frontier, where the persona was NEVER watched while that coverage
+    /// accumulated (restore-then-rescan: the pscan sealed `[0, tip)` watching
+    /// only other personas, then a lower-floor rescan sighted this bond).
+    /// The whole-covered *and* the height-gated verdicts both sit inside
+    /// covered here — only the per-persona watch floor keeps the real bond
+    /// out of the GC. Greenable only by the provenance gate.
+    #[test]
+    fn phantom_sweep_keeps_a_sighted_slot_its_persona_was_never_watched_for() {
+        let mut st = staking(&[3]);
+        st.record_first_sighting(3, BlockHeight::from_raw(50));
+        // Coverage [0, 100) is PAST the sighting — but gathered with a watch
+        // that never contained this persona (id(0xEE) has no floor row).
+        let ev = PReconcileSet::from_verified_scan(
+            VerifiedBatch::for_test(0, 100, [1; 32]).range(),
+            Vec::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let sweep =
+            reconcile_phantom_bonded_slots(&mut st, &ev, &no_retired(), |_| Ok::<_, ()>(id(0xEE)))
+                .expect("sweep");
+        assert!(
+            sweep.dropped.is_empty(),
+            "coverage gathered without the persona watched must not GC its bond"
+        );
+        assert_eq!(st.bonded_slots, vec![3]);
+        assert!(
+            st.bond_sightings.contains_key(&3),
+            "the bridge stays until watched coverage corroborates or refutes it"
         );
     }
 

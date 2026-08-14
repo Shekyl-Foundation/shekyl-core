@@ -490,6 +490,14 @@ pub(crate) struct ScanStepResult {
     /// (SP-R0 arm #1; includes the handler's in-step trailing merges). The
     /// task removes the matching records on ingest, before the seal.
     pub(crate) spent_funding: Vec<SpentFundingMatch>,
+    /// The persona canonical ids this step scanned FOR (the bonded scan
+    /// union's public ids). The provenance half of the reconcile evidence:
+    /// `bond_post_matches` is complete only over these personas, so the
+    /// accrual records each persona's **watch floor** (the first scanned
+    /// height it was watched at) from this set — an absence claim is sound
+    /// only over `[floor, frontier)`. Public ids; the slot association stays
+    /// behind the redacted-Debug persisted map.
+    pub(crate) watched_personas: Vec<PCanonicalId>,
 }
 
 /// Why a dual-extraction failed. All arms fail **closed** — a corrupted scan
@@ -857,6 +865,7 @@ pub(crate) fn run_dual_extractor(
             bond_post_matches,
             funding_outputs,
             spent_funding,
+            watched_personas: known_personas.keys().copied().collect(),
         },
         trailing_key_images,
     })
