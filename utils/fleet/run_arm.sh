@@ -81,6 +81,14 @@ esac
 # shrink `A` without saying so.
 while read -r host an as cn cs; do
   case "${host:-}" in ''|'#'*) continue ;; esac
+  # A host beginning with `-` is read by ssh as an OPTION, not a destination —
+  # `-oProxyCommand=...` in a spec file (or a copy/paste slip) would execute on
+  # this machine. Refused here for the same reason `read_anon_histogram.sh`
+  # refuses it: an inventory is input, and this is not a plausible typo that
+  # fails loudly on its own.
+  case "$host" in
+    -*) echo "REFUSE: host '$host' starts with '-' and would be read as an ssh option" >&2; exit 2 ;;
+  esac
   for v in "$an" "$as" "$cn" "$cs"; do
     case "$v" in ''|*[!0-9]*)
       echo "REFUSE: '$host' has a non-numeric field ('$v')" >&2; exit 2 ;;
@@ -89,6 +97,31 @@ while read -r host an as cn cs; do
 done < "$SPEC"
 
 remote() { timeout 300 ssh -n -o BatchMode=yes "$1" "$2"; }
+
+# One process-matching idiom for the whole script, and it is NOT `pgrep -f`.
+#
+# `pgrep -f <config-path>` matches the calling shell, whose own command line
+# contains the same path — that killed two sessions mid-script during the
+# 2026-08-14 run, silently, after the first statement had already run.
+#
+# `count_proc <exact-name> <cmdline-substring>` filters on the process's EXACT
+# name first, then narrows by reading /proc/<pid>/cmdline. **The safety is in
+# the first argument**: every call here passes a DAEMON name (`tor`,
+# `shekyld-fleet`) that no shell can have, so the caller can never match
+# itself. Passing a shell's name would reintroduce the hazard — the guard is a
+# usage contract, not an intrinsic property of the function.
+#
+# The whole loop body is redirected, not just `tr`: a process can exit between
+# `pgrep` and the read, and it is the SHELL's open of /proc/<pid>/cmdline that
+# fails, so a redirect on `tr` alone leaves "No such file or directory" on
+# stderr — observed polluting phase output during the run.
+PROC_COUNT='count_proc() {
+  _n=0
+  for _p in $(pgrep -x "$1" 2>/dev/null); do
+    { tr "\0" " " < /proc/$_p/cmdline | grep -qF -- "$2"; } 2>/dev/null && _n=$((_n+1))
+  done
+  echo "$_n"
+}'
 
 # Resolved on the host, not assumed: the bundle is under /home/shekyl on some
 # hosts and /opt/shekyl on others.
@@ -119,6 +152,7 @@ while read -r host an as cn cs; do
 
   tor)
     out=$(remote "$host" "
+      $PROC_COUNT
       $TOR_LOOKUP
       [ -x \"\$TOR\" ] || { echo 'NO-TOR-BINARY'; exit 1; }
       n=0
@@ -131,14 +165,30 @@ while read -r host an as cn cs; do
         n=\$((n+1))
       done
       sleep 5
-      printf 'launched=%s' \"\$n\"")
+      # `launched` counts what was STARTED; `running` counts what SURVIVED.
+      # Reporting only the first is how a phase claims success for a tor that
+      # exited on a bad torrc or a busy SocksPort — and the next phase would
+      # then read a STALE hs/hostname from an earlier run and pass on a dead
+      # onion. Counted per-torrc so the seed hosts' own testnet tor, which is
+      # not ours to count or to touch, is excluded.
+      running=0
+      for rc in $FLEET_ROOT/etc/tor-*.torrc; do
+        [ -e \"\$rc\" ] || continue
+        [ \"\$(count_proc tor \"\$rc\")\" -ge 1 ] && running=\$((running+1))
+      done
+      printf 'launched=%s running=%s' \"\$n\" \"\$running\"")
     echo "$out"
-    case "$out" in *"launched=$an"*) ;; *) fail=1 ;; esac
+    case "$out" in
+      *"launched=$an running=$an"*) ;;
+      *) echo "  ^ expected launched=$an running=$an — a tor that exited leaves a" >&2
+         echo "    stale onion the next phase would accept" >&2; fail=1 ;;
+    esac
     ;;
 
   onions)
     # Emitted as <ssh-host>\t<index>\t<onion> into $ONION_OUT for the caller.
     out=$(remote "$host" "
+      $PROC_COUNT
       for w in \$(seq 1 20); do
         c=\$(ls $FLEET_ROOT/tor/*/hs/hostname 2>/dev/null | wc -l)
         [ \"\$c\" -ge $an ] && break
@@ -147,6 +197,11 @@ while read -r host an as cn cs; do
       for f in $FLEET_ROOT/tor/*/hs/hostname; do
         [ -e \"\$f\" ] || continue
         i=\$(basename \$(dirname \$(dirname \"\$f\")))
+        # A hostname file OUTLIVES the tor that wrote it. Emitting one whose
+        # tor is gone publishes a dead onion into the peer map, and every
+        # later phase treats it as real — so the file is evidence only while
+        # its own tor is running.
+        [ \"\$(count_proc tor $FLEET_ROOT/etc/tor-\$i.torrc)\" -ge 1 ] || continue
         echo \"\$i \$(cat \"\$f\")\"
       done")
     n=$(printf '%s\n' "$out" | grep -c . || true)
@@ -161,6 +216,7 @@ while read -r host an as cn cs; do
     # Phase 2: NO add-peer lines. `anonymous-inbound` is appended here because
     # it needs the onion, which did not exist when the config was generated.
     out=$(remote "$host" "
+      $PROC_COUNT
       for rc in $FLEET_ROOT/etc/tor-*.torrc; do
         [ -e \"\$rc\" ] || continue
         i=\$(basename \"\$rc\" .torrc); i=\${i#tor-}
@@ -180,7 +236,12 @@ while read -r host an as cn cs; do
         sleep $START_STAGGER
       done
       sleep 15
-      printf 'launched=%s alive=%s' \"\$d\" \"\$(pgrep -c -x \$(basename $BIN) 2>/dev/null || echo 0)\"")
+      alive=0
+      for cf in $FLEET_ROOT/etc/node-*.conf; do
+        [ -e \"\$cf\" ] || continue
+        [ \"\$(count_proc \$(basename $BIN) \"\$cf\")\" -ge 1 ] && alive=\$((alive+1))
+      done
+      printf 'launched=%s alive=%s' \"\$d\" \"\$alive\"")
     want=$((an + cn))
     echo "$out"
     case "$out" in *"alive=$want"*) ;; *) echo "  ^ expected alive=$want — a lost instance shrinks A" >&2; fail=1 ;; esac
@@ -188,13 +249,18 @@ while read -r host an as cn cs; do
 
   peers|status)
     out=$(remote "$host" "
+      $PROC_COUNT
       want=\$(ls $FLEET_ROOT/etc/node-*.conf 2>/dev/null | wc -l)
-      dead=''
+      dead=''; alive=0
       for cf in $FLEET_ROOT/etc/node-*.conf; do
         i=\$(basename \"\$cf\" .conf); i=\${i#node-}
-        pgrep -f -x \"$BIN --config-file \$cf --non-interactive\" >/dev/null 2>&1 || dead=\"\$dead \$i\"
+        if [ \"\$(count_proc \$(basename $BIN) \"\$cf\")\" -ge 1 ]; then
+          alive=\$((alive+1))
+        else
+          dead=\"\$dead \$i\"
+        fi
       done
-      printf 'want=%s alive=%s dead:%s' \"\$want\" \"\$(pgrep -c -x \$(basename $BIN))\" \"\${dead:- none}\"")
+      printf 'want=%s alive=%s dead:%s' \"\$want\" \"\$alive\" \"\${dead:- none}\"")
     echo "$out"
     case "$out" in *"dead: none"*) ;; *) fail=1 ;; esac
     ;;

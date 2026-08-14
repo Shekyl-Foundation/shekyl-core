@@ -2349,13 +2349,15 @@ without `LD_LIBRARY_PATH` pointing into the bundle — and the bundle sits at
 `/home/shekyl/...` on some hosts and `/opt/shekyl/...` on others. Resolved on
 the host rather than assumed.
 
-### 13.7 Still owed
+### 13.7 Still owed (as of §13; §§14–15 close two of these)
 
 - **A longer `A = 60` arm** — 11 settled samples cannot separate the observed downward drift (55 → 46 at-floor) from ordinary churn; §11.9 needed a full hour and per-burn attribution to settle the analogous question.
-- **Q12-R5's late-joiner control**, both variants — one new node pointed at a
-  *seed* and one pointed at an *ordinary node*. The difference prices how much
-  of discovery is hub-mediated, and this arm's one-seed bootstrap makes the
-  comparison meaningful rather than notional.
+- ~~**Q12-R5's late-joiner control**, both variants.~~ **RUN — see §15.2**
+  (seed 56 s, ordinary node 247 s; both reach the floor, so discovery is not
+  hub-dependent). Struck rather than deleted: this section was written when the
+  control was owed, and the list is read by people skimming for remaining work,
+  so an item that quietly vanishes is indistinguishable from one that was
+  dropped.
 - **A degree distribution for `fluff_return_ms`.** This arm's series is a
   distribution at `A = 60`, but it is degree-at-target (the cap binds), so it
   raises `F′` by nothing: `DAEMON_RELAY_PRIVACY.md` §90.3 shows the conservative
