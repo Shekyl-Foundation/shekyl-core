@@ -7,7 +7,8 @@ registered as **Q12-D6a** in
 cannot be faked."*
 
 **Status: the `{15, 30, 60}` sweep (§§13–15) and Q12-R5's late-joiner control
-(§15.2) are RUN, 2026-08-14, and every readout is committed.**
+(§15.2) are RUN, 2026-08-14, and every readout is committed. §16 settles what
+the floor actually counts.**
 
 Corrected 2026-08-14. This line previously read *"No VM stood up, no arm run"*,
 which its own body had already outgrown before §13 existed: §§10–11.13 record a
@@ -1923,7 +1924,7 @@ unset, mechanism live, semantics pinned only afterwards.
 
 F-8b's floor is not a quality preference. `hop` and `F` were provisioned at
 **`OutboundOnly@12`**, so the floor is *the condition under which the derived
-constants are valid*. A node with 4 anonymity peers is not running the topology
+constants are valid*. A node with 4 anonymity connections is not running the topology
 the embargo was derived for: its fluff return is slower, so `F` is
 under-provisioned **in the privacy-losing direction**, and its own transactions
 carry an embargo too short for the graph they traverse.
@@ -2002,7 +2003,7 @@ it stand for originated traffic, where the cost is entirely different and
 `send_txs` had already ruled against exactly that.
 
 **The floor argument only supports (b).** The floor is a condition *on the
-stem*: below 12 anonymity peers the graph is not what `hop` and `F` were derived
+stem*: below 12 anonymity connections the graph is not what `hop` and `F` were derived
 at, so the embargo is invalid. That is an argument about **arming a stem
 timer**. It says nothing about which transport carries the bytes. Reading (a)
 converts *"the stem constants are invalid here"* into *"this zone is
@@ -2041,7 +2042,7 @@ a decision:
 | | pre-§89 | below-floor under (b) |
 | --- | --- | --- |
 | scope | **every** anonymity transaction | a bounded fallback |
-| trigger | none — it was the default | achieved anonymity peers `< 12`, checked live |
+| trigger | none — it was the default | achieved anonymity connections `< 12`, checked live |
 | known? | **no** — §63 discovered it | stated, with its cost |
 | recovery | none defined | automatic once the floor is met |
 
@@ -2427,23 +2428,13 @@ verified-empty peerlists, and `stored ≤ A` is the check that it did.**
 
 ### 14.5 A caveat the arm surfaced about the floor itself
 
-`peer_id` is randomised **only on the public zone**
-([`net_node.inl:147`](../../src/p2p/net_node.inl#L147)); `config_t` default-constructs it to
-`1` ([`net_node.h:157`](../../src/p2p/net_node.h#L157)) and `add_zone` never touches it. So
-**every node announces `peer_id = 1` on its Tor zone** — deliberately, since a
-unique id there would be a correlation handle (§8.1).
+Raised here because the arm made it concrete: an anonymity peerlist can be
+deduped only **by address**, so the floor counts connections rather than
+distinct hosts.
 
-The consequence for F-8b: a node can dedupe its anonymity peerlist only **by
-address**, never by identity. **"12 outbound anonymity links" therefore means
-twelve addresses, not twelve distinct peers**, and nothing in the anon zone can
-tell the difference. An adversary running one node behind twelve hidden services
-satisfies the floor while supplying one peer.
-
-This does not affect §13 or §14 — one hidden service per instance, by
-construction — but it means the floor's *security* reading ("12 independent
-paths") is not what the floor measures. Whether that matters is a question for
-the below-floor rule's threat model, and it is **not** settled here; it is
-recorded because the arm is what made it concrete.
+**Scoped and settled in §16**, which corrects this section's first framing on
+two counts — the sentinel did not *cause* the property, and clearnet has the
+same one.
 
 ---
 
@@ -2525,3 +2516,132 @@ story than one that reaches the floor in 56 seconds, and it survived twenty-one
 minutes of polling without once looking implausible. The rule the arc keeps
 re-learning is that a second instrument must be validated against the first
 before its disagreement is treated as a result rather than a bug.
+
+---
+
+## 16. The floor counts connections — on every zone, and always has
+
+**Maintainer analysis, 2026-08-14, verified at source.** §14.5 raised this as a
+Tor-specific consequence of the `peer_id` sentinel. **Both halves of that
+framing were wrong**, and the corrected version changes where it files and how
+severe it is.
+
+### 16.1 `peer_id` was never a distinctness mechanism, on any zone
+
+Every `peer_id` comparison in `net_node.inl` is one of exactly two things:
+
+- **self-connection detection** — [`:1110`](../../src/p2p/net_node.inl#L1110),
+  [`:1209`](../../src/p2p/net_node.inl#L1209),
+  [`:1234`](../../src/p2p/net_node.inl#L1234),
+  [`:2655`](../../src/p2p/net_node.inl#L2655) — every one guarded by
+  `is_public` / `azone == zone::public_`, and the two that inspect live
+  connections ([`:1215`](../../src/p2p/net_node.inl#L1215),
+  [`:1240`](../../src/p2p/net_node.inl#L1240)) additionally conjoin
+  `peer.adr.is_same_host(cntxt.m_remote_address)`;
+- **peerlist keying** — `set_peer_just_seen`, our own entry, the announce.
+
+**Nothing counts peers by `peer_id`.** Not on the anonymity zone, not on
+clearnet. So the sentinel did not remove a distinctness mechanism; there was
+none to remove, and §8.1's decision remains correct on its own terms.
+
+### 16.2 Clearnet has no diversity limit either
+
+`ipv4_network_subnet` appears only in the manual-ban machinery — the blocked
+map at [`:209`](../../src/p2p/net_node.inl#L209),
+[`block_subnet`](../../src/p2p/net_node.inl#L348) and
+[`unblock_subnet`](../../src/p2p/net_node.inl#L399). **There is no netgroup
+bucketing, no per-`/16` outbound cap, no stripe diversity in peer selection.**
+
+Clearnet's floor counts connections too. It merely *looks* better because IPv4
+is mildly scarce and `.onion` is free.
+
+**So the finding restates:** F-8b and D9 count **connections**, on every zone,
+and always have. The sentinel made that legible on Tor rather than causing it.
+
+**Which fixes where it files.** Against the below-floor rule's threat model is
+half right — it belongs equally against **F-8b's startup refusal**, which counts
+the same way and has been shipping since it landed.
+
+### 16.3 The exploitable direction is the opposite of the one first assumed
+
+Price the adversary's position both ways. An adversary holding `k` of a
+victim's twelve anonymity connections:
+
+| the floor reads | what the victim does | what the adversary gets |
+| --- | --- | --- |
+| **twelve** | stems | the epoch's stem successor is one connection of twelve, so with probability `k/12` it is the adversary — who then sees every origination and forward from that victim, **but ambiguous between origin and relay**, which is the ambiguity D++ is built on |
+| **low** | D9(b) fires, fluffs at origin | the adversary holding **any** connection sees the victim as the fluff source: deterministic, every origination, every epoch, **precision ≈ 1** |
+
+**The second is strictly better for the adversary.** So an adversary who can
+move the reading wants it **low** — and moving it low costs nothing. No onions,
+no sybils: occupy outbound slots, be unreachable at the right moment, or simply
+wait, because §15.1's own sweep says the network sits below the floor **47.9 %**
+of the time at `A = 15` and **15.8 %** at `A = 30`.
+
+**Therefore the address-counting property makes the floor read too HIGH, and
+too high is the direction that denies the adversary the better outcome.** The
+twelve-onions eclipse costs a VPS and buys the adversary the *worse* branch.
+That is not nothing — under full eclipse the adversary has precision 1 whichever
+branch fires, so the floor check changes nothing there at all — but it is not
+the severity §14.5 implied.
+
+### 16.4 Shelved on the mechanism, with the instrument named
+
+§12.1's counter is real: a below-floor node that stems anyway has `F′` above its
+embargo, so the embargo expires and it fluffs at origin **late** — after the
+stem already leaked to the successor. On that reading D9(b) does not *create*
+fluff-at-origin; it makes it prompt and deliberate instead of late and
+additionally leaky.
+
+**What prose cannot settle is whether prompt-and-certain beats
+late-and-probabilistic.** The `F′` distribution has mass below the embargo even
+at low degree, and D9(b) removes that mass unconditionally. That is a
+distribution question about a path that does not run — and
+`conformance::converged_fluff_return_mixed` is now exactly the instrument for
+it: it takes per-node degree distributions and returns converged p90s, refusing
+rather than reporting an unconverged draw.
+
+**Shelved under rule 7 on the mechanism, and this time the instrument exists.**
+
+### 16.5 Distinctness mechanisms, rejected on the merits
+
+Named and rejected rather than left unconsidered:
+
+- **The persona serving credential.** The one scarce resource in the tree that
+  could give peer-distinctness on Tor is the archival serving identity —
+  `OnionIdentity::from_hs_id_seed`
+  ([`rust/shekyl-tor/src/onion_identity.rs:124`](../../rust/shekyl-tor/src/onion_identity.rs#L124)),
+  moved under the `StakeEngine`'s custody in #464. Binding relay peering to it
+  would make p2p membership **paid**, give every relay peer a **persistent
+  identity**, and **correlate a node's relay position with its archival
+  service** across two subsystems that are deliberately separate. That is a
+  privacy regression wearing a sybil-resistance argument — the same shape as
+  the "typical hardware" proposal already ruled against.
+- **Per-zone random `peer_id`s, and behavioural distinctness heuristics.**
+  `peer_id` is self-asserted and free to mint, so an adversary running twelve
+  daemons defeats any `peer_id` policy at the same cost as twelve onions. A
+  per-zone random id would catch the *accidental* case and nothing adversarial
+  — **worse than no mechanism, because it would read as a defense.**
+
+### 16.6 What this changes in the code, and what it does not
+
+**No code change is required by this finding**, and none is made here. Two
+consequences carry forward:
+
+1. **The prose stops saying "peers."** Twelve outbound *connections* is what is
+   checked, on every zone, and the number does not certify twelve distinct
+   hosts. Corrected at three sites in §12 by this change.
+2. **When §12.2 specifies D9's input it must be a named type** — an
+   outbound-connection count that says what it counts — not a bare `usize`.
+   The substitution is not hypothetical: `shekyl_relay_zone_plan_relay_with_refresh`
+   takes `(outbound: *const u8, n: usize)` and binds `read_ids(outbound, n)` to
+   a local named **`peers`**
+   ([`relay_zone_ffi/mod.rs:816`](../../rust/shekyl-ffi/src/relay_zone_ffi/mod.rs#L816)),
+   when what it holds is connection ids. An earlier estimate that this site
+   "already receives the number" is **retracted** — it receives the wrong
+   quantity, and a type that names what it counts is what stops the next reader
+   repeating the substitution.
+
+**The honest statement, which the check should be allowed to make:** the floor
+is a **self-provisioning check against configuration and churn**, not a sybil
+defense, and it was never scoped to be one.
