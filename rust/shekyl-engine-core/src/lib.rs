@@ -39,6 +39,23 @@ pub use outbound_label::label_plaintext_for_payment_uri;
 // Canonical definition stays in `shekyl-address`; do not wrap or redefine.
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
 pub use shekyl_address::{format_payment_uri, parse_payment_uri, PaymentUri, PaymentUriError};
+/// The tor-posture producer, re-exported so an embedder can spawn the
+/// translator from this root rather than taking a second direct dependency.
+///
+/// The example compiles the path rather than asserting it in prose: a
+/// re-export list that silently omits a name the docs point at is invisible to
+/// every lint, because `unused_imports` does not fire on a `pub use` at a
+/// public root.
+///
+/// ```
+/// use shekyl_engine_core::tor_posture::spawn_tor_posture_translator;
+/// use shekyl_engine_core::{AlarmCondition, OperatorAlarms};
+///
+/// let alarms = OperatorAlarms::new();
+/// assert!(alarms.board().condition(AlarmCondition::TransportLiveness).is_none());
+/// let _reachable_from_this_root = spawn_tor_posture_translator;
+/// ```
+pub use shekyl_operator_alarm::tor_posture;
 /// The OA-1 operator alarm channel: the surface a human reads when a guarantee
 /// the wallet cannot restore by itself has been lost.
 ///
@@ -50,11 +67,10 @@ pub use shekyl_address::{format_payment_uri, parse_payment_uri, PaymentUri, Paym
 /// silently-lossy and restart-amnesiac by design, all of which are wrong for a
 /// condition whose evidence disappears before its consequence does.
 ///
-/// The tor supervisor reports through it today
-/// ([`tor_posture`](shekyl_operator_alarm::tor_posture)); the serving
-/// conditions join in SH-2b-2.
+/// The tor supervisor reports through it today; the serving conditions join in
+/// SH-2b-2. The producer module is re-exported [just below](tor_posture).
 pub use shekyl_operator_alarm::{
-    self, AlarmBoard, AlarmCondition, AlarmLifetime, Arming, ConditionState, DegradedCause,
+    AlarmBoard, AlarmCondition, AlarmLifetime, Arming, ConditionState, DegradedCause,
     DisarmedReason, IncidentId, OperatorAlarm, OperatorAlarms, RaisedAlarm,
 };
 
