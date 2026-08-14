@@ -315,14 +315,19 @@ mod tests {
         );
     }
 
-    /// Duplicate sightings of the same slot keep the FIRST height — the
-    /// evidence bar arm #3 reads must not advance on a re-observation.
+    /// Duplicate sightings of the same slot keep the EARLIEST height —
+    /// including when a later call (or a later row in the same untrusted
+    /// batch) lists a lower height. The evidence bar arm #3 reads must
+    /// not depend on producer order.
     #[test]
     fn adopt_bond_sightings_first_height_wins() {
         let mut staking = shekyl_engine_state::StakingBlock::empty();
         adopt_bond_sightings(&mut staking, &[sighting(0, 50)]);
         adopt_bond_sightings(&mut staking, &[sighting(0, 80)]);
         assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(50));
+        // One batch, high then low: the min wins, not the first row.
+        adopt_bond_sightings(&mut staking, &[sighting(0, 90), sighting(0, 40)]);
+        assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(40));
         assert_eq!(staking.bonded_slots, vec![0]);
     }
 

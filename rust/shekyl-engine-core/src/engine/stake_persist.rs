@@ -234,7 +234,13 @@ pub(crate) fn reconcile_phantom_bonded_slots<E>(
     pending_slots: &std::collections::BTreeSet<u32>,
     mut id_of_slot: impl FnMut(u32) -> Result<PCanonicalId, E>,
 ) -> Result<PhantomSlotSweep, E> {
-    let mut dropped = Vec::new();
+    // Membership, not walk-order: `bonded_slots` is *kept* sorted by its
+    // writers, but this sweep must not depend on that — a deserialized
+    // hint that lost its order (corrupt file, older writer) would make
+    // an order-assuming `binary_search` miss phantoms. `BTreeSet` is
+    // the membership structure; the returned `dropped` is still a
+    // sorted `Vec` (BTreeSet iteration).
+    let mut dropped = std::collections::BTreeSet::new();
     let mut pruned_sightings = Vec::new();
     for &slot in &staking.bonded_slots {
         if pending_slots.contains(&slot) {
@@ -258,7 +264,7 @@ pub(crate) fn reconcile_phantom_bonded_slots<E>(
         };
         match verdict {
             ReconcileVerdict::AbsentWithinCovered => {
-                dropped.push(slot);
+                dropped.insert(slot);
                 if staking.bond_sightings.contains_key(&slot) {
                     pruned_sightings.push(slot);
                 }
@@ -272,12 +278,7 @@ pub(crate) fn reconcile_phantom_bonded_slots<E>(
         }
     }
     if !dropped.is_empty() {
-        // `dropped` is ascending (built walking the ascending `bonded_slots`),
-        // so the membership test is a binary search — the sweep stays
-        // O(n log n) on large histories instead of quadratic.
-        staking
-            .bonded_slots
-            .retain(|s| dropped.binary_search(s).is_err());
+        staking.bonded_slots.retain(|s| !dropped.contains(s));
     }
     for slot in pruned_sightings {
         staking.bond_sightings.remove(&slot);
@@ -287,7 +288,7 @@ pub(crate) fn reconcile_phantom_bonded_slots<E>(
         staking.staking_enabled = false;
     }
     Ok(PhantomSlotSweep {
-        dropped,
+        dropped: dropped.into_iter().collect(),
         staking_disabled,
     })
 }
@@ -586,6 +587,30 @@ mod tests {
         assert!(!sweep.staking_disabled, "slots remain");
         assert_eq!(st.bonded_slots, vec![0, 1]);
         assert!(st.staking_enabled);
+    }
+
+    /// Membership in `dropped` must not assume `bonded_slots` is sorted.
+    /// This bites against a `binary_search` on walk-order `dropped` (a
+    /// descending hint would leave the later-walked phantom in the vec);
+    /// it does NOT cover writers keeping the hint sorted.
+    #[test]
+    fn phantom_sweep_drops_phantoms_from_an_unsorted_hint() {
+        // Descending on purpose: walk order is 2 then 0. Both absent,
+        // no pending. An order-assuming membership test on dropped=[2,0]
+        // misses 0.
+        let mut st = staking(&[2, 0]);
+        let ev = evidence(100, Vec::new());
+        let sweep = reconcile_phantom_bonded_slots(&mut st, &ev, &no_retired(), |slot| {
+            Ok::<_, ()>(id(u8::try_from(slot).unwrap()))
+        })
+        .expect("sweep");
+        assert_eq!(
+            sweep.dropped,
+            vec![0, 2],
+            "both phantoms, sorted in the report"
+        );
+        assert!(st.bonded_slots.is_empty(), "neither phantom survives");
+        assert!(sweep.staking_disabled);
     }
 
     /// Nothing exhaustively scanned ⇒ `OutsideCovered` ⇒ nothing drops —

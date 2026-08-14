@@ -230,19 +230,25 @@ impl StakingBlock {
         }
     }
 
-    /// Record a bond-post sighting for `slot`, keeping the **first**
-    /// sighted height if one is already recorded (the sighting's consumer
-    /// — arm #3's height-gated verdict — needs the earliest height whose
-    /// coverage proves or refutes the bond; a later duplicate must not
-    /// advance the evidence bar). Returns `true` if this call inserted
-    /// the row.
+    /// Record a bond-post sighting for `slot`, keeping the **earliest**
+    /// height (the sighting's consumer — arm #3's height-gated verdict —
+    /// needs the earliest height whose coverage proves or refutes the
+    /// bond). A later duplicate must not advance the evidence bar; an
+    /// earlier one must pull it back — `ScanResult` is untrusted at
+    /// merge, so this must not depend on producer order. Returns `true`
+    /// if this call inserted the row.
     pub fn record_first_sighting(&mut self, slot: u32, height: BlockHeight) -> bool {
         match self.bond_sightings.entry(slot) {
             std::collections::btree_map::Entry::Vacant(v) => {
                 v.insert(height);
                 true
             }
-            std::collections::btree_map::Entry::Occupied(_) => false,
+            std::collections::btree_map::Entry::Occupied(mut o) => {
+                if height.to_raw() < o.get().to_raw() {
+                    o.insert(height);
+                }
+                false
+            }
         }
     }
 
@@ -403,14 +409,19 @@ mod tests {
     }
 
     /// `record_first_sighting` keeps the earliest height: a later duplicate
-    /// must not advance the evidence bar arm #3's height-gated verdict
-    /// reads from.
+    /// must not advance the evidence bar, and an earlier one must pull it
+    /// back (O5: a single untrusted batch can list the same slot high-then-
+    /// low). This bites against an order-dependent first-call-wins; it does
+    /// NOT cover the merge's cache-membership refusal.
     #[test]
     fn first_sighting_wins_and_duplicates_are_ignored() {
         let mut b = StakingBlock::empty();
         assert!(b.record_first_sighting(4, BlockHeight::from_raw(100)));
         assert!(!b.record_first_sighting(4, BlockHeight::from_raw(200)));
         assert_eq!(b.bond_sightings.get(&4), Some(&BlockHeight::from_raw(100)));
+        // An earlier height in a later call pulls the bar back.
+        assert!(!b.record_first_sighting(4, BlockHeight::from_raw(40)));
+        assert_eq!(b.bond_sightings.get(&4), Some(&BlockHeight::from_raw(40)));
         // A different slot inserts independently.
         assert!(b.record_first_sighting(5, BlockHeight::from_raw(200)));
     }
