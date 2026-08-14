@@ -381,6 +381,16 @@ fn parse_branch_layers(
     offset: &mut usize,
 ) -> Option<Vec<shekyl_fcmp::proof::BranchLayer>> {
     let count = read_u32_le(data, offset)?;
+    // Protocol ceiling, not just a backing bound: a layer costs only a
+    // 4-byte header on the wire but a `BranchLayer` plus per-layer padding
+    // work in `prove` — so a genuinely BACKED blob could otherwise buy
+    // ~2.5M empty layers per 10 MiB (memory/CPU amplification). No valid
+    // witness has more branch layers per curve than the tree's maximum
+    // depth; the exact C1/C2 alternation split stays the proof library's
+    // contract (`prove` validates the path), not re-derived here.
+    if count > shekyl_fcmp::MAX_TREE_DEPTH as usize {
+        return None;
+    }
     let remaining = data.len() - *offset;
     let mut layers = bounded_capacity(count, 4, remaining)?;
     for _ in 0..count {
@@ -707,6 +717,51 @@ mod tests {
         blob.extend_from_slice(&0u32.to_le_bytes());
         blob.extend_from_slice(&0u32.to_le_bytes());
         blob.extend_from_slice(&0u32.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_some());
+    }
+
+    /// A layer count above `MAX_TREE_DEPTH` is refused even when every
+    /// 4-byte header is genuinely BACKED by blob bytes: a layer costs 4
+    /// wire bytes but a `BranchLayer` + per-layer prove work, so backing
+    /// alone still buys ~2.5M empty layers per 10 MiB (the amplification
+    /// this cap closes). Boundary-controlled: exactly `MAX_TREE_DEPTH`
+    /// empty layers (all zero sib counts, fully backed) still parse —
+    /// the cap is the protocol ceiling, not an off-by-one.
+    #[test]
+    fn backed_layer_counts_above_max_tree_depth_are_refused() {
+        let depth = u32::from(shekyl_fcmp::MAX_TREE_DEPTH);
+
+        // C1 leg: count = MAX_TREE_DEPTH + 1, every header backed.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes()); // chunk_count = 0
+        blob.extend_from_slice(&(depth + 1).to_le_bytes());
+        for _ in 0..=depth {
+            blob.extend_from_slice(&0u32.to_le_bytes()); // backed sib headers
+        }
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // C2 leg: valid empty C1, hostile-but-backed C2.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes()); // chunk_count = 0
+        blob.extend_from_slice(&0u32.to_le_bytes()); // c1_count = 0
+        blob.extend_from_slice(&(depth + 1).to_le_bytes());
+        for _ in 0..=depth {
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Boundary control: exactly MAX_TREE_DEPTH backed empty layers on
+        // both curves parse.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes()); // chunk_count = 0
+        blob.extend_from_slice(&depth.to_le_bytes());
+        for _ in 0..depth {
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        blob.extend_from_slice(&depth.to_le_bytes());
+        for _ in 0..depth {
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
         assert!(parse_prove_witness(&blob, 1).is_some());
     }
 }
