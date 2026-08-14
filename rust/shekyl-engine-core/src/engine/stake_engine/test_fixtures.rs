@@ -18,7 +18,7 @@ use super::{PSlot, StakeEngineHandle};
 use crate::engine::test_support::funding_record;
 
 /// Deterministic test seed (matches the `archival_p` module's KAT fixture).
-const TEST_SEED: [u8; MASTER_SEED_BYTES] = [0x33u8; MASTER_SEED_BYTES];
+pub(crate) const TEST_SEED: [u8; MASTER_SEED_BYTES] = [0x33u8; MASTER_SEED_BYTES];
 
 /// One tx-key for every fixture output (outputs differ by index).
 pub(crate) const FIXTURE_TX_KEY: [u8; 32] = [0x5Au8; 32];

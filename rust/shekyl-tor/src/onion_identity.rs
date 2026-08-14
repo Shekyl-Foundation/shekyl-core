@@ -104,10 +104,22 @@ impl OnionIdentity {
     /// Expand a **derived** 32-byte HS-identity seed (GF-9,
     /// `derive_p_hs_id_seed`) into the identity tor publishes.
     ///
-    /// The seed is consumed for the expansion and does not outlive this
-    /// call; the returned identity carries only the expanded key and the
-    /// address. This is the one place a seed touches the onion path — see
-    /// the type doc's custody note.
+    /// **This function retains nothing**: it borrows the seed for the
+    /// expansion, and the returned identity carries only the expanded key and
+    /// the address.
+    ///
+    /// Whether the *seed* outlives the call is the caller's business, and both
+    /// shapes are legitimate. A wallet-side derivation expands and drops it
+    /// immediately. The `StakeEngine` deliberately keeps it in the persona's
+    /// `ArchivalPKeys` — under that field's `Zeroizing` and the actor's stop
+    /// wipe — because [`OnionIdentity`] is not `Clone` and the credential is
+    /// therefore re-minted per request rather than cached. An earlier wording
+    /// here said the seed "does not outlive this call", which described the
+    /// first caller rather than this function; the property that holds for
+    /// every caller is that nothing is retained *here*.
+    ///
+    /// This is the one place a seed touches the onion path — see the type
+    /// doc's custody note.
     #[must_use]
     pub fn from_hs_id_seed(seed: &[u8; 32]) -> Self {
         let expanded = expand_seed(seed);

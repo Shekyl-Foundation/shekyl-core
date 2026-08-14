@@ -81,6 +81,11 @@ shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 # `PRpc` (an `Rpc` impl); it does NOT depend on `ureq` — all agent construction
 # and use is confined to shekyl-p-transport (§2b invariant 1).
 shekyl-p-transport = { path = "../shekyl-p-transport" }
+# `OnionIdentity` only: the persona's serving credential is expanded from
+# `hs_id_seed` **in the wallet context** and handed out as a least-privilege
+# value (`onion_identity.rs` custody note, §7.2(iii)) — so the expansion has to
+# happen on this side of the boundary, which puts the type here. SH-2b-1.
+shekyl-tor = { path = "../shekyl-tor" }
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }

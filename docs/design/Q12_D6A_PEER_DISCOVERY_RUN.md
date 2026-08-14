@@ -447,6 +447,41 @@ pool and no clearnet node's. **Reverse arm**: originate clearnet-only and
 confirm arrival at Tor-capable nodes — the easy direction, serving as the
 control.
 
+#### 6.3.1 Second readout — origin class, added 2026-08-13
+
+**Amendment, and its provenance is weaker than §6.3's: this is a scope change
+argued from text, not a finding anchored in code.** Read it as a requirement
+added to the arm, not as something the arm already implied.
+
+**Why it is needed.** `6af23439` names this arm as
+`txpool_tx_meta_t::origin_zone`'s consumer — *"distinguish originated-on-anon
+from relayed-on-anon"* — with a rule-15 reopen if the run ships without a
+reader. **No such measurement exists in §6.** The readout above is arrival
+fraction and time-to-arrival at the clearnet-only set, keyed by txid; the zone
+is fixed by the arm's construction rather than observed, and nothing in the arm
+reads the field. As written, the arm runs, produces its result, reads
+`origin_zone` nowhere, and the reopen fires at teardown **by default**.
+
+**And it cannot be recovered afterwards.** The arm originates on one node and
+measures at another, and both origin classes produce the same pool-membership
+event. Arrival fraction is not disaggregable by origin class after the fact, so
+this must be a second readout with its own failure signature rather than a
+different way of reading the first.
+
+**Second readout.** On each anon-capable node, partition its pool entries by
+recorded `origin_zone` — anonymity-arrived against clearnet-arrived and
+locally-originated — and report the split alongside arrival fraction.
+
+**Failure signature.** Anonymity-arrived entries at or near zero on nodes that
+demonstrably received anonymity traffic. That is the field failing to record,
+or coherence failing to hold, and it is distinct from §6.3's signature: a
+transaction can arrive everywhere it should (§6.3 green) while every entry
+carries the wrong origin.
+
+**Scope, not consequence.** Whatever the arm needs to produce this split is the
+arm's work and belongs in §7's order. Leaving it to fall out of the run is what
+makes the reopen fire on a technicality rather than on evidence.
+
 **Why discovery goes first.** The testnet is at height 1 with difficulty 1:
 **no spendable outputs exist.** The isolation arm needs mining
 (`skl-miner-test`), coinbase maturity and funded wallets on top of U1/U2.
@@ -2004,3 +2039,132 @@ trigger, a stated cost, and a stated recovery condition**, where the original
 was an unexamined default nobody had noticed.
 
 **Q12-U2 is unblocked.**
+
+### 12.5 Q12-D9 stands. The retraction that was owed was mine, and it was wrong
+
+**2026-08-13.** A conclusion had been carried since the A = 15 arm that §12.2's
+*live* below-floor check should be **dropped**, on the ground that *"no
+per-node form of the floor condition exists"*. **That is retracted. The check
+stands as ruled.**
+
+**The error was the axis, not the arithmetic.** The measurement behind the
+dropped-check conclusion asked whether one below-floor node moves *network*
+first passage. It does not, materially. But §12.1 does not justify the floor on
+the network's behalf — it justifies it on the node's own:
+
+> *"its fluff return is slower, so `F` is under-provisioned in the
+> privacy-losing direction, and **its own** transactions carry an embargo too
+> short for the graph they traverse."*
+
+So the rule is per-node **and self-regarding**, and a network-axis reading
+cannot settle it. Measuring the wrong axis and concluding about the rule is the
+same defect class as "assert on the axis where the defect lives": the number
+was real, and it answered a question nobody had asked.
+
+**Re-measured on both axes, and the placement is the whole variable**
+(`tests/d9_floor_locality.rs`, 60 nodes, 400 trials, 8 seeds, `OutboundOnly`,
+degree 10 against a floor of 12):
+
+| arm | mean first passage | vs. baseline |
+| --- | --- | --- |
+| baseline — every node at the floor | 1613 ms | — |
+| **SELF — the below-floor node is the source** | **1736 ms** | **+7.63 %** |
+| NETWORK — one below-floor node, elsewhere | 1634 ms | +1.30 % |
+| control — every node below the floor | 2095 ms | +29.83 % |
+
+**A single below-floor node slows its own transaction's propagation by roughly
+six times what it costs the network.** A per-node form of the condition exists,
+it is exactly the form §12.1 argues for, and the live check is the mechanism
+that acts on it.
+
+**What the numbers are and are not.** They are a seed-averaged reading of this
+instrument at these parameters, reported so the direction and the ~6× ratio
+rest on running code rather than on a remembered figure (Q12-D8). They are
+**not** a provisioning target: the test asserts only that the instrument
+discriminates (whole-network degradation must move the number) and that the two
+axes are distinguishable. Pinning a percentage would pin a seed-dependent draw,
+which is the defect the `fluff_return_ms` sweep already caught once.
+
+**Why this was worth rebuilding rather than quoting.** The original simulation
+did not survive its session, so the conclusion rested on a number nothing could
+re-run — and re-running it is what showed the axis was wrong. A design rule
+about to be deleted on the strength of an unreproducible measurement is exactly
+what Q12-D8's test is for.
+
+#### 12.5.1 The quantity exists at the decision site and is destroyed on the line that reads it
+
+**Verified at source, `eb1fd6d4e`.** The anchor for D9 is **not** in
+`net_node.inl`. It is `levin_notify.cpp`, `notify::get_status()`:
+
+```cpp
+bool has_outgoing = zone_->p2p->get_out_connections_count();
+```
+
+That is the per-zone **achieved** outbound count — D9's quantity exactly —
+assigned to a `bool`, so it is truncated to *nonzero*. `select_anonymity()`
+accepts on `network->second.m_connect && status.has_outgoing`, so **one live
+outbound peer is sufficient**: the zone stems at degree 1 against an embargo
+derived at degree 12.
+
+**The configured-axis gates are a different quantity that shares a numeral.**
+`set_max_out_peers` refuses a configured cap; `change_max_out_public_peers`
+clamps one. `MIN_PROVISIONED_OUT_PEERS = 12` equals `P2P_DEFAULT_OUT_PEERS = 12`,
+so **every default operator satisfies the startup gate by construction**, while
+the A = 15 fleet measured the condition it stands for as false ~30 % of the
+time.
+
+**And the anonymity zone has no runtime path at all.** `set_max_out_peers` has
+exactly two callers — `net_node.inl:588` (public, `--out-peers`) and `:625`
+(anonymity, `--tx-proxy`) — both inside `handle_command_line`.
+`change_max_out_public_peers` has exactly one caller
+(`core_rpc_server.cpp:2797`) and resolves `zone::public_` only. So the
+anonymity zone's cap is written once, at `:625`, and never again by any path in
+the tree. The one function holding `get_out_connections_count()` spends it
+*shedding* connections down to a cap — the count is in hand and used to move
+away from the floor.
+
+**§12.2 is therefore building a mechanism, not tightening one:** no live check,
+and no live path to put one on.
+
+#### 12.5.2 D9 and §30.5 do not collide — the bands are disjoint
+
+They read as rival answers only if both are taken as *zone* verbs. They are not.
+`send_txs` decides **which zone** and has no vocabulary for stem-or-fluff — it
+forwards `tx_relay` unchanged. The stem-or-fluff decision is one layer down, at
+`levin_notify.cpp`'s `dandelionpp_notify` dispatch (*"this will change a local
+tx to stem or fluff"*). So a node that rolls anon while below the floor executes
+both in sequence without conflict: `send_txs` puts it on the zone,
+`dandelionpp_notify` fluffs it there instead of stemming.
+
+The predicates nest rather than overlap:
+
+| achieved anon out-degree | behaviour | ruling |
+| --- | --- | --- |
+| `0` | zone unusable → send nothing | §30.5 fail-closed |
+| `0 < d < 12` | usable, below floor → **fluff in zone, do not stem** | D9 `x = 0`, reading (b) |
+| `d >= 12` | stem normally | — |
+
+Disjoint, total, ordered. "Below the floor" covering both the first and second
+band is what made one condition look like two answers.
+
+**Placement, pinned before §12.2 is drafted.** The check is **scoped to
+origination**, **tested at the stem/fluff decision**, and **never in
+`select_anonymity()` or any arm of `send_txs`**. The third clause is the
+load-bearing one: refusing the zone there is reading (a) — the §30.5 reversal —
+and `select_anonymity()` is the function whose entire comment block explains
+why originated traffic fails closed rather than falling to clearnet.
+
+Two consequences follow from the placement. `dandelionpp_notify` is also
+reached by **relayed** traffic through the coherence arm, so a check placed on
+the shared stem path would change relay behaviour on a **network-axis** warrant
+that §12.5's own table prices at roughly a sixth of the self-axis one. And it
+would catch the local pool re-relay and the missed submit nudge, which reach
+`anonymity_fail_closed` from three different producers.
+
+**Shelved, blocked on the mechanism (rule 7):** what a below-floor node should
+do at achieved degree 1, where its fluff has out-degree one. `x = 0` is right
+against the embargo argument, but whether a degree-1 *fluff* beats a degree-1
+*stem* is a quantitative question about a path that does not run. The
+instrument that could answer it now exists and is named:
+`simulate_fluff_return_mixed`, which takes a per-node degree vector. Settling it
+in §12.2's prose instead would be the failure Q12-D8 names.

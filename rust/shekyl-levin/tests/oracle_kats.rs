@@ -3,16 +3,18 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Byte-identity KATs against the C++ `epee::levin` oracle.
+//! Byte-identity KATs against the gtest expectations in
+//! `tests/unit_tests/levin.cpp`.
 //!
-//! Each test mirrors a gtest in `tests/unit_tests/levin.cpp` (`make_noise.*`,
-//! `make_fragment.*`) assertion for assertion, so the two implementations are
-//! pinned to the same wire bytes. Removing these loses the cross-language
-//! byte-identity pin; they do NOT cover the read-side state machine (see
-//! `reader_stream.rs`).
+//! Each test mirrors a gtest (`make_noise.*`, `make_fragment.*`) assertion
+//! for assertion. After the emit cut those gtests execute this crate
+//! through the FFI, so these KATs are a same-language pin of the same
+//! bytes the gtests check across the boundary. `make_header` is still an
+//! independent C++ implementation. Removing these loses that pin; they do
+//! NOT cover the read-side state machine (see `reader_stream.rs`).
 //!
 //! Coverage boundary, stated so it is not mistaken for completeness: these
-//! pin `make_header`, `make_noise_notify` and `make_fragmented_notify`.
+//! pin `make_header`, `noise_notify` and `fragmented_notify`.
 //! `try_compress_message` is deliberately **not** byte-pinned — its framing
 //! is identical, but the compressed bytes come from whichever libzstd is
 //! linked, so a golden vector here would pin the codec build rather than the

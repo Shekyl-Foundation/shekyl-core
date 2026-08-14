@@ -325,6 +325,77 @@ async fn identity_is_deterministic_across_respawn() {
     );
 }
 
+// SH-2b-1: the actor hands out an onion **serving credential**, and it is the
+// one the pinned derivation says it should be.
+//
+// The oracle is derived independently — `derive_p_hs_id_seed` straight from the
+// master seed, then expanded — rather than read back off the same bundle the
+// actor used. Comparing the actor's answer to the bundle it holds would assert
+// only that a field was copied; going through the derivation asserts the
+// credential is the persona's, which is what a `.onion` address means.
+//
+// Compared on `service_id`, deliberately: that is the public half, it is what
+// tor publishes and what a client dials, and `OnionIdentity` gives no way to
+// read the expanded secret back out — which is the custody posture working, not
+// a gap in the test.
+#[tokio::test]
+async fn the_onion_credential_matches_the_pinned_derivation() {
+    let handle = spawn_over(&[0, 1], &[], None);
+
+    for slot in [0u32, 1] {
+        let minted = handle
+            .persona_onion_identity(PSlot::from_raw(slot))
+            .await
+            .expect("held slot yields a credential");
+
+        let seed = shekyl_crypto_pq::archival_p::derive_p_hs_id_seed(
+            &super::test_fixtures::TEST_SEED,
+            shekyl_crypto_pq::account::DerivationNetwork::Mainnet,
+            shekyl_crypto_pq::account::SeedFormat::Bip39,
+            slot,
+        );
+        let oracle = shekyl_tor::onion_identity::OnionIdentity::from_hs_id_seed(&seed);
+
+        assert_eq!(
+            minted.service_id(),
+            oracle.service_id(),
+            "slot {slot}: the actor must publish the persona's own onion"
+        );
+    }
+
+    // Distinct personas must not share an address — the sequential-rotation
+    // unlinkability the whole p_slot discipline exists for would be void if the
+    // serving identity collapsed across slots.
+    let a = handle
+        .persona_onion_identity(PSlot::from_raw(0))
+        .await
+        .expect("slot 0");
+    let b = handle
+        .persona_onion_identity(PSlot::from_raw(1))
+        .await
+        .expect("slot 1");
+    assert_ne!(
+        a.service_id(),
+        b.service_id(),
+        "two personas sharing one .onion would link them on the network"
+    );
+}
+
+// An unheld slot is the same domain error every other slot boundary reports —
+// the credential path must not be the one place that panics or invents a key.
+#[tokio::test]
+async fn onion_credential_for_an_unheld_slot_is_lookahead_exhausted() {
+    let handle = spawn_over(&[0], &[], None);
+    let err = handle
+        .persona_onion_identity(PSlot::from_raw(9))
+        .await
+        .expect_err("slot 9 is not held");
+    assert!(
+        matches!(err, StakeEngineError::LookaheadExhausted { requested } if requested == PSlot::from_raw(9)),
+        "expected LookaheadExhausted{{9}}, got {err:?}"
+    );
+}
+
 // Minting a handle for a slot outside the held derive-forward set is the
 // real domain error `LookaheadExhausted` (reopen to extend the lookahead) —
 // not a panic, not a can't-happen.

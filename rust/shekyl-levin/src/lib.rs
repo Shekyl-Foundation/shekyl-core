@@ -17,20 +17,23 @@
 //! stream reader ([`BucketReader`]) that demultiplexes socket bytes into
 //! complete messages.
 //!
-//! **Wiring status (2026-08-06):** the compression half is
-//! **production-live** — the C++ `epee::levin` compression path is a
-//! marshaling shim over the `shekyl_levin_*` FFI
-//! (`rust/shekyl-ffi/src/levin_ffi.rs`), and the Rust-pinned libzstd is the
-//! binary's single zstd (the system-libzstd link and `HAVE_ZSTD` gate are
-//! gone). The seam is whole-message on the way out
-//! ([`compress_message`], which `epee::levin::try_compress_message`
-//! forwards to) and frame-level on the way in ([`inflated_size`] +
-//! [`decompress_into`], which `epee::levin::decompress_payload` forwards
-//! to). No compression policy is left in C++.
+//! **Wiring status (2026-08-13):** the **entire emit side and the
+//! compression path are production-live** through the `shekyl_levin_*` FFI
+//! (`rust/shekyl-ffi/src/levin_ffi.rs`):
 //!
-//! The framing half — builders and [`BucketReader`] — stays inert until the
-//! LV-3 cutover; the C++ path in `contrib/epee` remains the live framing
-//! implementation.
+//! - compression (2026-08-06): whole-message [`compress_message`] out,
+//!   frame-level [`inflated_size`] + [`decompress_into`] in; the
+//!   Rust-pinned libzstd is the binary's single zstd and no compression
+//!   policy is left in C++;
+//! - white-noise emit (2026-08-13): [`noise_notify`] and
+//!   [`fragmented_notify`] back `epee::levin::make_noise_notify` /
+//!   `make_fragmented_notify`, so the fragment-padding algorithm — the
+//!   privacy-load-bearing emit logic — has exactly one implementation,
+//!   and the byte-exact `make_fragment.*` gtests exercise this crate live.
+//!
+//! Still inert until LV-3: the read side ([`BucketReader`]) and the plain
+//! notification/request/response builders (the C++ `message_writer` keeps
+//! the hot finalize path).
 //!
 //! Deliberate **non-goals** of this crate:
 //!
@@ -42,12 +45,14 @@
 //!
 //! # Parity oracle
 //!
-//! The byte-level oracle is the C++ implementation:
-//! `epee::levin::{make_header, make_noise_notify, make_fragmented_notify}`
-//! (`contrib/epee/src/levin_base.cpp`) and the read-side state machine in
-//! `contrib/epee/include/net/levin_protocol_handler_async.h`
-//! (`handle_recv`). The tests mirror the `tests/unit_tests/levin.cpp`
-//! gtest expectations byte for byte, and a CI gate
+//! The remaining C++-side oracles are `epee::levin::make_header` (the hot
+//! `message_writer::finalize` path, still C++) and the read-side state
+//! machine in `contrib/epee/include/net/levin_protocol_handler_async.h`
+//! (`handle_recv`). `make_noise_notify` / `make_fragmented_notify` are
+//! forwarding shims over this crate and are no longer an independent
+//! implementation: the byte-level oracle for those emitters is the gtest
+//! *expectations* in `tests/unit_tests/levin.cpp` (`make_noise.*` /
+//! `make_fragment.*`), which now execute through the FFI. A CI gate
 //! (`.github/workflows/levin-constant-parity.yml`) fails the build if any
 //! wire constant here stops matching its C++ definition.
 //!
@@ -102,9 +107,10 @@
 //!    from keeping a malformed peer alive.
 //!
 //! Emit side. [`BucketHead::write`], [`notify`] / [`invoke`] / [`response`],
-//! [`noise_notify`] and [`fragmented_notify`] are byte-identical to the C++,
-//! pinned assertion-for-assertion by `tests/oracle_kats.rs`. Two caveats,
-//! neither of which those KATs cover:
+//! [`noise_notify`] and [`fragmented_notify`] are pinned assertion-for-
+//! assertion by `tests/oracle_kats.rs` and, for the wired emitters, by the
+//! `make_noise.*` / `make_fragment.*` gtests which now execute through the
+//! FFI. Three caveats, none of which those KATs cover:
 //!
 //! 6. **`try_compress_message` refuses malformed input** — *resolved
 //!    2026-08-06; no longer a divergence.* A buffer whose header signature
@@ -130,6 +136,14 @@
 //!    breaking on a routine dependency bump. What is guaranteed is what
 //!    actually matters on the wire: the frame format is stable, so any
 //!    zstd decodes any other's frames.
+//! 8. **emit refuses an oversize bucket** — [`noise_notify`] /
+//!    [`fragmented_notify`] reject when the bucket they would write has
+//!    `m_cb` above [`DEFAULT_MAX_PACKET_SIZE`] (the payload limit the
+//!    reader already enforces). Detected before any allocation. The
+//!    deleted C++ allocated first and left the peer to drop it. The bound
+//!    is on each on-wire body's `m_cb`, not on the inner payload that
+//!    fragmentation exists to split. Unreachable for a conforming sender
+//!    (production noise is 3 KiB).
 
 mod compress;
 mod error;

@@ -15,6 +15,7 @@ use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_scanner::ScannableBlock;
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::NoOpObserver;
+use shekyl_tor::onion_identity::OnionIdentity;
 use shekyl_tx_builder::TreeContext;
 use shekyl_types::PCanonicalId;
 
@@ -23,7 +24,7 @@ use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
     ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
-    MintPersonaHandle, PersonaIdentityOf, PlanBondPost,
+    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost,
 };
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
 use super::types::*;
@@ -198,6 +199,23 @@ impl StakeEngineHandle {
     ) -> Result<PersonaIdentity, StakeEngineError> {
         self.actor
             .ask(PersonaIdentityOf { p_slot })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// The onion serving credential for the held persona at `p_slot` — the
+    /// SH-2b handoff into `PersonaServingHost`.
+    ///
+    /// Yields an `OnionIdentity` and never the seed: see
+    /// [`PersonaOnionIdentityOf`] for the §7.2(iii) custody ruling that decides
+    /// which secret is allowed to cross into a serving role.
+    #[allow(dead_code)] // inert until SH-2b-2 starts a host
+    pub(crate) async fn persona_onion_identity(
+        &self,
+        p_slot: PSlot,
+    ) -> Result<OnionIdentity, StakeEngineError> {
+        self.actor
+            .ask(PersonaOnionIdentityOf { p_slot })
             .await
             .map_err(collapse_send_error)
     }

@@ -11,7 +11,14 @@ the gate on *verification only*: PR-SM-1 landed the construction with
 its verify surface type-gated on that layout (SM-R-6 R6-a), so signing
 ships and verification cannot be reached until the v2 address exists;
 (2) the 192f UX gate (dated, owned — `RELEASE_CHECKLIST.md`) before the
-freeze. Note the ordering constraint SM-R-4 R4-c records: the
+freeze. **Update 2026-08-13 — both SIGNED (release owner,
+`RELEASE_CHECKLIST.md`):** the freeze-window sign-off is recorded (the
+48-byte SLH-DSA-192s public-key field is the committed frozen wire
+field, as ratified) and the 192f UX gate closed by ruling — 192s
+stands; no UX test was run, and the gate reopens only if pre-freeze UX
+testing is actually run and finds the latency intolerable. The lane's
+remaining work is implementation only (v2 layout + vectors, then
+PR-SM-2's verify un-gate). Note the ordering constraint SM-R-4 R4-c records: the
 `(network, seed_format)` scoping amendment changes the derived
 public-key bytes and therefore had to land **before** any sign-off on
 the field that carries them. Everything else is implementation.
