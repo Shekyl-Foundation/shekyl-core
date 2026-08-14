@@ -61,11 +61,13 @@
 //! specifically — during IBD these are multi-megabyte block batches, once
 //! per packet per connection.
 //!
-//! Compression still returns an owned [`ShekylBuffer`], because its output
-//! size is not knowable before the fact and the emit path is not the one
-//! that carries bulk. Levin payloads are public wire data, so returning
-//! them by buffer is permitted (rule 40's secret-material restriction does
-//! not apply).
+//! Variable-length emit (compress, noise, fragment) returns an owned
+//! [`ShekylBuffer`]. Compression's size is not knowable before the fact;
+//! fragment's size is a pad-or-split decision the library owns; noise
+//! could be direct-write but shares the emit ownership shape so the three
+//! C++ shims stay one helper. Levin payloads are public wire data, so
+//! returning them by buffer is permitted (rule 40's secret-material
+//! restriction does not apply). Receive stays direct-write.
 
 use crate::{slice_from_ptr, ShekylBuffer};
 
@@ -160,8 +162,10 @@ pub unsafe extern "C" fn shekyl_levin_compress_message(
 ///
 /// Returns [`SHEKYL_LEVIN_OK`] with `out` set (free with
 /// `shekyl_buffer_free`), or [`SHEKYL_LEVIN_ERR_FORMAT`] when `noise_bytes`
-/// cannot hold a bucket header or exceeds the Levin packet limit (the C++
-/// shim returns a null slice for both, matching the historical contract).
+/// cannot hold a bucket header or would produce an `m_cb` above the Levin
+/// packet limit (the C++ shim returns a null slice for both, matching the
+/// historical contract). Size policy lives in [`shekyl_levin::noise_notify`];
+/// this export is marshaling.
 ///
 /// # Safety
 ///
@@ -176,9 +180,6 @@ pub unsafe extern "C" fn shekyl_levin_noise_notify(
     }
     // SAFETY: caller guarantees `out` is writable (checked non-null above).
     unsafe { *out = ShekylBuffer::null() };
-    if u64::try_from(noise_bytes).is_ok_and(|len| len > shekyl_levin::DEFAULT_MAX_PACKET_SIZE) {
-        return SHEKYL_LEVIN_ERR_TOO_LARGE;
-    }
     match shekyl_levin::noise_notify(noise_bytes) {
         Ok(noise) => {
             // SAFETY: `out` checked non-null above.
@@ -199,9 +200,11 @@ pub unsafe extern "C" fn shekyl_levin_noise_notify(
 /// gtests now running through this export.
 ///
 /// Returns [`SHEKYL_LEVIN_OK`] with `out` set (free with
-/// `shekyl_buffer_free`), [`SHEKYL_LEVIN_ERR_FORMAT`] when `noise_size`
-/// cannot hold two headers, or [`SHEKYL_LEVIN_ERR_TOO_LARGE`] above the
-/// Levin packet limit.
+/// `shekyl_buffer_free`), or [`SHEKYL_LEVIN_ERR_FORMAT`] when `noise_size`
+/// cannot hold two headers or would produce an `m_cb` above the Levin
+/// packet limit. The inner payload may itself be larger — that is why this
+/// path fragments. Size policy lives in
+/// [`shekyl_levin::fragmented_notify`]; this export is marshaling.
 ///
 /// # Safety
 ///
@@ -223,11 +226,6 @@ pub unsafe extern "C" fn shekyl_levin_fragmented_notify(
     let Some(payload) = (unsafe { slice_from_ptr(payload, payload_len) }) else {
         return SHEKYL_LEVIN_ERR_NULL;
     };
-    // Bounded deserialization (rule 40): nothing framed under the Levin
-    // packet limit can legitimately be larger than this.
-    if u64::try_from(payload_len).is_ok_and(|len| len > shekyl_levin::DEFAULT_MAX_PACKET_SIZE) {
-        return SHEKYL_LEVIN_ERR_TOO_LARGE;
-    }
     match shekyl_levin::fragmented_notify(noise_size, command, payload) {
         Ok(stream) => {
             // SAFETY: `out` checked non-null above.
@@ -483,6 +481,9 @@ mod tests {
 
     /// Invalid sizes map to the codes the C++ shim turns into the
     /// historical null-slice contract; a null out pointer is its own code.
+    /// Bites against a marshaling defect that would collapse `-3` into
+    /// `-7` (or drop the oversize arm); it does NOT re-prove the library
+    /// bound, which `shekyl-levin`'s emit tests own.
     #[test]
     fn noise_and_fragment_reject_invalid_sizes() {
         let mut out = ShekylBuffer::null();
@@ -494,6 +495,22 @@ mod tests {
         // SAFETY: valid slice + out pointer.
         let rc =
             unsafe { shekyl_levin_fragmented_notify(0, 0, [0u8; 1].as_ptr(), 1, &raw mut out) };
+        assert_eq!(rc, SHEKYL_LEVIN_ERR_FORMAT);
+        assert!(out.ptr.is_null());
+
+        let too_big = HEADER_SIZE
+            + usize::try_from(shekyl_levin::DEFAULT_MAX_PACKET_SIZE)
+                .expect("packet limit fits usize")
+            + 1;
+        // SAFETY: valid out pointer; the library rejects before allocating.
+        let rc = unsafe { shekyl_levin_noise_notify(too_big, &raw mut out) };
+        assert_eq!(rc, SHEKYL_LEVIN_ERR_FORMAT);
+        assert!(out.ptr.is_null());
+
+        // SAFETY: valid slice + out pointer; same reject-before-allocate.
+        let rc = unsafe {
+            shekyl_levin_fragmented_notify(too_big, 0, [0u8; 1].as_ptr(), 1, &raw mut out)
+        };
         assert_eq!(rc, SHEKYL_LEVIN_ERR_FORMAT);
         assert!(out.ptr.is_null());
 

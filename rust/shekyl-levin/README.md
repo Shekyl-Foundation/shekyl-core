@@ -63,12 +63,10 @@ It is deliberately kept in exactly one place: a second copy drifts from the
 code and then lies about it, which is the failure this crate is least able to
 afford.
 
-In summary, and without restating it: every divergence is *stricter* than the
-C++ — none accepts anything the oracle rejects. Five are read-side (three
-about fragment reassembly and response classification, one bounding a
-decompressed payload by the packet limit in force, one latching the reader
-after a fatal error); one is emit-side, where `try_compress_message` returns
-malformed input unchanged rather than re-framing it.
+In summary, and without restating it: every divergence is *stricter* than
+the remaining C++ oracles (`make_header`, `handle_recv`) — none accepts
+anything those reject. The list itself is in the crate docs; do not count
+or classify it here.
 
 All are unreachable for a conforming sender, and **two stopped being
 divergences at all** at the 2026-08-06 compression cut — kept in the census

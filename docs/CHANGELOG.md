@@ -17,7 +17,10 @@
   compression already Rust-owned, the entire Levin emit-transform surface
   (`IMPLEMENTATION_INDEX.md` LV row) is single-sourced in Rust; still C++
   until LV-3: the read-side state machine and the plain
-  notification/request/response finalize path.
+  notification/request/response finalize path. Emit also refuses a bucket
+  whose `m_cb` would exceed the Levin packet limit, checked in
+  `shekyl-levin` before any allocation (the on-wire body, not the inner
+  payload fragmentation exists to split); the FFI wrappers are marshaling.
 
 - **Curve-tree actor fail-stop now resumes over the held store, not a
   path-reopen** (SH-2a). `CurveTreeHandle` keeps a `WriterRecovery` for

@@ -17,13 +17,14 @@ pub enum Error {
     #[error("levin signature mismatch")]
     BadSignature,
 
-    /// A header (outer or reassembled-inner) claims a payload larger than
-    /// the configured packet-size limit.
+    /// A bucket's payload (`m_cb`) exceeds the configured packet-size
+    /// limit — claimed by a received header, or by an emit that would
+    /// write that `m_cb`.
     #[error("payload length {claimed} exceeds the packet-size limit {limit}")]
     OversizePacket {
-        /// The `length` field the header claimed.
+        /// The `length` field the header claimed, or would claim on emit.
         claimed: u64,
-        /// The limit in force when the header was parsed.
+        /// The limit in force ([`crate::DEFAULT_MAX_PACKET_SIZE`] on emit).
         limit: u64,
     },
 
