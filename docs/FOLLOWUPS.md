@@ -3885,13 +3885,84 @@ sustainability is unaffected by the recalibration.
     pending seal. Bond posting is production-reachable today, so SA-R-6 holes are
     live rather than future; the two above were fixed as found (rule 22) instead
     of deferred behind an inertness that does not hold.
-    **What remains in this reopen:** the *from-seed* reconstruction — a cursor
-    rolled back beyond the lookahead, where the wallet opens as a non-staker and
-    derives/scans nothing — needs a widening derive-and-scan forward probe under
-    Model D. Deferred on the **named blocker of a distinct validation surface**
-    (rule 19: it changes what a non-staker open derives and scans, not how the
-    reconcile arms compose), not on reachability. The ruling lives in
-    `shekyl-crypto-pq` `archival_p` module docs and CBOM §5.
+    **From-seed reconstruction DISCHARGED (2026-08-13, the bond-watch build):**
+    the deferred surface was built as the principal scan's **bond watch** —
+    at open the wallet derives the public persona canonical ids for
+    `{bonded} ∪ {cursor..=cursor+W}` (`ARCHIVAL_PERSONA_PROBE_WINDOW = 32`)
+    into the persisted `StakingBlock::persona_id_cache` (derive-once: ids are
+    a pure function of the seed; `STAKING_BLOCK_VERSION` 2), the ordinary
+    refresh/rescan producer matches on-chain `Input::BondPost` observations
+    against the cache (shared lift: `engine::bond_watch`), and the merge
+    adopts each sighted slot + records its first-sighting height
+    (`bond_sightings`) + raises the monotone cursor
+    (`merge::adopt_bond_sightings`) — positive evidence only, so no
+    exhaustiveness token is needed and the raise is sound on any coverage.
+    Two soundness bridges landed with it: arm #3 evaluates a sighted slot
+    with the **height-gated** verdict (a stale pscan seal cannot GC a
+    probe-adopted real bond as phantom), and the first-stake W2 resume guard
+    treats a persisted sighting as `AlreadyStaked` (no duplicate JoinMarket
+    post while the P-scan lags). Unconditional for every wallet — a
+    never-staked wallet's watch simply never fires — so any full rescan
+    reconstructs a lost staking history from slot 0. **Residual, not a
+    reopen:** a history deeper than `W` slots converges across open+rescan
+    cycles (`ceil(depth / W)`; each merge raises the cursor, the next open
+    derives the window above it), and the watch sees only what the principal
+    scan covers — a restore whose `restore_from_height` postdates its bonds
+    reconstructs nothing until a lower-floor rescan (the same birthday
+    semantics every fund has).
+    **UPDATE 2026-08-13 (review round on the bond-watch build — the absence
+    evidence is now per-persona):** the review found the height-gated bridge
+    alone was not airtight: the P-scan seal's match set is complete only over
+    personas **watched while coverage advanced**, so a probe-adopted bond
+    whose sighted height sat below an already-advanced frontier (restore →
+    stake a new slot → pscan seals `[0, tip)` → lower-floor rescan sights the
+    old bonds; or a mid-session adoption the spawn-time actor never watches)
+    read `AbsentWithinCovered` and was permanently GC'd — stuck funds. Fixed
+    structurally: the seal now records per-persona **watch floors**
+    (`PScanState::watch_floors`, `PSCAN_STATE_VERSION` 8→9;
+    `ScanStepResult::watched_personas` feeds them at ingest) and
+    `PReconcileSet::reconcile` refuses to convert "no match row" into absence
+    below a persona's floor or for an unfloored persona (`Present` is never
+    gated). Companion hardening from the same round: a reorg rewind now
+    **discards sighting rows at/above the fork at the merge**
+    (`StakingBlock::discard_sightings_at_or_above` — the re-scan re-sights a
+    re-mined post at its canonical height; also the in-session healing edge
+    for the first-stake `AlreadyStaked` guard), a committed sighting row is
+    **immutable** (no cross-batch height lowering; within-batch min is owned
+    by `adopt_bond_sightings`), the refresh producer **aborts as
+    `ReorgStorm`** when a divergence lands after the rewind budget instead of
+    scanning blind (monotone adoptions cannot self-heal the way ledger state
+    does), `sightings_in` adopts **JoinMarket posts only** (the same
+    confirmation filter as the P-scan), and a mid-session recovery is a
+    first-class surfaced state: `StakingReadView::recovery_pending_reopen` /
+    `staking_info.recovery_pending_reopen`, with `first_stake`/`start_pscan`
+    refusing `-29504 STAKE_RECOVERED_PENDING_REOPEN` ("close and reopen")
+    rather than an internal fault — Model D derives persona keys only at
+    open, so a mid-session adoption cannot spawn or extend the actor.
+    **Known residual (safe direction):** a persona whose sighting sits below
+    its watch floor is *retained indefinitely* (`OutsideCovered`), never
+    corroborated or refuted, until a P-scan covers that range with the
+    persona watched — which today never happens for an already-advanced
+    frontier (the pscan has no floor-lowering backfill). The same residual
+    has a second entry path (Copilot, PR #463 review): an **explicit full
+    rescan cannot invalidate** a sighting whose post was reorged out while
+    the wallet was closed — the reset leaves no old tip for the replay to
+    diverge from, so the merge sees no rewind and
+    `discard_sightings_at_or_above` never runs; the orphan row is retained
+    (and `first_stake` keeps refusing on it) until the pscan absence oracle
+    clears it under the same floor conditions. The wallet-scan replay is
+    deliberately NOT that oracle: its floor (`restore_from_height`) may sit
+    above the sighting, so "replayed and unseen" is not absence — and a
+    discard-then-re-sight at rescan start would reopen the arm-#3 stale-seal
+    hole if the wallet crashed between the discard persist and the re-sight
+    (the "only when the replay succeeds" condition IS the exhaustiveness
+    machinery). Funds-safe both ways (retention/refusal, never GC of a live
+    bond) and the flagship restore path is unaffected (a fresh restore
+    has no seal, so floors start at 0 — a seed-restore also heals both
+    residual paths unconditionally). **Reopen when** a pscan backfill /
+    frontier-lowering scan mode is designed — that is a new producer scan
+    mode over the exhaustiveness machinery, a distinct validation surface
+    (rule 19), not a patch on the reconcile arms.
   - **Persona slot-space exhaustion is not represented, and the binding gate
     does not refuse it.** `StakingBlock::monotone_current_slot` uses
     `saturating_add(1)`, which correctly prevents a wrap to slot 0 but makes
@@ -9536,20 +9607,29 @@ its wake.
   `shekyl_levin_*` FFI and the system-libzstd dependency is deleted
   (single-owner libzstd; zstd decision 2026-08-06). Still inert until
   LV-3: the read side (`BucketReader`) and the plain
-  notification/request/response builders. The remaining work is
-  **rejected-now with named reopening criteria** (rule 21):
+  notification/request/response builders. LV-2's build-vs-vendor question
+  is **closed** (2026-08-13 pin below); implementation of that pin is
+  in-scope. LV-3 remains **rejected-now with named reopening criteria**
+  (rule 21):
 
-  - **LV-2 — epee portable_storage payload codec + command schemas.** The
-    framing crate carries payloads as opaque bytes; speaking live
-    handshake/timed-sync/notify bodies needs the portable_storage binary
-    codec plus the ~25 KV maps in `src/p2p/p2p_protocol_defs.h` and
-    `src/cryptonote_protocol/cryptonote_protocol_defs.h`. Build-or-vendor
-    is an open rule-17/rule-10 decision — Cuprate's `epee-encoding` exists
-    but is vendoring-only (`DAEMON_RELAY_PRIVACY.md` §8). Reopens when
-    either (a) the p2p migration track is scheduled, or (b) any Rust
-    component needs live Levin command interop with the C++ node (e.g. a
-    relay readout that would otherwise add a third entry to the index's
-    relay-layer C++ dependency inventory).
+  - **LV-2 — epee portable_storage payload codec + command schemas.**
+    UPDATE 2026-08-13: build-vs-vendor **closed** — first-party
+    `shekyl-portable-storage` (codec) + typed maps in `shekyl-levin` (schemas);
+    Cuprate is reference-not-dependency. Pin:
+    [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md).
+    Split **LV-2a** (codec + KATs + delete the
+    `get_o_indexes.bin` / `get_blocks_by_height.bin` one-offs) then
+    **LV-2b** (handshake/timed-sync/ping/support-flags first, then 2002
+    and the remaining notifies including 2010). Census is 27
+    `BEGIN_KV_SERIALIZE_MAP`s in the two protocol-defs headers, of which
+    the Levin-wire subset plus the `network_address` union are LV-2b;
+    RPC maps stay out. Reopening criterion (a) of the 2026-08-05
+    deferral (p2p migration track scheduled) is met by that pin;
+    implementation is in-scope, not V3.0-gating. UPDATE 2026-08-13:
+    **LV-2a landed** — `rust/shekyl-portable-storage`,
+    `docs/PORTABLE_STORAGE.md` completed, the two homegrown HTTP `.bin`
+    parsers deleted. The framing crate still carries payloads as opaque
+    bytes until LV-2b lands.
   - **LV-3 — connection-path cutover.** Replace the C++ Levin read/write
     path at the `levin_notify.cpp` / `net_node.inl` seam with the Rust
     crate. Cost basis: the index's "Relay layer → C++ dependency

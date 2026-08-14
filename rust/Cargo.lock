@@ -3988,6 +3988,7 @@ dependencies = [
  "shekyl-operator-alarm",
  "shekyl-p-host",
  "shekyl-p-transport",
+ "shekyl-portable-storage",
  "shekyl-proofs",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
@@ -4268,6 +4269,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-portable-storage"
+version = "3.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "shekyl-pow-randomx"
 version = "3.1.0"
 dependencies = [
@@ -4331,6 +4339,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-curve-io",
+ "shekyl-portable-storage",
  "shekyl-rpc-types",
  "std-shims",
  "thiserror 2.0.18",

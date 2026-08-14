@@ -55,6 +55,34 @@
   is the posture watch, where the supervisor's liveness policy actually
   publishes.
 
+- **A full rescan now reconstructs a lost staking history — the principal
+  scan's bond watch** (SA-R-6 from-seed reconstruction,
+  `feat/rescan-slot-reconstruction`). At open, while the seed is transiently
+  in scope, the wallet derives the public persona canonical ids for the probe
+  window `{bonded} ∪ {cursor..=cursor+32}` into the new
+  `StakingBlock::persona_id_cache` — once per slot for the wallet's life
+  (ids are pure functions of the seed), so every later open and the
+  credential-less `rescan_blockchain` have candidates at zero keygen cost.
+  The ordinary refresh/rescan matches on-chain `Input::BondPost`
+  observations against the cache and the merge **adopts** each sighted slot
+  back into `bonded_slots`, records its first-sighting height
+  (`bond_sightings`), re-arms `staking_enabled`, and raises the monotone
+  `p_slot` cursor — positive evidence only, unconditional for every wallet
+  (a never-staked wallet's watch simply never fires). A restored-from-seed
+  wallet therefore recovers both the SA-R-6 no-reuse mark and the
+  reachability of its bonded personas (Model D: `bonded_slots` is the only
+  derive-forward input) on any full rescan, with no staking-specific
+  recovery flow. Soundness bridges: the phantom GC evaluates sighted slots
+  with the height-gated verdict (a stale pscan seal cannot collect a
+  probe-adopted real bond), and the first-stake resume guard treats a
+  persisted sighting as `AlreadyStaked` (no duplicate bond post while the
+  P-scan lags). `STAKING_BLOCK_VERSION` 1→2,
+  `WALLET_LEDGER_FORMAT_VERSION` 16→17 (refuse-don't-migrate; pre-genesis
+  recreate). Histories deeper than 32 slots converge across open+rescan
+  cycles; the watch sees only what the principal scan covers (a
+  `restore_from_height` above the bonds needs a lower-floor rescan — the
+  same birthday semantics as funds).
+
 - **Levin white-noise emit routed through Rust; the fragment algorithm has
   one implementation.** `epee::levin::make_noise_notify` and
   `make_fragmented_notify` are now forwarding shims over two new
@@ -245,6 +273,23 @@
   reset.
 
 ### Added
+
+- **LV-2 portable_storage decision** (`docs/design/LV2_PORTABLE_STORAGE.md`).
+  First-party `shekyl-portable-storage` codec (LV-2a) then typed Levin command
+  schemas in `shekyl-levin` (LV-2b). Cuprate `epee-encoding` is
+  reference-not-dependency, closing the question
+  `DAEMON_RELAY_PRIVACY.md` §8 deferred. Command inventory in
+  `LEVIN_PROTOCOL.md` drops the non-existent 1004–1006 and adds live
+  2010 `NOTIFY_GET_TXPOOL_COMPLEMENT`.
+
+- **LV-2a `shekyl-portable-storage`.** First-party binary portable_storage
+  codec, KAT'd against C++ `epee_serialization.cpp` (`two_keys`,
+  `duplicate_key`) plus encode/decode limits as a parameter (Levin vs
+  HTTP `.bin`). Completes `docs/PORTABLE_STORAGE.md`. Rewires
+  `get_o_indexes.bin` (`shekyl-rpc-client`) and the test-only
+  `get_blocks_by_height.bin` harness (`shekyl-engine-core`) onto the
+  crate and deletes both homegrown parsers. LV-2b (typed Levin maps)
+  is not in this change.
 
 - **You can now give up on a stuck send.** The new wallet-RPC method
   `abandon_tx` marks a dispatched-but-unconfirmed send `ABANDONED` in

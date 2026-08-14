@@ -31,6 +31,10 @@ lives at `rust/shekyl-levin` (LV-1, KAT'd against the C++ unit tests, with
 deliberately unwired until the scheduled p2p cutover. Where it is
 deliberately stricter than the C++, the authoritative list is the crate's
 own docs (`rust/shekyl-levin/src/lib.rs`) — kept in one place on purpose.
+Command *bodies* are epee portable_storage. The binary codec is
+`rust/shekyl-portable-storage` (LV-2a, landed). Typed Levin command
+maps in `shekyl-levin` are LV-2b and not yet implemented. Decision:
+[`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md).
 See also `docs/design/IMPLEMENTATION_INDEX.md` (LV row) and the
 `docs/FOLLOWUPS.md` "Levin p2p migration" entry.
 
@@ -175,14 +179,12 @@ For the rebooted chain:
 #### (`1002` Response) Timed Sync
 #### (`1003` Request) Ping
 #### (`1003` Response) Ping
-#### (`1004` Request) Stat Info
-#### (`1004` Response) Stat Info
-#### (`1005` Request) Network State
-#### (`1005` Response) Network State
-#### (`1006` Request) Peer ID
-#### (`1006` Response) Peer ID
 #### (`1007` Request) Support Flags
 #### (`1007` Response) Support Flags
+
+Commands 1004–1006 (Stat Info / Network State / Peer ID) do **not**
+exist in Shekyl. `COMMAND_REQUEST_SUPPORT_FLAGS` is
+`P2P_COMMANDS_POOL_BASE + 7`. Do not reintroduce them.
 
 ### Cryptonote Protocol Commands
 
@@ -227,6 +229,16 @@ affected by PQC sizing, but the follow-up `2002`/`2009` exchange is.
 Requests specific transactions by hash. The response contains full
 serialized v3 transactions including `pqc_auth`.
 
+#### (`2010` Notification) Get Txpool Complement
+
+Carries a list of transaction hashes (`CONTAINER_POD_AS_BLOB`). Live in
+`NOTIFY_GET_TXPOOL_COMPLEMENT` (`cryptonote_protocol_defs.h`) and handled
+by `handle_notify_get_txpool_complement`. Command 2005 was never
+allocated.
+
+Command-body field layouts are specified by the C++ KV maps until LV-2b
+lands typed Rust structs; see `LV2_PORTABLE_STORAGE.md` §5–§6.
+
 ### Wire Data Privacy Summary
 
 | Command | PQC size impact | Anonymity sensitivity | Notes |
@@ -239,3 +251,4 @@ serialized v3 transactions including `pqc_auth`.
 | 2006/2007 Chain Entry | None | None | Hash-only |
 | 2008 Fluffy Block | Minimal | Low | Header + hashes |
 | 2009 Missing TX | +5.4 KB per requested tx | Medium | Follow-up to fluffy block |
+| 2010 Txpool complement | None (hashes only) | Low | Mempool hash set |
