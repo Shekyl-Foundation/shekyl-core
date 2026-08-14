@@ -137,10 +137,17 @@ impl Message<PersonaIdentityOf> for StakeEngine {
 /// custody ruling rather than a convenience. §7.2(iii): the wallet's HKDF
 /// siblings all descend from `master_seed`, so a serving role holding
 /// `hs_id_seed` is one edit away from holding `bond_spend`'s authority. The
-/// expansion therefore runs **here**, on the wallet side —
-/// [`OnionIdentity::from_hs_id_seed`] consumes the derived seed and it dies at
-/// the end of that call — and what crosses is a value authorizing exactly one
-/// thing: publishing this onion.
+/// expansion therefore runs **here**, inside the secret owner, and what
+/// crosses the actor boundary is a value authorizing exactly one thing:
+/// publishing this onion.
+///
+/// **The guarantee is the boundary, not the seed's lifetime**, and the two are
+/// easy to conflate. This call does not shorten the seed's life or wipe it:
+/// `hs_id_seed` stays in the actor's [`ArchivalPKeys`] for the persona's life,
+/// under that field's `Zeroizing` and the `on_stop` wipe, and
+/// [`OnionIdentity::from_hs_id_seed`] borrows it and retains nothing. What
+/// makes the custody property hold is narrower and stronger: no caller of this
+/// message can obtain the seed, only the expanded credential.
 ///
 /// Minted per request rather than cached, because [`OnionIdentity`] is
 /// deliberately not `Clone`: holding the expanded bytes *is* the persona on
