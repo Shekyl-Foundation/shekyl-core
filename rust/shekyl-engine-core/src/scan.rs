@@ -34,6 +34,9 @@
 //!   [`ReorgRewind::fork_height`] before applying any of the
 //!   per-height events. Drives
 //!   [`shekyl_engine_state::LedgerIndexes::handle_reorg`].
+//! - [`ScanResult::bond_sightings`] — slots whose cached persona
+//!   canonical id posted a bond in a scanned block. The merge adopts
+//!   each into `StakingBlock::bonded_slots` and raises `p_slot`.
 //!
 //! Adding a new event class is a single-site change: extend the
 //! type, extend the apply match, add the scanner emission. Compare

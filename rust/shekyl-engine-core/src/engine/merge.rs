@@ -210,13 +210,13 @@ impl<
 
         // Bond-watch sightings ride the same result but mutate the STAKING
         // block, which `apply_scan_result_to_state` (LedgerBlock-scoped)
-        // cannot reach — so they are validated and taken here, and applied
-        // below after the merge body's invariant checks accept the result.
-        super::bond_watch::validate_bond_sightings(&result)?;
-        let bond_sightings = std::mem::take(&mut result.bond_sightings);
-
+        // cannot reach — validated here (cache membership needs the staking
+        // block) under the write guard *before* the ledger apply, so a
+        // malformed slot cannot advance the tip.
         let mut guard = self.ledger.write();
         let state = &mut *guard;
+        super::bond_watch::validate_bond_sightings(&result, &state.ledger.staking)?;
+        let bond_sightings = std::mem::take(&mut result.bond_sightings);
         // Capture the inserted-index list under the same write guard
         // so it remains valid for the post-pass. No external mutation
         // can shrink `ledger.transfers` between the merge body's

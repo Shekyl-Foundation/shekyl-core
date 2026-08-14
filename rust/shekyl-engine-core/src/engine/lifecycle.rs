@@ -889,7 +889,7 @@ impl Engine<SoloSigner> {
         // consumes it below. This is the (6-i) construction-time projection;
         // the full blob then lives only in the actor.
         let merge_view_secret = super::key_actor::HandleDerivationViewSecret::from_keys(&keys);
-        let refresh = std::sync::Arc::new(super::local_refresh::LocalRefresh::new(
+        let refresh = std::sync::Arc::new(super::local_refresh::LocalRefresh::with_bond_watch(
             view_material,
             scan_start_floor,
             // The watch map: the probe-id cache inverted, since-retired

@@ -21,14 +21,17 @@
 //! the wire→domain boundary and the post-kind byte — or the probe could sight
 //! a bond the P-scan would later fail to corroborate (or vice versa), and the
 //! sighting bridge in the open-time reconcile would wedge. Hence one free
-//! function, no policy: matching (against which id set, with what refusals)
-//! stays with each consumer.
+//! function for the lift, and one for "lookup this id in an id→slot map":
+//! which map (bonded personas vs probe-id cache) stays with each consumer.
 
+use std::collections::BTreeMap;
+
+use shekyl_engine_state::StakingBlock;
 use shekyl_types::PCanonicalId;
 use shekyl_wire::transaction::{BondPostKind, Input, Transaction};
 
 use super::error::RefreshError;
-use crate::scan::ScanResult;
+use crate::scan::{BondSightingObserved, ScanResult};
 
 /// One cleartext bond-post observation lifted from a transaction input:
 /// the posting persona's public canonical id and the wire post-kind byte.
@@ -73,6 +76,35 @@ pub(crate) fn post_kind_byte(kind: &BondPostKind) -> u8 {
     }
 }
 
+/// Observations in `tx` whose canonical id is in `watch`, paired with the
+/// mapped slot. Shared match — the P-scan extractor and the principal-scan
+/// watch differ only in *which* id→slot map they pass.
+pub(crate) fn match_watch<'a>(
+    tx: &'a Transaction,
+    watch: &'a BTreeMap<PCanonicalId, u32>,
+) -> impl Iterator<Item = (BondPostObservation, u32)> + 'a {
+    bond_post_observations(tx).filter_map(move |obs| {
+        watch
+            .get(&obs.p_canonical_id)
+            .copied()
+            .map(|slot| (obs, slot))
+    })
+}
+
+/// Slot-resolved sightings in `tx` at `height` against the principal scan's
+/// probe-id watch. The producer owns per-attempt dedup and the reorg rewind;
+/// this is just the per-tx match.
+pub(crate) fn sightings_in<'a>(
+    tx: &'a Transaction,
+    height: u64,
+    watch: &'a BTreeMap<PCanonicalId, u32>,
+) -> impl Iterator<Item = BondSightingObserved> + 'a {
+    match_watch(tx, watch).map(move |(_, slot)| BondSightingObserved {
+        block_height: height,
+        slot,
+    })
+}
+
 /// Extend the persisted probe-id cache to cover the derive-forward window
 /// `{bonded} ∪ {cursor ..= cursor + window}` — called at open (`assemble`),
 /// the one seam where the seed is transiently in scope. Derive-once: a slot
@@ -80,7 +112,7 @@ pub(crate) fn post_kind_byte(kind: &BondPostKind) -> u8 {
 /// invalidate), and a durably-retired slot is never cached (its cursor burn
 /// is arm #2's; the watch must not churn re-adopting it).
 pub(crate) fn extend_probe_cache<E>(
-    staking: &mut shekyl_engine_state::StakingBlock,
+    staking: &mut StakingBlock,
     retired: &std::collections::BTreeSet<u32>,
     window: u32,
     mut id_of_slot: impl FnMut(u32) -> Result<PCanonicalId, E>,
@@ -101,10 +133,10 @@ pub(crate) fn extend_probe_cache<E>(
 /// seal the refusal set is empty and arm #2 heals any re-adoption at the
 /// next open (converging).
 pub(crate) fn watch_map(
-    staking: &shekyl_engine_state::StakingBlock,
+    staking: &StakingBlock,
     retired: &std::collections::BTreeSet<u32>,
-) -> std::collections::BTreeMap<PCanonicalId, u32> {
-    let mut map = std::collections::BTreeMap::new();
+) -> BTreeMap<PCanonicalId, u32> {
+    let mut map = BTreeMap::new();
     for (slot, id) in &staking.persona_id_cache {
         if retired.contains(slot) {
             continue;
@@ -123,11 +155,20 @@ pub(crate) fn watch_map(
     map
 }
 
-/// O5 untrusted-`ScanResult` contract checks for the bond-watch sightings,
-/// mirroring the per-height-vector checks the merge body applies: an empty
-/// range carries no sightings, and every sighting height sits inside the
-/// processed range.
-pub(crate) fn validate_bond_sightings(result: &ScanResult) -> Result<(), RefreshError> {
+/// O5 untrusted-`ScanResult` contract checks for the bond-watch sightings.
+///
+/// Height checks mirror the per-height-vector gates the merge body applies
+/// (empty range carries no sightings; every height sits inside the processed
+/// range). The **slot** check is the load-bearing extra: a sighting adopts
+/// into `bonded_slots` and raises the monotone cursor, so an unknown slot
+/// would permanently burn the allocation sequence. Only a slot already in
+/// `persona_id_cache` — a slot this wallet asked to watch — may be adopted.
+/// Called under the ledger write guard, **before** the LedgerBlock apply, so
+/// a malformed result cannot advance the tip and then fail.
+pub(crate) fn validate_bond_sightings(
+    result: &ScanResult,
+    staking: &StakingBlock,
+) -> Result<(), RefreshError> {
     if result.processed_height_range.start == result.processed_height_range.end
         && !result.bond_sightings.is_empty()
     {
@@ -142,6 +183,15 @@ pub(crate) fn validate_bond_sightings(result: &ScanResult) -> Result<(), Refresh
     {
         return Err(RefreshError::MalformedScanResult {
             reason: "bond_sighting height outside processed_height_range",
+        });
+    }
+    if result
+        .bond_sightings
+        .iter()
+        .any(|s| !staking.persona_id_cache.contains_key(&s.slot))
+    {
+        return Err(RefreshError::MalformedScanResult {
+            reason: "bond_sighting slot not in persona_id_cache",
         });
     }
     Ok(())
@@ -165,10 +215,7 @@ pub(crate) fn validate_bond_sightings(result: &ScanResult) -> Result<(), Refresh
 /// Sorted insert: `bonded_slots` stays ascending (persisted-byte determinism
 /// — two wallets in the same logical state serialize identically), and a
 /// sighted slot may sit *below* existing entries after a partial rollback.
-pub(crate) fn adopt_bond_sightings(
-    staking: &mut shekyl_engine_state::StakingBlock,
-    sightings: &[crate::scan::BondSightingObserved],
-) {
+pub(crate) fn adopt_bond_sightings(staking: &mut StakingBlock, sightings: &[BondSightingObserved]) {
     if sightings.is_empty() {
         return;
     }
@@ -207,6 +254,20 @@ mod tests {
             block_height: height,
             slot,
         }
+    }
+
+    /// A staking block whose probe cache covers `slots` (dummy public ids).
+    /// O5's slot-membership check reads this map; the bytes are not matched.
+    fn staking_with_cached_slots(slots: &[u32]) -> shekyl_engine_state::StakingBlock {
+        let mut staking = shekyl_engine_state::StakingBlock::empty();
+        for (i, &slot) in slots.iter().enumerate() {
+            let mut bytes = [0u8; 32];
+            bytes[0] = u8::try_from(i.saturating_add(1)).unwrap_or(1);
+            staking
+                .persona_id_cache
+                .insert(slot, shekyl_types::PCanonicalId::from_bytes(bytes));
+        }
+        staking
     }
 
     /// The from-seed reconstruction's merge half: sighting a bond for a slot
@@ -269,10 +330,11 @@ mod tests {
     /// sighting height outside the range is malformed.
     #[test]
     fn validate_bond_sightings_rejects_contract_violations() {
+        let staking = staking_with_cached_slots(&[0]);
         let mut empty_range = ScanResult::empty_at(1, None);
         empty_range.bond_sightings.push(sighting(0, 5));
         assert!(matches!(
-            validate_bond_sightings(&empty_range),
+            validate_bond_sightings(&empty_range, &staking),
             Err(RefreshError::MalformedScanResult { .. })
         ));
 
@@ -280,13 +342,33 @@ mod tests {
         out_of_range.processed_height_range = 10..20;
         out_of_range.bond_sightings.push(sighting(0, 25));
         assert!(matches!(
-            validate_bond_sightings(&out_of_range),
+            validate_bond_sightings(&out_of_range, &staking),
             Err(RefreshError::MalformedScanResult { .. })
         ));
 
         let mut ok = ScanResult::empty_at(1, None);
         ok.processed_height_range = 10..20;
         ok.bond_sightings.push(sighting(0, 15));
-        assert!(validate_bond_sightings(&ok).is_ok());
+        assert!(validate_bond_sightings(&ok, &staking).is_ok());
+    }
+
+    /// A sighting whose slot is not in the probe cache is malformed — this
+    /// bites against a producer (or test double) naming an unwatched slot,
+    /// which would otherwise permanently raise the monotone cursor. It does
+    /// NOT cover retired-slot re-adoption (arm #2 heals that at the next
+    /// open; the cache may still hold the retired row).
+    #[test]
+    fn validate_bond_sightings_rejects_a_slot_not_in_the_probe_cache() {
+        let staking = staking_with_cached_slots(&[0]);
+        let mut unknown = ScanResult::empty_at(1, None);
+        unknown.processed_height_range = 10..20;
+        unknown.bond_sightings.push(sighting(999, 15));
+        let err = validate_bond_sightings(&unknown, &staking).expect_err("unknown slot");
+        match err {
+            RefreshError::MalformedScanResult { reason } => {
+                assert!(reason.contains("persona_id_cache"), "got {reason:?}");
+            }
+            other => panic!("expected MalformedScanResult, got {other:?}"),
+        }
     }
 }

@@ -3702,11 +3702,7 @@ mod start_refresh_integration_tests {
                 .expect("arc has one strong reference at this point")
                 .into_inner();
             let vm = hybrid_engine_view_material();
-            let refresh = StaleThenRealRefresh::new(LocalRefresh::new(
-                vm,
-                0,
-                std::collections::BTreeMap::new(),
-            ));
+            let refresh = StaleThenRealRefresh::new(LocalRefresh::new(vm, 0));
             let hybrid = engine.replace_refresh(refresh);
             Arc::new(RwLock::new(hybrid))
         };
@@ -3859,28 +3855,26 @@ mod start_refresh_integration_tests {
         // `pub(crate)`, so the `ViewMaterial` construction happens at
         // the test site.
         let (arc, _tmp) = make_hybrid_engine_arc(mock_daemon).await;
-        let arc =
-            {
-                // Pull the engine out of the `Arc<RwLock<…>>` to consume it
-                // for `replace_refresh`, then re-wrap. `make_hybrid_engine_arc`
-                // is the only `Arc` reference holder; the consume-and-
-                // rebuild shape of `replace_refresh` requires owned
-                // `Engine`, not a borrow.
-                let engine = std::sync::Arc::into_inner(arc)
-                    .expect("arc has one strong reference at this point")
-                    .into_inner();
-                // Re-derive ViewMaterial from the known hybrid seed — the
-                // engine no longer exposes its keys (they live in the
-                // `KeyActor`, §6). Wrap it in the (no-failure)
-                // `FaultInjectingRefresh` for four-slot composition, then in
-                // `StaleThenRealRefresh` to drive the one-shot retry.
-                let vm = hybrid_engine_view_material();
-                let refresh = StaleThenRealRefresh::new(FaultInjectingRefresh::new(
-                    LocalRefresh::new(vm, 0, std::collections::BTreeMap::new()),
-                ));
-                let hybrid = engine.replace_refresh(refresh);
-                Arc::new(RwLock::new(hybrid))
-            };
+        let arc = {
+            // Pull the engine out of the `Arc<RwLock<…>>` to consume it
+            // for `replace_refresh`, then re-wrap. `make_hybrid_engine_arc`
+            // is the only `Arc` reference holder; the consume-and-
+            // rebuild shape of `replace_refresh` requires owned
+            // `Engine`, not a borrow.
+            let engine = std::sync::Arc::into_inner(arc)
+                .expect("arc has one strong reference at this point")
+                .into_inner();
+            // Re-derive ViewMaterial from the known hybrid seed — the
+            // engine no longer exposes its keys (they live in the
+            // `KeyActor`, §6). Wrap it in the (no-failure)
+            // `FaultInjectingRefresh` for four-slot composition, then in
+            // `StaleThenRealRefresh` to drive the one-shot retry.
+            let vm = hybrid_engine_view_material();
+            let refresh =
+                StaleThenRealRefresh::new(FaultInjectingRefresh::new(LocalRefresh::new(vm, 0)));
+            let hybrid = engine.replace_refresh(refresh);
+            Arc::new(RwLock::new(hybrid))
+        };
 
         // Sanity-check the pre-refresh invariant on the ledger surface.
         {

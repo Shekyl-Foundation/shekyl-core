@@ -1059,4 +1059,113 @@ mod tests {
             .expect_err("a sighted slot is already staked, never a W2 resume");
         assert!(matches!(err, FirstStakeError::AlreadyStaked), "got {err:?}");
     }
+
+    /// One-block `ScanResult` continuing a fresh wallet (height 0 → 1).
+    fn one_block_scan_result(
+        sightings: Vec<crate::scan::BondSightingObserved>,
+    ) -> crate::scan::ScanResult {
+        crate::scan::ScanResult {
+            processed_height_range: 1..2,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32])],
+            new_transfers: Vec::new(),
+            spent_key_images: Vec::new(),
+            reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
+            bond_sightings: sightings,
+        }
+    }
+
+    /// `Engine::apply_scan_result` is the write gate: a sighting whose
+    /// slot is not in the probe cache must be refused *before* the
+    /// ledger apply, so the tip stays put and the cursor is not burned.
+    /// This bites against a producer/test-double naming an unwatched
+    /// slot; it does NOT cover the unit-level validate checks (those
+    /// live on `validate_bond_sightings`).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn apply_scan_result_refuses_an_uncached_sighting_without_advancing_the_tip() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"uncached sighting refusal");
+        let seed = fixed_seed();
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+        let engine =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        assert!(
+            !engine.ledger().staking.persona_id_cache.contains_key(&999),
+            "fixture: slot 999 is outside the 0..=W create window"
+        );
+        let tip_before = engine.synced_height();
+        let cursor_before = engine.ledger().staking.p_slot;
+
+        let err = engine
+            .apply_scan_result(one_block_scan_result(vec![
+                crate::scan::BondSightingObserved {
+                    block_height: 1,
+                    slot: 999,
+                },
+            ]))
+            .expect_err("uncached slot is malformed");
+        assert!(
+            matches!(err, crate::engine::RefreshError::MalformedScanResult { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(
+            engine.synced_height(),
+            tip_before,
+            "a refused sighting must not advance the tip"
+        );
+        assert_eq!(
+            engine.ledger().staking.p_slot,
+            cursor_before,
+            "a refused sighting must not burn the cursor"
+        );
+        assert!(
+            engine.ledger().staking.bonded_slots.is_empty(),
+            "a refused sighting must not adopt"
+        );
+    }
+
+    /// The peel-off + adopt seam: a sighting for a cached slot (create
+    /// derives 0..=W) is adopted and raises the cursor under the same
+    /// write that advances the tip. This bites against a regression that
+    /// dropped sightings in `apply_scan_result_to_state`; it does NOT
+    /// cover the producer emission path.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn apply_scan_result_adopts_a_cached_slot_and_advances_the_tip() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"cached sighting adopt");
+        let seed = fixed_seed();
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+        let engine =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        assert!(
+            engine.ledger().staking.persona_id_cache.contains_key(&0),
+            "create derives the 0..=W probe window"
+        );
+
+        engine
+            .apply_scan_result(one_block_scan_result(vec![
+                crate::scan::BondSightingObserved {
+                    block_height: 1,
+                    slot: 0,
+                },
+            ]))
+            .expect("cached slot is adopted");
+        assert_eq!(engine.synced_height(), 1, "tip advanced");
+        assert_eq!(engine.ledger().staking.bonded_slots, vec![0], "adopted");
+        assert_eq!(engine.ledger().staking.p_slot, 1, "cursor raised past 0");
+        assert!(engine.ledger().staking.staking_enabled);
+        assert_eq!(
+            engine
+                .ledger()
+                .staking
+                .bond_sightings
+                .get(&0)
+                .map(|h| h.to_raw()),
+            Some(1)
+        );
+    }
 }

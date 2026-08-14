@@ -177,7 +177,7 @@ use super::refresh::{LedgerSnapshot, RefreshOptions, RefreshPhase, RefreshProgre
 use super::traits::daemon::DaemonEngine;
 use super::traits::refresh::RefreshEngine;
 use super::view_material::ViewMaterial;
-use crate::engine::bond_watch::bond_post_observations;
+use crate::engine::bond_watch::sightings_in;
 use crate::scan::{
     BondSightingObserved, DetectedTransfer, KeyImageObserved, OwnedTxLeaves, ReorgRewind,
     ScanResult,
@@ -237,9 +237,10 @@ const MAX_REORG_REWINDS_PER_ATTEMPT: u32 = 8;
 /// # Construction
 ///
 /// [`Self::new`] consumes a [`ViewMaterial`] by move (the type is
-/// not [`Clone`]) and is the only constructor. Once constructed,
-/// `LocalRefresh` is shared `&LocalRefresh` for the
-/// orchestrator's lifetime — calls are `&self`, with all
+/// not [`Clone`]) and is the empty-watch constructor. The assemble
+/// path uses [`Self::with_bond_watch`] to arm the probe-id map.
+/// Once constructed, `LocalRefresh` is shared `&LocalRefresh` for
+/// the orchestrator's lifetime — calls are `&self`, with all
 /// per-attempt state living in local variables of
 /// [`Self::produce_scan_result`].
 ///
@@ -249,9 +250,8 @@ const MAX_REORG_REWINDS_PER_ATTEMPT: u32 = 8;
 /// `scan_start_floor`, `bond_watch`). External callers cannot
 /// construct or pattern-match against the struct shape regardless
 /// of the outer `pub` visibility — they reach the type only through
-/// [`Self::new`]. Future revisions add fields through
-/// `Self::new` API revisions; the public-API surface is the
-/// constructor signature plus the (`pub(crate)`)
+/// [`Self::new`] / [`Self::with_bond_watch`]. The public-API surface
+/// is the constructor signatures plus the (`pub(crate)`)
 /// [`RefreshEngine`] impl, not the struct shape itself.
 ///
 /// # Trait-implementation visibility
@@ -292,15 +292,23 @@ pub struct LocalRefresh {
 }
 
 impl LocalRefresh {
-    /// Construct a new [`LocalRefresh`] from owned
-    /// [`ViewMaterial`], the scan floor, and the bond watch's
-    /// candidate map.
+    /// Construct a [`LocalRefresh`] from owned [`ViewMaterial`] and the
+    /// scan floor, with an empty bond watch. Test doubles and wrappers
+    /// that do not reconstruct staking use this; assemble uses
+    /// [`Self::with_bond_watch`].
     ///
     /// The view material is held for `LocalRefresh`'s lifetime
     /// per §5.4.7 R4 a-instance-scoped; on drop the embedded
     /// [`ViewMaterial`]'s [`ZeroizeOnDrop`](zeroize::ZeroizeOnDrop)
     /// chain wipes the secret bytes.
-    pub const fn new(
+    pub const fn new(view_material: ViewMaterial, scan_start_floor: u64) -> Self {
+        Self::with_bond_watch(view_material, scan_start_floor, BTreeMap::new())
+    }
+
+    /// Arm the principal scan's bond watch (SA-R-6): `id → slot` inverted
+    /// from the open-built probe-id cache. The only production caller is
+    /// `assemble`, the seam that already holds the cache.
+    pub const fn with_bond_watch(
         view_material: ViewMaterial,
         scan_start_floor: u64,
         bond_watch: BTreeMap<PCanonicalId, u32>,
@@ -893,25 +901,15 @@ impl RefreshEngine for LocalRefresh {
                             });
                         }
                     }
-                    // Bond watch (SA-R-6): cleartext match of the block's
-                    // bond posts against the cached probe ids — the same
-                    // observation lift the P-scan extractor uses (shared
-                    // owner, `engine::bond_watch`), matched against this
-                    // wallet's candidate map. Emitted slot-resolved; the
-                    // merge adopts + raises under the write guard. One row
-                    // per slot per attempt: the scan walks heights ascending,
-                    // so the first occurrence is the earliest height — the
-                    // one the merge's first-sighting semantics would keep
-                    // anyway — and duplicates (an unbond post in the same
-                    // history, repeated posts) stay off the channel.
-                    for obs in bond_post_observations(tx) {
-                        if let Some(&slot) = self.bond_watch.get(&obs.p_canonical_id) {
-                            if sighted_slots.insert(slot) {
-                                bond_sightings.push(BondSightingObserved {
-                                    block_height: h,
-                                    slot,
-                                });
-                            }
+                    // Bond watch (SA-R-6): match against the probe-id map
+                    // (`bond_watch::sightings_in`). One row per slot per
+                    // attempt: the scan walks heights ascending, so the
+                    // first occurrence is the earliest height — the one
+                    // the merge's first-sighting semantics would keep —
+                    // and duplicates stay off the channel.
+                    for sighting in sightings_in(tx, h, &self.bond_watch) {
+                        if sighted_slots.insert(sighting.slot) {
+                            bond_sightings.push(sighting);
                         }
                     }
                 }
@@ -1578,7 +1576,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        LocalRefresh::new(vm, 0, std::collections::BTreeMap::new())
+        LocalRefresh::new(vm, 0)
     }
 
     fn snapshot_at_anchor(synced: u64, hash: [u8; 32]) -> LedgerSnapshot {
@@ -1672,7 +1670,7 @@ mod producer_property_tests {
         )
         .expect("rederive");
         let vm = ViewMaterial::try_from_keys(&blob).expect("view material");
-        let refresh = LocalRefresh::new(vm, 0, watch);
+        let refresh = LocalRefresh::with_bond_watch(vm, 0, watch);
 
         let sink = AssertionSink::new();
         let (progress_tx, _progress_rx) = fresh_progress_channel();
@@ -1737,7 +1735,7 @@ mod producer_property_tests {
         .expect("rederive");
         let vm = ViewMaterial::try_from_keys(&blob).expect("view material");
         let watch = std::collections::BTreeMap::from([(test_persona_id(&mine), 4u32)]);
-        let refresh = LocalRefresh::new(vm, 0, watch);
+        let refresh = LocalRefresh::with_bond_watch(vm, 0, watch);
 
         let sink = AssertionSink::new();
         let (progress_tx, _progress_rx) = fresh_progress_channel();
@@ -1843,7 +1841,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, 0, std::collections::BTreeMap::new());
+        let refresh = LocalRefresh::new(vm, 0);
 
         let chain_a = linear_chain(TIP);
         let tail_b = divergent_tail(&chain_a, FORK, TIP);
@@ -1926,7 +1924,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, 0, std::collections::BTreeMap::new());
+        let refresh = LocalRefresh::new(vm, 0);
 
         let chain_a = linear_chain(TIP);
         let tail_b = divergent_tail(&chain_a, FORK, TIP);
@@ -2010,7 +2008,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, 0, std::collections::BTreeMap::new());
+        let refresh = LocalRefresh::new(vm, 0);
 
         let chain_a = linear_chain(TIP);
         // Chain B: A below FORK1, divergent tail at/above it.
@@ -2141,7 +2139,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, FLOOR, std::collections::BTreeMap::new());
+        let refresh = LocalRefresh::new(vm, FLOOR);
         let chain = linear_chain(TIP);
         let parent_at_999 = chain[usize::try_from(FLOOR - 1).unwrap()].block.hash();
         let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
@@ -2186,7 +2184,7 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        let refresh = LocalRefresh::new(vm, FLOOR, std::collections::BTreeMap::new());
+        let refresh = LocalRefresh::new(vm, FLOOR);
         let chain = linear_chain(TIP);
         let parent = chain[usize::try_from(SYNCED).unwrap()].block.hash();
         let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);

@@ -61,7 +61,7 @@ use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{Input, Transaction};
 
-use crate::engine::bond_watch::bond_post_observations;
+use crate::engine::bond_watch::match_watch;
 
 /// Hard ceiling on the blocks one [`ScanStep`] may carry — the **enforced** form
 /// of DQ6's "bounded per message" (the actor holds `&mut self` across the offload,
@@ -742,14 +742,15 @@ pub(crate) fn run_dual_extractor(
         );
 
         // (b) public bond-post match — reads inputs, no secret, no clone.
-        // The observation lift (wire→domain id + post-kind byte) is the
-        // shared [`bond_post_observations`] owner, so this extractor and the
-        // principal scan's bond watch cannot disagree on what a bond-post
-        // observation is; the *matching* (against the bonded-persona set
-        // here, the probe-id cache there) stays with each consumer.
-        // (c) rides the same pass: spent-key-image match against the
-        // actor-derived watch-set (SP-R0 arm #1) — a hit is a confirmed spend
-        // of a held funding output, pruned by the task on ingest.
+        // The lift + id→slot match live in [`match_watch`]; this extractor
+        // and the principal scan's bond watch cannot disagree on what a
+        // bond-post observation is. The *map* (bonded-persona set here,
+        // probe-id cache there) stays with each consumer.
+        // (c) spent-key-image match against the actor-derived watch-set
+        // (SP-R0 arm #1) — a hit is a confirmed spend of a held funding
+        // output, pruned by the task on ingest. Inputs are few; the two
+        // walks (key images, then bond posts) stay separate so each
+        // consumer of the shared lift stays a one-liner.
         for (j, tx) in block.transactions.iter().enumerate() {
             for input in &tx.prefix.inputs {
                 if let Input::ToKey { key_image, .. } = input {
@@ -761,16 +762,14 @@ pub(crate) fn run_dual_extractor(
                     }
                 }
             }
-            for obs in bond_post_observations(tx) {
-                if let Some(slot) = known_personas.get(&obs.p_canonical_id) {
-                    bond_post_matches.push(BondPostMatch {
-                        height,
-                        p_canonical_id: obs.p_canonical_id,
-                        post_kind: obs.post_kind,
-                    });
-                    if let Some(tx_hash) = block.block.transaction_hashes.get(j) {
-                        bond_post_slots.entry(*tx_hash).or_default().insert(*slot);
-                    }
+            for (obs, slot) in match_watch(tx, known_personas) {
+                bond_post_matches.push(BondPostMatch {
+                    height,
+                    p_canonical_id: obs.p_canonical_id,
+                    post_kind: obs.post_kind,
+                });
+                if let Some(tx_hash) = block.block.transaction_hashes.get(j) {
+                    bond_post_slots.entry(*tx_hash).or_default().insert(slot);
                 }
             }
         }

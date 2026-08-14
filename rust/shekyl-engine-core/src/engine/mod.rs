@@ -1123,7 +1123,7 @@ impl<
     /// // in the KeyActor), so re-derive ViewMaterial from the same seed +
     /// // derivation params the engine was created with:
     /// let vm = ViewMaterial::try_from_keys(&rederive_test_blob())?;
-    /// let refresh = FaultInjecting::new(LocalRefresh::new(vm, 0, std::collections::BTreeMap::new()));
+    /// let refresh = FaultInjecting::new(LocalRefresh::new(vm, 0));
     /// let hybrid: Engine<
     ///     SoloSigner, TestDaemon, LocalLedger, LocalEconomics, FaultInjecting<LocalRefresh>,
     /// > = real
