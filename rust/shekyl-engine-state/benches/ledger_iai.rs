@@ -14,6 +14,18 @@
 //! install. The criterion sibling bench (`ledger.rs`) is the
 //! wall-clock story; this file is the "same machine, two runs,
 //! agree to the instruction" story.
+//!
+//! Collection is driven by Callgrind client requests, not gungraun's
+//! default `--toggle-collect=*::__gungraun_wrapper_mod::*` entry
+//! point. The default toggle records `instructions=0` when that
+//! wrapper is inlined or otherwise unmatched — these six postcard
+//! cells are one-liners under `#[benches::with_setup]`, the shape
+//! that flakes. Client requests are magic instruction sequences, so
+//! they still fire if the wrapper disappears. Setup (`build_ledger` /
+//! `build_bytes`) stays uninstrumented via `--instr-atstart=no` +
+//! `EntryPoint::None`; `start_instrumentation` / `stop_instrumentation`
+//! bound the measured region. See
+//! `docs/investigation/2026-05-09-bench-baseline-flake.md`.
 
 // Bench fns receive their fixture by value per gungraun's
 // `#[benches::with_setup]` contract, and the by-value drop is part of the
@@ -24,7 +36,10 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use curve25519_dalek::Scalar;
-use gungraun::{library_benchmark, library_benchmark_group, main};
+use gungraun::client_requests::callgrind as callgrind_cr;
+use gungraun::{
+    library_benchmark, library_benchmark_group, main, Callgrind, EntryPoint, LibraryBenchmarkConfig,
+};
 use std::hint::black_box;
 
 use shekyl_curve_primitives::Commitment;
@@ -89,20 +104,34 @@ fn build_bytes(n: usize) -> Vec<u8> {
     build_ledger(n).to_postcard_bytes().expect("serialize")
 }
 
+/// Run `f` between Callgrind `start`/`stop_instrumentation` so the
+/// count is the closure body, not setup. Works if inlined: the
+/// client-request sequences are position-based.
+fn measure<T>(f: impl FnOnce() -> T) -> T {
+    callgrind_cr::start_instrumentation();
+    let out = f();
+    callgrind_cr::stop_instrumentation();
+    out
+}
+
 #[library_benchmark]
 #[benches::with_setup(args = [100, 1_000, 10_000], setup = build_ledger)]
 fn hot_path_bench_ledger_postcard_serialize(ledger: WalletLedger) -> Vec<u8> {
-    black_box(ledger.to_postcard_bytes().expect("serialize"))
+    measure(|| black_box(ledger.to_postcard_bytes().expect("serialize")))
 }
 
 #[library_benchmark]
 #[benches::with_setup(args = [100, 1_000, 10_000], setup = build_bytes)]
 fn hot_path_bench_ledger_postcard_deserialize(bytes: Vec<u8>) -> WalletLedger {
-    black_box(WalletLedger::from_postcard_bytes(&bytes).expect("deserialize"))
+    measure(|| black_box(WalletLedger::from_postcard_bytes(&bytes).expect("deserialize")))
 }
 
 library_benchmark_group!(
     name = ledger;
+    config = LibraryBenchmarkConfig::default()
+        .tool(Callgrind::with_args(["--instr-atstart=no"])
+            .entry_point(EntryPoint::None)
+        );
     benchmarks =
         hot_path_bench_ledger_postcard_serialize,
         hot_path_bench_ledger_postcard_deserialize,

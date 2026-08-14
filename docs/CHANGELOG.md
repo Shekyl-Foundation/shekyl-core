@@ -185,6 +185,16 @@
 
 ### Fixed
 
+- **`ci/benchmarks` capture no longer dies on `ledger_iai`
+  `instructions=0`.** The six postcard cells were one-liners under
+  gungraun's default `--toggle-collect=*::__gungraun_wrapper_mod::*`;
+  when rustc inlined that wrapper, Callgrind recorded 0 and the
+  producer guard rejected the run (PR #467 / `dev` from 2026-08-14).
+  Those benches now bound the measured region with Callgrind client
+  requests (`EntryPoint::None`, `--instr-atstart=no`) so collection
+  does not depend on the wrapper symbol. See
+  `docs/investigation/2026-05-09-bench-baseline-flake.md`.
+
 - **The RandomX v2 differential's daily cron is green again: the T8
   RSS ceiling is re-derived for Arc reach-through residency, and the
   weekly cargo-mutants gate got its trigger back.** The T8 gate
