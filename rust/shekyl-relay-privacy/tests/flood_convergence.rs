@@ -15,9 +15,20 @@
 //!
 //! `converged_fluff_return_mixed` supplies the missing half: re-run at
 //! independent seeds, escalate until they agree to within the instrument's own
-//! grid, and **refuse to report** if they never do. That fixes the class rather
-//! than this instance — the next constant derived from this crate inherits the
-//! check instead of repeating the omission.
+//! grid, and **refuse to report** if they never do.
+//!
+//! # What was and was not wrong with `f7_directed.rs`
+//!
+//! Its *comparison* is sound and stays as it is: both arms share a seed, so a
+//! paired difference at one seed is a fair reading of the rule's effect, which
+//! is all F-7 needed. What it cannot support is a **level** — "the p90 is 3250"
+//! — because that is one draw with no spread attached, and a level is what got
+//! consumed as a constant.
+//!
+//! So this does not retroactively condemn that test; it supplies the tool the
+//! *derivation* needed. Nothing is routed through the criterion yet — it is
+//! available, and the next constant taken as a level from this crate should
+//! come through it.
 //!
 //! # What these tests do and do not assert
 //!
@@ -106,17 +117,18 @@ fn the_shipped_topology_converges_and_reports_its_cost() {
     );
 }
 
-/// Negative control for [`ConvergenceRefusal::Spread`].
+/// Negative control for [`ConvergenceRefusal::Spread`], at the **default**
+/// tolerance.
 ///
-/// A tolerance of zero demands the seeds agree *exactly*, which is below the
-/// instrument's 250 ms grid and so is a demand it cannot satisfy by widening
-/// the sample. With `max_trials == start_trials` the ladder gets one rung, so
-/// the refusal is forced rather than waited for.
+/// Eight trials is a trial count the seeds have not collapsed at — they span
+/// three ticks there — and `max_trials == start_trials` gives the ladder one
+/// rung, so the refusal is forced rather than waited for. Nothing here relies
+/// on an exotic tolerance: the criterion as it ships refuses this reading.
 ///
 /// Without this arm the criterion could be a function that always returns
 /// `Ok`, and the suite above would not notice.
 #[test]
-fn an_unsatisfiable_tolerance_is_refused_rather_than_reported() {
+fn a_spent_budget_is_refused_rather_than_reported() {
     let flood = shipped_topology();
     let degrees = vec![flood.peers; flood.nodes];
 
@@ -129,11 +141,11 @@ fn an_unsatisfiable_tolerance_is_refused_rather_than_reported() {
         ConvergenceBudget {
             start_trials: 8,
             max_trials: 8,
-            tolerance_ms: 0,
+            tolerance_ms: FLOOD_TICK_MS,
         },
         SplitMix64::new,
     )
-    .expect_err("a zero tolerance is sub-grid and must never produce a reading");
+    .expect_err("eight trials has not collapsed the spread — it must not be reported");
 
     println!("\n  {refusal}");
 
@@ -145,11 +157,12 @@ fn an_unsatisfiable_tolerance_is_refused_rather_than_reported() {
             ref readings_ms,
         } => {
             assert_eq!(trials_per_seed, 8, "the budget allowed exactly one rung");
-            assert_eq!(tolerance_ms, 0);
+            assert_eq!(tolerance_ms, FLOOD_TICK_MS);
             assert!(
-                spread_ms > 0,
-                "the seeds must actually disagree for this control to be meaningful — \
-                 if they agreed exactly, this arm would pass vacuously"
+                spread_ms > FLOOD_TICK_MS,
+                "the seeds must disagree by more than the tolerance for this control to \
+                 be meaningful — if they were already within it, this arm would pass \
+                 vacuously"
             );
             assert_eq!(readings_ms.len(), SEEDS.len());
         }
@@ -214,4 +227,83 @@ fn a_stranding_topology_is_refused_on_the_topology_not_the_budget() {
             )
         }
     }
+}
+
+/// The direction result that decides whether 3500 ms is a placeholder or a
+/// **floor** on `F′`.
+///
+/// The re-derivation was filed as blocked on a "churn-realistic" degree
+/// distribution. That input was never measured, and this arm asks whether it
+/// is needed at all.
+///
+/// Under `OutboundOnly` first passage is a minimum over directed paths, and
+/// raising a node's out-degree only *adds* paths — so a graph whose degrees
+/// are at or above the floor cannot flood more slowly than the uniform
+/// floor graph, and heterogeneity above the floor can only lower the reading.
+/// Below-floor nodes remove paths and can only raise it, which is the same
+/// self-harm direction Q12-D9's check is justified on (§12.1) and the
+/// condition §11.13 says a young network is in.
+///
+/// If both hold, uniform-at-the-floor is the **conservative** topology and
+/// 3500 ms is a lower bound on `F′` — the missing distribution can move the
+/// answer up, never down, so it is a refinement rather than a blocker.
+///
+/// Measured rather than argued, because the argument is exactly the kind that
+/// sounds airtight and encodes a direction backwards.
+#[test]
+fn uniform_at_the_floor_is_the_conservative_topology() {
+    let flood = shipped_topology();
+    let budget = ConvergenceBudget {
+        start_trials: 32,
+        max_trials: 1024,
+        tolerance_ms: FLOOD_TICK_MS,
+    };
+
+    let read = |degrees: &[usize], label: &str| -> u64 {
+        let c = converged_fluff_return_mixed(
+            flood,
+            degrees,
+            MEAN_QUARTER_SECS,
+            FAMILY,
+            &SEEDS,
+            budget,
+            SplitMix64::new,
+        )
+        .unwrap_or_else(|e| panic!("{label} did not converge: {e}"));
+        println!(
+            "  {label:34} p90 {:5} ms   ({} trials/seed, spread {})",
+            c.p90_ms, c.trials_per_seed, c.spread_ms
+        );
+        c.p90_ms
+    };
+
+    println!("\n  degree distribution                  converged reading");
+    println!("  -----------------------------------  ------------------");
+
+    let uniform = read(&vec![12_usize; flood.nodes], "uniform at the floor (12)");
+
+    // Every third node above the floor, the rest at it.
+    let above: Vec<usize> = (0..flood.nodes)
+        .map(|n| if n % 3 == 0 { 16 } else { 12 })
+        .collect();
+    let above = read(&above, "one third at 16, rest at 12");
+
+    // Every third node below it — the young-network condition of §11.13.
+    let below: Vec<usize> = (0..flood.nodes)
+        .map(|n| if n % 3 == 0 { 8 } else { 12 })
+        .collect();
+    let below = read(&below, "one third at 8, rest at 12");
+
+    println!("\n  shipped fluff_return_ms = 3250 ms; converged at the floor = {uniform} ms");
+
+    assert!(
+        above <= uniform,
+        "heterogeneity ABOVE the floor must not raise the reading — extra out-edges \
+         only add paths, and first passage is a min over paths. Got {above} vs {uniform}"
+    );
+    assert!(
+        below >= uniform,
+        "degrees BELOW the floor must not lower the reading — removing out-edges \
+         removes paths. Got {below} vs {uniform}"
+    );
 }

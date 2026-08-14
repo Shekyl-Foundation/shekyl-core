@@ -426,10 +426,13 @@ pub struct ConvergenceBudget {
     pub max_trials: usize,
     /// The spread across seeds that counts as converged, in milliseconds.
     ///
-    /// Defaults to [`FLOOD_TICK_MS`]: below one tick the seeds disagree by less
-    /// than the instrument's own grid, so further trials buy resolution the
-    /// simulation does not have. Tightening this past a tick asks for precision
-    /// the model cannot express.
+    /// Defaults to [`FLOOD_TICK_MS`] — one tick of disagreement admitted.
+    ///
+    /// Achievable spreads are exact multiples of the tick, so the meaningful
+    /// settings are coarse: anything in `0..FLOOD_TICK_MS` demands the seeds
+    /// agree *exactly*, and `FLOOD_TICK_MS` admits a single tick. Exact
+    /// agreement is a stricter bar, **not an impossible one** — the shipped
+    /// topology reaches spread 0 by 64 trials.
     pub tolerance_ms: u64,
 }
 

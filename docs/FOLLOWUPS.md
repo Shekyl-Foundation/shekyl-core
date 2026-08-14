@@ -9496,22 +9496,24 @@ its wake.
   (6 seeds at 64 trials and 10 seeds at 512 trials, both spread 0). Low is the
   privacy-losing direction — it under-provisions the embargo.
 
-  **Deliberately not landed with the criterion.** `F′` is re-derived *once*,
-  with both corrections applied together — the converged trial count **and** a
-  heterogeneous-degree graph — because moving it is a conformance-vector event
-  that carries the 190 s embargo, the 874 s wallet timeout and the §44 pins.
+  **3500 is a lower bound, not a placeholder.** This was queued as blocked on a
+  "churn-realistic" degree distribution; that input appears in no document,
+  commit or ref, and the second correction turns out to have a known sign, so
+  it is a refinement rather than a blocker. Measured
+  (`uniform_at_the_floor_is_the_conservative_topology`): a third of nodes above
+  the floor reads 3000 ms, uniform-at-floor 3500 ms, a third below 4750 ms.
+  Under `OutboundOnly` first passage is a min over paths and out-edges only add
+  paths, so **uniform-at-the-floor is the conservative topology and a real
+  distribution can only raise `F′`.**
 
-  **Named blocker: the degree distribution was never measured, and the built
-  estate could not have measured it.** The six-host ring saturates at degree 5
-  (`A = 6`), its steady-state churn is near zero (30/30 for 50 minutes), and
-  the `A = 60` arm — the only one where degree 12 is unsaturated and the floor
-  is per-node — was never run (`Q12_D6A_PEER_DISCOVERY_RUN.md` §§11.9–11.13
-  and its status line). The instrument side is ready:
-  `simulate_fluff_return_mixed` already takes per-node degrees.
+  **What actually gates landing it is blast radius, not data.** Moving `F′` is
+  a conformance-vector event carrying the 190 s embargo, the 874 s wallet
+  timeout and the §44 pins — a decision about when to spend the re-baselining.
 
-  **Reopen when** a run at `A ≥ 60` yields a degree distribution. Then one
-  change: re-derive through the criterion, and carry the embargo, the wallet
-  timeout and the §44 pins with it.
+  **Do when** that is authorized: re-derive through
+  `converged_fluff_return_mixed` (with an `A ≥ 60` degree distribution if one
+  has arrived by then, which can only raise the answer), and carry the embargo,
+  the wallet timeout and the §44 pins in the same change.
 
 - **Relay: populate the 48-cell Pi verification surface, then consume it
   per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first
