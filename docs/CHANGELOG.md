@@ -5,7 +5,8 @@
 ### Changed
 
 - **Untrusted numeric conversions: one live over-reservation fixed, the
-  cast gate made real at the trust boundary (SA-6, SA-R-7 proposed).** The
+  cast gate made real at the trust boundary (SA-6, SA-R-7 — ratified
+  2026-08-14).** The
   census behind the ruling (298 non-test `as` casts across the exposed
   crates) found the reject-via-`try_from` convention already lint-enforced
   and the decode crates cast-free — and three gate defects: (1)
