@@ -43,10 +43,17 @@
 //! `Degraded ∪ Ready{recovering}` as one continuous incident" rule. For a
 //! condition whose observable clears while the damage stands, losing the edge
 //! would lose the only report of it. [`AlarmLifetime::LatchedRederived`] closes
-//! that: the alarm stays on the board after the producer reports the condition
-//! gone, so it cannot be missed by a consumer that was slow. **The latch is
-//! what lets one lossy snapshot channel carry both classes**, which is why
-//! there is one channel here and not two.
+//! that: when the producer reports the condition gone, the alarm moves to
+//! [`AlarmBoard::unacknowledged`] instead of leaving, so it cannot be missed by
+//! a consumer that was slow. **The latch is what lets one lossy snapshot
+//! channel carry both classes**, which is why there is one channel here and not
+//! two.
+//!
+//! Live status and outstanding faults are separate shapes on the board rather
+//! than one slot per condition, and that is not tidiness: several faults can
+//! share an [`AlarmCondition`] while only one of them latches, so a single slot
+//! would have to choose between the fault the operator has not seen yet and the
+//! unrelated one that happened after it. See [`AlarmBoard`].
 //!
 //! # Emission cadence is a covert channel
 //!
@@ -312,12 +319,12 @@ impl IncidentId {
     }
 }
 
-/// An open alarm on the [`AlarmBoard`].
+/// An alarm on the [`AlarmBoard`] — either currently live on its condition's
+/// row, or sitting in the acknowledgment queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RaisedAlarm {
     alarm: OperatorAlarm,
     incident: IncidentId,
-    condition_cleared: bool,
 }
 
 impl RaisedAlarm {
@@ -334,16 +341,10 @@ impl RaisedAlarm {
         self.incident
     }
 
-    /// `true` once the producer has reported the underlying condition gone
-    /// while the alarm is still held for acknowledgment.
-    ///
-    /// Only reachable for [`AlarmLifetime::LatchedRederived`]: an
-    /// [`AlarmLifetime::Episode`] leaves the board at that moment instead. This
-    /// is the flag a UI uses to say "resolved, unacknowledged" rather than
-    /// "happening now".
+    /// The condition this alarm reports on.
     #[must_use]
-    pub fn condition_cleared(self) -> bool {
-        self.condition_cleared
+    pub fn condition(self) -> AlarmCondition {
+        self.alarm.condition()
     }
 
     /// This alarm's lifetime class.
@@ -353,11 +354,19 @@ impl RaisedAlarm {
     }
 }
 
-/// One condition's row on the board.
+/// One condition's row on the board: whether it is being watched, and what is
+/// wrong with it **right now**.
+///
+/// At most one live alarm, because that is what the producers can report — the
+/// tor supervisor's `warning` is one `Option<ServiceWarning>` and its
+/// `Degraded` is one state, so "two things wrong with this condition
+/// simultaneously" is not an observation any producer can make. Faults that
+/// happened and are awaiting acknowledgment are **not** here; see
+/// [`AlarmBoard::unacknowledged`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConditionState {
     arming: Arming,
-    raised: Option<RaisedAlarm>,
+    live: Option<RaisedAlarm>,
 }
 
 impl ConditionState {
@@ -367,26 +376,40 @@ impl ConditionState {
         self.arming
     }
 
-    /// The open alarm, if any.
-    ///
-    /// A latched alarm survives its condition being disarmed — the guard
-    /// topology was re-drawn whether or not tor is up to be asked about it now.
+    /// The alarm live on this condition right now, if any.
     #[must_use]
-    pub fn raised(self) -> Option<RaisedAlarm> {
-        self.raised
+    pub fn live(self) -> Option<RaisedAlarm> {
+        self.live
     }
 }
 
-/// The operator-visible snapshot: every watched condition, its arming, and its
-/// open alarm.
+/// The operator-visible snapshot: every watched condition with its arming and
+/// its live alarm, plus the queue of resolved faults awaiting acknowledgment.
 ///
 /// An empty board means **nothing is being watched yet**, not that everything
 /// is fine: rows appear when a producer starts reporting. A consumer that
 /// renders "all clear" for a board with no rows has made the mistake this
 /// module exists to prevent.
+///
+/// # Why the acknowledgment queue is not a per-condition field
+///
+/// A live alarm is a *status* — it belongs to a condition, and there is one of
+/// it. A resolved latch is a *fact awaiting acknowledgment*, and several can be
+/// outstanding at once: the vanguard set has three distinct integrity faults on
+/// one [`AlarmCondition`], of which one latches, so a per-condition slot would
+/// have to choose between the re-draw the operator has not seen yet and the
+/// unrelated fault that happened afterwards. Keeping them in separate shapes is
+/// what makes that choice not exist.
+///
+/// It also makes two properties structural rather than checked. A latch
+/// survives its condition being disarmed, because it does not live on the
+/// condition's row. And [`OperatorAlarms::acknowledge`] cannot be used to
+/// silence a fault that is still happening, because a live alarm is not in the
+/// queue to be acknowledged.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AlarmBoard {
     conditions: BTreeMap<AlarmCondition, ConditionState>,
+    unacknowledged: Vec<RaisedAlarm>,
 }
 
 impl AlarmBoard {
@@ -401,18 +424,36 @@ impl AlarmBoard {
         self.conditions.iter().map(|(c, s)| (*c, *s))
     }
 
-    /// Every open alarm, in a stable order.
-    pub fn raised(&self) -> impl Iterator<Item = (AlarmCondition, RaisedAlarm)> + '_ {
+    /// Every currently-live alarm, in a stable order.
+    pub fn live(&self) -> impl Iterator<Item = (AlarmCondition, RaisedAlarm)> + '_ {
         self.conditions
             .iter()
-            .filter_map(|(c, s)| s.raised.map(|r| (*c, r)))
+            .filter_map(|(c, s)| s.live.map(|r| (*c, r)))
+    }
+
+    /// Faults whose condition has cleared but which have not been acknowledged.
+    ///
+    /// Only [`AlarmLifetime::LatchedRederived`] alarms reach here — an
+    /// [`AlarmLifetime::Episode`] leaves the board when its condition clears.
+    /// Ordered oldest incident first: this is a queue a human works through, and
+    /// the fault they have been unaware of longest is the one to show first.
+    #[must_use]
+    pub fn unacknowledged(&self) -> &[RaisedAlarm] {
+        &self.unacknowledged
+    }
+
+    /// Nothing live and nothing outstanding. **Not** the same as an empty board
+    /// — see the type docs.
+    #[must_use]
+    pub fn is_quiet(&self) -> bool {
+        self.unacknowledged.is_empty() && self.conditions.values().all(|s| s.live.is_none())
     }
 
     /// The row this condition should have, created armed-and-quiet if absent.
     fn entry(&mut self, condition: AlarmCondition) -> &mut ConditionState {
         self.conditions.entry(condition).or_insert(ConditionState {
             arming: Arming::Armed,
-            raised: None,
+            live: None,
         })
     }
 }
@@ -462,52 +503,51 @@ impl OperatorAlarms {
         self.board.borrow().clone()
     }
 
-    /// Acknowledge a **resolved, latched** alarm, removing it from the board.
+    /// Acknowledge a resolved fault, removing it from the acknowledgment queue.
     ///
-    /// Returns `false` — changing nothing — when the named incident is not the
-    /// open one, or when the underlying condition is still live. Both refusals
-    /// are load-bearing:
+    /// Returns `false`, changing nothing, when no outstanding fault carries that
+    /// [`IncidentId`]. Naming the incident is what makes an acknowledgment apply
+    /// to the fault the operator actually read: one that arrived while they were
+    /// reading cannot be dismissed unseen.
     ///
-    /// - The incident check means an acknowledgment applies to the incident the
-    ///   operator actually read, so one that opened while they were reading
-    ///   cannot be dismissed unseen.
-    /// - Refusing to acknowledge a **live** condition keeps this from becoming
-    ///   a mute button. Silencing a fault that is still happening is a UI
-    ///   concern, and an embedder that wants it must implement it as muting,
-    ///   not by telling the board the operator handled something they did not.
+    /// **This is not a mute button, and that is structural rather than
+    /// enforced.** A fault that is still happening is live on its condition's
+    /// row and is not in this queue at all, so there is nothing here to
+    /// acknowledge it with. Silencing a live fault is a UI concern; an embedder
+    /// that wants it must implement muting, not tell the board an operator
+    /// handled something they did not.
     ///
-    /// [`AlarmLifetime::Episode`] alarms are never acknowledgeable: they clear
-    /// themselves, so an acknowledgment would race the producer.
-    pub fn acknowledge(&self, condition: AlarmCondition, incident: IncidentId) -> bool {
+    /// [`AlarmLifetime::Episode`] alarms are never acknowledgeable for the same
+    /// structural reason: they leave the board when their condition clears, so
+    /// they never enter the queue.
+    pub fn acknowledge(&self, incident: IncidentId) -> bool {
         let mut applied = false;
         self.board.send_if_modified(|board| {
-            let Some(state) = board.conditions.get_mut(&condition) else {
+            let Some(at) = board
+                .unacknowledged
+                .iter()
+                .position(|r| r.incident == incident)
+            else {
                 return false;
             };
-            let Some(raised) = state.raised else {
-                return false;
-            };
-            if raised.incident != incident || !raised.condition_cleared {
-                return false;
-            }
-            state.raised = None;
+            board.unacknowledged.remove(at);
             applied = true;
             true
         });
         applied
     }
 
-    /// Whether this condition currently has an open alarm.
+    /// Whether this condition currently has a live alarm.
     ///
     /// For producers that must distinguish "continue the open incident" from
     /// "open one" without disturbing the incident's payload — see
     /// [`tor_posture`], where a translator attaching mid-episode has no failure
     /// to report but must not leave the board reading healthy.
-    pub(crate) fn is_raised(&self, condition: AlarmCondition) -> bool {
+    pub(crate) fn is_live(&self, condition: AlarmCondition) -> bool {
         self.board
             .borrow()
             .condition(condition)
-            .is_some_and(|s| s.raised.is_some())
+            .is_some_and(|s| s.live.is_some())
     }
 
     /// Mark a condition's tripwire as able to fire.
@@ -517,10 +557,88 @@ impl OperatorAlarms {
 
     /// Mark a condition's tripwire as unable to fire, and say why.
     ///
-    /// Does **not** touch a raised alarm: a latched one outlives the ability to
-    /// re-observe it, which is the entire point of latching.
+    /// Does **not** touch the acknowledgment queue, and cannot: a latched fault
+    /// does not live on the condition's row, so losing the ability to re-observe
+    /// a condition can no longer discard the record of what it already did.
     pub(crate) fn disarm(&self, condition: AlarmCondition, reason: DisarmedReason) {
         self.set_arming(condition, Arming::Disarmed(reason));
+    }
+
+    /// Report a condition as live.
+    ///
+    /// Opens an incident if none is live for this condition. If one is live for
+    /// the **same** alarm, the payload is updated in place and the incident id
+    /// is kept — that is the "one fault, one incident" rule, and it is why a
+    /// producer may call this every tick without leaking a cadence. A
+    /// *different* alarm on the same condition replaces what is live, because a
+    /// producer reporting B is reporting that A is no longer what is wrong.
+    ///
+    /// Replacing what is **live** never discards an outstanding fault: those are
+    /// in the acknowledgment queue, which this does not touch except to *reclaim*
+    /// a recurrence. A latched fault that is re-reported is the same unfixed
+    /// problem observed again — `LatchedRederived` means exactly that the
+    /// producer re-detects it on every start — so it returns to live carrying
+    /// its original [`IncidentId`] rather than queueing a duplicate beside
+    /// itself.
+    pub(crate) fn raise(&self, alarm: OperatorAlarm) {
+        let condition = alarm.condition();
+        self.board.send_if_modified(|board| {
+            // A recurrence of something still awaiting acknowledgment: take it
+            // back out of the queue and keep its incident.
+            let reclaimed = board
+                .unacknowledged
+                .iter()
+                .position(|r| r.alarm == alarm)
+                .map(|at| board.unacknowledged.remove(at).incident);
+
+            let state = board.entry(condition);
+            match state.live {
+                Some(live) if same_fault(live.alarm, alarm) => {
+                    if live.alarm == alarm && reclaimed.is_none() {
+                        return false;
+                    }
+                    state.live = Some(RaisedAlarm {
+                        alarm,
+                        incident: live.incident,
+                    });
+                    true
+                }
+                _ => {
+                    let incident = reclaimed.unwrap_or_else(|| {
+                        IncidentId(self.next_incident.fetch_add(1, Ordering::Relaxed))
+                    });
+                    state.live = Some(RaisedAlarm { alarm, incident });
+                    true
+                }
+            }
+        });
+    }
+
+    /// Report a condition as no longer live.
+    ///
+    /// An [`AlarmLifetime::Episode`] alarm leaves the board. A
+    /// [`AlarmLifetime::LatchedRederived`] one moves to the acknowledgment
+    /// queue: the producer saying "it is fine now" is exactly the moment the
+    /// evidence disappears, so it is the last moment at which dropping the
+    /// report would be safe.
+    pub(crate) fn clear(&self, condition: AlarmCondition) {
+        self.board.send_if_modified(|board| {
+            let Some(state) = board.conditions.get_mut(&condition) else {
+                return false;
+            };
+            let Some(live) = state.live.take() else {
+                return false;
+            };
+            match live.lifetime() {
+                AlarmLifetime::Episode => true,
+                AlarmLifetime::LatchedRederived => {
+                    // Queue order is incident order, and incidents are minted
+                    // monotonically, so pushing keeps oldest-first.
+                    board.unacknowledged.push(live);
+                    true
+                }
+            }
+        });
     }
 
     fn set_arming(&self, condition: AlarmCondition, arming: Arming) {
@@ -533,84 +651,15 @@ impl OperatorAlarms {
             true
         });
     }
+}
 
-    /// Report a condition as live.
-    ///
-    /// Opens an incident if none is open for this condition. If one is open for
-    /// the **same** alarm, the payload is updated in place and the incident id
-    /// is kept — that is the "one fault, one incident" rule, and it is why a
-    /// producer may call this every tick without leaking a cadence. A
-    /// *different* alarm on the same condition is a different fault: the old
-    /// incident closes and a new one opens.
-    pub(crate) fn raise(&self, alarm: OperatorAlarm) {
-        let condition = alarm.condition();
-        self.board.send_if_modified(|board| {
-            let state = board.entry(condition);
-            match state.raised {
-                Some(existing)
-                    if std::mem::discriminant(&existing.alarm)
-                        == std::mem::discriminant(&alarm) =>
-                {
-                    // Same fault, still open. Re-reporting it must not mint a
-                    // new incident, and a re-report is also proof the condition
-                    // is live again, so a latch that was awaiting
-                    // acknowledgment goes back to unresolved.
-                    if existing.alarm == alarm && !existing.condition_cleared {
-                        return false;
-                    }
-                    state.raised = Some(RaisedAlarm {
-                        alarm,
-                        incident: existing.incident,
-                        condition_cleared: false,
-                    });
-                    true
-                }
-                _ => {
-                    state.raised = Some(RaisedAlarm {
-                        alarm,
-                        incident: IncidentId(self.next_incident.fetch_add(1, Ordering::Relaxed)),
-                        condition_cleared: false,
-                    });
-                    true
-                }
-            }
-        });
-    }
-
-    /// Report a condition as no longer live.
-    ///
-    /// An [`AlarmLifetime::Episode`] alarm leaves the board. A
-    /// [`AlarmLifetime::LatchedRederived`] one stays, marked
-    /// [`RaisedAlarm::condition_cleared`], until it is acknowledged — the
-    /// producer saying "it is fine now" is exactly the moment the evidence
-    /// disappears, so it is the last moment at which dropping the report would
-    /// be safe.
-    pub(crate) fn clear(&self, condition: AlarmCondition) {
-        self.board.send_if_modified(|board| {
-            let Some(state) = board.conditions.get_mut(&condition) else {
-                return false;
-            };
-            let Some(raised) = state.raised else {
-                return false;
-            };
-            match raised.lifetime() {
-                AlarmLifetime::Episode => {
-                    state.raised = None;
-                    true
-                }
-                AlarmLifetime::LatchedRederived => {
-                    if raised.condition_cleared {
-                        return false;
-                    }
-                    state.raised = Some(RaisedAlarm {
-                        condition_cleared: true,
-                        ..raised
-                    });
-                    true
-                }
-            }
-        });
-    }
+/// Whether two alarms are the *same fault* — same variant, payload aside.
+///
+/// The payload is deliberately excluded: `TransportDegraded`'s cause is updated
+/// on every failed retry, and a fresher cause for a fault that never stopped is
+/// not a new fault.
+fn same_fault(a: OperatorAlarm, b: OperatorAlarm) -> bool {
+    std::mem::discriminant(&a) == std::mem::discriminant(&b)
 }
 
 #[cfg(test)]
@@ -625,11 +674,20 @@ mod tests {
         OperatorAlarm::TransportDegraded { cause: Some(cause) }
     }
 
-    fn raised_for(alarms: &OperatorAlarms, condition: AlarmCondition) -> Option<RaisedAlarm> {
+    fn live_for(alarms: &OperatorAlarms, condition: AlarmCondition) -> Option<RaisedAlarm> {
         alarms
             .board()
             .condition(condition)
-            .and_then(ConditionState::raised)
+            .and_then(ConditionState::live)
+    }
+
+    fn queued(alarms: &OperatorAlarms) -> Vec<OperatorAlarm> {
+        alarms
+            .board()
+            .unacknowledged()
+            .iter()
+            .map(|r| r.alarm())
+            .collect()
     }
 
     /// Pins every variant's classification. A reclassification is then a diff
@@ -667,18 +725,19 @@ mod tests {
             .board()
             .condition(AlarmCondition::TransportLiveness)
             .is_none());
-        assert_eq!(alarms.board().raised().count(), 0);
+        assert_eq!(alarms.board().live().count(), 0);
+        assert!(alarms.board().unacknowledged().is_empty());
     }
 
     #[test]
     fn re_reporting_a_live_condition_keeps_one_incident() {
         let alarms = OperatorAlarms::new();
         alarms.raise(degraded(DegradedCause::Exited));
-        let first = raised_for(&alarms, AlarmCondition::TransportLiveness).expect("raised");
+        let first = live_for(&alarms, AlarmCondition::TransportLiveness).expect("live");
 
         // Same fault, re-reported with a fresher cause: one incident, updated.
         alarms.raise(degraded(DegradedCause::BootstrapTimeout));
-        let again = raised_for(&alarms, AlarmCondition::TransportLiveness).expect("raised");
+        let again = live_for(&alarms, AlarmCondition::TransportLiveness).expect("live");
         assert_eq!(again.incident(), first.incident());
         assert_eq!(
             again.alarm(),
@@ -691,10 +750,10 @@ mod tests {
     fn a_different_fault_on_the_same_condition_opens_a_new_incident() {
         let alarms = OperatorAlarms::new();
         alarms.raise(OperatorAlarm::VanguardStateUnpersisted);
-        let first = raised_for(&alarms, AlarmCondition::VanguardIntegrity).expect("raised");
+        let first = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
 
         alarms.raise(redrawn());
-        let second = raised_for(&alarms, AlarmCondition::VanguardIntegrity).expect("raised");
+        let second = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
         assert_ne!(second.incident(), first.incident());
         assert_eq!(second.alarm(), redrawn());
     }
@@ -704,137 +763,153 @@ mod tests {
         let alarms = OperatorAlarms::new();
         alarms.raise(degraded(DegradedCause::Exited));
         alarms.clear(AlarmCondition::TransportLiveness);
-        assert!(raised_for(&alarms, AlarmCondition::TransportLiveness).is_none());
+        assert!(live_for(&alarms, AlarmCondition::TransportLiveness).is_none());
+        assert!(
+            alarms.board().unacknowledged().is_empty(),
+            "an episode that ended is not something to acknowledge",
+        );
+        assert!(alarms.board().is_quiet());
     }
 
     #[test]
-    fn a_latch_outlives_its_condition_clearing() {
+    fn a_latch_moves_to_the_queue_when_its_condition_clears() {
         let alarms = OperatorAlarms::new();
         alarms.raise(redrawn());
-        let open = raised_for(&alarms, AlarmCondition::VanguardIntegrity).expect("raised");
-        assert!(!open.condition_cleared());
+        let open = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
 
         // The producer reports it fine — which for this fault means only that
         // the *evidence* is gone. The re-draw stands.
         alarms.clear(AlarmCondition::VanguardIntegrity);
-        let held = raised_for(&alarms, AlarmCondition::VanguardIntegrity).expect("still raised");
-        assert!(held.condition_cleared());
+        assert!(live_for(&alarms, AlarmCondition::VanguardIntegrity).is_none());
+        let held = *alarms.board().unacknowledged().first().expect("queued");
+        assert_eq!(held.alarm(), redrawn());
         assert_eq!(held.incident(), open.incident());
+        assert!(!alarms.board().is_quiet());
+    }
+
+    /// The defect this shape exists to make impossible: three vanguard faults
+    /// share one condition and only one latches, so a per-condition slot would
+    /// have to choose between the unacknowledged re-draw and the unrelated fault
+    /// that happened after it.
+    #[test]
+    fn a_later_unrelated_fault_cannot_evict_a_queued_latch() {
+        let alarms = OperatorAlarms::new();
+        alarms.raise(redrawn());
+        alarms.clear(AlarmCondition::VanguardIntegrity);
+
+        alarms.raise(OperatorAlarm::VanguardStateUnpersisted);
+        assert_eq!(
+            queued(&alarms),
+            vec![redrawn()],
+            "a later fault on the same condition must not discard the re-draw",
+        );
+        assert_eq!(
+            live_for(&alarms, AlarmCondition::VanguardIntegrity).map(RaisedAlarm::alarm),
+            Some(OperatorAlarm::VanguardStateUnpersisted),
+        );
     }
 
     #[test]
-    fn a_latch_outlives_its_condition_being_disarmed() {
+    fn a_queued_latch_outlives_its_condition_being_disarmed() {
         let alarms = OperatorAlarms::new();
         alarms.raise(redrawn());
+        alarms.clear(AlarmCondition::VanguardIntegrity);
         alarms.disarm(
             AlarmCondition::VanguardIntegrity,
             DisarmedReason::TransportStopped,
         );
-        let state = alarms
-            .board()
-            .condition(AlarmCondition::VanguardIntegrity)
-            .expect("row");
         assert_eq!(
-            state.arming(),
-            Arming::Disarmed(DisarmedReason::TransportStopped),
+            alarms
+                .board()
+                .condition(AlarmCondition::VanguardIntegrity)
+                .map(ConditionState::arming),
+            Some(Arming::Disarmed(DisarmedReason::TransportStopped)),
         );
-        assert!(
-            state.raised().is_some(),
+        assert_eq!(
+            queued(&alarms),
+            vec![redrawn()],
             "losing the ability to re-observe a fault is not evidence it did not happen",
         );
     }
 
     #[test]
-    fn acknowledging_a_live_condition_is_refused() {
+    fn a_live_fault_is_not_in_the_queue_to_be_acknowledged() {
         let alarms = OperatorAlarms::new();
         alarms.raise(redrawn());
-        let open = raised_for(&alarms, AlarmCondition::VanguardIntegrity).expect("raised");
+        let open = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
         assert!(
-            !alarms.acknowledge(AlarmCondition::VanguardIntegrity, open.incident()),
-            "acknowledgment is not a mute button",
+            alarms.board().unacknowledged().is_empty(),
+            "acknowledgment is not a mute button, and the shape is what says so",
         );
-        assert!(raised_for(&alarms, AlarmCondition::VanguardIntegrity).is_some());
+        assert!(!alarms.acknowledge(open.incident()));
+        assert!(live_for(&alarms, AlarmCondition::VanguardIntegrity).is_some());
     }
 
     #[test]
-    fn acknowledging_a_resolved_latch_clears_it() {
+    fn acknowledging_a_queued_latch_clears_it() {
         let alarms = OperatorAlarms::new();
         alarms.raise(redrawn());
         alarms.clear(AlarmCondition::VanguardIntegrity);
-        let held = raised_for(&alarms, AlarmCondition::VanguardIntegrity).expect("raised");
-        assert!(alarms.acknowledge(AlarmCondition::VanguardIntegrity, held.incident()));
-        assert!(raised_for(&alarms, AlarmCondition::VanguardIntegrity).is_none());
+        let held = *alarms.board().unacknowledged().first().expect("queued");
+        assert!(alarms.acknowledge(held.incident()));
+        assert!(alarms.board().unacknowledged().is_empty());
+        assert!(alarms.board().is_quiet());
     }
 
     #[test]
-    fn acknowledging_a_stale_incident_cannot_dismiss_the_open_one() {
+    fn acknowledging_a_stale_incident_cannot_dismiss_a_newer_one() {
         let alarms = OperatorAlarms::new();
         alarms.raise(redrawn());
-        let first = raised_for(&alarms, AlarmCondition::VanguardIntegrity).expect("raised");
         alarms.clear(AlarmCondition::VanguardIntegrity);
-        assert!(alarms.acknowledge(AlarmCondition::VanguardIntegrity, first.incident()));
+        let first = *alarms.board().unacknowledged().first().expect("queued");
+        assert!(alarms.acknowledge(first.incident()));
 
-        // A second, genuinely new occurrence opens while the operator is still
-        // holding the id they read a moment ago.
+        // A genuinely new occurrence, after the operator read the old id. The
+        // reclaim path is not taken here because nothing is queued.
         alarms.raise(redrawn());
         alarms.clear(AlarmCondition::VanguardIntegrity);
-        let second = raised_for(&alarms, AlarmCondition::VanguardIntegrity).expect("raised");
+        let second = *alarms.board().unacknowledged().first().expect("queued");
         assert_ne!(second.incident(), first.incident());
         assert!(
-            !alarms.acknowledge(AlarmCondition::VanguardIntegrity, first.incident()),
+            !alarms.acknowledge(first.incident()),
             "an acknowledgment names the incident the operator read",
         );
-        assert!(raised_for(&alarms, AlarmCondition::VanguardIntegrity).is_some());
+        assert_eq!(queued(&alarms), vec![redrawn()]);
     }
 
     #[test]
-    fn a_latch_re_reported_while_resolved_becomes_live_again() {
+    fn a_recurrence_reclaims_its_queued_incident_rather_than_duplicating_it() {
         let alarms = OperatorAlarms::new();
         alarms.raise(redrawn());
+        let opened = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
         alarms.clear(AlarmCondition::VanguardIntegrity);
+
+        // `LatchedRederived` means the producer re-detects the same unfixed
+        // problem on every start. That is one fault, not two.
         alarms.raise(redrawn());
-        let live = raised_for(&alarms, AlarmCondition::VanguardIntegrity).expect("raised");
         assert!(
-            !live.condition_cleared(),
-            "a re-report is proof the condition is live, not a resolved leftover",
+            alarms.board().unacknowledged().is_empty(),
+            "a recurrence must not sit in the queue beside its own live copy",
         );
+        let live = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
+        assert_eq!(live.incident(), opened.incident());
     }
 
     #[test]
-    fn a_changed_payload_on_a_resolved_latch_also_makes_it_live_again() {
+    fn a_recurrence_after_an_unrelated_fault_still_reclaims() {
         let alarms = OperatorAlarms::new();
-        alarms.raise(OperatorAlarm::VanguardRepairSkipped {
-            decoded: 1,
-            announced: 2,
-        });
+        alarms.raise(redrawn());
+        let opened = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
         alarms.clear(AlarmCondition::VanguardIntegrity);
+        alarms.raise(OperatorAlarm::VanguardStateUnpersisted);
 
-        // Episode, so the clear removed it — re-raising with different counts
-        // is a fresh incident, and nothing is left marked resolved.
-        alarms.raise(OperatorAlarm::VanguardRepairSkipped {
-            decoded: 3,
-            announced: 9,
-        });
-        let live = raised_for(&alarms, AlarmCondition::VanguardIntegrity).expect("raised");
-        assert!(!live.condition_cleared());
-        assert_eq!(
-            live.alarm(),
-            OperatorAlarm::VanguardRepairSkipped {
-                decoded: 3,
-                announced: 9
-            },
-        );
-
-        // The same path on a genuine latch: resolved, then re-reported with a
-        // *different* payload. It takes the update branch rather than the
-        // early return, so it must un-resolve there too.
-        let alarms = OperatorAlarms::new();
-        alarms.raise(degraded(DegradedCause::Exited));
-        let opened = raised_for(&alarms, AlarmCondition::TransportLiveness).expect("raised");
-        alarms.raise(degraded(DegradedCause::BinaryRejected));
-        let updated = raised_for(&alarms, AlarmCondition::TransportLiveness).expect("raised");
-        assert_eq!(updated.incident(), opened.incident());
-        assert!(!updated.condition_cleared());
+        // The unrelated fault is live; the re-draw is queued. Re-detecting the
+        // re-draw must take it back out of the queue, not leave a copy behind.
+        alarms.raise(redrawn());
+        assert!(alarms.board().unacknowledged().is_empty());
+        let live = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
+        assert_eq!(live.alarm(), redrawn());
+        assert_eq!(live.incident(), opened.incident());
     }
 
     #[test]
@@ -845,7 +920,7 @@ mod tests {
         assert_eq!(
             rx.borrow()
                 .condition(AlarmCondition::TransportLiveness)
-                .and_then(ConditionState::raised)
+                .and_then(ConditionState::live)
                 .map(RaisedAlarm::alarm),
             Some(degraded(DegradedCause::BinaryRejected)),
         );

@@ -118,7 +118,7 @@ fn apply(alarms: &OperatorAlarms, posture: &TorPosture) {
                 // replace a known cause with `None`; the only case that needs a
                 // write is a translator that attached mid-episode and has no
                 // incident to continue.
-                if !alarms.is_raised(AlarmCondition::TransportLiveness) {
+                if !alarms.is_live(AlarmCondition::TransportLiveness) {
                     alarms.raise(OperatorAlarm::TransportDegraded { cause: None });
                 }
             } else {
@@ -195,11 +195,20 @@ mod tests {
         }
     }
 
-    fn raised(alarms: &OperatorAlarms, condition: AlarmCondition) -> Option<RaisedAlarm> {
+    fn live(alarms: &OperatorAlarms, condition: AlarmCondition) -> Option<RaisedAlarm> {
         alarms
             .board()
             .condition(condition)
-            .and_then(ConditionState::raised)
+            .and_then(ConditionState::live)
+    }
+
+    fn queued(alarms: &OperatorAlarms) -> Vec<OperatorAlarm> {
+        alarms
+            .board()
+            .unacknowledged()
+            .iter()
+            .map(|r| r.alarm())
+            .collect()
     }
 
     fn arming(alarms: &OperatorAlarms, condition: AlarmCondition) -> Option<Arming> {
@@ -210,7 +219,7 @@ mod tests {
     }
 
     fn transport_incident(alarms: &OperatorAlarms) -> Option<IncidentId> {
-        raised(alarms, AlarmCondition::TransportLiveness).map(RaisedAlarm::incident)
+        live(alarms, AlarmCondition::TransportLiveness).map(RaisedAlarm::incident)
     }
 
     /// The §3c oracle: a degraded tor that briefly recovers and degrades again
@@ -260,7 +269,7 @@ mod tests {
         // published to nobody.
         apply(&alarms, &ready(true, None));
         assert_eq!(
-            raised(&alarms, AlarmCondition::TransportLiveness).map(RaisedAlarm::alarm),
+            live(&alarms, AlarmCondition::TransportLiveness).map(RaisedAlarm::alarm),
             Some(OperatorAlarm::TransportDegraded { cause: None }),
             "an incident with an unknown cause still beats a board that reads clean",
         );
@@ -277,7 +286,7 @@ mod tests {
         );
         apply(&alarms, &ready(true, None));
         assert_eq!(
-            raised(&alarms, AlarmCondition::TransportLiveness).map(RaisedAlarm::alarm),
+            live(&alarms, AlarmCondition::TransportLiveness).map(RaisedAlarm::alarm),
             Some(OperatorAlarm::TransportDegraded {
                 cause: Some(DegradedCause::NoSocksListener)
             }),
@@ -332,7 +341,7 @@ mod tests {
             arming(&alarms, AlarmCondition::VanguardIntegrity),
             Some(Arming::Armed),
         );
-        assert!(raised(&alarms, AlarmCondition::VanguardIntegrity).is_none());
+        assert!(live(&alarms, AlarmCondition::VanguardIntegrity).is_none());
     }
 
     #[test]
@@ -347,16 +356,59 @@ mod tests {
                 ))),
             ),
         );
-        let latched = raised(&alarms, AlarmCondition::VanguardIntegrity).expect("raised");
+        let latched = live(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
         assert_eq!(latched.alarm(), OperatorAlarm::VanguardStateRedrawn);
         assert_eq!(latched.lifetime(), AlarmLifetime::LatchedRederived);
 
         // The next pass persists cleanly, so the warning is gone — but the set
         // was already drawn fresh, and that is what the operator needs told.
         apply(&alarms, &ready(false, None));
-        let held = raised(&alarms, AlarmCondition::VanguardIntegrity).expect("still raised");
+        assert!(
+            live(&alarms, AlarmCondition::VanguardIntegrity).is_none(),
+            "the condition really did clear — the fault is history now, not status",
+        );
+        let held = *alarms.board().unacknowledged().first().expect("queued");
+        assert_eq!(held.alarm(), OperatorAlarm::VanguardStateRedrawn);
         assert_eq!(held.incident(), latched.incident());
-        assert!(held.condition_cleared());
+    }
+
+    /// Regression: the three vanguard warnings share one `AlarmCondition`, and
+    /// only one of them latches. A later, *different* warning must not evict
+    /// the unacknowledged record of the re-draw.
+    #[test]
+    fn a_later_warning_does_not_evict_the_unacknowledged_redraw() {
+        let alarms = OperatorAlarms::new();
+        apply(
+            &alarms,
+            &ready(
+                false,
+                Some(ServiceWarning::Vanguards(VanguardsWarning::StateUnusable(
+                    "unreadable".to_owned(),
+                ))),
+            ),
+        );
+        // The write succeeds next pass: the warning is gone, the re-draw is not.
+        apply(&alarms, &ready(false, None));
+        // A *different* vanguard fault appears on a later pass.
+        apply(
+            &alarms,
+            &ready(
+                false,
+                Some(ServiceWarning::Vanguards(
+                    VanguardsWarning::StateUnpersisted("disk full".to_owned()),
+                )),
+            ),
+        );
+        assert_eq!(
+            queued(&alarms),
+            vec![OperatorAlarm::VanguardStateRedrawn],
+            "an unacknowledged re-draw must survive a later, unrelated vanguard fault",
+        );
+        assert_eq!(
+            live(&alarms, AlarmCondition::VanguardIntegrity).map(RaisedAlarm::alarm),
+            Some(OperatorAlarm::VanguardStateUnpersisted),
+            "and the later fault is what the condition reports as its status",
+        );
     }
 
     #[test]
@@ -372,13 +424,13 @@ mod tests {
             ),
         );
         assert_eq!(
-            raised(&alarms, AlarmCondition::VanguardIntegrity).map(RaisedAlarm::alarm),
+            live(&alarms, AlarmCondition::VanguardIntegrity).map(RaisedAlarm::alarm),
             Some(OperatorAlarm::VanguardStateUnpersisted),
         );
 
         apply(&alarms, &ready(false, None));
         assert!(
-            raised(&alarms, AlarmCondition::VanguardIntegrity).is_none(),
+            live(&alarms, AlarmCondition::VanguardIntegrity).is_none(),
             "nothing rotated, so a successful write genuinely ends this one",
         );
     }
@@ -397,7 +449,7 @@ mod tests {
             ),
         );
         assert_eq!(
-            raised(&alarms, AlarmCondition::VanguardIntegrity).map(RaisedAlarm::alarm),
+            live(&alarms, AlarmCondition::VanguardIntegrity).map(RaisedAlarm::alarm),
             Some(OperatorAlarm::VanguardRepairSkipped {
                 decoded: 7,
                 announced: 9
@@ -451,9 +503,15 @@ mod tests {
                 "a supervisor that is gone is not a transport that is well",
             );
         }
-        assert!(
-            raised(&alarms, AlarmCondition::VanguardIntegrity).is_some(),
+        assert_eq!(
+            live(&alarms, AlarmCondition::VanguardIntegrity).map(RaisedAlarm::alarm),
+            Some(OperatorAlarm::VanguardStateRedrawn),
             "shutting tor down does not un-re-draw the guard set",
+        );
+        assert!(
+            alarms.board().unacknowledged().is_empty(),
+            "the condition never cleared — the supervisor stopped while it was still \
+             true, and a stop is not a resolution",
         );
 
         // The board really was published, not just mutated in place.

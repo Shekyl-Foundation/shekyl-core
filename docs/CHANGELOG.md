@@ -37,9 +37,26 @@
   would vanish. A severity ladder could express the split but nothing
   would enforce it; here the class comes from an exhaustive match, so a
   new alarm does not compile until someone classifies it.
-  Acknowledgment names the `IncidentId` the operator actually read and is
-  **refused** while the condition is still live, so it cannot become a
-  mute button.
+  Acknowledgment names the `IncidentId` the operator actually read, so a
+  fault that arrived while they were reading cannot be dismissed unseen.
+
+- **Live status and outstanding faults are separate shapes on the alarm
+  board** (OA-1). `ConditionState` carries at most one *live* alarm —
+  which is all a producer can report, since the tor supervisor's
+  `warning` is one `Option<ServiceWarning>` — and resolved latches go to
+  `AlarmBoard::unacknowledged`, a queue ordered oldest incident first.
+  A single per-condition slot was wrong: the vanguard set has three
+  distinct integrity faults on one `AlarmCondition` and only one of them
+  latches, so a later unrelated fault would have evicted the
+  unacknowledged record of a guard-set re-draw — silently losing exactly
+  what latching exists to retain. The split also turns two previously
+  runtime-checked properties structural: a latch survives its condition
+  being disarmed because it does not live on that condition's row, and
+  `acknowledge` cannot silence a fault that is still happening because a
+  live alarm is not in the queue to acknowledge. A recurrence *reclaims*
+  its queued incident rather than duplicating beside it —
+  `LatchedRederived` means the producer re-detects the same unfixed
+  problem on every start, which is one fault, not two.
 
 - **The tor control `EventSink` is not, and was never going to be, the
   alarm channel's input** (OA-1, grounded correction). The plan of record
