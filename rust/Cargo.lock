@@ -3985,6 +3985,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
  "shekyl-multisig",
+ "shekyl-operator-alarm",
  "shekyl-p-host",
  "shekyl-p-transport",
  "shekyl-proofs",
@@ -4228,6 +4229,14 @@ dependencies = [
  "shekyl-wire",
  "thiserror 2.0.18",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-operator-alarm"
+version = "3.1.0"
+dependencies = [
+ "shekyl-tor",
+ "tokio",
 ]
 
 [[package]]

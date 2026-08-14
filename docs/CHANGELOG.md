@@ -4,6 +4,57 @@
 
 ### Changed
 
+- **The wallet has an operator alarm channel, and the tor supervisor is
+  its first producer** (OA-1). `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` §3c calls
+  `TorPosture::Degraded` "the operator-alarm hook (`82`)" and specifies
+  how an alarm layer must render it; no alarm layer existed, so the
+  supervisor has been publishing alarm-shaped edges into nothing.
+  The new `shekyl-operator-alarm` crate is that layer, re-exported
+  from `shekyl-engine-core`'s root. Its primary surface is a
+  `watch<AlarmBoard>` snapshot rather than an event stream, because the
+  requirement that decides the shape is that a check which is **not
+  running** must read as *disarmed* and never as healthy — and a stream
+  cannot say that, since a disarmed check and a clean one both emit
+  nothing. Its `tor_posture` module maps posture to board: the §3c
+  episode rule (a degraded tor that briefly recovers and degrades again is
+  **one** `IncidentId`, ending only at `Ready { recovering: false }`), one
+  cause tag per `ServiceFailure` with no collapsing, and vanguard
+  integrity marked `Disarmed` off `Ready` because the `warning` field
+  exists on that variant and no other. It takes the posture *receiver*,
+  not a `TorService`, so it is testable without a tor binary. It is a leaf
+  crate rather than an engine module because it names no engine type: rule 82
+  makes failure-mode UX first-class, and a GUI matching on `OperatorAlarm`
+  should not have to link the wallet orchestrator to render a board.
+
+- **Alarms are classified by whether their observable outlives their
+  condition, not by a severity ladder** (OA-1). `AlarmLifetime::Episode`
+  leaves the board when its producer reports the condition gone;
+  `LatchedRederived` is held for acknowledgment, because the evidence
+  disappears while the damage stands — a vanguard set that was re-drawn
+  stays re-drawn after the next write succeeds and the warning clears. The
+  latch is also what makes a *coalescing* channel safe: a `watch` keeps
+  only the latest value, so an unlatched raise-and-clear inside one tick
+  would vanish. A severity ladder could express the split but nothing
+  would enforce it; here the class comes from an exhaustive match, so a
+  new alarm does not compile until someone classifies it.
+  Acknowledgment names the `IncidentId` the operator actually read and is
+  **refused** while the condition is still live, so it cannot become a
+  mute button.
+
+- **The tor control `EventSink` is not, and was never going to be, the
+  alarm channel's input** (OA-1, grounded correction). The plan of record
+  had a translator consuming it. No production call site issues
+  `SETEVENTS` — the DQ-T0.4 `STREAM` subscription is a harness, and §3c's
+  own retraction settled that bootstrap readiness is a `GETINFO` poll,
+  "a command, not a subscription" — so in production the sink receives
+  nothing at all, and `ControlReply` is a deliberately forensic surface
+  ("parse it, never log it") rather than an alarm vocabulary. The wallet's
+  honest production value is the new `EventSink::unsubscribed()`, which
+  states that at the construction site instead of leaving it as an
+  anonymous dropped receiver that reads like an accident. The alarm input
+  is the posture watch, where the supervisor's liveness policy actually
+  publishes.
+
 - **Curve-tree actor fail-stop now resumes over the held store, not a
   path-reopen** (SH-2a). `CurveTreeHandle` keeps a `WriterRecovery` for
   the wallet's life and `respawn` rebuilds the writer over the same open

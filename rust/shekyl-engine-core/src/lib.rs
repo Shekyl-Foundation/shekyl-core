@@ -39,6 +39,24 @@ pub use outbound_label::label_plaintext_for_payment_uri;
 // Canonical definition stays in `shekyl-address`; do not wrap or redefine.
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
 pub use shekyl_address::{format_payment_uri, parse_payment_uri, PaymentUri, PaymentUriError};
+/// The OA-1 operator alarm channel: the surface a human reads when a guarantee
+/// the wallet cannot restore by itself has been lost.
+///
+/// Re-exported rather than re-declared, and it lives in its own leaf crate
+/// because it names no engine type — an embedder can match on
+/// [`OperatorAlarm`] and render a board without linking the orchestrator,
+/// which is what rule 82 wants of a failure-mode surface. It is deliberately
+/// **not** part of `engine::diagnostics`: that trait's contract is droppable,
+/// silently-lossy and restart-amnesiac by design, all of which are wrong for a
+/// condition whose evidence disappears before its consequence does.
+///
+/// The tor supervisor reports through it today
+/// ([`tor_posture`](shekyl_operator_alarm::tor_posture)); the serving
+/// conditions join in SH-2b-2.
+pub use shekyl_operator_alarm::{
+    self, AlarmBoard, AlarmCondition, AlarmLifetime, Arming, ConditionState, DegradedCause,
+    DisarmedReason, IncidentId, OperatorAlarm, OperatorAlarms, RaisedAlarm,
+};
 
 /// **Not part of the public API.** Re-exports otherwise-`pub(crate)`
 /// types so external Criterion benchmarks (`benches/*.rs`) can measure

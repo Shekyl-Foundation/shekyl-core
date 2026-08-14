@@ -113,6 +113,13 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # names no engine type, which is what lets the pinner seam be the only path
 # to a `ServeSet`.
 shekyl-p-host = { path = "../shekyl-p-host" }
+# The OA-1 operator alarm channel, re-exported from `engine::diagnostics` so
+# both reporting surfaces are findable from one place. A leaf that names no
+# engine type — the dependency runs engine-core -> operator-alarm and never the
+# reverse, which is what lets an embedder render an alarm without linking the
+# orchestrator. No new third-party edge: its only deps are `shekyl-tor` (already
+# here, for `OnionIdentity`) and `tokio` (already a direct dep).
+shekyl-operator-alarm = { path = "../shekyl-operator-alarm" }
 # Phase 2a-3 synthetic FCMP++ tree root (§3.0.5): Selene multiexp + Helios
 # placeholder siblings in `engine::synthetic_tree`, consumed by assembly and
 # `sign_bridge` on the production send path.

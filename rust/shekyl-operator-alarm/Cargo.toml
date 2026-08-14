@@ -1,0 +1,28 @@
+[package]
+name = "shekyl-operator-alarm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Operator alarm channel: the snapshot a human reads when a guarantee the wallet cannot restore by itself has been lost"
+publish = false
+
+[dependencies]
+# The first producer's vocabulary: `TorPosture` (the §3c supervisor posture
+# watch this crate translates), `ServiceFailure`/`ServiceWarning`, and
+# `VanguardsWarning`. Read-only — this crate spawns no tor and holds no service
+# handle, only a `watch::Receiver`.
+shekyl-tor = { path = "../shekyl-tor" }
+# `watch` for the board itself and for the posture channel it reads; `rt` for
+# the translator task.
+tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = [
+    "macros",
+    "rt-multi-thread",
+] }
+
+[lints]
+workspace = true

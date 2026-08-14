@@ -156,6 +156,14 @@ members = [
     # Wallet-owned Tor integration: control client + lifecycle (2d-2 SP-T0)
     "shekyl-tor",
 
+    # The operator alarm channel (OA-1): the snapshot a human reads when a
+    # guarantee the wallet cannot restore by itself has been lost. A leaf on
+    # purpose — it names no engine type, so an embedder can render an alarm
+    # without linking the wallet orchestrator (rule 82 makes failure-mode UX
+    # first-class, and a GUI matching on `OperatorAlarm` should not have to
+    # pull `shekyl-engine-core` to do it).
+    "shekyl-operator-alarm",
+
     # Shekyl-native scanner crate
     "shekyl-scanner",
 
