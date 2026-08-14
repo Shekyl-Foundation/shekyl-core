@@ -231,8 +231,13 @@
   `dandelionpp_fluff` OPT default true; `CONTAINER_POD_AS_BLOB` for hash
   and `uint64` lists. In-crate consumer: encode → `notify()` →
   `BucketReader` (`tests/notify_kats.rs`). Does not wire the daemon
-  (`handle_recv` / `net_node` remain LV-3; live `shekyld` dual-stack is
-  the named remaining of `LV2_PORTABLE_STORAGE.md` §12 step 4).
+  (`handle_recv` / `net_node` remain LV-3).
+
+- **LV-2b dual-stack handshake against `shekyld`.** Ignored integration
+  harness `rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`) speaks
+  handshake / ping / timed-sync / support-flags with a live `--regtest`
+  daemon over Levin. Default `cargo test -p shekyl-levin` still spawns
+  no daemon (`LV2_PORTABLE_STORAGE.md` §12 step 4).
 
 - **LV-2b first drop — handshake / timed-sync / ping / support-flags.**
   Typed Levin maps in `shekyl-levin` on `shekyl-portable-storage`

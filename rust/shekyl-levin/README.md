@@ -39,6 +39,8 @@ chunk boundaries, and noise sizes.
   crate owns the typed maps (LV-2b): handshake / timed-sync /
   ping / support-flags (1001 / 1002 / 1003 / 1007) plus `network_address`
   and notifies 2001–2004 / 2006–2010. Cryptonote blobs stay opaque bytes.
+  Live `shekyld` dual-stack is the `#[ignore]` harness
+  `tests/dual_stack.rs` (`SHEKYLD_BIN`); default crate tests spawn no daemon.
 - **Not the connection stack.** No sockets, timeouts, invoke/response
   correlation, or peer management.
 - **Emit side and compression wired; read side is not.** Since 2026-08-06

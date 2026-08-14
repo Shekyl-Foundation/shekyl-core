@@ -36,9 +36,10 @@ Command *bodies* are epee portable_storage. The binary codec is
 maps in `shekyl-levin` are LV-2b (landed): handshake / timed-sync /
 ping / support-flags, `network_address`, and notifies 2001–2004 /
 2006–2010. Cryptonote blobs stay opaque bytes (`shekyl-wire`). Live
-`shekyld` dual-stack is the named remaining of
+`shekyld` dual-stack is the `#[ignore]` harness
+`rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`;
 [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)
-§12 step 4. Decision:
+§12 step 4). Decision:
 [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md).
 See also `docs/design/IMPLEMENTATION_INDEX.md` (LV row) and the
 `docs/FOLLOWUPS.md` "Levin p2p migration" entry.

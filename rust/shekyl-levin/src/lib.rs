@@ -43,8 +43,8 @@
 //!   support-flags (1001 / 1002 / 1003 / 1007), `network_address`, and
 //!   notifies 2001–2004 / 2006–2010. Cryptonote blobs stay opaque bytes
 //!   (`shekyl-wire`); RPC maps stay out. Live `shekyld` dual-stack is
-//!   the named remaining of `LV2_PORTABLE_STORAGE.md` §12 step 4 (no
-//!   daemon in crate unit tests).
+//!   the `#[ignore]` harness `tests/dual_stack.rs` (`SHEKYLD_BIN`; no
+//!   daemon in default crate tests).
 //! - connection management, timeouts, and invoke/response correlation
 //!   (the `async_protocol_handler` layer).
 //!

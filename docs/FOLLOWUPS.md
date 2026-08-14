@@ -9635,9 +9635,10 @@ its wake.
     landed** — notifies 2001–2004 / 2006–2010 (including 2002) in
     `shekyl-levin`; in-crate consumer is encode → `notify()` →
     `BucketReader` (`tests/notify_kats.rs`). Empty STL containers omit
-    the key (C++ `serialize_stl_container_*`). Live `shekyld` dual-stack
-    is the named remaining of §12 step 4 (no daemon in crate unit tests),
-    not a FOLLOWUPS dump of this PR's maps.
+    the key (C++ `serialize_stl_container_*`). UPDATE 2026-08-14: live
+    `shekyld` dual-stack landed as `#[ignore]` harness
+    `rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`; default crate
+    tests still spawn no daemon). Not a FOLLOWUPS dump of this PR's maps.
   - **LV-3 — connection-path cutover.** Replace the C++ Levin read/write
     path at the `levin_notify.cpp` / `net_node.inl` seam with the Rust
     crate. Cost basis: the index's "Relay layer → C++ dependency

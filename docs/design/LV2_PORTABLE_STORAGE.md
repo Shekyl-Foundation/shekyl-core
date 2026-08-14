@@ -5,8 +5,9 @@
 `network_address`, and notifies 2001–2004 / 2006–2010) landed in
 `shekyl-levin` (2026-08-14). This document remains authoritative for
 build-vs-vendor, the crate split, and the LV-2b census. Live `shekyld`
-dual-stack is the named remaining of §12 step 4 (no daemon in crate
-unit tests). **Not authoritative for:** the binary layout itself
+dual-stack (§12 step 4) landed as the `#[ignore]` harness
+`rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`; default crate
+tests still spawn no daemon). **Not authoritative for:** the binary layout itself
 ([`docs/PORTABLE_STORAGE.md`](../PORTABLE_STORAGE.md), completed by
 LV-2a) or Levin framing ([`docs/LEVIN_PROTOCOL.md`](../LEVIN_PROTOCOL.md),
 [`rust/shekyl-levin`](../../rust/shekyl-levin)).
@@ -149,7 +150,7 @@ Do **not** start LV-2b until LV-2a has byte-identity KATs against C++
 | Slice | What | First live consumer |
 | --- | --- | --- |
 | **LV-2a** | `shekyl-portable-storage`: encode/decode + Levin-default limits + KATs. Completes `PORTABLE_STORAGE.md` (§7). | Delete the `get_o_indexes.bin` / `get_blocks_by_height.bin` one-offs. Unblocks every later schema. |
-| **LV-2b** | The Levin-wire maps in `shekyl-levin`, starting with 1001/1002/1003/1007, then 2002. | First drop: in-crate encode → `invoke()` → `BucketReader`. A live `shekyld` dual-stack peer is the named remaining of this consumer (no daemon in crate unit tests). Then `store_t_to_binary(NOTIFY_NEW_TRANSACTIONS)` can leave `levin_notify.cpp`. |
+| **LV-2b** | The Levin-wire maps in `shekyl-levin`, starting with 1001/1002/1003/1007, then 2002. | First drop: in-crate encode → `invoke()` → `BucketReader`. Live `shekyld` dual-stack: `#[ignore]` harness `tests/dual_stack.rs` (2026-08-14). Then `store_t_to_binary(NOTIFY_NEW_TRANSACTIONS)` can leave `levin_notify.cpp` (LV-3). |
 
 Handshake first: small, no blob nesting, and is what lets a future
 LV-3 caller invoke `BucketReader::complete_handshake` from decoded
@@ -377,9 +378,10 @@ another name.
    the one-offs.
 4. Land handshake/timed-sync/ping/support-flags in `shekyl-levin`
    (LV-2b first drop). **Landed 2026-08-14** with in-crate
-   encode → `invoke()` → `BucketReader` KATs. A live dual-stack
-   interop test against `shekyld` is the named remaining of this step
-   (no daemon in crate unit tests).
+   encode → `invoke()` → `BucketReader` KATs. Live dual-stack
+   interop against `shekyld` **landed 2026-08-14** as
+   `rust/shekyl-levin/tests/dual_stack.rs` (`#[ignore]`, `SHEKYLD_BIN`;
+   default crate tests still spawn no daemon).
 5. Land 2002, then the remaining notifies including 2010.
    **Landed 2026-08-14** (`tests/notify_kats.rs`: fluff OPT, empty-container
    omit, `CONTAINER_POD_AS_BLOB`, pruned vs unpruned `txs`, witness cap,
