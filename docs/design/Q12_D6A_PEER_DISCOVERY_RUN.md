@@ -8,7 +8,7 @@ cannot be faked."*
 
 **Status: the `{15, 30, 60}` sweep (§§13–15) and Q12-R5's late-joiner control
 (§15.2) are RUN, 2026-08-14, and every readout is committed. §16 settles what
-the floor actually counts.**
+the floor actually counts, and CLOSES the distinctness question.**
 
 Corrected 2026-08-14. This line previously read *"No VM stood up, no arm run"*,
 which its own body had already outgrown before §13 existed: §§10–11.13 record a
@@ -1941,6 +1941,17 @@ The trade is a real cost against an invisible one: an invalid embargo is a
 
 ### 12.2 Two implementation constraints that are part of the ruling
 
+**Refused in advance (§16.5): D9's check is a self-provisioning check, not a
+sybil defense.** Distinctness on an anonymity zone is structurally unobtainable
+— the identifier that would supply it is an eclipse-completion oracle worth more
+to an attacker than to a victim — so this check can never be more than a check
+on the node's **own** configuration and churn. Any future proposal to "harden
+the floor against sybils" is proposing to reintroduce a linkable identifier, and
+is refused on that ground rather than re-argued. The input is an
+**outbound-connection count**, and §16.6 requires it be a named type that says
+so.
+
+
 - **The check must be live, not once at startup.** Peers churn, and a node above
   the floor can fall below it. This is exactly F-8b's gap: it floors the
   *configured cap*, never the *achieved count*, so a startup-only check would
@@ -2603,45 +2614,143 @@ rather than reporting an unconverged draw.
 
 **Shelved under rule 7 on the mechanism, and this time the instrument exists.**
 
-### 16.5 Distinctness mechanisms, rejected on the merits
+### 16.5 CLOSED — distinctness on an anonymity zone is structurally unobtainable
 
-Named and rejected rather than left unconsidered:
+Not a filed item with an open threat model. **Closed, with a reason**, and it
+would remain closed even if the counting problem were more severe than §16.3
+finds it.
 
-- **The persona serving credential.** The one scarce resource in the tree that
-  could give peer-distinctness on Tor is the archival serving identity —
-  `OnionIdentity::from_hs_id_seed`
-  ([`rust/shekyl-tor/src/onion_identity.rs:124`](../../rust/shekyl-tor/src/onion_identity.rs#L124)),
-  moved under the `StakeEngine`'s custody in #464. Binding relay peering to it
-  would make p2p membership **paid**, give every relay peer a **persistent
-  identity**, and **correlate a node's relay position with its archival
-  service** across two subsystems that are deliberately separate. That is a
-  privacy regression wearing a sybil-resistance argument — the same shape as
-  the "typical hardware" proposal already ruled against.
-- **Per-zone random `peer_id`s, and behavioural distinctness heuristics.**
-  `peer_id` is self-asserted and free to mint, so an adversary running twelve
-  daemons defeats any `peer_id` policy at the same cost as twelve onions. A
-  per-zone random id would catch the *accidental* case and nothing adversarial
-  — **worse than no mechanism, because it would read as a defense.**
+**A distinctness oracle and a linkability oracle are the same predicate.** *"Can
+I tell these twelve addresses are one host?"* and *"can I tell these two
+addresses are one host?"* are one question. Any identifier that lets a node
+detect twelve onions behind one daemon lets everyone else detect that two of an
+operator's addresses are the same operator. That is not a cost trade; it is the
+same knob.
 
-### 16.6 What this changes in the code, and what it does not
+**Shekyl already spent that knob.** `shekyl-p-transport::derive_socks_user`
+([`lib.rs:134`](../../rust/shekyl-p-transport/src/lib.rs#L134)) gives
+per-persona SOCKS stream isolation precisely so a node's personas do not share
+a circuit fate, and §10.9 pins one-P-per-wallet-on-wire. A stable per-zone
+`peer_id` announced to every peer would hand back, at the p2p layer, the linkage
+the transport layer is built to deny.
 
-**No code change is required by this finding**, and none is made here. Two
-consequences carry forward:
+#### And the oracle is worth more to the attacker — measured by direction, not preference
+
+The symmetry argument alone leaves the trade open: perhaps the defender's use is
+worth more. **It is not, and the asymmetry is structural.**
+
+The direction of announcement hands the oracle to the wrong party. Inbound
+anonymity connections carry **no client identity** — every hidden-service
+listener's `default_remote` is `net::tor_address::unknown()`
+([`net_node.cpp:336`](../../src/p2p/net_node.cpp#L336),
+default-constructed at [`tor_address.h:71`](../../src/net/tor_address.h#L71)) —
+so an attacker accepting N inbound streams sees N identical remotes. But
+`get_local_node_data` fills `node_data.peer_id` on the **dialer** side
+([`net_node.inl:2153`](../../src/p2p/net_node.inl#L2153)) and the acceptor reads
+it into `context.peer_id`
+([`:2672`](../../src/p2p/net_node.inl#L2672)). **The victim filling its outbound
+slots announces to every attacker onion it dials; the attacker announces nothing
+back that matters.**
+
+Eclipse is three steps: get onions into the victim's peerlist (cheap — gossip
+does it), get the victim to dial them (probabilistic), and **know it worked**.
+Step three has no cheap solution today: grouping must be inferred from
+correlated handshake timing, matching sync heights and correlated peerlist
+responses — noisy, slow and confounded, because twelve streams from one victim
+look much like twelve streams from twelve victims. A distinct `peer_id`
+collapses step three to a **field read at handshake, before any traffic**.
+
+That converts eclipse from an open-loop gamble into a closed-loop operation with
+a completion signal, and the signal is worth as much as the position: at 9/12 the
+attacker knows to publish more onions; at 12/12 it knows **every subsequent
+observation is sound** rather than possibly explained by an honest link. The
+oracle tells the attacker when its inference is valid, not merely when its
+position is complete. A third use needs no eclipse at all — run one onion, accept
+inbound, count distinct ids over time, and read out a **census of the anonymity
+network**, which is currently unobtainable and bears directly on the `A ≈ 30`
+launch condition §15.1 just established.
+
+| | defender's use | attacker's use |
+| --- | --- | --- |
+| timing | **retrospective** — learns it is eclipsed after it already is | **prospective** — learns when to push and when to start |
+| remedy | stop stemming → D9(b) fluff-at-origin, **the branch §16.3 shows the attacker prefers** | publish more onions, **near-zero cost** |
+
+**Same oracle, strictly more valuable to the attacker.** So the sentinel is not a
+reluctant trade in which distinctness is surrendered to preserve unlinkability:
+**the distinctness it would buy is negative-valued on its own terms**, before the
+linkability cost is counted at all.
+
+And it would not work regardless. `peer_id` is self-asserted and free to mint —
+an adversary running twelve daemons on one VPS announces twelve distinct ids at
+the same cost as twelve onions. A per-zone random value catches the *accidental*
+case and nothing adversarial, which is **worse than no mechanism, because it
+would read as a defense** in the code and in the doc.
+
+#### The one mechanism with real scarcity, refused
+
+The only scarce resource in the tree that could supply peer-distinctness on Tor
+is the archival serving identity — `OnionIdentity::from_hs_id_seed`
+([`onion_identity.rs:124`](../../rust/shekyl-tor/src/onion_identity.rs#L124)),
+under the `StakeEngine`'s custody since #464. Binding relay peering to it would
+make p2p membership **paid**, give every relay peer a **persistent identity**,
+and **correlate a node's relay position with its archival service** across two
+subsystems that are deliberately separate — a privacy regression wearing a
+sybil-resistance argument, the same shape as the "typical hardware" proposal
+already ruled against.
+
+### 16.6 What follows, in the code and in the record
+
+**No code change is required by this finding**, and no behaviour changes here.
+Three consequences:
 
 1. **The prose stops saying "peers."** Twelve outbound *connections* is what is
    checked, on every zone, and the number does not certify twelve distinct
-   hosts. Corrected at three sites in §12 by this change.
-2. **When §12.2 specifies D9's input it must be a named type** — an
-   outbound-connection count that says what it counts — not a bare `usize`.
-   The substitution is not hypothetical: `shekyl_relay_zone_plan_relay_with_refresh`
-   takes `(outbound: *const u8, n: usize)` and binds `read_ids(outbound, n)` to
-   a local named **`peers`**
-   ([`relay_zone_ffi/mod.rs:816`](../../rust/shekyl-ffi/src/relay_zone_ffi/mod.rs#L816)),
-   when what it holds is connection ids. An earlier estimate that this site
-   "already receives the number" is **retracted** — it receives the wrong
-   quantity, and a type that names what it counts is what stops the next reader
-   repeating the substitution.
+   hosts. Corrected at three sites in §12.
+2. **`ANON_ZONE_SENTINEL_PEER_ID`'s comment now carries the same-zone
+   argument.** It previously named only the cross-zone attack — connect to the
+   hidden service, read `peer_id`, scan clearnet for a match — and that argument
+   **is defeated** by the obvious counter-proposal of a per-zone independently
+   random value. A future reader weighing *"can we relax this for sybil
+   resistance?"* would have found the objection inapplicable and relaxed it. The
+   eclipse-completion argument survives that counter-proposal, so it belongs
+   beside it; the invariant now names its own consequence, which is what the
+   startup refusal enforces and what its comment previously under-justified.
+3. **§12.2's D9 input must be a named type** — an outbound-connection count that
+   says what it counts, not a bare `usize`. The substitution is not
+   hypothetical: `shekyl_relay_zone_plan_relay_with_refresh` takes
+   `(outbound: *const u8, n: usize)` and binds `read_ids(outbound, n)` to a
+   local named **`peers`**
+   ([`relay_zone_ffi/mod.rs:816`](../../rust/shekyl-ffi/src/relay_zone_ffi/mod.rs#L816))
+   while holding connection ids. An earlier estimate that this site "already
+   receives the number" is **retracted** — it receives the wrong quantity.
 
-**The honest statement, which the check should be allowed to make:** the floor
-is a **self-provisioning check against configuration and churn**, not a sybil
-defense, and it was never scoped to be one.
+**Refused in advance, in the shape of the Pi-4 ruling:** because distinctness is
+structurally unavailable on an anonymity zone, D9's check can never be more than
+a check on **the node's own configuration and churn**, and any future proposal to
+*"harden the floor against sybils"* is proposing to reintroduce a linkable
+identifier. That is a named privacy regression wearing a robustness argument, and
+it is refused here rather than re-litigated later.
+
+### 16.7 Lineage — Dandelion++ never had this check
+
+Worth recording so the gap is not read as inherited breakage. §3.1 of
+[1805.11060v1](https://arxiv.org/abs/1805.11060) models the adversary as a
+fraction `p` of corrupt nodes, states its goal as **mass** deanonymization rather
+than targeted attacks, and explicitly places ISP-level adversaries who can
+eclipse a node **outside scope**, noting that routing-based defenses cannot
+guarantee anything for a targeted node under those conditions.
+
+So `p` is a **free parameter of the analysis**, not a quantity the protocol
+bounds. Every result is conditional on it — Fig. 3's precision curves, Theorem
+1's bound, §5.3.1's `q = 0.2`. Nothing in Dandelion++ makes sybils expensive and
+the paper does not claim otherwise; §4.1.1's 4-regular graph is about robustness
+to graph-learning, and even assumes adversarial nodes have the same degree as
+honest ones. The CryptoNote line inherits that posture wholesale: address-only
+dedupe on non-public zones, and no netgroup bucketing on clearnet either.
+Bitcoin has the netgroup/ASN diversity machinery; this lineage never did.
+
+**So Dandelion++ never had this check, and therefore never had this gap.** We
+introduced it by deriving a constant from a graph-degree assumption and then
+writing a check that reads a number the assumption does not cover — which is the
+ordinary way this happens, and is a reason to name the check's limit rather than
+to treat it as a defect.
