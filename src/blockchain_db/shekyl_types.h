@@ -1345,6 +1345,11 @@ struct ArchivalBondValue {
     // good_through(P, E) is consensus semantics and lives in Rust only
     // (shekyl-archival-retention::good_through, via shekyl_archival_good_through).
 
+    // Contract: callers must pass registry-enumerated shard ids. A
+    // CompleteTree record answers true for ANY id — safe only because the
+    // challenge scheduler's CompleteTree arm enumerates pairs from the
+    // daemon's archival_shard_segment registry (the chain's frozen
+    // universe), never from caller-invented ids.
     [[nodiscard]] bool holds_shard(uint64_t shard_id) const noexcept
     {
         if (is_complete_tree())
