@@ -105,15 +105,35 @@ pub(crate) async fn verify_message(
     let network = tenants.lock().await.network;
 
     // Off the worker: SLH-DSA-192s + Schnorr verification plus the
-    // ~21.7 KB armored decode is CPU-bound work an unauthenticated
-    // caller can invoke at will, and it must not stall the tokio worker
-    // that also serves every other tenant request. `block_in_place` per
-    // the crate convention (see `staking::read_view_under_guard` for why
-    // every hosting runtime is multi-threaded and why the call is not
-    // scattered).
-    tokio::task::block_in_place(|| {
-        engine_signing::verify_message(network, &p.address, p.message.as_bytes(), &p.signature)
+    // ~21.7 KB armored decode is CPU-bound work, and it must not stall
+    // the tokio worker that also serves every other tenant request.
+    //
+    // `spawn_blocking`, not the `staking::read_view_under_guard`
+    // `block_in_place` convention: that convention exists for reads that
+    // BORROW under the engine guard, and this path holds no guard — the
+    // owned params move into the job. The blocking pool is then also the
+    // concurrency bound: a burst of verifies saturates at the pool cap
+    // and queues FIFO behind it, instead of `block_in_place` growing a
+    // replacement worker per in-flight call without limit. A dedicated
+    // verify permit (sign's single-flight shape) is deliberately absent:
+    // sign holds one because its unit is ~4 s of CPU plus key-actor
+    // residency, while verify's unit is milliseconds (~3.4 ms Pi-4 floor
+    // once the v2 gate opens; sub-ms today), it holds no wallet
+    // resource, and the caller already sits inside the server's auth
+    // boundary (UDS filesystem permissions / HTTP basic auth run before
+    // dispatch — session-less is not unauthenticated). Bound it for real
+    // if this server ever fronts verify outside that boundary, or if a
+    // scheme change moves the unit cost out of the millisecond class.
+    let VerifyMessageParams {
+        address,
+        message,
+        signature,
+    } = p;
+    tokio::task::spawn_blocking(move || {
+        engine_signing::verify_message(network, &address, message.as_bytes(), &signature)
     })
+    .await
+    .map_err(|e| WalletRpcError::InternalError(format!("verify_message task failed: {e}")))?
     .map_err(map_verify_error)?;
 
     serde_json::to_value(VerifyMessageResult { verified: Verified })

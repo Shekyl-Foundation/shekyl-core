@@ -220,9 +220,11 @@ mod tests {
     /// must never answer `WalletNotOpen`. A malformed signature string is
     /// the shape-first `-32602` refusal.
     ///
-    /// Multi-thread flavor: the handler wraps the verify pipeline in
-    /// `block_in_place`, which panics on a current-thread runtime.
-    #[tokio::test(flavor = "multi_thread")]
+    /// Deliberately the default (current-thread) test flavor: the
+    /// handler moves the verify pipeline through `spawn_blocking`, which
+    /// works on every runtime flavor — this annotation is the pin that
+    /// no flavor-sensitive primitive (`block_in_place`) creeps back in.
+    #[tokio::test]
     async fn verify_message_is_session_less_and_shape_gates_first() {
         let tenants = test_tenants();
         let err = dispatch(

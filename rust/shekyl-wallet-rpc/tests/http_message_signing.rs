@@ -219,11 +219,11 @@ async fn sign_and_the_full_verify_taxonomy() {
 /// `verify_message` needs no wallet: a fresh tenant with nothing open
 /// answers the taxonomy, never `-29001` (SM-R-6 session-less pin).
 ///
-/// Multi-thread flavor: the handler runs the verify pipeline through
-/// `block_in_place` (crate convention, `staking::read_view_under_guard`),
-/// which panics on a current-thread runtime — production runtimes are
-/// all multi-threaded.
-#[tokio::test(flavor = "multi_thread")]
+/// Deliberately the default (current-thread) test flavor: verify runs
+/// through `spawn_blocking`, which works on every runtime flavor — this
+/// annotation is the pin that no flavor-sensitive primitive
+/// (`block_in_place`) creeps back into the session-less path.
+#[tokio::test]
 async fn verify_message_works_with_no_wallet_open() {
     let dir = TempDir::new().unwrap();
     let state = state(&dir);
