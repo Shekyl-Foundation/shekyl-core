@@ -27,7 +27,18 @@
 //! The baselines below fail in BOTH directions, exactly like the engine
 //! decomposition ratchet:
 //!
-//! - **regression** — a file exceeds its pin: a new raw site landed.
+//! - **regression** — a file exceeds its pin: a net-new raw site landed.
+//!
+//! **Honest scope (stated, not papered over):** the pins are per-file
+//! NET counts, so a same-file swap — one raw site removed, a different
+//! one added — passes the gate. Catching that would need normalized
+//! call-site identities, i.e. a brittle pseudo-parser whose churn
+//! punishes every legitimate refactor; the engine decomposition
+//! ratchet accepts the identical property for line counts. The swap
+//! case is a **review duty**: a diff that touches a raw site in a
+//! pinned file is reviewed against rule 40's seam obligations even
+//! when the pin stays green. What the gate DOES guarantee
+//! mechanically: the per-file raw count is monotone non-increasing.
 //!   Route it through the seam helpers, or — for a reviewed, deliberate
 //!   raw site (typed slices, sub-pointer arithmetic, a local guarded
 //!   helper with its own error type like `flat_commitment_keys`) — bump
@@ -130,7 +141,7 @@ fn raw_boundary_reads_and_reserves_only_ratchet_down() {
                 if frp > pf || wc > pw {
                     failures.push(format!(
                         "{file}: raw counts grew (from_raw_parts {pf} -> {frp}, with_capacity \
-                         {pw} -> {wc}) — a new raw site landed; route it through the seam \
+                         {pw} -> {wc}) — a net-new raw site landed; route it through the seam \
                          helpers or bump the pin in the same commit with a rationale"
                     ));
                 } else if frp < pf || wc < pw {
