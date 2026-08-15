@@ -3229,6 +3229,31 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! substitute one for the other.
 std::uint32_t shekyl_p2p_default_out_peers();
 
+//! Once-at-origin zone routing (Q12-D5a; Q12_D6A_PEER_DISCOVERY_RUN.md §§12,
+//! 18), moved from `cryptonote_protocol/enums.h` under rule 20. Bytes cross
+//! raw; the C++ wrappers in enums.h static_assert `relay_method`,
+//! `epee::net_utils::zone` and `zone_route::decision` against this contract.
+//! Unknown bytes map to the SAFE arm (fail-closed / false), never toward
+//! clearnet -- refuse-to-leak is the family's invariant (§30.5).
+//!
+//! Decision bytes: 0 = keep_arrival, 1 = anonymity_fail_closed,
+//! 2 = public_clearnet.
+std::uint8_t shekyl_relay_zone_once_at_origin_route(std::uint8_t tx_relay, std::uint8_t origin_zone);
+
+//! §30.5/§89.8: an origin on a non-public zone keeps its `local` txpool
+//! record whatever the transport did. Unknown bytes: false.
+bool shekyl_relay_zone_originated_stays_in_zone(std::uint8_t tx_relay, std::uint8_t nzone);
+
+//! Pre-fluff relay methods (stem / local). Unknown bytes: false.
+bool shekyl_relay_zone_is_pre_fluff_relay(std::uint8_t tx_relay);
+
+//! R-1 coherence: pre-fluff on a real anonymity origin. Unknown bytes: false.
+bool shekyl_relay_zone_r1_coherence_keeps_origin(std::uint8_t tx_relay, std::uint8_t origin_zone);
+
+//! Roll -> zone byte: true -> invalid (fail-closed anonymity), false ->
+//! public_ (clearnet BY DESIGN, not fallback).
+std::uint8_t shekyl_relay_zone_originated_zone_from_anonymity_roll(bool take_anonymity);
+
 //! Record `n` packed 32-byte CANONICAL tx hashes stemmed to `successor`
 //! (16-byte uuid); `source` is the arriving peer's uuid or null for local
 //! origin. Canonical, not blob-derived — blob bytes are not a stable identity
