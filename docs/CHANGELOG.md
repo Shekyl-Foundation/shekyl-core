@@ -11,7 +11,7 @@
   file, failing in both directions — a new raw site fails CI, an
   improvement must tighten its pin — with `legacy_util`'s
   `slice_from_ptr`/`bounded_capacity` as the seam obligations (rule 40);
-  the third byte-identical unguarded `make_slice` clone
+  the second byte-identical unguarded `make_slice` clone
   (`engine_file_ffi`) was absorbed into the seam. House conventions
   landed as rules: one-domain-string-one-context (rule 30, SA-R-2),
   envelope-vs-payload version naming (rule 42, the SM-R-5 split),

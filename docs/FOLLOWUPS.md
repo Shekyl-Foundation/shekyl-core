@@ -62,7 +62,7 @@ sustainability is unaffected by the recalibration.
   (`feat/sa-rt-round-close`, the conventions tail): the FFI boundary
   ratchet (`shekyl-ffi/tests/ffi_boundary_ratchet.rs`) pins every raw
   `slice::from_raw_parts` and raw `Vec::with_capacity` per file, failing
-  in BOTH directions; the third unguarded `make_slice` clone
+  in BOTH directions; the second unguarded `make_slice` clone
   (`engine_file_ffi`) absorbed into the seam; pipefail is rule
   `46-shell-gate-exits`. Record below kept as filed.**
   The `bounded_capacity(count, stride, remaining_bytes)` helper landed in

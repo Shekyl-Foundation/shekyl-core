@@ -10,11 +10,15 @@
 //!
 //! Two patterns are counted per source file, over comment-stripped code:
 //!
-//! - **`slice::from_raw_parts`** (covers `std::`/`core::` and the `_mut`
-//!   form): every call carries `from_raw_parts`' language-level
-//!   `isize::MAX` byte-bound precondition by hand. The guarded seam is
-//!   [`legacy_util::slice_from_ptr`]; raw sites re-own the precondition
-//!   individually, with varying completeness.
+//! - **the `from_raw_parts` token** — deliberately the bare token, not
+//!   the `slice::`-qualified path, so an imported `use
+//!   std::slice::from_raw_parts;` call cannot slip past the count; it
+//!   also matches `_mut` and `Vec::from_raw_parts`, each of which
+//!   hand-owns a UB precondition of its own (byte bound / layout
+//!   match). Every raw call re-owns those preconditions individually;
+//!   the guarded seam is [`legacy_util::slice_from_ptr`]. (A textual
+//!   gate bounds drift, not adversaries — `use ... as alias` can evade
+//!   any needle; a reviewer evades a ratchet only on purpose.)
 //! - **`Vec::with_capacity(`**: a raw reserve. The guarded seam is
 //!   [`legacy_util::bounded_capacity`] (backing bound); counts that are
 //!   cheap-per-element additionally need a protocol ceiling (the
@@ -39,7 +43,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// (src-relative path, `slice::from_raw_parts` count, `Vec::with_capacity(` count)
+/// (src-relative path, `from_raw_parts`-token count, `Vec::with_capacity(` count)
 ///
 /// Baseline 2026-08-14 (SA-R-7 close). Honest inventory, not an
 /// endorsement: raw `from_raw_parts` sites each hand-own the byte-bound
@@ -94,7 +98,7 @@ fn scan(dir: &Path, src_root: &Path, counts: &mut BTreeMap<String, (usize, usize
         let mut wc = 0;
         for line in text.lines() {
             let code = line.split("//").next().unwrap_or("");
-            frp += code.matches("slice::from_raw_parts").count();
+            frp += code.matches("from_raw_parts").count();
             wc += code.matches("Vec::with_capacity(").count();
         }
         if frp > 0 || wc > 0 {
@@ -118,7 +122,7 @@ fn raw_boundary_reads_and_reserves_only_ratchet_down() {
     for (file, &(frp, wc)) in &counts {
         match pins.get(file.as_str()) {
             None => failures.push(format!(
-                "{file}: {frp} raw slice::from_raw_parts / {wc} raw Vec::with_capacity in an \
+                "{file}: {frp} raw from_raw_parts / {wc} raw Vec::with_capacity in an \
                  unpinned file — route through legacy_util::slice_from_ptr / bounded_capacity, \
                  or add a reviewed baseline row with a rationale"
             )),
