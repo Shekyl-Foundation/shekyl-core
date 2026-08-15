@@ -640,14 +640,23 @@ impl LeafStore {
         ))
     }
 
-    /// Number of frozen segments — the store's freeze-prefix cursor
-    /// (`META_NEXT_FREEZE_SEG`), defaulting to 0 when the cell is absent
-    /// (the same posture as [`Self::leaf_count`] reads; `init_tables`
-    /// seeds it to 0 on a fresh store).
+    /// The store's freeze-prefix cursor (`META_NEXT_FREEZE_SEG`): the
+    /// frozen set is exactly `[0, k)` for the returned `k`. Defaults to 0
+    /// when the cell is absent (the same posture as [`Self::leaf_count`]
+    /// reads; `init_tables` seeds it to 0 on a fresh store).
+    ///
+    /// **Not** `shekyl_archival_retention::frozen_segment_count` — that
+    /// helper is first-crossing completeness (`⌊leaf_count / E⌋`) and is
+    /// what the daemon registry writes. This cursor is burial-gated
+    /// ([`segment_freeze_eligible`]): a completed but unburied segment
+    /// does not advance it. D-5's refresh operand is *this* number;
+    /// `COMPLETETREE_ACTIVATION.md` drafted the getter as
+    /// `frozen_segment_count()`, which is amended here so the two facts
+    /// cannot share a name. Slice 2's `CompleteTreePrefix.frozen_count`
+    /// is this value.
     ///
     /// # The prefix invariant
     ///
-    /// The frozen set is always exactly `[0, k)` for the returned `k`.
     /// [`Self::maybe_freeze_segments`]'s in-transaction body advances the
     /// cursor **sequentially** — segment `k` is considered only after
     /// `0..k` have frozen, and the loop stops at the first ineligible
@@ -672,20 +681,11 @@ impl LeafStore {
     /// segment, so a larger cursor is provably corrupt with zero false
     /// positives, and this getter is the serve-obligation authority — it
     /// exists to report the prefix, not to trust a value the prefix cannot
-    /// have. Same bound and posture as `verify_frozen_tail`'s cursor read.
-    pub fn frozen_segment_count(&self) -> Result<u64, StoreError> {
+    /// have. Same decoder as `verify_frozen_tail`.
+    pub fn next_freeze_seg(&self) -> Result<u64, StoreError> {
         let txn = self.db.begin_read()?;
         let meta = txn.open_table(META_TABLE)?;
-        let count = meta
-            .get(META_NEXT_FREEZE_SEG)?
-            .map(|v| v.value())
-            .unwrap_or(0);
-        if count > u64::from(u32::MAX) + 1 {
-            return Err(StoreError::CorruptMeta(
-                "freeze segment counter exceeds u32",
-            ));
-        }
-        Ok(count)
+        next_freeze_seg_in(&meta)
     }
 
     /// Whether the prune-disabled posture is declared — see
@@ -694,11 +694,7 @@ impl LeafStore {
     pub fn prune_disabled(&self) -> Result<bool, StoreError> {
         let txn = self.db.begin_read()?;
         let meta = txn.open_table(META_TABLE)?;
-        Ok(meta
-            .get(META_PRUNE_DISABLED)?
-            .map(|v| v.value())
-            .unwrap_or(0)
-            != 0)
+        prune_disabled_in(&meta)
     }
 
     /// Declare the prune-disabled posture: from this call on,
@@ -986,12 +982,16 @@ impl LeafStore {
         let complete_segments = leaf_count / e;
         let mut next_freeze_seg = {
             let meta = txn.open_table(META_TABLE)?;
-            let next = meta.get(META_NEXT_FREEZE_SEG)?;
-            next.map(|v| v.value()).unwrap_or(0)
+            next_freeze_seg_in(&meta)?
         };
         let mut seg_k = next_freeze_seg;
         while seg_k < complete_segments {
-            let segment_id = SegmentId(u32::try_from(seg_k).expect("segment id fits u32"));
+            // `next_freeze_seg_in` admits `u32::MAX + 1` (every id frozen).
+            // There is nothing further to freeze in this store's id space.
+            let Ok(id) = u32::try_from(seg_k) else {
+                break;
+            };
+            let segment_id = SegmentId(id);
             {
                 let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
                 if frozen.get(segment_id)?.is_some() {
@@ -1555,12 +1555,7 @@ impl LeafStore {
         // `begin_write`, making the read-then-mutate atomic).
         {
             let meta = txn.open_table(META_TABLE)?;
-            if meta
-                .get(META_PRUNE_DISABLED)?
-                .map(|v| v.value())
-                .unwrap_or(0)
-                != 0
-            {
+            if prune_disabled_in(&meta)? {
                 return Err(StoreError::PruneDisabledPosture);
             }
         }
@@ -1678,19 +1673,14 @@ impl LeafStore {
         let txn = self.db.begin_read()?;
         let next_freeze_seg = {
             let meta = txn.open_table(META_TABLE)?;
-            meta.get(META_NEXT_FREEZE_SEG)?
-                .map(|v| v.value())
-                .unwrap_or(0)
+            next_freeze_seg_in(&meta)?
         };
         if next_freeze_seg == 0 {
             return Ok(());
         }
 
-        // `verify_frozen_tail` runs on the rollback path against persisted
-        // metadata, so a corrupt `META_NEXT_FREEZE_SEG` must surface as a
-        // structured error rather than panic — the function exists to detect
-        // corruption, not to trust it. (`next_freeze_seg >= 1` here, so the
-        // subtraction cannot underflow.)
+        // Bound is `next_freeze_seg_in`'s: `1..=u32::MAX+1`, so `k-1`
+        // always fits `SegmentId`. A larger cursor never reaches here.
         let segment = SegmentId(
             u32::try_from(next_freeze_seg - 1)
                 .map_err(|_| StoreError::CorruptMeta("freeze segment counter exceeds u32"))?,
@@ -1777,6 +1767,38 @@ fn delete_seg_keys_batched<V: redb::Value>(
         }
     }
     Ok(())
+}
+
+/// Largest legal `META_NEXT_FREEZE_SEG`: every `u32` [`SegmentId`] frozen.
+const NEXT_FREEZE_SEG_MAX: u64 = u32::MAX as u64 + 1;
+
+/// Read the freeze-prefix cursor from an already-open meta table.
+///
+/// Absent defaults to 0. A value above [`NEXT_FREEZE_SEG_MAX`] is
+/// [`StoreError::CorruptMeta`] — the same bound the public getter and
+/// `verify_frozen_tail` must share, so they cannot drift.
+fn next_freeze_seg_in(meta: &impl ReadableTable<&'static str, u64>) -> Result<u64, StoreError> {
+    let count = meta
+        .get(META_NEXT_FREEZE_SEG)?
+        .map(|v| v.value())
+        .unwrap_or(0);
+    if count > NEXT_FREEZE_SEG_MAX {
+        return Err(StoreError::CorruptMeta(
+            "freeze segment counter exceeds u32",
+        ));
+    }
+    Ok(count)
+}
+
+/// Read the prune-disabled posture from an already-open meta table.
+/// Absent (and 0) is undeclared; any non-zero is declared — the safe
+/// direction if the cell is corrupt.
+fn prune_disabled_in(meta: &impl ReadableTable<&'static str, u64>) -> Result<bool, StoreError> {
+    Ok(meta
+        .get(META_PRUNE_DISABLED)?
+        .map(|v| v.value())
+        .unwrap_or(0)
+        != 0)
 }
 
 fn recompute_next_freeze_seg(
@@ -3048,9 +3070,9 @@ mod tests {
     /// boundary on the ingest path; advance through the public
     /// [`LeafStore::maybe_freeze_segments`] wrapper.
     #[test]
-    fn frozen_segment_count_is_the_prefix_and_the_table_agrees() {
+    fn next_freeze_seg_is_the_prefix_and_the_table_agrees() {
         let store = LeafStore::open_ephemeral().unwrap();
-        assert_eq!(store.frozen_segment_count().unwrap(), 0);
+        assert_eq!(store.next_freeze_seg().unwrap(), 0);
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_none());
 
         // Segment 0 full and buried, one tail row into segment 1: the
@@ -3059,7 +3081,7 @@ mod tests {
         let mut entries = distinct_segment_entries();
         entries.push(sample_entry(e, 5_000));
         store.append_drained(&entries, BlockHeight(10_000)).unwrap();
-        assert_eq!(store.frozen_segment_count().unwrap(), 1);
+        assert_eq!(store.next_freeze_seg().unwrap(), 1);
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
         assert!(store.frozen_segment(SegmentId(1)).unwrap().is_none());
 
@@ -3067,7 +3089,7 @@ mod tests {
         // boundary and the table crosses with it.
         let more: Vec<LeafEntry> = (e + 1..2 * e).map(|g| sample_entry(g, 5_000)).collect();
         store.append_drained(&more, BlockHeight(20_000)).unwrap();
-        assert_eq!(store.frozen_segment_count().unwrap(), 2);
+        assert_eq!(store.next_freeze_seg().unwrap(), 2);
         assert!(store.frozen_segment(SegmentId(1)).unwrap().is_some());
         assert!(store.frozen_segment(SegmentId(2)).unwrap().is_none());
 
@@ -3075,13 +3097,13 @@ mod tests {
         // the cursor must not advance on completion alone…
         let tail: Vec<LeafEntry> = (2 * e..3 * e).map(|g| sample_entry(g, 19_900)).collect();
         store.append_drained(&tail, BlockHeight(20_000)).unwrap();
-        assert_eq!(store.frozen_segment_count().unwrap(), 2);
+        assert_eq!(store.next_freeze_seg().unwrap(), 2);
         assert!(store.frozen_segment(SegmentId(2)).unwrap().is_none());
 
         // …and advances through the public wrapper once burial is deep
         // enough, table agreeing at the new boundary.
         store.maybe_freeze_segments(BlockHeight(30_000)).unwrap();
-        assert_eq!(store.frozen_segment_count().unwrap(), 3);
+        assert_eq!(store.next_freeze_seg().unwrap(), 3);
         assert!(store.frozen_segment(SegmentId(2)).unwrap().is_some());
         assert!(store.frozen_segment(SegmentId(3)).unwrap().is_none());
     }
@@ -3089,7 +3111,7 @@ mod tests {
     /// The cursor is persisted state, not session state: it survives a
     /// close/reopen unchanged.
     #[test]
-    fn frozen_segment_count_survives_reopen() {
+    fn next_freeze_seg_survives_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("store.redb");
         {
@@ -3097,10 +3119,10 @@ mod tests {
             store
                 .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
                 .unwrap();
-            assert_eq!(store.frozen_segment_count().unwrap(), 1);
+            assert_eq!(store.next_freeze_seg().unwrap(), 1);
         }
         let reopened = LeafStore::open(&path).unwrap();
-        assert_eq!(reopened.frozen_segment_count().unwrap(), 1);
+        assert_eq!(reopened.next_freeze_seg().unwrap(), 1);
         assert!(reopened.frozen_segment(SegmentId(0)).unwrap().is_some());
     }
 
@@ -3109,16 +3131,16 @@ mod tests {
     /// This is the direction where a stale summary would silently omit
     /// owed shards, so the agreement assertion matters most here.
     #[test]
-    fn frozen_segment_count_agrees_after_rollback_recompute() {
+    fn next_freeze_seg_agrees_after_rollback_recompute() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
             .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
             .unwrap();
-        assert_eq!(store.frozen_segment_count().unwrap(), 1);
+        assert_eq!(store.next_freeze_seg().unwrap(), 1);
 
         store.rollback_to_fork(BlockHeight(500)).unwrap();
         assert_eq!(
-            store.frozen_segment_count().unwrap(),
+            store.next_freeze_seg().unwrap(),
             0,
             "the truncate path recomputed the cursor below the fork"
         );
@@ -3135,7 +3157,7 @@ mod tests {
     /// and must still be returned, or the check would be refusing a legal
     /// state rather than detecting an illegal one.
     #[test]
-    fn frozen_segment_count_reports_a_cursor_beyond_segment_id_space_as_corrupt() {
+    fn next_freeze_seg_reports_a_cursor_beyond_segment_id_space_as_corrupt() {
         let store = LeafStore::open_ephemeral().unwrap();
 
         let plant = |value: u64| {
@@ -3149,17 +3171,14 @@ mod tests {
 
         // Boundary: representable, returned.
         plant(u64::from(u32::MAX) + 1);
-        assert_eq!(
-            store.frozen_segment_count().unwrap(),
-            u64::from(u32::MAX) + 1
-        );
+        assert_eq!(store.next_freeze_seg().unwrap(), u64::from(u32::MAX) + 1);
 
         // One past it: no u32-keyed frozen table can agree with this
         // cursor, so the getter must surface corruption instead of
         // handing the serve-set derivation an impossible obligation.
         plant(u64::from(u32::MAX) + 2);
         assert!(matches!(
-            store.frozen_segment_count(),
+            store.next_freeze_seg(),
             Err(StoreError::CorruptMeta(_))
         ));
     }
