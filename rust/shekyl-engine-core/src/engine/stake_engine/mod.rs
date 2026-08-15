@@ -55,6 +55,11 @@ mod persona;
 mod retire;
 mod scan;
 pub(crate) mod serve_set_source;
+// SH-2b-2: the serving host's lifecycle — the §10.9-independent launch, the
+// refresh cadence, and the ordered teardown. Lives under `stake_engine/`
+// because the host's identity and its serve-set both come from persona state,
+// and because `engine/mod.rs` sits at its decomposition ceiling.
+pub(crate) mod serving;
 mod types;
 
 #[cfg(test)]

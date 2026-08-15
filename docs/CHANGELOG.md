@@ -22,6 +22,66 @@
   FOLLOWUPS' thirteen stray plus-bullet wraps mechanically rejoined
   (whitespace-normalized content verified identical).
 
+- **The persona serving host is wired: a staker's wallet now starts one**
+  (SH-2b-2). `Engine::start_serving_if_staker` is the sibling of
+  `start_pscan_if_staker`, and the embedder parks both handles together
+  in an `OpenTasks` bundle rather than as separate positional handles —
+  they have one lifetime, are created together and torn down together,
+  so a third task costs a field rather than a parameter on every
+  lifecycle signature. Shutdown is **serving first**: stopping the
+  advertisement before the scan, for the same reason the host stops tor
+  before its listener — a published descriptor must never outlive the
+  ability to answer at it. Fail-closed at open, like the P-scan. A
+  staker with no *active* persona gets `Ok(None)`: there is nothing to
+  serve until one is activated, and first-stake mid-session already
+  collapses onto reopen under Model D. Serving derives its serve-set
+  over a persona-isolated transport, which today means the ① local
+  posture — so a daemon that is not on loopback is refused with the
+  remedy named, rather than serving a set derived over the principal's
+  shared connection. The `<P>.wallet.tor` path helper joins
+  `shekyl-engine-file`'s companion family (`.curvetree`, `.pscan`,
+  `.pending`) rather than the prefs crate: it is wallet *data*, and the
+  family appends to the full base path.
+
+- **The wallet can configure a Tor service, and almost none of it is a
+  setting** (SH-2b-2). `PersonaServingHost::start` needs a
+  `TorServiceConfig`, and the wallet had no surface for one. The
+  organizing principle for the surface it now has: **every knob is a
+  fingerprint** — DQ-T0.7's argument about data-directory rotation, that
+  deviation from defaults is itself a signature, generalizes across the
+  whole struct — so the default answer is derive-or-inherit and exposure
+  needs a reason. The three fields get three different answers. The
+  **data directory is derived**, `<P>.tor/` off the same stem
+  `<P>.prefs.toml` uses: that satisfies DQ-T0.7's wallet-adjacent /
+  wallet-controlled / non-world-writable requirements by construction,
+  and it forecloses the linkage a configurable path invites — a shared
+  Tor directory is a shared entry-guard set, which cross-links every
+  persona served through it. The **binary source is discovery**, with a
+  single override (`device.tor_binary_path`, `PREFS_SCHEMA_VERSION`
+  3→4) because it is the one item where the operator holds information
+  the wallet cannot derive; the hash gate runs on whatever it resolves
+  to, so an override selects which candidate is gated, never whether.
+  The **supervisor policy gets no surface at all** — backoff,
+  `degrade_after`, `bootstrap_deadline` and `trust_retry` are observable
+  in retry timing, so an operator-tuned supervisor is a distinguishable
+  client. There is deliberately **no serve-or-not toggle**: a staker with
+  holdings that does not serve accrues misses and slashes, so the bond is
+  the decision, not a preference.
+
+- **A staker whose serving path cannot be configured does not open**
+  (SH-2b-2). Same fail-closed posture as `wrap_and_start_pscan`, for the
+  same reason: opening with serving dark is opening into an accruing
+  slash the operator cannot see. The derived directory is created
+  **private** rather than umask-shaped — `create_dir_all` honours the
+  umask, which typically yields `0o775`, leaving entry-guard state
+  group-writable — and a *pre-existing* directory that is group- or
+  world-writable is refused rather than silently tightened, because the
+  wallet did not create it and does not know what else relies on its
+  mode. A `device.tor_binary_path` that names no file on this machine
+  falls back to discovery with one warning rather than failing: the prefs
+  file travels with the wallet cluster, and a moved wallet must not
+  break.
+
 - **Untrusted numeric conversions: one live over-reservation fixed, the
   cast gate made real at the trust boundary (SA-6, SA-R-7 — ratified
   2026-08-14).** The

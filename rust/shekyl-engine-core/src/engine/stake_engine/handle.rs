@@ -209,7 +209,6 @@ impl StakeEngineHandle {
     /// Yields an `OnionIdentity` and never the seed: see
     /// [`PersonaOnionIdentityOf`] for the §7.2(iii) custody ruling that decides
     /// which secret is allowed to cross into a serving role.
-    #[allow(dead_code)] // inert until SH-2b-2 starts a host
     pub(crate) async fn persona_onion_identity(
         &self,
         p_slot: PSlot,
