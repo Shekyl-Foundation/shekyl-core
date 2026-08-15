@@ -65,7 +65,13 @@
 pub mod driver;
 pub mod stem_watch;
 pub mod zone;
+pub mod zone_route;
 
 pub use driver::{Driver, Effect};
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
 pub use zone::{FluffReach, PeerFluff, RelayPlan, TxBlob, Zone};
+pub use zone_route::{
+    is_pre_fluff_relay, once_at_origin_route, originated_stays_in_zone,
+    originated_zone_from_anonymity_roll, r1_coherence_keeps_origin, NetZone, RelayMethod,
+    ZoneRouteDecision,
+};

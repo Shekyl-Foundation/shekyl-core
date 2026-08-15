@@ -31,6 +31,7 @@
 #include <cstdint>
 
 #include "net/enums.h"
+#include "shekyl/shekyl_ffi.h"
 
 namespace cryptonote
 {
@@ -61,6 +62,27 @@ namespace cryptonote
      `upgrade_relay_method`'s monotonicity, whose `static_assert`s moved with
      the deletion. */
 
+  /* The once-at-origin decision family below FORWARDS to Rust
+     (`shekyl-relay::zone_route`, rule 20): the semantics live beside every
+     sibling relay decision and their governing parameter, and the tables that
+     pin them run in that crate's own test suite. C++ keeps two things — the
+     `zone_route` compile-time token (the seam guard `send_txs` requires), and
+     these byte-contract asserts. Each side pins its OWN enums to the shared
+     documented literals at compile time (Rust's pins are `const` asserts in
+     `zone_route.rs`) -- neither compiler can observe the other, so the pair
+     of pins is what makes a renumbering a compile error on the side that
+     renumbered. The runtime witness that both pins describe the same wire is
+     the `levin.cpp` gtest table, which crosses the real FFI. */
+  static_assert(unsigned(relay_method::none) == 0 && unsigned(relay_method::local) == 1
+             && unsigned(relay_method::stem) == 2 && unsigned(relay_method::fluff) == 3
+             && unsigned(relay_method::block) == 4,
+    "relay_method bytes are the FFI contract with shekyl-relay::zone_route");
+  static_assert(unsigned(epee::net_utils::zone::invalid) == 0
+             && unsigned(epee::net_utils::zone::public_) == 1
+             && unsigned(epee::net_utils::zone::i2p) == 2
+             && unsigned(epee::net_utils::zone::tor) == 3,
+    "zone bytes are the FFI contract with shekyl-relay::zone_route");
+
   /*! \brief Pre-fluff relay methods for R-1 (stem / local).
 
       Fluff is the deliberate exit from the anonymity zone: once a transaction
@@ -69,10 +91,9 @@ namespace cryptonote
       witness share one predicate — the suite cannot drive a full
       `handle_notify_new_transactions` arrival on a non-public context yet
       (FOLLOWUPS / §89.7), but it can pin this gate. */
-  constexpr bool is_pre_fluff_relay(const relay_method method) noexcept
+  inline bool is_pre_fluff_relay(const relay_method method) noexcept
   {
-    return method == relay_method::stem
-        || method == relay_method::local;
+    return shekyl_relay_zone_is_pre_fluff_relay(static_cast<std::uint8_t>(method));
   }
 
   /*! \brief Originated traffic on an anonymity zone keeps its `local` txpool
@@ -95,13 +116,12 @@ namespace cryptonote
       that traffic's home — the roll is eligibility, not a drop commitment
       (§59.7). Clearnet origins are excluded too: `local` on the public zone has
       always recorded `stem`, and its home *is* clearnet. */
-  constexpr bool originated_stays_in_zone(
+  inline bool originated_stays_in_zone(
     const relay_method tx_relay,
     const epee::net_utils::zone nzone) noexcept
   {
-    return tx_relay == relay_method::local
-        && nzone != epee::net_utils::zone::public_
-        && nzone != epee::net_utils::zone::invalid;
+    return shekyl_relay_zone_originated_stays_in_zone(
+      static_cast<std::uint8_t>(tx_relay), static_cast<std::uint8_t>(nzone));
   }
 
   /*! \brief R-1 coherence: keep a still-stemming transaction on its arrival
@@ -111,13 +131,12 @@ namespace cryptonote
       anonymity network. Clearnet never coheres to itself via this path; invalid
       origin never coheres; fluff never coheres (liveness exit). The caller still
       checks that the zone is present in the local zone map before sending. */
-  constexpr bool r1_coherence_keeps_origin(
+  inline bool r1_coherence_keeps_origin(
     const relay_method tx_relay,
     const epee::net_utils::zone origin) noexcept
   {
-    return is_pre_fluff_relay(tx_relay)
-        && origin != epee::net_utils::zone::public_
-        && origin != epee::net_utils::zone::invalid;
+    return shekyl_relay_zone_r1_coherence_keeps_origin(
+      static_cast<std::uint8_t>(tx_relay), static_cast<std::uint8_t>(origin));
   }
 
   /*! \brief Where `node_server::send_txs` should place a transaction under
@@ -153,37 +172,27 @@ namespace cryptonote
   private:
     decision k_;
     explicit constexpr zone_route(decision k) noexcept : k_(k) {}
-    friend constexpr zone_route once_at_origin_route(
+    friend zone_route once_at_origin_route(
       const relay_method, const epee::net_utils::zone) noexcept;
   };
 
-  constexpr zone_route once_at_origin_route(
+  inline zone_route once_at_origin_route(
     const relay_method tx_relay,
     const epee::net_utils::zone origin) noexcept
   {
-    if (r1_coherence_keeps_origin(tx_relay, origin))
-      return zone_route(zone_route::decision::keep_arrival);
-    if (origin == epee::net_utils::zone::invalid && is_pre_fluff_relay(tx_relay))
-      return zone_route(zone_route::decision::anonymity_fail_closed);
-    return zone_route(zone_route::decision::public_clearnet);
+    static_assert(unsigned(zone_route::decision::keep_arrival) == 0
+               && unsigned(zone_route::decision::anonymity_fail_closed) == 1
+               && unsigned(zone_route::decision::public_clearnet) == 2,
+      "decision bytes are the FFI contract with shekyl-relay::zone_route");
+    switch (shekyl_relay_zone_once_at_origin_route(
+      static_cast<std::uint8_t>(tx_relay), static_cast<std::uint8_t>(origin)))
+    {
+      case 0: return zone_route(zone_route::decision::keep_arrival);
+      case 2: return zone_route(zone_route::decision::public_clearnet);
+      /* 1, and defensively anything else: fail closed — send nothing is the
+         one default that cannot leak (§30.5). */
+      default: return zone_route(zone_route::decision::anonymity_fail_closed);
+    }
   }
 
-  /*! \brief Map the origination roll onto the zone argument `send_txs` reads.
-
-      `true` (take anonymity) → `invalid`, which `once_at_origin_route` treats
-      as fail-closed. `false` (clearnet **by design**) → `public_`.
-
-      These two must stay distinguishable from "chose anon, zone unusable":
-      that path never produces a `public_` origin argument, it sends nothing.
-      Pool re-relays of `local` keep passing `invalid` and do **not** re-roll
-      — they share this mapping's fail-closed arm, which is why the roll
-      lives at first origination (`daemon_submit::relay_tx`) rather than on
-      every `source.is_nil()` call into `send_txs`. */
-  constexpr epee::net_utils::zone originated_zone_from_anonymity_roll(
-    const bool take_anonymity) noexcept
-  {
-    return take_anonymity
-      ? epee::net_utils::zone::invalid
-      : epee::net_utils::zone::public_;
-  }
 }

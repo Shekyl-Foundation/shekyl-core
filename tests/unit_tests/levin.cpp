@@ -711,31 +711,11 @@ TEST(once_at_origin_route, table)
               cryptonote::once_at_origin_route(relay_method::fluff, zone::invalid).get());
 }
 
-/* The origination roll's two outcomes must stay distinguishable from each
-   other and from "chose anon, zone unusable". What edit reds it: swap the
-   ternary in `originated_zone_from_anonymity_roll`. */
-TEST(originated_zone_from_anonymity_roll, the_two_outcomes_are_distinct)
-{
-    using epee::net_utils::zone;
-
-    EXPECT_EQ(zone::invalid, cryptonote::originated_zone_from_anonymity_roll(true));
-    EXPECT_EQ(zone::public_, cryptonote::originated_zone_from_anonymity_roll(false));
-    EXPECT_NE(
-      cryptonote::originated_zone_from_anonymity_roll(true),
-      cryptonote::originated_zone_from_anonymity_roll(false));
-
-    // Fail-closed (unusable chosen zone) never produces `public_`.
-    EXPECT_EQ(
-      cryptonote::zone_route::decision::anonymity_fail_closed,
-      cryptonote::once_at_origin_route(
-        cryptonote::relay_method::local,
-        cryptonote::originated_zone_from_anonymity_roll(true)).get());
-    EXPECT_EQ(
-      cryptonote::zone_route::decision::public_clearnet,
-      cryptonote::once_at_origin_route(
-        cryptonote::relay_method::local,
-        cryptonote::originated_zone_from_anonymity_roll(false)).get());
-}
+/* The roll's zone mapping moved fully behind the FFI
+   (`shekyl_relay_zone_roll_originated_zone`, one crossing). Its two former
+   witnesses here have owners: outcome distinctness is `roll_mapping_preserves
+   _the_design_fallback_distinction` in `shekyl-relay::zone_route`, and the
+   byte-to-`epee` cast contract is the `static_assert` block in `enums.h`. */
 
 /* Zone-labelled stem tally. Production `stem_tallies_json` calls this.
    What edit reds it: omit the `"zone"` key from `format_stem_tally_row_json`.

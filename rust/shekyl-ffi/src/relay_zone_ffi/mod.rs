@@ -701,10 +701,23 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_in_flight(handle: *const RelayZo
 /// not *whether the transaction is still stemming*. A transaction that has
 /// fluffed must leave the zone, or one that entered over Tor never reaches
 /// the public network.
+/// R-1 origination roll AND its zone mapping, one crossing (rule 40's
+/// coarse-call rule): draws whether this ORIGINATED transaction takes the
+/// anonymity zone and returns the zone byte `send_txs` reads — `invalid` (0,
+/// fail-closed anonymity) or `public_` (1, clearnet BY DESIGN, not fallback).
+///
+/// Replaces the `shekyl_relay_zone_divert_originated_tx` +
+/// `shekyl_relay_zone_originated_zone_from_anonymity_roll` pair, whose only
+/// caller fed the first's bool straight into the second — a Rust-owned value
+/// crossing to C++ only to cross straight back for a two-arm map. The rate
+/// and the mapping both stay in Rust; a zone byte crosses, not a probability
+/// and not an intermediate verdict. Relayed traffic does not call this; it
+/// inherits its arrival zone.
 #[no_mangle]
-pub extern "C" fn shekyl_relay_zone_divert_originated_tx() -> bool {
+pub extern "C" fn shekyl_relay_zone_roll_originated_zone() -> u8 {
     let mut rng = SecureRelayRng;
-    shekyl_relay_privacy::divert_to_anonymity_zone(&mut rng)
+    let take = shekyl_relay_privacy::divert_to_anonymity_zone(&mut rng);
+    shekyl_relay::zone_route::originated_zone_from_anonymity_roll(take) as u8
 }
 
 /// The outbound-connection floor the embargo provisioning assumes (F-8b, §45).
@@ -732,6 +745,86 @@ pub extern "C" fn shekyl_relay_zone_min_provisioned_out_peers() -> u32 {
 #[no_mangle]
 pub extern "C" fn shekyl_p2p_default_out_peers() -> u32 {
     shekyl_relay_privacy::params::P2P_DEFAULT_OUT_PEERS
+}
+
+// ---------------------------------------------------------------------------
+// Once-at-origin zone routing (Q12-D5a; Q12_D6A_PEER_DISCOVERY_RUN.md §§12, 18)
+//
+// The decision family moved from C++ `cryptonote_protocol/enums.h` under rule
+// 20; C++ keeps the `zone_route` compile-time token as a seam guard whose body
+// forwards here. Bytes cross raw and are `static_assert`ed on the C++ side
+// against `relay_method`, `epee::net_utils::zone` and `zone_route::decision`.
+//
+// Unknown bytes are a caller bug (same process, asserted contract), and they
+// map to the SAFE arm — fail-closed / false — never to a guess that could put
+// a transaction on clearnet. Refuse-to-leak is this family's whole invariant
+// (§30.5), so the defensive default is the invariant itself.
+// ---------------------------------------------------------------------------
+
+/// Q12-D5a once-at-origin routing: `(relay_method byte, zone byte)` → decision
+/// byte (0 = keep_arrival, 1 = anonymity_fail_closed, 2 = public_clearnet).
+///
+/// Unknown method or zone bytes return `1` (fail-closed: send nothing).
+#[no_mangle]
+pub extern "C" fn shekyl_relay_zone_once_at_origin_route(tx_relay: u8, origin_zone: u8) -> u8 {
+    use shekyl_relay::zone_route::{once_at_origin_route, NetZone, RelayMethod};
+    match (
+        RelayMethod::from_byte(tx_relay),
+        NetZone::from_byte(origin_zone),
+    ) {
+        (Some(m), Some(z)) => once_at_origin_route(m, z) as u8,
+        _ => shekyl_relay::zone_route::ZoneRouteDecision::AnonymityFailClosed as u8,
+    }
+}
+
+/// §30.5 / §89.8: an origin on a non-public zone keeps its `local` txpool
+/// record whatever the transport did.
+///
+/// # Unknown-byte policy — and why `false` is NOT the safe arm here
+///
+/// For this predicate the leak direction is inverted relative to its
+/// siblings: `false` on a `local` origin lets the record upgrade to
+/// `stem`/`fluff` (`levin_notify.cpp`'s record site), and the monotone
+/// upgrade means the next pool re-relay places the entry in `public_req` —
+/// an anonymity-origin transaction on clearnet. So an unknown **zone** byte
+/// on a decodable `local` origin returns `true`: a zone this build cannot
+/// decode is not provably public, and keeping `local` fail-closes later
+/// (pool re-relay → `invalid` → send nothing). The cost is liveness on a
+/// zone that does not exist; the alternative is the §30.5 leak. An unknown
+/// **method** byte returns `false` — no `local` claim is invented for a
+/// class this build cannot name.
+#[no_mangle]
+pub extern "C" fn shekyl_relay_zone_originated_stays_in_zone(tx_relay: u8, nzone: u8) -> bool {
+    use shekyl_relay::zone_route::{originated_stays_in_zone, NetZone, RelayMethod};
+    match (RelayMethod::from_byte(tx_relay), NetZone::from_byte(nzone)) {
+        (Some(m), Some(z)) => originated_stays_in_zone(m, z),
+        (Some(RelayMethod::Local), None) => true,
+        _ => false,
+    }
+}
+
+/// Pre-fluff relay methods (stem / local). Unknown bytes return `false`.
+#[no_mangle]
+pub extern "C" fn shekyl_relay_zone_is_pre_fluff_relay(tx_relay: u8) -> bool {
+    shekyl_relay::zone_route::RelayMethod::from_byte(tx_relay)
+        .is_some_and(shekyl_relay::zone_route::is_pre_fluff_relay)
+}
+
+/// R-1 coherence: pre-fluff on a real anonymity origin. Unknown bytes return
+/// `false` (no coherence claim is invented for a zone that does not decode).
+#[no_mangle]
+pub extern "C" fn shekyl_relay_zone_r1_coherence_keeps_origin(
+    tx_relay: u8,
+    origin_zone: u8,
+) -> bool {
+    use shekyl_relay::zone_route::{r1_coherence_keeps_origin, NetZone, RelayMethod};
+    match (
+        RelayMethod::from_byte(tx_relay),
+        NetZone::from_byte(origin_zone),
+    ) {
+        (Some(m), Some(z)) => r1_coherence_keeps_origin(m, z),
+        _ => false,
+    }
 }
 
 #[no_mangle]
