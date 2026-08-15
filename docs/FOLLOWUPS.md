@@ -9582,6 +9582,18 @@ its wake.
   Owned by the wallet rewrite (this constant dies with `wallet2.cpp`); recorded
   now because the reason is visible now. See `DAEMON_RELAY_PRIVACY.md` §89.6.
 
+- **Relay: the D9 below-floor diagnostic (§18.4, ruled 2026-08-15).** The
+  runtime check no longer gates stemming — §17 overturned `x = 0`, §18 ruled
+  *stem anyway* — and what remains to build is the diagnostic: a warn-level
+  log line on the below-floor/recovery transitions, a field on the
+  stem-tallies snapshot (**admin-only listener, same posture and rationale as
+  `stem_tallies_json` — never the public RPC surface**), and the count crossing
+  as a named type (outbound *connections*, §16.6). Rust-owned per rule 20; no
+  wire change, no conformance-vector movement. The §18.3 principle is the
+  review test: the achieved count may change what the operator sees, never
+  what the network sees. Also note: §18.6 discharges the concurrency bar on
+  the `fluff_return_ms` landing below — the two no longer share vectors.
+
 - **Relay: re-derive `fluff_return_ms` once, when a degree distribution
   exists.** The convergence criterion landed 2026-08-13
   (`conformance::converged_fluff_return_mixed`, §90), and it says the shipped

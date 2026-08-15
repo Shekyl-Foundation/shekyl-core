@@ -9,7 +9,9 @@ cannot be faked."*
 **Status: the `{15, 30, 60}` sweep (§§13–15) and Q12-R5's late-joiner control
 (§15.2) are RUN, 2026-08-14, and every readout is committed. §16 settles what
 the floor actually counts and CLOSES the distinctness question; §17 discharges
-§16.4's gate and overturns D9(b)'s implementation.**
+§16.4's gate and overturns D9(b)'s implementation; §18 re-rules D9 — stem
+anyway, the check becomes an admin-only diagnostic, and the achieved count
+never selects wire behavior.**
 
 Corrected twice, and the second correction supersedes the first. This line
 originally read *"No VM stood up, no arm run"*, which its own body had already
@@ -1938,7 +1940,7 @@ carry an embargo too short for the graph they traverse.
 | --- | --- |
 | **stem anyway** | **rejected** — ships a known-invalid provisioning to the operator who chose Tor, invisibly. §75's shape: the failure has no feedback channel. |
 | **hold** | **rejected** — at `A ≤ 12` this is not a transient stall but *every* Tor node holding indefinitely on a young network. A liveness failure dressed as caution. |
-| **don't stem (`x = 0`)** | **chosen** — the node stops stemming until the floor is met. |
+| **don't stem (`x = 0`)** | ~~**chosen**~~ **OVERTURNED 2026-08-15** — chosen here, measured in §17, re-ruled in §18: the node **stems anyway**, and the check becomes a local diagnostic. This row is kept as written because the reasoning above it was sound on the premise it had; the premise is what §17.6 removed. |
 
 The trade is a real cost against an invisible one: an invalid embargo is a
 **stranger's** cost and unobservable, where `x = 0`'s exposure is the
@@ -1964,6 +1966,10 @@ so.
 - **Refuse, don't clamp.** If the anonymity zone cannot satisfy the condition
   its constants were derived under, it is not used — a **state the code
   represents**, not a threshold it approximates. Same device as the depth table.
+  *(Superseded as a runtime rule, 2026-08-15: "is not used" was `x = 0`, which
+  §17 overturned. The bullet survives at the **configuration** surface — the
+  parser/startup refusal — per §18.3's operator-controls/adversary-influences
+  split.)*
 
 ### 12.3 What it makes the run
 
@@ -1978,7 +1984,12 @@ Tor-capable nodes the anonymity stem does not engage**, and Tor delivers
 IP-hiding at the transport layer without the stem. A degradation with a floor,
 not a silent regression.
 
-### 12.4 RESOLVED — `x = 0` keeps the zone and drops only the stem (reading (b))
+### 12.4 ~~RESOLVED~~ SUPERSEDED — `x = 0` keeps the zone and drops only the stem (reading (b))
+
+> **Superseded 2026-08-15.** The mechanics below are correct as mechanics and
+> are kept for the record; the ruling they implement was overturned by
+> measurement (§17) and re-ruled (§18). Nothing implements reading (b) or any
+> other `x = 0` variant.
 
 **The ruling says the node "routes clearnet, which exposes its IP as a relay
 source". For *relayed* traffic that is right and costless — its home was always
@@ -2069,6 +2080,11 @@ was an unexamined default nobody had noticed.
 **Q12-U2 is unblocked.**
 
 ### 12.5 Q12-D9 stands. The retraction that was owed was mine, and it was wrong
+
+> **Scope note, 2026-08-15:** what this section defends — that the live
+> below-floor check *exists* and its quantity is real — survives §17/§18
+> intact. What changed is the check's **consequence**: it no longer gates
+> stemming (§18.4).
 
 **2026-08-13.** A conclusion had been carried since the A = 15 arm that §12.2's
 *live* below-floor check should be **dropped**, on the ground that *"no
@@ -3040,7 +3056,8 @@ supplies that condition unaided 47.9 % of the time at `A = 15` and 15.8 % at
 ### 17.5 Consequence for §12.2, which can now be drafted
 
 The gate is discharged, so the dependency §16.4 recorded is released — but not
-to the section §12.1 anticipated:
+to the section §12.1 anticipated. **Drafted: §18 (2026-08-15).** The
+constraints below are the ones it was drafted under:
 
 1. **`x = 0` is not the remedy for below-floor.** It buys an invalid-embargo
    argument at the price of certain origin attribution, against a measured 88 %
@@ -3121,3 +3138,124 @@ worse off — its own transactions still spread over fewer out-edges, which is a
 real effect on quantity (b) and is what §17.2's curve legitimately measures.
 §12.2 may still find a reason to act on out-degree; it may not use *"its
 embargo is under-provisioned"* as that reason.
+
+---
+
+## 18. Q12-D9 re-ruled — stem anyway, and the check loses its wire effect
+
+**Drafted 2026-08-15, discharging §17.5's obligation.** This is the §12.2 the
+measurement permits, and it is not the section §12.1 anticipated. The
+constraints it is drafted under are the ones already on the record: `x = 0` is
+overturned (§17), the two rejected candidates reopen **asymmetrically** (§17.5),
+the design is evaluated against an adversary who *wants* the check to fire
+(§16.3), and the floor is a self-provisioning check, never a sybil defense
+(§16.5–16.6).
+
+### 18.1 The re-ranking
+
+| candidate | verdict, with what changed since §12.1 |
+| --- | --- |
+| **`x = 0`** (don't stem → fluff at origin) | **OVERTURNED** (§17). Creates a leak that would not otherwise happen in ~88 % of originations, on a branch an adversary can force for free. |
+| **hold** | **Rejection STRENGTHENED, on three grounds.** (a) §12.1's original liveness ground stands. (b) Below-floor is *modal*, not exceptional — 47.9 % / 15.8 % / 14.8 % of settled samples at `A = 15/30/60` (§15.1), so "hold until healthy" is "originate rarely" on a young network. (c) **New, from §16.3's adversary model: hold is adversary-triggerable censorship.** An adversary who occupies outbound slots, or simply waits, converts the victim into a node that cannot transact — at zero cost, with a timing tell on top (withheld transactions burst on recovery). A remedy the adversary can invoke against the operator is not a remedy. |
+| **stem anyway** | **ADOPTED.** Reopened on its merits (§17.5) and now ruled in, on the dominance argument below plus the measured margins. |
+
+### 18.2 Why *stem anyway* — dominance, not preference
+
+The two costs §12.1 priced against it, re-priced by the measurements:
+
+**The embargo cost is near-zero.** *"Its own transactions carry an embargo too
+short for the graph they traverse"* was the load-bearing sentence, and §17.6
+killed it: a node's own fluff return is governed by its **in-degree**, which its
+own out-degree does not touch, and the fleet-measured below-floor in-degree
+deficit is **0.30 links** — an α shortfall of ~0.4 points, not a cliff.
+
+**The attribution cost is real and still dominated.** Falling out-degree `d`
+raises the chance the epoch's stem successor is adversarial (`k/d` rather than
+`k/12`) — at `d = 1`, interception is certain if the sole link is hostile. But
+**origin/relay ambiguity survives interception**: a successor seeing a stem
+cannot tell origination from relay, which is the ambiguity Dandelion++ is built
+on. Fluff-at-origin surrenders exactly that, to *every* attacker link, at
+precision ≈ 1. So on the attribution axis, **stemming weakly dominates
+fluff-at-origin at every out-degree `d ≥ 1`** — interception probability
+degrades gracefully; attribution certainty is a cliff the node never needs to
+step off.
+
+**Honesty about the range.** The α instrument refuses at `d ∈ {1, 2}`
+(whole-network stranding, §17.2), so the measured margins cover degrees 4–12.
+The ruling at 1–2 rests on the two structural legs alone — in-degree governs
+the embargo, ambiguity survives interception — both of which are
+degree-independent. Ruled by dominance, with α as the margin where it exists.
+
+**The real cost of low degree, recorded rather than hidden.** At `d = 1` the
+sole successor accumulates the victim's **entire origination timeline** across
+epochs — the guard-node shape (the SP-T3 finding: one guard sees the node's
+whole emission timeline). Per-transaction ambiguity survives; longitudinal
+volume and timing analysis strengthens. This argues for **provisioning** —
+the configured floor, more peers, the R13 retry fixes — and not for refusing
+to stem, because the alternative on offer hands the same adversary *more*.
+
+### 18.3 The design principle this generalizes to
+
+> **Gate on what the operator controls; only observe what the adversary can
+> influence.**
+
+§16.3's lesson, stated as a rule the next check can be tested against. The
+*configured* cap is the operator's own act: an adversary cannot set
+`--tx-proxy`'s count, so **F-8b's parser/startup refusal stands unchanged** —
+refuse-don't-clamp at the configuration surface, exactly as shipped. The
+*achieved* count is adversary-influenceable — occupy slots, be unreachable,
+wait — so **it must never select wire-visible behavior**: any branch it picks
+is an oracle the adversary fires at will, which is the entire §16.3 → §17
+arc in one sentence.
+
+This also resolves §12.2's two bullets without discarding either:
+*"live, not once at startup"* survives — the live quantity feeds the
+diagnostic below; *"refuse, don't clamp"* survives **at the configuration
+surface only** — as a runtime rule it was `x = 0`, and it is overturned.
+
+### 18.4 What D9's check becomes — a local diagnostic, exactly
+
+The check §12.5 defended still exists; what changed is its **consequence**.
+
+- **Reads** the achieved outbound anonymity-connection count, live (§12.2's
+  surviving bullet).
+- **Writes** operator-facing state only: a warn-level log line on the
+  below-floor transition (and on recovery), and a field on the existing
+  stem-tallies snapshot — which is already **admin-only by posture**
+  (`core_rpc_server.h`: *"Must not be registered on the restricted (public)
+  listener"*, with the Sharma probe-cost rationale). The diagnostic joins that
+  surface under the same restriction. **It must never appear on the public
+  RPC surface** — a remotely readable below-floor bit is a free targeting
+  oracle (§16.3) and a census input (§16.5).
+- **Changes no wire behavior.** Nothing in `select_anonymity()`, any arm of
+  `send_txs`, the stem/fluff decision, or the embargo consults it — the pin
+  recorded before this section was drafted, now satisfied structurally rather
+  than by discipline: the count simply has no consumer on those paths.
+- **Carries its name in its type.** When plumbed, the count crosses as a type
+  that says what it counts — outbound **connections**, not peers (§16.6 item
+  3; the `read_ids(...)` → `peers` mislabel is the standing example).
+
+### 18.5 Refused in advance
+
+- **Degree-adaptive embargo** — scaling the embargo by the achieved count would
+  let the adversary *write the victim's connection count onto the wire*:
+  embargo length is measurable from fluff timing (the
+  `zone_embargo_disclosure` instrument exists because of exactly this), and
+  the achieved count is theirs to influence. Same shape as §16.5's sybil
+  refusal: a robustness argument purchasing an oracle. Also unnecessary on the
+  measurement — the under-provisioning it would correct is ~0.4 points.
+- **Any future wire-visible consumer of the achieved count**, whatever its
+  rationale, re-opens §16.3 and must be argued against this section, not past
+  it.
+
+### 18.6 Consequences outside this section
+
+- **The `fluff_return_ms` sequencing constraint is discharged by
+  construction.** §16.4 barred concurrency because D9's remedy might have
+  moved the same conformance vectors as the 3500 ms landing. As ruled, this
+  change moves **no derived number** — no embargo, no timeout, no pin — so the
+  §90.4 landing decision is free to proceed on its own schedule.
+- **What implementation owes** (registered per rule 94, Rust-owned per rule
+  20): the diagnostic slice — transition logging, the admin-surface field, and
+  the named count type at the boundary it crosses. No consensus surface, no
+  wire change, no C++ beyond the existing snapshot plumbing it rides.
