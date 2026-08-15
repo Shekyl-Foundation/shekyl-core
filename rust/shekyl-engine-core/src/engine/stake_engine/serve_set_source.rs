@@ -151,7 +151,14 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             .map_err(|e| format!("serve-set pin failed: {e:?}"))?;
 
         Ok(PinReport {
-            shard_ids,
+            // Compile-fix only for the slice-2 PinReport reshape: this
+            // pinner still derives explicit holdings, so it reports the
+            // list arm; the CompleteTree prefix arm is slice 3's, where the
+            // refusal above is replaced.
+            set: shekyl_p_host::ReportedSet::ShardList {
+                shard_ids,
+                outcomes,
+            },
             // The height the daemon read the record at — the set's
             // provenance, and deliberately the reply's own height rather than
             // anything measured locally: it says at what height this shard
@@ -173,7 +180,6 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
                 .chain_height
                 .tip()
                 .map_or(BlockHeight(0), |h| BlockHeight(h.to_raw())),
-            outcomes,
             reader,
         })
     }
@@ -277,8 +283,15 @@ mod tests {
 
         let report = pinner.pin_serve_set().await.expect("pin");
 
+        let shekyl_p_host::ReportedSet::ShardList {
+            shard_ids,
+            outcomes,
+        } = report.set
+        else {
+            panic!("explicit holdings report the list arm");
+        };
         assert_eq!(
-            report.shard_ids,
+            shard_ids,
             vec![4, 9],
             "the set is the connected record's holdings, not anything held locally"
         );
@@ -288,8 +301,7 @@ mod tests {
             "chain_height is a COUNT; the stamp is the tip it describes, one lower"
         );
         assert_eq!(
-            report
-                .outcomes
+            outcomes
                 .iter()
                 .map(|(shard_id, _)| *shard_id)
                 .collect::<Vec<_>>(),
@@ -297,8 +309,7 @@ mod tests {
             "outcomes come back covering the reported set, in the record's order"
         );
         assert!(
-            report
-                .outcomes
+            outcomes
                 .iter()
                 .all(|(_, pin)| *pin == SegmentPin::PinnedNotYetFrozen),
             "an empty store has frozen nothing, so bonding is ahead of the freeze"
@@ -319,8 +330,15 @@ mod tests {
             .await
             .expect("no bond is not an error");
 
-        assert!(report.shard_ids.is_empty());
-        assert!(report.outcomes.is_empty());
+        let shekyl_p_host::ReportedSet::ShardList {
+            shard_ids,
+            outcomes,
+        } = report.set
+        else {
+            panic!("an unbonded persona reports the (empty) list arm");
+        };
+        assert!(shard_ids.is_empty());
+        assert!(outcomes.is_empty());
         assert_eq!(report.as_of_height, BlockHeight(30_000));
     }
 
@@ -364,8 +382,15 @@ mod tests {
             .pin_serve_set()
             .await
             .expect("an empty ShardSetCompact owes nothing and is not an error");
-        assert!(report.shard_ids.is_empty());
-        assert!(report.outcomes.is_empty());
+        let shekyl_p_host::ReportedSet::ShardList {
+            shard_ids,
+            outcomes,
+        } = report.set
+        else {
+            panic!("an empty ShardSetCompact reports the (empty) list arm");
+        };
+        assert!(shard_ids.is_empty());
+        assert!(outcomes.is_empty());
     }
 
     /// An empty chain has no tip. `ChainCount(0).tip()` is `None`, and the

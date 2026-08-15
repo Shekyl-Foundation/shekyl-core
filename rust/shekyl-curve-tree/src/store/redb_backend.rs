@@ -246,6 +246,21 @@ impl ServingReader {
         self.store.members_missing_pins(shard_ids)
     }
 
+    /// Whether the prune-disabled posture is declared — see
+    /// [`LeafStore::prune_disabled`], of which this is a pure read-only
+    /// forward. The CompleteTree-prefix serve-set witness verifies its
+    /// retention against this on mint and on every staleness poll: the
+    /// posture flag is the prefix arm's pin, so the reader that answers
+    /// "are these pins still there" for the list arm answers "is the
+    /// declaration still there" for the prefix arm.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`LeafStore::prune_disabled`]'s.
+    pub fn prune_disabled(&self) -> Result<bool, StoreError> {
+        self.store.prune_disabled()
+    }
+
     /// Whether `other` is a handle on the **same open database**.
     ///
     /// This is allocation identity, and that is store identity: a

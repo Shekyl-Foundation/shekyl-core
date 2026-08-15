@@ -75,5 +75,6 @@ pub mod serve_set;
 
 pub use host::{HostError, PersonaServing, PersonaServingHost};
 pub use serve_set::{
-    PinError, PinReport, PinnedServeSet, ServeSet, ServeSetPinner, Staleness, StalenessBound,
+    PinError, PinReport, PinnedServeSet, ReportedSet, ServeSet, ServeSetPinner, Staleness,
+    StalenessBound,
 };

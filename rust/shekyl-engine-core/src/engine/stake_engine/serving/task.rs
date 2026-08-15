@@ -459,9 +459,11 @@ mod lifecycle_tests {
                 return Err("pinner is down".into());
             }
             Ok(HostPinReport {
-                shard_ids: Vec::new(),
+                set: shekyl_p_host::ReportedSet::ShardList {
+                    shard_ids: Vec::new(),
+                    outcomes: Vec::new(),
+                },
                 as_of_height: BlockHeight(0),
-                outcomes: Vec::new(),
                 reader: ServingReader::new(Arc::clone(&self.store)),
             })
         }

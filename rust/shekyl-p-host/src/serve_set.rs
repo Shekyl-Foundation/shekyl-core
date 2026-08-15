@@ -15,6 +15,15 @@
 //! an epoch later, for a local bookkeeping mismatch. The failure is silent
 //! all the way to the slash, which is what makes a runtime check the wrong
 //! shape of defense.
+//!
+//! Two obligation shapes ride the one seam (`COMPLETETREE_ACTIVATION.md`
+//! D-1): explicit holdings pin per member, exactly as SH-2 built it; the
+//! Foundation **CompleteTree prefix** — the whole frozen corpus,
+//! `[0, frozen_count)` — carries no per-member pins at all, because the
+//! store's one-way prune-disabled posture makes the bad state
+//! unrepresentable instead of pinned-against. Same hazard, two closures:
+//! the list arm's witness checks pin rows, the prefix arm's checks the
+//! posture declaration.
 
 use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader, StoreError};
 
@@ -61,26 +70,91 @@ use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader, StoreError};
 /// tripwire is built from one clock read twice instead; see [`Staleness`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeSet {
-    shard_ids: Vec<u64>,
+    derivation: SetDerivation,
     as_of_height: BlockHeight,
 }
 
+/// The two shapes an obligation can take — private so both stay
+/// reported-only: a public enum's variants are public constructors, and the
+/// no-public-constructor rule is the module's load-bearing property.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SetDerivation {
+    /// Explicit holdings: the record's shard list, in the record's order.
+    ShardList(Vec<u64>),
+    /// The whole frozen corpus, as a structural prefix (`COMPLETETREE_
+    /// ACTIVATION.md` D-1): frozen segments are exactly `[0, frozen_count)`,
+    /// so the obligation is one number, never a stored list. `frozen_count`
+    /// is the store's burial-gated freeze cursor (`LeafStore::
+    /// next_freeze_seg`), **not** `shekyl_archival_retention::
+    /// frozen_segment_count` — that helper is first-crossing completeness
+    /// and would admit unburied segments as owed.
+    CompleteTreePrefix { frozen_count: u64 },
+}
+
 impl ServeSet {
-    /// Build the set the pinner reported. Crate-private on purpose: see the
-    /// type doc — a serving host does not get to name its own obligations,
-    /// and the only path to a `ServeSet` runs through
+    /// Build the list-arm set the pinner reported. Crate-private on purpose:
+    /// see the type doc — a serving host does not get to name its own
+    /// obligations, and the only path to a `ServeSet` runs through
     /// [`ServeSetPinner::pin_serve_set`].
     pub(crate) fn reported(shard_ids: Vec<u64>, as_of_height: BlockHeight) -> Self {
         Self {
-            shard_ids,
+            derivation: SetDerivation::ShardList(shard_ids),
             as_of_height,
         }
     }
 
-    /// The bonded shard ids, in the record's own order.
+    /// Build the prefix-arm set the pinner reported. Crate-private for the
+    /// same reason as [`Self::reported`].
+    pub(crate) fn reported_prefix(frozen_count: u64, as_of_height: BlockHeight) -> Self {
+        Self {
+            derivation: SetDerivation::CompleteTreePrefix { frozen_count },
+            as_of_height,
+        }
+    }
+
+    /// The bonded shard ids, in the record's own order — `None` for the
+    /// CompleteTree prefix arm, which has no list to return.
+    ///
+    /// Deliberately not an empty slice for the prefix arm: an empty list and
+    /// a whole-corpus obligation are this arc's two-empties hazard (the
+    /// `CompleteTree` wire form decodes to the same bytes as owing nothing),
+    /// and an accessor that renders "everything" as `[]` would rebuild that
+    /// conflation one layer up.
     #[must_use]
-    pub fn shard_ids(&self) -> &[u64] {
-        &self.shard_ids
+    pub fn shard_ids(&self) -> Option<&[u64]> {
+        match &self.derivation {
+            SetDerivation::ShardList(shard_ids) => Some(shard_ids),
+            SetDerivation::CompleteTreePrefix { .. } => None,
+        }
+    }
+
+    /// The frozen-prefix length — `None` for the shard-list arm.
+    #[must_use]
+    pub fn complete_tree_frozen_count(&self) -> Option<u64> {
+        match self.derivation {
+            SetDerivation::ShardList(_) => None,
+            SetDerivation::CompleteTreePrefix { frozen_count } => Some(frozen_count),
+        }
+    }
+
+    /// Whether `shard_id` is in this persona's obligation.
+    ///
+    /// List arm: set membership. Prefix arm: `shard_id < frozen_count`.
+    ///
+    /// **Exposed, not wired.** The request path does not consult serve-set
+    /// membership anywhere today — `StoreShardProvider` answers from the
+    /// store, whose per-read `Ok(None)` for an uncommitted segment is the
+    /// live servability authority — and this slice deliberately does not
+    /// invent request-path behavior for the predicate to gate (the brief's
+    /// halt condition, honored by stopping here). It exists so the arm's
+    /// meaning is a method callers share, not a comparison each consumer
+    /// re-derives.
+    #[must_use]
+    pub fn contains(&self, shard_id: u64) -> bool {
+        match &self.derivation {
+            SetDerivation::ShardList(shard_ids) => shard_ids.contains(&shard_id),
+            SetDerivation::CompleteTreePrefix { frozen_count } => shard_id < *frozen_count,
+        }
     }
 
     /// The chain height the record was read at.
@@ -89,10 +163,14 @@ impl ServeSet {
         self.as_of_height
     }
 
-    /// Whether this set carries no shards at all.
+    /// Whether this obligation is empty: an empty list, or a prefix over a
+    /// store that has frozen nothing yet.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.shard_ids.is_empty()
+        match &self.derivation {
+            SetDerivation::ShardList(shard_ids) => shard_ids.is_empty(),
+            SetDerivation::CompleteTreePrefix { frozen_count } => *frozen_count == 0,
+        }
     }
 }
 
@@ -140,6 +218,24 @@ pub enum PinError {
         /// The members its outcomes actually covered, in the order reported.
         covered: Vec<u64>,
     },
+    /// The report claims the whole frozen corpus
+    /// ([`ReportedSet::CompleteTreePrefix`]) over a store whose
+    /// prune-disabled posture is **not declared**.
+    ///
+    /// The posture flag is the prefix arm's pin: no per-member pin rows
+    /// exist, so retention of the corpus rests entirely on
+    /// `LeafStore::prune_frozen` refusing under the declared posture. A
+    /// prefix witness over an undeclared store would claim an obligation
+    /// nothing retains — §9.6 item 4's silent slash with the pin table
+    /// swapped out from under it.
+    ///
+    /// An implementor defect, not a transient fault: the flag is one-way
+    /// and the production pinner declares it (idempotently, through the
+    /// curve-tree actor) before reporting the prefix, so a report that
+    /// trips this was built without the declaration and retrying repeats
+    /// it. The remedy is in the implementor: declare the posture, then
+    /// report.
+    PostureNotDeclared,
     /// A refresh's pins landed in a different open store than the one this
     /// witness is serving.
     ///
@@ -179,6 +275,15 @@ impl std::fmt::Display for PinError {
                  this persona keeps its previous pins. This is an implementor \
                  defect, not a transient fault — retrying will repeat it"
             ),
+            Self::PostureNotDeclared => write!(
+                f,
+                "the pin report claims the whole frozen corpus but the store's \
+                 prune-disabled posture is not declared, so nothing retains the \
+                 bytes the claim rests on; declare the posture \
+                 (LeafStore::set_prune_disabled, through the curve-tree actor) \
+                 before reporting a CompleteTree prefix. This is an implementor \
+                 defect, not a transient fault — retrying will repeat it"
+            ),
         }
     }
 }
@@ -192,9 +297,9 @@ impl std::error::Error for PinError {}
 /// doc for why that is a soundness property and not a convenience.
 #[derive(Debug, Clone)]
 pub struct PinReport {
-    /// The shard ids derived from the **connected** bond record, in the
-    /// record's own order — the set the implementor pinned.
-    pub shard_ids: Vec<u64>,
+    /// The obligation the implementor derived from the **connected** bond
+    /// record, with the evidence appropriate to its arm.
+    pub set: ReportedSet,
     /// The chain height that record was read at; becomes
     /// [`ServeSet::as_of_height`], the set's **provenance** stamp.
     ///
@@ -202,13 +307,70 @@ pub struct PinReport {
     /// [`ServingReader::sync_tip_height`] read twice, so no remote height
     /// is ever subtracted from a local one. A [`BlockHeight`] rather than a
     /// raw chain count all the same: the value answers "at what height was
-    /// this shard list true", and a count is one more than the height it
+    /// this obligation true", and a count is one more than the height it
     /// describes.
     pub as_of_height: BlockHeight,
-    /// Each member's outcome paired with its shard id, in `shard_ids` order.
-    pub outcomes: Vec<(u64, SegmentPin)>,
-    /// A reader on the store the pins were applied in.
+    /// A reader on the store the pins (or the posture declaration) were
+    /// applied in.
     pub reader: ServingReader,
+}
+
+/// The two obligation shapes a pinner can report, each with the evidence
+/// that makes it a witness.
+///
+/// Public fields on a public enum, unlike [`ServeSet`]: this is the
+/// *reported* side of the seam — the implementor builds it, and the
+/// implementor is already the trusted residual the trait doc names. The
+/// witness the host holds is still minted only through
+/// [`PinnedServeSet::acquire`]/[`refreshed`](PinnedServeSet::refreshed),
+/// which validate a report before anything serves.
+#[derive(Debug, Clone)]
+pub enum ReportedSet {
+    /// Explicit holdings: the record's shard list, pinned per member —
+    /// unchanged from SH-2.
+    ShardList {
+        /// The shard ids derived from the connected record, in the record's
+        /// own order — the set the implementor pinned.
+        shard_ids: Vec<u64>,
+        /// Each member's outcome paired with its shard id, in `shard_ids`
+        /// order.
+        outcomes: Vec<(u64, SegmentPin)>,
+    },
+    /// The whole frozen corpus, as a structural prefix
+    /// (`COMPLETETREE_ACTIVATION.md` D-1): the obligation is
+    /// `[0, frozen_count)` where `frozen_count` is the store's burial-gated
+    /// freeze cursor (`LeafStore::next_freeze_seg` — **not**
+    /// `shekyl_archival_retention::frozen_segment_count`, the first-crossing
+    /// helper, which would admit unburied segments as owed).
+    ///
+    /// **No pin outcomes — the posture flag is the pin.** A CompleteTree
+    /// store declares the prune-disabled posture
+    /// (`LeafStore::set_prune_disabled`, one-way), under which
+    /// `prune_frozen` refuses outright; per-member pin rows would be a pin
+    /// table permanently restating that structural fact, O(D) writes per
+    /// refresh over a `D` that grows forever, plus the freeze→pin race
+    /// window the posture removes entirely. The witness constructors verify
+    /// the declaration ([`PinError::PostureNotDeclared`]) instead of
+    /// checking rows.
+    ///
+    /// # The freeze-lag window (`COMPLETETREE_ACTIVATION.md` §4 item 2)
+    ///
+    /// The wallet's prefix and the daemon's challenge registry freeze on
+    /// the **same rule** (`segment_freeze_eligible`) but not the same
+    /// driver: the registry advances with the daemon's tip, this cursor
+    /// with the wallet's ingest. A wallet trailing inside the caught-up
+    /// slack (`CAUGHT_UP_SLACK_BLOCKS`, one archival reorg depth) has a
+    /// real window in which the chain can challenge a shard the wallet has
+    /// not yet frozen-and-begun-serving. That window is absorbed by
+    /// design, not accident: challenges slash only across the m-of-n
+    /// sliding window (m = 11), and the daemon's own scan-cost note
+    /// (`db_lmdb.cpp:6074-6085`) prices the absorb. Stated here because
+    /// the prefix arm is where the two enumerations meet; nothing in this
+    /// crate needs to compensate for it.
+    CompleteTreePrefix {
+        /// The frozen-prefix length at the time of the report.
+        frozen_count: u64,
+    },
 }
 
 /// Pins a serve-set, and hands back the store those pins are in.
@@ -381,6 +543,10 @@ impl PinnedServeSet {
     /// refusing costs nothing and the remedy — rebuild the store by chain
     /// replay — wants to be paid before the persona advertises itself.
     /// [`Self::refreshed`] deliberately does *not* refuse: see its doc.
+    /// (List arm only: a CompleteTree-prefix report has no per-member
+    /// outcomes to be pruned in — the posture flag it verifies instead is
+    /// what makes pruning unrepresentable — so this refusal is structurally
+    /// unreachable for it.)
     ///
     /// # Errors
     ///
@@ -463,63 +629,109 @@ impl PinnedServeSet {
         Self::from_report(report, self.reader.clone())
     }
 
-    /// Validate a report's internal **coherence** and mint the witness. The
-    /// one place those checks live, so `acquire` and `refreshed` cannot drift
+    /// Validate a report's **soundness as a witness** and mint it. The one
+    /// place those checks live, so `acquire` and `refreshed` cannot drift
     /// apart on what a witness requires.
     ///
-    /// Coherence only: this function decides whether the report describes
-    /// itself, never whether the resulting witness is fit to start serving.
-    /// That is a policy question, it differs between the two callers, and it
-    /// therefore lives in the caller — `acquire` refuses a pruned member,
-    /// `refreshed` records it. Splitting on that line is what keeps this
-    /// function free of a mode flag.
+    /// Soundness, not fitness: this function decides whether the report's
+    /// evidence supports its claim — list arm: the outcomes describe the
+    /// reported set; prefix arm: the posture declaration the claim rests on
+    /// is actually in the store — never whether the resulting witness is fit
+    /// to start serving. Fitness is a policy question, it differs between
+    /// the two callers, and it therefore lives in the caller — `acquire`
+    /// refuses a pruned member, `refreshed` records it. Splitting on that
+    /// line is what keeps this function free of a mode flag. (The posture
+    /// check does NOT differ per caller, which is why it belongs here: the
+    /// flag is one-way, so a missing declaration is an implementor defect in
+    /// both directions, and refusing a refresh over it cannot wedge the loop
+    /// the way a terminal `AlreadyPruned` refusal would.)
     fn from_report(report: PinReport, reader: ServingReader) -> Result<Self, PinError> {
         let PinReport {
-            shard_ids,
+            set: reported,
             as_of_height,
-            outcomes,
             reader: _,
         } = report;
-        let set = ServeSet::reported(shard_ids, as_of_height);
-        // THE EVIDENCE MUST COVER THE OBLIGATION. The report states two
-        // things — the set this persona owes, and the pins that were applied
-        // — and the witness is only meaningful if the second describes the
-        // first. A report whose outcomes are short mints a witness for a set
-        // whose unreported members were never pinned, and an unpinned member
-        // is exactly what `prune_frozen` is free to remove out from under a
-        // read.
-        //
-        // Since the pinner now reports the set as well as the outcomes, this
-        // is an internal-coherence check rather than a did-you-answer-what-I-
-        // asked one. That is a narrower guarantee and worth naming: it cannot
-        // catch an implementor that derived the wrong set (the residual the
-        // trait doc states), but it does catch the bug class this whole slice
-        // is about — two derivations of the same fact drifting apart, here
-        // the reported set and the ids actually pinned.
-        //
-        // Sequence equality rather than set coverage: the trait promises
-        // outcomes in the reported set's order, so comparing the sequence
-        // enforces that contract exactly and catches omissions, extras,
-        // duplicates and reordering in one comparison. A coverage-only check
-        // would leave the documented ordering unverified and free to drift.
-        let covered: Vec<u64> = outcomes.iter().map(|(shard_id, _)| *shard_id).collect();
-        if covered != set.shard_ids() {
-            return Err(PinError::PinnerCoverageMismatch {
-                reported_set: set.shard_ids().to_vec(),
-                covered,
-            });
-        }
+        let (set, not_yet_frozen_at_last_pin, already_pruned) = match reported {
+            ReportedSet::ShardList {
+                shard_ids,
+                outcomes,
+            } => {
+                // THE EVIDENCE MUST COVER THE OBLIGATION. The report states
+                // two things — the set this persona owes, and the pins that
+                // were applied — and the witness is only meaningful if the
+                // second describes the first. A report whose outcomes are
+                // short mints a witness for a set whose unreported members
+                // were never pinned, and an unpinned member is exactly what
+                // `prune_frozen` is free to remove out from under a read.
+                //
+                // Since the pinner reports the set as well as the outcomes,
+                // this is an internal-coherence check rather than a did-you-
+                // answer-what-I-asked one. That is a narrower guarantee and
+                // worth naming: it cannot catch an implementor that derived
+                // the wrong set (the residual the trait doc states), but it
+                // does catch the bug class this whole slice is about — two
+                // derivations of the same fact drifting apart, here the
+                // reported set and the ids actually pinned.
+                //
+                // Sequence equality rather than set coverage: the trait
+                // promises outcomes in the reported set's order, so comparing
+                // the sequence enforces that contract exactly and catches
+                // omissions, extras, duplicates and reordering in one
+                // comparison. A coverage-only check would leave the
+                // documented ordering unverified and free to drift.
+                let covered: Vec<u64> = outcomes.iter().map(|(shard_id, _)| *shard_id).collect();
+                if covered != shard_ids {
+                    return Err(PinError::PinnerCoverageMismatch {
+                        reported_set: shard_ids,
+                        covered,
+                    });
+                }
 
-        let already_pruned: Vec<u64> = outcomes
-            .iter()
-            .filter(|(_, pin)| *pin == SegmentPin::AlreadyPruned)
-            .map(|(shard_id, _)| *shard_id)
-            .collect();
-        let not_yet_frozen_at_last_pin = outcomes
-            .iter()
-            .filter(|(_, pin)| *pin == SegmentPin::PinnedNotYetFrozen)
-            .map(|(shard_id, _)| *shard_id)
-            .collect();
+                let already_pruned: Vec<u64> = outcomes
+                    .iter()
+                    .filter(|(_, pin)| *pin == SegmentPin::AlreadyPruned)
+                    .map(|(shard_id, _)| *shard_id)
+                    .collect();
+                let not_yet_frozen_at_last_pin: Vec<u64> = outcomes
+                    .iter()
+                    .filter(|(_, pin)| *pin == SegmentPin::PinnedNotYetFrozen)
+                    .map(|(shard_id, _)| *shard_id)
+                    .collect();
+                (
+                    ServeSet::reported(shard_ids, as_of_height),
+                    not_yet_frozen_at_last_pin,
+                    already_pruned,
+                )
+            }
+            ReportedSet::CompleteTreePrefix { frozen_count } => {
+                // THE DECLARATION MUST BACK THE CLAIM — the prefix arm's
+                // coverage check. There are no outcomes to cover the set
+                // because the posture flag is the pin, so what the witness
+                // must verify is that the flag is actually declared in the
+                // store these bytes live in. Read from the reader rather
+                // than trusted from the report: the reader is the store,
+                // and a claim about the store is checked against the store.
+                //
+                // Both `not_yet_frozen_at_last_pin` and `already_pruned` are
+                // structurally empty here: the prefix is the *frozen* set by
+                // definition (an unfrozen segment is not in `[0, k)`), and
+                // nothing under the declared posture can prune — which is
+                // also why `PinError::MembersAlreadyPruned` is unreachable
+                // for this arm. The list-arm check stays: explicit holdings
+                // ride per-member pins and can still meet pruned bytes.
+                let declared = reader.prune_disabled().map_err(|e| PinError::Pinner {
+                    detail: format!("posture read failed: {e:?}"),
+                })?;
+                if !declared {
+                    return Err(PinError::PostureNotDeclared);
+                }
+                (
+                    ServeSet::reported_prefix(frozen_count, as_of_height),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            }
+        };
 
         // THE STALENESS BASELINE, TAKEN FROM THE SAME STORE THE PINS ARE IN.
         // Stamping it here rather than accepting it in the report is what
@@ -626,12 +838,17 @@ impl PinnedServeSet {
     /// `AlreadyPruned` — so counting them as claimed would report a permanent
     /// drop on a witness that is behaving exactly as documented.
     fn claimed_members(&self) -> Vec<u64> {
-        self.set
-            .shard_ids()
-            .iter()
-            .copied()
-            .filter(|id| !self.already_pruned.contains(id))
-            .collect()
+        match self.set.shard_ids() {
+            Some(shard_ids) => shard_ids
+                .iter()
+                .copied()
+                .filter(|id| !self.already_pruned.contains(id))
+                .collect(),
+            // The prefix arm claims no per-member pins — retention is the
+            // posture flag, checked in `staleness` — so there are no
+            // members whose pin rows could be interrogated.
+            None => Vec::new(),
+        }
     }
 
     /// Which claimed members the store no longer holds pins for.
@@ -639,6 +856,10 @@ impl PinnedServeSet {
     /// The diagnostic behind [`Staleness::PinsDropped`], which carries only a
     /// ratio so it can stay `Copy`. Call this when an operator needs the ids —
     /// a log line, a CLI report — rather than on every poll.
+    ///
+    /// Always empty for a CompleteTree-prefix witness: no per-member pin
+    /// rows exist to drop, and the retention it rests on (the posture flag)
+    /// is checked by [`Self::staleness`] on every poll instead.
     ///
     /// # Errors
     ///
@@ -654,18 +875,43 @@ impl PinnedServeSet {
         // prunable now, whatever the tip says, and re-ingest moves the tip
         // back above the stamp without restoring a single pin. Ordering this
         // second would let the arithmetic below return `Current` over it.
-        //
-        // The claimed set is every member except the terminally pruned ones:
-        // `pin_ids_within` writes a row for `PinnedNotYetFrozen` as well as
-        // `PinnedServable`, and `already_pruned` members never had one, so
-        // including them would report a permanent false positive.
-        let claimed = self.claimed_members();
-        let dropped = self.reader.members_missing_pins(&claimed)?;
-        if !dropped.is_empty() {
-            return Ok(Staleness::PinsDropped {
-                dropped: u32::try_from(dropped.len()).unwrap_or(u32::MAX),
-                claimed: u32::try_from(claimed.len()).unwrap_or(u32::MAX),
-            });
+        match self.set.complete_tree_frozen_count() {
+            None => {
+                // The claimed set is every member except the terminally
+                // pruned ones: `pin_ids_within` writes a row for
+                // `PinnedNotYetFrozen` as well as `PinnedServable`, and
+                // `already_pruned` members never had one, so including them
+                // would report a permanent false positive.
+                let claimed = self.claimed_members();
+                let dropped = self.reader.members_missing_pins(&claimed)?;
+                if !dropped.is_empty() {
+                    return Ok(Staleness::PinsDropped {
+                        dropped: u32::try_from(dropped.len()).unwrap_or(u32::MAX),
+                        claimed: u32::try_from(claimed.len()).unwrap_or(u32::MAX),
+                    });
+                }
+            }
+            Some(frozen_count) => {
+                // The prefix arm's analogue of the pin-rows read: the
+                // retention this witness rests on is the posture flag, so
+                // that is what gets re-read from the store on every poll —
+                // measured, not inferred, window-free, exactly like the pin
+                // table it replaces. Every store surface makes the flag
+                // one-way, so a `false` here is corruption or tampering,
+                // and it lands on the same arm because the meaning is the
+                // list arm's exactly: the retention behind the witness is
+                // gone, everything it claims is prunable now, and it clears
+                // only when a refresh re-declares. `dropped == claimed`
+                // states the store-wide scope the arm's docs already give
+                // that shape.
+                if !self.reader.prune_disabled()? {
+                    let claimed = u32::try_from(frozen_count).unwrap_or(u32::MAX);
+                    return Ok(Staleness::PinsDropped {
+                        dropped: claimed,
+                        claimed,
+                    });
+                }
+            }
         }
 
         let tip = self.reader.sync_tip_height()?;

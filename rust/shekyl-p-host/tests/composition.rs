@@ -25,7 +25,7 @@ use shekyl_curve_tree::{
 };
 use shekyl_p_host::{
     HostError, PersonaServing, PersonaServingHost, PinError, PinReport, PinnedServeSet,
-    ServeSetPinner, Staleness, StalenessBound,
+    ReportedSet, ServeSetPinner, Staleness, StalenessBound,
 };
 use shekyl_tor::onion_identity::OnionIdentity;
 use shekyl_tor::service::{
@@ -113,9 +113,11 @@ impl ServeSetPinner for StorePinner {
         // Both halves off the one store — the production implementor takes
         // them from the one `CurveTreeClient` it owns, for the same reason.
         Ok(PinReport {
-            shard_ids,
+            set: ReportedSet::ShardList {
+                shard_ids,
+                outcomes,
+            },
             as_of_height,
-            outcomes,
             reader: ServingReader::new(Arc::clone(&self.store)),
         })
     }
@@ -155,9 +157,11 @@ impl ServeSetPinner for SlowSecondCallPinner {
             .pin_serve_set(&shard_ids)
             .map_err(|e| format!("{e:?}"))?;
         Ok(PinReport {
-            shard_ids,
+            set: ReportedSet::ShardList {
+                shard_ids,
+                outcomes,
+            },
             as_of_height: BlockHeight(generation * 1_000),
-            outcomes,
             reader: ServingReader::new(Arc::clone(&self.store)),
         })
     }
@@ -207,9 +211,11 @@ impl ServeSetPinner for IncoherentPinner {
             }
         }
         Ok(PinReport {
-            shard_ids: self.shard_ids.clone(),
+            set: ReportedSet::ShardList {
+                shard_ids: self.shard_ids.clone(),
+                outcomes,
+            },
             as_of_height: BlockHeight(1),
-            outcomes,
             reader: ServingReader::new(Arc::new(LeafStore::open_ephemeral().expect("open store"))),
         })
     }
@@ -333,7 +339,7 @@ async fn unfrozen_members_are_pinned_and_recorded_as_not_yet_servable() {
     .expect("frozen + not-yet-frozen is a healthy set");
 
     assert_eq!(pinned.not_yet_frozen_at_last_pin(), &[1]);
-    assert_eq!(pinned.serve_set().shard_ids(), &[0, 1]);
+    assert_eq!(pinned.serve_set().shard_ids(), Some(&[0u64, 1][..]));
 
     // And the pin is real: a prune with no further pinning call leaves both
     // members covered.
@@ -583,7 +589,7 @@ async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
     let witness = host.pinned_serve_set();
     assert_eq!(
         witness.serve_set().shard_ids(),
-        &[0, 1],
+        Some(&[0u64, 1][..]),
         "the newest report must be the installed one; `[0]` is the older \
          attempt finishing last and overwriting it"
     );
@@ -882,7 +888,7 @@ async fn one_terminally_pruned_member_does_not_wedge_every_later_refresh() {
         &[0],
         "the unrecoverable member stays visible rather than being swallowed"
     );
-    assert_eq!(refreshed.serve_set().shard_ids(), &[0, 1]);
+    assert_eq!(refreshed.serve_set().shard_ids(), Some(&[0u64, 1][..]));
 
     // The point of not refusing: shard 1 got pinned. Freeze it, prune, and
     // it must still be there — under a whole-set refusal it would not be.
@@ -1084,9 +1090,11 @@ async fn a_refresh_that_pins_a_different_store_keeps_the_previous_witness() {
         async fn pin_serve_set(&self) -> Result<PinReport, String> {
             let other = Arc::new(LeafStore::open_ephemeral().expect("other store"));
             Ok(PinReport {
-                shard_ids: vec![0],
+                set: ReportedSet::ShardList {
+                    shard_ids: vec![0],
+                    outcomes: vec![(0, SegmentPin::PinnedServable)],
+                },
                 as_of_height: BlockHeight(2),
-                outcomes: vec![(0, SegmentPin::PinnedServable)],
                 reader: ServingReader::new(other),
             })
         }
@@ -1139,4 +1147,140 @@ async fn host_staleness_uses_the_live_witness() {
     );
 
     host.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// The CompleteTree prefix arm (COMPLETETREE_ACTIVATION.md D-1/D-5, slice 2)
+// ---------------------------------------------------------------------------
+
+/// A pinner reporting the CompleteTree prefix over a real store — the
+/// slice-3 production shape minus the actor hop and the claim-source fetch:
+/// it reads the store's own burial-gated freeze cursor and reports it, so
+/// the growth KAT below exercises the real "shards freeze → the obligation
+/// grows" path rather than a number a test invented.
+struct PrefixPinner {
+    store: Arc<LeafStore>,
+}
+
+impl ServeSetPinner for PrefixPinner {
+    async fn pin_serve_set(&self) -> Result<PinReport, String> {
+        let frozen_count = self.store.next_freeze_seg().map_err(|e| format!("{e:?}"))?;
+        Ok(PinReport {
+            set: ReportedSet::CompleteTreePrefix { frozen_count },
+            as_of_height: BlockHeight(10_000),
+            reader: ServingReader::new(Arc::clone(&self.store)),
+        })
+    }
+}
+
+/// The prefix arm's precondition, both directions: a report over an
+/// undeclared store refuses with the typed error naming the remedy, and the
+/// same report acquires once the posture is declared. The membership
+/// boundary is asserted on the resulting witness (`k-1` in, `k` out), plus
+/// the accessors that keep the two-empties hazard closed: `shard_ids()` is
+/// `None` for a whole-corpus obligation, never an empty list.
+#[tokio::test]
+async fn prefix_acquire_requires_the_declared_posture_and_bounds_membership() {
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("append and freeze segment 0");
+    let pinner = PrefixPinner {
+        store: Arc::clone(&store),
+    };
+
+    let err = PinnedServeSet::acquire(&pinner)
+        .await
+        .expect_err("a corpus claim over an undeclared store must refuse");
+    assert!(matches!(err, PinError::PostureNotDeclared), "got {err:?}");
+    assert!(
+        err.to_string().contains("set_prune_disabled"),
+        "the refusal must name the remedy: {err}"
+    );
+
+    store.set_prune_disabled().expect("declare the posture");
+    let pinned = PinnedServeSet::acquire(&pinner)
+        .await
+        .expect("the declared posture is the prefix arm's pin");
+
+    let set = pinned.serve_set();
+    assert_eq!(set.complete_tree_frozen_count(), Some(1));
+    assert!(set.contains(0), "k-1 is in the obligation");
+    assert!(!set.contains(1), "k is not — the boundary is exclusive");
+    assert!(!set.is_empty());
+    assert_eq!(
+        set.shard_ids(),
+        None,
+        "a whole-corpus obligation has no list; rendering it as [] would \
+         rebuild the two-empties conflation"
+    );
+    assert!(pinned.not_yet_frozen_at_last_pin().is_empty());
+    assert!(pinned.already_pruned().is_empty());
+    assert!(matches!(
+        pinned.staleness(StalenessBound::blocks(64)).expect("read"),
+        Staleness::Current { .. }
+    ));
+}
+
+/// D-5's growth policy, driven through the real store: a segment that
+/// freezes between refreshes enters the obligation at the next refresh,
+/// with no list maintained anywhere — the pinner re-reads the cursor and
+/// the membership boundary moves.
+#[tokio::test]
+async fn prefix_refresh_admits_a_segment_that_froze_since_the_last_one() {
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("append and freeze segment 0");
+    store.set_prune_disabled().expect("declare the posture");
+    let pinner = PrefixPinner {
+        store: Arc::clone(&store),
+    };
+
+    let pinned = PinnedServeSet::acquire(&pinner).await.expect("acquire");
+    assert!(!pinned.serve_set().contains(1), "segment 1 has not frozen");
+
+    // Segment 1 fills and freezes — the chain kept growing.
+    let mut second = segment_entries();
+    for (i, e) in second.iter_mut().enumerate() {
+        e.gindex = Gindex(leaves_per_segment() as u64 + i as u64);
+    }
+    store
+        .append_block_deltas(&second, &[], &[], BlockHeight(20_000))
+        .expect("append and freeze segment 1");
+
+    let refreshed = pinned.refreshed(&pinner).await.expect("refresh");
+    assert_eq!(refreshed.serve_set().complete_tree_frozen_count(), Some(2));
+    assert!(
+        refreshed.serve_set().contains(1),
+        "the newly frozen segment joined the obligation on the refresh \
+         after its freeze — the growth policy is the re-read"
+    );
+    assert!(
+        !refreshed.serve_set().contains(2),
+        "and the boundary moved to exactly the new cursor"
+    );
+}
+
+/// The prefix over a store that has frozen nothing is honestly empty — a
+/// Foundation wallet at genesis owes nothing servable yet — and still
+/// acquires, because an empty obligation is a state, not a fault.
+#[tokio::test]
+async fn prefix_over_an_unfrozen_store_is_empty_and_still_acquires() {
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store.set_prune_disabled().expect("declare the posture");
+    let pinner = PrefixPinner {
+        store: Arc::clone(&store),
+    };
+
+    let pinned = PinnedServeSet::acquire(&pinner)
+        .await
+        .expect("an empty corpus is not an error");
+    assert!(pinned.serve_set().is_empty());
+    assert_eq!(pinned.serve_set().complete_tree_frozen_count(), Some(0));
+    assert!(!pinned.serve_set().contains(0));
+    assert!(
+        pinned.dropped_pins().expect("read").is_empty(),
+        "no per-member pins exist to drop on the prefix arm"
+    );
 }
