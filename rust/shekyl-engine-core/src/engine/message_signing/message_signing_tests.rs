@@ -119,10 +119,38 @@ async fn sign_message_round_trips_through_wallet_file() {
     let wallet = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
 
     let message = b"engine surface end to end";
-    let armored = wallet
-        .sign_message(message)
-        .await
-        .expect("FULL wallet signs");
+
+    // Single-flight observable, ridden along the one expensive sign this
+    // suite pays for: while the multi-second PQ half runs, the engine's
+    // sign permit is held (it rides inside the blocking job), and it is
+    // free again once the call returns. A permit dropped before or at
+    // entry to the blocking task would leave the gate open for nearly
+    // the whole sign and fail the `observed_held` assertion.
+    let permit = wallet.key.sign_permit().clone();
+    // Scoped so the pinned call future is dropped before `wallet.close`
+    // moves the engine below.
+    let armored = {
+        let call = wallet.sign_message(message);
+        tokio::pin!(call);
+        let mut observed_held = false;
+        let armored = loop {
+            tokio::select! {
+                out = call.as_mut() => break out.expect("FULL wallet signs"),
+                () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                    observed_held |= permit.try_acquire().is_err();
+                }
+            }
+        };
+        assert!(
+            observed_held,
+            "the sign permit must be held across the PQ half"
+        );
+        armored
+    };
+    assert!(
+        permit.try_acquire().is_ok(),
+        "the permit must be free again once the job exits"
+    );
 
     assert!(armored.starts_with(ms::MSG_SIG_PREFIX));
     assert!(!armored.contains('='));

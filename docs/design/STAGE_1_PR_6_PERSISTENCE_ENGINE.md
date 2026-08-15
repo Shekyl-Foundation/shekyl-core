@@ -743,7 +743,7 @@ drives concurrent ledger mutation via `RefreshEngine` messages) while another
 task calls `close` and persists a stale ledger snapshot — classic TOCTOU on
 wallet state.
 
-**Stage 1 structural defense (today).** [`Engine::close`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+**Stage 1 structural defense (today).** [`Engine::close`](../../rust/shekyl-engine-core/src/engine/lifecycle/session.rs)
 takes `self` by value. Direct calls on one `Engine` value cannot race `&mut self`
 refresh with `close(self)`.
 

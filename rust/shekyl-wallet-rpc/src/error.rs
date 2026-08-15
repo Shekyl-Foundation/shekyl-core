@@ -47,6 +47,9 @@ pub enum WalletRpcErrorCode {
     InvalidPassword = -29004,
     /// Operation requires a capability the open wallet lacks.
     CapabilityForbids = -29005,
+    /// The open wallet's session has ended (its key actor stopped and the
+    /// key material is wiped); close and reopen the wallet, then retry.
+    WalletSessionEnded = -29006,
     /// Build: address parse / network check failed.
     InvalidRecipient = -29100,
     /// Build: spendable balance too low.
@@ -177,6 +180,16 @@ pub enum WalletRpcError {
         /// OpenAPI capability mode string (`FULL` / `VIEW_ONLY` / …).
         capability: String,
     },
+    /// The open wallet's session has ended: its key actor stopped and the
+    /// key blob is already zeroized, so **no retry inside this session can
+    /// succeed**. Terminal-with-remedy, its own code rather than `-32603`
+    /// because the user action differs from every other internal failure —
+    /// close and reopen the wallet, then retry (rule 82; the same ruling
+    /// that gives the stake path's pending-reopen state `-29504`).
+    /// Currently emitted by `sign_message`; any future method that needs
+    /// the live key actor maps its stopped-actor failure here too.
+    #[error("wallet session ended — close and reopen the wallet, then retry")]
+    WalletSessionEnded,
     /// Daemon RPC unreachable / failed.
     #[error("daemon unreachable")]
     DaemonUnreachable,
@@ -311,7 +324,8 @@ pub enum WalletRpcError {
     /// refusal with a self-contained remedy (rule 82): close and reopen the
     /// wallet, then retry; no protocol knowledge required (rule 81).
     #[error(
-        "staking was recovered during this session's scan; close and reopen          the wallet to finish recovery, then retry"
+        "staking was recovered during this session's scan; close and reopen \
+         the wallet to finish recovery, then retry"
     )]
     StakeRecoveredPendingReopen,
 
@@ -359,6 +373,7 @@ impl WalletRpcError {
             Self::WalletFileNotFound => WalletRpcErrorCode::WalletFileNotFound,
             Self::InvalidPassword => WalletRpcErrorCode::InvalidPassword,
             Self::CapabilityForbids { .. } => WalletRpcErrorCode::CapabilityForbids,
+            Self::WalletSessionEnded => WalletRpcErrorCode::WalletSessionEnded,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
             Self::RescanBlocked { .. } => WalletRpcErrorCode::RescanBlocked,

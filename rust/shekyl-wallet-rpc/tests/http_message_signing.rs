@@ -193,11 +193,20 @@ async fn sign_and_the_full_verify_taxonomy() {
     assert_eq!(error_code(&v), -32602);
 
     // ── Classical-only display form: valid address, wrong shape for
-    // this operation — -32602 with the full-address remedy.
-    let classical = address
-        .split(shekyl_address::SEGMENT_SEPARATOR)
-        .next()
-        .expect("classical segment");
+    // this operation — -32602 with the full-address remedy. Built with
+    // `encode_classical_display()` (the form users actually hold), NOT
+    // by splitting the full string at the segment separator: the first
+    // bech32m segment of a full address is the 81-byte BOUND payload,
+    // which fails plain address decode as InvalidAddress and would
+    // leave the ClassicalOnly arm of the engine taxonomy unexercised
+    // end to end.
+    let classical = shekyl_address::ShekylAddress::decode_for_network(
+        &address,
+        shekyl_address::Network::Stagenet,
+    )
+    .expect("fixture address decodes")
+    .encode_classical_display()
+    .expect("classical display form");
     let v = rpc(
         state.clone(),
         "verify_message",
@@ -209,7 +218,12 @@ async fn sign_and_the_full_verify_taxonomy() {
 
 /// `verify_message` needs no wallet: a fresh tenant with nothing open
 /// answers the taxonomy, never `-29001` (SM-R-6 session-less pin).
-#[tokio::test]
+///
+/// Multi-thread flavor: the handler runs the verify pipeline through
+/// `block_in_place` (crate convention, `staking::read_view_under_guard`),
+/// which panics on a current-thread runtime — production runtimes are
+/// all multi-threaded.
+#[tokio::test(flavor = "multi_thread")]
 async fn verify_message_works_with_no_wallet_open() {
     let dir = TempDir::new().unwrap();
     let state = state(&dir);

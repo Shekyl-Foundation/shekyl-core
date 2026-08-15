@@ -219,7 +219,10 @@ mod tests {
     /// `verify_message` is SESSION-LESS (SM-R-6): with no wallet open it
     /// must never answer `WalletNotOpen`. A malformed signature string is
     /// the shape-first `-32602` refusal.
-    #[tokio::test]
+    ///
+    /// Multi-thread flavor: the handler wraps the verify pipeline in
+    /// `block_in_place`, which panics on a current-thread runtime.
+    #[tokio::test(flavor = "multi_thread")]
     async fn verify_message_is_session_less_and_shape_gates_first() {
         let tenants = test_tenants();
         let err = dispatch(

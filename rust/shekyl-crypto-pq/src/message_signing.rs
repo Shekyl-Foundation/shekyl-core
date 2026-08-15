@@ -648,9 +648,16 @@ impl ArmoredSignature {
 /// See [`SignerIdentity`] for why this is unreachable in production
 /// until the fork-(ii) v2 address layout lands.
 ///
+/// Takes the already-decoded [`ArmoredSignature`], not the armored
+/// string: decoding carries the paste taxonomy (SM-R-6) and callers run
+/// it *before* judging the address, so accepting the string here would
+/// either re-decode the same ~21.7 KB payload (free work for an
+/// unauthenticated caller) or move the taxonomy ordering out of the
+/// caller's hands. There is exactly one decode, at
+/// [`ArmoredSignature::decode`], and exactly one AND, here.
+///
 /// # Errors
 ///
-/// Propagates [`ArmoredSignature::decode`];
 /// [`MessageSigError::VerifyFailed`] if either half does not verify;
 /// [`MessageSigError::InvalidKey`] if the identity's SLH key does not
 /// parse.
@@ -659,9 +666,8 @@ pub fn verify_message(
     network: DerivationNetwork,
     classical_segment: &[u8],
     message: &[u8],
-    armored: &str,
+    sig: &ArmoredSignature,
 ) -> Result<(), MessageSigError> {
-    let sig = ArmoredSignature::decode(armored)?;
     let preimage = message_preimage(network, classical_segment, message);
 
     // Inner half: SLH-DSA over the preimage, ctx empty. The AND is
@@ -724,7 +730,8 @@ mod tests {
         armored: &str,
     ) -> Result<(), MessageSigError> {
         let id = SignerIdentity::from_unbound_parts_for_test(spend, slh);
-        verify_message(&id, network, segment, message, armored)
+        let sig = ArmoredSignature::decode(armored)?;
+        verify_message(&id, network, segment, message, &sig)
     }
 
     /// SM-R-4 R4-a KAT: fixed master seed → fixed public key. Pins the

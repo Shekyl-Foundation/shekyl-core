@@ -8897,7 +8897,7 @@ C6's scope:
 - Lifecycle constructors (`Engine::create`, `Engine::open_*`)
   updated to construct the default `LocalPendingTx` per
   the new field-set in
-  [`engine/lifecycle.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs):
+  [`engine/lifecycle/open.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle/open.rs):
 
   ```rust
   pending: LocalPendingTx::new(

@@ -103,8 +103,18 @@ pub(crate) async fn verify_message(
     // Assembly (signature-first taxonomy, address decode, identity,
     // network mapping) lives next to sign in engine-core.
     let network = tenants.lock().await.network;
-    engine_signing::verify_message(network, &p.address, p.message.as_bytes(), &p.signature)
-        .map_err(map_verify_error)?;
+
+    // Off the worker: SLH-DSA-192s + Schnorr verification plus the
+    // ~21.7 KB armored decode is CPU-bound work an unauthenticated
+    // caller can invoke at will, and it must not stall the tokio worker
+    // that also serves every other tenant request. `block_in_place` per
+    // the crate convention (see `staking::read_view_under_guard` for why
+    // every hosting runtime is multi-threaded and why the call is not
+    // scattered).
+    tokio::task::block_in_place(|| {
+        engine_signing::verify_message(network, &p.address, p.message.as_bytes(), &p.signature)
+    })
+    .map_err(map_verify_error)?;
 
     serde_json::to_value(VerifyMessageResult { verified: Verified })
         .map_err(|e| WalletRpcError::InternalError(format!("serialize verify_message: {e}")))
@@ -164,8 +174,12 @@ fn map_sign_error(e: &SignMessageError, capability: &str) -> WalletRpcError {
             }
         }
         // Terminal for the session, with its own user action (close and
-        // reopen); the Display string already says exactly that.
-        SignMessageError::WalletSessionEnded => WalletRpcError::InternalError(e.to_string()),
+        // reopen). Its own code, not `-32603`: the engine gave this
+        // failure its own variant precisely because the remedy differs,
+        // and a client automating the reopen must branch on a code, not
+        // string-match an English sentence (the same ruling that gave
+        // the stake path `-29504`).
+        SignMessageError::WalletSessionEnded => WalletRpcError::WalletSessionEnded,
         SignMessageError::Key(detail) => {
             tracing::warn!(detail = %detail, "sign_message key-engine failure");
             WalletRpcError::InternalError("sign_message key-engine failure".into())
@@ -256,6 +270,21 @@ mod tests {
             assert_eq!(err.code(), WalletRpcErrorCode::CapabilityForbids);
             assert_eq!(err.data().expect("data")["capability"], "VIEW_ONLY");
         }
+    }
+
+    /// The one sign failure with a different user action (close and
+    /// reopen) keeps its own code on the wire — a client automating the
+    /// remedy branches on `-29006`, never on English prose (rule 82).
+    #[test]
+    fn wallet_session_ended_gets_its_own_code() {
+        let err = map_sign_error(&SignMessageError::WalletSessionEnded, "FULL");
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletSessionEnded);
+        assert_eq!(err.code().as_i32(), -29006);
+        assert!(
+            err.message().contains("close and reopen"),
+            "the remedy sentence must survive onto the wire: {}",
+            err.message()
+        );
     }
 
     #[test]

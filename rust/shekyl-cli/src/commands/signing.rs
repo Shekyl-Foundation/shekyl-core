@@ -20,9 +20,18 @@
 
 use serde_json::json;
 use shekyl_wallet_rpc::types::{SignMessageResult, VerifyMessageResult};
+use shekyl_wallet_rpc::WalletRpcErrorCode;
 
 use super::require_open;
 use crate::rpc_client::{RpcError, RpcSession};
+
+/// Refuse `@path` signature files larger than this. Any valid armored
+/// signature fits the decoder's own 64 KiB encoded ceiling
+/// (`MSG_SIG_MAX_ENCODED_LEN`, checked before whitespace filtering), so
+/// twice that is generous slack for the prefix and mail-wrap whitespace
+/// while keeping a typo'd path (a device node, a giant log) from being
+/// read to EOF and shipped to the server just to bounce.
+const SIG_FILE_MAX_BYTES: usize = 2 * shekyl_crypto_pq::message_signing::MSG_SIG_MAX_ENCODED_LEN;
 
 pub fn cmd_sign(rpc: &RpcSession, message: &str) {
     if !require_open(rpc) {
@@ -49,7 +58,7 @@ pub fn cmd_sign(rpc: &RpcSession, message: &str) {
     }
 }
 
-pub fn cmd_verify(rpc: &RpcSession, address: &str, signature: &str, message: Option<&str>) {
+pub fn cmd_verify(rpc: &RpcSession, address: &str, signature: &str, message: &str) {
     // Deliberately no `require_open`: verification is a public operation
     // over public inputs (SM-R-6).
     let signature = match load_signature(signature) {
@@ -63,10 +72,14 @@ pub fn cmd_verify(rpc: &RpcSession, address: &str, signature: &str, message: Opt
         "verify_message",
         json!({
             "address": address,
-            "message": message.unwrap_or(""),
+            "message": message,
             "signature": signature,
         }),
     );
+    // The one wire code that is a negative *verdict* rather than a fault
+    // — sourced from the server crate's own enum so a re-band cannot
+    // silently demote INVALID into the generic failure path.
+    let invalid = i64::from(WalletRpcErrorCode::MessageSigVerifyFailed.as_i32());
     match result {
         Ok(val) => match serde_json::from_value::<VerifyMessageResult>(val) {
             Ok(_) => println!("Signature is VALID for this address and message."),
@@ -79,7 +92,7 @@ pub fn cmd_verify(rpc: &RpcSession, address: &str, signature: &str, message: Opt
         // refusal (corrupted paste, unknown scheme, unbound address
         // format, malformed input) already carries its own remedy in the
         // server's sentence, which `report` prints verbatim.
-        Err(e) if e.code() == Some(-29800) => {
+        Err(e) if e.code() == Some(invalid) => {
             println!("Signature is INVALID: not a signature by that address over this message.");
         }
         Err(e) => rpc.report("Could not verify signature", &e),
@@ -88,6 +101,13 @@ pub fn cmd_verify(rpc: &RpcSession, address: &str, signature: &str, message: Opt
 
 /// `@path` reads a signature from a file so a mail-wrapped 21.7 KB paste
 /// does not have to survive `split_whitespace`. Bare tokens are used as-is.
+///
+/// The read is capped at [`SIG_FILE_MAX_BYTES`]: without a cap, a typo'd
+/// path (a FIFO, `/dev/urandom`, a multi-GB log) is read to EOF before
+/// any refusal — hanging or exhausting memory locally, or shipping a
+/// payload the server bounces as an opaque HTTP 413 (rule 82: the
+/// refusal must name the actual problem, at the earliest place that can
+/// see it).
 fn load_signature(token: &str) -> Result<String, String> {
     let Some(path) = token.strip_prefix('@') else {
         return Ok(token.to_owned());
@@ -95,7 +115,21 @@ fn load_signature(token: &str) -> Result<String, String> {
     if path.is_empty() {
         return Err("verify: @path needs a file path after @".into());
     }
-    std::fs::read_to_string(path).map_err(|e| format!("could not read signature file {path}: {e}"))
+    use std::io::Read as _;
+    let file = std::fs::File::open(path)
+        .map_err(|e| format!("could not open signature file {path}: {e}"))?;
+    let mut contents = String::new();
+    file.take(SIG_FILE_MAX_BYTES as u64 + 1)
+        .read_to_string(&mut contents)
+        .map_err(|e| format!("could not read signature file {path}: {e}"))?;
+    if contents.len() > SIG_FILE_MAX_BYTES {
+        return Err(format!(
+            "{path} is larger than any valid signature file (over \
+             {SIG_FILE_MAX_BYTES} bytes) — check that the path names the \
+             saved signature"
+        ));
+    }
+    Ok(contents)
 }
 
 #[cfg(test)]
@@ -122,5 +156,16 @@ mod tests {
         std::fs::write(&path, "shekylmsgsig1.FROMFILE\n").expect("write");
         let loaded = load_signature(&format!("@{}", path.display())).expect("read");
         assert_eq!(loaded, "shekylmsgsig1.FROMFILE\n");
+    }
+
+    /// The cap refuses with a remedy sentence and never reads past it —
+    /// an oversized file is a named refusal, not an opaque server bounce.
+    #[test]
+    fn load_signature_refuses_a_file_over_the_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("huge.txt");
+        std::fs::write(&path, "A".repeat(super::SIG_FILE_MAX_BYTES + 1)).expect("write");
+        let err = load_signature(&format!("@{}", path.display())).unwrap_err();
+        assert!(err.contains("larger than any valid signature"), "{err}");
     }
 }

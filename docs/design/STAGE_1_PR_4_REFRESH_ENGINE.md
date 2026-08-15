@@ -6395,7 +6395,7 @@ contract): `Engine::replace_refresh` refactored from
 `R` type parameter can change to `FaultInjecting<LocalRefresh>`
 (mirrors the existing `replace_daemon` / `replace_ledger`
 shape per
-[`engine/lifecycle.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs));
+[`engine/lifecycle/support.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle/support.rs));
 `AssertionSink` + `PanickingSink` + `PanickingSinkTrigger`
 land at
 [`engine/diagnostics.rs`](../../rust/shekyl-engine-core/src/engine/diagnostics.rs)

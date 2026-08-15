@@ -83,11 +83,13 @@ supply the identical string — repeated spaces are collapsed to one):
                                       Verify a reserve proof (no wallet
                                       needed)
 
-Message signing (multi-word messages join with single spaces — the
-verifier must supply the identical string):
+Message signing (the message is everything after the command, taken
+exactly as typed — the verifier must supply the identical string; a
+message that spans multiple lines cannot be entered here, use the
+sign_message / verify_message RPC directly):
   sign <message>                      Sign a message as this wallet's address
                                       (takes a few seconds by design)
-  verify <address> <signature> [message]
+  verify <address> <signature> <message>
                                       Check a message signature (no wallet
                                       needed; paste the signature as one
                                       unbroken token, or @path to a file)
@@ -281,7 +283,7 @@ pub fn repl(
                         signature,
                         message,
                     } => {
-                        signing::cmd_verify(&rpc, &address, &signature, message.as_deref());
+                        signing::cmd_verify(&rpc, &address, &signature, &message);
                     }
 
                     // Offline signing (RESERVED)

@@ -38,6 +38,13 @@
 //! concurrent daemon poll. `block_in_place` is *not* the alternative:
 //! it panics outright on a current-thread runtime.
 //!
+//! The blocking job is also **single-flight per wallet**: the PQ half
+//! acquires the key handle's `sign_permit` and carries it into the
+//! blocking task, so a burst of concurrent `sign_message` calls queues
+//! FIFO instead of stacking multi-second CPU-bound jobs — see the
+//! `sign_permit` field docs on
+//! [`KeyEngineHandle`](super::key_actor::KeyEngineHandle).
+//!
 //! # Verify is here, and is not an `Engine` method
 //!
 //! [`verify_message`] is session-less (SM-R-6): no wallet, no daemon, no
@@ -205,6 +212,22 @@ pub(crate) async fn sign_message(
     let (network, seed_format) = derivation_scope(ctx)?;
     let segment = bound_segment(ctx)?;
 
+    // Single-flight: one multi-second PQ job per wallet at a time
+    // (the handle's `sign_permit`). The permit is acquired here (queued
+    // FIFO under load) and MOVES INTO the blocking closure below —
+    // `spawn_blocking` work keeps running after its awaiting future is
+    // dropped, so releasing on this future's drop would admit the next
+    // job while the abandoned one still burns a blocking-pool thread.
+    // Acquired BEFORE the seed borrow: a queued call must wait empty-
+    // handed, not sit on a master-seed copy for seconds (rule 35).
+    let permit = ctx
+        .key
+        .sign_permit()
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("sign permit is never closed");
+
     // Transient seed borrow — the same envelope read the open path
     // performs; FULL capability enforced by the extractor itself.
     let inputs = ctx
@@ -218,6 +241,7 @@ pub(crate) async fn sign_message(
     let segment_bytes = *segment.as_bytes();
     let owned_message = message.to_vec();
     let (preimage, sig_pq) = tokio::task::spawn_blocking(move || {
+        let _held_until_the_job_exits = permit;
         message_signing::sign_message_pq_half(
             &inputs.master_seed_64,
             network,
@@ -253,8 +277,10 @@ pub fn verify_message(
     armored: &str,
 ) -> Result<(), VerifyMessageError> {
     // Taxonomy-first: a damaged paste must not hide behind R6-a's
-    // unbound-identity refusal.
-    message_signing::ArmoredSignature::decode(armored)?;
+    // unbound-identity refusal. This is the ONE decode — the crypto
+    // verify below consumes the decoded value rather than re-running
+    // the base64 + checksum pipeline on the same ~21.7 KB string.
+    let sig = message_signing::ArmoredSignature::decode(armored)?;
 
     let address = decode_signer_address(address, network)?;
     let segment = address.bound_classical_segment();
@@ -265,7 +291,7 @@ pub fn verify_message(
         network_to_derivation(network),
         segment.as_bytes(),
         message,
-        armored,
+        &sig,
     )?;
     Ok(())
 }
