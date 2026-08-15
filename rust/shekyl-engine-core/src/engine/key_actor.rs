@@ -397,6 +397,20 @@ pub(crate) struct KeyEngineHandle {
     actor: ActorRef<KeyActor>,
     /// Public-only projection (account address).
     public: Arc<KeyPublicProjection>,
+    /// Single-flight permit for the message-signing PQ half (the
+    /// multi-second SLH-DSA keygen + sign). Lives on the handle — the
+    /// wallet session's signing authority, shared across clones — for the
+    /// same reason `LocalPendingTx` owns its `build_permit`: every
+    /// embedder inherits the serialization, so a burst of `sign_message`
+    /// calls queues one CPU-bound blocking job at a time instead of
+    /// exhausting the blocking pool with concurrent multi-second signs.
+    /// `Arc` so the acquired permit can ride *into* the `spawn_blocking`
+    /// closure — a caller that goes away (request cancelled) keeps its
+    /// job's permit held until the job actually exits, and cannot
+    /// over-admit the next one. The actor's mailbox already serializes
+    /// the cheap classical outer half; this covers the expensive PQ half
+    /// in front of it.
+    sign_permit: Arc<tokio::sync::Semaphore>,
 }
 
 impl KeyEngineHandle {
@@ -449,7 +463,17 @@ impl KeyEngineHandle {
         // construction property).
         let actor = KeyActor::spawn(keys);
 
-        Self { actor, public }
+        Self {
+            actor,
+            public,
+            sign_permit: Arc::new(tokio::sync::Semaphore::new(1)),
+        }
+    }
+
+    /// The wallet's message-signing single-flight permit — see the field
+    /// docs for ownership and the ride-into-the-blocking-task contract.
+    pub(crate) fn sign_permit(&self) -> &Arc<tokio::sync::Semaphore> {
+        &self.sign_permit
     }
 
     /// Generate an INBOUND tx proof inside the actor (WI-RPC-3).

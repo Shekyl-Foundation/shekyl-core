@@ -9,15 +9,15 @@
 //!
 //! # What this suite can and cannot assert
 //!
-//! It cannot call `verify_message`: that needs a
-//! `shekyl_crypto_pq::message_signing::SignerIdentity`, which only the
-//! address can produce and no address version produces yet (fork (ii),
-//! see that type's docs). What it *can* assert is the part the crypto
-//! crate's own tests structurally cannot see — that the σ_cl the **key
+//! The production success path of [`super::verify_message`] is still
+//! gated (R6-a): no in-tree address constructs a `SignerIdentity`. This
+//! suite pins the assembly in front of that gate — signature-first
+//! taxonomy, full-address requirement, and the UnboundIdentity tripwire
+//! that must flip when the v2 layout lands — plus the part the crypto
+//! crate's own tests structurally cannot see: that the σ_cl the **key
 //! actor** produced from the wallet's real derived spend scalar verifies
 //! against the **address's** spend key, over exactly the preimage built
-//! from the **address's** bound segment. That is the seed → blob →
-//! address → transcript chain, end to end, and it is this suite's job.
+//! from the **address's** bound segment.
 
 use super::*;
 
@@ -119,10 +119,38 @@ async fn sign_message_round_trips_through_wallet_file() {
     let wallet = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
 
     let message = b"engine surface end to end";
-    let armored = wallet
-        .sign_message(message)
-        .await
-        .expect("FULL wallet signs");
+
+    // Single-flight observable, ridden along the one expensive sign this
+    // suite pays for: while the multi-second PQ half runs, the engine's
+    // sign permit is held (it rides inside the blocking job), and it is
+    // free again once the call returns. A permit dropped before or at
+    // entry to the blocking task would leave the gate open for nearly
+    // the whole sign and fail the `observed_held` assertion.
+    let permit = wallet.key.sign_permit().clone();
+    // Scoped so the pinned call future is dropped before `wallet.close`
+    // moves the engine below.
+    let armored = {
+        let call = wallet.sign_message(message);
+        tokio::pin!(call);
+        let mut observed_held = false;
+        let armored = loop {
+            tokio::select! {
+                out = call.as_mut() => break out.expect("FULL wallet signs"),
+                () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                    observed_held |= permit.try_acquire().is_err();
+                }
+            }
+        };
+        assert!(
+            observed_held,
+            "the sign permit must be held across the PQ half"
+        );
+        armored
+    };
+    assert!(
+        permit.try_acquire().is_ok(),
+        "the permit must be free again once the job exits"
+    );
 
     assert!(armored.starts_with(ms::MSG_SIG_PREFIX));
     assert!(!armored.contains('='));
@@ -137,6 +165,43 @@ async fn sign_message_round_trips_through_wallet_file() {
         &addr.bound_classical_segment(),
         message,
     );
+
+    // Session-less verify assembly (this module's free function). The
+    // success path is R6-a gated; the tripwire below is what flips
+    // when the v2 address layout lands.
+    let encoded = addr.encode().expect("encode primary address");
+    assert!(
+        matches!(
+            verify_message(network, &encoded, message, &armored),
+            Err(VerifyMessageError::Crypto(
+                ms::MessageSigError::UnboundIdentity
+            ))
+        ),
+        "in-tree addresses must refuse with UnboundIdentity until v2"
+    );
+
+    // Signature-first: a junk paste is Malformed even with a junk address.
+    assert!(matches!(
+        verify_message(network, "not-an-address", message, "not-a-signature"),
+        Err(VerifyMessageError::Crypto(ms::MessageSigError::Malformed(
+            _
+        )))
+    ));
+
+    // Well-formed signature + undecodable address: shape, not UnboundIdentity.
+    assert!(matches!(
+        verify_message(network, "not-an-address", message, &armored),
+        Err(VerifyMessageError::InvalidAddress)
+    ));
+
+    // Classical-only display form: the bound segment cannot be rebuilt.
+    let classical = addr
+        .encode_classical_display()
+        .expect("classical display form");
+    assert!(matches!(
+        verify_message(network, &classical, message, &armored),
+        Err(VerifyMessageError::ClassicalOnly)
+    ));
 
     wallet.close(&creds).expect("close");
 }

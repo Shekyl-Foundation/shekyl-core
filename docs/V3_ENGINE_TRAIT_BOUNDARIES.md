@@ -2033,8 +2033,8 @@ HKDF-derived sealing keys (`StateWrapKey` = `wrap_key_region_2`,
 `PrefsHmacKey` from `shekyl-engine-prefs`), not `Credentials` or password
 bytes. `type Error` is [`PersistenceError`](../rust/shekyl-engine-core/src/engine/error.rs)
 (not [`OpenError`](../rust/shekyl-engine-core/src/engine/error.rs));
-[`Engine::close`](../rust/shekyl-engine-core/src/engine/lifecycle.rs) maps
-persist failures via `OpenError::Persistence`. [`Engine::change_password`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+[`Engine::close`](../rust/shekyl-engine-core/src/engine/lifecycle/session.rs) maps
+persist failures via `OpenError::Persistence`. [`Engine::change_password`](../rust/shekyl-engine-core/src/engine/lifecycle/session.rs)
 uses [`ChangePasswordError`](../rust/shekyl-engine-core/src/engine/error.rs).
 Binding form, open ritual, and commit plan:
 [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).

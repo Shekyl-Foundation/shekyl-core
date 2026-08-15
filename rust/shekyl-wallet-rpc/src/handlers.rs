@@ -13,6 +13,7 @@ use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use crate::error::WalletRpcError;
 use crate::fees;
 use crate::lifecycle;
+use crate::message_signing;
 use crate::notes;
 use crate::proofs;
 use crate::queries;
@@ -77,6 +78,11 @@ pub async fn dispatch(
         "check_tx_proof" => proofs::check_tx_proof(tenants, params).await,
         "get_reserve_proof" => proofs::get_reserve_proof(tenants, params).await,
         "check_reserve_proof" => proofs::check_reserve_proof(tenants, params).await,
+        // PR-SM-2 message signing. `sign_message` requires the open
+        // wallet; `verify_message` is SESSION-LESS by contract (SM-R-6) —
+        // all its inputs are public and caller-supplied.
+        "sign_message" => message_signing::sign_message(tenants, params).await,
+        "verify_message" => message_signing::verify_message(tenants, params).await,
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
     }
 }
@@ -179,17 +185,57 @@ mod tests {
         assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
     }
 
-    /// A SPECIFIED-but-unimplemented method still falls through to
+    /// A RESERVED-but-unimplemented method still falls through to
     /// `MethodNotFound`. Kept alongside the rescan case above: routing
-    /// `rescan_blockchain` must not blur the line between "designed but not
-    /// built" (`-32601`) and "built, but the call is refused".
+    /// new methods must not blur the line between "designed but not
+    /// built" (`-32601`) and "built, but the call is refused". (The
+    /// example was `sign_message` until PR-SM-2 implemented it.)
     #[tokio::test]
-    async fn unimplemented_specified_method_is_method_not_found() {
+    async fn unimplemented_reserved_method_is_method_not_found() {
         let tenants = test_tenants();
-        let err = dispatch(&tenants, "sign_message", &json!({}), KdfParams::default())
+        let err = dispatch(&tenants, "unstake", &json!({}), KdfParams::default())
             .await
             .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
+    }
+
+    /// `sign_message` is routed: with no wallet open the answer is the
+    /// wallet gate, never the `-32601` fallthrough. Params must be valid —
+    /// parsing runs ahead of the gate.
+    #[tokio::test]
+    async fn sign_message_without_open_wallet_is_wallet_not_open() {
+        let tenants = test_tenants();
+        let err = dispatch(
+            &tenants,
+            "sign_message",
+            &json!({ "message": "m" }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
+    }
+
+    /// `verify_message` is SESSION-LESS (SM-R-6): with no wallet open it
+    /// must never answer `WalletNotOpen`. A malformed signature string is
+    /// the shape-first `-32602` refusal.
+    ///
+    /// Deliberately the default (current-thread) test flavor: the
+    /// handler moves the verify pipeline through `spawn_blocking`, which
+    /// works on every runtime flavor — this annotation is the pin that
+    /// no flavor-sensitive primitive (`block_in_place`) creeps back in.
+    #[tokio::test]
+    async fn verify_message_is_session_less_and_shape_gates_first() {
+        let tenants = test_tenants();
+        let err = dispatch(
+            &tenants,
+            "verify_message",
+            &json!({ "address": "x", "message": "m", "signature": "junk" }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::InvalidParams);
     }
 
     #[tokio::test]

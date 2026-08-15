@@ -192,21 +192,23 @@ async fn get_version_omitted_params() {
     assert_eq!(json["id"], "abc");
 }
 
-/// A method the OpenAPI contract SPECIFIES but this build has not
-/// implemented still answers `-32601` over the real transport. Pinned at the
+/// A method name the OpenAPI contract RESERVES but this build has not
+/// implemented answers `-32601` over the real transport. Pinned at the
 /// HTTP layer (not only in the dispatch unit tests) because the wire code is
-/// what a conforming client branches on. `sign_message` is the current
-/// RESERVED stand-in; when it lands, retarget this at another RESERVED
-/// method rather than deleting the case — the property is about the
-/// SPECIFIED-but-unimplemented class, not about any one method.
+/// what a conforming client branches on. `unstake` is the current RESERVED
+/// stand-in (this case exercised `sign_message` until PR-SM-2 landed it,
+/// when it was still the last SPECIFIED-but-unimplemented method — that
+/// class is empty now); when `unstake` lands, retarget this at another
+/// RESERVED method rather than deleting the case — the property is about
+/// the RESERVED-but-unimplemented class, not about any one method.
 #[tokio::test]
-async fn method_not_found_for_unimplemented_specified() {
+async fn method_not_found_for_reserved_unimplemented() {
     let (status, json) = post_json(
         AuthConfig::Disabled,
         json!({
             "jsonrpc": "2.0",
             "id": 2,
-            "method": "sign_message",
+            "method": "unstake",
             "params": {}
         }),
     )

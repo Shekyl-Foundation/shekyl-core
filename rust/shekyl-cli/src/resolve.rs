@@ -110,14 +110,19 @@ pub enum ResolvedCommand {
         message: Option<String>,
     },
 
-    // -- Signing (RESERVED) --
+    // -- Message signing (PR-SM-2) --
     Sign {
         message: String,
     },
     Verify {
         address: String,
-        message: String,
         signature: String,
+        /// Required, not `Option`: the RPC contract treats an absent
+        /// message as the empty string, and silently substituting `""`
+        /// for a forgotten argument would turn an incomplete command
+        /// into a confident false "INVALID" verdict (rule 82). Empty-
+        /// message signatures remain verifiable over the RPC directly.
+        message: String,
     },
 
     // -- Offline signing (RESERVED: cold-wallet workflow) --
@@ -437,22 +442,38 @@ pub fn parse(input: &str) -> ResolvedCommand {
             }
         }
         "sign" => {
-            let message = args.join(" ");
-            if message.is_empty() {
-                diag("sign: need <message>")
-            } else {
-                ResolvedCommand::Sign { message }
+            // The message is taken VERBATIM from the input line (not a
+            // re-join of tokens): the signature binds it byte-for-byte,
+            // so a run of spaces or a tab inside the message must reach
+            // the signer exactly as typed. The proofs grammars keep
+            // their join-with-single-spaces challenge semantics
+            // (`trailing_message`) — a proof challenge is an agreed
+            // label, not an attested text.
+            match raw_remainder(input, 1) {
+                Some(message) => ResolvedCommand::Sign {
+                    message: message.to_string(),
+                },
+                None => diag("sign: need <message>"),
             }
         }
         "verify" => {
-            if args.len() >= 3 {
-                ResolvedCommand::Verify {
+            // Signature before message, mirroring the proofs grammar
+            // (`check_tx_proof <txid> <address> <proof> [message]`): the
+            // trailing message is variadic, so everything else must
+            // come first. The signature is one token — the canonical
+            // armored form is a single line by construction (SM-R-5).
+            // Like `sign`, the message is the VERBATIM remainder of the
+            // line: re-joining tokens would collapse whitespace and
+            // report a genuine signature as INVALID (rule 82).
+            // A `Some` remainder implies at least four tokens on the
+            // line, so `args[0]` / `args[1]` are present by construction.
+            match raw_remainder(input, 3) {
+                Some(message) => ResolvedCommand::Verify {
                     address: args[0].to_string(),
-                    message: args[1].to_string(),
-                    signature: args[2].to_string(),
-                }
-            } else {
-                diag("verify: need <address> <message> <signature>")
+                    signature: args[1].to_string(),
+                    message: message.to_string(),
+                },
+                None => diag("verify: need <address> <signature> <message>"),
             }
         }
         "describe_transfer" => {
@@ -528,6 +549,25 @@ fn trailing_message(args: &[&str], start: usize) -> Option<String> {
     } else {
         None
     }
+}
+
+/// The verbatim remainder of `input` after its first `n` whitespace-
+/// delimited tokens, with the separating whitespace run stripped.
+///
+/// This is the message grammar for `sign` / `verify`: the message binds
+/// into the signature byte-for-byte, so internal whitespace must survive
+/// exactly as typed — [`trailing_message`]'s re-join would collapse it
+/// and make a genuine signature unverifiable. The REPL trims the line
+/// before parsing, so there is no trailing-whitespace ambiguity to
+/// resolve here. `None` when fewer than `n` tokens exist or nothing
+/// follows them.
+fn raw_remainder(input: &str, n: usize) -> Option<&str> {
+    let mut rest = input.trim_start();
+    for _ in 0..n {
+        let end = rest.find(char::is_whitespace)?;
+        rest = rest[end..].trim_start();
+    }
+    (!rest.is_empty()).then_some(rest)
 }
 
 // ---------------------------------------------------------------------------
@@ -742,6 +782,66 @@ mod tests {
             }
             other => panic!("expected RequestNew, got {other:?}"),
         }
+    }
+
+    /// `sign` takes the message VERBATIM from the line — internal
+    /// whitespace runs survive, because the signature binds the exact
+    /// bytes; an empty message is a diagnostic, not an empty sign.
+    #[test]
+    fn test_sign_parsing() {
+        match parse("sign I own   this address") {
+            ResolvedCommand::Sign { message } => {
+                assert_eq!(message, "I own   this address");
+            }
+            other => panic!("expected Sign, got {other:?}"),
+        }
+        assert!(matches!(parse("sign"), ResolvedCommand::Diagnostic { .. }));
+    }
+
+    /// `verify <address> <signature> <message...>`: the message is
+    /// REQUIRED (a forgotten argument must be a usage error, never a
+    /// silent empty-string verify that prints a false INVALID) and
+    /// verbatim — whitespace runs inside it are preserved, matching
+    /// `sign`. The signature is one token per the single-line canonical
+    /// form.
+    #[test]
+    fn test_verify_parsing() {
+        match parse("verify skl1abc shekylmsgsig1.AAAA the  signed words") {
+            ResolvedCommand::Verify {
+                address,
+                signature,
+                message,
+            } => {
+                assert_eq!(address, "skl1abc");
+                assert_eq!(signature, "shekylmsgsig1.AAAA");
+                assert_eq!(message, "the  signed words");
+            }
+            other => panic!("expected Verify, got {other:?}"),
+        }
+        assert!(matches!(
+            parse("verify skl1abc shekylmsgsig1.AAAA"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+        assert!(matches!(
+            parse("verify skl1abc"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+    }
+
+    /// The verbatim-remainder tokenizer behind `sign` / `verify`:
+    /// internal whitespace preserved, separator run stripped, missing
+    /// remainder is `None` (including a whitespace-only tail).
+    #[test]
+    fn raw_remainder_preserves_internal_whitespace() {
+        assert_eq!(
+            raw_remainder("sign  a  b\tc", 1),
+            Some("a  b\tc"),
+            "separator stripped, message whitespace intact"
+        );
+        assert_eq!(raw_remainder("verify addr sig  m", 3), Some("m"));
+        assert_eq!(raw_remainder("verify addr sig", 3), None);
+        assert_eq!(raw_remainder("sign", 1), None);
+        assert_eq!(raw_remainder("sign   ", 1), None);
     }
 
     /// A present-but-unparseable flag value is a hard diagnostic, never a

@@ -253,6 +253,54 @@ pub struct GetPrimaryAddressResult {
     pub address: String,
 }
 
+/// `sign_message` result (PR-SM-2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignMessageResult {
+    /// The armored signature: a single-line `shekylmsgsig1.` string,
+    /// ~21.7 KB for the ratified SLH-DSA-192s scheme (SM-R-5/R-8).
+    pub signature: String,
+}
+
+/// Marker that `verify_message` succeeded. The contract field is
+/// `const: true`; this type cannot represent `verified: false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Verified;
+
+impl Serialize for Verified {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(true)
+    }
+}
+
+impl<'de> Deserialize<'de> for Verified {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = bool::deserialize(deserializer)?;
+        if value {
+            Ok(Self)
+        } else {
+            Err(serde::de::Error::custom(
+                "verify_message is success-only; verified must be true",
+            ))
+        }
+    }
+}
+
+/// `verify_message` result (PR-SM-2).
+///
+/// Success-only by contract: every negative outcome is one of the
+/// `-29800`-band error codes (SM-R-6's taxonomy needs four distinct
+/// sentences — mismatch, corruption, unknown scheme, unbound address —
+/// which a `valid: false` boolean cannot carry). This deliberately
+/// diverges from `check_tx_proof`'s `{"valid": false}` shape, which
+/// predates that ruling.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VerifyMessageResult {
+    /// Always `true`: the signature verifies for the address, message,
+    /// and network. Present so scripted callers read a self-describing
+    /// field rather than inferring success from an empty object.
+    pub verified: Verified,
+}
+
 /// `get_height` result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetHeightResult {

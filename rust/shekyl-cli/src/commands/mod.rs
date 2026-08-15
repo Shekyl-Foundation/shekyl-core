@@ -18,6 +18,7 @@ mod lifecycle;
 mod proofs;
 mod receiving;
 pub mod scripted;
+mod signing;
 mod staking;
 mod transfers;
 
@@ -82,6 +83,17 @@ supply the identical string — repeated spaces are collapsed to one):
                                       Verify a reserve proof (no wallet
                                       needed)
 
+Message signing (the message is everything after the command, taken
+exactly as typed — the verifier must supply the identical string; a
+message that spans multiple lines cannot be entered here, use the
+sign_message / verify_message RPC directly):
+  sign <message>                      Sign a message as this wallet's address
+                                      (takes a few seconds by design)
+  verify <address> <signature> <message>
+                                      Check a message signature (no wallet
+                                      needed; paste the signature as one
+                                      unbroken token, or @path to a file)
+
 Receiving history:
   history incoming --unattributed     List receives with no payment-request
                                       match (FA-8 UNATTRIBUTED)
@@ -93,9 +105,8 @@ Meta:
   exit / quit                         Exit shekyl-cli
 
 Not yet available (the RPC surface is designed but has not landed; see
-docs/FOLLOWUPS.md): message signing (sign/verify), and the offline
-cold-signing workflow (describe/sign/submit_transfer,
-transfer --do-not-relay).";
+docs/FOLLOWUPS.md): the offline cold-signing workflow
+(describe/sign/submit_transfer, transfer --do-not-relay).";
 
 /// RESERVED-surface refusal: the command is part of the target set, but the
 /// wallet-RPC method that would back it has not landed. Names the gate so
@@ -132,7 +143,7 @@ pub fn repl(
                 }
 
                 let first_token = line.split_whitespace().next().unwrap_or("");
-                if !crate::display::is_secret_command(first_token) {
+                if !crate::display::omit_from_history(first_token) {
                     drop(rl.add_history_entry(line));
                 }
 
@@ -265,9 +276,14 @@ pub fn repl(
                         proofs::cmd_check_reserve_proof(&rpc, &address, &proof, message.as_deref());
                     }
 
-                    // Signing (RESERVED)
-                    ResolvedCommand::Sign { .. } | ResolvedCommand::Verify { .. } => {
-                        reserved(first_token, "the message-signing RPC surface");
+                    // Message signing (PR-SM-2 surface)
+                    ResolvedCommand::Sign { message } => signing::cmd_sign(&rpc, &message),
+                    ResolvedCommand::Verify {
+                        address,
+                        signature,
+                        message,
+                    } => {
+                        signing::cmd_verify(&rpc, &address, &signature, &message);
                     }
 
                     // Offline signing (RESERVED)

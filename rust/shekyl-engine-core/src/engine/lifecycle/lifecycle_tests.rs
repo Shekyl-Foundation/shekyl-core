@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Unit tests for the Engine open/create/close lifecycle (`engine/lifecycle.rs`).
+//! Unit tests for the Engine open/create/close lifecycle (`engine/lifecycle/`).
 //!
 //! Wired as a `#[path]` child of `lifecycle::tests`, so `use super::*`
 //! resolves into the workflow module and private items stay testable;
@@ -15,6 +15,8 @@ use super::*;
 
 use std::path::PathBuf;
 
+use shekyl_address::Network;
+use shekyl_crypto_pq::account::SeedFormat;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
 use shekyl_rpc_transport::HttpRpc;

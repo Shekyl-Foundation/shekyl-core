@@ -12035,7 +12035,7 @@
     general injector; `queued_failures()` drain inspector;
     `debug_assert!`-on-Drop queue-drain contract per F-Mock-2).
   - Adds `Engine::replace_refresh` test-only setter on
-    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+    [`engine/lifecycle/support.rs`](../rust/shekyl-engine-core/src/engine/lifecycle/support.rs)
     mirroring the existing `replace_daemon` / `replace_ledger`
     helpers.
   - Adds Class 1 trait-surface smoke tests covering empty-queue
@@ -12098,7 +12098,7 @@
     [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
     (struct, `impl Rpc`, `impl DaemonEngine`, module docstrings),
     [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs),
-    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs),
+    [`engine/lifecycle/mod.rs`](../rust/shekyl-engine-core/src/engine/lifecycle/mod.rs),
     [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs),
     [`benches/common/engine_fixture.rs`](../rust/shekyl-engine-core/benches/common/engine_fixture.rs)
     (forward-pointer comment), and
@@ -12137,7 +12137,7 @@
     constructor (`fn replace_refresh<R2: RefreshEngine>(self,
     refresh: R2) -> Engine<S, D, L, R2>`) mirroring the
     existing `replace_daemon` / `replace_ledger` shape at
-    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs).
+    [`engine/lifecycle/support.rs`](../rust/shekyl-engine-core/src/engine/lifecycle/support.rs).
     The refactor lets the generic `R` type parameter change
     between construction and replacement so test orchestration
     can build an `Engine<…, LocalRefresh>` at assemble time
@@ -18635,7 +18635,7 @@
     tag or KDF construction surface as test failures.
   - **`#[cfg(test)] pub(crate) Engine::replace_daemon<D2>(self,
     daemon: D2) -> Engine<S, D2>`** in
-    [`engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle.rs).
+    [`engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle/support.rs).
     Move-rebuild helper for the §6.3 hybrid-construction
     discipline: real `Engine::create` with a dummy `DaemonClient`
     pays the lifecycle cost once (file lock, KDF, ledger init,
@@ -19200,7 +19200,7 @@
 - **`Engine::create` / `Engine::open_full` / `Engine::change_password` /
   `Engine::close` lifecycle methods on `shekyl-engine-core` (Phase 1
   `lifecycle` task).** The new
-  [`shekyl_engine_core::engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+  [`shekyl_engine_core::engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle/mod.rs)
   module composes
   [`shekyl-engine-file`](../rust/shekyl-engine-file/src/),
   [`shekyl-crypto-pq::account::rederive_account`](../rust/shekyl-crypto-pq/src/account.rs),

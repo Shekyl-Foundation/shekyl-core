@@ -1651,11 +1651,19 @@ sustainability is unaffected by the recalibration.
     nested, with the 48-byte public key inline in the address (fork
     (ii); the round-0 hybrid-vk-certified lead was superseded on the
     record in pass 1). PR-SM-1 MERGED (#425, 2026-08-09: crypto +
-    engine + ACVP conformance); the CLI/RPC un-stub is PR-SM-2 per
-    the round's decomposition. The genesis lane's v2-field sign-off
-    landed 2026-08-13 (`RELEASE_CHECKLIST.md`), so PR-SM-2 is
-    unblocked — its address-integrated verify freezes against the
-    signed-off 48-byte field once the v2 layout lands in code.
+    engine + ACVP conformance). The genesis lane's v2-field sign-off
+    landed 2026-08-13 (`RELEASE_CHECKLIST.md`).
+    **CLOSED 2026-08-15 (PR-SM-2)** per the reopen shape below: the
+    surface PR un-stubbed the CLI commands in the same change.
+    `sign_message`/`verify_message` are SPECIFIED in
+    `wallet_rpc.yaml` (`-29800..-29803` allocated); CLI `sign`/`verify`
+    are real commands; verify is session-less (SM-R-6). One residue,
+    carried where it was always tracked (the genesis address-format
+    checklist row, NOT here): every in-tree address answers `-29803`
+    until the fork-(ii) v2 layout + `ADDRESS_DERIVATION_V1`-successor
+    vectors land in code, at which point `SignerIdentity`'s
+    constructor starts succeeding and verification opens with no
+    contract change.
   - **Offline cold-signing** (`describe_transfer`, `sign_transfer`,
     `submit_transfer`, `transfer --do-not-relay`) — blocked on Phase 2d
     (`UnsignedTxBundle`/`SignedTxBundle` air-gapped bundles).

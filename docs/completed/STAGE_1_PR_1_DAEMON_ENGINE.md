@@ -144,7 +144,7 @@ Inherited `Rpc` methods are *not* duplicated on `DaemonEngine`; consumers reach 
 - `Engine::daemon(&self) -> &D` (was `-> &DaemonClient`).
 - The default type parameter `D = DaemonClient` keeps every existing call site that names `Engine<S>` compiling unchanged.
 
-**4. Generic-ize lifecycle entry points.** [`rust/shekyl-engine-core/src/engine/lifecycle.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs) — `create` and `open*` signatures (~5 sites at lines 381, 501, 602, 621, 639 per the pre-read) become generic over `D`. Default `D = DaemonClient` keeps callers compiling.
+**4. Generic-ize lifecycle entry points.** [`rust/shekyl-engine-core/src/engine/lifecycle/open.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle/open.rs) — `create` and `open*` signatures (~5 sites at lines 381, 501, 602, 621, 639 per the pre-read) become generic over `D`. Default `D = DaemonClient` keeps callers compiling.
 
 **5. Refresh: replace `daemon.inner()` with trait-bound calls.** [`rust/shekyl-engine-core/src/engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs) — four `inner()` sites (lines ~1460, 1514, 1875, 1892 per pre-read) currently call `&SimpleRequestRpc` methods. Migrate to calling `Rpc` methods directly on `&D` (the `Rpc` supertrait bound makes the methods reachable). One clone site at ~1448 also needs to clone the generic `D` instead of `DaemonClient`.
 
