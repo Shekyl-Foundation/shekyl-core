@@ -47,7 +47,7 @@
 //! This type still does not create transports; it takes one. The bound decides
 //! *which kind*, the construction site decides *whose*.
 
-use shekyl_archival_retention::{HoldingsKind, ARCHIVAL_REORG_DEPTH_BLOCKS};
+use shekyl_archival_retention::{HoldingsKind, SETTLEMENT_EPOCH_BLOCKS};
 use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
 
@@ -116,19 +116,56 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     /// item 5 prices at ~13.6 GB against a rule-76 Pi-4 floor, since nothing
     /// else ever removes a pin.
     ///
-    /// # Why a gate at all, and why this one
+    /// # The gate is epoch-shaped, not reorg-shaped, and that is the whole point
     ///
-    /// §9.7 rules the asymmetry: **acquiring a pin needs no finality;
-    /// releasing one does.** A holdings drop that is later reorged back can,
-    /// if the pin went with it, have let a prune discard bytes no re-pin
-    /// restores — `AlreadyPruned` is terminal and its remedy is a chain
-    /// replay. So a shard must be absent for `ARCHIVAL_REORG_DEPTH_BLOCKS`
-    /// before its pin goes, and that constant is the chain's own reorg depth,
-    /// single-sourced from consensus rather than a number chosen here — the
-    /// same horizon the `P`-scan already treats as final.
+    /// The obvious gate is a reorg depth — wait until the departure has settled
+    /// on the chain. **That is the wrong quantity, and using it here would turn
+    /// a disk leak into a slash risk.** §4 quantizes drawability to epoch
+    /// boundaries: *"a pair is drawable in E iff it held the shard at E's
+    /// open"*, and evaluation at that fixed pre-challenge height is deliberate
+    /// — it is the WS-1 constraint, *"no tip-holdings read that would let P
+    /// drop the shard after the fire and escape"*. So a mid-epoch drop does
+    /// **not** end the obligation for E; the pair stays drawable, and
+    /// challengeable, through E's close.
+    ///
+    /// That matters here and not one layer up, because
+    /// [`StoreShardProvider`](shekyl_p_serve::StoreShardProvider) is
+    /// **serve-set-blind**: it holds only a `ServingReader` and answers for any
+    /// shard whose bytes are in the store. A dropped-but-still-pinned shard is
+    /// therefore still *served*, which is why today's leak happens to keep the
+    /// obligation met. Release the pin early and the prune reclaims the bytes
+    /// while the pair is still drawable — a miss, then a slash, for disk.
+    /// §9.7's own asymmetry, pointed the other way: the reclaim is recoverable,
+    /// the loss is not.
+    ///
+    /// # The condition
+    ///
+    /// Release once the shard has been absent across **two consecutive epoch
+    /// opens**. Then it was not drawable in the current epoch or the one
+    /// before, so the last epoch in which it could have been drawn closed a
+    /// full epoch ago.
+    ///
+    /// Two epochs rather than one because one is too tight: absent at only the
+    /// current epoch's open makes the previous epoch the last drawable one, and
+    /// a challenge issued in its final block still has to resolve. The extra
+    /// epoch is that resolution slack.
+    ///
+    /// **W₂ is deliberately not an input.** The resolution window has no landed
+    /// constant — it is the rig's output (§9.7 item 6, still UNDERIVED) — so a
+    /// gate that named it could not be written yet. This one does not need it:
+    /// a full epoch of slack covers any W₂ shorter than
+    /// `SETTLEMENT_EPOCH_BLOCKS`, which at ~14 days against a window measured
+    /// in minutes-to-hours is not a close call. **Reopening criterion (rule
+    /// 21):** if the rig ever derives a W₂ at or above one epoch, this gate is
+    /// wrong and must take W₂ as an operand.
+    ///
+    /// The reorg question the naive gate was answering is subsumed rather than
+    /// dropped: §2 notes drawability is evaluated at epoch open, *"deep history
+    /// relative to any plausible reorg, so the drawable set is reorg-stable"*.
+    /// Two epoch boundaries is far deeper than `ARCHIVAL_REORG_DEPTH_BLOCKS`.
     ///
     /// A shard that reappears in the record clears its entry, so a departure
-    /// that reorgs back inside the window costs nothing and leaves no trace.
+    /// that reverses inside the window costs nothing and leaves no trace.
     fn releasable(&self, owed: &[u64], pinned: &[u64], as_of: u64) -> Vec<u64> {
         let owed: std::collections::BTreeSet<u64> = owed.iter().copied().collect();
         let mut ledger = self.absent_since.lock().expect("departure ledger");
@@ -137,15 +174,17 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         // its clock restarts if it leaves again.
         ledger.retain(|shard_id, _| !owed.contains(shard_id));
 
+        let now_epoch = as_of / SETTLEMENT_EPOCH_BLOCKS;
         let mut releasable = Vec::new();
         for &shard_id in pinned {
             if owed.contains(&shard_id) {
                 continue;
             }
             let first_absent = *ledger.entry(shard_id).or_insert(as_of);
+            let absent_epoch = first_absent / SETTLEMENT_EPOCH_BLOCKS;
             // Saturating: a record height below the first observation means the
-            // chain moved backwards under us, which is not elapsed finality.
-            if as_of.saturating_sub(first_absent) >= ARCHIVAL_REORG_DEPTH_BLOCKS {
+            // chain moved backwards under us, which is not elapsed obligation.
+            if now_epoch.saturating_sub(absent_epoch) >= EPOCHS_BEFORE_PIN_RELEASE {
                 releasable.push(shard_id);
             }
         }
@@ -156,6 +195,11 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         releasable
     }
 }
+
+/// Consecutive epoch opens a shard must be absent across before its pin may be
+/// released. See [`EngineServeSetPinner::releasable`] for why two, and why the
+/// resolution window `W₂` is not an operand.
+const EPOCHS_BEFORE_PIN_RELEASE: u64 = 2;
 
 impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner<R> {
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
@@ -360,55 +404,64 @@ mod tests {
     /// outcomes + reader — is the one part of the seam no host-side test can
     /// reach. Without this it could be wrong in any of those four places
     /// while the whole suite stayed green.
-    /// The gate itself, exercised as a pure function of its three inputs — no
-    /// store, no actor, no daemon. `releasable` is where the slash-vs-disk
-    /// asymmetry actually lives, so it is worth testing without anything that
-    /// could make a pass mean something else.
+    /// The gate, exercised as a pure function of its three inputs — no store,
+    /// no actor, no daemon. This is where the slash-vs-disk asymmetry lives.
+    ///
+    /// The heights are chosen against `SETTLEMENT_EPOCH_BLOCKS = 10_000`:
+    /// a drop at 1_000 is mid-epoch-0, and the pair stays drawable through
+    /// epoch 0's close at 9_999.
     #[tokio::test]
-    async fn a_departed_shard_is_not_releasable_until_finality_has_elapsed() {
+    async fn a_departed_shard_is_not_releasable_while_it_is_still_drawable() {
         let (_dir, curve_tree) = handle();
         let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
 
-        // Shard 9 is pinned but no longer owed, first seen absent at height 1000.
+        // Dropped mid-epoch-0. Still drawable for the rest of epoch 0.
+        assert!(pinner.releasable(&[1], &[1, 9], 1_000).is_empty());
+
+        // A reorg depth later — what the first version of this gate released
+        // on. Epoch 0 has ~8_280 blocks left, and the provider is
+        // serve-set-blind, so reclaiming here means a real challenge finds no
+        // bytes.
         assert!(
-            pinner.releasable(&[1], &[1, 9], 1_000).is_empty(),
-            "a shard that just left is not final: releasing here is the reorg \
-             window the whole gate exists for",
+            pinner.releasable(&[1], &[1, 9], 1_720).is_empty(),
+            "720 blocks is a reorg depth, not an obligation: releasing here \
+             converts a disk leak into a miss",
         );
 
-        // One block short of the depth.
-        let almost = 1_000 + ARCHIVAL_REORG_DEPTH_BLOCKS - 1;
-        assert!(pinner.releasable(&[1], &[1, 9], almost).is_empty());
+        // Epoch 1's open: not drawable in epoch 1, but epoch 0's challenges
+        // may have fired as late as block 9_999 and still need to resolve.
+        assert!(
+            pinner.releasable(&[1], &[1, 9], 10_000).is_empty(),
+            "one epoch is too tight — a challenge issued in epoch 0's last \
+             block has had no time to resolve",
+        );
+        assert!(pinner.releasable(&[1], &[1, 9], 19_999).is_empty());
 
-        // Exactly the depth: releasable.
-        let at = 1_000 + ARCHIVAL_REORG_DEPTH_BLOCKS;
-        assert_eq!(pinner.releasable(&[1], &[1, 9], at), vec![9]);
+        // Epoch 2's open: absent across two consecutive epoch opens, and the
+        // last epoch it could have been drawn in closed a full epoch ago.
+        assert_eq!(pinner.releasable(&[1], &[1, 9], 20_000), vec![9]);
     }
 
-    /// A departure that reorgs back inside the window costs nothing and leaves
-    /// no trace — the clock restarts if it leaves again.
+    /// A departure that reverses inside the window costs nothing, and the clock
+    /// restarts if it leaves again.
     #[tokio::test]
     async fn a_shard_that_returns_clears_its_departure_clock() {
         let (_dir, curve_tree) = handle();
         let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
 
         assert!(pinner.releasable(&[1], &[1, 9], 1_000).is_empty());
-        // Back in the record at 1_100 — the reorg the gate is guarding against.
-        assert!(pinner.releasable(&[1, 9], &[1, 9], 1_100).is_empty());
-        // It leaves again at 1_200. Had the first clock survived, the depth
-        // would elapse at 1_720 and release 480 blocks too early.
-        assert!(pinner.releasable(&[1], &[1, 9], 1_200).is_empty());
+        // Back in the record inside epoch 0 — it was held at no epoch open it
+        // missed, so nothing has elapsed.
+        assert!(pinner.releasable(&[1, 9], &[1, 9], 5_000).is_empty());
+        // It leaves again in epoch 1. Had the first clock survived, epoch 2's
+        // open would release it while it was drawable in epoch 1.
+        assert!(pinner.releasable(&[1], &[1, 9], 15_000).is_empty());
         assert!(
-            pinner
-                .releasable(&[1], &[1, 9], 1_000 + ARCHIVAL_REORG_DEPTH_BLOCKS)
-                .is_empty(),
-            "the clock must have restarted at the second departure, not run from \
-             the first",
+            pinner.releasable(&[1], &[1, 9], 20_000).is_empty(),
+            "the clock restarted at the second departure: absent at epoch 2's \
+             open only, and it was drawable in epoch 1",
         );
-        assert_eq!(
-            pinner.releasable(&[1], &[1, 9], 1_200 + ARCHIVAL_REORG_DEPTH_BLOCKS),
-            vec![9],
-        );
+        assert_eq!(pinner.releasable(&[1], &[1, 9], 30_000), vec![9]);
     }
 
     /// A shard still owed is never releasable, however long it has been pinned
@@ -418,7 +471,7 @@ mod tests {
         let (_dir, curve_tree) = handle();
         let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
         assert!(pinner
-            .releasable(&[1, 9], &[1, 9], 10 * ARCHIVAL_REORG_DEPTH_BLOCKS)
+            .releasable(&[1, 9], &[1, 9], 10 * SETTLEMENT_EPOCH_BLOCKS)
             .is_empty());
     }
 
@@ -427,10 +480,11 @@ mod tests {
     async fn a_record_height_going_backwards_does_not_elapse_the_gate() {
         let (_dir, curve_tree) = handle();
         let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
-        assert!(pinner.releasable(&[1], &[1, 9], 5_000).is_empty());
+        assert!(pinner.releasable(&[1], &[1, 9], 50_000).is_empty());
         assert!(
             pinner.releasable(&[1], &[1, 9], 100).is_empty(),
-            "saturating subtraction: a lower height is not 4900 blocks of finality",
+            "saturating subtraction: a lower height is not five epochs of elapsed \
+             obligation",
         );
     }
 

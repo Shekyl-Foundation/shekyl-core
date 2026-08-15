@@ -18,14 +18,26 @@
   `EngineServeSetPinner` gains the departure ledger and the gate. The
   asymmetry §9.7 ruled is what shapes it: **acquiring a pin needs no
   finality; releasing one does**, because the reclaim is disk (recoverable)
-  and the risk is a slash (not). A pinned-but-unowed shard is stamped with
-  the record height it was first seen absent at, released only after
-  `ARCHIVAL_REORG_DEPTH_BLOCKS` — the chain's own reorg depth, the same
-  horizon the `P`-scan already treats as final, so there is no second
-  finality constant to keep in step — and its clock is **cleared if the
-  shard returns**, so a departure that reorgs back inside the window costs
-  nothing. Pin runs before release in the same actor turn, so the only
-  reachable transient is an extra pin, which fails toward retention.
+  and the risk is a slash (not).
+
+  **The gate is epoch-shaped, not reorg-shaped.** A reorg depth answers
+  "has this departure settled"; the obligation asks something else. §4
+  quantizes drawability to epoch boundaries — a pair is drawable in E iff
+  it held the shard at **E's open** — and that fixed pre-challenge
+  evaluation is the WS-1 constraint that stops `P` dropping a shard after
+  the fire to escape. A mid-epoch drop therefore leaves the pair drawable
+  through E's close. It bites at the pin because `StoreShardProvider` is
+  **serve-set-blind** — it answers for any shard whose bytes are in the
+  store — so the leak is currently what keeps the obligation met, and a
+  720-block release would have reclaimed the bytes ~9,280 blocks early,
+  turning a disk leak into a miss. A pinned-but-unowed shard is released
+  only after **two consecutive epoch opens** of absence, and its clock is
+  **cleared if the shard returns**. `W₂` is deliberately not an operand:
+  it has no landed constant (it is the rig's output), and a full epoch of
+  slack covers any `W₂` shorter than `SETTLEMENT_EPOCH_BLOCKS` — with the
+  stated reopen if the rig ever derives one at or above an epoch. Pin runs
+  before release in the same actor turn, so the only reachable transient is
+  an extra pin, which fails toward retention.
 
   The store does not enforce the gate: it has no clock, no view of the
   bond record, and no memory of when a shard left one. A half-check there

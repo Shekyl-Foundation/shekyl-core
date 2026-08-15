@@ -1641,18 +1641,51 @@ direction is now an implemented **release behind a finality depth**, taking
 the first of the two exits rather than the "never release" ruling — the
 maintainer's call, on the grounds that the space has to come back.
 
-The depth is **`ARCHIVAL_REORG_DEPTH_BLOCKS`**, the chain's own reorg depth,
-single-sourced from consensus rather than chosen here — the same horizon the
-`P`-scan already treats as final, so there is no second finality number to
-keep in step. `LeafStore` gained the two verbs it never had
-(`pinned_shard_ids`, `release_pins`); the pin table was previously written by
-`pin_serve_set` and cleared by truncation and *nothing else*, which is what
-made a departed shard's pin permanent. `EngineServeSetPinner` holds the
-departure ledger and owns the gate: a shard pinned-but-not-owed is stamped
-with the record height at which it was first observed absent, released only
-once `ARCHIVAL_REORG_DEPTH_BLOCKS` have elapsed, and **cleared if it returns**
-— so a departure that reorgs back inside the window leaves no trace and
-restarts the clock if it leaves again.
+**The gate is epoch-shaped, not reorg-shaped, and the review that caught it
+is worth recording.** The first implementation gated on
+`ARCHIVAL_REORG_DEPTH_BLOCKS` (720) — "has this departure settled on the
+chain". That is the wrong quantity. §4 quantizes drawability to epoch
+boundaries: a pair is drawable in E iff it held the shard at **E's open**,
+and that fixed pre-challenge evaluation is the WS-1 constraint — no
+tip-holdings read that would let `P` drop the shard after the fire and
+escape. So a mid-epoch drop does not end the obligation for E; the pair
+stays drawable, and challengeable, through E's close — roughly 9,280 blocks
+after a 720-block gate would have released.
+
+It bites at the pin rather than one layer up because
+`StoreShardProvider` is **serve-set-blind**: it holds only a `ServingReader`
+and answers for any shard whose bytes are in the store. So the leak is
+currently what *keeps the obligation met* — a dropped-but-still-pinned shard
+is still served. Releasing on a reorg depth would have converted a disk leak
+into a miss, then a slash: §9.7's own asymmetry pointed the wrong way.
+
+**The condition is two consecutive epoch opens of absence.** Then the shard
+was not drawable in the current epoch or the one before, so the last epoch it
+could have been drawn in closed a full epoch ago. Two rather than one because
+one is too tight — absent at only the current open leaves the previous epoch
+as the last drawable one, and a challenge issued in its final block still has
+to resolve; the extra epoch is that slack.
+
+**W₂ is deliberately not an operand.** The resolution window has no landed
+constant — it is the rig's output (item 6 below, still UNDERIVED) — so a gate
+naming it could not be written yet. A full epoch of slack covers any W₂
+shorter than `SETTLEMENT_EPOCH_BLOCKS`, which at ~14 days against a window
+measured in minutes-to-hours is not a close call. **Reopen (rule 21):** if
+the rig derives a W₂ at or above one epoch, this gate is wrong and must take
+W₂ as an operand.
+
+The reorg question the naive gate answered is subsumed, not dropped: §2 notes
+drawability is evaluated at epoch open, "deep history relative to any
+plausible reorg, so the drawable set is reorg-stable". Two epoch boundaries
+is far deeper than 720 blocks.
+
+`LeafStore` gained the two verbs it never had (`pinned_shard_ids`,
+`release_pins`); the pin table was previously written by `pin_serve_set` and
+cleared by truncation and *nothing else*, which is what made a departed
+shard's pin permanent. `EngineServeSetPinner` holds the departure ledger and
+owns the gate, and **clears a shard's entry if it returns** — so a departure
+that reverses inside the window leaves no trace and restarts the clock if it
+leaves again.
 
 Two residuals, both stated rather than discovered:
 
