@@ -58,8 +58,13 @@ sustainability is unaffected by the recalibration.
   row (unchecked until ruled + wired); inventory record:
   `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
 
-- **SA-R-7 cap-before-reserve source-scan gate (added 2026-08-14, the
-  ratification's filed residual — lands in the SA conventions tail).**
+- **SA-R-7 cap-before-reserve source-scan gate — DISCHARGED 2026-08-14
+  (`feat/sa-rt-round-close`, the conventions tail): the FFI boundary
+  ratchet (`shekyl-ffi/tests/ffi_boundary_ratchet.rs`) pins every raw
+  `slice::from_raw_parts` and raw `Vec::with_capacity` per file, failing
+  in BOTH directions; the third unguarded `make_slice` clone
+  (`engine_file_ffi`) absorbed into the seam; pipefail is rule
+  `46-shell-gate-exits`. Record below kept as filed.**
   The `bounded_capacity(count, stride, remaining_bytes)` helper landed in
   the #470 review round (`legacy_util`); `parse_prove_witness` (leaf-chunk,
   C1/C2 layer counts, sibling counts) routes through it. Still owed: a

@@ -4,6 +4,24 @@
 
 ### Changed
 
+- **The signature-alignment round is closed; its last rule is enforced,
+  not remembered (SA-R-7 tail).** The FFI boundary ratchet
+  (`shekyl-ffi/tests/ffi_boundary_ratchet.rs`) pins every raw
+  `slice::from_raw_parts` and raw `Vec::with_capacity` in the crate per
+  file, failing in both directions — a new raw site fails CI, an
+  improvement must tighten its pin — with `legacy_util`'s
+  `slice_from_ptr`/`bounded_capacity` as the seam obligations (rule 40);
+  the third byte-identical unguarded `make_slice` clone
+  (`engine_file_ffi`) was absorbed into the seam. House conventions
+  landed as rules: one-domain-string-one-context (rule 30, SA-R-2),
+  envelope-vs-payload version naming (rule 42, the SM-R-5 split),
+  refuse-never-panic on the untrusted FFI path (rule 40), and the new
+  `46-shell-gate-exits` — gate verdicts never travel through a pipe
+  (five swallowed-exit exhibits in one round, including one that pushed
+  a clippy-red commit and one that masked a broken C++ link).
+  FOLLOWUPS' thirteen stray plus-bullet wraps mechanically rejoined
+  (whitespace-normalized content verified identical).
+
 - **Untrusted numeric conversions: one live over-reservation fixed, the
   cast gate made real at the trust boundary (SA-6, SA-R-7 — ratified
   2026-08-14).** The
