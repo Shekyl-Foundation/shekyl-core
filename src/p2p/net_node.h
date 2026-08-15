@@ -127,7 +127,56 @@ namespace nodetool
       would then be a passive lookup — connect to the hidden service, read
       `peer_id` from the handshake, scan clearnet for a match — with no
       timing analysis and no traffic correlation. `node_server::init`
-      enforces this invariant and refuses to start if it is broken. */
+      enforces this invariant and refuses to start if it is broken.
+
+      \note The cross-zone argument above does NOT survive the obvious
+      counter-proposal — "give the anonymity zone its own independently
+      random `peer_id`, sharing no entropy with clearnet". The same-zone
+      argument does, and it is the one that keeps this constant a constant.
+
+      A stable identifier on an anonymity zone is an **eclipse-completion
+      oracle**, and the direction of announcement hands it to exactly the
+      wrong party. Inbound anonymity connections carry no client identity:
+      `net_node.cpp` sets every hidden-service listener's `default_remote`
+      to `net::tor_address::unknown()`, so an attacker accepting N inbound
+      streams sees N identical remotes. But `get_local_node_data` fills
+      `node_data.peer_id` on the **dialer** side and the acceptor reads it
+      into `context.peer_id`, so a victim filling its outbound slots
+      announces to every attacker onion it dials while the attacker
+      announces nothing back that matters.
+
+      Eclipse is three steps: get onions into the victim's peerlist (cheap —
+      gossip does it), get the victim to dial them (probabilistic), and know
+      it worked. Step three has no cheap solution today — grouping must be
+      inferred from correlated handshake timing, matching sync heights and
+      correlated peerlist responses, which is noisy and confounded because
+      twelve streams from one victim look much like twelve streams from
+      twelve victims. A distinct `peer_id` collapses step three to a field
+      read at handshake, before any traffic, turning an open-loop gamble
+      into a closed-loop operation with a completion signal: at 9/12 the
+      attacker knows to publish more onions, and at 12/12 it knows every
+      subsequent observation is sound rather than possibly explained by an
+      honest link. The same read, against one onion accepting inbound, is a
+      census of the anonymity network.
+
+      The trade is not close, and it is not symmetric. The defender's use is
+      **retrospective** — a node learns it is eclipsed only after it is —
+      and the remedy (stop stemming, fluff at origin) is the branch that
+      gives the attacker deterministic origin attribution. The attacker's
+      use is **prospective**, and its remedy is to publish more onions, at
+      near-zero cost. So the distinctness such an identifier would buy is
+      negative-valued on its own terms, before the linkability cost is even
+      counted — and that cost is already spent elsewhere:
+      `shekyl-p-transport::derive_socks_user` gives per-persona SOCKS stream
+      isolation precisely so personas do not share a circuit fate, and a
+      stable per-zone `peer_id` would hand back at the p2p layer the linkage
+      the transport layer exists to deny.
+
+      It would also not work. `peer_id` is self-asserted and free to mint, so
+      an adversary running twelve daemons announces twelve distinct ids at
+      the same cost as twelve onions. A per-zone random value would catch the
+      accidental case and nothing adversarial — worse than no mechanism,
+      because it would read as a defense. */
   constexpr peerid_type ANON_ZONE_SENTINEL_PEER_ID = 1;
 
   /*! Which addresses are currently suppressed after failed dials, and for how

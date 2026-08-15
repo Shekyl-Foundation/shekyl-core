@@ -930,7 +930,7 @@ async fn reopen_with_first_stake_intent(
         )
     });
     let engine = match reopened {
-        Ok(OpenedEngine::Loaded(w)) | Ok(OpenedEngine::Restored { wallet: w, .. }) => w,
+        Ok(OpenedEngine::Loaded(w) | OpenedEngine::Restored { wallet: w, .. }) => w,
         Err(e) => {
             // Credentials verified and daemon connected above, so this is a
             // real file/system fault. Best-effort restore: a plain reopen

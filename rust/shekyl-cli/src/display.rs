@@ -52,7 +52,7 @@ pub fn preflight_secret_display() -> Result<(), DisplaySafetyError> {
         eprintln!("WARNING: {warning}");
         eprintln!("Scrollback may retain this secret.");
         eprint!("Type YES to proceed: ");
-        let _ = io::stderr().flush();
+        drop(io::stderr().flush());
 
         let mut confirm = String::new();
         if io::stdin().read_line(&mut confirm).is_err() || confirm.trim() != "YES" {
@@ -74,15 +74,15 @@ pub fn show_secret(label: &str, secret: &mut String) {
     println!();
 
     eprint!("Press Enter to clear screen...");
-    let _ = io::stderr().flush();
+    drop(io::stderr().flush());
     let mut buf = String::new();
-    let _ = io::stdin().read_line(&mut buf);
+    drop(io::stdin().read_line(&mut buf));
 
     // Best-effort scrollback + screen clear.
     // \x1b[3J clears scrollback on xterm and most derivatives.
     // \x1b[2J clears the visible screen. \x1b[H moves cursor to top-left.
     print!("\x1b[3J\x1b[2J\x1b[H");
-    let _ = io::stdout().flush();
+    drop(io::stdout().flush());
 
     eprintln!(
         "NOTE: Your terminal may still have this secret in scrollback.\n\

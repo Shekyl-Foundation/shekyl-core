@@ -303,11 +303,10 @@ impl WalletRpcError {
     pub fn code(&self) -> WalletRpcErrorCode {
         match self {
             Self::ParseError => WalletRpcErrorCode::ParseError,
-            Self::InvalidRequest(_) => WalletRpcErrorCode::InvalidRequest,
+            Self::InvalidRequest(_) | Self::Unauthorized => WalletRpcErrorCode::InvalidRequest,
             Self::MethodNotFound(_) => WalletRpcErrorCode::MethodNotFound,
             Self::InvalidParams(_) => WalletRpcErrorCode::InvalidParams,
             Self::InternalError(_) => WalletRpcErrorCode::InternalError,
-            Self::Unauthorized => WalletRpcErrorCode::InvalidRequest,
             Self::WalletAlreadyOpen => WalletRpcErrorCode::WalletAlreadyOpen,
             Self::WalletNotOpen => WalletRpcErrorCode::WalletNotOpen,
             Self::WalletFileExists => WalletRpcErrorCode::WalletFileExists,
@@ -464,8 +463,9 @@ impl From<RefreshError> for WalletRpcError {
             RefreshError::RescanPersist(detail) => {
                 internal_detail("rescan reset persistence failed", detail)
             }
-            RefreshError::Io(IoError::Daemon { .. })
-            | RefreshError::Io(IoError::Scanner { .. }) => Self::DaemonUnreachable,
+            RefreshError::Io(IoError::Daemon { .. } | IoError::Scanner { .. }) => {
+                Self::DaemonUnreachable
+            }
             RefreshError::Io(other) => internal_detail("refresh I/O error", other),
             RefreshError::ConcurrentMutation { wallet, result } => internal_detail(
                 "refresh concurrent mutation",
@@ -583,9 +583,9 @@ fn terminal_to_reject_cause(kind: TerminalErrorKind) -> RejectCause {
         TerminalErrorKind::DoubleSpend => RejectCause::DoubleSpendConflict,
         TerminalErrorKind::FeeTooLow => RejectCause::FeeTooLow,
         TerminalErrorKind::Malformed => RejectCause::Malformed,
-        TerminalErrorKind::Unrecognized => RejectCause::Unrecognized,
-        // `TerminalErrorKind` is `#[non_exhaustive]`; unknown future kinds
-        // take the fail-safe Unrecognized disposition (DAEMON_SUBMIT_VERDICT §2.5).
+        // `TerminalErrorKind` is `#[non_exhaustive]`; `Unrecognized` and any
+        // unknown future kinds take the fail-safe Unrecognized disposition
+        // (DAEMON_SUBMIT_VERDICT §2.5).
         _ => RejectCause::Unrecognized,
     }
 }
@@ -663,11 +663,11 @@ impl From<PendingTxError> for WalletRpcError {
             PendingTxError::ChainStateChanged { .. } | PendingTxError::TooOld { .. } => {
                 Self::SnapshotInvalidated
             }
-            PendingTxError::DiscardBlockedPendingDaemonAck { .. } => Self::SubmitAmbiguous,
+            PendingTxError::DiscardBlockedPendingDaemonAck { .. }
+            | PendingTxError::Io(IoError::Daemon { .. }) => Self::SubmitAmbiguous,
             PendingTxError::SubmitAlreadyPending { .. } => {
                 Self::InternalError("submit already pending for this reservation".into())
             }
-            PendingTxError::Io(IoError::Daemon { .. }) => Self::SubmitAmbiguous,
             PendingTxError::Io(other) => Self::InternalError(other.to_string()),
             other => Self::InternalError(other.to_string()),
         }

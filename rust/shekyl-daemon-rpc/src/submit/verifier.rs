@@ -556,7 +556,8 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         .collect();
 
     // ── E8: claims battery (§7.1 steps 1–5) ─────────────────────────────
-    let claims = emission_vin_verify_claims(vin, &ctx, &sources).map_err(emission_reject)?;
+    let claims =
+        emission_vin_verify_claims(vin, &ctx, &sources).map_err(|e| emission_reject(&e))?;
 
     // ── E9 + E10: backing membership proof + the dual hybrid auths ──────
     let reference = facts.reference.ok_or(VerifyFailure::StaleRoot)?;
@@ -565,7 +566,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         .and_then(|depth| depth.checked_add(1))
         .ok_or(VerifyFailure::StaleRoot)?;
     let backing = emission_vin_verify_backing(vin, &reference.root, layers, signable_tx_hash)
-        .map_err(emission_reject)?;
+        .map_err(|e| emission_reject(&e))?;
     let reward_commits: Vec<RewardCommit> = parsed
         .tx
         .prefix
@@ -583,12 +584,14 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         .collect::<Option<Vec<_>>>()
         .ok_or(VerifyFailure::Malformed)?;
     let auth = emission_vin_verify_auth(vin, &reward_commits, &signable_tx_hash)
-        .map_err(emission_reject)?;
+        .map_err(|e| emission_reject(&e))?;
     // The witness assembly is infallible once the three minters passed —
     // mirroring the C++ oracle's single `shekyl_emission_vin_verify`
     // crossing; the outputs (total reward, epochs to commit) are the
     // connect arm's operands and unused at submit.
-    let _ = shekyl_archival_retention::emission_vin_verify(claims, backing, auth);
+    drop(shekyl_archival_retention::emission_vin_verify(
+        claims, backing, auth,
+    ));
 
     // ── E11: fee-input FCMP++ over the ToKey subset (blockchain.cpp:
     // 4046-4108 — the bond-arm funding shape; the full prefix hash, not
@@ -616,7 +619,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
 /// §8.7.2 classification rule: the consumed/moved claim slot — record gone
 /// or epoch already claimed — is the `DoubleSpendConflict` claim-slot leg;
 /// every other violation is a window/shape/proof failure → `Malformed`.
-fn emission_reject(e: EmissionVerifyError) -> VerifyFailure {
+fn emission_reject(e: &EmissionVerifyError) -> VerifyFailure {
     match e {
         EmissionVerifyError::BondMissing | EmissionVerifyError::EpochAlreadyClaimed { .. } => {
             VerifyFailure::DoubleSpendConflict

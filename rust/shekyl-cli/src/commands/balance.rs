@@ -68,7 +68,7 @@ pub fn cmd_engine_info(rpc: &RpcSession) {
             println!("  Capability:      {}", s("capability"));
             println!("  Address:         {}", s("address"));
             println!("  Wallet height:   {}", i("wallet_height"));
-            match val.get("daemon_height").and_then(|v| v.as_i64()) {
+            match val.get("daemon_height").and_then(serde_json::Value::as_i64) {
                 Some(h) => println!("  Daemon height:   {h}"),
                 None => println!("  Daemon height:   unavailable"),
             }
@@ -86,7 +86,7 @@ pub fn cmd_engine_info(rpc: &RpcSession) {
             if let Some(staking) = val.get("staking") {
                 let enabled = staking
                     .get("staking_enabled")
-                    .and_then(|v| v.as_bool())
+                    .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false);
                 println!("  Staking enabled:  {enabled}");
             }

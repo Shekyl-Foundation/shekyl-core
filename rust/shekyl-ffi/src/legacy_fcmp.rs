@@ -317,87 +317,9 @@ pub(crate) fn parse_prove_witness(
             .copy_from_slice(&data[offset + 224..offset + SHEKYL_PROVE_WITNESS_HEADER_BYTES]);
         offset += SHEKYL_PROVE_WITNESS_HEADER_BYTES;
 
-        // Leaf chunk
-        if offset + 4 > data.len() {
-            return None;
-        }
-        let chunk_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
-        offset += 4;
-
-        let mut leaf_chunk_outputs = Vec::with_capacity(chunk_count);
-        let mut leaf_chunk_h_pqc = Vec::with_capacity(chunk_count);
-        for _ in 0..chunk_count {
-            if offset + 128 > data.len() {
-                return None;
-            }
-            let mut lo = [0u8; 32];
-            let mut li = [0u8; 32];
-            let mut lc = [0u8; 32];
-            let mut lh = [0u8; 32];
-            lo.copy_from_slice(&data[offset..offset + 32]);
-            li.copy_from_slice(&data[offset + 32..offset + 64]);
-            lc.copy_from_slice(&data[offset + 64..offset + 96]);
-            lh.copy_from_slice(&data[offset + 96..offset + 128]);
-            leaf_chunk_outputs.push((lo, li, lc));
-            leaf_chunk_h_pqc.push(lh);
-            offset += 128;
-        }
-
-        // C1 (Selene) branch layers
-        if offset + 4 > data.len() {
-            return None;
-        }
-        let c1_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
-        offset += 4;
-
-        let mut c1_branch_layers = Vec::with_capacity(c1_count);
-        for _ in 0..c1_count {
-            if offset + 4 > data.len() {
-                return None;
-            }
-            let sib_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
-            offset += 4;
-            let needed = sib_count * 32;
-            if offset + needed > data.len() {
-                return None;
-            }
-            let mut siblings = Vec::with_capacity(sib_count);
-            for s in 0..sib_count {
-                let mut scalar = [0u8; 32];
-                scalar.copy_from_slice(&data[offset + s * 32..offset + (s + 1) * 32]);
-                siblings.push(scalar);
-            }
-            offset += needed;
-            c1_branch_layers.push(shekyl_fcmp::proof::BranchLayer { siblings });
-        }
-
-        // C2 (Helios) branch layers
-        if offset + 4 > data.len() {
-            return None;
-        }
-        let c2_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
-        offset += 4;
-
-        let mut c2_branch_layers = Vec::with_capacity(c2_count);
-        for _ in 0..c2_count {
-            if offset + 4 > data.len() {
-                return None;
-            }
-            let sib_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
-            offset += 4;
-            let needed = sib_count * 32;
-            if offset + needed > data.len() {
-                return None;
-            }
-            let mut siblings = Vec::with_capacity(sib_count);
-            for s in 0..sib_count {
-                let mut scalar = [0u8; 32];
-                scalar.copy_from_slice(&data[offset + s * 32..offset + (s + 1) * 32]);
-                siblings.push(scalar);
-            }
-            offset += needed;
-            c2_branch_layers.push(shekyl_fcmp::proof::BranchLayer { siblings });
-        }
+        let (leaf_chunk_outputs, leaf_chunk_h_pqc) = parse_leaf_chunks(data, &mut offset)?;
+        let c1_branch_layers = parse_branch_layers(data, &mut offset)?;
+        let c2_branch_layers = parse_branch_layers(data, &mut offset)?;
 
         inputs.push(shekyl_fcmp::proof::ProveInput {
             output_key,
@@ -416,6 +338,75 @@ pub(crate) fn parse_prove_witness(
     }
 
     Some(inputs)
+}
+
+fn read_u32_le(data: &[u8], offset: &mut usize) -> Option<usize> {
+    let bytes = data.get(*offset..*offset + 4)?;
+    *offset += 4;
+    Some(u32::from_le_bytes(bytes.try_into().ok()?) as usize)
+}
+
+type LeafChunkOutput = ([u8; 32], [u8; 32], [u8; 32]);
+
+fn parse_leaf_chunks(
+    data: &[u8],
+    offset: &mut usize,
+) -> Option<(Vec<LeafChunkOutput>, Vec<[u8; 32]>)> {
+    let chunk_count = read_u32_le(data, offset)?;
+    let remaining = data.len() - *offset;
+    let mut outputs = bounded_capacity(chunk_count, 128, remaining)?;
+    let mut h_pqc = bounded_capacity(chunk_count, 128, remaining)?;
+    for _ in 0..chunk_count {
+        let chunk = data.get(*offset..*offset + 128)?;
+        let mut lo = [0u8; 32];
+        let mut li = [0u8; 32];
+        let mut lc = [0u8; 32];
+        let mut lh = [0u8; 32];
+        lo.copy_from_slice(&chunk[..32]);
+        li.copy_from_slice(&chunk[32..64]);
+        lc.copy_from_slice(&chunk[64..96]);
+        lh.copy_from_slice(&chunk[96..128]);
+        outputs.push((lo, li, lc));
+        h_pqc.push(lh);
+        *offset += 128;
+    }
+    Some((outputs, h_pqc))
+}
+
+/// C1 and C2 branch layers share a wire shape: a u32 layer count, then
+/// per layer a u32 sibling count and that many 32-byte scalars. One
+/// parser so the sibling-count reserve goes through [`bounded_capacity`].
+fn parse_branch_layers(
+    data: &[u8],
+    offset: &mut usize,
+) -> Option<Vec<shekyl_fcmp::proof::BranchLayer>> {
+    let count = read_u32_le(data, offset)?;
+    // Protocol ceiling, not just a backing bound: a layer costs only a
+    // 4-byte header on the wire but a `BranchLayer` plus per-layer padding
+    // work in `prove` — so a genuinely BACKED blob could otherwise buy
+    // ~2.5M empty layers per 10 MiB (memory/CPU amplification). No valid
+    // witness has more branch layers per curve than the tree's maximum
+    // depth; the exact C1/C2 alternation split stays the proof library's
+    // contract (`prove` validates the path), not re-derived here.
+    if count > shekyl_fcmp::MAX_TREE_DEPTH as usize {
+        return None;
+    }
+    let remaining = data.len() - *offset;
+    let mut layers = bounded_capacity(count, 4, remaining)?;
+    for _ in 0..count {
+        let sib_count = read_u32_le(data, offset)?;
+        let remaining = data.len() - *offset;
+        let mut siblings = bounded_capacity(sib_count, 32, remaining)?;
+        for _ in 0..sib_count {
+            let bytes = data.get(*offset..*offset + 32)?;
+            let mut scalar = [0u8; 32];
+            scalar.copy_from_slice(bytes);
+            siblings.push(scalar);
+            *offset += 32;
+        }
+        layers.push(shekyl_fcmp::proof::BranchLayer { siblings });
+    }
+    Some(layers)
 }
 
 /// Verify an FCMP++ proof with batch verification.
@@ -660,7 +651,13 @@ pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
     outputs_ptr: *const u8,
     count: usize,
 ) -> ShekylBuffer {
-    let total = count * 128;
+    // `count` is the ABI-declared element count of the caller's buffer; the
+    // multiply must not wrap (a wrap-scale count would desync the declared
+    // byte length from the element count below — the checked-mul guard every
+    // other ptr+len count in this crate already carries).
+    let Some(total) = count.checked_mul(128) else {
+        return ShekylBuffer::null();
+    };
     let Some(bytes) = (unsafe { slice_from_ptr(outputs_ptr, total) }) else {
         return ShekylBuffer::null();
     };
@@ -673,4 +670,98 @@ pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
 
     let serialized = shekyl_fcmp::tree::leaves_to_bytes(&leaves);
     ShekylBuffer::from_vec(serialized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hostile count field must be refused BEFORE any reservation:
+    /// wire counts (`chunk_count`, `c1_count`, `c2_count`, and nested
+    /// `sib_count`) go through `bounded_capacity`. Pre-cap a 4-byte
+    /// `u32::MAX` drove `Vec::with_capacity` reservations of up to
+    /// ~412 GB — allocation failure aborts the whole C++ host process.
+    /// Post-cap, a count the remaining bytes cannot back is malformed
+    /// input and parses to `None` like every other truncation.
+    #[test]
+    fn hostile_witness_counts_are_refused_before_any_reservation() {
+        // Leaf-chunk count claims u32::MAX with zero backing bytes.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Valid empty leaf chunk, hostile C1 layer count.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Valid empty leaf chunk, one C1 layer, hostile sibling count.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Valid empty leaf chunk + C1, hostile C2 layer count.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Control: the same three counts at 0 with no further bytes parse
+        // (structurally empty input set is the caller's concern, not a
+        // truncation) — proves the caps refuse the COUNT, not the shape.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_some());
+    }
+
+    /// A layer count above `MAX_TREE_DEPTH` is refused even when every
+    /// 4-byte header is genuinely BACKED by blob bytes: a layer costs 4
+    /// wire bytes but a `BranchLayer` + per-layer prove work, so backing
+    /// alone still buys ~2.5M empty layers per 10 MiB (the amplification
+    /// this cap closes). Boundary-controlled: exactly `MAX_TREE_DEPTH`
+    /// empty layers (all zero sib counts, fully backed) still parse —
+    /// the cap is the protocol ceiling, not an off-by-one.
+    #[test]
+    fn backed_layer_counts_above_max_tree_depth_are_refused() {
+        let depth = u32::from(shekyl_fcmp::MAX_TREE_DEPTH);
+
+        // C1 leg: count = MAX_TREE_DEPTH + 1, every header backed.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes()); // chunk_count = 0
+        blob.extend_from_slice(&(depth + 1).to_le_bytes());
+        for _ in 0..=depth {
+            blob.extend_from_slice(&0u32.to_le_bytes()); // backed sib headers
+        }
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // C2 leg: valid empty C1, hostile-but-backed C2.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes()); // chunk_count = 0
+        blob.extend_from_slice(&0u32.to_le_bytes()); // c1_count = 0
+        blob.extend_from_slice(&(depth + 1).to_le_bytes());
+        for _ in 0..=depth {
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Boundary control: exactly MAX_TREE_DEPTH backed empty layers on
+        // both curves parse.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes()); // chunk_count = 0
+        blob.extend_from_slice(&depth.to_le_bytes());
+        for _ in 0..depth {
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        blob.extend_from_slice(&depth.to_le_bytes());
+        for _ in 0..depth {
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        assert!(parse_prove_witness(&blob, 1).is_some());
+    }
 }

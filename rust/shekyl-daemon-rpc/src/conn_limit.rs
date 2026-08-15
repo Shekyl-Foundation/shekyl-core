@@ -109,7 +109,10 @@ impl ConnTracker {
 
         // The map lock serializes acquire/release, so `total` (mutated only
         // here and in `release`) stays consistent with the per-IP counts.
-        let mut map = self.per_ip.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self
+            .per_ip
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         if self.limits.max_total != 0 && self.total.load(Ordering::Relaxed) >= self.limits.max_total
         {
@@ -128,7 +131,10 @@ impl ConnTracker {
     }
 
     fn release(&self, ip: IpAddr) {
-        let mut map = self.per_ip.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self
+            .per_ip
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(slot) = map.get_mut(&ip) else {
             // Unreachable given the guard lifecycle (a ConnGuard exists iff
             // try_acquire inserted this canonical IP). Fail safe if that
@@ -358,6 +364,8 @@ mod tests {
         let t = ConnTracker::new(ConnLimits::default());
         let guards: Vec<_> = (0u16..64)
             .map(|i| {
+                // Deliberate u16->byte split: both halves of `i` are kept.
+                #[allow(clippy::cast_possible_truncation)]
                 let addr = IpAddr::from([10, 0, (i >> 8) as u8, i as u8]);
                 t.try_acquire(addr).expect("unlimited")
             })

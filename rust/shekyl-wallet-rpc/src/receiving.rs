@@ -171,7 +171,7 @@ pub(crate) async fn make_uri(
         .map_err(|e| WalletRpcError::InternalError(format!("serialize make_uri: {e}")))
 }
 
-pub(crate) async fn parse_uri(
+pub(crate) fn parse_uri(
     _tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
 ) -> Result<Value, WalletRpcError> {

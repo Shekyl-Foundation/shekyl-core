@@ -241,7 +241,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                     cause: RejectCause::FeeTooLow,
                 })
             }
-            CommitOutcome::Raced(fresh) => self.classify_race(&parsed, &cert, &fresh, caller),
+            CommitOutcome::Raced(fresh) => Self::classify_race(&parsed, &cert, &fresh, caller),
             CommitOutcome::InternalFault => Err(EngineFault::CommitFault),
         }
     }
@@ -371,7 +371,6 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
     /// verdict out (§3.1). The C++ never chooses a verdict; this function
     /// is the single point where a raced commit becomes one.
     fn classify_race(
-        &self,
         parsed: &ParsedSubmission,
         cert: &VerificationCertificate,
         fresh: &SubmitFacts,

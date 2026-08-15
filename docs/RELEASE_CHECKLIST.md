@@ -19,6 +19,7 @@
   - [x] Genesis-lane freeze-window sign-off on the v2 layout — **SIGNED 2026-08-13 (R. Dawson, release owner).** The 48-byte SLH-DSA-192s public-key fourth field in the classical segment is the committed frozen wire field, exactly as SM-R-8 ratified it. This row records the ratified position; it decided nothing new.
   - [ ] Address v2 layout + test vectors landed (`ADDRESS_DERIVATION_V1` successor)
   - [x] Message-signing round unblocked — **2026-08-13, by the sign-off above.** PR-SM-2's address-integrated verify freezes against the signed-off layout; the SM-R-6 R6-a type-gate lifts in code once the v2 layout row above lands.
+- [ ] **Release-artifact signing policy ruled and implemented** (CBOM §6 reopen, SA-6; owner: R. Dawson, release owner) — the gitian workflow builds deterministically and publishes assets with **no maintainer-key signature step**; a policy (classical GPG, SLH-DSA-192s via the in-tree message-signing stack, or both) must be ruled and wired into the release job **before the first non-RC release tag**. Cutting a release with this row unchecked is the failure the row exists to prevent (`docs/CRYPTOGRAPHIC_INVENTORY.md` §6).
 - [ ] PQC specification frozen
   - [x] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation — updated in PR-SA-2 to the nested combiner (v2, 64-byte domain-separated preimage), `Result<()>` verify, and the v2/frozen-v1 test-vector split
   - [x] canonical transaction/signature serialization documented

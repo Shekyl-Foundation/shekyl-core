@@ -63,3 +63,6 @@ tempfile = "3"
 # feature is on for `cargo test`/`cargo clippy --all-targets` but never for the
 # production dependency edge above (mirrors the shekyl-scanner precedent).
 shekyl-engine-core = { path = "../shekyl-engine-core", features = ["test-helpers"] }
+
+[lints]
+workspace = true

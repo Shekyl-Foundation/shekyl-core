@@ -79,3 +79,6 @@ http = "1"
 # Consensus-constant generation from config/consensus_constants.json (the
 # JSON authority; same pattern as shekyl-engine-core/build.rs).
 serde_json = "1"
+
+[lints]
+workspace = true

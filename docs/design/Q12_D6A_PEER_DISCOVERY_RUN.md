@@ -6,26 +6,26 @@ registered as **Q12-D6a** in
 *"the most expensive measurement the arc has proposed and the only one that
 cannot be faked."*
 
-**Status: DESIGN for the arms; the estate and the rigs were built and measured.
-No arm has been run, and no `A ≥ 60` readout exists.**
+**Status: the `{15, 30, 60}` sweep (§§13–15) and Q12-R5's late-joiner control
+(§15.2) are RUN, 2026-08-14, and every readout is committed. §16 settles what
+the floor actually counts, and CLOSES the distinctness question.**
 
-Corrected 2026-08-13. This line previously read *"No VM stood up, no arm run"*,
-which its own body had outgrown: §§10–11.13 record a six-host ring sampled for
-an hour across three providers, a 60-service dialability rig, and 20 hidden
-services restarted and polled to recovery — all on VMs, and all after §9.4's
-privileged install cleared. "No arm run" survives that correction; "no VM stood
-up" did not. **A status line that disagrees with its own document is the
-failure rule 94 exists to catch**, and it was read as current in a later
-session (`DAEMON_RELAY_PRIVACY.md` §90.3) before being checked against the body.
+Corrected twice, and the second correction supersedes the first. This line
+originally read *"No VM stood up, no arm run"*, which its own body had already
+outgrown: §§10–11.13 record a six-host ring sampled for an hour across three
+providers, a 60-service dialability rig, and 20 hidden services restarted and
+polled to recovery — all on VMs, and all after §9.4's privileged install
+cleared. **A status line that disagrees with its own document is the failure
+rule 94 exists to catch**, and this one was read as current in a later session
+(`DAEMON_RELAY_PRIVACY.md` §90.3) and used to justify a claim about what had
+been measured.
 
-What the distinction buys a later reader: the *instruments* are built and their
-findings (§§11.5–11.13) are real measurements, while the *arms* — the `A`
-sweep the run exists for — have produced nothing. Any claim needing a degree
-distribution at `A ≥ 60` is therefore unmeasured, not mislaid.
-
-The seed estate carries a current binary and four hidden services. Ground
-findings below are verified at source and against the live estate on 2026-08-11
-at pin
+The 2026-08-13 correction kept *"no arm run"*, which was true when it was
+written and is no longer: §§13–15 ran the arms the next day. Read §§10–12 as
+instrument-building and dress rehearsal, §§13–15 as the arms, and §16 as what
+the floor's number means. The seed estate carries a current binary and four
+hidden services. Ground findings below are verified at source and against the
+live estate on 2026-08-11 at pin
 [`14c2ee599`](https://github.com/Shekyl-Foundation/shekyl-core/commit/14c2ee599).
 Identifiers `Q12-R1…R7` extend the already-registered `Q12-` family (rule 94 §1;
 no new prefix is minted).
@@ -1928,7 +1928,7 @@ unset, mechanism live, semantics pinned only afterwards.
 
 F-8b's floor is not a quality preference. `hop` and `F` were provisioned at
 **`OutboundOnly@12`**, so the floor is *the condition under which the derived
-constants are valid*. A node with 4 anonymity peers is not running the topology
+constants are valid*. A node with 4 anonymity connections is not running the topology
 the embargo was derived for: its fluff return is slower, so `F` is
 under-provisioned **in the privacy-losing direction**, and its own transactions
 carry an embargo too short for the graph they traverse.
@@ -1944,6 +1944,17 @@ The trade is a real cost against an invisible one: an invalid embargo is a
 **operator's own and bounded**.
 
 ### 12.2 Two implementation constraints that are part of the ruling
+
+**Refused in advance (§16.5): D9's check is a self-provisioning check, not a
+sybil defense.** Distinctness on an anonymity zone is structurally unobtainable
+— the identifier that would supply it is an eclipse-completion oracle worth more
+to an attacker than to a victim — so this check can never be more than a check
+on the node's **own** configuration and churn. Any future proposal to "harden
+the floor against sybils" is proposing to reintroduce a linkable identifier, and
+is refused on that ground rather than re-argued. The input is an
+**outbound-connection count**, and §16.6 requires it be a named type that says
+so.
+
 
 - **The check must be live, not once at startup.** Peers churn, and a node above
   the floor can fall below it. This is exactly F-8b's gap: it floors the
@@ -2007,7 +2018,7 @@ it stand for originated traffic, where the cost is entirely different and
 `send_txs` had already ruled against exactly that.
 
 **The floor argument only supports (b).** The floor is a condition *on the
-stem*: below 12 anonymity peers the graph is not what `hop` and `F` were derived
+stem*: below 12 anonymity connections the graph is not what `hop` and `F` were derived
 at, so the embargo is invalid. That is an argument about **arming a stem
 timer**. It says nothing about which transport carries the bytes. Reading (a)
 converts *"the stem constants are invalid here"* into *"this zone is
@@ -2046,7 +2057,7 @@ a decision:
 | | pre-§89 | below-floor under (b) |
 | --- | --- | --- |
 | scope | **every** anonymity transaction | a bounded fallback |
-| trigger | none — it was the default | achieved anonymity peers `< 12`, checked live |
+| trigger | none — it was the default | achieved anonymity connections `< 12`, checked live |
 | known? | **no** — §63 discovered it | stated, with its cost |
 | recovery | none defined | automatic once the floor is met |
 
@@ -2184,3 +2195,568 @@ against the embargo argument, but whether a degree-1 *fluff* beats a degree-1
 instrument that could answer it now exists and is named:
 `simulate_fluff_return_mixed`, which takes a per-node degree vector. Settling it
 in §12.2's prose instead would be the failure Q12-D8 names.
+
+---
+
+## 13. The `A = 60` arm — RUN 2026-08-14, and the graph forms
+
+**Status: RUN. The arm's readout is in
+[`data/q12-d6a-a60-2026-08-14/series.tsv`](data/q12-d6a-a60-2026-08-14/series.tsv),
+committed with this section.** Every previous number in this document came from
+a dress rehearsal or a rig; this is the first arm.
+
+### 13.1 What was stood up
+
+| | |
+| --- | --- |
+| anon population `A` | **60** |
+| clearnet detector | **15** (fixed, Q12-R3) |
+| hosts / regions / providers | 9 / 9 / 3 |
+| binary | one artifact, `sha256 18984a08…`, on all nine hosts |
+| bootstrap | 5 seeds cross-peered; **every other node got exactly ONE seed onion** |
+
+The one-seed bootstrap is the discriminator §11.2 (Q12-R5) specifies: *"If
+gossip works it reaches 12. If only seeds matter it reaches 1 and stops."*
+
+### 13.2 The result
+
+Twelve samples at ~4-minute intervals, 720 node-samples. Sample 1 is the
+settling sample and is excluded from the per-node statistics; it is kept in the
+series because excluding it silently is how a settling artifact becomes a
+result.
+
+| sample | min | at-or-above floor |
+| --- | --- | --- |
+| 04:26:24 | **1** | 49 |
+| 04:30:26 | 10 | 55 |
+| 04:34:28 | 11 | 52 |
+| 04:38:30 | 11 | 49 |
+| 04:42:33 | 11 | 54 |
+| 04:46:35 | 9 | 56 |
+| 04:50:37 | 11 | 54 |
+| 04:54:39 | 11 | 50 |
+| 04:58:42 | 10 | 49 |
+| 05:02:44 | 10 | 47 |
+| 05:06:47 | 8 | 50 |
+| 05:10:50 | 11 | 46 |
+
+**Per node, over the eleven settled samples:**
+
+| | nodes |
+| --- | --- |
+| always at or above the floor | 10 |
+| dips below and recovers | 50 |
+| **never reaches the floor** | **0** |
+
+Observation-level, 562 of 660 node-samples (**85.2 %**) at or above 12, and
+**every node's maximum is 12 or 13** — there is no node the floor is out of
+reach for.
+
+#### "Always above the floor" is not a sample-count-stable statistic
+
+An interim read of this same run at **eight** samples reported *26* nodes
+always above the floor and 88.1 % of observations; at **twelve** it is *10* and
+85.2 %. The observation rate barely moved. The "always" count more than
+halved — and it must, because it is a conjunction over samples: every added
+sample is another chance for a node to dip, so the count **decreases
+monotonically in sample count** and is not comparable between runs of different
+length.
+
+Recorded because the interim figure was written down before the run finished,
+which is the same defect as reading a constant off one seed. The statistics to
+compare across arms are the **observation-level rate** and **"never reaches the
+floor"**; the "always" column is descriptive of this run's length only.
+
+#### An unresolved downward drift
+
+At-floor counts run 55, 52, 49, 54, 56, 54, 50, 49, 47, 50, **46** — the last
+third sits lower than the first. Over 40 minutes that is either slow
+degradation or the low end of ordinary churn, and **eleven samples cannot
+separate them**. §11.9 settled the analogous question on the six-host ring only
+by running a full hour and matching every missing link to a specific burn with
+a specific expiry.
+
+**Not asserted either way here.** The claim this arm supports is the one the
+drift does not touch: no node is structurally below the floor, and every node
+reaches it. Whether the settled level is flat at ~50 or slowly falling needs a
+longer arm, and that is left owed in §13.7 rather than resolved by picking the
+reading that suits.
+
+**The single node reading `1` in the first sample is the finding, not noise.**
+That is the bootstrap-only state the control was designed to detect — one
+`add-peer`, nothing gossiped yet — and it left that state by the next sample.
+Every node reached the out-peer target. **Gossip carries the anonymity graph at
+`A = 60`; the seeds are not doing the work.**
+
+### 13.3 What the number is NOT
+
+**12 is the configured target, not merely the floor.** `tx-proxy=…,12` caps
+outbound anonymity links at 12, so the ~52 nodes sitting at 12 are *saturated*,
+not comfortably clear of the floor. The two nodes reading 13 are inbound-side
+artifacts of the same cap. A reader must not take "88 % at or above the floor"
+as headroom — the arm shows the floor is **reachable**, not that it is
+**exceeded**.
+
+**The dips are churn, and the per-node view is what says so.** A fleet total
+cannot distinguish 34 nodes each dipping once from 5 nodes permanently at 11 —
+§11.9's requirement, and it earns its keep here: the aggregate oscillates
+between 49 and 56 while **no node is ever structurally below**. Every dip
+recovers within one sample, which is §11.9's contrast between an ordinary link
+loss and a burned onion.
+
+### 13.4 The isolation control passed
+
+All 15 clearnet detector nodes read **0 anonymity links** (`END 15 0`). The
+anonymity graph did not leak into the detector set, so Q12-R10's confound —
+fleet nodes discovering each other by a route that is not the one under test —
+is excluded by measurement rather than by assumption.
+
+### 13.5 Consequence for §11.13's launch condition
+
+§11.13 composed §11.7's reachability with the below-floor rule and concluded
+that *"at `p ≈ 0.15–0.23` the floor is unreachable up to roughly `A ≈ 19`"*,
+and that on a young network **no Shekyl node anywhere stems over Tor**.
+
+**That bound is not contradicted, and this arm does not test it.** `A = 60` is
+far above 19, and the arm measures the regime where the floor *should* be
+reachable — it confirms the upper half of §11.13's own claim. The launch
+condition concerns small `A`, and the arm that would settle it is `A = 15`,
+which is still unrun.
+
+**What this arm does settle** is that the mechanism works when the population
+supports it: the graph is not held below the floor by discovery, by the failure
+cache, or by hub dependence. A failure at small `A` is therefore a population
+effect and not a broken gossip path — which is what makes the `A = 15` arm worth
+running rather than a formality.
+
+### 13.6 Three harness findings, all of which would have produced a wrong reading
+
+**Q12-R14 — startup peak is ~2× steady state, and simultaneous starts OOM.** A
+fleet instance settles at ~**274 MB** `RssAnon`, but the kernel killed one at
+**520 MB** during genesis processing. Sizing a host on steady state and starting
+every instance at once killed **exactly one daemon on each 8 GB host** at 15
+concurrent starts, and none at 11. A silently-lost instance reduces `A` — the
+independent variable — and the arm would report the smaller population's result
+under the larger population's label. Instances are now started with a stagger
+(`run_arm.sh`), and the phase verifies `alive == want` before continuing.
+
+**Q12-R7 reproduced, from the other direction.** The first build of this arm
+defaulted to `ARCH=native` on the dev box and emitted AVX-512; six of the nine
+hosts lack it. §9.1 records this exact failure, and the default reintroduced it
+the moment a build was made outside the recorded recipe. A rule written in prose
+did not survive contact with `cmake -B build`; the portable flags now live in
+the container recipe beside the binary they produce.
+
+**The tor expert bundle carries its own libraries.** `tor` ships beside
+`libevent-2.1.so.7`, `libssl.so.3` and `libcrypto.so.3` and will not start
+without `LD_LIBRARY_PATH` pointing into the bundle — and the bundle sits at
+`/home/shekyl/...` on some hosts and `/opt/shekyl/...` on others. Resolved on
+the host rather than assumed.
+
+### 13.7 Still owed (as of §13; §§14–15 close two of these)
+
+- **A longer `A = 60` arm** — 11 settled samples cannot separate the observed downward drift (55 → 46 at-floor) from ordinary churn; §11.9 needed a full hour and per-burn attribution to settle the analogous question.
+- ~~**Q12-R5's late-joiner control**, both variants.~~ **RUN — see §15.2**
+  (seed 56 s, ordinary node 247 s; both reach the floor, so discovery is not
+  hub-dependent). Struck rather than deleted: this section was written when the
+  control was owed, and the list is read by people skimming for remaining work,
+  so an item that quietly vanishes is indistinguishable from one that was
+  dropped.
+- **A degree distribution for `fluff_return_ms`.** This arm's series is a
+  distribution at `A = 60`, but it is degree-at-target (the cap binds), so it
+  raises `F′` by nothing: `DAEMON_RELAY_PRIVACY.md` §90.3 shows the conservative
+  topology is uniform-at-the-floor, and a population sitting at the cap is
+  exactly that. **3500 ms stands as the lower bound, now with a measured
+  population behind the assumption it rested on.**
+
+---
+
+## 14. The `A = 15` arm — and §11.13's prediction is too strong
+
+**Status: RUN 2026-08-14**, immediately after §13 on the same fleet, reduced to
+15 anon nodes. Readouts in
+[`data/q12-d6a-a15-2026-08-14/`](data/q12-d6a-a15-2026-08-14/) — **both** the
+clean series and the contaminated one, because the contaminated run is a
+finding rather than an embarrassment.
+
+### 14.1 What changed, and what deliberately did not
+
+The 15 were chosen **spread across all nine hosts**, not as indices 0–14, which
+would have concentrated the arm on two machines and confounded population with
+locality. Clearnet stayed at 15 — it is fixed across arms by design (Q12-R3),
+so it is the one thing that must not scale with `A`.
+
+Seeds dropped 5 → 2. Holding 5 would make the seed set a **third** of the
+population, which is §7's own distortion warning ("at `A = 15` four well-known
+hubs are a quarter of the population") applied to our harness. 2/15 = 13.3 %
+against 5/60 = 8.3 % is the closest a cross-peerable seed set gets.
+
+### 14.2 The result
+
+| arm | at-or-above floor | per-node max | `stored` |
+| --- | --- | --- | --- |
+| `A = 60` (§13) | 85.2 % | 12–13 | — |
+| `A = 15`, **contaminated** | **0.0 %** (0/180) | 4–8 | **60** |
+| **`A = 15`, clean** | **52.1 %** (86/165 settled) | **12, all 15 nodes** | **14–15** |
+
+**Every one of the 15 nodes reaches the floor; none sustains it.** Per-node
+means run 10.25–11.67 against a floor of 12 and a ceiling of 14.
+
+### 14.3 §11.13's prediction is directionally right and too strong
+
+§11.13 concluded that at `p ≈ 0.15–0.23` **"the floor is unreachable up to
+roughly `A ≈ 19`"**, and therefore that on a young network *no Shekyl node
+anywhere stems over Tor*.
+
+**Measured at `A = 15`: the floor is reachable — every node touches 12 — but
+held only about half the time.** So the strong form is wrong. The *useful* form
+survives and is now quantified: crossing 12 is a **coin-flip per sample** at
+`A = 15` against a near-certainty at `A = 60`, so a below-floor rule that
+suppresses stemming will fire on roughly half of a small network's samples
+rather than on all of them.
+
+That is a materially different launch condition from "no node stems", and it is
+the difference between a network that cannot stem and one that stems
+intermittently — which the arm can distinguish and the arithmetic could not.
+
+### 14.4 The contaminated run, kept deliberately
+
+The first `A = 15` attempt read **0.0 % at floor and 4–8 links**, and it was
+wrong. Reducing `A = 60` → 15 left every surviving node holding a **60-address
+peerlist**, two-thirds of it now dead hosts, so nodes spent their dial budget on
+corpses and burned each into the failure cache.
+
+**The `stored` column is what caught it** — 60 stored candidates in a 15-node
+population is arithmetically impossible for a clean run. That column exists for
+exactly this ("a node at 11 links with a full white list is churn, the same node
+with every candidate burned is the failure"), and it earned its place: nothing
+in the *achieved-links* series looked anomalous. A 4–8 plateau is entirely
+plausible as a small-population result, and would have been reported as one.
+
+**A second attempt was still not clean**, at 45–60 stored: the wipe raced the
+shutdown. Killing the daemon, sleeping 6 s and removing the data directory lets
+a daemon still flushing `p2pstate.bin` write the old list back out *after* the
+removal, and one surviving node re-gossips it to the whole arm. The third
+attempt waits for actual process exit, removes, **verifies removal**, and only
+then starts — `stored` reads 14–15, and the result moves from 0.0 % to 52.1 %.
+
+**Recorded as a standing requirement: an arm that changes `A` must start from
+verified-empty peerlists, and `stored ≤ A` is the check that it did.**
+
+### 14.5 A caveat the arm surfaced about the floor itself
+
+Raised here because the arm made it concrete: an anonymity peerlist can be
+deduped only **by address**, so the floor counts connections rather than
+distinct hosts.
+
+**Scoped and settled in §16**, which corrects this section's first framing on
+two counts — the sentinel did not *cause* the property, and clearnet has the
+same one.
+
+---
+
+## 15. The sweep closes — `A = 30`, and Q12-R5's late-joiner control
+
+**Status: RUN 2026-08-14.** With §13 and §14 this completes the `{15, 30, 60}`
+sweep and the bootstrap control. Readouts in
+[`data/q12-d6a-a30-2026-08-14/`](data/q12-d6a-a30-2026-08-14/) and
+[`data/q12-r5-late-joiner-2026-08-14/`](data/q12-r5-late-joiner-2026-08-14/).
+
+`A = 30` ran on the six permanent seed hosts alone — no VMs were provisioned,
+because 30 anon + 15 clearnet fits inside 24.8 GB once the startup peak is
+staggered (Q12-R14). Three seeds, 10 % of the population, bracketing 8.3 % at
+`A = 60` and 13.3 % at `A = 15`. **`stored ≤ A` was checked at the second
+sample** (29–30 in a 30-node population) before any of this was believed —
+§14.4's standing requirement, on its first use.
+
+### 15.1 The sweep
+
+| `A` | at-or-above floor (settled) | never reaches it | min after settling |
+| --- | --- | --- | --- |
+| 15 | 52.1 % | 0/15 | 11 |
+| **30** | **84.2 %** | **0/30** | 11 |
+| 60 | 85.2 % | 0/60 | 11 |
+
+**The transition is between 15 and 30, and it is saturated by 30.** Going from
+30 to 60 buys 1.1 points; going from 15 to 30 buys 32. In all three arms **no
+node is ever structurally below the floor** — every node reaches 12 — so what
+`A` changes is how *reliably* the floor is held, not whether it is attainable.
+
+**This is the number §11.13's launch condition actually needs.** The concern was
+that a young network cannot stem over Tor. Measured: at 15 anon nodes the
+below-floor rule fires on about half of samples; by 30 it fires on one in six;
+past 30 it stops improving. The operational reading is **~30 anonymity-capable
+nodes**, not the `A ≈ 19` the arithmetic implied and not "unreachable".
+
+### 15.2 Q12-R5 — the late joiner, both variants
+
+One new node, **exactly one `--add-peer`**, joining the converged `A = 30`
+network from a verified-empty peerlist. Run sequentially, not together: run
+concurrently they could peer with each other, which is neither variant.
+
+| variant | its one peer | time to floor |
+| --- | --- | --- |
+| **seed** | a cross-peered hub | **56 s** |
+| **ordinary** | an ordinary fleet node | **247 s** |
+
+**Both reach the floor, so discovery is not hub-dependent** — the thing Q12-R5
+existed to test. A node that knows one ordinary peer converges on its own.
+
+**The difference is ~4.4×, and that is the price of hub mediation.** It is not
+in peerlist acquisition: both variants held ~30 candidates within 30 seconds,
+because the handshake hands over a peerlist immediately either way. It is in
+*link establishment* — the seed variant went 2 → 9 → 12, while the ordinary
+variant climbed 0 → 2 → 5 → 6 → 6 → 9 → 9 → 10 → 11 → 12 with visible plateaus,
+the shape of dial failures and retries against a 240 s window.
+
+**Why the plateaus differ is NOT isolated by this rig** and is not claimed. Both
+variants had the same candidate set within 30 s, so the gap is in which
+candidates were tried and how many dials failed, and the rig records neither
+per-dial outcome. Stated as an observation with its mechanism open.
+
+### 15.3 A measurement error worth recording
+
+The first late-joiner run reported **`anon_out = 0` for 21 minutes** while
+`stored` climbed 1 → 31 — a node that learned the whole network and connected to
+none of it. That would have been a striking finding. **It was wrong**: the
+validated reader put the same node at **12**.
+
+The cause was a hand-rolled `get_connections` filter written inline for the
+poll loop, sitting beside `read_anon_histogram.sh` — the instrument with a test
+suite, written because *"a consumer that regexes the human format is a defect
+waiting to happen"* after an earlier extractor "reported nine values for six
+nodes". The same mistake, in the same run, against the same warning.
+
+**Recorded because the failure mode is seductive**: the bad number was
+*interesting*. A late joiner that learns 31 peers and links to none is a better
+story than one that reaches the floor in 56 seconds, and it survived twenty-one
+minutes of polling without once looking implausible. The rule the arc keeps
+re-learning is that a second instrument must be validated against the first
+before its disagreement is treated as a result rather than a bug.
+
+---
+
+## 16. The floor counts connections — on every zone, and always has
+
+**Maintainer analysis, 2026-08-14, verified at source.** §14.5 raised this as a
+Tor-specific consequence of the `peer_id` sentinel. **Both halves of that
+framing were wrong**, and the corrected version changes where it files and how
+severe it is.
+
+### 16.1 `peer_id` was never a distinctness mechanism, on any zone
+
+Every `peer_id` comparison in `net_node.inl` is one of exactly two things:
+
+- **self-connection detection** — [`:1110`](../../src/p2p/net_node.inl#L1110),
+  [`:1209`](../../src/p2p/net_node.inl#L1209),
+  [`:1234`](../../src/p2p/net_node.inl#L1234),
+  [`:2655`](../../src/p2p/net_node.inl#L2655) — every one guarded by
+  `is_public` / `azone == zone::public_`, and the two that inspect live
+  connections ([`:1215`](../../src/p2p/net_node.inl#L1215),
+  [`:1240`](../../src/p2p/net_node.inl#L1240)) additionally conjoin
+  `peer.adr.is_same_host(cntxt.m_remote_address)`;
+- **peerlist keying** — `set_peer_just_seen`, our own entry, the announce.
+
+**Nothing counts peers by `peer_id`.** Not on the anonymity zone, not on
+clearnet. So the sentinel did not remove a distinctness mechanism; there was
+none to remove, and §8.1's decision remains correct on its own terms.
+
+### 16.2 Clearnet has no diversity limit either
+
+`ipv4_network_subnet` appears only in the manual-ban machinery — the blocked
+map at [`:209`](../../src/p2p/net_node.inl#L209),
+[`block_subnet`](../../src/p2p/net_node.inl#L348) and
+[`unblock_subnet`](../../src/p2p/net_node.inl#L399). **There is no netgroup
+bucketing, no per-`/16` outbound cap, no stripe diversity in peer selection.**
+
+Clearnet's floor counts connections too. It merely *looks* better because IPv4
+is mildly scarce and `.onion` is free.
+
+**So the finding restates:** F-8b and D9 count **connections**, on every zone,
+and always have. The sentinel made that legible on Tor rather than causing it.
+
+**Which fixes where it files.** Against the below-floor rule's threat model is
+half right — it belongs equally against **F-8b's startup refusal**, which counts
+the same way and has been shipping since it landed.
+
+### 16.3 The exploitable direction is the opposite of the one first assumed
+
+Price the adversary's position both ways. An adversary holding `k` of a
+victim's twelve anonymity connections:
+
+| the floor reads | what the victim does | what the adversary gets |
+| --- | --- | --- |
+| **twelve** | stems | the epoch's stem successor is one connection of twelve, so with probability `k/12` it is the adversary — who then sees every origination and forward from that victim, **but ambiguous between origin and relay**, which is the ambiguity D++ is built on |
+| **low** | D9(b) fires, fluffs at origin | the adversary holding **any** connection sees the victim as the fluff source: deterministic, every origination, every epoch, **precision ≈ 1** |
+
+**The second is strictly better for the adversary.** So an adversary who can
+move the reading wants it **low** — and moving it low costs nothing. No onions,
+no sybils: occupy outbound slots, be unreachable at the right moment, or simply
+wait, because §15.1's own sweep says the network sits below the floor **47.9 %**
+of the time at `A = 15` and **15.8 %** at `A = 30`.
+
+**Therefore the address-counting property makes the floor read too HIGH, and
+too high is the direction that denies the adversary the better outcome.** The
+twelve-onions eclipse costs a VPS and buys the adversary the *worse* branch.
+That is not nothing — under full eclipse the adversary has precision 1 whichever
+branch fires, so the floor check changes nothing there at all — but it is not
+the severity §14.5 implied.
+
+### 16.4 Shelved on the mechanism, with the instrument named
+
+§12.1's counter is real: a below-floor node that stems anyway has `F′` above its
+embargo, so the embargo expires and it fluffs at origin **late** — after the
+stem already leaked to the successor. On that reading D9(b) does not *create*
+fluff-at-origin; it makes it prompt and deliberate instead of late and
+additionally leaky.
+
+**What prose cannot settle is whether prompt-and-certain beats
+late-and-probabilistic.** The `F′` distribution has mass below the embargo even
+at low degree, and D9(b) removes that mass unconditionally. That is a
+distribution question about a path that does not run — and
+`conformance::converged_fluff_return_mixed` is now exactly the instrument for
+it: it takes per-node degree distributions and returns converged p90s, refusing
+rather than reporting an unconverged draw.
+
+**Shelved under rule 7 on the mechanism, and this time the instrument exists.**
+
+### 16.5 CLOSED — distinctness on an anonymity zone is structurally unobtainable
+
+Not a filed item with an open threat model. **Closed, with a reason**, and it
+would remain closed even if the counting problem were more severe than §16.3
+finds it.
+
+**A distinctness oracle and a linkability oracle are the same predicate.** *"Can
+I tell these twelve addresses are one host?"* and *"can I tell these two
+addresses are one host?"* are one question. Any identifier that lets a node
+detect twelve onions behind one daemon lets everyone else detect that two of an
+operator's addresses are the same operator. That is not a cost trade; it is the
+same knob.
+
+**Shekyl already spent that knob.** `shekyl-p-transport::derive_socks_user`
+([`lib.rs:134`](../../rust/shekyl-p-transport/src/lib.rs#L134)) gives
+per-persona SOCKS stream isolation precisely so a node's personas do not share
+a circuit fate, and §10.9 pins one-P-per-wallet-on-wire. A stable per-zone
+`peer_id` announced to every peer would hand back, at the p2p layer, the linkage
+the transport layer is built to deny.
+
+#### And the oracle is worth more to the attacker — measured by direction, not preference
+
+The symmetry argument alone leaves the trade open: perhaps the defender's use is
+worth more. **It is not, and the asymmetry is structural.**
+
+The direction of announcement hands the oracle to the wrong party. Inbound
+anonymity connections carry **no client identity** — every hidden-service
+listener's `default_remote` is `net::tor_address::unknown()`
+([`net_node.cpp:336`](../../src/p2p/net_node.cpp#L336),
+default-constructed at [`tor_address.h:71`](../../src/net/tor_address.h#L71)) —
+so an attacker accepting N inbound streams sees N identical remotes. But
+`get_local_node_data` fills `node_data.peer_id` on the **dialer** side
+([`net_node.inl:2153`](../../src/p2p/net_node.inl#L2153)) and the acceptor reads
+it into `context.peer_id`
+([`:2672`](../../src/p2p/net_node.inl#L2672)). **The victim filling its outbound
+slots announces to every attacker onion it dials; the attacker announces nothing
+back that matters.**
+
+Eclipse is three steps: get onions into the victim's peerlist (cheap — gossip
+does it), get the victim to dial them (probabilistic), and **know it worked**.
+Step three has no cheap solution today: grouping must be inferred from
+correlated handshake timing, matching sync heights and correlated peerlist
+responses — noisy, slow and confounded, because twelve streams from one victim
+look much like twelve streams from twelve victims. A distinct `peer_id`
+collapses step three to a **field read at handshake, before any traffic**.
+
+That converts eclipse from an open-loop gamble into a closed-loop operation with
+a completion signal, and the signal is worth as much as the position: at 9/12 the
+attacker knows to publish more onions; at 12/12 it knows **every subsequent
+observation is sound** rather than possibly explained by an honest link. The
+oracle tells the attacker when its inference is valid, not merely when its
+position is complete. A third use needs no eclipse at all — run one onion, accept
+inbound, count distinct ids over time, and read out a **census of the anonymity
+network**, which is currently unobtainable and bears directly on the `A ≈ 30`
+launch condition §15.1 just established.
+
+| | defender's use | attacker's use |
+| --- | --- | --- |
+| timing | **retrospective** — learns it is eclipsed after it already is | **prospective** — learns when to push and when to start |
+| remedy | stop stemming → D9(b) fluff-at-origin, **the branch §16.3 shows the attacker prefers** | publish more onions, **near-zero cost** |
+
+**Same oracle, strictly more valuable to the attacker.** So the sentinel is not a
+reluctant trade in which distinctness is surrendered to preserve unlinkability:
+**the distinctness it would buy is negative-valued on its own terms**, before the
+linkability cost is counted at all.
+
+And it would not work regardless. `peer_id` is self-asserted and free to mint —
+an adversary running twelve daemons on one VPS announces twelve distinct ids at
+the same cost as twelve onions. A per-zone random value catches the *accidental*
+case and nothing adversarial, which is **worse than no mechanism, because it
+would read as a defense** in the code and in the doc.
+
+#### The one mechanism with real scarcity, refused
+
+The only scarce resource in the tree that could supply peer-distinctness on Tor
+is the archival serving identity — `OnionIdentity::from_hs_id_seed`
+([`onion_identity.rs:124`](../../rust/shekyl-tor/src/onion_identity.rs#L124)),
+under the `StakeEngine`'s custody since #464. Binding relay peering to it would
+make p2p membership **paid**, give every relay peer a **persistent identity**,
+and **correlate a node's relay position with its archival service** across two
+subsystems that are deliberately separate — a privacy regression wearing a
+sybil-resistance argument, the same shape as the "typical hardware" proposal
+already ruled against.
+
+### 16.6 What follows, in the code and in the record
+
+**No code change is required by this finding**, and no behaviour changes here.
+Three consequences:
+
+1. **The prose stops saying "peers."** Twelve outbound *connections* is what is
+   checked, on every zone, and the number does not certify twelve distinct
+   hosts. Corrected at three sites in §12.
+2. **`ANON_ZONE_SENTINEL_PEER_ID`'s comment now carries the same-zone
+   argument.** It previously named only the cross-zone attack — connect to the
+   hidden service, read `peer_id`, scan clearnet for a match — and that argument
+   **is defeated** by the obvious counter-proposal of a per-zone independently
+   random value. A future reader weighing *"can we relax this for sybil
+   resistance?"* would have found the objection inapplicable and relaxed it. The
+   eclipse-completion argument survives that counter-proposal, so it belongs
+   beside it; the invariant now names its own consequence, which is what the
+   startup refusal enforces and what its comment previously under-justified.
+3. **§12.2's D9 input must be a named type** — an outbound-connection count that
+   says what it counts, not a bare `usize`. The substitution is not
+   hypothetical: `shekyl_relay_zone_plan_relay_with_refresh` takes
+   `(outbound: *const u8, n: usize)` and binds `read_ids(outbound, n)` to a
+   local named **`peers`**
+   ([`relay_zone_ffi/mod.rs:816`](../../rust/shekyl-ffi/src/relay_zone_ffi/mod.rs#L816))
+   while holding connection ids. An earlier estimate that this site "already
+   receives the number" is **retracted** — it receives the wrong quantity.
+
+**Refused in advance, in the shape of the Pi-4 ruling:** because distinctness is
+structurally unavailable on an anonymity zone, D9's check can never be more than
+a check on **the node's own configuration and churn**, and any future proposal to
+*"harden the floor against sybils"* is proposing to reintroduce a linkable
+identifier. That is a named privacy regression wearing a robustness argument, and
+it is refused here rather than re-litigated later.
+
+### 16.7 Lineage — Dandelion++ never had this check
+
+Worth recording so the gap is not read as inherited breakage. §3.1 of
+[1805.11060v1](https://arxiv.org/abs/1805.11060) models the adversary as a
+fraction `p` of corrupt nodes, states its goal as **mass** deanonymization rather
+than targeted attacks, and explicitly places ISP-level adversaries who can
+eclipse a node **outside scope**, noting that routing-based defenses cannot
+guarantee anything for a targeted node under those conditions.
+
+So `p` is a **free parameter of the analysis**, not a quantity the protocol
+bounds. Every result is conditional on it — Fig. 3's precision curves, Theorem
+1's bound, §5.3.1's `q = 0.2`. Nothing in Dandelion++ makes sybils expensive and
+the paper does not claim otherwise; §4.1.1's 4-regular graph is about robustness
+to graph-learning, and even assumes adversarial nodes have the same degree as
+honest ones. The CryptoNote line inherits that posture wholesale: address-only
+dedupe on non-public zones, and no netgroup bucketing on clearnet either.
+Bitcoin has the netgroup/ASN diversity machinery; this lineage never did.
+
+**So Dandelion++ never had this check, and therefore never had this gap.** We
+introduced it by deriving a constant from a graph-degree assumption and then
+writing a check that reads a number the assumption does not cover — which is the
+ordinary way this happens, and is a reason to name the check's limit rather than
+to treat it as a defect.

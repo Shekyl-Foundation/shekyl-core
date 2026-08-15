@@ -125,6 +125,9 @@ pub struct ShekylU128 {
 
 impl From<u128> for ShekylU128 {
     fn from(v: u128) -> Self {
+        // Deliberate lo/hi split of the u128: both halves are kept, so the
+        // truncating cast is value-preserving by construction.
+        #[allow(clippy::cast_possible_truncation)]
         Self {
             lo: v as u64,
             hi: (v >> 64) as u64,
@@ -314,7 +317,11 @@ mod tests {
             0x0123_4567_89ab_cdef_fedc_ba98_7654_3210,
         ] {
             let abi = ShekylU128::from(v);
-            assert_eq!(abi.lo, v as u64, "low half of {v:#x}");
+            // Deliberate: asserting the low half of the split, so the
+            // truncating cast is the expected value here.
+            #[allow(clippy::cast_possible_truncation)]
+            let lo = v as u64;
+            assert_eq!(abi.lo, lo, "low half of {v:#x}");
             assert_eq!(abi.hi, (v >> 64) as u64, "high half of {v:#x}");
             let back: u128 = abi.into();
             assert_eq!(back, v, "round-trip of {v:#x}");
