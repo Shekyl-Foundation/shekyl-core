@@ -110,6 +110,17 @@ fn alpha_curve_across_below_floor_degrees() {
     println!("\n  degree   F'(d) ms   alpha(d)   shortfall vs design 0.90");
     println!("  ------   --------   --------   ------------------------");
 
+    // §16.4's pre-registered band boundary: alpha above this rules D9(b) off
+    // the provisioning floor for ANY pricing with E <= L. Asserting it here is
+    // what converts the frozen rule from a document into something CI
+    // enforces — a rule that was frozen once, versus a rule that stays frozen.
+    const PREREGISTERED_ALPHA_BOUNDARY: f64 = 0.5;
+    // Degrees where the OutboundOnly flood strands >10 % of nodes, so the
+    // question is ill-posed and the instrument must REFUSE. Asserted, not
+    // skipped: a refusal that silently became a reading (or spread to degree
+    // 4) would change what the sweep claims without reddening anything.
+    const MUST_REFUSE: [usize; 2] = [1, 2];
+
     let mut rows = Vec::new();
     for degree in [1_usize, 2, 4, 6, 8, 9, 10, 11, 12] {
         let flood = FloodParams {
@@ -133,6 +144,12 @@ fn alpha_curve_across_below_floor_degrees() {
                 // nodes, and `Stranded` says the topology cannot support the
                 // question rather than giving a number that looks finite.
                 println!("  {degree:6}   REFUSED   {e}");
+                assert!(
+                    MUST_REFUSE.contains(&degree),
+                    "degree {degree} REFUSED but is inside the answerable range — \
+                     the sweep's coverage shrank and every claim about 'every \
+                     measurable degree' is now over a smaller set than §17 records"
+                );
                 continue;
             }
         };
@@ -164,4 +181,33 @@ fn alpha_curve_across_below_floor_degrees() {
         );
     }
     assert!(!rows.is_empty(), "no degree produced a reading");
+
+    // The refusals must actually have refused. Without this, a future change
+    // that lets degree 1-2 return a finite-looking number would silently
+    // extend the curve into the region §17.2 records as ill-posed.
+    for d in MUST_REFUSE {
+        assert!(
+            !rows.iter().any(|r| r.0 == d),
+            "degree {d} produced a reading but the topology strands >10 % of \
+             nodes there — a finite number in the ill-posed region"
+        );
+    }
+
+    // THE PRE-REGISTERED RULE (§16.4, committed a5804d9c7 before this file
+    // existed): alpha above 0.5 at every answering degree rules D9(b) off the
+    // provisioning floor, robustly for any E <= L — and alpha never entering
+    // the band anywhere measurable is the sharper mode: the MECHANISM is
+    // wrong, not its threshold. This assertion is that ruling, armed. If a
+    // change to the flood model or the survival derivation ever pushes alpha
+    // into the band, this reddens and the D9(b) question REOPENS rather than
+    // drifting.
+    for (degree, f_ms, a) in &rows {
+        assert!(
+            *a > PREREGISTERED_ALPHA_BOUNDARY,
+            "alpha({degree}) = {a:.6} (F' = {f_ms} ms) entered the pre-registered \
+             band [0.1, 0.5] or below — §16.4's ruling no longer follows from \
+             the measurement and §12.2's D9(b) question must be REOPENED, not \
+             patched here"
+        );
+    }
 }

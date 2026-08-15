@@ -2918,11 +2918,32 @@ instrument existed** (`a5804d9c7`). Instrument:
 | 3250 ms (shipped, measured at degree 12) | **0.900281** |
 | 4750 ms (§90.3's third-below-floor reading) | **0.869051** |
 
-The first row is the composition checking itself: feeding the **shipped** `F′`
-to the **shipped** embargo reproduces `EMBARGO_FULL_TRAVEL_PROBABILITY = 0.90`
-to four decimals. The embargo really is solved for 0.90 at that `F′`, so the
-pipeline is measuring the quantity it claims to. The second row moves in the
-right direction and by a real amount, so `F′` is not a dead input.
+**The control is the two assertions, not the 0.90 reproduction — stated so a
+future reader leans on the right one.** The first row is a round trip:
+`derive_embargo` binary-searches `mean_ticks` for the smallest value whose
+`full_travel_probability` meets the 0.90 target at `F′ = 3250`, so feeding that
+pair back through the same function returns the search's own `achieved` field
+by construction. It could not have come back anything else, and a modeling
+error *inside* `full_travel_probability` moves the derivation and the check
+together — it prints 0.900281 either way. What the row does buy: the test
+hard-codes 190 s rather than re-deriving it, so the pair is pinned and an edit
+to `full_travel_probability` drifts the printed value off 0.90 — a regression
+canary on one pinned pair, and proof the harness calls the production
+derivation rather than a mirror.
+
+The evidence that the pipeline responds on the axis under test is the pair of
+**assertions**: α at `F′ = 3250` and `F′ = 4750` must differ, and the slower
+return must produce the *lower* α, with the mechanism named (a longer return
+inflates the timer-survival exponent). What rules out the sweep printing 0.90
+at every degree is the **sweep's own variation** — 0.884 at 11, ≥ 0.68 across
+the measurable range, refusals at 1–2 — which the curve test now asserts
+rather than reports (the pre-registered 0.5 boundary at every answering
+degree, and the refusals as refusals). A modeling error common to every row —
+a wrong slack exponent, a mis-placed RD-4 correction — passes both and is
+bounded instead by the analytic/empirical pairing the crate uses elsewhere
+(`marginal_preemption_profile` against `simulate_preemption_profile`,
+`derive.rs:490`); `full_travel_probability` has no such partner yet, and that
+empirical-α companion is the named follow-up, one degree's worth of work.
 
 ### 17.2 The curve
 
@@ -2994,10 +3015,17 @@ to the section §12.1 anticipated:
 1. **`x = 0` is not the remedy for below-floor.** It buys an invalid-embargo
    argument at the price of certain origin attribution, against a measured 88 %
    chance the stem would have completed.
-2. **The remaining candidates are the two §12.1 rejected**, and they must be
-   re-ranked against a measurement that did not exist when they were rejected —
-   *stem anyway* (whose cost is now quantified: 11.6 % of originations carry an
-   embargo short for their graph) and *hold*.
+2. **The remaining candidates are the two §12.1 rejected — and they are NOT
+   equally reopened.** *Stem anyway* was rejected on *"ships a known-invalid
+   provisioning invisibly"*, which is precisely the premise §17.6 just
+   weakened to a ~0.4-point shortfall; its rejection rests on a measurement
+   that has now moved. *Hold* was rejected on liveness — *"at `A ≤ 12` this is
+   not a transient stall but every Tor node holding indefinitely"* — and both
+   findings since then push the same way: R13's stickiness makes the
+   below-floor state longer-lived, and the sweep puts the network in it 47.9 %
+   / 15.8 % / 14.8 % of the time. **`x = 0` falling is not a general licence
+   to revisit**: the re-ranking reopens *stem anyway* on its merits and must
+   treat *hold*'s rejection as strengthened, not lapsed.
 3. **Whatever §12.2 specifies must be evaluated against an adversary who wants
    it to fire** (§16.3), not one who trips it by accident.
 
