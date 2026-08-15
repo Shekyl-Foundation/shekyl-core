@@ -1530,6 +1530,77 @@ impl LeafStore {
             .collect())
     }
 
+    /// Every shard id currently pinned in this store.
+    ///
+    /// The reconcile input for pin **release**: a serve-set refresh knows what
+    /// the bond record says it owes *now*, and this is the only way to learn
+    /// what the store is still retaining on the strength of an older record.
+    /// Without it a pin from a previous session — or from before a holdings
+    /// drop — is invisible, and invisible pins are exactly the leak
+    /// `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 5 prices at ~13.6 GB
+    /// against a rule-76 Pi-4 floor.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`] on a read fault.
+    pub fn pinned_shard_ids(&self) -> Result<Vec<u64>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
+        pinned
+            .iter()?
+            .map(|r| r.map(|(k, _)| u64::from(k.value().0)).map_err(Into::into))
+            .collect()
+    }
+
+    /// Release pins, letting [`Self::prune_frozen`] reclaim those segments.
+    ///
+    /// Returns how many pins were actually removed — ids with no pin are a
+    /// no-op, not an error, so a caller re-releasing an already-released shard
+    /// is idempotent rather than a failure to special-case.
+    ///
+    /// # This is the dangerous verb, and the caller owns the gate
+    ///
+    /// §9.7 item 5 rules the asymmetry: **acquiring a pin needs no finality;
+    /// releasing one does.** A holdings change that is later reorged back can,
+    /// if the pin was already released, have let a prune discard bytes that no
+    /// re-pin restores — `AlreadyPruned` is terminal, and its remedy is a chain
+    /// replay. The reclaim this buys is disk, which is recoverable; the loss it
+    /// risks is a slash, which is not.
+    ///
+    /// The store deliberately does **not** enforce that gate: it has no clock,
+    /// no view of the bond record, and no memory of when a shard left one. The
+    /// finality decision belongs to the side that reads the record over time,
+    /// and putting a half-check here would make it look guarded while the real
+    /// condition went unenforced. What the store owes is that this is the only
+    /// path — pins are otherwise removed solely by truncation.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::UnrepresentableShardId`] for an id outside the `u32`
+    /// space, plus any write fault.
+    pub fn release_pins(&self, shard_ids: &[u64]) -> Result<usize, StoreError> {
+        let ids = shard_ids
+            .iter()
+            .map(|&shard_id| {
+                u32::try_from(shard_id)
+                    .map(SegmentId)
+                    .map_err(|_| StoreError::UnrepresentableShardId { shard_id })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let txn = self.db.begin_write()?;
+        let mut removed = 0usize;
+        {
+            let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
+            for id in ids {
+                if pinned.remove(id)?.is_some() {
+                    removed += 1;
+                }
+            }
+        }
+        txn.commit()?;
+        Ok(removed)
+    }
+
     /// Prune frozen, unpinned segments down to their `R_k` records.
     ///
     /// Leaf bytes at `owned_positions` are copied into the owned-identities
@@ -2937,6 +3008,79 @@ mod tests {
                 entry
             })
             .collect()
+    }
+
+    /// The leak §9.7 item 5 prices, and its close: a released pin lets the
+    /// prune reclaim the bytes, and an un-released one does not.
+    #[test]
+    fn releasing_a_pin_lets_the_prune_reclaim_the_segment() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        store.pin_serve_set(&[0]).unwrap();
+        assert_eq!(store.pinned_shard_ids().unwrap(), vec![0]);
+
+        // Pinned: the prune must leave the bytes alone.
+        store.prune_frozen(&[]).unwrap();
+        assert_eq!(
+            store.pin_serve_set(&[0]).unwrap(),
+            vec![(0, SegmentPin::PinnedServable)],
+            "a pinned segment survives the prune",
+        );
+
+        // Released: the same prune now reclaims it, which is the whole point.
+        assert_eq!(store.release_pins(&[0]).unwrap(), 1);
+        assert!(store.pinned_shard_ids().unwrap().is_empty());
+        store.prune_frozen(&[]).unwrap();
+        assert_eq!(
+            store.pin_serve_set(&[0]).unwrap(),
+            vec![(0, SegmentPin::AlreadyPruned)],
+            "with the pin gone the prune reclaimed the leaf bytes — the disk the \
+             persona is no longer obligated to hold",
+        );
+    }
+
+    /// Releasing what was never pinned is a no-op, not a failure: the caller
+    /// re-computes its release set every refresh and must not have to remember
+    /// what it already released.
+    #[test]
+    fn releasing_an_unpinned_shard_is_idempotent() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        assert_eq!(store.release_pins(&[0]).unwrap(), 0);
+        store.pin_serve_set(&[0]).unwrap();
+        assert_eq!(store.release_pins(&[0]).unwrap(), 1);
+        assert_eq!(store.release_pins(&[0]).unwrap(), 0);
+    }
+
+    /// `pinned_shard_ids` is what makes a *previous session's* pin visible —
+    /// the cross-restart half of the leak. A refresh that only knew the current
+    /// record could never learn about it.
+    #[test]
+    fn pinned_shard_ids_reports_what_no_current_record_would_mention() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        store.pin_serve_set(&[0, 1]).unwrap();
+        let mut pinned = store.pinned_shard_ids().unwrap();
+        pinned.sort_unstable();
+        assert_eq!(pinned, vec![0, 1]);
+
+        // A later record owes only shard 1; shard 0 is retained on the strength
+        // of a record nobody holds any more.
+        store.pin_serve_set(&[1]).unwrap();
+        let mut still = store.pinned_shard_ids().unwrap();
+        still.sort_unstable();
+        assert_eq!(
+            still,
+            vec![0, 1],
+            "pinning a narrower set does not release the difference — that is the \
+             leak, and why release is an explicit verb",
+        );
     }
 
     /// The link `Staleness::PinsDropped` rests on, and the one nothing walked:

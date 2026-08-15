@@ -441,6 +441,34 @@ impl CurveTreeClient {
             .map_err(ClientError::from)
     }
 
+    /// Every shard id currently pinned — the reconcile input for release.
+    ///
+    /// Pure forward to [`LeafStore::pinned_shard_ids`]; the reason it exists
+    /// lives there.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn pinned_shard_ids(&self) -> Result<Vec<u64>, ClientError> {
+        self.store.pinned_shard_ids().map_err(ClientError::from)
+    }
+
+    /// Release pins so the prune can reclaim those segments.
+    ///
+    /// A store **write**, so it runs on the actor's object for the same reason
+    /// pinning does. Pure forward to [`LeafStore::release_pins`] — including
+    /// the part that matters most: the store does not enforce the finality
+    /// gate, and the caller owns it.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn release_pins(&self, shard_ids: &[u64]) -> Result<usize, ClientError> {
+        self.store
+            .release_pins(shard_ids)
+            .map_err(ClientError::from)
+    }
+
     /// Rebuild the in-memory client state from a store's persisted tables.
     ///
     /// **Resume order invariant (B4):** the rebuilt [`Self::entries`] vec
