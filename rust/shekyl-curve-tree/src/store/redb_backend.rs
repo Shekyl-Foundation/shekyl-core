@@ -47,6 +47,11 @@ const META_LEAF_COUNT: &str = "leaf_count";
 const META_SYNC_TIP: &str = "sync_tip_height";
 const META_NEXT_FREEZE_SEG: &str = "next_freeze_seg";
 const META_SCHEMA_VERSION: &str = "schema_version";
+// Prune-disabled posture declaration (CompleteTree serving). Boolean as
+// 0/1 in the u64 meta store; absent reads as false — the same
+// absent-defaults posture every other meta cell rides, so a pre-posture
+// store needs no migration.
+const META_PRUNE_DISABLED: &str = "prune_disabled";
 
 /// In-band layout version this build reads and writes.
 ///
@@ -373,6 +378,15 @@ pub enum StoreError {
         /// The frozen segment whose leaf bytes are gone.
         id: SegmentId,
     },
+    /// [`LeafStore::prune_frozen`] was called on a store whose
+    /// prune-disabled posture is declared
+    /// ([`LeafStore::set_prune_disabled`] — the CompleteTree serving
+    /// posture: the node owes every frozen shard, so pruning *any* frozen
+    /// bytes is the §9.6-item-4 silent-slash setup). A typed refusal,
+    /// never a silent no-op (rule 82): the caller asked for something the
+    /// store's declared posture forbids, and must learn it here rather
+    /// than at the first failed challenge.
+    PruneDisabledPosture,
     /// A [`LeafStore::pin_serve_set`] member does not fit the store's `u32`
     /// [`SegmentId`] space, so it cannot name a segment in *any* store — a
     /// construction bug in whatever built the serve-set, not a freeze race.
@@ -626,6 +640,104 @@ impl LeafStore {
         ))
     }
 
+    /// The store's freeze-prefix cursor (`META_NEXT_FREEZE_SEG`): the
+    /// frozen set is exactly `[0, k)` for the returned `k`. Defaults to 0
+    /// when the cell is absent (the same posture as [`Self::leaf_count`]
+    /// reads; `init_tables` seeds it to 0 on a fresh store).
+    ///
+    /// **Not** `shekyl_archival_retention::frozen_segment_count` — that
+    /// helper is first-crossing completeness (`⌊leaf_count / E⌋`) and is
+    /// what the daemon registry writes. This cursor is burial-gated
+    /// ([`segment_freeze_eligible`]): a completed but unburied segment
+    /// does not advance it. D-5's refresh operand is *this* number;
+    /// `COMPLETETREE_ACTIVATION.md` drafted the getter as
+    /// `frozen_segment_count()`, which is amended here so the two facts
+    /// cannot share a name. Slice 2's `CompleteTreePrefix.frozen_count`
+    /// is this value.
+    ///
+    /// # The prefix invariant
+    ///
+    /// [`Self::maybe_freeze_segments`]'s in-transaction body advances the
+    /// cursor **sequentially** — segment `k` is considered only after
+    /// `0..k` have frozen, and the loop stops at the first ineligible
+    /// segment — and the only other writers are the truncate/rollback
+    /// recompute (`recompute_next_freeze_seg`, which re-derives the same
+    /// prefix below the truncation point) and the fresh-store seed to 0.
+    /// A frozen-segments table that disagrees with this prefix is
+    /// corruption, not a reportable state; the KATs bind the cursor to
+    /// the table in both the growth and rollback directions so the
+    /// invariant is a tested property rather than prose.
+    ///
+    /// Consumer: the CompleteTree serve-set derivation
+    /// (`COMPLETETREE_ACTIVATION.md` D-1/D-5) — a CompleteTree persona's
+    /// obligation *is* this prefix, so "the CompleteTree collection" is
+    /// one growing number, never a stored list that could drift.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::CorruptMeta`] when the persisted cursor exceeds the
+    /// representable [`SegmentId`] space (`u32::MAX + 1` — the count with
+    /// every `u32` id frozen). No frozen-segments table can contain such a
+    /// segment, so a larger cursor is provably corrupt with zero false
+    /// positives, and this getter is the serve-obligation authority — it
+    /// exists to report the prefix, not to trust a value the prefix cannot
+    /// have. Same decoder as `verify_frozen_tail`.
+    pub fn next_freeze_seg(&self) -> Result<u64, StoreError> {
+        let txn = self.db.begin_read()?;
+        let meta = txn.open_table(META_TABLE)?;
+        next_freeze_seg_in(&meta)
+    }
+
+    /// Whether the prune-disabled posture is declared — see
+    /// [`Self::set_prune_disabled`]. Absent reads `false`: a store that
+    /// never declared the posture prunes as before.
+    pub fn prune_disabled(&self) -> Result<bool, StoreError> {
+        let txn = self.db.begin_read()?;
+        let meta = txn.open_table(META_TABLE)?;
+        prune_disabled_in(&meta)
+    }
+
+    /// Declare the prune-disabled posture: from this call on,
+    /// [`Self::prune_frozen`] refuses with
+    /// [`StoreError::PruneDisabledPosture`].
+    ///
+    /// This is the CompleteTree serving posture's structural half
+    /// (`COMPLETETREE_ACTIVATION.md` D-1): a whole-corpus obligation is
+    /// not pinned per segment — the bad state (a foundation node pruning
+    /// bytes it owes) is made unrepresentable instead, with no pin
+    /// bookkeeping to forget and no freeze→pin race window to schedule
+    /// around.
+    ///
+    /// **One-way, deliberately — there is no clear path.** Idempotent to
+    /// re-declare; never clearable through this surface. A node
+    /// un-declaring the posture while holding a live CompleteTree bond is
+    /// exactly the §9.6-item-4 silent-slash setup (locally discard bytes
+    /// the record still owes, fail challenges an epoch later). Reopen
+    /// criterion (rule 21): a clear path, if ever wanted, arrives only
+    /// with its own design round, and must bind the clear to evidence
+    /// that no live bond owes the corpus — it is not a flag flip.
+    pub fn set_prune_disabled(&self) -> Result<(), StoreError> {
+        // Steady-state short-circuit: the serving refresh re-declares on
+        // every tick, and the only transition is false→true, so an
+        // already-declared store answers with an MVCC read — no write
+        // serialization, no commit. The durable write happens exactly
+        // once. This matters at the provisioning floor (rule 76): a
+        // needless per-refresh fsync is flash wear on the Pi-class
+        // devices a foundation node may run on. The read-then-write race
+        // is benign — a concurrent declaration can only have written the
+        // same value, and redb's single writer serializes the commits.
+        if self.prune_disabled()? {
+            return Ok(());
+        }
+        let txn = self.db.begin_write()?;
+        {
+            let mut meta = txn.open_table(META_TABLE)?;
+            meta.insert(META_PRUNE_DISABLED, &1u64)?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
     /// Which of `shard_ids` no longer have a pin row — the members a serve-set
     /// witness claims are retained but the store would now prune.
     ///
@@ -870,12 +982,16 @@ impl LeafStore {
         let complete_segments = leaf_count / e;
         let mut next_freeze_seg = {
             let meta = txn.open_table(META_TABLE)?;
-            let next = meta.get(META_NEXT_FREEZE_SEG)?;
-            next.map(|v| v.value()).unwrap_or(0)
+            next_freeze_seg_in(&meta)?
         };
         let mut seg_k = next_freeze_seg;
         while seg_k < complete_segments {
-            let segment_id = SegmentId(u32::try_from(seg_k).expect("segment id fits u32"));
+            // `next_freeze_seg_in` admits `u32::MAX + 1` (every id frozen).
+            // There is nothing further to freeze in this store's id space.
+            let Ok(id) = u32::try_from(seg_k) else {
+                break;
+            };
+            let segment_id = SegmentId(id);
             {
                 let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
                 if frozen.get(segment_id)?.is_some() {
@@ -1493,10 +1609,27 @@ impl LeafStore {
     /// frozen `R_k`; anything needing a pruned segment's full chunk contents
     /// must have pinned it first ([`Self::pin_segment_for_serving`]). All leaf bytes are
     /// reconstructible by chain replay regardless.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::PruneDisabledPosture`] when the store's prune-disabled
+    /// posture is declared ([`Self::set_prune_disabled`]) — a refusal,
+    /// never a silent no-op: under that posture every frozen byte is owed,
+    /// and a caller that wanted to prune anyway must find out here.
     pub fn prune_frozen(&self, owned_positions: &[TreePosition]) -> Result<(), StoreError> {
         let owned: std::collections::BTreeSet<TreePosition> =
             owned_positions.iter().copied().collect();
         let txn = self.db.begin_write()?;
+        // Posture check inside the same write transaction that would
+        // mutate, so a concurrent declaration cannot land between the
+        // check and the removals (single-writer redb serializes on
+        // `begin_write`, making the read-then-mutate atomic).
+        {
+            let meta = txn.open_table(META_TABLE)?;
+            if prune_disabled_in(&meta)? {
+                return Err(StoreError::PruneDisabledPosture);
+            }
+        }
         let e = leaves_per_segment() as u64;
         let frozen_ids: Vec<SegmentId> = {
             let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
@@ -1611,19 +1744,14 @@ impl LeafStore {
         let txn = self.db.begin_read()?;
         let next_freeze_seg = {
             let meta = txn.open_table(META_TABLE)?;
-            meta.get(META_NEXT_FREEZE_SEG)?
-                .map(|v| v.value())
-                .unwrap_or(0)
+            next_freeze_seg_in(&meta)?
         };
         if next_freeze_seg == 0 {
             return Ok(());
         }
 
-        // `verify_frozen_tail` runs on the rollback path against persisted
-        // metadata, so a corrupt `META_NEXT_FREEZE_SEG` must surface as a
-        // structured error rather than panic — the function exists to detect
-        // corruption, not to trust it. (`next_freeze_seg >= 1` here, so the
-        // subtraction cannot underflow.)
+        // Bound is `next_freeze_seg_in`'s: `1..=u32::MAX+1`, so `k-1`
+        // always fits `SegmentId`. A larger cursor never reaches here.
         let segment = SegmentId(
             u32::try_from(next_freeze_seg - 1)
                 .map_err(|_| StoreError::CorruptMeta("freeze segment counter exceeds u32"))?,
@@ -1710,6 +1838,38 @@ fn delete_seg_keys_batched<V: redb::Value>(
         }
     }
     Ok(())
+}
+
+/// Largest legal `META_NEXT_FREEZE_SEG`: every `u32` [`SegmentId`] frozen.
+const NEXT_FREEZE_SEG_MAX: u64 = u32::MAX as u64 + 1;
+
+/// Read the freeze-prefix cursor from an already-open meta table.
+///
+/// Absent defaults to 0. A value above [`NEXT_FREEZE_SEG_MAX`] is
+/// [`StoreError::CorruptMeta`] — the same bound the public getter and
+/// `verify_frozen_tail` must share, so they cannot drift.
+fn next_freeze_seg_in(meta: &impl ReadableTable<&'static str, u64>) -> Result<u64, StoreError> {
+    let count = meta
+        .get(META_NEXT_FREEZE_SEG)?
+        .map(|v| v.value())
+        .unwrap_or(0);
+    if count > NEXT_FREEZE_SEG_MAX {
+        return Err(StoreError::CorruptMeta(
+            "freeze segment counter exceeds u32",
+        ));
+    }
+    Ok(count)
+}
+
+/// Read the prune-disabled posture from an already-open meta table.
+/// Absent (and 0) is undeclared; any non-zero is declared — the safe
+/// direction if the cell is corrupt.
+fn prune_disabled_in(meta: &impl ReadableTable<&'static str, u64>) -> Result<bool, StoreError> {
+    Ok(meta
+        .get(META_PRUNE_DISABLED)?
+        .map(|v| v.value())
+        .unwrap_or(0)
+        != 0)
 }
 
 fn recompute_next_freeze_seg(
@@ -3044,6 +3204,172 @@ mod tests {
                 Err(StoreError::FrozenSegmentPruned { id: SegmentId(0) })
             ),
             "the valid member of a refused set must not have been pinned"
+        );
+    }
+
+    /// The freeze-prefix cursor getter, bound to the frozen-segments table
+    /// at every step — the composed check that turns the prefix invariant
+    /// ("the frozen set is exactly `[0, k)`") from prose into a tested
+    /// property. Covers: 0 on a fresh store; advance across a segment
+    /// boundary on the ingest path; advance through the public
+    /// [`LeafStore::maybe_freeze_segments`] wrapper.
+    #[test]
+    fn next_freeze_seg_is_the_prefix_and_the_table_agrees() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 0);
+        assert!(store.frozen_segment(SegmentId(0)).unwrap().is_none());
+
+        // Segment 0 full and buried, one tail row into segment 1: the
+        // ingest path freezes exactly the completed, buried prefix.
+        let e = leaves_per_segment() as u64;
+        let mut entries = distinct_segment_entries();
+        entries.push(sample_entry(e, 5_000));
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 1);
+        assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
+        assert!(store.frozen_segment(SegmentId(1)).unwrap().is_none());
+
+        // Segment 1 completes and is buried: the cursor crosses the
+        // boundary and the table crosses with it.
+        let more: Vec<LeafEntry> = (e + 1..2 * e).map(|g| sample_entry(g, 5_000)).collect();
+        store.append_drained(&more, BlockHeight(20_000)).unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 2);
+        assert!(store.frozen_segment(SegmentId(1)).unwrap().is_some());
+        assert!(store.frozen_segment(SegmentId(2)).unwrap().is_none());
+
+        // Segment 2 completes but is NOT yet buried (recent maturity):
+        // the cursor must not advance on completion alone…
+        let tail: Vec<LeafEntry> = (2 * e..3 * e).map(|g| sample_entry(g, 19_900)).collect();
+        store.append_drained(&tail, BlockHeight(20_000)).unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 2);
+        assert!(store.frozen_segment(SegmentId(2)).unwrap().is_none());
+
+        // …and advances through the public wrapper once burial is deep
+        // enough, table agreeing at the new boundary.
+        store.maybe_freeze_segments(BlockHeight(30_000)).unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 3);
+        assert!(store.frozen_segment(SegmentId(2)).unwrap().is_some());
+        assert!(store.frozen_segment(SegmentId(3)).unwrap().is_none());
+    }
+
+    /// The cursor is persisted state, not session state: it survives a
+    /// close/reopen unchanged.
+    #[test]
+    fn next_freeze_seg_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.redb");
+        {
+            let store = LeafStore::open(&path).unwrap();
+            store
+                .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+                .unwrap();
+            assert_eq!(store.next_freeze_seg().unwrap(), 1);
+        }
+        let reopened = LeafStore::open(&path).unwrap();
+        assert_eq!(reopened.next_freeze_seg().unwrap(), 1);
+        assert!(reopened.frozen_segment(SegmentId(0)).unwrap().is_some());
+    }
+
+    /// The rollback path recomputes the cursor, and the getter reports the
+    /// recomputation — with the table agreeing on the shrunken prefix.
+    /// This is the direction where a stale summary would silently omit
+    /// owed shards, so the agreement assertion matters most here.
+    #[test]
+    fn next_freeze_seg_agrees_after_rollback_recompute() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 1);
+
+        store.rollback_to_fork(BlockHeight(500)).unwrap();
+        assert_eq!(
+            store.next_freeze_seg().unwrap(),
+            0,
+            "the truncate path recomputed the cursor below the fork"
+        );
+        assert!(
+            store.frozen_segment(SegmentId(0)).unwrap().is_none(),
+            "and the table shrank with it — cursor and table stay one fact"
+        );
+    }
+
+    /// A persisted cursor above the representable `SegmentId` space is
+    /// reported as corruption, not returned as an obligation — with the
+    /// negative control at the exact boundary: `u32::MAX + 1` (every `u32`
+    /// id frozen) is the largest value a real table could correspond to
+    /// and must still be returned, or the check would be refusing a legal
+    /// state rather than detecting an illegal one.
+    #[test]
+    fn next_freeze_seg_reports_a_cursor_beyond_segment_id_space_as_corrupt() {
+        let store = LeafStore::open_ephemeral().unwrap();
+
+        let plant = |value: u64| {
+            let txn = store.db.begin_write().unwrap();
+            {
+                let mut meta = txn.open_table(META_TABLE).unwrap();
+                meta.insert(META_NEXT_FREEZE_SEG, &value).unwrap();
+            }
+            txn.commit().unwrap();
+        };
+
+        // Boundary: representable, returned.
+        plant(u64::from(u32::MAX) + 1);
+        assert_eq!(store.next_freeze_seg().unwrap(), u64::from(u32::MAX) + 1);
+
+        // One past it: no u32-keyed frozen table can agree with this
+        // cursor, so the getter must surface corruption instead of
+        // handing the serve-set derivation an impossible obligation.
+        plant(u64::from(u32::MAX) + 2);
+        assert!(matches!(
+            store.next_freeze_seg(),
+            Err(StoreError::CorruptMeta(_))
+        ));
+    }
+
+    /// The prune-disabled posture flag: false by default, one-way,
+    /// idempotent to redeclare, persisted across reopen.
+    #[test]
+    fn prune_disabled_defaults_false_and_the_declaration_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.redb");
+        {
+            let store = LeafStore::open(&path).unwrap();
+            assert!(!store.prune_disabled().unwrap());
+            store.set_prune_disabled().unwrap();
+            assert!(store.prune_disabled().unwrap());
+            // Idempotent redeclare — the pinner sets it on every refresh.
+            store.set_prune_disabled().unwrap();
+            assert!(store.prune_disabled().unwrap());
+        }
+        let reopened = LeafStore::open(&path).unwrap();
+        assert!(
+            reopened.prune_disabled().unwrap(),
+            "the posture is a durable declaration, not session state"
+        );
+    }
+
+    /// Under the declared posture, `prune_frozen` refuses with the typed
+    /// error and mutates nothing — the frozen bytes stay servable. A
+    /// silent no-op would be indistinguishable from a successful prune to
+    /// the caller; the refusal names the posture (rule 82).
+    #[test]
+    fn prune_frozen_refuses_typed_under_the_declared_posture() {
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        store.set_prune_disabled().unwrap();
+
+        assert!(matches!(
+            store.prune_frozen(&[]),
+            Err(StoreError::PruneDisabledPosture)
+        ));
+        assert!(
+            matches!(store.open_frozen_segment_body(SegmentId(0)), Ok(Some(_))),
+            "the refused prune must have removed nothing: the frozen body \
+             is still present AND servable — Ok(None) would mean the frozen \
+             record itself vanished, which this oracle must catch"
         );
     }
 

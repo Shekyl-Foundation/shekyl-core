@@ -57,12 +57,15 @@ sustainability is unaffected by the recalibration.
   *tag*; the gitian job publishes *assets* with no per-asset signature,
   and a signed tag authenticates the source point, not the binary a user
   downloads — that half of the gap stands. Owed: a **signed `SHA256SUMS`
-  manifest step in the gitian release job** using the Foundation signing
-  subkey (same key, same ceremony as tags; one signature covers all
-  assets; composes with reproducible builds — independent builders
-  reproduce the hashes, the Foundation signs the manifest of them).
-  Enforcement surface: the `RELEASE_CHECKLIST.md` row (unchecked until
-  wired); inventory record: `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
+  manifest** using the Foundation signing subkey (same key, same ceremony
+  as tags; one signature covers all assets; composes with reproducible
+  builds). **Tooling LANDED (`feat/release-asset-ceremony`):
+  `scripts/release/sign_release_assets.py`** — the scripted ceremony
+  (hygiene preflight, manifest, exact-subkey sign, round-trip verify,
+  upload; `--verify-only` is the downstream path; token-held subkey means
+  it is deliberately local, not CI). Enforcement surface: the
+  `RELEASE_CHECKLIST.md` row (checks when exercised on a real release);
+  inventory record: `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
 
 - **SA-R-7 cap-before-reserve source-scan gate — DISCHARGED 2026-08-14
   (`feat/sa-rt-round-close`, the conventions tail): the FFI boundary
@@ -9587,6 +9590,42 @@ its wake.
   clearnet send reports failure at ~38 min instead of ~15.
   Owned by the wallet rewrite (this constant dies with `wallet2.cpp`); recorded
   now because the reason is visible now. See `DAEMON_RELAY_PRIVACY.md` §89.6.
+
+- **Relay: the D9 below-floor observer (§18.4, ruled 2026-08-15).** There
+  is no below-floor check. §17 overturned `x = 0`, §18 ruled *stem anyway*
+  exceptionlessly — the floor never selects wire behavior — and what remains
+  to build is the observer: a warn-level log line on the below-floor/recovery
+  transitions, a field on the stem-tallies snapshot (**admin-only listener,
+  same posture and rationale as `stem_tallies_json` — never the public RPC
+  surface**), and the count crossing as a named type (outbound
+  *connections*, §16.6) with **no `Ord`, no arithmetic**, whose floor
+  comparison is a constructor that produces a transition record for the
+  logger. A future wire consumer is then a visible edit to a type that says
+  why it exists (§18.4/§18.5). The integer does **not** land on
+  `get_status()` (zone selection, reading (a)) and does **not** land on the
+  Rust zone handle the stem/fluff decision reads. Rust-owned per rule 20; no
+  wire change, no conformance-vector movement. The §18.3 principle is the
+  review test: the achieved count may change what the operator sees, never
+  what the network sees. `d = 0` send-nothing is §30.5 / `zone_route`
+  usability, not a D9 exception. Also note: §18.6 discharges the concurrency
+  bar on the `fluff_return_ms` landing below — the two no longer share
+  vectors.
+
+- **Relay: the zone-route decision family moves to Rust** (in flight,
+  `feat/zone-route-rust`, PR #481, stacked on the §18 ruling). This is not
+  a consequence of D9. `once_at_origin_route`, `originated_stays_in_zone`,
+  `r1_coherence_keeps_origin`, `is_pre_fluff_relay` and
+  `originated_zone_from_anonymity_roll` become `shekyl-relay::zone_route`,
+  putting the decision beside the sibling relay decisions and its own
+  Rust-owned parameter (`MIXED_ELIGIBILITY_PCT_HUNDREDTHS`) — rule 20, and
+  the split it closes is concrete. C++ keeps the `zone_route` compile-time
+  token as the seam guard `send_txs` requires, its body forwarding over the
+  FFI, with the byte contract `static_assert`ed at the seam. The
+  `levin.cpp` gtest tables stay unchanged as the migration oracle; the
+  crate's own tests arm the full 5 × 4 truth table plus the
+  fail-closed-never-fallback invariant (§30.5). Registered here so the
+  design branch carries the arc's record and the code branch stays
+  code-only.
 
 - **Relay: re-derive `fluff_return_ms` once, when a degree distribution
   exists.** The convergence criterion landed 2026-08-13
