@@ -90,7 +90,7 @@ verifier must supply the identical string):
   verify <address> <signature> [message]
                                       Check a message signature (no wallet
                                       needed; paste the signature as one
-                                      unbroken token)
+                                      unbroken token, or @path to a file)
 
 Receiving history:
   history incoming --unattributed     List receives with no payment-request
@@ -141,7 +141,7 @@ pub fn repl(
                 }
 
                 let first_token = line.split_whitespace().next().unwrap_or("");
-                if !crate::display::is_secret_command(first_token) {
+                if !crate::display::omit_from_history(first_token) {
                     drop(rl.add_history_entry(line));
                 }
 

@@ -110,16 +110,17 @@ fn multiplexer_warning() -> Option<&'static str> {
     None
 }
 
-/// Returns true if the given command's input line carries secret material
-/// and must NOT be added to readline history. `restore`'s arguments are the
-/// BIP-39 mnemonic itself. The proof-check commands carry someone's proof
-/// string, a bearer artifact: an OUTBOUND tx proof embeds the raw per-tx
-/// key, and a reserve proof is a permanent spend-detection beacon (contract
-/// DISCLOSURE SEMANTICS) — neither belongs in a plaintext history file.
-/// (The wallet2-era secret-*display* commands — seed/viewkey/spendkey —
-/// were removed in WI-RPC-2b; their input lines carried no secret.)
-pub fn is_secret_command(cmd: &str) -> bool {
-    matches!(cmd, "restore" | "check_tx_proof" | "check_reserve_proof")
+/// Returns true if the command's input line must not be added to readline
+/// history. Covers secrets (`restore`'s mnemonic) and large bearer pastes
+/// (proof strings, message signatures). An OUTBOUND tx proof embeds the
+/// raw per-tx key; a reserve proof is a permanent spend-detection beacon;
+/// `verify` carries a ~21.7 KB armored signature — none of those belong
+/// in a plaintext history file.
+pub fn omit_from_history(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "restore" | "check_tx_proof" | "check_reserve_proof" | "verify"
+    )
 }
 
 /// Neutralize control characters in free-form, externally-supplied text before
@@ -143,8 +144,17 @@ pub fn sanitize_for_terminal(s: &str) -> std::borrow::Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_for_terminal;
+    use super::{omit_from_history, sanitize_for_terminal};
     use std::borrow::Cow;
+
+    #[test]
+    fn history_omits_secrets_and_bearer_pastes() {
+        for cmd in ["restore", "check_tx_proof", "check_reserve_proof", "verify"] {
+            assert!(omit_from_history(cmd), "{cmd} must stay out of history");
+        }
+        assert!(!omit_from_history("sign"));
+        assert!(!omit_from_history("balance"));
+    }
 
     #[test]
     fn sanitize_neutralizes_control_chars_and_borrows_clean_text() {

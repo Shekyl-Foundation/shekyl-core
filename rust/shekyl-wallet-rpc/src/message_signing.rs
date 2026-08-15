@@ -13,12 +13,12 @@
 //!   design** (~4.3 s on the Pi-4 floor, SM-R-8): the Engine moves the
 //!   CPU-bound half off the executor, so the server stays responsive
 //!   while one call signs.
-//! - `verify_message` is **SESSION-LESS** (SM-R-6): message, signature,
-//!   and address are all public, caller-supplied inputs, so it never
-//!   touches wallet state and never dials the daemon — refusing a public
-//!   operation for lack of a wallet session would be a rule-82 lie. Only
-//!   the tenant's network binding is read (the same read the wallet-less
-//!   `check_*` proof methods perform).
+//! - `verify_message` is **SESSION-LESS** (SM-R-6): a thin projection of
+//!   [`shekyl_engine_core::engine::message_signing::verify_message`]. It
+//!   never touches wallet state and never dials the daemon — refusing a
+//!   public operation for lack of a wallet session would be a rule-82
+//!   lie. Only the tenant's network binding is read (the same read the
+//!   wallet-less `check_*` proof methods perform).
 //!
 //! # Error taxonomy (SM-R-6, the reason this module exists)
 //!
@@ -32,29 +32,24 @@
 //!
 //! # The R6-a gate, honestly stated
 //!
-//! `verify_message`'s success path is **unreachable today**: the only
-//! constructor of [`SignerIdentity`] refuses every in-tree address
+//! The engine free function's success path is **unreachable today**: the
+//! only `SignerIdentity` constructor refuses every in-tree address
 //! because no address version carries the 48-byte SLH-DSA key (fork (ii)
-//! puts it inline in the v2 address, whose in-code layout is the one
-//! outstanding checklist row). This module still ships the full pipeline
-//! so that when the v2 layout lands, the constructor starts succeeding
-//! and nothing here changes — the same compiler-enforced sequencing that
-//! let PR-SM-1 land ahead of the sign-off.
+//! puts it inline in the v2 address). This projection maps that refusal
+//! to `-29803`; when the v2 layout lands, the constructor starts
+//! succeeding and nothing here changes.
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_address::ShekylAddress;
-use shekyl_crypto_pq::message_signing::{
-    verify_message as crypto_verify_message, ArmoredSignature, MessageSigError, SignerIdentity,
+use shekyl_crypto_pq::message_signing::MessageSigError;
+use shekyl_engine_core::engine::message_signing::{
+    self as engine_signing, SignMessageError, VerifyMessageError,
 };
-use shekyl_engine_core::engine::lifecycle::network_to_derivation;
-use shekyl_engine_core::engine::message_signing::SignMessageError;
-use shekyl_engine_core::Network;
 
 use crate::error::WalletRpcError;
 use crate::params::parse_required_object;
 use crate::tenant::{require_open_engine, TenantState};
-use crate::types::{capability_mode_str, SignMessageResult, VerifyMessageResult};
+use crate::types::{capability_mode_str, SignMessageResult, Verified, VerifyMessageResult};
 
 // ── Params (contract shapes) ─────────────────────────────────────────
 
@@ -104,63 +99,29 @@ pub(crate) async fn verify_message(
 ) -> Result<Value, WalletRpcError> {
     let p: VerifyMessageParams = parse_required_object(params, "verify_message")?;
 
-    // The signature string is judged first — see the module docs for why
-    // this order is the taxonomy, not a convenience. The decode here is
-    // the same one `crypto_verify_message` performs internally; running
-    // it ahead of the address costs one cheap re-decode and buys the
-    // error precedence the contract pins.
-    ArmoredSignature::decode(&p.signature).map_err(|e| map_sig_error(&e))?;
-
     // Session-less: only the tenant's network binding is read (SM-R-6).
+    // Assembly (signature-first taxonomy, address decode, identity,
+    // network mapping) lives next to sign in engine-core.
     let network = tenants.lock().await.network;
-    let address = decode_signer_address(&p.address, network)?;
+    engine_signing::verify_message(network, &p.address, p.message.as_bytes(), &p.signature)
+        .map_err(map_verify_error)?;
 
-    // The bound classical segment is assembled by its single owner
-    // (`BoundClassicalSegment` — the same bytes the address encodes and
-    // the signer bound), and the identity is extracted from it or not at
-    // all (R6-a): accepting keys from anywhere else would let a recovered
-    // spend scalar demote the PQ half to decoration.
-    let segment = address.bound_classical_segment();
-    let identity =
-        SignerIdentity::from_bound_segment(segment.as_bytes()).map_err(|e| map_sig_error(&e))?;
-
-    crypto_verify_message(
-        &identity,
-        network_to_derivation(network),
-        segment.as_bytes(),
-        p.message.as_bytes(),
-        &p.signature,
-    )
-    .map_err(|e| map_sig_error(&e))?;
-
-    serde_json::to_value(VerifyMessageResult { verified: true })
+    serde_json::to_value(VerifyMessageResult { verified: Verified })
         .map_err(|e| WalletRpcError::InternalError(format!("serialize verify_message: {e}")))
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-/// Decode the claimed signer's address against the tenant's network.
-///
-/// A bad address is `-32602` by ruling (SM-R-6: shape-first), unlike the
-/// proof methods' `-29100`. The classical-only display form is refused
-/// here too: a message signature binds the full bound segment including
-/// the `ek_bind_tag`, which cannot be reconstructed without the PQC
-/// segment — and letting it through would assemble a tag over an empty
-/// key and fail verification confusingly downstream. Parse detail is
-/// logged server-side, never echoed (the input is client-controlled).
-fn decode_signer_address(s: &str, network: Network) -> Result<ShekylAddress, WalletRpcError> {
-    let address = ShekylAddress::decode_for_network(s, network).map_err(|e| {
-        tracing::warn!(detail = %e, "verify_message address decode failed");
-        WalletRpcError::InvalidParams(
-            "address is not a valid Shekyl address for this network".into(),
-        )
-    })?;
-    if !address.has_pqc_segment() {
-        return Err(WalletRpcError::InvalidParams(
-            "verify_message requires the full address, not the classical-only form".into(),
-        ));
+/// Map the engine verify assembly onto the contract codes.
+fn map_verify_error(e: VerifyMessageError) -> WalletRpcError {
+    match e {
+        // SM-R-6: address shape is the caller's bug (`-32602`), never
+        // the proofs-surface `-29100`.
+        VerifyMessageError::InvalidAddress | VerifyMessageError::ClassicalOnly => {
+            WalletRpcError::InvalidParams(e.to_string())
+        }
+        VerifyMessageError::Crypto(inner) => map_sig_error(&inner),
     }
-    Ok(address)
 }
 
 /// Map the crypto-layer taxonomy onto the contract codes (SM-R-6).
@@ -309,5 +270,31 @@ mod tests {
             "internal detail must not cross the wire: {}",
             err.message()
         );
+    }
+
+    #[test]
+    fn address_shape_errors_are_params_not_proofs_codes() {
+        for e in [
+            VerifyMessageError::InvalidAddress,
+            VerifyMessageError::ClassicalOnly,
+        ] {
+            let err = map_verify_error(e);
+            assert_eq!(err.code(), WalletRpcErrorCode::InvalidParams);
+        }
+    }
+
+    #[test]
+    fn verify_result_cannot_represent_false() {
+        let ok =
+            serde_json::to_value(VerifyMessageResult { verified: Verified }).expect("serialize");
+        assert_eq!(ok["verified"], true);
+        assert!(serde_json::from_value::<VerifyMessageResult>(
+            serde_json::json!({ "verified": false })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<VerifyMessageResult>(
+            serde_json::json!({ "verified": true })
+        )
+        .is_ok());
     }
 }

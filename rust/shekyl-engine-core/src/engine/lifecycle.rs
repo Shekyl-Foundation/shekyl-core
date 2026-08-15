@@ -387,14 +387,7 @@ impl<'a> EngineCreateParams<'a> {
 /// from a wallet file's network byte. Wallets that need Fakechain
 /// keys must construct their `AllKeysBlob` outside the lifecycle
 /// methods.
-///
-/// Public because this mapping is the single owner of the
-/// address-network → derivation-network correspondence: the session-less
-/// `verify_message` RPC (SM-R-6) must scope its transcript by the same
-/// value `Engine::sign_message` scoped its identity by, and a second
-/// copy of this match at the RPC boundary is exactly the
-/// "two independently-derived bytes" hazard `MessageSignCtx` documents.
-pub fn network_to_derivation(network: Network) -> DerivationNetwork {
+pub(crate) fn network_to_derivation(network: Network) -> DerivationNetwork {
     match network {
         Network::Mainnet => DerivationNetwork::Mainnet,
         Network::Testnet => DerivationNetwork::Testnet,

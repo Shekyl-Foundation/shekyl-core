@@ -261,6 +261,30 @@ pub struct SignMessageResult {
     pub signature: String,
 }
 
+/// Marker that `verify_message` succeeded. The contract field is
+/// `const: true`; this type cannot represent `verified: false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Verified;
+
+impl Serialize for Verified {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(true)
+    }
+}
+
+impl<'de> Deserialize<'de> for Verified {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = bool::deserialize(deserializer)?;
+        if value {
+            Ok(Self)
+        } else {
+            Err(serde::de::Error::custom(
+                "verify_message is success-only; verified must be true",
+            ))
+        }
+    }
+}
+
 /// `verify_message` result (PR-SM-2).
 ///
 /// Success-only by contract: every negative outcome is one of the
@@ -274,7 +298,7 @@ pub struct VerifyMessageResult {
     /// Always `true`: the signature verifies for the address, message,
     /// and network. Present so scripted callers read a self-describing
     /// field rather than inferring success from an empty object.
-    pub verified: bool,
+    pub verified: Verified,
 }
 
 /// `get_height` result.

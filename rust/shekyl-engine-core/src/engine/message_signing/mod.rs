@@ -38,16 +38,23 @@
 //! concurrent daemon poll. `block_in_place` is *not* the alternative:
 //! it panics outright on a current-thread runtime.
 //!
-//! Verification is deliberately **not** here: it is session-less
-//! (SM-R-6), a pure function in [`shekyl_crypto_pq::message_signing`] —
-//! refusing a public operation for lack of a wallet session is a
-//! rule-82 lie. That function is also, deliberately, not reachable in
-//! production yet; see `shekyl_crypto_pq::message_signing::SignerIdentity`
-//! for the fork-(ii) address gate it waits on.
+//! # Verify is here, and is not an `Engine` method
+//!
+//! [`verify_message`] is session-less (SM-R-6): no wallet, no daemon, no
+//! `&Engine`. It still lives in this module so the transcript is scoped
+//! by the same address-network → derivation-network mapping sign uses —
+//! the RPC crate must not re-derive that byte. The crypto crate's
+//! [`shekyl_crypto_pq::message_signing::verify_message`] stays the AND
+//! of the two halves; this function is the address + network assembly
+//! in front of it. See [`SignerIdentity`] for the fork-(ii) address
+//! gate: every in-tree address still answers
+//! [`MessageSigError::UnboundIdentity`].
+//!
+//! [`SignerIdentity`]: shekyl_crypto_pq::message_signing::SignerIdentity
 
-use shekyl_address::BoundClassicalSegment;
+use shekyl_address::{BoundClassicalSegment, ShekylAddress};
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
-use shekyl_crypto_pq::message_signing::{self, MessageSigError};
+use shekyl_crypto_pq::message_signing::{self, MessageSigError, SignerIdentity};
 use shekyl_engine_file::secrets_transitional::ExtractRederivationInputsError;
 use shekyl_engine_file::WalletFile;
 
@@ -117,6 +124,29 @@ impl From<KeyEngineError> for SignMessageError {
             other => Self::Key(other.to_string()),
         }
     }
+}
+
+/// Refusals of the session-less [`verify_message`].
+///
+/// Address-shape failures stay distinct from the crypto taxonomy so the
+/// RPC projection can keep SM-R-6's shape-first `-32602` on a bad or
+/// classical-only address without collapsing it into
+/// [`MessageSigError::Malformed`] (which is about the *signature*
+/// string).
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum VerifyMessageError {
+    /// The address string is not a valid Shekyl address for this network.
+    #[error("address is not a valid Shekyl address for this network")]
+    InvalidAddress,
+    /// Classical-only display form: the bound segment (including
+    /// `ek_bind_tag`) cannot be reconstructed, so there is nothing
+    /// honest to verify against.
+    #[error("verify_message requires the full address, not the classical-only form")]
+    ClassicalOnly,
+    /// Crypto-layer taxonomy (malformed / corrupted / unsupported
+    /// scheme / unbound identity / verify-failed).
+    #[error(transparent)]
+    Crypto(#[from] MessageSigError),
 }
 
 /// Map the wallet-file seed-extractor refusal into the workflow's typed
@@ -202,6 +232,58 @@ pub(crate) async fn sign_message(
     let outer = message_signing::outer_bytes(&preimage, &sig_pq);
     let sig_cl = ctx.key.sign_message_outer(outer).await?;
     Ok(message_signing::assemble_armored(&sig_pq, &sig_cl))
+}
+
+/// Session-less verify (SM-R-6): public inputs only, no wallet, no daemon.
+///
+/// The signature string is judged **before** the address so the paste
+/// taxonomy (corruption / unknown scheme) stays reachable while every
+/// in-tree address still answers [`MessageSigError::UnboundIdentity`]
+/// (R6-a). The transcript is scoped by the same network mapping
+/// [`sign_message`] uses, so a produced signature is verified against
+/// the same network byte the signer bound.
+///
+/// # Errors
+///
+/// See [`VerifyMessageError`].
+pub fn verify_message(
+    network: shekyl_address::Network,
+    address: &str,
+    message: &[u8],
+    armored: &str,
+) -> Result<(), VerifyMessageError> {
+    // Taxonomy-first: a damaged paste must not hide behind R6-a's
+    // unbound-identity refusal.
+    message_signing::ArmoredSignature::decode(armored)?;
+
+    let address = decode_signer_address(address, network)?;
+    let segment = address.bound_classical_segment();
+    let identity = SignerIdentity::from_bound_segment(segment.as_bytes())?;
+
+    message_signing::verify_message(
+        &identity,
+        network_to_derivation(network),
+        segment.as_bytes(),
+        message,
+        armored,
+    )?;
+    Ok(())
+}
+
+/// Full hybrid address only: the signature binds the bound classical
+/// segment, which the classical-only display form cannot reconstruct.
+fn decode_signer_address(
+    s: &str,
+    network: shekyl_address::Network,
+) -> Result<ShekylAddress, VerifyMessageError> {
+    let address = ShekylAddress::decode_for_network(s, network).map_err(|e| {
+        tracing::warn!(detail = %e, "verify_message address decode failed");
+        VerifyMessageError::InvalidAddress
+    })?;
+    if !address.has_pqc_segment() {
+        return Err(VerifyMessageError::ClassicalOnly);
+    }
+    Ok(address)
 }
 
 // ── Engine delegator (thin shell; assemble the ctx and forward) ─────
