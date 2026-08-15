@@ -240,3 +240,43 @@ fn alpha_curve_across_below_floor_degrees() {
         );
     }
 }
+
+/// §17.1's named follow-up: the analytic/empirical pair for
+/// `full_travel_probability`, in the `derive.rs:490` pattern
+/// (`marginal_preemption_profile` against `simulate_preemption_profile`).
+///
+/// The analytic form is the gate's entire measurement path, and every check
+/// in this file moves the derivation and the check TOGETHER if a modeling
+/// error sits inside it (the §17.1 common-mode residue: a wrong slack
+/// exponent, a mis-placed RD-4 correction). This is the independent half:
+/// `simulate_propagation` walks actual stems against actual embargo draws and
+/// reports the achieved full-travel fraction with no closed form anywhere in
+/// the path. Agreement bounds the residue; disagreement reds the pair, not
+/// the sweep.
+#[test]
+fn analytic_alpha_agrees_with_the_empirical_walk() {
+    use shekyl_relay_privacy::conformance::simulate_propagation;
+    use shekyl_relay_privacy::EmbargoTimer;
+
+    let params = DandelionParams::adopted();
+    let embargo = EmbargoTimer::adopted(&params);
+    let analytic =
+        full_travel_probability(&params, shipped_mean_ticks(), DEFAULT_EMBARGO_TICK_MILLIS);
+
+    let mut rng = SplitMix64::new(0xD9A1_EA01);
+    let empirical = simulate_propagation(&params, &embargo, 40_000, &mut rng).full_travel_rate;
+
+    println!("\n  analytic alpha  = {analytic:.6}");
+    println!("  empirical alpha = {empirical:.6}   (40k walked stems)");
+
+    // ±1.5 points absolute: wide enough for 40k-trial noise (~3σ at p≈0.9 is
+    // ~0.45 points) plus the model's tick-quantization slack, narrow enough
+    // that the §17.1 failure modes (a wrong exponent moves alpha by several
+    // points at least) cannot hide inside it.
+    assert!(
+        (analytic - empirical).abs() < 0.015,
+        "analytic {analytic:.6} vs empirical {empirical:.6} — the closed form \
+         and the walked simulation disagree beyond noise; one of them has a \
+         modeling error and the sweep's alpha readings inherit it"
+    );
+}

@@ -55,7 +55,10 @@ use std::slice;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use shekyl_relay::{Driver, Effect, FluffReach, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone};
+use shekyl_relay::{
+    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, RelayPlan,
+    StemTallySnapshot, TxBlob, TxId, Zone,
+};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::stem_map::ConnectionId;
@@ -200,6 +203,9 @@ pub struct RelayZoneHandle {
     /// path that is almost never read. Off-strand readers clone the `Arc`
     /// (cheap) and copy fixed-size rows; the C++ merge edge emits JSON once.
     stem_tallies: Mutex<Arc<Vec<(ConnectionId, StemTallySnapshot)>>>,
+    /// §18.4's operator-facing diagnostic. The floor comparison lives inside
+    /// [`FloorWatch`] and nowhere else on any wire path.
+    floor_watch: Mutex<FloorWatch>,
 }
 
 impl RelayZoneHandle {
@@ -418,6 +424,9 @@ pub extern "C" fn shekyl_relay_zone_new(
         live_stems: AtomicUsize::new(0),
         stem_in_flight: AtomicUsize::new(0),
         stem_tallies: Mutex::new(Arc::new(Vec::new())),
+        floor_watch: Mutex::new(FloorWatch::new(
+            shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS,
+        )),
     };
     handle.publish();
     Box::into_raw(Box::new(handle))
@@ -713,6 +722,57 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_in_flight(handle: *const RelayZo
 /// and the mapping both stay in Rust; a zone byte crosses, not a probability
 /// and not an intermediate verdict. Relayed traffic does not call this; it
 /// inherits its arrival zone.
+/// §18.4's live diagnostic: record the zone's achieved outbound
+/// anonymity-connection count and report the floor transition, if any —
+/// 0 steady, 1 went below, 2 recovered. The comparison against the floor
+/// happens inside Rust's `FloorWatch` (the logging path); the value is
+/// stored for the admin-only snapshot and is readable by NOTHING on a wire
+/// path — §18.3: the achieved count may change what the operator sees, never
+/// what the network sees.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_note_achieved_out(
+    handle: *mut RelayZoneHandle,
+    achieved: u32,
+) -> u8 {
+    if handle.is_null() {
+        return FloorTransition::Steady as u8;
+    }
+    let h = &*handle;
+    match h.floor_watch.lock() {
+        Ok(mut w) => w.note(AchievedOutConnections::new(achieved)) as u8,
+        Err(_) => FloorTransition::Steady as u8,
+    }
+}
+
+/// Admin-surface read of the §18.4 diagnostic (`/get_stem_tallies`,
+/// AdminOnly). Returns false (and writes nothing) until the first note — an
+/// unreported zone is "no data", never a fabricated zero.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_floor_snapshot(
+    handle: *const RelayZoneHandle,
+    out_achieved: *mut u32,
+    out_floor: *mut u32,
+    out_below: *mut bool,
+) -> bool {
+    if handle.is_null() || out_achieved.is_null() || out_floor.is_null() || out_below.is_null() {
+        return false;
+    }
+    let h = &*handle;
+    let snap = match h.floor_watch.lock() {
+        Ok(w) => w.snapshot(),
+        Err(_) => None,
+    };
+    match snap {
+        Some(s) => {
+            *out_achieved = s.achieved;
+            *out_floor = s.floor;
+            *out_below = s.below;
+            true
+        }
+        None => false,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn shekyl_relay_zone_roll_originated_zone() -> u8 {
     let mut rng = SecureRelayRng;

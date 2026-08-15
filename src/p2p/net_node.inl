@@ -2213,7 +2213,8 @@ namespace nodetool
     /* §55 TRANSIT, NOT STRUCTURE. Collects published rows from every zone
        (a peer belongs to exactly one; zones do not share connection ids),
        sorts globally by peer id so operator diffs are content-stable, and
-       emits one JSON array. Each row carries the zone it was collected
+       emits one JSON object: `floor` (per-zone §18.4 diagnostics) and
+       `tallies` (the flattened rows). Each row carries the zone it was collected
        from -- verification of coherence / the isolation arm, not a `p`
        instrument. Serialisation lives in `format_stem_tally_row_json` so
        the unit table and this merge cannot disagree on the label.
@@ -2238,14 +2239,40 @@ namespace nodetool
           std::begin(b.first.peer), std::end(b.first.peer));
       });
 
-    std::string out = "[";
+    /* §18.4: the below-floor diagnostic joins this snapshot as a sibling
+       key rather than a row — rows are per-peer, this is per-zone. Endpoint
+       stays AdminOnly for the same reason with more force: a below-floor bit
+       on the public listener is a free targeting oracle (§16.3). "No data"
+       zones are omitted, never zero-filled. */
+    std::string out = "{\"floor\":[";
+    bool first_zone = true;
+    for (const auto& zone : m_network_zones)
+    {
+      std::uint32_t achieved = 0, floor = 0;
+      bool below = false;
+      if (!zone.second.m_notifier.floor_snapshot(achieved, floor, below))
+        continue;
+      if (!first_zone)
+        out += ',';
+      first_zone = false;
+      out += "{\"zone\":\"";
+      out += epee::net_utils::zone_to_string(zone.first);
+      out += "\",\"achieved_out_connections\":";
+      out += std::to_string(achieved);
+      out += ",\"floor\":";
+      out += std::to_string(floor);
+      out += ",\"below\":";
+      out += below ? "true" : "false";
+      out += '}';
+    }
+    out += "],\"tallies\":[";
     for (std::size_t i = 0; i < rows.size(); ++i)
     {
       if (i)
         out += ',';
       out += cryptonote::levin::format_stem_tally_row_json(rows[i].first, rows[i].second);
     }
-    out += ']';
+    out += "]}";
     return out;
   }
 

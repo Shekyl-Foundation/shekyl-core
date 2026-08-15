@@ -1078,6 +1078,26 @@ namespace levin
 
   void notify::run_next_wake()
   {
+    /* §18.4's live diagnostic rides the existing wake — no new timer. The
+       transition is Rust's answer (the floor comparison lives there, on the
+       logging path only); this site owns the operator-facing WARN. Wire
+       behavior is untouched by construction: nothing below reads the note. */
+    if (zone_ && zone_->relay && zone_->p2p)
+    {
+      switch (shekyl_relay_zone_note_achieved_out(
+        zone_->relay.get(), zone_->p2p->get_out_connections_count()))
+      {
+        case 1:
+          MWARNING("Anonymity zone below the provisioned outbound-connection floor"
+                " (D9/§18.4: stemming CONTINUES; diagnostic only — see"
+                " /get_stem_tallies on the admin listener)");
+          break;
+        case 2:
+          MWARNING("Anonymity zone recovered to the provisioned outbound-connection floor");
+          break;
+        default: break;
+      }
+    }
     if (!zone_)
       return;
 
@@ -1205,6 +1225,14 @@ namespace levin
     }
     out.clear();
     return out;
+  }
+
+  bool notify::floor_snapshot(std::uint32_t& achieved, std::uint32_t& floor, bool& below) const
+  {
+    /* §18.4 admin-surface read; same handle discipline as stem_snapshot. */
+    if (!zone_ || !zone_->relay)
+      return false;
+    return shekyl_relay_zone_floor_snapshot(zone_->relay.get(), &achieved, &floor, &below);
   }
 
   std::string format_stem_tally_row_json(

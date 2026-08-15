@@ -168,6 +168,10 @@ namespace levin
     //! .cpp note.
     std::vector<stem_tally_row> stem_snapshot() const;
 
+    //! §18.4 diagnostic for the admin snapshot: false until the zone has
+    //! reported once. Never exposed on the public listener (§16.3).
+    bool floor_snapshot(std::uint32_t& achieved, std::uint32_t& floor, bool& below) const;
+
     //! §46: stem observations pending resolution. Reads a published atomic on
     //! the relay handle (same discipline as `live_stems` / get_status), so it
     //! is safe from any thread — including the gtest harness after it drains
