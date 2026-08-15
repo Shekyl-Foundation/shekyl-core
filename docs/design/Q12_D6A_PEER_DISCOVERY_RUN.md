@@ -2945,6 +2945,17 @@ bounded instead by the analytic/empirical pairing the crate uses elsewhere
 `derive.rs:490`); `full_travel_probability` has no such partner yet, and that
 empirical-α companion is the named follow-up, one degree's worth of work.
 
+**The one unarmed premise, recorded beside it because it is the same shape: `E ≤ L`
+is argued, not measured.** The armed 0.5 boundary is the supremum of
+`α* = E/(E+L)` over the admissible pricing region — a derivation with the
+pricing quantified out, not a threshold picked for tidiness — but its
+admissibility condition is the argument that adversary precision caps at 1,
+D9(b)'s own branch already delivers ≈ 1, so `E` is an increment on an
+attribution the adversary already holds while `L` is the whole ambiguity. Sound,
+and nothing in the file covers it: **if `E ≤ L` ever fails, the assertion stays
+green while the ruling stops following from it.** Both residues are premises
+the gate rests on and cannot see.
+
 ### 17.2 The curve
 
 | degree | `F′(d)` ms | α(d) | shortfall vs design 0.90 |

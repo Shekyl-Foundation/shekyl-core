@@ -110,10 +110,17 @@ fn alpha_curve_across_below_floor_degrees() {
     println!("\n  degree   F'(d) ms   alpha(d)   shortfall vs design 0.90");
     println!("  ------   --------   --------   ------------------------");
 
-    // §16.4's pre-registered band boundary: alpha above this rules D9(b) off
-    // the provisioning floor for ANY pricing with E <= L. Asserting it here is
-    // what converts the frozen rule from a document into something CI
-    // enforces — a rule that was frozen once, versus a rule that stays frozen.
+    // §16.4's pre-registered band boundary, and NOT a round number picked for
+    // tidiness: D9(b) pays iff (1-a)·E > a·L, so a* = E/(E+L), and E <= L
+    // makes a* <= 0.5 with equality only at E = L. 0.5 is therefore the
+    // SUPREMUM of a* over the whole admissible pricing region — the weakest
+    // assertion that discharges the rule without committing to values for E
+    // and L, which is why it can be armed before either is measured. The one
+    // premise this cannot see is E <= L itself (argued in §17.1, not
+    // measured); if that fails, this stays green while the ruling stops
+    // following. Asserting it here is what converts the frozen rule from a
+    // document into something CI enforces — a rule that was frozen once,
+    // versus a rule that stays frozen.
     const PREREGISTERED_ALPHA_BOUNDARY: f64 = 0.5;
     // Degrees where the OutboundOnly flood strands >10 % of nodes, so the
     // question is ill-posed and the instrument must REFUSE. Asserted, not
