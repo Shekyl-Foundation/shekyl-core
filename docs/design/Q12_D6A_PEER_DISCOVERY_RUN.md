@@ -8,7 +8,8 @@ cannot be faked."*
 
 **Status: the `{15, 30, 60}` sweep (§§13–15) and Q12-R5's late-joiner control
 (§15.2) are RUN, 2026-08-14, and every readout is committed. §16 settles what
-the floor actually counts, and CLOSES the distinctness question.**
+the floor actually counts and CLOSES the distinctness question; §17 discharges
+§16.4's gate and overturns D9(b)'s implementation.**
 
 Corrected twice, and the second correction supersedes the first. This line
 originally read *"No VM stood up, no arm run"*, which its own body had already
@@ -2355,7 +2356,16 @@ the host rather than assumed.
 
 ### 13.7 Still owed (as of §13; §§14–15 close two of these)
 
-- **A longer `A = 60` arm** — 11 settled samples cannot separate the observed downward drift (55 → 46 at-floor) from ordinary churn; §11.9 needed a full hour and per-burn attribution to settle the analogous question.
+- **A longer `A = 60` arm** — 11 settled samples cannot separate the observed
+  downward drift (55 → 46 at-floor) from ordinary churn; §11.9 needed a full
+  hour and per-burn attribution to settle the analogous question.
+  **Classification: a true shelf.** Nothing waits on it — the arm's
+  distribution is degree-at-target, so it raises `F′` by nothing and 3500 ms
+  stands however the drift resolves (§13.7 below, `DAEMON_RELAY_PRIVACY.md`
+  §90.3). Its blocker is **fleet provisioning**, i.e. a fresh spend, not an
+  unanswered question. Contrast §16.4, which is a **gate**: filing both the
+  same way would put the item that is cheap to unblock and the item that is
+  blocking at the same priority in whatever reads this list next.
 - ~~**Q12-R5's late-joiner control**, both variants.~~ **RUN — see §15.2**
   (seed 56 s, ordinary node 247 s; both reach the floor, so discovery is not
   hub-dependent). Struck rather than deleted: this section was written when the
@@ -2602,23 +2612,169 @@ That is not nothing — under full eclipse the adversary has precision 1 whichev
 branch fires, so the floor check changes nothing there at all — but it is not
 the severity §14.5 implied.
 
-### 16.4 Shelved on the mechanism, with the instrument named
+### 16.4 GATE on §12.2 — the α measurement, pre-registered
 
-§12.1's counter is real: a below-floor node that stems anyway has `F′` above its
-embargo, so the embargo expires and it fluffs at origin **late** — after the
-stem already leaked to the successor. On that reading D9(b) does not *create*
-fluff-at-origin; it makes it prompt and deliberate instead of late and
-additionally leaky.
+**Not a shelf. A gate**, and the distinction is the point: a shelf is something
+the queue walks past, and this is something §12.2 walks *into*. Drafting D9's
+live check without this answer would settle the question by picking a
+semantics, which is the quiet form of the failure shelving exists to prevent.
 
-**What prose cannot settle is whether prompt-and-certain beats
-late-and-probabilistic.** The `F′` distribution has mass below the embargo even
-at low degree, and D9(b) removes that mass unconditionally. That is a
-distribution question about a path that does not run — and
-`conformance::converged_fluff_return_mixed` is now exactly the instrument for
-it: it takes per-node degree distributions and returns converged p90s, refusing
-rather than reporting an unconverged draw.
+**Reopening criterion (rule 21): §12.2 cannot be drafted until this runs.**
+**DISCHARGED 2026-08-14 — the gate ran; see §17.**
+That is the trigger, stated so the queue can see a dependency rather than a
+parking space.
 
-**Shelved under rule 7 on the mechanism, and this time the instrument exists.**
+#### The question, and why it is quantitative rather than a sign check
+
+§12.1's counter is real: a below-floor node that stems anyway carries an embargo
+too short for its own graph, so the embargo expires and it fluffs at origin
+**late** — after the stem already leaked to its successor. On that reading
+D9(b) does not create fluff-at-origin, it makes it prompt and deliberate
+instead of late and additionally leaky.
+
+Write the two branches out and the comparison stops being one-sided. Let `L` be
+the cost of losing origin ambiguity and `E` the cost of the extra
+stem-successor leak, and let **α** be the probability a below-floor node's stem
+completes before any node's embargo fires:
+
+| branch | expected cost |
+| --- | --- |
+| **D9(b) fires** | `L` — ambiguity lost with certainty, no extra leak |
+| **D9(b) does not** | `α·R + (1 − α)(L + E)` — with probability α the stem completes; otherwise the late fluff costs `L` *and* `E` |
+
+`R` is **not zero**, and an earlier draft of this table set it to zero. §16.3
+prices it: a stem that completes still hands the epoch's successor to an
+adversary holding `k` of 12 connections with probability `k/12`, ambiguously
+between origin and relay. Omitting `R` understates the no-D9(b) branch and so
+moves `α*` **down**, biasing the comparison toward the very ruling this
+section pre-registers as likely — which is exactly the lean a pre-registration
+exists to prevent.
+
+So **D9(b) is better iff `L < α·R + (1 − α)(L + E)`**, i.e. iff
+
+> **α · (L + E − R) < E**,  equivalently  **α < α\* = E / (L + E − R)**
+
+`R < L` (ambiguous attribution is worth less to an attacker than certain
+attribution), so `α*` is *larger* than the zero-`R` form — D9(b) is favoured
+somewhat more than the naive comparison suggests. That can still go either way
+on α, which is why it is measured rather than argued.
+
+**Unit for `L`, `E` and `R`: adversary precision**, the same quantity §16.3
+uses — `≈ 1` for fluff-at-origin seen by any attacker link, `k/12` per epoch
+with origin/relay ambiguity for a completed stem. Naming the unit here is what
+keeps the middle band below executable rather than an IOU.
+
+#### What α is, exactly — and why it is not `EMBARGO_FULL_TRAVEL_PROBABILITY`
+
+`EMBARGO_FULL_TRAVEL_PROBABILITY = 0.90` is a **design input**: the shipped
+190 s embargo is *solved* so that full travel completes with probability 0.90
+**at the provisioning degree of 12**. A below-floor node runs a slower graph, so
+its true `F′` exceeds the one the embargo was derived from and its *achieved*
+α falls below 0.90. The measurement is that shortfall.
+
+**No new instrument is needed — this is a composition of two that already
+ship:**
+
+1. `conformance::converged_fluff_return_mixed` → converged `F′(d)` at a given
+   degree distribution, refusing rather than reporting an unconverged draw;
+2. `derive::full_travel_probability(&DandelionParams, mean_ticks, tick_millis)`
+   → α, with `fluff_return_ms` set to `F′(d)` and `mean_ticks` taken from the
+   **shipped** 190 s embargo, not re-solved.
+
+Feeding the degraded `F′` to the *unchanged* embargo is what makes the output
+the achieved α rather than a redesign. `fluff_return_ms` enters
+`full_travel_probability` through the timer-survival exponent —
+`slack_ticks = ceil((h·hop + F′) / τ)` — so a larger `F′` inflates the exponent
+and depresses α, which is the mechanism the measurement needs.
+
+**Non-vacuity control, run FIRST and required to pass:** two calls differing
+only in `fluff_return_ms` (3250 against 4750) must return different α. If they
+do not, `F′` does not reach the computation, the sweep would return ≈ 0.90 at
+every degree, and it would "confirm" the `α > 0.5` row on the exact axis the
+measurement exists to vary — the `hop_sensitivity` failure (vacuous by input,
+hard-coded on the axis its name advertised) repeated one arc later. A sweep
+whose control has not run is not evidence.
+
+#### The degrees are taken from the readouts, not chosen
+
+Below-floor is **not** a broad spread over degrees 5–11. Counting below-floor
+node-samples in the committed series (`data/q12-d6a-a{15,30,60}-2026-08-14/`):
+
+| `A` | 6 | 8 | 9 | 10 | 11 | share at 11 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 15 | 1 | 2 | 2 | 7 | 67 | **85 %** |
+| 30 | — | — | 1 | 2 | 49 | **94 %** |
+| 60 | — | 1 | 2 | 3 | 92 | **94 %** |
+
+**The realized below-floor state is one connection short of the floor**, in
+85–94 % of cases, with a thin tail that reaches 6 exactly once across 229
+observations. So the headline is **α(11)**, weighted by that distribution;
+degrees 6–10 are reported as a tail and are not the decision driver. Sweeping
+5–11 uniformly would let the harness author pick the answer by choosing where
+to look.
+
+#### Pre-registered decision rule (rule 11) — written before the run
+
+`α*` depends on pricing `E` against `L`, which is a threat-model judgement and
+not a measurement. So the rule is stated over the regions where the ruling is
+**robust to that pricing**, with the boundaries fixed here in advance:
+
+| measured α(11) | ruling | why it is robust |
+| --- | --- | --- |
+| **α > 0.5** | **D9(b) does not fire on the provisioning floor.** The branch needs a different threshold or a different mechanism, and §12.2 is drafted against that. | `α* ≤ 0.5` for any `E + R ≤ L` *(corrected post-run — see the amendment note below)*; D9(b) would have to be justified by claiming the extra leak plus the residual successor exposure together outweigh losing origin ambiguity outright. |
+| **α < 0.1** | **D9(b) as ruled, threshold = the floor.** §12.2 proceeds as §12.1 specifies. | `α* ≥ 0.1` unless `E < (L − R)/9` *(corrected post-run: the original said "unless `E > 9L`", which is the inequality inverted even in the zero-`R` form)*; outside that corner, D9(b) wins for any defensible pricing. |
+| **0.1 ≤ α ≤ 0.5** | **The slice does NOT proceed to §12.2 on the measurement alone.** `E` and `L` are priced on the record first, and the ruling follows from the priced `α*`. | The regions overlap only where the answer genuinely turns on the threat model, and that is a decision, not a reading. |
+
+**Post-run amendment, 2026-08-15 — recorded rather than rewritten, because this
+table was frozen before the run.** Review caught that the robustness column
+mixed two derivations: this section's own formula is `α* = E/(L + E − R)` with
+`R > 0`, and under it `E ≤ L` does **not** give `α* ≤ 0.5` (take `E = L`, any
+`R > 0`). The condition for `α* ≤ 0.5` is **`E + R ≤ L`**. The **boundary the
+test enforces is unchanged at 0.5**; what the amendment changes is the stated
+pricing region over which 0.5 is the supremum — a *narrower* region, so the
+claim is weakened rather than strengthened, which is the only direction a
+frozen rule may be amended after its run. The `α < 0.1` row's algebra is also
+corrected (inequality inverted in the original). The measured result clears the
+corrected rule with margin: `α(11) = 0.884 > α*` for every pricing with
+`E < 7.6 · (L − R)`, so the ruling survives even well outside the `E + R ≤ L`
+region.
+
+**Stated consequence, so this cannot be graded after the fact:** the
+`α > 0.5` row is the outcome the arc's own numbers make likely, because degree
+11 against a floor of 12 is a small perturbation of the graph the embargo was
+derived for. **If that is what the instrument returns, D9's don't-stem ruling
+survives as a ruling but its implementation via prompt fluff-at-origin does
+not**, and §12.2 must be written against an adversary who *wants* the check to
+fire (§16.3) rather than one who trips it by accident.
+
+#### The primary output is the CURVE, not the band
+
+Because that outcome is near-certain at degree 11, "which band does α(11) land
+in" is close to a foregone conclusion and would not be a finding. **The
+decision-relevant output is `α(d)` as a curve over `d`, and the degree at which
+it crosses `α*`** — because that is what §12.2 actually needs: *at what
+threshold would this check fire only where it helps?* The floor is 12 by
+provisioning, and nothing says the useful trigger for D9(b) is the same number.
+
+This also carries the sharper failure mode, which the bands alone cannot
+express:
+
+- **α crosses `α*` at some `d < 12`** → the ruling stands and **the threshold
+  is wrong**; §12.2 specifies D9(b) at the crossing degree, not at the floor.
+- **α stays above `α*` all the way down to `d = 1`** → **no threshold makes
+  D9(b) beneficial**, and the finding is that *the mechanism* is wrong rather
+  than its number. §12.2 is then a different section than §12.1 anticipated.
+
+Distinguishing those two is the thing §12.2 turns on, so the curve is
+mandatory and the band table is the coarse summary of it.
+
+#### One sequencing constraint
+
+This measurement and the `fluff_return_ms` landing decision (`DAEMON_RELAY_PRIVACY.md`
+§90.4) move numbers derived from the **same degree assumption**, and §90.4
+records that landing 3500 carries the 190 s embargo, the 874 s wallet timeout
+and the §44 pins with it. If D9's threshold turns out not to be 12, the two
+changes touch the same conformance vectors. **They must not be concurrent.**
 
 ### 16.5 CLOSED — distinctness on an anonymity zone is structurally unobtainable
 
@@ -2760,3 +2916,208 @@ introduced it by deriving a constant from a graph-degree assumption and then
 writing a check that reads a number the assumption does not cover — which is the
 ordinary way this happens, and is a reason to name the check's limit rather than
 to treat it as a defect.
+
+---
+
+## 17. §16.4's gate — RUN, and the ruling is that the mechanism is wrong
+
+**Run 2026-08-14, against the decision rule committed in §16.4 before the
+instrument existed** (`a5804d9c7`). Instrument:
+`rust/shekyl-relay-privacy/tests/d9_alpha.rs`.
+
+### 17.1 The non-vacuity control passed, and it validates the composition
+
+| `F′` | α |
+| --- | --- |
+| 3250 ms (shipped, measured at degree 12) | **0.900281** |
+| 4750 ms (§90.3's third-below-floor reading) | **0.869051** |
+
+**The control is the two assertions, not the 0.90 reproduction — stated so a
+future reader leans on the right one.** The first row is a round trip:
+`derive_embargo` binary-searches `mean_ticks` for the smallest value whose
+`full_travel_probability` meets the 0.90 target at `F′ = 3250`, so feeding that
+pair back through the same function returns the search's own `achieved` field
+by construction. It could not have come back anything else, and a modeling
+error *inside* `full_travel_probability` moves the derivation and the check
+together — it prints 0.900281 either way. What the row does buy: the test
+hard-codes 190 s rather than re-deriving it, so the pair is pinned and an edit
+to `full_travel_probability` drifts the printed value off 0.90 — a regression
+canary on one pinned pair, and proof the harness calls the production
+derivation rather than a mirror.
+
+The evidence that the pipeline responds on the axis under test is the pair of
+**assertions**: α at `F′ = 3250` and `F′ = 4750` must differ, and the slower
+return must produce the *lower* α, with the mechanism named (a longer return
+inflates the timer-survival exponent). What rules out the sweep printing 0.90
+at every degree is the **sweep's own variation** — 0.884 at 11, ≥ 0.68 across
+the measurable range, refusals at 1–2 — which the curve test now asserts
+rather than reports (the pre-registered 0.5 boundary at every answering
+degree, and the refusals as refusals). A modeling error common to every row —
+a wrong slack exponent, a mis-placed RD-4 correction — passes both and is
+bounded instead by the analytic/empirical pairing the crate uses elsewhere
+(`marginal_preemption_profile` against `simulate_preemption_profile`,
+`derive.rs:490`); `full_travel_probability` has no such partner yet, and that
+empirical-α companion is the named follow-up, one degree's worth of work.
+
+**The one unarmed premise, recorded beside it because it is the same shape:
+`E + R ≤ L` is argued, not measured.** The armed 0.5 boundary is the supremum
+of `α* = E/(L + E − R)` over the admissible pricing region — a derivation with
+the pricing quantified out, not a threshold picked for tidiness. *(Amended
+post-run: an earlier draft stated the region as `E ≤ L` against the zero-`R`
+form `E/(E+L)`; with `R > 0` that region does not bound `α*` by 0.5 — the
+condition that does is `E + R ≤ L`.)* Its admissibility argument is the capped
+unit: adversary precision tops out at 1, D9(b)'s own branch already delivers
+≈ 1, so `E` — the increment on an attribution already held — is close to zero
+in that unit, and `R`, the *ambiguous* `k/12` exposure, is strictly below `L`,
+the *certain* attribution. `E + R ≤ L` follows from both together. Sound, and
+nothing in the file covers it: **if `E + R ≤ L` ever fails, the assertion stays
+green while the ruling stops following from it.** Both residues are premises
+the gate rests on and cannot see.
+
+### 17.2 The curve
+
+| degree | `F′(d)` ms | α(d) | shortfall vs design 0.90 |
+| --- | --- | --- | --- |
+| 1, 2 | **REFUSED** — stranded | — | — |
+| 4 | 16250 | 0.681111 | −0.218889 |
+| 6 | 9000 | 0.790112 | −0.109888 |
+| 8 | 6250 | 0.839674 | −0.060326 |
+| 9 | 5250 | 0.859061 | −0.040939 |
+| 10 | 4750 | 0.869051 | −0.030949 |
+| **11** | 4000 | **0.884424** | −0.015576 |
+| 12 — provisioning reference | 3500 | 0.894940 | −0.005060 |
+
+Monotonicity is asserted, not eyeballed. Degrees 1–2 are a **refusal, and the
+refusal is a reading**: the flood strands more than 10 % of nodes, so the
+question is ill-posed there rather than answerable with a finite-looking number.
+
+α(12) reads 0.8949 rather than 0.9003 because the sweep uses the **converged**
+`F′ = 3500` from #472 rather than the shipped 3250 — the half-point of α is the
+cost of the low draw that PR corrected.
+
+### 17.3 The ruling, taken from the frozen rule
+
+§16.4 pre-registered: **α > 0.5 ⇒ D9(b) does not fire on the provisioning
+floor**, robust for any pricing with `E + R ≤ L` (as amended — §16.4's
+post-run note).
+
+**Measured α(11) = 0.884.** Not marginal, and not sensitive to where in the
+observed distribution one looks: α ≥ 0.68 at *every* degree the instrument will
+answer for, and the realized below-floor state — 85–94 % of it — sits at 11,
+where α is within 1.6 points of the design target.
+
+**And the sharper mode fires too.** §16.4 pre-registered that if α stays above
+`α*` all the way down, the finding is that *the mechanism* is wrong rather than
+its threshold. The curve does not approach 0.5 anywhere it can be measured, so
+**there is no threshold in the measurable range at which D9(b) becomes
+beneficial.**
+
+`α* = E/(L + E − R)` seals it in the unit §16.4 named. Adversary precision is
+capped at 1, and D9(b)'s own branch already delivers ≈ 1 — so `E`, the
+*increment* from the successor leak on top of an attribution the adversary
+already has, is small against `L`. Small `E` drives `α*` low, and the measured
+α is high. The two are not close.
+
+### 17.4 What this does and does not overturn
+
+**D9's ruling stands. Its implementation does not.**
+
+§12.1's reasoning is untouched: a below-floor node *is* running a topology its
+constants were not derived for, and shipping that invisibly to an operator who
+chose Tor is still the wrong answer. What the measurement removes is the
+**premise of §12.1's counter** — that such a node fluffs at origin anyway when
+its embargo expires. At degree 11 it does so **11.6 % of the time**, not
+usually. So D9(b) does not convert a late leak into a prompt one; it **creates**
+a leak that would not otherwise have happened in 88 % of originations, and it
+does so on the branch §16.3 shows an adversary can force for free.
+
+Composed with §16.3, D9(b) as specified is an adversary-triggerable downgrade
+from `k/12`-with-ambiguity to precision ≈ 1, on a condition the attacker can
+induce by occupying slots or simply waiting — and §15.1 says the network
+supplies that condition unaided 47.9 % of the time at `A = 15` and 15.8 % at
+`A = 30`.
+
+### 17.5 Consequence for §12.2, which can now be drafted
+
+The gate is discharged, so the dependency §16.4 recorded is released — but not
+to the section §12.1 anticipated:
+
+1. **`x = 0` is not the remedy for below-floor.** It buys an invalid-embargo
+   argument at the price of certain origin attribution, against a measured 88 %
+   chance the stem would have completed.
+2. **The remaining candidates are the two §12.1 rejected — and they are NOT
+   equally reopened.** *Stem anyway* was rejected on *"ships a known-invalid
+   provisioning invisibly"*, which is precisely the premise §17.6 just
+   weakened to a ~0.4-point shortfall; its rejection rests on a measurement
+   that has now moved. *Hold* was rejected on liveness — *"at `A ≤ 12` this is
+   not a transient stall but every Tor node holding indefinitely"* — and both
+   findings since then push the same way: R13's stickiness makes the
+   below-floor state longer-lived, and the sweep puts the network in it 47.9 %
+   / 15.8 % / 14.8 % of the time. **`x = 0` falling is not a general licence
+   to revisit**: the re-ranking reopens *stem anyway* on its merits and must
+   treat *hold*'s rejection as strengthened, not lapsed.
+3. **Whatever §12.2 specifies must be evaluated against an adversary who wants
+   it to fire** (§16.3), not one who trips it by accident.
+
+**This does not reopen the floor itself.** F-8b's startup refusal is a
+provisioning check on the operator's own configuration and is unaffected; what
+is overturned is only the *runtime* below-floor branch. §16.5's refusal stands
+unchanged, and so does the sequencing constraint: this and the `fluff_return_ms`
+landing touch the same conformance vectors and must not be concurrent.
+
+### 17.6 CORRECTION — what the curve measured, and the sharper route to the same ruling
+
+**§17.2's curve is a whole-network reading, and §17.3 mislabelled it.** The
+sweep passes `vec![degree; NODES]`, so *every* node runs at degree `d` and both
+in- and out-degree move together. Calling α(11) "the realized below-floor
+state" was wrong: the realized state is **one** node short of the floor among
+healthy peers, which is a different and *milder* configuration.
+
+**The quantity D9 turns on is narrower still, and the floor does not gate it.**
+Under `OutboundOnly`, a node's own fluff return — the thing its embargo is set
+against — arrives over links *someone else* initiated, so it is governed by
+**in-degree**. The floor gates **out-degree**. In `build_adjacency_from_degrees`
+every node draws its targets uniformly and never consults the target's degree,
+so lowering a node's out-degree does not thin the edges pointed at it and does
+not slow its own return at all. §12.1's sentence — *"its fluff return is
+slower"* — is an `EveryPeer` intuition applied to an `OutboundOnly` rule, where
+the two degrees collapse into one and the reasoning would be sound.
+
+**The rescue clause is measurable, and it fails.** In-degree and out-degree
+could be correlated on a real network — a node that cannot dial out may be one
+others cannot reach (unpublished descriptor, R13 burn state, a slow guard) — in
+which case the simulator's independence would be the artifact. The fleet
+recorded both, so this is a reading rather than an argument. Over 1155 settled
+node-samples across all three arms:
+
+| | pooled |
+| --- | --- |
+| `r(out-degree, in-degree)` | **+0.050** |
+| mean in-degree, out-degree < 12 | 11.53 (sd 3.60, n = 229) |
+| mean in-degree, out-degree ≥ 12 | 11.83 (sd 4.36, n = 926) |
+| **deficit attributable to being below floor** | **−0.30 links** |
+
+Per-arm: `r` = +0.172 (A=15), +0.048 (A=30), +0.026 (A=60). **The simulator's
+independence is faithful to the measured fleet.**
+
+**So the ruling survives and strengthens, by a shorter route than §17.3's.** A
+below-floor node's own fluff return corresponds to in-degree ≈ 11.53 against
+11.83 — interpolating §17.2, α ≈ 0.889 against 0.893, a shortfall of about
+**0.4 percentage points**. §17.3 refused D9(b) because α was far above `α*`;
+the corrected figure is *higher* still and the margin *wider*. More directly:
+**§12.1's premise is very nearly false.** A below-floor node's embargo is not
+meaningfully under-provisioned, so there is no invalid-provisioning cost for
+D9(b) to buy, and the trade §16.4 priced does not arise.
+
+**What this does not change.** §17.3's arithmetic stands on its own inputs, and
+§17.4–17.5 are unaffected: D9's ruling still stands, `x = 0` is still not the
+remedy, and §12.2 must still be written against an adversary who wants the
+check to fire. What changes is that the case against D9(b) no longer rests on
+a close quantitative trade — it rests on the premise not holding.
+
+**One thing this does NOT license.** The result says the *fluff-return* half of
+§12.1 fails. It says nothing about whether a below-floor node is otherwise
+worse off — its own transactions still spread over fewer out-edges, which is a
+real effect on quantity (b) and is what §17.2's curve legitimately measures.
+§12.2 may still find a reason to act on out-degree; it may not use *"its
+embargo is under-provisioned"* as that reason.

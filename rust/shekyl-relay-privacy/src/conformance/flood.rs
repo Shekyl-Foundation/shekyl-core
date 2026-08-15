@@ -223,15 +223,45 @@ pub fn simulate_fluff_return<R: RelayRng + ?Sized>(
 /// **Node 0 is the flood source and is excluded from the arrival sample**, so
 /// the two questions are asked by *where the degraded node is placed*:
 ///
-/// - `degrees[0]` reduced — the degraded node is the **source**, so the sample
-///   is its own fluff return. This is the self-harm axis the floor is
-///   justified on.
-/// - some `degrees[k]`, `k != 0`, reduced — the degraded node is a peer, so
-///   the sample is the rest of the network's first passage. This is the
-///   network axis.
+/// - `degrees[0]` reduced — the degraded node is the **source**. The sample is
+///   how a degraded source slows *everyone else's* first passage.
+/// - some `degrees[k]`, `k != 0`, reduced — the degraded node is a peer, and
+///   the pooled sample averages it into `nodes - 2` healthy ones.
 ///
-/// Reading one and concluding about the other is the error this signature
-/// exists to make hard to commit.
+/// # This arm does NOT measure "the degraded node's own fluff return"
+///
+/// An earlier version of this comment said the `degrees[0]` arm did, and that
+/// sentence propagated into a design section and was used to justify a ruling.
+/// Two reasons it is false, and they compound:
+///
+/// 1. **Node 0's own arrival is never sampled** — `skip(1)` excludes it by
+///    construction, so no arm here reads the source's own return time.
+/// 2. **Under [`FloodReach::OutboundOnly`] a node's own fluff return is
+///    governed by its IN-degree, not its out-degree.** A fluff reaches `v`
+///    only over links someone else initiated toward `v`. But `degrees[v]`
+///    controls only `v`'s *outgoing* draws — every other node picks its
+///    targets uniformly, never consulting `degrees[v]` — so lowering
+///    `degrees[v]` does not thin the edges pointed *at* `v` and does not slow
+///    `v`'s own return at all.
+///
+/// The split exists **only because the fluff rule is outbound-only**. Under
+/// [`FloodReach::EveryPeer`] the receiver relays back over the link it did not
+/// initiate, in-degree and out-degree collapse into one quantity, and the
+/// intuition is sound. F-7 chose `OutboundOnly`; an `EveryPeer` intuition
+/// applied to it is what produced the wrong sentence.
+///
+/// Measuring a node's own return therefore needs an instrument this builder
+/// does not provide: `degrees` parameterizes only *outgoing* draws, so no
+/// value passed here can thin the edges pointed *at* a node. It would take
+/// either an explicit-adjacency entry point or an in-degree parameter — and
+/// the reader is `best[k]` for that node specifically, because the pooled
+/// sample averages one degraded node into `nodes - 2` healthy ones. Neither
+/// extension exists yet, deliberately: measured on the fleet, the effect it
+/// would quantify is a small correction — `r(out, in) = +0.05`, and a
+/// below-floor node's in-degree deficit is 0.30 links
+/// (`Q12_D6A_PEER_DISCOVERY_RUN.md` §17.6) — so the independence this builder
+/// assumes is faithful rather than an artifact, and the missing instrument is
+/// recorded rather than built.
 ///
 /// # Panics
 ///
