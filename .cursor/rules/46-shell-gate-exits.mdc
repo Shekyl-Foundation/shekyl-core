@@ -1,0 +1,29 @@
+---
+description: Shell gate exit-code discipline. Apply when writing or editing any shell command whose exit code decides a gate, commit, or push.
+globs:
+  - scripts/**
+  - .github/workflows/**
+---
+
+# Gate verdicts never travel through a pipe
+
+`cmd | tail`, `cmd | grep`, `cmd | head` — the pipeline's exit status is
+the LAST command's, so the gate reads the filter's success and the real
+verdict is discarded. This has shipped a clippy-red commit and masked a
+broken C++ link in the same review round; five instances were tallied in
+one SA round alone.
+
+- The verdict command runs **unpiped**: redirect to a log file and read
+  the tail afterwards, or capture `$?` on its own line immediately after
+  the bare command.
+- If a pipe is unavoidable, the verdict is `${PIPESTATUS[0]}` (bash),
+  captured on the very next line — not `$?`.
+- `set -o pipefail` is correct for **new** gate scripts, with one known
+  trap: under pipefail, an early-exiting consumer (`rg -q`, `head`)
+  SIGPIPEs its producer and a successful match reads as pipeline
+  failure, flaky by input size. Capture into a variable first, then
+  match (the SA-3b registry-gate fix). Do not blanket-add pipefail to
+  existing scripts without re-checking every pipe for this shape.
+- Chains matter: in `gate && commit && push`, a swallowed gate exit
+  makes the push unconditional. Anything that publishes (commit, push,
+  tag) never shares a chain with a piped verdict.

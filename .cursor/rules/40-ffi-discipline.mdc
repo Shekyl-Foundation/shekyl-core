@@ -153,3 +153,37 @@ Any `ShekylBuffer` accepted from the C++ side has a documented maximum
 length. Unbounded deserialization (e.g., the historical
 `pqc_authentication` blob) is a DoS surface and a parsing-bug surface.
 Enforce the bound at the Rust entry point before doing anything else.
+
+## Boundary reads and reserves (SA-R-7)
+
+- A byte slice is reconstructed from an FFI `(ptr, len)` through
+  `legacy_util::slice_from_ptr`, never a private clone and never bare
+  `from_raw_parts` — the seam owns the null check and `from_raw_parts`'
+  language-level `isize::MAX` byte bound (UB even when the caller really
+  provided the memory). Two byte-identical unguarded clones have already
+  been found and absorbed; a third is a bug on arrival.
+- A count that sizes an allocation is bounded **before** the reserve via
+  `legacy_util::bounded_capacity` — and the bound has two axes: the
+  backing bound (a count the remaining bytes cannot back is malformed)
+  and, for cheap-per-element counts, a **protocol ceiling** (a genuinely
+  backed blob can still buy amplification at 4 wire bytes per element;
+  `MAX_TREE_DEPTH` on branch layers is the precedent). Apply whichever
+  is tighter; never cap at an arbitrary large constant.
+- Both patterns are pinned by `tests/ffi_boundary_ratchet.rs`, which
+  fails in both directions: a new raw site fails CI, and a removed one
+  must tighten its baseline row. A reviewed raw site (typed slices,
+  sub-pointer arithmetic, a local guarded helper with its own error
+  type) bumps its pin in the same commit with a rationale.
+- Crate-root `#![allow]` of the cast lints is forbidden in FFI boundary
+  crates — it silently overrides the workspace deny exactly where the
+  lints matter most. Site-level allows only, each with a one-line
+  value-preserving rationale.
+
+## Refuse, never panic, on the untrusted path
+
+Malformed input from across the boundary parses to `None` or a typed
+error and the export returns its failure shape. A panic across `extern
+"C"` is UB, and even a caught one turns a hostile input into a crash the
+C++ host did not choose. Panics (and `expect`) are reserved for
+programmer invariants the caller cannot influence — and the message must
+name the invariant, not the input.
