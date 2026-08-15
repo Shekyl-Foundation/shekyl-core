@@ -250,12 +250,18 @@ pub fn simulate_fluff_return<R: RelayRng + ?Sized>(
 /// intuition is sound. F-7 chose `OutboundOnly`; an `EveryPeer` intuition
 /// applied to it is what produced the wrong sentence.
 ///
-/// To measure a node's own return, thin the edges pointed *at* it and read
-/// `best[k]` specifically — the pooled sample buries a single node's effect.
-/// Measured on the fleet, that is a small correction: `r(out, in) = +0.05` and
-/// a below-floor node's in-degree deficit is 0.30 links
-/// (`Q12_D6A_PEER_DISCOVERY_RUN.md` §17.6), so the independence this builder
-/// assumes is faithful rather than an artifact.
+/// Measuring a node's own return therefore needs an instrument this builder
+/// does not provide: `degrees` parameterizes only *outgoing* draws, so no
+/// value passed here can thin the edges pointed *at* a node. It would take
+/// either an explicit-adjacency entry point or an in-degree parameter — and
+/// the reader is `best[k]` for that node specifically, because the pooled
+/// sample averages one degraded node into `nodes - 2` healthy ones. Neither
+/// extension exists yet, deliberately: measured on the fleet, the effect it
+/// would quantify is a small correction — `r(out, in) = +0.05`, and a
+/// below-floor node's in-degree deficit is 0.30 links
+/// (`Q12_D6A_PEER_DISCOVERY_RUN.md` §17.6) — so the independence this builder
+/// assumes is faithful rather than an artifact, and the missing instrument is
+/// recorded rather than built.
 ///
 /// # Panics
 ///

@@ -2646,7 +2646,7 @@ completes before any node's embargo fires:
 prices it: a stem that completes still hands the epoch's successor to an
 adversary holding `k` of 12 connections with probability `k/12`, ambiguously
 between origin and relay. Omitting `R` understates the no-D9(b) branch and so
-moves `α\*` **down**, biasing the comparison toward the very ruling this
+moves `α*` **down**, biasing the comparison toward the very ruling this
 section pre-registers as likely — which is exactly the lean a pre-registration
 exists to prevent.
 
@@ -2655,7 +2655,7 @@ So **D9(b) is better iff `L < α·R + (1 − α)(L + E)`**, i.e. iff
 > **α · (L + E − R) < E**,  equivalently  **α < α\* = E / (L + E − R)**
 
 `R < L` (ambiguous attribution is worth less to an attacker than certain
-attribution), so `α\*` is *larger* than the zero-`R` form — D9(b) is favoured
+attribution), so `α*` is *larger* than the zero-`R` form — D9(b) is favoured
 somewhat more than the naive comparison suggests. That can still go either way
 on α, which is why it is measured rather than argued.
 
@@ -2715,15 +2715,15 @@ to look.
 
 #### Pre-registered decision rule (rule 11) — written before the run
 
-`α\*` depends on pricing `E` against `L`, which is a threat-model judgement and
+`α*` depends on pricing `E` against `L`, which is a threat-model judgement and
 not a measurement. So the rule is stated over the regions where the ruling is
 **robust to that pricing**, with the boundaries fixed here in advance:
 
 | measured α(11) | ruling | why it is robust |
 | --- | --- | --- |
-| **α > 0.5** | **D9(b) does not fire on the provisioning floor.** The branch needs a different threshold or a different mechanism, and §12.2 is drafted against that. | `α\* ≤ 0.5` for any `E ≤ L`; D9(b) would have to be justified by claiming the extra leak is *worse* than losing origin ambiguity outright. |
-| **α < 0.1** | **D9(b) as ruled, threshold = the floor.** §12.2 proceeds as §12.1 specifies. | `α\* ≥ 0.1` unless `E > 9L`; below this, D9(b) wins for any defensible pricing. |
-| **0.1 ≤ α ≤ 0.5** | **The slice does NOT proceed to §12.2 on the measurement alone.** `E` and `L` are priced on the record first, and the ruling follows from the priced `α\*`. | The regions overlap only where the answer genuinely turns on the threat model, and that is a decision, not a reading. |
+| **α > 0.5** | **D9(b) does not fire on the provisioning floor.** The branch needs a different threshold or a different mechanism, and §12.2 is drafted against that. | `α* ≤ 0.5` for any `E ≤ L`; D9(b) would have to be justified by claiming the extra leak is *worse* than losing origin ambiguity outright. |
+| **α < 0.1** | **D9(b) as ruled, threshold = the floor.** §12.2 proceeds as §12.1 specifies. | `α* ≥ 0.1` unless `E > 9L`; below this, D9(b) wins for any defensible pricing. |
+| **0.1 ≤ α ≤ 0.5** | **The slice does NOT proceed to §12.2 on the measurement alone.** `E` and `L` are priced on the record first, and the ruling follows from the priced `α*`. | The regions overlap only where the answer genuinely turns on the threat model, and that is a decision, not a reading. |
 
 **Stated consequence, so this cannot be graded after the fact:** the
 `α > 0.5` row is the outcome the arc's own numbers make likely, because degree
@@ -2738,16 +2738,16 @@ fire (§16.3) rather than one who trips it by accident.
 Because that outcome is near-certain at degree 11, "which band does α(11) land
 in" is close to a foregone conclusion and would not be a finding. **The
 decision-relevant output is `α(d)` as a curve over `d`, and the degree at which
-it crosses `α\*`** — because that is what §12.2 actually needs: *at what
+it crosses `α*`** — because that is what §12.2 actually needs: *at what
 threshold would this check fire only where it helps?* The floor is 12 by
 provisioning, and nothing says the useful trigger for D9(b) is the same number.
 
 This also carries the sharper failure mode, which the bands alone cannot
 express:
 
-- **α crosses `α\*` at some `d < 12`** → the ruling stands and **the threshold
+- **α crosses `α*` at some `d < 12`** → the ruling stands and **the threshold
   is wrong**; §12.2 specifies D9(b) at the crossing degree, not at the floor.
-- **α stays above `α\*` all the way down to `d = 1`** → **no threshold makes
+- **α stays above `α*` all the way down to `d = 1`** → **no threshold makes
   D9(b) beneficial**, and the finding is that *the mechanism* is wrong rather
   than its number. §12.2 is then a different section than §12.1 anticipated.
 

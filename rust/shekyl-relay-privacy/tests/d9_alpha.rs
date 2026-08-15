@@ -48,11 +48,19 @@ const MEAN_QUARTER_SECS: u32 = 20;
 /// The shipped embargo, in ticks: 190 s at the 250 ms tick.
 const SHIPPED_EMBARGO_SECS: u32 = 190;
 fn shipped_mean_ticks() -> u32 {
-    let ticks = u64::from(SHIPPED_EMBARGO_SECS) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS;
-    // 190 s at a 250 ms tick is 760, so this cannot fail — but an `as` cast
-    // would silently truncate if either constant moved, and this value sets the
-    // embargo the whole measurement is taken against. A wrong tick count would
-    // shift every alpha in the table by an amount nothing else would flag.
+    let embargo_ms = u64::from(SHIPPED_EMBARGO_SECS) * 1000;
+    // Exact divisibility asserted, not assumed: 190 000 ms / 250 ms = 760
+    // today, but a tick that stops dividing the embargo would make `/`
+    // truncate SILENTLY, shifting the embargo every alpha in the table is
+    // measured against by an amount nothing else would flag. This value is
+    // the measurement's denominator — it fails loudly or not at all.
+    assert!(
+        embargo_ms % DEFAULT_EMBARGO_TICK_MILLIS == 0,
+        "shipped embargo ({embargo_ms} ms) is not a whole number of \
+         {DEFAULT_EMBARGO_TICK_MILLIS} ms ticks — a constant moved; re-derive \
+         the tick count explicitly instead of letting division round it"
+    );
+    let ticks = embargo_ms / DEFAULT_EMBARGO_TICK_MILLIS;
     u32::try_from(ticks).expect("shipped embargo in ticks must fit u32")
 }
 
@@ -160,7 +168,16 @@ fn alpha_curve_across_below_floor_degrees() {
                 continue;
             }
         };
-        let f_ms = u32::try_from(f_prime).unwrap_or(u32::MAX);
+        // Fail loudly, never clamp: `unwrap_or(u32::MAX)` here would feed a
+        // fabricated F' into alpha and report a number for a measurement that
+        // did not happen. (The Ok arm already excludes u64::MAX — a stranded
+        // p90 surfaces as a `Stranded` refusal, not a value.)
+        let f_ms = u32::try_from(f_prime).unwrap_or_else(|_| {
+            panic!(
+                "converged p90 {f_prime} ms at degree {degree} exceeds u32 — \
+                    not a value to clamp, a measurement to refuse"
+            )
+        });
         let a = alpha_at(f_ms);
         println!(
             "  {degree:6}   {f_ms:8}   {a:8.6}   {:+.6}",
@@ -179,7 +196,7 @@ fn alpha_curve_across_below_floor_degrees() {
     for w in rows.windows(2) {
         assert!(
             w[0].2 <= w[1].2 + 1e-12,
-            "alpha rose with FALLING degree ({} -> {}): {} then {}. Either the \
+            "alpha FELL as degree ROSE ({} -> {}): {} then {}. Either the \
              flood measurement or the survival exponent has its sign inverted",
             w[0].0,
             w[1].0,
