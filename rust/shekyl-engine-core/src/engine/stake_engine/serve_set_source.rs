@@ -47,7 +47,7 @@
 //! This type still does not create transports; it takes one. The bound decides
 //! *which kind*, the construction site decides *whose*.
 
-use shekyl_archival_retention::HoldingsKind;
+use shekyl_archival_retention::{HoldingsKind, ARCHIVAL_REORG_DEPTH_BLOCKS};
 use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
 
@@ -78,6 +78,21 @@ pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
     curve_tree: CurveTreeHandle,
     rpc: R,
     p_id: [u8; 32],
+    /// Shards pinned in the store but absent from the connected record, and the
+    /// record height at which each was *first* observed absent. The release
+    /// gate reads from here; see [`Self::releasable`].
+    ///
+    /// **In memory, per session, deliberately.** A restart forgets the clock
+    /// and restarts it, so a wallet that reopens repeatedly reclaims more
+    /// slowly — but it never releases *early*, which is the only direction
+    /// that costs anything irreversible. Persisting it would buy faster
+    /// reclamation of disk (recoverable) at the price of a schema version and
+    /// a migration (not free), for a decision §9.7 item 5 already rules should
+    /// fail toward retention.
+    absent_since: std::sync::Mutex<std::collections::BTreeMap<u64, u64>>,
+    /// The store's pin set as of the last reconcile — the other half of the
+    /// release input, kept here so a refresh costs one actor round trip.
+    last_pinned: std::sync::Mutex<Vec<u64>>,
 }
 
 impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
@@ -87,7 +102,58 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
             curve_tree,
             rpc,
             p_id,
+            absent_since: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            last_pinned: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Fold this refresh's observation into the departure ledger and return the
+    /// shards whose pins are now releasable.
+    ///
+    /// `owed` is what the connected record says this persona must serve;
+    /// `pinned` is what the store is actually retaining. The difference is
+    /// retained-but-not-owed — the leak `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7
+    /// item 5 prices at ~13.6 GB against a rule-76 Pi-4 floor, since nothing
+    /// else ever removes a pin.
+    ///
+    /// # Why a gate at all, and why this one
+    ///
+    /// §9.7 rules the asymmetry: **acquiring a pin needs no finality;
+    /// releasing one does.** A holdings drop that is later reorged back can,
+    /// if the pin went with it, have let a prune discard bytes no re-pin
+    /// restores — `AlreadyPruned` is terminal and its remedy is a chain
+    /// replay. So a shard must be absent for `ARCHIVAL_REORG_DEPTH_BLOCKS`
+    /// before its pin goes, and that constant is the chain's own reorg depth,
+    /// single-sourced from consensus rather than a number chosen here — the
+    /// same horizon the `P`-scan already treats as final.
+    ///
+    /// A shard that reappears in the record clears its entry, so a departure
+    /// that reorgs back inside the window costs nothing and leaves no trace.
+    fn releasable(&self, owed: &[u64], pinned: &[u64], as_of: u64) -> Vec<u64> {
+        let owed: std::collections::BTreeSet<u64> = owed.iter().copied().collect();
+        let mut ledger = self.absent_since.lock().expect("departure ledger");
+
+        // A shard back in the record is not departed at all: drop its entry so
+        // its clock restarts if it leaves again.
+        ledger.retain(|shard_id, _| !owed.contains(shard_id));
+
+        let mut releasable = Vec::new();
+        for &shard_id in pinned {
+            if owed.contains(&shard_id) {
+                continue;
+            }
+            let first_absent = *ledger.entry(shard_id).or_insert(as_of);
+            // Saturating: a record height below the first observation means the
+            // chain moved backwards under us, which is not elapsed finality.
+            if as_of.saturating_sub(first_absent) >= ARCHIVAL_REORG_DEPTH_BLOCKS {
+                releasable.push(shard_id);
+            }
+        }
+        // Released pins stop being pinned, so their ledger entries are spent.
+        for shard_id in &releasable {
+            ledger.remove(shard_id);
+        }
+        releasable
     }
 }
 
@@ -144,11 +210,36 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             },
         };
 
-        let (outcomes, reader): (Vec<(u64, SegmentPin)>, ServingReader) = self
+        let as_of = source
+            .chain_height
+            .tip()
+            .map_or(0, shekyl_types::BlockHeight::to_raw);
+
+        // The release set is computed from the *previous* reconcile's view of
+        // the store, which is what `pinned_now` came back for. One round trip
+        // per refresh, and the release lags one refresh — against a 720-block
+        // gate that is not a lag that means anything.
+        let releasable = {
+            let pinned = self.last_pinned.lock().expect("pin view").clone();
+            self.releasable(&shard_ids, &pinned, as_of)
+        };
+
+        let reply = self
             .curve_tree
-            .pin_serve_set(shard_ids.clone())
+            .pin_serve_set(shard_ids.clone(), releasable.clone())
             .await
             .map_err(|e| format!("serve-set pin failed: {e:?}"))?;
+        *self.last_pinned.lock().expect("pin view") = reply.pinned_now.clone();
+        if reply.released > 0 {
+            tracing::info!(
+                released = reply.released,
+                shard_ids = ?releasable,
+                "released serve-set pins whose shards left the bond record more than \
+                 ARCHIVAL_REORG_DEPTH_BLOCKS ago; the prune may now reclaim their bytes"
+            );
+        }
+        let (outcomes, reader): (Vec<(u64, SegmentPin)>, ServingReader) =
+            (reply.outcomes, reply.reader);
 
         Ok(PinReport {
             shard_ids,
@@ -269,6 +360,80 @@ mod tests {
     /// outcomes + reader — is the one part of the seam no host-side test can
     /// reach. Without this it could be wrong in any of those four places
     /// while the whole suite stayed green.
+    /// The gate itself, exercised as a pure function of its three inputs — no
+    /// store, no actor, no daemon. `releasable` is where the slash-vs-disk
+    /// asymmetry actually lives, so it is worth testing without anything that
+    /// could make a pass mean something else.
+    #[tokio::test]
+    async fn a_departed_shard_is_not_releasable_until_finality_has_elapsed() {
+        let (_dir, curve_tree) = handle();
+        let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
+
+        // Shard 9 is pinned but no longer owed, first seen absent at height 1000.
+        assert!(
+            pinner.releasable(&[1], &[1, 9], 1_000).is_empty(),
+            "a shard that just left is not final: releasing here is the reorg \
+             window the whole gate exists for",
+        );
+
+        // One block short of the depth.
+        let almost = 1_000 + ARCHIVAL_REORG_DEPTH_BLOCKS - 1;
+        assert!(pinner.releasable(&[1], &[1, 9], almost).is_empty());
+
+        // Exactly the depth: releasable.
+        let at = 1_000 + ARCHIVAL_REORG_DEPTH_BLOCKS;
+        assert_eq!(pinner.releasable(&[1], &[1, 9], at), vec![9]);
+    }
+
+    /// A departure that reorgs back inside the window costs nothing and leaves
+    /// no trace — the clock restarts if it leaves again.
+    #[tokio::test]
+    async fn a_shard_that_returns_clears_its_departure_clock() {
+        let (_dir, curve_tree) = handle();
+        let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
+
+        assert!(pinner.releasable(&[1], &[1, 9], 1_000).is_empty());
+        // Back in the record at 1_100 — the reorg the gate is guarding against.
+        assert!(pinner.releasable(&[1, 9], &[1, 9], 1_100).is_empty());
+        // It leaves again at 1_200. Had the first clock survived, the depth
+        // would elapse at 1_720 and release 480 blocks too early.
+        assert!(pinner.releasable(&[1], &[1, 9], 1_200).is_empty());
+        assert!(
+            pinner
+                .releasable(&[1], &[1, 9], 1_000 + ARCHIVAL_REORG_DEPTH_BLOCKS)
+                .is_empty(),
+            "the clock must have restarted at the second departure, not run from \
+             the first",
+        );
+        assert_eq!(
+            pinner.releasable(&[1], &[1, 9], 1_200 + ARCHIVAL_REORG_DEPTH_BLOCKS),
+            vec![9],
+        );
+    }
+
+    /// A shard still owed is never releasable, however long it has been pinned
+    /// — the direction that would cause a slash rather than waste disk.
+    #[tokio::test]
+    async fn an_owed_shard_is_never_releasable() {
+        let (_dir, curve_tree) = handle();
+        let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
+        assert!(pinner
+            .releasable(&[1, 9], &[1, 9], 10 * ARCHIVAL_REORG_DEPTH_BLOCKS)
+            .is_empty());
+    }
+
+    /// A chain that moves backwards under the ledger is not elapsed finality.
+    #[tokio::test]
+    async fn a_record_height_going_backwards_does_not_elapse_the_gate() {
+        let (_dir, curve_tree) = handle();
+        let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
+        assert!(pinner.releasable(&[1], &[1, 9], 5_000).is_empty());
+        assert!(
+            pinner.releasable(&[1], &[1, 9], 100).is_empty(),
+            "saturating subtraction: a lower height is not 4900 blocks of finality",
+        );
+    }
+
     #[tokio::test]
     async fn the_report_is_derived_from_the_connected_record() {
         let (_dir, curve_tree) = handle();

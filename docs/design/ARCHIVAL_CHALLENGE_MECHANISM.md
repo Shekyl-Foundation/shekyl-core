@@ -1582,8 +1582,8 @@ stops tor *before* the listener so no descriptor outlives the port it names.
 Exactly the shape of "a tor restart must not cause a rotation" (§7.4), and
 silent in exactly the same way.
 
-**5. OPEN — deriving the pin set from the connected record makes it
-reorg-sensitive, and the type system cannot reach this one.** Items 3 and 4
+**5. CLOSED (2026-08-15) — deriving the pin set from the connected record
+makes it reorg-sensitive, and the type system cannot reach this one.** Items 3 and 4
 are about *how* a value is constructed, which a type can settle. This is
 about *when* it is recomputed, which no signature can express. Verified at
 source, and the state of it is worse than "needs reconciliation":
@@ -1634,6 +1634,41 @@ refresh, unconditionally; and either implement release behind a stated
 finality depth or record "never release" as a **ruled** disposition with its
 retention cost priced against the provisioning floor. A refresh that reads
 `as_of_height` and re-pins is the whole of the slashing-direction fix.
+
+**CLOSED (2026-08-15).** Both halves. The slashing direction closed with
+SH-2a's unconditional re-pin, driven every refresh by SH-2b-2. The leaking
+direction is now an implemented **release behind a finality depth**, taking
+the first of the two exits rather than the "never release" ruling — the
+maintainer's call, on the grounds that the space has to come back.
+
+The depth is **`ARCHIVAL_REORG_DEPTH_BLOCKS`**, the chain's own reorg depth,
+single-sourced from consensus rather than chosen here — the same horizon the
+`P`-scan already treats as final, so there is no second finality number to
+keep in step. `LeafStore` gained the two verbs it never had
+(`pinned_shard_ids`, `release_pins`); the pin table was previously written by
+`pin_serve_set` and cleared by truncation and *nothing else*, which is what
+made a departed shard's pin permanent. `EngineServeSetPinner` holds the
+departure ledger and owns the gate: a shard pinned-but-not-owed is stamped
+with the record height at which it was first observed absent, released only
+once `ARCHIVAL_REORG_DEPTH_BLOCKS` have elapsed, and **cleared if it returns**
+— so a departure that reorgs back inside the window leaves no trace and
+restarts the clock if it leaves again.
+
+Two residuals, both stated rather than discovered:
+
+- **The ledger is in memory, per session.** A restart forgets the clock and
+  restarts it, so a wallet that reopens often reclaims more slowly. It never
+  releases *early*, which is the only direction that is irreversible, and it
+  is why persisting it was refused: the reclaim is disk (recoverable) and the
+  price would be a schema version plus a migration.
+- **Release lags the pin by one refresh.** The reconcile learns the store's
+  pin set from the reply it is answering, so the difference is acted on next
+  time. Against a 720-block gate that is not a lag that means anything, and
+  it keeps the refresh at one actor round trip.
+
+The store deliberately does **not** enforce the gate — it has no clock, no
+view of the record, and no memory of when a shard left one. A half-check
+there would look guarded while the real condition went unenforced.
 
 **6. OPEN — the W₂ rig's three provenance requirements are stated in §9.5
 but not wired.** `VanguardsMode::Managed`, the rule-76 Pi-4 floor, and the

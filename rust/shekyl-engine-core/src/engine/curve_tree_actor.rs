@@ -198,6 +198,32 @@ pub(crate) struct IngestedTipHeight;
 pub(crate) struct PinServeSet {
     /// Shard ids from the connected bond record, in the record's order.
     pub shard_ids: Vec<u64>,
+    /// Shard ids whose pins the caller has determined are releasable — absent
+    /// from the record for at least `ARCHIVAL_REORG_DEPTH_BLOCKS`.
+    ///
+    /// Carried on the same message as the pin rather than sent as its own so
+    /// the two land in one actor turn, in the one order that is safe: pin the
+    /// current set, *then* release. Empty on most refreshes.
+    pub release_ids: Vec<u64>,
+}
+
+/// What one serve-set reconcile reports back.
+///
+/// `pinned_now` is the input the *next* reconcile needs: a refresh can only
+/// tell which pins are stale by comparing the store's pin set against the
+/// record it just read, and only the actor can see the former. Returning it
+/// here keeps the whole reconcile at one round trip per refresh — the release
+/// then lags by one refresh, which against a 720-block finality gate is not a
+/// lag that means anything.
+pub(crate) struct PinServeSetReply {
+    /// Per-member pin outcome, paired with its shard id, in caller order.
+    pub outcomes: Vec<(u64, SegmentPin)>,
+    /// A reader on the store the pins landed in.
+    pub reader: ServingReader,
+    /// Every shard id pinned in the store *after* this reconcile.
+    pub pinned_now: Vec<u64>,
+    /// How many pins this reconcile actually removed.
+    pub released: usize,
 }
 
 /// Actor message for the §3.3 ingest-time integrity verify (CT-5b): reconstruct
@@ -285,15 +311,31 @@ impl Message<IngestBlock> for CurveTreeActor {
 }
 
 impl Message<PinServeSet> for CurveTreeActor {
-    type Reply = Result<(Vec<(u64, SegmentPin)>, ServingReader), ClientError>;
+    type Reply = Result<PinServeSetReply, ClientError>;
 
     async fn handle(
         &mut self,
         msg: PinServeSet,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        // **Pin before release, always.** Both run on the actor's own object,
+        // so nothing else interleaves — but the order still matters, because a
+        // release that ran first would leave a window in which a shard this
+        // refresh still owes is unpinned and prunable. Pinning first makes the
+        // only reachable transient an *extra* pin, which fails toward
+        // retention. Same asymmetry §9.7 item 5 rules for the verbs themselves.
         let outcomes = self.client.pin_serve_set(&msg.shard_ids)?;
-        Ok((outcomes, self.client.serving_reader()))
+        let released = if msg.release_ids.is_empty() {
+            0
+        } else {
+            self.client.release_pins(&msg.release_ids)?
+        };
+        Ok(PinServeSetReply {
+            outcomes,
+            reader: self.client.serving_reader(),
+            pinned_now: self.client.pinned_shard_ids()?,
+            released,
+        })
     }
 }
 
@@ -733,9 +775,13 @@ impl CurveTreeHandle {
     pub(crate) async fn pin_serve_set(
         &self,
         shard_ids: Vec<u64>,
-    ) -> Result<(Vec<(u64, SegmentPin)>, ServingReader), CurveTreeHandleError> {
+        release_ids: Vec<u64>,
+    ) -> Result<PinServeSetReply, CurveTreeHandleError> {
         self.actor_ref()
-            .ask(PinServeSet { shard_ids })
+            .ask(PinServeSet {
+                shard_ids,
+                release_ids,
+            })
             .await
             .map_err(collapse_send_error)
     }
@@ -983,18 +1029,20 @@ mod tests {
         let (_dir, client) = fresh_client();
         let handle = CurveTreeHandle::spawn(client);
 
-        let (_outcomes, before) = handle
-            .pin_serve_set(Vec::new())
+        let before = handle
+            .pin_serve_set(Vec::new(), Vec::new())
             .await
-            .expect("pin before respawn");
+            .expect("pin before respawn")
+            .reader;
 
         handle.kill_and_wait_for_test().await;
         handle.respawn().await.expect("respawn");
 
-        let (_outcomes, after) = handle
-            .pin_serve_set(Vec::new())
+        let after = handle
+            .pin_serve_set(Vec::new(), Vec::new())
             .await
-            .expect("pin after respawn");
+            .expect("pin after respawn")
+            .reader;
 
         assert!(
             before.same_store(&after),

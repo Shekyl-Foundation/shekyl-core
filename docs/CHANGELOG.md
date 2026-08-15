@@ -4,6 +4,38 @@
 
 ### Changed
 
+- **A persona now releases the pins of shards it no longer owes** —
+  closing §9.7 item 5's leaking direction (SH pin-release). A pin means
+  one thing, "`prune_frozen` must not delete this segment's bytes", and
+  until now nothing ever removed one: the pin table was written by
+  `pin_serve_set` and cleared by tree truncation and **nothing else**. So
+  every shard that left a persona's holdings — an ordinary
+  `HoldingsUpdate` drop, not only unbonding — kept its ~3.33 MB forever,
+  up to ~13.6 GB against a rule-76 Pi-4 floor. Not self-correcting, and
+  the doc's own words for it were "a leak, not a policy".
+
+  `LeafStore` gains `pinned_shard_ids` and `release_pins`;
+  `EngineServeSetPinner` gains the departure ledger and the gate. The
+  asymmetry §9.7 ruled is what shapes it: **acquiring a pin needs no
+  finality; releasing one does**, because the reclaim is disk (recoverable)
+  and the risk is a slash (not). A pinned-but-unowed shard is stamped with
+  the record height it was first seen absent at, released only after
+  `ARCHIVAL_REORG_DEPTH_BLOCKS` — the chain's own reorg depth, the same
+  horizon the `P`-scan already treats as final, so there is no second
+  finality constant to keep in step — and its clock is **cleared if the
+  shard returns**, so a departure that reorgs back inside the window costs
+  nothing. Pin runs before release in the same actor turn, so the only
+  reachable transient is an extra pin, which fails toward retention.
+
+  The store does not enforce the gate: it has no clock, no view of the
+  bond record, and no memory of when a shard left one. A half-check there
+  would look guarded while the real condition went unenforced. Two stated
+  residuals: the ledger is in memory per session (a restart restarts the
+  clock — slower reclamation, never an early release), and the release
+  lags the pin by one refresh (the reconcile learns the store's pin set
+  from the reply it is answering; against a 720-block gate that is not a
+  lag that means anything).
+
 - **The persona serving host is wired: a staker's wallet now starts one**
   (SH-2b-2). `Engine::start_serving_if_staker` is the sibling of
   `start_pscan_if_staker`, and the embedder parks both handles together
