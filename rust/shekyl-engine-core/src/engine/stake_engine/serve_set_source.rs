@@ -6,6 +6,17 @@
 //! [`EngineServeSetPinner`] — the production `ServeSetPinner`: read the
 //! connected bond record, pin what it holds, report both (SH-2).
 //!
+//! Two holdings kinds, two derivations, one seam. `ShardSetCompact` pins the
+//! record's explicit list. `CompleteTree` — the Foundation archival posture —
+//! owes the whole corpus, which no list can express, so the serve-set is
+//! *enumerated from the store's own frozen-segments table* and re-enumerated
+//! on every refresh: as segments freeze they join the corpus with no list
+//! maintained anywhere that could drift ([`CurveTreeHandle::pin_frozen_corpus`]).
+//! That arm runs only for an operator who activated it through the CLI
+//! ([`CompleteTreeServing`]); otherwise it refuses loudly, because serving
+//! the empty set a `CompleteTree` record decodes to is §9.6 item 4's silent
+//! slash.
+//!
 //! This is the one implementor of `shekyl-p-host`'s seam, and the seam is
 //! shaped so that it is the *only* place a serve-set can come from. The host
 //! supplies none of the three values this returns — which shards the persona
@@ -55,18 +66,35 @@ use crate::engine::curve_tree_actor::CurveTreeHandle;
 use crate::engine::emission_source::fetch_emission_claim_source;
 use crate::engine::prpc::PersonaIsolatedTransport;
 
+/// Whether this wallet's operator has activated Foundation `CompleteTree`
+/// serving (`operational.serve_complete_tree`, flipped only by the CLI).
+///
+/// A two-variant enum rather than a `bool` so the construction site reads as
+/// what it is — a posture the operator chose after the CLI stated the terms
+/// (no rewards, outside the staking economy, unbounded disk, slash side
+/// intact) — and so the `CompleteTree` match arm below cannot be satisfied
+/// by an accidental `true` from some unrelated flag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompleteTreeServing {
+    /// The default: a `CompleteTree` bond refuses to serve, loudly, with the
+    /// activation remedy named.
+    NotActivated,
+    /// The operator activated the archival posture: the frozen corpus is the
+    /// serve-set, re-enumerated on every refresh.
+    Activated,
+}
+
 /// Derives a persona's serve-set from its connected bond record and pins it.
 // Wired by `Engine::start_serving_if_staker` (SH-2b-2). Landed with the seam
 // it implements rather than after it, so the one place a serve-set can come
 // from exists before anything can be wired to a second one.
 //
-// SH-2b inherits an open question this refusal makes visible: whether
-// `start_serving_if_staker` should start a serving host **at all** for a
-// `CompleteTree` persona. `first_stake` hardcodes that posture today — a named
-// PR-4c deviation, since no wallet entry posts a market bond yet — so wiring
-// the host unconditionally would make every first-stake wallet fail to start
-// one. A host that reliably refuses to start is correct and is not a finished
-// answer; the caller decides.
+// The SH-2b open question — whether the lifecycle should start a host at all
+// for a `CompleteTree` persona — is now answered where the caller could not
+// answer it: the host starts unconditionally, and *this* seam decides per
+// holdings kind. `first_stake` still hardcodes the CompleteTree posture (the
+// named PR-4c deviation), so a first-stake wallet that has not activated
+// archival serving keeps the loud refusal, now with its remedy named.
 //
 // Lives under `stake_engine/` rather than at `engine/` top level because both
 // halves of its input are already this tree's: the bond record it reads is what
@@ -78,15 +106,23 @@ pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
     curve_tree: CurveTreeHandle,
     rpc: R,
     p_id: [u8; 32],
+    complete_tree: CompleteTreeServing,
 }
 
 impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
-    /// Bind a pinner to one persona's canonical id and its own transport.
-    pub(crate) fn new(curve_tree: CurveTreeHandle, rpc: R, p_id: [u8; 32]) -> Self {
+    /// Bind a pinner to one persona's canonical id, its own transport, and
+    /// the operator's `CompleteTree` posture (read from prefs at wallet open).
+    pub(crate) fn new(
+        curve_tree: CurveTreeHandle,
+        rpc: R,
+        p_id: [u8; 32],
+        complete_tree: CompleteTreeServing,
+    ) -> Self {
         Self {
             curve_tree,
             rpc,
             p_id,
+            complete_tree,
         }
     }
 }
@@ -97,8 +133,8 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             .await
             .map_err(|e| format!("claim-source fetch failed: {e}"))?;
 
-        // Two different empties reach this line, and conflating them is the
-        // defect this match exists to prevent. `shard_ids` must never be read
+        // Two different empties reach this match, and conflating them is the
+        // defect it exists to prevent. `shard_ids` must never be read
         // without its discriminant.
         //
         // **Owing nothing.** No connected record is not an error — a persona
@@ -121,37 +157,66 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
         // outside the reward market but are explicitly **not** exempt from the
         // slash side (examined and closed 2026-08-07), so the loss is live.
         //
-        // **Refused rather than approximated.** `ServeSet` is a shard-id list
-        // with no representation of "all", so this seam cannot express the
-        // obligation at all. Whole-corpus pinning would need a store
-        // enumeration that does not exist and an unbounded-growth policy that
-        // is a different validation surface. Failing here fails
-        // `PinnedServeSet::acquire`, so the host does not start — loud and
-        // early, instead of a witness that is wrong in the dangerous
+        // What "the whole corpus" means is therefore never a list this seam
+        // holds: activated, it is the store's own frozen-segments enumeration,
+        // pinned in the same write transaction that reads it
+        // (`LeafStore::pin_frozen_corpus`), and the refresh cadence re-running
+        // this function is the growth policy — a segment that froze since the
+        // last refresh joins the serve-set on the next one.
+        //
+        // **Refused when not activated.** Serving the corpus is an operator
+        // posture with real terms (no rewards, outside the staking economy,
+        // unbounded disk growth, slash side intact), and the CLI is the one
+        // surface that states those terms and asks. Until then, failing here
+        // fails `PinnedServeSet::acquire`, so the host does not start — loud
+        // and early, instead of a witness that is wrong in the dangerous
         // direction.
-        let shard_ids: Vec<u64> = match source.bond.as_ref() {
-            None => Vec::new(),
+        enum Derivation {
+            Explicit(Vec<u64>),
+            FrozenCorpus,
+        }
+        let derivation = match source.bond.as_ref() {
+            None => Derivation::Explicit(Vec::new()),
             Some(bond) => match bond.holdings.kind {
-                HoldingsKind::ShardSetCompact => bond.holdings.shard_ids.as_slice().to_vec(),
-                HoldingsKind::CompleteTree => {
-                    return Err(
-                        "connected bond has CompleteTree holdings: this persona owes the \
-                                whole corpus, which a shard-id serve-set cannot express — \
-                                refusing rather than serving the empty set it decodes to"
-                            .to_string(),
-                    )
+                HoldingsKind::ShardSetCompact => {
+                    Derivation::Explicit(bond.holdings.shard_ids.as_slice().to_vec())
                 }
+                HoldingsKind::CompleteTree => match self.complete_tree {
+                    CompleteTreeServing::Activated => Derivation::FrozenCorpus,
+                    CompleteTreeServing::NotActivated => {
+                        return Err(
+                            "connected bond has CompleteTree holdings: this persona owes \
+                             the whole corpus, and serving it is not activated on this \
+                             wallet — a Foundation archival operator activates it from \
+                             the CLI (`serve_complete_tree`), which states the terms: no \
+                             staking rewards, unbounded disk growth, slash exposure while \
+                             not serving"
+                                .to_string(),
+                        )
+                    }
+                },
             },
         };
 
-        let (outcomes, reader): (Vec<(u64, SegmentPin)>, ServingReader) = self
-            .curve_tree
-            .pin_serve_set(shard_ids.clone())
-            .await
-            .map_err(|e| format!("serve-set pin failed: {e:?}"))?;
+        let (outcomes, reader): (Vec<(u64, SegmentPin)>, ServingReader) = match derivation {
+            Derivation::Explicit(shard_ids) => self
+                .curve_tree
+                .pin_serve_set(shard_ids)
+                .await
+                .map_err(|e| format!("serve-set pin failed: {e:?}"))?,
+            Derivation::FrozenCorpus => self
+                .curve_tree
+                .pin_frozen_corpus()
+                .await
+                .map_err(|e| format!("frozen-corpus pin failed: {e:?}"))?,
+        };
 
         Ok(PinReport {
-            shard_ids,
+            // Derived from the outcomes rather than echoed from the request:
+            // for the explicit arm the two are identical by the store's
+            // one-outcome-per-member contract, and for the corpus arm the
+            // outcomes ARE the enumeration — there is no request list to echo.
+            shard_ids: outcomes.iter().map(|(shard_id, _)| *shard_id).collect(),
             // The height the daemon read the record at — the set's
             // provenance, and deliberately the reply's own height rather than
             // anything measured locally: it says at what height this shard
@@ -263,6 +328,48 @@ mod tests {
         (dir, CurveTreeHandle::spawn(client))
     }
 
+    /// A store whose segment 0 is already frozen, opened through the same
+    /// client/handle path production uses — the fixture the `CompleteTree`
+    /// arm needs, because a corpus pin over an empty store proves nothing
+    /// (the enumeration and the refusal would both report the empty set).
+    fn handle_with_frozen_segment() -> (tempfile::TempDir, CurveTreeHandle) {
+        use shekyl_curve_tree::{
+            leaves_per_segment, Gindex, LeafEntry, LeafStore, OutputIdentity, TargetKind,
+        };
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("curve_tree.redb");
+        {
+            let store = LeafStore::open(&path).expect("open fresh store");
+            let entries: Vec<LeafEntry> = (0..leaves_per_segment() as u64)
+                .map(|gindex| {
+                    let mut leaf = [1u8; 128];
+                    leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
+                    LeafEntry {
+                        gindex: Gindex(gindex),
+                        maturity: shekyl_curve_tree::BlockHeight(60),
+                        creation_height: shekyl_curve_tree::BlockHeight(0),
+                        leaf,
+                        identity: OutputIdentity {
+                            output_key: [1u8; 32],
+                            commitment: Some([2u8; 32]),
+                            h_pqc: [3u8; 32],
+                            target: TargetKind::TaggedKey,
+                        },
+                    }
+                })
+                .collect();
+            // Buried far past the freeze gate, so segment 0 froze on append.
+            // (`append_block_deltas` with empty pending deltas — the same
+            // shape the store's own test wrapper uses.)
+            store
+                .append_block_deltas(&entries, &[], &[], shekyl_curve_tree::BlockHeight(30_000))
+                .expect("append a full frozen segment");
+        }
+        let client = CurveTreeClient::open(path).expect("resume over the frozen store");
+        (dir, CurveTreeHandle::spawn(client))
+    }
+
     /// **The production pinner's own KAT.** Every `shekyl-p-host` test drives
     /// a test-side pinner, so the mapping this function performs — record →
     /// `shard_ids`, `chain_height` → `as_of_height`, actor round trip →
@@ -272,8 +379,12 @@ mod tests {
     #[tokio::test]
     async fn the_report_is_derived_from_the_connected_record() {
         let (_dir, curve_tree) = handle();
-        let pinner =
-            EngineServeSetPinner::new(curve_tree, daemon(30_001, Some(vec![4, 9])), [7; 32]);
+        let pinner = EngineServeSetPinner::new(
+            curve_tree,
+            daemon(30_001, Some(vec![4, 9])),
+            [7; 32],
+            CompleteTreeServing::NotActivated,
+        );
 
         let report = pinner.pin_serve_set().await.expect("pin");
 
@@ -312,7 +423,12 @@ mod tests {
     #[tokio::test]
     async fn an_unbonded_persona_reports_the_empty_set_rather_than_failing() {
         let (_dir, curve_tree) = handle();
-        let pinner = EngineServeSetPinner::new(curve_tree, daemon(30_001, None), [7; 32]);
+        let pinner = EngineServeSetPinner::new(
+            curve_tree,
+            daemon(30_001, None),
+            [7; 32],
+            CompleteTreeServing::NotActivated,
+        );
 
         let report = pinner
             .pin_serve_set()
@@ -343,6 +459,7 @@ mod tests {
             curve_tree_a,
             daemon_of_kind(30_001, Some(Vec::new()), HoldingsKind::CompleteTree),
             [7; 32],
+            CompleteTreeServing::NotActivated,
         );
         let err = complete_tree
             .pin_serve_set()
@@ -352,6 +469,10 @@ mod tests {
             err.contains("CompleteTree"),
             "the refusal must name the holdings kind so the operator can act on it: {err}"
         );
+        assert!(
+            err.contains("serve_complete_tree"),
+            "the refusal must name the activation remedy (rule 82): {err}"
+        );
 
         // Same empty list, opposite meaning, and it must still succeed.
         let (_dir_b, curve_tree_b) = handle();
@@ -359,6 +480,7 @@ mod tests {
             curve_tree_b,
             daemon_of_kind(30_001, Some(Vec::new()), HoldingsKind::ShardSetCompact),
             [7; 32],
+            CompleteTreeServing::NotActivated,
         );
         let report = owes_nothing
             .pin_serve_set()
@@ -368,6 +490,70 @@ mod tests {
         assert!(report.outcomes.is_empty());
     }
 
+    /// **The activated arm, over a store that has actually frozen a shard.**
+    /// The serve-set is the store's enumeration — the bond record supplied no
+    /// list — and it is reported pinned-servable, so the witness describes a
+    /// Foundation node serving everything that exists so far. Over an empty
+    /// store this test would be vacuous (refusal and corpus both read empty),
+    /// which is why the fixture freezes a segment first.
+    #[tokio::test]
+    async fn activated_complete_tree_serves_the_enumerated_frozen_corpus() {
+        let (_dir, curve_tree) = handle_with_frozen_segment();
+        let pinner = EngineServeSetPinner::new(
+            curve_tree,
+            daemon_of_kind(30_001, Some(Vec::new()), HoldingsKind::CompleteTree),
+            [7; 32],
+            CompleteTreeServing::Activated,
+        );
+
+        let report = pinner
+            .pin_serve_set()
+            .await
+            .expect("an activated CompleteTree persona pins the frozen corpus");
+
+        assert_eq!(
+            report.shard_ids,
+            vec![0],
+            "the serve-set is the store's frozen enumeration, not the record's \
+             (empty) shard list"
+        );
+        assert_eq!(
+            report.outcomes,
+            vec![(0, SegmentPin::PinnedServable)],
+            "the one frozen segment is pinned and servable"
+        );
+        assert_eq!(
+            report.as_of_height,
+            BlockHeight(30_000),
+            "the record height still stamps the report — the set's provenance \
+             clock does not change with the derivation"
+        );
+    }
+
+    /// Activation changes nothing for a `ShardSetCompact` bond: the explicit
+    /// list stays the serve-set. The posture selects how `CompleteTree` is
+    /// derived; it is not a second growth policy for market bonds.
+    #[tokio::test]
+    async fn activation_does_not_reroute_an_explicit_shard_set() {
+        let (_dir, curve_tree) = handle_with_frozen_segment();
+        let pinner = EngineServeSetPinner::new(
+            curve_tree,
+            daemon(30_001, Some(Vec::new())),
+            [7; 32],
+            CompleteTreeServing::Activated,
+        );
+
+        let report = pinner
+            .pin_serve_set()
+            .await
+            .expect("an empty ShardSetCompact still owes nothing");
+        assert!(
+            report.shard_ids.is_empty(),
+            "the frozen segment must NOT leak into an explicit-set bond's \
+             serve-set just because the operator activated archival serving"
+        );
+    }
+
     /// An empty chain has no tip. `ChainCount(0).tip()` is `None`, and the
     /// stamp must land on 0 rather than underflow or refuse — 0 is also what
     /// an un-ingested store reports, so the host's lag reads zero and the
@@ -375,7 +561,12 @@ mod tests {
     #[tokio::test]
     async fn an_empty_chain_stamps_height_zero() {
         let (_dir, curve_tree) = handle();
-        let pinner = EngineServeSetPinner::new(curve_tree, daemon(0, None), [7; 32]);
+        let pinner = EngineServeSetPinner::new(
+            curve_tree,
+            daemon(0, None),
+            [7; 32],
+            CompleteTreeServing::NotActivated,
+        );
 
         let report = pinner.pin_serve_set().await.expect("pin");
         assert_eq!(report.as_of_height, BlockHeight(0));
@@ -388,7 +579,12 @@ mod tests {
     #[tokio::test]
     async fn the_reader_is_the_store_the_pins_landed_in() {
         let (_dir, curve_tree) = handle();
-        let pinner = EngineServeSetPinner::new(curve_tree, daemon(30_001, Some(vec![1])), [7; 32]);
+        let pinner = EngineServeSetPinner::new(
+            curve_tree,
+            daemon(30_001, Some(vec![1])),
+            [7; 32],
+            CompleteTreeServing::NotActivated,
+        );
 
         let first = pinner.pin_serve_set().await.expect("pin");
         let second = pinner.pin_serve_set().await.expect("pin again");

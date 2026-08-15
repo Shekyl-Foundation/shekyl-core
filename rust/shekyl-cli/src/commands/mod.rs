@@ -63,6 +63,11 @@ Staking:
   staked_balance                      Show the staked-balance breakdown
   staked_outputs                      List unspent staking-side outputs
   staking_info                        Show staking state and scan height
+  serve_complete_tree [on|off]        Foundation archival serving: pin and
+                                      serve EVERY frozen shard, forever. NO
+                                      staking rewards — outside the reward
+                                      market by design. No argument shows
+                                      the current posture.
   chain_health                        Show daemon/chain health (separate conn)
 
 Proofs (multi-word [message] binds into the proof; the verifier must
@@ -221,6 +226,9 @@ pub fn repl(
                     ResolvedCommand::StakedBalance => staking::cmd_staked_balance(&rpc),
                     ResolvedCommand::StakedOutputs => staking::cmd_staked_outputs(&rpc),
                     ResolvedCommand::StakingInfo => staking::cmd_staking_info(&rpc),
+                    ResolvedCommand::ServeCompleteTree { switch } => {
+                        staking::cmd_serve_complete_tree(&rpc, switch);
+                    }
 
                     // Fees (WI-RPC-1 surface)
                     ResolvedCommand::Fee {

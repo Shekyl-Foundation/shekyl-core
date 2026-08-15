@@ -1414,6 +1414,53 @@ impl LeafStore {
             .collect())
     }
 
+    /// Pin every segment the store has frozen — the whole-corpus serve-set a
+    /// `CompleteTree` persona owes — returning each member's outcome paired
+    /// with its shard id, ascending.
+    ///
+    /// This is [`Self::pin_serve_set`] with the set *enumerated from the
+    /// store* instead of supplied: `CompleteTree` holdings carry no shard
+    /// list by wire rule, so the frozen-segments table is the only honest
+    /// source for what "everything" currently means. Enumeration and pinning
+    /// share ONE write transaction, so a freeze or prune cannot commit
+    /// between reading the corpus and pinning it — the enumerated set is
+    /// exactly the set pinned.
+    ///
+    /// Segments not yet frozen are deliberately absent: an unfrozen tail
+    /// segment has no committed `R_k` and is not servable, and it enters the
+    /// corpus by the same door every other shard does — the next call after
+    /// it freezes. Re-pinning on a cadence is the growth policy: holdings
+    /// that "grow forever by definition" are followed by re-enumerating,
+    /// never by a locally maintained list that can drift.
+    ///
+    /// [`SegmentPin::PinnedNotYetFrozen`] is unreachable here (every member
+    /// is frozen by construction, within the same transaction that checks
+    /// it); [`SegmentPin::AlreadyPruned`] is *returned*, not raised, exactly
+    /// as [`Self::pin_serve_set`] returns it.
+    ///
+    /// # Errors
+    ///
+    /// Store failure.
+    pub fn pin_frozen_corpus(&self) -> Result<Vec<(u64, SegmentPin)>, StoreError> {
+        let txn = self.db.begin_write()?;
+        let ids: Vec<SegmentId> = {
+            let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
+            let mut ids = Vec::new();
+            for row in frozen.iter()? {
+                let (id, _) = row?;
+                ids.push(id.value());
+            }
+            ids
+        };
+        let outcomes = Self::pin_ids_within(&txn, &ids)?;
+        txn.commit()?;
+        Ok(ids
+            .into_iter()
+            .map(|id| u64::from(id.0))
+            .zip(outcomes)
+            .collect())
+    }
+
     /// Prune frozen, unpinned segments down to their `R_k` records.
     ///
     /// Leaf bytes at `owned_positions` are copied into the owned-identities
@@ -2900,6 +2947,74 @@ mod tests {
                 Err(StoreError::FrozenSegmentPruned { id: SegmentId(0) })
             ),
             "the valid member of a refused set must not have been pinned"
+        );
+    }
+
+    /// The `CompleteTree` serve-set is *enumerated*, and the enumeration is
+    /// the growth policy: a corpus pin covers exactly the frozen segments,
+    /// the unfrozen tail joins on the call after it freezes, and no caller
+    /// ever supplies a list that could drift from the store.
+    #[test]
+    fn pin_frozen_corpus_pins_the_frozen_set_and_grows_as_segments_freeze() {
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+
+        // An empty store has frozen nothing: the corpus is honestly empty,
+        // not an error — a Foundation wallet at genesis serves nothing yet.
+        assert!(store.pin_frozen_corpus().unwrap().is_empty());
+
+        // Segment 0 full and buried → frozen; segment 1 has a single tail
+        // row and must NOT appear (no committed `R_k`, nothing servable).
+        let e = leaves_per_segment() as u64;
+        let mut entries = distinct_segment_entries();
+        entries.push(sample_entry(e, 5_000));
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+
+        assert_eq!(
+            store.pin_frozen_corpus().unwrap(),
+            vec![(0, SegmentPin::PinnedServable)],
+            "the corpus is the frozen set: the unfrozen tail is absent, not \
+             PinnedNotYetFrozen — it enters when it freezes"
+        );
+
+        // The tail segment fills and gets buried. The next corpus pin — the
+        // serving refresh's unconditional re-pin — picks it up with no list
+        // maintained anywhere.
+        let more: Vec<LeafEntry> = (e + 1..2 * e)
+            .map(|gindex| {
+                let mut entry = sample_entry(gindex, 5_000);
+                entry.leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
+                entry
+            })
+            .collect();
+        store.append_drained(&more, BlockHeight(20_000)).unwrap();
+
+        assert_eq!(
+            store.pin_frozen_corpus().unwrap(),
+            vec![
+                (0, SegmentPin::PinnedServable),
+                (1, SegmentPin::PinnedServable)
+            ],
+            "a segment that froze since the last refresh joins the corpus, \
+             ascending, with both members pinned"
+        );
+    }
+
+    /// A pruned member of the corpus is *reported*, exactly as
+    /// [`LeafStore::pin_serve_set`] reports it — the serving host is the
+    /// layer that decides a missing member disqualifies the whole set.
+    #[test]
+    fn pin_frozen_corpus_reports_a_pruned_member_rather_than_hiding_it() {
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        store.prune_frozen(&[]).unwrap();
+
+        assert_eq!(
+            store.pin_frozen_corpus().unwrap(),
+            vec![(0, SegmentPin::AlreadyPruned)],
+            "pruned bytes stay in the enumeration — a corpus pin that skipped \
+             them would report a Current witness over a hole"
         );
     }
 

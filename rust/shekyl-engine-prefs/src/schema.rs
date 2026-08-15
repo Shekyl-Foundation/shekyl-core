@@ -235,6 +235,21 @@ pub struct OperationalPrefs {
     /// auto-lock.
     #[serde(default)]
     pub inactivity_lock_timeout: u32,
+
+    /// Serve the whole frozen shard corpus — the Foundation
+    /// `CompleteTree` archival posture. Off by default, and activated
+    /// only through the CLI (`serve_complete_tree`), never the GUI:
+    /// a CompleteTree node sits outside the reward market by design
+    /// (no staking rewards, `market_member_at_epoch` returns false),
+    /// keeps every frozen shard on disk forever, and still carries
+    /// the slash side of serving. The CLI states all of that and asks;
+    /// no other surface may flip this.
+    ///
+    /// Read at wallet open by the serving lifecycle
+    /// (`start_serving_if_staker`); flipping it mid-session takes
+    /// effect at the next open.
+    #[serde(default)]
+    pub serve_complete_tree: bool,
 }
 
 impl Default for OperationalPrefs {
@@ -251,6 +266,7 @@ impl Default for OperationalPrefs {
             ignore_outputs_below: AtomicUnits::ZERO,
             merge_destinations: false,
             inactivity_lock_timeout: 0,
+            serve_complete_tree: false,
         }
     }
 }
@@ -350,12 +366,12 @@ impl Default for WalletPrefs {
 /// Current `prefs.toml` schema version. Bumped when persisted fields
 /// are added or removed (`subaddress_lookahead` deletion → `2`;
 /// RPC-payment `[rpc]` bucket removal → `3`; `device.tor_binary_path`
-/// addition → `4`).
+/// addition → `4`; `operational.serve_complete_tree` addition → `5`).
 ///
 /// Load refuses on mismatch rather than migrating
 /// ([`crate::load_prefs`]) — pre-genesis, a prefs file from an older
 /// schema is recreated, not upgraded.
-pub const PREFS_SCHEMA_VERSION: u8 = 4;
+pub const PREFS_SCHEMA_VERSION: u8 = 5;
 
 fn default_schema_version() -> u8 {
     PREFS_SCHEMA_VERSION

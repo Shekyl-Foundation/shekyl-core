@@ -4,6 +4,27 @@
 
 ### Changed
 
+- **CompleteTree serving is activatable — the Foundation archival posture
+  now serves, CLI-only.** `EngineServeSetPinner` no longer dead-ends a
+  `CompleteTree` bond: with `operational.serve_complete_tree` set (prefs
+  schema 4 → 5), the serve-set is *enumerated from the store's own
+  frozen-segments table* and pinned in the same write transaction
+  (`LeafStore::pin_frozen_corpus`, exposed through the curve-tree actor as
+  the corpus sibling of `PinServeSet`), so the refresh cadence's
+  unconditional re-pin is the growth policy — shards join the served set
+  as they freeze, with no list maintained anywhere that could drift. Not
+  activated, the loud refusal stands and now names its remedy. Activation
+  is deliberately a CLI-only surface (`serve_complete_tree [on|off]`, over
+  the new `set_serve_complete_tree` wallet-RPC method; `staking_info`
+  reports the posture): the command states the terms before confirming —
+  **no staking rewards and no participation in normal staking economics**
+  (Foundation `CompleteTree` nodes sit outside the reward market by
+  design, `market_member_at_epoch` = false), unbounded disk growth
+  (nothing is ever pruned), and the slash side of serving intact. The GUI
+  has no control bound to the method. The pref is read once at wallet
+  open, so flipping it reports `reopen_required` and rides the same
+  reopen collapse as every other serving lifecycle change.
+
 - **The signature-alignment round is closed; its last rule is enforced,
   not remembered (SA-R-7 tail).** The FFI boundary ratchet
   (`shekyl-ffi/tests/ffi_boundary_ratchet.rs`) pins every raw

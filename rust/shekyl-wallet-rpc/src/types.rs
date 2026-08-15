@@ -767,6 +767,21 @@ pub struct StakingInfoResult {
     /// finish staking recovery. `false` in the steady state.
     #[serde(default)]
     pub recovery_pending_reopen: bool,
+    /// Whether the Foundation `CompleteTree` archival serving posture is
+    /// activated (`operational.serve_complete_tree`). Surfaced for the CLI's
+    /// status display; flipped only through `set_serve_complete_tree`.
+    #[serde(default)]
+    pub serve_complete_tree: bool,
+}
+
+/// `set_serve_complete_tree` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetServeCompleteTreeResult {
+    /// The persisted posture after this call.
+    pub serve_complete_tree: bool,
+    /// `true` when the posture changed: the serving lifecycle reads it at
+    /// wallet open, so the change takes effect at the next close/reopen.
+    pub reopen_required: bool,
 }
 
 /// `get_tx_proof` result (WI-RPC-3 proofs).

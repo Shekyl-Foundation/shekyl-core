@@ -160,6 +160,21 @@ substrate), **not** "curve-tree structure alone." The curve tree is
 commitments and proof paths (set **B**); it is **not** interchangeable with
 **C** (full blocks/txs) or **A** (your wallet's already-scanned outputs).
 
+**Wallet-side activation (CLI-only).** `CompleteTree` is a legitimate
+serving status, not a prohibited one — but it is an operator posture with
+stated terms, so the wallet serves it only after explicit activation
+(`operational.serve_complete_tree`, flipped by the CLI
+`serve_complete_tree` command; the GUI exposes no control). The CLI states
+the terms before confirming: **no profit — no staking rewards and no
+participation in normal staking economics** (`market_member_at_epoch`
+returns false for Foundation nodes), unbounded disk growth, and the slash
+side of serving intact. Activated, the serve-set is *enumerated from the
+store's frozen-segments table* and re-enumerated on every refresh — as
+shards freeze they join the served collection automatically
+(`LeafStore::pin_frozen_corpus`; enumeration and pin share one write
+transaction). Not activated, a `CompleteTree` bond refuses to serve,
+loudly, with the remedy named.
+
 **User-facing promise mapping (load-bearing):**
 
 | Claim | Depends on |

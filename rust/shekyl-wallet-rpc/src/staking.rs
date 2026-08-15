@@ -3,13 +3,18 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Staking read-only JSON-RPC methods (WI-RPC-1).
+//! Staking JSON-RPC methods (WI-RPC-1).
 //!
-//! Pure projections of [`Engine::staking_read_view`], the one authoritative
-//! aggregation over the sealed pscan / pending-post records — never the
-//! `bonded_slots` hint. All three methods are read-only (`&self` under the
-//! engine read guard). Staking *actions* (unstake, claim) are out of scope:
-//! they need Engine surfacing first.
+//! The read methods are pure projections of [`Engine::staking_read_view`],
+//! the one authoritative aggregation over the sealed pscan / pending-post
+//! records — never the `bonded_slots` hint (`&self` under the engine read
+//! guard). Staking *actions* (unstake, claim) are out of scope: they need
+//! Engine surfacing first.
+//!
+//! The one write here is [`set_serve_complete_tree`] — the CLI-only
+//! activation switch for the Foundation `CompleteTree` archival posture. It
+//! is a prefs write, not a staking action: it changes what the serving
+//! lifecycle derives at the next wallet open, never the bond record.
 //!
 //! `get_wallet_info` uses [`read_view_with_enabled`] after dropping its
 //! ledger guard — nested `ledger.read()` under a live
@@ -20,11 +25,12 @@ use serde_json::Value;
 use shekyl_engine_core::{Engine, SoloSigner, StakedOutput, StakingReadView};
 
 use crate::error::WalletRpcError;
-use crate::params::{parse_optional_object, require_empty_object};
+use crate::params::{parse_optional_object, parse_required_object, require_empty_object};
 use crate::project::atomic_units_string;
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
-    GetStakedBalanceResult, GetStakedOutputsResult, StakedOutputView, StakingInfoResult,
+    GetStakedBalanceResult, GetStakedOutputsResult, SetServeCompleteTreeResult, StakedOutputView,
+    StakingInfoResult,
 };
 
 /// Params for `get_staked_outputs`.
@@ -64,7 +70,12 @@ pub(crate) async fn staking_info(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "staking_info")?;
-    let view = read_view(tenants).await?;
+    // One read guard for both the view and the pref, so the two halves of
+    // the answer describe the same open wallet.
+    let shared = require_open_engine(tenants).await?;
+    let engine = shared.read().await;
+    let view = read_view_under_guard(&engine)?;
+    let serve_complete_tree = engine.prefs().operational.serve_complete_tree;
     let result = StakingInfoResult {
         staking_enabled: view.staking_enabled,
         balance: balance_result(&view),
@@ -73,9 +84,55 @@ pub(crate) async fn staking_info(
             .pscan_synced_height
             .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
         recovery_pending_reopen: view.recovery_pending_reopen,
+        serve_complete_tree,
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize staking_info: {e}")))
+}
+
+/// Params for `set_serve_complete_tree`.
+#[derive(Debug, Deserialize)]
+struct SetServeCompleteTreeParams {
+    /// The posture to persist. Required — there is no toggle semantics, so a
+    /// retried request is idempotent.
+    enabled: bool,
+}
+
+/// `set_serve_complete_tree`: persist the Foundation `CompleteTree` archival
+/// serving posture (`operational.serve_complete_tree`).
+///
+/// **CLI-only by policy, not by mechanism.** Any wallet-rpc client *can*
+/// call this; the CLI is the one surface that exposes it, states its terms
+/// (no staking rewards, outside the staking economy, unbounded disk growth,
+/// slash side intact), and asks for confirmation. The GUI deliberately has
+/// no control bound to it. The consent conversation therefore lives with the
+/// CLI; this method is the persistence step.
+///
+/// The change takes effect at the next wallet open — the serving lifecycle
+/// reads the pref once in `start_serving_if_staker` — which the result
+/// reports as `reopen_required` whenever the value actually changed.
+pub(crate) async fn set_serve_complete_tree(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    let p: SetServeCompleteTreeParams = parse_required_object(params, "set_serve_complete_tree")?;
+    let shared = require_open_engine(tenants).await?;
+    let mut engine = shared.write().await;
+    let previous = engine.prefs().operational.serve_complete_tree;
+    // Prefs flush is synchronous file I/O (HMAC + atomic write) — same
+    // off-the-worker discipline as the sealed-file reads above.
+    tokio::task::block_in_place(|| engine.set_serve_complete_tree(p.enabled)).map_err(|e| {
+        tracing::warn!(error = %e, "serve_complete_tree prefs flush failed");
+        // The cause can carry filesystem paths; detail stays server-side.
+        WalletRpcError::InternalError("preferences failed to save".into())
+    })?;
+    let result = SetServeCompleteTreeResult {
+        serve_complete_tree: p.enabled,
+        reopen_required: previous != p.enabled,
+    };
+    serde_json::to_value(result).map_err(|e| {
+        WalletRpcError::InternalError(format!("serialize set_serve_complete_tree: {e}"))
+    })
 }
 
 /// Compute the authoritative view from an already-held engine read guard.

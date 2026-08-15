@@ -119,7 +119,7 @@ where
         // outside this lock — `tor_service_config` creates and chmods a
         // directory, and holding the engine `RwLock` across that would stall
         // every other reader on disk.
-        let (stake, curve_tree, base_path, device) = {
+        let (stake, curve_tree, base_path, device, complete_tree) = {
             let g = self_arc.read().await;
             let stake = match g.stake_handle() {
                 Some(stake) => stake,
@@ -133,6 +133,14 @@ where
                 g.curve_tree.clone(),
                 g.persistence().base_path().to_path_buf(),
                 g.prefs().device.clone(),
+                // The operator's CompleteTree posture, CLI-set and persisted:
+                // read once at start, so what this host serves is what the
+                // wallet was opened with.
+                if g.prefs().operational.serve_complete_tree {
+                    crate::engine::stake_engine::serve_set_source::CompleteTreeServing::Activated
+                } else {
+                    crate::engine::stake_engine::serve_set_source::CompleteTreeServing::NotActivated
+                },
             )
         };
 
@@ -179,6 +187,7 @@ where
             curve_tree,
             claim_rpc,
             p_id.to_bytes(),
+            complete_tree,
         );
 
         Ok(Some(spawn_serving_task(

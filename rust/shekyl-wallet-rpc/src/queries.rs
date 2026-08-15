@@ -296,6 +296,7 @@ pub(crate) async fn get_wallet_info(
                 .pscan_synced_height
                 .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
             recovery_pending_reopen: staking_view.recovery_pending_reopen,
+            serve_complete_tree: engine.prefs().operational.serve_complete_tree,
         };
 
         let daemon = engine.daemon().clone();

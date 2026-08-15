@@ -117,6 +117,83 @@ pub fn cmd_staked_outputs(rpc: &RpcSession) {
     }
 }
 
+/// `serve_complete_tree [on|off]` — the Foundation `CompleteTree` archival
+/// serving posture. Deliberately a CLI-only surface: the GUI never exposes
+/// it, so the one road into this mode runs through the stated terms below.
+///
+/// The terms are printed *before* the confirmation and name every cost the
+/// design carries (`ARCHIVAL_CHALLENGE_MECHANISM.md`, Foundation
+/// CompleteTree nodes): no rewards, no participation in the staking economy,
+/// unbounded disk growth, and the slash side of serving intact. Rule 82:
+/// the operator learns the failure modes here, not from the first alarm.
+pub fn cmd_serve_complete_tree(rpc: &RpcSession, switch: Option<bool>) {
+    if !require_open(rpc) {
+        return;
+    }
+    let Some(enable) = switch else {
+        match rpc.call("staking_info", json!({})) {
+            Ok(val) => {
+                let on = val
+                    .get("serve_complete_tree")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                println!(
+                    "CompleteTree archival serving: {}",
+                    if on { "ACTIVATED" } else { "not activated" }
+                );
+                if !on {
+                    println!("Use \"serve_complete_tree on\" to activate it (CLI only).");
+                }
+            }
+            Err(e) => rpc.report("Failed to read serving posture", &e),
+        }
+        return;
+    };
+
+    if enable {
+        println!("CompleteTree is the Foundation archival serving posture.");
+        println!();
+        println!("  * This wallet will pin and serve EVERY frozen shard of the chain's");
+        println!("    output tree. New shards join automatically as they freeze, forever.");
+        println!("  * Disk use grows without bound. Nothing is ever pruned.");
+        println!("  * There is NO profit in this mode: CompleteTree nodes receive NO");
+        println!("    staking rewards and take NO part in normal staking economics —");
+        println!("    they sit outside the reward market by design.");
+        println!("  * The slash side of serving still applies: a CompleteTree node that");
+        println!("    stops serving long enough has its holdings cleared, and re-entry");
+        println!("    is a rebond.");
+        println!();
+        if !confirm("Activate CompleteTree archival serving anyway?") {
+            println!("CompleteTree serving left deactivated.");
+            return;
+        }
+    } else if !confirm("Deactivate CompleteTree archival serving?") {
+        println!("CompleteTree serving left as it is.");
+        return;
+    }
+
+    match rpc.call("set_serve_complete_tree", json!({ "enabled": enable })) {
+        Ok(val) => {
+            let on = val
+                .get("serve_complete_tree")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(enable);
+            println!(
+                "CompleteTree archival serving is now {}.",
+                if on { "ACTIVATED" } else { "deactivated" }
+            );
+            let reopen = val
+                .get("reopen_required")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if reopen {
+                println!("Close and reopen the wallet for the change to take effect.");
+            }
+        }
+        Err(e) => rpc.report("Failed to set serving posture", &e),
+    }
+}
+
 pub fn cmd_staking_info(rpc: &RpcSession) {
     if !require_open(rpc) {
         return;
@@ -147,6 +224,19 @@ pub fn cmd_staking_info(rpc: &RpcSession) {
             {
                 Some(h) => println!("Staking scan height: {h}"),
                 None => println!("Staking scan height: not yet scanned"),
+            }
+            // Surfaced only when on: the posture is a Foundation-operator
+            // niche, and a "not activated" line on every ordinary staker
+            // would read as something to go turn on.
+            if val
+                .get("serve_complete_tree")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                println!(
+                    "CompleteTree archival serving: ACTIVATED (no staking rewards; \
+                     see \"serve_complete_tree\")"
+                );
             }
         }
         Err(e) => rpc.report("Failed to get staking info", &e),

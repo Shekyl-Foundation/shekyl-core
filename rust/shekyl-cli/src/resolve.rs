@@ -79,6 +79,13 @@ pub enum ResolvedCommand {
     StakedBalance,
     StakedOutputs,
     StakingInfo,
+    /// Foundation `CompleteTree` archival serving. `None` shows the current
+    /// posture; `Some(true)`/`Some(false)` activates/deactivates it. This
+    /// command exists in the CLI only — the GUI deliberately has no surface
+    /// for it — and activation walks a stated-terms confirmation.
+    ServeCompleteTree {
+        switch: Option<bool>,
+    },
 
     // -- Fees (WI-RPC-1) --
     Fee {
@@ -343,6 +350,14 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "staked_balance" => ResolvedCommand::StakedBalance,
         "staked_outputs" => ResolvedCommand::StakedOutputs,
         "staking_info" => ResolvedCommand::StakingInfo,
+        "serve_complete_tree" => match args {
+            [] => ResolvedCommand::ServeCompleteTree { switch: None },
+            ["on"] => ResolvedCommand::ServeCompleteTree { switch: Some(true) },
+            ["off"] => ResolvedCommand::ServeCompleteTree {
+                switch: Some(false),
+            },
+            _ => diag("serve_complete_tree: usage: serve_complete_tree [on|off]"),
+        },
         "fee" => {
             // Parsed as u64, so a negative or non-numeric value is a hard
             // client-side diagnostic, never a silent fall-back to the default
@@ -1008,6 +1023,31 @@ mod tests {
         assert!(matches!(
             parse("staking_info"),
             ResolvedCommand::StakingInfo
+        ));
+    }
+
+    /// The archival-serving switch: bare = status, `on`/`off` = the two
+    /// postures, anything else is a usage diagnostic — never a silent
+    /// fall-through to status for a typo'd `onn`.
+    #[test]
+    fn test_serve_complete_tree_forms() {
+        assert!(matches!(
+            parse("serve_complete_tree"),
+            ResolvedCommand::ServeCompleteTree { switch: None }
+        ));
+        assert!(matches!(
+            parse("serve_complete_tree on"),
+            ResolvedCommand::ServeCompleteTree { switch: Some(true) }
+        ));
+        assert!(matches!(
+            parse("serve_complete_tree off"),
+            ResolvedCommand::ServeCompleteTree {
+                switch: Some(false)
+            }
+        ));
+        assert!(matches!(
+            parse("serve_complete_tree onn"),
+            ResolvedCommand::Diagnostic { .. }
         ));
     }
 

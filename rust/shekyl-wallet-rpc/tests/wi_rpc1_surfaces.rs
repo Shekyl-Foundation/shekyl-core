@@ -342,3 +342,65 @@ async fn staking_reads_on_fresh_wallet_are_zero_and_offline() {
         assert_eq!(r["error"]["code"], -29001, "{method}: {r}");
     }
 }
+
+/// `set_serve_complete_tree` — the CLI-only Foundation archival posture —
+/// persists across close/reopen (it is a prefs write, and the serving
+/// lifecycle reads it at open, so surviving the reopen IS the feature),
+/// reports `reopen_required` only when the value changed, and refuses
+/// without an open wallet like every other tenant method.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_complete_tree_posture_round_trips_and_persists() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = state(&dir);
+    create_wallet(&state, "foundation0").await;
+
+    // Fresh wallet: not activated — the default posture for every staker.
+    let info = rpc(state.clone(), "staking_info", json!({})).await;
+    assert_eq!(info["result"]["serve_complete_tree"], false, "{info}");
+
+    let on = rpc(
+        state.clone(),
+        "set_serve_complete_tree",
+        json!({ "enabled": true }),
+    )
+    .await;
+    assert!(on.get("error").is_none(), "{on}");
+    assert_eq!(on["result"]["serve_complete_tree"], true);
+    assert_eq!(
+        on["result"]["reopen_required"], true,
+        "activation changes what the next open serves: {on}"
+    );
+
+    // Idempotent re-activation: nothing changed, so no reopen prompt.
+    let again = rpc(
+        state.clone(),
+        "set_serve_complete_tree",
+        json!({ "enabled": true }),
+    )
+    .await;
+    assert_eq!(again["result"]["reopen_required"], false, "{again}");
+
+    // The posture survives close/reopen — the flush happened at set time,
+    // not at close.
+    let closed = rpc(state.clone(), "close_wallet", json!({})).await;
+    assert!(closed.get("error").is_none(), "{closed}");
+    let reopened = rpc(
+        state.clone(),
+        "open_wallet",
+        json!({ "name": "foundation0", "password": "pw" }),
+    )
+    .await;
+    assert!(reopened.get("error").is_none(), "{reopened}");
+    let info = rpc(state.clone(), "staking_info", json!({})).await;
+    assert_eq!(info["result"]["serve_complete_tree"], true, "{info}");
+
+    // Closed wallet: refused, same tenant discipline as the reads.
+    let _ = rpc(state.clone(), "close_wallet", json!({})).await;
+    let r = rpc(
+        state.clone(),
+        "set_serve_complete_tree",
+        json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(r["error"]["code"], -29001, "{r}");
+}

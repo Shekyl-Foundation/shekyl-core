@@ -1488,6 +1488,38 @@ impl<
         Ok(())
     }
 
+    /// Persist the operator's Foundation `CompleteTree` serving posture
+    /// (`operational.serve_complete_tree`) — the CLI-only activation switch.
+    ///
+    /// Mutates the pref and flushes the prefs sidecar immediately, so the
+    /// choice survives a crash between now and close. The running serving
+    /// host is deliberately untouched: the posture is read once at
+    /// `start_serving_if_staker`, so activation takes effect at the next
+    /// wallet open — the same reopen collapse every other serving lifecycle
+    /// change rides.
+    ///
+    /// On flush failure the in-memory pref is rolled back, so what this
+    /// session believes always matches what the next open will read.
+    ///
+    /// # Errors
+    ///
+    /// [`super::error::PersistenceError`] when the prefs sidecar write fails.
+    pub fn set_serve_complete_tree(
+        &mut self,
+        enabled: bool,
+    ) -> Result<(), super::error::PersistenceError> {
+        let previous = self.prefs.operational.serve_complete_tree;
+        self.prefs.operational.serve_complete_tree = enabled;
+        if let Err(e) = drive_persistence(
+            self.persistence
+                .save_prefs(self.prefs_hmac_key(), &self.prefs),
+        ) {
+            self.prefs.operational.serve_complete_tree = previous;
+            return Err(e.into());
+        }
+        Ok(())
+    }
+
     /// Persist final state + prefs for close, without consuming `self`.
     ///
     /// Callers that must keep the live `Engine` when flush fails (e.g.

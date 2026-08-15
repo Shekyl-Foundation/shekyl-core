@@ -200,6 +200,18 @@ pub(crate) struct PinServeSet {
     pub shard_ids: Vec<u64>,
 }
 
+/// Actor message pinning the whole frozen corpus — the `CompleteTree`
+/// serve-set — and taking a reader on the store the pins landed in.
+///
+/// The corpus sibling of [`PinServeSet`]: same both-halves-in-one-`ask`
+/// contract, same single-writer reasoning. It carries no set because the set
+/// is the point — `CompleteTree` holdings carry no shard list by wire rule,
+/// so the store's own frozen-segments enumeration is the only honest source,
+/// and [`CurveTreeClient::pin_frozen_corpus`] reads and pins it in one write
+/// transaction. Each refresh re-enumerates, which is how the serve-set grows
+/// as segments freeze.
+pub(crate) struct PinFrozenCorpus;
+
 /// Actor message for the §3.3 ingest-time integrity verify (CT-5b): reconstruct
 /// the curve-tree root at `height` and require it to byte-equal the consensus
 /// header-committed `expected_root`. Replies [`ClientError::RootMismatch`] on
@@ -293,6 +305,19 @@ impl Message<PinServeSet> for CurveTreeActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let outcomes = self.client.pin_serve_set(&msg.shard_ids)?;
+        Ok((outcomes, self.client.serving_reader()))
+    }
+}
+
+impl Message<PinFrozenCorpus> for CurveTreeActor {
+    type Reply = Result<(Vec<(u64, SegmentPin)>, ServingReader), ClientError>;
+
+    async fn handle(
+        &mut self,
+        _msg: PinFrozenCorpus,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let outcomes = self.client.pin_frozen_corpus()?;
         Ok((outcomes, self.client.serving_reader()))
     }
 }
@@ -740,6 +765,23 @@ impl CurveTreeHandle {
             .map_err(collapse_send_error)
     }
 
+    /// Pin the whole frozen corpus — the `CompleteTree` serve-set — and take
+    /// a reader on the store it landed in; see [`PinFrozenCorpus`] for why
+    /// the set is enumerated rather than supplied.
+    ///
+    /// # Errors
+    ///
+    /// [`CurveTreeHandleError::Client`] wrapping a store fault, and
+    /// [`CurveTreeHandleError::Unavailable`] on a stopped actor.
+    pub(crate) async fn pin_frozen_corpus(
+        &self,
+    ) -> Result<(Vec<(u64, SegmentPin)>, ServingReader), CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(PinFrozenCorpus)
+            .await
+            .map_err(collapse_send_error)
+    }
+
     /// §3.3 ingest-time integrity verify (CT-5b): require the reconstructed
     /// root at `height` to byte-equal the consensus header-committed
     /// `expected_root`. A divergence collapses (via the handler) to
@@ -865,6 +907,7 @@ mod tests {
         assert_send::<RootAndDepthAt>();
         assert_send::<AssembleTx>();
         assert_send::<PinServeSet>();
+        assert_send::<PinFrozenCorpus>();
         assert_send::<OwnedTxLeaves>();
     }
 
@@ -999,6 +1042,35 @@ mod tests {
         assert!(
             before.same_store(&after),
             "respawn must resume over the same open store a serving host holds"
+        );
+    }
+
+    /// [`PinFrozenCorpus`] transport round-trip: outcomes and reader come back
+    /// from one `ask`, and the reader is a handle on the same open store the
+    /// explicit-set path uses. The enumeration/growth behavior itself is
+    /// proven at the store level
+    /// (`pin_frozen_corpus_pins_the_frozen_set_and_grows_as_segments_freeze`).
+    #[tokio::test]
+    async fn corpus_pin_round_trips_and_shares_the_store() {
+        let (_dir, client) = fresh_client();
+        let handle = CurveTreeHandle::spawn(client);
+
+        let (corpus_outcomes, corpus_reader) = handle
+            .pin_frozen_corpus()
+            .await
+            .expect("corpus pin on a fresh client");
+        assert!(
+            corpus_outcomes.is_empty(),
+            "a fresh store has frozen nothing, so the corpus is empty"
+        );
+
+        let (_outcomes, reader) = handle
+            .pin_serve_set(Vec::new())
+            .await
+            .expect("explicit-set pin");
+        assert!(
+            corpus_reader.same_store(&reader),
+            "both pin paths answer about the one store this actor writes"
         );
     }
 

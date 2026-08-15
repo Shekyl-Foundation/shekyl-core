@@ -441,6 +441,21 @@ impl CurveTreeClient {
             .map_err(ClientError::from)
     }
 
+    /// Pin the whole frozen corpus — the `CompleteTree` serve-set, enumerated
+    /// from the store rather than supplied by the caller.
+    ///
+    /// Reachable here for the same reason [`Self::pin_serve_set`] is: pinning
+    /// is a store write, and this client is the single writer the actor layer
+    /// serializes. Pure forward to [`LeafStore::pin_frozen_corpus`] — the
+    /// enumeration/pin atomicity contract lives there.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping [`LeafStore::pin_frozen_corpus`]'s.
+    pub fn pin_frozen_corpus(&self) -> Result<Vec<(u64, SegmentPin)>, ClientError> {
+        self.store.pin_frozen_corpus().map_err(ClientError::from)
+    }
+
     /// Rebuild the in-memory client state from a store's persisted tables.
     ///
     /// **Resume order invariant (B4):** the rebuilt [`Self::entries`] vec

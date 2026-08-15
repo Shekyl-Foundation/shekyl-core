@@ -70,6 +70,7 @@ pub async fn dispatch(
         "get_staked_balance" => staking::get_staked_balance(tenants, params).await,
         "get_staked_outputs" => staking::get_staked_outputs(tenants, params).await,
         "staking_info" => staking::staking_info(tenants, params).await,
+        "set_serve_complete_tree" => staking::set_serve_complete_tree(tenants, params).await,
         // WI-RPC-3 proofs. The `get_*` pair requires an open wallet; the
         // `check_*` pair is WALLET-LESS by contract (a verifier checks
         // someone else's proof against the chain).
