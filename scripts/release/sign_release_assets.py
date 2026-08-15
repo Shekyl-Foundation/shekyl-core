@@ -190,16 +190,26 @@ def collect_assets(assets_dir: Path) -> list[Path]:
 
 
 def download_assets(tag: str, assets_dir: Path, verify_only: bool) -> None:
+    # A download works from a CLEAN slate, refused otherwise: a reused
+    # directory can hold stale versions of same-named assets or leftovers
+    # from a different tag, and both would silently enter the manifest —
+    # a signed manifest that does not match the release's published
+    # binaries is the exact failure this ceremony exists to prevent. The
+    # refusal is deliberate (this script never deletes files it did not
+    # create): point --assets-dir at a fresh directory, or clear the old
+    # one yourself.
     assets_dir.mkdir(parents=True, exist_ok=True)
-    pattern: list[str] = []
-    if not verify_only:
-        # producing: fetch everything EXCEPT any previously-published
-        # manifest, so a stale manifest never leaks into the new one's
-        # asset set. Verifying: fetch everything including the manifest.
-        pattern = []
+    leftovers = sorted(p.name for p in assets_dir.iterdir())
+    if leftovers:
+        die(
+            f"--download requires an empty assets directory, but "
+            f"{assets_dir} already contains {len(leftovers)} entr(y/ies) "
+            f"(e.g. {leftovers[0]}). Use a fresh directory or clear it "
+            "yourself — a reused directory can put stale or foreign files "
+            "into the signed manifest."
+        )
     proc = run(
-        ["gh", "release", "download", tag, "--dir", str(assets_dir),
-         "--skip-existing"] + pattern,
+        ["gh", "release", "download", tag, "--dir", str(assets_dir)],
         capture=False,
     )
     if proc.returncode != 0:
@@ -270,7 +280,16 @@ def verify(manifest: Path, signature: Path, assets_dir: Path,
         m2 = re.fullmatch(r"([0-9a-f]{64})  (\S.*)", ln)
         if not m2:
             die(f"malformed manifest line: {ln!r}")
-        entries[m2.group(2)] = m2.group(1)
+        name = m2.group(2)
+        if name in entries:
+            # Refuse rather than let the last line win: coreutils
+            # `sha256sum -c` checks EVERY line, so a duplicate-name
+            # manifest that this verifier waved through could still fail
+            # (or worse, pass differently) under the standard tool — the
+            # two verifiers must never diverge. Our writer cannot produce
+            # duplicates; one in the input is malformed or hostile.
+            die(f"duplicate manifest entry for {name!r} — malformed manifest")
+        entries[name] = m2.group(1)
     if not entries:
         die("manifest is empty")
     for name, want in sorted(entries.items()):
