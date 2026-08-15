@@ -1082,10 +1082,10 @@ namespace levin
        transition is Rust's answer (the floor comparison lives there, on the
        logging path only); this site owns the operator-facing WARN. Wire
        behavior is untouched by construction: nothing below reads the note. */
-    if (zone_ && zone_->relay && zone_->p2p)
+    if (zone_ && zone_->p2p)
     {
       switch (shekyl_relay_zone_note_achieved_out(
-        zone_->relay.get(), zone_->p2p->get_out_connections_count()))
+        static_cast<std::uint8_t>(zone_->nzone), zone_->p2p->get_out_connections_count()))
       {
         case 1:
           MWARNING("Anonymity zone below the provisioned outbound-connection floor"
@@ -1230,9 +1230,10 @@ namespace levin
   bool notify::floor_snapshot(std::uint32_t& achieved, std::uint32_t& floor, bool& below) const
   {
     /* §18.4 admin-surface read; same handle discipline as stem_snapshot. */
-    if (!zone_ || !zone_->relay)
+    if (!zone_)
       return false;
-    return shekyl_relay_zone_floor_snapshot(zone_->relay.get(), &achieved, &floor, &below);
+    return shekyl_relay_zone_floor_snapshot(
+      static_cast<std::uint8_t>(zone_->nzone), &achieved, &floor, &below);
   }
 
   std::string format_stem_tally_row_json(

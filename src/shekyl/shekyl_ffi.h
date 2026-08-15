@@ -3226,12 +3226,12 @@ std::uint8_t shekyl_relay_zone_roll_originated_zone();
 //! floor transition (0 steady, 1 went below, 2 recovered) for the warn log.
 //! The floor comparison lives in Rust's FloorWatch, the logging path -- no
 //! wire path reads this state (§18.3).
-std::uint8_t shekyl_relay_zone_note_achieved_out(RelayZoneHandle* handle, std::uint32_t achieved);
+std::uint8_t shekyl_relay_zone_note_achieved_out(std::uint8_t zone, std::uint32_t achieved);
 
 //! Admin-surface read of the §18.4 diagnostic (AdminOnly listener only -- a
 //! public below-floor bit is a targeting oracle, §16.3). False until the
 //! first note: no data is never a fabricated zero.
-bool shekyl_relay_zone_floor_snapshot(const RelayZoneHandle* handle, std::uint32_t* out_achieved, std::uint32_t* out_floor, bool* out_below);
+bool shekyl_relay_zone_floor_snapshot(std::uint8_t zone, std::uint32_t* out_achieved, std::uint32_t* out_floor, bool* out_below);
 
 //! The outbound floor the embargo provisioning assumes (F-8b): counts below
 //! this put real fluff first-passage above the provisioned value.

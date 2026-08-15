@@ -9599,7 +9599,15 @@ its wake.
   Owned by the wallet rewrite (this constant dies with `wallet2.cpp`); recorded
   now because the reason is visible now. See `DAEMON_RELAY_PRIVACY.md` §89.6.
 
-- **Relay: the D9 below-floor observer (§18.4, ruled 2026-08-15).** There
+- **Relay: the D9 below-floor observer (§18.4, ruled 2026-08-15). IMPLEMENTED
+  2026-08-15** (`feat/relay-remainder-sweep`): `FloorWatch` /
+  `AchievedOutConnections` in `shekyl-relay::floor_diag` — no `Ord`, no
+  arithmetic, the floor comparison only inside `note()`, which returns the
+  transition record for the logger; live note on the relay wake (MWARNING on
+  transitions, "stemming CONTINUES"); `floor` key beside `tallies` on the
+  admin-only snapshot; and the store is keyed by zone byte in a
+  diagnostic-named global, **not** on the relay handle, exactly as the
+  spec-sentence below requires. Original registration follows. There
   is no below-floor check. §17 overturned `x = 0`, §18 ruled *stem anyway*
   exceptionlessly — the floor never selects wire behavior — and what remains
   to build is the observer: a warn-level log line on the below-floor/recovery

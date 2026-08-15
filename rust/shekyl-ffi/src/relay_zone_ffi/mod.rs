@@ -203,9 +203,6 @@ pub struct RelayZoneHandle {
     /// path that is almost never read. Off-strand readers clone the `Arc`
     /// (cheap) and copy fixed-size rows; the C++ merge edge emits JSON once.
     stem_tallies: Mutex<Arc<Vec<(ConnectionId, StemTallySnapshot)>>>,
-    /// §18.4's operator-facing diagnostic. The floor comparison lives inside
-    /// [`FloorWatch`] and nowhere else on any wire path.
-    floor_watch: Mutex<FloorWatch>,
 }
 
 impl RelayZoneHandle {
@@ -424,9 +421,6 @@ pub extern "C" fn shekyl_relay_zone_new(
         live_stems: AtomicUsize::new(0),
         stem_in_flight: AtomicUsize::new(0),
         stem_tallies: Mutex::new(Arc::new(Vec::new())),
-        floor_watch: Mutex::new(FloorWatch::new(
-            shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS,
-        )),
     };
     handle.publish();
     Box::into_raw(Box::new(handle))
@@ -710,56 +704,51 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_in_flight(handle: *const RelayZo
 /// not *whether the transaction is still stemming*. A transaction that has
 /// fluffed must leave the zone, or one that entered over Tor never reaches
 /// the public network.
-/// R-1 origination roll AND its zone mapping, one crossing (rule 40's
-/// coarse-call rule): draws whether this ORIGINATED transaction takes the
-/// anonymity zone and returns the zone byte `send_txs` reads — `invalid` (0,
-/// fail-closed anonymity) or `public_` (1, clearnet BY DESIGN, not fallback).
-///
-/// Replaces the `shekyl_relay_zone_divert_originated_tx` +
-/// `shekyl_relay_zone_originated_zone_from_anonymity_roll` pair, whose only
-/// caller fed the first's bool straight into the second — a Rust-owned value
-/// crossing to C++ only to cross straight back for a two-arm map. The rate
-/// and the mapping both stay in Rust; a zone byte crosses, not a probability
-/// and not an intermediate verdict. Relayed traffic does not call this; it
-/// inherits its arrival zone.
+/// §18.4's diagnostic store — **deliberately NOT on `RelayZoneHandle`**: the
+/// FOLLOWUPS spec forbids the integer landing on the handle the stem/fluff
+/// decision reads, so that reaching this state from a wire path requires a
+/// call to a diagnostic-named global, a visible edit no review misses. Keyed
+/// by zone byte (one anonymity zone per byte per process); lives for the
+/// process, which a diagnostic may.
+fn floor_watches() -> &'static Mutex<std::collections::HashMap<u8, FloorWatch>> {
+    static WATCHES: std::sync::OnceLock<Mutex<std::collections::HashMap<u8, FloorWatch>>> =
+        std::sync::OnceLock::new();
+    WATCHES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
 /// §18.4's live diagnostic: record the zone's achieved outbound
-/// anonymity-connection count and report the floor transition, if any —
-/// 0 steady, 1 went below, 2 recovered. The comparison against the floor
-/// happens inside Rust's `FloorWatch` (the logging path); the value is
-/// stored for the admin-only snapshot and is readable by NOTHING on a wire
-/// path — §18.3: the achieved count may change what the operator sees, never
-/// what the network sees.
+/// anonymity-CONNECTION count; returns the floor transition (0 steady,
+/// 1 went below, 2 recovered) for the operator warn log. The floor
+/// comparison lives in [`FloorWatch::note`] — the logging path — and this
+/// state is readable by NOTHING on a wire path (§18.3).
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_relay_zone_note_achieved_out(
-    handle: *mut RelayZoneHandle,
-    achieved: u32,
-) -> u8 {
-    if handle.is_null() {
-        return FloorTransition::Steady as u8;
-    }
-    let h = &*handle;
-    match h.floor_watch.lock() {
-        Ok(mut w) => w.note(AchievedOutConnections::new(achieved)) as u8,
+pub extern "C" fn shekyl_relay_zone_note_achieved_out(zone: u8, achieved: u32) -> u8 {
+    match floor_watches().lock() {
+        Ok(mut m) => m
+            .entry(zone)
+            .or_insert_with(|| {
+                FloorWatch::new(shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS)
+            })
+            .note(AchievedOutConnections::new(achieved)) as u8,
         Err(_) => FloorTransition::Steady as u8,
     }
 }
 
 /// Admin-surface read of the §18.4 diagnostic (`/get_stem_tallies`,
-/// AdminOnly). Returns false (and writes nothing) until the first note — an
-/// unreported zone is "no data", never a fabricated zero.
+/// AdminOnly). False (writes nothing) until the zone's first note — no data
+/// is never a fabricated zero.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_floor_snapshot(
-    handle: *const RelayZoneHandle,
+    zone: u8,
     out_achieved: *mut u32,
     out_floor: *mut u32,
     out_below: *mut bool,
 ) -> bool {
-    if handle.is_null() || out_achieved.is_null() || out_floor.is_null() || out_below.is_null() {
+    if out_achieved.is_null() || out_floor.is_null() || out_below.is_null() {
         return false;
     }
-    let h = &*handle;
-    let snap = match h.floor_watch.lock() {
-        Ok(w) => w.snapshot(),
+    let snap = match floor_watches().lock() {
+        Ok(m) => m.get(&zone).and_then(FloorWatch::snapshot),
         Err(_) => None,
     };
     match snap {
@@ -773,6 +762,18 @@ pub unsafe extern "C" fn shekyl_relay_zone_floor_snapshot(
     }
 }
 
+/// R-1 origination roll AND its zone mapping, one crossing (rule 40's
+/// coarse-call rule): draws whether this ORIGINATED transaction takes the
+/// anonymity zone and returns the zone byte `send_txs` reads — `invalid` (0,
+/// fail-closed anonymity) or `public_` (1, clearnet BY DESIGN, not fallback).
+///
+/// Replaces the `shekyl_relay_zone_divert_originated_tx` +
+/// `shekyl_relay_zone_originated_zone_from_anonymity_roll` pair, whose only
+/// caller fed the first's bool straight into the second — a Rust-owned value
+/// crossing to C++ only to cross straight back for a two-arm map. The rate
+/// and the mapping both stay in Rust; a zone byte crosses, not a probability
+/// and not an intermediate verdict. Relayed traffic does not call this; it
+/// inherits its arrival zone.
 #[no_mangle]
 pub extern "C" fn shekyl_relay_zone_roll_originated_zone() -> u8 {
     let mut rng = SecureRelayRng;
