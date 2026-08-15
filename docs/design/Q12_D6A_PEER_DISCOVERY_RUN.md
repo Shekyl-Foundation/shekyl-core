@@ -2934,7 +2934,7 @@ right direction and by a real amount, so `F′` is not a dead input.
 | 8 | 6250 | 0.839674 | −0.060326 |
 | 9 | 5250 | 0.859061 | −0.040939 |
 | 10 | 4750 | 0.869051 | −0.030949 |
-| **11** — the realized below-floor state | 4000 | **0.884424** | −0.015576 |
+| **11** | 4000 | **0.884424** | −0.015576 |
 | 12 — provisioning reference | 3500 | 0.894940 | −0.005060 |
 
 Monotonicity is asserted, not eyeballed. Degrees 1–2 are a **refusal, and the
@@ -3006,3 +3006,60 @@ provisioning check on the operator's own configuration and is unaffected; what
 is overturned is only the *runtime* below-floor branch. §16.5's refusal stands
 unchanged, and so does the sequencing constraint: this and the `fluff_return_ms`
 landing touch the same conformance vectors and must not be concurrent.
+
+### 17.6 CORRECTION — what the curve measured, and the sharper route to the same ruling
+
+**§17.2's curve is a whole-network reading, and §17.3 mislabelled it.** The
+sweep passes `vec![degree; NODES]`, so *every* node runs at degree `d` and both
+in- and out-degree move together. Calling α(11) "the realized below-floor
+state" was wrong: the realized state is **one** node short of the floor among
+healthy peers, which is a different and *milder* configuration.
+
+**The quantity D9 turns on is narrower still, and the floor does not gate it.**
+Under `OutboundOnly`, a node's own fluff return — the thing its embargo is set
+against — arrives over links *someone else* initiated, so it is governed by
+**in-degree**. The floor gates **out-degree**. In `build_adjacency_from_degrees`
+every node draws its targets uniformly and never consults the target's degree,
+so lowering a node's out-degree does not thin the edges pointed at it and does
+not slow its own return at all. §12.1's sentence — *"its fluff return is
+slower"* — is an `EveryPeer` intuition applied to an `OutboundOnly` rule, where
+the two degrees collapse into one and the reasoning would be sound.
+
+**The rescue clause is measurable, and it fails.** In-degree and out-degree
+could be correlated on a real network — a node that cannot dial out may be one
+others cannot reach (unpublished descriptor, R13 burn state, a slow guard) — in
+which case the simulator's independence would be the artifact. The fleet
+recorded both, so this is a reading rather than an argument. Over 1155 settled
+node-samples across all three arms:
+
+| | pooled |
+| --- | --- |
+| `r(out-degree, in-degree)` | **+0.050** |
+| mean in-degree, out-degree < 12 | 11.53 (sd 3.60, n = 229) |
+| mean in-degree, out-degree ≥ 12 | 11.83 (sd 4.36, n = 926) |
+| **deficit attributable to being below floor** | **−0.30 links** |
+
+Per-arm: `r` = +0.172 (A=15), +0.048 (A=30), +0.026 (A=60). **The simulator's
+independence is faithful to the measured fleet.**
+
+**So the ruling survives and strengthens, by a shorter route than §17.3's.** A
+below-floor node's own fluff return corresponds to in-degree ≈ 11.53 against
+11.83 — interpolating §17.2, α ≈ 0.889 against 0.893, a shortfall of about
+**0.4 percentage points**. §17.3 refused D9(b) because α was far above `α*`;
+the corrected figure is *higher* still and the margin *wider*. More directly:
+**§12.1's premise is very nearly false.** A below-floor node's embargo is not
+meaningfully under-provisioned, so there is no invalid-provisioning cost for
+D9(b) to buy, and the trade §16.4 priced does not arise.
+
+**What this does not change.** §17.3's arithmetic stands on its own inputs, and
+§17.4–17.5 are unaffected: D9's ruling still stands, `x = 0` is still not the
+remedy, and §12.2 must still be written against an adversary who wants the
+check to fire. What changes is that the case against D9(b) no longer rests on
+a close quantitative trade — it rests on the premise not holding.
+
+**One thing this does NOT license.** The result says the *fluff-return* half of
+§12.1 fails. It says nothing about whether a below-floor node is otherwise
+worse off — its own transactions still spread over fewer out-edges, which is a
+real effect on quantity (b) and is what §17.2's curve legitimately measures.
+§12.2 may still find a reason to act on out-degree; it may not use *"its
+embargo is under-provisioned"* as that reason.
