@@ -9595,7 +9595,10 @@ its wake.
   wire change, no conformance-vector movement. The §18.3 principle is the
   review test: the achieved count may change what the operator sees, never
   what the network sees. Also note: §18.6 discharges the concurrency bar on
-  the `fluff_return_ms` landing below — the two no longer share vectors.
+  the `fluff_return_ms` landing below — the two no longer share vectors. The
+  zone-route decision family itself moves to Rust in `feat/zone-route-rust`
+  (§18.6): semantics in `shekyl-relay::zone_route`, C++ keeps the token as a
+  forwarding seam guard, `levin.cpp` tables unchanged as the migration oracle.
 
 - **Relay: re-derive `fluff_return_ms` once, when a degree distribution
   exists.** The convergence criterion landed 2026-08-13

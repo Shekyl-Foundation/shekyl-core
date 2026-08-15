@@ -3285,3 +3285,14 @@ The check §12.5 defended still exists; what changed is its **consequence**.
   diagnostic-only** (no `Ord`, no arithmetic, no floor comparison outside the
   logging path — §18.4). No consensus surface, no wire change, no C++ beyond
   the existing snapshot plumbing it rides.
+- **The zone-route decision family moves to Rust** (in flight,
+  `feat/zone-route-rust`): `once_at_origin_route`, `originated_stays_in_zone`,
+  `r1_coherence_keeps_origin`, `is_pre_fluff_relay` and
+  `originated_zone_from_anonymity_roll` become `shekyl-relay::zone_route`,
+  putting the decision beside the sibling relay decisions and its own
+  Rust-owned parameter (`MIXED_ELIGIBILITY_PCT_HUNDREDTHS`). C++ keeps the
+  `zone_route` compile-time token as the seam guard `send_txs` requires, its
+  body forwarding over the FFI, with the byte contract `static_assert`ed at
+  the seam. The `levin.cpp` gtest tables stay unchanged as the migration
+  oracle; the crate's own tests arm the full 5 × 4 truth table plus the
+  fail-closed-never-fallback invariant (§30.5, §18.3's exception).
