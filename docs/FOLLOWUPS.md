@@ -47,16 +47,22 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Release-artifact signing policy owed before the first non-RC release
-  tag (added 2026-08-14, SA-6 CBOM close — rule-21 reopen).** The gitian
-  workflow builds deterministically and publishes release assets with **no
-  maintainer-key signature step** (`--detach-sign` produces builder assert
-  files only). The policy — classical GPG, SLH-DSA-192s via the in-tree
-  message-signing stack, or both — is the release owner's ruling; what must
-  not happen is the first release shipping unsigned **by omission rather
-  than decision**. Enforcement surface: the dated `RELEASE_CHECKLIST.md`
-  row (unchecked until ruled + wired); inventory record:
-  `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
+- **Release-asset manifest signing owed before the first non-RC release
+  tag (added 2026-08-14, SA-6 CBOM close; CORRECTED 2026-08-15 — a wiring
+  task, not an open decision).** The original entry posed a three-way
+  scheme choice; that overstated it — **`docs/SIGNING.md` already rules
+  the policy** (GPG; the Foundation institutional key; certification-only
+  primary offline with the `sec#` stub invariant; hardware-token signing
+  subkey; personal-key fallback). What SIGNING.md governs is the release
+  *tag*; the gitian job publishes *assets* with no per-asset signature,
+  and a signed tag authenticates the source point, not the binary a user
+  downloads — that half of the gap stands. Owed: a **signed `SHA256SUMS`
+  manifest step in the gitian release job** using the Foundation signing
+  subkey (same key, same ceremony as tags; one signature covers all
+  assets; composes with reproducible builds — independent builders
+  reproduce the hashes, the Foundation signs the manifest of them).
+  Enforcement surface: the `RELEASE_CHECKLIST.md` row (unchecked until
+  wired); inventory record: `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
 
 - **SA-R-7 cap-before-reserve source-scan gate — DISCHARGED 2026-08-14
   (`feat/sa-rt-round-close`, the conventions tail): the FFI boundary
