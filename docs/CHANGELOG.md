@@ -45,8 +45,8 @@
   residuals: the ledger is in memory per session (a restart restarts the
   clock — slower reclamation, never an early release), and the release
   lags the pin by one refresh (the reconcile learns the store's pin set
-  from the reply it is answering; against a 720-block gate that is not a
-  lag that means anything).
+  from the reply it is answering; against an epoch-scale gate that is not
+  a lag that means anything).
 
 - **The signature-alignment round is closed; its last rule is enforced,
   not remembered (SA-R-7 tail).** The FFI boundary ratchet

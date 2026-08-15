@@ -261,8 +261,8 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
 
         // The release set is computed from the *previous* reconcile's view of
         // the store, which is what `pinned_now` came back for. One round trip
-        // per refresh, and the release lags one refresh — against a 720-block
-        // gate that is not a lag that means anything.
+        // per refresh, and the release lags one refresh — against a gate
+        // measured in settlement epochs that is not a lag that means anything.
         let releasable = {
             let pinned = self.last_pinned.lock().expect("pin view").clone();
             self.releasable(&shard_ids, &pinned, as_of)
@@ -278,8 +278,11 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             tracing::info!(
                 released = reply.released,
                 shard_ids = ?releasable,
-                "released serve-set pins whose shards left the bond record more than \
-                 ARCHIVAL_REORG_DEPTH_BLOCKS ago; the prune may now reclaim their bytes"
+                epochs_absent = EPOCHS_BEFORE_PIN_RELEASE,
+                "released serve-set pins: these shards were absent from the bond record \
+                 across two consecutive settlement-epoch opens, so the last epoch they \
+                 could have been challenged in has closed. The prune may now reclaim \
+                 their bytes"
             );
         }
         let (outcomes, reader): (Vec<(u64, SegmentPin)>, ServingReader) =

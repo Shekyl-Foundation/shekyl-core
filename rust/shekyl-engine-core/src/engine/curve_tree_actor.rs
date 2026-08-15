@@ -199,7 +199,10 @@ pub(crate) struct PinServeSet {
     /// Shard ids from the connected bond record, in the record's order.
     pub shard_ids: Vec<u64>,
     /// Shard ids whose pins the caller has determined are releasable — absent
-    /// from the record for at least `ARCHIVAL_REORG_DEPTH_BLOCKS`.
+    /// from the record across two consecutive settlement-epoch opens, so the
+    /// last epoch the pair could have been drawn in closed a full epoch ago.
+    /// The gate is the caller's (`EngineServeSetPinner::releasable`, where the
+    /// reasoning lives); this message only carries its result.
     ///
     /// Carried on the same message as the pin rather than sent as its own so
     /// the two land in one actor turn, in the one order that is safe: pin the
@@ -213,8 +216,8 @@ pub(crate) struct PinServeSet {
 /// tell which pins are stale by comparing the store's pin set against the
 /// record it just read, and only the actor can see the former. Returning it
 /// here keeps the whole reconcile at one round trip per refresh — the release
-/// then lags by one refresh, which against a 720-block finality gate is not a
-/// lag that means anything.
+/// then lags by one refresh, which against an epoch-scale gate is not a lag
+/// that means anything.
 pub(crate) struct PinServeSetReply {
     /// Per-member pin outcome, paired with its shard id, in caller order.
     pub outcomes: Vec<(u64, SegmentPin)>,
