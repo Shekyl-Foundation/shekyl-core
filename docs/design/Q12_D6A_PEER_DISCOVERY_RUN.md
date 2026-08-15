@@ -3208,6 +3208,20 @@ wait — so **it must never select wire-visible behavior**: any branch it picks
 is an oracle the adversary fires at will, which is the entire §16.3 → §17
 arc in one sentence.
 
+**The one accepted exception, named so the principle does not read as having
+an unexamined counterexample in production: achieved degree 0.** At `d = 0`,
+`select_anonymity()` refuses on `m_connect && status.has_outgoing`
+(`net_node.inl:2340`) and the transaction lands in `anonymity_fail_closed` —
+send nothing. That *is* hold, selected by the achieved count, invocable by an
+adversary who drives the victim to zero. It is a **forced residual, not a
+counterexample**: at `d = 0` there is no wire action available, and the only
+alternative — clearnet fallback — is the §30.5 forbidden path, first-spy from
+the origin's own IP. The count is not selecting *between* behaviors; there is
+one behavior. This is also why §18.1's ruling reads **"every achieved degree
+≥ 1"** and not "always": `d = 0` is the one place the adversary's censorship
+is unavoidable and accepted — which is the strongest form of the statement
+that the floor's remedy is *provisioning*, not a wire branch.
+
 This also resolves §12.2's two bullets without discarding either:
 *"live, not once at startup"* survives — the live quantity feeds the
 diagnostic below; *"refuse, don't clamp"* survives **at the configuration
@@ -3231,9 +3245,19 @@ The check §12.5 defended still exists; what changed is its **consequence**.
   `send_txs`, the stem/fluff decision, or the embargo consults it — the pin
   recorded before this section was drafted, now satisfied structurally rather
   than by discipline: the count simply has no consumer on those paths.
-- **Carries its name in its type.** When plumbed, the count crosses as a type
-  that says what it counts — outbound **connections**, not peers (§16.6 item
-  3; the `read_ids(...)` → `peers` mislabel is the standing example).
+- **Carries its name in its type, and the type is diagnostic-only.** When
+  plumbed, the count crosses as a type that says what it counts — outbound
+  **connections**, not peers (§16.6 item 3; the `read_ids(...)` → `peers`
+  mislabel is the standing example) — and the type exposes **no `Ord`, no
+  arithmetic, no comparison against the floor constant outside the logging
+  path**. §18.4's "no consumer" claim is structural *today* only because
+  nothing plumbs the count; the natural read site (`get_status()`, where
+  `get_out_connections_count()` already sits) is the same object, on the same
+  strand, that the stem/fluff dispatch consults — so once the diagnostic
+  lands, "no consumer" decays to discipline unless the type forbids the
+  branch. A diagnostic-only type makes a future wire consumer a **visible
+  edit to a type that says why it exists**, which converts §18.5's second
+  bullet from a request in prose into a rule the compiler reads.
 
 ### 18.5 Refused in advance
 
@@ -3257,5 +3281,7 @@ The check §12.5 defended still exists; what changed is its **consequence**.
   §90.4 landing decision is free to proceed on its own schedule.
 - **What implementation owes** (registered per rule 94, Rust-owned per rule
   20): the diagnostic slice — transition logging, the admin-surface field, and
-  the named count type at the boundary it crosses. No consensus surface, no
-  wire change, no C++ beyond the existing snapshot plumbing it rides.
+  the named count type at the boundary it crosses, **constructed
+  diagnostic-only** (no `Ord`, no arithmetic, no floor comparison outside the
+  logging path — §18.4). No consensus surface, no wire change, no C++ beyond
+  the existing snapshot plumbing it rides.

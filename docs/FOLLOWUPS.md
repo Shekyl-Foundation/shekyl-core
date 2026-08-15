@@ -9588,7 +9588,10 @@ its wake.
   log line on the below-floor/recovery transitions, a field on the
   stem-tallies snapshot (**admin-only listener, same posture and rationale as
   `stem_tallies_json` — never the public RPC surface**), and the count crossing
-  as a named type (outbound *connections*, §16.6). Rust-owned per rule 20; no
+  as a named type (outbound *connections*, §16.6) that is **diagnostic-only —
+  no `Ord`, no arithmetic, no comparison against the floor outside the logging
+  path** — so a future wire consumer requires a visible edit to a type that
+  says why it exists (§18.4/§18.5). Rust-owned per rule 20; no
   wire change, no conformance-vector movement. The §18.3 principle is the
   review test: the achieved count may change what the operator sees, never
   what the network sees. Also note: §18.6 discharges the concurrency bar on
