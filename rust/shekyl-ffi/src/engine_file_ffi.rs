@@ -390,15 +390,11 @@ fn map_wallet_file_err(e: &WalletFileError) -> u32 {
 // this module has no cross-module private coupling).
 // ---------------------------------------------------------------------------
 
-unsafe fn make_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
-    if len == 0 {
-        return Some(&[]);
-    }
-    if ptr.is_null() {
-        return None;
-    }
-    Some(std::slice::from_raw_parts(ptr, len))
-}
+// Byte-slice reconstruction is `legacy_util::slice_from_ptr` — this file
+// carried the second byte-identical private clone the SA-R-7 sweep found
+// (after `wallet_envelope_ffi`'s), and clones silently miss the seam's
+// `isize::MAX` byte-bound guard. One owner, one contract.
+use crate::legacy_util::slice_from_ptr as make_slice;
 
 unsafe fn set_err(out: *mut u32, code: u32) {
     if !out.is_null() {
