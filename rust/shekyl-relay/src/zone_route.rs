@@ -34,6 +34,29 @@
 
 use core::fmt;
 
+// Compile-time pin of every discriminant to the shared byte contract. The C++
+// side pins ITS enums to the same literals (`enums.h` static_asserts), so a
+// renumbering on either side is a compile error on that side — neither side
+// can observe the other at compile time, and without these pins a Rust
+// renumbering whose `from_byte` moved with it would slide through both
+// builds. The runtime witness that the two compile-time pins describe the
+// same wire is the unchanged `levin.cpp` gtest table, which crosses the real
+// FFI with real C++ enum values.
+const _: () = {
+    assert!(RelayMethod::None as u8 == 0);
+    assert!(RelayMethod::Local as u8 == 1);
+    assert!(RelayMethod::Stem as u8 == 2);
+    assert!(RelayMethod::Fluff as u8 == 3);
+    assert!(RelayMethod::Block as u8 == 4);
+    assert!(NetZone::Invalid as u8 == 0);
+    assert!(NetZone::Public as u8 == 1);
+    assert!(NetZone::I2p as u8 == 2);
+    assert!(NetZone::Tor as u8 == 3);
+    assert!(ZoneRouteDecision::KeepArrival as u8 == 0);
+    assert!(ZoneRouteDecision::AnonymityFailClosed as u8 == 1);
+    assert!(ZoneRouteDecision::PublicClearnet as u8 == 2);
+};
+
 /// How a transaction was received, mirrored from C++ `cryptonote::relay_method`
 /// **by value and test, not by include**: the C++ side `static_assert`s each
 /// variant's byte against this contract at the FFI seam, so a renumbering on

@@ -67,8 +67,12 @@ namespace cryptonote
      sibling relay decision and their governing parameter, and the tables that
      pin them run in that crate's own test suite. C++ keeps two things — the
      `zone_route` compile-time token (the seam guard `send_txs` requires), and
-     these byte-contract asserts, which make a renumbering on either side a
-     compile error HERE rather than a silent remap across the boundary. */
+     these byte-contract asserts. Each side pins its OWN enums to the shared
+     documented literals at compile time (Rust's pins are `const` asserts in
+     `zone_route.rs`) -- neither compiler can observe the other, so the pair
+     of pins is what makes a renumbering a compile error on the side that
+     renumbered. The runtime witness that both pins describe the same wire is
+     the `levin.cpp` gtest table, which crosses the real FFI. */
   static_assert(unsigned(relay_method::none) == 0 && unsigned(relay_method::local) == 1
              && unsigned(relay_method::stem) == 2 && unsigned(relay_method::fluff) == 3
              && unsigned(relay_method::block) == 4,
@@ -191,21 +195,4 @@ namespace cryptonote
     }
   }
 
-  /*! \brief Map the origination roll onto the zone argument `send_txs` reads.
-
-      `true` (take anonymity) → `invalid`, which `once_at_origin_route` treats
-      as fail-closed. `false` (clearnet **by design**) → `public_`.
-
-      These two must stay distinguishable from "chose anon, zone unusable":
-      that path never produces a `public_` origin argument, it sends nothing.
-      Pool re-relays of `local` keep passing `invalid` and do **not** re-roll
-      — they share this mapping's fail-closed arm, which is why the roll
-      lives at first origination (`daemon_submit::relay_tx`) rather than on
-      every `source.is_nil()` call into `send_txs`. */
-  inline epee::net_utils::zone originated_zone_from_anonymity_roll(
-    const bool take_anonymity) noexcept
-  {
-    return static_cast<epee::net_utils::zone>(
-      shekyl_relay_zone_originated_zone_from_anonymity_roll(take_anonymity));
-  }
 }

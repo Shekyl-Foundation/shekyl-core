@@ -996,3 +996,70 @@ fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
         shekyl_relay_zone_free(h);
     }
 }
+
+/// The zone-route byte policy, exercised through the REAL exports — the C++
+/// static_asserts pin known values, so these pin what happens OUTSIDE them.
+///
+/// The load-bearing arm is the inverted one: for `originated_stays_in_zone`
+/// an unknown ZONE byte on a `local` origin must return `true`, because
+/// `false` lets the record upgrade to `stem`/`fluff` and the next pool
+/// re-relay puts an anonymity-origin transaction on clearnet (§30.5). A
+/// future zone added on the C++ side before this crate learns its byte must
+/// fail toward liveness loss, never toward the leak.
+#[test]
+fn zone_route_unknown_bytes_fail_toward_refusal_never_clearnet() {
+    const LOCAL: u8 = 1;
+    const STEM: u8 = 2;
+    const TOR: u8 = 3;
+    const UNKNOWN_ZONE: u8 = 4; // first byte a future zone would claim
+    const UNKNOWN_METHOD: u8 = 9;
+    const FAIL_CLOSED: u8 = 1;
+
+    // The inverted arm: local + undecodable zone keeps `local`.
+    assert!(shekyl_relay_zone_originated_stays_in_zone(
+        LOCAL,
+        UNKNOWN_ZONE
+    ));
+    // No `local` claim is invented for an undecodable method…
+    assert!(!shekyl_relay_zone_originated_stays_in_zone(
+        UNKNOWN_METHOD,
+        TOR
+    ));
+    // …and a relayed class on an unknown zone keeps its own record.
+    assert!(!shekyl_relay_zone_originated_stays_in_zone(
+        STEM,
+        UNKNOWN_ZONE
+    ));
+
+    // The send-path decision on any undecodable input is fail-closed — send
+    // nothing is the one default that cannot leak.
+    assert_eq!(
+        shekyl_relay_zone_once_at_origin_route(STEM, UNKNOWN_ZONE),
+        FAIL_CLOSED
+    );
+    assert_eq!(
+        shekyl_relay_zone_once_at_origin_route(UNKNOWN_METHOD, TOR),
+        FAIL_CLOSED
+    );
+
+    // No coherence claim is invented for a zone that does not decode; the
+    // fail-closed token above is what actually guards the send.
+    assert!(!shekyl_relay_zone_r1_coherence_keeps_origin(
+        STEM,
+        UNKNOWN_ZONE
+    ));
+    assert!(!shekyl_relay_zone_is_pre_fluff_relay(UNKNOWN_METHOD));
+}
+
+/// The composed roll export returns only the two zone bytes the contract
+/// names — whichever way the draw lands, the byte is `invalid` (0) or
+/// `public_` (1), never a third value and never an anonymity zone directly
+/// (the zone map resolves `invalid`; that indirection is the fail-closed
+/// design, §30.5).
+#[test]
+fn roll_originated_zone_returns_only_the_two_contract_bytes() {
+    for _ in 0..64 {
+        let z = shekyl_relay_zone_roll_originated_zone();
+        assert!(z == 0 || z == 1, "roll returned byte {z}");
+    }
+}

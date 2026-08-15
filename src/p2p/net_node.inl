@@ -2361,7 +2361,7 @@ namespace nodetool
        §30.5 fail-closed reversal this arc has already recorded:
 
          1. Roll said clearnet. `daemon_submit::relay_tx` passed `public_`
-            via `originated_zone_from_anonymity_roll(false)`. This arm.
+            via `shekyl_relay_zone_roll_originated_zone()`. This arm.
             By design — the node already relays on clearnet at (1−p)·A/q.
          2. Roll said anon, zone unusable. That is the
             `anonymity_fail_closed` arm: `select_anonymity()` then
