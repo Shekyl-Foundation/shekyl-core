@@ -2355,7 +2355,16 @@ the host rather than assumed.
 
 ### 13.7 Still owed (as of §13; §§14–15 close two of these)
 
-- **A longer `A = 60` arm** — 11 settled samples cannot separate the observed downward drift (55 → 46 at-floor) from ordinary churn; §11.9 needed a full hour and per-burn attribution to settle the analogous question.
+- **A longer `A = 60` arm** — 11 settled samples cannot separate the observed
+  downward drift (55 → 46 at-floor) from ordinary churn; §11.9 needed a full
+  hour and per-burn attribution to settle the analogous question.
+  **Classification: a true shelf.** Nothing waits on it — the arm's
+  distribution is degree-at-target, so it raises `F′` by nothing and 3500 ms
+  stands however the drift resolves (§13.7 below, `DAEMON_RELAY_PRIVACY.md`
+  §90.3). Its blocker is **fleet provisioning**, i.e. a fresh spend, not an
+  unanswered question. Contrast §16.4, which is a **gate**: filing both the
+  same way would put the item that is cheap to unblock and the item that is
+  blocking at the same priority in whatever reads this list next.
 - ~~**Q12-R5's late-joiner control**, both variants.~~ **RUN — see §15.2**
   (seed 56 s, ordinary node 247 s; both reach the floor, so discovery is not
   hub-dependent). Struck rather than deleted: this section was written when the
@@ -2602,23 +2611,106 @@ That is not nothing — under full eclipse the adversary has precision 1 whichev
 branch fires, so the floor check changes nothing there at all — but it is not
 the severity §14.5 implied.
 
-### 16.4 Shelved on the mechanism, with the instrument named
+### 16.4 GATE on §12.2 — the α measurement, pre-registered
 
-§12.1's counter is real: a below-floor node that stems anyway has `F′` above its
-embargo, so the embargo expires and it fluffs at origin **late** — after the
-stem already leaked to the successor. On that reading D9(b) does not *create*
-fluff-at-origin; it makes it prompt and deliberate instead of late and
-additionally leaky.
+**Not a shelf. A gate**, and the distinction is the point: a shelf is something
+the queue walks past, and this is something §12.2 walks *into*. Drafting D9's
+live check without this answer would settle the question by picking a
+semantics, which is the quiet form of the failure shelving exists to prevent.
 
-**What prose cannot settle is whether prompt-and-certain beats
-late-and-probabilistic.** The `F′` distribution has mass below the embargo even
-at low degree, and D9(b) removes that mass unconditionally. That is a
-distribution question about a path that does not run — and
-`conformance::converged_fluff_return_mixed` is now exactly the instrument for
-it: it takes per-node degree distributions and returns converged p90s, refusing
-rather than reporting an unconverged draw.
+**Reopening criterion (rule 21): §12.2 cannot be drafted until this runs.**
+That is the trigger, stated so the queue can see a dependency rather than a
+parking space.
 
-**Shelved under rule 7 on the mechanism, and this time the instrument exists.**
+#### The question, and why it is quantitative rather than a sign check
+
+§12.1's counter is real: a below-floor node that stems anyway carries an embargo
+too short for its own graph, so the embargo expires and it fluffs at origin
+**late** — after the stem already leaked to its successor. On that reading
+D9(b) does not create fluff-at-origin, it makes it prompt and deliberate
+instead of late and additionally leaky.
+
+Write the two branches out and the comparison stops being one-sided. Let `L` be
+the cost of losing origin ambiguity and `E` the cost of the extra
+stem-successor leak, and let **α** be the probability a below-floor node's stem
+completes before any node's embargo fires:
+
+| branch | expected cost |
+| --- | --- |
+| **D9(b) fires** | `L` — ambiguity lost with certainty, no extra leak |
+| **D9(b) does not** | `(1 − α)(L + E)` — with probability α the stem completes and ambiguity survives; otherwise the late fluff costs `L` *and* `E` |
+
+So **D9(b) is better iff `L < (1 − α)(L + E)`**, i.e. iff
+
+> **α < α\* = E / (L + E)**
+
+That can go either way on α, which is why it is measured rather than argued.
+
+#### What α is, exactly — and why it is not `EMBARGO_FULL_TRAVEL_PROBABILITY`
+
+`EMBARGO_FULL_TRAVEL_PROBABILITY = 0.90` is a **design input**: the shipped
+190 s embargo is *solved* so that full travel completes with probability 0.90
+**at the provisioning degree of 12**. A below-floor node runs a slower graph, so
+its true `F′` exceeds the one the embargo was derived from and its *achieved*
+α falls below 0.90. The measurement is that shortfall.
+
+**No new instrument is needed — this is a composition of two that already
+ship:**
+
+1. `conformance::converged_fluff_return_mixed` → converged `F′(d)` at a given
+   degree distribution, refusing rather than reporting an unconverged draw;
+2. `derive::full_travel_probability(&DandelionParams, mean_ticks, tick_millis)`
+   → α, with `fluff_return_ms` set to `F′(d)` and `mean_ticks` taken from the
+   **shipped** 190 s embargo, not re-solved.
+
+Feeding the degraded `F′` to the *unchanged* embargo is what makes the output
+the achieved α rather than a redesign.
+
+#### The degrees are taken from the readouts, not chosen
+
+Below-floor is **not** a broad spread over degrees 5–11. Counting below-floor
+node-samples in the committed series (`data/q12-d6a-a{15,30,60}-2026-08-14/`):
+
+| `A` | 6 | 8 | 9 | 10 | 11 | share at 11 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 15 | 1 | 2 | 2 | 7 | 67 | **85 %** |
+| 30 | — | — | 1 | 2 | 49 | **94 %** |
+| 60 | — | 1 | 2 | 3 | 92 | **94 %** |
+
+**The realized below-floor state is one connection short of the floor**, in
+85–94 % of cases, with a thin tail that reaches 6 exactly once across 229
+observations. So the headline is **α(11)**, weighted by that distribution;
+degrees 6–10 are reported as a tail and are not the decision driver. Sweeping
+5–11 uniformly would let the harness author pick the answer by choosing where
+to look.
+
+#### Pre-registered decision rule (rule 11) — written before the run
+
+`α\*` depends on pricing `E` against `L`, which is a threat-model judgement and
+not a measurement. So the rule is stated over the regions where the ruling is
+**robust to that pricing**, with the boundaries fixed here in advance:
+
+| measured α(11) | ruling | why it is robust |
+| --- | --- | --- |
+| **α > 0.5** | **D9(b) does not fire on the provisioning floor.** The branch needs a different threshold or a different mechanism, and §12.2 is drafted against that. | `α\* ≤ 0.5` for any `E ≤ L`; D9(b) would have to be justified by claiming the extra leak is *worse* than losing origin ambiguity outright. |
+| **α < 0.1** | **D9(b) as ruled, threshold = the floor.** §12.2 proceeds as §12.1 specifies. | `α\* ≥ 0.1` unless `E > 9L`; below this, D9(b) wins for any defensible pricing. |
+| **0.1 ≤ α ≤ 0.5** | **The slice does NOT proceed to §12.2 on the measurement alone.** `E` and `L` are priced on the record first, and the ruling follows from the priced `α\*`. | The regions overlap only where the answer genuinely turns on the threat model, and that is a decision, not a reading. |
+
+**Stated consequence, so this cannot be graded after the fact:** the
+`α > 0.5` row is the outcome the arc's own numbers make likely, because degree
+11 against a floor of 12 is a small perturbation of the graph the embargo was
+derived for. **If that is what the instrument returns, D9's don't-stem ruling
+survives as a ruling but its implementation via prompt fluff-at-origin does
+not**, and §12.2 must be written against an adversary who *wants* the check to
+fire (§16.3) rather than one who trips it by accident.
+
+#### One sequencing constraint
+
+This measurement and the `fluff_return_ms` landing decision (`DAEMON_RELAY_PRIVACY.md`
+§90.4) move numbers derived from the **same degree assumption**, and §90.4
+records that landing 3500 carries the 190 s embargo, the 874 s wallet timeout
+and the §44 pins with it. If D9's threshold turns out not to be 12, the two
+changes touch the same conformance vectors. **They must not be concurrent.**
 
 ### 16.5 CLOSED — distinctness on an anonymity zone is structurally unobtainable
 
