@@ -663,13 +663,29 @@ impl LeafStore {
     /// (`COMPLETETREE_ACTIVATION.md` D-1/D-5) — a CompleteTree persona's
     /// obligation *is* this prefix, so "the CompleteTree collection" is
     /// one growing number, never a stored list that could drift.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::CorruptMeta`] when the persisted cursor exceeds the
+    /// representable [`SegmentId`] space (`u32::MAX + 1` — the count with
+    /// every `u32` id frozen). No frozen-segments table can contain such a
+    /// segment, so a larger cursor is provably corrupt with zero false
+    /// positives, and this getter is the serve-obligation authority — it
+    /// exists to report the prefix, not to trust a value the prefix cannot
+    /// have. Same bound and posture as `verify_frozen_tail`'s cursor read.
     pub fn frozen_segment_count(&self) -> Result<u64, StoreError> {
         let txn = self.db.begin_read()?;
         let meta = txn.open_table(META_TABLE)?;
-        Ok(meta
+        let count = meta
             .get(META_NEXT_FREEZE_SEG)?
             .map(|v| v.value())
-            .unwrap_or(0))
+            .unwrap_or(0);
+        if count > u64::from(u32::MAX) + 1 {
+            return Err(StoreError::CorruptMeta(
+                "freeze segment counter exceeds u32",
+            ));
+        }
+        Ok(count)
     }
 
     /// Whether the prune-disabled posture is declared — see
@@ -705,6 +721,18 @@ impl LeafStore {
     /// with its own design round, and must bind the clear to evidence
     /// that no live bond owes the corpus — it is not a flag flip.
     pub fn set_prune_disabled(&self) -> Result<(), StoreError> {
+        // Steady-state short-circuit: the serving refresh re-declares on
+        // every tick, and the only transition is false→true, so an
+        // already-declared store answers with an MVCC read — no write
+        // serialization, no commit. The durable write happens exactly
+        // once. This matters at the provisioning floor (rule 76): a
+        // needless per-refresh fsync is flash wear on the Pi-class
+        // devices a foundation node may run on. The read-then-write race
+        // is benign — a concurrent declaration can only have written the
+        // same value, and redb's single writer serializes the commits.
+        if self.prune_disabled()? {
+            return Ok(());
+        }
         let txn = self.db.begin_write()?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
@@ -3100,6 +3128,42 @@ mod tests {
         );
     }
 
+    /// A persisted cursor above the representable `SegmentId` space is
+    /// reported as corruption, not returned as an obligation — with the
+    /// negative control at the exact boundary: `u32::MAX + 1` (every `u32`
+    /// id frozen) is the largest value a real table could correspond to
+    /// and must still be returned, or the check would be refusing a legal
+    /// state rather than detecting an illegal one.
+    #[test]
+    fn frozen_segment_count_reports_a_cursor_beyond_segment_id_space_as_corrupt() {
+        let store = LeafStore::open_ephemeral().unwrap();
+
+        let plant = |value: u64| {
+            let txn = store.db.begin_write().unwrap();
+            {
+                let mut meta = txn.open_table(META_TABLE).unwrap();
+                meta.insert(META_NEXT_FREEZE_SEG, &value).unwrap();
+            }
+            txn.commit().unwrap();
+        };
+
+        // Boundary: representable, returned.
+        plant(u64::from(u32::MAX) + 1);
+        assert_eq!(
+            store.frozen_segment_count().unwrap(),
+            u64::from(u32::MAX) + 1
+        );
+
+        // One past it: no u32-keyed frozen table can agree with this
+        // cursor, so the getter must surface corruption instead of
+        // handing the serve-set derivation an impossible obligation.
+        plant(u64::from(u32::MAX) + 2);
+        assert!(matches!(
+            store.frozen_segment_count(),
+            Err(StoreError::CorruptMeta(_))
+        ));
+    }
+
     /// The prune-disabled posture flag: false by default, one-way,
     /// idempotent to redeclare, persisted across reopen.
     #[test]
@@ -3139,9 +3203,10 @@ mod tests {
             Err(StoreError::PruneDisabledPosture)
         ));
         assert!(
-            store.open_frozen_segment_body(SegmentId(0)).is_ok(),
+            matches!(store.open_frozen_segment_body(SegmentId(0)), Ok(Some(_))),
             "the refused prune must have removed nothing: the frozen body \
-             is still servable"
+             is still present AND servable — Ok(None) would mean the frozen \
+             record itself vanished, which this oracle must catch"
         );
     }
 
