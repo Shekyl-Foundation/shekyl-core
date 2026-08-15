@@ -160,7 +160,13 @@ CTestTestfile.cmake
 
 # Local packaging/release outputs
 artifacts/
+# the asset-signing ceremony's working directory (downloaded release
+# binaries + the manifest being produced) — scripts/release/
+release-assets/
 release/
+# ...but the release-ceremony tooling is source, not build output
+# (the blanket `release/` above exists for build trees).
+!scripts/release/
 *.tar.gz
 *.sha256
 # ...except the vendored-crypto content manifest: a tracked source-of-truth (the

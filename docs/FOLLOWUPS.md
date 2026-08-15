@@ -57,12 +57,15 @@ sustainability is unaffected by the recalibration.
   *tag*; the gitian job publishes *assets* with no per-asset signature,
   and a signed tag authenticates the source point, not the binary a user
   downloads — that half of the gap stands. Owed: a **signed `SHA256SUMS`
-  manifest step in the gitian release job** using the Foundation signing
-  subkey (same key, same ceremony as tags; one signature covers all
-  assets; composes with reproducible builds — independent builders
-  reproduce the hashes, the Foundation signs the manifest of them).
-  Enforcement surface: the `RELEASE_CHECKLIST.md` row (unchecked until
-  wired); inventory record: `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
+  manifest** using the Foundation signing subkey (same key, same ceremony
+  as tags; one signature covers all assets; composes with reproducible
+  builds). **Tooling LANDED (`feat/release-asset-ceremony`):
+  `scripts/release/sign_release_assets.py`** — the scripted ceremony
+  (hygiene preflight, manifest, exact-subkey sign, round-trip verify,
+  upload; `--verify-only` is the downstream path; token-held subkey means
+  it is deliberately local, not CI). Enforcement surface: the
+  `RELEASE_CHECKLIST.md` row (checks when exercised on a real release);
+  inventory record: `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
 
 - **SA-R-7 cap-before-reserve source-scan gate — DISCHARGED 2026-08-14
   (`feat/sa-rt-round-close`, the conventions tail): the FFI boundary
