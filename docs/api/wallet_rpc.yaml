@@ -147,11 +147,22 @@
 #       threat-model review accepting the key-image disclosure; the
 #       re-evaluation shape is a fresh contract sub-PR citing this
 #       note.)
-#     sign, verify                                 (Phase 2 sign_message /
-#                                                   verify_message on the
-#                                                   orchestrator)
 #     export_unsigned, submit_signed               (Phase 2d UnsignedTxBundle
 #                                                   / SignedTxBundle)
+#   SPECIFIED (PR-SM-2 — message-signing projection; formerly the
+#   "sign, verify" RESERVED entry, which sat ambiguously below the
+#   REJECTED block — it was reserved, never rejected):
+#     sign_message, verify_message                 (A2 nested-hybrid message
+#                                                   signing per
+#                                                   docs/design/WALLET_MESSAGE_SIGNING.md
+#                                                   §7; verify is
+#                                                   SESSION-LESS (SM-R-6).
+#                                                   Address-anchored verify
+#                                                   answers -29803 for every
+#                                                   in-tree address until the
+#                                                   fork-(ii) v2 layout lands
+#                                                   in code — see the Message
+#                                                   signing section)
 #
 # Error-code allocation (stable ranges; per-method codes land alongside each
 # method, ranges are fixed from this first commit — WALLET_REWRITE_PLAN.md
@@ -166,7 +177,8 @@
 #   -29500..-29599           staking (RESERVED range)
 #   -29600..-29699           payment requests (RESERVED range)
 #   -29700..-29799           air-gapped bundles (RESERVED range)
-#   -29800..-29899           sign / verify message (RESERVED range)
+#   -29800..-29899           sign / verify message (PR-SM-2:
+#                            -29800..-29803 allocated; rest reserved)
 #   -29900..-29999           server / transport / tenancy
 #
 # Codes allocated in this commit are enumerated in
@@ -267,6 +279,8 @@ components:
             - check_tx_proof
             - get_reserve_proof
             - check_reserve_proof
+            - sign_message
+            - verify_message
         params:
           description: Per-method params object; see `*Params` schemas.
           type: object
@@ -350,6 +364,10 @@ components:
         - -29501   # STAKE_IN_FLIGHT
         - -29502   # ALREADY_STAKED
         - -29503   # STAKE_RECORD_MOVED
+        - -29800   # MSG_SIG_VERIFY_FAILED
+        - -29801   # MSG_SIG_CORRUPTED
+        - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
+        - -29803   # MSG_SIG_ADDRESS_UNBOUND
         - -29900   # TENANT_UNAVAILABLE
       description: |
         Allocated codes (this commit). Per-method additions extend this enum
@@ -482,6 +500,41 @@ components:
                                           A reconcile that ADOPTS a
                                           chain-proven bond returns -29502
                                           instead, not this code
+          -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
+                                          checksum-intact, and NOT a valid
+                                          signature by that address over
+                                          this message on this network.
+                                          The method's honest negative
+                                          answer (SM-R-6), never conflated
+                                          with a shape error (-32602) or a
+                                          damaged paste (-29801)
+          -29801 MSG_SIG_CORRUPTED        verify_message: the armored
+                                          string's 4-byte checksum failed —
+                                          the paste was damaged in transit.
+                                          Remedy: re-copy the signature.
+                                          The checksum is NOT security
+                                          (verification is the integrity
+                                          check); it exists exactly so this
+                                          sentence and -29800 stay apart
+                                          (rule 82)
+          -29802 MSG_SIG_UNSUPPORTED_SCHEME
+                                          verify_message: the scheme byte
+                                          names a signature scheme this
+                                          build does not implement — "this
+                                          wallet is too old to check it",
+                                          the append-only forward-compat
+                                          outcome (SM-R-5).
+                                          data: {"scheme": <byte>}
+          -29803 MSG_SIG_ADDRESS_UNBOUND  verify_message: the address's
+                                          format carries no message-signing
+                                          public key, so there is nothing
+                                          to verify against. The address
+                                          itself is valid — this is a
+                                          format capability, not a typo.
+                                          EVERY in-tree address version
+                                          answers this until the fork-(ii)
+                                          v2 layout (48-byte SLH-DSA key
+                                          inline) lands in code
           -29900 TENANT_UNAVAILABLE       server: wallet-dir tenancy (reserved
                                           for the multi-tenant sub-PR)
 
@@ -2049,3 +2102,111 @@ components:
         output_count:
           type: integer
           format: int64
+
+    # ── Message signing — PR-SM-2 (A2 / Phase 2c residue) ────────────
+    # Transferable attestations binding a message to a Shekyl address:
+    # the nested hybrid ratified in docs/design/WALLET_MESSAGE_SIGNING.md
+    # §7 (SLH-DSA-SHA2-192s inner, spend-scalar Schnorr outer, cSHAKE256
+    # domain-separated preimage binding the address's bound classical
+    # segment, the network, and a mode byte).
+    #
+    # The armored signature is a single line, `shekylmsgsig1.` +
+    # unpadded canonical-strict base64url — about 21.7 KB (16,295
+    # canonical bytes) for the one shipping scheme. Decode enforces a
+    # 64 KB ceiling on the ENCODED length before any decoding.
+    #
+    # sign_message needs the open FULL wallet (the signing identity is
+    # derived on demand from the master seed) and is MULTI-SECOND BY
+    # DESIGN: ~4.3 s per call on the smallest supported device (Pi 4
+    # floor, SM-R-8 — signing is a rare, deliberate act; verification
+    # is ~3.4 ms there). Clients should present the wait as expected
+    # work, never as a hang (rule 82).
+    #
+    # verify_message is SESSION-LESS (SM-R-6): message, signature, and
+    # address are all public caller-supplied inputs, so it is callable
+    # with no wallet open, never touches wallet state, and never dials
+    # the daemon. It is constant-time with respect to NOTHING — every
+    # input is public; do not add timing hardening here.
+    #
+    # Error taxonomy (the contract-level fact of this section): shape
+    # errors are -32602 (malformed signature string, undecodable or
+    # classical-only address — shape-first, the get_transfer_by_id
+    # precedent); every other outcome is an ANSWER with its own code:
+    # -29800 not-by-that-address, -29801 corrupted paste, -29802
+    # unknown scheme, -29803 address format carries no signing key.
+    # The signature string is judged BEFORE the address, so the paste
+    # taxonomy (-29801/-29802) never masks behind -29803.
+    #
+    # CURRENT REACH (honest state, SM-R-6 R6-a): verification's success
+    # path is unreachable — every in-tree address version answers
+    # -29803, because the 48-byte SLH-DSA public key lives inline in
+    # the fork-(ii) v2 address whose in-code layout is the one
+    # outstanding row under the genesis address-format item. When it
+    # lands, verify_message starts succeeding with no contract change.
+
+    SignMessageParams:
+      type: object
+      required: [message]
+      description: >
+        Sign `message` as the open wallet's address (spend-tier mode).
+        Requires a FULL wallet (-29005 otherwise; -29001 with no wallet
+        open). Multi-second by design — see the section header.
+      properties:
+        message:
+          type: string
+          description: >
+            The exact string to sign, bound byte-for-byte (UTF-8). The
+            verifier must supply the identical string.
+
+    SignMessageResult:
+      type: object
+      required: [signature]
+      properties:
+        signature:
+          type: string
+          description: >
+            Single-line armored signature (`shekylmsgsig1.` + unpadded
+            base64url, ~21.7 KB). Not secret — it is a transferable
+            attestation; anyone holding message + signature + address
+            can verify it.
+
+    VerifyMessageParams:
+      type: object
+      required: [address, message, signature]
+      description: >
+        SESSION-LESS verification of a message signature against an
+        address. Works with no wallet open; reads only the server's
+        network binding (the address must belong to it). Requires the
+        FULL address form — the classical-only display form cannot
+        reconstruct the bound segment the signature covers (-32602).
+      properties:
+        address:
+          type: string
+          description: The claimed signer's full Shekyl address.
+        message:
+          type: string
+          description: The exact string the signer claims to have signed.
+        signature:
+          type: string
+          description: >
+            The armored `shekylmsgsig1.` string. Decode tolerates
+            embedded whitespace (mail clients wrap 21.7 KB lines) but is
+            otherwise canonical-strict.
+
+    VerifyMessageResult:
+      type: object
+      required: [verified]
+      description: >
+        SUCCESS-ONLY by contract: every negative outcome is one of the
+        -29800-band error codes, because the taxonomy needs four
+        distinct sentences (mismatch / corruption / unknown scheme /
+        unbound address) that a `valid: false` boolean cannot carry.
+        This deliberately diverges from CheckTxProofResult's
+        `valid: false` shape, which predates the SM-R-6 ruling.
+      properties:
+        verified:
+          const: true
+          description: >
+            The signature verifies for the address, message, and
+            network. Present so scripted callers read a self-describing
+            field rather than inferring success from an empty object.

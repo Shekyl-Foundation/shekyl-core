@@ -110,14 +110,14 @@ pub enum ResolvedCommand {
         message: Option<String>,
     },
 
-    // -- Signing (RESERVED) --
+    // -- Message signing (PR-SM-2) --
     Sign {
         message: String,
     },
     Verify {
         address: String,
-        message: String,
         signature: String,
+        message: Option<String>,
     },
 
     // -- Offline signing (RESERVED: cold-wallet workflow) --
@@ -445,14 +445,20 @@ pub fn parse(input: &str) -> ResolvedCommand {
             }
         }
         "verify" => {
-            if args.len() >= 3 {
+            // Signature before message, mirroring the proofs grammar
+            // (`check_tx_proof <txid> <address> <proof> [message]`): the
+            // trailing [message...] is variadic, so everything else must
+            // come first. The signature is one token — the canonical
+            // armored form is a single line by construction (SM-R-5).
+            if args.len() >= 2 {
+                let message = (args.len() > 2).then(|| args[2..].join(" "));
                 ResolvedCommand::Verify {
                     address: args[0].to_string(),
-                    message: args[1].to_string(),
-                    signature: args[2].to_string(),
+                    signature: args[1].to_string(),
+                    message,
                 }
             } else {
-                diag("verify: need <address> <message> <signature>")
+                diag("verify: need <address> <signature> [message]")
             }
         }
         "describe_transfer" => {
@@ -742,6 +748,47 @@ mod tests {
             }
             other => panic!("expected RequestNew, got {other:?}"),
         }
+    }
+
+    /// `sign` joins the whole remainder as the message (whitespace-split,
+    /// so repeated spaces collapse — the same caveat the proofs grammar
+    /// documents); an empty message is a diagnostic, not an empty sign.
+    #[test]
+    fn test_sign_parsing() {
+        match parse("sign I own   this address") {
+            ResolvedCommand::Sign { message } => {
+                assert_eq!(message, "I own this address");
+            }
+            other => panic!("expected Sign, got {other:?}"),
+        }
+        assert!(matches!(parse("sign"), ResolvedCommand::Diagnostic { .. }));
+    }
+
+    /// `verify <address> <signature> [message...]`: the trailing message
+    /// is optional (a signature over the empty string) and variadic; the
+    /// signature is one token per the single-line canonical form.
+    #[test]
+    fn test_verify_parsing() {
+        match parse("verify skl1abc shekylmsgsig1.AAAA the signed words") {
+            ResolvedCommand::Verify {
+                address,
+                signature,
+                message,
+            } => {
+                assert_eq!(address, "skl1abc");
+                assert_eq!(signature, "shekylmsgsig1.AAAA");
+                assert_eq!(message.as_deref(), Some("the signed words"));
+            }
+            other => panic!("expected Verify, got {other:?}"),
+        }
+        match parse("verify skl1abc shekylmsgsig1.AAAA") {
+            ResolvedCommand::Verify { message, .. } => assert_eq!(message, None),
+            other => panic!("expected Verify, got {other:?}"),
+        }
+        assert!(matches!(
+            parse("verify skl1abc"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
     }
 
     /// A present-but-unparseable flag value is a hard diagnostic, never a

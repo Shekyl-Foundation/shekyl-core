@@ -253,6 +253,30 @@ pub struct GetPrimaryAddressResult {
     pub address: String,
 }
 
+/// `sign_message` result (PR-SM-2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignMessageResult {
+    /// The armored signature: a single-line `shekylmsgsig1.` string,
+    /// ~21.7 KB for the ratified SLH-DSA-192s scheme (SM-R-5/R-8).
+    pub signature: String,
+}
+
+/// `verify_message` result (PR-SM-2).
+///
+/// Success-only by contract: every negative outcome is one of the
+/// `-29800`-band error codes (SM-R-6's taxonomy needs four distinct
+/// sentences — mismatch, corruption, unknown scheme, unbound address —
+/// which a `valid: false` boolean cannot carry). This deliberately
+/// diverges from `check_tx_proof`'s `{"valid": false}` shape, which
+/// predates that ruling.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VerifyMessageResult {
+    /// Always `true`: the signature verifies for the address, message,
+    /// and network. Present so scripted callers read a self-describing
+    /// field rather than inferring success from an empty object.
+    pub verified: bool,
+}
+
 /// `get_height` result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetHeightResult {

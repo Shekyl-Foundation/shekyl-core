@@ -18,6 +18,7 @@ mod lifecycle;
 mod proofs;
 mod receiving;
 pub mod scripted;
+mod signing;
 mod staking;
 mod transfers;
 
@@ -82,6 +83,15 @@ supply the identical string — repeated spaces are collapsed to one):
                                       Verify a reserve proof (no wallet
                                       needed)
 
+Message signing (multi-word messages join with single spaces — the
+verifier must supply the identical string):
+  sign <message>                      Sign a message as this wallet's address
+                                      (takes a few seconds by design)
+  verify <address> <signature> [message]
+                                      Check a message signature (no wallet
+                                      needed; paste the signature as one
+                                      unbroken token)
+
 Receiving history:
   history incoming --unattributed     List receives with no payment-request
                                       match (FA-8 UNATTRIBUTED)
@@ -93,9 +103,8 @@ Meta:
   exit / quit                         Exit shekyl-cli
 
 Not yet available (the RPC surface is designed but has not landed; see
-docs/FOLLOWUPS.md): message signing (sign/verify), and the offline
-cold-signing workflow (describe/sign/submit_transfer,
-transfer --do-not-relay).";
+docs/FOLLOWUPS.md): the offline cold-signing workflow
+(describe/sign/submit_transfer, transfer --do-not-relay).";
 
 /// RESERVED-surface refusal: the command is part of the target set, but the
 /// wallet-RPC method that would back it has not landed. Names the gate so
@@ -265,9 +274,14 @@ pub fn repl(
                         proofs::cmd_check_reserve_proof(&rpc, &address, &proof, message.as_deref());
                     }
 
-                    // Signing (RESERVED)
-                    ResolvedCommand::Sign { .. } | ResolvedCommand::Verify { .. } => {
-                        reserved(first_token, "the message-signing RPC surface");
+                    // Message signing (PR-SM-2 surface)
+                    ResolvedCommand::Sign { message } => signing::cmd_sign(&rpc, &message),
+                    ResolvedCommand::Verify {
+                        address,
+                        signature,
+                        message,
+                    } => {
+                        signing::cmd_verify(&rpc, &address, &signature, message.as_deref());
                     }
 
                     // Offline signing (RESERVED)

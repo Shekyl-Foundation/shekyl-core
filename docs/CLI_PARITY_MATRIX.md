@@ -39,7 +39,7 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 > refuses to print the seed to a non-TTY (pipe/redirect/log) rather than leak
 > it — so the `seed`-safety row's guarantee now holds on every path.
 
-## Parity matrix (25 covered, 7 planned, 49 out of scope)
+## Parity matrix (27 covered, 5 planned, 49 out of scope)
 
 | # | simplewallet command | shekyl-cli equivalent | Status | Notes |
 |---|---|---|---|---|
@@ -66,8 +66,8 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 21 | `check_tx_proof` | `check_tx_proof` | Covered | Wallet-less verification against the chain (WI-RPC-3); proof strings are kept out of readline history |
 | 22 | `get_reserve_proof` | `get_reserve_proof` | Covered | All-balance or amount-bounded (WI-RPC-3, FULL wallet). Grammar is `get_reserve_proof [amount] [message...]`: an amount-shaped first token binds as the bound, so the CLI echoes the bound amount and exact challenge message at generation; flag-shaped tokens (e.g. Monero's `--all`) are refused with a usage error rather than bound into the message. Prints the key-image-beacon warning |
 | 23 | `check_reserve_proof` | `check_reserve_proof` | Covered | Wallet-less verification with daemon spent-status reporting (WI-RPC-3) |
-| 24 | `sign` | RESERVED | Planned | Gated on the message-signing RPC surface (Phase 2c) |
-| 25 | `verify` | RESERVED | Planned | As row 24 |
+| 24 | `sign` | `sign` | Covered | Native `sign_message` (PR-SM-2): the ratified nested hybrid (SLH-DSA-192s inner / spend-Schnorr outer, [`WALLET_MESSAGE_SIGNING.md`](design/WALLET_MESSAGE_SIGNING.md) §7). Multi-second by design (~4 s floor); the CLI prints the expectation before the call |
+| 25 | `verify` | `verify` | Covered | Native `verify_message` (PR-SM-2), **session-less** — works with no wallet open (SM-R-6). Every current address answers -29803 ("this address format cannot verify message signatures") until the fork-(ii) v2 address layout lands in code |
 | 26 | `sign_transfer` | RESERVED | Planned | Gated on the Phase 2d offline cold-signing workflow (with `describe_transfer`, `submit_transfer`, `transfer --do-not-relay`) |
 | 27 | `submit_transfer` | RESERVED | Planned | As row 26 |
 | 28 | `password` | `password` | Covered | Native `change_password` flow, old-first |

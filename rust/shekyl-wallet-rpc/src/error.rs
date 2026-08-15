@@ -105,6 +105,24 @@ pub enum WalletRpcErrorCode {
     /// Stake: this session's scan recovered a staked slot; staking becomes
     /// operational at the next wallet open — close and reopen, then retry.
     StakeRecoveredPendingReopen = -29504,
+    /// `verify_message`: well-formed, intact, and **not** a valid signature
+    /// by the claimed address over this message on this network. An answer,
+    /// not a fault (SM-R-6).
+    MessageSigVerifyFailed = -29800,
+    /// `verify_message`: the armored string's checksum does not match — the
+    /// paste was corrupted in transit. Distinct from
+    /// [`Self::MessageSigVerifyFailed`] by ruling (rule 82): "your copy is
+    /// damaged" and "not from that address" are different sentences.
+    MessageSigCorrupted = -29801,
+    /// `verify_message`: the scheme byte names a signature scheme this
+    /// build does not implement (SM-R-5's append-only forward-compat
+    /// field) — "this wallet is too old to check it", not "malformed".
+    MessageSigUnsupportedScheme = -29802,
+    /// `verify_message`: the address carries no message-signing public
+    /// key, so there is nothing to verify against. Every in-tree address
+    /// version answers this today; the fork-(ii) v2 layout clears it
+    /// (SM-R-6 R6-a).
+    MessageSigAddressUnbound = -29803,
     /// Server: wallet-dir tenancy unavailable.
     TenantUnavailable = -29900,
 }
@@ -296,6 +314,34 @@ pub enum WalletRpcError {
         "staking was recovered during this session's scan; close and reopen          the wallet to finish recovery, then retry"
     )]
     StakeRecoveredPendingReopen,
+
+    /// `verify_message` (`-29800`): the signature is well-formed and intact
+    /// but does not verify for that address, message, and network. This is
+    /// the method's honest negative *answer* (SM-R-6), carried as its own
+    /// code so automated clients can branch on it without string-matching.
+    #[error("signature does not verify for this address and message")]
+    MessageSigVerifyFailed,
+    /// `verify_message` (`-29801`): checksum mismatch — the pasted string
+    /// was damaged in transit. The remedy is "re-copy the signature", which
+    /// is why it must never be conflated with
+    /// [`Self::MessageSigVerifyFailed`] (rule 82).
+    #[error("signature string corrupted — re-copy it and try again")]
+    MessageSigCorrupted,
+    /// `verify_message` (`-29802`): the scheme byte is not one this build
+    /// implements. `data.scheme` carries the byte (public wire data) so a
+    /// client can report which scheme its wallet is missing.
+    #[error("unsupported signature scheme — this wallet is too old to check it")]
+    MessageSigUnsupportedScheme {
+        /// The unrecognized scheme byte from the decoded canonical header.
+        scheme: u8,
+    },
+    /// `verify_message` (`-29803`): the supplied address's format carries
+    /// no message-signing public key (SM-R-6 R6-a). Deliberately not a
+    /// params error: the address is perfectly valid — it is the *format*
+    /// that cannot anchor a PQ signature, and the sentence must say so
+    /// rather than send the user hunting for a typo (rule 82).
+    #[error("this address format cannot verify message signatures")]
+    MessageSigAddressUnbound,
 }
 
 impl WalletRpcError {
@@ -336,6 +382,12 @@ impl WalletRpcError {
             Self::AlreadyStaked => WalletRpcErrorCode::AlreadyStaked,
             Self::StakeRecordMoved => WalletRpcErrorCode::StakeRecordMoved,
             Self::StakeRecoveredPendingReopen => WalletRpcErrorCode::StakeRecoveredPendingReopen,
+            Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
+            Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
+            Self::MessageSigUnsupportedScheme { .. } => {
+                WalletRpcErrorCode::MessageSigUnsupportedScheme
+            }
+            Self::MessageSigAddressUnbound => WalletRpcErrorCode::MessageSigAddressUnbound,
         }
     }
 
@@ -355,6 +407,7 @@ impl WalletRpcError {
             Self::StakeNotReady { detail } | Self::RescanBlocked { detail } => {
                 Some(json!({ "detail": detail }))
             }
+            Self::MessageSigUnsupportedScheme { scheme } => Some(json!({ "scheme": scheme })),
             _ => None,
         }
     }
