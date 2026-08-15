@@ -11,7 +11,7 @@ use shekyl_engine_core::engine::error::{RetryableRejectCause, TerminalErrorKind}
 use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
     ChangePasswordError, IoError, OpenError, PScanStartError, PendingTxError, PersistenceError,
-    RefreshError, SendError, SetTxNoteError,
+    RefreshError, SendError, ServingStartError, SetTxNoteError,
 };
 use shekyl_engine_file::WalletFileError;
 use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
@@ -513,6 +513,36 @@ impl From<PScanStartError> for WalletRpcError {
             // (`lifecycle::wrap_and_start_pscan`), not handed to the client.
             PScanStartError::LoadFailed(_source) => {
                 Self::InternalError("p-scan sealed state failed to load".into())
+            }
+        }
+    }
+}
+
+impl From<ServingStartError> for WalletRpcError {
+    fn from(err: ServingStartError) -> Self {
+        match err {
+            ServingStartError::NoStakeEngine => {
+                Self::InternalError("serving start: no stake engine".into())
+            }
+            ServingStartError::RecoveredPendingReopen => Self::StakeRecoveredPendingReopen,
+            // Reachable on the open path. The source can name a local
+            // filesystem path (the derived `<P>.wallet.tor` directory);
+            // that stays in the server log, not on the JSON-RPC wire.
+            ServingStartError::TorConfig(_source) => {
+                Self::InternalError("serving start: tor data directory is unusable".into())
+            }
+            ServingStartError::Identity(_source) => {
+                Self::InternalError("serving start: persona identity unavailable".into())
+            }
+            // Reachable: a remote daemon is refused so the serve-set is
+            // never derived over the principal's shared connection. The
+            // source can name the refused URL; the client gets the
+            // remedy, not the URL.
+            ServingStartError::DaemonNotLoopback(_source) => {
+                Self::InternalError("serving currently requires your own node on loopback".into())
+            }
+            ServingStartError::AlreadyRunning => {
+                Self::InternalError("serving start: task already running".into())
             }
         }
     }

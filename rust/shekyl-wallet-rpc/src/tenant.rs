@@ -76,28 +76,28 @@ impl OpenTasks {
 
 /// One wallet-bearing tenant inside the RPC process.
 ///
-/// `Debug` is hand-written rather than derived because [`PScanHandle`] is not
-/// `Debug` (a live task handle renders nothing useful); the manual impl reports
-/// only whether a P-scan task is parked, not its internals.
+/// `Debug` is hand-written rather than derived because the parked task
+/// handles are not `Debug` (a live task handle renders nothing useful); the
+/// manual impl reports only whether each task is parked, not its internals.
 #[derive(Default)]
 pub struct Tenant {
     /// Wallet file stem currently open, if any.
     open_name: Option<String>,
     /// Open Engine handle (FULL capability, SoloSigner).
     engine: Option<SharedEngine>,
-    /// Embedder-held P-scan task handle for the open wallet (WI-1).
+    /// Embedder-held background tasks for the open wallet (WI-1 P-scan +
+    /// SH-2b-2 serving).
     ///
-    /// A **staker** open/create spawns the driving P-scan task via
-    /// [`Engine::start_pscan_if_staker`] and parks its handle here for the
-    /// wallet's whole open lifetime; a non-staker parks `None`. The task holds
-    /// its own clone of the engine arc, so
-    /// [`close_wallet`](crate::lifecycle::close_wallet)
-    /// must [`PScanHandle::shutdown`] this handle (awaiting the task's exit and
-    /// the release of that clone) **before** `Arc::try_unwrap` — a live handle
-    /// otherwise blocks the unwrap and the close would fail-loud as "still in
-    /// use." The handle is carried atomically with the engine through
-    /// [`take_open`](Self::take_open) / [`restore_open`](Self::restore_open) so
-    /// no lifecycle transition can strand one without the other.
+    /// A **staker** open/create starts both via `wrap_and_start_tasks` and
+    /// parks them here for the wallet's whole open lifetime; a non-staker
+    /// parks `OpenTasks::default()`. The P-scan holds its own clone of the
+    /// engine arc, so [`close_wallet`](crate::lifecycle::close_wallet) must
+    /// [`OpenTasks::shutdown`] this bundle (serving first, then the scan)
+    /// **before** `Arc::try_unwrap` — a live scan handle otherwise blocks
+    /// the unwrap and the close would fail-loud as "still in use." The
+    /// bundle is carried atomically with the engine through
+    /// [`take_open`](Self::take_open) / [`restore_open`](Self::restore_open)
+    /// so no lifecycle transition can strand one without the other.
     tasks: OpenTasks,
     /// True while `create_wallet` / `open_wallet` is doing slow work
     /// (daemon connect, Argon2) *outside* the tenant mutex. Prevents a
@@ -157,12 +157,12 @@ impl Tenant {
     }
 
     /// Install a freshly created / opened engine (already wrapped in its
-    /// [`SharedEngine`] arc) and its P-scan handle as the open wallet.
+    /// [`SharedEngine`] arc) and its open-span tasks as the open wallet.
     ///
-    /// The caller wraps the engine and starts the P-scan task
-    /// ([`Engine::start_pscan_if_staker`]) *before* this call, so the
-    /// arc-and-handle land together and a staker's scan is live the moment the
-    /// wallet is reachable. `pscan` is `None` for a non-staker.
+    /// The caller wraps the engine and starts the P-scan and serving tasks
+    /// *before* this call, so the arc-and-bundle land together and a staker's
+    /// scan and host are live the moment the wallet is reachable. Both
+    /// handles are `None` for a non-staker.
     ///
     /// # Panics
     ///
@@ -194,18 +194,19 @@ impl Tenant {
     /// (which clear it), and the success path calls
     /// [`clear_closing`](Self::clear_closing).
     ///
-    /// The caller should [`PScanHandle::shutdown`] the returned P-scan handle
-    /// (if any) and then [`Arc::try_unwrap`](std::sync::Arc::try_unwrap) the
-    /// engine handle before close. Shutting the task down first is what lets the
-    /// unwrap succeed — the task holds its own clone of the engine arc. If other
-    /// clones still exist afterward (e.g. an in-flight refresh), the caller must
-    /// [`restore_open`](Self::restore_open) all three — name, engine, and P-scan
-    /// handle — and fail loud rather than evicting the still-live wallet.
+    /// The caller should [`OpenTasks::shutdown`] the returned bundle (if any)
+    /// and then [`Arc::try_unwrap`](std::sync::Arc::try_unwrap) the engine
+    /// handle before close. Shutting the scan down first is what lets the
+    /// unwrap succeed — the task holds its own clone of the engine arc. If
+    /// other clones still exist afterward (e.g. an in-flight refresh), the
+    /// caller must [`restore_open`](Self::restore_open) name, engine, and
+    /// tasks together and fail loud rather than evicting the still-live
+    /// wallet.
     pub fn take_open(&mut self) -> Option<(String, SharedEngine, OpenTasks)> {
         match (self.open_name.take(), self.engine.take()) {
             (Some(name), Some(engine)) => {
                 self.closing = true;
-                // The P-scan handle rides out with the engine so the two never
+                // The open-span tasks ride out with the engine so they never
                 // separate across a lifecycle transition.
                 Some((name, engine, std::mem::take(&mut self.tasks)))
             }

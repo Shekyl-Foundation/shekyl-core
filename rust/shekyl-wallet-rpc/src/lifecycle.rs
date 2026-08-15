@@ -633,14 +633,15 @@ pub(crate) async fn make_daemon(daemon: &DaemonEndpoint) -> Result<DaemonClient,
 }
 
 /// Wrap a freshly opened / created engine in its shared arc and, for a staker,
-/// spawn the driving P-scan task (WI-1) — the **sole production call site** for
-/// [`Engine::start_pscan_if_staker`]. Returns the arc plus the embedder-held
-/// [`PScanHandle`] (`None` for a non-staker), which the tenant parks for the
-/// wallet's open lifetime and [`close_wallet`] shuts down.
+/// spawn the driving P-scan and serving tasks — the **sole production call
+/// site** for [`Engine::start_pscan_if_staker`] and
+/// [`Engine::start_serving_if_staker`]. Returns the arc plus the embedder-held
+/// [`OpenTasks`] (`None`/`None` for a non-staker), which the tenant parks for
+/// the wallet's open lifetime and [`close_wallet`] shuts down (serving first).
 ///
-/// A staker whose sealed P-scan state cannot load fails **closed** here
-/// (`PScanStartError::LoadFailed` → the caller aborts the open): a staker must
-/// not open into a state where its firewall scan is silently not running
+/// A staker whose sealed P-scan state cannot load, or whose serving path
+/// cannot be configured, fails **closed** here: a staker must not open into
+/// a state where its firewall scan is dark or its holdings are not served
 /// (`00-mission` priority 2 — privacy is not a degraded mode).
 async fn wrap_and_start_tasks(
     engine: Engine<SoloSigner>,
@@ -690,7 +691,7 @@ async fn wrap_and_start_tasks(
                 "a staker's serving host could not be started; aborting the open \
                  (fail-closed — holdings that are not served accrue misses toward a slash)"
             );
-            return Err(WalletRpcError::InternalError(e.to_string()));
+            return Err(e.into());
         }
     };
     Ok((shared, OpenTasks { pscan, serving }))
