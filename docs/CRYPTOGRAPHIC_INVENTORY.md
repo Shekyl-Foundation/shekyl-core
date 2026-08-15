@@ -327,16 +327,26 @@ same PR — §3's "review duty" scope applies file-wide); what ends here is the
 
 | Surface | Today | PQ posture |
 |---|---|---|
-| Release artifacts | Gitian deterministic multi-OS builds on tags (`.github/workflows/gitian.yml`); `--detach-sign` produces builder assert files, and the release job packages and publishes assets — **no maintainer-key signature step over the published assets exists in the workflow** | **Named gap, classical and PQ alike.** Reopen below |
+| Release tags | Signed annotated tags per `docs/SIGNING.md` (canonical policy): GPG, Shekyl Foundation institutional key — certification-only primary held offline (`sec#` stub check written in as a verifiable invariant), hardware-token signing subkey (physical possession + PIN), personal-key fallback documented | Classical, and **ruled** — scheme, key, and ceremony are settled; the primary/subkey split means a lost token never compromises the identity |
+| Release assets | Gitian deterministic multi-OS builds on tags (`.github/workflows/gitian.yml`); `--detach-sign` produces builder assert files, and the release job packages and publishes assets — **no per-asset signature step exists in the workflow, and tag-signing does not close this**: a signed tag authenticates the source point, not the binary a user downloads | **Wiring gap, not a decision** — see below |
 | Bundled Tor (expert bundle) | Upstream GPG fingerprint pin (`TOR_SIGNING_KEY_FPR`) + byte-pin re-verification chain (`tor-pin-verify` workflow, `RELEASE_CHECKLIST.md` rows) | Classical, upstream-controlled; the durable pin is the key fingerprint, and the in-tree byte pin bounds a compromised download to a loud test failure |
 | Commit signing | House discipline: GPG-signed commits, verified before push | Classical; process-level, not CI-enforced — recorded as-is |
 
-**Reopen (rule 21) — release-artifact signing policy is owed before the
-first public release tag.** The decision is the release owner's, and the
-in-tree SLH-DSA-192s message-signing stack (§1) means a PQ or
-classical+PQ-hybrid release signature is *implementable* the day it is
-ruled; what must not happen is the first release shipping with the current
-default (unsigned published assets) by omission rather than decision. Trigger:
-cutting the first non-RC release tag with this row unresolved is the failure;
-the `RELEASE_CHECKLIST.md` is the enforcement surface once the policy is
-ruled.
+**Asset-manifest signing is owed before the first non-RC release tag —
+a wiring task with a named owner, not an open decision (corrected
+2026-08-15).** The SA-6 close filed this as a three-way scheme choice;
+that overstated it — `docs/SIGNING.md` already rules the policy (GPG,
+Foundation institutional key, offline-primary / hardware-subkey ceremony),
+and the ruling extends naturally to assets with no new decision: the
+release job gains a **signed `SHA256SUMS` manifest** step — the Foundation
+signing subkey signs one manifest of asset hashes; users verify the
+manifest signature, then check hashes. One signature covers every asset,
+uses the same key and the same hardware-token ceremony as the tags, and
+composes with the reproducible-build story (independent builders reproduce
+the hashes; the Foundation signs the manifest of them). What tag-signing
+alone cannot provide — authentication of the downloaded binary rather than
+the source point — is exactly what this step adds. Trigger unchanged:
+cutting the first non-RC release tag with the `RELEASE_CHECKLIST.md` row
+unchecked is the failure. (The in-tree SLH-DSA-192s stack remains
+*implementable* for a future PQ or hybrid manifest signature, recorded as
+capability, not as an open question.)

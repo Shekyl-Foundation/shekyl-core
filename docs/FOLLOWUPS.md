@@ -14,8 +14,8 @@ The split is load-bearing, not cosmetic; the section headers below reflect
 it explicitly.
 
 - **V3.0 pre-genesis queue** is load-bearing. Each item must land before
-  genesis cut. Each item carries fixed per-PR overhead (pre-flight + review
-  + CI); accumulation compounds the pre-genesis trajectory cost. The
+  genesis cut. Each item carries fixed per-PR overhead (pre-flight + review +
+  CI); accumulation compounds the pre-genesis trajectory cost. The
   V3.0 queue's growth rate against resolution rate determines whether
   the discipline pattern is sustainable. When V3.0 items hide inside a
   long undifferentiated list, accumulation looks manageable when it is
@@ -47,19 +47,30 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Release-artifact signing policy owed before the first non-RC release
-  tag (added 2026-08-14, SA-6 CBOM close — rule-21 reopen).** The gitian
-  workflow builds deterministically and publishes release assets with **no
-  maintainer-key signature step** (`--detach-sign` produces builder assert
-  files only). The policy — classical GPG, SLH-DSA-192s via the in-tree
-  message-signing stack, or both — is the release owner's ruling; what must
-  not happen is the first release shipping unsigned **by omission rather
-  than decision**. Enforcement surface: the dated `RELEASE_CHECKLIST.md`
-  row (unchecked until ruled + wired); inventory record:
-  `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
+- **Release-asset manifest signing owed before the first non-RC release
+  tag (added 2026-08-14, SA-6 CBOM close; CORRECTED 2026-08-15 — a wiring
+  task, not an open decision).** The original entry posed a three-way
+  scheme choice; that overstated it — **`docs/SIGNING.md` already rules
+  the policy** (GPG; the Foundation institutional key; certification-only
+  primary offline with the `sec#` stub invariant; hardware-token signing
+  subkey; personal-key fallback). What SIGNING.md governs is the release
+  *tag*; the gitian job publishes *assets* with no per-asset signature,
+  and a signed tag authenticates the source point, not the binary a user
+  downloads — that half of the gap stands. Owed: a **signed `SHA256SUMS`
+  manifest step in the gitian release job** using the Foundation signing
+  subkey (same key, same ceremony as tags; one signature covers all
+  assets; composes with reproducible builds — independent builders
+  reproduce the hashes, the Foundation signs the manifest of them).
+  Enforcement surface: the `RELEASE_CHECKLIST.md` row (unchecked until
+  wired); inventory record: `docs/CRYPTOGRAPHIC_INVENTORY.md` §6.
 
-- **SA-R-7 cap-before-reserve source-scan gate (added 2026-08-14, the
-  ratification's filed residual — lands in the SA conventions tail).**
+- **SA-R-7 cap-before-reserve source-scan gate — DISCHARGED 2026-08-14
+  (`feat/sa-rt-round-close`, the conventions tail): the FFI boundary
+  ratchet (`shekyl-ffi/tests/ffi_boundary_ratchet.rs`) pins every raw
+  `slice::from_raw_parts` and raw `Vec::with_capacity` per file, failing
+  in BOTH directions; the second unguarded `make_slice` clone
+  (`engine_file_ffi`) absorbed into the seam; pipefail is rule
+  `46-shell-gate-exits`. Record below kept as filed.**
   The `bounded_capacity(count, stride, remaining_bytes)` helper landed in
   the #470 review round (`legacy_util`); `parse_prove_witness` (leaf-chunk,
   C1/C2 layer counts, sibling counts) routes through it. Still owed: a
@@ -675,8 +686,8 @@ sustainability is unaffected by the recalibration.
   epoch has a correct value to decay to — NON-observation — so the
   credit-wire design carries one line making the prune path land there
   rather than inheriting the miss-reading hazard. **Board after
-  ratification: step 1 = countersignature binding + miss-record binding
-  + transferability fork (+ freshness pin `F`, natural at one epoch);
+  ratification: step 1 = countersignature binding + miss-record binding +
+  transferability fork (+ freshness pin `F`, natural at one epoch);
   set-size pin = `λ` with double duty (coverage AND fabrication bound);
   `(m, n)` waits on both — floor from transport, ceiling from W16.**
   **TRANSFERABILITY FORK RESOLVED (2026-08-01, maintainer):
@@ -3582,8 +3593,8 @@ sustainability is unaffected by the recalibration.
   `bond_age(s)` escrow would have over-stated the deep-band freeze exactly where the margin
   lives, sealing a higher floor on an artifact), and **the cooldown anchors at per-shard
   last-served** (§4.4 — faithful under the sim's serve-until-drop behavior). The friction is
-  **flat in amount, age-stratified in incidence** (legs 1+3: `bond_duration(age)` immobility
-  + thin deep-tail coverage), not a re-tuned flat scalar. Escrow is voluntary-drops-only
+  **flat in amount, age-stratified in incidence** (legs 1+3: `bond_duration(age)` immobility +
+  thin deep-tail coverage), not a re-tuned flat scalar. Escrow is voluntary-drops-only
   (slash burns, never cools; clean `Unbond` pre-elapses the cooldown so exit→re-entry is not
   re-frozen); the drop-and-re-add 2× capital bite (P2B-7 Pin 3 anti-dodge) is preserved.
   (3) **~~What it gates: the genesis-seal redundancy-floor re-derivation.~~ RE-DERIVED
@@ -4259,8 +4270,8 @@ sustainability is unaffected by the recalibration.
   Stage 2 actor migration it reopens into).
 
 - **Base emission migration (Stage 1 PR 7 §5.8) — CLOSED 2026-05-30 by
-  C2c cutover.** PR #88 landed C2 and C2a′ on `dev` (Rust `base_block_reward`
-  + `projected_already_generated`, dual-leg KAT harnesses
+  C2c cutover.** PR #88 landed C2 and C2a′ on `dev` (Rust `base_block_reward` +
+  `projected_already_generated`, dual-leg KAT harnesses
   `tests/unit_tests/economics_c2a_prime.cpp` /
   `tests/core_tests/economics_c2a_prime.cpp`, required CI checks, and the
   `shekyl_base_block_reward` FFI). C2c (`feat/stage-1-pr7-economics-cutover`,
@@ -4271,8 +4282,8 @@ sustainability is unaffected by the recalibration.
     `shekyl_base_block_reward` via the `shekyl::base_subsidy_before_penalty`
     thin wrapper in `src/shekyl/economics.h` (same shape as
     `compute_fee_burn` / `compute_emission_split`);
-  - the duplicated C++ ESF body (`(MONEY_SUPPLY - already_generated) >> esf`
-    + tail floor) is deleted from
+  - the duplicated C++ ESF body (`(MONEY_SUPPLY - already_generated) >> esf` +
+    tail floor) is deleted from
     `src/cryptonote_basic/cryptonote_basic_impl.cpp`;
   - the weight penalty (`mul128` / `div128_64`) and the 5-arg release
     multiplier path stay in C++ (per §5.8, behavior-identical to C2a′
@@ -4370,8 +4381,8 @@ sustainability is unaffected by the recalibration.
      by replacement.
 
   **Pre-genesis target rationale.** The 2g harness ships with
-  common-path leg-3 coverage (random corpus + canonical outputs
-  + cache-equivalence). Rare-path coverage is carried in the
+  common-path leg-3 coverage (random corpus + canonical outputs +
+  cache-equivalence). Rare-path coverage is carried in the
   interim by legs 1 (spec-faithful implementation discipline)
   and 2 (C-reference audit). Per
   [`docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`](./completed/RANDOMX_V2_PHASE2G_PLAN.md)
@@ -5149,8 +5160,8 @@ sustainability is unaffected by the recalibration.
   Target: V3.0 if the upstream change lands in time, otherwise
   rolled into the V3.1 audit-response cleanup batch.
 
-- **Stage 2 — `KeyEngine` migration to actor.** Migrate key material
-  + signing operations from a composed field on `Engine<S>` into a
+- **Stage 2 — `KeyEngine` migration to actor.** Migrate key material +
+  signing operations from a composed field on `Engine<S>` into a
   true actor with its own task and message protocol. The
   `KeyEngine` actor owns `AllKeysBlob` privately; exposes the
   post-M3 trait surface (`account_public_address`,
@@ -8031,8 +8042,8 @@ sustainability is unaffected by the recalibration.
   demonstrates the trinary calibration in operation: same root
   rule applied to substrate-related residue (fold inline) vs
   unrelated structural pattern (defer with traceability), with
-  the discriminating test (derivability + boundedness + traceability
-  + surface-during-review) yielding clean classifications. When the
+  the discriminating test (derivability + boundedness + traceability +
+  surface-during-review) yielding clean classifications. When the
   rule-15 trinary-reading amendment cuts, this table provides the
   worked-examples surface for the rule body.
 
@@ -8291,8 +8302,8 @@ sustainability is unaffected by the recalibration.
   companion deliverable, deferred at landing time because Python's
   `hashlib` does not include cSHAKE (SP 800-185) and the existing
   `tools/reference/` stdlib-only convention precludes reaching for
-  `pycryptodome`. Resolution path: either (a) implement `KECCAK[c=512]`
-  + cSHAKE construction over `hashlib.shake_256`'s underlying primitive
+  `pycryptodome`. Resolution path: either (a) implement `KECCAK[c=512]` +
+  cSHAKE construction over `hashlib.shake_256`'s underlying primitive
   in pure Python (~150 LOC), or (b) update `tools/reference/README.md`
   to permit `pycryptodome` as a documented dep and use its `cSHAKE256`
   directly. (a) preserves the stdlib-only invariant; (b) is faster to
@@ -13176,8 +13187,8 @@ one place to confirm each item's relationship to the wallet stack.
   actor's timing-obscurity property is degraded.** The
   design-rounds work to settle (c) reopens the strategy-
   actor threat model — the V3.x PR is necessarily a
-  coordinated `PendingTxEngine` + `SubmissionStrategyActor`
-  + `DIAGNOSTIC_STREAM.md` design-rounds pass.
+  coordinated `PendingTxEngine` + `SubmissionStrategyActor` +
+  `DIAGNOSTIC_STREAM.md` design-rounds pass.
 
   **Reopening criteria (per
   [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).**
@@ -13187,8 +13198,8 @@ one place to confirm each item's relationship to the wallet stack.
     errors observed in production at non-trivial frequency
     across operational deployments.
   - AND the coordinated V3.x design-rounds bandwidth is
-    available (`PendingTxEngine` + `SubmissionStrategyActor`
-    + `DIAGNOSTIC_STREAM.md`).
+    available (`PendingTxEngine` + `SubmissionStrategyActor` +
+    `DIAGNOSTIC_STREAM.md`).
 
   **Re-evaluation shape.** A V3.x design-rounds pass owned
   jointly by the per-trait PR template
@@ -13372,8 +13383,8 @@ one place to confirm each item's relationship to the wallet stack.
   `LocalPendingTx` is invoked from the in-process call
   graph; no async polling loop exists at V3.0). Per
   `15-deletion-and-debt.mdc` "code with no live caller"
-  default-delete rule, V3.0 ships the trait method
-  + variant + projection field as the substrate that
+  default-delete rule, V3.0 ships the trait method +
+  variant + projection field as the substrate that
   V3.x consumes additively. V3.0 unit tests hand-roll
   the call to exercise the trait method + handler body
   per the segment-2i §5.6.12 C5β test deliverable
@@ -14386,8 +14397,8 @@ one place to confirm each item's relationship to the wallet stack.
   `ArchivalEngine` must not bring down stake state); and the
   Hayekian shard-market property (the shard market priced by
   scarcity and opted into by stakers is conceptually distinct
-  from stake lifecycle and benefits from independent supervision
-  + message ordering).
+  from stake lifecycle and benefits from independent supervision +
+  message ordering).
 
   *Why Stage 5 (own stage), not Stage 3/4:* `ArchivalEngine` has
   substantially more open design questions than `StakeEngine`
