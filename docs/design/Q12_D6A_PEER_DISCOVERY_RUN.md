@@ -2721,9 +2721,23 @@ not a measurement. So the rule is stated over the regions where the ruling is
 
 | measured α(11) | ruling | why it is robust |
 | --- | --- | --- |
-| **α > 0.5** | **D9(b) does not fire on the provisioning floor.** The branch needs a different threshold or a different mechanism, and §12.2 is drafted against that. | `α* ≤ 0.5` for any `E ≤ L`; D9(b) would have to be justified by claiming the extra leak is *worse* than losing origin ambiguity outright. |
-| **α < 0.1** | **D9(b) as ruled, threshold = the floor.** §12.2 proceeds as §12.1 specifies. | `α* ≥ 0.1` unless `E > 9L`; below this, D9(b) wins for any defensible pricing. |
+| **α > 0.5** | **D9(b) does not fire on the provisioning floor.** The branch needs a different threshold or a different mechanism, and §12.2 is drafted against that. | `α* ≤ 0.5` for any `E + R ≤ L` *(corrected post-run — see the amendment note below)*; D9(b) would have to be justified by claiming the extra leak plus the residual successor exposure together outweigh losing origin ambiguity outright. |
+| **α < 0.1** | **D9(b) as ruled, threshold = the floor.** §12.2 proceeds as §12.1 specifies. | `α* ≥ 0.1` unless `E < (L − R)/9` *(corrected post-run: the original said "unless `E > 9L`", which is the inequality inverted even in the zero-`R` form)*; outside that corner, D9(b) wins for any defensible pricing. |
 | **0.1 ≤ α ≤ 0.5** | **The slice does NOT proceed to §12.2 on the measurement alone.** `E` and `L` are priced on the record first, and the ruling follows from the priced `α*`. | The regions overlap only where the answer genuinely turns on the threat model, and that is a decision, not a reading. |
+
+**Post-run amendment, 2026-08-15 — recorded rather than rewritten, because this
+table was frozen before the run.** Review caught that the robustness column
+mixed two derivations: this section's own formula is `α* = E/(L + E − R)` with
+`R > 0`, and under it `E ≤ L` does **not** give `α* ≤ 0.5` (take `E = L`, any
+`R > 0`). The condition for `α* ≤ 0.5` is **`E + R ≤ L`**. The **boundary the
+test enforces is unchanged at 0.5**; what the amendment changes is the stated
+pricing region over which 0.5 is the supremum — a *narrower* region, so the
+claim is weakened rather than strengthened, which is the only direction a
+frozen rule may be amended after its run. The `α < 0.1` row's algebra is also
+corrected (inequality inverted in the original). The measured result clears the
+corrected rule with margin: `α(11) = 0.884 > α*` for every pricing with
+`E < 7.6 · (L − R)`, so the ruling survives even well outside the `E + R ≤ L`
+region.
 
 **Stated consequence, so this cannot be graded after the fact:** the
 `α > 0.5` row is the outcome the arc's own numbers make likely, because degree
@@ -2945,14 +2959,18 @@ bounded instead by the analytic/empirical pairing the crate uses elsewhere
 `derive.rs:490`); `full_travel_probability` has no such partner yet, and that
 empirical-α companion is the named follow-up, one degree's worth of work.
 
-**The one unarmed premise, recorded beside it because it is the same shape: `E ≤ L`
-is argued, not measured.** The armed 0.5 boundary is the supremum of
-`α* = E/(E+L)` over the admissible pricing region — a derivation with the
-pricing quantified out, not a threshold picked for tidiness — but its
-admissibility condition is the argument that adversary precision caps at 1,
-D9(b)'s own branch already delivers ≈ 1, so `E` is an increment on an
-attribution the adversary already holds while `L` is the whole ambiguity. Sound,
-and nothing in the file covers it: **if `E ≤ L` ever fails, the assertion stays
+**The one unarmed premise, recorded beside it because it is the same shape:
+`E + R ≤ L` is argued, not measured.** The armed 0.5 boundary is the supremum
+of `α* = E/(L + E − R)` over the admissible pricing region — a derivation with
+the pricing quantified out, not a threshold picked for tidiness. *(Amended
+post-run: an earlier draft stated the region as `E ≤ L` against the zero-`R`
+form `E/(E+L)`; with `R > 0` that region does not bound `α*` by 0.5 — the
+condition that does is `E + R ≤ L`.)* Its admissibility argument is the capped
+unit: adversary precision tops out at 1, D9(b)'s own branch already delivers
+≈ 1, so `E` — the increment on an attribution already held — is close to zero
+in that unit, and `R`, the *ambiguous* `k/12` exposure, is strictly below `L`,
+the *certain* attribution. `E + R ≤ L` follows from both together. Sound, and
+nothing in the file covers it: **if `E + R ≤ L` ever fails, the assertion stays
 green while the ruling stops following from it.** Both residues are premises
 the gate rests on and cannot see.
 
@@ -2980,7 +2998,8 @@ cost of the low draw that PR corrected.
 ### 17.3 The ruling, taken from the frozen rule
 
 §16.4 pre-registered: **α > 0.5 ⇒ D9(b) does not fire on the provisioning
-floor**, robust for any `E ≤ L`.
+floor**, robust for any pricing with `E + R ≤ L` (as amended — §16.4's
+post-run note).
 
 **Measured α(11) = 0.884.** Not marginal, and not sensitive to where in the
 observed distribution one looks: α ≥ 0.68 at *every* degree the instrument will

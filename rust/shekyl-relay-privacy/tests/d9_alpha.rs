@@ -119,16 +119,20 @@ fn alpha_curve_across_below_floor_degrees() {
     println!("  ------   --------   --------   ------------------------");
 
     // §16.4's pre-registered band boundary, and NOT a round number picked for
-    // tidiness: D9(b) pays iff (1-a)·E > a·L, so a* = E/(E+L), and E <= L
-    // makes a* <= 0.5 with equality only at E = L. 0.5 is therefore the
-    // SUPREMUM of a* over the whole admissible pricing region — the weakest
-    // assertion that discharges the rule without committing to values for E
-    // and L, which is why it can be armed before either is measured. The one
-    // premise this cannot see is E <= L itself (argued in §17.1, not
-    // measured); if that fails, this stays green while the ruling stops
-    // following. Asserting it here is what converts the frozen rule from a
-    // document into something CI enforces — a rule that was frozen once,
-    // versus a rule that stays frozen.
+    // tidiness. With the module doc's full model — D9(b) costs L; not firing
+    // costs a·R + (1-a)(L+E) — D9(b) pays iff a < a* = E/(L + E - R), and
+    // a* <= 0.5 iff E + R <= L (NOT iff E <= L: at E = L any R > 0 puts a*
+    // above 0.5 — a review catch; an earlier version of this comment carried
+    // the zero-R derivation while the module doc carried the R-form). 0.5 is
+    // therefore the SUPREMUM of a* over the pricing region E + R <= L — the
+    // weakest assertion that discharges the rule without committing to values
+    // for E, L or R, which is why it can be armed before any is measured. The
+    // one premise this cannot see is E + R <= L itself (argued in §17.1, not
+    // measured: E is ~0 in the capped-precision unit and R, ambiguous k/12
+    // exposure, sits strictly below L, certain attribution); if that fails,
+    // this stays green while the ruling stops following. Asserting it here is
+    // what converts the frozen rule from a document into something CI
+    // enforces — a rule that was frozen once, versus a rule that stays frozen.
     const PREREGISTERED_ALPHA_BOUNDARY: f64 = 0.5;
     // Degrees where the OutboundOnly flood strands >10 % of nodes, so the
     // question is ill-posed and the instrument must REFUSE. Asserted, not
@@ -218,10 +222,11 @@ fn alpha_curve_across_below_floor_degrees() {
     }
 
     // THE PRE-REGISTERED RULE (§16.4, committed a5804d9c7 before this file
-    // existed): alpha above 0.5 at every answering degree rules D9(b) off the
-    // provisioning floor, robustly for any E <= L — and alpha never entering
-    // the band anywhere measurable is the sharper mode: the MECHANISM is
-    // wrong, not its threshold. This assertion is that ruling, armed. If a
+    // existed; admissibility condition corrected post-run to E + R <= L,
+    // §16.4's amendment note): alpha above 0.5 at every answering degree rules
+    // D9(b) off the provisioning floor for every admissible pricing — and
+    // alpha never entering the band anywhere measurable is the sharper mode:
+    // the MECHANISM is wrong, not its threshold. This assertion is that ruling, armed. If a
     // change to the flood model or the survival derivation ever pushes alpha
     // into the band, this reddens and the D9(b) question REOPENS rather than
     // drifting.
