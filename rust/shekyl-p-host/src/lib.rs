@@ -61,12 +61,14 @@
 //!
 //! # One rule the seam keeps applying
 //!
-//! [`ServeSetPinner`] reports three things and takes none: which shards the
-//! persona owes, whether they are pinned, and which store they are pinned in.
-//! **The host does not choose anything about its own duty** — each of those
-//! was once a parameter, and each removal closed a real call-site defect of
-//! the same shape. What a caller cannot supply, a caller cannot get wrong;
-//! what is left is one engine-side implementor, reviewable by reading it.
+//! [`ServeSetPinner`] reports three things and takes none: **the
+//! obligation** (a shard list or a CompleteTree prefix), **the evidence
+//! that retains it** (per-member pins, or the prune-disabled posture), and
+//! **which store** that evidence landed in. **The host does not choose
+//! anything about its own duty** — each of those was once a parameter, and
+//! each removal closed a real call-site defect of the same shape. What a
+//! caller cannot supply, a caller cannot get wrong; what is left is one
+//! engine-side implementor, reviewable by reading it.
 
 #![forbid(unsafe_code)]
 
@@ -75,6 +77,6 @@ pub mod serve_set;
 
 pub use host::{HostError, PersonaServing, PersonaServingHost};
 pub use serve_set::{
-    PinError, PinReport, PinnedServeSet, ReportedSet, ServeSet, ServeSetPinner, Staleness,
-    StalenessBound,
+    PinError, PinReport, PinnedServeSet, ReportedSet, ServeObligation, ServeSet, ServeSetPinner,
+    Staleness, StalenessBound,
 };

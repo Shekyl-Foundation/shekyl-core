@@ -25,7 +25,7 @@ use shekyl_curve_tree::{
 };
 use shekyl_p_host::{
     HostError, PersonaServing, PersonaServingHost, PinError, PinReport, PinnedServeSet,
-    ReportedSet, ServeSetPinner, Staleness, StalenessBound,
+    ReportedSet, ServeObligation, ServeSetPinner, Staleness, StalenessBound,
 };
 use shekyl_tor::onion_identity::OnionIdentity;
 use shekyl_tor::service::{
@@ -1204,6 +1204,11 @@ async fn prefix_acquire_requires_the_declared_posture_and_bounds_membership() {
         .expect("the declared posture is the prefix arm's pin");
 
     let set = pinned.serve_set();
+    assert_eq!(
+        set.obligation(),
+        ServeObligation::CompleteTreePrefix { frozen_count: 1 },
+        "the arm is a view, not two Options reconstructed as a tag"
+    );
     assert_eq!(set.complete_tree_frozen_count(), Some(1));
     assert!(set.contains(0), "k-1 is in the obligation");
     assert!(!set.contains(1), "k is not — the boundary is exclusive");
@@ -1277,10 +1282,103 @@ async fn prefix_over_an_unfrozen_store_is_empty_and_still_acquires() {
         .await
         .expect("an empty corpus is not an error");
     assert!(pinned.serve_set().is_empty());
-    assert_eq!(pinned.serve_set().complete_tree_frozen_count(), Some(0));
+    assert_eq!(
+        pinned.serve_set().obligation(),
+        ServeObligation::CompleteTreePrefix { frozen_count: 0 },
+    );
     assert!(!pinned.serve_set().contains(0));
     assert!(
         pinned.dropped_pins().expect("read").is_empty(),
         "no per-member pins exist to drop on the prefix arm"
     );
+}
+
+/// A prefix report that overstates the store's freeze cursor is the
+/// dangerous coverage lie — claiming shards the store has not frozen —
+/// and is refused. A stale-low snapshot (understating the cursor) is
+/// accepted: refresh grows the obligation, and equality can race.
+#[tokio::test]
+async fn prefix_overstating_the_cursor_refuses_and_understating_it_does_not() {
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("append and freeze segment 0");
+    store.set_prune_disabled().expect("declare the posture");
+
+    struct LyingPrefixPinner {
+        store: Arc<LeafStore>,
+        frozen_count: u64,
+    }
+    impl ServeSetPinner for LyingPrefixPinner {
+        async fn pin_serve_set(&self) -> Result<PinReport, String> {
+            Ok(PinReport {
+                set: ReportedSet::CompleteTreePrefix {
+                    frozen_count: self.frozen_count,
+                },
+                as_of_height: BlockHeight(10_000),
+                reader: ServingReader::new(Arc::clone(&self.store)),
+            })
+        }
+    }
+
+    let err = PinnedServeSet::acquire(&LyingPrefixPinner {
+        store: Arc::clone(&store),
+        frozen_count: 2,
+    })
+    .await
+    .expect_err("overstating the cursor must refuse");
+    assert_eq!(
+        err,
+        PinError::FrozenCountExceedsCursor {
+            reported: 2,
+            cursor: 1,
+        },
+        "got {err:?}"
+    );
+
+    let pinned = PinnedServeSet::acquire(&LyingPrefixPinner {
+        store: Arc::clone(&store),
+        frozen_count: 0,
+    })
+    .await
+    .expect("a stale-low snapshot is a conservative obligation, not a fault");
+    assert_eq!(
+        pinned.serve_set().obligation(),
+        ServeObligation::CompleteTreePrefix { frozen_count: 0 },
+    );
+}
+
+/// The prefix arm's retention reading is its own arm: tampering the
+/// one-way flag after acquire reports `PostureLost`, never
+/// `PinsDropped`, and `dropped_pins()` stays empty — there are no pin
+/// rows to list.
+#[tokio::test]
+async fn prefix_posture_loss_is_posture_lost_not_pins_dropped() {
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("append and freeze segment 0");
+    store.set_prune_disabled().expect("declare the posture");
+    let pinner = PrefixPinner {
+        store: Arc::clone(&store),
+    };
+
+    let pinned = PinnedServeSet::acquire(&pinner).await.expect("acquire");
+    store
+        .test_tamper_clear_prune_disabled()
+        .expect("tamper the one-way flag");
+
+    assert_eq!(
+        pinned.staleness(StalenessBound::blocks(64)).expect("read"),
+        Staleness::PostureLost { frozen_count: 1 },
+        "posture loss is its own diagnosis, not a fake pin-row drop"
+    );
+    assert!(
+        pinned.dropped_pins().expect("read").is_empty(),
+        "PinsDropped's id list stays empty: there are no pin rows"
+    );
+    assert!(pinned
+        .staleness(StalenessBound::blocks(64))
+        .expect("read")
+        .is_stale());
 }

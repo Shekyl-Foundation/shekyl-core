@@ -261,6 +261,20 @@ impl ServingReader {
         self.store.prune_disabled()
     }
 
+    /// The store's burial-gated freeze cursor — see
+    /// [`LeafStore::next_freeze_seg`], of which this is a pure read-only
+    /// forward. The CompleteTree-prefix witness verifies a reported
+    /// `frozen_count` against this on mint: the store is the authority
+    /// for the number, and a report that overstates it claims shards
+    /// the store has not frozen.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`LeafStore::next_freeze_seg`]'s.
+    pub fn next_freeze_seg(&self) -> Result<u64, StoreError> {
+        self.store.next_freeze_seg()
+    }
+
     /// Whether `other` is a handle on the **same open database**.
     ///
     /// This is allocation identity, and that is store identity: a
@@ -748,6 +762,23 @@ impl LeafStore {
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_PRUNE_DISABLED, &1u64)?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Overwrite the prune-disabled cell with 0 so a prefix witness can
+    /// observe posture loss. **Not a clear path.** The production setter
+    /// is one-way (rule 21); this exists so `shekyl-p-host` can KAT
+    /// `Staleness::PostureLost` — tampering is the only way the one-way
+    /// flag reads false after a successful acquire, which is exactly the
+    /// state that reading exists to report.
+    #[doc(hidden)]
+    pub fn test_tamper_clear_prune_disabled(&self) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut meta = txn.open_table(META_TABLE)?;
+            meta.insert(META_PRUNE_DISABLED, &0u64)?;
         }
         txn.commit()?;
         Ok(())
