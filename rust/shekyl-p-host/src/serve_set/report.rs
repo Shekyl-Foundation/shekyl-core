@@ -6,7 +6,7 @@
 //! The pinner's report: the obligation, the evidence that retains it, and
 //! the store both landed in.
 
-use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader};
+use shekyl_curve_tree::{BlockHeight, PostureDeclaration, SegmentPin, ServingReader};
 
 /// Why a serve-set could not be pinned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,6 +234,22 @@ pub enum ReportedSet {
     CompleteTreePrefix {
         /// The frozen-prefix length at the time of the report.
         frozen_count: u64,
+        /// What the store answered when the implementor declared the
+        /// posture for this report (declare-before-report is the prefix
+        /// contract; the declaration is idempotent).
+        ///
+        /// This is the **posture-loss detector for the gap the refresh
+        /// itself repairs**: the production loop re-declares and *then*
+        /// reads staleness, so a flag lost between ticks is restored
+        /// before any poll could observe it —
+        /// [`PostureDeclaration::NewlyDeclared`] at a refresh is the one
+        /// evidence the loss happened, and the witness responds by
+        /// running the corpus integrity scan over the reader rather than
+        /// trusting the gap was harmless. Same trust level as the list
+        /// arm's outcomes: the implementor reports what the store told
+        /// it, and the residual (an implementor that lies) is the one the
+        /// trait doc already names.
+        declaration: PostureDeclaration,
     },
 }
 
@@ -323,10 +339,13 @@ pub trait ServeSetPinner {
     ///   *reported* rather than raised, the whole set is applied in one
     ///   transaction, and pinning is idempotent.
     /// - **Prefix** (`ReportedSet::CompleteTreePrefix`): declare the
-    ///   prune-disabled posture (idempotent, through the curve-tree actor)
-    ///   and report the store's `next_freeze_seg`. No per-member pin
+    ///   prune-disabled posture (idempotent, through the curve-tree actor),
+    ///   report the store's `next_freeze_seg` **and the store's answer to
+    ///   the declaration** ([`PostureDeclaration`]). No per-member pin
     ///   outcomes — the posture flag is the pin. The witness verifies the
-    ///   declaration and that `frozen_count` does not exceed the cursor.
+    ///   declaration, that `frozen_count` does not exceed the cursor, and
+    ///   — on `NewlyDeclared` at a refresh — that the corpus survived the
+    ///   unretained gap (the integrity scan).
     ///
     /// [`PinReport::reader`] must be a handle on **the store the retention
     /// landed in** — the production implementor takes both from the one

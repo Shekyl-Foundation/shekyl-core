@@ -5,7 +5,7 @@
 
 //! The sealed witness: a serve-set whose retention is in place.
 
-use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader, StoreError};
+use shekyl_curve_tree::{BlockHeight, PostureDeclaration, SegmentPin, ServingReader, StoreError};
 
 use super::{
     PinError, PinReport, ReportedSet, ServeObligation, ServeSet, ServeSetPinner, Staleness,
@@ -83,10 +83,12 @@ impl PinnedServeSet {
     /// refusing costs nothing and the remedy — rebuild the store by chain
     /// replay — wants to be paid before the persona advertises itself.
     /// [`Self::refreshed`] deliberately does *not* refuse: see its doc.
-    /// (List arm only: a CompleteTree-prefix report has no per-member
-    /// outcomes to be pruned in — the posture flag it verifies instead is
-    /// what makes pruning unrepresentable — so this refusal is structurally
-    /// unreachable for it.)
+    /// Both arms can reach it: the list arm through its pin outcomes, the
+    /// prefix arm through the corpus integrity scan that runs when the
+    /// declaring call reports the posture was not already in place
+    /// (`NewlyDeclared` — a first activation over an intact store scans
+    /// clean and proceeds; holes mean an unretained gap already cost
+    /// bytes, and the persona must not advertise over them).
     ///
     /// # Errors
     ///
@@ -104,7 +106,27 @@ impl PinnedServeSet {
             .await
             .map_err(|detail| PinError::Pinner { detail })?;
         let reader = report.reader.clone();
-        let pinned = Self::from_report(report, reader)?;
+        let mut pinned = Self::from_report(report, reader)?;
+        // A start verifies the whole prefix corpus, unconditionally. The
+        // list arm's outcomes carry pruned members for free; the prefix
+        // arm has no outcomes, and the declaration history cannot be
+        // trusted across a restart — a loss repaired by an earlier
+        // session's refresh leaves the flag declared while the holes it
+        // cost persist, so a history-triggered scan here would mint a
+        // clean witness over a holed corpus. Starts are rare; O(k) once
+        // at start is the same order the list arm already pays to pin.
+        if matches!(
+            pinned.set.obligation(),
+            ServeObligation::CompleteTreePrefix { .. }
+        ) {
+            pinned.already_pruned =
+                pinned
+                    .reader
+                    .pruned_frozen_segments()
+                    .map_err(|e| PinError::Pinner {
+                        detail: format!("corpus integrity scan failed: {e:?}"),
+                    })?;
+        }
         // The refusal lives here rather than inside `from_report`, which both
         // constructors share. `refreshed` must be able to mint a witness that
         // *records* terminally-pruned members without failing (see its doc), so
@@ -174,7 +196,48 @@ impl PinnedServeSet {
         if !self.reader.same_store(&report.reader) {
             return Err(PinError::PinnerStoreMismatch);
         }
-        Self::from_report(report, self.reader.clone())
+        // THE GAP THE REFRESH ITSELF REPAIRS. The production loop
+        // re-declares the posture and only then reads staleness, so a flag
+        // lost between ticks is restored before any `PostureLost` poll
+        // could observe it — the declaring call is the one witness of that
+        // loss, and the report carries its answer. `NewlyDeclared` at a
+        // refresh means an unretained gap in which `prune_frozen` was free
+        // to run, and the prefix arm has no per-member outcomes to surface
+        // what it took; so the loss path — and only the loss path, per
+        // D-1's refusal to pay O(D) per tick — runs the store's integrity
+        // scan.
+        let posture_was_lost = matches!(
+            report.set,
+            ReportedSet::CompleteTreePrefix {
+                declaration: PostureDeclaration::NewlyDeclared,
+                ..
+            }
+        );
+        let mut next = Self::from_report(report, self.reader.clone())?;
+        // PERMANENT HOLES MUST NOT BE FORGOTTEN BY A HEALTHY RE-DECLARATION:
+        // the refresh after a loss reports `AlreadyDeclared`, and pruned
+        // leaves do not come back (chain replay builds a NEW store, whose
+        // reader fails `same_store` and forces a fresh acquire) — so a
+        // witness that carried holes re-scans on every replacement, keeping
+        // them visible exactly as the list arm's holes persist by being
+        // re-reported in every refresh's outcomes. Re-scanned rather than
+        // copied so it reports the store's current truth, not a memory of
+        // it. Recorded, never refused: the same non-wedging asymmetry as
+        // the list arm's `AlreadyPruned` members.
+        if (posture_was_lost || !self.already_pruned.is_empty())
+            && matches!(
+                next.set.obligation(),
+                ServeObligation::CompleteTreePrefix { .. }
+            )
+        {
+            next.already_pruned =
+                self.reader
+                    .pruned_frozen_segments()
+                    .map_err(|e| PinError::Pinner {
+                        detail: format!("corpus integrity scan failed: {e:?}"),
+                    })?;
+        }
+        Ok(next)
     }
 
     /// Validate a report's **soundness as a witness** and mint it. The one
@@ -260,7 +323,10 @@ impl PinnedServeSet {
                     already_pruned,
                 )
             }
-            ReportedSet::CompleteTreePrefix { frozen_count } => {
+            ReportedSet::CompleteTreePrefix {
+                frozen_count,
+                declaration,
+            } => {
                 // THE DECLARATION MUST BACK THE CLAIM — the prefix arm's
                 // coverage check. There are no outcomes to cover the set
                 // because the posture flag is the pin, so what the witness
@@ -277,13 +343,9 @@ impl PinnedServeSet {
                 // the obligation (D-5), and equality can race if a segment
                 // freezes between the pinner's read and this check.
                 //
-                // Both `not_yet_frozen_at_last_pin` and `already_pruned` are
-                // structurally empty here: the prefix is the *frozen* set by
-                // definition (an unfrozen segment is not in `[0, k)`), and
-                // nothing under the declared posture can prune — which is
-                // also why `PinError::MembersAlreadyPruned` is unreachable
-                // for this arm. The list-arm check stays: explicit holdings
-                // ride per-member pins and can still meet pruned bytes.
+                // `not_yet_frozen_at_last_pin` is structurally empty here:
+                // the prefix is the *frozen* set by definition (an unfrozen
+                // segment is not in `[0, k)`).
                 let declared = reader.prune_disabled().map_err(|e| PinError::Pinner {
                     detail: format!("posture read failed: {e:?}"),
                 })?;
@@ -299,6 +361,16 @@ impl PinnedServeSet {
                         cursor,
                     });
                 }
+                // `already_pruned` is empty AT THIS LAYER only: whether the
+                // corpus actually survived is a fitness question whose
+                // policy differs per caller, so the integrity scan lives in
+                // `acquire` (always, refusing over holes) and `refreshed`
+                // (on the loss path — see [`ReportedSet::CompleteTreePrefix`]'s
+                // `declaration` field — recording holes without wedging).
+                // `declaration` is deliberately unread here for the same
+                // reason: it is the refresh path's loss trigger, not a
+                // soundness operand.
+                let _ = declaration;
                 (
                     ServeSet::reported_prefix(frozen_count, as_of_height),
                     Vec::new(),
@@ -479,11 +551,22 @@ impl PinnedServeSet {
             ServeObligation::CompleteTreePrefix { frozen_count } => {
                 // The prefix arm's pin is the posture flag, so that is
                 // what gets re-read from the store on every poll —
-                // measured, not inferred, window-free. Every store surface
-                // makes the flag one-way, so a `false` here is corruption
-                // or tampering. It is not `PinsDropped`: there are no pin
+                // measured, not inferred. Every store surface makes the
+                // flag one-way, so a `false` here is corruption or
+                // tampering. It is not `PinsDropped`: there are no pin
                 // rows, the recovery story is different, and the operator
                 // text must not send anyone to debug a pin table.
+                //
+                // This poll covers a loss observed BETWEEN refreshes. It
+                // is deliberately not the only detector: the production
+                // loop re-declares the posture on every refresh and only
+                // then reads staleness, so a loss inside that gap is
+                // repaired before this line runs — that gap is witnessed
+                // by the declaring call instead (`NewlyDeclared` at a
+                // refresh → the corpus integrity scan in `from_report`,
+                // holes surfacing on `already_pruned`). The pair is what
+                // makes the loss story window-free; this read alone is
+                // not.
                 if !self.reader.prune_disabled()? {
                     return Ok(Staleness::PostureLost { frozen_count });
                 }

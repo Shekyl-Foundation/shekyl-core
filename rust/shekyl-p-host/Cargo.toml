@@ -22,6 +22,11 @@ shekyl-tor = { path = "../shekyl-tor" }
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
+# The posture-loss KATs tamper the one-way prune-disabled flag through a
+# feature-gated fixture; the feature exists only on this dev edge, so
+# production builds of this crate (and everything above it) compile a
+# curve-tree with no clear path at all.
+shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-tamper"] }
 tokio = { version = "1", default-features = false, features = [
     "macros",
     "rt-multi-thread",

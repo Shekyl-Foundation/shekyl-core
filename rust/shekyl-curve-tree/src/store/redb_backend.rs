@@ -122,6 +122,24 @@ pub enum SegmentPin {
     AlreadyPruned,
 }
 
+/// What [`LeafStore::set_prune_disabled`] found when it declared — the
+/// posture-loss detector for the serving refresh that re-declares on every
+/// tick.
+///
+/// A two-variant enum rather than a `bool` so a call site cannot invert the
+/// polarity silently: `NewlyDeclared` at a *first* declaration is the normal
+/// activation, while `NewlyDeclared` at a *re*-declaration means the one-way
+/// flag was lost in the gap (corruption or tampering — no API clears it)
+/// and the gap must be treated as unretained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostureDeclaration {
+    /// The posture was already declared; the call changed nothing.
+    AlreadyDeclared,
+    /// The call wrote the declaration — either the first activation, or
+    /// the repair of a lost flag.
+    NewlyDeclared,
+}
+
 /// Persistent curve-tree leaf store (redb).
 pub struct LeafStore {
     db: Database,
@@ -273,6 +291,21 @@ impl ServingReader {
     /// Exactly [`LeafStore::next_freeze_seg`]'s.
     pub fn next_freeze_seg(&self) -> Result<u64, StoreError> {
         self.store.next_freeze_seg()
+    }
+
+    /// The corpus integrity scan — see
+    /// [`LeafStore::pruned_frozen_segments`], of which this is a pure
+    /// read-only forward. The CompleteTree-prefix witness runs it only on
+    /// the posture-loss path ([`PostureDeclaration::NewlyDeclared`] at a
+    /// refresh, or prior holes carried on the witness): whether bytes
+    /// were pruned during an unretained gap is a fact about the store,
+    /// answered by the store.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`LeafStore::pruned_frozen_segments`]'s.
+    pub fn pruned_frozen_segments(&self) -> Result<Vec<u64>, StoreError> {
+        self.store.pruned_frozen_segments()
     }
 
     /// Whether `other` is a handle on the **same open database**.
@@ -745,7 +778,18 @@ impl LeafStore {
     /// criterion (rule 21): a clear path, if ever wanted, arrives only
     /// with its own design round, and must bind the clear to evidence
     /// that no live bond owes the corpus — it is not a flag flip.
-    pub fn set_prune_disabled(&self) -> Result<(), StoreError> {
+    ///
+    /// **The return value is the loss detector.** The serving refresh
+    /// re-declares on every tick, so this call is the one place a cleared
+    /// flag is guaranteed to be *seen* — the repair site is the
+    /// observation site. [`PostureDeclaration::NewlyDeclared`] from a
+    /// store that was declared before means the flag was lost in the gap
+    /// (corruption or tampering; no API clears it), and the caller must
+    /// treat the gap as unretained — bytes may have been pruned in it.
+    /// The answer is decided **inside the write transaction**, so a
+    /// concurrent declaration cannot make two callers both read
+    /// `NewlyDeclared`.
+    pub fn set_prune_disabled(&self) -> Result<PostureDeclaration, StoreError> {
         // Steady-state short-circuit: the serving refresh re-declares on
         // every tick, and the only transition is false→true, so an
         // already-declared store answers with an MVCC read — no write
@@ -756,24 +800,69 @@ impl LeafStore {
         // is benign — a concurrent declaration can only have written the
         // same value, and redb's single writer serializes the commits.
         if self.prune_disabled()? {
-            return Ok(());
+            return Ok(PostureDeclaration::AlreadyDeclared);
         }
         let txn = self.db.begin_write()?;
-        {
+        let declaration = {
             let mut meta = txn.open_table(META_TABLE)?;
+            // Re-checked inside the txn: the MVCC short-circuit above can
+            // race a concurrent declaration, and the loss detector must
+            // not read `NewlyDeclared` twice for one loss.
+            let declaration = if prune_disabled_in(&meta)? {
+                PostureDeclaration::AlreadyDeclared
+            } else {
+                PostureDeclaration::NewlyDeclared
+            };
             meta.insert(META_PRUNE_DISABLED, &1u64)?;
-        }
+            declaration
+        };
         txn.commit()?;
-        Ok(())
+        Ok(declaration)
+    }
+
+    /// Every frozen segment whose leaf bytes are gone — the corpus
+    /// integrity scan behind the posture-loss repair path, ascending.
+    ///
+    /// The prune discriminant is the same one [`Self::pin_ids_within`]
+    /// uses (a segment's first leaf position: prune removes whole
+    /// segments in one transaction). O(frozen count) reads, which is why
+    /// the caller runs it **only on the loss path**
+    /// ([`PostureDeclaration::NewlyDeclared`] at a serve-set refresh, or
+    /// a witness carrying prior holes) — running it per refresh would be
+    /// the O(D)-per-tick cost the prefix design exists to avoid.
+    ///
+    /// # Errors
+    ///
+    /// Store failure.
+    pub fn pruned_frozen_segments(&self) -> Result<Vec<u64>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
+        let leaves = txn.open_table(LEAVES_TABLE)?;
+        let e = leaves_per_segment() as u64;
+        let mut pruned = Vec::new();
+        for row in frozen.iter()? {
+            let (id, _) = row?;
+            let id = id.value();
+            let start = u64::from(id.0) * e;
+            if leaves.get(TreePosition(start))?.is_none() {
+                pruned.push(u64::from(id.0));
+            }
+        }
+        Ok(pruned)
     }
 
     /// Overwrite the prune-disabled cell with 0 so a prefix witness can
-    /// observe posture loss. **Not a clear path.** The production setter
-    /// is one-way (rule 21); this exists so `shekyl-p-host` can KAT
-    /// `Staleness::PostureLost` — tampering is the only way the one-way
-    /// flag reads false after a successful acquire, which is exactly the
-    /// state that reading exists to report.
-    #[doc(hidden)]
+    /// observe posture loss. **Not a clear path, and not compiled into
+    /// production.** The production setter is one-way (rule 21); this
+    /// exists so `shekyl-p-host` can KAT `Staleness::PostureLost` and the
+    /// posture-loss repair path — tampering is the only way the one-way
+    /// flag reads false, which is exactly the state those readings exist
+    /// to report. Behind the default-off `test-tamper` feature, enabled
+    /// only on `shekyl-p-host`'s dev-dependency edge: a `#[doc(hidden)]`
+    /// method would still ship callable, and the ruling is that a clear
+    /// path must not exist in shipped code, not that it must be
+    /// undocumented.
+    #[cfg(feature = "test-tamper")]
     pub fn test_tamper_clear_prune_disabled(&self) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         {
@@ -3238,16 +3327,58 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             assert!(!store.prune_disabled().unwrap());
-            store.set_prune_disabled().unwrap();
+            // The declaring call reports what it found — the loss detector
+            // for the refresh that re-declares every tick.
+            assert_eq!(
+                store.set_prune_disabled().unwrap(),
+                PostureDeclaration::NewlyDeclared,
+                "the first declaration wrote the flag"
+            );
             assert!(store.prune_disabled().unwrap());
             // Idempotent redeclare — the pinner sets it on every refresh.
-            store.set_prune_disabled().unwrap();
+            assert_eq!(
+                store.set_prune_disabled().unwrap(),
+                PostureDeclaration::AlreadyDeclared,
+                "a re-declaration over an intact flag changes nothing and \
+                 says so"
+            );
             assert!(store.prune_disabled().unwrap());
         }
         let reopened = LeafStore::open(&path).unwrap();
         assert!(
             reopened.prune_disabled().unwrap(),
             "the posture is a durable declaration, not session state"
+        );
+        assert_eq!(
+            reopened.set_prune_disabled().unwrap(),
+            PostureDeclaration::AlreadyDeclared,
+            "the declaration survives reopen, so re-declaring reports it"
+        );
+    }
+
+    /// The corpus integrity scan: clean on an intact store, names exactly
+    /// the frozen segments whose bytes are gone, and ignores the unfrozen
+    /// tail (nothing owed there yet).
+    #[test]
+    fn pruned_frozen_segments_names_the_holes_and_only_the_holes() {
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+        // Segment 0 frozen; one tail row into segment 1 (unfrozen).
+        let e = leaves_per_segment() as u64;
+        let mut entries = distinct_segment_entries();
+        entries.push(sample_entry(e, 5_000));
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+
+        assert!(
+            store.pruned_frozen_segments().unwrap().is_empty(),
+            "an intact corpus scans clean"
+        );
+
+        store.prune_frozen(&[]).unwrap();
+        assert_eq!(
+            store.pruned_frozen_segments().unwrap(),
+            vec![0],
+            "the pruned frozen segment is named; the unfrozen tail is not \
+             a hole — nothing is owed there yet"
         );
     }
 

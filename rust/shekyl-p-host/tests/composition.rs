@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use shekyl_curve_tree::{
-    leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity, SegmentPin,
-    ServingReader, TargetKind, TreePosition,
+    leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity,
+    PostureDeclaration, SegmentPin, ServingReader, TargetKind, TreePosition,
 };
 use shekyl_p_host::{
     HostError, PersonaServing, PersonaServingHost, PinError, PinReport, PinnedServeSet,
@@ -1153,20 +1153,51 @@ async fn host_staleness_uses_the_live_witness() {
 // The CompleteTree prefix arm (COMPLETETREE_ACTIVATION.md D-1/D-5, slice 2)
 // ---------------------------------------------------------------------------
 
-/// A pinner reporting the CompleteTree prefix over a real store — the
+/// A pinner following the full prefix contract over a real store — the
 /// slice-3 production shape minus the actor hop and the claim-source fetch:
-/// it reads the store's own burial-gated freeze cursor and reports it, so
-/// the growth KAT below exercises the real "shards freeze → the obligation
-/// grows" path rather than a number a test invented.
+/// it declares the posture (idempotently), reports the store's answer, and
+/// reads the store's own burial-gated freeze cursor, so the growth and
+/// loss-window KATs below exercise the real paths rather than numbers a
+/// test invented.
 struct PrefixPinner {
     store: Arc<LeafStore>,
 }
 
 impl ServeSetPinner for PrefixPinner {
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
+        // Declare-before-report: the contract's ordering, and the store's
+        // answer is the loss detector the report must carry.
+        let declaration = self
+            .store
+            .set_prune_disabled()
+            .map_err(|e| format!("{e:?}"))?;
         let frozen_count = self.store.next_freeze_seg().map_err(|e| format!("{e:?}"))?;
         Ok(PinReport {
-            set: ReportedSet::CompleteTreePrefix { frozen_count },
+            set: ReportedSet::CompleteTreePrefix {
+                frozen_count,
+                declaration,
+            },
+            as_of_height: BlockHeight(10_000),
+            reader: ServingReader::new(Arc::clone(&self.store)),
+        })
+    }
+}
+
+/// A defective implementor: reports the prefix without ever declaring the
+/// posture (and lies `AlreadyDeclared`). The witness must catch it against
+/// the store, not the report — the reader is the authority.
+struct UndeclaredPrefixPinner {
+    store: Arc<LeafStore>,
+}
+
+impl ServeSetPinner for UndeclaredPrefixPinner {
+    async fn pin_serve_set(&self) -> Result<PinReport, String> {
+        let frozen_count = self.store.next_freeze_seg().map_err(|e| format!("{e:?}"))?;
+        Ok(PinReport {
+            set: ReportedSet::CompleteTreePrefix {
+                frozen_count,
+                declaration: PostureDeclaration::AlreadyDeclared,
+            },
             as_of_height: BlockHeight(10_000),
             reader: ServingReader::new(Arc::clone(&self.store)),
         })
@@ -1174,31 +1205,37 @@ impl ServeSetPinner for PrefixPinner {
 }
 
 /// The prefix arm's precondition, both directions: a report over an
-/// undeclared store refuses with the typed error naming the remedy, and the
-/// same report acquires once the posture is declared. The membership
-/// boundary is asserted on the resulting witness (`k-1` in, `k` out), plus
-/// the accessors that keep the two-empties hazard closed: `shard_ids()` is
-/// `None` for a whole-corpus obligation, never an empty list.
+/// undeclared store refuses with the typed error naming the remedy — even
+/// when the report *claims* the posture was declared, because the reader is
+/// the authority — and the contract-following pinner acquires. The
+/// membership boundary is asserted on the resulting witness (`k-1` in, `k`
+/// out), plus the accessors that keep the two-empties hazard closed:
+/// `shard_ids()` is `None` for a whole-corpus obligation, never an empty
+/// list.
 #[tokio::test]
 async fn prefix_acquire_requires_the_declared_posture_and_bounds_membership() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("append and freeze segment 0");
-    let pinner = PrefixPinner {
-        store: Arc::clone(&store),
-    };
 
-    let err = PinnedServeSet::acquire(&pinner)
-        .await
-        .expect_err("a corpus claim over an undeclared store must refuse");
+    let err = PinnedServeSet::acquire(&UndeclaredPrefixPinner {
+        store: Arc::clone(&store),
+    })
+    .await
+    .expect_err("a corpus claim over an undeclared store must refuse");
     assert!(matches!(err, PinError::PostureNotDeclared), "got {err:?}");
     assert!(
         err.to_string().contains("set_prune_disabled"),
         "the refusal must name the remedy: {err}"
     );
 
-    store.set_prune_disabled().expect("declare the posture");
+    // The contract-following pinner declares as part of the report — a
+    // first activation, whose NewlyDeclared walks the integrity scan over
+    // an intact store and proceeds.
+    let pinner = PrefixPinner {
+        store: Arc::clone(&store),
+    };
     let pinned = PinnedServeSet::acquire(&pinner)
         .await
         .expect("the declared posture is the prefix arm's pin");
@@ -1237,7 +1274,6 @@ async fn prefix_refresh_admits_a_segment_that_froze_since_the_last_one() {
     store
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("append and freeze segment 0");
-    store.set_prune_disabled().expect("declare the posture");
     let pinner = PrefixPinner {
         store: Arc::clone(&store),
     };
@@ -1273,7 +1309,6 @@ async fn prefix_refresh_admits_a_segment_that_froze_since_the_last_one() {
 #[tokio::test]
 async fn prefix_over_an_unfrozen_store_is_empty_and_still_acquires() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    store.set_prune_disabled().expect("declare the posture");
     let pinner = PrefixPinner {
         store: Arc::clone(&store),
     };
@@ -1314,6 +1349,7 @@ async fn prefix_overstating_the_cursor_refuses_and_understating_it_does_not() {
             Ok(PinReport {
                 set: ReportedSet::CompleteTreePrefix {
                     frozen_count: self.frozen_count,
+                    declaration: PostureDeclaration::AlreadyDeclared,
                 },
                 as_of_height: BlockHeight(10_000),
                 reader: ServingReader::new(Arc::clone(&self.store)),
@@ -1358,7 +1394,6 @@ async fn prefix_posture_loss_is_posture_lost_not_pins_dropped() {
     store
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("append and freeze segment 0");
-    store.set_prune_disabled().expect("declare the posture");
     let pinner = PrefixPinner {
         store: Arc::clone(&store),
     };
@@ -1381,4 +1416,100 @@ async fn prefix_posture_loss_is_posture_lost_not_pins_dropped() {
         .staleness(StalenessBound::blocks(64))
         .expect("read")
         .is_stale());
+}
+
+/// The gap the refresh itself repairs, benign case: the flag is lost
+/// between ticks, the next refresh re-declares it (`NewlyDeclared`) and
+/// the loss-path integrity scan finds the corpus intact — the witness is
+/// replaced, records nothing pruned, and reads healthy. Without the
+/// declaration-triggered scan this case is indistinguishable from the
+/// harmful one below, which is exactly the masking the production
+/// refresh-then-poll ordering would otherwise cause.
+#[tokio::test]
+async fn prefix_refresh_repairs_a_lost_posture_and_verifies_the_corpus() {
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("append and freeze segment 0");
+    let pinner = PrefixPinner {
+        store: Arc::clone(&store),
+    };
+    let pinned = PinnedServeSet::acquire(&pinner).await.expect("acquire");
+
+    store
+        .test_tamper_clear_prune_disabled()
+        .expect("tamper the one-way flag");
+    // Nothing pruned in the gap. The refresh re-declares, scans, and the
+    // replacement witness is clean and current.
+    let refreshed = pinned.refreshed(&pinner).await.expect("refresh repairs");
+    assert!(refreshed.already_pruned().is_empty());
+    assert!(matches!(
+        refreshed
+            .staleness(StalenessBound::blocks(64))
+            .expect("read"),
+        Staleness::Current { .. }
+    ));
+}
+
+/// The gap the refresh itself repairs, harmful case — the finding this
+/// closes: flag lost, `prune_frozen` runs inside the unretained gap, the
+/// next refresh re-declares. The production loop reads staleness only
+/// after that repair, so without the declaration-triggered scan the
+/// replacement witness would report `Current` over permanent corpus loss.
+/// Instead: the loss surfaces on `already_pruned`, it is NOT forgotten by
+/// the following healthy refresh (the carry-forward re-scan), and a fresh
+/// `acquire` over the damaged store refuses outright — the same
+/// rebuild-by-replay remedy as the list arm's pruned members.
+#[tokio::test]
+async fn prefix_loss_window_prune_is_surfaced_persisted_and_refuses_a_restart() {
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .expect("append and freeze segment 0");
+    let pinner = PrefixPinner {
+        store: Arc::clone(&store),
+    };
+    let pinned = PinnedServeSet::acquire(&pinner).await.expect("acquire");
+
+    // The unretained gap: flag gone, prune permitted, segment 0's bytes
+    // discarded.
+    store
+        .test_tamper_clear_prune_disabled()
+        .expect("tamper the one-way flag");
+    store
+        .prune_frozen(&[])
+        .expect("prune runs freely in the unretained gap");
+
+    // The refresh repairs the flag and the scan surfaces what the gap cost.
+    let refreshed = pinned.refreshed(&pinner).await.expect(
+        "the refresh records terminal loss rather than wedging — the \
+         list-arm asymmetry",
+    );
+    assert_eq!(
+        refreshed.already_pruned(),
+        &[0],
+        "the pruned segment is on the witness, not masked by the repair"
+    );
+
+    // A following healthy refresh (AlreadyDeclared, no new loss) must not
+    // forget: pruned bytes do not come back.
+    let again = refreshed.refreshed(&pinner).await.expect("refresh again");
+    assert_eq!(
+        again.already_pruned(),
+        &[0],
+        "permanent holes persist across healthy refreshes — the \
+         carry-forward re-scan"
+    );
+
+    // And a restart over the damaged store refuses to advertise at all:
+    // acquire scans unconditionally, so the declaration history a prior
+    // session repaired cannot hide the holes.
+    let err = PinnedServeSet::acquire(&pinner)
+        .await
+        .expect_err("a start over a holed corpus must refuse");
+    assert_eq!(
+        err,
+        PinError::MembersAlreadyPruned { shard_ids: vec![0] },
+        "got {err:?}"
+    );
 }

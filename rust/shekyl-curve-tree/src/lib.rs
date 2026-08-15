@@ -63,7 +63,7 @@ pub use segment::{
 };
 pub use store::{
     mixed_composition_root, recompute_segment_r_k, FrozenSegmentBody, FrozenSegmentRecord,
-    LeafStore, MixedRootError, SegmentPin, ServingReader, StoreError,
+    LeafStore, MixedRootError, PostureDeclaration, SegmentPin, ServingReader, StoreError,
 };
 pub use types::{
     AssembleInput, AssembledPath, BlockHeight, ChunkLeaf, Gindex, LeafEntry, OutputIdentity,
