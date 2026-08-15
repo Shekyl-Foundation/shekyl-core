@@ -119,18 +119,33 @@ def preflight_key_hygiene(subkey_fpr: str, allow_ondisk_subkey: bool) -> None:
     lines = proc.stdout.splitlines()
     if is_foundation:
         # --with-colons: field 1 is the record type. `sec` records carry
-        # field 15 (token S/N) = `+` for on-disk material, `#` for a stub.
+        # field 15 (token S/N): `#` = offline stub (the ONLY state
+        # SIGNING.md permits for the primary), `+` = private material on
+        # this host, a serial = primary moved to a card — which also
+        # violates the offline-primary posture. Fail closed on anything
+        # that is not exactly the stub, including never having seen the
+        # primary's `sec` record at all.
+        primary_state = None
         for ln in lines:
             f = ln.split(":")
             if f[0] == "sec" and FOUNDATION_PRIMARY_ID in ln:
-                serial = f[14] if len(f) > 14 else ""
-                if serial == "+":
-                    die(
-                        "the Foundation PRIMARY private key is present on "
-                        "this host (`sec` without the stub marker). "
-                        "SIGNING.md: offline-primary policy violated — stop "
-                        "and treat as a key-hygiene incident."
-                    )
+                primary_state = f[14] if len(f) > 14 else ""
+        if primary_state != "#":
+            if primary_state == "+":
+                die(
+                    "the Foundation PRIMARY private key is present on "
+                    "this host (`sec` without the stub marker). "
+                    "SIGNING.md: offline-primary policy violated — stop "
+                    "and treat as a key-hygiene incident."
+                )
+            die(
+                "the Foundation primary is not an offline stub (`sec#`): "
+                f"observed state {primary_state!r}. SIGNING.md permits "
+                "exactly the stub — a card serial means the primary was "
+                "moved onto a token (still not the offline posture), and "
+                "an absent/unknown record is refused rather than assumed "
+                "safe."
+            )
         subkey_ok = False
         for ln in lines:
             f = ln.split(":")
@@ -299,8 +314,26 @@ def verify(manifest: Path, signature: Path, assets_dir: Path,
         have = sha256_file(p)
         if have != want:
             die(f"HASH MISMATCH for {name}: manifest {want}, file {have}")
+    # Completeness, not just membership: an asset present in the
+    # directory but absent from the manifest is UNAUTHENTICATED — on the
+    # `--download --verify-only` path that is exactly a binary someone
+    # attached to the release after the ceremony, and "verified." must
+    # never cover it. (The sign path builds the manifest from this same
+    # directory, so extras structurally cannot exist there.)
+    unlisted = sorted(
+        p.name for p in assets_dir.iterdir()
+        if p.is_file()
+        and p.name not in (MANIFEST, SIGNATURE)
+        and p.name not in entries
+    )
+    if unlisted:
+        die(
+            f"{len(unlisted)} asset(s) present but NOT in the signed "
+            f"manifest (e.g. {unlisted[0]!r}) — unauthenticated files; "
+            "if published, someone attached them after the ceremony."
+        )
     print(f"  verify: signature OK under {expected_fpr}, "
-          f"{len(entries)} hash(es) match")
+          f"{len(entries)} hash(es) match, no unlisted assets")
 
 
 # ── Phase 6: upload ───────────────────────────────────────────────────────
