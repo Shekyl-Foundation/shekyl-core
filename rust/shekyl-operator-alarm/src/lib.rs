@@ -83,6 +83,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod serve_set;
 pub mod tor_posture;
 
 use std::collections::BTreeMap;
@@ -105,6 +106,12 @@ pub enum AlarmCondition {
     /// Whether the persona's vanguard set — the guard topology behind every
     /// circuit it builds — is intact and will survive a restart.
     VanguardIntegrity,
+    /// Whether the shards this persona is bonded to serve are still pinned in
+    /// the wallet's store, and whether the set is still being refreshed against
+    /// the chain. A drifting or unrefreshed serve-set ends in the wallet's own
+    /// node pruning bonded bytes — `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6
+    /// item 4's slash, which is silent until it happens.
+    ServeSetIntegrity,
 }
 
 /// Whether a condition's tripwire can currently fire.
@@ -145,6 +152,17 @@ pub enum DisarmedReason {
     /// defines as the clean-shutdown signal. Nothing is being watched, and
     /// nothing will be until a supervisor is spawned again.
     TransportStopped,
+    /// The wallet is still catching up to the chain, so the serve-set staleness
+    /// tripwire is not armed.
+    ///
+    /// The tripwire measures ingest since the last successful refresh, and
+    /// during catch-up that advances at whatever rate the wallet can ingest —
+    /// far faster than the steady-state rate the bound is sized for, so an
+    /// armed check would fire on every healthy catch-up. Arming only in steady
+    /// state is what makes the bound derivable at all. **Rendered as "not
+    /// checking yet", never as healthy** — that distinction is the entire
+    /// reason this channel is a snapshot.
+    CatchingUp,
 }
 
 /// How a raised alarm's **observable** behaves once the condition is raised.
@@ -229,6 +247,64 @@ pub enum OperatorAlarm {
         /// Entries the consensus reply announced.
         announced: usize,
     },
+    /// The serve-set has not been refreshed within its bound: the wallet has
+    /// ingested `lag` blocks since the pins were last established. The refresh
+    /// loop has stopped or is wedged — holdings that move now go unpinned, and
+    /// unpinned bonded bytes are prunable.
+    ServeSetStale {
+        /// Blocks ingested since the last successful re-pin.
+        lag: u64,
+    },
+    /// Consecutive refresh attempts are failing. Distinct from
+    /// [`Self::ServeSetStale`]: that one is "nothing is trying", this one is
+    /// "something is trying and not succeeding" — the curve-tree actor
+    /// fail-stopping freezes ingest and pinning together, a common mode no
+    /// store-derived reading can see.
+    ServeSetRefreshFailing {
+        /// Consecutive failed refresh attempts.
+        consecutive: u32,
+    },
+    /// Pin rows for bonded members are gone from the store — a tree rollback
+    /// deleted them (`truncate_from_tree_position`). **Recoverable:** the next
+    /// successful refresh re-pins them, and the leaf bytes are still present.
+    /// It is an alarm because the store's own reading self-clears the moment
+    /// refresh runs, so a slow consumer could otherwise miss the window in
+    /// which the bytes were prunable.
+    ServeSetPinsDropped {
+        /// Members with no pin row.
+        dropped: u32,
+        /// Members the serve-set claims.
+        claimed: u32,
+    },
+    /// The wallet's ingest tip moved **below** the height the pins were minted
+    /// at — a chain rollback (`rollback_to_fork`). Recoverable: re-ingest past
+    /// the fork and the next refresh re-pins. It is reported rather than folded
+    /// into [`Self::ServeSetStale`] because the two want different operator
+    /// responses — a rollback resolves itself, a stale set means nothing is
+    /// refreshing — and because the rollback is what *deletes* pin rows, so
+    /// this is the precursor to [`Self::ServeSetPinsDropped`] rather than
+    /// another way of saying it.
+    ServeSetRolledBack {
+        /// The ingest tip when the pins were established.
+        minted_at_tip: u64,
+        /// The ingest tip now.
+        tip: u64,
+    },
+    /// Bonded leaf bytes are **gone** — frozen and already pruned, so no pin
+    /// can bring them back. The store must be rebuilt by chain replay before
+    /// this persona can serve those shards.
+    ///
+    /// The one irreversible condition on this board, and the reason it can be
+    /// [`AlarmLifetime::LatchedRederived`] rather than needing durable state:
+    /// it re-derives at every start, *more loudly than an alarm*.
+    /// `PinnedServeSet::acquire` refuses outright
+    /// (`PinError::MembersAlreadyPruned`) so the host does not start, while
+    /// `refreshed` records it so one dead member cannot wedge every later
+    /// refresh for the members that are still fine.
+    ServeSetBytesPruned {
+        /// Members whose leaf bytes were already gone at the last pin.
+        members: u32,
+    },
 }
 
 impl OperatorAlarm {
@@ -244,15 +320,26 @@ impl OperatorAlarm {
     #[must_use]
     pub fn lifetime(&self) -> AlarmLifetime {
         match self {
-            // The one whose damage outlives its evidence: the set has already
-            // been drawn fresh, and the next successful write makes the warning
-            // disappear while that rotation stands.
-            Self::VanguardStateRedrawn => AlarmLifetime::LatchedRederived,
+            // The two whose damage outlives their evidence. The vanguard set
+            // has already been drawn fresh, and the next successful write makes
+            // the warning disappear while that rotation stands; pruned leaf
+            // bytes are gone until a chain replay, and a re-pin reports success
+            // for every member it *could* pin. Both re-derive at the next start
+            // — the vanguard load fails again, and `acquire` refuses outright —
+            // so an in-memory latch is a convenience, not the record.
+            Self::VanguardStateRedrawn | Self::ServeSetBytesPruned { .. } => {
+                AlarmLifetime::LatchedRederived
+            }
             // The rest genuinely end when their condition does — sustained
-            // recovery, a successful write, a complete consensus view.
+            // recovery, a successful write, a complete consensus view, a
+            // refresh that runs and re-pins.
             Self::TransportDegraded { .. }
             | Self::VanguardStateUnpersisted
-            | Self::VanguardRepairSkipped { .. } => AlarmLifetime::Episode,
+            | Self::VanguardRepairSkipped { .. }
+            | Self::ServeSetStale { .. }
+            | Self::ServeSetRefreshFailing { .. }
+            | Self::ServeSetPinsDropped { .. }
+            | Self::ServeSetRolledBack { .. } => AlarmLifetime::Episode,
         }
     }
 
@@ -264,6 +351,11 @@ impl OperatorAlarm {
             Self::VanguardStateRedrawn
             | Self::VanguardStateUnpersisted
             | Self::VanguardRepairSkipped { .. } => AlarmCondition::VanguardIntegrity,
+            Self::ServeSetStale { .. }
+            | Self::ServeSetRefreshFailing { .. }
+            | Self::ServeSetPinsDropped { .. }
+            | Self::ServeSetRolledBack { .. }
+            | Self::ServeSetBytesPruned { .. } => AlarmCondition::ServeSetIntegrity,
         }
     }
 }
@@ -662,267 +754,9 @@ fn same_fault(a: OperatorAlarm, b: OperatorAlarm) -> bool {
     std::mem::discriminant(&a) == std::mem::discriminant(&b)
 }
 
+// Test suite extracted so NEW_FILE_CAP / the 1k review bar measure the
+// vocabulary and board, not their tests. Same pattern as the engine
+// decomposition ratchet's EXCLUDE'd `#[path]` siblings.
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn redrawn() -> OperatorAlarm {
-        OperatorAlarm::VanguardStateRedrawn
-    }
-
-    fn degraded(cause: DegradedCause) -> OperatorAlarm {
-        OperatorAlarm::TransportDegraded { cause: Some(cause) }
-    }
-
-    fn live_for(alarms: &OperatorAlarms, condition: AlarmCondition) -> Option<RaisedAlarm> {
-        alarms
-            .board()
-            .condition(condition)
-            .and_then(ConditionState::live)
-    }
-
-    fn queued(alarms: &OperatorAlarms) -> Vec<OperatorAlarm> {
-        alarms
-            .board()
-            .unacknowledged()
-            .iter()
-            .map(|r| r.alarm())
-            .collect()
-    }
-
-    /// Pins every variant's classification. A reclassification is then a diff
-    /// in this test, which is where the reopening criterion gets read.
-    #[test]
-    fn lifetime_classification_is_pinned_per_variant() {
-        assert_eq!(
-            OperatorAlarm::TransportDegraded { cause: None }.lifetime(),
-            AlarmLifetime::Episode,
-        );
-        assert_eq!(
-            OperatorAlarm::VanguardStateRedrawn.lifetime(),
-            AlarmLifetime::LatchedRederived,
-            "the fresh guard draw has already happened and the warning clears without it",
-        );
-        assert_eq!(
-            OperatorAlarm::VanguardStateUnpersisted.lifetime(),
-            AlarmLifetime::Episode,
-            "nothing has rotated: a successful write genuinely ends this one",
-        );
-        assert_eq!(
-            OperatorAlarm::VanguardRepairSkipped {
-                decoded: 1,
-                announced: 2
-            }
-            .lifetime(),
-            AlarmLifetime::Episode,
-        );
-    }
-
-    #[test]
-    fn an_empty_board_is_not_an_all_clear() {
-        let alarms = OperatorAlarms::new();
-        assert!(alarms
-            .board()
-            .condition(AlarmCondition::TransportLiveness)
-            .is_none());
-        assert_eq!(alarms.board().live().count(), 0);
-        assert!(alarms.board().unacknowledged().is_empty());
-    }
-
-    #[test]
-    fn re_reporting_a_live_condition_keeps_one_incident() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(degraded(DegradedCause::Exited));
-        let first = live_for(&alarms, AlarmCondition::TransportLiveness).expect("live");
-
-        // Same fault, re-reported with a fresher cause: one incident, updated.
-        alarms.raise(degraded(DegradedCause::BootstrapTimeout));
-        let again = live_for(&alarms, AlarmCondition::TransportLiveness).expect("live");
-        assert_eq!(again.incident(), first.incident());
-        assert_eq!(
-            again.alarm(),
-            degraded(DegradedCause::BootstrapTimeout),
-            "the payload must follow the newest failure",
-        );
-    }
-
-    #[test]
-    fn a_different_fault_on_the_same_condition_opens_a_new_incident() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(OperatorAlarm::VanguardStateUnpersisted);
-        let first = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
-
-        alarms.raise(redrawn());
-        let second = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
-        assert_ne!(second.incident(), first.incident());
-        assert_eq!(second.alarm(), redrawn());
-    }
-
-    #[test]
-    fn an_episode_leaves_the_board_when_its_condition_clears() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(degraded(DegradedCause::Exited));
-        alarms.clear(AlarmCondition::TransportLiveness);
-        assert!(live_for(&alarms, AlarmCondition::TransportLiveness).is_none());
-        assert!(
-            alarms.board().unacknowledged().is_empty(),
-            "an episode that ended is not something to acknowledge",
-        );
-        assert!(alarms.board().is_quiet());
-    }
-
-    #[test]
-    fn a_latch_moves_to_the_queue_when_its_condition_clears() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(redrawn());
-        let open = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
-
-        // The producer reports it fine — which for this fault means only that
-        // the *evidence* is gone. The re-draw stands.
-        alarms.clear(AlarmCondition::VanguardIntegrity);
-        assert!(live_for(&alarms, AlarmCondition::VanguardIntegrity).is_none());
-        let held = *alarms.board().unacknowledged().first().expect("queued");
-        assert_eq!(held.alarm(), redrawn());
-        assert_eq!(held.incident(), open.incident());
-        assert!(!alarms.board().is_quiet());
-    }
-
-    /// The defect this shape exists to make impossible: three vanguard faults
-    /// share one condition and only one latches, so a per-condition slot would
-    /// have to choose between the unacknowledged re-draw and the unrelated fault
-    /// that happened after it.
-    #[test]
-    fn a_later_unrelated_fault_cannot_evict_a_queued_latch() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(redrawn());
-        alarms.clear(AlarmCondition::VanguardIntegrity);
-
-        alarms.raise(OperatorAlarm::VanguardStateUnpersisted);
-        assert_eq!(
-            queued(&alarms),
-            vec![redrawn()],
-            "a later fault on the same condition must not discard the re-draw",
-        );
-        assert_eq!(
-            live_for(&alarms, AlarmCondition::VanguardIntegrity).map(RaisedAlarm::alarm),
-            Some(OperatorAlarm::VanguardStateUnpersisted),
-        );
-    }
-
-    #[test]
-    fn a_queued_latch_outlives_its_condition_being_disarmed() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(redrawn());
-        alarms.clear(AlarmCondition::VanguardIntegrity);
-        alarms.disarm(
-            AlarmCondition::VanguardIntegrity,
-            DisarmedReason::TransportStopped,
-        );
-        assert_eq!(
-            alarms
-                .board()
-                .condition(AlarmCondition::VanguardIntegrity)
-                .map(ConditionState::arming),
-            Some(Arming::Disarmed(DisarmedReason::TransportStopped)),
-        );
-        assert_eq!(
-            queued(&alarms),
-            vec![redrawn()],
-            "losing the ability to re-observe a fault is not evidence it did not happen",
-        );
-    }
-
-    #[test]
-    fn a_live_fault_is_not_in_the_queue_to_be_acknowledged() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(redrawn());
-        let open = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
-        assert!(
-            alarms.board().unacknowledged().is_empty(),
-            "acknowledgment is not a mute button, and the shape is what says so",
-        );
-        assert!(!alarms.acknowledge(open.incident()));
-        assert!(live_for(&alarms, AlarmCondition::VanguardIntegrity).is_some());
-    }
-
-    #[test]
-    fn acknowledging_a_queued_latch_clears_it() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(redrawn());
-        alarms.clear(AlarmCondition::VanguardIntegrity);
-        let held = *alarms.board().unacknowledged().first().expect("queued");
-        assert!(alarms.acknowledge(held.incident()));
-        assert!(alarms.board().unacknowledged().is_empty());
-        assert!(alarms.board().is_quiet());
-    }
-
-    #[test]
-    fn acknowledging_a_stale_incident_cannot_dismiss_a_newer_one() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(redrawn());
-        alarms.clear(AlarmCondition::VanguardIntegrity);
-        let first = *alarms.board().unacknowledged().first().expect("queued");
-        assert!(alarms.acknowledge(first.incident()));
-
-        // A genuinely new occurrence, after the operator read the old id. The
-        // reclaim path is not taken here because nothing is queued.
-        alarms.raise(redrawn());
-        alarms.clear(AlarmCondition::VanguardIntegrity);
-        let second = *alarms.board().unacknowledged().first().expect("queued");
-        assert_ne!(second.incident(), first.incident());
-        assert!(
-            !alarms.acknowledge(first.incident()),
-            "an acknowledgment names the incident the operator read",
-        );
-        assert_eq!(queued(&alarms), vec![redrawn()]);
-    }
-
-    #[test]
-    fn a_recurrence_reclaims_its_queued_incident_rather_than_duplicating_it() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(redrawn());
-        let opened = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
-        alarms.clear(AlarmCondition::VanguardIntegrity);
-
-        // `LatchedRederived` means the producer re-detects the same unfixed
-        // problem on every start. That is one fault, not two.
-        alarms.raise(redrawn());
-        assert!(
-            alarms.board().unacknowledged().is_empty(),
-            "a recurrence must not sit in the queue beside its own live copy",
-        );
-        let live = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
-        assert_eq!(live.incident(), opened.incident());
-    }
-
-    #[test]
-    fn a_recurrence_after_an_unrelated_fault_still_reclaims() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(redrawn());
-        let opened = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
-        alarms.clear(AlarmCondition::VanguardIntegrity);
-        alarms.raise(OperatorAlarm::VanguardStateUnpersisted);
-
-        // The unrelated fault is live; the re-draw is queued. Re-detecting the
-        // re-draw must take it back out of the queue, not leave a copy behind.
-        alarms.raise(redrawn());
-        assert!(alarms.board().unacknowledged().is_empty());
-        let live = live_for(&alarms, AlarmCondition::VanguardIntegrity).expect("live");
-        assert_eq!(live.alarm(), redrawn());
-        assert_eq!(live.incident(), opened.incident());
-    }
-
-    #[test]
-    fn a_late_subscriber_sees_the_open_incident_immediately() {
-        let alarms = OperatorAlarms::new();
-        alarms.raise(degraded(DegradedCause::BinaryRejected));
-        let rx = alarms.subscribe();
-        assert_eq!(
-            rx.borrow()
-                .condition(AlarmCondition::TransportLiveness)
-                .and_then(ConditionState::live)
-                .map(RaisedAlarm::alarm),
-            Some(degraded(DegradedCause::BinaryRejected)),
-        );
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

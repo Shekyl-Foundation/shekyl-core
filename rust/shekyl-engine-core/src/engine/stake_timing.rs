@@ -24,8 +24,10 @@
 //! waits for a second consumer — `21-reversion-clause-discipline.mdc` reopening
 //! criterion: "a downstream crate names one of these types in its public API."
 
+use std::time::Duration;
+
 use rand_core::RngCore as _;
-use shekyl_standoff::draw::GapRng;
+use shekyl_standoff::draw::{bounded_uniform, GapRng};
 use shekyl_units::AtomicUnits;
 
 /// Bridges [`rand_core::OsRng`] to the standoff [`GapRng`] trait for the
@@ -206,3 +208,148 @@ pub(crate) const DEFAULT_ENTRY_GAP: NetworkGap =
 /// `SebSpan → blocks` via `settlement_epoch_blocks` — wires in cold-start
 /// wiring (B6b reconciliation, R0-D3).
 pub(crate) const MIN_COLD_START_SPACING: EconomicSpacing = EconomicSpacing(SebSpan(1));
+
+// ---------------------------------------------------------------------------
+// SH-2b-2 — the serving-launch standoff (gate-6 §10.9 restore-flow)
+// ---------------------------------------------------------------------------
+
+/// Window for the **serving-launch standoff**: how long a staker's wallet waits
+/// after open before publishing `P`'s onion service.
+///
+/// # What this is for
+///
+/// `ARCHIVAL_FIREWALL_GATE6.md` §10.9's restore-flow bullet: *"On wallet
+/// restore, `StakeEngine` **must not auto-launch `P`'s HS in lockstep with
+/// `LedgerEngine`'s principal sync**. Co-activation co-times principal-sync and
+/// `P`-`.onion`-reanimation from one origin — a correlation `p_slot` rotation
+/// does **not** foreclose (it changes the address, not the co-timing)."* The
+/// §10.9 remedy is "independent scheduling + isolated circuits"; the isolated
+/// circuits are `PTorClient::for_persona`'s business, and this constant is the
+/// independent scheduling.
+///
+/// # What it buys, and what it does not — read before re-deriving the value
+///
+/// **It blurs the interval, not the sequence.** A serving host cannot start
+/// before the store has a serve-set to pin, so `principal-sync → HS-up` is
+/// forced by data dependency and is *not* something this delay conceals. An
+/// adversary watching many opens sees that ordering every time. What the draw
+/// removes is a *fixed* offset between the two — the thing that would let one
+/// observation of the principal edge predict the onion edge. Anyone re-deriving
+/// this window should start from that, not from "the delay hides the launch".
+///
+/// **It is a discrete, repeated event, not a continuous one.** Every wallet open
+/// is one fresh sample from `U[0, window]`, so linkage sharpens with the number
+/// of observed opens rather than staying flat: the minimum observed offset over
+/// `n` opens has expectation `window / (n + 1)`. The window therefore has to be
+/// sized against *expected open frequency*, and a window that is comfortable for
+/// a wallet opened weekly is thin for one opened hourly. This is the same
+/// discrete-vs-continuous axis [`posture`](super::posture) draws between fetch-③
+/// (continuous, statistical, unavoidable — disclosed) and broadcast-③ (discrete,
+/// categorical, avoidable — forbidden).
+///
+/// # Provenance of the value: **UNDERIVED, and deliberately named as such**
+///
+/// Ten minutes is a *starting* value chosen to be long against the principal
+/// sync's own duration, not a derived one — there is no open-frequency model to
+/// derive it from, and inventing a distribution to justify a number would be
+/// provenance dressed as derivation. The mechanism is what this slice owes;
+/// the number is a GF-7-class privacy parameter and wants the same treatment
+/// the other measured parameters get.
+///
+/// **Reopening criterion (rule 21):** the first of — an open-frequency
+/// distribution exists (measurement or a stated operator model), or the W₂ rig
+/// produces onion-publish timing that bounds the observable edge. Either makes
+/// `n` and the edge width concrete, and the window becomes derivable rather
+/// than picked. Until then this is a **parameter of the start call**
+/// (derive-don't-hardcode, the same discipline §9.5 item 1 applies to
+/// `λ_target`), not a hardcoded sleep.
+pub(crate) const DEFAULT_SERVING_LAUNCH_WINDOW: Duration = Duration::from_secs(10 * 60);
+
+/// Draw the serving-launch standoff `d ~ U[0, window]`.
+///
+/// Deliberately **not** [`shekyl_standoff::draw_entry_gap`]: that function is
+/// the single source for the *funding-seam* draw and its published conformance
+/// vectors are pinned to that meaning, so a second semantic riding the same
+/// function would make those vectors ambiguous and couple two windows that have
+/// no reason to move together. The *arithmetic* is shared all the same — this
+/// draws through [`bounded_uniform`](shekyl_standoff::bounded_uniform), the
+/// standoff family's single unbiased sampler, exactly as the WI-3 dispatch
+/// driver's dispersal draw does. Modulo bias would be privacy-load-bearing here
+/// for the same reason it is there.
+///
+/// Millisecond resolution: the observable edge is a network publish, and
+/// sub-millisecond precision on a multi-minute window is noise either way.
+pub(crate) fn draw_serving_launch_delay<R: GapRng + ?Sized>(
+    window: Duration,
+    rng: &mut R,
+) -> Duration {
+    let window_ms = u64::try_from(window.as_millis()).unwrap_or(u64::MAX);
+    if window_ms == 0 {
+        // A zero window is "no standoff" — used by tests that assert the
+        // start path itself. Drawing over an empty range would be a rejection
+        // loop with nothing to accept.
+        return Duration::ZERO;
+    }
+    Duration::from_millis(bounded_uniform(rng, window_ms))
+}
+
+#[cfg(test)]
+mod serving_launch_tests {
+    use super::*;
+
+    /// Deterministic replay so a draw test asserts a property, not a sample.
+    struct Seq(Vec<u64>, usize);
+
+    impl GapRng for Seq {
+        fn next_u64(&mut self) -> u64 {
+            let v = self.0[self.1 % self.0.len()];
+            self.1 += 1;
+            v
+        }
+    }
+
+    #[test]
+    fn a_zero_window_draws_no_standoff() {
+        let mut rng = Seq(vec![u64::MAX], 0);
+        assert_eq!(
+            draw_serving_launch_delay(Duration::ZERO, &mut rng),
+            Duration::ZERO,
+            "an empty range has nothing to accept; the rejection loop must not spin",
+        );
+    }
+
+    #[test]
+    fn every_draw_lands_inside_the_window() {
+        let window = Duration::from_secs(600);
+        // A spread of raw words including the extremes, so the mapping is
+        // exercised at both ends rather than in the comfortable middle.
+        let mut rng = Seq(vec![0, 1, u64::MAX / 2, u64::MAX - 1, u64::MAX], 0);
+        for _ in 0..64 {
+            let d = draw_serving_launch_delay(window, &mut rng);
+            assert!(d <= window, "{d:?} exceeds the {window:?} window");
+        }
+    }
+
+    #[test]
+    fn the_draw_actually_uses_the_window() {
+        // A degenerate draw — one that always returned zero, or always the cap —
+        // would satisfy the bound test above while providing no standoff at all.
+        let window = Duration::from_secs(600);
+        let mut rng = Seq(vec![0, u64::MAX / 4, u64::MAX / 2, (u64::MAX / 4) * 3], 0);
+        let draws: Vec<Duration> = (0..4)
+            .map(|_| draw_serving_launch_delay(window, &mut rng))
+            .collect();
+        assert!(
+            draws
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                > 1,
+            "a standoff that always draws the same delay is not a standoff: {draws:?}",
+        );
+        assert!(
+            draws.iter().any(|d| *d > Duration::ZERO),
+            "at least one draw must be non-zero",
+        );
+    }
+}

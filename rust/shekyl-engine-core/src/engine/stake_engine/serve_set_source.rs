@@ -56,32 +56,30 @@ use crate::engine::emission_source::fetch_emission_claim_source;
 use crate::engine::prpc::PersonaIsolatedTransport;
 
 /// Derives a persona's serve-set from its connected bond record and pins it.
-// Inert until the lifecycle slice starts a `PersonaServingHost` and drives its
-// refresh from the P-scan sweep. Landed with the seam it implements rather
-// than after it, so the one place a serve-set can come from exists before
-// anything can be wired to a second one.
+// Wired by `Engine::start_serving_if_staker` (SH-2b-2). Landed with the seam
+// it implements rather than after it, so the one place a serve-set can come
+// from exists before anything can be wired to a second one.
 //
 // SH-2b inherits an open question this refusal makes visible: whether
-// `start_pscan_if_staker` should start a serving host **at all** for a
+// `start_serving_if_staker` should start a serving host **at all** for a
 // `CompleteTree` persona. `first_stake` hardcodes that posture today — a named
 // PR-4c deviation, since no wallet entry posts a market bond yet — so wiring
 // the host unconditionally would make every first-stake wallet fail to start
 // one. A host that reliably refuses to start is correct and is not a finished
-// answer; the caller decides, and the caller is the next slice.
+// answer; the caller decides.
 //
 // Lives under `stake_engine/` rather than at `engine/` top level because both
 // halves of its input are already this tree's: the bond record it reads is what
-// `bond`/`claim` assemble, and the lifecycle call that will start the host is a
-// `StakeEngine` message. A `serve_set_source` at the engine root would have been
-// a module the composition root declares and nothing else near it uses.
-#[allow(dead_code)]
+// `bond`/`claim` assemble, and the lifecycle call that starts the host is a
+// `StakeEngine` identity + this pinner. A `serve_set_source` at the engine
+// root would have been a module the composition root declares and nothing
+// else near it uses.
 pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
     curve_tree: CurveTreeHandle,
     rpc: R,
     p_id: [u8; 32],
 }
 
-#[allow(dead_code)]
 impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     /// Bind a pinner to one persona's canonical id and its own transport.
     pub(crate) fn new(curve_tree: CurveTreeHandle, rpc: R, p_id: [u8; 32]) -> Self {

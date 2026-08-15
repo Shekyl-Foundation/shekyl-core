@@ -2758,6 +2758,97 @@ mod tests {
         assert_eq!(recomputed, record.r_k);
     }
 
+    /// A segment's worth of entries **created above** `created`, so a rollback
+    /// below it genuinely truncates them.
+    ///
+    /// `distinct_segment_entries` cannot be used for a rollback test:
+    /// `sample_entry` derives `creation_height = maturity - 60`, so those
+    /// leaves are created at height 0 and *survive* every rollback. A test
+    /// built on them reports "the pin was not dropped" and looks like a defect
+    /// in the store rather than in the fixture — which is exactly what it did
+    /// on first run here.
+    fn segment_entries_created_at(created: u64) -> Vec<LeafEntry> {
+        (0..leaves_per_segment())
+            .map(|i| {
+                let gindex = u64::try_from(i).expect("index fits u64");
+                let mut entry = sample_entry(gindex, created + 60);
+                entry.creation_height = BlockHeight(created);
+                entry.leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
+                entry
+            })
+            .collect()
+    }
+
+    /// The link `Staleness::PinsDropped` rests on, and the one nothing walked:
+    /// a **real** rollback deletes the pin rows, and `members_missing_pins`
+    /// sees it.
+    ///
+    /// Both halves existed and were tested separately — `rollback_to_fork` has
+    /// its own tests, `members_missing_pins` has its own — while the claim
+    /// joining them lived only in a doc comment ("Pins are cleared by
+    /// `truncate_from_tree_position` (and so by `rollback_to_fork`) at and
+    /// above the truncation point"). A serving host's dropped-pin tripwire is
+    /// built on that sentence: if a rollback silently left the rows in place,
+    /// `members_missing_pins` would report nothing, the tripwire would read
+    /// healthy, and the wallet's own `prune_frozen` would be free to remove
+    /// bonded bytes — §9.6 item 4's slash, reached through a check that passed.
+    #[test]
+    fn a_rollback_drops_the_pins_the_staleness_tripwire_reads() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .unwrap();
+
+        // Segment 0 is frozen and pinned; the tripwire sees nothing missing.
+        assert_eq!(
+            store.pin_serve_set(&[0]).unwrap(),
+            vec![(0, SegmentPin::PinnedServable)],
+        );
+        assert!(
+            store.members_missing_pins(&[0]).unwrap().is_empty(),
+            "a freshly pinned member is not missing its pin",
+        );
+
+        // A chain reorg takes the tree back below the leaves' creation height.
+        store.rollback_to_fork(BlockHeight(500)).unwrap();
+
+        assert_eq!(
+            store.members_missing_pins(&[0]).unwrap(),
+            vec![0],
+            "the rollback deleted the pin row, and the tripwire's reading is what \
+             must show it — the doc comment claiming this is now walked",
+        );
+    }
+
+    /// The recovery half of the same story, and the reason
+    /// `Staleness::PinsDropped` is an `Episode` rather than a latch: re-pinning
+    /// after the rollback restores the row, so the condition genuinely ends.
+    ///
+    /// This is what separates it from `already_pruned` — bytes that are gone
+    /// stay gone, and that one is the board's only irreversible entry.
+    #[test]
+    fn re_pinning_after_a_rollback_clears_the_dropped_pin() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .unwrap();
+        store.pin_serve_set(&[0]).unwrap();
+        store.rollback_to_fork(BlockHeight(500)).unwrap();
+        assert_eq!(store.members_missing_pins(&[0]).unwrap(), vec![0]);
+
+        // Re-ingest past the fork and re-pin, exactly as the serving host's
+        // unconditional refresh does.
+        store
+            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .unwrap();
+        store.pin_serve_set(&[0]).unwrap();
+        assert!(
+            store.members_missing_pins(&[0]).unwrap().is_empty(),
+            "a refresh that runs again re-pins: the condition is recoverable, which \
+             is why it is an Episode and not a latch",
+        );
+    }
+
     #[test]
     fn pin_serve_set_reports_each_member_and_refuses_an_unrepresentable_id() {
         // A whole serve-set in one call: a frozen member, a member bonded

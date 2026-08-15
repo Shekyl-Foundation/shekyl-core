@@ -120,6 +120,47 @@ pub fn curve_tree_store_path_from(base: &Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+/// Extension suffix appended to the base path to derive this wallet's **Tor
+/// `DataDirectory`** (SH-2b-2). A directory rather than a file, and a sibling
+/// of the rest of the cluster: `primary.wallet` → `primary.wallet.tor`.
+pub const TOR_DATA_DIR_SUFFIX: &str = ".tor";
+
+/// Derive this wallet's Tor `DataDirectory` from the base `.wallet` path.
+///
+/// # Why this is derived and not a setting
+///
+/// **DQ-T0.7's three placement requirements are satisfied by construction.**
+/// That ruling requires a "wallet-adjacent, wallet-controlled,
+/// non-world-writable" directory, held **persistently** across sessions —
+/// the directory carries the entry-guard identity, and per-session rotation is
+/// itself a deviation-from-defaults signature. Deriving from the wallet base
+/// gives adjacency and per-wallet ownership for free; a configurable path lets
+/// an operator put entry-guard state on a network share or in a world-readable
+/// temp dir, with no compensating benefit.
+///
+/// **The stronger reason is linkage.** A shared Tor `DataDirectory` is a shared
+/// entry-guard set, and shared guards link every persona served through them.
+/// Two wallets pointed at one directory would be cross-linked *at the guard* —
+/// the exact linkage the persona architecture exists to prevent. Per-wallet
+/// derivation forecloses it structurally, where a configurable path actively
+/// invites an operator to "save disk" by sharing one.
+///
+/// # Examples
+///
+/// ```
+/// use shekyl_engine_file::paths::tor_data_dir_from;
+/// use std::path::Path;
+/// assert_eq!(
+///     tor_data_dir_from(Path::new("/tmp/primary.wallet")),
+///     Path::new("/tmp/primary.wallet.tor"),
+/// );
+/// ```
+pub fn tor_data_dir_from(base: &Path) -> PathBuf {
+    let mut os: OsString = base.as_os_str().to_owned();
+    os.push(TOR_DATA_DIR_SUFFIX);
+    PathBuf::from(os)
+}
+
 /// Extension suffix appended to the base path to derive the `P`-isolated
 /// archival-scan state path (2d-1 SP-5). Appended as raw bytes (same rule as
 /// [`KEYS_FILE_SUFFIX`]) so a base like `primary.wallet` becomes
@@ -178,6 +219,35 @@ pub fn pending_post_path_from(base: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    /// Two wallets must never derive the same Tor directory: a shared
+    /// `DataDirectory` is a shared entry-guard set, which links every persona
+    /// served through it.
+    #[test]
+    fn distinct_wallets_derive_distinct_tor_dirs() {
+        use super::tor_data_dir_from;
+        assert_ne!(
+            tor_data_dir_from(Path::new("/w/main.wallet")),
+            tor_data_dir_from(Path::new("/w/second.wallet")),
+        );
+    }
+
+    /// The tor directory is a sibling of the rest of the cluster, appended to
+    /// the full base exactly as every other data companion is.
+    #[test]
+    fn tor_dir_joins_the_companion_family() {
+        use super::{curve_tree_store_path_from, keys_path_from, tor_data_dir_from};
+        let base = Path::new("/w/primary.wallet");
+        assert_eq!(tor_data_dir_from(base), Path::new("/w/primary.wallet.tor"));
+        assert_eq!(
+            tor_data_dir_from(base).parent(),
+            keys_path_from(base).parent()
+        );
+        assert_eq!(
+            tor_data_dir_from(base).parent(),
+            curve_tree_store_path_from(base).parent(),
+        );
+    }
+
     use super::*;
 
     #[test]

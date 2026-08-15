@@ -255,8 +255,8 @@ impl Default for OperationalPrefs {
     }
 }
 
-/// Device prefs (Bucket 4). HW-wallet routing hints; tampering
-/// redirects to the wrong device and fails at signing time —
+/// Device prefs (Bucket 4). Machine-scoped routing hints; tampering
+/// redirects to the wrong device or binary and fails at a gate —
 /// annoying but not funds-threatening.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -267,6 +267,39 @@ pub struct DevicePrefs {
     /// HW-wallet derivation path hint (e.g. `"m/44'/1001'/0'"`).
     #[serde(default)]
     pub device_derivation_path: String,
+    /// Absolute path to a `tor` binary, for an operator whose tor is not on the
+    /// ambient search path. Empty (the default) means **discover it**, which is
+    /// the intended posture for essentially every wallet.
+    ///
+    /// # Why this is the only Tor knob
+    ///
+    /// Every knob is a fingerprint. DQ-T0.7's reasoning about the data
+    /// directory — that deviation from defaults is itself a signature —
+    /// generalizes across this whole surface, so the default answer is
+    /// derive-or-inherit and exposure needs a reason. This one has a reason the
+    /// others do not: **the operator holds information the wallet cannot
+    /// derive** — where they installed tor. Nothing else about the Tor
+    /// integration is like that. The `DataDirectory` is derived
+    /// (`paths::tor_data_dir_from`), and the supervisor's retry policy is
+    /// pinned and unexposed because backoff timing is observable and an
+    /// operator-tuned supervisor is a distinguishable client.
+    ///
+    /// # Why it lives in the device bucket
+    ///
+    /// It is a property of *this machine*, not of this wallet. It is in
+    /// `DevicePrefs` for that reason — though note the honest residual: this
+    /// bucket is part of `<P>.prefs.toml`, which sits beside the wallet file
+    /// and therefore travels if the cluster is copied to another machine. A
+    /// path that does not exist on the new machine is **not** a failure: the
+    /// binary source falls back to discovery and says so once. That keeps a
+    /// travelled override harmless without inventing a second, device-scoped
+    /// config file this slice was not asked for.
+    ///
+    /// The pinned-hash gate (rule 17, SP-T0c) runs on whatever this resolves
+    /// to, so an override cannot be used to launch an unverified binary — it
+    /// selects *which* candidate is gated, never *whether* it is.
+    #[serde(default)]
+    pub tor_binary_path: String,
 }
 
 /// Top-level prefs document. Serialized as a TOML file with one
@@ -316,8 +349,13 @@ impl Default for WalletPrefs {
 
 /// Current `prefs.toml` schema version. Bumped when persisted fields
 /// are added or removed (`subaddress_lookahead` deletion → `2`;
-/// RPC-payment `[rpc]` bucket removal → `3`).
-pub const PREFS_SCHEMA_VERSION: u8 = 3;
+/// RPC-payment `[rpc]` bucket removal → `3`; `device.tor_binary_path`
+/// addition → `4`).
+///
+/// Load refuses on mismatch rather than migrating
+/// ([`crate::load_prefs`]) — pre-genesis, a prefs file from an older
+/// schema is recreated, not upgraded.
+pub const PREFS_SCHEMA_VERSION: u8 = 4;
 
 fn default_schema_version() -> u8 {
     PREFS_SCHEMA_VERSION

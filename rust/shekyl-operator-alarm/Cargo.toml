@@ -14,6 +14,12 @@ publish = false
 # `VanguardsWarning`. Read-only — this crate spawns no tor and holds no service
 # handle, only a `watch::Receiver`.
 shekyl-tor = { path = "../shekyl-tor" }
+# The second producer's vocabulary: `Staleness`, the serving host's tripwire
+# reading. Read-only — this crate starts no host and holds no store handle, it
+# only maps a reading onto the board. Same shape as the `shekyl-tor` edge above,
+# and it is what keeps `OperatorAlarms`'s raise/clear methods crate-private
+# instead of handing every crate the ability to raise an alarm.
+shekyl-p-host = { path = "../shekyl-p-host" }
 # `watch` for the board itself and for the posture channel it reads; `rt` for
 # the translator task.
 tokio = { version = "1", default-features = false, features = ["rt", "sync"] }

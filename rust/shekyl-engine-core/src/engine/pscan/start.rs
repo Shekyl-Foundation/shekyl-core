@@ -683,7 +683,8 @@ where
                 None => return Err(PScanStartError::NoStakeEngine),
             };
             let slot_guard = g
-                .pscan_slot
+                .open_slots
+                .pscan
                 .try_claim()
                 .ok_or(PScanStartError::AlreadyRunning)?;
             // The per-wallet pending-seal write lock (§3.3): the dispatch driver
@@ -966,7 +967,7 @@ mod tests {
 
         // Nothing claimed the single-flight slot: the quiet path really did nothing.
         assert!(
-            !arc.read().await.pscan_slot.is_claimed(),
+            !arc.read().await.open_slots.pscan.is_claimed(),
             "the quiet path must not claim the P-scan slot"
         );
     }
@@ -1026,7 +1027,7 @@ mod tests {
             .expect("staker auto-start succeeds")
             .expect("a staker gets a P-scan handle");
         assert!(
-            arc.read().await.pscan_slot.is_claimed(),
+            arc.read().await.open_slots.pscan.is_claimed(),
             "the running task holds the single-flight slot"
         );
 
@@ -1046,7 +1047,7 @@ mod tests {
         // Shutdown: the task exits, releasing the slot and its engine-arc clone.
         handle.shutdown().await;
         assert!(
-            !arc.read().await.pscan_slot.is_claimed(),
+            !arc.read().await.open_slots.pscan.is_claimed(),
             "shutdown releases the single-flight slot"
         );
 

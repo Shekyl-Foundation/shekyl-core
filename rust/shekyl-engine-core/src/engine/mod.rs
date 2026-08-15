@@ -737,12 +737,11 @@ pub struct Engine<
     /// task exit (RAII).
     refresh_slot: refresh::RefreshSlot,
 
-    /// Single-flight slot for the 2d-1 `P`-scan task — independent of
-    /// `refresh_slot`. The running task holds a
-    /// [`PScanSlotGuard`](pscan::task::PScanSlotGuard) that releases it on exit
-    /// (RAII), so [`start_pscan`](Self::start_pscan) enforces one scan task per
-    /// wallet (no two tasks racing the `.wallet.pscan` seal).
-    pscan_slot: pscan::task::PScanSlot,
+    /// Single-flight slots for the embedder-held open-span tasks (P-scan +
+    /// serving). One field so a third task does not spend a `FIELDS_CEILING`
+    /// slot; the two flags are independent. Serving reuses [`RefreshSlot`]
+    /// rather than a third copy of the same primitive.
+    open_slots: refresh_slot::OpenTaskSlots,
 
     /// Per-wallet write lock over the `.wallet.pending` sibling seal (WI-3
     /// §3.3 writer discipline). The pending seal legitimately has **two**
@@ -929,7 +928,8 @@ impl<
             .field("network", &self.network)
             .field("capability", &self.capability)
             .field("refresh_running", &self.refresh_slot.is_claimed())
-            .field("pscan_running", &self.pscan_slot.is_claimed())
+            .field("pscan_running", &self.open_slots.pscan.is_claimed())
+            .field("serving_running", &self.open_slots.serving.is_claimed())
             .field("refresh", &"<redacted: RefreshEngine>")
             .field("refresh_kind", &std::any::type_name::<R>())
             .field("economics_kind", &std::any::type_name::<E>())
@@ -1187,7 +1187,7 @@ impl<
             network,
             capability,
             refresh_slot,
-            pscan_slot,
+            open_slots,
             pending_write_lock,
             refresh: _old,
             economics,
@@ -1209,7 +1209,7 @@ impl<
             network,
             capability,
             refresh_slot,
-            pscan_slot,
+            open_slots,
             pending_write_lock,
             refresh: std::sync::Arc::new(refresh),
             economics,
@@ -1246,7 +1246,7 @@ impl<
             network,
             capability,
             refresh_slot,
-            pscan_slot,
+            open_slots,
             pending_write_lock,
             refresh,
             economics,
@@ -1268,7 +1268,7 @@ impl<
             network,
             capability,
             refresh_slot,
-            pscan_slot,
+            open_slots,
             pending_write_lock,
             refresh,
             economics,
