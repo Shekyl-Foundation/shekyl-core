@@ -37,6 +37,12 @@ pub use outbound_label::label_plaintext_for_payment_uri;
 // can consume the one payment-URI codec without a direct `shekyl-address`
 // dependency — mirroring the `ShekylAddress` re-export in [`engine`].
 // Canonical definition stays in `shekyl-address`; do not wrap or redefine.
+/// SH-2b-2's embedder surface: the serving lifecycle handle and its start
+/// failures, re-exported beside `PScanHandle` for the same reason — the
+/// embedder parks the handle for the wallet's open lifetime and shuts it down
+/// on close. Re-exported here rather than through `engine`'s own list because
+/// that module sits at its decomposition ceiling.
+pub use engine::stake_engine::serving::{ServingHandle, ServingStartError, TorConfigError};
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
 pub use shekyl_address::{format_payment_uri, parse_payment_uri, PaymentUri, PaymentUriError};
 /// The tor-posture producer, re-exported so an embedder can spawn the

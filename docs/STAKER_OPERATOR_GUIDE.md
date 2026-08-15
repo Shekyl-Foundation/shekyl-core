@@ -184,7 +184,31 @@ keep them that way.
 
 - **Let timing be the wallet's job.** Beyond the funding gap (Footgun 2), avoid
   introducing any deterministic timing relationship between your `P`'s on-chain
-  events and anything externally observable.
+  events and anything externally observable. This includes wallet *open*: the
+  wallet waits a randomized standoff before publishing your `P`'s onion, so that
+  the moment your principal wallet starts syncing does not predict the moment
+  your `P` reappears. Do not defeat it by scripting the two together.
+
+- **Run one staking wallet per machine.** This is a recommendation, not
+  something the software forces, and it is the one opsec rule you can break
+  without the wallet noticing.
+
+  Each staking wallet derives its own Tor data directory (`<wallet>.tor/`), so
+  each gets its own entry guards and its own tor process — the isolation is
+  correct *per wallet*. What no wallet can see is the machine: two staking
+  wallets open at once are two personas active from **one IP at the same time**,
+  which is co-activation at a level no per-wallet mechanism can observe, let
+  alone prevent.
+
+  If you want to serve several `P`s, serve them from **separate machines or
+  VMs**. Sharing a host is not forbidden and the software will not stop you; it
+  is simply not a posture that preserves the separation the rest of this guide
+  is about.
+
+  A corollary: never point two wallets at one Tor data directory to save disk.
+  A shared directory is a shared entry-guard set, which links every persona
+  served through it — the wallet derives the path precisely so this is not
+  something you can configure your way into.
 
 ---
 
