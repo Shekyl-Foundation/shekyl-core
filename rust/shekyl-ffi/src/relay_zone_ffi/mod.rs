@@ -55,7 +55,10 @@ use std::slice;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use shekyl_relay::{Driver, Effect, FluffReach, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone};
+use shekyl_relay::{
+    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, RelayPlan,
+    StemTallySnapshot, TxBlob, TxId, Zone,
+};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::stem_map::ConnectionId;
@@ -701,6 +704,64 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_in_flight(handle: *const RelayZo
 /// not *whether the transaction is still stemming*. A transaction that has
 /// fluffed must leave the zone, or one that entered over Tor never reaches
 /// the public network.
+/// §18.4's diagnostic store — **deliberately NOT on `RelayZoneHandle`**: the
+/// FOLLOWUPS spec forbids the integer landing on the handle the stem/fluff
+/// decision reads, so that reaching this state from a wire path requires a
+/// call to a diagnostic-named global, a visible edit no review misses. Keyed
+/// by zone byte (one anonymity zone per byte per process); lives for the
+/// process, which a diagnostic may.
+fn floor_watches() -> &'static Mutex<std::collections::HashMap<u8, FloorWatch>> {
+    static WATCHES: std::sync::OnceLock<Mutex<std::collections::HashMap<u8, FloorWatch>>> =
+        std::sync::OnceLock::new();
+    WATCHES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// §18.4's live diagnostic: record the zone's achieved outbound
+/// anonymity-CONNECTION count; returns the floor transition (0 steady,
+/// 1 went below, 2 recovered) for the operator warn log. The floor
+/// comparison lives in [`FloorWatch::note`] — the logging path — and this
+/// state is readable by NOTHING on a wire path (§18.3).
+#[no_mangle]
+pub extern "C" fn shekyl_relay_zone_note_achieved_out(zone: u8, achieved: u32) -> u8 {
+    match floor_watches().lock() {
+        Ok(mut m) => m
+            .entry(zone)
+            .or_insert_with(|| {
+                FloorWatch::new(shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS)
+            })
+            .note(AchievedOutConnections::new(achieved)) as u8,
+        Err(_) => FloorTransition::Steady as u8,
+    }
+}
+
+/// Admin-surface read of the §18.4 diagnostic (`/get_stem_tallies`,
+/// AdminOnly). False (writes nothing) until the zone's first note — no data
+/// is never a fabricated zero.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_floor_snapshot(
+    zone: u8,
+    out_achieved: *mut u32,
+    out_floor: *mut u32,
+    out_below: *mut bool,
+) -> bool {
+    if out_achieved.is_null() || out_floor.is_null() || out_below.is_null() {
+        return false;
+    }
+    let snap = match floor_watches().lock() {
+        Ok(m) => m.get(&zone).and_then(FloorWatch::snapshot),
+        Err(_) => None,
+    };
+    match snap {
+        Some(s) => {
+            *out_achieved = s.achieved;
+            *out_floor = s.floor;
+            *out_below = s.below;
+            true
+        }
+        None => false,
+    }
+}
+
 /// R-1 origination roll AND its zone mapping, one crossing (rule 40's
 /// coarse-call rule): draws whether this ORIGINATED transaction takes the
 /// anonymity zone and returns the zone byte `send_txs` reads — `invalid` (0,
