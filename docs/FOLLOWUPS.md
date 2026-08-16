@@ -9720,6 +9720,46 @@ its wake.
   has arrived by then, which can only raise the answer), and carry the embargo,
   the wallet timeout and the §44 pins in the same change.
 
+  > **Superseded on the method, 2026-08-16** —
+  > `tests/f_prime_admissible_region.rs`. `F'` is not a quantity with a point
+  > value to measure: the network has no instantaneous degree distribution, and
+  > feeding a realized histogram to a simulator that consumes a static `degrees`
+  > vector converts "one fleet at one moment" into "the value". `F'` is instead
+  > derived at the boundary of a stated admissible region (at most `beta` of
+  > nodes below the floor, none below `d_min`), the shape §16.4's α gate used.
+  > Read at `beta*` = the `A = 60` series' p90 (0.2167) with `d_min = 8`, that
+  > is **`F' = 4500 ms`**. The dependent list below is also stale in two places
+  > — the wallet wait is **2297 s**, not 874 (§89.2 made it worst-zone-global),
+  > and there are **two** embargoes, not one (clearnet 190 s / anonymity 499 s
+  > from a single process-wide `F'`). §90.3's *"no `A ≥ 60` readout exists
+  > anywhere in the tree"* needs a date: the arm ran 2026-08-14, one day after
+  > §90 was written, and cannot be the retired phantom input's provenance.
+
+- **Relay: the `F'` region and §15's launch condition are one condition, and
+  neither section says so.** `beta* = 0.2167` was chosen as the statistic-matched
+  read of the `A = 60` series and independently lands where §15's sweep does:
+  `A = 30` (the operational launch reading) and `A = 60` sit inside the region,
+  `A = 15` sits outside it and is below the launch condition. **A future reader
+  who relaxes the launch condition below ~30 anonymity-capable nodes is also
+  invalidating `F'`**, and nothing in §15 or §90 currently tells them. The
+  numeric half is armed
+  (`the_region_is_consistent_with_the_launch_condition`); what is owed is the
+  prose coupling in **both** directions, landing with the constant in the
+  re-pin change so it sits beside the value it constrains.
+
+- **Fleet: arm readouts must record the per-sample series, not a pooled
+  summary — an instrument fix, not a data gap.** Of the `{15, 30, 60}` sweep
+  only `A = 60` (§13.2) published per-sample counts; §14.2 and §15.1 recorded
+  pooled rates (52.1 %, 84.2 %) with no series behind them. A region bound is a
+  **quantile**, so a pooled mean cannot set or check one: `A = 30`'s mean tail
+  (0.158) is marginally *worse* than `A = 60`'s (0.148), yet its p90 is
+  unknowable from what was kept, which is exactly the like-for-like check the
+  launch-condition coupling wants. This is the **second** instance of the same
+  omission — the degree histogram behind `fluff_return_ms` was the first — so
+  the fix belongs in the readout spec rather than in another one-off re-run:
+  `utils/fleet/sample_node_series.sh` and `anon_readout_parse.py` should emit
+  the per-sample series by default and any arm's write-up should carry it.
+
 - **Relay: populate the 48-cell Pi verification surface, then consume it
   per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first
   (`shekyl-relay-privacy/src/verify_cost.rs`, 2026-08-06) carrying the four
