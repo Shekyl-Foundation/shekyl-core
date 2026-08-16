@@ -1433,6 +1433,7 @@ pub(super) fn persona_address(
         shekyl_address::Network::Mainnet,
         *keys.spend_pk.as_canonical_bytes(),
         *keys.view_pk.as_canonical_bytes(),
+        keys.msg_sign_pk,
         keys.ml_kem_ek.to_vec(),
     )
     .encode()

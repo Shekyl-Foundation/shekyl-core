@@ -59,7 +59,15 @@
 /// `_check`. Must match Rust `account::CLASSICAL_ADDRESS_BYTES` exactly; a
 /// drift here corrupts every later field of `ShekylAllKeysBlob` because the
 /// FFI is declared `#[repr(C)]` with byte-aligned `[u8; N]` arrays.
-#define SHEKYL_CLASSICAL_ADDRESS_BYTES 65
+///
+/// 113 since the fork-(ii) address layout: `version || spend_pk ||
+/// view_pk || msg_sign_pk[48]` — the SLH-DSA-192s message-signing anchor
+/// is the fourth classical field. The *persisted* wallet-file field
+/// (`SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES`) deliberately stays
+/// 65: it stores the `version || spend || view` PREFIX, which detects a
+/// seed/file mismatch at full strength and keeps every existing wallet
+/// file openable.
+#define SHEKYL_CLASSICAL_ADDRESS_BYTES 113
 
 /// BIP-39 inputs: 32-byte entropy, 24 words, 64-byte PBKDF2-HMAC-SHA512 output,
 /// max mnemonic string length (24 × longest English word "mountain"=8 + 23
@@ -480,10 +488,16 @@ bool shekyl_kem_decapsulate(
 
 /// Encode Shekyl Bech32m address. Returns UTF-8 string in ShekylBuffer.
 /// network: 0=mainnet, 1=testnet, 2=stagenet.
+/// msg_sign_pk_ptr: 48 bytes (SLH-DSA-192s message-signing public key,
+/// the fourth classical field since the fork-(ii) layout). REQUIRED —
+/// null returns a null buffer, because no valid address exists without
+/// it. Callers holding only an `account_public_address` (no msg_sign_pk)
+/// cannot re-encode; live daemon paths carry the original address string.
 ShekylBuffer shekyl_address_encode(
     uint8_t network,
     const uint8_t* spend_key_ptr,
     const uint8_t* view_key_ptr,
+    const uint8_t* msg_sign_pk_ptr,
     const uint8_t* ml_kem_ek_ptr,
     size_t ml_kem_ek_len);
 

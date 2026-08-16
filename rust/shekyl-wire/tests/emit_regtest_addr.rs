@@ -27,7 +27,13 @@ fn emit_regtest_mining_address() {
     let view: [u8; 32] = blob.classical_address_bytes[33..65]
         .try_into()
         .expect("view key slice");
-    let addr = ShekylAddress::new(Network::Mainnet, spend, view, blob.ml_kem_ek.to_vec());
+    let addr = ShekylAddress::new(
+        Network::Mainnet,
+        spend,
+        view,
+        *blob.msg_sign_pk(),
+        blob.ml_kem_ek.to_vec(),
+    );
     let encoded = addr.encode().expect("encode address");
     // Round-trip through the decoder the daemon uses, as a sanity gate.
     assert!(ShekylAddress::decode(&encoded).is_ok(), "must decode");

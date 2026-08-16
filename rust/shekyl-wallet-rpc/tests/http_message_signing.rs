@@ -10,11 +10,11 @@
 //! These bite against routing, param validation, and the `-29800`-band
 //! code mapping; they do NOT re-verify the construction itself (the
 //! `shekyl-crypto-pq` KATs, tamper battery, and the engine workflow tests
-//! own that). The one crypto fact they do pin is deliberate: **every
-//! in-tree address answers `-29803`** on verify (SM-R-6 R6-a) — when the
-//! fork-(ii) v2 address layout lands, the R6-a assertion inside
-//! `sign_and_the_full_verify_taxonomy` is what must flip to a round-trip
-//! success.
+//! own that). The round-trip assertion inside
+//! `sign_and_the_full_verify_taxonomy` began life as the R6-a tripwire
+//! (every address answered the retired `-29803` while verification was
+//! type-gated); the fork-(ii) layout landing flipped it, by design, into
+//! a live sign→verify round trip over the wire.
 
 use std::sync::Arc;
 
@@ -126,16 +126,27 @@ async fn sign_and_the_full_verify_taxonomy() {
         "emission is single-line"
     );
 
-    // ── R6-a: the wallet's own v1 address cannot anchor verification —
-    // -29803, not a success and not a params error. When the v2 layout
-    // lands, THIS assertion is what changes into a round-trip success.
+    // ── The flipped R6-a tripwire: the wallet's own address verifies
+    // its own signature, end to end over the wire, with no wallet open
+    // required on the verify side.
     let v = rpc(
         state.clone(),
         "verify_message",
         json!({ "address": address, "message": "hello shekyl", "signature": signature }),
     )
     .await;
-    assert_eq!(error_code(&v), -29803);
+    assert_eq!(v["result"]["verified"], true, "round trip must verify: {v}");
+
+    // ── And the honest negative answer: same address and signature,
+    // different message — -29800, the band's verify-failed code,
+    // reachable end to end for the first time.
+    let v = rpc(
+        state.clone(),
+        "verify_message",
+        json!({ "address": address, "message": "a different message", "signature": signature }),
+    )
+    .await;
+    assert_eq!(error_code(&v), -29800);
 
     // ── Malformed string: shape-first -32602 (SM-R-6). ──
     let v = rpc(

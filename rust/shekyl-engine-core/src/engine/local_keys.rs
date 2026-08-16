@@ -633,7 +633,10 @@ mod tests {
     fn account_public_address_returns_cached_material() {
         let keys = LocalKeys::from_test_seed(TEST_SEED);
         let addr = keys.account_public_address();
-        assert_eq!(addr.classical_address_bytes.len(), 65);
+        assert_eq!(
+            addr.classical_address_bytes.len(),
+            shekyl_crypto_pq::account::CLASSICAL_ADDRESS_BYTES
+        );
         assert_eq!(addr.pqc_public_key.len(), 1216);
         // Stable across repeated calls.
         let addr2 = keys.account_public_address();

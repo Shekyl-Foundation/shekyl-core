@@ -44,6 +44,7 @@ fn fixture_recipients() -> Vec<Recipient> {
                 Network::Testnet,
                 *blob.spend_pk.as_canonical_bytes(),
                 *blob.view_pk.as_canonical_bytes(),
+                *blob.msg_sign_pk(),
                 blob.ml_kem_ek.to_vec(),
             )
             .encode()

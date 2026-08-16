@@ -193,6 +193,22 @@ sustainability is unaffected by the recalibration.
   segment-agnostic (length-prefixed) preimage and its verify surface
   type-gated; the sign-off unblocks the address-integrated verify in
   PR-SM-2. *Target: V3.0, before the genesis format freeze.*
+  **CLOSED 2026-08-15 — the v2 layout + `ADDRESS_DERIVATION_V2`
+  successor vectors are in code.** Three rulings recorded at landing:
+  (1) IN-PLACE correction — the version byte stays `0x01` over the new
+  113-byte classical segment and the 65-byte draft layout is deleted
+  (multisig never-deployed precedent; no fossil version number reaches
+  the frozen record); (2) the FFI boundary moved with minimal C++ (blob
+  mirror 65→113; the persisted wallet-file field keeps the 65-byte
+  prefix, so existing files stay openable and wallet2's check keeps its
+  meaning; daemon mining paths carry the original address string instead
+  of struct re-encoding, which the layout made impossible); (3) persona
+  receive addresses derive their mandatory `msg_sign_pk` under the
+  seventh archival-P per-slot label
+  (`shekyl-archival-p-msg-sign-slh-dsa-192s-v1`) — uniformity (a
+  zero-filled field would make persona addresses a distinguishable
+  class), not a persona signing capability. The R6-a verify gate is
+  lifted; RPC `-29803` retired unused.
 
 - **FFI *signature* drift has no remedy, unlike FFI *constant* drift
   (added 2026-07-29, from RP-3b step 2; measurement attached).**

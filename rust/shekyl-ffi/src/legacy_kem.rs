@@ -194,6 +194,13 @@ pub unsafe extern "C" fn shekyl_kem_decapsulate(
 ///
 /// `network`: 0=mainnet, 1=testnet, 2=stagenet.
 /// `spend_key_ptr`: 32 bytes. `view_key_ptr`: 32 bytes.
+/// `msg_sign_pk_ptr`: 48 bytes (SLH-DSA-192s message-signing public key —
+/// the fourth classical field since the fork-(ii) layout). **Required**:
+/// a null pointer returns a null buffer, because no valid address can be
+/// assembled without it. C++ callers that only hold an
+/// `account_public_address` (which carries no msg_sign_pk) cannot use
+/// this function any more; live daemon paths carry the original address
+/// string instead of re-encoding.
 /// `ml_kem_ek_ptr`: 1184 bytes (ML-KEM-768 encapsulation key).
 ///
 /// Returns a ShekylBuffer containing the UTF-8 encoded address string.
@@ -205,10 +212,11 @@ pub unsafe extern "C" fn shekyl_address_encode(
     network: u8,
     spend_key_ptr: *const u8,
     view_key_ptr: *const u8,
+    msg_sign_pk_ptr: *const u8,
     ml_kem_ek_ptr: *const u8,
     ml_kem_ek_len: usize,
 ) -> ShekylBuffer {
-    if spend_key_ptr.is_null() || view_key_ptr.is_null() {
+    if spend_key_ptr.is_null() || view_key_ptr.is_null() || msg_sign_pk_ptr.is_null() {
         return ShekylBuffer::null();
     }
     if ml_kem_ek_len > 0 && ml_kem_ek_ptr.is_null() {
@@ -229,6 +237,16 @@ pub unsafe extern "C" fn shekyl_address_encode(
         std::ptr::copy_nonoverlapping(view_key_ptr, buf.as_mut_ptr(), 32);
         buf
     };
+    // Seam helper for the boundary read (rule 40): length is the fixed
+    // layout constant, so a short caller buffer cannot silently truncate.
+    let msg_sign_pk: [u8; shekyl_address::MSG_SIGN_PK_LEN] = {
+        let Some(slice) =
+            (unsafe { slice_from_ptr(msg_sign_pk_ptr, shekyl_address::MSG_SIGN_PK_LEN) })
+        else {
+            return ShekylBuffer::null();
+        };
+        slice.try_into().expect("slice length fixed above")
+    };
     let ml_kem_ek = if ml_kem_ek_len == 0 {
         Vec::new()
     } else {
@@ -238,7 +256,7 @@ pub unsafe extern "C" fn shekyl_address_encode(
         slice.to_vec()
     };
 
-    let addr = shekyl_address::ShekylAddress::new(net, spend_key, view_key, ml_kem_ek);
+    let addr = shekyl_address::ShekylAddress::new(net, spend_key, view_key, msg_sign_pk, ml_kem_ek);
 
     match addr.encode() {
         Ok(s) => ShekylBuffer::from_vec(s.into_bytes()),

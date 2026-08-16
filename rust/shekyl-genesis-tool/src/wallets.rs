@@ -103,6 +103,7 @@ pub fn generate_wallets(net: Network) -> Result<Vec<GeneratedWallet>, GenesisToo
             net,
             *blob.spend_pk.as_canonical_bytes(),
             *blob.view_pk.as_canonical_bytes(),
+            *blob.msg_sign_pk(),
             blob.ml_kem_ek.to_vec(),
         )
         .encode()

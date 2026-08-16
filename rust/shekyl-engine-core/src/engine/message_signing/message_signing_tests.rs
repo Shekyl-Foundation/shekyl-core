@@ -166,19 +166,23 @@ async fn sign_message_round_trips_through_wallet_file() {
         message,
     );
 
-    // Session-less verify assembly (this module's free function). The
-    // success path is R6-a gated; the tripwire below is what flips
-    // when the v2 address layout lands.
+    // Session-less verify assembly (this module's free function). This
+    // assertion WAS the R6-a tripwire (refuse with UnboundIdentity); the
+    // fork-(ii) layout landing flipped it, by design, into the full
+    // production round trip: sign through the wallet file and key actor,
+    // verify from nothing but the encoded address string.
     let encoded = addr.encode().expect("encode primary address");
-    assert!(
-        matches!(
-            verify_message(network, &encoded, message, &armored),
-            Err(VerifyMessageError::Crypto(
-                ms::MessageSigError::UnboundIdentity
-            ))
-        ),
-        "in-tree addresses must refuse with UnboundIdentity until v2"
-    );
+    verify_message(network, &encoded, message, &armored)
+        .expect("the wallet's own address verifies its own signature");
+
+    // And the negative that makes it non-vacuous: a different message
+    // under the same address and signature is the honest refusal.
+    assert!(matches!(
+        verify_message(network, &encoded, b"a different message", &armored),
+        Err(VerifyMessageError::Crypto(
+            ms::MessageSigError::VerifyFailed
+        ))
+    ));
 
     // Signature-first: a junk paste is Malformed even with a junk address.
     assert!(matches!(

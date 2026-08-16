@@ -284,7 +284,9 @@ pub fn verify_message(
 
     let address = decode_signer_address(address, network)?;
     let segment = address.bound_classical_segment();
-    let identity = SignerIdentity::from_bound_segment(segment.as_bytes())?;
+    // Total since the fork-(ii) layout landed: every decodable address
+    // carries the key, so extraction cannot fail (the lifted R6-a gate).
+    let identity = SignerIdentity::from_bound_segment(&segment);
 
     message_signing::verify_message(
         &identity,

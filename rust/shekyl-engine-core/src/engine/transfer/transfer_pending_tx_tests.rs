@@ -92,6 +92,7 @@ fn test_payment_address() -> String {
         Network::Mainnet,
         test_recipient_spend_pk(),
         *blob.view_pk.as_canonical_bytes(),
+        *blob.msg_sign_pk(),
         blob.ml_kem_ek.to_vec(),
     )
     .encode()

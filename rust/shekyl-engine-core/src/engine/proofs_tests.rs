@@ -16,7 +16,13 @@ use super::*;
 use shekyl_address::Network;
 
 fn test_address() -> ShekylAddress {
-    ShekylAddress::new(Network::Mainnet, [0xAA; 32], [0xBB; 32], vec![0xCC; 1184])
+    ShekylAddress::new(
+        Network::Mainnet,
+        [0xAA; 32],
+        [0xBB; 32],
+        [0xEE; 48],
+        vec![0xCC; 1184],
+    )
 }
 
 // ── canonical address bytes ──────────────────────────────────────
@@ -431,6 +437,7 @@ mod check_workflows {
             Network::Testnet,
             *keys.spend_pk.as_canonical_bytes(),
             *keys.view_pk.as_canonical_bytes(),
+            *keys.msg_sign_pk(),
             keys.ml_kem_ek.to_vec(),
         );
 
@@ -609,6 +616,7 @@ mod check_workflows {
             Network::Testnet,
             *other.keys.spend_pk.as_canonical_bytes(),
             *other.keys.view_pk.as_canonical_bytes(),
+            *other.keys.msg_sign_pk(),
             other.keys.ml_kem_ek.to_vec(),
         );
 

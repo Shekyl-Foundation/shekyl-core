@@ -653,6 +653,7 @@ mod tests {
             Network::Mainnet,
             *recipient_keys.keys.spend_pk.as_canonical_bytes(),
             *recipient_keys.keys.view_pk.as_canonical_bytes(),
+            *recipient_keys.keys.msg_sign_pk(),
             recipient_keys.keys.ml_kem_ek.to_vec(),
         )
         .encode()

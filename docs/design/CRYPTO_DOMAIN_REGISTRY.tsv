@@ -128,6 +128,7 @@
 2	shekyl-archival-p-bond-spend-ed25519-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_BOND_SPEND_ED_INFO	shekyl-live		info
 2	shekyl-archival-p-bond-spend-ml-dsa-65-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO	shekyl-live		info
 2	shekyl-archival-p-hs-id-ed25519-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_HS_ID_INFO	shekyl-live		info
+2	shekyl-archival-p-msg-sign-slh-dsa-192s-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_MSG_SIGN_INFO	shekyl-live		info
 2	shekyl-v31-hybrid-sign	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_HYBRID_SIGN	shekyl-live		info
 2	shekyl-v31-classical-spend	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_CLASSICAL_SPEND	shekyl-live		info
 2	shekyl-v31-view-tag	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_VIEW_TAG	shekyl-live		info

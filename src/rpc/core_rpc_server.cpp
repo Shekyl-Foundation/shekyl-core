@@ -1088,7 +1088,7 @@ namespace cryptonote
       res.status = "Already mining";
       return true;
     }
-    if(!miner.start(info.address, static_cast<size_t>(req.threads_count), req.do_background_mining, req.ignore_battery))
+    if(!miner.start(info.address, req.miner_address, static_cast<size_t>(req.threads_count), req.do_background_mining, req.ignore_battery))
     {
       res.status = "Failed, mining not started";
       LOG_PRINT_L0(res.status);
@@ -1142,9 +1142,11 @@ namespace cryptonote
       res.threads_count = lMiner.get_threads_count();
       res.block_reward = lMiner.get_block_reward();
     }
-    const account_public_address& lMiningAdr = lMiner.get_mining_address();
+    // The retained original string, not a struct re-encode: since the
+    // fork-(ii) address layout the struct alone cannot re-encode an
+    // address (no msg_sign_pk field).
     if (lMiner.is_mining() || lMiner.get_is_background_mining_enabled())
-      res.address = get_account_address_as_str(nettype(), false, lMiningAdr);
+      res.address = lMiner.get_mining_address_str();
     const uint8_t major_version = m_core.get_blockchain_storage().get_current_hard_fork_version();
     const unsigned variant = major_version >= 7 ? major_version - 6 : 0;
     switch (variant)

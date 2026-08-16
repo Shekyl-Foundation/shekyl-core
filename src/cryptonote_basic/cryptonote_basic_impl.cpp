@@ -182,10 +182,18 @@ namespace cryptonote {
           << " or zero for legacy address-only wallets)");
       return {};
     }
+    // Since the fork-(ii) layout, a valid address carries a 48-byte
+    // msg_sign_pk fourth field that `account_public_address` does not
+    // hold, so struct-only re-encoding is no longer possible: the FFI
+    // refuses a null msg_sign_pk and this funnel returns {}. Live daemon
+    // paths (mining start/status) carry the user's original address
+    // string instead of re-encoding; remaining legacy-wallet display
+    // callers degrade with wallet2, which Phase 5 deletes.
     ShekylBuffer buf = shekyl_address_encode(
         net,
         reinterpret_cast<const uint8_t*>(adr.m_spend_public_key.data),
         reinterpret_cast<const uint8_t*>(adr.m_view_public_key.data),
+        /*msg_sign_pk_ptr=*/nullptr,
         ml_ptr,
         ml_len);
     if (!buf.ptr || buf.len == 0)
