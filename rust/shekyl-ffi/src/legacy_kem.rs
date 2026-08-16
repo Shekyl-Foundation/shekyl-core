@@ -216,9 +216,6 @@ pub unsafe extern "C" fn shekyl_address_encode(
     ml_kem_ek_ptr: *const u8,
     ml_kem_ek_len: usize,
 ) -> ShekylBuffer {
-    if spend_key_ptr.is_null() || view_key_ptr.is_null() || msg_sign_pk_ptr.is_null() {
-        return ShekylBuffer::null();
-    }
     if ml_kem_ek_len > 0 && ml_kem_ek_ptr.is_null() {
         return ShekylBuffer::null();
     }
@@ -227,18 +224,26 @@ pub unsafe extern "C" fn shekyl_address_encode(
         return ShekylBuffer::null();
     };
 
-    let spend_key: [u8; 32] = unsafe {
-        let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(spend_key_ptr, buf.as_mut_ptr(), 32);
-        buf
+    // Every fixed-size boundary read goes through the seam helper
+    // (rule 40): one audited construction owns the null / zero-length /
+    // isize::MAX preconditions, and the read length is the layout
+    // constant so a wrong count cannot silently truncate. What NO
+    // boundary code can check is the caller's allocation size — a
+    // non-null undersized buffer is UB under any read idiom; that
+    // precondition is the `# Safety` contract above, as everywhere on
+    // this surface.
+    let spend_key: [u8; 32] = {
+        let Some(slice) = (unsafe { slice_from_ptr(spend_key_ptr, 32) }) else {
+            return ShekylBuffer::null();
+        };
+        slice.try_into().expect("slice length fixed above")
     };
-    let view_key: [u8; 32] = unsafe {
-        let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(view_key_ptr, buf.as_mut_ptr(), 32);
-        buf
+    let view_key: [u8; 32] = {
+        let Some(slice) = (unsafe { slice_from_ptr(view_key_ptr, 32) }) else {
+            return ShekylBuffer::null();
+        };
+        slice.try_into().expect("slice length fixed above")
     };
-    // Seam helper for the boundary read (rule 40): length is the fixed
-    // layout constant, so a short caller buffer cannot silently truncate.
     let msg_sign_pk: [u8; shekyl_address::MSG_SIGN_PK_LEN] = {
         let Some(slice) =
             (unsafe { slice_from_ptr(msg_sign_pk_ptr, shekyl_address::MSG_SIGN_PK_LEN) })
