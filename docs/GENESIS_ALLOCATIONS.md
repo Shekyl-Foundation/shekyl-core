@@ -41,18 +41,18 @@ Source of truth: [`config/genesis_recipients.mainnet.json`](../config/genesis_re
 
 | # | Label | Amount | Address |
 |---|---|---|---|
-| 1 | Founder allocation 1 | 20,000 SHEKYL | `shekyl1q9y7r7cn83zne…xqjudqx2ex3q` |
-| 2 | Founder allocation 2 | 20,000 SHEKYL | `shekyl1q8slynhuac3hu…mz3c8s48rrt0` |
-| 3 | Founder allocation 3 | 20,000 SHEKYL | `shekyl1q9g0g2vmt8fzx…9epsysdwr77m` |
-| 4 | Founder allocation 4 | 20,000 SHEKYL | `shekyl1qyuvwck4vqyrp…z32unsvq9jqx` |
-| 5 | Founder allocation 5 | 20,000 SHEKYL | `shekyl1qypaqfqxflcr9…leqzus5pdly4` |
+| 1 | Founder allocation 1 | 20,000 SHEKYL | `shekyl1q9y7r7cn8…xqjudqx2ex3q` |
+| 2 | Founder allocation 2 | 20,000 SHEKYL | `shekyl1q8slynhua…mz3c8s48rrt0` |
+| 3 | Founder allocation 3 | 20,000 SHEKYL | `shekyl1q9g0g2vmt…9epsysdwr77m` |
+| 4 | Founder allocation 4 | 20,000 SHEKYL | `shekyl1qyuvwck4v…z32unsvq9jqx` |
+| 5 | Founder allocation 5 | 20,000 SHEKYL | `shekyl1qypaqfqxf…leqzus5pdly4` |
 
 Genesis identity:
 
 ```text
 GENESIS_NONCE  10000
-tx hash        c9a86b116babf1844f2b6c4549e29f8e863c248581b41cbed6b19ca2a69cf459
-block id       49d590b6e783c77dbe019436b283009c76de76ef6800211f56ca41a137a70d89
+tx hash        7d578c228f117681e20c225527fdf54593beafd693ec1dc08ebe020188baf573
+block id       49d3831cb7212fbbeae14c341d1cf6667ddbf28952f76668b8b569d5fb2e2ab0
 ```
 
 ### stagenet
@@ -61,18 +61,18 @@ Source of truth: [`config/genesis_recipients.stagenet.json`](../config/genesis_r
 
 | # | Label | Amount | Address |
 |---|---|---|---|
-| 1 | Founder allocation 1 | 20,000 SHEKYL | `sshekyl1q8tpl0cj84zk…00568qam38dc` |
-| 2 | Founder allocation 2 | 20,000 SHEKYL | `sshekyl1q9fet8jhlwxa…4cy77qkxahm5` |
-| 3 | Founder allocation 3 | 20,000 SHEKYL | `sshekyl1qy69mmkk9aly…xad49sykauun` |
-| 4 | Founder allocation 4 | 20,000 SHEKYL | `sshekyl1q92cx59c6630…lahv3s2z5yst` |
-| 5 | Founder allocation 5 | 20,000 SHEKYL | `sshekyl1qyspctq2y88a…tw5cwsqk2u2q` |
+| 1 | Founder allocation 1 | 20,000 SHEKYL | `sshekyl1q8tpl0cj…00568qam38dc` |
+| 2 | Founder allocation 2 | 20,000 SHEKYL | `sshekyl1q9fet8jh…4cy77qkxahm5` |
+| 3 | Founder allocation 3 | 20,000 SHEKYL | `sshekyl1qy69mmkk…xad49sykauun` |
+| 4 | Founder allocation 4 | 20,000 SHEKYL | `sshekyl1q92cx59c…lahv3s2z5yst` |
+| 5 | Founder allocation 5 | 20,000 SHEKYL | `sshekyl1qyspctq2…tw5cwsqk2u2q` |
 
 Genesis identity:
 
 ```text
 GENESIS_NONCE  10002
-tx hash        d21c2bb9b69249e711d618222be3cb7d632deb296b68480a1ef4f61ca3b5dc41
-block id       f34560b4787451edb6ddba36c8b5d4be90dabf4a00847df96b6c1a44696d3e70
+tx hash        7e7a757b1d907f19d7b5bdf233edf7ece9446979b834af937fc7fedf0678c4a1
+block id       e5683ca39b1ce002cd08fd7c1b467110f31daa1560db6cc7bb6bf1b1f2c1a11a
 ```
 
 ### testnet
@@ -81,22 +81,26 @@ Source of truth: [`config/genesis_recipients.testnet.json`](../config/genesis_re
 
 | # | Label | Amount | Address |
 |---|---|---|---|
-| 1 | Developer 1 | 20,000 SHEKYL | `tshekyl1q849z9k40wpj…7qun4s3prjf4` |
-| 2 | Developer 2 | 20,000 SHEKYL | `tshekyl1q9c7ffknyduf…yhzf4q5qx6yq` |
-| 3 | Developer 3 | 20,000 SHEKYL | `tshekyl1qxrg5vxx7y0m…2fg0zs9x74gn` |
-| 4 | Developer 4 | 20,000 SHEKYL | `tshekyl1q9h4aw68zfe3…0lkhnszd0epx` |
-| 5 | Developer 5 | 20,000 SHEKYL | `tshekyl1q8eagpjhvee9…qnn9fq4jnkjy` |
+| 1 | Developer 1 | 20,000 SHEKYL | `tshekyl1q849z9k4…7qun4s3prjf4` |
+| 2 | Developer 2 | 20,000 SHEKYL | `tshekyl1q9c7ffkn…yhzf4q5qx6yq` |
+| 3 | Developer 3 | 20,000 SHEKYL | `tshekyl1qxrg5vxx…2fg0zs9x74gn` |
+| 4 | Developer 4 | 20,000 SHEKYL | `tshekyl1q9h4aw68…0lkhnszd0epx` |
+| 5 | Developer 5 | 20,000 SHEKYL | `tshekyl1q8eagpjh…qnn9fq4jnkjy` |
 
 Genesis identity:
 
 ```text
 GENESIS_NONCE  10101
-tx hash        d80c7c848b868461d9b0531fd17289d5e9e6d2e3ae5d82885b062e66bb3750bf
-block id       ac2c43bd041edb3d379f203a3648e50c26c3ef19d35c51bb510593f99fd0f20e
+tx hash        f450491a2e41fa5e574fa3c5af1438f77524f657a843f9d5f52afeab312f618a
+block id       3dcfcd97ffed5f9b474a5edbaa23cb03bc8f7d7bc41570aab66f9111e66773e9
 ```
 
 Addresses are truncated above for readability only — the full strings are
 in the linked JSON files, which are the bytes genesis actually commits to.
+The 2026-08-16 fork-(ii) re-encode kept each recipient's spend/view/ek and
+filled `msg_sign_pk` so the files parse on the current layout; the freeze
+ceremony (`geblock gen-wallets`) still replaces this set with seed-derived
+keys.
 Each address is a three-segment Bech32m string
 (`<classical>/<ML-KEM part A>/<ML-KEM part B>`) carrying the hybrid
 post-quantum key material Shekyl requires from genesis.
