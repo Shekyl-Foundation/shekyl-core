@@ -455,9 +455,12 @@ impl CurveTreeClient {
 
     /// Declare the prune-disabled posture, reporting what the store found.
     ///
-    /// A store **write**, so it runs on the actor's object for the same
-    /// reason pinning does — the CompleteTree serving posture is declared
-    /// through the curve-tree actor, never around it. Pure forward to
+    /// A store **write**, same as [`Self::pin_serve_set`]: the method is a
+    /// pure forward, so a holder of this client *can* call it directly.
+    /// The engine does not — production declaration rides
+    /// `PinCompleteTreePrefix` so it serializes with ingest / pin /
+    /// rollback on the actor that owns the client. A caller outside that
+    /// actor is a second writer and owns the interleaving. Pure forward to
     /// [`LeafStore::set_prune_disabled`], including the parts that matter
     /// most: the declaration is one-way with no clear path, and the
     /// returned [`PostureDeclaration`] is the loss detector a re-declaring
