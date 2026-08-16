@@ -161,9 +161,12 @@ namespace cryptonote {
     // carry `msg_sign_pk`, and we will not thicken the C++ struct to
     // hold a field the Rust address crate owns (rule 20). Live daemon
     // paths retain the caller's original encoded string (miner
-    // start/status). Remaining wallet2 display callers are the Phase-5
-    // deletion surface — they get an empty string, not a theatrical
-    // FFI call that cannot succeed.
+    // start/status). Wallet-owned encode of *this* account is
+    // `account_base::get_public_address_str` (blob-derived pk, same
+    // `shekyl_address_encode` the mining RPC/FFI already call). Remaining
+    // wallet2 display callers that only have a destination struct are
+    // the Phase-5 deletion surface — they get an empty string, not a
+    // theatrical FFI call that cannot succeed.
     (void)nettype;
     (void)adr;
     LOG_PRINT_L0("get_account_address_as_str: cannot encode from account_public_address (no msg_sign_pk); pass the original address string");

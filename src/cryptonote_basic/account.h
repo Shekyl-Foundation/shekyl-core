@@ -73,6 +73,13 @@ namespace cryptonote
     bool                 m_master_seed_present = false;
     std::vector<uint8_t> m_ml_kem_decap_key;
 
+    /// SLH-DSA-192s message-signing public key from the last blob fill.
+    /// Public; rederived on every open; not persisted. Lets
+    /// `get_public_address_str` encode without thickening
+    /// `account_public_address` (rule 20).
+    uint8_t m_msg_sign_pk[SHEKYL_MSG_SIGN_PK_BYTES]{};
+    bool m_has_msg_sign_pk = false;
+
     hw::device *m_device = &hw::get_device("default");
     crypto::chacha_iv m_encryption_iv;
 
