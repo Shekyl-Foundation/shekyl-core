@@ -497,3 +497,22 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod marginal_input_weight_pin {
+    /// The dust boundary's marginal-input weight, pinned so any weight-model
+    /// movement is a loud, reviewed change to the dust bar. The second
+    /// assertion records the 2026-08-16 retirement fact: the provisional
+    /// `MARGINAL_INPUT_WEIGHT = 3457` stub (zero FCMP proof increment)
+    /// understated this by the whole per-input proof increment — a future
+    /// "simplification" back to a proofless constant must fail here.
+    #[test]
+    fn marginal_input_weight_is_pinned() {
+        let w = super::marginal_input_weight_at_d_ref(super::MAX_TREE_DEPTH);
+        assert_eq!(w, 9136, "weight-model movement changes the dust boundary");
+        assert!(
+            w > 3457,
+            "the marginal weight must exceed the retired proofless stub"
+        );
+    }
+}

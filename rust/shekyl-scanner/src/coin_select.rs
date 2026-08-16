@@ -62,7 +62,10 @@ impl Default for SelectionCriteria {
             target_amount: AtomicUnits::ZERO,
             min_inputs: 1,
             max_inputs: 16,
-            dust_threshold: AtomicUnits::from_raw(tx_fee::dust_threshold(&reference_rate)),
+            dust_threshold: AtomicUnits::from_raw(tx_fee::dust_threshold(
+                &reference_rate,
+                shekyl_tx_weight::marginal_input_weight_at_d_ref(shekyl_tx_weight::MAX_TREE_DEPTH),
+            )),
         }
     }
 }

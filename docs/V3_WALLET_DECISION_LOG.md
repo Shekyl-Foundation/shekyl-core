@@ -4654,4 +4654,61 @@ re-spelling**. No persisted-state change ⇒ no rule-42 (serialization-schema) b
 
 ---
 
+## 2026-08-16 — Fee sanity ceiling: three unreconciled specifications collapse to one interim ruling
+
+**Context.** The A3 audit found the named-tier fee sanity ceiling
+specified three times with three different shapes, and the code
+implementing none of them (`Custom`-only 100×-economy was the whole
+shipped check; `TxError::DaemonFeeUnreasonable` had zero construction
+sites):
+
+1. `WALLET_REWRITE_PLAN.md` "Fee priority" cross-cutting lock (the
+   oldest): refuse when the daemon's `priority` exceeds **10× the same
+   snapshot's `economy`** — intra-snapshot, no history needed.
+2. Decision 6 above (2026-04-25 vintage prose): cap any estimate at
+   **10× the previous block's median fee per byte** — needs last-block
+   fee data the wallet does not hold.
+3. The 2026-04-25 positional-mapping entry: **5× the 1000-block
+   historical median of `fees[3]`, hard cap 100,000 atomic units /
+   byte** — needs a wallet-side historical fee series that is precisely
+   the named substrate of the deferred V3.x `WalletSideEstimator`
+   (R16(c) declined its V3.0 lift).
+
+**Ruling (interim, superseded-by-design).** Implement now, from the one
+atomic snapshot the wallet already holds:
+
+- **tier-band monotonicity** (`economy ≤ standard ≤ priority`) — an
+  inverted band is a defect or a lie, not a market condition;
+- **priority ≤ 10× economy** — position 1, the original lock, verbatim;
+- **absolute cap: 100,000 atomic units per weight unit on every tier
+  including `Custom`** — the history-free half of position 3.
+
+All three checks fire as `FeeEstimatorError::DaemonFeeUnreasonable`
+(new; the dead `TxError` twin is deleted), surfacing as JSON-RPC
+**`-29109 DAEMON_FEE_UNREASONABLE`** on both the build and
+`get_default_fee_priority` quote paths — distinct from `-29102` ("the
+query failed") because the remedies differ. `Custom`-rate band
+violations are re-classed as the caller's error
+(`CustomFeeOutOfRange` → `-32602`), not the daemon's.
+
+**What the interim form deliberately does not catch:** common-mode
+inflation of all tiers together below the absolute cap. That is the
+anomaly-vs-history job of positions 2/3, which are **not rejected but
+deferred as one item**: the median-multiple ceiling lands with the
+V3.x `WalletSideEstimator`, whose historical-fee accessor is its named
+substrate — building that accessor inside a finishing pass would have
+pulled a ruled-deferred item forward without the fingerprint-analysis
+and UX validation its own lift triggers require. **The interim ceiling
+names its successor**: when the `WalletSideEstimator` lands, the
+median-multiple check replaces (not joins) the 10×-economy check;
+the monotonicity and absolute-cap checks remain.
+
+**Also closed in the same pass** (Phase-2a §10 residuals): the
+"named buckets unchecked" FOLLOWUPS row; the
+`MARGINAL_INPUT_WEIGHT` proofless stub retired in favor of the landed
+`shekyl_tx_weight::marginal_input_weight_at_d_ref` (dust marginal
+weight 3457 → 9136 — the stub had understated the dust bar by the
+whole per-input FCMP proof increment); `STUB_FEE_ATOMIC_UNITS`
+`#[cfg(test)]`-gated with the `*_in_state` reference bodies it feeds.
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

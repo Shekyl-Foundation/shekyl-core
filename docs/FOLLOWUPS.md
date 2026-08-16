@@ -5513,7 +5513,7 @@ sustainability is unaffected by the recalibration.
   (2a-1…2a-4). **Design/audit:** `docs/design/PHASE_2A_SEND_PATH.md`,
   `PHASE_2A_SEND_PATH_AUDIT.md` §2a-4 post-verdict. **Residual (reopen before
   wallet build against untrusted daemon):** daemon-tier fee sanity ceiling —
-  `DaemonFeeUnreasonable` applies to `Custom` only today; named buckets unchecked
+  `DaemonFeeUnreasonable` applies to `Custom` only today; named buckets unchecked — **CLOSED 2026-08-16** (interim intra-snapshot ceiling + absolute cap implemented, `-29109`; see the same-date decision-log entry; the historical median-multiple ceiling is the V3.x `WalletSideEstimator`'s, marked as this check's successor)
   (`tx_fee_model.rs`). **Still open (orchestrator):** `WALLET_REWRITE_PLAN.md`
   `phase2_ops_refresh_send` — `Wallet::refresh` / `build_pending_tx` / … pending
   Phase 1. **Does not block:** Phase 2b design (parallel).
@@ -14074,6 +14074,16 @@ one place to confirm each item's relationship to the wallet stack.
   fingerprint analysis; fee-band-selection UX validated.
   None are V3.0 blockers under the segment-2c
   disposition; the seam preserves V3.0 shipping date.
+
+  **Inherited obligation (2026-08-16 ceiling ruling).** The
+  interim fee sanity ceiling (intra-snapshot 10×-economy +
+  monotonicity + absolute 100k/weight cap, `-29109`) names
+  this item as its successor: when `WalletSideEstimator`
+  lands, its historical fee series implements the
+  median-multiple ceiling (5× the 1000-block median of
+  `fees[3]`), which REPLACES the 10×-economy check — the
+  monotonicity and absolute-cap checks remain. See the
+  same-date `V3_WALLET_DECISION_LOG.md` entry.
 
   Cross-references:
   [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)

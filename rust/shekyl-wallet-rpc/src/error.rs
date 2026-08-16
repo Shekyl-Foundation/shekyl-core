@@ -70,6 +70,12 @@ pub enum WalletRpcErrorCode {
     /// is on chain; `FAILED` was never relayed). A state conflict, not
     /// a bad request — refresh the view and re-decide.
     AbandonStateForbids = -29108,
+    /// Build / fee quote: the daemon's fee snapshot failed the interim
+    /// sanity ceiling (non-monotonic tier band, priority above 10×
+    /// economy, or a tier above the absolute per-weight cap). The
+    /// daemon *answered*; the wallet refused what it said — distinct
+    /// from `-29102`'s "the fee query itself failed" (rule 82).
+    DaemonFeeUnreasonable = -29109,
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200,
     /// Refresh / rescan / proofs: daemon RPC failed.
@@ -220,6 +226,18 @@ pub enum WalletRpcError {
     /// Build: daemon fee query failed.
     #[error("fee estimation failed")]
     FeeEstimationFailed,
+    /// Build / quote (`-29109`): the daemon's fee snapshot was refused
+    /// by the interim sanity ceiling. `data` carries the numeric facts
+    /// (all public snapshot values); the message stays category-only.
+    #[error("daemon fee estimate refused by the wallet's sanity ceiling ({reason})")]
+    DaemonFeeUnreasonable {
+        /// Which interim check refused (engine-supplied static string).
+        reason: &'static str,
+        /// Offending per-weight rate (atomic units).
+        rate: u64,
+        /// The violated bound (atomic units per weight).
+        bound: u64,
+    },
     /// Submit: unknown / expired reservation handle.
     #[error("reservation not found")]
     ReservationNotFound,
@@ -369,6 +387,7 @@ impl WalletRpcError {
             Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
             Self::InsufficientFunds => WalletRpcErrorCode::InsufficientFunds,
             Self::FeeEstimationFailed => WalletRpcErrorCode::FeeEstimationFailed,
+            Self::DaemonFeeUnreasonable { .. } => WalletRpcErrorCode::DaemonFeeUnreasonable,
             Self::ReservationNotFound => WalletRpcErrorCode::ReservationNotFound,
             Self::SnapshotInvalidated => WalletRpcErrorCode::SnapshotInvalidated,
             Self::ContentGenMismatch { .. } => WalletRpcErrorCode::ContentGenMismatch,
@@ -410,6 +429,11 @@ impl WalletRpcError {
                 Some(json!({ "detail": detail }))
             }
             Self::MessageSigUnsupportedScheme { scheme } => Some(json!({ "scheme": scheme })),
+            Self::DaemonFeeUnreasonable {
+                reason,
+                rate,
+                bound,
+            } => Some(json!({ "reason": reason, "rate": rate, "bound": bound })),
             _ => None,
         }
     }
@@ -607,6 +631,20 @@ impl From<SendError> for WalletRpcError {
     fn from(err: SendError) -> Self {
         match err {
             SendError::InvalidRecipient { .. } => Self::InvalidRecipient,
+            SendError::DaemonFeeUnreasonable {
+                reason,
+                rate,
+                bound,
+            } => Self::DaemonFeeUnreasonable {
+                reason,
+                rate,
+                bound,
+            },
+            // The caller's Custom rate is out of band: a request error,
+            // -32602 — never blamed on the daemon (rule 82).
+            SendError::CustomFeeOutOfRange { reason } => {
+                Self::InvalidParams(format!("custom fee rate out of range: {reason}"))
+            }
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
             SendError::Io(IoError::Daemon { .. }) => Self::FeeEstimationFailed,
             SendError::Io(other) => Self::InternalError(other.to_string()),

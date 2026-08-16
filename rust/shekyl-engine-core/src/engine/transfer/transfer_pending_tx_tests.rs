@@ -3286,10 +3286,12 @@ fn populate_ledger_scan_only(
 }
 
 fn daemon_fee_estimates_distinct() -> FeeEstimates {
+    // Distinct, monotonic, and inside the interim sanity ceiling
+    // (priority = 8× economy < 10×).
     FeeEstimates {
-        economy: FeeRate::new(1, 1).expect("economy rate"),
+        economy: FeeRate::new(5, 1).expect("economy rate"),
         standard: FeeRate::new(10, 1).expect("standard rate"),
-        priority: FeeRate::new(100, 1).expect("priority rate"),
+        priority: FeeRate::new(40, 1).expect("priority rate"),
         quantization_mask: 1,
     }
 }

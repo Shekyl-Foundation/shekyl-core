@@ -16,11 +16,17 @@ use super::error::{FeeEstimatorError, IoError};
 use super::traits::{DaemonEngine, FeeEstimates};
 
 pub(crate) fn map_daemon_engine_fee_error<E: Into<IoError>>(err: E) -> FeeEstimatorError {
+    // The matched headers are the upstream `RpcError` Display prefixes,
+    // which the `From<RpcError> for IoError` conversion documents as the
+    // stable stringification contract. `starts_with`, not `contains`:
+    // the parenthesized interior can embed daemon-supplied response
+    // text, and a position-anchored match keeps a daemon from steering
+    // classification by echoing a header inside its error body.
     match err.into() {
-        IoError::Daemon { detail } if detail.contains("connection error") => {
+        IoError::Daemon { detail } if detail.starts_with("connection error") => {
             FeeEstimatorError::DaemonUnreachable
         }
-        IoError::Daemon { detail } if detail.contains("unexpected fee response") => {
+        IoError::Daemon { detail } if detail.starts_with("unexpected fee response") => {
             FeeEstimatorError::DaemonResponseInvalid {
                 reason: "get_fee_estimates response unusable: unexpected fee response",
             }

@@ -354,6 +354,7 @@ components:
         - -29106   # SUBMIT_REJECTED
         - -29107   # SUBMIT_AMBIGUOUS
         - -29108   # ABANDON_STATE_FORBIDS
+        - -29109   # DAEMON_FEE_UNREASONABLE
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
@@ -413,6 +414,23 @@ components:
                                           data: {"state": "..."} in
                                           get_transfers vocabulary. There
                                           is no force override (P3-4)
+          -29109 DAEMON_FEE_UNREASONABLE  build / get_default_fee_priority:
+                                          the daemon ANSWERED the fee query
+                                          and the wallet refused the answer —
+                                          the interim sanity ceiling caught a
+                                          non-monotonic tier band, priority
+                                          above 10× economy, or a tier above
+                                          the absolute 100,000
+                                          atomic-units/weight cap
+                                          (data: {"reason","rate","bound"}).
+                                          Distinct from -29102 (the query
+                                          itself failed) by rule 82: the
+                                          remedies differ — retry vs. stop
+                                          trusting this daemon. The ceiling
+                                          is interim by ruling (2026-08-16);
+                                          the superseding historical
+                                          median-multiple ceiling lands with
+                                          the V3.x wallet-side estimator
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs: daemon RPC
                                           failed (proof methods dial the
@@ -572,8 +590,11 @@ components:
       description: >
         Mirrors `shekyl_engine_core::FeePriority`. Named tiers resolve to a
         feerate via the daemon fee estimate at build time — never hardcoded
-        multipliers. `custom` pins atomic-units-per-byte and bypasses the
-        daemon estimate (and its sanity checks) entirely.
+        multipliers — and the snapshot must pass the wallet's interim
+        sanity ceiling (-29109 otherwise). `custom` pins
+        atomic-units-per-byte, bypassing the named tiers but not the
+        guard rails: it must sit between the snapshot's economy floor
+        and the sanity ceiling (-32602 otherwise).
       oneOf:
         - type: string
           enum: [ECONOMY, STANDARD, PRIORITY]

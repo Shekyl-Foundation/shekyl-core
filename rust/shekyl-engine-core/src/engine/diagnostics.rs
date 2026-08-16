@@ -419,6 +419,13 @@ pub enum BuildErrorKind {
     /// etc.).
     InvalidRecipient,
 
+    /// The build refused the fee inputs: the daemon's snapshot failed
+    /// the interim sanity ceiling, or the caller's `Custom` rate is
+    /// out of band. Its own kind (not `DaemonUnavailable`) because the
+    /// operator remedy differs — the daemon answered, and what it said
+    /// (or what the caller asked) was refused.
+    FeeRefused,
+
     /// Wallet output coverage is insufficient for the requested
     /// transfer + fee; orchestrator-side
     /// [`SendError::InsufficientFunds`](super::error::SendError::InsufficientFunds)

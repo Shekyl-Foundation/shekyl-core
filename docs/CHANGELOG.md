@@ -4,6 +4,29 @@
 
 ### Changed
 
+- **Fee sanity ceiling is live (interim form) — `-29109 DAEMON_FEE_UNREASONABLE`.**
+  Named fee tiers were previously accepted from the daemon unchecked
+  (only `Custom` rates were capped); the wallet now refuses a snapshot
+  with a non-monotonic tier band, `priority` above 10× `economy` (the
+  original cross-cutting lock, implemented verbatim), or any tier above
+  100,000 atomic units per weight unit — on both the build path and the
+  `get_default_fee_priority` quote. Caller-side `Custom` band violations
+  are re-classed as `-32602` request errors instead of being blamed on
+  the daemon. The ceiling is **interim by ruling** (2026-08-16
+  decision-log entry): the historical median-multiple ceiling supersedes
+  the 10×-economy check when the V3.x `WalletSideEstimator` lands.
+- **Dust boundary corrected: marginal input weight 3457 → 9136.** The
+  provisional `MARGINAL_INPUT_WEIGHT` stub (zero FCMP proof increment)
+  outlived the KAT that was meant to replace it; the dust threshold now
+  composes the shared fee formula with the weight model's own
+  `marginal_input_weight_at_d_ref`, so outputs that cost more to spend
+  than they carry are correctly classed as dust.
+- **Fee-surface scaffolding retired.** `STUB_FEE_ATOMIC_UNITS` and the
+  pre-PR-5 `*_in_state` reference bodies are `#[cfg(test)]`-gated;
+  "Phase 1 stub" doc-prose on the live estimator swept; the
+  grace-blocks constant has one owner (`shekyl-rpc-client`); daemon
+  fee-error classification is prefix-anchored instead of substring-open.
+
 - **Genesis tx-key remint (`shekyl/genesis-txkey-v2`).** The founding
   transaction key is now derived from payment identity (spend ‖ view ‖
   ML-KEM encap key ‖ amount), not the Bech32m address spelling. A layout

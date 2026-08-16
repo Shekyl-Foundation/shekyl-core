@@ -51,14 +51,11 @@ use crate::engine::pending::TxHash;
 use crate::engine::traits::{DaemonEngine, DaemonHealth, FeeEstimates, TxSubmitOutcome};
 use crate::engine::transaction_submitter::submit_outcome_from_verdict;
 
-/// Grace-block horizon passed to the daemon's `get_fee_estimate`
-/// JSON-RPC (matches `shekyl_rpc_client`'s private
-/// `GRACE_BLOCKS_FOR_FEE_ESTIMATE`). The daemon estimates a fee rate
-/// expected to stay above the relay floor for this many blocks. Held
-/// here (rather than reaching for the upstream constant, which is not
-/// `pub`) so the single-RPC snapshot path (§3.3) does not re-export
-/// vendored internals.
-const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
+// One owner for the grace-block horizon: the constant lives in
+// `shekyl-rpc-client` (a first-class workspace crate since the
+// un-vendoring — the old "not re-exporting vendored internals"
+// rationale for a local copy no longer applies).
+use shekyl_rpc_client::GRACE_BLOCKS_FOR_FEE_ESTIMATE;
 
 /// Map a daemon `get_fee_estimate` JSON-RPC `result` object onto the
 /// three-tier [`FeeEstimates`] snapshot (§3.3), deriving every tier

@@ -107,13 +107,16 @@ use crate::engine::{
 #[cfg(test)]
 use crate::engine::refresh::{derive_snapshot_id, LedgerSnapshot};
 
-/// Stub fee for Phase 1 [`Engine::build_pending_tx`].
+/// Test-fixture fee for the `cfg(test)` reference bodies below.
 ///
-/// Replaced in Phase 2a by a daemon `get_fee_estimates` call resolved
-/// against the caller's [`FeePriority`]. The constant is non-zero so
-/// that lifecycle tests exercising [`Reservation::fee_atomic_units`]
-/// run against a real value rather than zero-as-special-case.
-pub const STUB_FEE_ATOMIC_UNITS: AtomicUnits = AtomicUnits::from_raw(1_000);
+/// Production builds resolve fees through the `FeeEstimator` seam
+/// (daemon snapshot → weight model → convergence); this constant feeds
+/// only the pre-PR-5 `*_in_state` reference implementations and their
+/// unit tests, and is gated with them so no production path can name
+/// it. Non-zero so reservation tests run against a real value rather
+/// than zero-as-special-case.
+#[cfg(test)]
+pub(crate) const STUB_FEE_ATOMIC_UNITS: AtomicUnits = AtomicUnits::from_raw(1_000);
 
 /// Opaque 16-byte content-derived ledger-snapshot digest.
 ///
@@ -290,7 +293,8 @@ pub struct TxRequest {
     /// One or more destinations. Empty input is rejected with
     /// [`SendError::InvalidRecipient`].
     pub recipients: Vec<TxRecipient>,
-    /// Fee tier; Phase 1 ignores and uses [`STUB_FEE_ATOMIC_UNITS`].
+    /// Fee tier, resolved at build time against the daemon fee
+    /// snapshot through the `FeeEstimator` seam.
     pub priority: FeePriority,
 }
 
@@ -410,7 +414,7 @@ pub(crate) struct Reservation {
     /// dispatch code.
     #[allow(dead_code)]
     pub extensions: Vec<ReservationExtension>,
-    /// Fee in atomic units. Phase 1: [`STUB_FEE_ATOMIC_UNITS`].
+    /// Fee in atomic units, as resolved by the build's fee pipeline.
     ///
     /// `dead_code` allow: the field is consumed only by the `Debug`
     /// derive and by tests that read the reservation map directly.

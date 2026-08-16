@@ -4460,6 +4460,7 @@ dependencies = [
  "shekyl-engine-state",
  "shekyl-rpc-client",
  "shekyl-scanner",
+ "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",

@@ -108,6 +108,9 @@ pub(super) fn map_handle_err_to_reanchor(err: &CurveTreeHandleError) -> Reanchor
 pub(super) fn build_error_kind(err: &SendError) -> BuildErrorKind {
     match err {
         SendError::InvalidRecipient { .. } | SendError::Tx(_) => BuildErrorKind::InvalidRecipient,
+        SendError::DaemonFeeUnreasonable { .. } | SendError::CustomFeeOutOfRange { .. } => {
+            BuildErrorKind::FeeRefused
+        }
         SendError::InsufficientFunds { .. } => BuildErrorKind::InsufficientFunds,
         SendError::SpendUnavailableRebuilding { .. } => BuildErrorKind::RebuildingMembershipData,
         SendError::OutputNotYetSpendable { .. } => BuildErrorKind::OutputNotYetSpendable,
@@ -157,9 +160,25 @@ pub(super) fn map_output_selector_error(err: &OutputSelectorError) -> SendError 
 }
 
 pub(super) fn map_fee_estimator_error(err: &FeeEstimatorError) -> SendError {
-    SendError::Io(IoError::Daemon {
-        detail: err.to_string(),
-    })
+    match err {
+        FeeEstimatorError::DaemonFeeUnreasonable {
+            reason,
+            rate,
+            bound,
+        } => SendError::DaemonFeeUnreasonable {
+            reason,
+            rate: *rate,
+            bound: *bound,
+        },
+        FeeEstimatorError::CustomFeeOutOfRange { reason } => {
+            SendError::CustomFeeOutOfRange { reason }
+        }
+        // Transport / response-shape failures keep the daemon-IO
+        // disposition (`-29102`-class at the RPC boundary).
+        other => SendError::Io(IoError::Daemon {
+            detail: other.to_string(),
+        }),
+    }
 }
 
 pub(super) fn map_signer_error(err: &SignerError) -> SendError {

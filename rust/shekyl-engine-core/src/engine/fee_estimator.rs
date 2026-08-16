@@ -25,9 +25,10 @@
 //! - [`FeeEstimationContext`] — the structural context the
 //!   estimator reasons against (recipient count, input
 //!   count, ledger snapshot for V3.x wallet-side analysis).
-//! - [`DaemonFeeEstimator`] — V3.0 default impl; Phase 1
-//!   stub returns
-//!   [`STUB_FEE_ATOMIC_UNITS`](super::pending::STUB_FEE_ATOMIC_UNITS).
+//! - [`DaemonFeeEstimator`] — V3.0 default impl: resolves the
+//!   priority against the build's atomic daemon fee snapshot
+//!   through the single-source weight model and the two-pass
+//!   convergence fixpoint (`tx_fee_model`).
 //!
 //! # Trait-vs-implementation split (R16)
 //!
@@ -64,10 +65,8 @@ use super::tx_fee_model::{converge_fee, fee_from_weight, fee_rate_for_priority, 
 /// Caller-supplied fee preference for the
 /// `PendingTxEngine::build` pipeline.
 ///
-/// Phase 1 ignores the variant and uses
-/// [`STUB_FEE_ATOMIC_UNITS`](super::pending::STUB_FEE_ATOMIC_UNITS);
-/// Phase 2a resolves each variant against the daemon's
-/// `get_fee_estimates` (for [`DaemonFeeEstimator`]) or
+/// Each variant is resolved against the daemon's
+/// `get_fee_estimates` snapshot (for [`DaemonFeeEstimator`]) or
 /// against the implementor's strategy (for the V3.x
 /// `ExplicitFeeEstimator` / `WalletSideEstimator`).
 ///
@@ -92,8 +91,12 @@ pub enum FeePriority {
     /// inclusion under normal mempool conditions.
     Priority,
     /// Caller-pinned feerate in atomic-units-per-byte. The
-    /// daemon's estimate is bypassed entirely (and so are
-    /// `TxError::DaemonFeeUnreasonable` sanity checks).
+    /// daemon's named tiers are bypassed, but not the guard rails:
+    /// the rate must sit between the snapshot's economy floor and
+    /// the sanity ceiling
+    /// ([`FeeEstimatorError::CustomFeeOutOfRange`](super::error::FeeEstimatorError)
+    /// otherwise), and the snapshot itself must pass the interim
+    /// unreasonableness checks.
     Custom(NonZeroU64),
 }
 
@@ -208,9 +211,11 @@ pub trait FeeEstimator: Send + Sync + 'static {
     /// orchestrator converts via `.into()` to the engine-wide
     /// [`FeeEstimatorError`]. V3.0's [`DaemonFeeEstimator`]
     /// returns [`FeeEstimatorError::DaemonUnreachable`] on
-    /// network failure and [`FeeEstimatorError::DaemonResponseInvalid`]
-    /// on malformed responses; the Phase 1 stub returns `Ok`
-    /// unconditionally with [`STUB_FEE_ATOMIC_UNITS`](super::pending::STUB_FEE_ATOMIC_UNITS).
+    /// network failure, [`FeeEstimatorError::DaemonResponseInvalid`]
+    /// on malformed responses, and
+    /// [`FeeEstimatorError::DaemonFeeUnreasonable`] /
+    /// [`FeeEstimatorError::CustomFeeOutOfRange`] from the
+    /// snapshot / custom-rate guard rails.
     fn estimate_fee(
         &self,
         priority: FeePriority,
@@ -220,13 +225,13 @@ pub trait FeeEstimator: Send + Sync + 'static {
 
 /// V3.0 default [`FeeEstimator`] implementor.
 ///
-/// **Phase 1 stub.** Returns
-/// [`STUB_FEE_ATOMIC_UNITS`](super::pending::STUB_FEE_ATOMIC_UNITS)
-/// regardless of `priority` or `context` — matches the
-/// pre-PR-5 `build_pending_tx_in_state` body's `let fee =
-/// STUB_FEE_ATOMIC_UNITS;` line byte-for-byte. Phase 2a wires
-/// the actual daemon `get_fee_estimates` query against the
-/// priority variant.
+/// Resolves `priority` against the context's atomic daemon fee
+/// snapshot: the snapshot passes the interim unreasonableness guard,
+/// the priority maps to a per-weight rate, and the fee converges
+/// through the single-source weight model at the context's structural
+/// shape (`tx_fee_model::converge_fee`). It deliberately ignores
+/// `context.ledger` — that field is the V3.x `WalletSideEstimator`
+/// hook (wallet-side history), not this estimator's input.
 ///
 /// # V3.x successors
 ///
@@ -275,13 +280,9 @@ mod tests {
     use std::num::NonZeroU64;
 
     fn dummy_context() -> LedgerSnapshot {
-        // The Phase 1 stub ignores all context fields; a
-        // default-empty LedgerSnapshot is sufficient for the
-        // regression. The `from_ledger_for_bench` constructor
-        // is gated behind `bench-internals`; for the C4γ
-        // stub-regression we don't need a real LedgerBlock —
-        // we just need to verify the stub returns the
-        // constant.
+        // `DaemonFeeEstimator` deliberately ignores the ledger field
+        // (that hook is the V3.x `WalletSideEstimator`'s), so a
+        // default-empty LedgerSnapshot is sufficient here.
         //
         // Constructing a LedgerSnapshot from outside its
         // module requires either the bench-internals gate
@@ -295,10 +296,13 @@ mod tests {
     }
 
     fn test_fee_snapshot() -> FeeEstimates {
+        // Inside the interim sanity ceiling (priority = 8× economy);
+        // ceiling refusals are tested where the ceiling lives
+        // (`tx_fee_model::interim_ceiling_battery`).
         FeeEstimates {
-            economy: FeeRate::new(1, 1).expect("economy fee rate is non-zero"),
+            economy: FeeRate::new(5, 1).expect("economy fee rate is non-zero"),
             standard: FeeRate::new(10, 1).expect("standard fee rate is non-zero"),
-            priority: FeeRate::new(100, 1).expect("priority fee rate is non-zero"),
+            priority: FeeRate::new(40, 1).expect("priority fee rate is non-zero"),
             quantization_mask: 1,
         }
     }
@@ -339,9 +343,9 @@ mod tests {
 
         let daemon = std::sync::Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
         daemon.set_fee_estimates(FeeEstimates {
-            economy: FeeRate::new(1, 1).expect("economy rate"),
+            economy: FeeRate::new(5, 1).expect("economy rate"),
             standard: FeeRate::new(10, 1).expect("standard rate"),
-            priority: FeeRate::new(100, 1).expect("priority rate"),
+            priority: FeeRate::new(40, 1).expect("priority rate"),
             quantization_mask: 1,
         });
 

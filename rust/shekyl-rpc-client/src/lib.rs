@@ -32,7 +32,13 @@ use shekyl_portable_storage::{
 // Number of blocks the fee estimate will be valid for
 // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c
 //   /src/wallet/wallet2.cpp#L121
-const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
+/// Grace-block horizon for the daemon's `get_fee_estimate` JSON-RPC:
+/// the daemon estimates a rate expected to stay above the relay floor
+/// for this many blocks. `pub` because this crate is the single owner
+/// of the value (inherited from wallet2's constant of the same intent);
+/// `shekyl-engine-core`'s snapshot path imports it rather than keeping
+/// a shadow copy that could drift.
+pub const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
 
 /// Phase 2a canonical dust threshold (§3.10.2).
 pub mod tx_fee;
@@ -379,6 +385,13 @@ pub trait Rpc: Sync + Clone {
     /// This may be manipulated to unsafe levels and MUST be sanity checked.
     ///
     /// This MUST NOT be expected to be deterministic in any way.
+    ///
+    /// NOTE (2026-08-16): parallel, older consumer path — the engine's
+    /// build/quote surfaces use `DaemonClient::get_fee_estimates` (one
+    /// atomic snapshot, interim-ceiling-guarded). The remaining
+    /// consumer is `shekyl-mobile-wallet`; consolidate onto the
+    /// snapshot path when that wallet re-wires against
+    /// `shekyl-wallet-rpc`.
     fn get_fee_rate(
         &self,
         priority: FeePriority,
