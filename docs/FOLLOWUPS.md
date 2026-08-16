@@ -9760,6 +9760,62 @@ its wake.
   `utils/fleet/sample_node_series.sh` and `anon_readout_parse.py` should emit
   the per-sample series by default and any arm's write-up should carry it.
 
+- **Relay: `full_travel_probability` has no simulation partner, and it is now
+  the derivation AND the check.** *(Registered 2026-08-16. §17.1 records the
+  gap in the design doc; it has never had a `FOLLOWUPS` entry, which is how it
+  survived three rounds that all leaned on it.)*
+
+  Everything α-shaped runs through this one analytic function.
+  `derive_embargo` binary-searches against it, so the shipped embargo is
+  *defined* as the smallest tick count where it clears 0.90; `d9_alpha.rs`
+  reads α from it to price D9(b); and since PR #488 the admissible region's
+  boundary and its miss curve are both derived through it as well. **A wrong
+  slack exponent moves the derivation, the gate and the region bound together
+  and every one of them stays green** — the textbook common-mode failure, and
+  the surface has only grown.
+
+  **The tree already knows the remedy, one function up.**
+  [`marginal_preemption_profile`](../rust/shekyl-relay-privacy/src/derive.rs)
+  carries `conformance::simulate_preemption_profile` as its explicitly named
+  *"cross-check anchor"* — an independent simulator that walks the thing the
+  closed form asserts. `full_travel_probability` has no counterpart; grep finds
+  none.
+
+  **Do:** add a `simulate_full_travel` beside the other conformance walkers —
+  draw real embargo deadlines per stem node, walk the stem, report the fraction
+  completing before any timer fires — and pin it against the analytic value at
+  the shipped pair, the way §15.3's recorded rows anchor the recovery formula.
+  The two must be able to disagree, which is the whole point: a partner that
+  shares the exponent is not a partner.
+
+- **Relay: `F'` may be per-POSTURE even though §89.2 correctly refused
+  per-ZONE.** *(Registered 2026-08-16, from PR #488's review round. Deliberately
+  **not** blocking the region pick.)*
+
+  §89.2 kept `fluff_return_ms` process-wide on §63.2's keeper — *"a dual-stack
+  node's fluff returns over both networks, so there is no per-zone value to
+  pick"* — against `time_between_hop_ms`, which §59's coherence makes
+  well-defined per zone. That argument is structural and it stands.
+
+  **It does not reach the posture question.** `F'` is not per-zone, but it may
+  be per-node-transport-mix: a **Tor-only** node's return genuinely *is* the
+  anonymity value, while a **dual-stack** node's is a min over both networks.
+  Worst-zone-global is therefore correct for the Tor-only posture and
+  over-provisions the dual-stack one — a different claim from the one §89.2
+  disposed of, and one it never addressed.
+
+  **Why this is filed rather than acted on.** The sharpest form of the
+  objection is that `β` is measured on anonymity nodes while the §6.6 leak it
+  buys is paid on clearnet, where the anonymity zone's leak is structurally
+  zero. PR #488 measured that cost: the clearnet leak is flat to inside a
+  3-sigma noise floor across the entire candidate range (`F' = 3250 → 5000`),
+  so the asymmetry does not currently bite.
+
+  **Reopen if** a future measurement moves the clearnet leak across candidate
+  `F'` values, or if Tor-only stops being a minority posture — either restores
+  the cost that would make the split worth its second constant and its
+  ownership seam.
+
 - **Relay: populate the 48-cell Pi verification surface, then consume it
   per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first
   (`shekyl-relay-privacy/src/verify_cost.rs`, 2026-08-06) carrying the four
