@@ -1361,9 +1361,9 @@ record, none silently:
 
   So the Bandguards cap and the vanguard L2/L3 sizing are sized against the
   *serving* load, which the schedule bounds and §18 covers — not against 97,
-  and not against a pending run. `shekyl-sp-t3-spike`'s `MeasuredSide` keeps
-  the producer/serving distinction honest in any future rig; the distinction is
-  real even where the question built on it was not.
+  and not against a pending run. The producer/serving distinction is real even
+  where the question built on it was not; it does not need a type in a
+  disposable spike to stay true.
 - **Derive-don't-hardcode, *where it earns its keep*:** the constants this
   mechanism lands (challenges per epoch, majority threshold, penalty) follow
   the `DandelionParams` pattern — design inputs in, derived value as a method,
@@ -1438,11 +1438,13 @@ than repealing it:
    `TorService` with the wallet-derived `hs_id` bundle (index 0 today;
    derived-bundles-only custody per §7.2 check (iii)), and **the
    vanguards-full / Bandguards launch pins** (addon-level, not
-   `ADD_ONION` arguments). The W₂ rig then extends the spike harness to
-   the concurrent-batch shape (§9) — *built 2026-08-15, and owed to nothing:
-   W₂ was ruled rather than measured, so this step is no longer a dependency
-   of anything downstream.* **Rig expectations, set before it
-   exists (2026-08-11):** off-floor hardware gives *shape, not the
+   `ADD_ONION` arguments). A W₂ concurrent-batch extension of the spike
+   harness was the next step when W₂ was still a measurement. W₂ was
+   ruled rather than measured, so that step is not a dependency of
+   anything downstream and was not landed — a provenance type with no
+   measurement to stamp is scaffolding (rule 15). **Rig expectations, set
+   before it exists (2026-08-11), retained because they are how a
+   measurement ships if a ruling premise returns:** off-floor hardware gives *shape, not the
    governing figure* — batch-concurrency scaling, the knees, vanguards'
    pinned-L2 behaviour under ~97 simultaneous rendezvous circuits, and
    whether Bandguards' cap trips are structural and largely
@@ -1746,13 +1748,12 @@ one is too tight — absent at only the current open leaves the previous epoch
 as the last drawable one, and a challenge issued in its final block still has
 to resolve; the extra epoch is that slack.
 
-**W₂ is deliberately not an operand.** The resolution window has no landed
-constant — it is the rig's output (item 6 below, still UNDERIVED) — so a gate
-naming it could not be written yet. A full epoch of slack covers any W₂
-shorter than `SETTLEMENT_EPOCH_BLOCKS`, which at ~14 days against a window
-measured in minutes-to-hours is not a close call. **Reopen (rule 21):** if
-the rig derives a W₂ at or above one epoch, this gate is wrong and must take
-W₂ as an operand.
+**W₂ is deliberately not an operand.** The window is now a landed scalar
+(`CHALLENGE_RESPONSE_BLOCKS` = 500, item 6a) and one epoch of slack still
+covers it by a factor of twenty, which at ~14 days against a window measured
+in minutes-to-hours is not a close call. **Reopen (rule 21):** if
+`SETTLEMENT_EPOCH_BLOCKS` is re-pinned such that W₂ is no longer strictly
+shorter than one epoch, this gate is wrong and must take W₂ as an operand.
 
 The reorg question the naive gate answered is subsumed, not dropped: §2 notes
 drawability is evaluated at epoch open, "deep history relative to any
@@ -1783,7 +1784,7 @@ The store deliberately does **not** enforce the gate — it has no clock, no
 view of the record, and no memory of when a shard left one. A half-check
 there would look guarded while the real condition went unenforced.
 
-**6a. W₂ IS PINNED (2026-08-15) — and the rig's role inverts.**
+**6a. W₂ IS PINNED (2026-08-15) — ruled, closed, no measurement owed.**
 `CHALLENGE_RESPONSE_BLOCKS = SETTLEMENT_EPOCH_BLOCKS / 20` (500 blocks,
 ≈16.7 h), collapsed from its `Option<u64> = None` staging slot per the pin
 shape that slot specified. What made it pinnable is not a measurement but a
@@ -1839,23 +1840,22 @@ the split then exposed is that the residual was assembled out of two facts that
 belong to different machines. Retiring a mandate does not sanitise the premises
 it carried.
 
-**6. DONE (2026-08-15) — the rig's three provenance requirements are wired
-as one indivisible type.** `shekyl-sp-t3-spike`'s `RunProvenance::attest` takes
-`VanguardsAttested` (mintable only from a `VanguardsActive`, whose constructor
-is private to `shekyl-tor` and runs only after a confirmed `SETCONF`),
-`RunDevice`, and `LiveNetworkAttested` (refused below `MIN_REAL_CONSENSUS_RELAYS`)
-— and `Apparatus::provenance` returns `Option`, so an unattestable run yields no
-datum. A **fourth** field the requirement did not anticipate proved necessary:
-`MeasuredSide`, derived from the apparatus's own persona count rather than
-declared. Without it `is_floor_datum()` faded open — a producer-shaped batch run
-on a Pi minted `true` and stamped "rule-76 provisioning input" on the wrong
-machine's number, which is the laundering this item exists to prevent arriving
-through the one field missing from it.
-
-Note what this does *not* mean: W₂ is **ruled, not measured** (§9.7 item 6a),
-so the apparatus has no pending consumer. It is correct and it sits. The
-requirement below is retained as written because the reasoning is what
-generalises, not because a run is owed.
+**6. CLOSED as not owed (2026-08-16) — a provenance type with no measurement
+to stamp is scaffolding.** Item 6a's ruling means no W₂ run is pending, so
+the three-attestation type was not landed. A first cut did land it in
+`shekyl-sp-t3-spike` (`RunProvenance`, `w2-measure`, a third `bring_up`
+wrapper, a producing shape of 97 onions on one tor) and then had to invent
+`is_floor_datum` / `MeasuredSide` / a "floor check" verdict to give the
+scaffolding something to say. That is the half-step item 6a already named:
+a check whose only possible outcome is a safe-direction move, applied to a
+one-sided constraint, confirms what the asymmetry already settled — and the
+implementation failed open besides (`ARCH == "aarch64"` certified any Apple
+Silicon box as a rule-76 floor datum; the producing shape measured the
+co-activation layout this harness already forbids). Rule 15 deletes unused
+callees; the type is gone with the rig. The requirement below is retained
+as written because the reasoning is what generalises, not because a run is
+owed. If a ruling premise returns and a measurement is scoped, this is how
+it ships — not before.
 
 *Original text, retained:* **the W₂ rig's three provenance requirements are
 stated in §9.5 but not wired.** `VanguardsMode::Managed`, the rule-76 Pi-4 floor, and the

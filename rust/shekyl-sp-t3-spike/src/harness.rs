@@ -40,7 +40,6 @@ use shekyl_p_transport::{PTorClient, PTransportError, RequestErrorKind, TorSocks
 use shekyl_tor::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId};
 use shekyl_tor::control::{BootstrapReadiness, BootstrapState, Command, EventSink, TorControl};
 use shekyl_tor::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
-use shekyl_tor::vanguard_rotation::{VanguardManager, VanguardsActive, VanguardsMode};
 use shekyl_types::{PCanonicalId, PSlot};
 
 use shekyl_p_serve::{PServeEndpoint, ROUTE_PREFIX};
@@ -118,13 +117,6 @@ pub struct Apparatus {
     socks: TorSocksEndpoint,
     /// The published personas, in slot order.
     pub personas: Vec<Persona>,
-    /// The sealed vanguards witness, when this apparatus was brought up
-    /// `Managed`. `None` under [`VanguardsMode::Off`] — and a `None` here is
-    /// what makes [`Self::provenance`] refuse, so a non-vanguards run cannot
-    /// produce a W₂ datum.
-    vanguards: Option<VanguardsActive>,
-    /// Relays counted in the consensus this incarnation bootstrapped against.
-    consensus_relays: usize,
 }
 
 /// Why the apparatus could not be brought up. Every arm is an *apparatus*
@@ -243,56 +235,6 @@ impl Apparatus {
         payload: Arc<[u8]>,
         pow: OnionPow,
     ) -> Result<Self, ApparatusError> {
-        Self::bring_up_with(
-            tor_binary,
-            data_dir,
-            persona_count,
-            payload,
-            pow,
-            VanguardsMode::Off,
-        )
-        .await
-    }
-
-    /// [`Self::bring_up_with_pow`] with the vanguards mode selected — the W₂
-    /// rig's entry point.
-    ///
-    /// **Why this is a parameter and not simply switched on.** §9.5 rules that
-    /// the W₂ rig MUST run `Managed`, because full vanguards add a guard layer
-    /// and cost "longer paths and higher latency — latency on exactly the path
-    /// W₂ measures", so a non-vanguards run measures a shorter path than
-    /// production ships and errs in the failure-causing direction. But the
-    /// recorded SP-T3 `D*` was measured with vanguards **off**, and forcing
-    /// them on here would silently change what every existing caller measures
-    /// and break comparability with that record. Same call `OnionPow` made in
-    /// this file for the same reason: new arm, old default.
-    ///
-    /// **The vanguard set is established once and not maintained.** The
-    /// `VanguardManager` is dropped when this returns, so nothing calls its
-    /// mid-life `reconcile`. That is correct for a batch run measured in
-    /// minutes, and it is *wrong* for a soak arm like `pd-f2-measure`'s: over
-    /// hours, nodes expire and leave the consensus, and the pinned set drifts
-    /// from the persisted state with nothing to notice. Anyone extending this
-    /// to a long run must hold the manager for the run's lifetime and drive
-    /// rotation, or the witness stops describing the tor being measured.
-    ///
-    /// Under `Managed` this also reads the consensus (`GETINFO ns/all`) so the
-    /// run can attest it was on the real network. That is a second read — the
-    /// vanguard draw fetches its own — and deliberately so: `shekyl-tor`'s
-    /// fetch is private, and a second `GETINFO` once at bring-up is cheaper
-    /// than widening a production crate's surface for a disposable spike.
-    pub async fn bring_up_with(
-        tor_binary: std::path::PathBuf,
-        data_dir: std::path::PathBuf,
-        persona_count: u32,
-        payload: Arc<[u8]>,
-        pow: OnionPow,
-        vanguards_mode: VanguardsMode,
-    ) -> Result<Self, ApparatusError> {
-        // Cloned before `data_dir` moves into `ManagedTor`: the vanguard state
-        // file lives beside tor's own state, which is the persistence DQ-T0.7
-        // requires (guards must survive a restart rather than re-draw).
-        let vanguards_state_dir = data_dir.clone();
         let socks_port = free_port();
         let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
@@ -373,57 +315,11 @@ impl Apparatus {
             });
         }
 
-        // Vanguards *after* bootstrap and *before* the measurement: the pin is a
-        // `SETCONF` on a live control port, and the witness it mints is what the
-        // W₂ provenance requires. Under `Off` this is a no-op returning `None`,
-        // which is exactly what the recorded `D*` runs did.
-        let (vanguards, consensus_relays) = match vanguards_mode {
-            VanguardsMode::Off => (None, 0),
-            VanguardsMode::Managed => {
-                let relays = consensus_relay_count(&control, VANGUARDS_REPLY_DEADLINE).await;
-                let (_shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
-                let mut manager =
-                    VanguardManager::load(VanguardsMode::Managed, &vanguards_state_dir);
-                let witness = manager
-                    .establish(&control, VANGUARDS_REPLY_DEADLINE, &mut shutdown_rx)
-                    .await
-                    .map_err(|e| ApparatusError::Control(format!("vanguards: {e:?}")))?;
-                (witness, relays)
-            }
-        };
-
         Ok(Self {
             control,
             socks: TorSocksEndpoint::loopback(socks_port),
             personas,
-            vanguards,
-            consensus_relays,
         })
-    }
-
-    /// The run's W₂ provenance for a batch of `concurrent_fetches`, or `None`
-    /// if this apparatus cannot attest it.
-    ///
-    /// `None` under [`VanguardsMode::Off`], or when the consensus reading did
-    /// not clear [`MIN_REAL_CONSENSUS_RELAYS`](crate::w2::MIN_REAL_CONSENSUS_RELAYS).
-    /// That is the whole design: §9.7 requires an incomplete run to yield **no
-    /// datum rather than an unlabelled one**, so this returns nothing rather
-    /// than something annotated as partial.
-    ///
-    /// The measured side is read off `self.personas` — the apparatus's own
-    /// fan-out — rather than taken as an argument, so a run cannot label itself
-    /// the side it wishes it were. Only the batch width comes from the caller,
-    /// because only the caller ran the batch.
-    #[must_use]
-    pub fn provenance(&self, concurrent_fetches: usize) -> Option<crate::w2::RunProvenance> {
-        let vanguards = self.vanguards.as_ref()?;
-        let network = crate::w2::LiveNetworkAttested::from_consensus(self.consensus_relays).ok()?;
-        Some(crate::w2::RunProvenance::attest(
-            crate::w2::VanguardsAttested::from_witness(vanguards),
-            crate::w2::RunDevice::detect(),
-            network,
-            crate::w2::MeasuredSide::from_shape(self.personas.len(), concurrent_fetches),
-        ))
     }
 
     /// Block until at least one persona answers, so the measurement does not
@@ -451,96 +347,7 @@ impl Apparatus {
 
     /// One fetch as `client_id`, returning the byte count on success.
     async fn fetch_once(&self, client_id: &PCanonicalId, url: &str) -> Result<usize, FailureKind> {
-        fetch_over(self.socks, client_id, url).await
-    }
-}
-
-/// How long a vanguards control round trip may take before the bring-up gives up.
-///
-/// Generous because this runs once at bring-up on a floor device against the
-/// real consensus, and a rig that fails to start is a wasted run rather than a
-/// fast one.
-const VANGUARDS_REPLY_DEADLINE: Duration = Duration::from_secs(120);
-
-/// Count router entries in `GETINFO ns/all` — the real-network discriminator.
-///
-/// Read here rather than reused from `shekyl-tor`'s vanguard draw because that
-/// crate's `fetch_consensus` is private, and a second `GETINFO` at bring-up is
-/// cheaper than widening a crate's surface for a spike. Returns 0 on any
-/// failure, which fails *closed*: no count, no attestation, no datum.
-async fn consensus_relay_count(
-    control: &kameo::actor::ActorRef<TorControl>,
-    deadline: Duration,
-) -> usize {
-    let reply = tokio::time::timeout(
-        deadline,
-        control.ask(Command::GetInfo(vec!["ns/all".to_owned()])),
-    )
-    .await;
-    match reply {
-        Ok(Ok(reply)) if reply.status() == 250 => {
-            reply.lines().iter().filter(|l| l.starts_with("r ")).count()
-        }
-        _ => 0,
-    }
-}
-
-/// What one concurrent batch produced, before it is folded into a
-/// [`BatchObservation`](crate::w2::BatchObservation).
-///
-/// Raw rather than pre-summarised: the caller pairs it with the run's
-/// provenance, and a summary computed here could be recorded without one.
-#[derive(Debug, Clone)]
-pub struct BatchOutcome {
-    /// Fetches launched together.
-    pub launched: usize,
-    /// One observation per fetch, in completion order.
-    pub observations: Vec<Observation>,
-    /// Wall time from launching the first fetch to the last completion.
-    pub batch_completion: Duration,
-}
-
-impl BatchOutcome {
-    /// Fetches that returned the full expected body.
-    #[must_use]
-    pub fn completed(&self) -> usize {
-        self.observations.iter().filter(|o| o.is_success()).count()
-    }
-
-    /// The slowest individual fetch in the batch.
-    #[must_use]
-    pub fn slowest_fetch(&self) -> Duration {
-        self.observations
-            .iter()
-            .map(|o| o.elapsed)
-            .max()
-            .unwrap_or(Duration::ZERO)
-    }
-
-    /// Fold into the W₂ datum's per-batch shape.
-    #[must_use]
-    pub fn observe(&self) -> crate::w2::BatchObservation {
-        crate::w2::BatchObservation {
-            launched: self.launched,
-            completed: self.completed(),
-            batch_completion: self.batch_completion,
-            slowest_fetch: self.slowest_fetch(),
-        }
-    }
-}
-
-/// The fetch itself, over a `Copy` endpoint rather than `&self`.
-///
-/// Free-standing so [`Apparatus::timed_batch`] can spawn many of these at once
-/// without borrowing the apparatus into every task — the endpoint is all a
-/// fetch needs, and `TorSocksEndpoint` is `Copy`.
-async fn fetch_over(
-    socks: TorSocksEndpoint,
-    client_id: &PCanonicalId,
-    url: &str,
-) -> Result<usize, FailureKind> {
-    {
-        let Ok(client) = PTorClient::for_persona(client_id, &socks) else {
+        let Ok(client) = PTorClient::for_persona(client_id, &self.socks) else {
             return Err(FailureKind::Transport);
         };
         let url = url.to_owned();
@@ -559,9 +366,7 @@ async fn fetch_over(
             Ok(Ok(Err(e))) => Err(classify(&e)),
         }
     }
-}
 
-impl Apparatus {
     /// Time one fetch of `expected_len` bytes from `persona` as `client_id`.
     ///
     /// The clock starts before the client is constructed and stops after the last
@@ -587,78 +392,6 @@ impl Apparatus {
             Ok(len) if len == expected_len => Observation::success(elapsed),
             Ok(_) => Observation::failure(elapsed, FailureKind::Truncated),
             Err(kind) => Observation::failure(elapsed, kind),
-        }
-    }
-
-    /// Launch `count` fetches **concurrently** and time the whole batch — the
-    /// W₂ shape (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5 concurrency pin).
-    ///
-    /// [`Self::timed_fetch`] answers a single-transfer question. This answers
-    /// the producer's: `λ·D/E` pairs land on one block at once, so the witness
-    /// fetches them together and must land *all* of them inside the window.
-    /// The pin is explicit that the sequential shape "under-estimates badly,
-    /// missing circuit-establishment throughput, Tor client memory, and guard
-    /// capacity".
-    ///
-    /// # What the returned duration is
-    ///
-    /// Wall time from launching the first fetch to the last completion — the
-    /// batch, not the median. `slowest_fetch` is reported alongside it: for a
-    /// genuinely parallel launch the two converge, so a large gap between them
-    /// is the signal that the batch serialized (a client, guard, or apparatus
-    /// bottleneck) rather than ran concurrently. Hiding that behind one number
-    /// would let a serialized run pass as a slow-but-parallel one.
-    ///
-    /// Each fetch uses a **distinct** client id, so tor's `IsolateSOCKSAuth`
-    /// gives each its own circuit. That is the faithful model *and* the load
-    /// the pin describes: "~97 concurrent rendezvous circuits from the same
-    /// client".
-    pub async fn timed_batch(&self, count: usize, expected_len: usize) -> BatchOutcome {
-        if count == 0 || self.personas.is_empty() {
-            return BatchOutcome {
-                launched: 0,
-                observations: Vec::new(),
-                batch_completion: Duration::ZERO,
-            };
-        }
-        let start = Instant::now();
-        let mut set = tokio::task::JoinSet::new();
-        for i in 0..count {
-            // A fresh id per fetch: distinct SOCKS auth, distinct circuit.
-            let client_id = cold_client_id(i as u64);
-            // Spread across the published personas, which is what a producer's
-            // assignment looks like — many pairs, not many reads of one shard.
-            let persona_index = i % self.personas.len();
-            let url = match self.personas.get(persona_index) {
-                Some(p) => p.shard_url(0),
-                None => continue,
-            };
-            let socks = self.socks;
-            set.spawn(async move {
-                let began = Instant::now();
-                let outcome = fetch_over(socks, &client_id, &url).await;
-                let elapsed = began.elapsed();
-                match outcome {
-                    Ok(len) if len == expected_len => Observation::success(elapsed),
-                    Ok(_) => Observation::failure(elapsed, FailureKind::Truncated),
-                    Err(kind) => Observation::failure(elapsed, kind),
-                }
-            });
-        }
-        let mut observations = Vec::with_capacity(count);
-        while let Some(joined) = set.join_next().await {
-            observations.push(joined.unwrap_or_else(|_| {
-                // A panicked or cancelled task is an apparatus failure, and it
-                // must count as a failure rather than vanish from the batch —
-                // a batch that silently shrank would report a better
-                // completion than the run earned.
-                Observation::failure(Duration::ZERO, FailureKind::Transport)
-            }));
-        }
-        BatchOutcome {
-            launched: count,
-            batch_completion: start.elapsed(),
-            observations,
         }
     }
 

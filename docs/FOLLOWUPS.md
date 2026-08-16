@@ -14871,10 +14871,8 @@ one place to confirm each item's relationship to the wallet stack.
   §18 — and there is no measurement pending. The two sides never shared a
   floor to begin with: rule 76 provisions the anonymity of the node being
   protected, the staker running `P`, so the Pi-4 is the floor for the *serving*
-  side only. `shekyl-sp-t3-spike`'s `MeasuredSide` encodes that distinction
-  (a producer-shaped batch is a capability check on whatever ran it, never a
-  floor datum, including on a Pi) and it stays — the distinction is real even
-  though the question built on it was not.
+  side only. The producer/serving distinction is real even though the question
+  built on it was not; it does not need a spike-crate type to stay true.
 
   **The lesson, since it repeated within one commit:** the W₂ correction named
   "a discipline applied without asking whether this instance needs it." This
@@ -14883,10 +14881,10 @@ one place to confirm each item's relationship to the wallet stack.
   Retiring a bad mandate does not sanitise the premises it carried; those need
   re-grounding one by one, or they re-file themselves as fresh work.
 
-  *Apparatus, not owed to anything:* `rust/shekyl-sp-t3-spike` (`w2-measure`,
-  `SHEKYL_W2_SHAPE`) is built and correct. It has no pending consumer and is
-  not waiting on the shard fixture it would need, because nothing is waiting on
-  it. It sits until some question genuinely needs measuring.
+  A concurrent-batch W₂ apparatus was not landed. W₂ is ruled, not measured;
+  a provenance type with no measurement to stamp is scaffolding (rule 15). If
+  a ruling premise returns, `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 6 is
+  how a measurement ships — not before.
 
 ---
 
