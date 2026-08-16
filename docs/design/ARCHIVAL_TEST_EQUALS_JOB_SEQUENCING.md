@@ -1275,10 +1275,14 @@ evaluability of §9.4 and §9.5.
 **DISCHARGED (2026-08-15): `CHALLENGE_RESPONSE_BLOCKS = SETTLEMENT_EPOCH_BLOCKS
 / 20` = 500 blocks (≈16.7 h).** The deadline exists, so the `n·I − S` margin,
 the helper round-trip and the dumb-pipe case are now evaluable and §9.4/§9.5's
-arithmetic can be run. Note what the pin does *not* settle: it was made by
-ruling (W₂ has no surviving upper bound, so pick generous) rather than by
-measurement, and a floor check can still raise it — so a margin computed
-against 500 is evaluable but should be re-run if the rig moves the value.
+arithmetic can be run. The pin was made by **ruling** — W₂ has no surviving
+upper bound, so the shape is *pick generous* — not by measurement, and
+**(corrected 2026-08-15) it is settled, not provisional.** An earlier version
+of this note said "a floor check can still raise it — so a margin computed
+against 500 should be re-run if the rig moves the value", which left §9.4/§9.5
+reading as evaluable-but-pending. No rig is owed and the value is not moving;
+a margin computed against 500 is simply evaluable. It re-opens only if the
+ruling's premises do (see `constants.rs` on `CHALLENGE_RESPONSE_BLOCKS`).
 
 ### 10.3 TJ-3 (HIGH) — the fire beacon seals one block into a 10,000-block epoch
 
