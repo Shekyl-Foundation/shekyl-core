@@ -62,3 +62,4 @@ pub mod fixture;
 pub mod harness;
 pub mod measure;
 pub mod onion_key;
+pub mod w2;

@@ -347,7 +347,66 @@ impl Apparatus {
 
     /// One fetch as `client_id`, returning the byte count on success.
     async fn fetch_once(&self, client_id: &PCanonicalId, url: &str) -> Result<usize, FailureKind> {
-        let Ok(client) = PTorClient::for_persona(client_id, &self.socks) else {
+        fetch_over(self.socks, client_id, url).await
+    }
+}
+
+/// What one concurrent batch produced, before it is folded into a
+/// [`BatchObservation`](crate::w2::BatchObservation).
+///
+/// Raw rather than pre-summarised: the caller pairs it with the run's
+/// provenance, and a summary computed here could be recorded without one.
+#[derive(Debug, Clone)]
+pub struct BatchOutcome {
+    /// Fetches launched together.
+    pub launched: usize,
+    /// One observation per fetch, in completion order.
+    pub observations: Vec<Observation>,
+    /// Wall time from launching the first fetch to the last completion.
+    pub batch_completion: Duration,
+}
+
+impl BatchOutcome {
+    /// Fetches that returned the full expected body.
+    #[must_use]
+    pub fn completed(&self) -> usize {
+        self.observations.iter().filter(|o| o.is_success()).count()
+    }
+
+    /// The slowest individual fetch in the batch.
+    #[must_use]
+    pub fn slowest_fetch(&self) -> Duration {
+        self.observations
+            .iter()
+            .map(|o| o.elapsed)
+            .max()
+            .unwrap_or(Duration::ZERO)
+    }
+
+    /// Fold into the W₂ datum's per-batch shape.
+    #[must_use]
+    pub fn observe(&self) -> crate::w2::BatchObservation {
+        crate::w2::BatchObservation {
+            launched: self.launched,
+            completed: self.completed(),
+            batch_completion: self.batch_completion,
+            slowest_fetch: self.slowest_fetch(),
+        }
+    }
+}
+
+/// The fetch itself, over a `Copy` endpoint rather than `&self`.
+///
+/// Free-standing so [`Apparatus::timed_batch`] can spawn many of these at once
+/// without borrowing the apparatus into every task — the endpoint is all a
+/// fetch needs, and `TorSocksEndpoint` is `Copy`.
+async fn fetch_over(
+    socks: TorSocksEndpoint,
+    client_id: &PCanonicalId,
+    url: &str,
+) -> Result<usize, FailureKind> {
+    {
+        let Ok(client) = PTorClient::for_persona(client_id, &socks) else {
             return Err(FailureKind::Transport);
         };
         let url = url.to_owned();
@@ -366,7 +425,9 @@ impl Apparatus {
             Ok(Ok(Err(e))) => Err(classify(&e)),
         }
     }
+}
 
+impl Apparatus {
     /// Time one fetch of `expected_len` bytes from `persona` as `client_id`.
     ///
     /// The clock starts before the client is constructed and stops after the last
@@ -392,6 +453,78 @@ impl Apparatus {
             Ok(len) if len == expected_len => Observation::success(elapsed),
             Ok(_) => Observation::failure(elapsed, FailureKind::Truncated),
             Err(kind) => Observation::failure(elapsed, kind),
+        }
+    }
+
+    /// Launch `count` fetches **concurrently** and time the whole batch — the
+    /// W₂ shape (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5 concurrency pin).
+    ///
+    /// [`Self::timed_fetch`] answers a single-transfer question. This answers
+    /// the producer's: `λ·D/E` pairs land on one block at once, so the witness
+    /// fetches them together and must land *all* of them inside the window.
+    /// The pin is explicit that the sequential shape "under-estimates badly,
+    /// missing circuit-establishment throughput, Tor client memory, and guard
+    /// capacity".
+    ///
+    /// # What the returned duration is
+    ///
+    /// Wall time from launching the first fetch to the last completion — the
+    /// batch, not the median. `slowest_fetch` is reported alongside it: for a
+    /// genuinely parallel launch the two converge, so a large gap between them
+    /// is the signal that the batch serialized (a client, guard, or apparatus
+    /// bottleneck) rather than ran concurrently. Hiding that behind one number
+    /// would let a serialized run pass as a slow-but-parallel one.
+    ///
+    /// Each fetch uses a **distinct** client id, so tor's `IsolateSOCKSAuth`
+    /// gives each its own circuit. That is the faithful model *and* the load
+    /// the pin describes: "~97 concurrent rendezvous circuits from the same
+    /// client".
+    pub async fn timed_batch(&self, count: usize, expected_len: usize) -> BatchOutcome {
+        if count == 0 || self.personas.is_empty() {
+            return BatchOutcome {
+                launched: 0,
+                observations: Vec::new(),
+                batch_completion: Duration::ZERO,
+            };
+        }
+        let start = Instant::now();
+        let mut set = tokio::task::JoinSet::new();
+        for i in 0..count {
+            // A fresh id per fetch: distinct SOCKS auth, distinct circuit.
+            let client_id = cold_client_id(i as u64);
+            // Spread across the published personas, which is what a producer's
+            // assignment looks like — many pairs, not many reads of one shard.
+            let persona_index = i % self.personas.len();
+            let url = match self.personas.get(persona_index) {
+                Some(p) => p.shard_url(0),
+                None => continue,
+            };
+            let socks = self.socks;
+            set.spawn(async move {
+                let began = Instant::now();
+                let outcome = fetch_over(socks, &client_id, &url).await;
+                let elapsed = began.elapsed();
+                match outcome {
+                    Ok(len) if len == expected_len => Observation::success(elapsed),
+                    Ok(_) => Observation::failure(elapsed, FailureKind::Truncated),
+                    Err(kind) => Observation::failure(elapsed, kind),
+                }
+            });
+        }
+        let mut observations = Vec::with_capacity(count);
+        while let Some(joined) = set.join_next().await {
+            observations.push(joined.unwrap_or_else(|_| {
+                // A panicked or cancelled task is an apparatus failure, and it
+                // must count as a failure rather than vanish from the batch —
+                // a batch that silently shrank would report a better
+                // completion than the run earned.
+                Observation::failure(Duration::ZERO, FailureKind::Transport)
+            }));
+        }
+        BatchOutcome {
+            launched: count,
+            batch_completion: start.elapsed(),
+            observations,
         }
     }
 
