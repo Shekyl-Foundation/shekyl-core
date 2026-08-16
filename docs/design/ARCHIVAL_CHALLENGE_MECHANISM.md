@@ -1346,14 +1346,24 @@ record, none silently:
   built for this must measure the **concurrent-batch completion
   distribution**, not the single-transfer one.
 
-  **Re-addressed (2026-08-15).** This finding is correct and survives the W₂
-  ruling; what changes is who it is addressed to. It was never really a W₂
-  sizing input — "can a floor device carry ~97 concurrent rendezvous circuits"
-  is a **device-requirement** question whose failure answer is *re-open the
-  floor or bound what a floor device serves*, not *pick a different window*.
-  It is filed on its own in `docs/FOLLOWUPS.md`, where the Bandguards cap and
-  the vanguard eligibility set (VG-2) — the two consumers that genuinely
-  depend on it — now point.
+  **Corrected (2026-08-15) — read the addressee off the sentence above.**
+  `λ·D/E` is *draws per block assigned to that block's **producer***, so the
+  ~97 figure describes a **miner**, and this paragraph's own "from the same
+  client" says so. It was first re-addressed to a "device-requirement question"
+  — *can a rule-76 floor device carry ~97 concurrent circuits* — which closed
+  the same day as **incoherent**: nobody mines on a Pi 4, so the floor device
+  is never in that role. The two sides do not share a floor. Rule 76
+  provisions the anonymity of the node being protected, the staker running `P`,
+  which is the **serving** side: many readers on one persona, a handful at a
+  time once the block's draws spread across the pair population, and already
+  measured with margin by `SP_T3_SKELETON_MEASUREMENT.md` §18 (4→32 readers,
+  p50 10.9 s → 14.8 s).
+
+  So the Bandguards cap and the vanguard L2/L3 sizing are sized against the
+  *serving* load, which the schedule bounds and §18 covers — not against 97,
+  and not against a pending run. `shekyl-sp-t3-spike`'s `MeasuredSide` keeps
+  the producer/serving distinction honest in any future rig; the distinction is
+  real even where the question built on it was not.
 - **Derive-don't-hardcode, *where it earns its keep*:** the constants this
   mechanism lands (challenges per epoch, majority threshold, penalty) follow
   the `DandelionParams` pattern — design inputs in, derived value as a method,
@@ -1480,10 +1490,11 @@ same path.
 > **Moot (2026-08-15), retained because the sequencing judgement was sound
 > for its premise.** W₂ was pinned by ruling, so it was never the longest
 > pole and nothing about it was blocked on the serving path. The second
-> sentence survives intact and re-addressed: the Bandguards cap and the
-> vanguard L2/L3 parameters *are* consumed by a concurrent-transfer
-> measurement and *do* land on the serving path — they were consumers of
-> the device-requirement question, not of a W₂ derivation.
+> sentence goes with it: the Bandguards cap and the vanguard L2/L3 parameters
+> are sized against a *serving* persona's concurrent load, which the schedule
+> bounds to a handful and `SP_T3_SKELETON_MEASUREMENT.md` §18 already measured
+> — they were never consumers of a W₂ derivation, and they are not consumers
+> of a pending measurement either.
 
 **The discipline that comes with it, written here and into the serving
 PR's description rather than trusted to memory: the provisional framing
@@ -1810,13 +1821,21 @@ clock-burn regains both a commitment record and an abandonment penalty
 is re-pinned and carries W₂ out of its ≈200–500 band. Either means re-running
 the ruling and widening the band deliberately.
 
-**The Pi-4 residual is filed elsewhere, deliberately.** Whether a floor device
-is CPU-bound on Tor crypto at ~97 concurrent circuits, well below what
-bandwidth suggests, is a **device-requirement** question: if it fails, the
-answer is re-open the floor or bound what a floor device is asked to serve —
-never a different value for this window. Keeping it attached to W₂ is what
-dragged a settled parameter back open, so it lives in `docs/FOLLOWUPS.md` on
-its own, with the Bandguards cap and VG-2 pointing at it.
+**The Pi-4 residual turned out not to exist.** Whether a floor device is
+CPU-bound on Tor crypto at ~97 concurrent circuits was first split out as a
+**device-requirement** question — filed in `docs/FOLLOWUPS.md`, then **closed
+the same day as incoherent**. `λ·D/E` ≈ 97 is draws per block assigned to that
+block's *producer*, and a producer is a miner; nobody mines on a Pi 4, so the
+floor device is never asked the question. A serving persona sees a handful of
+concurrent readers once those draws spread across the pair population, which
+`SP_T3_SKELETON_MEASUREMENT.md` §18 already measured at 4→32 with room to
+spare.
+
+The split itself was still right — the residual had to leave W₂, because
+keeping it attached is what dragged a settled parameter back open twice. What
+the split then exposed is that the residual was assembled out of two facts that
+belong to different machines. Retiring a mandate does not sanitise the premises
+it carried.
 
 **6. OPEN — the W₂ rig's three provenance requirements are stated in §9.5
 but not wired.** `VanguardsMode::Managed`, the rule-76 Pi-4 floor, and the

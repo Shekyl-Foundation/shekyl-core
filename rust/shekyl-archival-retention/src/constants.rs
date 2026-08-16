@@ -111,10 +111,12 @@ pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 /// # No measurement is owed, and that is a ruling about *this* parameter
 ///
 /// Sanity, so the number is not blind: ~97 pairs per block at maturity means
-/// the assigned producer fetches ~323 MB; at plausible Tor rendezvous
-/// throughput on a floor device that is minutes, with a heavy tail to perhaps
-/// an hour. 500 blocks is ≈16.7 h — two orders of margin, which is what you
-/// want when the tail is unmeasured and the failure mode is someone's bond.
+/// the assigned producer fetches ~323 MB. That producer is a **miner** — this
+/// is the fetch side, not the serving side, and the two do not share a floor —
+/// so the reference machine is a mining box, at plausible Tor rendezvous
+/// throughput minutes of work with a heavy tail to perhaps an hour. 500 blocks
+/// is ≈16.7 h: two orders of margin, which is what you want when the tail is
+/// unmeasured and the failure mode is someone's bond.
 ///
 /// Sixteen hours against a transfer that takes minutes is not a value that
 /// needs *finding*; it is a value that needs to be **large enough**, and the
@@ -133,11 +135,15 @@ pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 /// the ruling rather than editing past the assert.
 ///
 /// **What is not a reopening trigger:** whether a rule-76 Pi-4 can serve ~97
-/// concurrent rendezvous circuits at all. That reads like a W₂ question and is
-/// not one — it is a *device-requirement* question, and it has a different
-/// answer if it fails (re-open the floor, or bound what a floor device is asked
-/// to serve), none of which is a number for this window. It is filed on its own
-/// in `docs/FOLLOWUPS.md`; attaching it here is what dragged W₂ back open twice.
+/// concurrent rendezvous circuits. That reads like a W₂ question, is not one,
+/// and on inspection is not a question at all: `λ·D/E` ≈ 97 is *draws per block
+/// assigned to that block's producer*, a producer is a miner, and nobody mines
+/// on a Pi 4. A serving persona sees a handful of concurrent readers once those
+/// draws spread across the pair population — a load
+/// `docs/design/SP_T3_SKELETON_MEASUREMENT.md` §18 already measured with margin
+/// (4→32 readers, p50 10.9 s → 14.8 s). The `docs/FOLLOWUPS.md` entry that
+/// briefly held it is closed. Attaching it here is what dragged W₂ back open
+/// twice; re-attaching it under a new name would do it a third time.
 pub const CHALLENGE_RESPONSE_BLOCKS: u64 = SETTLEMENT_EPOCH_BLOCKS / W2_EPOCH_DIVISOR;
 
 /// Fraction of a settlement epoch W₂ occupies: `SEB / 20`.
