@@ -14816,8 +14816,8 @@ one place to confirm each item's relationship to the wallet stack.
   post-testnet. *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md`
   §*L12* finding 1.
 
-- **Vanguard eligibility flag set is a provisional pin awaiting the W₂ rig
-  (VG-2 / transport; rule-21 reopen record).** `REQUIRED_FLAGS = ["Fast",
+- **Vanguard eligibility flag set is a provisional pin, unseated only by
+  operation (VG-2 / transport; rule-21 reopen record).** `REQUIRED_FLAGS = ["Fast",
   "Stable", "Valid", "Running"]` in `rust/shekyl-tor/src/control/consensus.rs`
   decides which relays a serving persona's L2/L3 vanguards may be drawn from.
   The `Guard` flag is deliberately **not** required — vanguards are middle

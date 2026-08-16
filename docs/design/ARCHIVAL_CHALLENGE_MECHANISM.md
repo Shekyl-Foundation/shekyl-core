@@ -1439,7 +1439,9 @@ than repealing it:
    derived-bundles-only custody per §7.2 check (iii)), and **the
    vanguards-full / Bandguards launch pins** (addon-level, not
    `ADD_ONION` arguments). The W₂ rig then extends the spike harness to
-   the concurrent-batch shape (§9). **Rig expectations, set before it
+   the concurrent-batch shape (§9) — *built 2026-08-15, and owed to nothing:
+   W₂ was ruled rather than measured, so this step is no longer a dependency
+   of anything downstream.* **Rig expectations, set before it
    exists (2026-08-11):** off-floor hardware gives *shape, not the
    governing figure* — batch-concurrency scaling, the knees, vanguards'
    pinned-L2 behaviour under ~97 simultaneous rendezvous circuits, and
@@ -1837,8 +1839,26 @@ the split then exposed is that the residual was assembled out of two facts that
 belong to different machines. Retiring a mandate does not sanitise the premises
 it carried.
 
-**6. OPEN — the W₂ rig's three provenance requirements are stated in §9.5
-but not wired.** `VanguardsMode::Managed`, the rule-76 Pi-4 floor, and the
+**6. DONE (2026-08-15) — the rig's three provenance requirements are wired
+as one indivisible type.** `shekyl-sp-t3-spike`'s `RunProvenance::attest` takes
+`VanguardsAttested` (mintable only from a `VanguardsActive`, whose constructor
+is private to `shekyl-tor` and runs only after a confirmed `SETCONF`),
+`RunDevice`, and `LiveNetworkAttested` (refused below `MIN_REAL_CONSENSUS_RELAYS`)
+— and `Apparatus::provenance` returns `Option`, so an unattestable run yields no
+datum. A **fourth** field the requirement did not anticipate proved necessary:
+`MeasuredSide`, derived from the apparatus's own persona count rather than
+declared. Without it `is_floor_datum()` faded open — a producer-shaped batch run
+on a Pi minted `true` and stamped "rule-76 provisioning input" on the wrong
+machine's number, which is the laundering this item exists to prevent arriving
+through the one field missing from it.
+
+Note what this does *not* mean: W₂ is **ruled, not measured** (§9.7 item 6a),
+so the apparatus has no pending consumer. It is correct and it sits. The
+requirement below is retained as written because the reasoning is what
+generalises, not because a run is owed.
+
+*Original text, retained:* **the W₂ rig's three provenance requirements are
+stated in §9.5 but not wired.** `VanguardsMode::Managed`, the rule-76 Pi-4 floor, and the
 real Tor network (never chutney) are today three sentences of prose in three
 places. Each one's failure mode is silent and points the same way: a
 non-vanguards run measures a shorter path than production ships, an off-floor
