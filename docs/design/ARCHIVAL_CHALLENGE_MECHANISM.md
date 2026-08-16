@@ -1305,8 +1305,12 @@ record, none silently:
   quadratic plus the outer window. The sentence is corrected rather than
   deleted because a silent gap here is what let this keep circling — every
   re-derivation read it and reconstructed an upper bound that no longer
-  exists. The landed shape is likely a lookup
-  table that refuses outside its domain — never a scalar or fitted curve.
+  exists. **The "landed shape is likely a lookup table … never a scalar"
+  clause is retired with it (2026-08-15):** it presumed W₂ would be *sized
+  from* this distribution, which is what a lookup table is for. Under the
+  pin-by-ruling it is a scalar (`SETTLEMENT_EPOCH_BLOCKS / 20`) and the
+  distribution's job is a floor *check*, not a domain to interpolate over.
+  A table would now be a lookup with one answer.
   **CONCURRENCY, not bandwidth, is the W₂ unit (pinned 2026-08-11, from
   reading the derivation module — decided before the rig is built because
   it changes what gets instrumented).** The schedule assigns λ·D/E pairs

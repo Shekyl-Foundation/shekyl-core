@@ -57,8 +57,8 @@ pub const CHALLENGE_RESOLUTION_BLOCKS: u64 = 10_000;
 pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 
 /// W₂ — blocks after a challenge's issuing block to accept its serve-credit
-/// response. **Pinned at one twentieth of a settlement epoch (500 blocks,
-/// ≈16.7 h).**
+/// response. **Pinned at one twentieth of a settlement epoch
+/// ([`W2_EPOCH_DIVISOR`]) — 500 blocks, ≈16.7 h.**
 ///
 /// # The ruling that makes a number pinnable: W₂ has no surviving upper bound
 ///
@@ -129,7 +129,48 @@ pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 /// circuits, far below what bandwidth suggests. That is a question about
 /// whether the floor device can do the job at all, and it raises this value (or
 /// re-opens the floor), never lowers it.
-pub const CHALLENGE_RESPONSE_BLOCKS: u64 = SETTLEMENT_EPOCH_BLOCKS / 20;
+pub const CHALLENGE_RESPONSE_BLOCKS: u64 = SETTLEMENT_EPOCH_BLOCKS / W2_EPOCH_DIVISOR;
+
+/// Fraction of a settlement epoch W₂ occupies: `SEB / 20`.
+///
+/// Named rather than inline so a re-pin is a visible edit to a documented
+/// quantity instead of a digit change inside an expression.
+pub const W2_EPOCH_DIVISOR: u64 = 20;
+
+/// Lower and upper edge of the band the W₂ ruling defends.
+///
+/// The ruling is "asymmetric with slack on one side ⇒ pick generous, not
+/// optimal", and it holds anywhere in roughly 200–500 blocks. **The band is
+/// the ruled part; the divisor is a consequence** — so these are what the
+/// const-asserts below defend, not the divisor.
+pub const W2_MIN_DEFENSIBLE_BLOCKS: u64 = 200;
+/// Upper edge of the W₂ band — see [`W2_MIN_DEFENSIBLE_BLOCKS`].
+pub const W2_MAX_DEFENSIBLE_BLOCKS: u64 = 500;
+
+// Keep the doc's "one twentieth of a settlement epoch" literally true. Integer
+// division would silently truncate if `SETTLEMENT_EPOCH_BLOCKS` were ever
+// re-pinned to a non-multiple, leaving the prose claiming a fraction the value
+// is not. Compile-time, so a re-pin cannot land it quietly.
+const _: () = assert!(
+    SETTLEMENT_EPOCH_BLOCKS.is_multiple_of(W2_EPOCH_DIVISOR),
+    "SETTLEMENT_EPOCH_BLOCKS is not a multiple of W2_EPOCH_DIVISOR: CHALLENGE_RESPONSE_BLOCKS \
+     would truncate and no longer be the fraction of an epoch its doc claims; re-pin the \
+     divisor deliberately rather than inheriting a rounded value"
+);
+
+// The one that defends the *ruling* rather than the arithmetic. Divisibility
+// keeps the prose true; this keeps the value inside the band the ruling was
+// made over. A re-pin of `SETTLEMENT_EPOCH_BLOCKS` alone would otherwise carry
+// W₂ out of that band while every claim about it still read as current —
+// `SEB = 100_000` divides evenly and yields 5_000, which no part of the ruling
+// covers.
+const _: () = assert!(
+    CHALLENGE_RESPONSE_BLOCKS >= W2_MIN_DEFENSIBLE_BLOCKS
+        && CHALLENGE_RESPONSE_BLOCKS <= W2_MAX_DEFENSIBLE_BLOCKS,
+    "CHALLENGE_RESPONSE_BLOCKS is outside the band the W2 ruling was made over; a change \
+     to SETTLEMENT_EPOCH_BLOCKS has carried W2 with it. Re-run the ruling (no surviving \
+     upper bound; hard lower bound) before widening the band"
+);
 
 // The slash fold for epoch E must not run before the response window of E's
 // last-issued challenge closes, or in-flight responses read as misses. The fold

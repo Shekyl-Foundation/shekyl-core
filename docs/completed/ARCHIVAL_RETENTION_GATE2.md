@@ -155,7 +155,7 @@ derives identical `(ℓ, H_fire, R_k)` from consensus-visible state (§3.3–§3
 | `CHALLENGES_PER_EPOCH` | **1** | Guaranteed on-demand test per `(P,s,E)` — demand floor (§0) |
 | `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** | Slash grace after `H_close` — [`ARCHIVAL_TIMING_CONSTANTS.md`](../design/ARCHIVAL_TIMING_CONSTANTS.md) |
 | `CHALLENGE_BEACON_SEAL_BLOCKS` | **1** (provisional) | Blocks after `H_open` before `block_hash(H_seal)` is fixed — `shekyl-archival-retention::CHALLENGE_BEACON_SEAL_BLOCKS` |
-| `CHALLENGE_RESPONSE_BLOCKS` | **TBD (byte pin)** | Blocks after `H_fire` to accept credit; must end before `H_close` |
+| `CHALLENGE_RESPONSE_BLOCKS` | **500** (`SEB / 20`, pinned 2026-08-15) | Blocks after `H_fire` to accept credit; must end before `H_close`. Pinned by ruling — see `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 6a. The must-end-before-`H_close` obligation is *not* yet enforced anywhere; the fire-ceiling fix lands with the first consumer (FOLLOWUPS TJ-2) |
 
 ### 3.2 Epoch heights (ordering)
 

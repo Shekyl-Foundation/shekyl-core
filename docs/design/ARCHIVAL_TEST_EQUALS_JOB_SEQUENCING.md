@@ -1256,7 +1256,9 @@ fix, not a new design).
 
 ### 10.2 TJ-2 (CRITICAL) — response semantics are **not** frozen, and this corrects a claim in §9
 
-`constants.rs:24`: `pub const CHALLENGE_RESPONSE_BLOCKS: Option<u64> = None;` —
+`constants.rs`: **`pub const CHALLENGE_RESPONSE_BLOCKS: u64 = SETTLEMENT_EPOCH_BLOCKS / 20;`
+(500 blocks, pinned 2026-08-15).** Historical reading below, retained because the
+reasoning it drove is still the record; the blocker itself is discharged —
 *"Not yet byte-pinned in gate-2 §3.1."* **The acceptance deadline after `H_fire`
 has no value.**
 
@@ -1269,6 +1271,14 @@ against **a deadline that does not exist**. Until `CHALLENGE_RESPONSE_BLOCKS` is
 pinned, the free-rider's round-trip budget is **unbounded** and the margin is
 **not evaluable**. This is a **freeze item, not a build item**, and it gates the
 evaluability of §9.4 and §9.5.
+
+**DISCHARGED (2026-08-15): `CHALLENGE_RESPONSE_BLOCKS = SETTLEMENT_EPOCH_BLOCKS
+/ 20` = 500 blocks (≈16.7 h).** The deadline exists, so the `n·I − S` margin,
+the helper round-trip and the dumb-pipe case are now evaluable and §9.4/§9.5's
+arithmetic can be run. Note what the pin does *not* settle: it was made by
+ruling (W₂ has no surviving upper bound, so pick generous) rather than by
+measurement, and a floor check can still raise it — so a margin computed
+against 500 is evaluable but should be re-run if the rig moves the value.
 
 ### 10.3 TJ-3 (HIGH) — the fire beacon seals one block into a 10,000-block epoch
 
@@ -1505,9 +1515,10 @@ sweep input rather than a structural hole.
 
 ### 11.7 Revised dependency order
 
-1. **TJ-2 — `CHALLENGE_RESPONSE_BLOCKS`.** Prerequisite, **not** a broken freeze
-   claim: the `n·I − S` margin, the helper round-trip, and the dumb-pipe case
-   are unevaluable until it has a value. **Gates the sweep, not the build.**
+1. **TJ-2 — `CHALLENGE_RESPONSE_BLOCKS`. ✅ DISCHARGED 2026-08-15** (= 500,
+   `SEB / 20`). Was a prerequisite, **not** a broken freeze claim: the
+   `n·I − S` margin, the helper round-trip, and the dumb-pipe case were
+   unevaluable until it had a value. The sweep it gated is now runnable.
 2. **Item 1 — the read shape and the on-chain artifact.** §11.1 decides it:
    bulk read, no viable leaf parameterization. Everything downstream is a
    function of this.
