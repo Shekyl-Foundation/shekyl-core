@@ -309,6 +309,16 @@ pub enum CheckedReserveProof {
 /// The canonical decoded-address byte form both proof sides bind to:
 /// `network[1] ‖ spend_key[32] ‖ view_key[32] ‖ ml_kem_encap_key`.
 ///
+/// This is **payment identity**, not the full address string.
+/// `msg_sign_pk` is the message-signing anchor (SM-R-8); it is not a
+/// payment key. Honest derivation ties it to the same seed as
+/// spend/view, so two addresses that differ only there cannot arise
+/// from one wallet. An adversarially constructed string with the same
+/// spend/view/ek and a foreign `msg_sign_pk` is the same payment
+/// destination — proofs correctly treat it as such. Binding the
+/// signing key here would be a proof-wire change with no payment-
+/// security content.
+///
 /// Deliberately the **decoded** form, never the Bech32m string — the
 /// contract pins the ownership comparison and proof binding to decoded
 /// addresses because Bech32m admits an all-uppercase encoding of the

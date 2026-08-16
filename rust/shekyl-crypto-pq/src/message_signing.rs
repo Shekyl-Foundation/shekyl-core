@@ -79,16 +79,17 @@
 //! on both halves (SM-R-3 R3-a); all domain separation lives in the
 //! cSHAKE customization strings below.
 //!
-//! [`verify_message`] takes a [`SignerIdentity`], and the only way to
-//! build one is to extract it from the address's
-//! [`BoundClassicalSegment`] — whose fourth field has carried the
-//! 48-byte SLH-DSA key since the fork-(ii) layout landed (the R6-a type
-//! gate, lifted by becoming total). Accepting the key as a free
-//! parameter instead would mean an adversary who recovered the spend
-//! scalar could supply their own SLH keypair and produce an attestation
-//! that verifies against a victim's address — the PQ half reduced to
-//! decoration, which is precisely the "degenerate verifier" outcome the
-//! nesting order was chosen to foreclose.
+//! [`verify_message`] takes a [`BoundClassicalSegment`]. The keys and
+//! the bound bytes are the same object — there is no constructor that
+//! accepts a spend key from one address and an SLH key from another.
+//! Accepting the keys as free parameters would mean an adversary who
+//! recovered the spend scalar could supply their own SLH keypair and
+//! produce an attestation that verifies against a victim's address —
+//! the PQ half reduced to decoration, which is precisely the
+//! "degenerate verifier" outcome the nesting order was chosen to
+//! foreclose. The R6-a type gate lifted by becoming this: every
+//! decodable address carries the fourth field, so extraction cannot
+//! fail and cannot be unbound.
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::scalar::Scalar;
@@ -305,45 +306,6 @@ pub fn derive_message_signing_public_key(
     Ok(pk.into_bytes())
 }
 
-/// The signer's public identity, **as the address supplies it**.
-///
-/// # Why this is a type and not two parameters
-///
-/// Verification needs two public keys: the address's Ed25519 spend key
-/// and the 48-byte SLH-DSA key. Taking them as independent arguments
-/// makes the security of the whole construction a caller convention —
-/// and a caller who supplies a spend key from the address but an SLH key
-/// from somewhere else gets a signature that verifies while proving
-/// nothing about the address. Under SM-R-8's fork (ii) both keys live in
-/// the address, so extraction from the address's bound classical segment
-/// is the *only* honest provenance, and it is the only constructor.
-pub struct SignerIdentity<'a> {
-    spend_pk: &'a [u8; 32],
-    slh_pk: &'a [u8; SLH_192S_PK_LEN],
-}
-
-impl<'a> SignerIdentity<'a> {
-    /// Extract the signer's identity from an address's bound classical
-    /// segment.
-    ///
-    /// **Total** since the fork-(ii) layout landed: every decodable
-    /// address carries the 48-byte message-signing key as its fourth
-    /// classical field, so extraction cannot fail — the R6-a type gate
-    /// "lifted" by becoming infallible. Taking the
-    /// [`BoundClassicalSegment`] *type* (not raw bytes) is what keeps
-    /// the provenance honest: the only ways to obtain one are the
-    /// address encoder and the version-checked
-    /// [`BoundClassicalSegment::from_address_parts`], so the keys read
-    /// here are the keys the signature's preimage binds.
-    #[must_use]
-    pub fn from_bound_segment(segment: &'a BoundClassicalSegment) -> Self {
-        Self {
-            spend_pk: segment.spend_key(),
-            slh_pk: segment.msg_sign_pk(),
-        }
-    }
-}
-
 /// Assemble the signing preimage (SM-R-3):
 ///
 /// ```text
@@ -435,10 +397,10 @@ pub fn sign_message_pq_half(
     master_seed: &[u8; MASTER_SEED_BYTES],
     network: DerivationNetwork,
     seed_format: SeedFormat,
-    classical_segment: &[u8],
+    segment: &BoundClassicalSegment,
     message: &[u8],
 ) -> Result<([u8; MSG_PREIMAGE_LEN], Box<[u8; SLH_192S_SIG_LEN]>), MessageSigError> {
-    let preimage = message_preimage(network, classical_segment, message);
+    let preimage = message_preimage(network, segment.as_bytes(), message);
     let (_pk, slh_sk) = derive_message_signing_identity(master_seed, network, seed_format)
         .map_err(|_| MessageSigError::InvalidKey)?;
     // Hedged (`true`): fips205 feeds opt_rand on top of SK.prf, so a bad
@@ -488,16 +450,11 @@ pub fn sign_message(
     spend_sk: &[u8; 32],
     network: DerivationNetwork,
     seed_format: SeedFormat,
-    classical_segment: &[u8],
+    segment: &BoundClassicalSegment,
     message: &[u8],
 ) -> Result<String, MessageSigError> {
-    let (preimage, sig_pq) = sign_message_pq_half(
-        master_seed,
-        network,
-        seed_format,
-        classical_segment,
-        message,
-    )?;
+    let (preimage, sig_pq) =
+        sign_message_pq_half(master_seed, network, seed_format, segment, message)?;
     let outer = outer_bytes(&preimage, &sig_pq);
     let sig_cl = sign_outer_with_spend_scalar(spend_sk, outer.as_ref())?;
     Ok(assemble_armored(&sig_pq, &sig_cl))
@@ -638,9 +595,6 @@ impl ArmoredSignature {
 /// `σ_cl` too. That composition lives here, in one place, so no caller
 /// can accidentally implement it as an OR.
 ///
-/// See [`SignerIdentity`] for why this is unreachable in production
-/// until the fork-(ii) v2 address layout lands.
-///
 /// Takes the already-decoded [`ArmoredSignature`], not the armored
 /// string: decoding carries the paste taxonomy (SM-R-6) and callers run
 /// it *before* judging the address, so accepting the string here would
@@ -649,23 +603,25 @@ impl ArmoredSignature {
 /// caller's hands. There is exactly one decode, at
 /// [`ArmoredSignature::decode`], and exactly one AND, here.
 ///
+/// Keys come from `segment` — the same object whose bytes enter the
+/// preimage. There is no parameter that can point them elsewhere.
+///
 /// # Errors
 ///
 /// [`MessageSigError::VerifyFailed`] if either half does not verify;
-/// [`MessageSigError::InvalidKey`] if the identity's SLH key does not
+/// [`MessageSigError::InvalidKey`] if the segment's SLH key does not
 /// parse.
 pub fn verify_message(
-    identity: &SignerIdentity<'_>,
+    segment: &BoundClassicalSegment,
     network: DerivationNetwork,
-    classical_segment: &[u8],
     message: &[u8],
     sig: &ArmoredSignature,
 ) -> Result<(), MessageSigError> {
-    let preimage = message_preimage(network, classical_segment, message);
+    let preimage = message_preimage(network, segment.as_bytes(), message);
 
     // Inner half: SLH-DSA over the preimage, ctx empty. The AND is
     // structural — a verifier without this dependency cannot get here.
-    let slh_public = slh_dsa_sha2_192s::PublicKey::try_from_bytes(identity.slh_pk)
+    let slh_public = slh_dsa_sha2_192s::PublicKey::try_from_bytes(segment.msg_sign_pk())
         .map_err(|_| MessageSigError::InvalidKey)?;
     if !slh_public.verify(&preimage, &sig.sig_pq, b"") {
         return Err(MessageSigError::VerifyFailed);
@@ -676,7 +632,7 @@ pub fn verify_message(
     let outer = outer_bytes(&preimage, &sig.sig_pq);
     if !schnorr::verify_compressed(
         MSG_SIGN_OUTER_DOMAIN,
-        identity.spend_pk,
+        segment.spend_key(),
         outer.as_ref(),
         &sig.sig_cl,
     ) {
@@ -734,17 +690,16 @@ mod tests {
         BoundClassicalSegment::from_address_parts(&classical, &TEST_EK).expect("fixture segment")
     }
 
-    /// Verify helper: the identity comes from the segment itself — the
-    /// only constructor, exactly as production does it.
+    /// Verify helper: same surface as production — segment in, no
+    /// unbound keys.
     fn verify_with(
         segment: &BoundClassicalSegment,
         network: DerivationNetwork,
         message: &[u8],
         armored: &str,
     ) -> Result<(), MessageSigError> {
-        let id = SignerIdentity::from_bound_segment(segment);
         let sig = ArmoredSignature::decode(armored)?;
-        verify_message(&id, network, segment.as_bytes(), message, &sig)
+        verify_message(segment, network, message, &sig)
     }
 
     /// SM-R-4 R4-a KAT: fixed master seed → fixed public key. Pins the
@@ -820,32 +775,12 @@ mod tests {
         );
     }
 
-    /// The only constructor of [`SignerIdentity`] reads exactly the
-    /// segment's own fields. This test replaced
-    /// `identity_cannot_be_extracted_from_any_current_segment` when the
-    /// fork-(ii) layout landed — the R6-a gate lifting was, by design,
-    /// this test flipping.
-    #[test]
-    fn identity_extracts_the_segments_keys() {
-        let seg = test_segment();
-        let id = SignerIdentity::from_bound_segment(&seg);
-        assert_eq!(id.spend_pk, &spend_pk());
-        assert_eq!(id.slh_pk, &slh_pk());
-    }
-
     /// End-to-end round trip through the real segment constructor.
     #[test]
     fn sign_verify_round_trips() {
         let seg = test_segment();
-        let armored = sign_message(
-            &SEED,
-            &spend_sk(),
-            NET,
-            FMT,
-            seg.as_bytes(),
-            b"hello shekyl",
-        )
-        .expect("sign");
+        let armored =
+            sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"hello shekyl").expect("sign");
         assert!(armored.starts_with(MSG_SIG_PREFIX));
         assert!(!armored.contains('='), "unpadded is pinned");
         verify_with(&seg, NET, b"hello shekyl", &armored).expect("verify");
@@ -858,8 +793,7 @@ mod tests {
     #[test]
     fn verification_binds_every_input() {
         let seg = test_segment();
-        let armored =
-            sign_message(&SEED, &spend_sk(), NET, FMT, seg.as_bytes(), b"msg").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"msg").expect("sign");
         assert_eq!(verify_with(&seg, NET, b"msg", &armored), Ok(()));
         assert_eq!(
             verify_with(&seg, NET, b"msh", &armored),
@@ -909,8 +843,7 @@ mod tests {
     fn armored_tamper_battery() {
         use base64::Engine as _;
         let seg = test_segment();
-        let armored =
-            sign_message(&SEED, &spend_sk(), NET, FMT, seg.as_bytes(), b"m").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"m").expect("sign");
         let verify = |s: &str| verify_with(&seg, NET, b"m", s);
 
         assert_eq!(
@@ -1042,8 +975,7 @@ mod tests {
     #[test]
     fn wrapped_and_padded_whitespace_still_verifies() {
         let seg = test_segment();
-        let armored =
-            sign_message(&SEED, &spend_sk(), NET, FMT, seg.as_bytes(), b"m").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"m").expect("sign");
         let wrapped: String = armored
             .as_bytes()
             .chunks(72)
@@ -1082,8 +1014,7 @@ mod tests {
         use base64::Engine as _;
         let engine = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
         let seg = test_segment();
-        let armored =
-            sign_message(&SEED, &spend_sk(), NET, FMT, seg.as_bytes(), b"m").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"m").expect("sign");
         let mut c = engine
             .decode(armored.strip_prefix(MSG_SIG_PREFIX).unwrap())
             .unwrap();
@@ -1107,8 +1038,7 @@ mod tests {
         use base64::Engine as _;
         let engine = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
         let seg = test_segment();
-        let armored =
-            sign_message(&SEED, &spend_sk(), NET, FMT, seg.as_bytes(), b"m").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"m").expect("sign");
         let mut canonical = engine
             .decode(armored.strip_prefix(MSG_SIG_PREFIX).unwrap())
             .unwrap();

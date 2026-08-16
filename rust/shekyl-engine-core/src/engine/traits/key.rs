@@ -94,12 +94,12 @@ pub(crate) const VIEW_TAG_BYTES: usize = 1;
 /// lifetime; cheap; touches no secrets.
 ///
 /// Per `STAGE_1_PR_3_KEY_ENGINE.md` §3.3 Sub-bundle A, mirrors
-/// `AllKeysBlob`'s public side: the 1216-byte ML-KEM-768 PK and the
-/// 65-byte classical address bytes. Returned by
-/// [`KeyEngine::account_public_address`] as `&AccountPublicAddress`
-/// — the one trait method that hands out a borrowed reference rather
-/// than an owned message, because address material is not bound to
-/// any per-call context.
+/// `AllKeysBlob`'s public side: the 1216-byte PQC public key and the
+/// [`shekyl_address::CLASSICAL_SEGMENT_LEN`]-byte classical payload.
+/// Returned by [`KeyEngine::account_public_address`] as
+/// `&AccountPublicAddress` — the one trait method that hands out a
+/// borrowed reference rather than an owned message, because address
+/// material is not bound to any per-call context.
 #[derive(Clone, Debug)]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct AccountPublicAddress {
@@ -107,7 +107,8 @@ pub(crate) struct AccountPublicAddress {
     /// Read the halves through the accessors below rather than slicing —
     /// the split point is this type's business, not its callers'.
     pub pqc_public_key: Vec<u8>,
-    /// Encoded classical address bytes.
+    /// Classical address payload (`version ‖ spend ‖ view ‖ msg_sign_pk`).
+    /// Split through [`Self::to_shekyl_address`], not by offset.
     pub classical_address_bytes: Vec<u8>,
 }
 
@@ -124,6 +125,27 @@ impl AccountPublicAddress {
     /// `pqc_public_key[32..]` with a bare literal.
     pub(crate) fn ml_kem_encap_key(&self) -> Option<&[u8]> {
         self.pqc_public_key.get(X25519_PK_LEN..)
+    }
+
+    /// Rebuild the encoded address. The classical split lives in
+    /// [`shekyl_address::ShekylAddress::from_classical_bytes`] — this
+    /// type does not re-learn offsets.
+    pub(crate) fn to_shekyl_address(
+        &self,
+        network: shekyl_address::Network,
+    ) -> Result<shekyl_address::ShekylAddress, shekyl_address::AddressError> {
+        let ek = self
+            .ml_kem_encap_key()
+            .ok_or(shekyl_address::AddressError::BadLength {
+                segment: "ML-KEM encap key (after x25519 prefix)",
+                expected: shekyl_address::PQC_PAYLOAD_LEN,
+                got: self.pqc_public_key.len().saturating_sub(X25519_PK_LEN),
+            })?;
+        shekyl_address::ShekylAddress::from_classical_bytes(
+            network,
+            &self.classical_address_bytes,
+            ek.to_vec(),
+        )
     }
 }
 

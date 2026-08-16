@@ -576,6 +576,20 @@ impl ArchivalPKeys {
             bond_spend_pk: &self.bond_spend_pk,
         }
     }
+
+    /// The persona's receive address. Same field set as the principal
+    /// blob's [`crate::account::AllKeysBlob::to_address`] — callers do
+    /// not re-assemble `ShekylAddress::new`.
+    #[must_use]
+    pub fn to_address(&self, network: shekyl_address::Network) -> shekyl_address::ShekylAddress {
+        shekyl_address::ShekylAddress::new(
+            network,
+            *self.spend_pk.as_canonical_bytes(),
+            *self.view_pk.as_canonical_bytes(),
+            self.msg_sign_pk,
+            self.ml_kem_ek.to_vec(),
+        )
+    }
 }
 
 /// Public-only key pair for constructing a JoinMarket bond post.

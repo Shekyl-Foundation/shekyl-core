@@ -157,50 +157,17 @@ namespace cryptonote {
     , account_public_address const & adr
     )
   {
-    uint8_t net = nettype_to_ffi_network(nettype);
-    // Canonical m_pqc_public_key layout is pinned at SHEKYL_PQC_PUBLIC_KEY_BYTES
-    // (X25519_pub[32] || ML-KEM-768_ek[1184]) by a static_assert in shekyl_ffi.h
-    // and by get_account_address_from_str, which is the only v1 assembler. Any
-    // other length is a programming error — we fall through and let the
-    // bech32m encoder refuse a malformed input rather than silently patch up
-    // legacy 1184-byte blobs that predate the freeze. The old "ML-KEM-only"
-    // fallback was a footgun: it let partially-initialized addresses round-
-    // trip through the encoder with the X25519 prefix missing and no check on
-    // the other side.
-    const std::vector<uint8_t>& pq = adr.m_pqc_public_key;
-    const uint8_t* ml_ptr = nullptr;
-    size_t ml_len = 0;
-    if (pq.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES)
-    {
-      ml_ptr = pq.data() + SHEKYL_X25519_PK_BYTES;
-      ml_len = SHEKYL_ML_KEM_768_EK_BYTES;
-    }
-    else if (!pq.empty())
-    {
-      LOG_PRINT_L1("Refusing to encode address with non-canonical m_pqc_public_key size "
-          << pq.size() << " (expected " << SHEKYL_PQC_PUBLIC_KEY_BYTES
-          << " or zero for legacy address-only wallets)");
-      return {};
-    }
-    // Since the fork-(ii) layout, a valid address carries a 48-byte
-    // msg_sign_pk fourth field that `account_public_address` does not
-    // hold, so struct-only re-encoding is no longer possible: the FFI
-    // refuses a null msg_sign_pk and this funnel returns {}. Live daemon
-    // paths (mining start/status) carry the user's original address
-    // string instead of re-encoding; remaining legacy-wallet display
-    // callers degrade with wallet2, which Phase 5 deletes.
-    ShekylBuffer buf = shekyl_address_encode(
-        net,
-        reinterpret_cast<const uint8_t*>(adr.m_spend_public_key.data),
-        reinterpret_cast<const uint8_t*>(adr.m_view_public_key.data),
-        /*msg_sign_pk_ptr=*/nullptr,
-        ml_ptr,
-        ml_len);
-    if (!buf.ptr || buf.len == 0)
-      return {};
-    std::string result(reinterpret_cast<const char*>(buf.ptr), buf.len);
-    shekyl_buffer_free(buf.ptr, buf.len);
-    return result;
+    // Struct-only re-encode is gone: `account_public_address` does not
+    // carry `msg_sign_pk`, and we will not thicken the C++ struct to
+    // hold a field the Rust address crate owns (rule 20). Live daemon
+    // paths retain the caller's original encoded string (miner
+    // start/status). Remaining wallet2 display callers are the Phase-5
+    // deletion surface — they get an empty string, not a theatrical
+    // FFI call that cannot succeed.
+    (void)nettype;
+    (void)adr;
+    LOG_PRINT_L0("get_account_address_as_str: cannot encode from account_public_address (no msg_sign_pk); pass the original address string");
+    return {};
   }
   //-----------------------------------------------------------------------
   // Shekyl has no integrated (payment-id) addresses; this is a compatibility

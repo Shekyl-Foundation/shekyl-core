@@ -9,13 +9,14 @@
 //!
 //! # What this suite can and cannot assert
 //!
-//! The production success path of [`super::verify_message`] is still
-//! gated (R6-a): no in-tree address constructs a `SignerIdentity`. This
-//! suite pins the assembly in front of that gate — signature-first
-//! taxonomy, full-address requirement, and the UnboundIdentity tripwire
-//! that must flip when the v2 layout lands — plus the part the crypto
-//! crate's own tests structurally cannot see: that the σ_cl the **key
-//! actor** produced from the wallet's real derived spend scalar verifies
+//! The production success path of [`super::verify_message`] is live:
+//! every decodable address carries the fourth classical field, and
+//! verify takes the address's [`shekyl_address::BoundClassicalSegment`]
+//! so the keys cannot be unbound from the bound bytes. This suite pins
+//! the assembly in front of that AND — signature-first taxonomy, the
+//! full-address requirement — plus the part the crypto crate's own
+//! tests structurally cannot see: that the σ_cl the **key actor**
+//! produced from the wallet's real derived spend scalar verifies
 //! against the **address's** spend key, over exactly the preimage built
 //! from the **address's** bound segment.
 
@@ -192,7 +193,8 @@ async fn sign_message_round_trips_through_wallet_file() {
         )))
     ));
 
-    // Well-formed signature + undecodable address: shape, not UnboundIdentity.
+    // Well-formed signature + undecodable address: address shape, not
+    // a verify-failed answer.
     assert!(matches!(
         verify_message(network, "not-an-address", message, &armored),
         Err(VerifyMessageError::InvalidAddress)
@@ -263,14 +265,9 @@ async fn sign_message_outer_with_real_keys() {
         .expect("segment assembles");
 
     let message = b"actor end to end";
-    let (preimage, sig_pq) = ms::sign_message_pq_half(
-        &master_seed,
-        network,
-        seed_format,
-        segment.as_bytes(),
-        message,
-    )
-    .expect("pq half");
+    let (preimage, sig_pq) =
+        ms::sign_message_pq_half(&master_seed, network, seed_format, &segment, message)
+            .expect("pq half");
     let sig_cl = handle
         .sign_message_outer(ms::outer_bytes(&preimage, &sig_pq))
         .await

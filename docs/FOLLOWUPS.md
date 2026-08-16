@@ -1699,13 +1699,11 @@ sustainability is unaffected by the recalibration.
     surface PR un-stubbed the CLI commands in the same change.
     `sign_message`/`verify_message` are SPECIFIED in
     `wallet_rpc.yaml` (`-29800..-29803` allocated); CLI `sign`/`verify`
-    are real commands; verify is session-less (SM-R-6). One residue,
-    carried where it was always tracked (the genesis address-format
-    checklist row, NOT here): every in-tree address answers `-29803`
-    until the fork-(ii) v2 layout + `ADDRESS_DERIVATION_V1`-successor
-    vectors land in code, at which point `SignerIdentity`'s
-    constructor starts succeeding and verification opens with no
-    contract change.
+    are real commands; verify is session-less (SM-R-6). Residue closed
+    2026-08-15/16 with the fork-(ii) layout: every decodable address
+    carries `msg_sign_pk`; `verify_message` takes
+    `&BoundClassicalSegment` (keys and bound bytes are one object);
+    `-29803` retired unused.
   - **Offline cold-signing** (`describe_transfer`, `sign_transfer`,
     `submit_transfer`, `transfer --do-not-relay`) — blocked on Phase 2d
     (`UnsignedTxBundle`/`SignedTxBundle` air-gapped bundles).

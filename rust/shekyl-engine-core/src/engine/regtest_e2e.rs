@@ -1429,15 +1429,9 @@ pub(super) fn persona_address(
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     let keys = derive_archival_p_keys(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
         .expect("derive persona keys");
-    shekyl_address::ShekylAddress::new(
-        shekyl_address::Network::Mainnet,
-        *keys.spend_pk.as_canonical_bytes(),
-        *keys.view_pk.as_canonical_bytes(),
-        keys.msg_sign_pk,
-        keys.ml_kem_ek.to_vec(),
-    )
-    .encode()
-    .expect("encode persona address")
+    keys.to_address(shekyl_address::Network::Mainnet)
+        .encode()
+        .expect("encode persona address")
 }
 
 /// Run the production P-scan (tight cadence + the shallow

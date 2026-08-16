@@ -33,8 +33,8 @@
 //! # The R6-a gate, lifted
 //!
 //! Every decodable address carries the 48-byte SLH-DSA key as its fourth
-//! classical field, so the engine's `SignerIdentity` extraction is total
-//! and the verify success path is live end to end.
+//! classical field, so verify takes the address's bound classical
+//! segment and the success path is live end to end.
 
 use serde::Deserialize;
 use serde_json::Value;

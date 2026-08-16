@@ -26,7 +26,10 @@ ruled at landing, multisig never-deployed precedent), the
 addresses carry a per-slot `msg_sign_pk` under the seventh archival-P
 label (a landing-time ruling the round had not priced — uniformity, not
 a persona signing capability), and the R6-a type gate lifted by
-`SignerIdentity::from_bound_segment` becoming total. Note the ordering constraint SM-R-4 R4-c records: the
+`verify_message` taking `&BoundClassicalSegment` — keys and bound
+bytes are the same object; `SignerIdentity` is deleted (the two-
+parameter API would have left the unbound provenance the type was
+invented to forbid). Note the ordering constraint SM-R-4 R4-c records: the
 `(network, seed_format)` scoping amendment changes the derived
 public-key bytes and therefore had to land **before** any sign-off on
 the field that carries them. Everything else is implementation.

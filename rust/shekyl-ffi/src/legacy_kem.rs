@@ -224,33 +224,24 @@ pub unsafe extern "C" fn shekyl_address_encode(
         return ShekylBuffer::null();
     };
 
-    // Every fixed-size boundary read goes through the seam helper
+    // Every fixed-size boundary read goes through `array_from_ptr`
     // (rule 40): one audited construction owns the null / zero-length /
-    // isize::MAX preconditions, and the read length is the layout
-    // constant so a wrong count cannot silently truncate. What NO
+    // isize::MAX preconditions, and the type parameter *is* the layout
+    // length so a wrong count cannot silently truncate. What NO
     // boundary code can check is the caller's allocation size — a
     // non-null undersized buffer is UB under any read idiom; that
     // precondition is the `# Safety` contract above, as everywhere on
     // this surface.
-    let spend_key: [u8; 32] = {
-        let Some(slice) = (unsafe { slice_from_ptr(spend_key_ptr, 32) }) else {
-            return ShekylBuffer::null();
-        };
-        slice.try_into().expect("slice length fixed above")
+    let Some(spend_key) = (unsafe { array_from_ptr::<32>(spend_key_ptr) }) else {
+        return ShekylBuffer::null();
     };
-    let view_key: [u8; 32] = {
-        let Some(slice) = (unsafe { slice_from_ptr(view_key_ptr, 32) }) else {
-            return ShekylBuffer::null();
-        };
-        slice.try_into().expect("slice length fixed above")
+    let Some(view_key) = (unsafe { array_from_ptr::<32>(view_key_ptr) }) else {
+        return ShekylBuffer::null();
     };
-    let msg_sign_pk: [u8; shekyl_address::MSG_SIGN_PK_LEN] = {
-        let Some(slice) =
-            (unsafe { slice_from_ptr(msg_sign_pk_ptr, shekyl_address::MSG_SIGN_PK_LEN) })
-        else {
-            return ShekylBuffer::null();
-        };
-        slice.try_into().expect("slice length fixed above")
+    let Some(msg_sign_pk) =
+        (unsafe { array_from_ptr::<{ shekyl_address::MSG_SIGN_PK_LEN }>(msg_sign_pk_ptr) })
+    else {
+        return ShekylBuffer::null();
     };
     let ml_kem_ek = if ml_kem_ek_len == 0 {
         Vec::new()
