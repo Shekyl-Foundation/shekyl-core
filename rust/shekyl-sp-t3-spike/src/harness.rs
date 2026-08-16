@@ -267,6 +267,15 @@ impl Apparatus {
     /// and break comparability with that record. Same call `OnionPow` made in
     /// this file for the same reason: new arm, old default.
     ///
+    /// **The vanguard set is established once and not maintained.** The
+    /// `VanguardManager` is dropped when this returns, so nothing calls its
+    /// mid-life `reconcile`. That is correct for a batch run measured in
+    /// minutes, and it is *wrong* for a soak arm like `pd-f2-measure`'s: over
+    /// hours, nodes expire and leave the consensus, and the pinned set drifts
+    /// from the persisted state with nothing to notice. Anyone extending this
+    /// to a long run must hold the manager for the run's lifetime and drive
+    /// rotation, or the witness stops describing the tor being measured.
+    ///
     /// Under `Managed` this also reads the consensus (`GETINFO ns/all`) so the
     /// run can attest it was on the real network. That is a second read — the
     /// vanguard draw fetches its own — and deliberately so: `shekyl-tor`'s
