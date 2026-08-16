@@ -40,6 +40,7 @@ use shekyl_p_transport::{PTorClient, PTransportError, RequestErrorKind, TorSocks
 use shekyl_tor::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId};
 use shekyl_tor::control::{BootstrapReadiness, BootstrapState, Command, EventSink, TorControl};
 use shekyl_tor::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
+use shekyl_tor::vanguard_rotation::{VanguardManager, VanguardsActive, VanguardsMode};
 use shekyl_types::{PCanonicalId, PSlot};
 
 use shekyl_p_serve::{PServeEndpoint, ROUTE_PREFIX};
@@ -117,6 +118,13 @@ pub struct Apparatus {
     socks: TorSocksEndpoint,
     /// The published personas, in slot order.
     pub personas: Vec<Persona>,
+    /// The sealed vanguards witness, when this apparatus was brought up
+    /// `Managed`. `None` under [`VanguardsMode::Off`] — and a `None` here is
+    /// what makes [`Self::provenance`] refuse, so a non-vanguards run cannot
+    /// produce a W₂ datum.
+    vanguards: Option<VanguardsActive>,
+    /// Relays counted in the consensus this incarnation bootstrapped against.
+    consensus_relays: usize,
 }
 
 /// Why the apparatus could not be brought up. Every arm is an *apparatus*
@@ -235,6 +243,46 @@ impl Apparatus {
         payload: Arc<[u8]>,
         pow: OnionPow,
     ) -> Result<Self, ApparatusError> {
+        Self::bring_up_with(
+            tor_binary,
+            data_dir,
+            persona_count,
+            payload,
+            pow,
+            VanguardsMode::Off,
+        )
+        .await
+    }
+
+    /// [`Self::bring_up_with_pow`] with the vanguards mode selected — the W₂
+    /// rig's entry point.
+    ///
+    /// **Why this is a parameter and not simply switched on.** §9.5 rules that
+    /// the W₂ rig MUST run `Managed`, because full vanguards add a guard layer
+    /// and cost "longer paths and higher latency — latency on exactly the path
+    /// W₂ measures", so a non-vanguards run measures a shorter path than
+    /// production ships and errs in the failure-causing direction. But the
+    /// recorded SP-T3 `D*` was measured with vanguards **off**, and forcing
+    /// them on here would silently change what every existing caller measures
+    /// and break comparability with that record. Same call `OnionPow` made in
+    /// this file for the same reason: new arm, old default.
+    ///
+    /// Under `Managed` this also reads the consensus (`GETINFO ns/all`) so the
+    /// run can attest it was on the real network. That is a second read — the
+    /// vanguard draw fetches its own — and deliberately so: see
+    /// [`consensus_relay_count`].
+    pub async fn bring_up_with(
+        tor_binary: std::path::PathBuf,
+        data_dir: std::path::PathBuf,
+        persona_count: u32,
+        payload: Arc<[u8]>,
+        pow: OnionPow,
+        vanguards_mode: VanguardsMode,
+    ) -> Result<Self, ApparatusError> {
+        // Cloned before `data_dir` moves into `ManagedTor`: the vanguard state
+        // file lives beside tor's own state, which is the persistence DQ-T0.7
+        // requires (guards must survive a restart rather than re-draw).
+        let vanguards_state_dir = data_dir.clone();
         let socks_port = free_port();
         let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
@@ -315,11 +363,50 @@ impl Apparatus {
             });
         }
 
+        // Vanguards *after* bootstrap and *before* the measurement: the pin is a
+        // `SETCONF` on a live control port, and the witness it mints is what the
+        // W₂ provenance requires. Under `Off` this is a no-op returning `None`,
+        // which is exactly what the recorded `D*` runs did.
+        let (vanguards, consensus_relays) = match vanguards_mode {
+            VanguardsMode::Off => (None, 0),
+            VanguardsMode::Managed => {
+                let relays = consensus_relay_count(&control, VANGUARDS_REPLY_DEADLINE).await;
+                let (_shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+                let mut manager =
+                    VanguardManager::load(VanguardsMode::Managed, &vanguards_state_dir);
+                let witness = manager
+                    .establish(&control, VANGUARDS_REPLY_DEADLINE, &mut shutdown_rx)
+                    .await
+                    .map_err(|e| ApparatusError::Control(format!("vanguards: {e:?}")))?;
+                (witness, relays)
+            }
+        };
+
         Ok(Self {
             control,
             socks: TorSocksEndpoint::loopback(socks_port),
             personas,
+            vanguards,
+            consensus_relays,
         })
+    }
+
+    /// The run's W₂ provenance, or `None` if this apparatus cannot attest it.
+    ///
+    /// `None` under [`VanguardsMode::Off`], or when the consensus reading did
+    /// not clear [`MIN_REAL_CONSENSUS_RELAYS`](crate::w2::MIN_REAL_CONSENSUS_RELAYS).
+    /// That is the whole design: §9.7 requires an incomplete run to yield **no
+    /// datum rather than an unlabelled one**, so this returns nothing rather
+    /// than something annotated as partial.
+    #[must_use]
+    pub fn provenance(&self) -> Option<crate::w2::RunProvenance> {
+        let vanguards = self.vanguards.as_ref()?;
+        let network = crate::w2::LiveNetworkAttested::from_consensus(self.consensus_relays).ok()?;
+        Some(crate::w2::RunProvenance::attest(
+            crate::w2::VanguardsAttested::from_witness(vanguards),
+            crate::w2::RunDevice::detect(),
+            network,
+        ))
     }
 
     /// Block until at least one persona answers, so the measurement does not
@@ -348,6 +435,36 @@ impl Apparatus {
     /// One fetch as `client_id`, returning the byte count on success.
     async fn fetch_once(&self, client_id: &PCanonicalId, url: &str) -> Result<usize, FailureKind> {
         fetch_over(self.socks, client_id, url).await
+    }
+}
+
+/// How long a vanguards control round trip may take before the bring-up gives up.
+///
+/// Generous because this runs once at bring-up on a floor device against the
+/// real consensus, and a rig that fails to start is a wasted run rather than a
+/// fast one.
+const VANGUARDS_REPLY_DEADLINE: Duration = Duration::from_secs(120);
+
+/// Count router entries in `GETINFO ns/all` — the real-network discriminator.
+///
+/// Read here rather than reused from `shekyl-tor`'s vanguard draw because that
+/// crate's `fetch_consensus` is private, and a second `GETINFO` at bring-up is
+/// cheaper than widening a crate's surface for a spike. Returns 0 on any
+/// failure, which fails *closed*: no count, no attestation, no datum.
+async fn consensus_relay_count(
+    control: &kameo::actor::ActorRef<TorControl>,
+    deadline: Duration,
+) -> usize {
+    let reply = tokio::time::timeout(
+        deadline,
+        control.ask(Command::GetInfo(vec!["ns/all".to_owned()])),
+    )
+    .await;
+    match reply {
+        Ok(Ok(reply)) if reply.status() == 250 => {
+            reply.lines().iter().filter(|l| l.starts_with("r ")).count()
+        }
+        _ => 0,
     }
 }
 
