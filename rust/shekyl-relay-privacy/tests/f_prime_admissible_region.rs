@@ -182,9 +182,17 @@ fn f_prime_against_tail_mass_at_the_measured_minimum() {
 
     // 1/12 and 1/4 bracket the `A = 60` arm's observed tail range; 1/3 is
     // §90.3's recorded row; 1/2 is the `A = 15` arm's condition (§14.2: 52.1 %
-    // of settled samples at or above the floor, so beta ~ 0.48), which is the
-    // young-network state §11.13 is about and must not be silently outside the
-    // region.
+    // of settled samples at or above the floor, so beta ~ 0.48).
+    //
+    // **Retraction, recorded where it is consumed.** An earlier revision of
+    // this comment said the `A = 15` state "must not be silently outside the
+    // region", and the menu that followed recommended the most conservative row
+    // on that basis. That is exactly the *"set it to the worst"* policy §43.2
+    // says must be defended rather than inherited, and it is wrong here on its
+    // own terms: `A = 15` is *below* §15's launch condition of ~30
+    // anonymity-capable nodes, so it is a state the network is not supposed to
+    // launch in. The region declines to cover it deliberately — see
+    // `the_region_is_consistent_with_the_launch_condition`.
     let strides = [12_usize, 8, 6, 5, 4, 3, 2];
     let mut rows: Vec<(usize, f64, u64)> = Vec::new();
     for stride in strides {
@@ -750,6 +758,29 @@ fn alpha_degradation_when_the_network_leaves_the_region() {
                  bound constrains nothing: got {worst} at F' = 5000"
             );
         }
+
+        // **The invariant, stated so it can be quoted and re-checked.** At the
+        // chosen region this reads: the bound holds for 90 % of the A = 60
+        // arm's observed samples, and where it does not, alpha degrades to no
+        // worse than DEGRADED_FLOOR at the worst tail any arm has recorded.
+        // "The miss is small" is not re-checkable and gets quoted without its
+        // number; this does not.
+        if (beta_star - 0.250).abs() < 1e-9 {
+            /// The floor the chosen region commits to outside its own bound.
+            const DEGRADED_FLOOR: f64 = 0.891;
+            println!(
+                "\n  INVARIANT at the chosen region: alpha >= {DEGRADED_FLOOR} at the worst \
+                 recorded tail\n  (beta = 0.500, F' = 5000); measured {worst:.6}, against the \
+                 pinned {EMBARGO_FULL_TRAVEL_PROBABILITY}."
+            );
+            assert!(
+                worst >= DEGRADED_FLOOR,
+                "the chosen region commits to alpha >= {DEGRADED_FLOOR} outside its bound; \
+                 the worst recorded tail now reads {worst:.6}. Either a constant moved or \
+                 the commitment must be restated at its true strength — it must not be \
+                 quietly weakened to whatever the run produced"
+            );
+        }
     }
 }
 
@@ -813,5 +844,98 @@ fn beta_star_is_a_quantile_of_the_measured_series_not_its_mean() {
     assert!(
         p90 <= max,
         "a p90 cannot exceed the observed maximum: {p90} against {max}"
+    );
+}
+
+/// **The region and §15's launch condition are the same condition, and neither
+/// section says so.**
+///
+/// `beta* = 0.2167` was picked as the statistic-matched read of the `A = 60`
+/// series, on its own merits. It also lands exactly where §15's sweep does, and
+/// that coupling is load-bearing but recorded nowhere:
+///
+/// | arm | at-or-above floor | mean `beta` | vs region |
+/// | --- | --- | --- | --- |
+/// | `A = 15` (§14.2) | 52.1 % | 0.479 | **outside** |
+/// | `A = 30` (§15.1) | 84.2 % | 0.158 | inside |
+/// | `A = 60` (§13.2) | 85.2 % | 0.148 (p90 0.217) | inside |
+///
+/// §15's operational reading is **~30 anonymity-capable nodes**, and `A = 15`
+/// is the state below it. So the region does not fail to cover a state the
+/// network will be in — it declines to cover a state §15 says the network
+/// should not launch in. The two are consistent by construction, which is a
+/// better answer to the young-network worry than the recording gap is.
+///
+/// **The obligation this creates runs both ways**, and it is the reason this
+/// test exists rather than a comment: a future reader who relaxes the launch
+/// condition below ~30 is also invalidating `F'`, and nothing in §15 or §90
+/// currently tells them. Registered in `FOLLOWUPS.md` for the doc side; armed
+/// here so the numeric half fails rather than drifts.
+///
+/// # What this test deliberately does NOT claim
+///
+/// `beta*` is a **p90**; the comparisons for `A = 15` and `A = 30` are against
+/// **means**, because §14.2 and §15.1 recorded only pooled aggregates. Only
+/// `A = 60` (§13.2) published a per-sample series. The like-for-like check at
+/// the launch figure is therefore unavailable — and `A = 30`'s mean tail
+/// (0.158) is marginally *worse* than `A = 60`'s (0.148), so its p90 cannot be
+/// assumed to sit under `A = 60`'s. That gap is the instrument fix registered
+/// in `FOLLOWUPS.md`, not something to argue around here.
+#[test]
+fn the_region_is_consistent_with_the_launch_condition() {
+    /// The chosen region bound: `A = 60`'s p90, from
+    /// `beta_star_is_a_quantile_of_the_measured_series_not_its_mean`.
+    const BETA_STAR: f64 = 0.2167;
+    /// (`A`, at-or-above-floor rate) as §14.2 / §15.1 / §13.2 record them.
+    const ARMS: [(u32, f64); 3] = [(15, 0.521), (30, 0.842), (60, 0.852)];
+    /// §15's operational launch reading, in anonymity-capable nodes.
+    const LAUNCH_A: u32 = 30;
+
+    println!("\n  region (beta* = {BETA_STAR:.4}) against §15's sweep");
+    println!("  A     at-floor   mean beta   vs region");
+    println!("  ---   --------   ---------   ---------");
+    for (a, at_floor) in ARMS {
+        let beta = 1.0 - at_floor;
+        let inside = beta <= BETA_STAR;
+        println!(
+            "  {a:3}   {:7.1} %   {beta:9.4}   {}",
+            at_floor * 100.0,
+            if inside { "inside" } else { "OUTSIDE" }
+        );
+    }
+
+    // Every arm at or above the launch condition must sit inside the region:
+    // if one did not, the region would be rejecting a network state the launch
+    // condition explicitly permits, and F' would be under-provisioned for a
+    // supported configuration.
+    for (a, at_floor) in ARMS {
+        if a >= LAUNCH_A {
+            let beta = 1.0 - at_floor;
+            assert!(
+                beta <= BETA_STAR,
+                "A = {a} is at or above the launch condition ({LAUNCH_A}) but its mean \
+                 tail {beta:.4} falls OUTSIDE the region {BETA_STAR:.4} — the region \
+                 rejects a state the launch condition permits, so F' is under-provisioned \
+                 for a supported network"
+            );
+        }
+    }
+
+    // And the arm below the launch condition must sit outside it — otherwise
+    // the region is not the launch condition's counterpart at all, and the
+    // coupling this test exists to pin is a coincidence of one revision.
+    let (below_a, below_at_floor) = ARMS[0];
+    assert!(
+        below_a < LAUNCH_A,
+        "the sweep's smallest arm must be below the launch condition for this test \
+         to have a negative side; got A = {below_a} against {LAUNCH_A}"
+    );
+    assert!(
+        1.0 - below_at_floor > BETA_STAR,
+        "A = {below_a} is below the launch condition, so its tail {:.4} must fall \
+         OUTSIDE the region {BETA_STAR:.4}. If it does not, the region covers a state \
+         §15 says not to launch in, and the two conditions are unrelated rather than \
+         coupled",
+        1.0 - below_at_floor
     );
 }

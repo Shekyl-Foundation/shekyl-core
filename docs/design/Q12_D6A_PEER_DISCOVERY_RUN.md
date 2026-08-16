@@ -2572,6 +2572,32 @@ anonymity-capable nodes**, not the `A ≈ 19` the arithmetic implied and not
 "unreachable". §18 later separated the two halves: the population figure
 still says when the floor is held; it no longer says when the stem turns on.
 
+> **A second consumer, added 2026-08-16 — this figure now constrains `F'`.**
+> `DAEMON_RELAY_PRIVACY.md` §90's re-derivation stopped treating
+> `fluff_return_ms` as a quantity to measure and derives it at the boundary of
+> a stated admissible region — at most `β` of nodes below the floor, none below
+> `d_min` — the shape §16.4's α gate used. `β*` is read as the `A = 60`
+> series' **p90 (0.2167)**, and it lands exactly where this sweep does: `A = 30`
+> (0.158 mean tail) and `A = 60` (0.148) sit **inside** the region, `A = 15`
+> (0.479) sits **outside** it and is below the launch condition. The region
+> therefore does not fail to cover a state the network will be in — it declines
+> to cover a state this section says not to launch in.
+>
+> **So relaxing ~30 also invalidates `F'`.** The two conditions are coupled by
+> construction and were not, before this note, coupled in writing. The numeric
+> half is armed in
+> `rust/shekyl-relay-privacy/tests/f_prime_admissible_region.rs`
+> (`the_region_is_consistent_with_the_launch_condition`), which fails if either
+> side moves without the other.
+>
+> **Caveat this section owes.** `β*` is a p90; the `A = 15` and `A = 30`
+> comparisons above are against **means**, because §14.2 and §15.1 recorded
+> pooled rates with no per-sample series behind them. Only §13.2 published one.
+> `A = 30`'s mean tail is marginally *worse* than `A = 60`'s, so its p90 cannot
+> be assumed to sit under `A = 60`'s, and the like-for-like check at the launch
+> figure is unavailable from what was kept — registered in `FOLLOWUPS.md` as a
+> readout-spec fix rather than another re-run.
+
 ### 15.2 Q12-R5 — the late joiner, both variants
 
 One new node, **exactly one `--add-peer`**, joining the converged `A = 30`
