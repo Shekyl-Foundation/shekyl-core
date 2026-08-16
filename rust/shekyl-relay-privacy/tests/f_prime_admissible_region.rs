@@ -101,6 +101,20 @@ const FLOOR: usize = 12;
 /// 8-11 across the eleven settled samples).
 const MEASURED_D_MIN: usize = 8;
 
+/// The `beta = 0` reference reading every sweep anchors on.
+///
+/// Named rather than repeated, but deliberately **not** cached across tests: a
+/// shared `OnceLock` would couple the sweeps to each other, and each one
+/// re-establishing this independently is what makes a divergence between them
+/// a signal instead of something an optimization hid.
+fn uniform_baseline(flood: FloodParams) -> u64 {
+    read(
+        flood,
+        &vec![FLOOR; flood.nodes],
+        "beta = 0     uniform at 12",
+    )
+}
+
 fn shipped_topology() -> FloodParams {
     FloodParams {
         nodes: 512,
@@ -174,11 +188,7 @@ fn f_prime_against_tail_mass_at_the_measured_minimum() {
     );
     println!("  ------------------------------------------------------------------");
 
-    let uniform = read(
-        flood,
-        &vec![FLOOR; flood.nodes],
-        "beta = 0     uniform at 12",
-    );
+    let uniform = uniform_baseline(flood);
 
     // 1/12 and 1/4 bracket the `A = 60` arm's observed tail range; 1/3 is
     // §90.3's recorded row; 1/2 is the `A = 15` arm's condition (§14.2: 52.1 %
@@ -248,11 +258,7 @@ fn tail_shape_at_the_boundary_mass() {
     println!("\n  tail SHAPE at beta = 1/{STRIDE} (0.250, just above the arm's worst 0.233)");
     println!("  ------------------------------------------------------------------");
 
-    let uniform = read(
-        flood,
-        &vec![FLOOR; flood.nodes],
-        "beta = 0     uniform at 12",
-    );
+    let uniform = uniform_baseline(flood);
     let all_at_8 = read(
         flood,
         &strided_tail(flood.nodes, STRIDE, 8),
@@ -308,11 +314,16 @@ fn tail_shape_at_the_boundary_mass() {
 #[test]
 fn dependents_at_each_candidate_boundary() {
     use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
-    use shekyl_relay_privacy::schedule::{EmbargoTimer, PROPAGATION_FALSE_FAIL_ONE_IN};
+    use shekyl_relay_privacy::schedule::{
+        EmbargoTimer, ADOPTED_PROPAGATION_TIMEOUT_SECS, PROPAGATION_FALSE_FAIL_ONE_IN,
+    };
     use shekyl_relay_privacy::zone::RelayZone;
 
     /// `DIFFICULTY_TARGET` — the block interval §44/§15 reconcile against.
     const BLOCK_INTERVAL_SECS: u32 = 120;
+
+    // (F', clearnet secs, anon secs, wallet wait) per candidate.
+    let mut rows: Vec<(u32, u32, u32, u32)> = Vec::new();
 
     println!("\n  dependents at each candidate F' (shipped F' = 3250)");
     println!("  F' ms   region                       clearnet E   anon E   wallet wait   E/120s");
@@ -349,6 +360,73 @@ fn dependents_at_each_candidate_boundary() {
         println!(
             "  {f_prime:5}   {region:26}   {:8} s   {:4} s   {wait:8} s   {crossings:5}",
             secs[0], secs[1]
+        );
+
+        // The anonymity zone takes the longer hop (§89.2's per-zone split, the
+        // ONLY term that differs between the two parameter sets), so its solve
+        // must exceed clearnet's at every candidate. Equal values would mean
+        // `adopted_for` stopped distinguishing the classes and the whole
+        // two-column table is one column printed twice.
+        assert!(
+            secs[1] > secs[0],
+            "the anonymity embargo ({} s) must exceed clearnet's ({} s) at F' = {f_prime}: \
+             the zones differ only in transit class, and a tie means `adopted_for` is no \
+             longer splitting them",
+            secs[1],
+            secs[0]
+        );
+        // The wallet wait is a 1-in-N SURVIVAL quantile of the worst zone's
+        // table, so it cannot come in at or under that table's mean.
+        assert!(
+            wait > secs[1],
+            "the wallet wait ({wait} s) is a 1-in-{PROPAGATION_FALSE_FAIL_ONE_IN} survival \
+             quantile of the worst zone's table and must exceed its mean ({} s) at \
+             F' = {f_prime}",
+            secs[1]
+        );
+        rows.push((f_prime, secs[0], secs[1], wait));
+    }
+
+    // **Calibration against the shipped constants, which is what makes this a
+    // test rather than a report.** The first row is the pair in force today, so
+    // it must reproduce the three values the tree pins independently — the FFI's
+    // 190 s and 499 s and `ADOPTED_PROPAGATION_TIMEOUT_SECS`. If the derivation
+    // drifts, every other row is wrong by the same amount and nothing else here
+    // would notice.
+    let (shipped_f, shipped_clear, shipped_anon, shipped_wait) = rows[0];
+    assert_eq!(
+        shipped_f, 3_250,
+        "the first row must be the shipped pair for the calibration below to mean anything"
+    );
+    assert_eq!(
+        shipped_clear, 190,
+        "the shipped clearnet embargo is pinned at 190 s (dandelionpp_ffi.rs); this \
+         derivation gives {shipped_clear} s"
+    );
+    assert_eq!(
+        shipped_anon, 499,
+        "the shipped anonymity embargo is pinned at 499 s (dandelionpp_ffi.rs); this \
+         derivation gives {shipped_anon} s"
+    );
+    assert_eq!(
+        shipped_wait, ADOPTED_PROPAGATION_TIMEOUT_SECS,
+        "the shipped wallet wait is pinned at {ADOPTED_PROPAGATION_TIMEOUT_SECS} s \
+         (schedule.rs); this derivation gives {shipped_wait} s"
+    );
+
+    // Monotonicity: a longer fluff return cannot shorten any dependent. This is
+    // the structural claim the whole menu rests on — if it failed, the region
+    // boundary would not bound the dependents and reading them off a `beta`
+    // bound would be unsound.
+    for w in rows.windows(2) {
+        let (f_lo, c_lo, a_lo, w_lo) = w[0];
+        let (f_hi, c_hi, a_hi, w_hi) = w[1];
+        assert!(
+            c_hi >= c_lo && a_hi >= a_lo && w_hi >= w_lo,
+            "dependents must not FALL as F' rises ({f_lo} -> {f_hi} ms): clearnet \
+             {c_lo} -> {c_hi}, anon {a_lo} -> {a_hi}, wallet {w_lo} -> {w_hi}. The menu \
+             reads a bound off a region boundary, which is only sound if each dependent \
+             is monotone in F'"
         );
     }
 
@@ -444,14 +522,15 @@ fn the_step_is_not_a_degraded_source_artifact() {
 
     println!("\n  placement control: tail ON the source (n%k==0) vs OFF it (n%k==1)");
     println!("  ------------------------------------------------------------------");
-    let uniform = read(
-        flood,
-        &vec![FLOOR; flood.nodes],
-        "beta = 0     uniform at 12",
-    );
+    let uniform = uniform_baseline(flood);
 
     let mut rows = Vec::new();
-    for stride in [12_usize, 8, 6, 4, 3, 2] {
+    // Range ends plus the middle. The claim is that the source term is a
+    // roughly CONSTANT offset across the tail range, and three points spanning
+    // that range test it as sharply as six while halving the debug CI cost —
+    // a non-constant offset would have to be flat at 1/12, 1/4 and 1/2 and bend
+    // only between them.
+    for stride in [12_usize, 4, 2] {
         let on = read(
             flood,
             &strided_tail(flood.nodes, stride, MEASURED_D_MIN),
@@ -536,14 +615,28 @@ fn leak_at_each_candidate_region() {
     use shekyl_relay_privacy::schedule::{EmbargoTimer, DEFAULT_EMBARGO_TICK_MILLIS};
     use shekyl_relay_privacy::zone::RelayZone;
 
-    // 1e6 rather than §6.6's 2e5: the question here is whether the band is
-    // FLAT, and a null result is only as good as the noise floor under it. At
-    // p ~ 0.011 the binomial standard error is ~1.0e-4 at 1e6 trials against
-    // ~2.3e-4 at 2e5, which is what makes the tolerance below meaningful
-    // instead of a restatement of the sampling error.
-    const TRIALS: usize = 1_000_000;
+    // **Trials are matched to the claim each row makes, not set uniformly.**
+    // Uniform 1e6 across every row cost ~20 s in a debug CI test to buy
+    // precision on rows whose claims are qualitative, which is budget spent
+    // where it proves nothing.
+    //
+    // The candidate rows carry the FLATNESS claim, and a null result is only as
+    // good as the noise floor under it: at p ~ 0.011 the binomial standard
+    // error is ~1.0e-4 at 1e6 against ~2.3e-4 at §6.6's 2e5, which is what makes
+    // the tolerance below a real bound instead of a restatement of the sampling
+    // error. This one does not move.
+    const CANDIDATE_TRIALS: usize = 1_000_000;
+    // The anonymity rows assert a STRUCTURAL zero (§6.6: fluff never traverses
+    // the supernode's inbound edges). Any nonzero reading is a defect whatever
+    // the count, so precision buys nothing — this is not a statistical claim.
+    const STRUCTURAL_TRIALS: usize = 100_000;
+    // The sensitivity control demonstrates a ~14x separation; at p ~ 0.06 that
+    // is some eighty standard errors at this count. Raising it would not make
+    // the control more convincing, only slower.
+    const CONTROL_TRIALS: usize = 100_000;
     const PHI: f64 = 0.10;
-    /// Three binomial standard errors at `TRIALS` and `p ~ 0.011`, rounded up.
+    /// Three binomial standard errors at `CANDIDATE_TRIALS` and `p ~ 0.011`,
+    /// rounded up.
     /// A band inside this is flat as far as this instrument can see; a band
     /// outside it is a real movement on §43.2's axis.
     const NOISE_3SIGMA: f64 = 3.2e-4;
@@ -560,11 +653,23 @@ fn leak_at_each_candidate_region() {
         };
         let e = EmbargoTimer::adopted(&params);
         let mut cr = SplitMix64::new(0x1EA4_0000 + u64::from(f_prime));
-        let c =
-            simulate_passive_neighbor_leak(&params, &e, PHI, Transport::Clearnet, TRIALS, &mut cr);
+        let c = simulate_passive_neighbor_leak(
+            &params,
+            &e,
+            PHI,
+            Transport::Clearnet,
+            CANDIDATE_TRIALS,
+            &mut cr,
+        );
         let mut tr = SplitMix64::new(0x1EA4_7919 + u64::from(f_prime));
-        let t =
-            simulate_passive_neighbor_leak(&params, &e, PHI, Transport::Anonymity, TRIALS, &mut tr);
+        let t = simulate_passive_neighbor_leak(
+            &params,
+            &e,
+            PHI,
+            Transport::Anonymity,
+            STRUCTURAL_TRIALS,
+            &mut tr,
+        );
         println!(
             "  {f_prime:5}   {:8} s   {:9.5}   {:12.4}   {:8.5}",
             e.mean_secs(),
@@ -615,8 +720,15 @@ fn leak_at_each_candidate_region() {
         let e = EmbargoTimer::geometric_from_ticks(ticks, DEFAULT_EMBARGO_TICK_MILLIS);
         let params = DandelionParams::adopted_for(RelayZone::Public);
         let mut r = SplitMix64::new(0x0C0C_7201 ^ u64::from(secs));
-        simulate_passive_neighbor_leak(&params, &e, PHI, Transport::Clearnet, TRIALS, &mut r)
-            .leak_rate
+        simulate_passive_neighbor_leak(
+            &params,
+            &e,
+            PHI,
+            Transport::Clearnet,
+            CONTROL_TRIALS,
+            &mut r,
+        )
+        .leak_rate
     };
     let short = control(31);
     let long = control(500);

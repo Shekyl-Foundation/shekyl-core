@@ -9706,7 +9706,7 @@ its wake.
   > Read at `beta*` = the `A = 60` series' p90 (0.2167) with `d_min = 8`, that
   > is **`F' = 4500 ms`**. The dependent list below is also stale in two places
   > — the wallet wait is **2297 s**, not 874 (§89.2 made it worst-zone-global),
-  > and there are **two** embargos, not one (clearnet 190 s / anonymity 499 s
+  > and there are **two** embargoes, not one (clearnet 190 s / anonymity 499 s
   > from a single process-wide `F'`). §90.3's *"no `A ≥ 60` readout exists
   > anywhere in the tree"* needs a date: the arm ran 2026-08-14, one day after
   > §90 was written, and cannot be the retired phantom input's provenance.
