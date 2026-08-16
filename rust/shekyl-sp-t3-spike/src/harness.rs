@@ -269,8 +269,9 @@ impl Apparatus {
     ///
     /// Under `Managed` this also reads the consensus (`GETINFO ns/all`) so the
     /// run can attest it was on the real network. That is a second read — the
-    /// vanguard draw fetches its own — and deliberately so: see
-    /// [`consensus_relay_count`].
+    /// vanguard draw fetches its own — and deliberately so: `shekyl-tor`'s
+    /// fetch is private, and a second `GETINFO` once at bring-up is cheaper
+    /// than widening a production crate's surface for a disposable spike.
     pub async fn bring_up_with(
         tor_binary: std::path::PathBuf,
         data_dir: std::path::PathBuf,
@@ -391,21 +392,28 @@ impl Apparatus {
         })
     }
 
-    /// The run's W₂ provenance, or `None` if this apparatus cannot attest it.
+    /// The run's W₂ provenance for a batch of `concurrent_fetches`, or `None`
+    /// if this apparatus cannot attest it.
     ///
     /// `None` under [`VanguardsMode::Off`], or when the consensus reading did
     /// not clear [`MIN_REAL_CONSENSUS_RELAYS`](crate::w2::MIN_REAL_CONSENSUS_RELAYS).
     /// That is the whole design: §9.7 requires an incomplete run to yield **no
     /// datum rather than an unlabelled one**, so this returns nothing rather
     /// than something annotated as partial.
+    ///
+    /// The measured side is read off `self.personas` — the apparatus's own
+    /// fan-out — rather than taken as an argument, so a run cannot label itself
+    /// the side it wishes it were. Only the batch width comes from the caller,
+    /// because only the caller ran the batch.
     #[must_use]
-    pub fn provenance(&self) -> Option<crate::w2::RunProvenance> {
+    pub fn provenance(&self, concurrent_fetches: usize) -> Option<crate::w2::RunProvenance> {
         let vanguards = self.vanguards.as_ref()?;
         let network = crate::w2::LiveNetworkAttested::from_consensus(self.consensus_relays).ok()?;
         Some(crate::w2::RunProvenance::attest(
             crate::w2::VanguardsAttested::from_witness(vanguards),
             crate::w2::RunDevice::detect(),
             network,
+            crate::w2::MeasuredSide::from_shape(self.personas.len(), concurrent_fetches),
         ))
     }
 

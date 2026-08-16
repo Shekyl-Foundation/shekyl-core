@@ -193,6 +193,54 @@ impl std::fmt::Display for ProvenanceError {
 
 impl std::error::Error for ProvenanceError {}
 
+/// Which side of the fetch this run's concurrency landed on.
+///
+/// The module doc says the ~97 concurrent circuits are the **witness's**, not
+/// the serving persona's — and that the distinction "decides what runs on the
+/// rule-76 floor device". This type is that sentence made load-bearing, because
+/// a rig can express both shapes and the two want different floors.
+///
+/// It is **derived from the apparatus**, never declared: see
+/// [`Self::from_shape`]. A run cannot label itself the side it wishes it were.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeasuredSide {
+    /// Many readers hitting **one** persona — what a staker's `P` faces, and
+    /// what `SP_T3_SKELETON_MEASUREMENT.md` §18 measured across 4→32 readers.
+    Serving {
+        /// Concurrent readers pointed at the single persona.
+        readers: usize,
+    },
+    /// One client fetching from **many** personas at once — what a block
+    /// producer faces when `λ·D/E` pairs land on its block.
+    Producing {
+        /// Concurrent fetches spread across the published personas.
+        pairs: usize,
+    },
+}
+
+impl MeasuredSide {
+    /// Read the side off the shape the apparatus actually ran.
+    ///
+    /// The discriminator is **where the concurrency landed**, which is a fact of
+    /// the run rather than an intention: with one persona published, every
+    /// concurrent fetch stacks on that one persona's inbound path, which is the
+    /// serving side. With more than one, the load spreads across personas and
+    /// the only thing bearing all of it is the client — the producer side. The
+    /// harness's own `i % personas.len()` fan-out is what makes this exact.
+    #[must_use]
+    pub fn from_shape(personas: usize, concurrent_fetches: usize) -> Self {
+        if personas <= 1 {
+            Self::Serving {
+                readers: concurrent_fetches,
+            }
+        } else {
+            Self::Producing {
+                pairs: concurrent_fetches,
+            }
+        }
+    }
+}
+
 /// The three §9.5 requirements as **one indivisible value**.
 ///
 /// This is the §9.7 item-6 requirement, in its own words:
@@ -213,21 +261,32 @@ pub struct RunProvenance {
     vanguards: VanguardsAttested,
     device: RunDevice,
     network: LiveNetworkAttested,
+    side: MeasuredSide,
 }
 
 impl RunProvenance {
-    /// The only constructor. All three or nothing.
+    /// The only constructor. All three attestations, plus the side they were
+    /// measured on — because [`Self::is_floor_datum`] is not answerable without
+    /// knowing which machine's problem the run reproduced.
     #[must_use]
     pub fn attest(
         vanguards: VanguardsAttested,
         device: RunDevice,
         network: LiveNetworkAttested,
+        side: MeasuredSide,
     ) -> Self {
         Self {
             vanguards,
             device,
             network,
+            side,
         }
+    }
+
+    /// Which side's concurrency this run reproduced.
+    #[must_use]
+    pub fn side(&self) -> MeasuredSide {
+        self.side
     }
 
     /// The device this run executed on (rule 76 §1's "beside the number").
@@ -242,13 +301,30 @@ impl RunProvenance {
         self.network
     }
 
-    /// Whether this datum was produced at the rule-76 floor.
+    /// Whether this datum was produced at the rule-76 floor **for the side it
+    /// measured**.
     ///
     /// A `false` here does not invalidate the run — it says the number is a
-    /// capability check on a faster machine, not a floor provisioning input.
+    /// capability check, not a floor provisioning input.
+    ///
+    /// **The side is load-bearing, and leaving it out fails open.** Rule 76
+    /// provisions the anonymity guarantees of *a node*, and the node being
+    /// protected in this arc is the staker running `P` — so the Pi-4 is the
+    /// floor for the **serving** side and nothing else. A producer sustaining
+    /// ~97 concurrent fetches is a mining box, and rule 76 names no floor for
+    /// mining, so this code cannot certify one. Without the side, a
+    /// producer-shaped run executed on a Pi would mint `true` and stamp "floor
+    /// provisioning input" on the wrong machine's number — which is exactly the
+    /// laundering the indivisible-provenance type exists to prevent, arriving
+    /// through the one field that was missing from it.
     #[must_use]
     pub fn is_floor_datum(&self) -> bool {
-        self.device.at_or_above_floor && self.device.arch == "aarch64"
+        match self.side {
+            MeasuredSide::Serving { .. } => {
+                self.device.at_or_above_floor && self.device.arch == "aarch64"
+            }
+            MeasuredSide::Producing { .. } => false,
+        }
     }
 }
 
@@ -453,14 +529,59 @@ mod tests {
     /// floor datum, and the two must be distinguishable.
     #[test]
     fn an_off_floor_run_is_recorded_as_not_a_floor_datum() {
-        let p = RunProvenance::attest(VanguardsAttested(()), device(false), network());
+        let serving = MeasuredSide::Serving { readers: 32 };
+        let p = RunProvenance::attest(VanguardsAttested(()), device(false), network(), serving);
         assert!(
             !p.is_floor_datum(),
             "a developer box produces a capability reading, never a rule-76 \
              provisioning input",
         );
-        let floor = RunProvenance::attest(VanguardsAttested(()), device(true), network());
+        let floor = RunProvenance::attest(VanguardsAttested(()), device(true), network(), serving);
         assert!(floor.is_floor_datum());
+    }
+
+    /// The fail-open the side exists to close: the SAME floor device, the SAME
+    /// three attestations, and the producer shape must still refuse the floor
+    /// label.
+    ///
+    /// Negative control: delete the `Producing` arm of `is_floor_datum` and
+    /// this assertion fails, because every other input is identical to the
+    /// passing case above.
+    #[test]
+    fn a_producer_batch_on_the_floor_device_is_not_a_floor_datum() {
+        let on_the_pi = RunProvenance::attest(
+            VanguardsAttested(()),
+            device(true),
+            network(),
+            MeasuredSide::Producing { pairs: 97 },
+        );
+        assert!(
+            !on_the_pi.is_floor_datum(),
+            "rule 76 names the Pi-4 as the floor for the node whose anonymity is \
+             provisioned - the staker running P - and names no floor at all for \
+             mining, so 97 outbound circuits on a Pi is the wrong machine's \
+             problem however aarch64 the host is",
+        );
+    }
+
+    /// The side is a fact of the apparatus, not a claim: one persona means the
+    /// concurrency stacked on that persona's inbound path.
+    #[test]
+    fn the_side_follows_where_the_concurrency_landed() {
+        assert_eq!(
+            MeasuredSide::from_shape(1, 32),
+            MeasuredSide::Serving { readers: 32 },
+        );
+        assert_eq!(
+            MeasuredSide::from_shape(8, 97),
+            MeasuredSide::Producing { pairs: 97 },
+        );
+        // No published personas is not a producer run that happens to have
+        // nowhere to fetch from; it is the degenerate serving case.
+        assert_eq!(
+            MeasuredSide::from_shape(0, 4),
+            MeasuredSide::Serving { readers: 4 },
+        );
     }
 
     /// The statistic is the batch, not the fetch. A batch bounded by its slowest
@@ -468,7 +589,12 @@ mod tests {
     #[test]
     fn the_reported_statistic_is_the_worst_batch() {
         let d = W2Datum::new(
-            RunProvenance::attest(VanguardsAttested(()), device(true), network()),
+            RunProvenance::attest(
+                VanguardsAttested(()),
+                device(true),
+                network(),
+                MeasuredSide::Serving { readers: 32 },
+            ),
             vec![batch(97, 97, 30), batch(97, 97, 900), batch(97, 97, 45)],
         );
         assert_eq!(
@@ -484,7 +610,12 @@ mod tests {
     #[test]
     fn an_incomplete_batch_cannot_pass_the_floor_check() {
         let d = W2Datum::new(
-            RunProvenance::attest(VanguardsAttested(()), device(true), network()),
+            RunProvenance::attest(
+                VanguardsAttested(()),
+                device(true),
+                network(),
+                MeasuredSide::Serving { readers: 32 },
+            ),
             vec![batch(97, 96, 5)],
         );
         assert_eq!(
@@ -499,7 +630,12 @@ mod tests {
     #[test]
     fn the_floor_check_requires_the_stated_margin() {
         let d = W2Datum::new(
-            RunProvenance::attest(VanguardsAttested(()), device(true), network()),
+            RunProvenance::attest(
+                VanguardsAttested(()),
+                device(true),
+                network(),
+                MeasuredSide::Serving { readers: 32 },
+            ),
             vec![batch(97, 97, 600)],
         );
         // W2 = 500 blocks x 120 s = 60_000 s. 600 s x 100 = 60_000 -> fits.
@@ -512,7 +648,12 @@ mod tests {
     #[test]
     fn an_empty_run_answers_nothing() {
         let d = W2Datum::new(
-            RunProvenance::attest(VanguardsAttested(()), device(true), network()),
+            RunProvenance::attest(
+                VanguardsAttested(()),
+                device(true),
+                network(),
+                MeasuredSide::Serving { readers: 32 },
+            ),
             Vec::new(),
         );
         assert_eq!(d.fits_within(Duration::from_secs(60_000), 100), None);
