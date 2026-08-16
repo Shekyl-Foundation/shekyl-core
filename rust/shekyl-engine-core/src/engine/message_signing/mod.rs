@@ -53,15 +53,12 @@
 //! the RPC crate must not re-derive that byte. The crypto crate's
 //! [`shekyl_crypto_pq::message_signing::verify_message`] stays the AND
 //! of the two halves; this function is the address + network assembly
-//! in front of it. See [`SignerIdentity`] for the fork-(ii) address
-//! gate: every in-tree address still answers
-//! [`MessageSigError::UnboundIdentity`].
-//!
-//! [`SignerIdentity`]: shekyl_crypto_pq::message_signing::SignerIdentity
+//! in front of it. Verify takes the address's [`BoundClassicalSegment`]
+//! — keys and bound bytes are the same object.
 
 use shekyl_address::{BoundClassicalSegment, ShekylAddress};
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
-use shekyl_crypto_pq::message_signing::{self, MessageSigError, SignerIdentity};
+use shekyl_crypto_pq::message_signing::{self, MessageSigError};
 use shekyl_engine_file::secrets_transitional::ExtractRederivationInputsError;
 use shekyl_engine_file::WalletFile;
 
@@ -238,7 +235,6 @@ pub(crate) async fn sign_message(
     // CPU-bound multi-second work leaves the executor (module docs).
     // The seed moves into the blocking task and its `Zeroizing` drop
     // wipes it there; only public bytes come back.
-    let segment_bytes = *segment.as_bytes();
     let owned_message = message.to_vec();
     let (preimage, sig_pq) = tokio::task::spawn_blocking(move || {
         let _held_until_the_job_exits = permit;
@@ -246,7 +242,7 @@ pub(crate) async fn sign_message(
             &inputs.master_seed_64,
             network,
             seed_format,
-            &segment_bytes,
+            &segment,
             &owned_message,
         )
     })
@@ -261,9 +257,8 @@ pub(crate) async fn sign_message(
 /// Session-less verify (SM-R-6): public inputs only, no wallet, no daemon.
 ///
 /// The signature string is judged **before** the address so the paste
-/// taxonomy (corruption / unknown scheme) stays reachable while every
-/// in-tree address still answers [`MessageSigError::UnboundIdentity`]
-/// (R6-a). The transcript is scoped by the same network mapping
+/// taxonomy (corruption / unknown scheme) stays reachable as a
+/// property of the paste alone. The transcript is scoped by the same network mapping
 /// [`sign_message`] uses, so a produced signature is verified against
 /// the same network byte the signer bound.
 ///
@@ -276,23 +271,16 @@ pub fn verify_message(
     message: &[u8],
     armored: &str,
 ) -> Result<(), VerifyMessageError> {
-    // Taxonomy-first: a damaged paste must not hide behind R6-a's
-    // unbound-identity refusal. This is the ONE decode — the crypto
-    // verify below consumes the decoded value rather than re-running
-    // the base64 + checksum pipeline on the same ~21.7 KB string.
+    // Taxonomy-first: a damaged paste is judged before the address.
+    // This is the ONE decode — the crypto verify below consumes the
+    // decoded value rather than re-running the base64 + checksum
+    // pipeline on the same ~21.7 KB string.
     let sig = message_signing::ArmoredSignature::decode(armored)?;
 
     let address = decode_signer_address(address, network)?;
     let segment = address.bound_classical_segment();
-    let identity = SignerIdentity::from_bound_segment(segment.as_bytes())?;
 
-    message_signing::verify_message(
-        &identity,
-        network_to_derivation(network),
-        segment.as_bytes(),
-        message,
-        &sig,
-    )?;
+    message_signing::verify_message(&segment, network_to_derivation(network), message, &sig)?;
     Ok(())
 }
 

@@ -121,11 +121,6 @@ pub enum WalletRpcErrorCode {
     /// build does not implement (SM-R-5's append-only forward-compat
     /// field) — "this wallet is too old to check it", not "malformed".
     MessageSigUnsupportedScheme = -29802,
-    /// `verify_message`: the address carries no message-signing public
-    /// key, so there is nothing to verify against. Every in-tree address
-    /// version answers this today; the fork-(ii) v2 layout clears it
-    /// (SM-R-6 R6-a).
-    MessageSigAddressUnbound = -29803,
     /// Server: wallet-dir tenancy unavailable.
     TenantUnavailable = -29900,
 }
@@ -349,13 +344,6 @@ pub enum WalletRpcError {
         /// The unrecognized scheme byte from the decoded canonical header.
         scheme: u8,
     },
-    /// `verify_message` (`-29803`): the supplied address's format carries
-    /// no message-signing public key (SM-R-6 R6-a). Deliberately not a
-    /// params error: the address is perfectly valid — it is the *format*
-    /// that cannot anchor a PQ signature, and the sentence must say so
-    /// rather than send the user hunting for a typo (rule 82).
-    #[error("this address format cannot verify message signatures")]
-    MessageSigAddressUnbound,
 }
 
 impl WalletRpcError {
@@ -402,7 +390,6 @@ impl WalletRpcError {
             Self::MessageSigUnsupportedScheme { .. } => {
                 WalletRpcErrorCode::MessageSigUnsupportedScheme
             }
-            Self::MessageSigAddressUnbound => WalletRpcErrorCode::MessageSigAddressUnbound,
         }
     }
 

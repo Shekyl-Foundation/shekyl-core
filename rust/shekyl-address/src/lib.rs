@@ -20,6 +20,7 @@
 //!     Network::Mainnet,
 //!     [0xaa; 32],  // spend key
 //!     [0xbb; 32],  // view key
+//!     [0xee; 48],  // SLH-DSA-192s message-signing key (the PQ anchor)
 //!     vec![0xcc; 1184],  // ML-KEM-768 encap key
 //! );
 //! let encoded = addr.encode().unwrap();
@@ -36,8 +37,9 @@ pub mod network;
 pub mod payment_uri;
 
 pub use address::{
-    AddressError, BoundClassicalSegment, ShekylAddress, ADDRESS_VERSION_V1,
-    CLASSICAL_BOUND_SEGMENT_LEN, CLASSICAL_PAYLOAD_LEN, PQC_PAYLOAD_LEN, SEGMENT_SEPARATOR,
+    classical_segment_bytes, AddressError, BoundClassicalSegment, ClassicalFields, ShekylAddress,
+    ADDRESS_VERSION_V1, CLASSICAL_BOUND_SEGMENT_LEN, CLASSICAL_PAYLOAD_LEN, CLASSICAL_SEGMENT_LEN,
+    MSG_SIGN_PK_LEN, PQC_PAYLOAD_LEN, SEGMENT_SEPARATOR,
 };
 pub use multisig_address::{
     address_fingerprint, fingerprint_badge, fingerprint_hex, AddressProvenance,

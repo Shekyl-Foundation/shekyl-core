@@ -649,14 +649,11 @@ mod tests {
         // Recipient wallet: encode its primary address (Edwards view key on the
         // wire), then decode it exactly as `sign_tx` does.
         let recipient_keys = LocalKeys::from_test_seed(SEED);
-        let address = ShekylAddress::new(
-            Network::Mainnet,
-            *recipient_keys.keys.spend_pk.as_canonical_bytes(),
-            *recipient_keys.keys.view_pk.as_canonical_bytes(),
-            recipient_keys.keys.ml_kem_ek.to_vec(),
-        )
-        .encode()
-        .expect("encode recipient address");
+        let address = recipient_keys
+            .keys
+            .to_address(Network::Mainnet)
+            .encode()
+            .expect("encode recipient address");
         let decoded = decode_recipient(&address, Network::Mainnet).expect("decode recipient");
 
         // Sender-side mapping, exactly as the `sign_tx` payment loop does it.

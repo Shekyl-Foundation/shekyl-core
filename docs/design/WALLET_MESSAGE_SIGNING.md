@@ -18,7 +18,18 @@ field, as ratified) and the 192f UX gate closed by ruling — 192s
 stands; no UX test was run, and the gate reopens only if pre-freeze UX
 testing is actually run and finds the latency intolerable. The lane's
 remaining work is implementation only (v2 layout + vectors, then
-PR-SM-2's verify un-gate). Note the ordering constraint SM-R-4 R4-c records: the
+PR-SM-2's verify un-gate). **Update 2026-08-15 — LANDED, round fully
+discharged:** the layout went in as an in-place correction (version
+byte stays `0x01`; the 65-byte draft never reaches the frozen record —
+ruled at landing, multisig never-deployed precedent), the
+`ADDRESS_DERIVATION_V2` successor corpus is pinned, persona receive
+addresses carry a per-slot `msg_sign_pk` under the seventh archival-P
+label (a landing-time ruling the round had not priced — uniformity, not
+a persona signing capability), and the R6-a type gate lifted by
+`verify_message` taking `&BoundClassicalSegment` — keys and bound
+bytes are the same object; `SignerIdentity` is deleted (the two-
+parameter API would have left the unbound provenance the type was
+invented to forbid). Note the ordering constraint SM-R-4 R4-c records: the
 `(network, seed_format)` scoping amendment changes the derived
 public-key bytes and therefore had to land **before** any sign-off on
 the field that carries them. Everything else is implementation.

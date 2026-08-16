@@ -449,7 +449,10 @@ bool t_command_parser_executor::start_mining(const std::vector<std::string>& arg
     }
   }
 
-  m_executor.start_mining(info.address, threads_count, nettype, do_background_mining, ignore_battery);
+  // Pass the validated ORIGINAL string through; the parse above stays as
+  // the syntax/network gate (the parsed struct cannot be re-encoded since
+  // the fork-(ii) address layout).
+  m_executor.start_mining(args.front(), threads_count, nettype, do_background_mining, ignore_battery);
 
   return true;
 }

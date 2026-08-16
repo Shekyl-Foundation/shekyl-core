@@ -56,6 +56,20 @@ pub(crate) unsafe fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'
     Some(std::slice::from_raw_parts(ptr, len))
 }
 
+/// Read a fixed-size **public** array through [`slice_from_ptr`].
+/// One typed construction on top of the seam: null / zero-length /
+/// `isize::MAX` are the helper's, the `N`-byte conversion is this
+/// layer's.
+///
+/// # Safety
+/// Same as [`slice_from_ptr`]: a non-null pointer must address at
+/// least `N` bytes. That allocation-size precondition is the
+/// caller's `# Safety` contract — no read idiom can check it.
+pub(crate) unsafe fn array_from_ptr<const N: usize>(ptr: *const u8) -> Option<[u8; N]> {
+    let slice = unsafe { slice_from_ptr(ptr, N) }?;
+    Some(slice.try_into().expect("slice length is N by construction"))
+}
+
 /// Reserve `count` slots only if `remaining` bytes can back that many
 /// `stride`-byte elements. Wire-embedded counts must go through this;
 /// a raw `with_capacity(wire_count)` is the host-abort class SA-R-7

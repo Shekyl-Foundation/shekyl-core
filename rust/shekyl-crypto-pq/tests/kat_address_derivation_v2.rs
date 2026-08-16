@@ -3,11 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Tier-1/Tier-2 Known Answer Tests for the frozen ADDRESS_DERIVATION_V1 pipeline.
+//! Tier-1/Tier-2 Known Answer Tests for the frozen ADDRESS_DERIVATION_V2 pipeline.
 //!
-//! Corpus: `docs/test_vectors/ADDRESS_DERIVATION_V1/{manifest.json,vectors.json}`.
+//! Corpus: `docs/test_vectors/ADDRESS_DERIVATION_V2/{manifest.json,vectors.json}`.
 //! Regenerate after a deliberate, documented derivation bump:
-//! `cargo test -p shekyl-crypto-pq kat_regenerate_address_derivation_v1 -- --ignored --nocapture`
+//! `cargo test -p shekyl-crypto-pq kat_regenerate_address_derivation_v2 -- --ignored --nocapture`
 
 use std::path::PathBuf;
 
@@ -22,9 +22,9 @@ use shekyl_crypto_pq::address_derivation_freeze::address_derivation_manifest_sel
 use shekyl_crypto_pq::bip39;
 
 const MANIFEST_JSON: &str =
-    include_str!("../../../docs/test_vectors/ADDRESS_DERIVATION_V1/manifest.json");
+    include_str!("../../../docs/test_vectors/ADDRESS_DERIVATION_V2/manifest.json");
 const VECTORS_JSON: &str =
-    include_str!("../../../docs/test_vectors/ADDRESS_DERIVATION_V1/vectors.json");
+    include_str!("../../../docs/test_vectors/ADDRESS_DERIVATION_V2/vectors.json");
 
 #[derive(Debug, Deserialize)]
 struct ManifestFile {
@@ -279,7 +279,7 @@ fn run_tier2(v: &Tier2Vector) {
 }
 
 #[test]
-fn kat_address_derivation_v1_vectors() {
+fn kat_address_derivation_v2_vectors() {
     use sha2::{Digest, Sha256};
 
     address_derivation_manifest_self_check().expect("corpus manifest hash pin");
@@ -288,7 +288,7 @@ fn kat_address_derivation_v1_vectors() {
     // describe; otherwise they are decorative and will drift.
     let manifest: ManifestFile =
         serde_json::from_str(MANIFEST_JSON).expect("manifest.json must parse");
-    assert_eq!(manifest.derivation_version, "v1", "derivation_version");
+    assert_eq!(manifest.derivation_version, "v2", "derivation_version");
     assert_eq!(
         manifest.vectors_sha256_hex,
         hex::encode(Sha256::digest(VECTORS_JSON.as_bytes())),
@@ -542,13 +542,13 @@ fn build_tier2_vectors() -> Vec<serde_json::Value> {
 }
 
 fn corpus_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/test_vectors/ADDRESS_DERIVATION_V1")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/test_vectors/ADDRESS_DERIVATION_V2")
 }
 
 /// Regenerates the on-disk KAT corpus. Run manually after a deliberate derivation bump.
 #[test]
 #[ignore = "fixture regenerator; run manually after derivation corpus changes"]
-fn kat_regenerate_address_derivation_v1() {
+fn kat_regenerate_address_derivation_v2() {
     use sha2::{Digest, Sha256};
     use std::fs;
 
@@ -571,23 +571,23 @@ fn kat_regenerate_address_derivation_v1() {
     let vectors_hash = Sha256::digest(vectors_on_disk.as_bytes());
     let manifest_body = serde_json::json!({
         "_comment": [
-            "Tier-1/Tier-2 Known Answer Test fixtures for ADDRESS_DERIVATION_V1.",
+            "Tier-1/Tier-2 Known Answer Test fixtures for ADDRESS_DERIVATION_V2.",
             "Tier-1 pins intermediate derivation steps; Tier-2 pins end-to-end",
             "account material from generate_account_from_* / rederive_account.",
             "vectors_sha256_hex covers the exact on-disk bytes of vectors.json",
             "(verify with `sha256sum vectors.json`).",
             "Regenerate only on a deliberate, documented derivation-version bump:",
-            "cargo test -p shekyl-crypto-pq kat_regenerate_address_derivation_v1 -- --ignored --nocapture",
+            "cargo test -p shekyl-crypto-pq kat_regenerate_address_derivation_v2 -- --ignored --nocapture",
             "",
             "ML-KEM keygen uses fips203 =0.4.3 with the SHA3-ChaCha intermediary",
             "(see account.rs module doc). Tier-3 BIP-39 wordlist/PBKDF2 vectors",
             "live in rust/shekyl-crypto-pq/src/bip39.rs tests; Tier-4 KEM derive",
             "vectors live in KEM_DERIVE_V1_KAT.json (derivation.rs inline KAT)."
         ],
-        "derivation_version": "v1",
+        "derivation_version": "v2",
         "fips203_pin": "=0.4.3",
         "vectors_sha256_hex": hex::encode(vectors_hash),
-        "regeneration_command": "cargo test -p shekyl-crypto-pq kat_regenerate_address_derivation_v1 -- --ignored --nocapture",
+        "regeneration_command": "cargo test -p shekyl-crypto-pq kat_regenerate_address_derivation_v2 -- --ignored --nocapture",
         "tier1_count": tier1.len(),
         "tier2_count": tier2.len()
     });

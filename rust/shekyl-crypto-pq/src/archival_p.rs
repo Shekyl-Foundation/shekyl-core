@@ -130,6 +130,7 @@
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use ed25519_dalek::SigningKey;
 use fips204::traits::SerDes as _;
+use fips205::traits::SerDes as _;
 use hkdf::Hkdf;
 use sha2::Sha512;
 use zeroize::Zeroizing;
@@ -192,6 +193,21 @@ pub const ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO: &[u8] = b"shekyl-archival-p-bond-sp
 /// production path is **forthcoming** (2d-2 SP-T3); today only the disposable
 /// SP-T3 spike exercises it.
 pub const ARCHIVAL_P_HS_ID_INFO: &[u8] = b"shekyl-archival-p-hs-id-ed25519-v1";
+
+/// HKDF info-label for `P`'s SLH-DSA-192s **message-signing** identity seed
+/// (`L=72`, sliced `SK.seed ‖ SK.prf ‖ PK.seed` — the SM-R-4 R4-a shape,
+/// single-owned by `message_signing::slh_identity_from_okm`).
+///
+/// Exists because the fork-(ii) address layout makes the 48-byte
+/// `msg_sign_pk` fourth classical field mandatory for **every** address,
+/// persona receive addresses included: a zero-filled or absent field would
+/// make persona addresses a distinguishable class, which the uniformity
+/// discipline forbids. Message signing *from* a persona is deliberately
+/// unwired — this label exists so the persona's address is a full citizen,
+/// not to grant a capability. Like every sibling label it is per-slot and
+/// network-scoped, so the published key links nothing across personas or
+/// networks (the same property SM-R-4 R4-c pins for the principal).
+pub const ARCHIVAL_P_MSG_SIGN_INFO: &[u8] = b"shekyl-archival-p-msg-sign-slh-dsa-192s-v1";
 
 /// Single-byte separator between the info label and the little-endian `p_slot`.
 /// Frozen into the wire from genesis (`ARCHIVAL_FIREWALL_GATE6.md` §9.3).
@@ -395,6 +411,33 @@ pub fn derive_p_hs_id_seed(
     p_expand_32(master_seed, net, fmt, ARCHIVAL_P_HS_ID_INFO, p_slot)
 }
 
+/// `P`'s SLH-DSA-192s message-signing **public key** — the fourth classical
+/// field of the persona's receive address (see [`ARCHIVAL_P_MSG_SIGN_INFO`]).
+///
+/// Public-only by design: the secret half is derived and immediately
+/// dropped (wiped by its `ZeroizeOnDrop`), because no persona signing
+/// surface exists to hold it. A full SLH-DSA keygen (~415 ms on the Pi-4
+/// floor) — paid once per full-bundle derivation (staker open derives the
+/// lookahead window, `ARCHIVAL_PERSONA_LOOKAHEAD + 1` bundles), never on a
+/// per-request path. The probe-window id derivation
+/// (`derive_archival_p_identity_pk`) deliberately does not pay it.
+#[must_use]
+pub fn derive_p_msg_sign_pk(
+    master_seed: &[u8; MASTER_SEED_BYTES],
+    net: DerivationNetwork,
+    fmt: SeedFormat,
+    p_slot: u32,
+) -> [u8; shekyl_address::MSG_SIGN_PK_LEN] {
+    let salt = salt_for(net, fmt);
+    let info = p_info(ARCHIVAL_P_MSG_SIGN_INFO, p_slot);
+    let hk = Hkdf::<Sha512>::new(Some(&salt), master_seed);
+    let mut okm = Zeroizing::new([0u8; crate::message_signing::MSG_SIGN_IDENTITY_SEED_LEN]);
+    hk.expand(&info, okm.as_mut())
+        .expect("72 bytes < HKDF-SHA-512 max output");
+    let (pk, _sk) = crate::message_signing::slh_identity_from_okm(&okm);
+    pk.into_bytes()
+}
+
 // --- hybrid keypair assembly -------------------------------------------------
 
 /// Build a seed-keyed hybrid `(public, secret)` pair from a 32-byte Ed25519 RFC
@@ -476,6 +519,11 @@ pub struct ArchivalPKeys {
     /// X25519 public key, `montgomery(view_pk)` — same birational map as principal.
     pub x25519_pk: [u8; 32],
 
+    /// SLH-DSA-192s message-signing public key — the mandatory fourth
+    /// classical field of the receive address ([`ARCHIVAL_P_MSG_SIGN_INFO`]).
+    /// Public; the secret half is never held (no persona signing surface).
+    pub msg_sign_pk: [u8; shekyl_address::MSG_SIGN_PK_LEN],
+
     /// Public identity hybrid key (= `hybrid_bond_id`). Rides the wire as `P_pubkey`.
     pub hybrid_sign_pk: HybridPublicKey,
     /// Public identity hybrid secret (Ed25519 RFC 8032 seed + ML-DSA-65 secret).
@@ -527,6 +575,20 @@ impl ArchivalPKeys {
             identity_pk: self.hybrid_bond_id(),
             bond_spend_pk: &self.bond_spend_pk,
         }
+    }
+
+    /// The persona's receive address. Same field set as the principal
+    /// blob's [`crate::account::AllKeysBlob::to_address`] — callers do
+    /// not re-assemble `ShekylAddress::new`.
+    #[must_use]
+    pub fn to_address(&self, network: shekyl_address::Network) -> shekyl_address::ShekylAddress {
+        shekyl_address::ShekylAddress::new(
+            network,
+            *self.spend_pk.as_canonical_bytes(),
+            *self.view_pk.as_canonical_bytes(),
+            self.msg_sign_pk,
+            self.ml_kem_ek.to_vec(),
+        )
     }
 }
 
@@ -598,6 +660,9 @@ pub fn derive_archival_p_keys(
     let d_z = derive_p_kem_d_z(master_seed, net, fmt, p_slot);
     let (ml_kem_ek, ml_kem_dk) = ml_kem_keypair_from_d_z(&d_z)?;
 
+    // --- Receive address: SLH-DSA-192s message-signing anchor (public only) ---
+    let msg_sign_pk = derive_p_msg_sign_pk(master_seed, net, fmt, p_slot);
+
     // --- Public identity hybrid (seed consumers) ---
     let account_sign_seed = derive_p_account_sign_seed(master_seed, net, fmt, p_slot);
     let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, fmt, p_slot);
@@ -620,6 +685,7 @@ pub fn derive_archival_p_keys(
         ml_kem_ek,
         ml_kem_dk,
         x25519_pk,
+        msg_sign_pk,
         hybrid_sign_pk,
         hybrid_sign_sk,
         bond_spend_pk,

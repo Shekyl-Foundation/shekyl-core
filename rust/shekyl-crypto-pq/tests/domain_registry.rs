@@ -62,7 +62,7 @@ const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY
 /// these numbers.
 const PRODUCTION_PINS: [(&str, usize, usize); 6] = [
     ("1", 25, 0), // SA-3c: +1 (snapshot-id moved mech 5→1 on cn_fast_hash/Keccak→cSHAKE)
-    ("2", 44, 0),
+    ("2", 45, 0), // fork-(ii) layout: +1 (archival-p msg-sign identity, the 7th P label)
     ("3", 1, 3),
     ("4", 9, 0),
     ("5", 6, 8), // SA-3c: -1 (snapshot-id left mechanism 5)

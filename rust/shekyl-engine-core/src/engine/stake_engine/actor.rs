@@ -200,12 +200,12 @@ impl StakeEngine {
 
     /// Project the held persona at `slot` into its public
     /// [`ShekylAddress`](shekyl_address::ShekylAddress) — built **in-actor**,
-    /// from the already-live bundle (never re-derived), from only the public
-    /// spend/view pubs + ML-KEM-768 encap key. The reply type is structurally
-    /// public-only (an address cannot carry a secret), so **no `P` secret leaves
-    /// the actor** (rule 36). The orchestrator uses this only to address a
-    /// funding transfer *to* `P` (`Engine::stake_in`), where `P` is a public
-    /// recipient. `network` is the principal wallet's network (the actor is
+    /// from the already-live bundle (never re-derived). The reply type is
+    /// structurally public-only (an address cannot carry a secret), so
+    /// **no `P` secret leaves the actor** (rule 36). The orchestrator
+    /// uses this only to address a funding transfer *to* `P`
+    /// (`Engine::stake_in`), where `P` is a public recipient. `network`
+    /// is the principal wallet's network (the actor is
     /// network-agnostic; the address's network is the sender's).
     pub(crate) fn receive_address_of(&self, slot: PSlot, network: Network) -> ShekylAddress {
         let keys = self
@@ -213,12 +213,7 @@ impl StakeEngine {
             .get(&slot)
             .expect("receive_address_of called for a held slot")
             .keys();
-        ShekylAddress::new(
-            network,
-            *keys.spend_pk.as_canonical_bytes(),
-            *keys.view_pk.as_canonical_bytes(),
-            keys.ml_kem_ek.to_vec(),
-        )
+        keys.to_address(network)
     }
 
     /// Wipe the retired slot iff it is ephemeral; a bonded persona is left

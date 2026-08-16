@@ -27,7 +27,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Offline check that the embedded ADDRESS_DERIVATION_V1 corpus matches
+    /// Offline check that the embedded ADDRESS_DERIVATION_V2 corpus matches
     /// the compile-time manifest hash pin (release / genesis tooling).
     DerivationFreezeSelfCheck,
 
@@ -205,7 +205,7 @@ where
 
 fn run_derivation_freeze_self_check() {
     match shekyl_crypto_pq::address_derivation_freeze::address_derivation_manifest_self_check() {
-        Ok(()) => println!("ADDRESS_DERIVATION_V1 corpus OK"),
+        Ok(()) => println!("ADDRESS_DERIVATION_V2 corpus OK"),
         Err(e) => {
             eprintln!("derivation freeze self-check failed: {e}");
             std::process::exit(1);

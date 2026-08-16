@@ -16,7 +16,13 @@ use super::*;
 use shekyl_address::Network;
 
 fn test_address() -> ShekylAddress {
-    ShekylAddress::new(Network::Mainnet, [0xAA; 32], [0xBB; 32], vec![0xCC; 1184])
+    ShekylAddress::new(
+        Network::Mainnet,
+        [0xAA; 32],
+        [0xBB; 32],
+        [0xEE; 48],
+        vec![0xCC; 1184],
+    )
 }
 
 // ── canonical address bytes ──────────────────────────────────────
@@ -427,12 +433,7 @@ mod check_workflows {
         let mut txs = BTreeMap::new();
         txs.insert(hex::encode(txid), hex::encode(tx.serialize()));
 
-        let address = ShekylAddress::new(
-            Network::Testnet,
-            *keys.spend_pk.as_canonical_bytes(),
-            *keys.view_pk.as_canonical_bytes(),
-            keys.ml_kem_ek.to_vec(),
-        );
+        let address = keys.to_address(Network::Testnet);
 
         CheckFixture {
             address,
@@ -605,12 +606,7 @@ mod check_workflows {
 
         // A different wallet's address: same network, wrong keys.
         let other = LocalKeys::from_test_seed([0x5C; 32]);
-        let wrong = ShekylAddress::new(
-            Network::Testnet,
-            *other.keys.spend_pk.as_canonical_bytes(),
-            *other.keys.view_pk.as_canonical_bytes(),
-            other.keys.ml_kem_ek.to_vec(),
-        );
+        let wrong = other.keys.to_address(Network::Testnet);
 
         let checked = check_tx_proof(&fx.rpc, fx.txid, &wrong, MSG, &proof)
             .await

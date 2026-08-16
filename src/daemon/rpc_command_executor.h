@@ -106,7 +106,10 @@ public:
 
   bool print_transaction_pool_stats();
 
-  bool start_mining(cryptonote::account_public_address address, uint64_t num_threads, cryptonote::network_type nettype, bool do_background_mining = false, bool ignore_battery = false);
+  // `address` is the user's original encoded string, passed through
+  // verbatim (the parsed struct cannot be re-encoded since the fork-(ii)
+  // address layout); the caller validates it before calling.
+  bool start_mining(const std::string& address, uint64_t num_threads, cryptonote::network_type nettype, bool do_background_mining = false, bool ignore_battery = false);
 
   bool stop_mining();
 

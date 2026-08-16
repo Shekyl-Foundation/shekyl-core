@@ -24,20 +24,17 @@
 //!
 //! Shape errors are the caller's bug (`-32602`); everything else is an
 //! *answer* with its own code: `-29800` not-from-that-address, `-29801`
-//! corrupted paste, `-29802` unknown scheme, `-29803` address format
-//! carries no signing key. The signature string is judged **before** the
-//! address: its taxonomy (corruption vs. unknown scheme) is a property of
-//! the paste alone, and judging it first keeps those sentences reachable
-//! while every in-tree address still answers `-29803` (R6-a below).
+//! corrupted paste, `-29802` unknown scheme. The signature string is
+//! judged **before** the address: its taxonomy (corruption vs. unknown
+//! scheme) is a property of the paste alone. (`-29803` ADDRESS_UNBOUND
+//! was allocated while verification was R6-a-gated and RETIRED unused
+//! when the fork-(ii) layout made every address carry the key.)
 //!
-//! # The R6-a gate, honestly stated
+//! # The R6-a gate, lifted
 //!
-//! The engine free function's success path is **unreachable today**: the
-//! only `SignerIdentity` constructor refuses every in-tree address
-//! because no address version carries the 48-byte SLH-DSA key (fork (ii)
-//! puts it inline in the v2 address). This projection maps that refusal
-//! to `-29803`; when the v2 layout lands, the constructor starts
-//! succeeding and nothing here changes.
+//! Every decodable address carries the 48-byte SLH-DSA key as its fourth
+//! classical field, so verify takes the address's bound classical
+//! segment and the success path is live end to end.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -170,7 +167,6 @@ fn map_sig_error(e: &MessageSigError) -> WalletRpcError {
         }
         MessageSigError::Corrupted => WalletRpcError::MessageSigCorrupted,
         MessageSigError::VerifyFailed => WalletRpcError::MessageSigVerifyFailed,
-        MessageSigError::UnboundIdentity => WalletRpcError::MessageSigAddressUnbound,
         MessageSigError::InvalidKey => {
             WalletRpcError::InternalError("message-signing key material invalid".into())
         }
@@ -243,10 +239,6 @@ mod tests {
                 WalletRpcErrorCode::MessageSigVerifyFailed,
             ),
             (
-                MessageSigError::UnboundIdentity,
-                WalletRpcErrorCode::MessageSigAddressUnbound,
-            ),
-            (
                 MessageSigError::InvalidKey,
                 WalletRpcErrorCode::InternalError,
             ),
@@ -273,10 +265,6 @@ mod tests {
         assert_eq!(
             WalletRpcErrorCode::MessageSigUnsupportedScheme.as_i32(),
             -29802
-        );
-        assert_eq!(
-            WalletRpcErrorCode::MessageSigAddressUnbound.as_i32(),
-            -29803
         );
     }
 

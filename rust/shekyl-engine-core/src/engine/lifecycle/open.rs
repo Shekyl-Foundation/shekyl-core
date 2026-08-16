@@ -85,8 +85,14 @@ impl Engine<SoloSigner> {
                 })
             })?;
 
+        // The envelope stores (and AAD-commits, and KEK-binds) the 65-byte
+        // `version ‖ spend ‖ view` PREFIX of the classical bytes — the
+        // `msg_sign_pk` tail is deterministic from the same seed and adds
+        // no mismatch-detection power, and keeping the stored bytes
+        // prefix-shaped kept every pre-layout wallet file openable.
         let mut expected_classical_address = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
-        expected_classical_address.copy_from_slice(&blob.classical_address_bytes);
+        expected_classical_address
+            .copy_from_slice(&blob.classical_address_bytes[..EXPECTED_CLASSICAL_ADDRESS_BYTES]);
 
         let mut initial_ledger = WalletLedger::empty();
         if restore_height_hint > 0 {
@@ -258,9 +264,14 @@ impl Engine<SoloSigner> {
                 })
             })?;
 
-        // Public-bytes cross-check: the envelope's AAD commits to a
-        // 65-byte classical address; rederive must produce the same.
-        if blob.classical_address_bytes != *file.expected_classical_address() {
+        // Public-bytes cross-check: the envelope's AAD commits to the
+        // 65-byte `version ‖ spend ‖ view` classical PREFIX; rederive must
+        // produce the same. Prefix-only by design (see the create path):
+        // the `msg_sign_pk` tail is deterministic from the same seed, so
+        // the prefix detects a seed/file mismatch at full strength.
+        if blob.classical_address_bytes[..EXPECTED_CLASSICAL_ADDRESS_BYTES]
+            != *file.expected_classical_address()
+        {
             return Err(OpenError::Key(KeyError::PublicBytesMismatch));
         }
 

@@ -54,12 +54,20 @@
 #define SHEKYL_MASTER_SEED_BYTES 64
 /// Raw 32-byte seed accepted by testnet/fakechain generate flows.
 #define SHEKYL_RAW_SEED_BYTES 32
-/// Canonical 65-byte classical address body (`version || spend_pk || view_pk`)
-/// used by wallet-file AAD and by `shekyl_account_public_address_build` /
-/// `_check`. Must match Rust `account::CLASSICAL_ADDRESS_BYTES` exactly; a
-/// drift here corrupts every later field of `ShekylAllKeysBlob` because the
-/// FFI is declared `#[repr(C)]` with byte-aligned `[u8; N]` arrays.
-#define SHEKYL_CLASSICAL_ADDRESS_BYTES 65
+/// Full classical address payload in `ShekylAllKeysBlob.classical_address_bytes`
+/// and Rust `account::CLASSICAL_ADDRESS_BYTES`:
+/// `version || spend_pk || view_pk || msg_sign_pk[48]` (113).
+/// Must match the Rust constant exactly; a drift corrupts every later
+/// field of the `#[repr(C)]` blob.
+///
+/// This is NOT the persisted wallet-envelope field. That one is
+/// `SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES` (65) — the
+/// `version || spend || view` PREFIX — and is what AAD / file-KEK bind.
+#define SHEKYL_CLASSICAL_ADDRESS_BYTES 113
+
+/// SLH-DSA-192s message-signing public key — the fourth classical field.
+/// Matches Rust `shekyl_address::MSG_SIGN_PK_LEN`.
+#define SHEKYL_MSG_SIGN_PK_BYTES 48
 
 /// BIP-39 inputs: 32-byte entropy, 24 words, 64-byte PBKDF2-HMAC-SHA512 output,
 /// max mnemonic string length (24 × longest English word "mountain"=8 + 23
@@ -480,10 +488,16 @@ bool shekyl_kem_decapsulate(
 
 /// Encode Shekyl Bech32m address. Returns UTF-8 string in ShekylBuffer.
 /// network: 0=mainnet, 1=testnet, 2=stagenet.
+/// msg_sign_pk_ptr: 48 bytes (SLH-DSA-192s message-signing public key,
+/// the fourth classical field since the fork-(ii) layout). REQUIRED —
+/// null returns a null buffer, because no valid address exists without
+/// it. Callers holding only an `account_public_address` (no msg_sign_pk)
+/// cannot re-encode; live daemon paths carry the original address string.
 ShekylBuffer shekyl_address_encode(
     uint8_t network,
     const uint8_t* spend_key_ptr,
     const uint8_t* view_key_ptr,
+    const uint8_t* msg_sign_pk_ptr,
     const uint8_t* ml_kem_ek_ptr,
     size_t ml_kem_ek_len);
 
@@ -1323,9 +1337,13 @@ void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 
 #define SHEKYL_WALLET_KEYS_WRAP_SALT_BYTES 16
 #define SHEKYL_WALLET_SEED_BLOCK_TAG_BYTES 16
-/// Canonical classical-address layout used by the wallet envelope.
-/// version(1) || spend_pk(32) || view_pk(32).
+/// Persisted wallet-envelope classical PREFIX: version(1) || spend(32) ||
+/// view(32). Not the full blob field (`SHEKYL_CLASSICAL_ADDRESS_BYTES`).
 #define SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES 65
+static_assert(
+    SHEKYL_CLASSICAL_ADDRESS_BYTES
+        == SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES + SHEKYL_MSG_SIGN_PK_BYTES,
+    "blob classical bytes are the envelope prefix plus msg_sign_pk");
 
 #define SHEKYL_WALLET_ERR_OK 0
 #define SHEKYL_WALLET_ERR_TOO_SHORT 1

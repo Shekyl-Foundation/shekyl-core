@@ -110,21 +110,26 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-08-11, incl. SA-3c): 93 distinct production domain
-strings across the five mechanisms — 94 registered, including the SHA3-256
-micro-bucket.** The `shekyl/`-prefix lens saw ~28 — a 3.3× undercount, which is the
+**Census (dated snapshot, 2026-08-15, incl. the fork-(ii) address-layout
+slice): 94 distinct production domain strings across the five mechanisms —
+95 registered, including the SHA3-256 micro-bucket.** The `shekyl/`-prefix lens saw ~28 — a 3.3× undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
-sums to 94: the five mechanisms 93, plus the 1-entry micro-bucket.) **This table is a
+sums to 95: the five mechanisms 94, plus the 1-entry micro-bucket.) **This table is a
 snapshot, not the checked copy** — the per-mechanism counts are pinned once, against
 the parsed TSV rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry
 legitimately changes, that pin fails and this table is refreshed with a new as-of
 date. SA-3c moved `snapshot-id` from mechanism 5 to mechanism 1 (cn_fast_hash →
-cSHAKE); the total is unchanged (one domain recategorized, not added).
+cSHAKE); the total was unchanged (one domain recategorized, not added). The
+2026-08-15 refresh adds one mechanism-2 info label:
+`shekyl-archival-p-msg-sign-slh-dsa-192s-v1`, the persona's SLH-DSA-192s
+message-signing identity — the seventh archival-P per-slot label, forced
+by the fork-(ii) address layout making `msg_sign_pk` a mandatory field of
+every address (persona receive addresses included, for uniformity).
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
 | 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 25 | 0 |
-| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 33 infos | 0 |
+| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 34 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 9 | 0 |
 | 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 14 | 8 |
@@ -134,13 +139,13 @@ Distinctness identity is per-mechanism; mechanism 2 is keyed by `(salt, info)`, 
 three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused across two
 derivations that differ only by salt — legitimately distinct, not a collision.
 
-**Frozen vs. live.** 11 of the 93 are **frozen-inherited** (mech-3: the FROST
+**Frozen vs. live.** 11 of the 94 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
 generator and Bulletproof(+) DSTs). Frozen strings are byte-identical to the
 un-vendored upstream, are pinned by derived-output KATs, and are **rule-93
 carve-outs** (a rebrand sweep skips them) — enumerated with per-seam consequences in
 [`FROZEN_DOMAIN_SEPARATORS.md`](FROZEN_DOMAIN_SEPARATORS.md), and the CI gate
-cross-checks that every frozen row still has its entry there. The remaining 82 are
+cross-checks that every frozen row still has its entry there. The remaining 83 are
 Shekyl-authored **live** strings: still byte-load-bearing, but ours to version (mint
 a `…-v2` alongside a migration, never edit `…-v1` in place — SIGNATURE_ALIGNMENT §5).
 

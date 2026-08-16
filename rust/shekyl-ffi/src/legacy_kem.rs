@@ -194,6 +194,13 @@ pub unsafe extern "C" fn shekyl_kem_decapsulate(
 ///
 /// `network`: 0=mainnet, 1=testnet, 2=stagenet.
 /// `spend_key_ptr`: 32 bytes. `view_key_ptr`: 32 bytes.
+/// `msg_sign_pk_ptr`: 48 bytes (SLH-DSA-192s message-signing public key —
+/// the fourth classical field since the fork-(ii) layout). **Required**:
+/// a null pointer returns a null buffer, because no valid address can be
+/// assembled without it. C++ callers that only hold an
+/// `account_public_address` (which carries no msg_sign_pk) cannot use
+/// this function any more; live daemon paths carry the original address
+/// string instead of re-encoding.
 /// `ml_kem_ek_ptr`: 1184 bytes (ML-KEM-768 encapsulation key).
 ///
 /// Returns a ShekylBuffer containing the UTF-8 encoded address string.
@@ -205,12 +212,10 @@ pub unsafe extern "C" fn shekyl_address_encode(
     network: u8,
     spend_key_ptr: *const u8,
     view_key_ptr: *const u8,
+    msg_sign_pk_ptr: *const u8,
     ml_kem_ek_ptr: *const u8,
     ml_kem_ek_len: usize,
 ) -> ShekylBuffer {
-    if spend_key_ptr.is_null() || view_key_ptr.is_null() {
-        return ShekylBuffer::null();
-    }
     if ml_kem_ek_len > 0 && ml_kem_ek_ptr.is_null() {
         return ShekylBuffer::null();
     }
@@ -219,15 +224,24 @@ pub unsafe extern "C" fn shekyl_address_encode(
         return ShekylBuffer::null();
     };
 
-    let spend_key: [u8; 32] = unsafe {
-        let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(spend_key_ptr, buf.as_mut_ptr(), 32);
-        buf
+    // Every fixed-size boundary read goes through `array_from_ptr`
+    // (rule 40): one audited construction owns the null / zero-length /
+    // isize::MAX preconditions, and the type parameter *is* the layout
+    // length so a wrong count cannot silently truncate. What NO
+    // boundary code can check is the caller's allocation size — a
+    // non-null undersized buffer is UB under any read idiom; that
+    // precondition is the `# Safety` contract above, as everywhere on
+    // this surface.
+    let Some(spend_key) = (unsafe { array_from_ptr::<32>(spend_key_ptr) }) else {
+        return ShekylBuffer::null();
     };
-    let view_key: [u8; 32] = unsafe {
-        let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(view_key_ptr, buf.as_mut_ptr(), 32);
-        buf
+    let Some(view_key) = (unsafe { array_from_ptr::<32>(view_key_ptr) }) else {
+        return ShekylBuffer::null();
+    };
+    let Some(msg_sign_pk) =
+        (unsafe { array_from_ptr::<{ shekyl_address::MSG_SIGN_PK_LEN }>(msg_sign_pk_ptr) })
+    else {
+        return ShekylBuffer::null();
     };
     let ml_kem_ek = if ml_kem_ek_len == 0 {
         Vec::new()
@@ -238,7 +252,7 @@ pub unsafe extern "C" fn shekyl_address_encode(
         slice.to_vec()
     };
 
-    let addr = shekyl_address::ShekylAddress::new(net, spend_key, view_key, ml_kem_ek);
+    let addr = shekyl_address::ShekylAddress::new(net, spend_key, view_key, msg_sign_pk, ml_kem_ek);
 
     match addr.encode() {
         Ok(s) => ShekylBuffer::from_vec(s.into_bytes()),

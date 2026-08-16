@@ -375,6 +375,7 @@ mod tests {
             shekyl_address::Network::Stagenet,
             [0xAA; 32],
             [0xBB; 32],
+            [0xEE; 48],
             vec![0xCC; 1184],
         )
     }

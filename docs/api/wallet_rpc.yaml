@@ -157,11 +157,9 @@
 #                                                   docs/design/WALLET_MESSAGE_SIGNING.md
 #                                                   §7; verify is
 #                                                   SESSION-LESS (SM-R-6).
-#                                                   Address-anchored verify
-#                                                   answers -29803 for every
-#                                                   in-tree address until the
-#                                                   fork-(ii) v2 layout lands
-#                                                   in code — see the Message
+#                                                   Live end to end since the
+#                                                   fork-(ii) address layout
+#                                                   landed — see the Message
 #                                                   signing section)
 #
 # Error-code allocation (stable ranges; per-method codes land alongside each
@@ -178,7 +176,11 @@
 #   -29600..-29699           payment requests (RESERVED range)
 #   -29700..-29799           air-gapped bundles (RESERVED range)
 #   -29800..-29899           sign / verify message (PR-SM-2:
-#                            -29800..-29803 allocated; rest reserved)
+#                            -29800..-29802 allocated; -29803
+#                            ADDRESS_UNBOUND was allocated for the
+#                            R6-a-gated interim and RETIRED unused when
+#                            the fork-(ii) address layout landed — never
+#                            reuse the number; rest reserved)
 #   -29900..-29999           server / transport / tenancy
 #
 # Codes allocated in this commit are enumerated in
@@ -368,7 +370,6 @@ components:
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
-        - -29803   # MSG_SIG_ADDRESS_UNBOUND
         - -29900   # TENANT_UNAVAILABLE
       description: |
         Allocated codes (this commit). Per-method additions extend this enum
@@ -534,16 +535,6 @@ components:
                                           the append-only forward-compat
                                           outcome (SM-R-5).
                                           data: {"scheme": <byte>}
-          -29803 MSG_SIG_ADDRESS_UNBOUND  verify_message: the address's
-                                          format carries no message-signing
-                                          public key, so there is nothing
-                                          to verify against. The address
-                                          itself is valid — this is a
-                                          format capability, not a typo.
-                                          EVERY in-tree address version
-                                          answers this until the fork-(ii)
-                                          v2 layout (48-byte SLH-DSA key
-                                          inline) lands in code
           -29900 TENANT_UNAVAILABLE       server: wallet-dir tenancy (reserved
                                           for the multi-tenant sub-PR)
 
@@ -2142,16 +2133,13 @@ components:
     # classical-only address — shape-first, the get_transfer_by_id
     # precedent); every other outcome is an ANSWER with its own code:
     # -29800 not-by-that-address, -29801 corrupted paste, -29802
-    # unknown scheme, -29803 address format carries no signing key.
-    # The signature string is judged BEFORE the address, so the paste
-    # taxonomy (-29801/-29802) never masks behind -29803.
+    # unknown scheme. The signature string is judged BEFORE the
+    # address, so the paste taxonomy is a property of the paste alone.
     #
-    # CURRENT REACH (honest state, SM-R-6 R6-a): verification's success
-    # path is unreachable — every in-tree address version answers
-    # -29803, because the 48-byte SLH-DSA public key lives inline in
-    # the fork-(ii) v2 address whose in-code layout is the one
-    # outstanding row under the genesis address-format item. When it
-    # lands, verify_message starts succeeding with no contract change.
+    # REACH: verification is live end to end — every address carries the
+    # 48-byte SLH-DSA key as its fourth classical field (fork (ii)), so
+    # the SignerIdentity extraction that gated the R6-a interim is total.
+    # (-29803 ADDRESS_UNBOUND, the interim refusal, was retired unused.)
 
     SignMessageParams:
       type: object

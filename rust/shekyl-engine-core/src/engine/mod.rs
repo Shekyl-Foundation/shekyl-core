@@ -1027,26 +1027,10 @@ impl<
     pub fn primary_address(&self) -> ShekylAddress {
         use crate::engine::traits::key::KeyEngine;
 
-        let addr = self.key.account_public_address();
-
-        // `classical_address_bytes` is `version || spend_pk || view_pk`
-        // (65 bytes) and `pqc_public_key` is `x25519_pk || ml_kem_ek`
-        // (32 + 1184 bytes), both byte-identical to the `AllKeysBlob`
-        // fields they were projected from at `KeyEngineHandle::spawn`
-        // (see `shekyl_crypto_pq::account::AllKeysBlob`). The encoded
-        // address format carries the 1184-byte ML-KEM encapsulation
-        // key only (`shekyl_address::PQC_PAYLOAD_LEN`); the leading
-        // 32-byte x25519 public key is not part of the address.
-        let mut spend_key = [0u8; 32];
-        spend_key.copy_from_slice(&addr.classical_address_bytes[1..33]);
-        let mut view_key = [0u8; 32];
-        view_key.copy_from_slice(&addr.classical_address_bytes[33..65]);
-        let ml_kem_encap_key = addr
-            .ml_kem_encap_key()
-            .expect("key-actor projection always carries the x25519 prefix")
-            .to_vec();
-
-        ShekylAddress::new(self.network, spend_key, view_key, ml_kem_encap_key)
+        self.key
+            .account_public_address()
+            .to_shekyl_address(self.network)
+            .expect("key-actor projection is a well-formed classical segment + ek")
     }
 
     /// Borrow the [`PersistenceEngine`] implementor.

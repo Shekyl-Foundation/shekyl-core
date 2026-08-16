@@ -9,13 +9,14 @@
 //!
 //! # What this suite can and cannot assert
 //!
-//! The production success path of [`super::verify_message`] is still
-//! gated (R6-a): no in-tree address constructs a `SignerIdentity`. This
-//! suite pins the assembly in front of that gate — signature-first
-//! taxonomy, full-address requirement, and the UnboundIdentity tripwire
-//! that must flip when the v2 layout lands — plus the part the crypto
-//! crate's own tests structurally cannot see: that the σ_cl the **key
-//! actor** produced from the wallet's real derived spend scalar verifies
+//! The production success path of [`super::verify_message`] is live:
+//! every decodable address carries the fourth classical field, and
+//! verify takes the address's [`shekyl_address::BoundClassicalSegment`]
+//! so the keys cannot be unbound from the bound bytes. This suite pins
+//! the assembly in front of that AND — signature-first taxonomy, the
+//! full-address requirement — plus the part the crypto crate's own
+//! tests structurally cannot see: that the σ_cl the **key actor**
+//! produced from the wallet's real derived spend scalar verifies
 //! against the **address's** spend key, over exactly the preimage built
 //! from the **address's** bound segment.
 
@@ -166,19 +167,23 @@ async fn sign_message_round_trips_through_wallet_file() {
         message,
     );
 
-    // Session-less verify assembly (this module's free function). The
-    // success path is R6-a gated; the tripwire below is what flips
-    // when the v2 address layout lands.
+    // Session-less verify assembly (this module's free function). This
+    // assertion WAS the R6-a tripwire (refuse with UnboundIdentity); the
+    // fork-(ii) layout landing flipped it, by design, into the full
+    // production round trip: sign through the wallet file and key actor,
+    // verify from nothing but the encoded address string.
     let encoded = addr.encode().expect("encode primary address");
-    assert!(
-        matches!(
-            verify_message(network, &encoded, message, &armored),
-            Err(VerifyMessageError::Crypto(
-                ms::MessageSigError::UnboundIdentity
-            ))
-        ),
-        "in-tree addresses must refuse with UnboundIdentity until v2"
-    );
+    verify_message(network, &encoded, message, &armored)
+        .expect("the wallet's own address verifies its own signature");
+
+    // And the negative that makes it non-vacuous: a different message
+    // under the same address and signature is the honest refusal.
+    assert!(matches!(
+        verify_message(network, &encoded, b"a different message", &armored),
+        Err(VerifyMessageError::Crypto(
+            ms::MessageSigError::VerifyFailed
+        ))
+    ));
 
     // Signature-first: a junk paste is Malformed even with a junk address.
     assert!(matches!(
@@ -188,7 +193,8 @@ async fn sign_message_round_trips_through_wallet_file() {
         )))
     ));
 
-    // Well-formed signature + undecodable address: shape, not UnboundIdentity.
+    // Well-formed signature + undecodable address: address shape, not
+    // a verify-failed answer.
     assert!(matches!(
         verify_message(network, "not-an-address", message, &armored),
         Err(VerifyMessageError::InvalidAddress)
@@ -259,14 +265,9 @@ async fn sign_message_outer_with_real_keys() {
         .expect("segment assembles");
 
     let message = b"actor end to end";
-    let (preimage, sig_pq) = ms::sign_message_pq_half(
-        &master_seed,
-        network,
-        seed_format,
-        segment.as_bytes(),
-        message,
-    )
-    .expect("pq half");
+    let (preimage, sig_pq) =
+        ms::sign_message_pq_half(&master_seed, network, seed_format, &segment, message)
+            .expect("pq half");
     let sig_cl = handle
         .sign_message_outer(ms::outer_bytes(&preimage, &sig_pq))
         .await
