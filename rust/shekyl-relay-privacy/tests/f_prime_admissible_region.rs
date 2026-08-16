@@ -499,3 +499,319 @@ fn the_step_is_not_a_degraded_source_artifact() {
         );
     }
 }
+
+/// **The leak column §43.2 requires before this lands.**
+///
+/// §43.2: *"over-estimating `F` is safe on the disarm axis and adverse on the
+/// leak axis. The policy names one consumer, and was written when only one
+/// existed."* A menu of `F'` candidates carrying only disarm-side dependents is
+/// the incomplete policy being inherited through the unit that rests on it.
+///
+/// The two terms genuinely oppose, and `simulate_passive_neighbor_leak` sees
+/// both: a leak is counted when a neighboured prefix node's embargo fires
+/// **before `trace.disarm_ms`**. Raising `F'` pushes `disarm_ms` out (more
+/// window, more leak) *and* lengthens the derived embargo (lower firing rate,
+/// less leak). Neither §6.6 nor §6.7 fixes the net sign on its own, because
+/// each holds the other term still. Moving both together is the only reading
+/// that answers §43.2.
+///
+/// Note the asymmetry this exposes, which is the whole of the per-zone
+/// question: the leak is **structurally zero on Tor/I2P** (§6.6 — fluff never
+/// traverses the supernode's inbound edges), so every millisecond of `beta`
+/// margin is derived from an anonymity-zone statistic and paid on the clearnet
+/// axis.
+#[test]
+fn leak_at_each_candidate_region() {
+    use shekyl_relay_privacy::conformance::{simulate_passive_neighbor_leak, Transport};
+    use shekyl_relay_privacy::derive::derive_embargo;
+    use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
+    use shekyl_relay_privacy::schedule::{EmbargoTimer, DEFAULT_EMBARGO_TICK_MILLIS};
+    use shekyl_relay_privacy::zone::RelayZone;
+
+    // 1e6 rather than §6.6's 2e5: the question here is whether the band is
+    // FLAT, and a null result is only as good as the noise floor under it. At
+    // p ~ 0.011 the binomial standard error is ~1.0e-4 at 1e6 trials against
+    // ~2.3e-4 at 2e5, which is what makes the tolerance below meaningful
+    // instead of a restatement of the sampling error.
+    const TRIALS: usize = 1_000_000;
+    const PHI: f64 = 0.10;
+    /// Three binomial standard errors at `TRIALS` and `p ~ 0.011`, rounded up.
+    /// A band inside this is flat as far as this instrument can see; a band
+    /// outside it is a real movement on §43.2's axis.
+    const NOISE_3SIGMA: f64 = 3.2e-4;
+
+    println!("\n  §6.6 passive inbound-supernode leak at each candidate (phi = {PHI})");
+    println!("  F' ms   clearnet E   leak rate   origin share   tor leak");
+    println!("  -----   ----------   ---------   ------------   --------");
+
+    let mut rows = Vec::new();
+    for f_prime in [3_250_u32, 3_500, 4_500, 4_750, 5_000] {
+        let params = DandelionParams {
+            fluff_return_ms: f_prime,
+            ..DandelionParams::adopted_for(RelayZone::Public)
+        };
+        let e = EmbargoTimer::adopted(&params);
+        let mut cr = SplitMix64::new(0x1EA4_0000 + u64::from(f_prime));
+        let c =
+            simulate_passive_neighbor_leak(&params, &e, PHI, Transport::Clearnet, TRIALS, &mut cr);
+        let mut tr = SplitMix64::new(0x1EA4_7919 + u64::from(f_prime));
+        let t =
+            simulate_passive_neighbor_leak(&params, &e, PHI, Transport::Anonymity, TRIALS, &mut tr);
+        println!(
+            "  {f_prime:5}   {:8} s   {:9.5}   {:12.4}   {:8.5}",
+            e.mean_secs(),
+            c.leak_rate,
+            c.origin_share_of_leaks,
+            t.leak_rate
+        );
+        // §6.6's structural claim, re-armed at every candidate rather than
+        // assumed to survive the re-baselining.
+        assert!(
+            t.leak_rate < 1e-12,
+            "the anonymity-zone leak must be structurally zero at F' = {f_prime}, got {}",
+            t.leak_rate
+        );
+        rows.push((f_prime, c.leak_rate));
+    }
+
+    let base = rows[0].1;
+    // **Calibration against the record.** §6.6's banner re-measured the adopted
+    // row at the F-7-corrected pair and recorded 1.08 %. This run must land on
+    // it, or the column below is measuring a channel the record does not have.
+    assert!(
+        (base - 0.0108).abs() < NOISE_3SIGMA,
+        "the shipped pair (F' = 3250, embargo 190 s) reads {base:.5}; §6.6's banner \
+         records 0.0108 at exactly this pair. A mismatch means this is not the \
+         channel §43.2 names"
+    );
+    println!("\n  shipped F' = 3250 reads {base:.5} (§6.6 banner records 0.0108)");
+    for (f_prime, rate) in &rows[1..] {
+        println!(
+            "  F' = {f_prime}: {:+.1} % against shipped",
+            ((rate / base) - 1.0) * 100.0
+        );
+    }
+    println!(
+        "\n  §43.2 predicts the disarm-window term pushes this UP while the longer\n  \
+         embargo pushes it DOWN. The sign of the net is the column it asked for."
+    );
+
+    // **The sensitivity control, and it decides whether the flat band above is
+    // a finding or an instrument that cannot see.** A null result on an
+    // unvalidated instrument is indistinguishable from a broken one, so the
+    // same call is made across §6.6's own embargo range, where the recorded
+    // answer is a ~4x move (0.0465 at 31 s against 0.0108 at 190 s).
+    let control = |secs: u32| -> f64 {
+        let ticks = u32::try_from(u64::from(secs) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS)
+            .expect("control embargo in ticks must fit u32");
+        let e = EmbargoTimer::geometric_from_ticks(ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+        let params = DandelionParams::adopted_for(RelayZone::Public);
+        let mut r = SplitMix64::new(0x0C0C_7201 ^ u64::from(secs));
+        simulate_passive_neighbor_leak(&params, &e, PHI, Transport::Clearnet, TRIALS, &mut r)
+            .leak_rate
+    };
+    let short = control(31);
+    let long = control(500);
+    println!("\n  sensitivity control (embargo alone, §6.6's range)");
+    println!("  embargo  31 s -> leak {short:.5}");
+    println!("  embargo 500 s -> leak {long:.5}");
+    println!(
+        "  (§6.6's 0.0465 / 0.0032 rows were taken at the PRE-correction pair, so they\n  \
+         are not the comparison — the calibration is the adopted row asserted below.)"
+    );
+    assert!(
+        short > long * 3.0,
+        "the leak instrument must move sharply across §6.6's embargo range — got \
+         {short:.5} at 31 s against {long:.5} at 500 s. Without this the flat band \
+         above is an instrument that cannot see, not a finding"
+    );
+
+    // With the instrument shown sensitive, the band's flatness is the reading.
+    let (lo, hi) = rows
+        .iter()
+        .map(|(_, r)| *r)
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), r| {
+            (lo.min(r), hi.max(r))
+        });
+    println!(
+        "\n  candidate band spans {:.5} ({lo:.5}..{hi:.5}) against a 3-sigma noise \
+         floor of {NOISE_3SIGMA:.5}",
+        hi - lo
+    );
+    assert!(
+        hi - lo < NOISE_3SIGMA,
+        "the leak band across the candidates spans {:.5}, beyond the {NOISE_3SIGMA:.5} \
+         noise floor — §43.2's adverse term does NOT cancel here, and the region \
+         choice is a privacy-against-privacy trade that this file must price rather \
+         than report as flat",
+        hi - lo
+    );
+
+    // Whatever the sign, `derive_embargo` must be answering at the pinned
+    // target for every row; a silently unreachable solve would make the whole
+    // column a reading against the wrong embargo.
+    for (f_prime, _) in &rows {
+        let p = DandelionParams {
+            fluff_return_ms: *f_prime,
+            ..DandelionParams::adopted_for(RelayZone::Public)
+        };
+        let d = derive_embargo(
+            &p,
+            DEFAULT_EMBARGO_TICK_MILLIS,
+            EMBARGO_FULL_TRAVEL_PROBABILITY,
+        )
+        .expect("the full-travel target must be reachable at every candidate");
+        assert!(d.achieved >= EMBARGO_FULL_TRAVEL_PROBABILITY);
+    }
+}
+
+/// **What the region choice actually buys: the alpha miss when the network
+/// leaves it.**
+///
+/// Choosing `beta` looks like a free parameter, and it is not decidable as one.
+/// [`EMBARGO_FULL_TRAVEL_PROBABILITY`] is pinned at 0.90 and `derive_embargo`
+/// searches for the smallest embargo achieving it *at the `F'` handed to it* —
+/// so picking `beta` picks `F'` picks `E`, and 0.90 holds by construction at
+/// whatever `F'` it was derived from. Asking "is 0.90 met?" of the pair that
+/// was solved for 0.90 is a round trip.
+///
+/// The non-circular quantity is the **miss**: fix `E` at the region boundary,
+/// then read alpha against the `F'` a network *outside* the region actually
+/// produces. That curve is the cost of the bound being wrong, and it converts
+/// the region choice from a taste question into one about a pinned invariant —
+/// how far below 0.90 is acceptable when `beta` exceeds the bound.
+#[test]
+fn alpha_degradation_when_the_network_leaves_the_region() {
+    use shekyl_relay_privacy::derive::derive_embargo;
+    use shekyl_relay_privacy::full_travel_probability;
+    use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
+    use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
+    use shekyl_relay_privacy::zone::RelayZone;
+
+    // (beta, F') from `f_prime_against_tail_mass_at_the_measured_minimum`.
+    const SWEEP: [(f64, u32); 7] = [
+        (0.000, 3_500),
+        (0.083, 4_250),
+        (0.125, 4_250),
+        (0.167, 4_500),
+        (0.250, 4_500),
+        (0.333, 4_750),
+        (0.500, 5_000),
+    ];
+
+    let params_at = |f_prime: u32| DandelionParams {
+        fluff_return_ms: f_prime,
+        ..DandelionParams::adopted_for(RelayZone::Public)
+    };
+
+    for (beta_star, f_star) in [(0.250_f64, 4_500_u32), (0.333, 4_750), (0.500, 5_000)] {
+        let fixed = derive_embargo(
+            &params_at(f_star),
+            DEFAULT_EMBARGO_TICK_MILLIS,
+            EMBARGO_FULL_TRAVEL_PROBABILITY,
+        )
+        .expect("the target is reachable at every candidate")
+        .mean_ticks;
+
+        println!(
+            "\n  region beta* = {beta_star:.3} (F' = {f_star} ms), embargo FIXED at {fixed} ticks"
+        );
+        println!("  beta     F' ms   alpha at the fixed embargo   miss vs 0.90");
+        println!("  -----    -----   --------------------------   ------------");
+        for (beta, f_prime) in SWEEP {
+            let a =
+                full_travel_probability(&params_at(f_prime), fixed, DEFAULT_EMBARGO_TICK_MILLIS);
+            let outside = if beta > beta_star { " <- OUTSIDE" } else { "" };
+            println!(
+                "  {beta:.3}    {f_prime:5}   {a:26.6}   {:+.6}{outside}",
+                a - EMBARGO_FULL_TRAVEL_PROBABILITY
+            );
+        }
+
+        // At the boundary itself the invariant must hold — that is what
+        // `derive_embargo` solved for, and a failure here means the fixed
+        // embargo was taken from the wrong row.
+        let at_boundary =
+            full_travel_probability(&params_at(f_star), fixed, DEFAULT_EMBARGO_TICK_MILLIS);
+        assert!(
+            at_boundary >= EMBARGO_FULL_TRAVEL_PROBABILITY,
+            "at its own boundary the region must meet the pinned target: got \
+             {at_boundary} at F' = {f_star}"
+        );
+
+        // And outside it the invariant must actually be MISSED, or the region
+        // bound is not doing any work and `beta` is not a design parameter at
+        // all — the same vacuity trap the alpha gate's control exists to catch.
+        let worst = full_travel_probability(&params_at(5_000), fixed, DEFAULT_EMBARGO_TICK_MILLIS);
+        if f_star < 5_000 {
+            assert!(
+                worst < EMBARGO_FULL_TRAVEL_PROBABILITY,
+                "beta* = {beta_star:.3} must be MISSED at the worst swept tail, else the \
+                 bound constrains nothing: got {worst} at F' = 5000"
+            );
+        }
+    }
+}
+
+/// **`beta*` is a quantile of the measured series, not its mean.**
+///
+/// A region is a bound, so the statistic that sets it has to be a bound. §13.2
+/// names the observation-level rate as the cross-arm statistic, and the `A = 60`
+/// arm's eleven settled samples give a *series* — so the bound can be read off
+/// it at the quantile matching the invariant being protected, rather than
+/// chosen. At [`EMBARGO_FULL_TRAVEL_PROBABILITY`] = 0.90 the matching read is
+/// the p90.
+///
+/// The `A = 15` arm cannot answer the same way: §14.2 records only the pooled
+/// 52.1 % (86/165), not the per-sample series, so its beta has a mean and no
+/// quantile. That is a recording gap, not a measurement gap — and it is the
+/// concrete reason the young-network region cannot be set from what exists.
+#[test]
+fn beta_star_is_a_quantile_of_the_measured_series_not_its_mean() {
+    /// §13.2's eleven settled samples: nodes at or above the floor, of 60.
+    const AT_OR_ABOVE: [u32; 11] = [55, 52, 49, 54, 56, 54, 50, 49, 47, 50, 46];
+    const FLEET: f64 = 60.0;
+
+    let mut betas: Vec<f64> = AT_OR_ABOVE
+        .iter()
+        .map(|at| (FLEET - f64::from(*at)) / FLEET)
+        .collect();
+    let mean = betas.iter().sum::<f64>() / betas.len() as f64;
+    betas.sort_by(|a, b| a.partial_cmp(b).expect("no NaN in a ratio of counts"));
+
+    // Nearest-rank, the definition that keeps the answer inside the observed
+    // set rather than interpolating a value no sample produced. The rank is
+    // computed in integer arithmetic — a quantile index is a count, and
+    // rounding it through f64 is how an off-by-one enters a bound silently.
+    let nearest_rank = |q_num: usize, q_den: usize| -> f64 {
+        let n = betas.len();
+        let rank = (q_num * n).div_ceil(q_den).max(1).min(n);
+        betas[rank - 1]
+    };
+
+    let p50 = nearest_rank(1, 2);
+    let p90 = nearest_rank(9, 10);
+    let max = *betas.last().expect("eleven samples");
+
+    println!("\n  A = 60 below-floor tail, eleven settled samples (§13.2)");
+    println!("  mean {mean:.4}   p50 {p50:.4}   p90 {p90:.4}   max {max:.4}");
+    println!(
+        "  the p90 is the read matching the pinned 0.90 invariant; on the sweep it \
+         lands\n  between beta = 0.200 and 0.250, both of which read F' = 4500 ms."
+    );
+
+    // The point of the test: mean and p90 are DIFFERENT, so "which statistic"
+    // is a real choice and not a distinction without a difference.
+    assert!(
+        p90 > mean,
+        "p90 {p90} must exceed the mean {mean} for a right-skewed tail — if these \
+         coincide, reading a bound off the mean was harmless here and this test is \
+         asserting nothing"
+    );
+    // And the quantile must not be read as covering the worst sample: it does
+    // not, by construction, which is exactly what a p90 bound means.
+    assert!(
+        p90 <= max,
+        "a p90 cannot exceed the observed maximum: {p90} against {max}"
+    );
+}
