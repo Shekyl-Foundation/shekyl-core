@@ -246,7 +246,14 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
                 .curve_tree
                 .pin_complete_tree_prefix()
                 .await
-                .map_err(|e| format!("posture declaration failed: {e:?}"))?;
+                // Names the whole operation, not its first step: this one
+                // round trip declares the posture, reads the freeze cursor
+                // and takes the reader, and it collapses a dead actor into
+                // the same error. "posture declaration failed" would send
+                // an operator to the prune-disabled flag for a fault that
+                // never touched it (rule 82's misdiagnosis guard); the
+                // cause rides along in `{e:?}`.
+                .map_err(|e| format!("complete-tree prefix derivation failed: {e:?}"))?;
             return Ok(PinReport {
                 // Declare-before-report is satisfied inside the actor
                 // message: the declaration answer and the cursor it vouches
