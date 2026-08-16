@@ -1280,17 +1280,36 @@ record, none silently:
 
 ## 9. Parameter discipline (binding on implementation)
 
-- **W₂ must not be guessed.** It prices whole-shard transfer over the
-  rendezvous path + verification + inclusion margin. Requirements imported
-  from the relay-privacy round (PR #418, `verify_cost.rs`, `params.rs`):
-  measured on the **Pi 4 spec floor** with provenance asserted by test (a
-  below-spec archiver missing deadlines loses capital, silently); measured
+- **W₂ is RULED, not measured — `SETTLEMENT_EPOCH_BLOCKS / 20` = 500 blocks
+  (≈16.7 h), settled 2026-08-15 and not provisional.** This bullet used to
+  open "W₂ must not be guessed" and import a sizing program from the
+  relay-privacy round (PR #418, `verify_cost.rs`, `params.rs`): measure on the
+  **Pi 4 spec floor** with provenance asserted by test; measure
   **forward-to-forward** (RTT rigs omit verification and err in the failure
-  direction); field work yields a **distribution**, not a point; and the
-  sizing target is the **second-order statistic of three transfer draws**,
-  not the marginal tail — under 2-of-3 the epoch needs the second of three
-  completions, so per-transfer completion ~0.94 delivers 0.99 epoch
-  survival. **Correction (2026-08-15): the clause that used to follow —
+  direction); field work yields a **distribution**, not a point; size to the
+  **second-order statistic of three transfer draws** rather than the marginal
+  tail, since under 2-of-3 the epoch needs the second of three completions and
+  per-transfer completion ~0.94 delivers 0.99 epoch survival.
+
+  **That program is retired for W₂** (the requirements remain sound for any
+  parameter that is actually sized from a distribution — they are retired
+  *here*, not refuted). W₂ has pressure on **one side only**: too short slashes
+  honest archivers on transfer time they do not control, and nothing at all
+  pushes back on long. A number under one-sided pressure does not need finding,
+  it needs to be large enough — sixteen hours against a transfer that takes
+  minutes obviously is — and a measurement program would have confirmed what
+  the asymmetry already guaranteed. Full reasoning on
+  `CHALLENGE_RESPONSE_BLOCKS` in `constants.rs`.
+
+  **The failure mode this cost, named because it will recur:** a discipline
+  that is right in general (derive-don't-hardcode, immediately below) applied
+  without first asking whether *this instance* needs it. Derivation earns its
+  keep between two competing pressures where being wrong either way costs
+  something. Applied to a one-sided constraint it manufactures work and, worse,
+  keeps a settled question reading as open. Same category as inheriting a
+  default because the pattern has one.
+
+  **Correction (2026-08-15): the clause that used to follow —
   "every extra block of W₂ widens the clock-burn window §6 prices" — is
   retired, and with it the framing that W₂ is a two-sided optimization.**
   Clock-burn required a commitment record and an abandonment penalty;
@@ -1308,9 +1327,11 @@ record, none silently:
   exists. **The "landed shape is likely a lookup table … never a scalar"
   clause is retired with it (2026-08-15):** it presumed W₂ would be *sized
   from* this distribution, which is what a lookup table is for. Under the
-  pin-by-ruling it is a scalar (`SETTLEMENT_EPOCH_BLOCKS / 20`) and the
-  distribution's job is a floor *check*, not a domain to interpolate over.
-  A table would now be a lookup with one answer.
+  pin-by-ruling it is a scalar (`SETTLEMENT_EPOCH_BLOCKS / 20`), and a table
+  would now be a lookup with one answer. **Further (2026-08-15): the
+  distribution has no job here at all.** It was demoted to a floor *check*
+  before the ruling was followed through; a one-sided constraint does not owe
+  a check either, and leaving one standing is what kept this reading as open.
   **CONCURRENCY, not bandwidth, is the W₂ unit (pinned 2026-08-11, from
   reading the derivation module — decided before the rig is built because
   it changes what gets instrumented).** The schedule assigns λ·D/E pairs
@@ -1321,15 +1342,37 @@ record, none silently:
   single-transfer rig under-estimates badly, missing circuit-establishment
   throughput, Tor client memory, and guard capacity. This also feeds the
   Bandguards cap and the vanguards L2/L3 sizing directly: a pinned L2 set
-  carries ~97 concurrent rendezvous circuits from the same client. The
-  rig must measure the **concurrent-batch completion distribution**, not
-  the single-transfer one.
-- **Derive-don't-hardcode:** every constant this mechanism lands (challenges
-  per epoch, majority threshold, W₂, penalty) follows the `DandelionParams`
-  pattern — design inputs in, derived value as a method, executable
-  derivation. Cautionary precedent: the inherited 39 s embargo was its own
-  formula evaluated with `log10` instead of `ln`, carried for years as a
-  `#define`.
+  carries ~97 concurrent rendezvous circuits from the same client. Any rig
+  built for this must measure the **concurrent-batch completion
+  distribution**, not the single-transfer one.
+
+  **Re-addressed (2026-08-15).** This finding is correct and survives the W₂
+  ruling; what changes is who it is addressed to. It was never really a W₂
+  sizing input — "can a floor device carry ~97 concurrent rendezvous circuits"
+  is a **device-requirement** question whose failure answer is *re-open the
+  floor or bound what a floor device serves*, not *pick a different window*.
+  It is filed on its own in `docs/FOLLOWUPS.md`, where the Bandguards cap and
+  the vanguard eligibility set (VG-2) — the two consumers that genuinely
+  depend on it — now point.
+- **Derive-don't-hardcode, *where it earns its keep*:** the constants this
+  mechanism lands (challenges per epoch, majority threshold, penalty) follow
+  the `DandelionParams` pattern — design inputs in, derived value as a method,
+  executable derivation. Cautionary precedent: the inherited 39 s embargo was
+  its own formula evaluated with `log10` instead of `ln`, carried for years as
+  a `#define`.
+
+  **W₂ was struck from that list (2026-08-15), and the qualifier added because
+  of it.** Derivation is what you reach for when a number sits between two
+  competing pressures and being wrong in either direction costs something —
+  which is precisely the 39 s embargo's shape. W₂ has pressure on one side
+  only: a hard lower bound (honest archivers slashed on transfer time they do
+  not control) and, since clock-burn lost its prerequisites, no upper bound at
+  all. Under a one-sided constraint the question is not *what is the value* but
+  *is this large enough*, and an executable derivation would reproduce the
+  asymmetry's own answer at the cost of holding a settled parameter open. The
+  rule applied without asking whether the instance needs it is the same defect
+  as inheriting a default because the pattern has one — the failure it was
+  written to prevent, arriving through the rule itself.
 - **2-of-3's reference inputs are stale:** the f ≈ 0.23 liar-containment
   figure predates this rework; re-derive alongside (m, n).
 
@@ -1433,6 +1476,14 @@ the measurement program needs a working transfer, not a frozen format
 layout), and W₂ is the round's longest pole. The Bandguards cap and
 vanguards parameters, both consumed by the W₂ derivation, land on the
 same path.
+
+> **Moot (2026-08-15), retained because the sequencing judgement was sound
+> for its premise.** W₂ was pinned by ruling, so it was never the longest
+> pole and nothing about it was blocked on the serving path. The second
+> sentence survives intact and re-addressed: the Bandguards cap and the
+> vanguard L2/L3 parameters *are* consumed by a concurrent-transfer
+> measurement and *do* land on the serving path — they were consumers of
+> the device-requirement question, not of a W₂ derivation.
 
 **The discipline that comes with it, written here and into the serving
 PR's description rather than trusted to memory: the provisional framing
@@ -1745,15 +1796,27 @@ generous, not optimal*. The band ≈200–500 is the ruled part; the divisor is 
 consequence, written as a fraction so it tracks if `SETTLEMENT_EPOCH_BLOCKS`
 is ever re-pinned.
 
-**The rig is now a floor check, not a derivation.** Its question is "does the
-honest concurrent-batch p99 on the Pi-4 floor, on the real Tor network under
-`VanguardsMode::Managed`, fit inside 500 blocks with room to spare?" If yes,
-done; if no, W₂ goes **up**, which by the ruling costs nothing — so the rig
-can only move this in the safe direction. **Reopen (rule 21):** the floor does
-not fit, most plausibly because a Pi-4 is CPU-bound on Tor crypto at ~97
-concurrent circuits well below what bandwidth suggests. That is a question
-about whether the floor device can do the job at all, and it raises W₂ or
-re-opens the floor — never lowers it.
+**The rig is owed nothing, and W₂ is closed.** This paragraph previously
+demoted the rig to a floor check — "does the honest concurrent-batch p99 on
+the Pi-4 floor, on the real Tor network under `VanguardsMode::Managed`, fit
+inside 500 blocks with room to spare?" — which was a half-step: a check that
+can only move a value in the safe direction, applied to a constraint that is
+already one-sided, confirms what the asymmetry guarantees. **Correction
+(2026-08-15): W₂ is ruled and not provisional; no measurement is owed.**
+
+**Reopen (rule 21)** is now about the ruling's *premises*, not about a run:
+clock-burn regains both a commitment record and an abandonment penalty
+(restoring an upper bound where none survives), or `SETTLEMENT_EPOCH_BLOCKS`
+is re-pinned and carries W₂ out of its ≈200–500 band. Either means re-running
+the ruling and widening the band deliberately.
+
+**The Pi-4 residual is filed elsewhere, deliberately.** Whether a floor device
+is CPU-bound on Tor crypto at ~97 concurrent circuits, well below what
+bandwidth suggests, is a **device-requirement** question: if it fails, the
+answer is re-open the floor or bound what a floor device is asked to serve —
+never a different value for this window. Keeping it attached to W₂ is what
+dragged a settled parameter back open, so it lives in `docs/FOLLOWUPS.md` on
+its own, with the Bandguards cap and VG-2 pointing at it.
 
 **6. OPEN — the W₂ rig's three provenance requirements are stated in §9.5
 but not wired.** `VanguardsMode::Managed`, the rule-76 Pi-4 floor, and the

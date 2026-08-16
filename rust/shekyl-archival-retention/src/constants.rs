@@ -35,12 +35,12 @@ pub const CHALLENGES_PER_PAIR_PER_EPOCH: u32 = 3;
 /// Pinned (one full epoch) under the retired fire-to-close challenge shape.
 /// Under derived assignment the binding constraint is against the response
 /// window: a challenge issued at the epoch's **last** block, `(E+1)·SEB − 1`,
-/// must be resolvable before the slash fold reads the epoch, so once W₂ is
-/// pinned the resolution grace must satisfy
-/// `CHALLENGE_RESOLUTION_BLOCKS ≥ w2` (the const-assert below arms on the
-/// inner value of [`CHALLENGE_RESPONSE_BLOCKS`]'s `Some`). One epoch
-/// dominates any plausible W₂; re-confirm this value when the W₂
-/// measurement program reports.
+/// must be resolvable before the slash fold reads the epoch, so the resolution
+/// grace must satisfy `CHALLENGE_RESOLUTION_BLOCKS ≥ W₂` — enforced by the
+/// const-assert below, which reads [`CHALLENGE_RESPONSE_BLOCKS`] directly now
+/// that W₂ is a pinned `u64` rather than an unfilled `Option`. One epoch
+/// dominates W₂'s ruled band by a factor of twenty, so the coupling has
+/// slack; re-derive it alongside any W₂ re-pin, not on any other schedule.
 pub const CHALLENGE_RESOLUTION_BLOCKS: u64 = 10_000;
 
 /// Blocks after `H_open` before the fire beacon input `block_hash(H_seal)` is fixed.
@@ -108,15 +108,7 @@ pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 /// reader who disagrees with 500 should re-check the argument above, not
 /// re-litigate the divisor.
 ///
-/// # What the rig does, which is not compute this
-///
-/// The W₂ measurement program (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5) is a
-/// **floor check**, not a derivation: it answers "does the honest
-/// concurrent-batch p99 on a rule-76 Pi-4 floor, on the real Tor network under
-/// `VanguardsMode::Managed`, fit inside this with room to spare?" If yes,
-/// done. If no, W₂ goes **up**, which by the ruling above costs nothing. The
-/// rig can therefore only move this in the safe direction, which is why the
-/// pin does not wait on it.
+/// # No measurement is owed, and that is a ruling about *this* parameter
 ///
 /// Sanity, so the number is not blind: ~97 pairs per block at maturity means
 /// the assigned producer fetches ~323 MB; at plausible Tor rendezvous
@@ -124,11 +116,28 @@ pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 /// an hour. 500 blocks is ≈16.7 h — two orders of margin, which is what you
 /// want when the tail is unmeasured and the failure mode is someone's bond.
 ///
-/// **Reopen (rule 21):** the rig reports a floor that does *not* fit — most
-/// plausibly because a Pi-4 is CPU-bound on Tor crypto at ~97 concurrent
-/// circuits, far below what bandwidth suggests. That is a question about
-/// whether the floor device can do the job at all, and it raises this value (or
-/// re-opens the floor), never lowers it.
+/// Sixteen hours against a transfer that takes minutes is not a value that
+/// needs *finding*; it is a value that needs to be **large enough**, and the
+/// asymmetry above already guarantees 500 is. Derive-don't-hardcode earns its
+/// keep where a number sits between two competing pressures and being wrong in
+/// either direction costs something. Here the pressure is one-sided, so a
+/// derivation would confirm what the asymmetry settles and nothing more. This
+/// parameter is **ruled, not provisional**; it is not awaiting a floor check,
+/// and a comment claiming otherwise is what kept the question circling.
+///
+/// **Reopen (rule 21):** a *premise* of the ruling returns — clock-burn
+/// regains both a commitment record and an abandonment penalty, restoring an
+/// upper bound where none survives; or [`SETTLEMENT_EPOCH_BLOCKS`] is re-pinned
+/// and carries this out of its band (the const-assert below arms on exactly
+/// that). Raising W₂ then means **widening the band deliberately**, re-running
+/// the ruling rather than editing past the assert.
+///
+/// **What is not a reopening trigger:** whether a rule-76 Pi-4 can serve ~97
+/// concurrent rendezvous circuits at all. That reads like a W₂ question and is
+/// not one — it is a *device-requirement* question, and it has a different
+/// answer if it fails (re-open the floor, or bound what a floor device is asked
+/// to serve), none of which is a number for this window. It is filed on its own
+/// in `docs/FOLLOWUPS.md`; attaching it here is what dragged W₂ back open twice.
 pub const CHALLENGE_RESPONSE_BLOCKS: u64 = SETTLEMENT_EPOCH_BLOCKS / W2_EPOCH_DIVISOR;
 
 /// Fraction of a settlement epoch W₂ occupies: `SEB / 20`.

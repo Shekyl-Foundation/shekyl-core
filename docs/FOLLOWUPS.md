@@ -312,9 +312,18 @@ sustainability is unaffected by the recalibration.
   bound (clock-burn needed a commitment record and an abandonment penalty —
   derived assignment superseded the first, the impossibility result killed the
   second; under derived assignment there is no occupancy to extend), so with a
-  hard lower bound and no upper one the shape is *pick generous*. The rig is
-  demoted to a floor check that can only move W₂ **up**. Full reasoning on the
-  constant and in `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 6a.
+  hard lower bound and no upper one the shape is *pick generous*. Full
+  reasoning on the constant and in `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7
+  item 6a.
+
+  **Corrected 2026-08-15 (same day):** this entry first said "the rig is
+  demoted to a floor check that can only move W₂ **up**", which was a
+  half-step — a check whose only possible effect is a safe-direction move,
+  applied to a constraint that is already one-sided, confirms what the
+  asymmetry guarantees. **W₂ is ruled and closed; no measurement is owed and
+  the value is not provisional.** The device-requirement question that was
+  riding on the rig is filed separately below (*Can a rule-76 floor device
+  serve ~97 concurrent rendezvous circuits?*).
 
   **Still open, and it is NOT the constant:** the fire-ceiling fix below
   (`h_fire` can land within W₂ of `H_close`). It stays open because it is a
@@ -14817,14 +14826,59 @@ one place to confirm each item's relationship to the wallet stack.
   `NUM_LAYER3_GUARDS = 6`, which come from the Sybil rotation table and are
   **not** in scope here). The in-code comment names the dependency but a
   comment is not a durable reopening record, which is what rule 21 asks for.
-  *Blocker:* the W₂ capacity rig — whether a 4-node L2 set drawn from this
-  eligibility pool carries a serving persona's concurrent rendezvous load is
-  the measurement that decides whether the set should be stricter (fewer,
-  better relays) or looser (a larger pool at lower average quality). *Reopening
-  criterion:* the first W₂ run that reports L2 saturation or draw-pool
-  exhaustion against this filter, or a tor release that renames/retires any of
-  the four flags. *Target:* gate 6, alongside the rig. *Reference:*
-  `ARCHIVAL_CHALLENGE_MECHANISM.md` §7.4; PR #447.
+  *Blocker:* the **device-requirement question** below — whether a 4-node L2
+  set drawn from this eligibility pool carries a serving persona's concurrent
+  rendezvous load is the measurement that decides whether the set should be
+  stricter (fewer, better relays) or looser (a larger pool at lower average
+  quality). *Reopening criterion:* the first concurrent-load run that reports
+  L2 saturation or draw-pool exhaustion against this filter, or a tor release
+  that renames/retires any of the four flags. *Target:* gate 6, alongside that
+  run. *Reference:* `ARCHIVAL_CHALLENGE_MECHANISM.md` §7.4; PR #447.
+
+  **Re-pointed 2026-08-15.** This entry named its blocker as "the W₂ capacity
+  rig" and its trigger as "the first W₂ run". W₂ was then ruled rather than
+  measured, which would have left this a rule-21 reopening record that can
+  never fire — a reopening criterion depending on a run nobody owes is
+  convention theater. The blocker was never really W₂: what VG-2 needs to know
+  is whether the eligibility pool carries the *concurrent load*, which is the
+  device-requirement question, mislabelled the same way W₂ was.
+
+- **Can a rule-76 floor device serve ~97 concurrent rendezvous circuits?
+  (device requirement — NOT a W₂ question).** At maturity the schedule lands
+  ~97 pairs on one block's producer, and `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5
+  pins **concurrency, not bandwidth, as the unit**: the aggregate is
+  comfortable (a 1 % miner sustains ~32 GB/epoch ≈ 27 KB/s) but the shape is
+  bursty and highly concurrent, and the plausible failure is a Pi-4 CPU-bound
+  on Tor crypto far below what bandwidth suggests.
+
+  *Why it is filed on its own.* This rode on the W₂ rig for two rounds and
+  dragged a settled parameter back open each time. It is not a W₂ input,
+  because **its failure answer is a different kind of thing**: if a floor
+  device cannot carry the load, you re-open the rule-76 floor or bound what a
+  floor device is asked to serve. You do not pick a different response window —
+  W₂ is ruled on a one-sided constraint and a slow device does not put pressure
+  on the side that has none.
+
+  *Note the two sides do not share a floor.* Rule 76 provisions the anonymity
+  of the node being protected — the staker running `P` — so the Pi-4 is the
+  floor for the **serving** side (many readers on one persona). The ~97
+  concurrent circuits are the **producer's**, and a producer is a mining box
+  for which rule 76 names no floor at all. `shekyl-sp-t3-spike`'s `MeasuredSide`
+  encodes exactly this: a producer-shaped batch is a capability check on
+  whatever ran it and never a floor datum, including on a Pi.
+
+  *Consumers waiting on it:* the vanguard eligibility set (VG-2, directly
+  above) and the Bandguards cap — both are sized by concurrent rendezvous load,
+  and both were previously pointed at the W₂ rig.
+
+  *Apparatus:* already built and unblocked, sitting until there is a question
+  that needs it — `rust/shekyl-sp-t3-spike` (`w2-measure`, `SHEKYL_W2_SHAPE`),
+  which brings tor up under `VanguardsMode::Managed` against the real network
+  and refuses to emit a datum it cannot attest. It needs an extracted shard
+  fixture (`extract-shard` against a regtest daemon) before any run.
+
+  *Target:* gate 6. *Reference:* `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5;
+  `docs/design/SP_T3_SKELETON_MEASUREMENT.md` §18.
 
 ---
 
