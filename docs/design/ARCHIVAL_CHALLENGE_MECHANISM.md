@@ -1290,11 +1290,27 @@ record, none silently:
   sizing target is the **second-order statistic of three transfer draws**,
   not the marginal tail — under 2-of-3 the epoch needs the second of three
   completions, so per-transfer completion ~0.94 delivers 0.99 epoch
-  survival, whereas sizing W₂ at the marginal p99 overshoots materially and
-  every extra block of W₂ widens the clock-burn window §6 prices (the §66
-  per-hop-vs-sum lesson, one level up — the doc imports §66's discipline
-  and must import this instance of it). The landed shape is likely a lookup
-  table that refuses outside its domain — never a scalar or fitted curve.
+  survival. **Correction (2026-08-15): the clause that used to follow —
+  "every extra block of W₂ widens the clock-burn window §6 prices" — is
+  retired, and with it the framing that W₂ is a two-sided optimization.**
+  Clock-burn required a commitment record and an abandonment penalty;
+  derived assignment superseded the first and the impossibility result
+  killed the second, which is why §6 now keeps its sizing arithmetic "as
+  the record of what a penalty would have had to achieve, not as pending
+  work". Under derived assignment there is **no occupancy to extend** — the
+  witness is the producer of block `h`, and if it does nothing, nothing is
+  held. A witness that sits on its assignment wastes exactly one of the
+  pair's three draws whether W₂ is 500 blocks or 5,000: clock-burn is a
+  *draw-count* attack, not a *duration* one, contained by the 2-of-3
+  quadratic plus the outer window. The sentence is corrected rather than
+  deleted because a silent gap here is what let this keep circling — every
+  re-derivation read it and reconstructed an upper bound that no longer
+  exists. **The "landed shape is likely a lookup table … never a scalar"
+  clause is retired with it (2026-08-15):** it presumed W₂ would be *sized
+  from* this distribution, which is what a lookup table is for. Under the
+  pin-by-ruling it is a scalar (`SETTLEMENT_EPOCH_BLOCKS / 20`) and the
+  distribution's job is a floor *check*, not a domain to interpolate over.
+  A table would now be a lookup with one answer.
   **CONCURRENCY, not bandwidth, is the W₂ unit (pinned 2026-08-11, from
   reading the derivation module — decided before the rig is built because
   it changes what gets instrumented).** The schedule assigns λ·D/E pairs
@@ -1702,6 +1718,42 @@ Two residuals, both stated rather than discovered:
 The store deliberately does **not** enforce the gate — it has no clock, no
 view of the record, and no memory of when a shard left one. A half-check
 there would look guarded while the real condition went unenforced.
+
+**6a. W₂ IS PINNED (2026-08-15) — and the rig's role inverts.**
+`CHALLENGE_RESPONSE_BLOCKS = SETTLEMENT_EPOCH_BLOCKS / 20` (500 blocks,
+≈16.7 h), collapsed from its `Option<u64> = None` staging slot per the pin
+shape that slot specified. What made it pinnable is not a measurement but a
+**ruling: W₂ has no surviving upper bound.**
+
+Every argument for keeping it small was clock-burn, which required a
+commitment record (superseded by derived assignment) and an abandonment
+penalty (killed by the impossibility result). Under derived assignment there
+is no occupancy to extend — the witness is the producer of block `h`, and if
+it does nothing, nothing is held. Clock-burn is a draw-count attack, not a
+duration one. The remaining candidates are slack: settlement bookkeeping
+already grants `CHALLENGE_RESOLUTION_BLOCKS` = one full epoch of grace;
+outstanding-challenge count is bookkeeping; `P`'s availability burden is
+unchanged; and DDoS makes a **longer** window a defense, as §6 already
+lists. One candidate raised in review and rejected — **outsourcing
+resistance** — fails because the economics invert it, half of it is not an
+attack, and decisively because a short W₂ does not prevent the cheap (local)
+form anyway.
+
+The lower bound is hard (too short slashes honest archivers on transfer time
+they do not control) and the upper bound is absent, so the shape is *pick
+generous, not optimal*. The band ≈200–500 is the ruled part; the divisor is a
+consequence, written as a fraction so it tracks if `SETTLEMENT_EPOCH_BLOCKS`
+is ever re-pinned.
+
+**The rig is now a floor check, not a derivation.** Its question is "does the
+honest concurrent-batch p99 on the Pi-4 floor, on the real Tor network under
+`VanguardsMode::Managed`, fit inside 500 blocks with room to spare?" If yes,
+done; if no, W₂ goes **up**, which by the ruling costs nothing — so the rig
+can only move this in the safe direction. **Reopen (rule 21):** the floor does
+not fit, most plausibly because a Pi-4 is CPU-bound on Tor crypto at ~97
+concurrent circuits well below what bandwidth suggests. That is a question
+about whether the floor device can do the job at all, and it raises W₂ or
+re-opens the floor — never lowers it.
 
 **6. OPEN — the W₂ rig's three provenance requirements are stated in §9.5
 but not wired.** `VanguardsMode::Managed`, the rule-76 Pi-4 floor, and the

@@ -304,9 +304,29 @@ sustainability is unaffected by the recalibration.
   lands late** — restore `block_hash[H_challenge]` to `τ` (spec conformance,
   not new design).
 
-- **TJ-2 (CRITICAL, freeze item) — `CHALLENGE_RESPONSE_BLOCKS` is unpinned**
-  (added 2026-07-29, §10.2). `constants.rs:24` is `None` — *"not yet byte-pinned
-  in gate-2 §3.1"*. The acceptance deadline after `H_fire` **has no value**, so
+- **TJ-2 — `CHALLENGE_RESPONSE_BLOCKS` is PINNED (2026-08-15); the freeze item
+  is discharged, one dependent fix remains.** `constants.rs` is now
+  `SETTLEMENT_EPOCH_BLOCKS / 20` = 500 blocks (≈16.7 h), collapsed from
+  `Option<u64> = None` to a bare `u64` per that slot's own pin shape. What
+  unblocked it was a **ruling, not a measurement**: W₂ has no surviving upper
+  bound (clock-burn needed a commitment record and an abandonment penalty —
+  derived assignment superseded the first, the impossibility result killed the
+  second; under derived assignment there is no occupancy to extend), so with a
+  hard lower bound and no upper one the shape is *pick generous*. The rig is
+  demoted to a floor check that can only move W₂ **up**. Full reasoning on the
+  constant and in `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 6a.
+
+  **Still open, and it is NOT the constant:** the fire-ceiling fix below
+  (`h_fire` can land within W₂ of `H_close`). It stays open because it is a
+  *consensus* change to `challenge_fire_height` — FFI-exported, consumed by
+  the serve-credit gate and the slash path, and pinned by the gate-2/gate-4
+  KATs — so it belongs with the **consumer that enforces the window**, not with
+  the constant that names it. Nothing reads `CHALLENGE_RESPONSE_BLOCKS` today
+  (one re-export), so the false-slash remains latent: pinning the value did not
+  arm it, and wiring the first consumer will.
+
+  *Historical framing (retained):* `constants.rs:24` was `None` — *"not yet
+  byte-pinned in gate-2 §3.1"*. The acceptance deadline after `H_fire` **has no value**, so
   the free-rider's round-trip budget is **unbounded** and every `n·I − S` cost
   statement in the TJ round is quantified against a deadline that does not
   exist. **Not evaluable until pinned**; gates §9.4/§9.5's arithmetic and is
@@ -1271,12 +1291,18 @@ sustainability is unaffected by the recalibration.
   reserves no response room.** `challenge.rs:96–106`: `modulus = span − 1`,
   `h_fire = h_seal + offset + 1` ⇒ fire range `(H_seal, H_close − 1]` — the
   latest fire lands one block before close while `constants.rs` requires the
-  response to *end before `H_close`*. Invisible while
-  `CHALLENGE_RESPONSE_BLOCKS = None`; the moment `W` is pinned, epochs whose
+  response to *end before `H_close`*. **Update (2026-08-15): `W` is now pinned
+  at 500, and this is still latent — pinning the constant did not arm it,
+  because nothing reads `CHALLENGE_RESPONSE_BLOCKS` yet. The trigger is the
+  first consumer that enforces the window, which is where the fix belongs.**
+  Once armed, epochs whose
   fire lands past `H_close − W` produce **structural misses that are not the
   `P`'s fault — a false-slash source, the one objective `(m, n)` still
   carries.** Fix belongs WITH the `W` pin (modulus → `span − W − 1`, or an
-  explicit fire ceiling `H_close − W`), on the **surviving** surface —
+  explicit fire ceiling `H_close − W`) — a **consensus** change to
+  `challenge_fire_height`, which is FFI-exported and KAT-pinned, so it is its
+  own validation surface and not a rider on a constant pin. On the
+  **surviving** surface —
   `challenge_fire_height` outlives TJ-B's leaf-path deletion, unlike its
   `challenge_leaf_index` neighbour. The fn's doc-comment range claim
   `(H_open, H_close]` is also loose (code yields `(H_seal, H_close − 1]`)

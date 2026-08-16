@@ -57,38 +57,130 @@ pub const CHALLENGE_RESOLUTION_BLOCKS: u64 = 10_000;
 pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 
 /// W₂ — blocks after a challenge's issuing block to accept its serve-credit
-/// response.
+/// response. **Pinned at one twentieth of a settlement epoch
+/// ([`W2_EPOCH_DIVISOR`]) — 500 blocks, ≈16.7 h.**
 ///
-/// Unpinned (`None`): the value comes from the W₂ **measurement program**
-/// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5 — provisioned at the Pi-4 floor
-/// per rule 76, measured on the real Tor network), and its byte-pin lands
-/// with the format round's frozen response wire (rule 42 version bump).
-/// The gate-2 wording that its wire "lands with the vin serializer" is
-/// obsolete — that serializer is on the format round's deletion surface.
+/// # The ruling that makes a number pinnable: W₂ has no surviving upper bound
 ///
-/// **Pin shape:** collapse this to a bare `u64` when the measurement program
-/// reports — do **not** leave `Option`/`Some(n)` as permanent scaffolding
-/// (rule 21: optionality without need is debt). The match-assert below is
-/// interim tripwire for a `Some` staging pin only; the pin PR replaces both
-/// with `pub const CHALLENGE_RESPONSE_BLOCKS: u64 = n` and
-/// `assert!(CHALLENGE_RESOLUTION_BLOCKS >= CHALLENGE_RESPONSE_BLOCKS)`.
-pub const CHALLENGE_RESPONSE_BLOCKS: Option<u64> = None;
+/// This was treated as a two-sided optimization for as long as it kept
+/// circling, and it stopped being one without anyone noticing. Every argument
+/// against a generous W₂ was **clock-burn** — a witness commits to a challenge,
+/// sits on it, and burns the pair's slot for W₂ blocks. That attack needed two
+/// things that no longer exist: a commitment record (superseded by derived
+/// assignment) and an abandonment penalty (killed by the impossibility result;
+/// §6 now keeps its sizing arithmetic "as the record of what a penalty would
+/// have had to achieve, **not as pending work**"). Under derived assignment
+/// **there is no occupancy to extend**: the witness is the producer of block
+/// `h`, and if it does nothing, nothing is held. A witness that sits on its
+/// assignment wastes exactly one of the pair's three draws whether W₂ is 500
+/// blocks or 5,000 — clock-burn is a *draw-count* attack, not a *duration*
+/// one, and it is contained by the 2-of-3 quadratic plus the outer `(m, n)`
+/// window rather than by keeping this number small.
+///
+/// The remaining upper-bound candidates are all slack. Settlement bookkeeping:
+/// [`CHALLENGE_RESOLUTION_BLOCKS`] already grants a full epoch of grace, and
+/// `E` stays explicit in the record precisely so a response window may cross
+/// the boundary. Outstanding-challenge count: bookkeeping, no consensus cost.
+/// `P`'s availability burden: unchanged — `P` is continuously obligated either
+/// way. DDoS: longer is a **defense**, since the attacker must suppress the
+/// whole window (§6 already lists long-W₂ as a mitigation, not a cost).
+///
+/// One further candidate, raised and rejected: **outsourcing resistance** — a
+/// generous window lets a persona that does not store a shard fetch it on
+/// demand and answer, making this prove retrievability rather than retention.
+/// It fails three ways, and the third is decisive. The economics invert it
+/// (λ·3 challenges across up to `MAX_HOLDINGS_SHARDS` is far more fetched
+/// bandwidth per epoch than the bytes cost to store once). Half of it is not an
+/// attack (a persona backed by a full node the same operator runs still means
+/// the operator retains the corpus). And a short W₂ **does not prevent it**:
+/// the cheapest outsourcing is a local or LAN fetch that completes in seconds,
+/// so shortening this buys almost none of the property while charging honest
+/// archivers real slash risk.
+///
+/// # Asymmetric with slack on one side means pick generous, not optimal
+///
+/// The lower bound is hard: too short and honest archivers miss on transfer
+/// time they do not control, which slashes capital. The upper bound is absent.
+/// So this is a fraction of [`SETTLEMENT_EPOCH_BLOCKS`] rather than a tight
+/// quantile, written as a fraction so it tracks if the epoch is ever re-pinned.
+/// `SEB/20` is a choice within a defensible band (roughly 200–500 on the same
+/// reasoning); the **band is the ruled part, the integer is a consequence**. A
+/// reader who disagrees with 500 should re-check the argument above, not
+/// re-litigate the divisor.
+///
+/// # What the rig does, which is not compute this
+///
+/// The W₂ measurement program (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5) is a
+/// **floor check**, not a derivation: it answers "does the honest
+/// concurrent-batch p99 on a rule-76 Pi-4 floor, on the real Tor network under
+/// `VanguardsMode::Managed`, fit inside this with room to spare?" If yes,
+/// done. If no, W₂ goes **up**, which by the ruling above costs nothing. The
+/// rig can therefore only move this in the safe direction, which is why the
+/// pin does not wait on it.
+///
+/// Sanity, so the number is not blind: ~97 pairs per block at maturity means
+/// the assigned producer fetches ~323 MB; at plausible Tor rendezvous
+/// throughput on a floor device that is minutes, with a heavy tail to perhaps
+/// an hour. 500 blocks is ≈16.7 h — two orders of margin, which is what you
+/// want when the tail is unmeasured and the failure mode is someone's bond.
+///
+/// **Reopen (rule 21):** the rig reports a floor that does *not* fit — most
+/// plausibly because a Pi-4 is CPU-bound on Tor crypto at ~97 concurrent
+/// circuits, far below what bandwidth suggests. That is a question about
+/// whether the floor device can do the job at all, and it raises this value (or
+/// re-opens the floor), never lowers it.
+pub const CHALLENGE_RESPONSE_BLOCKS: u64 = SETTLEMENT_EPOCH_BLOCKS / W2_EPOCH_DIVISOR;
 
-// Interim tripwire while W₂ is still `Option`: when (and only when) the
-// slot is staged as `Some(w2)`, require resolution grace ≥ that inner
-// value so the slash fold for epoch E cannot run before the response
-// window of E's last-issued challenge closes (fold runs strictly above
-// the deadline — `failure_window.rs` — so `>=` is exact). Always-true
-// while unpinned. Delete this match form with the bare-u64 pin above.
+/// Fraction of a settlement epoch W₂ occupies: `SEB / 20`.
+///
+/// Named rather than inline so a re-pin is a visible edit to a documented
+/// quantity instead of a digit change inside an expression.
+pub const W2_EPOCH_DIVISOR: u64 = 20;
+
+/// Lower and upper edge of the band the W₂ ruling defends.
+///
+/// The ruling is "asymmetric with slack on one side ⇒ pick generous, not
+/// optimal", and it holds anywhere in roughly 200–500 blocks. **The band is
+/// the ruled part; the divisor is a consequence** — so these are what the
+/// const-asserts below defend, not the divisor.
+pub const W2_MIN_DEFENSIBLE_BLOCKS: u64 = 200;
+/// Upper edge of the W₂ band — see [`W2_MIN_DEFENSIBLE_BLOCKS`].
+pub const W2_MAX_DEFENSIBLE_BLOCKS: u64 = 500;
+
+// Keep the doc's "one twentieth of a settlement epoch" literally true. Integer
+// division would silently truncate if `SETTLEMENT_EPOCH_BLOCKS` were ever
+// re-pinned to a non-multiple, leaving the prose claiming a fraction the value
+// is not. Compile-time, so a re-pin cannot land it quietly.
 const _: () = assert!(
-    match CHALLENGE_RESPONSE_BLOCKS {
-        Some(w2) => CHALLENGE_RESOLUTION_BLOCKS >= w2,
-        None => true,
-    },
-    "CHALLENGE_RESOLUTION_BLOCKS < pinned W2 (CHALLENGE_RESPONSE_BLOCKS inner): \
-     the slash fold for an epoch would run before the response window of its \
-     last-issued challenge closes, reading in-flight responses as misses; \
-     re-derive the resolution grace alongside the W2 pin"
+    SETTLEMENT_EPOCH_BLOCKS.is_multiple_of(W2_EPOCH_DIVISOR),
+    "SETTLEMENT_EPOCH_BLOCKS is not a multiple of W2_EPOCH_DIVISOR: CHALLENGE_RESPONSE_BLOCKS \
+     would truncate and no longer be the fraction of an epoch its doc claims; re-pin the \
+     divisor deliberately rather than inheriting a rounded value"
+);
+
+// The one that defends the *ruling* rather than the arithmetic. Divisibility
+// keeps the prose true; this keeps the value inside the band the ruling was
+// made over. A re-pin of `SETTLEMENT_EPOCH_BLOCKS` alone would otherwise carry
+// W₂ out of that band while every claim about it still read as current —
+// `SEB = 100_000` divides evenly and yields 5_000, which no part of the ruling
+// covers.
+const _: () = assert!(
+    CHALLENGE_RESPONSE_BLOCKS >= W2_MIN_DEFENSIBLE_BLOCKS
+        && CHALLENGE_RESPONSE_BLOCKS <= W2_MAX_DEFENSIBLE_BLOCKS,
+    "CHALLENGE_RESPONSE_BLOCKS is outside the band the W2 ruling was made over; a change \
+     to SETTLEMENT_EPOCH_BLOCKS has carried W2 with it. Re-run the ruling (no surviving \
+     upper bound; hard lower bound) before widening the band"
+);
+
+// The slash fold for epoch E must not run before the response window of E's
+// last-issued challenge closes, or in-flight responses read as misses. The fold
+// runs strictly above the deadline (`failure_window.rs`), so `>=` is exact.
+const _: () = assert!(
+    CHALLENGE_RESOLUTION_BLOCKS >= CHALLENGE_RESPONSE_BLOCKS,
+    "CHALLENGE_RESOLUTION_BLOCKS < CHALLENGE_RESPONSE_BLOCKS (W2): the slash fold \
+     for an epoch would run before the response window of its last-issued \
+     challenge closes, reading in-flight responses as misses; re-derive the \
+     resolution grace alongside any W2 re-pin"
 );
 
 /// Global settlement-epoch boundary (`ARCHIVAL_TIMING_CONSTANTS.md` §1).
