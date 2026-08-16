@@ -1729,7 +1729,19 @@ async fn stake_persona_to_confirmed_bond(
         FixtureStake::FirstStake => {
             let mut outcome = None;
             for _ in 0..MAX_MINE_BATCHES {
-                match super::Engine::first_stake(arc.clone(), slot_raw).await {
+                // The fixture drives the production entry exactly as the RPC
+                // does, and states its posture explicitly (D-3): this lane
+                // exercises the Foundation CompleteTree bond. The
+                // acknowledgment D-4 requires is an RPC-layer fact and is
+                // deliberately not an engine parameter, so it has no place
+                // here.
+                match super::Engine::first_stake(
+                    arc.clone(),
+                    slot_raw,
+                    super::StakePosture::FoundationCompleteTree,
+                )
+                .await
+                {
                     Ok(o) => {
                         outcome = Some(o);
                         break;

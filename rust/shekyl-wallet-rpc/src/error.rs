@@ -108,6 +108,9 @@ pub enum WalletRpcErrorCode {
     /// Stake: this session's scan recovered a staked slot; staking becomes
     /// operational at the next wallet open — close and reopen, then retry.
     StakeRecoveredPendingReopen = -29504,
+    /// Stake: market staking has no shard to bond over — shard assignment
+    /// is an unbuilt round (`COMPLETETREE_ACTIVATION.md` §10 item 1).
+    StakeNoShardsAvailable = -29505,
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -324,6 +327,18 @@ pub enum WalletRpcError {
     )]
     StakeRecoveredPendingReopen,
 
+    /// `stake` (`-29505`): market staking bonds over an **assigned** shard
+    /// subset, and the assignment mechanism is its own unbuilt round — so
+    /// there is nothing for a market bond to cover yet. A domain refusal
+    /// with a named remedy, kept off `-29500` because "fund and retry" is
+    /// the wrong instruction for a wallet whose funding is fine (rule 82).
+    /// Nothing durable was written.
+    #[error(
+        "market staking assigns a shard automatically, and shard assignment \
+         is not available yet; nothing was written"
+    )]
+    StakeNoShardsAvailable,
+
     /// `verify_message` (`-29800`): the signature is well-formed and intact
     /// but does not verify for that address, message, and network. This is
     /// the method's honest negative *answer* (SM-R-6), carried as its own
@@ -385,6 +400,7 @@ impl WalletRpcError {
             Self::AlreadyStaked => WalletRpcErrorCode::AlreadyStaked,
             Self::StakeRecordMoved => WalletRpcErrorCode::StakeRecordMoved,
             Self::StakeRecoveredPendingReopen => WalletRpcErrorCode::StakeRecoveredPendingReopen,
+            Self::StakeNoShardsAvailable => WalletRpcErrorCode::StakeNoShardsAvailable,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {

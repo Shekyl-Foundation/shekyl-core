@@ -334,7 +334,7 @@ async fn first_stake_intent_spawns_transiently_and_aborts_clean() {
 /// wallet remains a clean non-staker after any pre-persist failure.
 #[tokio::test(flavor = "multi_thread")]
 async fn first_stake_refuses_cleanly_before_the_durable_point() {
-    use crate::engine::FirstStakeError;
+    use crate::engine::{FirstStakeError, StakePosture};
     use tokio::sync::RwLock;
 
     let fix = make_create_fixture();
@@ -359,7 +359,7 @@ async fn first_stake_refuses_cleanly_before_the_durable_point() {
     .expect("plain open")
     .into_wallet();
     let arc = std::sync::Arc::new(RwLock::new(plain));
-    let err = Engine::first_stake(arc.clone(), 0)
+    let err = Engine::first_stake(arc.clone(), 0, StakePosture::FoundationCompleteTree)
         .await
         .expect_err("no stake engine must refuse");
     assert!(matches!(err, FirstStakeError::NoStakeEngine), "got {err:?}");
@@ -390,7 +390,7 @@ async fn first_stake_refuses_cleanly_before_the_durable_point() {
     .expect("intent open")
     .into_wallet();
     let arc = std::sync::Arc::new(RwLock::new(intent));
-    let err = Engine::first_stake(arc.clone(), 0)
+    let err = Engine::first_stake(arc.clone(), 0, StakePosture::FoundationCompleteTree)
         .await
         .expect_err("unreachable daemon must refuse pre-persist");
     assert!(

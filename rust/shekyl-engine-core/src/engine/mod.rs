@@ -444,7 +444,7 @@ pub use pending::{
 // re-exported so embedders holding the `PScanHandle` (the module keeps the
 // handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
 // the types without reaching into the `pub(crate)` pscan internals.
-pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome};
+pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome, StakePosture};
 // F-D2 aggregate drain-balance read error: two-armed (transient "syncing" vs.
 // non-transient state fault), re-exported flat so the wallet/GUI can match on
 // the arm across the command boundary without reaching into the `pub(crate)`
