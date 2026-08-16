@@ -365,6 +365,8 @@ components:
         - -29501   # STAKE_IN_FLIGHT
         - -29502   # ALREADY_STAKED
         - -29503   # STAKE_RECORD_MOVED
+        - -29504   # STAKE_RECOVERED_PENDING_REOPEN
+        - -29505   # STAKE_NO_SHARDS_AVAILABLE
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -509,6 +511,19 @@ components:
                                           A reconcile that ADOPTS a
                                           chain-proven bond returns -29502
                                           instead, not this code
+          -29504 STAKE_RECOVERED_PENDING_REOPEN
+                                          stake: this session's scan recovered
+                                          a staked slot; staking becomes
+                                          operational at the next wallet
+                                          open — close and reopen, then retry
+          -29505 STAKE_NO_SHARDS_AVAILABLE
+                                          stake: market staking assigns a
+                                          shard automatically, and shard
+                                          assignment is not available yet;
+                                          nothing was written. Kept off
+                                          -29500 because "fund and retry"
+                                          is the wrong sentence for a wallet
+                                          whose funding is fine
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -761,6 +776,14 @@ components:
     StakeParams:
       type: object
       required: [password]
+      description: >
+        First-stake continuation. This surface currently always requests
+        market staking (`StakePosture::Market`): the engine entry is
+        posture-mandatory, and Market is the only posture this method may
+        choose on its own. Foundation CompleteTree — and D-4's
+        acknowledgment gate, the sole path to that posture — land with
+        the `posture` parameter in a later slice. Until then a well-funded
+        wallet refuses -29505 rather than silently owing the corpus.
       properties:
         password:
           type: string

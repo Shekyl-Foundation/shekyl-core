@@ -266,6 +266,32 @@ pub enum FirstStakeError {
     NoShardsAvailable,
 }
 
+impl StakePosture {
+    /// The holdings this posture posts — the only conversion from an
+    /// intent into a [`HoldingsKind`] in the tree. The caller names a
+    /// posture and never a kind or a shard set (D-3; the §9.1
+    /// no-select-all property).
+    ///
+    /// [`StakePosture::Market`] refuses rather than posting an empty
+    /// `ShardSetCompact`, which consensus rejects at JoinMarket anyway
+    /// (`bond_post.rs`, floor-zero protection) — so the alternative to
+    /// this refusal is not a smaller bond, it is an invalid one.
+    ///
+    /// [`StakePosture::FoundationCompleteTree`] is the whole-corpus
+    /// backstop: `CompleteTree` carries no shard list by wire rule
+    /// (`BondPostError::CompleteTreeWithShardIds`), so the empty set
+    /// here is the obligation's *encoding*, not its size.
+    pub(crate) fn holdings(self) -> Result<HoldingsDescriptor, FirstStakeError> {
+        match self {
+            Self::Market => Err(FirstStakeError::NoShardsAvailable),
+            Self::FoundationCompleteTree => Ok(HoldingsDescriptor {
+                kind: HoldingsKind::CompleteTree,
+                shard_ids: ShardSet::empty(),
+            }),
+        }
+    }
+}
+
 use super::signer::EngineSignerKind;
 use super::stake_engine::{AssembledBondPost, PersonaHandle, StakeEngineError};
 use super::stake_persist::PersistedBondTicket;
@@ -736,34 +762,15 @@ where
             false
         };
 
-        // The posture becomes holdings here, and this is the only place in
-        // the tree that turns an intent into a `HoldingsKind` — the caller
-        // names a posture and never a kind or a shard set (D-3; the §9.1
-        // no-select-all property).
-        //
-        // Placed after the idempotency/W2 guards and before the fee
-        // estimate on purpose. The guards above are pure reads, and their
-        // refusals are *more specific* than this one: a wallet with a post
-        // in flight should hear `BondInFlight`, not "no shards available"
-        // (rule 82's misdiagnosis guard). Everything below is either a
-        // daemon round trip, a funding sweep, or durable — so a refused
-        // posture costs none of it.
-        let holdings = match posture {
-            // The assignment round's stub. Refuses rather than posting an
-            // empty `ShardSetCompact`, which consensus rejects at
-            // JoinMarket anyway (`bond_post.rs`, floor-zero protection) —
-            // so the alternative to this refusal is not a smaller bond,
-            // it is an invalid one.
-            StakePosture::Market => return Err(FirstStakeError::NoShardsAvailable),
-            // Whole-corpus backstop: `CompleteTree` carries no shard list
-            // by wire rule (`BondPostError::CompleteTreeWithShardIds`), so
-            // the empty set here is the obligation's *encoding*, not its
-            // size.
-            StakePosture::FoundationCompleteTree => HoldingsDescriptor {
-                kind: HoldingsKind::CompleteTree,
-                shard_ids: ShardSet::empty(),
-            },
-        };
+        // After the idempotency/W2 guards and before the fee estimate on
+        // purpose. The guards above are pure reads, and their refusals
+        // are *more specific* than a refused posture: a wallet with a
+        // post in flight should hear `BondInFlight`, not "no shards
+        // available" (rule 82's misdiagnosis guard). Everything below is
+        // either a daemon round trip, a funding sweep, or durable — so a
+        // refused posture costs none of it. The conversion itself lives
+        // on [`StakePosture::holdings`].
+        let holdings = posture.holdings()?;
         // The bond fee is derived from the daemon's live estimate over the
         // bond size ceiling (the seam the WI-2 addendum reserved for this
         // entry — overpaying is a miner transfer, never a conservation

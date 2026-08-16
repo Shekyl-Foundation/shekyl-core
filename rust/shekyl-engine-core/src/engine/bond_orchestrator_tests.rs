@@ -48,6 +48,30 @@ fn funding_refusal_detail_is_amount_free() {
 use super::*;
 use shekyl_curve_tree::{should_reanchor, REF_ANCHOR_AGE};
 
+/// The posture is the conversion: Market has nothing to post until
+/// assignment exists, Foundation is CompleteTree with the empty-set
+/// *encoding*. These are the two facts `first_stake` must not re-derive
+/// inline — they live on [`StakePosture::holdings`].
+#[test]
+fn market_posture_has_no_holdings_until_assignment_exists() {
+    assert!(matches!(
+        StakePosture::Market.holdings(),
+        Err(FirstStakeError::NoShardsAvailable)
+    ));
+}
+
+#[test]
+fn foundation_posture_is_complete_tree_with_the_empty_encoding() {
+    let holdings = StakePosture::FoundationCompleteTree
+        .holdings()
+        .expect("foundation posts");
+    assert_eq!(
+        holdings.kind,
+        shekyl_archival_retention::HoldingsKind::CompleteTree
+    );
+    assert!(holdings.shard_ids.is_empty());
+}
+
 /// F-2 (i): assemble stamps `anchor_t0` via [`daemon_claimed_tip`]; the
 /// pscan `BlockSource::tip_height` path also routes through that same
 /// named function (see `block_source.rs`). This KAT pins that both

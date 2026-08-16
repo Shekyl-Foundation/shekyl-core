@@ -48,7 +48,7 @@
 //! *which kind*, the construction site decides *whose*.
 
 use shekyl_archival_retention::{HoldingsKind, SETTLEMENT_EPOCH_BLOCKS};
-use shekyl_curve_tree::{BlockHeight, SegmentPin, ServingReader};
+use shekyl_curve_tree::{BlockHeight, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
@@ -195,102 +195,60 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         }
         releasable
     }
-}
 
-/// Consecutive epoch opens a shard must be absent across before its pin may be
-/// released. See [`EngineServeSetPinner::releasable`] for why two, and why the
-/// resolution window `W₂` is not an operand.
-const EPOCHS_BEFORE_PIN_RELEASE: u64 = 2;
-
-impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner<R> {
-    async fn pin_serve_set(&self) -> Result<PinReport, String> {
-        let source = fetch_emission_claim_source(&self.rpc, &self.p_id)
+    /// CompleteTree prefix arm: declare the prune-disabled posture, then
+    /// report the freeze cursor that declaration vouches for.
+    ///
+    /// Declare-before-report is the actor message's own order
+    /// ([`CurveTreeHandle::pin_complete_tree_prefix`]), so this arm cannot
+    /// pair a declaration with a cursor from another moment. Both race
+    /// directions are already ruled and neither is silent: a segment that
+    /// freezes after the read makes the count stale-LOW, which the witness
+    /// accepts (the next refresh grows it — D-5); a rollback after the
+    /// read makes it overstate, which the witness refuses loudly
+    /// (`FrozenCountExceedsCursor`) so the caller re-acquires.
+    async fn report_prefix(&self) -> Result<(shekyl_p_host::ReportedSet, ServingReader), String> {
+        let reply = self
+            .curve_tree
+            .pin_complete_tree_prefix()
             .await
-            .map_err(|e| format!("claim-source fetch failed: {e}"))?;
+            // Names the whole operation, not its first step: this one
+            // round trip declares the posture, reads the freeze cursor
+            // and takes the reader, and it collapses a dead actor into
+            // the same error. "posture declaration failed" would send
+            // an operator to the prune-disabled flag for a fault that
+            // never touched it (rule 82's misdiagnosis guard); the
+            // cause rides along in `{e:?}`.
+            .map_err(|e| format!("complete-tree prefix derivation failed: {e:?}"))?;
+        Ok((
+            shekyl_p_host::ReportedSet::CompleteTreePrefix {
+                frozen_count: reply.frozen_count,
+                declaration: reply.declaration,
+            },
+            reply.reader,
+        ))
+    }
 
-        let as_of = source
-            .chain_height
-            .tip()
-            .map_or(0, shekyl_types::BlockHeight::to_raw);
-
-        // Two different empties reach this match, and conflating them is the
-        // defect it exists to prevent. `shard_ids` must never be read
-        // without its discriminant.
-        //
-        // **Owing nothing.** No connected record is not an error — a persona
-        // with no bond owes nothing and pins nothing. Reported as the empty
-        // set so the host's witness still describes reality (and its
-        // staleness clock still advances) rather than the refresh failing
-        // forever on a wallet that simply has not bonded yet. A
-        // `ShardSetCompact` record with an empty list is the same statement,
-        // made by a record that exists.
-        //
-        // **Owing everything, in the same bytes.** `CompleteTree` carries no
-        // shard list *by wire rule* — `BondPostError::CompleteTreeWithShardIds`
-        // rejects one, and the daemon's own vin builder writes
-        // `ShardSet::empty()` for it — so reading `shard_ids` blind here
-        // would pin nothing and report a `Current` witness for a persona
-        // owing the whole corpus: §9.6 item 4's silent slash, produced by
-        // the refresh built to close it.
-        //
-        // The prefix arm is what that obligation is *expressed* as, and the
-        // rationale for expressing it structurally rather than as pins —
-        // grow-forever holdings, no pin table restating a structural fact,
-        // no freeze→pin race — lives on `ReportedSet::CompleteTreePrefix`,
-        // which owns it. Not duplicated here.
-        if matches!(
-            source.bond.as_ref().map(|bond| bond.holdings.kind),
-            Some(HoldingsKind::CompleteTree)
-        ) {
-            let reply = self
-                .curve_tree
-                .pin_complete_tree_prefix()
-                .await
-                // Names the whole operation, not its first step: this one
-                // round trip declares the posture, reads the freeze cursor
-                // and takes the reader, and it collapses a dead actor into
-                // the same error. "posture declaration failed" would send
-                // an operator to the prune-disabled flag for a fault that
-                // never touched it (rule 82's misdiagnosis guard); the
-                // cause rides along in `{e:?}`.
-                .map_err(|e| format!("complete-tree prefix derivation failed: {e:?}"))?;
-            return Ok(PinReport {
-                // Declare-before-report is satisfied inside the actor
-                // message: the declaration answer and the cursor it vouches
-                // for come back from one handler invocation, so this arm
-                // cannot pair them wrongly.
-                //
-                // Both race directions are already ruled and neither is
-                // silent: a segment that freezes after the read makes this
-                // count stale-LOW, which the witness accepts (the next
-                // refresh grows it — D-5), and a rollback after the read
-                // makes it overstate, which the witness refuses loudly
-                // (`FrozenCountExceedsCursor`) so the caller re-acquires.
-                set: shekyl_p_host::ReportedSet::CompleteTreePrefix {
-                    frozen_count: reply.frozen_count,
-                    declaration: reply.declaration,
-                },
-                // The same provenance stamp the list arm takes, from the
-                // same reply — the obligation's shape changed, the
-                // question "at what height was this true" did not.
-                as_of_height: BlockHeight(as_of),
-                reader: reply.reader,
-            });
-        }
-
-        let shard_ids: Vec<u64> = source
-            .bond
-            .as_ref()
-            .map(|bond| bond.holdings.shard_ids.as_slice().to_vec())
-            .unwrap_or_default();
-
-        // The release set is computed from the *previous* reconcile's view of
-        // the store, which is what `pinned_now` came back for. One round trip
-        // per refresh, and the release lags one refresh — against a gate
-        // measured in settlement epochs that is not a lag that means anything.
+    /// Explicit-holdings list arm: pin the record's shard list, release
+    /// what the epoch gate has cleared, report both.
+    ///
+    /// `as_of` is the same provenance stamp the caller puts on the
+    /// [`PinReport`] — the release gate is epoch-shaped, so it needs the
+    /// height the record was read at, not a second clock.
+    async fn report_list(
+        &self,
+        shard_ids: &[u64],
+        as_of: BlockHeight,
+    ) -> Result<(shekyl_p_host::ReportedSet, ServingReader), String> {
+        let shard_ids = shard_ids.to_vec();
+        // The release set is computed from the *previous* reconcile's view
+        // of the store, which is what `pinned_now` came back for. One
+        // round trip per refresh, and the release lags one refresh —
+        // against a gate measured in settlement epochs that is not a lag
+        // that means anything.
         let releasable = {
             let pinned = self.last_pinned.lock().expect("pin view").clone();
-            self.releasable(&shard_ids, &pinned, as_of)
+            self.releasable(&shard_ids, &pinned, as_of.0)
         };
 
         let reply = self
@@ -310,36 +268,80 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
                  their bytes"
             );
         }
-        let (outcomes, reader): (Vec<(u64, SegmentPin)>, ServingReader) =
-            (reply.outcomes, reply.reader);
+        Ok((
+            shekyl_p_host::ReportedSet::ShardList {
+                shard_ids,
+                outcomes: reply.outcomes,
+            },
+            reply.reader,
+        ))
+    }
+}
+
+/// Consecutive epoch opens a shard must be absent across before its pin may be
+/// released. See [`EngineServeSetPinner::releasable`] for why two, and why the
+/// resolution window `W₂` is not an operand.
+const EPOCHS_BEFORE_PIN_RELEASE: u64 = 2;
+
+impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner<R> {
+    async fn pin_serve_set(&self) -> Result<PinReport, String> {
+        let source = fetch_emission_claim_source(&self.rpc, &self.p_id)
+            .await
+            .map_err(|e| format!("claim-source fetch failed: {e}"))?;
+
+        // One stamp, both arms. `chain_height` is a ChainCount (the
+        // daemon's `db.height()`), one more than the height of the block
+        // it counts; this field is a height, so the stamp is `tip()`. An
+        // empty chain has no tip and reads 0.
+        //
+        // The obligation's shape changed; the question "at what height
+        // was this true" did not. It is **not** an operand of the host's
+        // staleness reading and must not become one: this is the daemon's
+        // height over RPC while the store's ingest tip is local, and a
+        // wallet catching up sits far below it. `PinnedServeSet` stamps
+        // the local ingest tip instead and compares that one clock to
+        // itself.
+        let as_of_height = source
+            .chain_height
+            .tip()
+            .map_or(BlockHeight(0), |h| BlockHeight(h.to_raw()));
+
+        // Two different empties reach this match, and conflating them is
+        // the defect it exists to prevent. `shard_ids` is only in scope
+        // on the compact arm — a third `HoldingsKind` fails to compile.
+        //
+        // **Owing nothing.** No connected record is not an error — a
+        // persona with no bond owes nothing and pins nothing. Reported as
+        // the empty list so the host's witness still describes reality
+        // (and its staleness clock still advances) rather than the
+        // refresh failing forever on a wallet that simply has not bonded
+        // yet. A `ShardSetCompact` record with an empty list is the same
+        // statement, made by a record that exists.
+        //
+        // **Owing everything, in the same bytes.** `CompleteTree` carries
+        // no shard list *by wire rule* —
+        // `BondPostError::CompleteTreeWithShardIds` rejects one, and the
+        // daemon's own vin builder writes `ShardSet::empty()` for it — so
+        // reading `shard_ids` blind here would pin nothing and report a
+        // `Current` witness for a persona owing the whole corpus: §9.6
+        // item 4's silent slash, produced by the refresh built to close
+        // it. The prefix arm is what that obligation is *expressed* as;
+        // the grow-forever / no-pin rationale lives on
+        // `ReportedSet::CompleteTreePrefix`, which owns it.
+        let (set, reader) = match source.bond.as_ref() {
+            Some(bond) => match bond.holdings.kind {
+                HoldingsKind::CompleteTree => self.report_prefix().await?,
+                HoldingsKind::ShardSetCompact => {
+                    self.report_list(bond.holdings.shard_ids.as_slice(), as_of_height)
+                        .await?
+                }
+            },
+            None => self.report_list(&[], as_of_height).await?,
+        };
 
         Ok(PinReport {
-            // Explicit holdings: the record's own list, pinned per member.
-            set: shekyl_p_host::ReportedSet::ShardList {
-                shard_ids,
-                outcomes,
-            },
-            // The height the daemon read the record at — the set's
-            // provenance, and deliberately the reply's own height rather than
-            // anything measured locally: it says at what height this shard
-            // list was true, which is a fact about the record and not about
-            // this wallet.
-            //
-            // It is **not** an operand of the host's staleness reading, and
-            // must not become one. This is the daemon's height over RPC while
-            // the store's ingest tip is local, and a wallet catching up sits
-            // far below it; differencing the two would measure the catch-up
-            // and read healthy right through it. `PinnedServeSet` stamps the
-            // local ingest tip instead and compares that one clock to itself.
-            //
-            // `tip()`, not the raw count: `chain_height` is a ChainCount (the
-            // daemon's `db.height()`), one more than the height of the block
-            // it counts, and this field is a height. An empty chain has no
-            // tip and reads 0.
-            as_of_height: source
-                .chain_height
-                .tip()
-                .map_or(BlockHeight(0), |h| BlockHeight(h.to_raw())),
+            set,
+            as_of_height,
             reader,
         })
     }
@@ -353,8 +355,7 @@ mod tests {
     use shekyl_archival_retention::{
         settlement_epoch_at_height, HoldingsDescriptor, HoldingsKind, ShardSet,
     };
-    use shekyl_curve_tree::CurveTreeClient;
-    use shekyl_curve_tree::PostureDeclaration;
+    use shekyl_curve_tree::{CurveTreeClient, PostureDeclaration, SegmentPin};
     use shekyl_rpc_client::{Rpc, RpcError};
     use shekyl_types::ChainCount;
     use std::sync::Arc;
