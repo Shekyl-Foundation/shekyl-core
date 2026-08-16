@@ -49,6 +49,8 @@
 #include <boost/system/system_error.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <chrono>
+#include <algorithm>
+#include <limits>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -1084,8 +1086,16 @@ namespace levin
        behavior is untouched by construction: nothing below reads the note. */
     if (zone_ && zone_->p2p)
     {
+      /* size_t -> u32, bounded explicitly rather than narrowed implicitly. A
+         count above u32 is already garbage (outbound connections are capped
+         orders of magnitude below), and clamping keeps the reading on the
+         side the diagnostic treats as healthy — above-floor is Steady, so a
+         clamped value can never fabricate a below-floor WARN. */
       switch (shekyl_relay_zone_note_achieved_out(
-        static_cast<std::uint8_t>(zone_->nzone), zone_->p2p->get_out_connections_count()))
+        static_cast<std::uint8_t>(zone_->nzone),
+        static_cast<std::uint32_t>(std::min<std::size_t>(
+          zone_->p2p->get_out_connections_count(),
+          std::numeric_limits<std::uint32_t>::max()))))
       {
         case 1:
           MWARNING("Anonymity zone below the provisioned outbound-connection floor"
