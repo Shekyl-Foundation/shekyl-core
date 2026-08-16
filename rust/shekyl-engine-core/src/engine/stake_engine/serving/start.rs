@@ -89,6 +89,25 @@ where
     /// lifetime, exactly as `PScanHandle` is, and shutting it down is what
     /// unpublishes the onion in the right order.
     ///
+    /// # Posture-blind by design
+    ///
+    /// This site does not read the persona's holdings kind, and must not
+    /// start to. Both archival postures start a host here; which obligation
+    /// that host carries — an explicit shard list or the whole frozen
+    /// prefix — is derived one layer down by `EngineServeSetPinner`, from
+    /// the **connected bond record** (`COMPLETETREE_ACTIVATION.md` D-1).
+    /// The SH-2b question this call once carried ("should a host start at
+    /// all for a `CompleteTree` persona?") is closed by that split: yes,
+    /// and the kind-aware decision lives with the code that reads the
+    /// record rather than with the code that spawns the task.
+    ///
+    /// A Foundation wallet whose store has frozen nothing yet starts on an
+    /// **empty prefix** (`frozen_count = 0`) and grows at refresh as
+    /// segments freeze (D-5). That is a valid serving state, not a reason
+    /// to withhold the host: the obligation is empty precisely because the
+    /// corpus is, and a host that refused to start would have to be started
+    /// by something later noticing — the polling nobody writes.
+    ///
     /// # The daemon endpoint is the caller's
     ///
     /// The serve-set is derived over a persona-isolated transport, and the

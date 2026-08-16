@@ -56,7 +56,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::recon::{collect_block_leaves, extract_leaf_hashes, per_output_h_pqc, TxOutputs};
-use crate::store::{LeafStore, SegmentPin, ServingReader, StoreError};
+use crate::store::{LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError};
 use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
@@ -451,6 +451,37 @@ impl CurveTreeClient {
     /// [`ClientError::Store`] wrapping the store's.
     pub fn pinned_shard_ids(&self) -> Result<Vec<u64>, ClientError> {
         self.store.pinned_shard_ids().map_err(ClientError::from)
+    }
+
+    /// Declare the prune-disabled posture, reporting what the store found.
+    ///
+    /// A store **write**, so it runs on the actor's object for the same
+    /// reason pinning does — the CompleteTree serving posture is declared
+    /// through the curve-tree actor, never around it. Pure forward to
+    /// [`LeafStore::set_prune_disabled`], including the parts that matter
+    /// most: the declaration is one-way with no clear path, and the
+    /// returned [`PostureDeclaration`] is the loss detector a re-declaring
+    /// refresh reads (`COMPLETETREE_ACTIVATION.md` RR-2).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn set_prune_disabled(&self) -> Result<PostureDeclaration, ClientError> {
+        self.store.set_prune_disabled().map_err(ClientError::from)
+    }
+
+    /// The store's burial-gated freeze cursor — the CompleteTree prefix
+    /// obligation `[0, k)`.
+    ///
+    /// Pure forward to [`LeafStore::next_freeze_seg`]; the prefix invariant
+    /// and the deliberate non-collision with
+    /// `shekyl_archival_retention::frozen_segment_count` live there.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn next_freeze_seg(&self) -> Result<u64, ClientError> {
+        self.store.next_freeze_seg().map_err(ClientError::from)
     }
 
     /// Release pins so the prune can reclaim those segments.

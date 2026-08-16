@@ -60,13 +60,14 @@ use crate::engine::prpc::PersonaIsolatedTransport;
 // it implements rather than after it, so the one place a serve-set can come
 // from exists before anything can be wired to a second one.
 //
-// SH-2b inherits an open question this refusal makes visible: whether
-// `start_serving_if_staker` should start a serving host **at all** for a
-// `CompleteTree` persona. `first_stake` hardcodes that posture today — a named
-// PR-4c deviation, since no wallet entry posts a market bond yet — so wiring
-// the host unconditionally would make every first-stake wallet fail to start
-// one. A host that reliably refuses to start is correct and is not a finished
-// answer; the caller decides.
+// SH-2b's open question — whether `start_serving_if_staker` should start a
+// serving host **at all** for a `CompleteTree` persona — is answered: it
+// does, and this seam is where the answer lives (`COMPLETETREE_ACTIVATION.md`
+// D-1/D-5). A CompleteTree persona serves the frozen prefix under the store's
+// prune-disabled posture; the construction site stays kind-blind, because the
+// kind-aware decision is this pinner's. The `first_stake` hardcode that made
+// the question urgent is gone with it (D-3): a posture is now named by the
+// caller, so a wallet owes the corpus only if someone asked for that.
 //
 // Lives under `stake_engine/` rather than at `engine/` top level because both
 // halves of its input are already this tree's: the bond record it reads is what
@@ -207,8 +208,13 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             .await
             .map_err(|e| format!("claim-source fetch failed: {e}"))?;
 
-        // Two different empties reach this line, and conflating them is the
-        // defect this match exists to prevent. `shard_ids` must never be read
+        let as_of = source
+            .chain_height
+            .tip()
+            .map_or(0, shekyl_types::BlockHeight::to_raw);
+
+        // Two different empties reach this match, and conflating them is the
+        // defect it exists to prevent. `shard_ids` must never be read
         // without its discriminant.
         //
         // **Owing nothing.** No connected record is not an error — a persona
@@ -222,42 +228,54 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
         // **Owing everything, in the same bytes.** `CompleteTree` carries no
         // shard list *by wire rule* — `BondPostError::CompleteTreeWithShardIds`
         // rejects one, and the daemon's own vin builder writes
-        // `ShardSet::empty()` for it — and it means the persona owes the whole
-        // corpus, holdings that "grow forever by definition"
-        // (`ARCHIVAL_CHALLENGE_MECHANISM.md`, Foundation CompleteTree nodes).
-        // Reading `shard_ids` blind would pin nothing and report a `Current`
-        // witness for a persona owing everything: §9.6 item 4's silent slash,
-        // produced by the refresh built to close it. Foundation nodes sit
-        // outside the reward market but are explicitly **not** exempt from the
-        // slash side (examined and closed 2026-08-07), so the loss is live.
+        // `ShardSet::empty()` for it — so reading `shard_ids` blind here
+        // would pin nothing and report a `Current` witness for a persona
+        // owing the whole corpus: §9.6 item 4's silent slash, produced by
+        // the refresh built to close it.
         //
-        // **Refused rather than approximated.** `ServeSet` is a shard-id list
-        // with no representation of "all", so this seam cannot express the
-        // obligation at all. Whole-corpus pinning would need a store
-        // enumeration that does not exist and an unbounded-growth policy that
-        // is a different validation surface. Failing here fails
-        // `PinnedServeSet::acquire`, so the host does not start — loud and
-        // early, instead of a witness that is wrong in the dangerous
-        // direction.
-        let shard_ids: Vec<u64> = match source.bond.as_ref() {
-            None => Vec::new(),
-            Some(bond) => match bond.holdings.kind {
-                HoldingsKind::ShardSetCompact => bond.holdings.shard_ids.as_slice().to_vec(),
-                HoldingsKind::CompleteTree => {
-                    return Err(
-                        "connected bond has CompleteTree holdings: this persona owes the \
-                                whole corpus, which a shard-id serve-set cannot express — \
-                                refusing rather than serving the empty set it decodes to"
-                            .to_string(),
-                    )
-                }
-            },
-        };
+        // The prefix arm is what that obligation is *expressed* as, and the
+        // rationale for expressing it structurally rather than as pins —
+        // grow-forever holdings, no pin table restating a structural fact,
+        // no freeze→pin race — lives on `ReportedSet::CompleteTreePrefix`,
+        // which owns it. Not duplicated here.
+        if matches!(
+            source.bond.as_ref().map(|bond| bond.holdings.kind),
+            Some(HoldingsKind::CompleteTree)
+        ) {
+            let reply = self
+                .curve_tree
+                .pin_complete_tree_prefix()
+                .await
+                .map_err(|e| format!("posture declaration failed: {e:?}"))?;
+            return Ok(PinReport {
+                // Declare-before-report is satisfied inside the actor
+                // message: the declaration answer and the cursor it vouches
+                // for come back from one handler invocation, so this arm
+                // cannot pair them wrongly.
+                //
+                // Both race directions are already ruled and neither is
+                // silent: a segment that freezes after the read makes this
+                // count stale-LOW, which the witness accepts (the next
+                // refresh grows it — D-5), and a rollback after the read
+                // makes it overstate, which the witness refuses loudly
+                // (`FrozenCountExceedsCursor`) so the caller re-acquires.
+                set: shekyl_p_host::ReportedSet::CompleteTreePrefix {
+                    frozen_count: reply.frozen_count,
+                    declaration: reply.declaration,
+                },
+                // The same provenance stamp the list arm takes, from the
+                // same reply — the obligation's shape changed, the
+                // question "at what height was this true" did not.
+                as_of_height: BlockHeight(as_of),
+                reader: reply.reader,
+            });
+        }
 
-        let as_of = source
-            .chain_height
-            .tip()
-            .map_or(0, shekyl_types::BlockHeight::to_raw);
+        let shard_ids: Vec<u64> = source
+            .bond
+            .as_ref()
+            .map(|bond| bond.holdings.shard_ids.as_slice().to_vec())
+            .unwrap_or_default();
 
         // The release set is computed from the *previous* reconcile's view of
         // the store, which is what `pinned_now` came back for. One round trip
@@ -289,10 +307,7 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             (reply.outcomes, reply.reader);
 
         Ok(PinReport {
-            // Compile-fix only for the slice-2 PinReport reshape: this
-            // pinner still derives explicit holdings, so it reports the
-            // list arm; the CompleteTree prefix arm is slice 3's, where the
-            // refusal above is replaced.
+            // Explicit holdings: the record's own list, pinned per member.
             set: shekyl_p_host::ReportedSet::ShardList {
                 shard_ids,
                 outcomes,
@@ -332,6 +347,7 @@ mod tests {
         settlement_epoch_at_height, HoldingsDescriptor, HoldingsKind, ShardSet,
     };
     use shekyl_curve_tree::CurveTreeClient;
+    use shekyl_curve_tree::PostureDeclaration;
     use shekyl_rpc_client::{Rpc, RpcError};
     use shekyl_types::ChainCount;
     use std::sync::Arc;
@@ -404,6 +420,47 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let client = CurveTreeClient::open(dir.path().join("curve_tree.redb"))
             .expect("open fresh curve-tree client");
+        (dir, CurveTreeHandle::spawn(client))
+    }
+
+    /// A handle over a store whose segment 0 is already frozen.
+    ///
+    /// The segment is written **before** the client opens, because the
+    /// actor holds the store exclusively once spawned — the same reason
+    /// this fixture cannot freeze anything mid-test.
+    fn handle_with_frozen_segment() -> (tempfile::TempDir, CurveTreeHandle) {
+        use shekyl_curve_tree::{
+            leaves_per_segment, Gindex, LeafEntry, LeafStore, OutputIdentity, TargetKind,
+        };
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("curve_tree.redb");
+        {
+            let store = LeafStore::open(&path).expect("open fresh store");
+            let entries: Vec<LeafEntry> = (0..leaves_per_segment() as u64)
+                .map(|gindex| {
+                    let mut leaf = [1u8; 128];
+                    leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
+                    LeafEntry {
+                        gindex: Gindex(gindex),
+                        maturity: BlockHeight(60),
+                        creation_height: BlockHeight(0),
+                        leaf,
+                        identity: OutputIdentity {
+                            output_key: [1u8; 32],
+                            commitment: Some([2u8; 32]),
+                            h_pqc: [3u8; 32],
+                            target: TargetKind::TaggedKey,
+                        },
+                    }
+                })
+                .collect();
+            // Buried far past the freeze gate, so segment 0 froze on append.
+            store
+                .append_block_deltas(&entries, &[], &[], BlockHeight(30_000))
+                .expect("append a full frozen segment");
+        }
+        let client = CurveTreeClient::open(path).expect("resume over the frozen store");
         (dir, CurveTreeHandle::spawn(client))
     }
 
@@ -572,28 +629,51 @@ mod tests {
     /// for a persona serving none of its obligation.
     ///
     /// Both arms live in one test on purpose: a `CompleteTree`-only assertion
-    /// would also pass against an implementation that refused on
-    /// `shard_ids.is_empty()`, which is the *wrong* fix — it would break the
-    /// legitimately-empty `ShardSetCompact` case in the same stroke. The
-    /// discriminant is the thing under test, not the emptiness.
+    /// would also pass against an implementation that keyed on
+    /// `shard_ids.is_empty()`, which is the *wrong* discriminant — it would
+    /// route the legitimately-empty `ShardSetCompact` case into the whole-
+    /// corpus arm in the same stroke. The discriminant is the thing under
+    /// test, not the emptiness.
+    ///
+    /// **This is the slice-3 flip of the SH-2 refusal.** The same two
+    /// inputs that used to prove "CompleteTree refuses, empty compact
+    /// reports empty" now prove "CompleteTree reports the *prefix*, empty
+    /// compact still reports the empty *list*" — the obligation is
+    /// expressed, not refused, and the pair still cannot be conflated.
     #[tokio::test]
-    async fn complete_tree_holdings_refuse_while_an_empty_shard_set_reports_empty() {
+    async fn complete_tree_reports_the_prefix_while_an_empty_shard_set_reports_the_empty_list() {
         let (_dir_a, curve_tree_a) = handle();
         let complete_tree = EngineServeSetPinner::new(
             curve_tree_a,
             daemon_of_kind(30_001, Some(Vec::new()), HoldingsKind::CompleteTree),
             [7; 32],
         );
-        let err = complete_tree
+        let report = complete_tree
             .pin_serve_set()
             .await
-            .expect_err("a whole-corpus obligation must refuse, not pin the empty set");
-        assert!(
-            err.contains("CompleteTree"),
-            "the refusal must name the holdings kind so the operator can act on it: {err}"
+            .expect("a whole-corpus obligation is expressed, not refused");
+        let shekyl_p_host::ReportedSet::CompleteTreePrefix {
+            frozen_count,
+            declaration,
+        } = report.set
+        else {
+            panic!("CompleteTree holdings must report the prefix arm");
+        };
+        assert_eq!(
+            frozen_count, 0,
+            "an un-ingested store has frozen nothing: the obligation is \
+             honestly empty and grows as segments freeze (D-5)"
         );
+        assert_eq!(
+            declaration,
+            PostureDeclaration::NewlyDeclared,
+            "the first report declares the prune-disabled posture — the \
+             prefix arm's pin — and says it did"
+        );
+        assert_eq!(report.as_of_height, BlockHeight(30_000));
 
-        // Same empty list, opposite meaning, and it must still succeed.
+        // Same empty list on the wire, opposite meaning, and it must still
+        // report the LIST arm.
         let (_dir_b, curve_tree_b) = handle();
         let owes_nothing = EngineServeSetPinner::new(
             curve_tree_b,
@@ -613,6 +693,60 @@ mod tests {
         };
         assert!(shard_ids.is_empty());
         assert!(outcomes.is_empty());
+    }
+
+    /// **The reported count is the store's own cursor, and re-reporting is
+    /// quiet.** This is the mapping only an engine-side test can reach:
+    /// over a store that has actually frozen a segment the report carries
+    /// `1`, not the `0` a fresh store gives — so a pinner that hardcoded
+    /// the empty prefix, or read the wrong counter, fails here. The second
+    /// report's `AlreadyDeclared` is the steady-state answer that tells the
+    /// witness no retention gap opened between refreshes (RR-2).
+    ///
+    /// Growth *across a refresh* (a segment freezing between two reports)
+    /// is `shekyl-p-host`'s KAT, driven against its own store; this test
+    /// does not duplicate it, because the actor holds this store
+    /// exclusively and freezing mid-test would mean driving full block
+    /// ingest to prove a mapping that layer already proves.
+    #[tokio::test]
+    async fn the_prefix_reports_the_store_cursor_and_redeclares_quietly() {
+        let (_dir, curve_tree) = handle_with_frozen_segment();
+        let pinner = EngineServeSetPinner::new(
+            curve_tree,
+            daemon_of_kind(30_001, Some(Vec::new()), HoldingsKind::CompleteTree),
+            [7; 32],
+        );
+
+        let first = pinner.pin_serve_set().await.expect("first report");
+        let shekyl_p_host::ReportedSet::CompleteTreePrefix {
+            frozen_count,
+            declaration,
+        } = first.set
+        else {
+            panic!("prefix arm");
+        };
+        assert_eq!(
+            frozen_count, 1,
+            "the obligation is the store's frozen prefix — one segment is \
+             frozen, so the persona owes exactly [0, 1)"
+        );
+        assert_eq!(declaration, PostureDeclaration::NewlyDeclared);
+
+        let second = pinner.pin_serve_set().await.expect("second report");
+        let shekyl_p_host::ReportedSet::CompleteTreePrefix {
+            frozen_count,
+            declaration,
+        } = second.set
+        else {
+            panic!("prefix arm");
+        };
+        assert_eq!(frozen_count, 1, "nothing froze in between");
+        assert_eq!(
+            declaration,
+            PostureDeclaration::AlreadyDeclared,
+            "the posture was already declared, so no retention gap opened \
+             between the two reports"
+        );
     }
 
     /// An empty chain has no tip. `ChainCount(0).tip()` is `None`, and the
