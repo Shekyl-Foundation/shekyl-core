@@ -35,8 +35,11 @@ jobs:
       - name: install valgrind headers + libclang
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind libclang-dev clang
       # `cargo +stable` overrides the 1.94.0 pin in rust/rust-toolchain.toml for
-      # this advisory run. The vendored-crypto `ignore` in rustfmt.toml still
-      # applies, so the canary reformats only first-party code, same as the gate.
+      # this advisory run. Vendored crypto stays out of scope because those
+      # crates are WORKSPACE-EXCLUDED (the `exclude` list in rust/Cargo.toml),
+      # so `cargo fmt --all` never visits them — same as the pinned gate. (An
+      # earlier version of this comment credited a rustfmt.toml `ignore` that
+      # has never existed; rustfmt.toml pins only the edition.)
       - name: cargo fmt --check (@stable)
         working-directory: rust
         run: cargo +stable fmt --all -- --check

@@ -63,11 +63,13 @@
 //! wall-clock dependence.
 
 pub mod driver;
+pub mod floor_diag;
 pub mod stem_watch;
 pub mod zone;
 pub mod zone_route;
 
 pub use driver::{Driver, Effect};
+pub use floor_diag::{AchievedOutConnections, FloorSnapshot, FloorTransition, FloorWatch};
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
 pub use zone::{FluffReach, PeerFluff, RelayPlan, TxBlob, Zone};
 pub use zone_route::{

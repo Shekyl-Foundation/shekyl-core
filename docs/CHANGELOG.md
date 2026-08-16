@@ -4,6 +4,45 @@
 
 ### Changed
 
+- **W₂ is pinned, and what unblocked it was a ruling rather than a
+  measurement.** `CHALLENGE_RESPONSE_BLOCKS` collapses from its
+  `Option<u64> = None` staging slot to
+  `SETTLEMENT_EPOCH_BLOCKS / 20` (500 blocks, ≈16.7 h), written as a
+  fraction so it tracks if the epoch is ever re-pinned, and the interim
+  match-assert is replaced by the bare
+  `CHALLENGE_RESOLUTION_BLOCKS >= CHALLENGE_RESPONSE_BLOCKS` the slot's own
+  pin shape specified — no `Some(n)` left behind as scaffolding (rule 21).
+
+  **The ruling: W₂ has no surviving upper bound.** Every argument for
+  keeping it small was clock-burn, and that attack needed a commitment
+  record (superseded by derived assignment) and an abandonment penalty
+  (killed by the impossibility result — §6 keeps its sizing arithmetic "as
+  the record of what a penalty would have had to achieve, not as pending
+  work"). Under derived assignment there is no occupancy to extend: the
+  witness is the producer of block `h`, and a witness that sits on its
+  assignment wastes exactly one of the pair's three draws whether W₂ is 500
+  blocks or 5,000. Clock-burn is a draw-count attack, not a duration one.
+  The rest is slack — settlement bookkeeping already grants a full epoch of
+  grace, outstanding-challenge count is bookkeeping, `P`'s availability
+  burden is unchanged, and a longer window is a DDoS *defense*. One further
+  candidate raised in review, **outsourcing resistance**, is rejected: the
+  economics invert it, half of it is not an attack, and decisively a short
+  W₂ does not prevent the cheap (local) form anyway.
+
+  With a hard lower bound and no upper one, the shape is pick generous, not
+  optimal — the band ≈200–500 is the ruled part and the divisor is its
+  consequence. **The rig's role inverts** from deriving the value to
+  checking a floor: does the honest concurrent-batch p99 on a Pi-4, on the
+  real Tor network under `VanguardsMode::Managed`, fit inside 500 blocks
+  with room to spare? If not, W₂ goes *up*, which costs nothing — so the
+  measurement can only move it in the safe direction.
+
+  Also corrects the design doc's stale clause "every extra block of W₂
+  widens the clock-burn window §6 prices" — **corrected rather than
+  deleted**, because a silent gap there is what let this keep circling:
+  every re-derivation read it and reconstructed an upper bound that no
+  longer exists.
+
 - **A persona now releases the pins of shards it no longer owes** —
   closing §9.7 item 5's leaking direction (SH pin-release). A pin means
   one thing, "`prune_frozen` must not delete this segment's bytes", and

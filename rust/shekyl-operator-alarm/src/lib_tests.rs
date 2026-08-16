@@ -74,6 +74,11 @@ fn lifetime_classification_is_pinned_per_variant() {
         "a rollback deleted pin rows, not leaf bytes: the next re-pin recovers",
     );
     assert_eq!(
+        OperatorAlarm::ServeSetPostureLost { frozen_count: 4 }.lifetime(),
+        AlarmLifetime::Episode,
+        "the flag is re-readable; a refresh that re-declares ends the episode",
+    );
+    assert_eq!(
         OperatorAlarm::ServeSetRolledBack {
             minted_at_tip: 9,
             tip: 4
@@ -100,6 +105,7 @@ fn every_serve_set_alarm_reports_on_one_condition() {
             dropped: 1,
             claimed: 2,
         },
+        OperatorAlarm::ServeSetPostureLost { frozen_count: 4 },
         OperatorAlarm::ServeSetBytesPruned { members: 1 },
         OperatorAlarm::ServeSetRolledBack {
             minted_at_tip: 9,

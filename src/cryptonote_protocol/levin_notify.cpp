@@ -49,6 +49,8 @@
 #include <boost/system/system_error.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <chrono>
+#include <algorithm>
+#include <limits>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -1078,6 +1080,34 @@ namespace levin
 
   void notify::run_next_wake()
   {
+    /* §18.4's live diagnostic rides the existing wake — no new timer. The
+       transition is Rust's answer (the floor comparison lives there, on the
+       logging path only); this site owns the operator-facing WARN. Wire
+       behavior is untouched by construction: nothing below reads the note. */
+    if (zone_ && zone_->p2p)
+    {
+      /* size_t -> u32, bounded explicitly rather than narrowed implicitly. A
+         count above u32 is already garbage (outbound connections are capped
+         orders of magnitude below), and clamping keeps the reading on the
+         side the diagnostic treats as healthy — above-floor is Steady, so a
+         clamped value can never fabricate a below-floor WARN. */
+      switch (shekyl_relay_zone_note_achieved_out(
+        static_cast<std::uint8_t>(zone_->nzone),
+        static_cast<std::uint32_t>(std::min<std::size_t>(
+          zone_->p2p->get_out_connections_count(),
+          std::numeric_limits<std::uint32_t>::max()))))
+      {
+        case 1:
+          MWARNING("Anonymity zone below the provisioned outbound-connection floor"
+                " (D9/§18.4: stemming CONTINUES; diagnostic only — see"
+                " /get_stem_tallies on the admin listener)");
+          break;
+        case 2:
+          MWARNING("Anonymity zone recovered to the provisioned outbound-connection floor");
+          break;
+        default: break;
+      }
+    }
     if (!zone_)
       return;
 
@@ -1205,6 +1235,15 @@ namespace levin
     }
     out.clear();
     return out;
+  }
+
+  bool notify::floor_snapshot(std::uint32_t& achieved, std::uint32_t& floor, bool& below) const
+  {
+    /* §18.4 admin-surface read; same handle discipline as stem_snapshot. */
+    if (!zone_)
+      return false;
+    return shekyl_relay_zone_floor_snapshot(
+      static_cast<std::uint8_t>(zone_->nzone), &achieved, &floor, &below);
   }
 
   std::string format_stem_tally_row_json(

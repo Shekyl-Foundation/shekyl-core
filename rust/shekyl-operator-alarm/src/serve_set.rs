@@ -107,6 +107,9 @@ pub fn apply(alarms: &OperatorAlarms, observation: ServeSetObservation) {
                 Staleness::PinsDropped { dropped, claimed } => {
                     alarms.raise(OperatorAlarm::ServeSetPinsDropped { dropped, claimed });
                 }
+                Staleness::PostureLost { frozen_count } => {
+                    alarms.raise(OperatorAlarm::ServeSetPostureLost { frozen_count });
+                }
                 Staleness::RefreshFailing { consecutive } => {
                     alarms.raise(OperatorAlarm::ServeSetRefreshFailing { consecutive });
                 }
@@ -201,6 +204,10 @@ mod tests {
                     dropped: 3,
                     claimed: 7,
                 },
+            ),
+            (
+                Staleness::PostureLost { frozen_count: 4 },
+                OperatorAlarm::ServeSetPostureLost { frozen_count: 4 },
             ),
             (
                 Staleness::RefreshFailing { consecutive: 4 },
