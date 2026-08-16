@@ -276,6 +276,15 @@ pub enum OperatorAlarm {
         /// Members the serve-set claims.
         claimed: u32,
     },
+    /// The CompleteTree prune-disabled declaration is gone — corruption or
+    /// tampering; every production surface is one-way. `prune_frozen` can
+    /// discard the whole corpus. **Not** [`Self::ServeSetPinsDropped`]:
+    /// there are no pin rows, and re-declaring the flag restores the
+    /// refusal, not any bytes already pruned in the window.
+    ServeSetPostureLost {
+        /// The prefix length the witness claimed when the declaration vanished.
+        frozen_count: u64,
+    },
     /// The wallet's ingest tip moved **below** the height the pins were minted
     /// at — a chain rollback (`rollback_to_fork`). Recoverable: re-ingest past
     /// the fork and the next refresh re-pins. It is reported rather than folded
@@ -339,6 +348,7 @@ impl OperatorAlarm {
             | Self::ServeSetStale { .. }
             | Self::ServeSetRefreshFailing { .. }
             | Self::ServeSetPinsDropped { .. }
+            | Self::ServeSetPostureLost { .. }
             | Self::ServeSetRolledBack { .. } => AlarmLifetime::Episode,
         }
     }
@@ -354,6 +364,7 @@ impl OperatorAlarm {
             Self::ServeSetStale { .. }
             | Self::ServeSetRefreshFailing { .. }
             | Self::ServeSetPinsDropped { .. }
+            | Self::ServeSetPostureLost { .. }
             | Self::ServeSetRolledBack { .. }
             | Self::ServeSetBytesPruned { .. } => AlarmCondition::ServeSetIntegrity,
         }
