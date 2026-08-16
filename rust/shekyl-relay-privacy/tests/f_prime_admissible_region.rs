@@ -317,7 +317,9 @@ fn dependents_at_each_candidate_boundary() {
     use shekyl_relay_privacy::schedule::{
         EmbargoTimer, ADOPTED_PROPAGATION_TIMEOUT_SECS, PROPAGATION_FALSE_FAIL_ONE_IN,
     };
-    use shekyl_relay_privacy::zone::RelayZone;
+    // No `RelayZone` import: every zone this test touches now comes from
+    // `CLASS_REPRESENTATIVES` itself, so there is no way to name a zone the
+    // measured columns did not come from.
 
     /// `DIFFICULTY_TARGET` — the block interval §44/§15 reconcile against.
     const BLOCK_INTERVAL_SECS: u32 = 120;
@@ -336,30 +338,42 @@ fn dependents_at_each_candidate_boundary() {
         (4_750, "beta <= 1/3, d_min >= 8"),
         (5_000, "beta <= 1/2, d_min >= 8"),
     ] {
-        let mut secs = [0_u32; 2];
-        for (i, zone) in DandelionParams::CLASS_REPRESENTATIVES.iter().enumerate() {
-            let params = DandelionParams {
+        // **The two classes are DESTRUCTURED, not indexed — the pattern is the
+        // pin.** §89.2 splits the adopted parameter sets into exactly two
+        // transit classes, and this test is binary all the way down: two named
+        // columns, a pairwise comparison between them, and a calibration
+        // against the two embargo constants the FFI pins. Sizing a container to
+        // `CLASS_REPRESENTATIVES.len()` would let a third class compile and
+        // then silently vanish from the table — a loud failure traded for a
+        // quiet omission. This pattern instead fails to COMPILE if the set ever
+        // grows, which is the signal to rewrite the test rather than widen it.
+        let [clearnet_zone, anon_zone] = DandelionParams::CLASS_REPRESENTATIVES;
+        let embargo_secs = |zone| {
+            EmbargoTimer::adopted(&DandelionParams {
                 fluff_return_ms: f_prime,
-                ..DandelionParams::adopted_for(*zone)
-            };
-            secs[i] = EmbargoTimer::adopted(&params).mean_secs();
-        }
-        // The wallet wait is taken over the WORST zone, per §89.2.
-        let worst_zone = if secs[1] >= secs[0] {
-            RelayZone::Tor
-        } else {
-            RelayZone::Public
+                ..DandelionParams::adopted_for(zone)
+            })
+            .mean_secs()
         };
-        let worst = DandelionParams {
+        let clearnet = embargo_secs(clearnet_zone);
+        let anon = embargo_secs(anon_zone);
+
+        // The wallet wait is taken over the WORST zone, per §89.2 — picked from
+        // the representatives just measured rather than re-named independently,
+        // so the wait can never be drawn from a zone the columns did not read.
+        let worst_zone = if anon >= clearnet {
+            anon_zone
+        } else {
+            clearnet_zone
+        };
+        let wait = EmbargoTimer::adopted(&DandelionParams {
             fluff_return_ms: f_prime,
             ..DandelionParams::adopted_for(worst_zone)
-        };
-        let wait =
-            EmbargoTimer::adopted(&worst).judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
-        let crossings = secs[0] / BLOCK_INTERVAL_SECS;
+        })
+        .judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
+        let crossings = clearnet / BLOCK_INTERVAL_SECS;
         println!(
-            "  {f_prime:5}   {region:26}   {:8} s   {:4} s   {wait:8} s   {crossings:5}",
-            secs[0], secs[1]
+            "  {f_prime:5}   {region:26}   {clearnet:8} s   {anon:4} s   {wait:8} s   {crossings:5}"
         );
 
         // The anonymity zone takes the longer hop (§89.2's per-zone split, the
@@ -368,23 +382,20 @@ fn dependents_at_each_candidate_boundary() {
         // `adopted_for` stopped distinguishing the classes and the whole
         // two-column table is one column printed twice.
         assert!(
-            secs[1] > secs[0],
-            "the anonymity embargo ({} s) must exceed clearnet's ({} s) at F' = {f_prime}: \
-             the zones differ only in transit class, and a tie means `adopted_for` is no \
-             longer splitting them",
-            secs[1],
-            secs[0]
+            anon > clearnet,
+            "the anonymity embargo ({anon} s) must exceed clearnet's ({clearnet} s) at \
+             F' = {f_prime}: the zones differ only in transit class, and a tie means \
+             `adopted_for` is no longer splitting them"
         );
         // The wallet wait is a 1-in-N SURVIVAL quantile of the worst zone's
         // table, so it cannot come in at or under that table's mean.
         assert!(
-            wait > secs[1],
+            wait > anon,
             "the wallet wait ({wait} s) is a 1-in-{PROPAGATION_FALSE_FAIL_ONE_IN} survival \
-             quantile of the worst zone's table and must exceed its mean ({} s) at \
-             F' = {f_prime}",
-            secs[1]
+             quantile of the worst zone's table and must exceed its mean ({anon} s) at \
+             F' = {f_prime}"
         );
-        rows.push((f_prime, secs[0], secs[1], wait));
+        rows.push((f_prime, clearnet, anon, wait));
     }
 
     // **Calibration against the shipped constants, which is what makes this a
