@@ -200,7 +200,7 @@ treasury output on mainnet/stagenet is retired). The genesis coinbase is
 built by the Rust `geblock` tool (`rust/shekyl-genesis-tool`) from the
 committed recipients files `config/genesis_recipients.{mainnet,testnet,stagenet}.json`,
 with a **deterministic transaction key** derived from the recipients file
-itself (cSHAKE256, customization `shekyl/genesis-txkey-v1`; full spec in
+itself (cSHAKE256, customization `shekyl/genesis-txkey-v2`; full spec in
 the tool's `txkey` module). Genesis is transparent by design — CT type
 Null, cleartext amounts, published recipients — so the public derivation
 discloses nothing beyond this document, and it makes the pinned

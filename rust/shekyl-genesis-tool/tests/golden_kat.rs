@@ -24,14 +24,14 @@ use shekyl_wire::tx_extra::{self, TxExtraField, HYBRID_KEM_CT_BYTES, PQC_LEAF_HA
 /// but nothing here depends on the config).
 const KAT_NONCE: u32 = 10101;
 
-// --- pinned vectors (recaptured 2026-08-16: fork-(ii) address layout) ---
-const KAT_TX_SECRET_HEX: &str = "2540c575756f712a0a72036a53a30a5bb460deff15a98e56d4775d165a744c06";
-const KAT_TX_PUB_HEX: &str = "2a1386ec4b6065142492394c0406cf76e291f6355a5aac4694678aca62e0d460";
+// --- pinned vectors (recaptured 2026-08-16: genesis-txkey-v2 payment identity) ---
+const KAT_TX_SECRET_HEX: &str = "f5c1a3a255f52bdb04fe23448d941ed4ec70fea47a9eee658f4468f79617a602";
+const KAT_TX_PUB_HEX: &str = "6e78259c37b956a355c36e67c72037279170d260a4ea0e6ebbc8c3a7d711eac1";
 const KAT_BLOB_LEN: usize = 6263;
 const KAT_BLOB_SHA256_HEX: &str =
-    "f2600783b9833d358ac566d812f9932459231948dc2f58ffb8f872720d46a578";
-const KAT_TX_HASH_HEX: &str = "875b38eaff2d853e69a206d33ecdad29282f81af7ec72700877af3896f281949";
-const KAT_BLOCK_ID_HEX: &str = "3d5f6792e5bb020b1fef8e379f7799aedc9b7e4cc0459d52b41f6d31d1bb6716";
+    "05783d331507994ea7459777f0f281be89a0635deb8f7544aac1dc986b7cda73";
+const KAT_TX_HASH_HEX: &str = "80be1fd3fc0dee9d402eeafd35af0111446b35a2ae8ac8931371a66b07a135ec";
+const KAT_BLOCK_ID_HEX: &str = "c91b2e335074202ff64a35338e4d0aa5cb792136a8f11cd4cc5b272a6b0d8130";
 // ----------------------------------------------------------------------------
 
 fn fixture_recipients() -> Vec<Recipient> {

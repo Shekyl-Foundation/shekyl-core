@@ -64,7 +64,7 @@
 # mech	literal	file	const	status	key	notes
 #
 # ── Mechanism 1 — cSHAKE256 customization ─────────────────────────────
-1	shekyl/genesis-txkey-v1	rust/shekyl-genesis-tool/src/txkey.rs	GENESIS_TXKEY_CUSTOMIZATION	shekyl-live
+1	shekyl/genesis-txkey-v2	rust/shekyl-genesis-tool/src/txkey.rs	GENESIS_TXKEY_CUSTOMIZATION	shekyl-live		pre-genesis remint: preimage is payment identity (spend/view/ek), not Bech32m spelling; v1 retired unused
 1	shekyl/multisig-address-v1	rust/shekyl-address/src/multisig_address.rs	MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION	shekyl-live
 1	shekyl/ek-bind-v1	rust/shekyl-address/src/address.rs	EK_BIND_DST	shekyl-live
 1	shekyl/archival-serve-challenge-leaf-v1	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_LEAF_CUSTOMIZATION	shekyl-live

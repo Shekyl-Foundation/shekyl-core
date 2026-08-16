@@ -910,7 +910,7 @@ mod tests {
 
     // Tier-2 golden vectors (mainnet/stagenet BIP-39, testnet Raw32, passphrase
     // separation) live in `docs/test_vectors/ADDRESS_DERIVATION_V2/vectors.json`
-    // and are exercised by `tests/kat_address_derivation_v1.rs`. BIP-39 wallet
+    // and are exercised by `tests/kat_address_derivation_v2.rs`. BIP-39 wallet
     // creation has no C++ `wallet2` equivalent by design — see FOLLOWUPS
     // "wallet2 has no generate_from_bip39 entry point".
 

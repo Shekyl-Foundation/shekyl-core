@@ -51,8 +51,8 @@ Genesis identity:
 
 ```text
 GENESIS_NONCE  10000
-tx hash        7d578c228f117681e20c225527fdf54593beafd693ec1dc08ebe020188baf573
-block id       49d3831cb7212fbbeae14c341d1cf6667ddbf28952f76668b8b569d5fb2e2ab0
+tx hash        4de2da89098b1cf31ffdbee52c10c3720cb8168f85f468ef407a94f9377b192f
+block id       e623214c06d3ec19a8326c166ff4ee920fe85badbfadd67966c15a315ed7aa12
 ```
 
 ### stagenet
@@ -71,8 +71,8 @@ Genesis identity:
 
 ```text
 GENESIS_NONCE  10002
-tx hash        7e7a757b1d907f19d7b5bdf233edf7ece9446979b834af937fc7fedf0678c4a1
-block id       e5683ca39b1ce002cd08fd7c1b467110f31daa1560db6cc7bb6bf1b1f2c1a11a
+tx hash        01c0e761c9b00b7b8c2087bb512c072dd862812ad4f51335ebbd12f80ad91528
+block id       82ccf33577a4833d0bfd0eef768de21130cc2a9b66f83b9d32c8a91e6cedf7b4
 ```
 
 ### testnet
@@ -91,16 +91,18 @@ Genesis identity:
 
 ```text
 GENESIS_NONCE  10101
-tx hash        f450491a2e41fa5e574fa3c5af1438f77524f657a843f9d5f52afeab312f618a
-block id       3dcfcd97ffed5f9b474a5edbaa23cb03bc8f7d7bc41570aab66f9111e66773e9
+tx hash        7c34c6d93491ceb88329236f97125b35b02bd2cc9ce89f25715af0b8fdf13925
+block id       7cbb852932d7c1b35991e5880c8158da2a36c9101e4daf2620139c0585663280
 ```
 
 Addresses are truncated above for readability only — the full strings are
 in the linked JSON files, which are the bytes genesis actually commits to.
 The 2026-08-16 fork-(ii) re-encode kept each recipient's spend/view/ek and
-filled `msg_sign_pk` so the files parse on the current layout; the freeze
-ceremony (`geblock gen-wallets`) still replaces this set with seed-derived
-keys.
+filled `msg_sign_pk` so the files parse on the current layout. The same-day
+tx-key remint (`shekyl/genesis-txkey-v2`) binds the founding tx to that
+payment identity, not the Bech32m spelling, so a later layout correction
+cannot rotate the pinned bytes. The freeze ceremony (`geblock gen-wallets`)
+still replaces this set with seed-derived keys.
 Each address is a three-segment Bech32m string
 (`<classical>/<ML-KEM part A>/<ML-KEM part B>`) carrying the hybrid
 post-quantum key material Shekyl requires from genesis.
@@ -142,10 +144,11 @@ Derivation (implemented in `rust/shekyl-genesis-tool/src/txkey.rs`):
 M = varint(len(net)) ‖ net_ascii            net ∈ {mainnet, testnet, stagenet}
     ‖ varint(n_recipients)
     ‖ for each recipient, in file order:
-        varint(len(addr)) ‖ addr_utf8       canonical full address
+        spend_pk(32) ‖ view_pk(32)
+        ‖ varint(len(ek)) ‖ ek              ML-KEM-768 encap key
         ‖ amount_atomic as u64 little-endian
 
-seed      = cSHAKE256-32(customization = "shekyl/genesis-txkey-v1", input = M)
+seed      = cSHAKE256-32(customization = "shekyl/genesis-txkey-v2", input = M)
 tx_secret = seed reduced mod ℓ
 tx_pub    = tx_secret · G                   (the tx_extra 0x01 field)
 ```

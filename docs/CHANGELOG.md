@@ -4,6 +4,20 @@
 
 ### Changed
 
+- **Genesis tx-key remint (`shekyl/genesis-txkey-v2`).** The founding
+  transaction key is now derived from payment identity (spend ‖ view ‖
+  ML-KEM encap key ‖ amount), not the Bech32m address spelling. A layout
+  correction can no longer rotate `GENESIS_TX`. The v1 customization is
+  retired unused; pins in `cryptonote_config.h`, `GENESIS_ALLOCATIONS.md`,
+  `mining_parity`, and the shekyl-wire h0 corpus move with the remint.
+
+- **Wallet-owned address encode rides `shekyl_address_encode`.**
+  `account_base` keeps the blob-derived `msg_sign_pk` (public, not
+  persisted, not on `account_public_address`) so
+  `get_public_address_str` — including `start_mining` — emits a real
+  fork-(ii) address. Struct-only `get_account_address_as_str` stays
+  fail-closed.
+
 - **W₂ is pinned, and what unblocked it was a ruling rather than a
   measurement.** `CHALLENGE_RESPONSE_BLOCKS` collapses from its
   `Option<u64> = None` staging slot to
