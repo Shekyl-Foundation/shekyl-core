@@ -4,6 +4,27 @@
 
 ### Changed
 
+- **An indivisible-value requirement is only as strong as its field list, so
+  the shape is now "derive every field", not "these N fields".**
+  `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 6 asked for a provenance record
+  that cannot be constructed without all three attestations. That was
+  implemented to spec and the gate still **faded open**, because the defect
+  arrived through a *fourth* field nobody had listed — leaving a producer-shaped
+  batch on any `aarch64` box able to certify itself a rule-76 floor datum.
+  Completeness of an enumeration is not checkable from inside the requirement,
+  so the revised property is that **every field is derived from the apparatus
+  that ran and none is declared by the caller**: it holds for fields nobody
+  anticipated. The superseded text is retained — "necessary but not sufficient"
+  is only legible next to what it was.
+
+- **Rule 91 gains an index sweep.** A correction is not landed until every
+  surface *pointing at* the corrected text agrees with it — headings, tables of
+  contents, `IMPLEMENTATION_INDEX.md` rows, `FOLLOWUPS.md` entry titles, and
+  cross-references from other docs. A corrected body under a stale heading is
+  worse than an uncorrected item: long docs are read by heading, so the stale
+  title routes the correction to exactly the readers who did not need it while
+  the file looks fixed to anyone grepping the body.
+
 - **Genesis tx-key remint (`shekyl/genesis-txkey-v2`).** The founding
   transaction key is now derived from payment identity (spend ‖ view ‖
   ML-KEM encap key ‖ amount), not the Bech32m address spelling. A layout
