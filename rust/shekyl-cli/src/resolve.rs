@@ -355,8 +355,19 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 diag("parse_uri: need <uri>")
             }
         }
-        "stake" => ResolvedCommand::Stake {
-            foundation: args.contains(&"--complete-tree-foundation"),
+        // Exhaustive rather than `contains`, and unrecognized arguments are
+        // a diagnostic instead of a shrug. `stake` is capital-locking and
+        // its two postures carry different obligations, so an argument the
+        // parser does not understand means the operator asked for something
+        // this build cannot map — and *guessing* market would post the
+        // wrong-shaped bond under a typo'd foundation flag once assignment
+        // exists. Silent divergence between what was asked and what is done
+        // is the whole class D-3's mandatory enum removed at the engine; the
+        // CLI must not reintroduce it at the front door.
+        "stake" => match args {
+            [] => ResolvedCommand::Stake { foundation: false },
+            ["--complete-tree-foundation"] => ResolvedCommand::Stake { foundation: true },
+            _ => diag("stake: unrecognized argument; usage: stake [--complete-tree-foundation]"),
         },
         "staked_balance" => ResolvedCommand::StakedBalance,
         "staked_outputs" => ResolvedCommand::StakedOutputs,
@@ -1120,12 +1131,21 @@ mod tests {
             ),
             "the foundation posture must be reachable only by naming it"
         );
-        // Negative control: a near-miss flag does NOT arm the foundation
-        // posture. Silently treating an unrecognized flag as the unbounded
-        // obligation is the one direction that must never happen.
+        // A near-miss flag arms nothing and is not silently downgraded to a
+        // market stake either: the operator asked for something this build
+        // does not understand, and the honest answer is to say so. Both
+        // failure directions are covered — the typo must not reach the
+        // unbounded obligation, and it must not quietly reach the other one.
+        assert!(
+            matches!(
+                parse("stake --complete-tree"),
+                ResolvedCommand::Diagnostic { .. }
+            ),
+            "a misspelt posture flag must be refused, never guessed"
+        );
         assert!(matches!(
-            parse("stake --complete-tree"),
-            ResolvedCommand::Stake { foundation: false }
+            parse("stake --complete-tree-foundation --extra"),
+            ResolvedCommand::Diagnostic { .. }
         ));
         assert!(matches!(
             parse("staked_balance"),

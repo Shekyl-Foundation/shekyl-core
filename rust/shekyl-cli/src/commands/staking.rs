@@ -224,3 +224,37 @@ pub fn cmd_staking_info(rpc: &RpcSession) {
         Err(e) => rpc.report("Failed to get staking info", &e),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::FOUNDATION_PHRASE;
+    use shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING;
+
+    /// **The phrase shown and the phrase required are one string.**
+    ///
+    /// The warning's closing line instructs the operator to type the
+    /// phrase, and [`FOUNDATION_PHRASE`] is what the prompt compares
+    /// against — two spellings of one fact. The warning is pinned to
+    /// `docs/api/wallet_rpc.yaml`, so a contract-side reword lands here
+    /// without touching this file: an operator would then be shown one
+    /// phrase while being required to type another, which is an
+    /// unpassable gate on the one command whose gate is the point.
+    ///
+    /// Asserted rather than interpolated. Building the warning with a
+    /// `format!` would make the served text no longer *verbatim* §5 —
+    /// the property the round ratified and the yaml gate enforces — so
+    /// the two stay separately readable and a test keeps them equal.
+    #[test]
+    fn the_required_phrase_is_the_phrase_the_warning_shows() {
+        assert!(
+            FOUNDATION_POSTURE_WARNING.contains(FOUNDATION_PHRASE),
+            "the warning must instruct exactly the phrase the prompt \
+             accepts; they have drifted"
+        );
+
+        // The gate must be able to fail: a phrase the warning does not
+        // contain has to be rejected, or the assertion above would pass
+        // over any string at all.
+        assert!(!FOUNDATION_POSTURE_WARNING.contains("serve for profit"));
+    }
+}
