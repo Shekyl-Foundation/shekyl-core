@@ -75,7 +75,18 @@ pub enum ResolvedCommand {
     },
 
     // -- Staking (WI-RPC-1) --
-    Stake,
+    Stake {
+        /// `--complete-tree-foundation`: request the Foundation
+        /// whole-corpus archival posture instead of market staking
+        /// (`COMPLETETREE_ACTIVATION.md` D-2/D-4).
+        ///
+        /// A flag rather than a subcommand, and off by default, because
+        /// the posture must be *named* to be reached — there is no
+        /// select-all affordance and no default that could land on the
+        /// unbounded obligation. Setting it does not by itself stake: the
+        /// command states the terms and requires a typed phrase first.
+        foundation: bool,
+    },
     StakedBalance,
     StakedOutputs,
     StakingInfo,
@@ -344,7 +355,9 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 diag("parse_uri: need <uri>")
             }
         }
-        "stake" => ResolvedCommand::Stake,
+        "stake" => ResolvedCommand::Stake {
+            foundation: args.contains(&"--complete-tree-foundation"),
+        },
         "staked_balance" => ResolvedCommand::StakedBalance,
         "staked_outputs" => ResolvedCommand::StakedOutputs,
         "staking_info" => ResolvedCommand::StakingInfo,
@@ -1096,7 +1109,24 @@ mod tests {
 
     #[test]
     fn test_staking_commands() {
-        assert!(matches!(parse("stake"), ResolvedCommand::Stake));
+        assert!(matches!(
+            parse("stake"),
+            ResolvedCommand::Stake { foundation: false }
+        ));
+        assert!(
+            matches!(
+                parse("stake --complete-tree-foundation"),
+                ResolvedCommand::Stake { foundation: true }
+            ),
+            "the foundation posture must be reachable only by naming it"
+        );
+        // Negative control: a near-miss flag does NOT arm the foundation
+        // posture. Silently treating an unrecognized flag as the unbounded
+        // obligation is the one direction that must never happen.
+        assert!(matches!(
+            parse("stake --complete-tree"),
+            ResolvedCommand::Stake { foundation: false }
+        ));
         assert!(matches!(
             parse("staked_balance"),
             ResolvedCommand::StakedBalance
