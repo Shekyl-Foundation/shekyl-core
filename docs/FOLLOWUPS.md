@@ -9760,6 +9760,81 @@ its wake.
   `utils/fleet/sample_node_series.sh` and `anon_readout_parse.py` should emit
   the per-sample series by default and any arm's write-up should carry it.
 
+- **Relay: `full_travel_probability`'s cross-check holds `fluff_return_ms`
+  fixed, and `F'` is the axis the region derivation moves.** *(Registered
+  2026-08-16; **rewritten 2026-08-17 after the original entry was found to be
+  factually wrong** — see the retraction below, kept rather than deleted
+  because the wrong version was published and acted on.)*
+
+  > **RETRACTED, and the correction is most of this entry.** The first version
+  > of this entry claimed `full_travel_probability` *"has no simulation
+  > partner; grep finds none"* and proposed building one. **That is false.**
+  > `conformance::simulate_propagation` is an independent Monte-Carlo stem
+  > walker that reports `full_travel_rate`
+  > (`shekyl-relay-privacy/src/conformance/stem.rs`), and
+  > `analytic_derivation_agrees_with_the_simulator`
+  > (`tests/propagation_measurement/embargo_survival.rs`) has been pinning the
+  > analytic function against it across eight `(mean, tick)` pairs at 6M
+  > trials, with a stated Monte-Carlo band. That test **deliberately sweeps the
+  > tick** for exactly the reason the retracted entry claimed was undefended:
+  > *"a tick-dependent divergence — exactly where a fire-vs-disarm boundary
+  > convention would surface — had nothing watching it."* There is a second
+  > pairing too: `solve_embargo_secs_for_target` bisects the embargo using the
+  > **simulator** rather than the closed form.
+  >
+  > **How the error was made, because the method is the reusable part.** The
+  > check was `grep -rn "simulate_full_travel\|full_travel.*simulate"` — a grep
+  > for the name the entry had already predicted, not for the *concept*. The
+  > partner exists under a different name and would have been found by grepping
+  > `full_travel_rate`. A search that can only confirm the hypothesis that
+  > generated it is not evidence of absence.
+
+  **What is actually owed, which is much smaller.** The cross-check builds
+  `DandelionParams::inherited()` and varies only the embargo mean and the tick,
+  so `fluff_return_ms` is held at the shipped value for every row. The `F'`
+  axis *is* swept — but **analytically only**, through `derive_embargo` and
+  `full_travel_probability` with no simulator in the loop
+  (`embargo_survival.rs`, the `[500, 1_500, 2_250, 3_250, 4_250, 13_750]` row
+  sweep).
+
+  PR #488 made that the load-bearing axis: the admissible region's boundary and
+  its miss curve are both read off `F'`, so the one parameter the region moves
+  is the one the analytic/simulator agreement never varies. A slack-exponent
+  error in the `F` term specifically would agree at 3250 and be unwitnessed
+  elsewhere.
+
+  **Do:** add `fluff_return_ms` to `analytic_derivation_agrees_with_the_simulator`'s
+  sweep at the region's candidate values, not a new simulator. One axis on an
+  existing test.
+
+- **Relay: `F'` may be per-POSTURE even though §89.2 correctly refused
+  per-ZONE.** *(Registered 2026-08-16, from PR #488's review round. Deliberately
+  **not** blocking the region pick.)*
+
+  §89.2 kept `fluff_return_ms` process-wide on §63.2's keeper — *"a dual-stack
+  node's fluff returns over both networks, so there is no per-zone value to
+  pick"* — against `time_between_hop_ms`, which §59's coherence makes
+  well-defined per zone. That argument is structural and it stands.
+
+  **It does not reach the posture question.** `F'` is not per-zone, but it may
+  be per-node-transport-mix: a **Tor-only** node's return genuinely *is* the
+  anonymity value, while a **dual-stack** node's is a min over both networks.
+  Worst-zone-global is therefore correct for the Tor-only posture and
+  over-provisions the dual-stack one — a different claim from the one §89.2
+  disposed of, and one it never addressed.
+
+  **Why this is filed rather than acted on.** The sharpest form of the
+  objection is that `β` is measured on anonymity nodes while the §6.6 leak it
+  buys is paid on clearnet, where the anonymity zone's leak is structurally
+  zero. PR #488 measured that cost: the clearnet leak is flat to inside a
+  3-sigma noise floor across the entire candidate range (`F' = 3250 → 5000`),
+  so the asymmetry does not currently bite.
+
+  **Reopen if** a future measurement moves the clearnet leak across candidate
+  `F'` values, or if Tor-only stops being a minority posture — either restores
+  the cost that would make the split worth its second constant and its
+  ownership seam.
+
 - **Relay: populate the 48-cell Pi verification surface, then consume it
   per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first
   (`shekyl-relay-privacy/src/verify_cost.rs`, 2026-08-06) carrying the four
