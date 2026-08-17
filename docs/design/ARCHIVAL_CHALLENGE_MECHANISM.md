@@ -1459,6 +1459,14 @@ than repealing it:
    property* with real W₂ consequences, decided on its merits in the
    format round, never inherited from what was convenient to build.
 
+   > **How these three get enforced, if a rig is ever scoped (revised
+   > 2026-08-16 — see §9.7 item 6).** Not as three flags, and *also* not as
+   > "one type carrying these three": that shape was implemented to spec and
+   > still faded open through a fourth field nobody had listed. The rule is
+   > **every field of the provenance record is derived from the apparatus that
+   > ran, none declared by the caller** — which holds for fields nobody
+   > anticipated, and an enumeration cannot.
+
    **The rig MUST run with `VanguardsMode::Managed` (ruled 2026-08-11,
    written before the rig exists rather than discovered afterward).** Full
    vanguards adds a guard layer, and the spec is explicit that this costs
@@ -1841,7 +1849,8 @@ belong to different machines. Retiring a mandate does not sanitise the premises
 it carried.
 
 **6. CLOSED as not owed (2026-08-16) — a provenance type with no measurement
-to stamp is scaffolding.** Item 6a's ruling means no W₂ run is pending, so
+to stamp is scaffolding; the REQUIREMENT was revised on the way out and is
+reusable: derive every field from the apparatus, do not enumerate three.** Item 6a's ruling means no W₂ run is pending, so
 the three-attestation type was not landed. A first cut did land it in
 `shekyl-sp-t3-spike` (`RunProvenance`, `w2-measure`, a third `bring_up`
 wrapper, a producing shape of 97 onions on one tor) and then had to invent
@@ -1867,16 +1876,57 @@ latency structure that makes the distribution heavy-tailed. All three come
 back *looking good*. Prose cannot stop a run that violates one from producing
 a number that then gets cited.
 
-**Requirement, written before the rig exists (the same discipline §9.5
-applied to the vanguards mode).** The rig's provenance record is a **single
-type that cannot be constructed without all three**, and a W₂ datum is a
-value of that type — so an incomplete run yields no datum rather than an
-unlabelled one. Three separate flags checked at three points is the shape
-that fails, because it makes "record the mode" a step someone can skip;
-one indivisible value is the shape that holds. Same call as
-`ServingPosture::Serving` carrying the onion and the vanguards mode as one
-value, for the same reason. This lands with the rig, not before it — a
-provenance type with no measurement to stamp is scaffolding.
+### Requirement, REVISED (2026-08-16) — derive every field, do not enumerate three
+
+**The finding that forced the revision: indivisibility was necessary and it
+was not sufficient.** The first cut implemented the original requirement *to
+spec* — one type, three attestations, no constructor taking fewer — and the
+gate still **faded open**. `is_floor_datum()` certified any `aarch64` box as a
+rule-76 floor datum, so a producer-shaped batch run on a floor device would
+have stamped "rule-76 provisioning input" on the wrong machine's number. That
+is precisely the laundering this item exists to prevent, and it arrived
+**through a field nobody had listed**.
+
+That is the generalisable lesson, and it is not "make it indivisible":
+
+> **An indivisible-value requirement is only as strong as the completeness of
+> its field list, and completeness is not checkable from inside the
+> requirement.** Enumerating the fields that must travel together says nothing
+> about the field you did not think of — and the omitted field is where the
+> defect lives, because a field nobody listed is a field nobody reasoned about.
+
+What actually caught it was not the enumeration. It was **deriving** the
+missing field (`MeasuredSide`, read off the apparatus's own persona count)
+rather than accepting it as an argument the caller supplies. A declaration can
+be wrong or absent; a value read off the apparatus that ran cannot disagree
+with the run. Evidence over assertion, the same call as the vanguards witness
+being mintable only from a confirmed `SETCONF`.
+
+**So the requirement, restated as the stronger property:**
+
+> The provenance record is a single value **every field of which is derived
+> from the apparatus that ran** — none declared by the caller, none defaulted.
+> A W₂ datum is a value of that type, so an incomplete run yields no datum
+> rather than an unlabelled one.
+
+This does not depend on having enumerated correctly. A field that is derived
+is one the run cannot misreport whether or not anyone anticipated it, and a
+requirement that admits no declared field has nothing for an unlisted one to
+slip through. Where a fact genuinely originates outside the apparatus (the
+batch width, which only the caller ran), take *that* and derive everything the
+apparatus can supply from the apparatus itself.
+
+*Superseded text, retained:* "The rig's provenance record is a **single type
+that cannot be constructed without all three**… Three separate flags checked
+at three points is the shape that fails, because it makes 'record the mode' a
+step someone can skip; one indivisible value is the shape that holds." Correct
+as far as it goes — three-flags-at-three-points is still the shape that fails,
+and `ServingPosture::Serving` carrying the onion and the vanguards mode as one
+value is still the same call. It is retained rather than deleted because
+"necessary but not sufficient" is only legible next to what it was.
+
+This lands with a rig if one is ever scoped, not before — a provenance type
+with no measurement to stamp is scaffolding.
 
 ## 10. Standing rules for any agent working this
 
