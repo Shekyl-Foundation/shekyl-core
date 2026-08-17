@@ -117,13 +117,44 @@ pub struct FloodParams {
 /// the reach **is** the link class: deriving transit from it removes the one
 /// incoherent combination (an anonymity reach at clearnet latency) that §91.6
 /// says invalidates a derivation while still looking reasonable.
+///
+/// **Derived from the cost model's constants, never re-typed.** An earlier
+/// revision spelled these as literals (`50`, `1_625`) beside doc text naming
+/// the constants — a duplicate that drifts the instant either assumption is
+/// adjusted, leaving the flood simulating a network the derivation has stopped
+/// describing. That is F-7's failure mode one layer down, and the fix is to
+/// delete the duplicate rather than keep it synchronized.
 #[must_use]
-pub const fn transit_for(reach: FloodReach) -> u64 {
+pub fn transit_for(reach: FloodReach) -> u64 {
+    // Both constants are finite, positive and far below 2^53; the cast cannot
+    // truncate meaningfully or lose a sign.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     match reach {
-        // Clearnet: ADOPTED_TRANSIT_ASSUMPTION_MS.
-        FloodReach::EveryPeer => 50,
-        // Anonymity zone: ANON_ZONE_TRANSIT_ASSUMPTION_MS.
-        FloodReach::OutboundOnly => 1_625,
+        FloodReach::EveryPeer => crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS as u64,
+        FloodReach::OutboundOnly => crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS as u64,
+    }
+}
+
+#[cfg(test)]
+mod transit_for_tests {
+    use super::{transit_for, FloodReach};
+
+    /// The pairing is the point: an anonymity reach at clearnet latency is the
+    /// combination §91.6 says invalidates a derivation while looking
+    /// reasonable. Pinned against the cost model's own constants so this fails
+    /// if the two are ever separated again.
+    #[test]
+    fn transit_tracks_the_cost_model_not_a_literal() {
+        assert_eq!(
+            transit_for(FloodReach::EveryPeer),
+            crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS as u64
+        );
+        assert_eq!(
+            transit_for(FloodReach::OutboundOnly),
+            crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS as u64
+        );
+        // And they must differ, or the link-class split is decorative.
+        assert!(transit_for(FloodReach::OutboundOnly) > transit_for(FloodReach::EveryPeer));
     }
 }
 
