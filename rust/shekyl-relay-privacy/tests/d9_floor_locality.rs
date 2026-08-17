@@ -76,6 +76,9 @@ fn measure(degrees: &[usize]) -> f64 {
                 nodes: NODES,
                 peers: floor(),
                 reach: FloodReach::OutboundOnly,
+                transit_ms: shekyl_relay_privacy::conformance::transit_for(
+                    FloodReach::OutboundOnly,
+                ),
             },
             degrees,
             MEAN_QUARTER_SECS,
@@ -187,6 +190,7 @@ fn uniform_is_the_mixed_form_at_a_constant_degree() {
         nodes: 24,
         peers: floor(),
         reach: FloodReach::OutboundOnly,
+        transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::OutboundOnly),
     };
     let degrees = vec![floor(); params.nodes];
 

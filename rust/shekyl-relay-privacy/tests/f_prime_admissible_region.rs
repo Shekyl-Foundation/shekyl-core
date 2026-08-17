@@ -122,6 +122,7 @@ fn shipped_topology() -> FloodParams {
         // set to the floor so the struct does not misdescribe the run.
         peers: FLOOR,
         reach: FloodReach::OutboundOnly,
+        transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::OutboundOnly),
     }
 }
 
@@ -337,6 +338,8 @@ fn dependents_at_each_candidate_boundary() {
         (4_500, "beta <= 1/4, d_min >= 8"),
         (4_750, "beta <= 1/3, d_min >= 8"),
         (5_000, "beta <= 1/2, d_min >= 8"),
+        (12_375, "S91 A: anon transit, beta = 0"),
+        (13_625, "S91 A: anon transit, beta* = p90"),
     ] {
         // **The two classes are DESTRUCTURED, not indexed — the pattern is the
         // pin.** §89.2 splits the adopted parameter sets into exactly two

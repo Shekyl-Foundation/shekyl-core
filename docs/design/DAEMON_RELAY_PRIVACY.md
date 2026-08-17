@@ -8446,6 +8446,135 @@ activity*. Whether that is acceptable is a scope call this round owes, and the
 honest framing is that **the alternative on offer is not "cover everything" —
 that option is 4.3× over capacity and was never available.**
 
+### 42.5a The covert branch REFUSES to stem, and that is inherited Monero (2026-08-17)
+
+**Found while scoping the restoration.** The covert branch in `levin_notify.cpp`
+is not merely a different carrier — it is a different *architecture*, and it
+contradicts §89:
+
+```cpp
+if (shekyl_relay_zone_covert_enabled(...) && !zone_->channels.empty())
+{
+  if (tx_relay == relay_method::stem)
+  {
+    MWARNING("Dandelion++ stem not supported over noise networks");
+    tx_relay = relay_method::local;   // do not put into stempool embargo
+  }
+  ...
+  for (channel = 0; channel < zone_->channels.size(); ++channel)  // ALL channels
+```
+
+Three properties, all inherited, all wrong for Shekyl:
+
+1. **The carrier check sits ABOVE the phase switch**, so the carrier is chosen
+   *instead of* a phase rather than *for* one.
+2. **It downgrades a stem to `local`** — Monero's posture that noise mode
+   *replaces* Dandelion++ rather than carrying it.
+3. **It broadcasts on every channel**, not on the stem slot — which contradicts
+   the Rust substrate, where `CovertSchedule` already binds channel `i` to stem
+   slot `i` (§20.3).
+
+**Why this is recorded loudly.** Reconnecting noise naively — passing a real
+payload at the two `nullptr` notifier sites — would not merely restore a
+4.3×-over-capacity carrier (§42.1). **It would silently switch the anonymity
+zone from stemming to not stemming**, reversing §89, disarming the coherence
+branch the D9 arc just landed, and announcing it through an `MWARNING` that
+reads as a capability notice rather than a posture change.
+
+This is the **sixth** stale-inherited-premise found in this arc and the first
+that would have changed **consensus-adjacent behaviour** rather than a
+document. It sits directly beneath a Shekyl comment that correctly explains
+§89's *"Dandelion++ runs on every zone"* — the prose was updated for §89 and
+the branch below it was not.
+
+> **Amendment to §25.1's framing (same day).** The backstop was described as
+> required because *"a covert path that cannot deliver has nowhere to fall."*
+> That is not true today: it **falls through to fluff** (see the retraction in
+> §42.5b). It falls somewhere, and that somewhere is the privacy-losing branch —
+> which makes the backstop more load-bearing, not less.
+
+**What §42.3 therefore requires** is not an ordering fix. It is: delete the
+stem→`local` downgrade; move the carrier decision below the phase decision; and
+replace the all-channels broadcast with a per-stem-slot send. The covert path
+and the stem path are currently *mutually exclusive implementations of the same
+job*, and that — not ordering — is what §42.5's open 1 calls non-mechanical.
+
+### 42.5b The decision half is already Rust, and the covert branch bypasses it
+
+The relay plan already crosses the FFI: `shekyl_relay_zone_plan_relay_with_refresh`
+returns `SHEKYL_RELAY_PLAN_STEM` / `NO_ROUTE` / `FLUFF_EPOCH`, and the stem
+path at `levin_notify.cpp` consumes it. **Rust decides, C++ dispatches** — the
+architecture rule 20 asks for is already in place for the phase.
+
+**The covert branch is the one path that never asks.** So the restoration is
+not a port of working C++ into Rust; it is bringing an inherited bypass under
+a seam that already exists, and the correct model is already on the Rust side
+(`CovertSchedule`'s slot binding). Scope:
+
+| concern | owner |
+| --- | --- |
+| phase (stem / fluff / no-route) | **Rust** — already |
+| carrier (covert vs ordinary) | **Rust** — new, folded into the plan |
+| which channel / stem slot | **Rust** — `CovertSchedule` already binds `i ↔ i` |
+| dummy payload bytes | **Rust** — one owner for the covert parameters |
+| strand dispatch, levin fragmenting, socket write | **C++** — epee-bound, stays |
+
+Per rule 40's coarse-call rule this is **one** crossing returning a plan that
+carries phase *and* carrier *and* slot — the precedent being
+`shekyl_relay_zone_roll_originated_zone`, which folded a roll and its mapping
+into a single call rather than shuttling an intermediate verdict across.
+
+The stem→`local` downgrade is **deleted, not migrated**: Rust does not produce
+"downgrade the phase", it produces a plan.
+
+> **RETRACTED the same day, and the error was inverted rather than imprecise.**
+> This paragraph continued: *"…and a carrier that cannot serve a phase is a
+> `NO_ROUTE` — which §30.5 already requires to send nothing rather than fall
+> back."* **`NO_ROUTE` does not send nothing. It fluffs.**
+>
+> `levin_notify.cpp` runs the stem attempt, forces a map refresh, re-plans,
+> attempts once more, logs `MERROR("Unable to send transaction(s) via
+> Dandelion++ stem")` — and then **falls through to
+> `record_relayed(relay_method::fluff)` and `relay_fluff::run(...)`**. §30.5's
+> send-nothing rule is enforced somewhere else entirely: at `send_txs`'s
+> `anonymity_fail_closed` arm, which is a **zone** decision, not a plan verdict.
+>
+> **So the retracted design would have produced fluff-at-origin** — a covert
+> zone unable to carry a stem would fluff the origination instead, which is the
+> outcome §16.4's gate overturned D9(b) for producing, arriving through a
+> different door.
+
+#### Why `NO_ROUTE` is the wrong channel even setting the inversion aside
+
+**The two conditions have different lifetimes.** `NO_ROUTE` is a *transient
+graph state* — no stem successor at this instant, the connection list may be
+stale, so refresh and retry. Try-twice-then-fluff is a defensible degradation
+for that, because the next transaction will probably route.
+
+*"Covert cannot serve this phase"* is a **persistent configuration state**: true
+for every transaction until an operator changes something. Routing it through a
+retry-shaped verdict means every origination pays the same two failed attempts
+and the same fluff fallback forever, with an `MERROR` per transaction that reads
+as a transport hiccup. **Terminal conditions and transient ones need different
+channels** — the distinction the CompleteTree slice already drew when it put the
+one-way posture flag in the shared constructor precisely because, unlike the
+terminal `AlreadyPruned` refusal, it cannot wedge the refresh loop.
+
+#### The right shape: unrepresentable, not expressible
+
+If covert is enabled on a zone, **the zone should be unable to be in a state
+where it cannot serve a phase it will be asked for** — validated at
+construction, not discovered at send time. `CovertSchedule` is already built
+that way: *"One type so 'enabled' and 'has deadlines' cannot disagree: a
+disabled zone has no schedule; an enabled zone always has one deadline per stem
+slot."* Extending that invariant to cover phase-serving capability makes the
+condition **unrepresentable rather than expressible**, and leaves the plan enum
+meaning exactly what it means today.
+
+If a runtime verdict turns out to be genuinely required anyway, it must be
+**distinct and terminal**, and its handler **must not be the fluff
+fall-through**.
+
 ### 42.5 What remains open
 
 1. **The ordering problem, and it is the implementation question.**
@@ -10080,7 +10209,15 @@ deletion removed the noise flag and left the zone-selection oracle untouched.
 
 ### 59.1 The decision, and why coherence is not a second one
 
-> **DORMANT AS SHIPPED — §63.8.** The coherence half cannot fire today: every
+> **STALE — see §89.8.8 (2026-08-17).** The dormancy chain has been broken at
+> BOTH ends and coherence is **live**: §89 broke link 1 (a stem send clears
+> `dandelionpp_fluff`), and Q12-U2 removed link 5 by deleting
+> `relay_method::forward` outright, so `tx_pool.cpp`'s suppression is gone and
+> an arrival relays at arrival. Every "coherence dormant" reading below — and
+> §89.8.1's correction that it *"did not wake"* — predates that removal.
+>
+> **DORMANT AS SHIPPED — §63.8.** *(Superseded; kept per the retraction
+> rule.)* The coherence half cannot fire today: every
 > anonymity-zone release carries `dandelionpp_fluff`, so a receiver assigns
 > `relay_method::fluff` and `still_stemming` is false on arrival. R-1 as
 > shipped is **the roll alone**; the reasoning below describes the world
@@ -10815,6 +10952,14 @@ relays alike. The flag cannot separate them because it does not vary.
 
 ### 63.8 R-1's coherence branch is unreachable — half of §59 is not running
 
+> **STALE — see §89.8.8 (2026-08-17).** The dormancy chain has been broken at
+> BOTH ends and coherence is **live**: §89 broke link 1 (a stem send clears
+> `dandelionpp_fluff`), and Q12-U2 removed link 5 by deleting
+> `relay_method::forward` outright, so `tx_pool.cpp`'s suppression is gone and
+> an arrival relays at arrival. Every "coherence dormant" reading below — and
+> §89.8.1's correction that it *"did not wake"* — predates that removal.
+
+
 **§59 shipped as two changes and describes itself as *"one roll at entry,
 coherence until fluff."* Only the roll is live.** The coherence branch
 (`net_node.inl:2381`, `still_stemming && origin != public_`) cannot fire
@@ -10918,8 +11063,12 @@ and the stem work reverses all four:
 | --- | --- | --- |
 | §63.7 exit (b) not dominated | `:561` flags **everything** `fluff` | stem sends pass `fluff = false` (`:807`, `:827`) — **the flag varies again, and §61.1's partition argument revives verbatim** |
 | §63.5 stem shortening rules out exit (a) | diversion **terminates** a stem | a diverted transaction **continues** stemming; the 64 % cost disappears |
-| §63.8 coherence dormant | arrivals are always `fluff` | receiver takes the `forward` default (`:941-942`), `still_stemming` holds, **coherence fires** |
+| §63.8 coherence dormant *(**stale premise** — §89.8.8)* | arrivals are always `fluff` | receiver takes the `forward` default (`:941-942`), `still_stemming` holds, **coherence fires** |
 | §62 F-12 retracted | no Tor-latency hops exist | the change **creates** them — un-retracts forward-looking (§64.3) |
+
+> **This table's left column is evaluated against the pre-§89 posture and is
+> stale — §89.8.8. Its conclusion is owed a re-derivation and must not be
+> quoted as-is.**
 
 **So the ranking inverts: exit (a) regains its footing and exit (b) loses
 its.** Item 1 can still be landed, but only as **posture-conditional** — the
@@ -13639,7 +13788,17 @@ because the *reason* is visible now and will not be later.
 
 ## 89.7 Coherence woke up, and its witness is uneven — stated rather than assumed
 
-> **CORRECTED 2026-08-10 by §89.8.1: it did not wake.** §63.8's chain has a
+> **STALE — see §89.8.8 (2026-08-17).** The dormancy chain has been broken at
+> BOTH ends and coherence is **live**: §89 broke link 1 (a stem send clears
+> `dandelionpp_fluff`), and Q12-U2 removed link 5 by deleting
+> `relay_method::forward` outright, so `tx_pool.cpp`'s suppression is gone and
+> an arrival relays at arrival. Every "coherence dormant" reading below — and
+> §89.8.1's correction that it *"did not wake"* — predates that removal.
+>
+> **CORRECTED 2026-08-10 by §89.8.1: it did not wake.** *(That correction is
+> itself superseded — see the banner above. §89.7's original conclusion is the
+> one that holds today, reached through a link §89.8.1 could not have known was
+> about to be deleted.)* §63.8's chain has a
 > fifth link this section did not know about — `tx_pool.cpp:360-361` refuses to
 > propagate `forward` into `tvc.m_relay`, so an anonymity arrival never reaches
 > `relay_transactions` at all — and §89 did not move it. Link 1 did break
@@ -13912,6 +14071,82 @@ that no longer works the way its comment describes.
 
 ---
 
+### 89.8.8 The dormancy chain is broken at both ends — coherence is LIVE
+
+**2026-08-17.** Four sections in this file carry a "coherence dormant" reading
+and **all four are stale**, in a chain where each corrected the last and the
+code then moved past every one of them. Recorded as its own subsection because
+the value of the record is that a reader can find the *current* answer without
+reconstructing the sequence.
+
+| round | claim | link it rested on | status |
+| --- | --- | --- | --- |
+| §63.8 | dormant | 1: every anonymity release sets `dandelionpp_fluff` | **broken by §89** |
+| §89.7 | woke | link 1 broken | conclusion correct, reached early |
+| §89.8.1 | did **not** wake | 5: `tx_pool.cpp`'s `tx_relay != relay_method::forward` conjunct | **removed by Q12-U2** |
+| **now** | **live** | both ends broken | current |
+
+**Verified at source, not inferred.** `levin_notify.cpp` sends with
+`fluff = false` on the stem arms and `true` on the fluff arm, and its comment
+names the downstream consequence. `tx_pool.cpp` states the removal outright:
+*"Q12-U2 removed the `tx_relay != relay_method::forward` conjunct that used to
+sit here. It was the fifth link in the chain that held coherence dormant… The
+class is gone and so is the suppression — an arrival now relays at arrival."*
+`relay_method` has no `forward` variant: the enum is
+`none | local | stem | fluff | block`.
+
+**§64.1's conditional table is therefore evaluating the wrong column.** Its
+"why it holds today" premises describe the pre-§89 posture, so its conclusion —
+*"item 1 is downstream of item 2"* — is **owed a re-derivation** against the
+current state rather than being quotable as-is. It is not simply inverted:
+three of its four rows turn on the stem graph and need re-reading one at a
+time. **Do not cite §64.1's ranking until that is done.**
+
+### 89.8.9 What this does NOT change: `F′` is a clearnet quantity in every posture
+
+The reflex is that a live coherence branch makes the anonymity zone a
+multi-hop graph, so `fluff_return_ms` becomes an anon-graph measurement. **It
+does not, and the reason is structural rather than configurational.**
+
+Coherence gates on `is_pre_fluff_relay`, which is `Stem | Local`. **Fluff can
+never cohere** — `once_at_origin_route(Fluff, ·)` returns `PublicClearnet` for
+*every* zone, pinned exhaustively by `zone_route::tests::fluff_never_coheres`
+— and the `public_clearnet` arm is `send(*m_network_zones.begin())`, the
+clearnet zone, **singular**. So a fluff arriving over an anonymity zone is
+forwarded to clearnet and **not onward over that zone**.
+
+**The anonymity fluff wave is therefore depth one from whoever fluffed, in both
+postures.** Coherence changes the *stem* graph; it cannot touch the fluff
+graph. And `F′` is a **fluff first passage**, so the flood it measures runs on
+clearnet whichever way the stem question is settled.
+
+Three consequences, and they reorganize the §90 round rather than voiding it:
+
+- **The `A = 15/30/60` β work is not orphaned — it has the wrong consumer.**
+  An anonymity-zone degree distribution governs the **stem** term (per-hop
+  cost, stem-length distribution), which *is* an anon-graph quantity measured
+  on the right topology, `--tx-proxy` cap and all. The region machinery, the
+  convergence criterion and the refusal semantics all transfer; the input feeds
+  a different term.
+- **`F′`'s own consumer is the clearnet flood**, whose degree distribution is a
+  larger population with no proxy cap, no descriptor fetch and no dial-failure
+  tail. Nobody in this arc has measured it.
+- **Per-zone `F′` is void, not merely rebutted.** §89.2 refused it on the
+  dual-stack keeper and was right for a *stronger* reason than it gave: there
+  is no anonymity fluff graph for a per-zone value to describe. **Per-posture
+  is the live regime and is not a refinement** — a dual-stack node's return
+  arrives over the clearnet flood, while a Tor-only node has no clearnet zone
+  and can only receive the return inside the depth-one wave, i.e. as something
+  close to a Bernoulli on whether the fluffer held it as an outbound peer. That
+  is a categorically different distribution, not a shifted one.
+
+**So `F′ = 4500` is not wrong so much as unconsumed**: it was derived at an
+admissible region on the anonymity topology, and the term it was derived *for*
+lives on clearnet. What is owed before any landing is a decomposition of the
+embargo **by term** — which are anon-graph, which clearnet-graph, which
+posture-dependent. That is a reading exercise on `full_travel_probability`, not
+a measurement.
+
 ## 90. The first-passage readings get a convergence criterion — and the shipped `F′` is a low draw
 
 **2026-08-13.** `fluff_return_ms = 3250` was read off **one** `(seed, trials)`
@@ -14034,3 +14269,417 @@ distribution has arrived by then) through `converged_fluff_return_mixed`, and
 carry the embargo, the wallet timeout and the §44 pins in the same change.
 Until then the shipped 3250 is known to be low by one tick against the
 conservative topology, and low is the under-provisioning direction.
+
+---
+
+## 91. The propagation-graph ruling — Design A adopted, and the composition it rests on
+
+**2026-08-17, maintainer ruling.** This section exists because four consecutive
+rounds re-derived the same confusion from scratch. Every constant in this file
+is a term that must be evaluated *on a graph*, and until now the answer to
+"which graph" depended on which phase you asked about — because the tree was
+running one design for the stem and a different one for the fluff, while this
+document argued the first in §89 and the second in §59.1.
+
+### 91.1 The two coherent designs, and that we had one of each
+
+**Design A — transport is a parameter, not a topology.** One propagation
+graph; clearnet, Tor and i2p are *link classes* within it. A fluff floods all
+of them. `F′` is a first passage over the union. Tor-only is a full
+participant. This is what §89 states in as many words at the fluff send site
+(*"a transport is a parameter and changing it does not change the graph"*), what
+§89.2's dual-stack keeper presupposes (*"a dual-stack node's fluff returns over
+both networks"* is only true if fluffs traverse both), and what the per-zone
+`hop` split is for.
+
+**Design B — the anonymity zone is a stem-only ingress.** Anonymity zones exist
+to hide *origination*; once a transaction fluffs it belongs to the public
+network. `F′` is purely clearnet. Tor-only is submit-only and needs clearnet or
+a bridge to receive. This is what §59.1 argues (*"fluff is the deliberate exit
+from the anonymity zone"*) — and it is what the routing implements.
+
+**We were running A for the stem and B for the fluff.** Verified: a fluff
+arriving on any zone takes `once_at_origin_route(Fluff, ·) → PublicClearnet`
+(fluff can never cohere — coherence gates on `is_pre_fluff_relay`, which is
+`Stem | Local`), and that arm is `send(*m_network_zones.begin())` — the
+clearnet zone, **singular**. Nothing anywhere pushes a fluff into Tor or i2p.
+
+**The consequence nobody had stated:** a Tor-only node sees only
+anonymity-originated traffic. It never learns of the transactions that
+originate on clearnet, so it cannot maintain a mempool, cannot disarm embargoes
+against the real flood, and cannot mine on a current template. **Tor-only was
+not a working posture — not by ruling, but by routing.**
+
+### 91.2 Design A is adopted
+
+**Tor-only is a supported posture. It is not the default.** Seed hosts run
+dual-network and are knowingly linkable, which costs nothing: long-running
+public infrastructure whose onion is discoverable anyway.
+
+A fluff is broadcast across every configured zone. `F′` remains **process-wide
+at the worst zone** per §89.2 — and under A the worst zone is the anonymity
+graph, because `ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625` against clearnet's
+`50`. A dual-stack node's return is a *min* over the graphs it runs; a Tor-only
+node's return is the anonymity graph alone, and provisioning at the worst zone
+is provisioning for that node.
+
+### 91.3 §59.1's exit rule is superseded, and its problem was real
+
+§59.1 gated coherence on the pre-fluff methods to stop anonymity-originated
+transactions being **stranded in the anonymity subgraph** — *"a liveness break
+that would read as correct."* That failure mode is genuine and this ruling does
+not dismiss it.
+
+**Design A solves it differently: the fluff goes to clearnet *and stays on the
+anonymity zone*, rather than leaving it.** The exit rule achieved liveness by
+making the anonymity zone one-way. A broadcast achieves the same liveness
+without that, which is why the rule is superseded rather than reversed — the
+constraint it enforced still holds, by a different mechanism.
+
+### 91.4 The unlinkability composition — a PRECONDITION of A, not an incidental property
+
+Design A makes a dual-stack node emit each fluff on more than one zone, which
+invites the obvious objection: a correlated pair, IP on clearnet and onion on
+Tor, accumulating over enough transactions into the IP↔onion linkage
+`ANON_ZONE_SENTINEL_PEER_ID` exists to prevent.
+
+**That attack does not close, and the reason is a composition of three
+decisions none of which was made for it:**
+
+| decision | made for | effect here |
+| --- | --- | --- |
+| `ANON_ZONE_SENTINEL_PEER_ID = 1` | stop passive IP↔onion correlation via the handshake field | inbound anon peers carry no distinguishing id |
+| `tor_address::unknown()` on inbound | hidden services have no client identifier | an inbound anon peer has no address to record |
+| `FluffReach::OutboundOnly` | sybil resistance — relay only to peers we chose | **the direction that carries fluffs carries no identity** |
+
+The third is the one that closes it. On an `OutboundOnly` zone the fluff loop
+skips every peer whose direction is inbound, so for an adversary `A` to receive
+a fluff from node `Y` over Tor, **`Y` must have dialled `A`** — making it `A`'s
+inbound, where `A` holds `unknown()` and the sentinel. `A` sees a socket, not
+an identity. And the converse closes the other route: if `A` dialled `Y` — the
+direction where `A` *does* know `Y`'s onion, having chosen it from its peerlist
+— then that link is `Y`'s inbound, and `Y`'s fluff loop skips it. **There is no
+combination that yields both the emit and the name.**
+
+What survives is strictly weaker: an active marker can pair an IP with *one of
+the inbound sockets it already holds*, never with an onion address — a channel
+it already had, and a fact far short of IP↔onion.
+
+**This is recorded as a precondition because Design A now depends on it.** The
+composition is load-bearing and undocumented, and there is a proposal already
+in this arc's record that would revoke it: **peer-distinctness on the anonymity
+zone** (§16, closed on the ground that a distinctness oracle is a linkability
+oracle). This is the third and sharpest argument against it — identifying
+inbound anonymity peers would hand an active marker exactly the attribution it
+currently cannot obtain, and would do so at the moment Design A begins emitting
+on both zones. **Do not reopen distinctness without reopening this ruling.**
+
+> **Two retracted attacks, recorded because the method is the reusable part.**
+> The correlation cost of A was priced as real *twice* — first as a shared emit
+> time (killed by each zone drawing its own `FluffScheduler` delay from its own
+> `m_notifier`), then as a shared receipt anchor (killed by the composition
+> above). Both constructions assumed an adversary that receives the emit *and*
+> knows the emitter, without ever making it pay for that position. Pricing the
+> adversary's position before its gain is the check that would have caught both.
+
+### 91.5 What this ruling closes
+
+- **F-8b's floor keeps its number on both arms.** Under A the anonymity
+  out-degree governs an anonymity fluff flood, so `MIN_PROVISIONED_OUT_PEERS`
+  and the `--tx-proxy` refusal are derived on the graph they constrain. The
+  cross-graph defect that Design B exposed does not arise.
+- **The `A = 15/30/60` β work has its consumer back**, and as the *right*
+  input rather than a reassigned one: the anonymity graph carries a real fluff
+  flood, and the worst-zone `F′` needs exactly that graph.
+- **Per-posture `F′` is not a distinct regime** — it is what §89.2 already
+  says, a min over the transports a node runs.
+- **§64.1's conditional table becomes re-derivable** rather than owed.
+
+### 91.6 What it opens, and neither is optional
+
+**The flood instrument has no transit term.** `simulate_fluff_return_mixed`
+advances each hop by a fluff-flush draw alone; `time_between_hop_ms` and the
+transit constants appear nowhere in the module. Under Design B that was
+harmless — 50 ms against a 5000 ms flush mean is ~1 %. Under A it is decisive:
+the worst zone carries **1625 ms per hop, ~32 % against the same mean**, and
+omitting it makes the flood look *faster*, which is the under-provisioning
+direction. **No `F′` derived without it is valid**, including the 4500 ms this
+arc reached at the §90 admissible region.
+
+#### What the instrument says once transit is in it — and why this is NOT a candidate constant
+
+The transit term landed with this ruling (`FloodParams::transit_ms`, mandatory;
+`Default` removed; `transit_for(reach)` derives it from the link class, since
+`FluffReach::OutboundOnly` is set from `nzone != public_` in production and the
+reach therefore *is* the link class). Re-derived on the anonymity graph at
+`ANON_ZONE_TRANSIT_ASSUMPTION_MS`:
+
+| `beta` | `F′` transit-less | **`F′` at 1625 ms** |
+| --- | --- | --- |
+| 0 | 3500 | **12375** |
+| 0.167 | 4500 | 13500 |
+| **0.2167 (`beta*` = p90)** | **4500** | **13625** |
+| 0.500 | 5000 | 14250 |
+
+Dependents at 13625: clearnet embargo **662 s**, anonymity **984 s**, wallet
+wait **4529 s**.
+
+**This is recorded as instrument output, not as a value to land, and the reason
+is structural rather than caution.** The sweep's own result is that `F′` here is
+**transit-dominated, not degree-dominated**: the whole admissible region spans
+**+15.2 %** against **+42.9 %** transit-less, so `beta` — the quantity three
+rounds chased — moves the constant by about a seventh of what the transit
+assumption does. And `ANON_ZONE_TRANSIT_ASSUMPTION_MS` is a **labelled
+assumption** (§80, §85.3), not a measurement.
+
+So the number is mostly a restatement of an unmeasured input wearing a
+derivation's clothes. **The next quantity worth measuring is Tor transit, not
+anonymity degree** — and it must be measured on the complete mechanism
+(§42's noise half landed, D++ already live per §89), not simulated. Constants
+derived against a mechanism that does not yet exist end-to-end are the
+theoretical layer this arc has already paid for four times.
+
+**A note on why the suite stayed green.** Adding transit moved the anonymity
+flood's readings by ~3× and **not one test failed** (155 passed, 0 failed).
+That is not evidence the change is inert — it is evidence the flood instruments
+assert **shape** (monotonicity, ordering, refusal at stranded degrees) and not
+**level**. Which is precisely how a missing transit term survived a convergence
+criterion, an admissible-region boundary and two review rounds: nothing in the
+suite was watching the axis it moved.
+
+**Tor-only liveness is a question Design A creates and B never had to answer.**
+"Supported posture" must mean a Tor-only node stays in consensus, not merely
+that it receives transactions eventually — and the anonymity flood at 1625 ms
+per hop over a ~30-node graph is a very different propagation regime from
+clearnet. This is owed before Tor-only is documented as supported to users.
+
+---
+
+## 92. The backstop ruling — and the disarm scope decides the carve-out's sign
+
+**2026-08-17, maintainer ruling.** §25.1 gated the noise restoration on *"what
+the backstop does when it fires on B."* This settles it, and the answer is not
+the one §25.1 anticipated, because its premise expired.
+
+### 92.1 §25.1's premise is stale — seventh instance
+
+§25.1, verbatim: *"On a noise zone there is no fluff path — everything leaves
+through the covert channels — so the remedy is a design choice (re-point to a
+different covert channel…; or fluff to the zone's outbound set)."*
+
+That was true of **Configuration B**, where covert carried everything. B was
+deleted at §41, and §42.3's proposal is precisely that **fluff takes the
+ordinary connection while covert carries the stem phase** — so the fluff path
+exists by construction under the architecture the restoration proposes.
+Option (a) is no longer needed to answer the question. **Seventh
+stale-inherited-premise in this arc.**
+
+But that does not discharge the gate. It **relocates it onto §91's Design A**,
+where the answer is genuinely contested.
+
+### 92.2 Design A and §30.5 conflict — only on the backstop, only at the origin
+
+Under A a fluff broadcasts to every configured zone, clearnet included. For an
+ordinary fluff that is fine: the stem has run `h` hops, so the fluffing node is
+not the origin and clearnet exposure costs nothing.
+
+**The backstop is the one case where that fails.** It fires at a node whose own
+stem was swallowed. When that node is the *originator*, A's broadcast rule puts
+its own transaction on clearnet from its own IP with itself as the fluff
+source — the origin oracle §30.5 forbids, and the failure §25.1's own header
+names (*"the covert channel is an origin oracle and attribution precision goes
+from ≈ f to ≈ 1"*).
+
+**The predicate already exists.** `originated_stays_in_zone(tx_relay, nzone)`
+draws exactly this distinction at `record_relayed`. It is currently a txpool-class
+decision; under A it must become a **wire** decision too, because A changed what
+"fluff" does on the wire.
+
+### 92.3 The ranking
+
+1. **Re-stem is preferred** (§25.1's option (a)). A backstop that re-points to a
+   fresh stem successor keeps the transaction in stem phase: no clearnet flood,
+   therefore no return trip, therefore nothing to strip and nothing to disarm.
+   It is Dandelion++'s own answer to a swallowed stem.
+2. **The carve-out applies at the terminal fluff.** Re-stem must terminate, so
+   after a bounded number of attempts the transaction fluffs anyway — by which
+   point it has moved off the origin and the fluffing node is not the origin.
+   **The backstop's fluff is in-zone only when the firing node originated the
+   transaction** — an explicit carve-out from A's broadcast rule, scoped to that
+   predicate. Everything else about A stands.
+
+### 92.4 The third clause — the ratchet does two jobs and only one should be frozen
+
+`upgrade_relay_method` is a one-way ratchet over `none < local < stem < fluff <
+block`, and it does two opposite jobs at once:
+
+- **It makes `Local` unforgeable** — nothing can demote *into* it, so no relaying
+  node can acquire the origin mark. Verified: `set_relayed` writes through
+  `upgrade_relay_method`, so the covert branch's `tx_relay = relay_method::local`
+  cannot demote an entry already at `stem` or `fluff`; the write is discarded.
+- **It makes `Local` non-durable** — anything above upgrades *past* it, so the
+  origin loses the mark on the first fluff re-arrival, and
+  `originated_stays_in_zone`'s own note says what follows: *"one record of `Stem`
+  or `Fluff` moves the entry out of `Local` permanently, and the next pool
+  re-relay puts the user's own transaction on the clear internet."*
+
+So freezing the ratchet and letting it run are **both** wrong. `Local` is two
+facts with different lifetimes — provenance, which is permanent, and re-broadcast
+responsibility, which should end when the transaction is observed circulating:
+
+> **An originated entry's `Local` class is provenance and is not upgraded by a
+> re-arrival of its own transaction; its re-broadcast responsibility is
+> separately disarmed when the transaction is observed circulating.**
+
+Discipline #17 with **presence** as the signal: `T` returning is proof it is
+circulating, which is exactly the condition under which re-broadcast has no job
+left.
+
+> **A fourth reason to delete the covert downgrade rather than migrate it**
+> (§42.5a): its stated purpose, *"do not put into stempool embargo"*, is achieved
+> not by the value meaning anything but by monotonicity throwing the value away.
+> A value that works because it is ignored is not a mechanism to carry forward.
+
+### 92.5 The disarm's SCOPE is open — and origin-only is net-NEGATIVE
+
+**This is the deciding question, not insurance.** The re-broadcast loop is
+bounded — `get_relay_delay` sets the wait to the entry's age rounded to
+`MIN_RELAY_TIME` (300 s) and capped at `MAX_RELAY_TIME` (4 h), with a hard stop
+at `max_age / 2`, giving **13 emissions over 36 hours**. Under A a relaying node
+holds `T` at `fluff` and broadcasts to both zones: **13 on anon, 13 on clearnet**.
+
+| branch | origin's emissions | verdict |
+| --- | --- | --- |
+| **(a) no disarm** (freeze only) | 13 anon / **0 clearnet** | distinguishable by clearnet absence |
+| **(b) origin-only disarm** | **1** anon / **0 clearnet** | **worst** — distinguishable on both axes |
+| **(c) universal disarm** | 1, like everyone | resolves |
+
+**Why (b) is net-negative.** The origin relays everyone else's traffic on
+clearnet normally, so the signal is not "quiet once" — it is *"there is a set of
+transactions this node never re-emits on clearnet while re-emitting its
+neighbours' traffic thirteen times."* Over a handful of originations that set
+**is** the origination set, and the adversary's position is one of the node's
+twelve clearnet outbound slots.
+
+Set against what the carve-out prevents: without it the origin emits on clearnet
+at the terminal backstop, *first*. **"I saw T first from O" is a weak signal** —
+someone is always first, and being on the path is not being the origin.
+**Thirteen repeated absences is not weak.** So the carve-out with origin-only
+disarm trades an ambiguous one-shot signal for an unambiguous repeated one.
+
+**(c) universal disarm resolves it**: if every node disarms re-broadcast on
+observing `T` circulating — and for a relaying node, receiving it from a peer
+*is* that observation — then nobody re-emits wire-received transactions, absence
+is the norm, and the origin's silence is explained by a mechanism every node
+runs. The re-relay loop collapses to what it arguably always was: **the origin
+pushing its own transaction until it sees it come back**, with the origin's
+disarm trigger coinciding with its embargo's — one mechanism rather than a
+special case.
+
+**Ruled: the carve-out lands, and its dual-stack cost is an ACCEPTED RESIDUAL
+until the disarm scope is settled.** Do not read the third clause as optional.
+It determines the carve-out's **sign** for a dual-stack originator.
+
+### 92.5a The complement does NOT make (c) free — it is thinner than it looks
+
+The coverage objection to universal disarm is *"nodes that missed the flood need
+those 13 emissions."* The obvious answer is that
+`NOTIFY_GET_TXPOOL_COMPLEMENT` already serves late joiners by a targeted pull:
+`request_txpool_complement` sends the node's own pool hashes and the peer
+replies with the difference. If that held, branch (c) would be nearly free — the
+re-relay loop would be a redundant second sync mechanism costing `13 × N`
+emissions network-wide per transaction.
+
+**Read at source, it does not hold.** `m_ask_for_txpool_complement` is
+initialised `true`, consumed by a **one-shot**
+`compare_exchange_strong(true, false)`, and re-armed at exactly one site: when
+`target == 0` and the node has become **fully disconnected** from the network.
+The request then goes to the **first** peer at `state_synchronizing` or better.
+
+So the complement fires **once per total-disconnection cycle, against one peer,
+with no retry** — not once per sync in any recurring sense. A node that syncs,
+draws a complement from a peer whose pool happened to be thin, and stays
+connected **never asks again**.
+
+**And the trigger is loss of the network, not joining it.** A node that has
+never been disconnected asks **exactly once in its lifetime, at startup** — the
+flag is `true` at construction and consumed at the first sync completion. So
+this is not a thin late-joiner pull; it is a **reconnection-recovery path that
+happens to fire once at boot**.
+
+**Consequence, and it inverts the tentative reading:** there is **no ongoing
+pull at all**, so the re-relay loop is the only recurring coverage mechanism,
+full stop. Universal disarm would remove it rather than de-duplicate it.
+**Branch (c) is not nearly free.**
+
+What the loop genuinely covers that no pull can is unchanged and is the
+unbundling's own conclusion: a transaction that propagated to **nobody** —
+swallowed at the first hop, or lost to a partition — has no holder to pull from.
+That is the black-hole case, and it is exactly what the *origin's* push is for.
+Every **other** node's participation is the part that duplicates a pull.
+
+### 92.5b Branch (d) — probabilistic re-broadcast, and it is now the leading candidate
+
+Given §92.5a, the middle option is not universal-or-none:
+
+> **Each holder re-broadcasts with probability `p`.**
+
+Aggregate coverage stays high at large `N` while any individual node emitting
+zero becomes unremarkable — which converts the origin's **deterministic**
+absence (§92.5's oracle) into a **statistical** one with a tunable cost.
+
+It passes this project's own scope rule on randomness: Fanti–Viswanath licenses
+randomization where the observable being attacked *is* the one being randomized,
+and here the adversary's observable is precisely the emission **count**.
+
+**Ranking after §92.5a:** (b) origin-only remains net-negative and is refused;
+(c) universal is no longer cheap and would cost the only recurring coverage;
+**(d) probabilistic is the leading candidate** and is what the implementing round
+should price first.
+
+#### (e) Fix the complement's trigger — a substitute for `p`, not a companion
+
+`p` leads only because the re-relay loop is currently doing two jobs. The other
+way to separate them is to **give coverage its own mechanism**: a pull that
+fires on **new-peer** rather than on total-disconnection is a targeted answer to
+a targeted job, and it would let `p` be set for the **privacy** objective alone
+instead of doubling as the coverage mechanism.
+
+**(d) and (e) are substitutes, and choosing between them is cheaper than tuning
+one to do both** — the same unbundling shape that produced §92.4. The round
+prices them against each other rather than adopting `p` by default.
+
+### 92.5c What the round settles, in order
+
+1. **The disarm predicate**, and it fails *"received once"* in **two**
+   directions. A single arrival can be the origin's own echo off one peer — and,
+   more dangerously, **a relay's first receipt is its only receipt in the common
+   case**, so a predicate firing on it disarms every node immediately and
+   **collapses to branch (c) by accident**. The property that actually means
+   *circulating* is *"this came back from somewhere other than where I sent
+   it"* — which the stem-observation machinery already distinguishes, and
+   already has the join key for.
+2. **`p` for branch (d)**, against measured `N` — and per §91.6 that measurement
+   waits on the complete mechanism, not a simulation.
+
+### 92.6 The residual is a second independent argument for Tor-only
+
+**A Tor-only originator has no clearnet peers to be silent in front of**, so it
+does not leak §92.5's absence signal at all — under any disarm branch.
+
+That is now **two independent mechanisms** where Tor-only is *strictly stronger*
+rather than merely equivalent: this, and §91.4's emit-attribution composition.
+Which is a real answer to §91.2's *"Tor-only is supported, not default"* —
+**supported and strictly more private**, with the cost quantified at the
+anonymity zone's embargo (§91.6).
+
+### 92.7 A loop that closed without either end noticing
+
+§25.2 already contains the sybil argument this arc spent two rounds
+reconstructing, and states it more strongly: *"on an anonymity network inbound
+peer identity is free to mint… it is that you can never establish you have more
+than one distinct one. Effective inbound anonymity set ≈ 1 against anyone willing
+to generate keys."* It names `rust/shekyl-relay/src/zone/mod.rs`'s
+`FluffReach::OutboundOnly` doc as the load-bearing misattribution — **the exact
+site corrected two rounds later**, without the connection being made at the time.
+Cross-referenced here so the next reader gets it in one hop.
