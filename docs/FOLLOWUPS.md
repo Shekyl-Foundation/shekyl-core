@@ -9760,33 +9760,52 @@ its wake.
   `utils/fleet/sample_node_series.sh` and `anon_readout_parse.py` should emit
   the per-sample series by default and any arm's write-up should carry it.
 
-- **Relay: `full_travel_probability` has no simulation partner, and it is now
-  the derivation AND the check.** *(Registered 2026-08-16. §17.1 records the
-  gap in the design doc; it has never had a `FOLLOWUPS` entry, which is how it
-  survived three rounds that all leaned on it.)*
+- **Relay: `full_travel_probability`'s cross-check holds `fluff_return_ms`
+  fixed, and `F'` is the axis the region derivation moves.** *(Registered
+  2026-08-16; **rewritten 2026-08-17 after the original entry was found to be
+  factually wrong** — see the retraction below, kept rather than deleted
+  because the wrong version was published and acted on.)*
 
-  Everything α-shaped runs through this one analytic function.
-  `derive_embargo` binary-searches against it, so the shipped embargo is
-  *defined* as the smallest tick count where it clears 0.90; `d9_alpha.rs`
-  reads α from it to price D9(b); and since PR #488 the admissible region's
-  boundary and its miss curve are both derived through it as well. **A wrong
-  slack exponent moves the derivation, the gate and the region bound together
-  and every one of them stays green** — the textbook common-mode failure, and
-  the surface has only grown.
+  > **RETRACTED, and the correction is most of this entry.** The first version
+  > of this entry claimed `full_travel_probability` *"has no simulation
+  > partner; grep finds none"* and proposed building one. **That is false.**
+  > `conformance::simulate_propagation` is an independent Monte-Carlo stem
+  > walker that reports `full_travel_rate`
+  > (`shekyl-relay-privacy/src/conformance/stem.rs`), and
+  > `analytic_derivation_agrees_with_the_simulator`
+  > (`tests/propagation_measurement/embargo_survival.rs`) has been pinning the
+  > analytic function against it across eight `(mean, tick)` pairs at 6M
+  > trials, with a stated Monte-Carlo band. That test **deliberately sweeps the
+  > tick** for exactly the reason the retracted entry claimed was undefended:
+  > *"a tick-dependent divergence — exactly where a fire-vs-disarm boundary
+  > convention would surface — had nothing watching it."* There is a second
+  > pairing too: `solve_embargo_secs_for_target` bisects the embargo using the
+  > **simulator** rather than the closed form.
+  >
+  > **How the error was made, because the method is the reusable part.** The
+  > check was `grep -rn "simulate_full_travel\|full_travel.*simulate"` — a grep
+  > for the name the entry had already predicted, not for the *concept*. The
+  > partner exists under a different name and would have been found by grepping
+  > `full_travel_rate`. A search that can only confirm the hypothesis that
+  > generated it is not evidence of absence.
 
-  **The tree already knows the remedy, one function up.**
-  [`marginal_preemption_profile`](../rust/shekyl-relay-privacy/src/derive.rs)
-  carries `conformance::simulate_preemption_profile` as its explicitly named
-  *"cross-check anchor"* — an independent simulator that walks the thing the
-  closed form asserts. `full_travel_probability` has no counterpart; grep finds
-  none.
+  **What is actually owed, which is much smaller.** The cross-check builds
+  `DandelionParams::inherited()` and varies only the embargo mean and the tick,
+  so `fluff_return_ms` is held at the shipped value for every row. The `F'`
+  axis *is* swept — but **analytically only**, through `derive_embargo` and
+  `full_travel_probability` with no simulator in the loop
+  (`embargo_survival.rs`, the `[500, 1_500, 2_250, 3_250, 4_250, 13_750]` row
+  sweep).
 
-  **Do:** add a `simulate_full_travel` beside the other conformance walkers —
-  draw real embargo deadlines per stem node, walk the stem, report the fraction
-  completing before any timer fires — and pin it against the analytic value at
-  the shipped pair, the way §15.3's recorded rows anchor the recovery formula.
-  The two must be able to disagree, which is the whole point: a partner that
-  shares the exponent is not a partner.
+  PR #488 made that the load-bearing axis: the admissible region's boundary and
+  its miss curve are both read off `F'`, so the one parameter the region moves
+  is the one the analytic/simulator agreement never varies. A slack-exponent
+  error in the `F` term specifically would agree at 3250 and be unwitnessed
+  elsewhere.
+
+  **Do:** add `fluff_return_ms` to `analytic_derivation_agrees_with_the_simulator`'s
+  sweep at the region's candidate values, not a new simulator. One axis on an
+  existing test.
 
 - **Relay: `F'` may be per-POSTURE even though §89.2 correctly refused
   per-ZONE.** *(Registered 2026-08-16, from PR #488's review round. Deliberately
