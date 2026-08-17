@@ -8446,6 +8446,83 @@ activity*. Whether that is acceptable is a scope call this round owes, and the
 honest framing is that **the alternative on offer is not "cover everything" —
 that option is 4.3× over capacity and was never available.**
 
+### 42.5a The covert branch REFUSES to stem, and that is inherited Monero (2026-08-17)
+
+**Found while scoping the restoration.** The covert branch in `levin_notify.cpp`
+is not merely a different carrier — it is a different *architecture*, and it
+contradicts §89:
+
+```cpp
+if (shekyl_relay_zone_covert_enabled(...) && !zone_->channels.empty())
+{
+  if (tx_relay == relay_method::stem)
+  {
+    MWARNING("Dandelion++ stem not supported over noise networks");
+    tx_relay = relay_method::local;   // do not put into stempool embargo
+  }
+  ...
+  for (channel = 0; channel < zone_->channels.size(); ++channel)  // ALL channels
+```
+
+Three properties, all inherited, all wrong for Shekyl:
+
+1. **The carrier check sits ABOVE the phase switch**, so the carrier is chosen
+   *instead of* a phase rather than *for* one.
+2. **It downgrades a stem to `local`** — Monero's posture that noise mode
+   *replaces* Dandelion++ rather than carrying it.
+3. **It broadcasts on every channel**, not on the stem slot — which contradicts
+   the Rust substrate, where `CovertSchedule` already binds channel `i` to stem
+   slot `i` (§20.3).
+
+**Why this is recorded loudly.** Reconnecting noise naively — passing a real
+payload at the two `nullptr` notifier sites — would not merely restore a
+4.3×-over-capacity carrier (§42.1). **It would silently switch the anonymity
+zone from stemming to not stemming**, reversing §89, disarming the coherence
+branch the D9 arc just landed, and announcing it through an `MWARNING` that
+reads as a capability notice rather than a posture change.
+
+This is the **sixth** stale-inherited-premise found in this arc and the first
+that would have changed **consensus-adjacent behaviour** rather than a
+document. It sits directly beneath a Shekyl comment that correctly explains
+§89's *"Dandelion++ runs on every zone"* — the prose was updated for §89 and
+the branch below it was not.
+
+**What §42.3 therefore requires** is not an ordering fix. It is: delete the
+stem→`local` downgrade; move the carrier decision below the phase decision; and
+replace the all-channels broadcast with a per-stem-slot send. The covert path
+and the stem path are currently *mutually exclusive implementations of the same
+job*, and that — not ordering — is what §42.5's open 1 calls non-mechanical.
+
+### 42.5b The decision half is already Rust, and the covert branch bypasses it
+
+The relay plan already crosses the FFI: `shekyl_relay_zone_plan_relay_with_refresh`
+returns `SHEKYL_RELAY_PLAN_STEM` / `NO_ROUTE` / `FLUFF_EPOCH`, and the stem
+path at `levin_notify.cpp` consumes it. **Rust decides, C++ dispatches** — the
+architecture rule 20 asks for is already in place for the phase.
+
+**The covert branch is the one path that never asks.** So the restoration is
+not a port of working C++ into Rust; it is bringing an inherited bypass under
+a seam that already exists, and the correct model is already on the Rust side
+(`CovertSchedule`'s slot binding). Scope:
+
+| concern | owner |
+| --- | --- |
+| phase (stem / fluff / no-route) | **Rust** — already |
+| carrier (covert vs ordinary) | **Rust** — new, folded into the plan |
+| which channel / stem slot | **Rust** — `CovertSchedule` already binds `i ↔ i` |
+| dummy payload bytes | **Rust** — one owner for the covert parameters |
+| strand dispatch, levin fragmenting, socket write | **C++** — epee-bound, stays |
+
+Per rule 40's coarse-call rule this is **one** crossing returning a plan that
+carries phase *and* carrier *and* slot — the precedent being
+`shekyl_relay_zone_roll_originated_zone`, which folded a roll and its mapping
+into a single call rather than shuttling an intermediate verdict across.
+
+The stem→`local` downgrade is **deleted, not migrated**: Rust does not produce
+"downgrade the phase", it produces a plan, and a carrier that cannot serve a
+phase is a `NO_ROUTE` — which §30.5 already requires to send nothing rather
+than fall back.
+
 ### 42.5 What remains open
 
 1. **The ordering problem, and it is the implementation question.**
