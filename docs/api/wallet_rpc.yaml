@@ -592,10 +592,12 @@ components:
         multipliers — and the snapshot must be well-formed (monotonic
         tiers, no named tier above the absolute cap; -29109 otherwise).
         `custom` pins atomic-units-per-byte, bypassing the named tiers
-        but not its own band: it must sit between the snapshot's economy
-        floor and min(100× economy, the absolute cap) (-32602 otherwise).
-        An honest Priority tier that is many times economy does not
-        lock `custom`.
+        but not the policy they obey: it must sit at or above the
+        snapshot's economy floor and at or below the same absolute cap
+        (-32602 otherwise — a `custom` rate is the caller's parameter,
+        not a daemon defect). There is no `custom`-only relative
+        ceiling, so `custom` can always express the snapshot's own
+        `PRIORITY` rate, or a little more.
       oneOf:
         - type: string
           enum: [ECONOMY, STANDARD, PRIORITY]
@@ -1604,8 +1606,11 @@ components:
         [default_priority, economy_fee, standard_fee, priority_fee, tree_depth]
       description: >
         One daemon fee snapshot + the same converge fixpoint the build path
-        runs, per named tier. A failed snapshot is -29102 (the same code
-        the build path uses).
+        runs, per named tier. The quote is gated by the same snapshot
+        checks the build path applies, so a quote never reports a
+        snapshot a build would refuse: a fee query that *failed* is
+        -29102, and a snapshot that answered but was *refused* is
+        -29109 (both the same codes the build path uses).
       properties:
         default_priority:
           type: string

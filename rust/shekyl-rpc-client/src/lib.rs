@@ -11,7 +11,7 @@
 #![deny(unsafe_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use core::{fmt::Debug, future::Future};
+use core::{fmt::Debug, future::Future, num::NonZeroU64};
 use std_shims::{
     alloc::format,
     io,
@@ -86,12 +86,28 @@ pub struct FeeRate {
 }
 
 impl FeeRate {
-    /// Construct a new fee rate.
-    pub fn new(per_weight: u64, mask: u64) -> Result<FeeRate, RpcError> {
-        if (per_weight == 0) || (mask == 0) {
-            Err(RpcError::InvalidFee)?;
+    /// Construct a fee rate whose non-zero invariants the caller's own
+    /// types already carry.
+    ///
+    /// Total, so a caller holding the proof — a `Custom` rate that
+    /// arrived as [`NonZeroU64`], against the mask of an
+    /// already-validated snapshot — gets no unreachable error arm to
+    /// misclassify. [`Self::new`] is the fallible edge, for the bare
+    /// `u64` fields that come off the daemon wire.
+    #[must_use]
+    pub const fn from_nonzero(per_weight: NonZeroU64, mask: NonZeroU64) -> FeeRate {
+        FeeRate {
+            per_weight: per_weight.get(),
+            mask: mask.get(),
         }
-        Ok(FeeRate { per_weight, mask })
+    }
+
+    /// Construct a new fee rate, rejecting a zero rate or zero mask.
+    pub fn new(per_weight: u64, mask: u64) -> Result<FeeRate, RpcError> {
+        match (NonZeroU64::new(per_weight), NonZeroU64::new(mask)) {
+            (Some(per_weight), Some(mask)) => Ok(Self::from_nonzero(per_weight, mask)),
+            _ => Err(RpcError::InvalidFee),
+        }
     }
 
     /// Atomic units charged per weight unit, before mask rounding.

@@ -170,7 +170,16 @@ pub(super) fn map_signer_error(err: &SignerError) -> SendError {
     }
 }
 
-pub(super) fn phase1_tx_hash(id: ReservationId) -> TxHash {
+/// Correlation value for a submit outcome whose transaction bytes the
+/// engine no longer holds, so there is nothing to hash.
+///
+/// Not a transaction hash and never compared against one: it encodes
+/// the [`ReservationId`] little-endian at offsets `0..8` so an
+/// ambiguous-submit diagnostic can be tied back to its reservation.
+/// (Was `phase1_tx_hash`; the Phase-1 stub it was named for is gone,
+/// but this correlation need is not — `finalize_submit_ambiguous` is
+/// a live path.)
+pub(super) fn correlation_tx_hash(id: ReservationId) -> TxHash {
     let mut bytes = [0u8; 32];
     bytes[..8].copy_from_slice(&id.raw().to_le_bytes());
     TxHash::from_bytes(bytes)

@@ -416,6 +416,11 @@ pub use error::{
     RefreshError, SendError, SubmitError, TxError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
+// `ValidatedFeeEstimates` is the type of `FeeEstimationContext`'s public
+// `fee_snapshot` field, and `ABSOLUTE_FEE_RATE_CAP` is the `bound` an
+// RPC consumer reads out of a `-29109` payload: both were reachable
+// through public API while unnameable, so neither could be documented.
+pub use fee_policy::{ValidatedFeeEstimates, ABSOLUTE_FEE_RATE_CAP};
 pub use fee_query::{FeeTierQuote, TxShapeEstimate};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use local_economics::LocalEconomics;

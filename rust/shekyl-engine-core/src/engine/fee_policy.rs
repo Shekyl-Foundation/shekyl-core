@@ -33,6 +33,15 @@
 //! [`ValidatedFeeEstimates`] is the only constructor. Quote and build
 //! both go through it; Custom band-checks run later, against a snapshot
 //! that has already been accepted.
+//!
+//! `Custom` is bounded by the *same* two facts and nothing else — at or
+//! above the snapshot's economy floor, at or below the cap on the same
+//! effective basis. It gets no relative ceiling of its own: economy is
+//! the market floor, so an economy multiple cannot separate a user's
+//! typo from an honest top tier, and one anchored on `priority` would
+//! be a free parameter. See [`CustomFeeBand`].
+
+use core::num::NonZeroU64;
 
 use shekyl_rpc_client::{tx_fee, FeeRate};
 
@@ -42,7 +51,11 @@ use super::traits::FeeEstimates;
 /// `Custom`. History-free half of the 2026-04-25 decision-log entry;
 /// pinned against the 2021-scaling KAT (`Fh = 67_000` at the 10 SKL /
 /// 300 k-weight row).
-pub(crate) const ABSOLUTE_FEE_RATE_CAP: u64 = 100_000;
+///
+/// `pub` because [`CeilingViolation::bound`] returns it as the
+/// `-29109` wire payload's `bound` field: an RPC consumer reading
+/// those docs must be able to follow the link to the number.
+pub const ABSOLUTE_FEE_RATE_CAP: u64 = 100_000;
 
 /// Failures from fee estimation / snapshot validation.
 ///
@@ -157,30 +170,46 @@ impl CeilingViolation {
 }
 
 /// Why a caller-pinned `Custom` rate was refused.
+///
+/// The band is exactly the policy every *named* tier obeys — no more,
+/// no less. There is no `Custom`-only relative ceiling: an
+/// economy-anchored multiple is the same category error the withdrawn
+/// 10× lock was (economy is the market *floor*, and honest
+/// 2021-scaling `Fh / Fl` reaches 1077×), so a "100× economy" ceiling
+/// refused `Custom` at the snapshot's own Priority rate while
+/// `FeePriority::Priority` succeeded at that identical rate. The
+/// 2026-08-16 ruling names one bound for `Custom` — the absolute cap —
+/// and that is what is enforced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CustomFeeBand {
-    /// Below the snapshot's economy floor.
+    /// Below the snapshot's economy floor — the daemon's own cheapest
+    /// tier. Not paternalism: below it the transaction does not clear.
     #[error("custom feerate below economy floor")]
     BelowEconomyFloor,
-    /// Above 100× the snapshot's economy rate.
-    #[error("custom feerate above 100x economy")]
-    AboveRelativeCeiling,
-    /// Above [`ABSOLUTE_FEE_RATE_CAP`].
+    /// Effective weight-1 charge above [`ABSOLUTE_FEE_RATE_CAP`], on
+    /// the same basis [`ValidatedFeeEstimates`] applies to every named
+    /// tier. A rate that overflows the fee arithmetic is this variant
+    /// too — it is certainly above the cap.
     #[error("custom feerate above the absolute per-weight cap")]
     AboveAbsoluteCap,
-    /// `FeeRate::new` rejected the custom rate or the snapshot mask.
-    #[error("custom feerate or mask is zero")]
-    ZeroRateOrMask,
 }
 
-/// A [`FeeEstimates`] snapshot that passed [`ValidatedFeeEstimates::try_new`].
+/// A daemon fee snapshot that passed `try_new`.
 ///
 /// Field access goes through accessors so a raw (unvalidated) snapshot
-/// cannot be mistaken for this type. `Copy` so it rides
+/// cannot be mistaken for this type, and the constructor is
+/// crate-internal: outside the engine this is an opaque token minted
+/// only at the fetch boundary, so no consumer can hand the build path
+/// a snapshot that skipped the ceiling. `Copy` so it rides
 /// [`super::FeeEstimationContext`] the way the raw snapshot did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValidatedFeeEstimates {
     inner: FeeEstimates,
+    /// The non-zero proof for `inner.quantization_mask`, established
+    /// once in [`Self::try_new`]. Carried rather than re-derived so no
+    /// accessor needs an `expect` (or an unreachable error arm) to hand
+    /// the mask to an infallible [`FeeRate::from_nonzero`].
+    mask: NonZeroU64,
 }
 
 impl ValidatedFeeEstimates {
@@ -192,12 +221,12 @@ impl ValidatedFeeEstimates {
     /// mask disagrees with the snapshot mask (or the mask is zero).
     /// [`FeeEstimatorError::DaemonFeeUnreasonable`] if the tier band is
     /// non-monotonic or any named tier exceeds the absolute cap.
-    pub fn try_new(snapshot: FeeEstimates) -> Result<Self, FeeEstimatorError> {
-        if snapshot.quantization_mask == 0 {
-            return Err(FeeEstimatorError::DaemonResponseInvalid {
+    pub(crate) fn try_new(snapshot: FeeEstimates) -> Result<Self, FeeEstimatorError> {
+        let mask = NonZeroU64::new(snapshot.quantization_mask).ok_or(
+            FeeEstimatorError::DaemonResponseInvalid {
                 reason: "quantization_mask is zero",
-            });
-        }
+            },
+        )?;
         for (rate, which) in [
             (&snapshot.economy, "economy"),
             (&snapshot.standard, "standard"),
@@ -245,7 +274,10 @@ impl ValidatedFeeEstimates {
                 ));
             }
         }
-        Ok(Self { inner: snapshot })
+        Ok(Self {
+            inner: snapshot,
+            mask,
+        })
     }
 
     /// Economy tier.
@@ -268,9 +300,13 @@ impl ValidatedFeeEstimates {
 
     /// Snapshot quantization mask (shared by every named tier and by
     /// `Custom` construction).
+    ///
+    /// [`NonZeroU64`] because the constructor refused a zero mask —
+    /// the proof travels with the value, so `Custom` construction is
+    /// total.
     #[must_use]
-    pub fn quantization_mask(self) -> u64 {
-        self.inner.quantization_mask
+    pub fn quantization_mask(self) -> NonZeroU64 {
+        self.mask
     }
 }
 

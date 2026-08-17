@@ -4737,4 +4737,59 @@ that check is gone.
 **Reference.** `rust/shekyl-engine-core/src/engine/fee_policy.rs`;
 PR #490 review.
 
+---
+
+## 2026-08-17 — The `Custom` relative ceiling falls to the same argument; the legacy scalar-fee ladder is deleted
+
+**Context.** The two entries above withdrew an *economy-anchored*
+relative lock from the named tiers, on the ground that economy is the
+market floor and honest 2021-scaling `Fh / Fl` reaches 1077×. The
+identical construction survived one surface: `Custom`'s "100× economy"
+ceiling. Its cost was concrete and one-sided against the user — on the
+pinned KAT row `(340, 1400, 67_000)` the ceiling is `34_000`, so
+`FeePriority::Custom(67_000)` was refused as **the caller's** error
+(`-32602`) while `FeePriority::Priority` returned that same `67_000`
+rate successfully. "Priority, plus a little" was inexpressible, and the
+wallet blamed the user's parameter for asking to pay what the daemon
+was quoting.
+
+**Ruling.** The `Custom` relative ceiling is **withdrawn**. `Custom`'s
+band is exactly the policy every named tier obeys and nothing more:
+at or above the snapshot's economy floor (below it the transaction
+does not clear — not paternalism), at or below the absolute 100,000
+atomic-units/weight cap on the same effective weight-1 basis. This
+brings the code to what the 2026-08-16 ruling already named as
+`Custom`'s bound; no third, `Custom`-only ceiling was ever ratified,
+and none is introduced. A ceiling anchored on `priority` was
+considered and **rejected**: the daemon's ladder spacing describes the
+tiers' relationship to each other, not how much headroom a user should
+have above the top tier, so any multiple would be a free parameter
+wearing a derivation's clothes (`21-reversion-clause-discipline`).
+
+**Reopening criterion.** If wallet telemetry or support traffic shows
+users overpaying by large multiples of `priority` through `custom`,
+the answer is a **confirmation prompt at the UX layer** (rule 82),
+where the user can see the SKL amount and say yes — not a refusal in
+the engine, which cannot distinguish a typo from intent.
+
+**Also deleted: the legacy scalar-`fee` multiplier ladder.**
+`fee_estimates_from_value` treated an absent `fees` array as a
+pre-2021-scaling daemon and synthesized tiers as `(fee×1, fee×5,
+fee×1000)`. That daemon cannot exist on this chain:
+`HF_VERSION_2021_SCALING` is `1` (`src/cryptonote_config.h`), so
+`core_rpc_server::on_get_base_fee_estimate` always takes the scaling
+branch and always answers with a four-element `fees` array — including
+a reply forwarded from a bootstrap daemon, which is itself a Shekyl
+daemon. The ladder was inherited Monero-lineage shape with no daemon
+behind it, and it was actively harmful: `×1000` put priority three
+orders of magnitude above economy, so any base fee over 100 exceeded
+the absolute cap and got the **whole snapshot** refused — Economy
+included — for a daemon charging nothing unusual, with the verdict
+depending on which response shape arrived rather than on what was
+charged. A missing `fees` array is now a malformed reply like any
+other missing field (rules 60 / 15 / 16).
+
+**Reference.** `rust/shekyl-engine-core/src/engine/{fee_policy,
+tx_fee_model,daemon}.rs`; PR #490 review round 2.
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

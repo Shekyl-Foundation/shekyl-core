@@ -15,6 +15,22 @@
   `Fh / Fl` is 65×–1000×, so that lock banned the production Priority
   tier. The historical median-multiple ceiling remains the V3.x
   `WalletSideEstimator`'s job (2026-08-16 decision-log entries).
+- **`custom` fee rates can reach the daemon's own `PRIORITY` tier.** The
+  `custom` band's "100× economy" ceiling was the withdrawn 10× lock in
+  another place: on the pinned 2021-scaling row `(340, 1400, 67_000)` it
+  refused `custom = 67_000` as *the caller's* error while `PRIORITY`
+  returned that exact rate. `custom` is now bounded by the economy floor
+  and the same absolute cap every named tier obeys, and nothing else, so
+  "priority, plus a little" is expressible (2026-08-17 decision-log
+  entry).
+- **Legacy scalar-`fee` tier synthesis deleted.** A daemon reply without
+  a `fees` array was treated as pre-2021-scaling and turned into
+  `(fee×1, fee×5, fee×1000)`. No such daemon exists on this chain
+  (`HF_VERSION_2021_SCALING = 1` from genesis), and the invented `×1000`
+  priority meant any base fee above 100 blew the absolute cap and got
+  the whole snapshot refused — Economy included. A missing `fees` array
+  is now a malformed reply. A daemon that grows the ladder past four
+  tiers still works.
 - **Dust boundary corrected: marginal input weight 3457 → 9136.** The
   provisional `MARGINAL_INPUT_WEIGHT` stub (zero FCMP proof increment)
   outlived the KAT that was meant to replace it; the dust threshold now
@@ -26,6 +42,22 @@
   "Phase 1 stub" doc-prose on the live estimator swept; the
   grace-blocks constant has one owner (`shekyl-rpc-client`); daemon
   fee-error classification is prefix-anchored instead of substring-open.
+  `phase1_tx_hash` is renamed `correlation_tx_hash` — the Phase-1 stub
+  it was named for is gone, but the function is live: it identifies an
+  *ambiguous* submit whose transaction bytes the engine no longer holds,
+  which is a correlation id and never a transaction hash.
+- **Fee-path invariants moved into the types.** `ValidatedFeeEstimates`
+  carries its mask's non-zero proof and its constructor is
+  crate-internal, so outside the engine it is an opaque token minted
+  only at the fetch boundary — no consumer can hand the build path a
+  snapshot that skipped the ceiling. `FeeRate::from_nonzero` makes
+  `Custom` construction total, retiring a `CustomFeeBand` variant that
+  was unreachable and, had it been reachable, would have blamed the
+  caller for a daemon-supplied mask.
+  `marginal_input_weight_at_d_ref()` drops its `tree_depth` parameter:
+  every caller passed `MAX_TREE_DEPTH`, and fixing it is the point — a
+  dust bar that tracked live tree depth would reclassify outputs a
+  wallet already holds each time the tree grew a level.
 
 - **Genesis tx-key remint (`shekyl/genesis-txkey-v2`).** The founding
   transaction key is now derived from payment identity (spend ‖ view ‖

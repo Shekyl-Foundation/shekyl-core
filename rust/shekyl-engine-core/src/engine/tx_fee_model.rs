@@ -41,15 +41,24 @@ pub(crate) use shekyl_tx_weight::{
 /// understating the dust bar until 2026-08-16.
 #[must_use]
 pub(crate) fn dust_threshold_for_rate(rate: &FeeRate) -> u64 {
-    tx_fee::dust_threshold(
-        rate,
-        shekyl_tx_weight::marginal_input_weight_at_d_ref(shekyl_tx_weight::MAX_TREE_DEPTH),
-    )
+    tx_fee::dust_threshold(rate, shekyl_tx_weight::marginal_input_weight_at_d_ref())
 }
 
 /// Map [`super::fee_estimator::FeePriority`] to a [`FeeRate`] from an
 /// already-validated snapshot. Named tiers are a lookup; `Custom` is
-/// the caller's band (economy floor, 100× economy, absolute cap).
+/// the caller's band — the snapshot's economy floor below, and above
+/// it exactly the [`ABSOLUTE_FEE_RATE_CAP`] every named tier obeys.
+///
+/// There is deliberately no `Custom`-only relative ceiling. One
+/// anchored on economy (the shipped "100× economy") banned the
+/// snapshot's own Priority rate: on the pinned KAT row
+/// `(340, 1400, 67_000)` it refused `Custom(67_000)` as the caller's
+/// error while `FeePriority::Priority` succeeded at that identical
+/// rate. Economy is the market *floor* and honest 2021-scaling
+/// `Fh / Fl` reaches 1077×, so no economy multiple can separate
+/// "user typo" from "honest top tier" — the same reason the 10×
+/// named-tier lock was withdrawn.
+///
 /// Snapshot well-formedness lives in
 /// [`ValidatedFeeEstimates::try_new`] — this function must not
 /// re-litigate it, or Custom dies when honest `Fh / Fl` is large.
@@ -64,35 +73,25 @@ pub(crate) fn fee_rate_for_priority(
         FeePriority::Standard => Ok(snapshot.standard()),
         FeePriority::Priority => Ok(snapshot.priority()),
         FeePriority::Custom(rate) => {
-            let custom = FeeRate::new(rate.get(), snapshot.quantization_mask()).map_err(|_| {
-                FeeEstimatorError::CustomFeeOutOfRange(CustomFeeBand::ZeroRateOrMask)
-            })?;
-            let floor = snapshot.economy().per_weight();
-            let custom_one = custom.per_weight();
-            if custom_one < floor {
+            // Total: the caller's rate arrived as `NonZeroU64` and the
+            // validated snapshot carries its mask's non-zero proof.
+            let custom = FeeRate::from_nonzero(rate, snapshot.quantization_mask());
+            if custom.per_weight() < snapshot.economy().per_weight() {
                 return Err(FeeEstimatorError::CustomFeeOutOfRange(
                     CustomFeeBand::BelowEconomyFloor,
                 ));
             }
-            let relative = floor.saturating_mul(100);
-            if custom_one > relative {
-                return Err(FeeEstimatorError::CustomFeeOutOfRange(
-                    CustomFeeBand::AboveRelativeCeiling,
-                ));
-            }
-            // Same basis as the snapshot constructor's cap: the
-            // EFFECTIVE weight-1 charge (mask rounding included). The
-            // validated snapshot already bounds the mask at the cap,
-            // so this is coherence, not a second defense.
-            let custom_effective_one = tx_fee::try_fee_from_weight(&custom, 1).ok_or(
-                FeeEstimatorError::CustomFeeOutOfRange(CustomFeeBand::ZeroRateOrMask),
-            )?;
-            if custom_effective_one > ABSOLUTE_FEE_RATE_CAP {
-                return Err(FeeEstimatorError::CustomFeeOutOfRange(
+            // The ONLY ceiling, and the same basis
+            // `ValidatedFeeEstimates::try_new` applies to every named
+            // tier: the EFFECTIVE weight-1 charge, mask rounding
+            // included. An overflow is above any finite cap, so it
+            // lands in the same band rather than inventing a class.
+            match tx_fee::try_fee_from_weight(&custom, 1) {
+                Some(one) if one <= ABSOLUTE_FEE_RATE_CAP => Ok(custom),
+                _ => Err(FeeEstimatorError::CustomFeeOutOfRange(
                     CustomFeeBand::AboveAbsoluteCap,
-                ));
+                )),
             }
-            Ok(custom)
         }
     }
 }
@@ -293,28 +292,71 @@ mod tests {
             other => panic!("unexpected: {other:?}"),
         }
 
-        let high = NonZeroU64::new(1_001).expect("nonzero");
-        match fee_rate_for_priority(FeePriority::Custom(high), &snapshot) {
-            Err(FeeEstimatorError::CustomFeeOutOfRange(CustomFeeBand::AboveRelativeCeiling)) => {}
-            other => panic!("unexpected: {other:?}"),
-        }
-
-        let ok = NonZeroU64::new(500).expect("nonzero");
-        fee_rate_for_priority(FeePriority::Custom(ok), &snapshot).expect("in-band custom");
-
-        // 2021-scaling KAT shape (Fh/Fl = 197×): Custom at a sane rate
-        // must still resolve — the withdrawn 10× lock used to refuse
-        // the whole snapshot first.
-        let scaling = validated(340, 1400, 67_000);
-        let mid = NonZeroU64::new(500).expect("nonzero");
-        fee_rate_for_priority(FeePriority::Custom(mid), &scaling)
-            .expect("Custom is not locked by an honest Priority tier");
+        // Exactly the floor is IN band — the negative control that
+        // stops the comparison drifting to `<=`.
+        let at_floor = NonZeroU64::new(10).expect("nonzero");
+        fee_rate_for_priority(FeePriority::Custom(at_floor), &snapshot)
+            .expect("the economy floor itself is payable");
 
         let wide = validated(2_000, 2_000, 2_000);
-        let over_abs = NonZeroU64::new(150_000).expect("nonzero");
+        let over_abs = NonZeroU64::new(100_001).expect("nonzero");
         match fee_rate_for_priority(FeePriority::Custom(over_abs), &wide) {
             Err(FeeEstimatorError::CustomFeeOutOfRange(CustomFeeBand::AboveAbsoluteCap)) => {}
             other => panic!("unexpected: {other:?}"),
+        }
+        let at_abs = NonZeroU64::new(100_000).expect("nonzero");
+        fee_rate_for_priority(FeePriority::Custom(at_abs), &wide)
+            .expect("exactly the absolute cap is payable");
+    }
+
+    /// The withdrawn ceiling's exact vector: a `Custom` rate that the
+    /// snapshot's OWN `Priority` tier already charges must resolve. The
+    /// shipped "100× economy" band refused this as the *caller's*
+    /// error (`-32602`) while `FeePriority::Priority` returned the same
+    /// rate successfully — the wallet told the user their parameter was
+    /// invalid for asking to pay what the daemon was quoting.
+    ///
+    /// This bites against an economy-anchored ceiling returning; it
+    /// does NOT cover the absolute cap (that is the test above).
+    #[test]
+    fn custom_can_reach_the_snapshots_own_priority_tier() {
+        use super::fee_rate_for_priority;
+        use crate::engine::fee_estimator::FeePriority;
+        use crate::engine::fee_policy::ValidatedFeeEstimates;
+        use crate::engine::traits::FeeEstimates;
+        use std::num::NonZeroU64;
+
+        let validated = |e: u64, s: u64, p: u64| {
+            ValidatedFeeEstimates::try_new(FeeEstimates {
+                economy: FeeRate::new(e, 1).expect("economy"),
+                standard: FeeRate::new(s, 1).expect("standard"),
+                priority: FeeRate::new(p, 1).expect("priority"),
+                quantization_mask: 1,
+            })
+            .expect("named tiers inside the snapshot ceiling")
+        };
+
+        // Every 2021-scaling KAT row, at its own Priority rate and just
+        // above it ("priority, plus a little" — the ask the old band
+        // made inexpressible). 197×, 65×, and 1077× economy.
+        for (e, s, p) in [(340, 1400, 67_000), (340, 1400, 22_000), (13, 53, 14_000)] {
+            let snapshot = validated(e, s, p);
+            let named = fee_rate_for_priority(FeePriority::Priority, &snapshot)
+                .expect("the named tier resolves");
+            assert_eq!(named.per_weight(), p, "the named tier IS this rate");
+
+            let same = NonZeroU64::new(p).expect("nonzero");
+            let custom = fee_rate_for_priority(FeePriority::Custom(same), &snapshot)
+                .unwrap_or_else(|err| panic!("Custom at the Priority rate {p} refused: {err:?}"));
+            assert_eq!(
+                custom.per_weight(),
+                named.per_weight(),
+                "Custom and Priority must agree at the same rate"
+            );
+
+            let bump = NonZeroU64::new(p + 1).expect("nonzero");
+            fee_rate_for_priority(FeePriority::Custom(bump), &snapshot)
+                .unwrap_or_else(|err| panic!("Custom just above Priority refused: {err:?}"));
         }
     }
 }
