@@ -38,7 +38,7 @@ pub mod tenant;
 pub mod types;
 
 pub use auth::AuthConfig;
-pub use error::{WalletRpcError, WalletRpcErrorCode};
+pub use error::{WalletRpcError, WalletRpcErrorCode, FOUNDATION_POSTURE_WARNING};
 pub use server::{
     build_router, run_server, spawn_in_process, spawn_in_process_with, AppState, InProcessHandle,
     InProcessListen, ListenAddr, ServerConfig,

@@ -328,9 +328,19 @@ sustainability is unaffected by the recalibration.
   bound (clock-burn needed a commitment record and an abandonment penalty —
   derived assignment superseded the first, the impossibility result killed the
   second; under derived assignment there is no occupancy to extend), so with a
-  hard lower bound and no upper one the shape is *pick generous*. The rig is
-  demoted to a floor check that can only move W₂ **up**. Full reasoning on the
-  constant and in `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 6a.
+  hard lower bound and no upper one the shape is *pick generous*. Full
+  reasoning on the constant and in `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7
+  item 6a.
+
+  **Corrected 2026-08-15 (same day):** this entry first said "the rig is
+  demoted to a floor check that can only move W₂ **up**", which was a
+  half-step — a check whose only possible effect is a safe-direction move,
+  applied to a constraint that is already one-sided, confirms what the
+  asymmetry guarantees. **W₂ is ruled and closed; no measurement is owed and
+  the value is not provisional.** The device-requirement question that was
+  riding on the rig was filed separately below and then **closed the same day
+  as incoherent** — 97 concurrent is a block producer's number and no persona
+  faces it, so it was never a floor-device question at all.
 
   **Still open, and it is NOT the constant:** the fire-ceiling fix below
   (`h_fire` can land within W₂ of `H_close`). It stays open because it is a
@@ -9710,6 +9720,121 @@ its wake.
   has arrived by then, which can only raise the answer), and carry the embargo,
   the wallet timeout and the §44 pins in the same change.
 
+  > **Superseded on the method, 2026-08-16** —
+  > `tests/f_prime_admissible_region.rs`. `F'` is not a quantity with a point
+  > value to measure: the network has no instantaneous degree distribution, and
+  > feeding a realized histogram to a simulator that consumes a static `degrees`
+  > vector converts "one fleet at one moment" into "the value". `F'` is instead
+  > derived at the boundary of a stated admissible region (at most `beta` of
+  > nodes below the floor, none below `d_min`), the shape §16.4's α gate used.
+  > Read at `beta*` = the `A = 60` series' p90 (0.2167) with `d_min = 8`, that
+  > is **`F' = 4500 ms`**. The dependent list below is also stale in two places
+  > — the wallet wait is **2297 s**, not 874 (§89.2 made it worst-zone-global),
+  > and there are **two** embargoes, not one (clearnet 190 s / anonymity 499 s
+  > from a single process-wide `F'`). §90.3's *"no `A ≥ 60` readout exists
+  > anywhere in the tree"* needs a date: the arm ran 2026-08-14, one day after
+  > §90 was written, and cannot be the retired phantom input's provenance.
+
+- **Relay: the `F'` region and §15's launch condition are one condition, and
+  neither section says so.** `beta* = 0.2167` was chosen as the statistic-matched
+  read of the `A = 60` series and independently lands where §15's sweep does:
+  `A = 30` (the operational launch reading) and `A = 60` sit inside the region,
+  `A = 15` sits outside it and is below the launch condition. **A future reader
+  who relaxes the launch condition below ~30 anonymity-capable nodes is also
+  invalidating `F'`**, and nothing in §15 or §90 currently tells them. The
+  numeric half is armed
+  (`the_region_is_consistent_with_the_launch_condition`); what is owed is the
+  prose coupling in **both** directions, landing with the constant in the
+  re-pin change so it sits beside the value it constrains.
+
+- **Fleet: arm readouts must record the per-sample series, not a pooled
+  summary — an instrument fix, not a data gap.** Of the `{15, 30, 60}` sweep
+  only `A = 60` (§13.2) published per-sample counts; §14.2 and §15.1 recorded
+  pooled rates (52.1 %, 84.2 %) with no series behind them. A region bound is a
+  **quantile**, so a pooled mean cannot set or check one: `A = 30`'s mean tail
+  (0.158) is marginally *worse* than `A = 60`'s (0.148), yet its p90 is
+  unknowable from what was kept, which is exactly the like-for-like check the
+  launch-condition coupling wants. This is the **second** instance of the same
+  omission — the degree histogram behind `fluff_return_ms` was the first — so
+  the fix belongs in the readout spec rather than in another one-off re-run:
+  `utils/fleet/sample_node_series.sh` and `anon_readout_parse.py` should emit
+  the per-sample series by default and any arm's write-up should carry it.
+
+- **Relay: `full_travel_probability`'s cross-check holds `fluff_return_ms`
+  fixed, and `F'` is the axis the region derivation moves.** *(Registered
+  2026-08-16; **rewritten 2026-08-17 after the original entry was found to be
+  factually wrong** — see the retraction below, kept rather than deleted
+  because the wrong version was published and acted on.)*
+
+  > **RETRACTED, and the correction is most of this entry.** The first version
+  > of this entry claimed `full_travel_probability` *"has no simulation
+  > partner; grep finds none"* and proposed building one. **That is false.**
+  > `conformance::simulate_propagation` is an independent Monte-Carlo stem
+  > walker that reports `full_travel_rate`
+  > (`shekyl-relay-privacy/src/conformance/stem.rs`), and
+  > `analytic_derivation_agrees_with_the_simulator`
+  > (`tests/propagation_measurement/embargo_survival.rs`) has been pinning the
+  > analytic function against it across eight `(mean, tick)` pairs at 6M
+  > trials, with a stated Monte-Carlo band. That test **deliberately sweeps the
+  > tick** for exactly the reason the retracted entry claimed was undefended:
+  > *"a tick-dependent divergence — exactly where a fire-vs-disarm boundary
+  > convention would surface — had nothing watching it."* There is a second
+  > pairing too: `solve_embargo_secs_for_target` bisects the embargo using the
+  > **simulator** rather than the closed form.
+  >
+  > **How the error was made, because the method is the reusable part.** The
+  > check was `grep -rn "simulate_full_travel\|full_travel.*simulate"` — a grep
+  > for the name the entry had already predicted, not for the *concept*. The
+  > partner exists under a different name and would have been found by grepping
+  > `full_travel_rate`. A search that can only confirm the hypothesis that
+  > generated it is not evidence of absence.
+
+  **What is actually owed, which is much smaller.** The cross-check builds
+  `DandelionParams::inherited()` and varies only the embargo mean and the tick,
+  so `fluff_return_ms` is held at the shipped value for every row. The `F'`
+  axis *is* swept — but **analytically only**, through `derive_embargo` and
+  `full_travel_probability` with no simulator in the loop
+  (`embargo_survival.rs`, the `[500, 1_500, 2_250, 3_250, 4_250, 13_750]` row
+  sweep).
+
+  PR #488 made that the load-bearing axis: the admissible region's boundary and
+  its miss curve are both read off `F'`, so the one parameter the region moves
+  is the one the analytic/simulator agreement never varies. A slack-exponent
+  error in the `F` term specifically would agree at 3250 and be unwitnessed
+  elsewhere.
+
+  **Do:** add `fluff_return_ms` to `analytic_derivation_agrees_with_the_simulator`'s
+  sweep at the region's candidate values, not a new simulator. One axis on an
+  existing test.
+
+- **Relay: `F'` may be per-POSTURE even though §89.2 correctly refused
+  per-ZONE.** *(Registered 2026-08-16, from PR #488's review round. Deliberately
+  **not** blocking the region pick.)*
+
+  §89.2 kept `fluff_return_ms` process-wide on §63.2's keeper — *"a dual-stack
+  node's fluff returns over both networks, so there is no per-zone value to
+  pick"* — against `time_between_hop_ms`, which §59's coherence makes
+  well-defined per zone. That argument is structural and it stands.
+
+  **It does not reach the posture question.** `F'` is not per-zone, but it may
+  be per-node-transport-mix: a **Tor-only** node's return genuinely *is* the
+  anonymity value, while a **dual-stack** node's is a min over both networks.
+  Worst-zone-global is therefore correct for the Tor-only posture and
+  over-provisions the dual-stack one — a different claim from the one §89.2
+  disposed of, and one it never addressed.
+
+  **Why this is filed rather than acted on.** The sharpest form of the
+  objection is that `β` is measured on anonymity nodes while the §6.6 leak it
+  buys is paid on clearnet, where the anonymity zone's leak is structurally
+  zero. PR #488 measured that cost: the clearnet leak is flat to inside a
+  3-sigma noise floor across the entire candidate range (`F' = 3250 → 5000`),
+  so the asymmetry does not currently bite.
+
+  **Reopen if** a future measurement moves the clearnet leak across candidate
+  `F'` values, or if Tor-only stops being a minority posture — either restores
+  the cost that would make the split worth its second constant and its
+  ownership seam.
+
 - **Relay: populate the 48-cell Pi verification surface, then consume it
   per shape.** The §80-adopted `f(n_in, depth)` table landed structure-first
   (`shekyl-relay-privacy/src/verify_cost.rs`, 2026-08-06) carrying the four
@@ -14832,8 +14957,8 @@ one place to confirm each item's relationship to the wallet stack.
   post-testnet. *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md`
   §*L12* finding 1.
 
-- **Vanguard eligibility flag set is a provisional pin awaiting the W₂ rig
-  (VG-2 / transport; rule-21 reopen record).** `REQUIRED_FLAGS = ["Fast",
+- **Vanguard eligibility flag set is a provisional pin, unseated only by
+  operation (VG-2 / transport; rule-21 reopen record).** `REQUIRED_FLAGS = ["Fast",
   "Stable", "Valid", "Running"]` in `rust/shekyl-tor/src/control/consensus.rs`
   decides which relays a serving persona's L2/L3 vanguards may be drawn from.
   The `Guard` flag is deliberately **not** required — vanguards are middle
@@ -14843,14 +14968,64 @@ one place to confirm each item's relationship to the wallet stack.
   `NUM_LAYER3_GUARDS = 6`, which come from the Sybil rotation table and are
   **not** in scope here). The in-code comment names the dependency but a
   comment is not a durable reopening record, which is what rule 21 asks for.
-  *Blocker:* the W₂ capacity rig — whether a 4-node L2 set drawn from this
-  eligibility pool carries a serving persona's concurrent rendezvous load is
-  the measurement that decides whether the set should be stricter (fewer,
-  better relays) or looser (a larger pool at lower average quality). *Reopening
-  criterion:* the first W₂ run that reports L2 saturation or draw-pool
-  exhaustion against this filter, or a tor release that renames/retires any of
-  the four flags. *Target:* gate 6, alongside the rig. *Reference:*
+  *Blocker:* **none.** *Reopening criterion:* L2 saturation or draw-pool
+  exhaustion observed against this filter **in operation**, or a tor release
+  that renames or retires any of the four flags. *Target:* none — the pin
+  stands until one of those is seen. *Reference:*
   `ARCHIVAL_CHALLENGE_MECHANISM.md` §7.4; PR #447.
+
+  **Un-blocked 2026-08-15, in two steps that are worth keeping separate.**
+  This entry first named its blocker as "the W₂ capacity rig" and its trigger
+  as "the first W₂ run". W₂ was then ruled rather than measured, which would
+  have left a rule-21 record that can never fire — a reopening criterion
+  depending on a run nobody owes is convention theater. It was re-pointed at a
+  "device-requirement question", and that question then **closed as incoherent**
+  (below): 97 concurrent is a *block producer's* number, and no persona faces
+  it. What VG-2 actually needed to know — whether a 4-node L2 set carries a
+  serving persona's concurrent rendezvous load — follows from the schedule
+  (a handful of concurrent readers per persona) and `SP_T3_SKELETON_MEASUREMENT.md`
+  §18 (4→32 readers, p50 10.9 s → 14.8 s), which is well above it. The four
+  flags are not under-specified for that load, so the pin needs no run to
+  stand — only an observation to unseat it.
+
+- **CLOSED (2026-08-15, same day it was opened) — "can a rule-76 floor device
+  serve ~97 concurrent rendezvous circuits?" was never a coherent question.**
+  Recorded rather than deleted, because the way it was wrong is the same defect
+  twice in one afternoon and the second instance is the instructive one.
+
+  **The pairing is incoherent.** `λ·D/E` ≈ 97 is *draws per block, assigned to
+  that block's producer* (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5; `constants.rs`
+  on `CHALLENGES_PER_PAIR_PER_EPOCH`: "the urn issues `λ·D/E` draws in each
+  block"). A block producer is a **miner**, and nobody mines on a Pi 4. The
+  ~97-concurrent figure and the rule-76 floor device were stapled together in
+  §9.5 when this was going to be a single rig, and that staple was carried into
+  a fresh entry without asking whether the two halves belonged in one sentence.
+
+  **What a serving persona actually faces is not 97.** Those draws spread
+  across the whole population of `(P, shard)` pairs, so an individual persona
+  sees a handful concurrently, not the block's whole assignment. That load is
+  already measured with margin: `SP_T3_SKELETON_MEASUREMENT.md` §18 walked
+  4→32 concurrent readers on one persona at p50 10.9 s → 14.8 s — comfortably
+  above anything the schedule produces per persona.
+
+  **So both halves are answered** — the load by the schedule, the capacity by
+  §18 — and there is no measurement pending. The two sides never shared a
+  floor to begin with: rule 76 provisions the anonymity of the node being
+  protected, the staker running `P`, so the Pi-4 is the floor for the *serving*
+  side only. The producer/serving distinction is real even though the question
+  built on it was not; it does not need a spike-crate type to stay true.
+
+  **The lesson, since it repeated within one commit:** the W₂ correction named
+  "a discipline applied without asking whether this instance needs it." This
+  entry was opened minutes later by inheriting a framing — 97-concurrent-on-the-
+  floor-device — without asking whether *that pairing* had ever been checked.
+  Retiring a bad mandate does not sanitise the premises it carried; those need
+  re-grounding one by one, or they re-file themselves as fresh work.
+
+  A concurrent-batch W₂ apparatus was not landed. W₂ is ruled, not measured;
+  a provenance type with no measurement to stamp is scaffolding (rule 15). If
+  a ruling premise returns, `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 6 is
+  how a measurement ships — not before.
 
 ---
 

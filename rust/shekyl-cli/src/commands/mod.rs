@@ -61,6 +61,11 @@ Receiving (payment requests):
 
 Staking:
   stake                               Make this wallet a staker
+    [--complete-tree-foundation]      Foundation nodes only: serve EVERY
+                                      frozen shard, forever. Earns NOTHING
+                                      — outside the reward market by
+                                      design. States the terms and
+                                      requires a typed phrase.
   staked_balance                      Show the staked-balance breakdown
   staked_outputs                      List unspent staking-side outputs
   staking_info                        Show staking state and scan height
@@ -228,7 +233,9 @@ pub fn repl(
                     ResolvedCommand::ParseUri { uri } => receiving::cmd_parse_uri(&rpc, &uri),
 
                     // Staking (WI-RPC-1 surface)
-                    ResolvedCommand::Stake => staking::cmd_stake(&rpc),
+                    ResolvedCommand::Stake { foundation } => {
+                        staking::cmd_stake(&rpc, foundation);
+                    }
                     ResolvedCommand::StakedBalance => staking::cmd_staked_balance(&rpc),
                     ResolvedCommand::StakedOutputs => staking::cmd_staked_outputs(&rpc),
                     ResolvedCommand::StakingInfo => staking::cmd_staking_info(&rpc),

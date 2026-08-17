@@ -368,6 +368,9 @@ components:
         - -29501   # STAKE_IN_FLIGHT
         - -29502   # ALREADY_STAKED
         - -29503   # STAKE_RECORD_MOVED
+        - -29504   # STAKE_RECOVERED_PENDING_REOPEN
+        - -29505   # STAKE_NO_SHARDS_AVAILABLE
+        - -29506   # STAKE_FOUNDATION_UNACKNOWLEDGED
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -537,6 +540,30 @@ components:
                                           A reconcile that ADOPTS a
                                           chain-proven bond returns -29502
                                           instead, not this code
+          -29504 STAKE_RECOVERED_PENDING_REOPEN
+                                          stake: this session's scan recovered
+                                          a staked slot; staking becomes
+                                          operational at the next wallet
+                                          open — close and reopen, then retry
+          -29505 STAKE_NO_SHARDS_AVAILABLE
+                                          stake: market staking assigns a
+                                          shard automatically, and shard
+                                          assignment is not available yet;
+                                          nothing was written. Kept off
+                                          -29500 because "fund and retry"
+                                          is the wrong sentence for a wallet
+                                          whose funding is fine
+          -29506 STAKE_FOUNDATION_UNACKNOWLEDGED
+                                          stake: posture
+                                          "foundation_complete_tree" was
+                                          requested without
+                                          acknowledge_non_earning_unbounded.
+                                          The refusal MESSAGE IS THE WARNING
+                                          (D-4): every client, including a
+                                          third-party wrapper, must
+                                          round-trip the acknowledgment, so
+                                          the terms are seen or deliberately
+                                          echoed. Nothing was written
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -786,6 +813,17 @@ components:
     StakeParams:
       type: object
       required: [password]
+      description: >
+        First-stake continuation. The engine entry is posture-mandatory,
+        and this surface offers both: `posture` selects which obligation
+        the bond takes on, and omitting it means market staking — so every
+        caller written before the parameter existed keeps its exact
+        behaviour. The foundation posture is reachable ONLY by also
+        setting `acknowledge_non_earning_unbounded`; without it the call
+        refuses -29506 and the refusal message is the full warning (D-4).
+        Market staking today refuses -29505: shard assignment is its own
+        round, so a well-funded wallet is told so rather than silently
+        owing the corpus.
       properties:
         password:
           type: string
@@ -796,6 +834,53 @@ components:
             against the sealed envelope BEFORE the reopen closes anything,
             so a wrong password refuses (-29004) with the wallet still
             open. Crosses a local transport only.
+        posture:
+          type: string
+          enum: [market, foundation_complete_tree]
+          default: market
+          description: >
+            Which archival obligation this bond takes on. `market` is an
+            ordinary per-shard staking position inside the reward market.
+            `foundation_complete_tree` is the whole-corpus archival
+            backstop: permanently excluded from the reward market by
+            holdings shape, unbounded and monotone in disk, and fully
+            inside the penalty economy. Absent means `market`, which is
+            what makes this parameter additive rather than breaking.
+            A posture, never a shard set and never a raw holdings kind —
+            there is no select-all affordance on this API.
+        acknowledge_non_earning_unbounded:
+          type: boolean
+          default: false
+          description: >
+            Required to be `true` for posture
+            `foundation_complete_tree`; ignored for `market`. Its absence
+            is not a validation nicety — it is the warning gate (D-4):
+            the -29506 refusal body carries the full statement of terms,
+            so a client either shows the operator those terms or
+            deliberately echoes an acknowledgment it was handed. The
+            wallet GUI never sends this field, which is what keeps the
+            foundation posture off that surface by construction.
+
+    FoundationPostureWarning:
+      type: string
+      description: |
+        The verbatim body of a -29506 refusal, and the text the CLI prints
+        before it will accept the typed phrase. Published here because the
+        contract is what a client implementer reads: a wrapper that wants
+        to render the terms itself must render THESE terms. The server
+        constant and this block are compared whitespace-normalized by
+        `foundation_warning_matches_the_published_contract`, so the two
+        cannot drift apart silently.
+      example: |
+        Foundation CompleteTree posture — read before confirming.
+        This bond declares your node a whole-corpus archival backstop. It is not a staking product:
+        1. It never earns. CompleteTree holdings are excluded from the reward market by holdings shape, permanently. This is not a phase or a promotion path.
+        2. The obligation grows forever. You commit to storing and serving every frozen shard the chain ever produces. Disk consumption is unbounded and monotone. Your drive space is your commitment.
+        3. The penalty side is fully live. You are challenged like any archiver, over the entire frozen corpus. Missed service inside the tolerance window is absorbed; crossing it slashes your collateral, clears your holdings, and demotes this record to an ordinary market position. Reinstatement from there is as a market participant. Returning to CompleteTree posture requires a fresh foundation bond under a new persona.
+        4. Capital is locked at zero yield. The bond floor is nominal, but it is collateral against the largest possible obligation.
+        5. Durability credit is genesis-gated. Unless your identity is in the genesis foundation enumeration, this node also receives no durability_count credit — it is a pure donation to the network. Donations are welcome and genuinely valuable; they are simply not compensated.
+        To proceed, confirm that you are choosing a non-earning, unbounded-storage service posture.
+        CLI: type exactly: `serve without reward` — RPC: set `acknowledge_non_earning_unbounded: true`.
 
     StakeResult:
       type: object

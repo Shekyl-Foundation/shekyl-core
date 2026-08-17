@@ -20,6 +20,38 @@ use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
 use shekyl_rpc_client::{RejectCause, SubmitVerdict};
 use thiserror::Error;
 
+/// The Foundation CompleteTree terms, stated to the operator on the path
+/// that would take them on (`COMPLETETREE_ACTIVATION.md` §5, approved
+/// verbatim — **a defect in this text is a finding for the round record,
+/// never an edit here**).
+///
+/// # One text, two surfaces, and a gate that keeps them one
+///
+/// This constant is the body of [`WalletRpcError::StakeFoundationUnacknowledged`]
+/// (`-29506`) and what the CLI prints before it will accept the typed
+/// phrase. Both read *this*; neither keeps a copy. The contract carries the
+/// same words in `docs/api/wallet_rpc.yaml`, and
+/// `foundation_warning_matches_the_published_contract` compares the two
+/// whitespace-normalized — so a wording change that lands in only one of
+/// them fails the suite instead of leaving a client implementer reading
+/// terms the server no longer states.
+///
+/// It is deliberately not a `format!` with substituted numbers: every
+/// figure it could have interpolated (a bond floor, a disk estimate) would
+/// be a second thing to keep true, and the terms that matter here are
+/// structural — never earns, grows forever, slash side live — not
+/// numeric.
+pub const FOUNDATION_POSTURE_WARNING: &str = "\
+Foundation CompleteTree posture — read before confirming.
+This bond declares your node a whole-corpus archival backstop. It is not a staking product:
+1. It never earns. CompleteTree holdings are excluded from the reward market by holdings shape, permanently. This is not a phase or a promotion path.
+2. The obligation grows forever. You commit to storing and serving every frozen shard the chain ever produces. Disk consumption is unbounded and monotone. Your drive space is your commitment.
+3. The penalty side is fully live. You are challenged like any archiver, over the entire frozen corpus. Missed service inside the tolerance window is absorbed; crossing it slashes your collateral, clears your holdings, and demotes this record to an ordinary market position. Reinstatement from there is as a market participant. Returning to CompleteTree posture requires a fresh foundation bond under a new persona.
+4. Capital is locked at zero yield. The bond floor is nominal, but it is collateral against the largest possible obligation.
+5. Durability credit is genesis-gated. Unless your identity is in the genesis foundation enumeration, this node also receives no durability_count credit — it is a pure donation to the network. Donations are welcome and genuinely valuable; they are simply not compensated.
+To proceed, confirm that you are choosing a non-earning, unbounded-storage service posture.
+CLI: type exactly: `serve without reward` — RPC: set `acknowledge_non_earning_unbounded: true`.";
+
 /// Allocated application / protocol error codes (spec enum).
 ///
 /// Emitting a code outside this set is a conformance failure. RESERVED-range
@@ -116,6 +148,12 @@ pub enum WalletRpcErrorCode {
     /// Stake: this session's scan recovered a staked slot; staking becomes
     /// operational at the next wallet open — close and reopen, then retry.
     StakeRecoveredPendingReopen = -29504,
+    /// Stake: market staking has no shard to bond over — shard assignment
+    /// is an unbuilt round (`COMPLETETREE_ACTIVATION.md` §10 item 1).
+    StakeNoShardsAvailable = -29505,
+    /// Stake: the foundation posture was requested without the
+    /// acknowledgment; the refusal message is the warning itself (D-4).
+    StakeFoundationUnacknowledged = -29506,
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -344,6 +382,30 @@ pub enum WalletRpcError {
     )]
     StakeRecoveredPendingReopen,
 
+    /// `stake` (`-29505`): market staking bonds over an **assigned** shard
+    /// subset, and the assignment mechanism is its own unbuilt round — so
+    /// there is nothing for a market bond to cover yet. A domain refusal
+    /// with a named remedy, kept off `-29500` because "fund and retry" is
+    /// the wrong instruction for a wallet whose funding is fine (rule 82).
+    /// Nothing durable was written.
+    #[error(
+        "market staking assigns a shard automatically, and shard assignment \
+         is not available yet; nothing was written"
+    )]
+    StakeNoShardsAvailable,
+
+    /// `stake` (`-29506`): posture `foundation_complete_tree` was requested
+    /// without `acknowledge_non_earning_unbounded`.
+    ///
+    /// **The message is the warning** ([`FOUNDATION_POSTURE_WARNING`]), not
+    /// a pointer to it. That is D-4's whole mechanism: the terms of an
+    /// unbounded, non-earning, slash-exposed obligation reach the operator
+    /// on the path that would have taken it on, and a third-party wrapper
+    /// that wants to skip them has to echo an acknowledgment it was handed
+    /// rather than simply omit a field. Nothing was written.
+    #[error("{}", FOUNDATION_POSTURE_WARNING)]
+    StakeFoundationUnacknowledged,
+
     /// `verify_message` (`-29800`): the signature is well-formed and intact
     /// but does not verify for that address, message, and network. This is
     /// the method's honest negative *answer* (SM-R-6), carried as its own
@@ -406,6 +468,10 @@ impl WalletRpcError {
             Self::AlreadyStaked => WalletRpcErrorCode::AlreadyStaked,
             Self::StakeRecordMoved => WalletRpcErrorCode::StakeRecordMoved,
             Self::StakeRecoveredPendingReopen => WalletRpcErrorCode::StakeRecoveredPendingReopen,
+            Self::StakeNoShardsAvailable => WalletRpcErrorCode::StakeNoShardsAvailable,
+            Self::StakeFoundationUnacknowledged => {
+                WalletRpcErrorCode::StakeFoundationUnacknowledged
+            }
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {
@@ -973,6 +1039,62 @@ mod tests {
             "cannot abandon: the send is FAILED",
             "Display uses TransferState::as_str"
         );
+    }
+
+    /// **The published contract and the served text are one text.**
+    ///
+    /// D-4's mechanism is that the refusal body *is* the warning, and a
+    /// client implementer reads the contract rather than this crate — so a
+    /// wording change in one place and not the other would leave wrappers
+    /// rendering terms the server no longer states. The comparison is
+    /// whitespace-normalized because YAML block scalars carry indentation
+    /// the wire text does not; every other character must match, which is
+    /// what makes this a wording gate rather than a formatting one.
+    #[test]
+    fn foundation_warning_matches_the_published_contract() {
+        let contract = include_str!("../../../docs/api/wallet_rpc.yaml");
+        let squash = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        let served = squash(FOUNDATION_POSTURE_WARNING);
+        assert!(
+            squash(contract).contains(&served),
+            "the -29506 body has drifted from docs/api/wallet_rpc.yaml; the \
+             contract is the spec (RR-4, spec-first) — update it, or fix the \
+             constant to match it"
+        );
+
+        // A negative control: the gate must be able to FAIL. If the
+        // normalizer collapsed everything to a substring of the document,
+        // the assertion above would pass over any text at all.
+        assert!(
+            !squash(contract).contains(&squash(
+                "Foundation CompleteTree posture — it earns competitive yield."
+            )),
+            "the comparison must reject text the contract does not contain"
+        );
+    }
+
+    /// The refusal body is the warning itself, not a pointer to it — the
+    /// one property D-4 rests on, asserted through the public `message()`
+    /// projection a client actually receives.
+    #[test]
+    fn unacknowledged_foundation_refusal_carries_the_terms() {
+        let err = WalletRpcError::StakeFoundationUnacknowledged;
+        assert_eq!(
+            err.code(),
+            WalletRpcErrorCode::StakeFoundationUnacknowledged
+        );
+        assert_eq!(err.code() as i32, -29506);
+
+        let message = err.message();
+        assert_eq!(message, FOUNDATION_POSTURE_WARNING);
+        // The load-bearing clauses, named individually: a future edit that
+        // trims the message to a summary keeps the equality above (it
+        // would move with the constant) but loses these.
+        assert!(message.contains("It never earns"));
+        assert!(message.contains("grows forever"));
+        assert!(message.contains("penalty side is fully live"));
+        assert!(message.contains("serve without reward"));
     }
 
     #[test]

@@ -78,7 +78,7 @@ use kameo::message::{Context, Message};
 
 use shekyl_curve_tree::{
     AssembleInput, AssembledPath, BlockHeight, BlockLeaves, ClientError, CurveTreeClient,
-    ReferenceBlock, SegmentPin, ServingReader, TxLeafInputs, WriterRecovery,
+    PostureDeclaration, ReferenceBlock, SegmentPin, ServingReader, TxLeafInputs, WriterRecovery,
 };
 
 use crate::scan::OwnedTxLeaves;
@@ -229,6 +229,51 @@ pub(crate) struct PinServeSetReply {
     pub released: usize,
 }
 
+/// Actor message for the **CompleteTree prefix** serve-set: declare the
+/// prune-disabled posture, then read the freeze cursor and take a reader —
+/// one message, in that order (`COMPLETETREE_ACTIVATION.md` D-1/D-5, RR-2).
+///
+/// The corpus sibling of [`PinServeSet`], and deliberately a **separate
+/// message rather than a mode flag on it**: the two arms take and return
+/// different things (a shard list and per-member outcomes versus no input
+/// and a cursor), and a flag would rebuild inside one message the very
+/// conflation the two-armed `ReportedSet` was split to remove.
+///
+/// # Why the order is the message, not the caller's discipline
+///
+/// `ServeSetPinner`'s prefix contract is **declare-before-report**: the
+/// `PostureDeclaration` a report carries is the loss detector for the gap a
+/// re-declaring refresh repairs, so it has to be the answer the store gave
+/// *for this report*, and the cursor has to be the one that declaration
+/// vouches for. Both run here, in this order, so no caller can get the
+/// sequence wrong and no caller can pair a declaration with a cursor read
+/// from a different moment.
+///
+/// **The handler invocation is the atomicity unit** — the same guarantee
+/// [`AssembleTx`] documents for read-path snapshots and [`PinServeSet`]
+/// relies on for pin-then-release. The cursor moves only through this
+/// actor's own ingest / truncate / rollback messages, kameo processes one
+/// message at a time, and the store is opened exclusively — so nothing can
+/// advance the freeze prefix between the declaration and the read. Two
+/// store calls rather than one redb transaction, therefore, with the
+/// property the transaction would have bought delivered by the serialization
+/// that already governs every other write on this actor.
+pub(crate) struct PinCompleteTreePrefix;
+
+/// What [`PinCompleteTreePrefix`] reports: the declaration answer, the
+/// prefix length it vouches for, and a reader on the store both came from.
+pub(crate) struct PinCompleteTreePrefixReply {
+    /// What the store found when this call declared the posture —
+    /// `NewlyDeclared` from an already-serving wallet is the evidence a
+    /// one-way flag was lost, which the witness answers with the corpus
+    /// integrity scan.
+    pub declaration: PostureDeclaration,
+    /// The burial-gated freeze cursor: the obligation is `[0, frozen_count)`.
+    pub frozen_count: u64,
+    /// A reader on the store the declaration landed in.
+    pub reader: ServingReader,
+}
+
 /// Actor message for the §3.3 ingest-time integrity verify (CT-5b): reconstruct
 /// the curve-tree root at `height` and require it to byte-equal the consensus
 /// header-committed `expected_root`. Replies [`ClientError::RootMismatch`] on
@@ -338,6 +383,27 @@ impl Message<PinServeSet> for CurveTreeActor {
             reader: self.client.serving_reader(),
             pinned_now: self.client.pinned_shard_ids()?,
             released,
+        })
+    }
+}
+
+impl Message<PinCompleteTreePrefix> for CurveTreeActor {
+    type Reply = Result<PinCompleteTreePrefixReply, ClientError>;
+
+    async fn handle(
+        &mut self,
+        _msg: PinCompleteTreePrefix,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // **Declare before read, always** — see the message doc. The
+        // declaration is idempotent and one-way, so re-declaring costs an
+        // MVCC read in the steady state and the durable write happens once.
+        let declaration = self.client.set_prune_disabled()?;
+        let frozen_count = self.client.next_freeze_seg()?;
+        Ok(PinCompleteTreePrefixReply {
+            declaration,
+            frozen_count,
+            reader: self.client.serving_reader(),
         })
     }
 }
@@ -789,6 +855,23 @@ impl CurveTreeHandle {
             .map_err(collapse_send_error)
     }
 
+    /// Declare the CompleteTree serving posture and read the prefix it
+    /// vouches for — see [`PinCompleteTreePrefix`] for why both halves ride
+    /// one message and why the handler invocation is the atomicity unit.
+    ///
+    /// # Errors
+    ///
+    /// [`CurveTreeHandleError::Client`] wrapping a store fault, and
+    /// [`CurveTreeHandleError::Unavailable`] on a stopped actor.
+    pub(crate) async fn pin_complete_tree_prefix(
+        &self,
+    ) -> Result<PinCompleteTreePrefixReply, CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(PinCompleteTreePrefix)
+            .await
+            .map_err(collapse_send_error)
+    }
+
     /// §3.3 ingest-time integrity verify (CT-5b): require the reconstructed
     /// root at `height` to byte-equal the consensus header-committed
     /// `expected_root`. A divergence collapses (via the handler) to
@@ -914,6 +997,7 @@ mod tests {
         assert_send::<RootAndDepthAt>();
         assert_send::<AssembleTx>();
         assert_send::<PinServeSet>();
+        assert_send::<PinCompleteTreePrefix>();
         assert_send::<OwnedTxLeaves>();
     }
 

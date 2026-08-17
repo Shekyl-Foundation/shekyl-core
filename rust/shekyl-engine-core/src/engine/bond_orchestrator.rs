@@ -164,6 +164,53 @@ fn preflight_error(e: &BondAssemblyError) -> FirstStakeError {
     }
 }
 
+/// Which archival posture a first-stake bonds into
+/// (`COMPLETETREE_ACTIVATION.md` D-3).
+///
+/// **Mandatory on [`Engine::first_stake`], with no default, deliberately.**
+/// A defaulted parameter is exactly the `ARCHIVAL_BOND_CONSTRUCTION.md`
+/// §9.1 footgun this round exists to close: it makes one posture reachable
+/// without anyone stating it, and the posture that would be reachable is
+/// the unbounded one. A mandatory enum forces every caller — RPC, CLI,
+/// e2e fixture, embedder — to say which obligation it is asking for.
+///
+/// This amends §9.1 items 1–2 (from "separately-named constructor; the
+/// standard entry takes no holdings argument" to "one entry, mandatory
+/// posture enum"). The property §9.1 was protecting is preserved and
+/// strengthened: opt-in by intent, no default to override, and no
+/// select-all affordance anywhere — a caller names a *posture*, never a
+/// shard set and never a raw [`HoldingsKind`].
+///
+/// The **warning** that must precede a foundation choice is not this
+/// type's job: D-4 puts it structurally at the RPC boundary (an
+/// acknowledgment field whose absence returns the warning text) and in the
+/// CLI's typed phrase. The engine trusts that its caller stated intent,
+/// because the engine has no user to warn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StakePosture {
+    /// Ordinary market archival staking: a per-shard bond over an assigned
+    /// subset of the corpus, inside the reward market.
+    ///
+    /// **A stub in this round** — shard assignment does not exist yet, so
+    /// this arm refuses with [`FirstStakeError::NoShardsAvailable`] rather
+    /// than posting anything. The refusal is typed and names its remedy
+    /// (rule 22: scoped work lands where scoped, and a deferral is
+    /// disclosed, never silent). When the assignment round lands, this arm
+    /// assigns and posts; **the caller's shape does not change**, which is
+    /// why the parameter is a posture rather than a shard set.
+    Market,
+    /// The Foundation whole-corpus archival backstop: `CompleteTree`
+    /// holdings, outside the reward market by holdings shape and fully
+    /// inside the penalty economy.
+    ///
+    /// Never a default and never reachable without a caller naming it
+    /// here — the hardcode that used to produce it unconditionally was
+    /// deleted in the same change that made this arm opt-in, so no code
+    /// state ever existed where an ordinary staker silently owed the
+    /// corpus.
+    FoundationCompleteTree,
+}
+
 /// First-stake refusal/failure taxonomy (rule 82;
 /// `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.1/§5.7). Refusals are
 /// caller-recoverable states with user-meaning, each carrying the remedy
@@ -245,6 +292,55 @@ pub enum FirstStakeError {
     /// point it is the W2 window — re-invoke `stake` to resume.
     #[error("stake engine failed: {0}")]
     Engine(String),
+    /// [`StakePosture::Market`] was requested and **no shard assignment
+    /// exists yet** (`COMPLETETREE_ACTIVATION.md` §10 item 1): market
+    /// staking bonds over an assigned subset of the corpus, and the
+    /// mechanism that picks that subset is its own design round.
+    ///
+    /// A typed refusal with a named remedy rather than a silent deferral
+    /// (rule 22), and W1-clean: it fires after the idempotency guards —
+    /// so a wallet that is already staking still gets *that* diagnosis,
+    /// which is the more specific one — but before the fee estimate, the
+    /// funding sweep, and every durable write. Nothing is written, nothing
+    /// is swept, and no daemon round trip is spent on a bond that cannot
+    /// be assembled.
+    ///
+    /// **Not** an invitation to pass
+    /// [`StakePosture::FoundationCompleteTree`] instead: that posture is a
+    /// permanent, non-earning, unbounded-storage obligation, and choosing
+    /// it to route around this refusal is precisely the mistake D-4's
+    /// warning gate exists to prevent.
+    #[error(
+        "market staking assigns a shard automatically, and shard assignment \
+         is not built yet: no shards are available to bond. Nothing was written"
+    )]
+    NoShardsAvailable,
+}
+
+impl StakePosture {
+    /// The holdings this posture posts — the only conversion from an
+    /// intent into a [`HoldingsKind`] in the tree. The caller names a
+    /// posture and never a kind or a shard set (D-3; the §9.1
+    /// no-select-all property).
+    ///
+    /// [`StakePosture::Market`] refuses rather than posting an empty
+    /// `ShardSetCompact`, which consensus rejects at JoinMarket anyway
+    /// (`bond_post.rs`, floor-zero protection) — so the alternative to
+    /// this refusal is not a smaller bond, it is an invalid one.
+    ///
+    /// [`StakePosture::FoundationCompleteTree`] is the whole-corpus
+    /// backstop: `CompleteTree` carries no shard list by wire rule
+    /// (`BondPostError::CompleteTreeWithShardIds`), so the empty set
+    /// here is the obligation's *encoding*, not its size.
+    pub(crate) fn holdings(self) -> Result<HoldingsDescriptor, FirstStakeError> {
+        match self {
+            Self::Market => Err(FirstStakeError::NoShardsAvailable),
+            Self::FoundationCompleteTree => Ok(HoldingsDescriptor {
+                kind: HoldingsKind::CompleteTree,
+                shard_ids: ShardSet::empty(),
+            }),
+        }
+    }
 }
 
 use super::signer::EngineSignerKind;
@@ -593,9 +689,28 @@ where
     /// ticket — `persist_bond_record` is re-entrant); the un-resumed slot is
     /// benign by the `StakingBlock` hint design and, post-genesis, arm #3's
     /// backstop.
+    ///
+    /// # The posture is the caller's, and it is mandatory
+    ///
+    /// `posture` names the obligation this bond takes on
+    /// ([`StakePosture`], `COMPLETETREE_ACTIVATION.md` D-3). There is no
+    /// default: the entry used to hardcode `CompleteTree` ("genesis
+    /// posture", the named PR-4c deviation), which made every first-stake
+    /// wallet owe the whole corpus without anyone asking for it. That
+    /// hardcode is deleted here rather than re-anchored behind a default,
+    /// so no code state exists in which an ordinary staker silently owes
+    /// the corpus.
+    ///
+    /// Nothing posture-shaped is persisted, and nothing needs to be: the
+    /// posture is realized as the assembled post's `HoldingsDescriptor`,
+    /// and from there the **connected bond record** is the durable, chain-
+    /// owned marker every later consumer reads (the serving pinner derives
+    /// its obligation from it; `staking_info` renders it). A W2 resume
+    /// passes the posture again, exactly as the first call did.
     pub async fn first_stake(
         self_arc: Arc<RwLock<Self>>,
         slot: u32,
+        posture: StakePosture,
     ) -> Result<FirstStakeOutcome, FirstStakeError> {
         let slot = PSlot::from_raw(slot);
         let (daemon, stake, curve_tree, pending_write_lock, chain_tip, tip_hash_at, staking) = {
@@ -698,14 +813,20 @@ where
             false
         };
 
-        // Genesis posture: JoinMarket CompleteTree holdings; the bond fee is
-        // derived from the daemon's live estimate over the bond size ceiling
-        // (the seam the WI-2 addendum reserved for this entry — overpaying is
-        // a miner transfer, never a conservation term).
-        let holdings = HoldingsDescriptor {
-            kind: HoldingsKind::CompleteTree,
-            shard_ids: ShardSet::empty(),
-        };
+        // After the idempotency/W2 guards and before the fee estimate on
+        // purpose. The guards above are pure reads, and their refusals
+        // are *more specific* than a refused posture: a wallet with a
+        // post in flight should hear `BondInFlight`, not "no shards
+        // available" (rule 82's misdiagnosis guard). Everything below is
+        // either a daemon round trip, a funding sweep, or durable — so a
+        // refused posture costs none of it. The conversion itself lives
+        // on [`StakePosture::holdings`].
+        let holdings = posture.holdings()?;
+        // The bond fee is derived from the daemon's live estimate over the
+        // bond size ceiling (the seam the WI-2 addendum reserved for this
+        // entry — overpaying is a miner transfer, never a conservation
+        // term), gated by the same ceiling the send path applies —
+        // see [`bond_fee_from_estimates`].
         let fee = bond_fee_from_estimates(
             daemon
                 .get_fee_estimates()

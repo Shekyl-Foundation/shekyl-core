@@ -50,7 +50,8 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 5 | `show_transfers` | `transfers` | Covered | Native `get_transfers` |
 | 6 | `show_transfer` | `show_transfer` | Covered | Native `get_transfer_by_txid` |
 | 7 | `sweep_all` | N/A | Out of scope | Deleted-by-design: no Engine sweep surface; FOLLOWUPS "`sweep_all`" row carries the reopening criterion (Engine-level `build_sweep_tx`, specced contract-first) |
-| 8 | `stake` | `stake` | Covered | Native `stake` RPC (WI-RPC-1 entry; Full-gated, resume-aware) |
+| 8 | `stake` | `stake` | Covered | Native `stake` RPC (WI-RPC-1 entry; Full-gated, resume-aware). Posture-aware: no flag ⇒ `posture: "market"` (today `-29505`, shard assignment unbuilt) |
+| 8a | `stake --complete-tree-foundation` | `stake` + `posture: "foundation_complete_tree"` + `acknowledge_non_earning_unbounded: true` | Covered | Foundation whole-corpus posture (COMPLETETREE_ACTIVATION D-2/D-4). CLI prints the terms verbatim and requires the typed phrase `serve without reward`; the RPC refuses `-29506` without the acknowledgment, and that refusal's body **is** the warning. Deliberately CLI-only by convention — the GUI never sends the field |
 | 9 | `unstake` | N/A | Planned | No native RPC surface yet; unbonding entry design pending (stake-lifecycle Phase 2b scope) |
 | 10 | `claim_rewards` | N/A | Out of scope | No manual claim step by design: emission claims are assembled and dispatched engine-side (WI-2/WI-3 orchestration); rewards surface in `staked_balance` |
 | 11 | `staking_info` | `staking_info` | Covered | Native `staking_info`, plus `staked_balance` / `staked_outputs` breakdowns (WI-RPC-1 reads) |

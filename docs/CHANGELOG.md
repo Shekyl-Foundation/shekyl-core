@@ -115,11 +115,14 @@
 
   With a hard lower bound and no upper one, the shape is pick generous, not
   optimal — the band ≈200–500 is the ruled part and the divisor is its
-  consequence. **The rig's role inverts** from deriving the value to
-  checking a floor: does the honest concurrent-batch p99 on a Pi-4, on the
-  real Tor network under `VanguardsMode::Managed`, fit inside 500 blocks
-  with room to spare? If not, W₂ goes *up*, which costs nothing — so the
-  measurement can only move it in the safe direction.
+  consequence. **No measurement is owed.** Demoting the unused rig to a
+  "floor check that can only raise W₂" was the half-step that kept the
+  question open: a check whose only possible outcome is a safe-direction
+  move, applied to a constraint that is already one-sided, confirms what
+  the asymmetry already settled. The value is ruled, not provisional.
+  Reopen only if a *premise* of the ruling returns (clock-burn regains both
+  a commitment record and an abandonment penalty, or
+  `SETTLEMENT_EPOCH_BLOCKS` is re-pinned out of the band).
 
   Also corrects the design doc's stale clause "every extra block of W₂
   widens the clock-burn window §6 prices" — **corrected rather than

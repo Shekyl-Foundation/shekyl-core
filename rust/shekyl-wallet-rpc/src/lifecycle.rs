@@ -23,7 +23,7 @@ use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES}
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     Capability, CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network,
-    OpenedEngine, SoloSigner,
+    OpenedEngine, SoloSigner, StakePosture,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
@@ -706,6 +706,41 @@ struct StakeParams {
     /// it for the bootstrap persona derivation. Crosses a local transport
     /// only (SA-R1-d pin 2).
     password: String,
+    /// Which archival obligation this bond takes on
+    /// (`COMPLETETREE_ACTIVATION.md` D-3/D-4).
+    ///
+    /// **Absent means `Market`, and that is what makes this additive**: a
+    /// caller written before the parameter existed keeps its exact
+    /// behaviour. The default is deliberately the *bounded* posture — a
+    /// defaulted parameter that could land on the unbounded one is the
+    /// §9.1 footgun this round exists to close.
+    #[serde(default)]
+    posture: StakePostureParam,
+    /// D-4's acknowledgment gate: required `true` for
+    /// [`StakePostureParam::FoundationCompleteTree`], ignored for market.
+    ///
+    /// Not a validation nicety — the refusal it guards *is* the warning
+    /// (see [`FOUNDATION_POSTURE_WARNING`]), so a client either shows the
+    /// operator those terms or deliberately echoes an acknowledgment it
+    /// was handed. The GUI never sends this field, which is what keeps the
+    /// foundation posture off that surface by construction rather than by
+    /// a check the GUI could forget.
+    #[serde(default)]
+    acknowledge_non_earning_unbounded: bool,
+}
+
+/// The wire spelling of [`StakePosture`], kept separate from the engine
+/// enum so the JSON contract and the engine's type can evolve without
+/// either silently redefining the other.
+#[derive(Debug, Default, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StakePostureParam {
+    /// Ordinary market staking — the default, and the bounded obligation.
+    #[default]
+    Market,
+    /// The Foundation whole-corpus backstop; reachable only with the
+    /// acknowledgment.
+    FoundationCompleteTree,
 }
 
 /// `stake` — make the open wallet a staker (the #332 activation entry).
@@ -737,6 +772,21 @@ pub(crate) async fn stake(
     // including the continue path that never uses it and every early error
     // return — wipes it on drop (rule 35).
     let password = Zeroizing::new(p.password.into_bytes());
+
+    // D-4's gate, and it runs FIRST — before the capability read, before
+    // the idempotency reads, and long before the credentialed reopen that
+    // closes and re-opens the wallet. An unacknowledged foundation request
+    // must cost the caller nothing and change nothing: it is a request for
+    // terms, and the answer is the terms. Putting it after the intent
+    // dance would close a working wallet to tell someone what they were
+    // about to agree to.
+    let posture = match (p.posture, p.acknowledge_non_earning_unbounded) {
+        (StakePostureParam::Market, _) => StakePosture::Market,
+        (StakePostureParam::FoundationCompleteTree, true) => StakePosture::FoundationCompleteTree,
+        (StakePostureParam::FoundationCompleteTree, false) => {
+            return Err(WalletRpcError::StakeFoundationUnacknowledged)
+        }
+    };
 
     // Phase 1 — inspect the open tenant: capability gate, idempotency reads,
     // slot choice (the engine's monotone cursor for a fresh stake; the
@@ -812,59 +862,71 @@ pub(crate) async fn stake(
         drop(password); // unused on the continue path — zeroizes here
         shared
     };
-    let outcome = Engine::first_stake(shared, slot).await.map_err(|e| {
-        use shekyl_engine_core::FirstStakeError as E;
-        match e {
-            E::BondInFlight => WalletRpcError::StakeInFlight,
-            E::AlreadyStaked => WalletRpcError::AlreadyStaked,
-            E::Funding(detail) => WalletRpcError::StakeNotReady { detail },
-            // Daemon-side fee failure: the build-path code whose remedy
-            // (check the daemon, retry) actually matches — never the
-            // "fund and retry" misdiagnosis (rule 82).
-            E::FeeEstimate(_) => WalletRpcError::FeeEstimationFailed,
-            // The daemon ANSWERED and the wallet refused the answer. The
-            // same -29102/-29109 split the send path draws, for the same
-            // reason: "check the connection and retry" is the wrong
-            // remedy when the connection worked (rule 82). The bond fee
-            // is charged to persona working capital with no user-facing
-            // control, so this refusal is the only place the operator
-            // ever learns the daemon quoted an absurd rate — it has to
-            // say which check fired and what the bound was.
-            E::FeeUnreasonable(v) => WalletRpcError::DaemonFeeUnreasonable {
-                reason: v.reason(),
-                rate: v.rate(),
-                bound: v.bound(),
-            },
-            // W1-clean internal failures: state file / persona-id reads.
-            // Funding cannot fix these, so they are not `-29500`.
-            E::State(d) => WalletRpcError::InternalError(format!(
-                "stake preflight failed ({d}); nothing durable was written"
-            )),
-            E::NoStakeEngine => {
-                WalletRpcError::InternalError("stake: no stake engine after intent open".into())
+    // The posture the caller named, gated above. `Market` (the default, and
+    // every pre-parameter caller) still surfaces `NoShardsAvailable` until
+    // the assignment round builds the arm it needs.
+    let outcome = Engine::first_stake(shared, slot, posture)
+        .await
+        .map_err(|e| {
+            use shekyl_engine_core::FirstStakeError as E;
+            match e {
+                E::BondInFlight => WalletRpcError::StakeInFlight,
+                E::AlreadyStaked => WalletRpcError::AlreadyStaked,
+                E::Funding(detail) => WalletRpcError::StakeNotReady { detail },
+                // Daemon-side fee failure: the build-path code whose remedy
+                // (check the daemon, retry) actually matches — never the
+                // "fund and retry" misdiagnosis (rule 82).
+                E::FeeEstimate(_) => WalletRpcError::FeeEstimationFailed,
+                // The daemon ANSWERED and the wallet refused the answer. The
+                // same -29102/-29109 split the send path draws, for the same
+                // reason: "check the connection and retry" is the wrong
+                // remedy when the connection worked (rule 82). The bond fee
+                // is charged to persona working capital with no user-facing
+                // control, so this refusal is the only place the operator
+                // ever learns the daemon quoted an absurd rate — it has to
+                // say which check fired and what the bound was.
+                E::FeeUnreasonable(v) => WalletRpcError::DaemonFeeUnreasonable {
+                    reason: v.reason(),
+                    rate: v.rate(),
+                    bound: v.bound(),
+                },
+                // W1-clean internal failures: state file / persona-id reads.
+                // Funding cannot fix these, so they are not `-29500`.
+                E::State(d) => WalletRpcError::InternalError(format!(
+                    "stake preflight failed ({d}); nothing durable was written"
+                )),
+                E::NoStakeEngine => {
+                    WalletRpcError::InternalError("stake: no stake engine after intent open".into())
+                }
+                E::RecoveredPendingReopen => WalletRpcError::StakeRecoveredPendingReopen,
+                // NOT an internal fault: the slot above is read from the engine
+                // BEFORE the credentialed reopen, and that reopen runs the SP-R0
+                // open-time reconcile — which can GC the picked slot as a phantom
+                // (arm #3) or burn the cursor past it for a retired persona
+                // (arm #2), either of which moves the record out from under the
+                // read. The engine refuses fail-closed; the operator's remedy is to
+                // call `stake` again, which reads the reconciled record. Rule 82: a
+                // legitimate domain state gets a domain code, never `-32603`.
+                //
+                // Arm #4 adoption lands on `-29502 AlreadyStaked` instead, not
+                // here: it re-arms `staking_enabled` with a slot that has a
+                // matching bond post, so `first_stake`'s already-staked scan wins
+                // the race to refuse — and it is the right answer.
+                E::WrongSlot { .. } => WalletRpcError::StakeRecordMoved,
+                // W2: durable slot may exist without a post — a `stake` re-invoke
+                // resumes. Say so in the operator-facing text (rule 82).
+                E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(
+                    "stake failed mid-flow ({d}); call stake again to resume"
+                )),
+                // A designed refusal with a named remedy, not an internal
+                // fault and not a funding problem: shard assignment is an
+                // unbuilt round, so market staking has nothing to bond over
+                // yet. Its own code rather than a reused one — `-29500`'s
+                // remedy is "fund and retry", which would send an operator to
+                // top up a wallet that is funded fine (rule 82).
+                E::NoShardsAvailable => WalletRpcError::StakeNoShardsAvailable,
             }
-            E::RecoveredPendingReopen => WalletRpcError::StakeRecoveredPendingReopen,
-            // NOT an internal fault: the slot above is read from the engine
-            // BEFORE the credentialed reopen, and that reopen runs the SP-R0
-            // open-time reconcile — which can GC the picked slot as a phantom
-            // (arm #3) or burn the cursor past it for a retired persona
-            // (arm #2), either of which moves the record out from under the
-            // read. The engine refuses fail-closed; the operator's remedy is to
-            // call `stake` again, which reads the reconciled record. Rule 82: a
-            // legitimate domain state gets a domain code, never `-32603`.
-            //
-            // Arm #4 adoption lands on `-29502 AlreadyStaked` instead, not
-            // here: it re-arms `staking_enabled` with a slot that has a
-            // matching bond post, so `first_stake`'s already-staked scan wins
-            // the race to refuse — and it is the right answer.
-            E::WrongSlot { .. } => WalletRpcError::StakeRecordMoved,
-            // W2: durable slot may exist without a post — a `stake` re-invoke
-            // resumes. Say so in the operator-facing text (rule 82).
-            E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(
-                "stake failed mid-flow ({d}); call stake again to resume"
-            )),
-        }
-    })?;
+        })?;
 
     Ok(json!({
         "slot": outcome.p_slot,
@@ -1216,16 +1278,31 @@ mod tests {
         assert_pscan(&tenants, false, "close clears the parked handle").await;
     }
 
-    /// The `stake` handler end-to-end against the never-connecting daemon:
-    /// the full SA-R1-a intent dance runs (close → reopen-with-intent →
-    /// actor + on-demand P-scan parked), the continuation fails W1-clean at
-    /// the first daemon-touching pre-persist step — reported as `-29102`
-    /// (fee estimation), the code whose remedy matches, NOT the `-29500`
-    /// "fund and retry" misdiagnosis (rule 82) — the wallet REMAINS OPEN as
-    /// an intent-spawned tenant, and a retry takes the continue path (no
+    /// The `stake` handler end-to-end: the full SA-R1-a intent dance runs
+    /// (close → reopen-with-intent → actor + on-demand P-scan parked), the
+    /// continuation refuses W1-clean, the wallet REMAINS OPEN as an
+    /// intent-spawned tenant, and a retry takes the continue path (no
     /// second reopen) to the same clean outcome.
+    ///
+    /// **The terminal diagnosis moved in slice 3, and honestly so**
+    /// (`COMPLETETREE_ACTIVATION.md` D-3). This surface passes
+    /// `StakePosture::Market` — the only posture it may choose on its own
+    /// until slice 4 adds the parameter and D-4's acknowledgment gate — and
+    /// market staking has no shard assignment yet, so the refusal is now
+    /// `-29505 StakeNoShardsAvailable` and it fires *before* the daemon is
+    /// touched. It used to be `-29102` (fee estimation) because the deleted
+    /// hardcode carried every caller past the posture point into the
+    /// dead-daemon fee estimate.
+    ///
+    /// What that costs, stated rather than left to be noticed: the
+    /// **RPC-layer** mapping of the daemon-seam W1-clean fault is not
+    /// exercised here until slice 4 lets a foundation call through. The
+    /// fault itself still has coverage one layer down —
+    /// `lifecycle_tests::first_stake_refuses_cleanly_before_the_durable_point`
+    /// drives `first_stake` with `FoundationCompleteTree` against the same
+    /// dead daemon and asserts `FirstStakeError::FeeEstimate`.
     #[tokio::test(flavor = "multi_thread")]
-    async fn stake_runs_the_intent_dance_and_fails_w1_clean_at_the_daemon_seam() {
+    async fn stake_runs_the_intent_dance_and_refuses_w1_clean_without_shard_assignment() {
         let dir = tempfile::tempdir().expect("tempdir");
         let tenants = tenants_in(dir.path());
 
@@ -1250,12 +1327,12 @@ mod tests {
             crate::error::WalletRpcError::InvalidParams(_)
         ));
 
-        // The real call: intent dance + W1-clean daemon-fault diagnosis.
+        // The real call: intent dance + the W1-clean posture refusal.
         let err = stake(&tenants, &json!({ "password": "pw" }))
             .await
-            .expect_err("unreachable daemon fails pre-persist");
+            .expect_err("market staking has no shard assignment yet");
         assert!(
-            matches!(err, crate::error::WalletRpcError::FeeEstimationFailed),
+            matches!(err, crate::error::WalletRpcError::StakeNoShardsAvailable),
             "got {err:?}"
         );
         // The wallet stayed open, now intent-spawned with the scan parked.
@@ -1279,9 +1356,155 @@ mod tests {
             .expect_err("retry fails identically");
         assert!(matches!(
             err,
-            crate::error::WalletRpcError::FeeEstimationFailed
+            crate::error::WalletRpcError::StakeNoShardsAvailable
         ));
 
+        close_wallet(&tenants, &json!({})).await.expect("close");
+    }
+
+    /// **D-4's gate costs the caller nothing** — the point of asking for
+    /// terms is that asking is free. An unacknowledged foundation request
+    /// refuses `-29506` carrying the warning, and it does so *before* the
+    /// credentialed reopen: the wallet is not intent-spawned, which is the
+    /// observable that separates "the gate ran first" from "the gate ran
+    /// eventually". A wallet closed and reopened to be told what it was
+    /// about to agree to would be the wrong shape entirely.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unacknowledged_foundation_posture_refuses_before_the_intent_dance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tenants_in(dir.path());
+        create_wallet(
+            &tenants,
+            &json!({ "name": "foundation", "password": "pw" }),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+
+        let err = stake(
+            &tenants,
+            &json!({ "password": "pw", "posture": "foundation_complete_tree" }),
+        )
+        .await
+        .expect_err("the foundation posture is unreachable without the acknowledgment");
+        assert!(
+            matches!(
+                err,
+                crate::error::WalletRpcError::StakeFoundationUnacknowledged
+            ),
+            "got {err:?}"
+        );
+        assert_eq!(
+            err.message(),
+            crate::error::FOUNDATION_POSTURE_WARNING,
+            "the refusal body IS the warning, not a pointer to it"
+        );
+
+        {
+            let shared = crate::tenant::require_open_engine(&tenants)
+                .await
+                .expect("the wallet is untouched and still open");
+            let g = shared.read().await;
+            assert!(
+                !g.has_stake_engine(),
+                "the gate must precede the credentialed reopen: asking for \
+                 terms must not close and respawn the wallet"
+            );
+            assert!(
+                !g.ledger().staking.staking_enabled,
+                "and nothing durable was written"
+            );
+        }
+        close_wallet(&tenants, &json!({})).await.expect("close");
+    }
+
+    /// With the acknowledgment, the foundation posture reaches the engine —
+    /// **the RPC-layer coverage slice 3 had to give up.** Market refuses at
+    /// the posture (nothing downstream runs), so until this parameter
+    /// existed no RPC-level test could reach the daemon-touching pre-persist
+    /// step at all. Against the never-connecting daemon that step is the fee
+    /// estimate, mapped to `-29102` — the code whose remedy matches, never
+    /// the `-29500` "fund and retry" misdiagnosis (rule 82).
+    ///
+    /// This also proves the acknowledgment is *plumbed*, not merely
+    /// accepted: reaching a daemon fault at all means `first_stake` ran with
+    /// `FoundationCompleteTree`, since `Market` returns before the daemon is
+    /// touched.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn acknowledged_foundation_posture_reaches_the_engine_and_fails_w1_clean() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tenants_in(dir.path());
+        create_wallet(
+            &tenants,
+            &json!({ "name": "foundation", "password": "pw" }),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+
+        let err = stake(
+            &tenants,
+            &json!({
+                "password": "pw",
+                "posture": "foundation_complete_tree",
+                "acknowledge_non_earning_unbounded": true
+            }),
+        )
+        .await
+        .expect_err("the unreachable daemon refuses pre-persist");
+        assert!(
+            matches!(err, crate::error::WalletRpcError::FeeEstimationFailed),
+            "got {err:?} — a posture-layer refusal here would mean the \
+             acknowledgment never reached the engine"
+        );
+
+        {
+            let shared = crate::tenant::require_open_engine(&tenants)
+                .await
+                .expect("wallet still open after a W1-clean refusal");
+            let g = shared.read().await;
+            assert!(
+                g.has_stake_engine(),
+                "the acknowledged call ran the intent dance"
+            );
+            assert!(
+                !g.ledger().staking.staking_enabled,
+                "W1-clean: nothing durable was written"
+            );
+        }
+        close_wallet(&tenants, &json!({})).await.expect("close");
+    }
+
+    /// An explicit `"market"` is the same request as omitting the parameter
+    /// — the additive-default property every pre-parameter caller relies
+    /// on, asserted rather than assumed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn explicit_market_posture_matches_the_absent_default() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tenants_in(dir.path());
+        create_wallet(
+            &tenants,
+            &json!({ "name": "market", "password": "pw" }),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+
+        let explicit = stake(&tenants, &json!({ "password": "pw", "posture": "market" }))
+            .await
+            .expect_err("market has no shard assignment yet");
+        let absent = stake(&tenants, &json!({ "password": "pw" }))
+            .await
+            .expect_err("and neither does the default");
+        assert!(matches!(
+            explicit,
+            crate::error::WalletRpcError::StakeNoShardsAvailable
+        ));
+        assert_eq!(
+            explicit.code() as i32,
+            absent.code() as i32,
+            "omitting the posture must be exactly `market`"
+        );
         close_wallet(&tenants, &json!({})).await.expect("close");
     }
 
