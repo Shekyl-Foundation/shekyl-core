@@ -76,16 +76,32 @@ pub(crate) fn fee_rate_for_priority(
             // Total: the caller's rate arrived as `NonZeroU64` and the
             // validated snapshot carries its mask's non-zero proof.
             let custom = FeeRate::from_nonzero(rate, snapshot.quantization_mask());
+
+            // The two bounds read DIFFERENT quantities, deliberately,
+            // because they ask different questions of the same rate.
+            //
+            // Floor — raw `per_weight`. "Does this undercut the
+            // daemon's cheapest tier?" is a per-weight question: mask
+            // rounding dominates only at tiny weights, and at a real
+            // transaction's weight the raw rate is what is charged.
+            // Reading the floor at weight 1 would collapse the
+            // comparison — under a 10,000 mask every rate in `1..=10_000`
+            // quantizes to the same 10,000 charge, so a weight-1 floor
+            // would admit a rate of 1 against an economy tier of 340 and
+            // then undercut it at every weight that matters.
             if custom.per_weight() < snapshot.economy().per_weight() {
                 return Err(FeeEstimatorError::CustomFeeOutOfRange(
                     CustomFeeBand::BelowEconomyFloor,
                 ));
             }
-            // The ONLY ceiling, and the same basis
-            // `ValidatedFeeEstimates::try_new` applies to every named
-            // tier: the EFFECTIVE weight-1 charge, mask rounding
-            // included. An overflow is above any finite cap, so it
-            // lands in the same band rather than inventing a class.
+            // Ceiling — EFFECTIVE weight-1 charge, the same quantity
+            // `ValidatedFeeEstimates::try_new` caps on every named tier.
+            // "What is the most this can cost per weight?" is maximized
+            // exactly where mask rounding dominates, so weight 1 is the
+            // conservative read for a ceiling and the collapse above is
+            // the property that makes it one. An overflow is above any
+            // finite cap, so it lands in this band rather than inventing
+            // a class for arithmetic.
             match tx_fee::try_fee_from_weight(&custom, 1) {
                 Some(one) if one <= ABSOLUTE_FEE_RATE_CAP => Ok(custom),
                 _ => Err(FeeEstimatorError::CustomFeeOutOfRange(
@@ -297,6 +313,34 @@ mod tests {
         let at_floor = NonZeroU64::new(10).expect("nonzero");
         fee_rate_for_priority(FeePriority::Custom(at_floor), &snapshot)
             .expect("the economy floor itself is payable");
+
+        // The floor reads the RAW rate and the ceiling the EFFECTIVE
+        // weight-1 charge. Under a large mask that distinction is the
+        // whole guard: every rate in `1..=10_000` quantizes to the same
+        // 10,000 charge at weight 1, so a floor read there would admit a
+        // rate of 1 against an economy tier of 340 — and then undercut
+        // it at every weight a real transaction has.
+        let masked = ValidatedFeeEstimates::try_new(FeeEstimates {
+            economy: FeeRate::new(340, 10_000).expect("economy"),
+            standard: FeeRate::new(1_400, 10_000).expect("standard"),
+            priority: FeeRate::new(67_000, 10_000).expect("priority"),
+            quantization_mask: 10_000,
+        })
+        .expect("KAT row under an honest 10k mask");
+        assert_eq!(
+            tx_fee::try_fee_from_weight(&FeeRate::new(1, 10_000).expect("rate"), 1),
+            tx_fee::try_fee_from_weight(&masked.economy(), 1),
+            "the weight-1 charges are indistinguishable — this is why the floor is not read there"
+        );
+        let undercut = NonZeroU64::new(1).expect("nonzero");
+        match fee_rate_for_priority(FeePriority::Custom(undercut), &masked) {
+            Err(FeeEstimatorError::CustomFeeOutOfRange(CustomFeeBand::BelowEconomyFloor)) => {}
+            other => panic!("a rate 340x under economy must be refused, got: {other:?}"),
+        }
+        // The masked snapshot's own Priority tier is still reachable.
+        let top = NonZeroU64::new(67_000).expect("nonzero");
+        fee_rate_for_priority(FeePriority::Custom(top), &masked)
+            .expect("Custom reaches Priority under a mask too");
 
         let wide = validated(2_000, 2_000, 2_000);
         let over_abs = NonZeroU64::new(100_001).expect("nonzero");

@@ -34,12 +34,16 @@
 //! both go through it; Custom band-checks run later, against a snapshot
 //! that has already been accepted.
 //!
-//! `Custom` is bounded by the *same* two facts and nothing else — at or
-//! above the snapshot's economy floor, at or below the cap on the same
-//! effective basis. It gets no relative ceiling of its own: economy is
-//! the market floor, so an economy multiple cannot separate a user's
-//! typo from an honest top tier, and one anchored on `priority` would
-//! be a free parameter. See [`CustomFeeBand`].
+//! `Custom` is bounded by those two facts and nothing else — at or
+//! above the snapshot's economy floor, at or below the same absolute
+//! cap. It gets no relative ceiling of its own: economy is the market
+//! floor, so an economy multiple cannot separate a user's typo from an
+//! honest top tier, and one anchored on `priority` would be a free
+//! parameter. The floor reads the raw per-weight rate and the ceiling
+//! the effective weight-1 charge — different quantities on purpose,
+//! because "does this undercut economy" and "how much can this cost"
+//! are maximized at opposite ends of the weight range. See
+//! [`CustomFeeBand`].
 
 use core::num::NonZeroU64;
 
