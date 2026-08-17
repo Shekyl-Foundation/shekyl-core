@@ -14580,6 +14580,66 @@ special case.
 until the disarm scope is settled.** Do not read the third clause as optional.
 It determines the carve-out's **sign** for a dual-stack originator.
 
+### 92.5a The complement does NOT make (c) free — it is thinner than it looks
+
+The coverage objection to universal disarm is *"nodes that missed the flood need
+those 13 emissions."* The obvious answer is that
+`NOTIFY_GET_TXPOOL_COMPLEMENT` already serves late joiners by a targeted pull:
+`request_txpool_complement` sends the node's own pool hashes and the peer
+replies with the difference. If that held, branch (c) would be nearly free — the
+re-relay loop would be a redundant second sync mechanism costing `13 × N`
+emissions network-wide per transaction.
+
+**Read at source, it does not hold.** `m_ask_for_txpool_complement` is
+initialised `true`, consumed by a **one-shot**
+`compare_exchange_strong(true, false)`, and re-armed at exactly one site: when
+`target == 0` and the node has become **fully disconnected** from the network.
+The request then goes to the **first** peer at `state_synchronizing` or better.
+
+So the complement fires **once per total-disconnection cycle, against one peer,
+with no retry** — not once per sync in any recurring sense. A node that syncs,
+draws a complement from a peer whose pool happened to be thin, and stays
+connected **never asks again**.
+
+**Consequence, and it inverts the tentative reading:** the complement does not
+reliably cover the late joiner, so universal disarm would remove the only
+*recurring* coverage mechanism rather than a redundant one. **Branch (c) is not
+nearly free.**
+
+What the loop genuinely covers that no pull can is unchanged and is the
+unbundling's own conclusion: a transaction that propagated to **nobody** —
+swallowed at the first hop, or lost to a partition — has no holder to pull from.
+That is the black-hole case, and it is exactly what the *origin's* push is for.
+Every **other** node's participation is the part that duplicates a pull.
+
+### 92.5b Branch (d) — probabilistic re-broadcast, and it is now the leading candidate
+
+Given §92.5a, the middle option is not universal-or-none:
+
+> **Each holder re-broadcasts with probability `p`.**
+
+Aggregate coverage stays high at large `N` while any individual node emitting
+zero becomes unremarkable — which converts the origin's **deterministic**
+absence (§92.5's oracle) into a **statistical** one with a tunable cost.
+
+It passes this project's own scope rule on randomness: Fanti–Viswanath licenses
+randomization where the observable being attacked *is* the one being randomized,
+and here the adversary's observable is precisely the emission **count**.
+
+**Ranking after §92.5a:** (b) origin-only remains net-negative and is refused;
+(c) universal is no longer cheap and would cost the only recurring coverage;
+**(d) probabilistic is the leading candidate** and is what the implementing round
+should price first.
+
+### 92.5c What the round settles, in order
+
+1. **The disarm predicate.** *"Observed circulating"* needs a definition that is
+   not merely *"received once"* — a single arrival can be the origin's own echo
+   off one peer. The stem-observation machinery already has the shape and the
+   join key.
+2. **`p` for branch (d)**, against measured `N` — and per §91.6 that measurement
+   waits on the complete mechanism, not a simulation.
+
 ### 92.6 The residual is a second independent argument for Tor-only
 
 **A Tor-only originator has no clearnet peers to be silent in front of**, so it
