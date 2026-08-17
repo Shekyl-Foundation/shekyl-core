@@ -10080,7 +10080,15 @@ deletion removed the noise flag and left the zone-selection oracle untouched.
 
 ### 59.1 The decision, and why coherence is not a second one
 
-> **DORMANT AS SHIPPED — §63.8.** The coherence half cannot fire today: every
+> **STALE — see §89.8.8 (2026-08-17).** The dormancy chain has been broken at
+> BOTH ends and coherence is **live**: §89 broke link 1 (a stem send clears
+> `dandelionpp_fluff`), and Q12-U2 removed link 5 by deleting
+> `relay_method::forward` outright, so `tx_pool.cpp`'s suppression is gone and
+> an arrival relays at arrival. Every "coherence dormant" reading below — and
+> §89.8.1's correction that it *"did not wake"* — predates that removal.
+>
+> **DORMANT AS SHIPPED — §63.8.** *(Superseded; kept per the retraction
+> rule.)* The coherence half cannot fire today: every
 > anonymity-zone release carries `dandelionpp_fluff`, so a receiver assigns
 > `relay_method::fluff` and `still_stemming` is false on arrival. R-1 as
 > shipped is **the roll alone**; the reasoning below describes the world
@@ -10815,6 +10823,14 @@ relays alike. The flag cannot separate them because it does not vary.
 
 ### 63.8 R-1's coherence branch is unreachable — half of §59 is not running
 
+> **STALE — see §89.8.8 (2026-08-17).** The dormancy chain has been broken at
+> BOTH ends and coherence is **live**: §89 broke link 1 (a stem send clears
+> `dandelionpp_fluff`), and Q12-U2 removed link 5 by deleting
+> `relay_method::forward` outright, so `tx_pool.cpp`'s suppression is gone and
+> an arrival relays at arrival. Every "coherence dormant" reading below — and
+> §89.8.1's correction that it *"did not wake"* — predates that removal.
+
+
 **§59 shipped as two changes and describes itself as *"one roll at entry,
 coherence until fluff."* Only the roll is live.** The coherence branch
 (`net_node.inl:2381`, `still_stemming && origin != public_`) cannot fire
@@ -10918,8 +10934,12 @@ and the stem work reverses all four:
 | --- | --- | --- |
 | §63.7 exit (b) not dominated | `:561` flags **everything** `fluff` | stem sends pass `fluff = false` (`:807`, `:827`) — **the flag varies again, and §61.1's partition argument revives verbatim** |
 | §63.5 stem shortening rules out exit (a) | diversion **terminates** a stem | a diverted transaction **continues** stemming; the 64 % cost disappears |
-| §63.8 coherence dormant | arrivals are always `fluff` | receiver takes the `forward` default (`:941-942`), `still_stemming` holds, **coherence fires** |
+| §63.8 coherence dormant *(**stale premise** — §89.8.8)* | arrivals are always `fluff` | receiver takes the `forward` default (`:941-942`), `still_stemming` holds, **coherence fires** |
 | §62 F-12 retracted | no Tor-latency hops exist | the change **creates** them — un-retracts forward-looking (§64.3) |
+
+> **This table's left column is evaluated against the pre-§89 posture and is
+> stale — §89.8.8. Its conclusion is owed a re-derivation and must not be
+> quoted as-is.**
 
 **So the ranking inverts: exit (a) regains its footing and exit (b) loses
 its.** Item 1 can still be landed, but only as **posture-conditional** — the
@@ -13639,7 +13659,17 @@ because the *reason* is visible now and will not be later.
 
 ## 89.7 Coherence woke up, and its witness is uneven — stated rather than assumed
 
-> **CORRECTED 2026-08-10 by §89.8.1: it did not wake.** §63.8's chain has a
+> **STALE — see §89.8.8 (2026-08-17).** The dormancy chain has been broken at
+> BOTH ends and coherence is **live**: §89 broke link 1 (a stem send clears
+> `dandelionpp_fluff`), and Q12-U2 removed link 5 by deleting
+> `relay_method::forward` outright, so `tx_pool.cpp`'s suppression is gone and
+> an arrival relays at arrival. Every "coherence dormant" reading below — and
+> §89.8.1's correction that it *"did not wake"* — predates that removal.
+>
+> **CORRECTED 2026-08-10 by §89.8.1: it did not wake.** *(That correction is
+> itself superseded — see the banner above. §89.7's original conclusion is the
+> one that holds today, reached through a link §89.8.1 could not have known was
+> about to be deleted.)* §63.8's chain has a
 > fifth link this section did not know about — `tx_pool.cpp:360-361` refuses to
 > propagate `forward` into `tvc.m_relay`, so an anonymity arrival never reaches
 > `relay_transactions` at all — and §89 did not move it. Link 1 did break
@@ -13911,6 +13941,82 @@ field and Q-12 are one round**, or the forward delay is left justifying a bridge
 that no longer works the way its comment describes.
 
 ---
+
+### 89.8.8 The dormancy chain is broken at both ends — coherence is LIVE
+
+**2026-08-17.** Four sections in this file carry a "coherence dormant" reading
+and **all four are stale**, in a chain where each corrected the last and the
+code then moved past every one of them. Recorded as its own subsection because
+the value of the record is that a reader can find the *current* answer without
+reconstructing the sequence.
+
+| round | claim | link it rested on | status |
+| --- | --- | --- | --- |
+| §63.8 | dormant | 1: every anonymity release sets `dandelionpp_fluff` | **broken by §89** |
+| §89.7 | woke | link 1 broken | conclusion correct, reached early |
+| §89.8.1 | did **not** wake | 5: `tx_pool.cpp`'s `tx_relay != relay_method::forward` conjunct | **removed by Q12-U2** |
+| **now** | **live** | both ends broken | current |
+
+**Verified at source, not inferred.** `levin_notify.cpp` sends with
+`fluff = false` on the stem arms and `true` on the fluff arm, and its comment
+names the downstream consequence. `tx_pool.cpp` states the removal outright:
+*"Q12-U2 removed the `tx_relay != relay_method::forward` conjunct that used to
+sit here. It was the fifth link in the chain that held coherence dormant… The
+class is gone and so is the suppression — an arrival now relays at arrival."*
+`relay_method` has no `forward` variant: the enum is
+`none | local | stem | fluff | block`.
+
+**§64.1's conditional table is therefore evaluating the wrong column.** Its
+"why it holds today" premises describe the pre-§89 posture, so its conclusion —
+*"item 1 is downstream of item 2"* — is **owed a re-derivation** against the
+current state rather than being quotable as-is. It is not simply inverted:
+three of its four rows turn on the stem graph and need re-reading one at a
+time. **Do not cite §64.1's ranking until that is done.**
+
+### 89.8.9 What this does NOT change: `F′` is a clearnet quantity in every posture
+
+The reflex is that a live coherence branch makes the anonymity zone a
+multi-hop graph, so `fluff_return_ms` becomes an anon-graph measurement. **It
+does not, and the reason is structural rather than configurational.**
+
+Coherence gates on `is_pre_fluff_relay`, which is `Stem | Local`. **Fluff can
+never cohere** — `once_at_origin_route(Fluff, ·)` returns `PublicClearnet` for
+*every* zone, pinned exhaustively by `zone_route::tests::fluff_never_coheres`
+— and the `public_clearnet` arm is `send(*m_network_zones.begin())`, the
+clearnet zone, **singular**. So a fluff arriving over an anonymity zone is
+forwarded to clearnet and **not onward over that zone**.
+
+**The anonymity fluff wave is therefore depth one from whoever fluffed, in both
+postures.** Coherence changes the *stem* graph; it cannot touch the fluff
+graph. And `F′` is a **fluff first passage**, so the flood it measures runs on
+clearnet whichever way the stem question is settled.
+
+Three consequences, and they reorganize the §90 round rather than voiding it:
+
+- **The `A = 15/30/60` β work is not orphaned — it has the wrong consumer.**
+  An anonymity-zone degree distribution governs the **stem** term (per-hop
+  cost, stem-length distribution), which *is* an anon-graph quantity measured
+  on the right topology, `--tx-proxy` cap and all. The region machinery, the
+  convergence criterion and the refusal semantics all transfer; the input feeds
+  a different term.
+- **`F′`'s own consumer is the clearnet flood**, whose degree distribution is a
+  larger population with no proxy cap, no descriptor fetch and no dial-failure
+  tail. Nobody in this arc has measured it.
+- **Per-zone `F′` is void, not merely rebutted.** §89.2 refused it on the
+  dual-stack keeper and was right for a *stronger* reason than it gave: there
+  is no anonymity fluff graph for a per-zone value to describe. **Per-posture
+  is the live regime and is not a refinement** — a dual-stack node's return
+  arrives over the clearnet flood, while a Tor-only node has no clearnet zone
+  and can only receive the return inside the depth-one wave, i.e. as something
+  close to a Bernoulli on whether the fluffer held it as an outbound peer. That
+  is a categorically different distribution, not a shifted one.
+
+**So `F′ = 4500` is not wrong so much as unconsumed**: it was derived at an
+admissible region on the anonymity topology, and the term it was derived *for*
+lives on clearnet. What is owed before any landing is a decomposition of the
+embargo **by term** — which are anon-graph, which clearnet-graph, which
+posture-dependent. That is a reading exercise on `full_travel_probability`, not
+a measurement.
 
 ## 90. The first-passage readings get a convergence criterion — and the shipped `F′` is a low draw
 
