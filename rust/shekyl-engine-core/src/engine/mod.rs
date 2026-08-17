@@ -417,7 +417,7 @@ pub use error::{
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 // `ValidatedFeeEstimates` is the type of `FeeEstimationContext`'s public
-// `fee_snapshot` field, and `ABSOLUTE_FEE_RATE_CAP` is the `bound` an
+// `fee_snapshot` field, and `absolute_fee_rate_cap()` is the `bound` an
 // RPC consumer reads out of a `-29109` payload: both were reachable
 // through public API while unnameable, so neither could be documented.
 pub use fee_policy::{absolute_fee_rate_cap, ValidatedFeeEstimates};

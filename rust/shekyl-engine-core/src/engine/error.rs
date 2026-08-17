@@ -50,7 +50,9 @@
 //!   hash at `built_at_height` no longer matches `built_at_tip_hash`.
 //! - [`FeeEstimatorError::DaemonFeeUnreasonable`] — the daemon's fee
 //!   snapshot failed well-formedness (non-monotonic tier band, or a
-//!   named tier above the absolute 100,000 atomic-units/weight cap).
+//!   named tier whose effective weight-1 charge exceeds the derived
+//!   era-maximum cap, `absolute_fee_rate_cap()` = 14,000,000
+//!   atomic-units/weight).
 
 use shekyl_address::Network;
 

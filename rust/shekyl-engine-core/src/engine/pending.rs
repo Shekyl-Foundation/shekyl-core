@@ -71,10 +71,12 @@
 //!   snapshot. `STUB_FEE_ATOMIC_UNITS` is a `cfg(test)` fixture value
 //!   for the reference bodies and has no production reachability.
 //! - **Broadcast** is a real daemon submit returning the daemon's
-//!   reported hash. The reservation-derived synthetic hash survives in
-//!   one live place — correlating an *ambiguous* submit whose bytes the
-//!   engine no longer holds, where there is nothing to hash (see
-//!   [`TxHash`] below) — and in the `cfg(test)` bodies.
+//!   reported hash. The reservation-derived synthetic hash is fully
+//!   retired from production: an *ambiguous* submit whose bytes the
+//!   engine no longer holds now reports `tx_hash: None` (there is
+//!   nothing to hash, and a synthetic id is not a hash — see
+//!   [`TxHash`] below). Only the `cfg(test)` reference bodies still
+//!   mint synthetic ids.
 //!
 //! The chain-state tags ([`PendingTx::built_at_height`],
 //! [`PendingTx::built_at_tip_hash`], [`PendingTx::fee_atomic_units`])

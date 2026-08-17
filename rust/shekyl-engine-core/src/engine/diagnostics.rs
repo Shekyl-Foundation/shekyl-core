@@ -1094,10 +1094,13 @@ pub trait DiagnosticSink: Send + Sync + 'static {
     ///    undefined.
     /// 4. **In-process trust boundary** — no serialization
     ///    surface; events do not cross a process boundary. The
-    ///    `tx_hash: TxHash` field on `SubmitSucceeded` /
+    ///    `tx_hash: Option<TxHash>` field on `SubmitSucceeded` /
     ///    `SubmitPendingResolution` is admissible at this
-    ///    boundary because the hash is on-chain by construction
-    ///    (segment-2i G1 per PR 4 §5.4.8 #4 field-level
+    ///    boundary because every `Some` hash is daemon-reported /
+    ///    on-chain by construction, and `None` marks the one case
+    ///    with nothing real to report — an ambiguous submit whose
+    ///    bytes the engine no longer holds (synthetic ids are
+    ///    retired; segment-2i G1 per PR 4 §5.4.8 #4 field-level
     ///    recursive-trust-boundary discipline).
     /// 5. **Restart-amnesia is deliberate** — producer-side per-
     ///    attempt state is cleared at attempt start.

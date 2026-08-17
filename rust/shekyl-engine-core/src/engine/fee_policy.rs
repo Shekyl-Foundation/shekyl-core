@@ -18,7 +18,11 @@
 //! 1. **Tier band monotonic** — `economy ≤ standard ≤ priority`. An
 //!    inversion is a defect or a lie, not a market condition.
 //! 2. **Absolute cap on the EFFECTIVE weight-1 charge** — for each
-//!    named tier, `fee_from_weight(rate, 1) ≤ 100,000` atomic units.
+//!    named tier, `fee_from_weight(rate, 1) ≤`
+//!    [`absolute_fee_rate_cap()`] (the daemon-rounded genesis-condition
+//!    `Fh` = 14,000,000 atomic units — derived, KAT-pinned; a 100,000
+//!    mid-regime literal was caught in review refusing honest
+//!    young-chain snapshots whose economy tier alone is ~68,266).
 //!    The effective charge, not the raw `per_weight`: every fee is
 //!    rounded UP to a multiple of the daemon-controlled
 //!    `quantization_mask`, so a raw-rate cap is bypassable by mask
@@ -27,8 +31,7 @@
 //!    `≥ mask` and `≥ per_weight`, so one bound caps both without a
 //!    second policy constant; the marginal per-weight cost stays
 //!    `≤ per_weight ≤` the same bound, and mask rounding adds at most
-//!    one mask unit (`≤` the cap) to any fee, once. Honest
-//!    2021-scaling `Fh` in the KAT is 67,000 with a small mask.
+//!    one mask unit (`≤` the cap) to any fee, once.
 //!
 //! [`ValidatedFeeEstimates`] is the only constructor. Quote and build
 //! both go through it; Custom band-checks run later, against a snapshot
@@ -253,7 +256,7 @@ pub enum CustomFeeBand {
     /// tier. Not paternalism: below it the transaction does not clear.
     #[error("custom feerate below economy floor")]
     BelowEconomyFloor,
-    /// Effective weight-1 charge above [`ABSOLUTE_FEE_RATE_CAP`], on
+    /// Effective weight-1 charge above [`absolute_fee_rate_cap()`], on
     /// the same basis [`ValidatedFeeEstimates`] applies to every named
     /// tier. A rate that overflows the fee arithmetic is this variant
     /// too — it is certainly above the cap.
@@ -330,11 +333,12 @@ impl ValidatedFeeEstimates {
         // mask-bypassable (module docs). `fee(1) ≥ mask` also bounds
         // the mask itself under the same constant.
         for rate in [&snapshot.economy, &snapshot.standard, &snapshot.priority] {
-            let one = tx_fee::try_fee_from_weight(rate, 1).ok_or(
-                FeeEstimatorError::DaemonResponseInvalid {
-                    reason: "feerate overflowed fee arithmetic at weight 1",
-                },
-            )?;
+            // Fail-closed arithmetic: an overflowing weight-1 charge is
+            // represented as `u64::MAX`, which the cap branch refuses as
+            // what it is — a charge above any finite cap (`-29109`) —
+            // rather than a malformed response (`-29102`). Same
+            // disposition as `Custom`'s cap arm.
+            let one = tx_fee::fee_from_weight(rate, 1);
             if one > absolute_fee_rate_cap() {
                 return Err(FeeEstimatorError::DaemonFeeUnreasonable(
                     CeilingViolation::AboveAbsoluteCap { rate: one },
@@ -479,6 +483,28 @@ mod tests {
                 rate,
             })) => assert_eq!(rate, cap + 1),
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// The overflow arm is an over-cap refusal, not a malformed
+    /// response: a representable wire value whose weight-1 charge
+    /// overflows the fee arithmetic is unambiguously above any finite
+    /// cap and must answer `-29109` (`AboveAbsoluteCap`, saturated
+    /// rate), never `-29102`.
+    #[test]
+    fn weight_one_overflow_is_over_cap_not_malformed() {
+        let m = 2u64;
+        let big = FeeEstimates {
+            economy: FeeRate::new(u64::MAX, m).expect("economy"),
+            standard: FeeRate::new(u64::MAX, m).expect("standard"),
+            priority: FeeRate::new(u64::MAX, m).expect("priority"),
+            quantization_mask: m,
+        };
+        match ValidatedFeeEstimates::try_new(big) {
+            Err(FeeEstimatorError::DaemonFeeUnreasonable(CeilingViolation::AboveAbsoluteCap {
+                rate,
+            })) => assert_eq!(rate, u64::MAX, "saturated charge rides the wire pair"),
+            other => panic!("overflow must be an over-cap refusal: {other:?}"),
         }
     }
 

@@ -4736,8 +4736,10 @@ sat inside rate selection it also locked Custom and was skipped by
 the quote path.
 
 **Ruling.** The 10× intra-snapshot refusal is **withdrawn**. Snapshot
-well-formedness is monotonicity plus the absolute 100,000
-atomic-units/weight cap, constructed once as `ValidatedFeeEstimates`
+well-formedness is monotonicity plus the absolute cap on the effective
+weight-1 charge (the derived era-maximum, `absolute_fee_rate_cap()` =
+14,000,000 atomic-units/weight — see the same-day re-provisioning
+amendment below), constructed once as `ValidatedFeeEstimates`
 at fetch (build *and* quote). Custom band-checks run against that
 type and are not gated on the Priority tier's ratio. The historical
 median-multiple ceiling remains the V3.x `WalletSideEstimator`'s
@@ -4766,8 +4768,9 @@ was quoting.
 **Ruling.** The `Custom` relative ceiling is **withdrawn**. `Custom`'s
 band is exactly the policy every named tier obeys and nothing more:
 at or above the snapshot's economy floor (below it the transaction
-does not clear — not paternalism), at or below the absolute 100,000
-atomic-units/weight cap on the same effective weight-1 basis. This
+does not clear — not paternalism), at or below the same derived
+era-maximum absolute cap (`absolute_fee_rate_cap()` = 14,000,000
+atomic-units/weight) on the same effective weight-1 basis. This
 brings the code to what the 2026-08-16 ruling already named as
 `Custom`'s bound; no third, `Custom`-only ceiling was ever ratified,
 and none is introduced. A ceiling anchored on `priority` was

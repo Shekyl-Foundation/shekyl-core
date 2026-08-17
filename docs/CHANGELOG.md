@@ -77,10 +77,11 @@ production callers.
   "Phase 1 stub" doc-prose on the live estimator swept; the
   grace-blocks constant has one owner (`shekyl-rpc-client`); daemon
   fee-error classification is prefix-anchored instead of substring-open.
-  `phase1_tx_hash` is renamed `correlation_tx_hash` — the Phase-1 stub
-  it was named for is gone, but the function is live: it identifies an
-  *ambiguous* submit whose transaction bytes the engine no longer holds,
-  which is a correlation id and never a transaction hash.
+  `phase1_tx_hash` is deleted outright (an intermediate rename to
+  `correlation_tx_hash` did not survive review): an *ambiguous* submit
+  whose transaction bytes the engine no longer holds now reports
+  `tx_hash: None` — a synthetic reservation-derived id is not a
+  transaction hash, and emitting one as if it were was the defect.
 - **Fee-path invariants moved into the types.** `ValidatedFeeEstimates`
   carries its mask's non-zero proof and its constructor is
   crate-internal, so outside the engine it is an opaque token minted
