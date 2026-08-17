@@ -1,6 +1,7 @@
 # Cover traffic restoration — audit, plan, and status
 
-**Status: audit complete, plan pending, implementation not started.**
+**Status: audit and plan complete; implementation not started. Stages 1–3 are
+unblocked, stage 4 is not — see §3.**
 
 This document exists because the cover mechanism is **deliberately inert, fully
 built, and has no production caller** — which is indistinguishable, to a
@@ -12,7 +13,7 @@ architecture (§42.3), a ruled backstop (§92), and a scoped implementation
 > **DO NOT DELETE ANY COMPONENT IN §1 ON "NO CALLERS" GROUNDS.** The absence of
 > a production caller is *the current state of a two-line configuration
 > decision* (§1.1), not evidence of abandonment. The deletion criteria that
-> would actually justify removing this machinery are stated in §1.5, and none
+> would actually justify removing this machinery are stated in §1.6, and none
 > of them is "grep found no callers".
 
 ---
@@ -125,8 +126,105 @@ called).
 
 ## 2. The plan
 
-*Pending — next commit.*
+### 2.0 What this plan is NOT — explicit non-scope
+
+**Two unblocked items in the relay arc are deliberately outside this plan and
+must not be absorbed into it.** If this document becomes the tracked artifact,
+they drift by omission — which is how a queue disappears while attention is on
+one page. Each carries its own `IMPLEMENTATION_INDEX` row.
+
+| item | why not here |
+| --- | --- |
+| **Tor transit measurement** (`ANON_ZONE_TRANSIT_ASSUMPTION_MS`) | **The largest remaining item in the relay arc and blocked on nothing.** §91.6: it is the term that sets `F′`, it is a *labelled assumption* rather than a measurement, and the admissible-region sweep showed it moves the constant ~7× more than `beta` does. Independent of cover. |
+| **Flood-suite reconciliation** (5 files) | Adding the transit term moved every anonymity-reach reading ~3× and **no test failed**, because the flood instruments assert *shape*, never *level*. The recorded numbers in `f7_directed`, `flood_convergence`, `d9_alpha`, `d9_floor_locality` and `f_prime_admissible_region` are now transit-less readings sitting beside a transit-bearing instrument. Independent of cover. |
+
+### 2.1 The unblocked slice — and it needs NO covert enablement anywhere
+
+**This is the key structural fact, and §1.5 implies it without stating it.**
+`make_notifier(noise_size, …)` takes the payload size **as a parameter**, so
+the covert gtests construct notifiers with an explicit payload and bypass the
+config path entirely. Therefore:
+
+> **All three §42.5a changes are verifiable with both production notifier sites
+> still passing `nullptr` and the mechanism still off.**
+
+There is an existing oracle, a defined red-then-green transition, and **no
+production exposure**:
+
+| stage | change | done when |
+| --- | --- | --- |
+| **1** | Delete the stem→`local` downgrade | `noise_stem` reds; expectation becomes `take_relayed(stem)` per its annotation |
+| **2** | Move the carrier decision **below** the phase decision — carrier chosen *for* a phase, not *instead of* one | covert branch consumes `shekyl_relay_zone_plan_relay_with_refresh` rather than bypassing it (§42.5b) |
+| **3** | Replace the all-channels broadcast with a **per-stem-slot** send | `noise_stem`'s `notified_size()` becomes **1**; C++ send loop now respects `CovertSchedule`'s `i ↔ i` binding |
+
+Stages 1–3 also carry §42.5b's ownership move: phase, carrier, slot and the
+dummy payload become Rust, in **one** crossing per rule 40; strand dispatch,
+levin fragmenting and the socket write stay C++ as epee-bound.
+
+**The `noise_stem` annotation is the acceptance test.** Greening it means
+changing the expectations to `stem` and `1` — *not* the code. A change that
+leaves it green as written has preserved the bypass.
+
+### 2.2 The intermediate state is a REAL done-condition, not partial completion
+
+After stages 1–3 the covert branch is **correct and inert**.
+
+Today it is **wrong and inert**: it refuses to stem, contradicting §89, in code
+that would execute the moment anyone passed a payload. Moving from the second
+state to the first is a genuine deliverable with a privacy consequence — **it
+removes the trap where re-enabling covert silently reverses a consensus-adjacent
+ruling** (§42.5a).
+
+**This stage closes.** It is not held open awaiting §2.3.
+
+### 2.3 Stage 4 — enablement, and its unblock criterion is NAMED
+
+Stage 4 is §1.1's two-line change: pass a real payload at both notifier sites.
+
+> **A stage marked merely "blocked" decays exactly as §64.1 did** — read as
+> amber, treated as "nearly there", quoted as if current. §64.1 only stopped
+> being mis-cited when it was marked **un-citable with the specific
+> re-derivation named**. So this stage carries a **checkable** criterion rather
+> than a label.
+
+**Stage 4 is unblocked when, and only when, §92.5's disarm scope is ruled.**
+That ruling has exactly two components, and a reader can verify each rather than
+guess:
+
+1. **The disarm predicate is defined**, and it is not *"received once"* — which
+   fails in two directions: a single arrival may be the origin's own echo, and a
+   relay's first receipt is its **only** receipt in the common case, so a
+   predicate firing on it disarms every node and collapses to branch (c) by
+   accident. The property meaning *circulating* is *"this came back from
+   somewhere other than where I sent it"* (§92.5c).
+2. **(d) probabilistic re-broadcast and (e) fixing the complement's trigger have
+   been priced against each other and one chosen.** They are **substitutes**, not
+   companions — the complement fires once at boot, so it is a
+   reconnection-recovery path, not recurring coverage (§92.5a/b).
+
+Until both hold, stage 4 does not start. §92 ruled the backstop; it explicitly
+left the disarm scope open **because the carve-out's sign depends on it**.
+
+### 2.4 Rule 94 registration
+
+This plan, the transit measurement and the suite reconciliation each get an
+`IMPLEMENTATION_INDEX` row, so §2.0's non-scope items stay visible from the
+index rather than only from this page.
+
+---
 
 ## 3. Status against the plan
 
-*Pending.*
+**Verified against `dev` at the audit commit.**
+
+| stage | status | evidence |
+| --- | --- | --- |
+| audit | **done** | §1, this document |
+| 1 — delete the stem→`local` downgrade | not started | `levin_notify.cpp` covert branch still downgrades |
+| 2 — carrier below phase | not started | carrier check still above the `switch (tx_relay)` |
+| 3 — per-stem-slot send | not started | send loop still iterates all channels |
+| **1–3 done-condition: correct and inert** | **not reached** | current state: *wrong* and inert |
+| 4 — enablement | **not startable** | §2.3's two criteria both unmet |
+
+**Non-scope, tracked separately (§2.0):** Tor transit measurement — *unblocked,
+not started*; flood-suite reconciliation — *unblocked, not started*.
