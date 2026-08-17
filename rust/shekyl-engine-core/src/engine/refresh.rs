@@ -921,7 +921,7 @@ async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
     }
 
     // Producer-side observability sink. `TracingDiagnosticSink` is the
-    // V3.0 canonical projection per `engine/diagnostics.rs` F9: each
+    // V3.0 canonical projection per `engine/diagnostics/sink.rs` F9: each
     // RefreshDiagnostic variant is routed to a typed `tracing` span
     // with bucketed labels. Constructed once per refresh and shared
     // by reference into every attempt's `RefreshEngine::produce_scan_result` call —

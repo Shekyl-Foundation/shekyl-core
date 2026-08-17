@@ -12167,7 +12167,7 @@ production callers.
   [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R6 reframe + §5.4.8 attack-surface dispositions.
   - `pub enum RefreshDiagnostic` at
-    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+    [`engine/diagnostics/refresh_events.rs`](../rust/shekyl-engine-core/src/engine/diagnostics/refresh_events.rs)
     with `#[non_exhaustive]` and the Round-4-audit-confirmed
     Stage 1 variant set: `DaemonMalformed { kind:
     MalformedKind }`, `DaemonTimeout { op: DaemonOp, elapsed:
@@ -12358,7 +12358,7 @@ production callers.
     `dyn`-erased trait object.
   - Adds `AssertionSink`, `PanickingSink`, and the
     `PanickingSinkTrigger` configuration enum to
-    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs),
+    [`engine/diagnostics/sink.rs`](../rust/shekyl-engine-core/src/engine/diagnostics/sink.rs),
     all gated `#[cfg(any(test, feature = "test-helpers"))]`
     per the F-Mock-1 cfg-symmetry pin. `AssertionSink` records
     emitted `RefreshDiagnostic` events for post-hoc coherence
@@ -18808,7 +18808,7 @@ production callers.
     callers (`engine::refresh::*`) bind against `DaemonEngine`
     or `Rpc` instead of reaching through to the wrapped
     transport. `From<RpcError> for IoError` lands in
-    [`engine::error`](../rust/shekyl-engine-core/src/engine/error.rs)
+    [`engine::error`](../rust/shekyl-engine-core/src/engine/error/io.rs)
     to satisfy `DaemonEngine::Error: Into<IoError>` for the
     `DaemonClient` impl.
   - **`MockDaemon` (renamed from `MockRpc`) extends to a full
@@ -21508,7 +21508,7 @@ production callers.
 
      **Empirical variant enumeration (per source).** Of the
      six `RefreshError` variants at
-     [`engine/error.rs:148`](../rust/shekyl-engine-core/src/engine/error.rs),
+     [`engine/error/refresh.rs`](../rust/shekyl-engine-core/src/engine/error/refresh.rs),
      three are reachable from a `RefreshEngine` impl's
      `Self::Error` via the `From` conversion: `Cancelled`
      (unit), `Io(IoError)` (payload), and
@@ -21555,7 +21555,7 @@ production callers.
   is `pub(crate)`, unit-variant-only by convention, four
   variants (`Cancelled`, `Io`, `Malformed`, `Internal`).
   Orchestrator-facing
-  [`RefreshError`](../rust/shekyl-engine-core/src/engine/error.rs)
+  [`RefreshError`](../rust/shekyl-engine-core/src/engine/error/refresh.rs)
   is `pub`, payload-bearing throughout. The `From` impl
   boundary at
   [`engine/local_refresh.rs:368–384`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)

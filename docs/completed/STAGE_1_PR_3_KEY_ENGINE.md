@@ -1662,7 +1662,7 @@ spec-clarification" provenance subsection).**
 ### 3.2 Phase 0b — `KeyError` / `KeyEngineError` split (§7-non-compliant)
 
 **Drift.** Existing `KeyError`
-([`engine/error.rs:362`](../../rust/shekyl-engine-core/src/engine/error.rs))
+([`engine/error/key.rs`](../../rust/shekyl-engine-core/src/engine/error/key.rs))
 covers wallet-open / derivation only: `PublicBytesMismatch`,
 `UnsupportedDerivationPair`, `Primitive`. The §2.1 trait surface
 has runtime ops (signing, ECDH, decap, subaddress derivation)

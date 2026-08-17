@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Unit suite for the diagnostics surface (`engine/diagnostics.rs`).
+//! Unit suite for the diagnostics surface (`engine/diagnostics/`).
 //!
 //! Extracted to a `#[path]` sibling so the engine-decomposition ratchet
 //! measures the workflow file rather than its tests — the pattern the
@@ -18,6 +18,8 @@
 //! boundaries that F9 names — the contract pins (§5.4.8 #5
 //! per-class emission budget; §5.4.6 emission/return
 //! coherence) are exercised end-to-end in C7.
+
+use std::time::Duration;
 
 use super::*;
 

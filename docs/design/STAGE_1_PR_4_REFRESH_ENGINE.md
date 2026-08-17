@@ -358,7 +358,7 @@ reentrance pops the head); F-Mock-3 + F-Mock-3-sharpening pin
 the wrapper-API design (Option (i): `type Error = RefreshError`;
 the queue holds `RefreshError` values directly) and the trait-
 reachable-variant enumeration. Empirical resolution against
-[`engine/error.rs:148–270`](../../rust/shekyl-engine-core/src/engine/error.rs),
+[`engine/error/refresh.rs`](../../rust/shekyl-engine-core/src/engine/error/refresh.rs),
 [`engine/local_refresh.rs:347–384`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs),
 [`engine/traits/ledger.rs:270–273`](../../rust/shekyl-engine-core/src/engine/traits/ledger.rs),
 and [`engine/merge.rs:181–451`](../../rust/shekyl-engine-core/src/engine/merge.rs):
@@ -5312,7 +5312,7 @@ worth pinning explicitly as a positive architectural reference:
   `DaemonMalformed`) before the return; the `Self::Error` itself
   is structural-branch-signal-only.
 - **Orchestrator-facing `RefreshError`** —
-  [`engine/error.rs:148`](../../rust/shekyl-engine-core/src/engine/error.rs),
+  [`engine/error/refresh.rs`](../../rust/shekyl-engine-core/src/engine/error/refresh.rs),
   `pub`, payload-bearing throughout (only `Cancelled` and
   `AlreadyRunning` are unit). Of the six variants, three are
   reachable from a `RefreshEngine` impl's `Self::Error` per
@@ -6133,7 +6133,7 @@ precedent set by C5 / C5a / C5b / C5β):
   **F-Mock-3-sharpening (trait-reachable vs.
   orchestrator-constructed variants; cause-vs-effect testing
   pattern).** Of the six `RefreshError` variants per
-  [`engine/error.rs:148–270`](../../rust/shekyl-engine-core/src/engine/error.rs),
+  [`engine/error/refresh.rs`](../../rust/shekyl-engine-core/src/engine/error/refresh.rs),
   three are reachable from a `RefreshEngine` impl's
   `Self::Error` via the `From` conversion: `Cancelled` (unit),
   `Io(IoError)` (payload), and `InternalInvariantViolation
@@ -6398,7 +6398,7 @@ shape per
 [`engine/lifecycle/support.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle/support.rs));
 `AssertionSink` + `PanickingSink` + `PanickingSinkTrigger`
 land at
-[`engine/diagnostics.rs`](../../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+[`engine/diagnostics/sink.rs`](../../rust/shekyl-engine-core/src/engine/diagnostics/sink.rs)
 gated `#[cfg(any(test, feature = "test-helpers"))]` per the
 F-Mock-1 cfg-symmetry pin; `proptest = "1"` added as a
 `dev-dependency` for the producer-property-tests module at

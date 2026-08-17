@@ -1267,7 +1267,7 @@ in §7 invariant 4.
 [`engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs)
 (commit `d3edc1abb`, PR 4 C1); the supporting
 `RefreshDiagnostic` + `DiagnosticSink` substrate at
-[`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+[`engine/diagnostics/`](../rust/shekyl-engine-core/src/engine/diagnostics/mod.rs)
 (commit `8fc207051`, PR 4 C2); the `LocalRefresh` implementor at
 [`engine/local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
 (commit `ac100e1ab`, PR 4 C4); the `Engine<S, D, L, R>` four-parameter
@@ -1591,8 +1591,8 @@ declared at
 `TerminalErrorKind` / `AmbiguousErrorKind` / `PendingTxError` /
 `DiscardReason` / `SnapshotId` / `ReservationExtension` /
 `PendingTxDiagnostic` enums + the augmented `Reservation` /
-`PendingTx` types land in `engine/error.rs` /
-`engine/diagnostics.rs` / `engine/pending.rs` (PR 5 C2 =
+`PendingTx` types land in `engine/error/` /
+`engine/diagnostics/` / `engine/pending.rs` (PR 5 C2 =
 `fa5981e9d` / `316f5c15e` / `8f8e4c863`; C3 = `58fb6174f`); the
 `LocalPendingTx<S: Signer, O: OutputSelector, F: FeeEstimator>`
 aggregate implementor lands at
@@ -2031,11 +2031,11 @@ pub trait PersistenceEngine {
 **PR 6 Phase 0a amendment (F5(b), 2026-05-27).** Steady-state saves take
 HKDF-derived sealing keys (`StateWrapKey` = `wrap_key_region_2`,
 `PrefsHmacKey` from `shekyl-engine-prefs`), not `Credentials` or password
-bytes. `type Error` is [`PersistenceError`](../rust/shekyl-engine-core/src/engine/error.rs)
-(not [`OpenError`](../rust/shekyl-engine-core/src/engine/error.rs));
+bytes. `type Error` is [`PersistenceError`](../rust/shekyl-engine-core/src/engine/error/lifecycle.rs)
+(not [`OpenError`](../rust/shekyl-engine-core/src/engine/error/lifecycle.rs));
 [`Engine::close`](../rust/shekyl-engine-core/src/engine/lifecycle/session.rs) maps
 persist failures via `OpenError::Persistence`. [`Engine::change_password`](../rust/shekyl-engine-core/src/engine/lifecycle/session.rs)
-uses [`ChangePasswordError`](../rust/shekyl-engine-core/src/engine/error.rs).
+uses [`ChangePasswordError`](../rust/shekyl-engine-core/src/engine/error/lifecycle.rs).
 Binding form, open ritual, and commit plan:
 [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
@@ -2807,7 +2807,7 @@ Stage 4 field-relevance shift.
 
 **Origin.** `EngineConfig` exists at Stage 1 with all fields
 defined; lives in `engine/config.rs`
-(new module, sibling to `engine/error.rs`). The struct is
+(new module, sibling to `engine/error/`). The struct is
 `#[non_exhaustive]` so future fields (V3.1 multisig, V3.x
 Component 3 adaptive-burn knobs) extend additively without
 breaking V3.0 callers.
@@ -3876,14 +3876,15 @@ pub enum EngineError {
 
 Existing error enums (`KeyError`, `OpenError`, `RefreshError`,
 `SendError`, `PendingTxError`, `IoError`, `TxError`) stay where
-they are in [`engine/error.rs`](../rust/shekyl-engine-core/src/engine/error.rs).
+they are in [`engine/error/`](../rust/shekyl-engine-core/src/engine/error/mod.rs).
 The `EngineError` aggregate is new; it's the type that
 `Engine<S>`-level methods return and that the JSON-RPC server
 converts to wire errors.
 
 **`EconomicsError` (Round 4a — Item 5 pin).** New alongside
-`EconomicsEngine` (§2.7); lives in the same `engine/error.rs`
-module as the other per-trait error enums. V3.0 shape:
+`EconomicsEngine` (§2.7); lives in the same `engine::error`
+module as the other per-trait error enums (`error/economics.rs`
+after the PR #490 workflow split). V3.0 shape:
 
 ```rust
 #[non_exhaustive]
@@ -3977,7 +3978,7 @@ variant at Stage 4 are explicitly:
 
 | Trait | Error family | V3.0 origin |
 |---|---|---|
-| `KeyEngine` | `KeyError` | existing in `engine/error.rs` |
+| `KeyEngine` | `KeyError` | existing in `engine/error/key.rs` |
 | `LedgerEngine` | `RefreshError` (shared with `RefreshEngine`) | existing |
 | `RefreshEngine` | `RefreshError` | existing |
 | `PendingTxEngine` | `PendingTxError` | existing |

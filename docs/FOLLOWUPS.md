@@ -6672,7 +6672,7 @@ sustainability is unaffected by the recalibration.
   intended to stay payload-free) covers types defined **off** the
   trait files: `PendingTxEngine`'s `SendError` / `SubmitError` /
   `PendingTxError` / `DiscardReason` (in
-  [`engine/error.rs`](../rust/shekyl-engine-core/src/engine/error.rs)
+  [`engine/error/send.rs`](../rust/shekyl-engine-core/src/engine/error/send.rs)
   and [`engine/pending.rs`](../rust/shekyl-engine-core/src/engine/pending.rs))
   and `PersistenceEngine`'s `PersistenceError`. The audit: for each
   trait-owned value/error type, confirm it carries the appropriate

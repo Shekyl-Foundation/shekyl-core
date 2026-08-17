@@ -1470,7 +1470,7 @@ async fn panic_safety_recovery_after_panic_succeeds() {
 
 /// Coverage of the [`is_daemon_malformed`] discriminator. The
 /// `DaemonMalformed` emission path is exercised in
-/// `engine/diagnostics.rs::tests::assertion_sink_records_events_in_emission_order`
+/// `engine/diagnostics_tests.rs::assertion_sink_records_events_in_emission_order`
 /// and across the C7 panic-safety tests; this test pins that
 /// `is_daemon_malformed` correctly classifies the event class
 /// against a synthesized event.
