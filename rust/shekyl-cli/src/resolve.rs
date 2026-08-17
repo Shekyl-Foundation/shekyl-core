@@ -75,7 +75,18 @@ pub enum ResolvedCommand {
     },
 
     // -- Staking (WI-RPC-1) --
-    Stake,
+    Stake {
+        /// `--complete-tree-foundation`: request the Foundation
+        /// whole-corpus archival posture instead of market staking
+        /// (`COMPLETETREE_ACTIVATION.md` D-2/D-4).
+        ///
+        /// A flag rather than a subcommand, and off by default, because
+        /// the posture must be *named* to be reached — there is no
+        /// select-all affordance and no default that could land on the
+        /// unbounded obligation. Setting it does not by itself stake: the
+        /// command states the terms and requires a typed phrase first.
+        foundation: bool,
+    },
     StakedBalance,
     StakedOutputs,
     StakingInfo,
@@ -344,7 +355,20 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 diag("parse_uri: need <uri>")
             }
         }
-        "stake" => ResolvedCommand::Stake,
+        // Exhaustive rather than `contains`, and unrecognized arguments are
+        // a diagnostic instead of a shrug. `stake` is capital-locking and
+        // its two postures carry different obligations, so an argument the
+        // parser does not understand means the operator asked for something
+        // this build cannot map — and *guessing* market would post the
+        // wrong-shaped bond under a typo'd foundation flag once assignment
+        // exists. Silent divergence between what was asked and what is done
+        // is the whole class D-3's mandatory enum removed at the engine; the
+        // CLI must not reintroduce it at the front door.
+        "stake" => match args {
+            [] => ResolvedCommand::Stake { foundation: false },
+            ["--complete-tree-foundation"] => ResolvedCommand::Stake { foundation: true },
+            _ => diag("stake: unrecognized argument; usage: stake [--complete-tree-foundation]"),
+        },
         "staked_balance" => ResolvedCommand::StakedBalance,
         "staked_outputs" => ResolvedCommand::StakedOutputs,
         "staking_info" => ResolvedCommand::StakingInfo,
@@ -1096,7 +1120,33 @@ mod tests {
 
     #[test]
     fn test_staking_commands() {
-        assert!(matches!(parse("stake"), ResolvedCommand::Stake));
+        assert!(matches!(
+            parse("stake"),
+            ResolvedCommand::Stake { foundation: false }
+        ));
+        assert!(
+            matches!(
+                parse("stake --complete-tree-foundation"),
+                ResolvedCommand::Stake { foundation: true }
+            ),
+            "the foundation posture must be reachable only by naming it"
+        );
+        // A near-miss flag arms nothing and is not silently downgraded to a
+        // market stake either: the operator asked for something this build
+        // does not understand, and the honest answer is to say so. Both
+        // failure directions are covered — the typo must not reach the
+        // unbounded obligation, and it must not quietly reach the other one.
+        assert!(
+            matches!(
+                parse("stake --complete-tree"),
+                ResolvedCommand::Diagnostic { .. }
+            ),
+            "a misspelt posture flag must be refused, never guessed"
+        );
+        assert!(matches!(
+            parse("stake --complete-tree-foundation --extra"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
         assert!(matches!(
             parse("staked_balance"),
             ResolvedCommand::StakedBalance

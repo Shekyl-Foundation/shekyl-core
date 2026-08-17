@@ -706,6 +706,41 @@ struct StakeParams {
     /// it for the bootstrap persona derivation. Crosses a local transport
     /// only (SA-R1-d pin 2).
     password: String,
+    /// Which archival obligation this bond takes on
+    /// (`COMPLETETREE_ACTIVATION.md` D-3/D-4).
+    ///
+    /// **Absent means `Market`, and that is what makes this additive**: a
+    /// caller written before the parameter existed keeps its exact
+    /// behaviour. The default is deliberately the *bounded* posture — a
+    /// defaulted parameter that could land on the unbounded one is the
+    /// §9.1 footgun this round exists to close.
+    #[serde(default)]
+    posture: StakePostureParam,
+    /// D-4's acknowledgment gate: required `true` for
+    /// [`StakePostureParam::FoundationCompleteTree`], ignored for market.
+    ///
+    /// Not a validation nicety — the refusal it guards *is* the warning
+    /// (see [`FOUNDATION_POSTURE_WARNING`]), so a client either shows the
+    /// operator those terms or deliberately echoes an acknowledgment it
+    /// was handed. The GUI never sends this field, which is what keeps the
+    /// foundation posture off that surface by construction rather than by
+    /// a check the GUI could forget.
+    #[serde(default)]
+    acknowledge_non_earning_unbounded: bool,
+}
+
+/// The wire spelling of [`StakePosture`], kept separate from the engine
+/// enum so the JSON contract and the engine's type can evolve without
+/// either silently redefining the other.
+#[derive(Debug, Default, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StakePostureParam {
+    /// Ordinary market staking — the default, and the bounded obligation.
+    #[default]
+    Market,
+    /// The Foundation whole-corpus backstop; reachable only with the
+    /// acknowledgment.
+    FoundationCompleteTree,
 }
 
 /// `stake` — make the open wallet a staker (the #332 activation entry).
@@ -737,6 +772,21 @@ pub(crate) async fn stake(
     // including the continue path that never uses it and every early error
     // return — wipes it on drop (rule 35).
     let password = Zeroizing::new(p.password.into_bytes());
+
+    // D-4's gate, and it runs FIRST — before the capability read, before
+    // the idempotency reads, and long before the credentialed reopen that
+    // closes and re-opens the wallet. An unacknowledged foundation request
+    // must cost the caller nothing and change nothing: it is a request for
+    // terms, and the answer is the terms. Putting it after the intent
+    // dance would close a working wallet to tell someone what they were
+    // about to agree to.
+    let posture = match (p.posture, p.acknowledge_non_earning_unbounded) {
+        (StakePostureParam::Market, _) => StakePosture::Market,
+        (StakePostureParam::FoundationCompleteTree, true) => StakePosture::FoundationCompleteTree,
+        (StakePostureParam::FoundationCompleteTree, false) => {
+            return Err(WalletRpcError::StakeFoundationUnacknowledged)
+        }
+    };
 
     // Phase 1 — inspect the open tenant: capability gate, idempotency reads,
     // slot choice (the engine's monotone cursor for a fresh stake; the
@@ -812,14 +862,10 @@ pub(crate) async fn stake(
         drop(password); // unused on the continue path — zeroizes here
         shared
     };
-    // Slice-3 compile-fix: the posture is mandatory at the engine entry, and
-    // `Market` is the only one this surface may choose on its own. The
-    // `posture` parameter and D-4's acknowledgment gate — the sole path to
-    // `FoundationCompleteTree` — land in slice 4. Passing the foundation
-    // posture here to keep tests green would recreate the deleted hardcode
-    // one layer up, so this deliberately surfaces `NoShardsAvailable` until
-    // the parameter exists.
-    let outcome = Engine::first_stake(shared, slot, StakePosture::Market)
+    // The posture the caller named, gated above. `Market` (the default, and
+    // every pre-parameter caller) still surfaces `NoShardsAvailable` until
+    // the assignment round builds the arm it needs.
+    let outcome = Engine::first_stake(shared, slot, posture)
         .await
         .map_err(|e| {
             use shekyl_engine_core::FirstStakeError as E;
@@ -1300,6 +1346,152 @@ mod tests {
             crate::error::WalletRpcError::StakeNoShardsAvailable
         ));
 
+        close_wallet(&tenants, &json!({})).await.expect("close");
+    }
+
+    /// **D-4's gate costs the caller nothing** — the point of asking for
+    /// terms is that asking is free. An unacknowledged foundation request
+    /// refuses `-29506` carrying the warning, and it does so *before* the
+    /// credentialed reopen: the wallet is not intent-spawned, which is the
+    /// observable that separates "the gate ran first" from "the gate ran
+    /// eventually". A wallet closed and reopened to be told what it was
+    /// about to agree to would be the wrong shape entirely.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unacknowledged_foundation_posture_refuses_before_the_intent_dance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tenants_in(dir.path());
+        create_wallet(
+            &tenants,
+            &json!({ "name": "foundation", "password": "pw" }),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+
+        let err = stake(
+            &tenants,
+            &json!({ "password": "pw", "posture": "foundation_complete_tree" }),
+        )
+        .await
+        .expect_err("the foundation posture is unreachable without the acknowledgment");
+        assert!(
+            matches!(
+                err,
+                crate::error::WalletRpcError::StakeFoundationUnacknowledged
+            ),
+            "got {err:?}"
+        );
+        assert_eq!(
+            err.message(),
+            crate::error::FOUNDATION_POSTURE_WARNING,
+            "the refusal body IS the warning, not a pointer to it"
+        );
+
+        {
+            let shared = crate::tenant::require_open_engine(&tenants)
+                .await
+                .expect("the wallet is untouched and still open");
+            let g = shared.read().await;
+            assert!(
+                !g.has_stake_engine(),
+                "the gate must precede the credentialed reopen: asking for \
+                 terms must not close and respawn the wallet"
+            );
+            assert!(
+                !g.ledger().staking.staking_enabled,
+                "and nothing durable was written"
+            );
+        }
+        close_wallet(&tenants, &json!({})).await.expect("close");
+    }
+
+    /// With the acknowledgment, the foundation posture reaches the engine —
+    /// **the RPC-layer coverage slice 3 had to give up.** Market refuses at
+    /// the posture (nothing downstream runs), so until this parameter
+    /// existed no RPC-level test could reach the daemon-touching pre-persist
+    /// step at all. Against the never-connecting daemon that step is the fee
+    /// estimate, mapped to `-29102` — the code whose remedy matches, never
+    /// the `-29500` "fund and retry" misdiagnosis (rule 82).
+    ///
+    /// This also proves the acknowledgment is *plumbed*, not merely
+    /// accepted: reaching a daemon fault at all means `first_stake` ran with
+    /// `FoundationCompleteTree`, since `Market` returns before the daemon is
+    /// touched.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn acknowledged_foundation_posture_reaches_the_engine_and_fails_w1_clean() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tenants_in(dir.path());
+        create_wallet(
+            &tenants,
+            &json!({ "name": "foundation", "password": "pw" }),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+
+        let err = stake(
+            &tenants,
+            &json!({
+                "password": "pw",
+                "posture": "foundation_complete_tree",
+                "acknowledge_non_earning_unbounded": true
+            }),
+        )
+        .await
+        .expect_err("the unreachable daemon refuses pre-persist");
+        assert!(
+            matches!(err, crate::error::WalletRpcError::FeeEstimationFailed),
+            "got {err:?} — a posture-layer refusal here would mean the \
+             acknowledgment never reached the engine"
+        );
+
+        {
+            let shared = crate::tenant::require_open_engine(&tenants)
+                .await
+                .expect("wallet still open after a W1-clean refusal");
+            let g = shared.read().await;
+            assert!(
+                g.has_stake_engine(),
+                "the acknowledged call ran the intent dance"
+            );
+            assert!(
+                !g.ledger().staking.staking_enabled,
+                "W1-clean: nothing durable was written"
+            );
+        }
+        close_wallet(&tenants, &json!({})).await.expect("close");
+    }
+
+    /// An explicit `"market"` is the same request as omitting the parameter
+    /// — the additive-default property every pre-parameter caller relies
+    /// on, asserted rather than assumed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn explicit_market_posture_matches_the_absent_default() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tenants_in(dir.path());
+        create_wallet(
+            &tenants,
+            &json!({ "name": "market", "password": "pw" }),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+
+        let explicit = stake(&tenants, &json!({ "password": "pw", "posture": "market" }))
+            .await
+            .expect_err("market has no shard assignment yet");
+        let absent = stake(&tenants, &json!({ "password": "pw" }))
+            .await
+            .expect_err("and neither does the default");
+        assert!(matches!(
+            explicit,
+            crate::error::WalletRpcError::StakeNoShardsAvailable
+        ));
+        assert_eq!(
+            explicit.code() as i32,
+            absent.code() as i32,
+            "omitting the posture must be exactly `market`"
+        );
         close_wallet(&tenants, &json!({})).await.expect("close");
     }
 
