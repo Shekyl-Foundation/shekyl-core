@@ -200,6 +200,16 @@ tokio = { version = "1", features = ["time", "macros", "sync", "rt", "rt-multi-t
 # `CancellationToken` is part of the unconditional surface in
 # tokio-util 0.7 (no feature gate); no explicit feature list needed.
 tokio-util = { version = "0.7" }
+
+# Free-space probe for the serving task's disk-headroom alarm
+# (`statvfs`; COMPLETETREE_ACTIVATION.md Q-2). Mirrors the line
+# `shekyl-engine-prefs` already carries for its directory-fsync shim —
+# same crate, same version, same `fs` feature, already locked and in the
+# build graph, so this is a direct edge onto a vetted dependency rather
+# than a new one. `deny(unsafe_code)` on this crate is unaffected: the
+# attribute governs this crate's own code, and the syscall wrapper's
+# `unsafe` stays inside rustix.
+rustix = { version = "1", features = ["fs"] }
 # `Engine::refresh` constructs a `shekyl_scanner::Scanner` from
 # `AllKeysBlob`, which requires assembling a `ViewPair` over
 # `(EdwardsPoint, Scalar, [u8; 32], Vec<u8>)`. Decompressing the

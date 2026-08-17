@@ -220,6 +220,25 @@ pub fn cmd_staking_info(rpc: &RpcSession) {
                 Some(h) => println!("Staking scan height: {h}"),
                 None => println!("Staking scan height: not yet scanned"),
             }
+            // Always rendered, including the absent case: "not serving" is
+            // the reading an operator most needs and the one that would
+            // otherwise be invisible — a bonded wallet showing no posture
+            // line at all reads as though the question were not asked
+            // (rule 82). The non-earning parenthetical rides the foundation
+            // arm every time it is shown, so the terms stay attached to the
+            // posture rather than living only in the one-time warning.
+            let posture = val.get("posture").and_then(serde_json::Value::as_str);
+            match posture {
+                Some("foundation_complete_tree") => {
+                    println!("Serving posture:     Foundation CompleteTree (non-earning)");
+                }
+                Some("market") => println!("Serving posture:     market"),
+                // An unknown spelling is a newer server talking to an older
+                // CLI. Echo it rather than claiming "not serving", which
+                // would be a false negative about a node that IS serving.
+                Some(other) => println!("Serving posture:     {other}"),
+                None => println!("Serving posture:     not serving"),
+            }
         }
         Err(e) => rpc.report("Failed to get staking info", &e),
     }
