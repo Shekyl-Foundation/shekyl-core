@@ -8487,6 +8487,12 @@ document. It sits directly beneath a Shekyl comment that correctly explains
 §89's *"Dandelion++ runs on every zone"* — the prose was updated for §89 and
 the branch below it was not.
 
+> **Amendment to §25.1's framing (same day).** The backstop was described as
+> required because *"a covert path that cannot deliver has nowhere to fall."*
+> That is not true today: it **falls through to fluff** (see the retraction in
+> §42.5b). It falls somewhere, and that somewhere is the privacy-losing branch —
+> which makes the backstop more load-bearing, not less.
+
 **What §42.3 therefore requires** is not an ordering fix. It is: delete the
 stem→`local` downgrade; move the carrier decision below the phase decision; and
 replace the all-channels broadcast with a per-stem-slot send. The covert path
@@ -8519,9 +8525,55 @@ carries phase *and* carrier *and* slot — the precedent being
 into a single call rather than shuttling an intermediate verdict across.
 
 The stem→`local` downgrade is **deleted, not migrated**: Rust does not produce
-"downgrade the phase", it produces a plan, and a carrier that cannot serve a
-phase is a `NO_ROUTE` — which §30.5 already requires to send nothing rather
-than fall back.
+"downgrade the phase", it produces a plan.
+
+> **RETRACTED the same day, and the error was inverted rather than imprecise.**
+> This paragraph continued: *"…and a carrier that cannot serve a phase is a
+> `NO_ROUTE` — which §30.5 already requires to send nothing rather than fall
+> back."* **`NO_ROUTE` does not send nothing. It fluffs.**
+>
+> `levin_notify.cpp` runs the stem attempt, forces a map refresh, re-plans,
+> attempts once more, logs `MERROR("Unable to send transaction(s) via
+> Dandelion++ stem")` — and then **falls through to
+> `record_relayed(relay_method::fluff)` and `relay_fluff::run(...)`**. §30.5's
+> send-nothing rule is enforced somewhere else entirely: at `send_txs`'s
+> `anonymity_fail_closed` arm, which is a **zone** decision, not a plan verdict.
+>
+> **So the retracted design would have produced fluff-at-origin** — a covert
+> zone unable to carry a stem would fluff the origination instead, which is the
+> outcome §16.4's gate overturned D9(b) for producing, arriving through a
+> different door.
+
+#### Why `NO_ROUTE` is the wrong channel even setting the inversion aside
+
+**The two conditions have different lifetimes.** `NO_ROUTE` is a *transient
+graph state* — no stem successor at this instant, the connection list may be
+stale, so refresh and retry. Try-twice-then-fluff is a defensible degradation
+for that, because the next transaction will probably route.
+
+*"Covert cannot serve this phase"* is a **persistent configuration state**: true
+for every transaction until an operator changes something. Routing it through a
+retry-shaped verdict means every origination pays the same two failed attempts
+and the same fluff fallback forever, with an `MERROR` per transaction that reads
+as a transport hiccup. **Terminal conditions and transient ones need different
+channels** — the distinction the CompleteTree slice already drew when it put the
+one-way posture flag in the shared constructor precisely because, unlike the
+terminal `AlreadyPruned` refusal, it cannot wedge the refresh loop.
+
+#### The right shape: unrepresentable, not expressible
+
+If covert is enabled on a zone, **the zone should be unable to be in a state
+where it cannot serve a phase it will be asked for** — validated at
+construction, not discovered at send time. `CovertSchedule` is already built
+that way: *"One type so 'enabled' and 'has deadlines' cannot disagree: a
+disabled zone has no schedule; an enabled zone always has one deadline per stem
+slot."* Extending that invariant to cover phase-serving capability makes the
+condition **unrepresentable rather than expressible**, and leaves the plan enum
+meaning exactly what it means today.
+
+If a runtime verdict turns out to be genuinely required anyway, it must be
+**distinct and terminal**, and its handler **must not be the fluff
+fall-through**.
 
 ### 42.5 What remains open
 
