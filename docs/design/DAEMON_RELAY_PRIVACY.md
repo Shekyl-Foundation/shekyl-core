@@ -14140,3 +14140,145 @@ distribution has arrived by then) through `converged_fluff_return_mixed`, and
 carry the embargo, the wallet timeout and the §44 pins in the same change.
 Until then the shipped 3250 is known to be low by one tick against the
 conservative topology, and low is the under-provisioning direction.
+
+---
+
+## 91. The propagation-graph ruling — Design A adopted, and the composition it rests on
+
+**2026-08-17, maintainer ruling.** This section exists because four consecutive
+rounds re-derived the same confusion from scratch. Every constant in this file
+is a term that must be evaluated *on a graph*, and until now the answer to
+"which graph" depended on which phase you asked about — because the tree was
+running one design for the stem and a different one for the fluff, while this
+document argued the first in §89 and the second in §59.1.
+
+### 91.1 The two coherent designs, and that we had one of each
+
+**Design A — transport is a parameter, not a topology.** One propagation
+graph; clearnet, Tor and i2p are *link classes* within it. A fluff floods all
+of them. `F′` is a first passage over the union. Tor-only is a full
+participant. This is what §89 states in as many words at the fluff send site
+(*"a transport is a parameter and changing it does not change the graph"*), what
+§89.2's dual-stack keeper presupposes (*"a dual-stack node's fluff returns over
+both networks"* is only true if fluffs traverse both), and what the per-zone
+`hop` split is for.
+
+**Design B — the anonymity zone is a stem-only ingress.** Anonymity zones exist
+to hide *origination*; once a transaction fluffs it belongs to the public
+network. `F′` is purely clearnet. Tor-only is submit-only and needs clearnet or
+a bridge to receive. This is what §59.1 argues (*"fluff is the deliberate exit
+from the anonymity zone"*) — and it is what the routing implements.
+
+**We were running A for the stem and B for the fluff.** Verified: a fluff
+arriving on any zone takes `once_at_origin_route(Fluff, ·) → PublicClearnet`
+(fluff can never cohere — coherence gates on `is_pre_fluff_relay`, which is
+`Stem | Local`), and that arm is `send(*m_network_zones.begin())` — the
+clearnet zone, **singular**. Nothing anywhere pushes a fluff into Tor or i2p.
+
+**The consequence nobody had stated:** a Tor-only node sees only
+anonymity-originated traffic. It never learns of the transactions that
+originate on clearnet, so it cannot maintain a mempool, cannot disarm embargoes
+against the real flood, and cannot mine on a current template. **Tor-only was
+not a working posture — not by ruling, but by routing.**
+
+### 91.2 Design A is adopted
+
+**Tor-only is a supported posture. It is not the default.** Seed hosts run
+dual-network and are knowingly linkable, which costs nothing: long-running
+public infrastructure whose onion is discoverable anyway.
+
+A fluff is broadcast across every configured zone. `F′` remains **process-wide
+at the worst zone** per §89.2 — and under A the worst zone is the anonymity
+graph, because `ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625` against clearnet's
+`50`. A dual-stack node's return is a *min* over the graphs it runs; a Tor-only
+node's return is the anonymity graph alone, and provisioning at the worst zone
+is provisioning for that node.
+
+### 91.3 §59.1's exit rule is superseded, and its problem was real
+
+§59.1 gated coherence on the pre-fluff methods to stop anonymity-originated
+transactions being **stranded in the anonymity subgraph** — *"a liveness break
+that would read as correct."* That failure mode is genuine and this ruling does
+not dismiss it.
+
+**Design A solves it differently: the fluff goes to clearnet *and stays on the
+anonymity zone*, rather than leaving it.** The exit rule achieved liveness by
+making the anonymity zone one-way. A broadcast achieves the same liveness
+without that, which is why the rule is superseded rather than reversed — the
+constraint it enforced still holds, by a different mechanism.
+
+### 91.4 The unlinkability composition — a PRECONDITION of A, not an incidental property
+
+Design A makes a dual-stack node emit each fluff on more than one zone, which
+invites the obvious objection: a correlated pair, IP on clearnet and onion on
+Tor, accumulating over enough transactions into the IP↔onion linkage
+`ANON_ZONE_SENTINEL_PEER_ID` exists to prevent.
+
+**That attack does not close, and the reason is a composition of three
+decisions none of which was made for it:**
+
+| decision | made for | effect here |
+| --- | --- | --- |
+| `ANON_ZONE_SENTINEL_PEER_ID = 1` | stop passive IP↔onion correlation via the handshake field | inbound anon peers carry no distinguishing id |
+| `tor_address::unknown()` on inbound | hidden services have no client identifier | an inbound anon peer has no address to record |
+| `FluffReach::OutboundOnly` | sybil resistance — relay only to peers we chose | **the direction that carries fluffs carries no identity** |
+
+The third is the one that closes it. On an `OutboundOnly` zone the fluff loop
+skips every peer whose direction is inbound, so for an adversary `A` to receive
+a fluff from node `Y` over Tor, **`Y` must have dialled `A`** — making it `A`'s
+inbound, where `A` holds `unknown()` and the sentinel. `A` sees a socket, not
+an identity. And the converse closes the other route: if `A` dialled `Y` — the
+direction where `A` *does* know `Y`'s onion, having chosen it from its peerlist
+— then that link is `Y`'s inbound, and `Y`'s fluff loop skips it. **There is no
+combination that yields both the emit and the name.**
+
+What survives is strictly weaker: an active marker can pair an IP with *one of
+the inbound sockets it already holds*, never with an onion address — a channel
+it already had, and a fact far short of IP↔onion.
+
+**This is recorded as a precondition because Design A now depends on it.** The
+composition is load-bearing and undocumented, and there is a proposal already
+in this arc's record that would revoke it: **peer-distinctness on the anonymity
+zone** (§16, closed on the ground that a distinctness oracle is a linkability
+oracle). This is the third and sharpest argument against it — identifying
+inbound anonymity peers would hand an active marker exactly the attribution it
+currently cannot obtain, and would do so at the moment Design A begins emitting
+on both zones. **Do not reopen distinctness without reopening this ruling.**
+
+> **Two retracted attacks, recorded because the method is the reusable part.**
+> The correlation cost of A was priced as real *twice* — first as a shared emit
+> time (killed by each zone drawing its own `FluffScheduler` delay from its own
+> `m_notifier`), then as a shared receipt anchor (killed by the composition
+> above). Both constructions assumed an adversary that receives the emit *and*
+> knows the emitter, without ever making it pay for that position. Pricing the
+> adversary's position before its gain is the check that would have caught both.
+
+### 91.5 What this ruling closes
+
+- **F-8b's floor keeps its number on both arms.** Under A the anonymity
+  out-degree governs an anonymity fluff flood, so `MIN_PROVISIONED_OUT_PEERS`
+  and the `--tx-proxy` refusal are derived on the graph they constrain. The
+  cross-graph defect that Design B exposed does not arise.
+- **The `A = 15/30/60` β work has its consumer back**, and as the *right*
+  input rather than a reassigned one: the anonymity graph carries a real fluff
+  flood, and the worst-zone `F′` needs exactly that graph.
+- **Per-posture `F′` is not a distinct regime** — it is what §89.2 already
+  says, a min over the transports a node runs.
+- **§64.1's conditional table becomes re-derivable** rather than owed.
+
+### 91.6 What it opens, and neither is optional
+
+**The flood instrument has no transit term.** `simulate_fluff_return_mixed`
+advances each hop by a fluff-flush draw alone; `time_between_hop_ms` and the
+transit constants appear nowhere in the module. Under Design B that was
+harmless — 50 ms against a 5000 ms flush mean is ~1 %. Under A it is decisive:
+the worst zone carries **1625 ms per hop, ~32 % against the same mean**, and
+omitting it makes the flood look *faster*, which is the under-provisioning
+direction. **No `F′` derived without it is valid**, including the 4500 ms this
+arc reached at the §90 admissible region.
+
+**Tor-only liveness is a question Design A creates and B never had to answer.**
+"Supported posture" must mean a Tor-only node stays in consensus, not merely
+that it receives transactions eventually — and the anonymity flood at 1625 ms
+per hop over a ~30-node graph is a very different propagation regime from
+clearnet. This is owed before Tor-only is documented as supported to users.
