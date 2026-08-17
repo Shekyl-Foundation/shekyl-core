@@ -14452,3 +14452,152 @@ suite was watching the axis it moved.
 that it receives transactions eventually — and the anonymity flood at 1625 ms
 per hop over a ~30-node graph is a very different propagation regime from
 clearnet. This is owed before Tor-only is documented as supported to users.
+
+---
+
+## 92. The backstop ruling — and the disarm scope decides the carve-out's sign
+
+**2026-08-17, maintainer ruling.** §25.1 gated the noise restoration on *"what
+the backstop does when it fires on B."* This settles it, and the answer is not
+the one §25.1 anticipated, because its premise expired.
+
+### 92.1 §25.1's premise is stale — seventh instance
+
+§25.1, verbatim: *"On a noise zone there is no fluff path — everything leaves
+through the covert channels — so the remedy is a design choice (re-point to a
+different covert channel…; or fluff to the zone's outbound set)."*
+
+That was true of **Configuration B**, where covert carried everything. B was
+deleted at §41, and §42.3's proposal is precisely that **fluff takes the
+ordinary connection while covert carries the stem phase** — so the fluff path
+exists by construction under the architecture the restoration proposes.
+Option (a) is no longer needed to answer the question. **Seventh
+stale-inherited-premise in this arc.**
+
+But that does not discharge the gate. It **relocates it onto §91's Design A**,
+where the answer is genuinely contested.
+
+### 92.2 Design A and §30.5 conflict — only on the backstop, only at the origin
+
+Under A a fluff broadcasts to every configured zone, clearnet included. For an
+ordinary fluff that is fine: the stem has run `h` hops, so the fluffing node is
+not the origin and clearnet exposure costs nothing.
+
+**The backstop is the one case where that fails.** It fires at a node whose own
+stem was swallowed. When that node is the *originator*, A's broadcast rule puts
+its own transaction on clearnet from its own IP with itself as the fluff
+source — the origin oracle §30.5 forbids, and the failure §25.1's own header
+names (*"the covert channel is an origin oracle and attribution precision goes
+from ≈ f to ≈ 1"*).
+
+**The predicate already exists.** `originated_stays_in_zone(tx_relay, nzone)`
+draws exactly this distinction at `record_relayed`. It is currently a txpool-class
+decision; under A it must become a **wire** decision too, because A changed what
+"fluff" does on the wire.
+
+### 92.3 The ranking
+
+1. **Re-stem is preferred** (§25.1's option (a)). A backstop that re-points to a
+   fresh stem successor keeps the transaction in stem phase: no clearnet flood,
+   therefore no return trip, therefore nothing to strip and nothing to disarm.
+   It is Dandelion++'s own answer to a swallowed stem.
+2. **The carve-out applies at the terminal fluff.** Re-stem must terminate, so
+   after a bounded number of attempts the transaction fluffs anyway — by which
+   point it has moved off the origin and the fluffing node is not the origin.
+   **The backstop's fluff is in-zone only when the firing node originated the
+   transaction** — an explicit carve-out from A's broadcast rule, scoped to that
+   predicate. Everything else about A stands.
+
+### 92.4 The third clause — the ratchet does two jobs and only one should be frozen
+
+`upgrade_relay_method` is a one-way ratchet over `none < local < stem < fluff <
+block`, and it does two opposite jobs at once:
+
+- **It makes `Local` unforgeable** — nothing can demote *into* it, so no relaying
+  node can acquire the origin mark. Verified: `set_relayed` writes through
+  `upgrade_relay_method`, so the covert branch's `tx_relay = relay_method::local`
+  cannot demote an entry already at `stem` or `fluff`; the write is discarded.
+- **It makes `Local` non-durable** — anything above upgrades *past* it, so the
+  origin loses the mark on the first fluff re-arrival, and
+  `originated_stays_in_zone`'s own note says what follows: *"one record of `Stem`
+  or `Fluff` moves the entry out of `Local` permanently, and the next pool
+  re-relay puts the user's own transaction on the clear internet."*
+
+So freezing the ratchet and letting it run are **both** wrong. `Local` is two
+facts with different lifetimes — provenance, which is permanent, and re-broadcast
+responsibility, which should end when the transaction is observed circulating:
+
+> **An originated entry's `Local` class is provenance and is not upgraded by a
+> re-arrival of its own transaction; its re-broadcast responsibility is
+> separately disarmed when the transaction is observed circulating.**
+
+Discipline #17 with **presence** as the signal: `T` returning is proof it is
+circulating, which is exactly the condition under which re-broadcast has no job
+left.
+
+> **A fourth reason to delete the covert downgrade rather than migrate it**
+> (§42.5a): its stated purpose, *"do not put into stempool embargo"*, is achieved
+> not by the value meaning anything but by monotonicity throwing the value away.
+> A value that works because it is ignored is not a mechanism to carry forward.
+
+### 92.5 The disarm's SCOPE is open — and origin-only is net-NEGATIVE
+
+**This is the deciding question, not insurance.** The re-broadcast loop is
+bounded — `get_relay_delay` sets the wait to the entry's age rounded to
+`MIN_RELAY_TIME` (300 s) and capped at `MAX_RELAY_TIME` (4 h), with a hard stop
+at `max_age / 2`, giving **13 emissions over 36 hours**. Under A a relaying node
+holds `T` at `fluff` and broadcasts to both zones: **13 on anon, 13 on clearnet**.
+
+| branch | origin's emissions | verdict |
+| --- | --- | --- |
+| **(a) no disarm** (freeze only) | 13 anon / **0 clearnet** | distinguishable by clearnet absence |
+| **(b) origin-only disarm** | **1** anon / **0 clearnet** | **worst** — distinguishable on both axes |
+| **(c) universal disarm** | 1, like everyone | resolves |
+
+**Why (b) is net-negative.** The origin relays everyone else's traffic on
+clearnet normally, so the signal is not "quiet once" — it is *"there is a set of
+transactions this node never re-emits on clearnet while re-emitting its
+neighbours' traffic thirteen times."* Over a handful of originations that set
+**is** the origination set, and the adversary's position is one of the node's
+twelve clearnet outbound slots.
+
+Set against what the carve-out prevents: without it the origin emits on clearnet
+at the terminal backstop, *first*. **"I saw T first from O" is a weak signal** —
+someone is always first, and being on the path is not being the origin.
+**Thirteen repeated absences is not weak.** So the carve-out with origin-only
+disarm trades an ambiguous one-shot signal for an unambiguous repeated one.
+
+**(c) universal disarm resolves it**: if every node disarms re-broadcast on
+observing `T` circulating — and for a relaying node, receiving it from a peer
+*is* that observation — then nobody re-emits wire-received transactions, absence
+is the norm, and the origin's silence is explained by a mechanism every node
+runs. The re-relay loop collapses to what it arguably always was: **the origin
+pushing its own transaction until it sees it come back**, with the origin's
+disarm trigger coinciding with its embargo's — one mechanism rather than a
+special case.
+
+**Ruled: the carve-out lands, and its dual-stack cost is an ACCEPTED RESIDUAL
+until the disarm scope is settled.** Do not read the third clause as optional.
+It determines the carve-out's **sign** for a dual-stack originator.
+
+### 92.6 The residual is a second independent argument for Tor-only
+
+**A Tor-only originator has no clearnet peers to be silent in front of**, so it
+does not leak §92.5's absence signal at all — under any disarm branch.
+
+That is now **two independent mechanisms** where Tor-only is *strictly stronger*
+rather than merely equivalent: this, and §91.4's emit-attribution composition.
+Which is a real answer to §91.2's *"Tor-only is supported, not default"* —
+**supported and strictly more private**, with the cost quantified at the
+anonymity zone's embargo (§91.6).
+
+### 92.7 A loop that closed without either end noticing
+
+§25.2 already contains the sybil argument this arc spent two rounds
+reconstructing, and states it more strongly: *"on an anonymity network inbound
+peer identity is free to mint… it is that you can never establish you have more
+than one distinct one. Effective inbound anonymity set ≈ 1 against anyone willing
+to generate keys."* It names `rust/shekyl-relay/src/zone/mod.rs`'s
+`FluffReach::OutboundOnly` doc as the load-bearing misattribution — **the exact
+site corrected two rounds later**, without the connection being made at the time.
+Cross-referenced here so the next reader gets it in one hop.
