@@ -203,11 +203,12 @@ impl ReservationId {
 /// Submit returns the daemon's reported tx hash. One live path cannot:
 /// `finalize_submit_ambiguous` reports an ambiguous outcome for a
 /// reservation that is no longer in flight, so there are no `tx_bytes`
-/// left to hash. It synthesizes a correlation value
-/// (`transfer::support::correlation_tx_hash`, the [`ReservationId`]
-/// little-endian at offsets `0..8`, the rest zero) purely so the
-/// diagnostic can be tied back to the reservation. Callers compare
-/// the bytes as opaque and must never rely on that bit pattern.
+/// left to hash. That path reports `None` — its diagnostic's `tx_hash`
+/// is an `Option` — rather than synthesizing one from the
+/// [`ReservationId`], which is what the retired `phase1_tx_hash` did:
+/// a manufactured value is a plausible, nonexistent txid in a field
+/// consumers monitor. Correlation runs through the `reservation_id`
+/// the same event already carries.
 pub use shekyl_types::TxHash;
 
 // `FeePriority` migrated to `engine::fee_estimator` per PR 5

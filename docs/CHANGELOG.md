@@ -37,7 +37,23 @@
   wrong remedy when the connection worked. Nothing durable is written on
   that path (W1-clean). `FeeRate::calculate_fee_from_weight` — which
   multiplies unchecked and documents that it may panic — now has zero
-  production callers.
+production callers.
+- **Fee-rate units in the API say per *weight*, not per byte.** `FeeRate`'s
+  contract is per weight unit, and the two diverge by the Bulletproofs+
+  clawback once a transaction has more than two outputs — so a client that
+  sized a `custom` rate against the serialized length pinned the wrong
+  number. Corrected on the `Feerate` scalar, the `FeePriority` description,
+  and `FeePriority::Custom`'s rustdoc.
+- **An ambiguous submit no longer reports a manufactured transaction hash.**
+  `SubmitPendingResolution.tx_hash` is `Option<TxHash>`: when the reservation
+  is no longer in flight there are no bytes to hash, and the previous code
+  synthesized one from the `ReservationId`. The field is documented as the
+  submitted tx's hash and is consumed by the V3.x mempool monitor, so a
+  synthesized value was a plausible, *nonexistent* txid — the monitor would
+  have read "never in the mempool" as "disappeared from it", a confident
+  wrong verdict where `None` is a correct absent one. Correlation runs
+  through `reservation_id`, which the same event always carries; the
+  synthesizer is deleted rather than renamed.
 - **Legacy scalar-`fee` tier synthesis deleted.** A daemon reply without
   a `fees` array was treated as pre-2021-scaling and turned into
   `(fee×1, fee×5, fee×1000)`. No such daemon exists on this chain

@@ -35,7 +35,7 @@ use super::super::transaction_submitter::{
     canonical_tx_id, SubmitSuccess, SubmitterError, TransactionSubmitter,
 };
 use super::engine::LocalPendingTx;
-use super::support::{correlation_tx_hash, release_output_locks_for};
+use super::support::release_output_locks_for;
 use super::types::{PendingTxState, RescanRequest, Stage1LedgerSpendableAccess};
 
 /// `#[allow(private_bounds)]`: the where-bounds name crate-private traits
@@ -397,11 +397,15 @@ where
         id: ReservationId,
         kind: AmbiguousErrorKind,
     ) -> SubmitError {
+        // `None` when the reservation is no longer in flight: there
+        // are no bytes left to hash, and the reservation_id below
+        // already correlates the event. Manufacturing a TxHash from
+        // the id (the retired `phase1_tx_hash`) put a plausible,
+        // nonexistent txid into a field consumers monitor.
         let tx_hash = state
             .in_flight
             .get(&id)
-            .map(|flight| canonical_tx_id(&flight.entry.tx_bytes))
-            .unwrap_or_else(|| correlation_tx_hash(id));
+            .map(|flight| canonical_tx_id(&flight.entry.tx_bytes));
 
         emit_pending_tx_diagnostic(
             self.sink.as_ref(),

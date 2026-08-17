@@ -5,14 +5,23 @@
 
 //! Quantized fee arithmetic over daemon-derived rates (Phase 2a §3.10).
 //!
-//! The dust boundary and its marginal-input weight moved to
-//! `shekyl-engine-core::tx_fee_model` (2026-08-16): the marginal weight
-//! is now read from the single-source weight model
-//! (`shekyl-tx-weight`), which this crate deliberately does not depend
-//! on — the pre-move `MARGINAL_INPUT_WEIGHT` here was a provisional
-//! stub with a zero FCMP proof increment that outlived the KAT meant to
-//! replace it. This module keeps only the rate→fee arithmetic every
-//! consumer shares.
+//! Ownership of the dust boundary, precisely (2026-08-16), because
+//! "it moved to engine-core" would be wrong in both directions:
+//!
+//! - the **formula** stays here ([`dust_threshold`]) — it is rate
+//!   arithmetic, which is what this module is;
+//! - the **marginal-input weight** it takes belongs to
+//!   `shekyl-tx-weight`, the single-source weight model, which this
+//!   crate deliberately does not depend on;
+//! - the **composition** happens at each call site (engine build,
+//!   scanner coin selection), which is the only place both are in
+//!   scope.
+//!
+//! So an edit to the arithmetic lands here, an edit to the weight
+//! lands in `shekyl-tx-weight`, and neither crate has to know the
+//! other exists. The pre-2026-08-16 `MARGINAL_INPUT_WEIGHT` constant
+//! *here* was the thing that moved: a provisional stub with a zero
+//! FCMP proof increment that outlived the KAT meant to replace it.
 
 use crate::FeeRate;
 

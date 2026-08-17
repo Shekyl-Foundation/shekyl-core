@@ -90,15 +90,26 @@ pub enum FeePriority {
     /// Fastest tier short of fee-spiking; targets next-block
     /// inclusion under normal mempool conditions.
     Priority,
-    /// Caller-pinned feerate in atomic-units-per-byte. The
-    /// daemon's named tiers are bypassed, but not the Custom band:
-    /// the rate must sit between the snapshot's economy floor and
-    /// min(100× economy, the absolute per-weight cap)
+    /// Caller-pinned feerate in atomic units per **weight** unit —
+    /// `FeeRate`'s own contract, and not per *byte*: the two diverge
+    /// by the Bulletproofs+ clawback once a transaction has more than
+    /// two outputs, so a client that reads "per byte" and sizes its
+    /// number against the serialized length pins the wrong rate.
+    ///
+    /// The daemon's named tiers are bypassed, but not the Custom
+    /// band: the rate must sit at or above the snapshot's economy
+    /// floor and at or below the absolute per-weight cap — the same
+    /// cap every named tier obeys, and the only ceiling
     /// ([`FeeEstimatorError::CustomFeeOutOfRange`](super::error::FeeEstimatorError)
-    /// otherwise). Snapshot well-formedness (monotonicity, absolute
-    /// cap on *named* tiers) is already decided before this variant
-    /// is interpreted — an honest 2021-scaling Priority tier does
-    /// not lock Custom.
+    /// otherwise). There is deliberately no `Custom`-only relative
+    /// ceiling; see
+    /// [`CustomFeeBand`](super::fee_policy::CustomFeeBand) for why an
+    /// economy-anchored one banned the snapshot's own Priority rate.
+    ///
+    /// Snapshot well-formedness (monotonicity, absolute cap on
+    /// *named* tiers) is already decided before this variant is
+    /// interpreted — an honest 2021-scaling Priority tier does not
+    /// lock Custom.
     Custom(NonZeroU64),
 }
 

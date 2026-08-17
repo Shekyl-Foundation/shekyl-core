@@ -604,7 +604,10 @@ components:
       type: string
       pattern: "^[1-9][0-9]*$"
       description: >
-        Nonzero feerate in atomic units per byte, decimal string. Mirrors the
+        Nonzero feerate in atomic units per **weight** unit, decimal string.
+        Per weight, NOT per byte: the two diverge by the Bulletproofs+
+        clawback once a transaction has more than two outputs, so sizing a
+        rate against the serialized length pins the wrong number. Mirrors the
         `NonZeroU64` inside `shekyl_engine_core::FeePriority::Custom` — a rate,
         NOT an amount, so it is distinct from `AtomicUnits` and forbids "0"
         (the pattern excludes zero and leading zeros).
@@ -628,7 +631,8 @@ components:
         feerate via the daemon fee estimate at build time — never hardcoded
         multipliers — and the snapshot must be well-formed (monotonic
         tiers, no named tier above the absolute cap; -29109 otherwise).
-        `custom` pins atomic-units-per-byte, bypassing the named tiers
+        `custom` pins atomic units per weight unit (see `Feerate` — per
+        weight, not per byte), bypassing the named tiers
         but not the policy they obey: it must sit at or above the
         snapshot's economy floor and at or below the same absolute cap
         (-32602 otherwise — a `custom` rate is the caller's parameter,

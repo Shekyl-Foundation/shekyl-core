@@ -2961,15 +2961,30 @@ async fn submit_timeout_keeps_reservation_in_flight() {
     assert_eq!(pending.outstanding(), 1);
 
     let events = sink.recorded_pending();
-    assert!(
-        matches!(
-            events.last(),
-            Some(PendingTxDiagnostic::SubmitPendingResolution {
-                kind: AmbiguousErrorKind::DaemonTimeout,
-                ..
-            })
-        ),
-        "expected SubmitPendingResolution, got {events:?}"
+    let Some(PendingTxDiagnostic::SubmitPendingResolution {
+        kind: AmbiguousErrorKind::DaemonTimeout,
+        tx_hash,
+        reservation_id,
+    }) = events.last()
+    else {
+        panic!("expected SubmitPendingResolution, got {events:?}");
+    };
+    assert_eq!(*reservation_id, built.id, "the event correlates by id");
+    // The reservation IS still in flight here, so a real hash exists and
+    // must be reported. The negative control is the shape of the retired
+    // `phase1_tx_hash`: the ReservationId little-endian in the low 8
+    // bytes, zeroes after. A value of that shape is a plausible,
+    // NONEXISTENT txid — the thing a mempool monitor would chase.
+    let hash = tx_hash.expect("bytes are in flight, so the hash is real");
+    let manufactured = {
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&built.id.raw().to_le_bytes());
+        bytes
+    };
+    assert_ne!(
+        *hash.as_bytes(),
+        manufactured,
+        "the diagnostic must carry a real tx hash, never one synthesized from the reservation id"
     );
     assert!(
         !events
