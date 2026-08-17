@@ -560,7 +560,11 @@ fn fluff_return_dominates_the_embargo_derivation() {
             let s = simulate_fluff_return(
                 FloodParams {
                     peers,
-                    ..FloodParams::default()
+                    nodes: 512,
+                    reach: shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+                    transit_ms: shekyl_relay_privacy::conformance::transit_for(
+                        shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+                    ),
                 },
                 20,
                 dist,

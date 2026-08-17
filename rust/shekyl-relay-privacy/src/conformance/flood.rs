@@ -11,7 +11,6 @@
 // ^ Goodness-of-fit grading / simulation is float math over sample counts.
 //   Diagnostic-only and excluded from the default build.
 
-use crate::params::P2P_DEFAULT_OUT_PEERS;
 use crate::rng::{bounded_uniform, RelayRng};
 use crate::schedule::{DelayFamily, DelayTable};
 
@@ -89,17 +88,59 @@ pub struct FloodParams {
     pub peers: usize,
     /// Which edges relay (see [`FloodReach`]).
     pub reach: FloodReach,
+    /// **Per-hop network transit for this flood's link class, in ms.**
+    ///
+    /// # Why this is a required field and not an `Option` with a default
+    ///
+    /// Until 2026-08-17 this model had no transit term at all: a hop advanced
+    /// by a fluff-flush draw alone. That was harmless while `F′` was a
+    /// clearnet quantity — [`crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS`]
+    /// is 50 ms against a 5000 ms flush mean, ~1 % — and became decisive the
+    /// moment §91 ruled Design A, under which the **worst zone is the
+    /// anonymity graph** at
+    /// [`crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS`] = 1625 ms,
+    /// ~32 % of the same mean. Omitting it makes the flood look *faster*,
+    /// which is the under-provisioning direction (§91.6).
+    ///
+    /// It is mandatory so that every caller must **declare which link class it
+    /// is simulating**. A defaulted field would let the omission recur
+    /// silently, and the omission is exactly what invalidated an `F′`
+    /// derivation that had already been through a convergence criterion, an
+    /// admissible-region boundary and two review rounds.
+    pub transit_ms: u64,
 }
 
-impl Default for FloodParams {
-    fn default() -> Self {
-        Self {
-            nodes: 512,
-            peers: P2P_DEFAULT_OUT_PEERS as usize,
-            reach: FloodReach::EveryPeer,
-        }
+/// The transit assumption that goes with a reach, so the two cannot be set to
+/// different link classes.
+///
+/// `FluffReach::OutboundOnly` is set from `nzone != public_` in production, so
+/// the reach **is** the link class: deriving transit from it removes the one
+/// incoherent combination (an anonymity reach at clearnet latency) that §91.6
+/// says invalidates a derivation while still looking reasonable.
+#[must_use]
+pub const fn transit_for(reach: FloodReach) -> u64 {
+    match reach {
+        // Clearnet: ADOPTED_TRANSIT_ASSUMPTION_MS.
+        FloodReach::EveryPeer => 50,
+        // Anonymity zone: ANON_ZONE_TRANSIT_ASSUMPTION_MS.
+        FloodReach::OutboundOnly => 1_625,
     }
 }
+
+/* `Default` was REMOVED with the transit field (§91.6). Its whole affordance
+was filling fields the caller did not think about, and the field the caller
+must not skip is the one that says which network this flood runs on. A
+default transit would have re-created, behind a shorter spelling, the exact
+omission that invalidated an `F′` derivation. Callers name all four fields.
+
+The two shipped pairings, so `reach` and `transit_ms` are not set to
+different link classes by accident:
+
+  clearnet  -> FloodReach::EveryPeer    + ADOPTED_TRANSIT_ASSUMPTION_MS  (50)
+  anonymity -> FloodReach::OutboundOnly + ANON_ZONE_TRANSIT_ASSUMPTION_MS (1625)
+
+(`FluffReach::OutboundOnly` is set from `nzone != public_` in production, so
+the reach IS the link class; the transit must agree with it.) */
 
 /// First-passage statistics for a fluff flood, in milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -306,7 +347,10 @@ pub fn simulate_fluff_return_mixed<R: RelayRng + ?Sized>(
                 continue;
             }
             for &next in &adjacency[node] {
-                let arrival = at.saturating_add(draw_ms(rng));
+                // Flush-scheduler delay PLUS this link class's transit (§91.6).
+                let arrival = at
+                    .saturating_add(draw_ms(rng))
+                    .saturating_add(flood.transit_ms);
                 if arrival < best[next] {
                     best[next] = arrival;
                     frontier.push(std::cmp::Reverse((arrival, next)));
@@ -405,7 +449,10 @@ pub fn simulate_diffusion_first_spy<R: RelayRng + ?Sized>(
                 break;
             }
             for &next in &adjacency[node] {
-                let arrival = at.saturating_add(draw_ms(rng));
+                // Flush-scheduler delay PLUS this link class's transit (§91.6).
+                let arrival = at
+                    .saturating_add(draw_ms(rng))
+                    .saturating_add(flood.transit_ms);
                 if arrival < best[next] {
                     best[next] = arrival;
                     pred[next] = node;

@@ -35,8 +35,9 @@ fn f7_directed_first_passage_exceeds_the_undirected_measurement() {
             let s = simulate_fluff_return(
                 FloodParams {
                     peers,
+                    nodes: 512,
                     reach,
-                    ..FloodParams::default()
+                    transit_ms: shekyl_relay_privacy::conformance::transit_for(reach),
                 },
                 20,
                 dist,

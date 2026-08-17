@@ -43,7 +43,7 @@ pub use analysis::{
 };
 pub use flood::{
     converged_fluff_return_mixed, simulate_diffusion_first_spy, simulate_fluff_return,
-    simulate_fluff_return_mixed, Converged, ConvergenceBudget, ConvergenceRefusal,
+    simulate_fluff_return_mixed, transit_for, Converged, ConvergenceBudget, ConvergenceRefusal,
     FirstSpyPrecision, FloodParams, FloodReach, FloodSummary, FLOOD_TICK_MS,
 };
 pub use grade::{grade_bernoulli, grade_poisson, grade_stem_balance, grade_uniform, Grade};

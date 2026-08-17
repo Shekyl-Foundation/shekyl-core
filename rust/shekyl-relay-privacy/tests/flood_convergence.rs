@@ -66,6 +66,7 @@ fn shipped_topology() -> FloodParams {
         nodes: 512,
         peers: 12,
         reach: FloodReach::OutboundOnly,
+        transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::OutboundOnly),
     }
 }
 
@@ -186,6 +187,7 @@ fn a_stranding_topology_is_refused_on_the_topology_not_the_budget() {
         nodes: 512,
         peers: 1,
         reach: FloodReach::OutboundOnly,
+        transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::OutboundOnly),
     };
     let degrees = vec![1_usize; flood.nodes];
 

@@ -14277,6 +14277,47 @@ omitting it makes the flood look *faster*, which is the under-provisioning
 direction. **No `F′` derived without it is valid**, including the 4500 ms this
 arc reached at the §90 admissible region.
 
+#### What the instrument says once transit is in it — and why this is NOT a candidate constant
+
+The transit term landed with this ruling (`FloodParams::transit_ms`, mandatory;
+`Default` removed; `transit_for(reach)` derives it from the link class, since
+`FluffReach::OutboundOnly` is set from `nzone != public_` in production and the
+reach therefore *is* the link class). Re-derived on the anonymity graph at
+`ANON_ZONE_TRANSIT_ASSUMPTION_MS`:
+
+| `beta` | `F′` transit-less | **`F′` at 1625 ms** |
+| --- | --- | --- |
+| 0 | 3500 | **12375** |
+| 0.167 | 4500 | 13500 |
+| **0.2167 (`beta*` = p90)** | **4500** | **13625** |
+| 0.500 | 5000 | 14250 |
+
+Dependents at 13625: clearnet embargo **662 s**, anonymity **984 s**, wallet
+wait **4529 s**.
+
+**This is recorded as instrument output, not as a value to land, and the reason
+is structural rather than caution.** The sweep's own result is that `F′` here is
+**transit-dominated, not degree-dominated**: the whole admissible region spans
+**+15.2 %** against **+42.9 %** transit-less, so `beta` — the quantity three
+rounds chased — moves the constant by about a seventh of what the transit
+assumption does. And `ANON_ZONE_TRANSIT_ASSUMPTION_MS` is a **labelled
+assumption** (§80, §85.3), not a measurement.
+
+So the number is mostly a restatement of an unmeasured input wearing a
+derivation's clothes. **The next quantity worth measuring is Tor transit, not
+anonymity degree** — and it must be measured on the complete mechanism
+(§42's noise half landed, D++ already live per §89), not simulated. Constants
+derived against a mechanism that does not yet exist end-to-end are the
+theoretical layer this arc has already paid for four times.
+
+**A note on why the suite stayed green.** Adding transit moved the anonymity
+flood's readings by ~3× and **not one test failed** (155 passed, 0 failed).
+That is not evidence the change is inert — it is evidence the flood instruments
+assert **shape** (monotonicity, ordering, refusal at stranded degrees) and not
+**level**. Which is precisely how a missing transit term survived a convergence
+criterion, an admissible-region boundary and two review rounds: nothing in the
+suite was watching the axis it moved.
+
 **Tor-only liveness is a question Design A creates and B never had to answer.**
 "Supported posture" must mean a Tor-only node stays in consensus, not merely
 that it receives transactions eventually — and the anonymity flood at 1625 ms

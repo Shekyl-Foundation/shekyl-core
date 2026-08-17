@@ -146,6 +146,7 @@ fn alpha_curve_across_below_floor_degrees() {
             nodes: NODES,
             peers: degree,
             reach: FloodReach::OutboundOnly,
+            transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::OutboundOnly),
         };
         let degrees = vec![degree; NODES];
         let f_prime = match converged_fluff_return_mixed(
