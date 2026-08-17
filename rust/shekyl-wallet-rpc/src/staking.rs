@@ -22,7 +22,7 @@ use shekyl_engine_core::{Engine, ServingPosture, SoloSigner, StakedOutput, Staki
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, require_empty_object};
 use crate::project::atomic_units_string;
-use crate::tenant::TenantState;
+use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
     GetStakedBalanceResult, GetStakedOutputsResult, StakedOutputView, StakingInfoResult,
 };
@@ -64,7 +64,7 @@ pub(crate) async fn staking_info(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "staking_info")?;
-    let view = read_view(tenants).await?;
+    let (view, posture) = read_view_with_posture(tenants).await?;
     let result = StakingInfoResult {
         staking_enabled: view.staking_enabled,
         balance: balance_result(&view),
@@ -73,7 +73,7 @@ pub(crate) async fn staking_info(
             .pscan_synced_height
             .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
         recovery_pending_reopen: view.recovery_pending_reopen,
-        posture: posture_str(view.serving_posture),
+        posture: posture_str(posture),
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize staking_info: {e}")))
@@ -108,17 +108,10 @@ pub(crate) async fn staking_info(
 /// a stable, detail-free client message (the cause can carry filesystem
 /// paths; it is logged server-side only — same discipline as the
 /// `PScanStartError::LoadFailed` mapping).
-/// `serving_posture` is the tenant's — the handle lives with the embedder,
-/// not the engine (`Tenant::serving_posture`), so it is threaded in rather
-/// than read here. Passing `None` states "no host is running", which is
-/// what a caller with no serving context truthfully knows.
 pub(crate) fn read_view_under_guard(
     engine: &Engine<SoloSigner>,
-    serving_posture: Option<ServingPosture>,
 ) -> Result<StakingReadView, WalletRpcError> {
-    map_staking_read(tokio::task::block_in_place(|| {
-        engine.staking_read_view(serving_posture)
-    }))
+    map_staking_read(tokio::task::block_in_place(|| engine.staking_read_view()))
 }
 
 /// Like [`read_view_under_guard`], but uses a caller-supplied ledger
@@ -131,14 +124,9 @@ pub(crate) fn read_view_with_snapshot(
     engine: &Engine<SoloSigner>,
     staking_enabled: bool,
     recovery_pending_reopen: bool,
-    serving_posture: Option<ServingPosture>,
 ) -> Result<StakingReadView, WalletRpcError> {
     map_staking_read(tokio::task::block_in_place(|| {
-        engine.staking_read_view_with_snapshot(
-            staking_enabled,
-            recovery_pending_reopen,
-            serving_posture,
-        )
+        engine.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
     }))
 }
 
@@ -155,33 +143,37 @@ fn map_staking_read(
 async fn read_view(
     tenants: &tokio::sync::Mutex<TenantState>,
 ) -> Result<StakingReadView, WalletRpcError> {
-    // The posture comes off the tenant's parked handle, and the tenant lock
-    // is taken and released BEFORE the engine guard — never nested, so this
-    // read cannot participate in a lock cycle with the lifecycle paths that
-    // hold the tenant lock while installing tasks.
-    let (shared, serving_posture) = {
+    let shared = require_open_engine(tenants).await?;
+    let engine = shared.read().await;
+    read_view_under_guard(&engine)
+}
+
+/// Like [`read_view`], but also snapshots the parked host's posture
+/// under the tenant lock — before the engine guard, never nested.
+///
+/// The posture is the embedder's fact (`Tenant::serving_posture`); it
+/// does not belong on [`StakingReadView`]. Assembled here so
+/// `staking_info` can project it without stuffing an embedder snapshot
+/// into the engine's sealed-state aggregation.
+async fn read_view_with_posture(
+    tenants: &tokio::sync::Mutex<TenantState>,
+) -> Result<(StakingReadView, Option<ServingPosture>), WalletRpcError> {
+    let (shared, posture) = {
         let state = tenants.lock().await;
         let shared = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
         (shared, state.tenant.serving_posture())
     };
     let engine = shared.read().await;
-    read_view_under_guard(&engine, serving_posture)
+    Ok((read_view_under_guard(&engine)?, posture))
 }
 
-/// The wire spelling of a serving posture — the contract's enum, produced
-/// in exactly one place so `staking_info` and `get_wallet_info` cannot
-/// disagree about what a foundation node is called.
+/// The wire spelling of a serving posture — the contract's values,
+/// produced in exactly one place so `staking_info` and `get_wallet_info`
+/// cannot disagree about what a foundation node is called.
 pub(crate) fn posture_str(posture: Option<ServingPosture>) -> Option<String> {
     match posture {
-        // The obligation sizes (`shard_count` / `frozen_count`) are
-        // deliberately not projected: `staking_info` answers *which
-        // posture*, and a growing count on a status line invites reading
-        // it as progress toward something. The corpus size is the store's
-        // to report if it is ever wanted.
-        Some(ServingPosture::Market { .. }) => Some("market".to_owned()),
-        Some(ServingPosture::FoundationCompleteTree { .. }) => {
-            Some("foundation_complete_tree".to_owned())
-        }
+        Some(ServingPosture::Market) => Some("market".to_owned()),
+        Some(ServingPosture::FoundationCompleteTree) => Some("foundation_complete_tree".to_owned()),
         None => None,
     }
 }
@@ -201,5 +193,23 @@ fn staked_output_view(o: &StakedOutput) -> StakedOutputView {
         p_slot: i64::from(o.p_slot.to_raw()),
         unlock_height: i64::try_from(o.unlock_height.to_raw()).unwrap_or(i64::MAX),
         confirmed: o.confirmed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn posture_str_is_the_contract_spelling() {
+        assert_eq!(
+            posture_str(Some(ServingPosture::Market)).as_deref(),
+            Some("market")
+        );
+        assert_eq!(
+            posture_str(Some(ServingPosture::FoundationCompleteTree)).as_deref(),
+            Some("foundation_complete_tree")
+        );
+        assert_eq!(posture_str(None), None);
     }
 }

@@ -275,9 +275,9 @@ impl Tenant {
     /// `None` when no host is running (`COMPLETETREE_ACTIVATION.md` Q-3).
     ///
     /// The embedder is the only layer that can answer this — the handle
-    /// lives here, not on the `Engine` — so the staking reads take it from
-    /// the tenant and hand it to the view, the same shape
-    /// `read_view_with_snapshot` already uses for the ledger flags.
+    /// lives here, not on the `Engine` — so `staking_info` /
+    /// `get_wallet_info` take it from the tenant and project it onto the
+    /// wire. It is not a field of the engine's sealed-state view.
     ///
     /// A cheap snapshot read: it never waits on the serving task, so a
     /// status query cannot stall the thing that serves.

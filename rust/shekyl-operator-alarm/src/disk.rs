@@ -54,7 +54,7 @@ pub fn apply(alarms: &OperatorAlarms, observation: DiskObservation) {
         DiskObservation::NotServing => {
             alarms.disarm(
                 AlarmCondition::ServingDiskHeadroom,
-                DisarmedReason::TransportStopped,
+                DisarmedReason::NotServing,
             );
         }
         // A broken probe must not read as healthy, and must not read as an
@@ -178,6 +178,18 @@ mod tests {
             .lifetime(),
             crate::AlarmLifetime::Episode
         );
+    }
+
+    /// No host is a different sentence from an unreadable probe.
+    #[test]
+    fn not_serving_disarms_as_not_serving() {
+        let alarms = OperatorAlarms::new();
+        apply(&alarms, DiskObservation::NotServing);
+        assert_eq!(
+            state(&alarms).arming,
+            Arming::Disarmed(DisarmedReason::NotServing)
+        );
+        assert!(state(&alarms).live.is_none());
     }
 
     /// Exactly at the floor is not below it.

@@ -281,7 +281,6 @@ pub(crate) async fn get_wallet_info(
             &engine,
             staking_enabled,
             recovery_pending_reopen,
-            serving_posture,
         )?;
         let staking = StakingInfoResult {
             staking_enabled: staking_view.staking_enabled,
@@ -301,7 +300,7 @@ pub(crate) async fn get_wallet_info(
                 .pscan_synced_height
                 .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
             recovery_pending_reopen: staking_view.recovery_pending_reopen,
-            posture: crate::staking::posture_str(staking_view.serving_posture),
+            posture: crate::staking::posture_str(serving_posture),
         };
 
         let daemon = engine.daemon().clone();

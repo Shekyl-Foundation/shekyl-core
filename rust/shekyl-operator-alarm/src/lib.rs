@@ -184,6 +184,11 @@ pub enum DisarmedReason {
     /// the reason this enum exists at all. Deliberately **not** an alarm:
     /// a broken probe is not evidence the disk is filling.
     DiskUnreadable,
+    /// No serving host is running — the launch standoff has not elapsed,
+    /// start failed, or the host has been torn down. Distinct from
+    /// [`Self::TransportStopped`]: that one is the tor supervisor's
+    /// channel closing; this one is the serving lifecycle itself.
+    NotServing,
 }
 
 /// How a raised alarm's **observable** behaves once the condition is raised.

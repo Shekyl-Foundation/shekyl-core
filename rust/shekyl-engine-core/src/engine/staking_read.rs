@@ -53,7 +53,6 @@ use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 use shekyl_units::AtomicUnits;
 
 use crate::consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
-use crate::engine::stake_engine::serving::ServingPosture;
 
 use super::local_ledger::LocalLedger;
 use super::signer::EngineSignerKind;
@@ -144,21 +143,6 @@ pub struct StakingReadView {
     /// the surface that tells the embedder to say so (rule 82) instead of
     /// leaving a wallet that claims staker-hood but cannot stake.
     pub recovery_pending_reopen: bool,
-    /// What this wallet's serving host is currently obligated to serve, or
-    /// `None` when no host is running (`COMPLETETREE_ACTIVATION.md` Q-3).
-    ///
-    /// **Supplied by the embedder, not computed here**, and that is the
-    /// honest shape rather than a limitation: the posture is a fact about
-    /// the *live serving host*, which the embedder holds
-    /// (`ServingHandle::posture`) and this engine does not. Nothing
-    /// posture-shaped is durable wallet-side (AF-1) and the connected bond
-    /// record lives daemon-side, so the alternative to reading the host
-    /// would be a daemon round trip on a read path documented as offline.
-    ///
-    /// `None` renders "not serving" — including for a bonded wallet whose
-    /// host has not finished its launch standoff. That is accurate: the
-    /// question this answers is what is being served now, not what is owed.
-    pub serving_posture: Option<ServingPosture>,
 }
 
 impl std::fmt::Debug for StakingReadView {
@@ -171,11 +155,6 @@ impl std::fmt::Debug for StakingReadView {
             .field("outputs", &"<redacted funding-history>")
             .field("pscan_synced_height", &self.pscan_synced_height)
             .field("recovery_pending_reopen", &self.recovery_pending_reopen)
-            // Rendered, not redacted: the posture is a public property of
-            // the bond record this persona already published on-chain, and
-            // `P` is public by design — the firewall protects the
-            // `P`↔principal edge, which a serving arm does not cross.
-            .field("serving_posture", &self.serving_posture)
             .finish()
     }
 }
@@ -335,7 +314,7 @@ impl<
     /// **not** call this method while that guard is live: `std::sync::RwLock`
     /// is not re-entrant, and the nested `ledger.read()` deadlocks the
     /// worker. Snapshot `staking_enabled` from the held guard, drop it, then
-    /// call [`Self::staking_read_view_with_enabled`].
+    /// call [`Self::staking_read_view_with_snapshot`].
     ///
     /// Small synchronous file I/O (the same class as
     /// [`WalletFile::open_pscan_state`]'s other callers); async callers on a
@@ -355,15 +334,7 @@ impl<
         !self.ledger.read().slots_adopted_this_session.is_empty()
     }
 
-    /// `serving_posture` is the embedder's — see
-    /// [`StakingReadView::serving_posture`]. It is a parameter rather than
-    /// something read here because the engine cannot reach it: the live
-    /// value lives on the embedder-held `ServingHandle`, and inventing a
-    /// default would make every wallet report "not serving".
-    pub fn staking_read_view(
-        &self,
-        serving_posture: Option<ServingPosture>,
-    ) -> Result<StakingReadView, StakingReadError> {
+    pub fn staking_read_view(&self) -> Result<StakingReadView, StakingReadError> {
         let (staking_enabled, recovery_pending_reopen) = {
             let guard = self.ledger.read();
             (
@@ -371,11 +342,7 @@ impl<
                 !guard.slots_adopted_this_session.is_empty(),
             )
         };
-        self.staking_read_view_with_snapshot(
-            staking_enabled,
-            recovery_pending_reopen,
-            serving_posture,
-        )
+        self.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen)
     }
 
     /// Like [`Self::staking_read_view`], but uses a caller-supplied
@@ -395,7 +362,6 @@ impl<
         &self,
         staking_enabled: bool,
         recovery_pending_reopen: bool,
-        serving_posture: Option<ServingPosture>,
     ) -> Result<StakingReadView, StakingReadError> {
         // No key copy: the region-2 wrap key is borrowed straight from its
         // owner for the two seal opens (same shape as `pscan/start.rs`'s
@@ -423,7 +389,6 @@ impl<
             outputs,
             pscan_synced_height,
             recovery_pending_reopen,
-            serving_posture,
         })
     }
 }
@@ -720,7 +685,6 @@ mod tests {
             outputs: outs,
             pscan_synced_height: Some(BlockHeight::from_raw(5_000)),
             recovery_pending_reopen: false,
-            serving_posture: None,
         };
         let rendered = format!("{view:?}");
         assert!(

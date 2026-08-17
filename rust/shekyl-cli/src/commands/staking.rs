@@ -202,6 +202,9 @@ pub fn cmd_staking_info(rpc: &RpcSession) {
             println!("Staking enabled: {}", if enabled { "yes" } else { "no" });
             if !enabled {
                 println!("Use \"stake\" to make this wallet a staker.");
+                // Still printed: omitting the line on a non-staker reads
+                // as though the question were never asked (rule 82).
+                print_serving_posture(&val);
                 return;
             }
             if let Some(balance) = val.get("balance") {
@@ -227,26 +230,37 @@ pub fn cmd_staking_info(rpc: &RpcSession) {
             // (rule 82). The non-earning parenthetical rides the foundation
             // arm every time it is shown, so the terms stay attached to the
             // posture rather than living only in the one-time warning.
-            let posture = val.get("posture").and_then(serde_json::Value::as_str);
-            match posture {
-                Some("foundation_complete_tree") => {
-                    println!("Serving posture:     Foundation CompleteTree (non-earning)");
-                }
-                Some("market") => println!("Serving posture:     market"),
-                // An unknown spelling is a newer server talking to an older
-                // CLI. Echo it rather than claiming "not serving", which
-                // would be a false negative about a node that IS serving.
-                Some(other) => println!("Serving posture:     {other}"),
-                None => println!("Serving posture:     not serving"),
-            }
+            print_serving_posture(&val);
         }
         Err(e) => rpc.report("Failed to get staking info", &e),
     }
 }
 
+/// Wire `posture` → the line an operator reads.
+///
+/// Isolated so the disabled-wallet early return and the enabled path
+/// cannot drift, and so an unknown spelling can be asserted as echoed
+/// rather than downgraded to "not serving".
+fn serving_posture_display(posture: Option<&str>) -> String {
+    match posture {
+        Some("foundation_complete_tree") => "Foundation CompleteTree (non-earning)".to_owned(),
+        Some("market") => "market".to_owned(),
+        // An unknown spelling is a newer server talking to an older
+        // CLI. Echo it rather than claiming "not serving", which
+        // would be a false negative about a node that IS serving.
+        Some(other) => other.to_owned(),
+        None => "not serving".to_owned(),
+    }
+}
+
+fn print_serving_posture(val: &Value) {
+    let posture = val.get("posture").and_then(Value::as_str);
+    println!("Serving posture:     {}", serving_posture_display(posture));
+}
+
 #[cfg(test)]
 mod tests {
-    use super::FOUNDATION_PHRASE;
+    use super::{serving_posture_display, FOUNDATION_PHRASE};
     use shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING;
 
     /// **The phrase shown and the phrase required are one string.**
@@ -275,5 +289,20 @@ mod tests {
         // contain has to be rejected, or the assertion above would pass
         // over any string at all.
         assert!(!FOUNDATION_POSTURE_WARNING.contains("serve for profit"));
+    }
+
+    #[test]
+    fn serving_posture_renders_the_contract_spellings() {
+        assert_eq!(serving_posture_display(None), "not serving");
+        assert_eq!(serving_posture_display(Some("market")), "market");
+        assert_eq!(
+            serving_posture_display(Some("foundation_complete_tree")),
+            "Foundation CompleteTree (non-earning)"
+        );
+        assert_eq!(
+            serving_posture_display(Some("future_arm")),
+            "future_arm",
+            "unknown spellings are echoed, never downgraded to not serving"
+        );
     }
 }

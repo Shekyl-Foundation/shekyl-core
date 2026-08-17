@@ -555,8 +555,7 @@ async fn recovered_mid_session_first_stake_names_the_reopen_remedy() {
         engine.staking_recovery_pending_reopen(),
         "adoption must surface the pending-reopen state"
     );
-    // No serving host in this fixture, so the posture is honestly absent.
-    let view = engine.staking_read_view(None).expect("staking read view");
+    let view = engine.staking_read_view().expect("staking read view");
     assert!(view.recovery_pending_reopen);
 
     let arc = std::sync::Arc::new(tokio::sync::RwLock::new(engine));

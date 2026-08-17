@@ -61,6 +61,7 @@
 //! [`tor_config`] is the fingerprint-minimal `TorServiceConfig` surface,
 //! [`start`] is the Engine construction site.
 
+pub(crate) mod disk;
 pub(crate) mod start;
 pub(crate) mod task;
 pub(crate) mod tor_config;
