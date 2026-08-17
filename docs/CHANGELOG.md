@@ -7,9 +7,13 @@
 - **Fee sanity ceiling is live (interim form) — `-29109 DAEMON_FEE_UNREASONABLE`.**
   Named fee tiers were previously accepted from the daemon unchecked
   (only `Custom` rates were capped). The wallet now refuses a snapshot
-  that is non-monotonic or that names a tier above 100,000 atomic units
-  per weight — on both the build path and `get_default_fee_priority`,
-  through one `ValidatedFeeEstimates` constructor. Caller-side `Custom`
+  that is non-monotonic or whose effective weight-1 charge exceeds the
+  era-maximum legitimate fee — the daemon-rounded genesis-condition
+  `Fh` (14,000,000 atomic units/weight), derived from the economics
+  crate and KAT-pinned rather than hand-picked — on both the build path
+  and `get_default_fee_priority`, through one `ValidatedFeeEstimates`
+  constructor. (A 100,000 mid-regime literal was caught in review
+  refusing honest young-chain snapshots from block 1.) Caller-side `Custom`
   band violations are `-32602`, not a daemon defect. The intra-snapshot
   10×-economy lock is **withdrawn**: honest `shekyld` 2021-scaling
   `Fh / Fl` is 65×–1000×, so that lock banned the production Priority

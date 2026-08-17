@@ -739,11 +739,15 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
     );
 
     // Economy itself over the absolute cap: refused as a REFUSAL, not
-    // as a query failure. This is the vector the bypass paid.
-    let gouging = snapshot(200_000, 200_000, 200_000, 1);
+    // as a query failure. This is the vector the bypass paid. The cap
+    // is the derived genesis-era maximum (a 200k literal here became an
+    // HONEST young-chain rate once the cap was re-provisioned — fixtures
+    // must gouge relative to the real bound, not a era-local one).
+    let cap = crate::engine::fee_policy::absolute_fee_rate_cap();
+    let gouging = snapshot(cap + 1, cap + 1, cap + 1, 1);
     match bond_fee_from_estimates(gouging) {
         Err(FirstStakeError::FeeUnreasonable(CeilingViolation::AboveAbsoluteCap { rate })) => {
-            assert_eq!(rate, 200_000);
+            assert_eq!(rate, cap + 1);
         }
         other => panic!("a gouging economy tier must be refused by class, got: {other:?}"),
     }

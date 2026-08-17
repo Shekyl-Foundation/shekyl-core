@@ -51,15 +51,78 @@ use shekyl_rpc_client::{tx_fee, FeeRate};
 
 use super::traits::FeeEstimates;
 
-/// Absolute per-weight cap (atomic units) on every named tier and on
-/// `Custom`. History-free half of the 2026-04-25 decision-log entry;
-/// pinned against the 2021-scaling KAT (`Fh = 67_000` at the 10 SKL /
-/// 300 k-weight row).
+/// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h`)
+/// — the 2021-scaling reference transaction weight the daemon's fee
+/// formula folds in.
+const DYNAMIC_FEE_REFERENCE_TX_WEIGHT: u64 = 3_000;
+
+/// The penalty-free zone / minimum median (`Zm`), single-sourced from
+/// the wire crate's `MIN_BLOCK_WEIGHT`
+/// (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`).
+const PENALTY_FREE_ZONE: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
+
+/// `round_money_up(x, 2)` (`cryptonote_format_utils.cpp`): round UP to
+/// two significant decimal digits — the daemon applies this to every
+/// tier it returns, so the legitimate maximum must be computed
+/// post-rounding. (The C++ comment says "5 or more"; the code bumps on
+/// ANY nonzero remainder, and the code is the contract.)
+const fn round_money_up_2(x: u64) -> u64 {
+    if x < 100 {
+        return x;
+    }
+    // unit = 10^(digit_count - 2)
+    let mut unit: u64 = 1;
+    let mut probe = x;
+    while probe >= 100 {
+        probe /= 10;
+        unit *= 10;
+    }
+    x.div_ceil(unit).saturating_mul(unit)
+}
+
+/// Absolute cap (atomic units) on every named tier's — and `Custom`'s —
+/// **effective weight-1 charge**: the maximum fee an honest daemon can
+/// legitimately quote over the whole emission era.
+///
+/// Derived, not hand-picked. This review round caught a `100_000`
+/// literal provisioned from a mid-regime KAT row — **140× below the
+/// genesis-era `Fh`**, which would have refused every honest snapshot
+/// from block 1 (young-chain `economy` alone is ~68,266; `standard`
+/// is 4× that). The 2021-scaling fees rise with the block reward and
+/// fall with the weight medians; the reward is maximal at genesis
+/// (`base_block_reward(0)` — the estimate path uses the 5-arg reward,
+/// no release multiplier) and both medians floor at the penalty-free
+/// zone, so the era maximum is `Fh` at genesis conditions,
+/// daemon-rounded:
+///
+/// ```text
+/// Fm  = 16·R₀·Brw / Zm²                      (Mfw = Zm)
+/// Fh  = max(4·Fm, 4·Fm·Zm / (32·Brw·Zm/Zm))  (Mnw = Zm) = 12.5·Fm
+/// cap = round_money_up(Fh, 2) = 14,000,000
+/// ```
+///
+/// Pinned by `absolute_cap_is_the_rounded_genesis_fh`, so an
+/// economics-parameter change moves this loudly. Deliberately NOT
+/// covering `BLOCK_REWARD_OVERESTIMATE` (the daemon's 10,000-SKL
+/// placeholder when its own reward computation fails): a daemon that
+/// just logged an internal error is not a daemon whose quote we pay —
+/// refusing that snapshot is the cap working.
 ///
 /// `pub` because [`CeilingViolation::bound`] returns it as the
 /// `-29109` wire payload's `bound` field: an RPC consumer reading
-/// those docs must be able to follow the link to the number.
-pub const ABSOLUTE_FEE_RATE_CAP: u64 = 100_000;
+/// those docs must be able to follow the link to the derivation.
+#[must_use]
+pub fn absolute_fee_rate_cap() -> u64 {
+    let params = shekyl_economics::params::EconomicParams::default();
+    let r0 = shekyl_economics::emission::base_block_reward(0, &params)
+        .expect("genesis reward is defined for already_generated = 0");
+    let zm = PENALTY_FREE_ZONE;
+    let brw = DYNAMIC_FEE_REFERENCE_TX_WEIGHT;
+    // The C++ folded integer expressions, verbatim, at Mfw = Mnw = Zm.
+    let fm = 16 * r0 * brw / (zm * zm);
+    let fh = std::cmp::max(4 * fm, 4 * fm * zm / (32 * brw * zm / zm));
+    round_money_up_2(fh)
+}
 
 /// Failures from fee estimation / snapshot validation.
 ///
@@ -110,10 +173,10 @@ pub enum CeilingViolation {
         priority: u64,
     },
     /// A named tier's **effective weight-1 quantized charge** exceeds
-    /// [`ABSOLUTE_FEE_RATE_CAP`] (the charge includes the
+    /// [`absolute_fee_rate_cap()`] (the charge includes the
     /// daemon-controlled mask rounding — see the module docs for why
     /// the raw rate is not the checked quantity).
-    #[error("tier above the absolute per-weight cap ({rate} > {cap})", cap = ABSOLUTE_FEE_RATE_CAP)]
+    #[error("tier above the absolute per-weight cap (effective weight-1 charge {rate})")]
     AboveAbsoluteCap {
         /// Offending effective weight-1 charge (atomic units).
         rate: u64,
@@ -155,7 +218,7 @@ impl CeilingViolation {
     /// For [`Self::NonMonotonic`], the value the left-hand side should
     /// have been `≤` (`standard` if `economy > standard`, else `priority`).
     #[must_use]
-    pub const fn bound(self) -> u64 {
+    pub fn bound(self) -> u64 {
         match self {
             Self::NonMonotonic {
                 standard,
@@ -168,7 +231,7 @@ impl CeilingViolation {
                     priority
                 }
             }
-            Self::AboveAbsoluteCap { .. } => ABSOLUTE_FEE_RATE_CAP,
+            Self::AboveAbsoluteCap { .. } => absolute_fee_rate_cap(),
         }
     }
 }
@@ -272,7 +335,7 @@ impl ValidatedFeeEstimates {
                     reason: "feerate overflowed fee arithmetic at weight 1",
                 },
             )?;
-            if one > ABSOLUTE_FEE_RATE_CAP {
+            if one > absolute_fee_rate_cap() {
                 return Err(FeeEstimatorError::DaemonFeeUnreasonable(
                     CeilingViolation::AboveAbsoluteCap { rate: one },
                 ));
@@ -407,28 +470,67 @@ mod tests {
 
         // Boundary: mask exactly at the cap with a tiny rate — the
         // effective charge is exactly the cap, and passes.
-        ValidatedFeeEstimates::try_new(masked(1, 1, 1, 100_000))
+        let cap = absolute_fee_rate_cap();
+        ValidatedFeeEstimates::try_new(masked(1, 1, 1, cap))
             .expect("effective charge exactly at the cap passes");
-        // One mask unit above: refused.
-        match ValidatedFeeEstimates::try_new(masked(1, 1, 1, 100_001)) {
+        // One unit above: refused.
+        match ValidatedFeeEstimates::try_new(masked(1, 1, 1, cap + 1)) {
             Err(FeeEstimatorError::DaemonFeeUnreasonable(CeilingViolation::AboveAbsoluteCap {
                 rate,
-            })) => assert_eq!(rate, 100_001),
+            })) => assert_eq!(rate, cap + 1),
             other => panic!("unexpected: {other:?}"),
         }
     }
 
     #[test]
     fn absolute_cap_refuses_only_over_the_bound() {
-        match ValidatedFeeEstimates::try_new(snapshot(100_001, 100_001, 100_001)) {
+        let cap = absolute_fee_rate_cap();
+        match ValidatedFeeEstimates::try_new(snapshot(cap + 1, cap + 1, cap + 1)) {
             Err(FeeEstimatorError::DaemonFeeUnreasonable(CeilingViolation::AboveAbsoluteCap {
                 rate,
             })) => {
-                assert_eq!(rate, 100_001);
+                assert_eq!(rate, cap + 1);
             }
             other => panic!("unexpected: {other:?}"),
         }
-        ValidatedFeeEstimates::try_new(snapshot(100_000, 100_000, 100_000))
+        ValidatedFeeEstimates::try_new(snapshot(cap, cap, cap))
             .expect("exactly the absolute cap is within the ceiling");
+    }
+
+    /// The cap IS the daemon-rounded genesis-condition `Fh` — pinned as
+    /// a literal so an economics-parameter change moves it loudly, and
+    /// cross-checked against the folded formula so a cap edit that
+    /// bypasses the derivation fails here.
+    #[test]
+    fn absolute_cap_is_the_rounded_genesis_fh() {
+        let cap = absolute_fee_rate_cap();
+        assert_eq!(cap, 14_000_000, "economics params moved the era-max fee");
+
+        let params = shekyl_economics::params::EconomicParams::default();
+        let r0 = shekyl_economics::emission::base_block_reward(0, &params).expect("r0");
+        assert_eq!(r0, 2_048_000_000_000, "genesis base reward moved");
+        let fm = 16 * r0 * 3_000 / (300_000u64 * 300_000);
+        let fh = 4 * fm * 300_000 / (32 * 3_000);
+        assert_eq!(
+            cap,
+            round_money_up_2(fh),
+            "cap must equal rounded genesis Fh"
+        );
+    }
+
+    /// The finding's scenario, pinned end to end: the honest YOUNG-CHAIN
+    /// snapshot — raw genesis-condition tiers and their daemon-rounded
+    /// forms (what the wallet actually receives) — must be well-formed.
+    /// This is the bootstrap-operation guarantee: build, quote, and
+    /// first-stake all ride this constructor from block 1.
+    #[test]
+    fn genesis_condition_snapshots_are_well_formed() {
+        // Raw folded-formula tiers at genesis conditions.
+        ValidatedFeeEstimates::try_new(snapshot(68_266, 273_066, 13_653_325))
+            .expect("raw genesis-condition tiers are honest and must pass");
+        // Daemon-rounded (round_money_up, 2 significant digits): the
+        // wire form. Priority lands exactly on the cap.
+        ValidatedFeeEstimates::try_new(snapshot(69_000, 280_000, 14_000_000))
+            .expect("rounded genesis-condition tiers are honest and must pass");
     }
 }

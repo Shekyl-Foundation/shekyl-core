@@ -20,7 +20,7 @@ use shekyl_rpc_client::{tx_fee, FeeRate};
 use shekyl_units::AtomicUnits;
 
 use super::fee_policy::{
-    CustomFeeBand, FeeEstimatorError, ValidatedFeeEstimates, ABSOLUTE_FEE_RATE_CAP,
+    absolute_fee_rate_cap, CustomFeeBand, FeeEstimatorError, ValidatedFeeEstimates,
 };
 use super::traits::key::FeeDirective;
 
@@ -47,7 +47,7 @@ pub(crate) fn dust_threshold_for_rate(rate: &FeeRate) -> u64 {
 /// Map [`super::fee_estimator::FeePriority`] to a [`FeeRate`] from an
 /// already-validated snapshot. Named tiers are a lookup; `Custom` is
 /// the caller's band — the snapshot's economy floor below, and above
-/// it exactly the [`ABSOLUTE_FEE_RATE_CAP`] every named tier obeys.
+/// it exactly the [`absolute_fee_rate_cap()`] every named tier obeys.
 ///
 /// There is deliberately no `Custom`-only relative ceiling. One
 /// anchored on economy (the shipped "100× economy") banned the
@@ -103,7 +103,7 @@ pub(crate) fn fee_rate_for_priority(
             // finite cap, so it lands in this band rather than inventing
             // a class for arithmetic.
             match tx_fee::try_fee_from_weight(&custom, 1) {
-                Some(one) if one <= ABSOLUTE_FEE_RATE_CAP => Ok(custom),
+                Some(one) if one <= absolute_fee_rate_cap() => Ok(custom),
                 _ => Err(FeeEstimatorError::CustomFeeOutOfRange(
                     CustomFeeBand::AboveAbsoluteCap,
                 )),
@@ -343,12 +343,13 @@ mod tests {
             .expect("Custom reaches Priority under a mask too");
 
         let wide = validated(2_000, 2_000, 2_000);
-        let over_abs = NonZeroU64::new(100_001).expect("nonzero");
+        let cap = absolute_fee_rate_cap();
+        let over_abs = NonZeroU64::new(cap + 1).expect("nonzero");
         match fee_rate_for_priority(FeePriority::Custom(over_abs), &wide) {
             Err(FeeEstimatorError::CustomFeeOutOfRange(CustomFeeBand::AboveAbsoluteCap)) => {}
             other => panic!("unexpected: {other:?}"),
         }
-        let at_abs = NonZeroU64::new(100_000).expect("nonzero");
+        let at_abs = NonZeroU64::new(cap).expect("nonzero");
         fee_rate_for_priority(FeePriority::Custom(at_abs), &wide)
             .expect("exactly the absolute cap is payable");
     }

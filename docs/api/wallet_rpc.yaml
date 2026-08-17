@@ -421,9 +421,16 @@ components:
                                           stake: the daemon ANSWERED the fee
                                           query and the wallet refused the
                                           answer —
-                                          non-monotonic tier band, or a tier
-                                          above the absolute 100,000
-                                          atomic-units/weight cap
+                                          non-monotonic tier band, or a
+                                          tier whose effective weight-1
+                                          charge (mask rounding included)
+                                          exceeds the era-maximum
+                                          legitimate fee — the
+                                          daemon-rounded genesis-condition
+                                          Fh, 14,000,000
+                                          atomic-units/weight, derived from
+                                          the economics parameters and
+                                          KAT-pinned
                                           (data: {"reason","rate","bound"}).
                                           Distinct from -29102 (the query
                                           itself failed) by rule 82: the
@@ -630,7 +637,8 @@ components:
         Mirrors `shekyl_engine_core::FeePriority`. Named tiers resolve to a
         feerate via the daemon fee estimate at build time — never hardcoded
         multipliers — and the snapshot must be well-formed (monotonic
-        tiers, no named tier above the absolute cap; -29109 otherwise).
+        tiers, no named tier above the era-maximum absolute cap;
+        -29109 otherwise).
         `custom` pins atomic units per weight unit (see `Feerate` — per
         weight, not per byte), bypassing the named tiers
         but not the policy they obey: it must sit at or above the

@@ -4680,8 +4680,18 @@ atomic snapshot the wallet already holds:
 - **tier-band monotonicity** (`economy ≤ standard ≤ priority`) — an
   inverted band is a defect or a lie, not a market condition;
 - **priority ≤ 10× economy** — position 1, the original lock, verbatim;
-- **absolute cap: 100,000 atomic units per weight unit on every tier
-  including `Custom`** — the history-free half of position 3.
+- **absolute cap on the effective weight-1 charge, provisioned at the
+  era maximum** — `round_money_up(Fh, 2)` at genesis conditions
+  (maximal reward `base_block_reward(0)`, both medians floored at the
+  penalty-free zone) = **14,000,000 atomic units per weight unit**, on
+  every tier including `Custom`. Derived from the economics crate and
+  the ported 2021-scaling folded formula, KAT-pinned — not a literal.
+  (Position 3's `100,000` was mid-regime provisioning: young-chain
+  `economy` alone is ~68,266 and `standard` is 4× that, so that number
+  would have refused every honest snapshot from block 1 — caught in
+  the 2026-08-17 review round. The `BLOCK_REWARD_OVERESTIMATE`
+  error-path placeholder is deliberately NOT covered: a daemon whose
+  own reward computation just failed is refused.)
 
 All three checks fire as `FeeEstimatorError::DaemonFeeUnreasonable`
 (new; the dead `TxError` twin is deleted), surfacing as JSON-RPC

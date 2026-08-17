@@ -14201,8 +14201,11 @@ one place to confirm each item's relationship to the wallet stack.
   disposition; the seam preserves V3.0 shipping date.
 
   **Inherited obligation (2026-08-16 ceiling ruling, amended
-  same day).** The live snapshot ceiling is monotonicity +
-  the absolute 100k/weight cap (`-29109`). The intra-snapshot
+  2026-08-17).** The live snapshot ceiling is monotonicity +
+  the absolute cap on the effective weight-1 charge, provisioned
+  at the era maximum (daemon-rounded genesis `Fh` = 14M/weight,
+  derived + KAT-pinned; a 100k mid-regime literal was caught in
+  review refusing honest young chains) (`-29109`). The intra-snapshot
   10×-economy lock was withdrawn: honest `shekyld` 2021-scaling
   `Fh/Fl` exceeds 10× by design. When `WalletSideEstimator`
   lands, its historical fee series implements the
