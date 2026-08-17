@@ -25,7 +25,7 @@
 //! Multi-tenant `--wallet-dir` exchanges extend this seam later
 //! (`WALLET_REWRITE_PLAN.md`).
 
-use shekyl_engine_core::{Engine, PScanHandle, ServingHandle, SoloSigner};
+use shekyl_engine_core::{Engine, PScanHandle, ServingHandle, ServingPosture, SoloSigner};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -269,6 +269,20 @@ impl Tenant {
     /// behavioral check that survives `pub`).
     pub(crate) fn has_pscan(&self) -> bool {
         self.tasks.pscan.is_some()
+    }
+
+    /// What the parked serving host is currently obligated to serve, or
+    /// `None` when no host is running (`COMPLETETREE_ACTIVATION.md` Q-3).
+    ///
+    /// The embedder is the only layer that can answer this — the handle
+    /// lives here, not on the `Engine` — so `staking_info` /
+    /// `get_wallet_info` take it from the tenant and project it onto the
+    /// wire. It is not a field of the engine's sealed-state view.
+    ///
+    /// A cheap snapshot read: it never waits on the serving task, so a
+    /// status query cannot stall the thing that serves.
+    pub(crate) fn serving_posture(&self) -> Option<ServingPosture> {
+        self.tasks.serving.as_ref().and_then(ServingHandle::posture)
     }
 }
 

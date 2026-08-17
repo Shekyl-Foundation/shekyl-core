@@ -17,7 +17,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_engine_core::{Engine, SoloSigner, StakedOutput, StakingReadView};
+use shekyl_engine_core::{Engine, ServingPosture, SoloSigner, StakedOutput, StakingReadView};
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, require_empty_object};
@@ -64,7 +64,7 @@ pub(crate) async fn staking_info(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "staking_info")?;
-    let view = read_view(tenants).await?;
+    let (view, posture) = read_view_with_posture(tenants).await?;
     let result = StakingInfoResult {
         staking_enabled: view.staking_enabled,
         balance: balance_result(&view),
@@ -73,6 +73,7 @@ pub(crate) async fn staking_info(
             .pscan_synced_height
             .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
         recovery_pending_reopen: view.recovery_pending_reopen,
+        posture: posture_str(posture),
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize staking_info: {e}")))
@@ -147,6 +148,36 @@ async fn read_view(
     read_view_under_guard(&engine)
 }
 
+/// Like [`read_view`], but also snapshots the parked host's posture
+/// under the tenant lock — before the engine guard, never nested.
+///
+/// The posture is the embedder's fact (`Tenant::serving_posture`); it
+/// does not belong on [`StakingReadView`]. Assembled here so
+/// `staking_info` can project it without stuffing an embedder snapshot
+/// into the engine's sealed-state aggregation.
+async fn read_view_with_posture(
+    tenants: &tokio::sync::Mutex<TenantState>,
+) -> Result<(StakingReadView, Option<ServingPosture>), WalletRpcError> {
+    let (shared, posture) = {
+        let state = tenants.lock().await;
+        let shared = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
+        (shared, state.tenant.serving_posture())
+    };
+    let engine = shared.read().await;
+    Ok((read_view_under_guard(&engine)?, posture))
+}
+
+/// The wire spelling of a serving posture — the contract's values,
+/// produced in exactly one place so `staking_info` and `get_wallet_info`
+/// cannot disagree about what a foundation node is called.
+pub(crate) fn posture_str(posture: Option<ServingPosture>) -> Option<String> {
+    match posture {
+        Some(ServingPosture::Market) => Some("market".to_owned()),
+        Some(ServingPosture::FoundationCompleteTree) => Some("foundation_complete_tree".to_owned()),
+        None => None,
+    }
+}
+
 fn balance_result(view: &StakingReadView) -> GetStakedBalanceResult {
     GetStakedBalanceResult {
         bonded_principal_confirmed: atomic_units_string(view.balance.bonded_principal_confirmed),
@@ -162,5 +193,23 @@ fn staked_output_view(o: &StakedOutput) -> StakedOutputView {
         p_slot: i64::from(o.p_slot.to_raw()),
         unlock_height: i64::try_from(o.unlock_height.to_raw()).unwrap_or(i64::MAX),
         confirmed: o.confirmed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn posture_str_is_the_contract_spelling() {
+        assert_eq!(
+            posture_str(Some(ServingPosture::Market)).as_deref(),
+            Some("market")
+        );
+        assert_eq!(
+            posture_str(Some(ServingPosture::FoundationCompleteTree)).as_deref(),
+            Some("foundation_complete_tree")
+        );
+        assert_eq!(posture_str(None), None);
     }
 }

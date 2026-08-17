@@ -79,7 +79,7 @@ pub fn apply(alarms: &OperatorAlarms, observation: ServeSetObservation) {
         ServeSetObservation::NotServing => {
             alarms.disarm(
                 AlarmCondition::ServeSetIntegrity,
-                DisarmedReason::TransportStopped,
+                DisarmedReason::NotServing,
             );
         }
         ServeSetObservation::Refreshed {
@@ -257,7 +257,7 @@ mod tests {
         apply(&alarms, ServeSetObservation::NotServing);
         assert_eq!(
             arming(&alarms),
-            Some(Arming::Disarmed(DisarmedReason::TransportStopped)),
+            Some(Arming::Disarmed(DisarmedReason::NotServing)),
         );
         assert!(
             alarms.board().unacknowledged().is_empty(),

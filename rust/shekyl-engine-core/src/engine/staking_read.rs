@@ -314,7 +314,7 @@ impl<
     /// **not** call this method while that guard is live: `std::sync::RwLock`
     /// is not re-entrant, and the nested `ledger.read()` deadlocks the
     /// worker. Snapshot `staking_enabled` from the held guard, drop it, then
-    /// call [`Self::staking_read_view_with_enabled`].
+    /// call [`Self::staking_read_view_with_snapshot`].
     ///
     /// Small synchronous file I/O (the same class as
     /// [`WalletFile::open_pscan_state`]'s other callers); async callers on a

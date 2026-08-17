@@ -217,6 +217,11 @@ where
                 // parameter, not a wallet setting.
                 shekyl_economics::EconomicParams::default().daa_target_seconds,
             ),
+            // The wallet's own directory — the volume the curve-tree
+            // store grows on. Tor's data dir is deliberately not used:
+            // it can be a different mount, and the disk that matters
+            // is the one the corpus lands on.
+            base_path.clone(),
             slot_guard,
         )))
     }

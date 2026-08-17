@@ -5,18 +5,23 @@
 
 //! The running serving loop: handle, spawn, standoff, refresh, ordered teardown.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use shekyl_operator_alarm::disk::{apply as report_disk, DiskObservation};
 use shekyl_operator_alarm::serve_set::{apply as report, ServeSetObservation};
 use shekyl_operator_alarm::OperatorAlarms;
 use shekyl_p_host::{
-    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeSetPinner,
-    StalenessBound,
+    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeObligation,
+    ServeSetPinner, StalenessBound,
 };
 use shekyl_tor::service::TorServiceConfig;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+use super::disk::{spawn_disk_probe, DISK_HEADROOM_WARN_BYTES};
 
 use crate::engine::refresh_slot::SlotGuard;
 use crate::engine::stake_timing::{
@@ -59,6 +64,10 @@ pub(crate) const CLAIM_SOURCE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Serving lifecycle settings. Parameterized rather than hardcoded so tests can
 /// collapse the standoff and the cadence; production takes
 /// [`ServingConfig::production`].
+///
+/// Timing only — the store volume the disk probe measures is a
+/// construction-site path, not a setting, and travels beside this so
+/// this type stays `Copy`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ServingConfig {
     /// Upper bound of the §10.9 launch standoff draw.
@@ -107,6 +116,32 @@ impl ServingConfig {
     }
 }
 
+/// What this persona is currently obligated to serve — the *serving* truth,
+/// published by the running task (`COMPLETETREE_ACTIVATION.md` Q-3/AF-4).
+///
+/// **The arm, not the size.** `staking_info` answers *which* posture, and
+/// a growing count on a status line invites reading it as progress toward
+/// something. The corpus size is the store's to report if it is ever
+/// wanted. Derived from the live witness via
+/// [`ServeSet::obligation`](shekyl_p_host::ServeSet::obligation) — the
+/// single match site p-host exposes — so a second derivation cannot
+/// disagree with the serving side.
+///
+/// Absent (`None` on the handle) means no host is running, which renders
+/// as "not serving" rather than as either posture.
+///
+/// **Do not reconstruct this from the store's prune-disabled flag.** That
+/// flag is one-way and survives Unbond (Q-5's named residue), so a former
+/// foundation node would report `FoundationCompleteTree` forever — a
+/// retention fact misread as a posture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServingPosture {
+    /// Ordinary market staking: the record's explicit shard list.
+    Market,
+    /// The Foundation whole-corpus backstop: the frozen prefix.
+    FoundationCompleteTree,
+}
+
 /// A running serving lifecycle: the cancel token plus the task's join handle.
 ///
 /// Deliberately the same shape as `PScanHandle` — the embedder parks it for the
@@ -118,6 +153,7 @@ pub struct ServingHandle {
     cancel_token: CancellationToken,
     join: Option<JoinHandle<()>>,
     alarms: Arc<OperatorAlarms>,
+    posture: watch::Receiver<Option<ServingPosture>>,
 }
 
 impl ServingHandle {
@@ -139,6 +175,23 @@ impl ServingHandle {
     #[must_use]
     pub fn alarms(&self) -> Arc<OperatorAlarms> {
         Arc::clone(&self.alarms)
+    }
+
+    /// What this persona is serving right now, or `None` when no host is up.
+    ///
+    /// **Held here for the same reason [`Self::alarms`] is**: the value's
+    /// lifetime is the serving lifetime, and the embedder that parks this
+    /// handle is the one thing that outlives a refresh tick but not the
+    /// wallet's open. Published by the task at each successful pin and
+    /// cleared on teardown, so a read is the last thing the host actually
+    /// established rather than an intent someone recorded.
+    ///
+    /// A snapshot read, deliberately — not a subscription. The staking read
+    /// path answers a question, and `borrow()` never waits on the task:
+    /// nothing the operator asks can stall the thing that serves.
+    #[must_use]
+    pub fn posture(&self) -> Option<ServingPosture> {
+        *self.posture.borrow()
     }
 
     /// Fire the cancel token. Idempotent. The task observes it at its next
@@ -180,43 +233,96 @@ pub(crate) fn spawn_serving_task<P>(
     pinner: P,
     alarms: Arc<OperatorAlarms>,
     config: ServingConfig,
+    store_fs_path: PathBuf,
     slot_guard: SlotGuard,
 ) -> ServingHandle
 where
     P: ServeSetPinner + Send + Sync + 'static,
 {
     let cancel_token = CancellationToken::new();
+    // Starts absent: the task publishes only once a pin has actually
+    // established what it serves, so the standoff window reads "not
+    // serving" — which it is.
+    let (posture_tx, posture_rx) = watch::channel(None);
     let join = tokio::spawn(run_serving_task(
         tor,
         serving,
         pinner,
-        Arc::clone(&alarms),
-        config,
+        ServingReporters {
+            alarms: Arc::clone(&alarms),
+            posture: posture_tx,
+        },
+        ServingSetup {
+            config,
+            store_fs_path,
+        },
         cancel_token.clone(),
         slot_guard,
     ));
     ServingHandle {
+        posture: posture_rx,
         cancel_token,
         join: Some(join),
         alarms,
     }
 }
 
+/// Everything the task publishes *to*, bundled.
+///
+/// The two channels have one lifetime and one writer — the task — and every
+/// signature that carried one carried the other, so they travel as a pair
+/// rather than as two more parameters. The same reasoning `OpenTasks` uses
+/// one layer up, and it keeps the spawn signature at a readable arity
+/// instead of buying that back with a lint suppression.
+struct ServingReporters {
+    /// The OA-1 board every condition lands on.
+    alarms: Arc<OperatorAlarms>,
+    /// The live serving-obligation snapshot the embedder reads.
+    posture: watch::Sender<Option<ServingPosture>>,
+}
+
+/// Construction-site facts that are not host inputs: the timing
+/// settings, and the volume the disk probe measures.
+///
+/// Bundled so [`run_serving_task`] does not pick up an extra arity slot
+/// for a path that always travels with the config. The path is *not*
+/// on [`ServingConfig`] — that type is `Copy` timing, and a `PathBuf`
+/// is a fact about where the wallet was opened, which only
+/// `start_serving_if_staker` knows.
+struct ServingSetup {
+    config: ServingConfig,
+    /// The wallet's own directory — the volume the curve-tree store
+    /// grows on. Tor's data dir is deliberately not used: it can be a
+    /// different mount, and the disk that matters is the one the
+    /// corpus lands on.
+    store_fs_path: PathBuf,
+}
+
 async fn run_serving_task<P>(
     tor: TorServiceConfig,
     serving: PersonaServing,
     pinner: P,
-    alarms: Arc<OperatorAlarms>,
-    config: ServingConfig,
+    reporters: ServingReporters,
+    setup: ServingSetup,
     cancel: CancellationToken,
     _slot_guard: SlotGuard,
 ) where
     P: ServeSetPinner + Send + Sync + 'static,
 {
-    // The serve-set condition is watched from the moment the task exists, so a
-    // wallet sitting in the launch standoff reads "not serving yet" rather than
-    // reading nothing at all.
+    let ServingReporters {
+        alarms,
+        posture: serving_posture,
+    } = reporters;
+    let ServingSetup {
+        config,
+        store_fs_path,
+    } = setup;
+    // Both conditions are watched from the moment the task exists, so a
+    // wallet sitting in the launch standoff reads "not serving yet"
+    // rather than reading nothing at all — including when start fails
+    // or cancel fires before the host is up.
     report(&alarms, ServeSetObservation::NotServing);
+    report_disk(&alarms, DiskObservation::NotServing);
 
     let delay = draw_serving_launch_delay(config.launch_window, &mut OsRngGapAdapter);
     tokio::select! {
@@ -240,6 +346,12 @@ async fn run_serving_task<P>(
 
     let bound = config.staleness_bound;
 
+    // The host has pinned, so what it serves is established: publish it in
+    // the same breath as the first witness read, for the same reason that
+    // read exists — an operator must not see "not serving" while the onion
+    // is up.
+    publish_posture(&serving_posture, &host);
+
     // The host is live *now*, and the board still says `NotServing` from the
     // standoff. Reporting the start witness immediately closes a window in
     // which an operator reads "not serving" while the onion is published —
@@ -248,6 +360,17 @@ async fn run_serving_task<P>(
     // `start` just pinned, so a refresh here would be a redundant actor round
     // trip to re-derive what the witness already holds.
     report(&alarms, read(&host, bound));
+
+    // Own task: the probe is not a serve-set reading, and a wedged
+    // refresh must not also silence the volume check. First reading is
+    // immediate, so the board is not unwatched for a full cadence.
+    let disk = spawn_disk_probe(
+        store_fs_path,
+        DISK_HEADROOM_WARN_BYTES,
+        config.refresh_cadence,
+        Arc::clone(&alarms),
+        cancel.clone(),
+    );
 
     let mut ticker = tokio::time::interval(config.refresh_cadence);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -263,15 +386,54 @@ async fn run_serving_task<P>(
         }
 
         report(&alarms, observe(&host, bound).await);
+        // Re-read after every refresh so a host whose obligation *arm*
+        // changes is not stuck on the start snapshot. The type is the
+        // arm, not the size — a growing prefix does not change what we
+        // publish.
+        publish_posture(&serving_posture, &host);
     }
 
     // Ordered teardown: tor first, then the listener (§9.7 item 4).
     host.shutdown().await;
     posture.abort();
+    // Drain the probe before disarming: a late measured reading must
+    // not overwrite `NotServing` after the host is gone.
+    let _disk = disk.await;
     // Nothing is watched once the host is gone. Disarm rather than clear: a
     // closed wallet is not a healthy serve-set, and a live pruned-bytes report
     // stays live because nothing observed it fixed.
     report(&alarms, ServeSetObservation::NotServing);
+    report_disk(&alarms, DiskObservation::NotServing);
+    // The posture, by contrast, IS cleared: it is a statement about what is
+    // being served, and after teardown nothing is. Leaving the last value
+    // would have `staking_info` report a posture for a host that has
+    // stopped — the same false-healthy reading the alarm board refuses.
+    // The send outcome is deliberately unused: a dropped receiver means the
+    // embedder released the handle, which is a wallet closing rather than a
+    // serving fault.
+    let _sent = serving_posture.send(None);
+}
+
+/// Publish what the host is currently obligated to serve, read from the
+/// live witness.
+///
+/// The witness is the one authority for the arm — `ServeSet::obligation()`
+/// is the single match site `shekyl-p-host` exposes for exactly this, so a
+/// second derivation cannot disagree with the one the serving side uses.
+/// Send failures are ignored: a dropped receiver means the embedder let the
+/// handle go, which is a wallet closing, not a serving fault.
+fn publish_posture<P>(
+    serving_posture: &watch::Sender<Option<ServingPosture>>,
+    host: &PersonaServingHost<P>,
+) where
+    P: ServeSetPinner,
+{
+    let pinned = host.pinned_serve_set();
+    let posture = match pinned.serve_set().obligation() {
+        ServeObligation::ShardList(_) => ServingPosture::Market,
+        ServeObligation::CompleteTreePrefix { .. } => ServingPosture::FoundationCompleteTree,
+    };
+    let _sent = serving_posture.send(Some(posture));
 }
 
 /// Run one refresh and read the tripwire, producing the observation the alarm
@@ -511,6 +673,13 @@ mod lifecycle_tests {
         }
     }
 
+    /// A path that exists on the test machine's filesystem — the probe
+    /// must resolve rather than report `Unreadable` and muddy what the
+    /// lifecycle cases assert about the serve-set.
+    fn store_path() -> PathBuf {
+        std::env::temp_dir()
+    }
+
     fn claim() -> SlotGuard {
         RefreshSlot::new()
             .try_claim()
@@ -546,6 +715,7 @@ mod lifecycle_tests {
             pinner(false),
             Arc::clone(&alarms),
             immediate(),
+            store_path(),
             claim(),
         );
 
@@ -557,13 +727,153 @@ mod lifecycle_tests {
         let armed = settle_until(&alarms, |b| {
             b.condition(AlarmCondition::ServeSetIntegrity)
                 .map(ConditionState::arming)
-                .is_some_and(|a| a != Arming::Disarmed(DisarmedReason::TransportStopped))
+                .is_some_and(|a| a != Arming::Disarmed(DisarmedReason::NotServing))
         })
         .await;
         assert!(
             armed,
             "the serve-set row still reads as a stopped transport after the host \
              started; nothing would correct it for a whole refresh cadence",
+        );
+        handle.shutdown().await;
+    }
+
+    /// **The posture snapshot is the live serving truth, and absent before
+    /// anything is served.** The empty-set pinner reports the list arm, so a
+    /// started host publishes `Market`; before start and after shutdown the
+    /// answer is `None`, which the surfaces render "not serving".
+    ///
+    /// The `None`-after-shutdown half is the one that earns its keep: a
+    /// snapshot left at its last value would have `staking_info` report a
+    /// posture for a host that has stopped — the same false-healthy reading
+    /// the alarm board refuses on every other condition.
+    #[tokio::test]
+    async fn the_posture_snapshot_tracks_the_host_and_clears_on_shutdown() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let alarms = Arc::new(OperatorAlarms::new());
+        let handle = spawn_serving_task(
+            churning_tor(&dir),
+            serving_identity(),
+            pinner(false),
+            Arc::clone(&alarms),
+            immediate(),
+            store_path(),
+            claim(),
+        );
+
+        // Published once the host has actually pinned — never before, so the
+        // standoff window cannot claim a posture it has not established.
+        let mut published = None;
+        for _ in 0..200 {
+            if let Some(p) = handle.posture() {
+                published = Some(p);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            published,
+            Some(ServingPosture::Market),
+            "an empty ShardSetCompact obligation is the market arm — not \
+             the corpus, and not absent"
+        );
+
+        // `shutdown` consumes the handle, so the receiver is cloned first —
+        // otherwise the clearing half of this test's name could only be
+        // *asserted in a comment*, which is how a test ends up proving less
+        // than it claims. The channel outlives the sender, so a clone still
+        // reads the task's final write.
+        let after_shutdown = handle.posture.clone();
+        handle.shutdown().await;
+        assert_eq!(
+            *after_shutdown.borrow(),
+            None,
+            "teardown must clear the posture: a snapshot left at its last \
+             value would have `staking_info` report a posture for a host \
+             that has stopped"
+        );
+    }
+
+    /// The disk probe reports against a real filesystem and reaches the
+    /// board: a started host arms `ServingDiskHeadroom` rather than leaving
+    /// it unobserved. The first reading is immediate — this uses the
+    /// hour-long `immediate()` cadence so a pass cannot be a refresh tick
+    /// rescuing a hitchhiked probe. The threshold arithmetic itself is
+    /// `shekyl-operator-alarm`'s (`disk::tests`); what only this layer can
+    /// prove is that the reading is taken at all and lands on the board.
+    #[tokio::test]
+    async fn a_started_host_observes_disk_headroom() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let alarms = Arc::new(OperatorAlarms::new());
+        let handle = spawn_serving_task(
+            churning_tor(&dir),
+            serving_identity(),
+            pinner(false),
+            Arc::clone(&alarms),
+            immediate(),
+            store_path(),
+            claim(),
+        );
+
+        let observed = settle_until(&alarms, |b| {
+            b.condition(AlarmCondition::ServingDiskHeadroom)
+                .map(ConditionState::arming)
+                .is_some_and(|a| a == Arming::Armed)
+        })
+        .await;
+        assert!(
+            observed,
+            "the serving task never reported disk headroom; the condition \
+             has no row, which renders as unwatched"
+        );
+        handle.shutdown().await;
+        assert_eq!(
+            alarms
+                .board()
+                .condition(AlarmCondition::ServingDiskHeadroom)
+                .map(ConditionState::arming),
+            Some(Arming::Disarmed(DisarmedReason::NotServing)),
+            "teardown must disarm the volume check: a host that has \
+             stopped is not a healthy disk"
+        );
+    }
+
+    /// An unreadable path degrades to *disarmed*, and the serving task keeps
+    /// running. A broken disk probe must never take down a healthy server —
+    /// the diagnostic is subordinate to the obligation it reports on.
+    #[tokio::test]
+    async fn an_unreadable_disk_path_disarms_without_killing_the_task() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let alarms = Arc::new(OperatorAlarms::new());
+        let handle = spawn_serving_task(
+            churning_tor(&dir),
+            serving_identity(),
+            pinner(false),
+            Arc::clone(&alarms),
+            immediate(),
+            dir.path().join("no-such-directory"),
+            claim(),
+        );
+
+        let disarmed = settle_until(&alarms, |b| {
+            b.condition(AlarmCondition::ServingDiskHeadroom)
+                .map(ConditionState::arming)
+                .is_some_and(|a| a == Arming::Disarmed(DisarmedReason::DiskUnreadable))
+        })
+        .await;
+        assert!(
+            disarmed,
+            "an unreadable path must read as unknown headroom, never as \
+             healthy and never as an alarm"
+        );
+        // The serve-set side is still being reported, which is the proof the
+        // task survived the failed probe rather than unwinding on it.
+        assert!(
+            alarms
+                .board()
+                .condition(AlarmCondition::ServeSetIntegrity)
+                .is_some(),
+            "the serving task must keep serving through a broken disk probe"
         );
         handle.shutdown().await;
     }
@@ -580,6 +890,7 @@ mod lifecycle_tests {
             pinner(false),
             Arc::clone(&alarms),
             immediate(),
+            store_path(),
             claim(),
         );
 
@@ -610,6 +921,7 @@ mod lifecycle_tests {
             pinner(true),
             Arc::clone(&alarms),
             immediate(),
+            store_path(),
             claim(),
         );
 
@@ -620,6 +932,16 @@ mod lifecycle_tests {
         })
         .await;
         assert!(reported, "a pinner that is down must reach the operator");
+        assert_eq!(
+            handle
+                .alarms()
+                .board()
+                .condition(AlarmCondition::ServingDiskHeadroom)
+                .map(ConditionState::arming),
+            Some(Arming::Disarmed(DisarmedReason::NotServing)),
+            "a host that never started still watches the volume row — \
+             unwatched would look like the probe was never wired"
+        );
         handle.shutdown().await;
     }
 }

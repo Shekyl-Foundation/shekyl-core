@@ -42,7 +42,9 @@ pub use outbound_label::label_plaintext_for_payment_uri;
 /// embedder parks the handle for the wallet's open lifetime and shuts it down
 /// on close. Re-exported here rather than through `engine`'s own list because
 /// that module sits at its decomposition ceiling.
-pub use engine::stake_engine::serving::{ServingHandle, ServingStartError, TorConfigError};
+pub use engine::stake_engine::serving::{
+    ServingHandle, ServingPosture, ServingStartError, TorConfigError,
+};
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
 pub use shekyl_address::{format_payment_uri, parse_payment_uri, PaymentUri, PaymentUriError};
 /// The tor-posture producer, re-exported so an embedder can spawn the

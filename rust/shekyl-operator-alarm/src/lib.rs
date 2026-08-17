@@ -83,6 +83,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod disk;
 pub mod serve_set;
 pub mod tor_posture;
 
@@ -112,6 +113,17 @@ pub enum AlarmCondition {
     /// node pruning bonded bytes — `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6
     /// item 4's slash, which is silent until it happens.
     ServeSetIntegrity,
+    /// Whether the filesystem holding the wallet's curve-tree store still
+    /// has room for the corpus to grow.
+    ///
+    /// Its own condition rather than a `ServeSetIntegrity` reading: the
+    /// serve-set conditions are about what the *chain* obligates and what
+    /// the store retains, and both are answered by consulting the store.
+    /// This one is about the volume underneath it, is fixed by the
+    /// operator with a bigger disk rather than by anything the wallet can
+    /// do, and applies to a market archiver exactly as much as to a
+    /// foundation node (`COMPLETETREE_ACTIVATION.md` Q-2).
+    ServingDiskHeadroom,
 }
 
 /// Whether a condition's tripwire can currently fire.
@@ -163,6 +175,20 @@ pub enum DisarmedReason {
     /// checking yet", never as healthy** — that distinction is the entire
     /// reason this channel is a snapshot.
     CatchingUp,
+    /// The free-space probe could not read the filesystem, so headroom is
+    /// unknown.
+    ///
+    /// Disarmed rather than silently healthy: a probe that cannot answer
+    /// and a probe that answered "plenty" are both quiet, and rendering
+    /// them the same way is how a stopped watchdog reads as good news —
+    /// the reason this enum exists at all. Deliberately **not** an alarm:
+    /// a broken probe is not evidence the disk is filling.
+    DiskUnreadable,
+    /// No serving host is running — the launch standoff has not elapsed,
+    /// start failed, or the host has been torn down. Distinct from
+    /// [`Self::TransportStopped`]: that one is the tor supervisor's
+    /// channel closing; this one is the serving lifecycle itself.
+    NotServing,
 }
 
 /// How a raised alarm's **observable** behaves once the condition is raised.
@@ -285,6 +311,24 @@ pub enum OperatorAlarm {
         /// The prefix length the witness claimed when the declaration vanished.
         frozen_count: u64,
     },
+    /// The filesystem holding the curve-tree store is running out of room.
+    ///
+    /// **The operator's commitment, surfaced before it is spent** (Q-2):
+    /// the archival obligation grows without bound and nothing in the
+    /// wallet can shrink it, so the only useful moment to say so is while
+    /// there is still room to act — add a disk, or unbond. An `Episode`,
+    /// because freeing space genuinely ends the condition; nothing is
+    /// latched, and the next probe that reads healthy clears it.
+    ///
+    /// Fires for **any** serving posture. A market archiver filling its
+    /// volume fails its challenges exactly like a foundation node does;
+    /// the obligation is smaller, not the hazard.
+    ServingDiskLow {
+        /// Bytes available to an unprivileged writer on that filesystem.
+        free_bytes: u64,
+        /// The threshold this reading fell below.
+        threshold_bytes: u64,
+    },
     /// The wallet's ingest tip moved **below** the height the pins were minted
     /// at — a chain rollback (`rollback_to_fork`). Recoverable: re-ingest past
     /// the fork and the next refresh re-pins. It is reported rather than folded
@@ -349,7 +393,10 @@ impl OperatorAlarm {
             | Self::ServeSetRefreshFailing { .. }
             | Self::ServeSetPinsDropped { .. }
             | Self::ServeSetPostureLost { .. }
-            | Self::ServeSetRolledBack { .. } => AlarmLifetime::Episode,
+            | Self::ServeSetRolledBack { .. }
+            // Freeing space ends it outright, and the next probe says so —
+            // there is no evidence that outlives the condition here.
+            | Self::ServingDiskLow { .. } => AlarmLifetime::Episode,
         }
     }
 
@@ -367,6 +414,7 @@ impl OperatorAlarm {
             | Self::ServeSetPostureLost { .. }
             | Self::ServeSetRolledBack { .. }
             | Self::ServeSetBytesPruned { .. } => AlarmCondition::ServeSetIntegrity,
+            Self::ServingDiskLow { .. } => AlarmCondition::ServingDiskHeadroom,
         }
     }
 }

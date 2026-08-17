@@ -815,6 +815,15 @@ pub struct StakingInfoResult {
     /// finish staking recovery. `false` in the steady state.
     #[serde(default)]
     pub recovery_pending_reopen: bool,
+    /// What the serving host is currently obligated to serve
+    /// (`"market"` / `"foundation_complete_tree"`), or absent when no host
+    /// is running — see the contract's `StakingInfoResult.posture`.
+    ///
+    /// Absent for a bonded wallet is a legitimate reading, not a gap: the
+    /// field reports the live serving truth, and a host inside its launch
+    /// standoff is not yet serving anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub posture: Option<String>,
 }
 
 /// `get_tx_proof` result (WI-RPC-3 proofs).

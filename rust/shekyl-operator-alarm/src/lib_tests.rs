@@ -92,6 +92,15 @@ fn lifetime_classification_is_pinned_per_variant() {
         AlarmLifetime::LatchedRederived,
         "pruned leaf bytes are gone until a chain replay; a re-pin cannot restore them",
     );
+    assert_eq!(
+        OperatorAlarm::ServingDiskLow {
+            free_bytes: 1,
+            threshold_bytes: 50,
+        }
+        .lifetime(),
+        AlarmLifetime::Episode,
+        "freeing space ends it; nothing outlives the fullness",
+    );
 }
 
 /// The serving conditions are one condition row, not four — an operator
