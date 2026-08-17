@@ -1790,13 +1790,27 @@ components:
             wallet has never scanned as a staker.
         posture:
           type: string
-          enum: [market, foundation_complete_tree]
           description: >
             What this wallet's serving host is currently obligated to
             serve. **Absent means no host is running** — a non-staker, a
             staker still inside its launch standoff, or a wallet whose
             serving path failed — and renders as "not serving" rather than
             as either posture.
+
+            Values defined at this contract version: `market`,
+            `foundation_complete_tree`.
+
+            **Deliberately an open string, not a closed enum.** A serving
+            posture is added by a later round, and a *response* enum would
+            make an older validator reject the whole `staking_info` reply
+            over one display field it did not recognise — breaking a
+            client's balance and scan readings to protect a status line.
+            Clients must therefore treat an unknown value as an opaque
+            posture name and render it as-is, which is exactly what the
+            wallet CLI does; treating it as "not serving" would be a false
+            negative about a node that is serving. The set above is the
+            documentation, and adding to it is a contract change like any
+            other.
 
             Read-only and derived from the LIVE serving witness, never
             from a stored setting: no posture is durable wallet-side, and

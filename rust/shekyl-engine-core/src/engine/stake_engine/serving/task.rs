@@ -433,9 +433,15 @@ fn observe_disk(path: &std::path::Path, threshold_bytes: u64) -> DiskObservation
         Ok(stat) => {
             // rustix normalizes both fields to `u64` across platforms, so
             // the product needs no conversion — only saturation, because a
-            // nonsense fragment size must not panic a serving task. An
-            // absurd product reads as "plenty", the same non-alarming
-            // direction an unreadable probe takes.
+            // nonsense fragment size must not panic a serving task.
+            //
+            // A saturated product is still a MEASURED reading: it arms the
+            // condition and, being enormous, reads clean. That is *not*
+            // the same board state as an unreadable probe, which disarms
+            // — "the disk has room" and "I cannot tell" are the two
+            // sentences this channel exists to keep apart. Saturation here
+            // is the benign direction of a value that cannot occur on a
+            // real filesystem, not a stand-in for the failure path below.
             let free_bytes = stat.f_bavail.saturating_mul(stat.f_frsize);
             DiskObservation::Measured {
                 free_bytes,
@@ -824,8 +830,20 @@ mod lifecycle_tests {
              shards — not the corpus, and not absent"
         );
 
+        // `shutdown` consumes the handle, so the receiver is cloned first —
+        // otherwise the clearing half of this test's name could only be
+        // *asserted in a comment*, which is how a test ends up proving less
+        // than it claims. The channel outlives the sender, so a clone still
+        // reads the task's final write.
+        let after_shutdown = handle.posture.clone();
         handle.shutdown().await;
-        // The receiver outlives the task; after teardown it must read absent.
+        assert_eq!(
+            *after_shutdown.borrow(),
+            None,
+            "teardown must clear the posture: a snapshot left at its last \
+             value would have `staking_info` report a posture for a host \
+             that has stopped"
+        );
     }
 
     /// The disk probe reports against a real filesystem and reaches the
