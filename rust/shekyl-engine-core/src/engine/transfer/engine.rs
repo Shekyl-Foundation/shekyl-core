@@ -351,7 +351,7 @@ where
     pub(super) fn build_select_sync(
         &self,
         request: &TxRequest,
-        fee_snapshot: super::super::traits::FeeEstimates,
+        fee_snapshot: super::super::fee_policy::ValidatedFeeEstimates,
         tree_gate: TreeSpendGate,
         reference: Option<ReferenceBlock>,
         tree_depth: u8,

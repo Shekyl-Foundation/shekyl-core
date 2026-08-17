@@ -33,6 +33,7 @@ tracing = "0.1"
 shekyl-wire = { path = "../shekyl-wire" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+shekyl-tx-weight = { path = "../shekyl-tx-weight" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }

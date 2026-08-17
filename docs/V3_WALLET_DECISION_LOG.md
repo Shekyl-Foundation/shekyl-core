@@ -4654,4 +4654,180 @@ re-spelling**. No persisted-state change ⇒ no rule-42 (serialization-schema) b
 
 ---
 
+## 2026-08-16 — Fee sanity ceiling: three unreconciled specifications collapse to one interim ruling
+
+**Context.** The A3 audit found the named-tier fee sanity ceiling
+specified three times with three different shapes, and the code
+implementing none of them (`Custom`-only 100×-economy was the whole
+shipped check; `TxError::DaemonFeeUnreasonable` had zero construction
+sites):
+
+1. `WALLET_REWRITE_PLAN.md` "Fee priority" cross-cutting lock (the
+   oldest): refuse when the daemon's `priority` exceeds **10× the same
+   snapshot's `economy`** — intra-snapshot, no history needed.
+2. Decision 6 above (2026-04-25 vintage prose): cap any estimate at
+   **10× the previous block's median fee per byte** — needs last-block
+   fee data the wallet does not hold.
+3. The 2026-04-25 positional-mapping entry: **5× the 1000-block
+   historical median of `fees[3]`, hard cap 100,000 atomic units /
+   byte** — needs a wallet-side historical fee series that is precisely
+   the named substrate of the deferred V3.x `WalletSideEstimator`
+   (R16(c) declined its V3.0 lift).
+
+**Ruling (interim, superseded-by-design).** Implement now, from the one
+atomic snapshot the wallet already holds:
+
+- **tier-band monotonicity** (`economy ≤ standard ≤ priority`) — an
+  inverted band is a defect or a lie, not a market condition;
+- **priority ≤ 10× economy** — position 1, the original lock, verbatim;
+- **absolute cap on the effective weight-1 charge, provisioned at the
+  era maximum** — `round_money_up(Fh, 2)` at genesis conditions
+  (maximal reward `base_block_reward(0)`, both medians floored at the
+  penalty-free zone) = **14,000,000 atomic units per weight unit**, on
+  every tier including `Custom`. Derived from the economics crate and
+  the ported 2021-scaling folded formula, KAT-pinned — not a literal.
+  (Position 3's `100,000` was mid-regime provisioning: young-chain
+  `economy` alone is ~68,266 and `standard` is 4× that, so that number
+  would have refused every honest snapshot from block 1 — caught in
+  the 2026-08-17 review round. The `BLOCK_REWARD_OVERESTIMATE`
+  error-path placeholder is deliberately NOT covered: a daemon whose
+  own reward computation just failed is refused.)
+
+All three checks fire as `FeeEstimatorError::DaemonFeeUnreasonable`
+(new; the dead `TxError` twin is deleted), surfacing as JSON-RPC
+**`-29109 DAEMON_FEE_UNREASONABLE`** on both the build and
+`get_default_fee_priority` quote paths — distinct from `-29102` ("the
+query failed") because the remedies differ. `Custom`-rate band
+violations are re-classed as the caller's error
+(`CustomFeeOutOfRange` → `-32602`), not the daemon's.
+
+**What the interim form deliberately does not catch:** common-mode
+inflation of all tiers together below the absolute cap. That is the
+anomaly-vs-history job of positions 2/3, which are **not rejected but
+deferred as one item**: the median-multiple ceiling lands with the
+V3.x `WalletSideEstimator`, whose historical-fee accessor is its named
+substrate — building that accessor inside a finishing pass would have
+pulled a ruled-deferred item forward without the fingerprint-analysis
+and UX validation its own lift triggers require. **The interim ceiling
+names its successor**: when the `WalletSideEstimator` lands, the
+median-multiple check replaces (not joins) the 10×-economy check;
+the monotonicity and absolute-cap checks remain.
+
+**Also closed in the same pass** (Phase-2a §10 residuals): the
+"named buckets unchecked" FOLLOWUPS row; the
+`MARGINAL_INPUT_WEIGHT` proofless stub retired in favor of the landed
+`shekyl_tx_weight::marginal_input_weight_at_d_ref` (dust marginal
+weight 3457 → 9136 — the stub had understated the dust bar by the
+whole per-input FCMP proof increment); `STUB_FEE_ATOMIC_UNITS`
+`#[cfg(test)]`-gated with the `*_in_state` reference bodies it feeds.
+
+---
+
+## 2026-08-16 — Intra-snapshot 10×-economy lock withdrawn; well-formedness is a snapshot type
+
+**Context.** The same-day entry above implemented the original
+`WALLET_REWRITE_PLAN` 10×-economy lock *verbatim* as a snapshot
+refusal. That lock is incompatible with the daemon this wallet talks
+to. `shekyld` is 2021-scaling from genesis (`HF_VERSION_2021_SCALING
+= 1`); `tests/unit_tests/scaling_2021.cpp` pins `Fh / Fl` at 65×,
+197×, and 1077×. A 10× intra-snapshot check does not catch a lying
+daemon — it refuses an honest Priority tier, and because validation
+sat inside rate selection it also locked Custom and was skipped by
+the quote path.
+
+**Ruling.** The 10× intra-snapshot refusal is **withdrawn**. Snapshot
+well-formedness is monotonicity plus the absolute cap on the effective
+weight-1 charge (the derived era-maximum, `absolute_fee_rate_cap()` =
+14,000,000 atomic-units/weight — see the same-day re-provisioning
+amendment below), constructed once as `ValidatedFeeEstimates`
+at fetch (build *and* quote). Custom band-checks run against that
+type and are not gated on the Priority tier's ratio. The historical
+median-multiple ceiling remains the V3.x `WalletSideEstimator`'s
+named successor; it no longer "replaces" a live 10× check, because
+that check is gone.
+
+**Reference.** `rust/shekyl-engine-core/src/engine/fee_policy.rs`;
+PR #490 review.
+
+---
+
+## 2026-08-17 — The `Custom` relative ceiling falls to the same argument; the legacy scalar-fee ladder is deleted
+
+**Context.** The two entries above withdrew an *economy-anchored*
+relative lock from the named tiers, on the ground that economy is the
+market floor and honest 2021-scaling `Fh / Fl` reaches 1077×. The
+identical construction survived one surface: `Custom`'s "100× economy"
+ceiling. Its cost was concrete and one-sided against the user — on the
+pinned KAT row `(340, 1400, 67_000)` the ceiling is `34_000`, so
+`FeePriority::Custom(67_000)` was refused as **the caller's** error
+(`-32602`) while `FeePriority::Priority` returned that same `67_000`
+rate successfully. "Priority, plus a little" was inexpressible, and the
+wallet blamed the user's parameter for asking to pay what the daemon
+was quoting.
+
+**Ruling.** The `Custom` relative ceiling is **withdrawn**. `Custom`'s
+band is exactly the policy every named tier obeys and nothing more:
+at or above the snapshot's economy floor (below it the transaction
+does not clear — not paternalism), at or below the same derived
+era-maximum absolute cap (`absolute_fee_rate_cap()` = 14,000,000
+atomic-units/weight) on the same effective weight-1 basis. This
+brings the code to what the 2026-08-16 ruling already named as
+`Custom`'s bound; no third, `Custom`-only ceiling was ever ratified,
+and none is introduced. A ceiling anchored on `priority` was
+considered and **rejected**: the daemon's ladder spacing describes the
+tiers' relationship to each other, not how much headroom a user should
+have above the top tier, so any multiple would be a free parameter
+wearing a derivation's clothes (`21-reversion-clause-discipline`).
+
+**Reopening criterion.** If wallet telemetry or support traffic shows
+users overpaying by large multiples of `priority` through `custom`,
+the answer is a **confirmation prompt at the UX layer** (rule 82),
+where the user can see the SKL amount and say yes — not a refusal in
+the engine, which cannot distinguish a typo from intent.
+
+**Also deleted: the legacy scalar-`fee` multiplier ladder.**
+`fee_estimates_from_value` treated an absent `fees` array as a
+pre-2021-scaling daemon and synthesized tiers as `(fee×1, fee×5,
+fee×1000)`. That daemon cannot exist on this chain:
+`HF_VERSION_2021_SCALING` is `1` (`src/cryptonote_config.h`), so
+`core_rpc_server::on_get_base_fee_estimate` always takes the scaling
+branch and always answers with a four-element `fees` array — including
+a reply forwarded from a bootstrap daemon, which is itself a Shekyl
+daemon. The ladder was inherited Monero-lineage shape with no daemon
+behind it, and it was actively harmful: `×1000` put priority three
+orders of magnitude above economy, so any base fee over 100 exceeded
+the absolute cap and got the **whole snapshot** refused — Economy
+included — for a daemon charging nothing unusual, with the verdict
+depending on which response shape arrived rather than on what was
+charged. A missing `fees` array is now a malformed reply like any
+other missing field (rules 60 / 15 / 16).
+
+**Also closed: the P-lane bond fee was outside the ceiling.**
+`ValidatedFeeEstimates` was introduced as "the single constructor —
+quote and build both go through it." That was true of the two paths it
+named and false of a third: `bond_orchestrator::first_stake` (reachable
+through the `stake` RPC) read `estimates.economy` straight off the raw
+snapshot. The bypass matters more on this lane than on the send lane,
+not less — the bond fee is charged to persona working capital and
+carries **no user-facing fee control by design**, so an inflated rate is
+paid with nobody positioned to see it. The pinned vector charges
+6,553,600,000 atomic units. Routed through the same constructor, with
+the refusal given its own arm (`FirstStakeError::FeeUnreasonable` →
+`-29109`) rather than folded into the query-failed arm, because "check
+the connection and retry" is the wrong remedy when the query succeeded
+(rule 82). The whole snapshot is validated even though only `economy` is
+read: a bond path more permissive than the send path would be the
+incoherence, and a test asserts the two gates accept exactly the same
+snapshots. The fee derivation moved out of the 500-line `first_stake`
+body into `bond_fee_from_estimates` so the gate is visible and testable.
+
+**Standing rule this makes explicit.** A type introduced as "the single
+constructor" is a claim about *every* consumer, not about the consumers
+the introducing PR happened to touch. Enumerate them — the check is one
+grep for the underlying fetch — before writing the claim down.
+
+**Reference.** `rust/shekyl-engine-core/src/engine/{fee_policy,
+tx_fee_model,daemon,bond_orchestrator}.rs`;
+`rust/shekyl-wallet-rpc/src/lifecycle.rs`; PR #490 review round 2.
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

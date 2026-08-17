@@ -224,7 +224,23 @@ Internal C++ name: `COMMAND_RPC_GET_BASE_FEE_ESTIMATE` /
 the post-2021-scaling regime — confirmed in `cryptonote_config.h`),
 the `fees` vector is **always** populated with the four tiers by
 `get_dynamic_base_fee_estimate_2021_scaling`. The legacy
-single-`fee` branch is dead code on Shekyl from genesis.
+single-`fee` branch is dead code on Shekyl from genesis. This also
+holds for a reply forwarded through the bootstrap-daemon path
+(`core_rpc_server.cpp`, `use_bootstrap_daemon_if_necessary`), since
+that forward reaches another Shekyl daemon under the same rule.
+
+**Wallet-side consequence (2026-08-17, PR #490).** The wallet no
+longer accepts a scalar-only reply. It previously synthesized a tier
+band from `fee` as `(×1, ×5, ×1000)` when `fees` was absent — an
+invented ladder with no daemon behind it, whose `×1000` priority
+exceeded the wallet's absolute fee cap for any base fee above 100 and
+so got the *whole* snapshot refused, Economy included. A reply without
+a `fees` array of at least four numeric tiers is now a malformed
+estimate (`RpcError::InvalidFee` / `InvalidPriority`). **A daemon
+serving this wallet must emit `fees[]`** — every `shekyld` does, by the
+paragraph above; the requirement is stated here so a future non-
+`shekyld` implementer is not left to infer it. Extra tiers beyond the
+fourth are ignored, not rejected (rule 75).
 
 ### Tier semantics
 
@@ -290,10 +306,14 @@ names — but the implementation now binds names to known positional
 indices rather than parsing them from a daemon-supplied map.)
 
 The wallet-side sanity ceiling
-(`TxError::DaemonFeeUnreasonable`) remains binding: any
-`fees[i]` that exceeds a wallet-configured maximum (denominated in
-atomic units / byte) causes the wallet to refuse the build with a
-typed error. The ceiling itself is wallet config, not daemon config.
+(`FeeEstimatorError::DaemonFeeUnreasonable`) remains binding: a
+non-monotonic `fees[]` band, or any `fees[i]` whose effective
+weight-1 charge (mask rounding included) exceeds the derived
+era-maximum cap (`absolute_fee_rate_cap()` — the daemon-rounded
+genesis-condition `Fh`, 14,000,000 atomic-units/weight), causes the
+wallet to refuse the build (and the fee quote) with a typed error. The ceiling is wallet
+policy, not daemon config. An intra-snapshot 10× `fees[3]/fees[0]`
+lock is *not* applied — honest 2021-scaling `Fh/Fl` exceeds 10×.
 
 ---
 

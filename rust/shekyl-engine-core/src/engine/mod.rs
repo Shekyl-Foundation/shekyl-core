@@ -296,6 +296,7 @@ pub(crate) mod fault_injecting_pending_tx;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
+pub(crate) mod fee_policy;
 // WI-RPC-1: read-only fee/weight query projection for the wallet-RPC surface.
 pub mod fee_query;
 pub(crate) mod fee_snapshot;
@@ -415,6 +416,11 @@ pub use error::{
     RefreshError, SendError, SubmitError, TxError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
+// `ValidatedFeeEstimates` is the type of `FeeEstimationContext`'s public
+// `fee_snapshot` field, and `absolute_fee_rate_cap()` is the `bound` an
+// RPC consumer reads out of a `-29109` payload: both were reachable
+// through public API while unnameable, so neither could be documented.
+pub use fee_policy::{absolute_fee_rate_cap, ValidatedFeeEstimates};
 pub use fee_query::{FeeTierQuote, TxShapeEstimate};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use local_economics::LocalEconomics;

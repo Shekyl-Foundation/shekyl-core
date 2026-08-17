@@ -51,42 +51,51 @@ use crate::engine::pending::TxHash;
 use crate::engine::traits::{DaemonEngine, DaemonHealth, FeeEstimates, TxSubmitOutcome};
 use crate::engine::transaction_submitter::submit_outcome_from_verdict;
 
-/// Grace-block horizon passed to the daemon's `get_fee_estimate`
-/// JSON-RPC (matches `shekyl_rpc_client`'s private
-/// `GRACE_BLOCKS_FOR_FEE_ESTIMATE`). The daemon estimates a fee rate
-/// expected to stay above the relay floor for this many blocks. Held
-/// here (rather than reaching for the upstream constant, which is not
-/// `pub`) so the single-RPC snapshot path (§3.3) does not re-export
-/// vendored internals.
-const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
+// One owner for the grace-block horizon: the constant lives in
+// `shekyl-rpc-client` (a first-class workspace crate since the
+// un-vendoring — the old "not re-exporting vendored internals"
+// rationale for a local copy no longer applies).
+use shekyl_rpc_client::GRACE_BLOCKS_FOR_FEE_ESTIMATE;
 
 /// Map a daemon `get_fee_estimate` JSON-RPC `result` object onto the
 /// three-tier [`FeeEstimates`] snapshot (§3.3), deriving every tier
 /// and the rounding mask from this **one** response.
 ///
 /// Mirrors `shekyl_rpc_client::Rpc::get_fee_rate`'s response handling but
-/// resolves **all three** non-`Custom` tiers from a single call
-/// rather than one tier per call:
+/// resolves **all three** non-`Custom` tiers from a single call rather
+/// than one tier per call. Tiers map to `fees` indices `0` (economy),
+/// `1` (standard), `3` (priority) per `V3_WALLET_DECISION_LOG.md`.
+/// Index `2` (`Fm`, "elevated") is deliberately unmapped: the wallet
+/// offers three named tiers, and the ladder's ends — cheapest and
+/// fastest — are the ones a user picks between.
 ///
-/// - **`fees` array present** (V3 daemon): tiers map to array indices
-///   `0` (economy), `1` (standard), `3` (priority) per
-///   `V3_WALLET_DECISION_LOG.md` (index `2`, "elevated", has no
-///   wallet tier). Requires `fees.len() >= 4`.
-/// - **`fees` absent** (scalar `fee` only): the canonical upstream
-///   multiplier ladder `[1, 5, 25, 1000]` applies at the same indices,
-///   i.e. economy `×1`, standard `×5`, priority `×1000`.
+/// # `fees` is required, and its absence is not a legacy shape
 ///
-/// A `fees` field that is **present but not an array** (string, number,
-/// object) is a malformed reply, not an absent one: it is rejected as
-/// [`RpcError::InvalidFee`] rather than silently falling back to the
-/// scalar path. Only an absent field (or explicit JSON `null`) selects
-/// the scalar ladder.
+/// The ArticMine 2021 fee ladder is live **from genesis**:
+/// `HF_VERSION_2021_SCALING` is `1` (`src/cryptonote_config.h`), so
+/// `core_rpc_server::on_get_base_fee_estimate` always takes the
+/// `version >= HF_VERSION_2021_SCALING` branch and always answers with
+/// a four-element `fees` array (`Blockchain::
+/// get_dynamic_base_fee_estimate_2021_scaling` `resize(4)`s it). This
+/// holds for a reply forwarded from a bootstrap daemon too — that
+/// forward reaches another Shekyl daemon, which is subject to the same
+/// rule.
+///
+/// A pre-2021-scaling daemon answering with a bare scalar `fee` is
+/// therefore a shape that **cannot occur on this chain**; it is
+/// Monero-lineage inheritance, and the multiplier ladder the wallet
+/// used to synthesize from it (`×1 / ×5 / ×1000`) was an invented
+/// tier band with no daemon behind it — one that put `priority`
+/// three orders of magnitude above `economy` and so tripped the
+/// absolute cap on any base fee over 100, refusing the whole snapshot
+/// (Economy included) for a daemon that had charged nothing unusual.
+/// Deleted per rules 60 / 15 / 16: a missing `fees` array is a
+/// malformed reply, like any other missing field.
 ///
 /// Untrusted-daemon input is parsed defensively (rule
-/// `20-rust-vs-cpp-policy.mdc` §3): every field is validated, missing
-/// or non-numeric fields and `status != "OK"` map to
-/// [`RpcError::InvalidFee`] / [`RpcError::InvalidPriority`], and the
-/// scalar-`fee` multiply is `checked_mul` (rule §4).
+/// `20-rust-vs-cpp-policy.mdc` §3): every field is validated, and
+/// missing or non-numeric fields and `status != "OK"` map to
+/// [`RpcError::InvalidFee`] / [`RpcError::InvalidPriority`].
 fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
     if result.get("status").and_then(Value::as_str) != Some("OK") {
         return Err(RpcError::InvalidFee);
@@ -101,36 +110,31 @@ fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
     // surface a per-tier rate or the upstream error verbatim.
     let rate = |per_weight: u64| FeeRate::new(per_weight, mask);
 
-    // Distinguish "`fees` absent" (legacy scalar daemon → multiplier
-    // ladder) from "`fees` present but not an array" (malformed reply).
-    // Collapsing both to the scalar path — as `and_then(as_array)` would —
-    // lets a daemon send `fees: "oops"` and silently get scalar fallback,
-    // violating the validate-every-field contract above.
-    let (economy, standard, priority) = match result.get("fees") {
-        Some(Value::Array(fees)) => {
-            // Indices 0/1/3 must exist; a short array is a malformed
-            // estimate, not a silently-clamped one.
-            let at = |idx: usize| -> Result<u64, RpcError> {
-                fees.get(idx)
-                    .and_then(Value::as_u64)
-                    .ok_or(RpcError::InvalidPriority)
-            };
-            (rate(at(0)?)?, rate(at(1)?)?, rate(at(3)?)?)
-        }
-        // Absent (`None`) or explicit JSON `null`: legacy scalar `fee`.
-        None | Some(Value::Null) => {
-            let fee = result
-                .get("fee")
-                .and_then(Value::as_u64)
-                .ok_or(RpcError::InvalidFee)?;
-            let scaled = |mult: u64| -> Result<u64, RpcError> {
-                fee.checked_mul(mult).ok_or(RpcError::InvalidFee)
-            };
-            (rate(scaled(1)?)?, rate(scaled(5)?)?, rate(scaled(1000)?)?)
-        }
-        // Present but not an array (string/number/object): malformed.
-        Some(_) => return Err(RpcError::InvalidFee),
+    // `fees` must be an array of at least the four tiers every Shekyl
+    // daemon emits. Absent, null, or any non-array (`fees: "oops"`) is
+    // a malformed reply — there is no fallback shape to degrade to, so
+    // nothing here can silently accept a snapshot the daemon did not
+    // actually quote.
+    let Some(Value::Array(fees)) = result.get("fees") else {
+        return Err(RpcError::InvalidFee);
     };
+    // A short array is a malformed estimate, not a silently-clamped
+    // one. Destructured once rather than indexed three times, so the
+    // ladder positions are named here and nowhere else — including
+    // `_elevated` (`Fm`), whose absence from the wallet's tier set is
+    // now visible in the code instead of only in prose. A longer array
+    // from a future daemon keeps working (rule 75).
+    let [economy, standard, _elevated, priority, ..] = &fees[..] else {
+        return Err(RpcError::InvalidPriority);
+    };
+    let tier = |value: &Value| -> Result<u64, RpcError> {
+        value.as_u64().ok_or(RpcError::InvalidPriority)
+    };
+    let (economy, standard, priority) = (
+        rate(tier(economy)?)?,
+        rate(tier(standard)?)?,
+        rate(tier(priority)?)?,
+    );
 
     Ok(FeeEstimates {
         economy,
@@ -332,20 +336,30 @@ mod tests {
         assert_ne!(est.economy, est.priority);
     }
 
-    /// Legacy daemon: scalar `fee` only → upstream multiplier ladder
-    /// `[1, 5, _, 1000]` at the economy/standard/priority tiers.
+    /// A reply carrying only the scalar `fee` is malformed, not a
+    /// legacy shape to synthesize tiers from.
+    ///
+    /// `HF_VERSION_2021_SCALING` is `1`, so every Shekyl daemon emits
+    /// `fees[4]`; the `×1 / ×5 / ×1000` ladder the wallet used to
+    /// invent here had no daemon behind it, and its `×1000` priority
+    /// meant any base fee above 100 blew the absolute cap and got the
+    /// **whole** snapshot refused — Economy included — for a daemon
+    /// charging nothing unusual.
+    ///
+    /// This bites against the ladder being reintroduced. It does NOT
+    /// cover the `fees` mapping (that is
+    /// `fee_estimates_array_maps_indices_0_1_3`).
     #[test]
-    fn fee_estimates_scalar_fallback_multipliers() {
-        let result = json!({
-            "status": "OK",
-            "fee": 10u64,
-            "quantization_mask": 4u64,
-        });
-        let est = fee_estimates_from_value(&result).expect("well-formed scalar fee");
-        assert_eq!(est.economy, FeeRate::new(10, 4).unwrap());
-        assert_eq!(est.standard, FeeRate::new(50, 4).unwrap());
-        assert_eq!(est.priority, FeeRate::new(10_000, 4).unwrap());
-        assert_eq!(est.quantization_mask, 4);
+    fn fee_estimates_refuses_a_scalar_only_reply() {
+        for reply in [
+            json!({"status": "OK", "fee": 10u64, "quantization_mask": 4u64}),
+            json!({"status": "OK", "fees": null, "fee": 10u64, "quantization_mask": 4u64}),
+        ] {
+            assert!(
+                matches!(fee_estimates_from_value(&reply), Err(RpcError::InvalidFee)),
+                "a scalar-only reply must not synthesize a tier band: {reply}"
+            );
+        }
     }
 
     #[test]
@@ -376,9 +390,8 @@ mod tests {
         ));
     }
 
-    /// A present-but-non-array `fees` (e.g. a string) is malformed, not a
-    /// legacy scalar reply: it must not silently fall back to the `fee`
-    /// path (validate-every-field contract).
+    /// A present-but-non-array `fees` (e.g. a string) is malformed, and
+    /// the neighbouring scalar `fee` does not rescue it.
     #[test]
     fn fee_estimates_rejects_non_array_fees() {
         let result = json!({
@@ -393,19 +406,21 @@ mod tests {
         ));
     }
 
-    /// Explicit JSON `null` for `fees` is treated as absent → legacy
-    /// scalar ladder (lenient where a string/number/object is rejected).
+    /// A daemon that grows the ladder past four tiers keeps working:
+    /// the wallet reads its three positions and ignores the rest
+    /// (rule 75 — no coordinated wallet upgrade for a tier it does not
+    /// offer).
     #[test]
-    fn fee_estimates_null_fees_uses_scalar() {
+    fn fee_estimates_tolerates_a_longer_fees_array() {
         let result = json!({
             "status": "OK",
-            "fees": null,
-            "fee": 10u64,
-            "quantization_mask": 4u64,
+            "fees": [100u64, 200, 300, 400, 500, 600],
+            "quantization_mask": 8u64,
         });
-        let est = fee_estimates_from_value(&result).expect("null fees → scalar");
-        assert_eq!(est.economy, FeeRate::new(10, 4).unwrap());
-        assert_eq!(est.priority, FeeRate::new(10_000, 4).unwrap());
+        let est = fee_estimates_from_value(&result).expect("a longer ladder is not malformed");
+        assert_eq!(est.economy, FeeRate::new(100, 8).unwrap());
+        assert_eq!(est.standard, FeeRate::new(200, 8).unwrap());
+        assert_eq!(est.priority, FeeRate::new(400, 8).unwrap());
     }
 
     #[test]

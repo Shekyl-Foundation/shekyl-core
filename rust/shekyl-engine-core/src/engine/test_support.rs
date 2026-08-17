@@ -387,12 +387,14 @@ impl State {
 /// observe per-priority resolution see distinct values without
 /// configuring fees explicitly. Mask is `1` everywhere — the
 /// rounding mask carries no signal in tests that don't exercise
-/// fee-rounding code paths.
+/// fee-rounding code paths. Distinct, monotonic, under the
+/// absolute cap so fixtures model a well-formed daemon —
+/// ceiling tests build their own violating snapshots explicitly.
 fn default_fee_estimates() -> FeeEstimates {
     FeeEstimates {
-        economy: FeeRate::new(1, 1).expect("economy fee rate is non-zero"),
+        economy: FeeRate::new(5, 1).expect("economy fee rate is non-zero"),
         standard: FeeRate::new(10, 1).expect("standard fee rate is non-zero"),
-        priority: FeeRate::new(100, 1).expect("priority fee rate is non-zero"),
+        priority: FeeRate::new(40, 1).expect("priority fee rate is non-zero"),
         quantization_mask: 1,
     }
 }
@@ -1033,9 +1035,9 @@ mod tests {
         // FeeRate exposes no public per_weight accessor; verify
         // shape by round-tripping through equality against the
         // documented default constants.
-        assert_eq!(fees.economy, FeeRate::new(1, 1).unwrap());
+        assert_eq!(fees.economy, FeeRate::new(5, 1).unwrap());
         assert_eq!(fees.standard, FeeRate::new(10, 1).unwrap());
-        assert_eq!(fees.priority, FeeRate::new(100, 1).unwrap());
+        assert_eq!(fees.priority, FeeRate::new(40, 1).unwrap());
     }
 
     #[tokio::test]

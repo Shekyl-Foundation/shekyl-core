@@ -308,17 +308,26 @@ pub fn predict_size_and_weight(
     (size, weight)
 }
 
-/// Marginal weight of one additional input at `D_ref = MAX_TREE_DEPTH`.
+/// Marginal weight of one additional input, evaluated at the reference
+/// depth `D_ref = MAX_TREE_DEPTH`.
+///
+/// The depth is fixed, not a parameter, and that is the point: this
+/// number sets the wallet's dust boundary
+/// (`shekyl_rpc_client::tx_fee::dust_threshold`), and a dust bar that
+/// tracked the live tree depth would *reclassify outputs the wallet
+/// already holds* every time the tree grew a level — an output that was
+/// economical to spend on Monday becoming dust on Tuesday, with no
+/// action by its owner. Pinning `D_ref` at the maximum makes the bar
+/// conservative (it never under-states the cost of spending an input)
+/// and stable for the life of the chain. The signature carries that
+/// decision so no caller can quietly re-open it.
 #[must_use]
-pub fn marginal_input_weight_at_d_ref(tree_depth: u8) -> usize {
+pub fn marginal_input_weight_at_d_ref() -> usize {
     let fee = 0;
     let n_out = OutputCount::clamped(1);
-    predict_weight(InputCount::clamped(2), n_out, tree_depth, fee).saturating_sub(predict_weight(
-        InputCount::clamped(1),
-        n_out,
-        tree_depth,
-        fee,
-    ))
+    predict_weight(InputCount::clamped(2), n_out, MAX_TREE_DEPTH, fee).saturating_sub(
+        predict_weight(InputCount::clamped(1), n_out, MAX_TREE_DEPTH, fee),
+    )
 }
 
 #[cfg(test)]
@@ -495,5 +504,24 @@ mod tests {
                 "predict_size_and_weight size ≠ wire serialized_len for n_in={n_in} n_out={n_out}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod marginal_input_weight_pin {
+    /// The dust boundary's marginal-input weight, pinned so any weight-model
+    /// movement is a loud, reviewed change to the dust bar. The second
+    /// assertion records the 2026-08-16 retirement fact: the provisional
+    /// `MARGINAL_INPUT_WEIGHT = 3457` stub (zero FCMP proof increment)
+    /// understated this by the whole per-input proof increment — a future
+    /// "simplification" back to a proofless constant must fail here.
+    #[test]
+    fn marginal_input_weight_is_pinned() {
+        let w = super::marginal_input_weight_at_d_ref();
+        assert_eq!(w, 9136, "weight-model movement changes the dust boundary");
+        assert!(
+            w > 3457,
+            "the marginal weight must exceed the retired proofless stub"
+        );
     }
 }

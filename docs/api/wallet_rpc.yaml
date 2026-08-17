@@ -354,6 +354,7 @@ components:
         - -29106   # SUBMIT_REJECTED
         - -29107   # SUBMIT_AMBIGUOUS
         - -29108   # ABANDON_STATE_FORBIDS
+        - -29109   # DAEMON_FEE_UNREASONABLE
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
@@ -416,6 +417,39 @@ components:
                                           data: {"state": "..."} in
                                           get_transfers vocabulary. There
                                           is no force override (P3-4)
+          -29109 DAEMON_FEE_UNREASONABLE  build / get_default_fee_priority /
+                                          stake: the daemon ANSWERED the fee
+                                          query and the wallet refused the
+                                          answer —
+                                          non-monotonic tier band, or a
+                                          tier whose effective weight-1
+                                          charge (mask rounding included)
+                                          exceeds the era-maximum
+                                          legitimate fee — the
+                                          daemon-rounded genesis-condition
+                                          Fh, 14,000,000
+                                          atomic-units/weight, derived from
+                                          the economics parameters and
+                                          KAT-pinned
+                                          (data: {"reason","rate","bound"}).
+                                          Distinct from -29102 (the query
+                                          itself failed) by rule 82: the
+                                          remedies differ — retry vs. stop
+                                          trusting this daemon. The
+                                          intra-snapshot 10×-economy lock is
+                                          withdrawn (honest 2021-scaling
+                                          Fh/Fl exceeds 10×), as is the
+                                          custom-only 100×-economy ceiling.
+                                          The historical median-multiple
+                                          ceiling lands with the V3.x
+                                          wallet-side estimator.
+                                          On `stake` this refuses the BOND
+                                          fee, which is charged to persona
+                                          working capital and has no fee
+                                          control of its own — so this is
+                                          the only place the operator learns
+                                          the daemon quoted an absurd rate.
+                                          Nothing durable is written (W1)
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs: daemon RPC
                                           failed (proof methods dial the
@@ -577,7 +611,10 @@ components:
       type: string
       pattern: "^[1-9][0-9]*$"
       description: >
-        Nonzero feerate in atomic units per byte, decimal string. Mirrors the
+        Nonzero feerate in atomic units per **weight** unit, decimal string.
+        Per weight, NOT per byte: the two diverge by the Bulletproofs+
+        clawback once a transaction has more than two outputs, so sizing a
+        rate against the serialized length pins the wrong number. Mirrors the
         `NonZeroU64` inside `shekyl_engine_core::FeePriority::Custom` — a rate,
         NOT an amount, so it is distinct from `AtomicUnits` and forbids "0"
         (the pattern excludes zero and leading zeros).
@@ -599,8 +636,17 @@ components:
       description: >
         Mirrors `shekyl_engine_core::FeePriority`. Named tiers resolve to a
         feerate via the daemon fee estimate at build time — never hardcoded
-        multipliers. `custom` pins atomic-units-per-byte and bypasses the
-        daemon estimate (and its sanity checks) entirely.
+        multipliers — and the snapshot must be well-formed (monotonic
+        tiers, no named tier above the era-maximum absolute cap;
+        -29109 otherwise).
+        `custom` pins atomic units per weight unit (see `Feerate` — per
+        weight, not per byte), bypassing the named tiers
+        but not the policy they obey: it must sit at or above the
+        snapshot's economy floor and at or below the same absolute cap
+        (-32602 otherwise — a `custom` rate is the caller's parameter,
+        not a daemon defect). There is no `custom`-only relative
+        ceiling, so `custom` can always express the snapshot's own
+        `PRIORITY` rate, or a little more.
       oneOf:
         - type: string
           enum: [ECONOMY, STANDARD, PRIORITY]
@@ -1667,8 +1713,11 @@ components:
         [default_priority, economy_fee, standard_fee, priority_fee, tree_depth]
       description: >
         One daemon fee snapshot + the same converge fixpoint the build path
-        runs, per named tier. A failed snapshot is -29102 (the same code
-        the build path uses).
+        runs, per named tier. The quote is gated by the same snapshot
+        checks the build path applies, so a quote never reports a
+        snapshot a build would refuse: a fee query that *failed* is
+        -29102, and a snapshot that answered but was *refused* is
+        -29109 (both the same codes the build path uses).
       properties:
         default_priority:
           type: string

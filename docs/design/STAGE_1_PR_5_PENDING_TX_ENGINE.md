@@ -8043,7 +8043,7 @@ PR 4's C5 / C5α / C5β precedent):
   ancillary error enums for downstream traits).**
 
   Adds to
-  [`engine/error.rs`](../../rust/shekyl-engine-core/src/engine/error.rs):
+  [`engine/error/`](../../rust/shekyl-engine-core/src/engine/error/mod.rs):
 
   ```rust
   #[derive(Debug)]
@@ -8202,7 +8202,7 @@ the methods that emit.
 C3's scope:
 
 - Augments
-  [`engine/diagnostics.rs`](../../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+  [`engine/diagnostics/pending_tx_events.rs`](../../rust/shekyl-engine-core/src/engine/diagnostics/pending_tx_events.rs)
   with the `PendingTxDiagnostic` enum:
 
   ```rust

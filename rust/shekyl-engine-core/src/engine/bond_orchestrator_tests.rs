@@ -696,3 +696,91 @@ async fn apply_scan_result_adopts_a_cached_slot_and_advances_the_tip() {
         Some(1)
     );
 }
+
+/// The P-lane bond fee obeys the SAME ceiling the send path obeys.
+///
+/// Until 2026-08-17 this was the one production `get_fee_estimates`
+/// consumer that read `economy` straight off the raw snapshot, so a
+/// daemon quoting an absurd rate had its number charged to persona
+/// working capital — a lane with no user-facing fee control, hence
+/// nobody positioned to notice. The oracle is the refusal CLASS, not
+/// merely "an error": `FeeEstimate` means "the query failed, check the
+/// connection and retry", which is the wrong remedy when the query
+/// plainly succeeded (rule 82).
+///
+/// This bites against the validation being dropped or the class being
+/// collapsed. It does NOT cover snapshot well-formedness itself (that
+/// is `fee_policy::tests`).
+#[test]
+fn bond_fee_refuses_what_the_send_path_refuses() {
+    use super::{bond_fee_from_estimates, FirstStakeError, BOND_SIZE_CEILING_BYTES};
+    use crate::engine::fee_policy::{CeilingViolation, ValidatedFeeEstimates};
+    use crate::engine::traits::FeeEstimates;
+    use shekyl_rpc_client::FeeRate;
+
+    let snapshot = |e: u64, s: u64, p: u64, mask: u64| FeeEstimates {
+        economy: FeeRate::new(e, mask).expect("economy"),
+        standard: FeeRate::new(s, mask).expect("standard"),
+        priority: FeeRate::new(p, mask).expect("priority"),
+        quantization_mask: mask,
+    };
+
+    // Honest 2021-scaling KAT row: accepted, and the fee is the shared
+    // formula over the bond ceiling — not a number this path invents.
+    let honest = snapshot(340, 1_400, 67_000, 1);
+    let fee = bond_fee_from_estimates(honest).expect("an honest snapshot funds a bond");
+    assert_eq!(
+        fee.to_raw(),
+        shekyl_rpc_client::tx_fee::fee_from_weight(
+            &FeeRate::new(340, 1).expect("rate"),
+            BOND_SIZE_CEILING_BYTES
+        ),
+        "the bond fee is economy over the bond ceiling, via the shared formula"
+    );
+
+    // Economy itself over the absolute cap: refused as a REFUSAL, not
+    // as a query failure. This is the vector the bypass paid. The cap
+    // is the derived genesis-era maximum (a 200k literal here became an
+    // HONEST young-chain rate once the cap was re-provisioned — fixtures
+    // must gouge relative to the real bound, not a era-local one).
+    let cap = crate::engine::fee_policy::absolute_fee_rate_cap();
+    let gouging = snapshot(cap + 1, cap + 1, cap + 1, 1);
+    match bond_fee_from_estimates(gouging) {
+        Err(FirstStakeError::FeeUnreasonable(CeilingViolation::AboveAbsoluteCap { rate })) => {
+            assert_eq!(rate, cap + 1);
+        }
+        other => panic!("a gouging economy tier must be refused by class, got: {other:?}"),
+    }
+
+    // The mask bypass reaches this lane too: benign raw rates under an
+    // enormous daemon-controlled mask.
+    match bond_fee_from_estimates(snapshot(1, 1, 1, 1_000_000_000_000_000_000)) {
+        Err(FirstStakeError::FeeUnreasonable(CeilingViolation::AboveAbsoluteCap { .. })) => {}
+        other => panic!("the mask bypass must not survive on the bond lane: {other:?}"),
+    }
+
+    // An inverted band is refused here for the same reason it is on the
+    // send path, even though only `economy` is read.
+    match bond_fee_from_estimates(snapshot(50, 20, 100, 1)) {
+        Err(FirstStakeError::FeeUnreasonable(CeilingViolation::NonMonotonic { .. })) => {}
+        other => panic!("bond must not be more permissive than send: {other:?}"),
+    }
+
+    // Agreement, stated directly: the two gates accept exactly the same
+    // snapshots. A future edit that loosens one and not the other fails.
+    for (e, s, p, m) in [
+        (340, 1_400, 67_000, 1),
+        (13, 53, 14_000, 1),
+        (200_000, 200_000, 200_000, 1),
+        (50, 20, 100, 1),
+        (1, 1, 1, 1_000_000_000_000_000_000),
+        (340, 1_400, 67_000, 10_000),
+    ] {
+        let raw = snapshot(e, s, p, m);
+        assert_eq!(
+            ValidatedFeeEstimates::try_new(raw).is_ok(),
+            bond_fee_from_estimates(raw).is_ok(),
+            "send and bond disagree on ({e}, {s}, {p}) mask {m}"
+        );
+    }
+}

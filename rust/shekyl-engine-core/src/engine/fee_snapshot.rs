@@ -6,21 +6,29 @@
 //! Fee-snapshot source for the Phase 2a two-pass build pipeline (§3.2 / PF2).
 //!
 //! Narrowed capability held alongside the synchronous [`super::FeeEstimator`]:
-//! `build`'s async block fetches one atomic [`FeeEstimates`] snapshot per
-//! attempt; the estimator reads it from [`super::FeeEstimationContext`].
+//! `build`'s async block fetches one atomic snapshot per attempt and
+//! constructs [`ValidatedFeeEstimates`] at this boundary so quote and
+//! build cannot drift.
 
 use std::future::Future;
 use std::sync::Arc;
 
 use super::error::{FeeEstimatorError, IoError};
-use super::traits::{DaemonEngine, FeeEstimates};
+use super::fee_policy::ValidatedFeeEstimates;
+use super::traits::DaemonEngine;
 
 pub(crate) fn map_daemon_engine_fee_error<E: Into<IoError>>(err: E) -> FeeEstimatorError {
+    // The matched headers are the upstream `RpcError` Display prefixes,
+    // which the `From<RpcError> for IoError` conversion documents as the
+    // stable stringification contract. `starts_with`, not `contains`:
+    // the parenthesized interior can embed daemon-supplied response
+    // text, and a position-anchored match keeps a daemon from steering
+    // classification by echoing a header inside its error body.
     match err.into() {
-        IoError::Daemon { detail } if detail.contains("connection error") => {
+        IoError::Daemon { detail } if detail.starts_with("connection error") => {
             FeeEstimatorError::DaemonUnreachable
         }
-        IoError::Daemon { detail } if detail.contains("unexpected fee response") => {
+        IoError::Daemon { detail } if detail.starts_with("unexpected fee response") => {
             FeeEstimatorError::DaemonResponseInvalid {
                 reason: "get_fee_estimates response unusable: unexpected fee response",
             }
@@ -31,10 +39,13 @@ pub(crate) fn map_daemon_engine_fee_error<E: Into<IoError>>(err: E) -> FeeEstima
     }
 }
 
-/// Fetches one atomic multi-tier fee snapshot per build.
+/// Fetches one atomic multi-tier fee snapshot per build and validates it.
 pub(crate) trait FeeSnapshotSource: Send + Sync + Clone + 'static {
-    /// Single-RPC `get_fee_estimates` (§3.3).
-    fn fetch(&self) -> impl Future<Output = Result<FeeEstimates, FeeEstimatorError>> + Send;
+    /// Single-RPC `get_fee_estimates` (§3.3), then
+    /// [`ValidatedFeeEstimates::try_new`].
+    fn fetch(
+        &self,
+    ) -> impl Future<Output = Result<ValidatedFeeEstimates, FeeEstimatorError>> + Send;
 }
 
 /// Production source: delegates to [`DaemonEngine::get_fee_estimates`].
@@ -65,33 +76,38 @@ impl<D> FeeSnapshotSource for DaemonFeeSnapshotSource<D>
 where
     D: DaemonEngine,
 {
-    fn fetch(&self) -> impl Future<Output = Result<FeeEstimates, FeeEstimatorError>> + Send {
+    fn fetch(
+        &self,
+    ) -> impl Future<Output = Result<ValidatedFeeEstimates, FeeEstimatorError>> + Send {
         let daemon = Arc::clone(&self.daemon);
         async move {
-            daemon
+            let raw = daemon
                 .get_fee_estimates()
                 .await
-                .map_err(map_daemon_engine_fee_error)
+                .map_err(map_daemon_engine_fee_error)?;
+            ValidatedFeeEstimates::try_new(raw)
         }
     }
 }
 
-/// Test / unit-build source returning a fixed snapshot.
+/// Test / unit-build source returning a fixed, already-validated snapshot.
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)] // constructed from `local_pending_tx` tests only.
 pub(crate) struct FixedFeeSnapshotSource {
-    snapshot: FeeEstimates,
+    snapshot: ValidatedFeeEstimates,
 }
 
 impl FixedFeeSnapshotSource {
     #[allow(dead_code)] // `local_pending_tx` tests construct this source.
-    pub(crate) const fn new(snapshot: FeeEstimates) -> Self {
+    pub(crate) const fn new(snapshot: ValidatedFeeEstimates) -> Self {
         Self { snapshot }
     }
 }
 
 impl FeeSnapshotSource for FixedFeeSnapshotSource {
-    fn fetch(&self) -> impl Future<Output = Result<FeeEstimates, FeeEstimatorError>> + Send {
+    fn fetch(
+        &self,
+    ) -> impl Future<Output = Result<ValidatedFeeEstimates, FeeEstimatorError>> + Send {
         let snapshot = self.snapshot;
         async move { Ok(snapshot) }
     }

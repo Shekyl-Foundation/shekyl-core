@@ -4,6 +4,97 @@
 
 ### Changed
 
+- **Fee sanity ceiling is live (interim form) — `-29109 DAEMON_FEE_UNREASONABLE`.**
+  Named fee tiers were previously accepted from the daemon unchecked
+  (only `Custom` rates were capped). The wallet now refuses a snapshot
+  that is non-monotonic or whose effective weight-1 charge exceeds the
+  era-maximum legitimate fee — the daemon-rounded genesis-condition
+  `Fh` (14,000,000 atomic units/weight), derived from the economics
+  crate and KAT-pinned rather than hand-picked — on both the build path
+  and `get_default_fee_priority`, through one `ValidatedFeeEstimates`
+  constructor. (A 100,000 mid-regime literal was caught in review
+  refusing honest young-chain snapshots from block 1.) Caller-side `Custom`
+  band violations are `-32602`, not a daemon defect. The intra-snapshot
+  10×-economy lock is **withdrawn**: honest `shekyld` 2021-scaling
+  `Fh / Fl` is 65×–1000×, so that lock banned the production Priority
+  tier. The historical median-multiple ceiling remains the V3.x
+  `WalletSideEstimator`'s job (2026-08-16 decision-log entries).
+- **`custom` fee rates can reach the daemon's own `PRIORITY` tier.** The
+  `custom` band's "100× economy" ceiling was the withdrawn 10× lock in
+  another place: on the pinned 2021-scaling row `(340, 1400, 67_000)` it
+  refused `custom = 67_000` as *the caller's* error while `PRIORITY`
+  returned that exact rate. `custom` is now bounded by the economy floor
+  and the same absolute cap every named tier obeys, and nothing else, so
+  "priority, plus a little" is expressible (2026-08-17 decision-log
+  entry).
+- **The bond fee obeys the ceiling too (`stake` can now return `-29109`).**
+  `first_stake` was the one production `get_fee_estimates` consumer that
+  read `economy` straight off the raw snapshot, so the new ceiling did
+  not cover it. That is the lane where it matters most: the bond fee is
+  charged to persona working capital and carries no user-facing fee
+  control by design, so a daemon quoting an absurd rate was paid with
+  nobody positioned to notice — 6.5 billion atomic units for a 200,000
+  per-weight `economy` tier, in the pinned vector. It now goes through
+  the same `ValidatedFeeEstimates` gate, and a refusal is
+  `FirstStakeError::FeeUnreasonable` → `-29109` rather than being folded
+  into `-29102` ("check the daemon connection and retry"), which is the
+  wrong remedy when the connection worked. Nothing durable is written on
+  that path (W1-clean). `FeeRate::calculate_fee_from_weight` — which
+  multiplies unchecked and documents that it may panic — now has zero
+production callers.
+- **Fee-rate units in the API say per *weight*, not per byte.** `FeeRate`'s
+  contract is per weight unit, and the two diverge by the Bulletproofs+
+  clawback once a transaction has more than two outputs — so a client that
+  sized a `custom` rate against the serialized length pinned the wrong
+  number. Corrected on the `Feerate` scalar, the `FeePriority` description,
+  and `FeePriority::Custom`'s rustdoc.
+- **An ambiguous submit no longer reports a manufactured transaction hash.**
+  `SubmitPendingResolution.tx_hash` is `Option<TxHash>`: when the reservation
+  is no longer in flight there are no bytes to hash, and the previous code
+  synthesized one from the `ReservationId`. The field is documented as the
+  submitted tx's hash and is consumed by the V3.x mempool monitor, so a
+  synthesized value was a plausible, *nonexistent* txid — the monitor would
+  have read "never in the mempool" as "disappeared from it", a confident
+  wrong verdict where `None` is a correct absent one. Correlation runs
+  through `reservation_id`, which the same event always carries; the
+  synthesizer is deleted rather than renamed.
+- **Legacy scalar-`fee` tier synthesis deleted.** A daemon reply without
+  a `fees` array was treated as pre-2021-scaling and turned into
+  `(fee×1, fee×5, fee×1000)`. No such daemon exists on this chain
+  (`HF_VERSION_2021_SCALING = 1` from genesis), and the invented `×1000`
+  priority meant any base fee above 100 blew the absolute cap and got
+  the whole snapshot refused — Economy included. A missing `fees` array
+  is now a malformed reply. A daemon that grows the ladder past four
+  tiers still works.
+- **Dust boundary corrected: marginal input weight 3457 → 9136.** The
+  provisional `MARGINAL_INPUT_WEIGHT` stub (zero FCMP proof increment)
+  outlived the KAT that was meant to replace it; the dust threshold now
+  composes the shared fee formula with the weight model's own
+  `marginal_input_weight_at_d_ref`, so outputs that cost more to spend
+  than they carry are correctly classed as dust.
+- **Fee-surface scaffolding retired.** `STUB_FEE_ATOMIC_UNITS` and the
+  pre-PR-5 `*_in_state` reference bodies are `#[cfg(test)]`-gated;
+  "Phase 1 stub" doc-prose on the live estimator swept; the
+  grace-blocks constant has one owner (`shekyl-rpc-client`); daemon
+  fee-error classification is prefix-anchored instead of substring-open.
+  `phase1_tx_hash` is deleted outright (an intermediate rename to
+  `correlation_tx_hash` did not survive review): an *ambiguous* submit
+  whose transaction bytes the engine no longer holds now reports
+  `tx_hash: None` — a synthetic reservation-derived id is not a
+  transaction hash, and emitting one as if it were was the defect.
+- **Fee-path invariants moved into the types.** `ValidatedFeeEstimates`
+  carries its mask's non-zero proof and its constructor is
+  crate-internal, so outside the engine it is an opaque token minted
+  only at the fetch boundary — no consumer can hand the build path a
+  snapshot that skipped the ceiling. `FeeRate::from_nonzero` makes
+  `Custom` construction total, retiring a `CustomFeeBand` variant that
+  was unreachable and, had it been reachable, would have blamed the
+  caller for a daemon-supplied mask.
+  `marginal_input_weight_at_d_ref()` drops its `tree_depth` parameter:
+  every caller passed `MAX_TREE_DEPTH`, and fixing it is the point — a
+  dust bar that tracked live tree depth would reclassify outputs a
+  wallet already holds each time the tree grew a level.
+
 - **An indivisible-value requirement is only as strong as its field list, so
   the shape is now "derive every field", not "these N fields".**
   `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 6 asked for a provenance record
@@ -12076,7 +12167,7 @@
   [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R6 reframe + §5.4.8 attack-surface dispositions.
   - `pub enum RefreshDiagnostic` at
-    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+    [`engine/diagnostics/refresh_events.rs`](../rust/shekyl-engine-core/src/engine/diagnostics/refresh_events.rs)
     with `#[non_exhaustive]` and the Round-4-audit-confirmed
     Stage 1 variant set: `DaemonMalformed { kind:
     MalformedKind }`, `DaemonTimeout { op: DaemonOp, elapsed:
@@ -12267,7 +12358,7 @@
     `dyn`-erased trait object.
   - Adds `AssertionSink`, `PanickingSink`, and the
     `PanickingSinkTrigger` configuration enum to
-    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs),
+    [`engine/diagnostics/sink.rs`](../rust/shekyl-engine-core/src/engine/diagnostics/sink.rs),
     all gated `#[cfg(any(test, feature = "test-helpers"))]`
     per the F-Mock-1 cfg-symmetry pin. `AssertionSink` records
     emitted `RefreshDiagnostic` events for post-hoc coherence
@@ -18717,7 +18808,7 @@
     callers (`engine::refresh::*`) bind against `DaemonEngine`
     or `Rpc` instead of reaching through to the wrapped
     transport. `From<RpcError> for IoError` lands in
-    [`engine::error`](../rust/shekyl-engine-core/src/engine/error.rs)
+    [`engine::error`](../rust/shekyl-engine-core/src/engine/error/io.rs)
     to satisfy `DaemonEngine::Error: Into<IoError>` for the
     `DaemonClient` impl.
   - **`MockDaemon` (renamed from `MockRpc`) extends to a full
@@ -21417,7 +21508,7 @@
 
      **Empirical variant enumeration (per source).** Of the
      six `RefreshError` variants at
-     [`engine/error.rs:148`](../rust/shekyl-engine-core/src/engine/error.rs),
+     [`engine/error/refresh.rs`](../rust/shekyl-engine-core/src/engine/error/refresh.rs),
      three are reachable from a `RefreshEngine` impl's
      `Self::Error` via the `From` conversion: `Cancelled`
      (unit), `Io(IoError)` (payload), and
@@ -21464,7 +21555,7 @@
   is `pub(crate)`, unit-variant-only by convention, four
   variants (`Cancelled`, `Io`, `Malformed`, `Internal`).
   Orchestrator-facing
-  [`RefreshError`](../rust/shekyl-engine-core/src/engine/error.rs)
+  [`RefreshError`](../rust/shekyl-engine-core/src/engine/error/refresh.rs)
   is `pub`, payload-bearing throughout. The `From` impl
   boundary at
   [`engine/local_refresh.rs:368–384`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)

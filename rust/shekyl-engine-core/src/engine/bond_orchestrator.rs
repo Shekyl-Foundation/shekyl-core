@@ -34,6 +34,7 @@ use super::bond_assembly::{
     SpentRecordsDurablyPruned,
 };
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
+use super::fee_policy::{CeilingViolation, FeeEstimatorError, ValidatedFeeEstimates};
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::dispatch::PendingPostStore;
 use super::pscan::start::{
@@ -47,6 +48,48 @@ use super::pscan::start::{
 /// harness (which now references this constant) to the production seam the
 /// WI-2 addendum reserved for the stake entry.
 pub(crate) const BOND_SIZE_CEILING_BYTES: usize = 32 * 1024;
+
+/// Bond fee for the first-stake post, from one daemon fee snapshot.
+///
+/// Named and separated from `first_stake`'s body so the gate is
+/// visible and testable: this is the P-lane's only fee decision, and
+/// until 2026-08-17 it was the one production `get_fee_estimates`
+/// consumer that did **not** go through [`ValidatedFeeEstimates`] —
+/// reading `economy` straight off the raw snapshot with no ceiling.
+/// The bond fee is charged to persona working capital and carries no
+/// user-facing control by design (the P-lane pin), so an inflated
+/// economy rate would be paid with nobody positioned to see it. That
+/// makes this the lane that most needs the ceiling, not the one that
+/// can do without it.
+///
+/// The whole snapshot is validated, not just `economy`: a
+/// non-monotonic band is a defect or a lie whichever tier you read,
+/// and a bond path more permissive than the send path would be the
+/// incoherence.
+///
+/// # Errors
+///
+/// [`FirstStakeError::FeeUnreasonable`] when the daemon answered and
+/// the ceiling refused it; [`FirstStakeError::FeeEstimate`] when the
+/// reply was malformed. The split is by remedy (rule 82), mirroring
+/// `-29109` vs `-29102` on the send path.
+fn bond_fee_from_estimates(
+    estimates: super::traits::FeeEstimates,
+) -> Result<AtomicUnits, FirstStakeError> {
+    let estimates = ValidatedFeeEstimates::try_new(estimates).map_err(|e| match e {
+        FeeEstimatorError::DaemonFeeUnreasonable(v) => FirstStakeError::FeeUnreasonable(v),
+        other => FirstStakeError::FeeEstimate(other.to_string()),
+    })?;
+    // `tx_fee::fee_from_weight`, not `FeeRate::calculate_fee_from_weight`:
+    // the latter multiplies unchecked and documents that it may panic. The
+    // validated cap makes overflow unreachable here, but a wallet path
+    // should not be one edit away from aborting the process on a
+    // daemon-supplied number.
+    Ok(AtomicUnits::from_raw(super::tx_fee_model::fee_from_weight(
+        &estimates.economy(),
+        BOND_SIZE_CEILING_BYTES,
+    )))
+}
 
 /// What a completed first-stake reports back to the stake entry (public
 /// identity only).
@@ -234,6 +277,14 @@ pub enum FirstStakeError {
     /// and retry; nothing durable was written (W1-clean).
     #[error("bond fee estimate failed: {0}")]
     FeeEstimate(String),
+    /// The daemon *answered* the fee query and the wallet refused the
+    /// answer (`ValidatedFeeEstimates`). Distinct from
+    /// [`Self::FeeEstimate`] by remedy, exactly as `-29109` is distinct
+    /// from `-29102` on the send path: retrying the connection does not
+    /// help, because the connection worked. Nothing durable was written
+    /// (W1-clean) — the refusal happens before the durable point.
+    #[error("bond fee estimate refused: {0}")]
+    FeeUnreasonable(CeilingViolation),
     /// The durable staker record could not be written.
     #[error("persisting the bond record failed: {0}")]
     Persist(String),
@@ -774,18 +825,14 @@ where
         // The bond fee is derived from the daemon's live estimate over the
         // bond size ceiling (the seam the WI-2 addendum reserved for this
         // entry — overpaying is a miner transfer, never a conservation
-        // term).
-        let fee = {
-            let estimates = daemon
+        // term), gated by the same ceiling the send path applies —
+        // see [`bond_fee_from_estimates`].
+        let fee = bond_fee_from_estimates(
+            daemon
                 .get_fee_estimates()
                 .await
-                .map_err(|e| FirstStakeError::FeeEstimate(e.into().to_string()))?;
-            AtomicUnits::from_raw(
-                estimates
-                    .economy
-                    .calculate_fee_from_weight(BOND_SIZE_CEILING_BYTES),
-            )
-        };
+                .map_err(|e| FirstStakeError::FeeEstimate(e.into().to_string()))?,
+        )?;
 
         // W1 preflight sweep (SA-R1-b, sweep-before-persist): the SAME body
         // the assemble path runs (`sweep_bond_funding` — including the

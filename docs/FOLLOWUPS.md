@@ -5523,7 +5523,7 @@ sustainability is unaffected by the recalibration.
   (2a-1…2a-4). **Design/audit:** `docs/design/PHASE_2A_SEND_PATH.md`,
   `PHASE_2A_SEND_PATH_AUDIT.md` §2a-4 post-verdict. **Residual (reopen before
   wallet build against untrusted daemon):** daemon-tier fee sanity ceiling —
-  `DaemonFeeUnreasonable` applies to `Custom` only today; named buckets unchecked
+  `DaemonFeeUnreasonable` applies to `Custom` only today; named buckets unchecked — **CLOSED 2026-08-16** (monotonicity + absolute cap as `ValidatedFeeEstimates` on build and quote, `-29109`; the intra-snapshot 10×-economy lock was withdrawn the same day — honest 2021-scaling `Fh/Fl` is 65×–1000×; the historical median-multiple ceiling remains the V3.x `WalletSideEstimator`'s successor)
   (`tx_fee_model.rs`). **Still open (orchestrator):** `WALLET_REWRITE_PLAN.md`
   `phase2_ops_refresh_send` — `Wallet::refresh` / `build_pending_tx` / … pending
   Phase 1. **Does not block:** Phase 2b design (parallel).
@@ -6672,7 +6672,7 @@ sustainability is unaffected by the recalibration.
   intended to stay payload-free) covers types defined **off** the
   trait files: `PendingTxEngine`'s `SendError` / `SubmitError` /
   `PendingTxError` / `DiscardReason` (in
-  [`engine/error.rs`](../rust/shekyl-engine-core/src/engine/error.rs)
+  [`engine/error/send.rs`](../rust/shekyl-engine-core/src/engine/error/send.rs)
   and [`engine/pending.rs`](../rust/shekyl-engine-core/src/engine/pending.rs))
   and `PersistenceEngine`'s `PersistenceError`. The audit: for each
   trait-owned value/error type, confirm it carries the appropriate
@@ -14199,6 +14199,21 @@ one place to confirm each item's relationship to the wallet stack.
   fingerprint analysis; fee-band-selection UX validated.
   None are V3.0 blockers under the segment-2c
   disposition; the seam preserves V3.0 shipping date.
+
+  **Inherited obligation (2026-08-16 ceiling ruling, amended
+  2026-08-17).** The live snapshot ceiling is monotonicity +
+  the absolute cap on the effective weight-1 charge, provisioned
+  at the era maximum (daemon-rounded genesis `Fh` = 14M/weight,
+  derived + KAT-pinned; a 100k mid-regime literal was caught in
+  review refusing honest young chains) (`-29109`). The intra-snapshot
+  10×-economy lock was withdrawn: honest `shekyld` 2021-scaling
+  `Fh/Fl` exceeds 10× by design. When `WalletSideEstimator`
+  lands, its historical fee series implements the
+  median-multiple ceiling (5× the 1000-block median of
+  `fees[3]`) as the *first* intra-wallet ratio check, not as
+  a replacement for a live 10× snapshot refusal. Monotonicity
+  and the absolute cap remain. See both 2026-08-16
+  `V3_WALLET_DECISION_LOG.md` entries.
 
   Cross-references:
   [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)

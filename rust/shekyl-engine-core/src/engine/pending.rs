@@ -55,34 +55,43 @@
 //!                                  on unknown handles
 //! ```
 //!
-//! # What is stubbed in Phase 1
+//! # The `cfg(test)` reference bodies
 //!
-//! Three call sites are deferred to Phase 2a and named here so that
-//! the seam is explicit in code review:
+//! The three Phase-1 stubs this module was written around are all
+//! retired in production; what remains of them lives behind
+//! `#[cfg(test)]`, and this section exists so a reader does not
+//! mistake the reference bodies for the shipped path:
 //!
-//! 1. **`tx_bytes` construction.** [`PendingTx::tx_bytes`] is an
-//!    empty `Vec<u8>` until Phase 2a wires `shekyl-tx-builder`. The
-//!    chain-state tags ([`PendingTx::built_at_height`],
-//!    [`PendingTx::built_at_tip_hash`],
-//!    [`PendingTx::fee_atomic_units`]) are *real* and drive
-//!    [`Engine::submit_pending_tx`]'s invariant checks.
-//! 2. **Fee-priority resolution.** [`STUB_FEE_ATOMIC_UNITS`] is a
-//!    flat constant. Phase 2a replaces this with a daemon
-//!    `get_fee_estimates` call resolved through [`FeePriority`].
-//! 3. **Daemon broadcast.** [`Engine::submit_pending_tx`] returns a
-//!    `TxHash` synthesized from the [`ReservationId`]. Phase 2a
-//!    replaces the body with a real broadcast call that returns the
-//!    daemon-reported tx hash.
+//! - **`tx_bytes`** is filled from `shekyl-tx-builder` by the
+//!   production build paths (`transfer/`, `claim_dispatch`,
+//!   `drain_dispatch`); only `build_pending_tx_in_state`, a
+//!   `cfg(test)` reference body, leaves it empty.
+//! - **Fee resolution** goes through the `FeeEstimator` seam and a
+//!   [`ValidatedFeeEstimates`](super::fee_policy::ValidatedFeeEstimates)
+//!   snapshot. `STUB_FEE_ATOMIC_UNITS` is a `cfg(test)` fixture value
+//!   for the reference bodies and has no production reachability.
+//! - **Broadcast** is a real daemon submit returning the daemon's
+//!   reported hash. The reservation-derived synthetic hash is fully
+//!   retired from production: an *ambiguous* submit whose bytes the
+//!   engine no longer holds now reports `tx_hash: None` (there is
+//!   nothing to hash, and a synthetic id is not a hash — see
+//!   [`TxHash`] below). Only the `cfg(test)` reference bodies still
+//!   mint synthetic ids.
 //!
-//! # Output selection (Phase 1 placeholder)
+//! The chain-state tags ([`PendingTx::built_at_height`],
+//! [`PendingTx::built_at_tip_hash`], [`PendingTx::fee_atomic_units`])
+//! were always real and drive [`Engine::submit_pending_tx`]'s
+//! invariant checks.
 //!
-//! [`build_pending_tx_in_state`] picks the largest-amount unspent
-//! outputs first until the cumulative sum covers `amount + fee`. This
-//! is the simplest correct algorithm and is appropriate as a stub;
-//! the production algorithm (decoy-friendly, change-output-aware,
-//! locked-stake-aware) lands in Phase 2a alongside the real builder
-//! integration. Outputs already cited by an existing reservation are
-//! filtered out so a second concurrent build cannot select them.
+//! # Output selection in the reference bodies
+//!
+//! `build_pending_tx_in_state` picks the largest-amount unspent
+//! outputs first until the cumulative sum covers `amount + fee` — the
+//! simplest correct algorithm, kept as the `cfg(test)` reference.
+//! Production selection (decoy-friendly, change-output-aware,
+//! locked-stake-aware) is the `OutputSelector` seam. Outputs already
+//! cited by an existing reservation are filtered out so a second
+//! concurrent build cannot select them.
 //!
 //! [`OpenError::OutstandingPendingTx`]: super::error::OpenError::OutstandingPendingTx
 //! [`Engine::submit_pending_tx`]: super::Engine::submit_pending_tx
@@ -107,13 +116,10 @@ use crate::engine::{
 #[cfg(test)]
 use crate::engine::refresh::{derive_snapshot_id, LedgerSnapshot};
 
-/// Stub fee for Phase 1 [`Engine::build_pending_tx`].
-///
-/// Replaced in Phase 2a by a daemon `get_fee_estimates` call resolved
-/// against the caller's [`FeePriority`]. The constant is non-zero so
-/// that lifecycle tests exercising [`Reservation::fee_atomic_units`]
-/// run against a real value rather than zero-as-special-case.
-pub const STUB_FEE_ATOMIC_UNITS: AtomicUnits = AtomicUnits::from_raw(1_000);
+/// Test-fixture fee for the `cfg(test)` `*_in_state` reference bodies.
+/// Production resolves fees through the `FeeEstimator` seam.
+#[cfg(test)]
+pub(crate) const STUB_FEE_ATOMIC_UNITS: AtomicUnits = AtomicUnits::from_raw(1_000);
 
 /// Opaque 16-byte content-derived ledger-snapshot digest.
 ///
@@ -196,11 +202,15 @@ impl ReservationId {
 /// single definition workspace-wide (`18-type-placement.mdc`: re-export,
 /// never redefine). Built from raw bytes via [`TxHash::from_bytes`].
 ///
-/// Phase 1 stub: `phase1_tx_hash` (in `local_pending_tx`) encodes the
-/// [`ReservationId`] in little-endian at offsets `0..8`, the rest left zero.
-/// Phase 2a replaces submit with a real daemon broadcast call whose
-/// response carries the daemon's reported tx hash; callers compare the
-/// bytes as opaque either way and never rely on the stub bit pattern.
+/// Submit returns the daemon's reported tx hash. One live path cannot:
+/// `finalize_submit_ambiguous` reports an ambiguous outcome for a
+/// reservation that is no longer in flight, so there are no `tx_bytes`
+/// left to hash. That path reports `None` — its diagnostic's `tx_hash`
+/// is an `Option` — rather than synthesizing one from the
+/// [`ReservationId`], which is what the retired `phase1_tx_hash` did:
+/// a manufactured value is a plausible, nonexistent txid in a field
+/// consumers monitor. Correlation runs through the `reservation_id`
+/// the same event already carries.
 pub use shekyl_types::TxHash;
 
 // `FeePriority` migrated to `engine::fee_estimator` per PR 5
@@ -290,7 +300,8 @@ pub struct TxRequest {
     /// One or more destinations. Empty input is rejected with
     /// [`SendError::InvalidRecipient`].
     pub recipients: Vec<TxRecipient>,
-    /// Fee tier; Phase 1 ignores and uses [`STUB_FEE_ATOMIC_UNITS`].
+    /// Fee tier, resolved at build time against the daemon fee
+    /// snapshot through the `FeeEstimator` seam.
     pub priority: FeePriority,
 }
 
@@ -410,14 +421,12 @@ pub(crate) struct Reservation {
     /// dispatch code.
     #[allow(dead_code)]
     pub extensions: Vec<ReservationExtension>,
-    /// Fee in atomic units. Phase 1: [`STUB_FEE_ATOMIC_UNITS`].
+    /// Fee in atomic units, as resolved by the build's fee pipeline.
     ///
     /// `dead_code` allow: the field is consumed only by the `Debug`
     /// derive and by tests that read the reservation map directly.
     /// The submit path on the [`PendingTx`] handle reads the same
-    /// value off the handle, not off the reservation. Phase 2a reads
-    /// this field when reconciling unconfirmed-spend tracking against
-    /// the daemon's broadcast response.
+    /// value off the handle, not off the reservation.
     #[allow(dead_code)]
     pub fee_atomic_units: AtomicUnits,
     /// Caller's recipient summary. Carried so a UI can describe an
@@ -426,19 +435,19 @@ pub(crate) struct Reservation {
     /// the caller-facing path.
     #[allow(dead_code)]
     pub recipients: Vec<TxRecipientSummary>,
-    /// Caller-supplied fee tier. Stored for diagnostics; the actual
-    /// fee is in [`Self::fee_atomic_units`] (Phase 1 stub). Read only
-    /// via `Debug` and tests; Phase 2a reads it when resolving
-    /// daemon `get_fee_estimates`.
+    /// Caller-supplied fee tier. Stored for diagnostics; the rate it
+    /// resolved to is already charged in [`Self::fee_atomic_units`].
+    /// Read only via `Debug` and tests.
     #[allow(dead_code)]
     pub priority: FeePriority,
 }
 
-/// Phase-1 in-flight transaction handle.
+/// In-flight transaction handle.
 ///
-/// `tx_bytes` is empty until Phase 2a wires `shekyl-tx-builder`. Every
-/// other field is real and drives [`Engine::submit_pending_tx`]'s
-/// invariant checks against the wallet's current state.
+/// Every field drives [`Engine::submit_pending_tx`]'s invariant checks
+/// against the wallet's current state. `tx_bytes` carries the built
+/// transaction on the production paths; the module's `cfg(test)`
+/// reference bodies leave it empty (module docs).
 #[derive(Clone, Debug)]
 pub struct PendingTx {
     /// Reservation identifier; pass back to
@@ -449,7 +458,8 @@ pub struct PendingTx {
     /// Engine's recorded block hash at `built_at_height` at build
     /// time.
     pub built_at_tip_hash: [u8; 32],
-    /// Fee in atomic units captured at build time (Phase 1 stub).
+    /// Fee in atomic units captured at build time, resolved through
+    /// the `FeeEstimator` seam against a validated daemon snapshot.
     pub fee_atomic_units: AtomicUnits,
     /// [`SnapshotId`] derived at build time from the wallet's
     /// ledger snapshot — mirrors the value stored on the
@@ -460,8 +470,8 @@ pub struct PendingTx {
     /// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0b binding
     /// form.
     pub snapshot_id: SnapshotId,
-    /// Constructed transaction bytes. Empty in Phase 1; Phase 2a
-    /// fills this from `shekyl-tx-builder`.
+    /// Constructed transaction bytes, from `shekyl-tx-builder`. Empty
+    /// only in the module's `cfg(test)` reference bodies.
     pub tx_bytes: Vec<u8>,
     /// Recipient summary for display.
     pub recipients: Vec<TxRecipientSummary>,
@@ -767,7 +777,7 @@ pub(crate) fn build_pending_tx_in_state(
 }
 
 /// Submit a [`PendingTx`] handle: run invariants, mark its inputs
-/// as locally spent, and return the (Phase-1 stubbed) tx hash.
+/// as locally spent, and return the reference-body tx hash.
 ///
 /// See [`Engine::submit_pending_tx`] for the invariant contract; note the
 /// Engine surface returns the daemon-verdict-bearing [`SubmitOutcome`],
@@ -811,9 +821,10 @@ pub(crate) fn submit_pending_tx_in_state(
             td.spent = true;
             // `spent_height` deliberately stays `None` until refresh
             // confirms the broadcast; this is the "unconfirmed-spent"
-            // half-state the rewrite plan locks in. Phase 2a will
-            // model unconfirmed-vs-confirmed spends explicitly when
-            // the daemon broadcast call lands.
+            // half-state the rewrite plan locks in. The reference body
+            // keeps this pre-F14 shape on purpose — production submit
+            // places the outputs under the F14 awaiting-confirmation
+            // lock instead of marking them spent.
         }
     }
 
@@ -1005,485 +1016,5 @@ impl<
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use std::num::NonZeroU64;
-
-    use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-    use shekyl_address::Network;
-    use shekyl_curve_primitives::Commitment;
-    use shekyl_scanner::{
-        LedgerBlock, LedgerIndexes, LedgerIndexesExt, RecoveredWalletOutput, Timelocked,
-        WalletOutput,
-    };
-    use shekyl_units::AtomicUnits;
-
-    use super::{
-        build_pending_tx_in_state, discard_pending_tx_in_state, submit_pending_tx_in_state,
-        FeePriority, PendingTxError, Reservation, ReservationId, SendError, TxRecipient, TxRequest,
-        STUB_FEE_ATOMIC_UNITS,
-    };
-
-    fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredWalletOutput {
-        let mut bytes = [0u8; 32];
-        bytes[..8].copy_from_slice(&global_index.to_le_bytes());
-        bytes[8] = seed;
-        let scalar = Scalar::from_bytes_mod_order(bytes);
-        let key = &scalar * ED25519_BASEPOINT_TABLE;
-        let base = WalletOutput::new_for_test(
-            [seed; 32],
-            0,
-            global_index,
-            key,
-            Scalar::ZERO,
-            Commitment {
-                mask: Scalar::ONE,
-                amount,
-            },
-        );
-        RecoveredWalletOutput::new_for_test(base, amount)
-    }
-
-    /// Ingest `outputs` at `block_height` (single-block batch), then
-    /// keep advancing the ledger by empty blocks up to `final_height`.
-    fn populate(
-        ledger: &mut LedgerBlock,
-        indexes: &mut LedgerIndexes,
-        block_height: u64,
-        outputs: Vec<RecoveredWalletOutput>,
-        final_height: u64,
-    ) {
-        let timelocked = Timelocked::from_vec(outputs);
-        let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
-        let inserted_range =
-            indexes.process_scanned_outputs(ledger, block_height, block_hash, timelocked);
-        assert!(!inserted_range.is_empty() || ledger.transfer_count() == 0);
-        for h in (block_height + 1)..=final_height {
-            let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
-            let _ =
-                indexes.process_scanned_outputs(ledger, h, hash, Timelocked::from_vec(Vec::new()));
-        }
-    }
-
-    fn standard_request(amount: u64) -> TxRequest {
-        TxRequest {
-            recipients: vec![TxRecipient {
-                address: "test_address".to_string(),
-                amount_atomic_units: AtomicUnits::from_raw(amount),
-            }],
-            priority: FeePriority::Standard,
-        }
-    }
-
-    #[test]
-    fn build_reserves_outputs_and_advances_id_counter() {
-        let mut ledger = LedgerBlock::empty();
-        let mut indexes = LedgerIndexes::empty();
-        populate(
-            &mut ledger,
-            &mut indexes,
-            1,
-            vec![
-                make_recovered_output(1, 100, 10_000),
-                make_recovered_output(2, 101, 5_000),
-            ],
-            20,
-        );
-        assert_eq!(ledger.height(), 20);
-
-        let mut reservations = std::collections::BTreeMap::new();
-        let mut next_id = 0u64;
-
-        let pending = build_pending_tx_in_state(
-            &ledger,
-            &mut reservations,
-            &mut next_id,
-            &standard_request(7_000),
-        )
-        .expect("build ok");
-
-        assert_eq!(pending.id.raw(), 0);
-        assert_eq!(next_id, 1);
-        assert_eq!(pending.fee_atomic_units, STUB_FEE_ATOMIC_UNITS);
-        assert_eq!(pending.built_at_height, 20);
-        assert!(pending.tx_bytes.is_empty(), "Phase 1 leaves tx_bytes empty");
-        assert_eq!(reservations.len(), 1);
-        let r = reservations.get(&pending.id).unwrap();
-        // 10_000 alone covers 7_000 + 1_000 fee, so the algorithm
-        // selects exactly the 10_000 output.
-        assert_eq!(r.selected_transfer_indices.len(), 1);
-    }
-
-    #[test]
-    fn build_filters_outputs_already_reserved_by_another_build() {
-        let mut ledger = LedgerBlock::empty();
-        let mut indexes = LedgerIndexes::empty();
-        populate(
-            &mut ledger,
-            &mut indexes,
-            1,
-            vec![
-                make_recovered_output(1, 100, 10_000),
-                make_recovered_output(2, 101, 6_000),
-            ],
-            20,
-        );
-
-        let mut reservations = std::collections::BTreeMap::new();
-        let mut next_id = 0u64;
-
-        // First build reserves the 10_000 output.
-        let _first = build_pending_tx_in_state(
-            &ledger,
-            &mut reservations,
-            &mut next_id,
-            &standard_request(7_000),
-        )
-        .expect("first build");
-
-        // Second build needs more than 5_000 (the only remaining
-        // output is 6_000, which can cover 4_000 + fee). Asking for
-        // 5_000 exhausts available because 5_000 + 1_000 fee = 6_000.
-        let second_ok = build_pending_tx_in_state(
-            &ledger,
-            &mut reservations,
-            &mut next_id,
-            &standard_request(5_000),
-        )
-        .expect("second build covers exactly 6_000");
-        let r = reservations.get(&second_ok.id).unwrap();
-        assert_eq!(r.selected_transfer_indices.len(), 1);
-
-        // Third build cannot cover anything — every output is
-        // reserved.
-        let err = build_pending_tx_in_state(
-            &ledger,
-            &mut reservations,
-            &mut next_id,
-            &standard_request(1),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, SendError::InsufficientFunds { available: 0, .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn build_rejects_empty_recipients() {
-        let mut ledger = LedgerBlock::empty();
-        let mut indexes = LedgerIndexes::empty();
-        populate(
-            &mut ledger,
-            &mut indexes,
-            1,
-            vec![make_recovered_output(1, 100, 10_000)],
-            20,
-        );
-        let mut reservations = std::collections::BTreeMap::new();
-        let mut next_id = 0u64;
-        let req = TxRequest {
-            recipients: Vec::new(),
-            priority: FeePriority::Economy,
-        };
-        let err =
-            build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap_err();
-        assert!(matches!(err, SendError::InvalidRecipient { .. }));
-        assert!(reservations.is_empty());
-        assert_eq!(next_id, 0);
-    }
-
-    #[test]
-    fn build_rejects_when_no_block_ingested_yet() {
-        // Empty ledger: synced = 0, no recorded block hash at 0.
-        let ledger = LedgerBlock::empty();
-        let mut reservations = std::collections::BTreeMap::new();
-        let mut next_id = 0u64;
-        let err = build_pending_tx_in_state(
-            &ledger,
-            &mut reservations,
-            &mut next_id,
-            &standard_request(1),
-        )
-        .unwrap_err();
-        assert!(matches!(err, SendError::CannotSign { .. }));
-    }
-
-    #[test]
-    fn build_returns_insufficient_funds_when_balance_short() {
-        let mut ledger = LedgerBlock::empty();
-        let mut indexes = LedgerIndexes::empty();
-        populate(
-            &mut ledger,
-            &mut indexes,
-            1,
-            vec![make_recovered_output(1, 100, 5_000)],
-            20,
-        );
-        let mut reservations = std::collections::BTreeMap::new();
-        let mut next_id = 0u64;
-        let err = build_pending_tx_in_state(
-            &ledger,
-            &mut reservations,
-            &mut next_id,
-            &standard_request(10_000),
-        )
-        .unwrap_err();
-        match err {
-            SendError::InsufficientFunds { needed, available } => {
-                assert_eq!(needed, 11_000);
-                assert_eq!(available, 5_000);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn submit_unknown_handle_returns_unknown_handle() {
-        let mut ledger = LedgerBlock::empty();
-        let mut reservations: std::collections::BTreeMap<ReservationId, Reservation> =
-            std::collections::BTreeMap::new();
-        let err = submit_pending_tx_in_state(
-            &mut ledger,
-            &mut reservations,
-            Network::Testnet,
-            ReservationId(42),
-        )
-        .unwrap_err();
-        assert!(matches!(err, PendingTxError::UnknownHandle));
-    }
-
-    #[test]
-    fn submit_too_old_when_built_height_outside_reorg_window() {
-        let mut ledger = LedgerBlock::empty();
-        let mut indexes = LedgerIndexes::empty();
-        populate(
-            &mut ledger,
-            &mut indexes,
-            1,
-            vec![make_recovered_output(1, 100, 10_000)],
-            20,
-        );
-        let mut reservations = std::collections::BTreeMap::new();
-        let mut next_id = 0u64;
-        let pending = build_pending_tx_in_state(
-            &ledger,
-            &mut reservations,
-            &mut next_id,
-            &standard_request(1_000),
-        )
-        .expect("build");
-
-        // Advance ledger so synced - built_at_height > max_reorg_depth.
-        // Testnet's max_reorg_depth = 6.
-        for h in 21..=40 {
-            let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
-            let _ = indexes.process_scanned_outputs(
-                &mut ledger,
-                h,
-                hash,
-                Timelocked::from_vec(Vec::new()),
-            );
-        }
-
-        let err = submit_pending_tx_in_state(
-            &mut ledger,
-            &mut reservations,
-            Network::Testnet,
-            pending.id,
-        )
-        .unwrap_err();
-        match err {
-            PendingTxError::TooOld {
-                built,
-                current,
-                max_reorg,
-            } => {
-                assert_eq!(built, 20);
-                assert_eq!(current, 40);
-                assert_eq!(max_reorg, 6);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-        // Reservation is preserved on TooOld so the caller can
-        // discard it explicitly.
-        assert_eq!(reservations.len(), 1);
-    }
-
-    #[test]
-    fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() {
-        let mut ledger = LedgerBlock::empty();
-        let mut indexes = LedgerIndexes::empty();
-        populate(
-            &mut ledger,
-            &mut indexes,
-            1,
-            vec![make_recovered_output(1, 100, 10_000)],
-            5,
-        );
-        let mut reservations = std::collections::BTreeMap::new();
-        let mut next_id = 0u64;
-
-        // Drive the build at height 5 (well past the spendable_age
-        // cutoff so the output qualifies).
-        for h in 6..=15 {
-            let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
-            let _ = indexes.process_scanned_outputs(
-                &mut ledger,
-                h,
-                hash,
-                Timelocked::from_vec(Vec::new()),
-            );
-        }
-        let pending = build_pending_tx_in_state(
-            &ledger,
-            &mut reservations,
-            &mut next_id,
-            &standard_request(1_000),
-        )
-        .expect("build");
-        assert_eq!(pending.built_at_height, 15);
-
-        // Reorg: rewind to fork height 15, replay 15..=20 with new
-        // hashes. After rewind, `block_hash_at(15)` differs from
-        // `pending.built_at_tip_hash`.
-        indexes.handle_reorg(&mut ledger, 15);
-        for h in 15..=20 {
-            let hash = [u8::try_from(0xA0 ^ (h & 0xFF)).unwrap(); 32];
-            let _ = indexes.process_scanned_outputs(
-                &mut ledger,
-                h,
-                hash,
-                Timelocked::from_vec(Vec::new()),
-            );
-        }
-
-        let err = submit_pending_tx_in_state(
-            &mut ledger,
-            &mut reservations,
-            Network::Testnet,
-            pending.id,
-        )
-        .unwrap_err();
-        match err {
-            PendingTxError::ChainStateChanged { height } => {
-                assert_eq!(height, 15);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-        assert_eq!(reservations.len(), 1, "reservation preserved on error");
-    }
-
-    #[test]
-    fn submit_marks_inputs_spent_and_consumes_reservation() {
-        let mut ledger = LedgerBlock::empty();
-        let mut indexes = LedgerIndexes::empty();
-        populate(
-            &mut ledger,
-            &mut indexes,
-            1,
-            vec![make_recovered_output(1, 100, 10_000)],
-            20,
-        );
-        let mut reservations = std::collections::BTreeMap::new();
-        let mut next_id = 0u64;
-        let pending = build_pending_tx_in_state(
-            &ledger,
-            &mut reservations,
-            &mut next_id,
-            &standard_request(5_000),
-        )
-        .expect("build");
-
-        let tx_hash = submit_pending_tx_in_state(
-            &mut ledger,
-            &mut reservations,
-            Network::Testnet,
-            pending.id,
-        )
-        .expect("submit");
-
-        assert_eq!(reservations.len(), 0);
-        // Output was marked locally spent (Phase 1 stub).
-        assert!(ledger.transfers()[0].spent);
-        assert_eq!(
-            ledger.transfers()[0].spent_height,
-            None,
-            "Phase 1 leaves spent_height None until refresh confirms"
-        );
-
-        // Stub TxHash encodes the reservation id in the first 8 bytes.
-        assert_eq!(&tx_hash.as_bytes()[..8], &pending.id.raw().to_le_bytes());
-    }
-
-    #[test]
-    fn discard_releases_reservation_and_outputs_become_selectable_again() {
-        let mut ledger = LedgerBlock::empty();
-        let mut indexes = LedgerIndexes::empty();
-        populate(
-            &mut ledger,
-            &mut indexes,
-            1,
-            vec![make_recovered_output(1, 100, 10_000)],
-            20,
-        );
-        let mut reservations = std::collections::BTreeMap::new();
-        let mut next_id = 0u64;
-        let pending = build_pending_tx_in_state(
-            &ledger,
-            &mut reservations,
-            &mut next_id,
-            &standard_request(1_000),
-        )
-        .expect("build");
-
-        assert!(discard_pending_tx_in_state(&mut reservations, pending.id));
-        assert_eq!(reservations.len(), 0);
-
-        // Re-build picks up the same output: it is no longer reserved.
-        let again = build_pending_tx_in_state(
-            &ledger,
-            &mut reservations,
-            &mut next_id,
-            &standard_request(1_000),
-        )
-        .expect("rebuild");
-        let r = reservations.get(&again.id).unwrap();
-        assert_eq!(r.selected_transfer_indices, vec![0]);
-    }
-
-    #[test]
-    fn discard_is_idempotent_on_unknown_handle() {
-        let mut reservations: std::collections::BTreeMap<ReservationId, Reservation> =
-            std::collections::BTreeMap::new();
-        let was_present = discard_pending_tx_in_state(&mut reservations, ReservationId(99));
-        assert!(!was_present);
-        // No state change, no panic.
-        assert!(reservations.is_empty());
-    }
-
-    #[test]
-    fn priority_custom_is_accepted_and_preserved() {
-        let mut ledger = LedgerBlock::empty();
-        let mut indexes = LedgerIndexes::empty();
-        populate(
-            &mut ledger,
-            &mut indexes,
-            1,
-            vec![make_recovered_output(1, 100, 10_000)],
-            20,
-        );
-        let mut reservations = std::collections::BTreeMap::new();
-        let mut next_id = 0u64;
-        let req = TxRequest {
-            recipients: vec![TxRecipient {
-                address: "addr".into(),
-                amount_atomic_units: AtomicUnits::from_raw(1_000),
-            }],
-            priority: FeePriority::Custom(NonZeroU64::new(42).unwrap()),
-        };
-        let pending =
-            build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap();
-        let r = reservations.get(&pending.id).unwrap();
-        assert!(matches!(r.priority, FeePriority::Custom(_)));
-    }
-}
+#[path = "pending_tests.rs"]
+mod tests;
