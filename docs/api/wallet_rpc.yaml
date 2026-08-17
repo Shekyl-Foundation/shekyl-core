@@ -414,9 +414,10 @@ components:
                                           data: {"state": "..."} in
                                           get_transfers vocabulary. There
                                           is no force override (P3-4)
-          -29109 DAEMON_FEE_UNREASONABLE  build / get_default_fee_priority:
-                                          the daemon ANSWERED the fee query
-                                          and the wallet refused the answer —
+          -29109 DAEMON_FEE_UNREASONABLE  build / get_default_fee_priority /
+                                          stake: the daemon ANSWERED the fee
+                                          query and the wallet refused the
+                                          answer —
                                           non-monotonic tier band, or a tier
                                           above the absolute 100,000
                                           atomic-units/weight cap
@@ -427,9 +428,18 @@ components:
                                           trusting this daemon. The
                                           intra-snapshot 10×-economy lock is
                                           withdrawn (honest 2021-scaling
-                                          Fh/Fl exceeds 10×). The historical
-                                          median-multiple ceiling lands with
-                                          the V3.x wallet-side estimator
+                                          Fh/Fl exceeds 10×), as is the
+                                          custom-only 100×-economy ceiling.
+                                          The historical median-multiple
+                                          ceiling lands with the V3.x
+                                          wallet-side estimator.
+                                          On `stake` this refuses the BOND
+                                          fee, which is charged to persona
+                                          working capital and has no fee
+                                          control of its own — so this is
+                                          the only place the operator learns
+                                          the daemon quoted an absurd rate.
+                                          Nothing durable is written (W1)
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs: daemon RPC
                                           failed (proof methods dial the

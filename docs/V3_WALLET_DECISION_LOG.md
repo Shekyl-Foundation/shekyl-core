@@ -4789,7 +4789,32 @@ depending on which response shape arrived rather than on what was
 charged. A missing `fees` array is now a malformed reply like any
 other missing field (rules 60 / 15 / 16).
 
+**Also closed: the P-lane bond fee was outside the ceiling.**
+`ValidatedFeeEstimates` was introduced as "the single constructor —
+quote and build both go through it." That was true of the two paths it
+named and false of a third: `bond_orchestrator::first_stake` (reachable
+through the `stake` RPC) read `estimates.economy` straight off the raw
+snapshot. The bypass matters more on this lane than on the send lane,
+not less — the bond fee is charged to persona working capital and
+carries **no user-facing fee control by design**, so an inflated rate is
+paid with nobody positioned to see it. The pinned vector charges
+6,553,600,000 atomic units. Routed through the same constructor, with
+the refusal given its own arm (`FirstStakeError::FeeUnreasonable` →
+`-29109`) rather than folded into the query-failed arm, because "check
+the connection and retry" is the wrong remedy when the query succeeded
+(rule 82). The whole snapshot is validated even though only `economy` is
+read: a bond path more permissive than the send path would be the
+incoherence, and a test asserts the two gates accept exactly the same
+snapshots. The fee derivation moved out of the 500-line `first_stake`
+body into `bond_fee_from_estimates` so the gate is visible and testable.
+
+**Standing rule this makes explicit.** A type introduced as "the single
+constructor" is a claim about *every* consumer, not about the consumers
+the introducing PR happened to touch. Enumerate them — the check is one
+grep for the underlying fetch — before writing the claim down.
+
 **Reference.** `rust/shekyl-engine-core/src/engine/{fee_policy,
-tx_fee_model,daemon}.rs`; PR #490 review round 2.
+tx_fee_model,daemon,bond_orchestrator}.rs`;
+`rust/shekyl-wallet-rpc/src/lifecycle.rs`; PR #490 review round 2.
 
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

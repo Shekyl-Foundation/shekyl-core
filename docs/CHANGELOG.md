@@ -23,6 +23,21 @@
   and the same absolute cap every named tier obeys, and nothing else, so
   "priority, plus a little" is expressible (2026-08-17 decision-log
   entry).
+- **The bond fee obeys the ceiling too (`stake` can now return `-29109`).**
+  `first_stake` was the one production `get_fee_estimates` consumer that
+  read `economy` straight off the raw snapshot, so the new ceiling did
+  not cover it. That is the lane where it matters most: the bond fee is
+  charged to persona working capital and carries no user-facing fee
+  control by design, so a daemon quoting an absurd rate was paid with
+  nobody positioned to notice — 6.5 billion atomic units for a 200,000
+  per-weight `economy` tier, in the pinned vector. It now goes through
+  the same `ValidatedFeeEstimates` gate, and a refusal is
+  `FirstStakeError::FeeUnreasonable` → `-29109` rather than being folded
+  into `-29102` ("check the daemon connection and retry"), which is the
+  wrong remedy when the connection worked. Nothing durable is written on
+  that path (W1-clean). `FeeRate::calculate_fee_from_weight` — which
+  multiplies unchecked and documents that it may panic — now has zero
+  production callers.
 - **Legacy scalar-`fee` tier synthesis deleted.** A daemon reply without
   a `fees` array was treated as pre-2021-scaling and turned into
   `(fee×1, fee×5, fee×1000)`. No such daemon exists on this chain

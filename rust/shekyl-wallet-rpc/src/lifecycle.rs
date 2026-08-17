@@ -822,6 +822,19 @@ pub(crate) async fn stake(
             // (check the daemon, retry) actually matches — never the
             // "fund and retry" misdiagnosis (rule 82).
             E::FeeEstimate(_) => WalletRpcError::FeeEstimationFailed,
+            // The daemon ANSWERED and the wallet refused the answer. The
+            // same -29102/-29109 split the send path draws, for the same
+            // reason: "check the connection and retry" is the wrong
+            // remedy when the connection worked (rule 82). The bond fee
+            // is charged to persona working capital with no user-facing
+            // control, so this refusal is the only place the operator
+            // ever learns the daemon quoted an absurd rate — it has to
+            // say which check fired and what the bound was.
+            E::FeeUnreasonable(v) => WalletRpcError::DaemonFeeUnreasonable {
+                reason: v.reason(),
+                rate: v.rate(),
+                bound: v.bound(),
+            },
             // W1-clean internal failures: state file / persona-id reads.
             // Funding cannot fix these, so they are not `-29500`.
             E::State(d) => WalletRpcError::InternalError(format!(
