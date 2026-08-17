@@ -80,7 +80,14 @@ pub(crate) fn fee_rate_for_priority(
                     CustomFeeBand::AboveRelativeCeiling,
                 ));
             }
-            if custom_one > ABSOLUTE_FEE_RATE_CAP {
+            // Same basis as the snapshot constructor's cap: the
+            // EFFECTIVE weight-1 charge (mask rounding included). The
+            // validated snapshot already bounds the mask at the cap,
+            // so this is coherence, not a second defense.
+            let custom_effective_one = tx_fee::try_fee_from_weight(&custom, 1).ok_or(
+                FeeEstimatorError::CustomFeeOutOfRange(CustomFeeBand::ZeroRateOrMask),
+            )?;
+            if custom_effective_one > ABSOLUTE_FEE_RATE_CAP {
                 return Err(FeeEstimatorError::CustomFeeOutOfRange(
                     CustomFeeBand::AboveAbsoluteCap,
                 ));

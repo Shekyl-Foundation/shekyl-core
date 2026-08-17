@@ -17,14 +17,24 @@
 //!
 //! 1. **Tier band monotonic** — `economy ≤ standard ≤ priority`. An
 //!    inversion is a defect or a lie, not a market condition.
-//! 2. **Absolute cap** — no named tier above 100,000 atomic units per
-//!    weight unit. Honest 2021-scaling `Fh` in the KAT is 67,000.
+//! 2. **Absolute cap on the EFFECTIVE weight-1 charge** — for each
+//!    named tier, `fee_from_weight(rate, 1) ≤ 100,000` atomic units.
+//!    The effective charge, not the raw `per_weight`: every fee is
+//!    rounded UP to a multiple of the daemon-controlled
+//!    `quantization_mask`, so a raw-rate cap is bypassable by mask
+//!    alone (tiers `(1,1,1)` with mask `10^18` would quantize every
+//!    ordinary transaction to `10^18` units). The weight-1 charge is
+//!    `≥ mask` and `≥ per_weight`, so one bound caps both without a
+//!    second policy constant; the marginal per-weight cost stays
+//!    `≤ per_weight ≤` the same bound, and mask rounding adds at most
+//!    one mask unit (`≤` the cap) to any fee, once. Honest
+//!    2021-scaling `Fh` in the KAT is 67,000 with a small mask.
 //!
 //! [`ValidatedFeeEstimates`] is the only constructor. Quote and build
 //! both go through it; Custom band-checks run later, against a snapshot
 //! that has already been accepted.
 
-use shekyl_rpc_client::FeeRate;
+use shekyl_rpc_client::{tx_fee, FeeRate};
 
 use super::traits::FeeEstimates;
 
@@ -82,10 +92,13 @@ pub enum CeilingViolation {
         /// Per-weight priority rate.
         priority: u64,
     },
-    /// A named tier exceeds [`ABSOLUTE_FEE_RATE_CAP`].
+    /// A named tier's **effective weight-1 quantized charge** exceeds
+    /// [`ABSOLUTE_FEE_RATE_CAP`] (the charge includes the
+    /// daemon-controlled mask rounding — see the module docs for why
+    /// the raw rate is not the checked quantity).
     #[error("tier above the absolute per-weight cap ({rate} > {cap})", cap = ABSOLUTE_FEE_RATE_CAP)]
     AboveAbsoluteCap {
-        /// Offending per-weight rate.
+        /// Offending effective weight-1 charge (atomic units).
         rate: u64,
     },
 }
@@ -205,6 +218,8 @@ impl ValidatedFeeEstimates {
         let standard = snapshot.standard.per_weight();
         let priority = snapshot.priority.per_weight();
 
+        // Raw rates for monotonicity: the tiers share one mask, so the
+        // effective ordering follows the raw ordering exactly.
         if economy > standard || standard > priority {
             return Err(FeeEstimatorError::DaemonFeeUnreasonable(
                 CeilingViolation::NonMonotonic {
@@ -214,10 +229,19 @@ impl ValidatedFeeEstimates {
                 },
             ));
         }
-        for rate in [economy, standard, priority] {
-            if rate > ABSOLUTE_FEE_RATE_CAP {
+        // EFFECTIVE weight-1 charge for the cap: the mask rounds every
+        // fee up to a mask multiple, so the raw rate alone is
+        // mask-bypassable (module docs). `fee(1) ≥ mask` also bounds
+        // the mask itself under the same constant.
+        for rate in [&snapshot.economy, &snapshot.standard, &snapshot.priority] {
+            let one = tx_fee::try_fee_from_weight(rate, 1).ok_or(
+                FeeEstimatorError::DaemonResponseInvalid {
+                    reason: "feerate overflowed fee arithmetic at weight 1",
+                },
+            )?;
+            if one > ABSOLUTE_FEE_RATE_CAP {
                 return Err(FeeEstimatorError::DaemonFeeUnreasonable(
-                    CeilingViolation::AboveAbsoluteCap { rate },
+                    CeilingViolation::AboveAbsoluteCap { rate: one },
                 ));
             }
         }
@@ -307,6 +331,51 @@ mod tests {
             .expect("10 SKL / 1.5M-zone Fh=14000 is 1077× economy and must pass");
         ValidatedFeeEstimates::try_new(snapshot(10, 20, 101))
             .expect("the withdrawn 10× lock must not refuse 10.1×");
+    }
+
+    /// The finding's vector, pinned: a benign raw rate under an
+    /// enormous daemon-controlled mask must NOT pass — the mask alone
+    /// quantizes every ordinary transaction to one mask unit, which is
+    /// the overpayment the cap exists to refuse. The negative controls
+    /// keep honest small masks (the daemon's real rounding granularity)
+    /// passing at the same raw rates.
+    #[test]
+    fn absolute_cap_is_on_the_effective_charge_not_the_raw_rate() {
+        let masked = |e: u64, s: u64, p: u64, m: u64| FeeEstimates {
+            economy: FeeRate::new(e, m).expect("economy"),
+            standard: FeeRate::new(s, m).expect("standard"),
+            priority: FeeRate::new(p, m).expect("priority"),
+            quantization_mask: m,
+        };
+
+        // Raw rates of 1 pass a raw-rate cap; the 10^18 mask makes the
+        // effective weight-1 charge 10^18. Refused, with the effective
+        // charge in the wire pair.
+        match ValidatedFeeEstimates::try_new(masked(1, 1, 1, 1_000_000_000_000_000_000)) {
+            Err(FeeEstimatorError::DaemonFeeUnreasonable(CeilingViolation::AboveAbsoluteCap {
+                rate,
+            })) => {
+                assert_eq!(rate, 1_000_000_000_000_000_000);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        // Honest mask (the 2021-scaling daemon's rounding granularity):
+        // same KAT raw rates pass — the fix must not refuse honesty.
+        ValidatedFeeEstimates::try_new(masked(340, 1400, 67_000, 10_000))
+            .expect("KAT row with an honest 10k mask passes");
+
+        // Boundary: mask exactly at the cap with a tiny rate — the
+        // effective charge is exactly the cap, and passes.
+        ValidatedFeeEstimates::try_new(masked(1, 1, 1, 100_000))
+            .expect("effective charge exactly at the cap passes");
+        // One mask unit above: refused.
+        match ValidatedFeeEstimates::try_new(masked(1, 1, 1, 100_001)) {
+            Err(FeeEstimatorError::DaemonFeeUnreasonable(CeilingViolation::AboveAbsoluteCap {
+                rate,
+            })) => assert_eq!(rate, 100_001),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]
