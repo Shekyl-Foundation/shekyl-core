@@ -107,12 +107,40 @@ pub enum FluffReach {
     EveryPeer,
     /// Outbound connections only — **i2p/tor**.
     ///
-    /// The inherited rule, one line in `fluff_notify` under the comment *"When
-    /// i2p/tor, only fluff to outbound connections"*. It is why noise-mode
-    /// networks can substitute for Dandelion++'s sybil resistance at all: an
-    /// inbound connection on a hidden service is an unauthenticated stranger who
-    /// dialled *us*, so relaying to it hands a transaction to a peer we did not
-    /// choose. Only outbound connections are ones this node selected.
+    /// The mechanism is inherited — one line in `fluff_notify` under *"When
+    /// i2p/tor, only fluff to outbound connections"* — but **its Shekyl
+    /// justification is not, and the inherited one was wrong.**
+    ///
+    /// > **Retracted rationale (2026-08-17).** This doc previously read *"it is
+    /// > why noise-mode networks can substitute for Dandelion++'s sybil
+    /// > resistance at all"*. That is the sybil-substitution fallacy §64
+    /// > already named, and it conflates two different observers: **noise**
+    /// > masks the node↔proxy wire against an *external* observer, while
+    /// > **Dandelion++** defends against an *internal* adversarial peer.
+    /// > Neither substitutes for the other, and minting onion addresses is
+    /// > free, so the anonymity network never supplied sybil resistance —
+    /// > this rule did.
+    ///
+    /// Two justifications, both standing on their own:
+    ///
+    /// 1. **A node relays only to peers it chose.** An inbound connection on a
+    ///    hidden service is an unauthenticated stranger who dialled *us*, so
+    ///    relaying to it hands a transaction to a peer we did not select. That
+    ///    is a genuine partial sybil mitigation and it needs no cover traffic
+    ///    to be true.
+    /// 2. **It is the leg that makes anonymity-zone emit attribution
+    ///    impossible** (§91.4). To receive a fluff from node `Y`, an adversary
+    ///    must be `Y`'s *outbound* — i.e. `Y` dialled it — which is exactly the
+    ///    direction where the adversary holds `tor_address::unknown()` and
+    ///    `ANON_ZONE_SENTINEL_PEER_ID`. On the reverse link, where the
+    ///    adversary does know `Y`'s onion because it chose it, this rule skips
+    ///    the send. **There is no direction carrying both the emit and the
+    ///    name**, and §91 (Design A) now depends on that.
+    ///
+    /// Point 2 makes this rule load-bearing rather than merely inherited:
+    /// widening the reach to inbound peers would hand an active marker the
+    /// attribution it currently cannot obtain. Do not relax it without
+    /// reopening §91.4.
     OutboundOnly,
 }
 
