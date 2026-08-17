@@ -14601,10 +14601,16 @@ with no retry** — not once per sync in any recurring sense. A node that syncs,
 draws a complement from a peer whose pool happened to be thin, and stays
 connected **never asks again**.
 
-**Consequence, and it inverts the tentative reading:** the complement does not
-reliably cover the late joiner, so universal disarm would remove the only
-*recurring* coverage mechanism rather than a redundant one. **Branch (c) is not
-nearly free.**
+**And the trigger is loss of the network, not joining it.** A node that has
+never been disconnected asks **exactly once in its lifetime, at startup** — the
+flag is `true` at construction and consumed at the first sync completion. So
+this is not a thin late-joiner pull; it is a **reconnection-recovery path that
+happens to fire once at boot**.
+
+**Consequence, and it inverts the tentative reading:** there is **no ongoing
+pull at all**, so the re-relay loop is the only recurring coverage mechanism,
+full stop. Universal disarm would remove it rather than de-duplicate it.
+**Branch (c) is not nearly free.**
 
 What the loop genuinely covers that no pull can is unchanged and is the
 unbundling's own conclusion: a transaction that propagated to **nobody** —
@@ -14631,12 +14637,28 @@ and here the adversary's observable is precisely the emission **count**.
 **(d) probabilistic is the leading candidate** and is what the implementing round
 should price first.
 
+#### (e) Fix the complement's trigger — a substitute for `p`, not a companion
+
+`p` leads only because the re-relay loop is currently doing two jobs. The other
+way to separate them is to **give coverage its own mechanism**: a pull that
+fires on **new-peer** rather than on total-disconnection is a targeted answer to
+a targeted job, and it would let `p` be set for the **privacy** objective alone
+instead of doubling as the coverage mechanism.
+
+**(d) and (e) are substitutes, and choosing between them is cheaper than tuning
+one to do both** — the same unbundling shape that produced §92.4. The round
+prices them against each other rather than adopting `p` by default.
+
 ### 92.5c What the round settles, in order
 
-1. **The disarm predicate.** *"Observed circulating"* needs a definition that is
-   not merely *"received once"* — a single arrival can be the origin's own echo
-   off one peer. The stem-observation machinery already has the shape and the
-   join key.
+1. **The disarm predicate**, and it fails *"received once"* in **two**
+   directions. A single arrival can be the origin's own echo off one peer — and,
+   more dangerously, **a relay's first receipt is its only receipt in the common
+   case**, so a predicate firing on it disarms every node immediately and
+   **collapses to branch (c) by accident**. The property that actually means
+   *circulating* is *"this came back from somewhere other than where I sent
+   it"* — which the stem-observation machinery already distinguishes, and
+   already has the join key for.
 2. **`p` for branch (d)**, against measured `N` — and per §91.6 that measurement
    waits on the complete mechanism, not a simulation.
 
