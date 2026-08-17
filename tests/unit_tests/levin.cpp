@@ -2567,6 +2567,8 @@ TEST_F(levin_notify, noise)
         // queue sends a dummy, so real-notification count is the stop
         // condition and the send count is a floor.
         EXPECT_LE(2u, sent);
+        // KNOWN-WRONG (§42.5a): every channel receives it, rather than the one
+        // bound to this stem slot. Under §42.3 this becomes 1u.
         ASSERT_EQ(2u, receiver_.notified_size());
         for (unsigned i = 0; i < 2u; ++i)
         {
@@ -2601,6 +2603,32 @@ TEST_F(levin_notify, noise)
     }
 }
 
+/*! **TRIPWIRE — this test PINS INHERITED BEHAVIOUR THAT §89 CONTRADICTS.**
+
+    Read this before "fixing" it. Both assertions below are deliberate records
+    of a **known-wrong** state (`DAEMON_RELAY_PRIVACY.md` §42.5a), not a
+    specification:
+
+      1. `take_relayed(relay_method::local)` — the covert branch DOWNGRADES a
+         stem to `local` with `MWARNING("Dandelion++ stem not supported over
+         noise networks")`. That is Monero's posture, in which noise mode
+         *replaces* Dandelion++. §89 ruled the anonymity zone **stems**.
+      2. `notified_size() == 2` — the covert send loops over EVERY channel
+         (`for channel < zone_->channels.size()`), not the bound stem slot.
+         The Rust substrate already models the target: `CovertSchedule` binds
+         channel `i` to stem slot `i` (§20.3) and pins the deadline vector's
+         length to `NOISE_CHANNELS`. **The two sides disagree today, and this
+         test is where the disagreement is visible.**
+
+    **When §42.3's restoration lands, this test MUST go red, and greening it
+    means changing the expectations, not the code:** `take_relayed` becomes
+    `relay_method::stem`, and `notified_size()` becomes **1** — the bound slot
+    alone. A change that keeps this test green as written has not implemented
+    §42.3; it has preserved the bypass.
+
+    This annotation exists because the failure mode is specific and cheap: an
+    implementer hits a failing regression test and silences the oracle. The
+    edit that reds this test is the edit that matters. */
 TEST_F(levin_notify, noise_stem)
 {
     for (unsigned count = 0; count < 10; ++count)
@@ -2640,7 +2668,8 @@ TEST_F(levin_notify, noise_stem)
     {
         const std::size_t sent =
             drive_schedule(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
-        // downgraded to local when being notified
+        // KNOWN-WRONG (§42.5a): the covert branch downgrades stem -> local.
+        // Under §42.3 this becomes `relay_method::stem`.
         EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
         EXPECT_LE(2u, sent);
         ASSERT_EQ(2u, receiver_.notified_size());
