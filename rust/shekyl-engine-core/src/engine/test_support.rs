@@ -387,9 +387,8 @@ impl State {
 /// observe per-priority resolution see distinct values without
 /// configuring fees explicitly. Mask is `1` everywhere — the
 /// rounding mask carries no signal in tests that don't exercise
-/// fee-rounding code paths. The spread sits INSIDE the interim
-/// sanity ceiling (priority = 8× economy < 10×; every tier far
-/// below the absolute cap) so fixtures model an honest daemon —
+/// fee-rounding code paths. Distinct, monotonic, under the
+/// absolute cap so fixtures model a well-formed daemon —
 /// ceiling tests build their own violating snapshots explicitly.
 fn default_fee_estimates() -> FeeEstimates {
     FeeEstimates {

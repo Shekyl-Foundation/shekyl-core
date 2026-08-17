@@ -414,22 +414,13 @@ pub enum RefreshDiagnostic {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuildErrorKind {
-    /// A [`TxRecipient`](super::pending::TxRecipient) failed
-    /// recipient-side validation (zero amount, malformed address,
-    /// etc.).
+    /// Recipient failed validation (zero amount, malformed address).
     InvalidRecipient,
 
-    /// The build refused the fee inputs: the daemon's snapshot failed
-    /// the interim sanity ceiling, or the caller's `Custom` rate is
-    /// out of band. Its own kind (not `DaemonUnavailable`) because the
-    /// operator remedy differs — the daemon answered, and what it said
-    /// (or what the caller asked) was refused.
+    /// Snapshot failed well-formedness, or Custom is out of band.
     FeeRefused,
 
-    /// Wallet output coverage is insufficient for the requested
-    /// transfer + fee; orchestrator-side
-    /// [`SendError::InsufficientFunds`](super::error::SendError::InsufficientFunds)
-    /// carries the fielded `needed` / `available` payload.
+    /// Output coverage cannot meet amount + fee.
     InsufficientFunds,
 
     /// The configured `Signer` surface is unavailable (e.g., HW

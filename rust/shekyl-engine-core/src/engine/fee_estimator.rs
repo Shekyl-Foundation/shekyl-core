@@ -57,8 +57,8 @@ use std::num::NonZeroU64;
 use shekyl_units::AtomicUnits;
 
 use super::error::FeeEstimatorError;
+use super::fee_policy::ValidatedFeeEstimates;
 use super::refresh::LedgerSnapshot;
-use super::traits::FeeEstimates;
 use super::tx_counts::{InputCount, OutputCount};
 use super::tx_fee_model::{converge_fee, fee_from_weight, fee_rate_for_priority, predict_weight};
 
@@ -91,12 +91,14 @@ pub enum FeePriority {
     /// inclusion under normal mempool conditions.
     Priority,
     /// Caller-pinned feerate in atomic-units-per-byte. The
-    /// daemon's named tiers are bypassed, but not the guard rails:
+    /// daemon's named tiers are bypassed, but not the Custom band:
     /// the rate must sit between the snapshot's economy floor and
-    /// the sanity ceiling
+    /// min(100× economy, the absolute per-weight cap)
     /// ([`FeeEstimatorError::CustomFeeOutOfRange`](super::error::FeeEstimatorError)
-    /// otherwise), and the snapshot itself must pass the interim
-    /// unreasonableness checks.
+    /// otherwise). Snapshot well-formedness (monotonicity, absolute
+    /// cap on *named* tiers) is already decided before this variant
+    /// is interpreted — an honest 2021-scaling Priority tier does
+    /// not lock Custom.
     Custom(NonZeroU64),
 }
 
@@ -119,7 +121,7 @@ pub enum FeePriority {
 ///   to the fee calculation.
 /// - `output_count`: projected output count for this fee
 ///   variant (`N` payments or `N+1` with change intent).
-/// - `fee_snapshot`: atomic §3.3 `FeeEstimates` fetched once
+/// - `fee_snapshot`: validated §3.3 snapshot fetched once
 ///   per build; the sync estimator reads rates from here.
 /// - `tree_depth`: FCMP++ tree depth for weight prediction.
 ///
@@ -145,8 +147,8 @@ pub struct FeeEstimationContext<'a> {
     /// Projected output count for this fee variant
     /// (bounded `1..=MAX_OUTPUTS`).
     pub output_count: OutputCount,
-    /// Single-RPC fee snapshot for the build (§3.3 / PF1).
-    pub fee_snapshot: FeeEstimates,
+    /// Validated single-RPC fee snapshot for the build (§3.3 / PF1).
+    pub fee_snapshot: ValidatedFeeEstimates,
     /// Tree depth for structural weight prediction.
     pub tree_depth: u8,
 }
@@ -212,10 +214,9 @@ pub trait FeeEstimator: Send + Sync + 'static {
     /// [`FeeEstimatorError`]. V3.0's [`DaemonFeeEstimator`]
     /// returns [`FeeEstimatorError::DaemonUnreachable`] on
     /// network failure, [`FeeEstimatorError::DaemonResponseInvalid`]
-    /// on malformed responses, and
-    /// [`FeeEstimatorError::DaemonFeeUnreasonable`] /
-    /// [`FeeEstimatorError::CustomFeeOutOfRange`] from the
-    /// snapshot / custom-rate guard rails.
+    /// on malformed responses, [`FeeEstimatorError::DaemonFeeUnreasonable`]
+    /// on a non-monotonic or over-cap snapshot, and
+    /// [`FeeEstimatorError::CustomFeeOutOfRange`] on a caller-band miss.
     fn estimate_fee(
         &self,
         priority: FeePriority,
@@ -225,13 +226,14 @@ pub trait FeeEstimator: Send + Sync + 'static {
 
 /// V3.0 default [`FeeEstimator`] implementor.
 ///
-/// Resolves `priority` against the context's atomic daemon fee
-/// snapshot: the snapshot passes the interim unreasonableness guard,
-/// the priority maps to a per-weight rate, and the fee converges
-/// through the single-source weight model at the context's structural
-/// shape (`tx_fee_model::converge_fee`). It deliberately ignores
-/// `context.ledger` — that field is the V3.x `WalletSideEstimator`
-/// hook (wallet-side history), not this estimator's input.
+/// Resolves `priority` against the context's validated daemon fee
+/// snapshot: the priority maps to a per-weight rate, and the fee
+/// converges through the single-source weight model at the context's
+/// structural shape (`tx_fee_model::converge_fee`). It deliberately
+/// ignores `context.ledger` — that field is the V3.x
+/// `WalletSideEstimator` hook (wallet-side history), not this
+/// estimator's input. Snapshot well-formedness is the fetch
+/// boundary's job (`ValidatedFeeEstimates`), not this impl's.
 ///
 /// # V3.x successors
 ///
@@ -275,6 +277,7 @@ mod tests {
     //!   — regression: structural estimator yields a positive fee
     //!   from a fixed §3.3 snapshot.
     use super::*;
+    use crate::engine::fee_policy::ValidatedFeeEstimates;
     use crate::engine::traits::FeeEstimates;
     use shekyl_rpc_client::FeeRate;
     use std::num::NonZeroU64;
@@ -295,16 +298,16 @@ mod tests {
         LedgerSnapshot::from_ledger(&block)
     }
 
-    fn test_fee_snapshot() -> FeeEstimates {
-        // Inside the interim sanity ceiling (priority = 8× economy);
-        // ceiling refusals are tested where the ceiling lives
-        // (`tx_fee_model::interim_ceiling_battery`).
-        FeeEstimates {
+    fn test_fee_snapshot() -> ValidatedFeeEstimates {
+        // Distinct, monotonic, under the absolute cap. Ceiling
+        // refusals live in `fee_policy::tests`.
+        ValidatedFeeEstimates::try_new(FeeEstimates {
             economy: FeeRate::new(5, 1).expect("economy fee rate is non-zero"),
             standard: FeeRate::new(10, 1).expect("standard fee rate is non-zero"),
             priority: FeeRate::new(40, 1).expect("priority fee rate is non-zero"),
             quantization_mask: 1,
-        }
+        })
+        .expect("test fixture is well-formed")
     }
 
     #[test]

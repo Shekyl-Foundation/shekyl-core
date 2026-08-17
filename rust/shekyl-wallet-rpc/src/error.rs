@@ -7,7 +7,9 @@
 //! `docs/api/wallet_rpc.yaml` (`WalletRpcErrorCode`).
 
 use serde_json::{json, Value};
-use shekyl_engine_core::engine::error::{RetryableRejectCause, TerminalErrorKind};
+use shekyl_engine_core::engine::error::{
+    FeeEstimatorError, RetryableRejectCause, TerminalErrorKind,
+};
 use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
     ChangePasswordError, IoError, OpenError, PScanStartError, PendingTxError, PersistenceError,
@@ -70,11 +72,11 @@ pub enum WalletRpcErrorCode {
     /// is on chain; `FAILED` was never relayed). A state conflict, not
     /// a bad request — refresh the view and re-decide.
     AbandonStateForbids = -29108,
-    /// Build / fee quote: the daemon's fee snapshot failed the interim
-    /// sanity ceiling (non-monotonic tier band, priority above 10×
-    /// economy, or a tier above the absolute per-weight cap). The
-    /// daemon *answered*; the wallet refused what it said — distinct
-    /// from `-29102`'s "the fee query itself failed" (rule 82).
+    /// Build / fee quote: the daemon's fee snapshot failed
+    /// well-formedness (non-monotonic tier band, or a tier above the
+    /// absolute per-weight cap). The daemon *answered*; the wallet
+    /// refused what it said — distinct from `-29102`'s "the fee query
+    /// itself failed" (rule 82).
     DaemonFeeUnreasonable = -29109,
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200,
@@ -227,8 +229,8 @@ pub enum WalletRpcError {
     #[error("fee estimation failed")]
     FeeEstimationFailed,
     /// Build / quote (`-29109`): the daemon's fee snapshot was refused
-    /// by the interim sanity ceiling. `data` carries the numeric facts
-    /// (all public snapshot values); the message stays category-only.
+    /// as ill-formed (non-monotonic or over the absolute cap). `data`
+    /// carries the numeric facts; the message stays category-only.
     #[error("daemon fee estimate refused by the wallet's sanity ceiling ({reason})")]
     DaemonFeeUnreasonable {
         /// Which interim check refused (engine-supplied static string).
@@ -627,24 +629,29 @@ impl From<ServingStartError> for WalletRpcError {
     }
 }
 
+impl From<FeeEstimatorError> for WalletRpcError {
+    fn from(err: FeeEstimatorError) -> Self {
+        match err {
+            FeeEstimatorError::DaemonFeeUnreasonable(v) => Self::DaemonFeeUnreasonable {
+                reason: v.reason(),
+                rate: v.rate(),
+                bound: v.bound(),
+            },
+            // The caller's Custom rate is out of band: a request error,
+            // -32602 — never blamed on the daemon (rule 82).
+            FeeEstimatorError::CustomFeeOutOfRange(band) => {
+                Self::InvalidParams(format!("custom fee rate out of range: {band}"))
+            }
+            _ => Self::FeeEstimationFailed,
+        }
+    }
+}
+
 impl From<SendError> for WalletRpcError {
     fn from(err: SendError) -> Self {
         match err {
             SendError::InvalidRecipient { .. } => Self::InvalidRecipient,
-            SendError::DaemonFeeUnreasonable {
-                reason,
-                rate,
-                bound,
-            } => Self::DaemonFeeUnreasonable {
-                reason,
-                rate,
-                bound,
-            },
-            // The caller's Custom rate is out of band: a request error,
-            // -32602 — never blamed on the daemon (rule 82).
-            SendError::CustomFeeOutOfRange { reason } => {
-                Self::InvalidParams(format!("custom fee rate out of range: {reason}"))
-            }
+            SendError::Fee(e) => e.into(),
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
             SendError::Io(IoError::Daemon { .. }) => Self::FeeEstimationFailed,
             SendError::Io(other) => Self::InternalError(other.to_string()),

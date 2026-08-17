@@ -290,10 +290,12 @@ names — but the implementation now binds names to known positional
 indices rather than parsing them from a daemon-supplied map.)
 
 The wallet-side sanity ceiling
-(`TxError::DaemonFeeUnreasonable`) remains binding: any
-`fees[i]` that exceeds a wallet-configured maximum (denominated in
-atomic units / byte) causes the wallet to refuse the build with a
-typed error. The ceiling itself is wallet config, not daemon config.
+(`FeeEstimatorError::DaemonFeeUnreasonable`) remains binding: a
+non-monotonic `fees[]` band, or any `fees[i]` above the absolute
+100,000 atomic-units/weight cap, causes the wallet to refuse the
+build (and the fee quote) with a typed error. The ceiling is wallet
+policy, not daemon config. An intra-snapshot 10× `fees[3]/fees[0]`
+lock is *not* applied — honest 2021-scaling `Fh/Fl` exceeds 10×.
 
 ---
 

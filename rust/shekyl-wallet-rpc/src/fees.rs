@@ -78,26 +78,13 @@ pub(crate) async fn get_default_fee_priority(
 
     let shared = require_open_engine(tenants).await?;
     let engine = shared.read().await;
-    // One daemon fee snapshot + the same converge fixpoint the build path
-    // runs, and the same error taxonomy: a failed query is `-29102`, a
-    // refused (unreasonable) snapshot is `-29109` — the quote surface
-    // must not report a snapshot the build would refuse as if the query
-    // merely failed (rule 82).
+    // Same ValidatedFeeEstimates constructor as the build path, same
+    // error taxonomy: a failed query is `-29102`, a refused snapshot
+    // is `-29109`.
     let quote = engine
         .quote_fee_tiers(n_in, n_out)
         .await
-        .map_err(|e| match e {
-            shekyl_engine_core::engine::error::FeeEstimatorError::DaemonFeeUnreasonable {
-                reason,
-                rate,
-                bound,
-            } => WalletRpcError::DaemonFeeUnreasonable {
-                reason,
-                rate,
-                bound,
-            },
-            _ => WalletRpcError::FeeEstimationFailed,
-        })?;
+        .map_err(WalletRpcError::from)?;
 
     let result = GetDefaultFeePriorityResult {
         default_priority: "STANDARD".to_owned(),

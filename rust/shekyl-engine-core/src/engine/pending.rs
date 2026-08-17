@@ -107,14 +107,8 @@ use crate::engine::{
 #[cfg(test)]
 use crate::engine::refresh::{derive_snapshot_id, LedgerSnapshot};
 
-/// Test-fixture fee for the `cfg(test)` reference bodies below.
-///
-/// Production builds resolve fees through the `FeeEstimator` seam
-/// (daemon snapshot → weight model → convergence); this constant feeds
-/// only the pre-PR-5 `*_in_state` reference implementations and their
-/// unit tests, and is gated with them so no production path can name
-/// it. Non-zero so reservation tests run against a real value rather
-/// than zero-as-special-case.
+/// Test-fixture fee for the `cfg(test)` `*_in_state` reference bodies.
+/// Production resolves fees through the `FeeEstimator` seam.
 #[cfg(test)]
 pub(crate) const STUB_FEE_ATOMIC_UNITS: AtomicUnits = AtomicUnits::from_raw(1_000);
 

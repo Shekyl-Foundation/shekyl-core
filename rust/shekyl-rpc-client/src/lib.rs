@@ -94,6 +94,18 @@ impl FeeRate {
         Ok(FeeRate { per_weight, mask })
     }
 
+    /// Atomic units charged per weight unit, before mask rounding.
+    #[must_use]
+    pub fn per_weight(&self) -> u64 {
+        self.per_weight
+    }
+
+    /// Quantization mask the fee is rounded up to.
+    #[must_use]
+    pub fn mask(&self) -> u64 {
+        self.mask
+    }
+
     /// Write the FeeRate.
     ///
     /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol

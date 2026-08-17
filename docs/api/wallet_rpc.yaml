@@ -417,18 +417,17 @@ components:
           -29109 DAEMON_FEE_UNREASONABLE  build / get_default_fee_priority:
                                           the daemon ANSWERED the fee query
                                           and the wallet refused the answer —
-                                          the interim sanity ceiling caught a
-                                          non-monotonic tier band, priority
-                                          above 10× economy, or a tier above
-                                          the absolute 100,000
+                                          non-monotonic tier band, or a tier
+                                          above the absolute 100,000
                                           atomic-units/weight cap
                                           (data: {"reason","rate","bound"}).
                                           Distinct from -29102 (the query
                                           itself failed) by rule 82: the
                                           remedies differ — retry vs. stop
-                                          trusting this daemon. The ceiling
-                                          is interim by ruling (2026-08-16);
-                                          the superseding historical
+                                          trusting this daemon. The
+                                          intra-snapshot 10×-economy lock is
+                                          withdrawn (honest 2021-scaling
+                                          Fh/Fl exceeds 10×). The historical
                                           median-multiple ceiling lands with
                                           the V3.x wallet-side estimator
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
@@ -590,11 +589,13 @@ components:
       description: >
         Mirrors `shekyl_engine_core::FeePriority`. Named tiers resolve to a
         feerate via the daemon fee estimate at build time — never hardcoded
-        multipliers — and the snapshot must pass the wallet's interim
-        sanity ceiling (-29109 otherwise). `custom` pins
-        atomic-units-per-byte, bypassing the named tiers but not the
-        guard rails: it must sit between the snapshot's economy floor
-        and the sanity ceiling (-32602 otherwise).
+        multipliers — and the snapshot must be well-formed (monotonic
+        tiers, no named tier above the absolute cap; -29109 otherwise).
+        `custom` pins atomic-units-per-byte, bypassing the named tiers
+        but not its own band: it must sit between the snapshot's economy
+        floor and min(100× economy, the absolute cap) (-32602 otherwise).
+        An honest Priority tier that is many times economy does not
+        lock `custom`.
       oneOf:
         - type: string
           enum: [ECONOMY, STANDARD, PRIORITY]

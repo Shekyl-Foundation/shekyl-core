@@ -6,15 +6,15 @@
 
 - **Fee sanity ceiling is live (interim form) — `-29109 DAEMON_FEE_UNREASONABLE`.**
   Named fee tiers were previously accepted from the daemon unchecked
-  (only `Custom` rates were capped); the wallet now refuses a snapshot
-  with a non-monotonic tier band, `priority` above 10× `economy` (the
-  original cross-cutting lock, implemented verbatim), or any tier above
-  100,000 atomic units per weight unit — on both the build path and the
-  `get_default_fee_priority` quote. Caller-side `Custom` band violations
-  are re-classed as `-32602` request errors instead of being blamed on
-  the daemon. The ceiling is **interim by ruling** (2026-08-16
-  decision-log entry): the historical median-multiple ceiling supersedes
-  the 10×-economy check when the V3.x `WalletSideEstimator` lands.
+  (only `Custom` rates were capped). The wallet now refuses a snapshot
+  that is non-monotonic or that names a tier above 100,000 atomic units
+  per weight — on both the build path and `get_default_fee_priority`,
+  through one `ValidatedFeeEstimates` constructor. Caller-side `Custom`
+  band violations are `-32602`, not a daemon defect. The intra-snapshot
+  10×-economy lock is **withdrawn**: honest `shekyld` 2021-scaling
+  `Fh / Fl` is 65×–1000×, so that lock banned the production Priority
+  tier. The historical median-multiple ceiling remains the V3.x
+  `WalletSideEstimator`'s job (2026-08-16 decision-log entries).
 - **Dust boundary corrected: marginal input weight 3457 → 9136.** The
   provisional `MARGINAL_INPUT_WEIGHT` stub (zero FCMP proof increment)
   outlived the KAT that was meant to replace it; the dust threshold now

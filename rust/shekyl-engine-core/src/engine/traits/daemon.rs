@@ -368,7 +368,7 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     /// handlers (Stage 4) surface handler panics as
     /// [`Self::Error`] (mappable to
     /// [`IoError::Daemon`]) per §5.1's `RuntimeFailure` discipline,
-    /// not as a panic of this method..
+    /// not as a panic of this method.
     fn get_fee_estimates(
         &self,
     ) -> impl std::future::Future<Output = Result<FeeEstimates, Self::Error>> + Send;

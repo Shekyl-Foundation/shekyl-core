@@ -49,11 +49,12 @@
 //! - [`PendingTxError::ChainStateChanged`] — the wallet's recorded block
 //!   hash at `built_at_height` no longer matches `built_at_tip_hash`.
 //! - [`FeeEstimatorError::DaemonFeeUnreasonable`] — the daemon's fee
-//!   snapshot failed the interim sanity ceiling (priority > 10× economy,
-//!   a non-monotonic tier band, or any tier above the absolute
-//!   100,000 atomic-units/weight cap).
+//!   snapshot failed well-formedness (non-monotonic tier band, or a
+//!   named tier above the absolute 100,000 atomic-units/weight cap).
 
 use shekyl_address::Network;
+
+pub use super::fee_policy::{CeilingViolation, CustomFeeBand, FeeEstimatorError};
 
 use super::pending::{ReservationId, SnapshotId};
 
@@ -489,28 +490,11 @@ pub(crate) enum LedgerError {}
 /// state machine, which has its own [`PendingTxError`]).
 #[derive(Debug, thiserror::Error)]
 pub enum SendError {
-    /// The daemon's fee snapshot failed the interim sanity ceiling
-    /// (see [`FeeEstimatorError::DaemonFeeUnreasonable`]). The build is
-    /// refused before any selection or signing; retry against a daemon
-    /// you trust, or with a `Custom` rate you choose.
-    #[error("daemon fee estimate unreasonable ({reason}: {rate} vs bound {bound})")]
-    DaemonFeeUnreasonable {
-        /// Which interim check refused (compile-time-fixed).
-        reason: &'static str,
-        /// The offending per-weight rate (atomic units).
-        rate: u64,
-        /// The bound it violated (atomic units per weight).
-        bound: u64,
-    },
-
-    /// The caller's `Custom` fee rate is outside the accepted band —
-    /// a request error, not a daemon or wallet fault
-    /// (see [`FeeEstimatorError::CustomFeeOutOfRange`]).
-    #[error("custom fee rate out of range ({reason})")]
-    CustomFeeOutOfRange {
-        /// Compile-time-fixed description of the violated bound.
-        reason: &'static str,
-    },
+    /// Fee-estimator refusal or fee-query failure. Wraps
+    /// [`FeeEstimatorError`] so the estimator's taxonomy is not
+    /// restated here; the RPC layer maps it once.
+    #[error(transparent)]
+    Fee(#[from] FeeEstimatorError),
 
     /// Selected output set could not cover `amount + fee`.
     #[error("insufficient funds: need {needed} atomic units, available {available}")]
@@ -1371,74 +1355,6 @@ pub enum OutputSelectorError {
         /// dedicated `OutputIndex` newtype) is a V3.x refinement
         /// item per `docs/FOLLOWUPS.md`.
         offending_index: usize,
-    },
-}
-
-/// Failures from `FeeEstimator::estimate_fee`. Phase 0j binding form
-/// per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 (R16 segment-2c closure
-/// with segment-2d V3.0-lift evaluation).
-///
-/// The trait isolates fee-estimation policy from the build pipeline.
-/// The default implementation forwards the daemon's `priority` /
-/// `economy` buckets; consumers can plug in custom estimators for
-/// testing or for offline-build flows.
-///
-/// `#[non_exhaustive]` so V3.x estimators can extend the variant set.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum FeeEstimatorError {
-    /// The daemon RPC the estimator depends on was unreachable.
-    #[error("fee estimator: daemon unreachable")]
-    DaemonUnreachable,
-
-    /// The daemon returned a response that the estimator could not
-    /// consume (missing field, out-of-range value, etc.). Carries
-    /// a `&'static str` named at the call site so audit can read
-    /// every distinguishable defect class from source.
-    #[error("fee estimator: daemon response invalid ({reason})")]
-    DaemonResponseInvalid {
-        /// Compile-time-fixed description of the contract violation.
-        reason: &'static str,
-    },
-
-    /// The daemon's fee snapshot is *well-formed but unreasonable*: a
-    /// named tier fails the interim sanity ceiling. Distinct from
-    /// [`Self::DaemonResponseInvalid`] (rule 82): that variant is "the
-    /// daemon broke the wire contract", this one is "the daemon obeyed
-    /// the contract and asked for a fee we refuse to pay" — the
-    /// cross-cutting-lock defense against a compromised or buggy daemon
-    /// on the untrusted-daemon boundary.
-    ///
-    /// **Interim ceiling, by ruling (2026-08-16):** the checks are the
-    /// original cross-cutting lock's intra-snapshot form (priority ≤ 10×
-    /// economy, monotonic tier band) plus the absolute
-    /// 100,000 atomic-units/weight cap — all computable from the one
-    /// atomic snapshot. The superseding design is the historical
-    /// median-multiple ceiling, which lands with the V3.x
-    /// `WalletSideEstimator` (the wallet-side historical fee series it
-    /// needs is that item's named substrate). See
-    /// `V3_WALLET_DECISION_LOG.md` (2026-08-16 entry) and
-    /// `FOLLOWUPS.md` §"wallet-side fee estimation".
-    #[error("fee estimator: daemon fee unreasonable ({reason}: {rate} vs bound {bound})")]
-    DaemonFeeUnreasonable {
-        /// Which interim check refused (compile-time-fixed).
-        reason: &'static str,
-        /// The offending per-weight rate (atomic units).
-        rate: u64,
-        /// The bound it violated (atomic units per weight).
-        bound: u64,
-    },
-
-    /// The caller's `Custom` fee rate is outside the accepted band
-    /// (below the snapshot's economy floor, above the sanity ceiling,
-    /// or zero). A *caller* error, not a daemon defect — surfaced
-    /// separately so the RPC layer can answer `-32602` instead of
-    /// blaming the daemon (the pre-2026-08-16 code misfiled these as
-    /// `DaemonResponseInvalid`).
-    #[error("custom fee rate out of range ({reason})")]
-    CustomFeeOutOfRange {
-        /// Compile-time-fixed description of the violated bound.
-        reason: &'static str,
     },
 }
 

@@ -4711,4 +4711,30 @@ weight 3457 → 9136 — the stub had understated the dust bar by the
 whole per-input FCMP proof increment); `STUB_FEE_ATOMIC_UNITS`
 `#[cfg(test)]`-gated with the `*_in_state` reference bodies it feeds.
 
+---
+
+## 2026-08-16 — Intra-snapshot 10×-economy lock withdrawn; well-formedness is a snapshot type
+
+**Context.** The same-day entry above implemented the original
+`WALLET_REWRITE_PLAN` 10×-economy lock *verbatim* as a snapshot
+refusal. That lock is incompatible with the daemon this wallet talks
+to. `shekyld` is 2021-scaling from genesis (`HF_VERSION_2021_SCALING
+= 1`); `tests/unit_tests/scaling_2021.cpp` pins `Fh / Fl` at 65×,
+197×, and 1077×. A 10× intra-snapshot check does not catch a lying
+daemon — it refuses an honest Priority tier, and because validation
+sat inside rate selection it also locked Custom and was skipped by
+the quote path.
+
+**Ruling.** The 10× intra-snapshot refusal is **withdrawn**. Snapshot
+well-formedness is monotonicity plus the absolute 100,000
+atomic-units/weight cap, constructed once as `ValidatedFeeEstimates`
+at fetch (build *and* quote). Custom band-checks run against that
+type and are not gated on the Priority tier's ratio. The historical
+median-multiple ceiling remains the V3.x `WalletSideEstimator`'s
+named successor; it no longer "replaces" a live 10× check, because
+that check is gone.
+
+**Reference.** `rust/shekyl-engine-core/src/engine/fee_policy.rs`;
+PR #490 review.
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

@@ -56,7 +56,8 @@ pub struct SelectionCriteria {
 impl Default for SelectionCriteria {
     fn default() -> Self {
         // Reference economy rate for default criteria; callers with a live
-        // fee snapshot should set `dust_threshold` via `tx_fee::dust_threshold(&rate)`.
+        // fee snapshot should set `dust_threshold` via
+        // `tx_fee::dust_threshold(rate, marginal_input_weight)`.
         let reference_rate = FeeRate::new(1, 1).expect("reference fee rate is non-zero");
         SelectionCriteria {
             target_amount: AtomicUnits::ZERO,

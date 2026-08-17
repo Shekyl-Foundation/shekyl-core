@@ -3,7 +3,6 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Canonical dust threshold and non-panicking fee-from-weight helpers for
 //! Quantized fee arithmetic over daemon-derived rates (Phase 2a §3.10).
 //!
 //! The dust boundary and its marginal-input weight moved to

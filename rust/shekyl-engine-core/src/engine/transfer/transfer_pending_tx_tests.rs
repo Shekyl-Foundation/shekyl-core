@@ -121,7 +121,10 @@ fn test_fee_estimates() -> FeeEstimates {
 }
 
 fn test_fee_snapshot_source() -> FixedFeeSnapshotSource {
-    FixedFeeSnapshotSource::new(test_fee_estimates())
+    FixedFeeSnapshotSource::new(
+        crate::engine::fee_policy::ValidatedFeeEstimates::try_new(test_fee_estimates())
+            .expect("test fixture is well-formed"),
+    )
 }
 
 /// Stands in for the daemon submitter on the **production** dispatch
@@ -1901,7 +1904,10 @@ struct GatedFeeSnapshotSource {
 impl FeeSnapshotSource for GatedFeeSnapshotSource {
     async fn fetch(
         &self,
-    ) -> Result<crate::engine::traits::FeeEstimates, crate::engine::error::FeeEstimatorError> {
+    ) -> Result<
+        crate::engine::fee_policy::ValidatedFeeEstimates,
+        crate::engine::error::FeeEstimatorError,
+    > {
         self.entered
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.gate
@@ -1909,7 +1915,7 @@ impl FeeSnapshotSource for GatedFeeSnapshotSource {
             .await
             .expect("test gate semaphore is never closed")
             .forget();
-        Ok(test_fee_estimates())
+        crate::engine::fee_policy::ValidatedFeeEstimates::try_new(test_fee_estimates())
     }
 }
 
@@ -3286,8 +3292,7 @@ fn populate_ledger_scan_only(
 }
 
 fn daemon_fee_estimates_distinct() -> FeeEstimates {
-    // Distinct, monotonic, and inside the interim sanity ceiling
-    // (priority = 8× economy < 10×).
+    // Distinct, monotonic, under the absolute cap.
     FeeEstimates {
         economy: FeeRate::new(5, 1).expect("economy rate"),
         standard: FeeRate::new(10, 1).expect("standard rate"),
@@ -3426,7 +3431,9 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     let n_in = tx.prefix.inputs.len();
     let n_out = tx.prefix.outputs.len();
 
-    let snapshot = daemon_fee_estimates_distinct();
+    let snapshot =
+        crate::engine::fee_policy::ValidatedFeeEstimates::try_new(daemon_fee_estimates_distinct())
+            .expect("test daemon tiers are well-formed");
     let rate = fee_rate_for_priority(FeePriority::Standard, &snapshot).expect("standard rate");
     // Real tree depth for the 2-leaf consistent fixture is 2.
     let seed = fee_from_weight(
