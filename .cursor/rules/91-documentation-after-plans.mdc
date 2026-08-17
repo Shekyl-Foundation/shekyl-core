@@ -24,6 +24,20 @@ the changes.
 - **Stale-doc detection:** if a doc references behavior that no longer
   exists (e.g., a removed RPC field, a deleted RCT type), the doc update is
   not optional — the doc is wrong and will mislead readers.
+- **Sweep the indexes, not just the text.** A correction is not landed until
+  every surface that *points at* the corrected text agrees with it: the item's
+  own **heading**, tables of contents, `docs/design/IMPLEMENTATION_INDEX.md`
+  rows (rule 94), `docs/FOLLOWUPS.md` entry titles, cross-references from other
+  docs, and the doc-comment headings above a corrected Rust item.
+
+  **A corrected body under a stale heading is worse than an uncorrected
+  item.** Scanning is how long documents are actually used — `FOLLOWUPS.md` is
+  read by heading, and the body is read only if the heading says it is
+  relevant. So a stale heading routes the correction to exactly the readers who
+  did not need it, and hides it from the ones who did, while the file looks
+  fixed to anyone grepping the body. Landed 2026-08-16: a FOLLOWUPS entry whose
+  blocker had been removed in the body still read *"provisional pin awaiting
+  the W₂ rig"* in its title.
 
 ## Example
 
