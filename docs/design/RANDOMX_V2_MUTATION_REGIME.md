@@ -1307,31 +1307,95 @@ Item 2 carries the least design and the subtlest failure modes. These
 four are **construction requirements**, not nice-to-haves: each is a
 property the lane must have on the day it lands.
 
-#### MR-R1 — a rotating seed makes its own red self-erasing
+#### MR-R1 — a rotating seed makes its own red self-erasing — **REVISED: derive the seed, do not draw it**
 
-This is the structural hazard the fixed seed did not have. Under a
-pinned corpus a red reproduces on every rerun, so rerun-until-green is
-bounded by not working. **Under a rotating seed, rerunning does make it
-green** — with a different, innocent input set — and the run looks
-identical in the UI. Every halt-and-escalate posture in this workflow
-(concurrent, native-arm) rests implicitly on a reproducibility that
-item 2 removes.
+**The hazard.** Under a pinned corpus a red reproduces on every rerun,
+so rerun-until-green is bounded by not working. Under a seed drawn from
+fresh entropy, **rerunning does make it green** — with a different,
+innocent input set — and the run looks identical in the UI. Every
+halt-and-escalate posture in this workflow (concurrent, native-arm)
+rests implicitly on a reproducibility that a fresh-entropy lane
+removes.
 
-The fix is cheap and entirely outside the harness. `failure_output.rs`
-already carries `seedhash` (64-char hex) and `data` (hex) verbatim in
-its 11-field schema, so **a divergent pair is fully reproducible
-without the corpus seed** — no T11 schema amendment is needed. The gap
-is *persistence*:
+**The first countermeasure, now downgraded.** Artifact-uploading the
+emitted `FailureOutput` line is the house pattern
+(`economics-c2a-prime.yml`: `if: failure()`, run-id-named,
+`retention-days: 14`) and it *works*. But it is the weak form: a
+consensus divergence is the one finding class whose record must outlive
+any retention window, and 14 days — or 90 — is a countdown on evidence
+that may not be read in time. It also makes recoverability depend on CI
+infrastructure state rather than on a property of the design.
 
-- the lane **must upload the emitted JSON line as a workflow artifact**;
-- the documented triage path is **"replay the recorded `(seedhash,
-  data)` pair"**, never "re-run the lane."
+**The revision: make the seed a deterministic function of a time
+index.**
 
-Absent that, the record lives only in CI logs under GitHub's retention
-window, and a red discovered late is a consensus finding that can no
-longer be reproduced. Artifact upload is a **construction requirement**:
-this is the one respect in which item 2 is strictly more fragile than
-what it supplements.
+```text
+seed(i) = cSHAKE256("shekyl/randomx-rotating-corpus-v1", i)[..32]
+```
+
+where `i` is a stable integer — ISO week number, or days-since-epoch —
+computed **once at lane start** and emitted in the M4 banner.
+
+This keeps every property that motivated pinning
+`RANDOM_CORPUS_SEED_V1` in the first place — reproducible CI failures,
+T9 byte-stability, and the runtime-recompute-from-source-string
+discipline whose own rationale reads *"a hard-coded hex pin would pass
+even if the constant and the source-string comment drifted apart"* —
+while making coverage **monotonic instead of constant**. Week 47's
+input set is reconstructable in three years by anyone, offline, from
+the integer alone. No artifact, no retention, no CI archaeology.
+**MR-R1 does not get mitigated; it stops existing.**
+
+Three consequences, pinned explicitly:
+
+1. **It fixes rerun-until-green in the right direction.** A same-day
+   rerun regenerates the *same* set, so the red reproduces — the
+   property the fixed corpus had and that fresh entropy would have
+   thrown away. A rerun the following day gives a different set, so the
+   triage rule is **"replay by index,"** never "re-run the lane," and
+   the banner is what makes the distinction auditable.
+2. **Compute `i` once at process start, not per mode.** A lane
+   straddling midnight UTC that re-derives mid-run produces a run whose
+   banner index does not describe all of its own inputs — a record that
+   lies while looking complete.
+3. **It largely dissolves MR-R4.** See below.
+
+**Prohibition — do not retrofit the pinned corpus into the sequence.**
+The elegant-looking unification ("the pinned corpus is just index 0")
+is a trap. `RANDOM_CORPUS_SEED_V1` is
+`SHA-256("shekyl-randomx-differential-corpus-v1")`, re-derived at
+runtime by `tests::seed_v1_matches_source_sha256`, and all 1024
+`CANONICAL_RANDOM_HASHES` entries plus 32 `CANONICAL_CACHE_SHAS`
+entries are **positionally bound to that seed**. Any redefinition
+invalidates the entire canonical table and every pin gate consuming it,
+across five lanes. The rotating sequence is a **separate,
+domain-separated namespace that never touches the v1 derivation.**
+Stated as a prohibition rather than an omission because the
+unification is exactly what a later reader proposes as cleanup.
+
+**Domain-separator registration is mandatory, not optional.**
+`shekyl/randomx-rotating-corpus-v1` is a new cSHAKE domain separator,
+so it registers in
+[`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) (SA-3b, 207
+rows at time of writing) in the **same PR** that introduces it, and
+`scripts/ci/domain_registry_gate.sh` enforces the row-presence and
+const-binding tripwires. Note the gate reads comment-stripped source
+precisely so a doc comment quoting the literal cannot keep it green
+after the definition moves — the same discipline §13 names.
+
+**Where the artifact upload still earns its place: forensics, not
+recovery.** The 11-field `FailureOutput` schema carries `rust_hash`,
+`c_hash`, both cache SHAs, `class_tag`, `harness_version` and
+`fork_pin`. The *inputs* are reconstructable from the index; the
+*observed outputs on that runner at that toolchain state* are not — and
+for a divergence that later fails to reproduce locally, that delta is
+the whole investigation. So: keep the `if: failure()` upload at the
+house shape, raise retention to the maximum, and let
+
+> **the index carry recoverability, the artifact carry forensics.**
+
+That division goes in the doc because it tells the next reader **which
+one they are allowed to lose.**
 
 #### MR-R2 — the promotion target is the adversarial corpus, not the random one
 
@@ -1355,6 +1419,17 @@ adversarial corpus "stays empty through 2g per §3.19 R7-D4 (post-2g
 design round decides the replacement methodology)." **This is that
 round.** The destination was designed to be decided here.
 
+**Provenance inherited from MR-R1's revision, for free.** With an
+index-derived sequence a promoted entry cites `(index, pair position)`
+— a complete, checkable **derivation** of where the input came from,
+not an assertion that it came from somewhere. A reviewer regenerates
+the pair from the citation and confirms it is what the lane actually
+saw, rather than trusting the claim. That discharges the T-A2
+pin-and-justify discipline with a derivation, which is the stronger
+form and is available here at no cost. (Under fresh entropy the best
+available provenance would have been "found by fuzzing," which is an
+assertion.)
+
 #### MR-R3 — promotion ordering, or the wrong value gets pinned
 
 At the moment of discovery `rust != c`, and **neither leg is
@@ -1375,10 +1450,16 @@ wrong here.
 
 #### MR-R4 — seed provenance must reach the banner
 
-MR-R1's replay path requires an operator-suppliable seed, which is by
-construction attacker-selectable: a contributor can dispatch the lane
-with a seed known to be benign and cite the green run. That is
-T-A7/T-A11 (trust laundering, rubber-stamp) with a new lever.
+**Largely dissolved by MR-R1's revision, and retained in reduced
+form.** With entropy-based seeds an operator-supplied seed is an
+unbounded attacker-selectable value, and the banner's provenance field
+is the *only* defense. With index-based seeds a dispatch input is a
+**bounded integer whose corresponding input set anyone can regenerate
+and check**, so "the operator chose a benign one" becomes a claim that
+can be falsified offline. The banner must still distinguish
+schedule-derived from operator-supplied — a green replay must not be
+citable as a sweep (T-A11) — but it is now a **provenance label rather
+than the load-bearing control**.
 
 The M4 banner substrate is already the right answer —
 `invocation_banner.rs`'s `emit_banner` writes mode and fork-pin before
@@ -1501,6 +1582,8 @@ Per the 2g plan's own §5.7 + §8.3, this is the required carrier.)*
 
 ---
 
+---
+
 ## 12. Round record
 
 | Round | Date | Substance |
@@ -1510,3 +1593,73 @@ Per the 2g plan's own §5.7 + §8.3, this is the required carrier.)*
 | Re-scope | 2026-08-18 | Second review round, read against the threat model and harness source rather than this doc's own artifacts. Three findings recorded: **MR-F9** — the "random" corpus is a pinned `ChaCha20Rng` seed, so five lanes re-verify the same 1024 pairs forever, and `shekyl-pow-randomx` is the **only** crate with a byte-exact reference oracle and **no** `cargo-fuzz` lane (eight other crates have one); **MR-F10** — `assert_equivalent` takes live sessions, so its verdict has no negative test anywhere and mutating it would survive for API-shape reasons, meaning C1's first skip-list would be a refactor catalogue; **MR-F11** — §4.6 M2's T-A9 claim exceeds §4.5 T-A9's own "cannot defend structurally" disposition, and cargo-mutants' mutation distribution is not the laundering distribution. **MR-DQ-8's C1 ruling WITHDRAWN → HELD**: sound on its own terms, but it priced an instrument whose yield was never derived. Re-scoped into three separable items (§7.5): verdict-path testability + negative tests; a rotating-seed differential lane that promotes divergences into the pinned corpus; mutation as a narrow ratchet over assertion modules only, after item 1. §7.6 answers necessary-vs-sufficient-vs-additive; §7.7 answers the cadence question. MR-DQ-1, MR-F6, MR-F7 survive unchanged. |
 | Ratification | 2026-08-18 | Re-scope **RATIFIED**, item 1 first — the sequencing is self-reinforcing: item 1 is what converts "assertion mutant survives" from an API-shape artifact into a real signal, so item 3 cannot be sized honestly until item 1 exists, and item 1 is the only one of the three that is merge-blocking-cheap. Item 2 gained four construction requirements from a source read (§7.9): **MR-R1** — a rotating seed makes its own red self-erasing, since rerunning *does* turn it green with a different innocent input set; countered by artifact-uploading the `failure_output` JSON line (which already carries `seedhash` + `data`, so no T11 amendment) and documenting replay-the-pair, never re-run-the-lane. **MR-R2** — the promotion target cannot be the random corpus (length- and index-coupled per `canonical_outputs.rs`); it is the adversarial corpus, whose methodology `§3.19 R7-D4` explicitly deferred to a post-2g round — this one. **MR-R3** — promotion must follow divergence → halt → root-cause → fix → *then* promote against the fixed build, or a wrong canonical is pinned permanently (T-A10 laundering shape). **MR-R4** — the seed and its provenance must reach the M4 banner with a T17 assertion, since an operator-suppliable seed is attacker-selectable. Also corrected item 2's claim: the **explored** boundary advances, the **pinned** one does not, and the negative half of that rationale belongs in the T# row. Item 3 sizing: row E's **cost** carries over, its **yield** must be re-measured post-item-1. |
 | Macro finding | 2026-08-18 | **MR-F12 — the round's largest finding, and it subsumes MR-F5.** cargo-mutants does not mutate macro invocations (its book says so; the visitors are syn `Visit` impls and a macro body is an unparsed `TokenStream`). Confirmed empirically on this branch: the `+` inside `debug_assert_eq!` at `cache_precondition.rs:378` produced **zero** mutants while structurally identical arithmetic at `:364`, `:379`, `:389` outside macros each produced one. So `assert_eq!(rust_hash, c_hash)` — §4.6 M2's flagship T-A1 target — **is not a mutable expression**, and the mechanism could not fire at any scoping, profile, or budget. MR-F5's scoping defect is real but downstream. This makes **item 1 the precondition** for M2's T-A1 claim to be mechanically true rather than aspirational, and generates the construction constraint *"harness verdicts are functions returning `Result`, never bare assertion macros"* — enforced by a grep gate, because the doc line is what decays. A prior turn's `debug_assert`-under-release-profile hazard is **retracted and recorded as retracted**: those expressions are not mutation sites in either profile, so the proposed class-level `exclude_re` would have been an exclusion covering nothing — this round's own signature failure shape. **MR-DQ-4 DISSOLVED** with reasoning (a denominator needs a population where survival is informative; at verdict scope every mutant is), and replaced by the guard the new scope actually needs: a **minimum-mutant-count assertion**, since `--re` is name-based and a rename yields a clean green over an empty set. Also pinned: the `assert_equivalent` skip-list entry states both halves of its residual, and **ordering-as-triage-routing** is named as its own property class. |
+
+---
+
+## 13. The round's general finding: a gate must assert its own subject exists
+
+Everything specific in this document is a repair. This section is the
+part that generalises, and it is the only part likely to matter to
+someone who never touches RandomX.
+
+**Every defect in this round has one shape.** Not "the gate computed
+the wrong answer" — in every case the gate computed a *correct* answer
+about a surface that was not there, and reported it as a clean signal.
+
+| Instance | The surface that wasn't there | What it looked like |
+| --- | --- | --- |
+| Severed job header (2026-07, `477a448b1`) | the job itself | Monday cron green |
+| MR-F2′ skip-list config | the file, at the read path | discipline "enforced" |
+| MR-F5 test scoping | the harness, in the judging set | mutants "caught" |
+| **MR-F12 assertion macros** | **the mutable expression** | **survivor count clean** |
+| MR-F10 verdict reachability | the reachable branch | tests "passing" |
+| MR-F6 dispatch precedence | the intended trigger condition | job "gated" |
+
+And — the part that makes this a finding rather than an observation —
+**three of the proposed fixes had the same shape as the defect**:
+
+| Proposed fix | Would have been |
+| --- | --- |
+| pin `test_package` in `.cargo/mutants.toml` | a setting in a file nothing reads |
+| class-level `exclude_re` for `debug_assert` mutants | an exclusion covering a class that cannot occur |
+| `--re`-scoped verdict ratchet | a clean green over an empty mutant set |
+
+Each was caught, but none by noticing the fix was wrong on its own
+terms — each was caught by asking *"does the thing this acts on
+exist?"* That question is cheap, mechanical, and was not part of the
+process at the round's start.
+
+### The rule
+
+> **A gate must assert that its own subject exists, and fail loudly
+> when it does not. Absence of signal is not evidence of absence of
+> defect — it is, first, evidence that the subject may be absent.**
+
+The countermeasures this round landed are not three fixes. They are
+three instances of one rule:
+
+- **grep gate** on verdict shape (MR-F12) — asserts the mutable
+  expression exists;
+- **minimum-mutant-count assertion** (MR-DQ-4) — asserts the mutant
+  population is non-empty;
+- **skip-list liveness assertion** (MR-DQ-7) — asserts each exclusion
+  matches at least one real path;
+- and two that predate the round and are the same rule:
+  `ctest --no-tests=error` in the full-parity job, and the
+  domain-registry gate reading **comment-stripped** source so a doc
+  comment quoting a literal cannot keep it green.
+
+That last one is the tell: the house already had the rule, applied in
+two places, without the rule being written down. Which is why it was
+not applied to T18.
+
+### Why it belongs outside this document
+
+The pattern is not RandomX-specific — it is a property of gates. It has
+precedent for promotion:
+[`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+was itself "promoted from RandomX v2 Phase 2c" for the same reason. A
+`docs/FOLLOWUPS.md` entry proposes promoting this to a rule; the
+promotion is **not** made here, because minting a rule from inside the
+round that discovered it is precisely the self-auditing move this round
+has been arguing against. It wants a reader who was not in it.
