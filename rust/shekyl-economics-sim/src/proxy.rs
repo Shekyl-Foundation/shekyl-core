@@ -61,13 +61,33 @@ pub fn max_holdings_bytes() -> f64 {
 }
 
 /// Bytes in one serve-challenge response: the 128-byte challenged leaf
-/// (`ArchivalServeCreditResponse::leaf_bytes`) + the **shallow** segment co-path
-/// (`SegmentPathOpening`). The segment is `SELENE·HELIOS·SELENE = 38·18·38`
-/// (`SEGMENT_LEAF_COUNT`), so the opening is ~3 layers of sibling commitments:
-/// `(38 + 18 + 38) · 32 B ≈ 3.0 KB`. A model estimate (scenario layer) — the
-/// verdict is robust to it: any KB-scale opening is ≪ the 3.33 MB segment, which
-/// is the whole point (`wire.rs`: *"segment paths are shallow"*).
-pub const RESPONSE_BYTES: f64 = 128.0 + (38.0 + 18.0 + 38.0) * 32.0;
+/// (`ArchivalServeCreditResponse::leaf_bytes`) + everything `verify_segment_path`
+/// needs to check it against `R_k`.
+///
+/// The segment is `SELENE·HELIOS·SELENE = 38·18·38` (`SEGMENT_LEAF_COUNT`), so at
+/// `SEGMENT_LAYER_J = 2` the opening is:
+///
+/// - **leaf chunk** `4·38·32 B = 4,864 B` — `SCALARS_PER_LEAF · SELENE_CHUNK_WIDTH`.
+///   It is a *separate parameter* of `verify_segment_path`, declared by no struct,
+///   and `leaf_bytes_in_layer` requires the whole chunk rather than the one leaf.
+///   A verifier can neither run without it nor derive it, so it is transmitted.
+/// - **branch layers** `(18 + 38)·32 B = 1,792 B` — `shekyl-curve-tree`'s assembler
+///   runs `for layer in 1..depth`, so the leaf layer is *excluded* and depth 3
+///   yields exactly two branch layers, not three.
+///
+/// **Corrected 2026-08-18 (`ARCHIVAL_PASS_RECORD_CARRIER.md` CR-D2).** This read
+/// `128 + (38 + 18 + 38)·32 ≈ 3.1 KB`, wrong in **both directions at once**: three
+/// branch layers where the assembler yields two, and the leaf layer counted as 38
+/// scalars where it is 152. Net understatement **2.16×**.
+///
+/// **The caveat that let the error travel.** The old note said "the verdict is
+/// robust to it: any KB-scale opening is ≪ the 3.33 MB segment" — true for the
+/// *hold-vs-fetch* comparison it was written for, and false wherever this constant
+/// is the dominant term. CR-D2 quoted the signature alone and reached the opposite
+/// conclusion from the one it reached with the opening included. **A robustness
+/// caveat is a property of the use, not of the constant, and does not travel when
+/// the constant does** — so this one is stated per-use below rather than blanket.
+pub const RESPONSE_BYTES: f64 = 128.0 + (4.0 * 38.0) * 32.0 + (18.0 + 38.0) * 32.0;
 
 /// Storage cost basis, fiat `$/byte/year` (mirrors `burden::BASE_STORAGE_FIAT_PER_BYTE_YEAR`
 /// — amortized commodity HDD ≈ `1e-11 $/B/yr`). The honest holder pays this on
@@ -722,19 +742,35 @@ pub fn tj_shard_payload_report(
 mod tests {
     use super::*;
 
+    /// Re-fetch beats holding at **bulk transit only** — the band no longer
+    /// agrees with itself.
+    ///
+    /// **Restated 2026-08-18 with the `RESPONSE_BYTES` correction (CR-D2).** This
+    /// asserted `refetch < storage` at *every* band member, which was the strong
+    /// form: if the proxy free-rides even at the price least favourable to it,
+    /// it free-rides everywhere. The 2.16× correction breaks that inference —
+    /// at retail egress the proxy now pays *more* than it would to hold.
+    ///
+    /// Both directions are asserted so the split cannot silently close again from
+    /// either side.
     #[test]
-    fn refetch_is_far_cheaper_than_storage() {
-        // The crux: one epoch of holding 13.6 GB dwarfs re-fetching ~4096 KB-scale
-        // openings, at any bandwidth band member — so at q=0 the margin is negative
-        // (the proxy free-rides), which is exactly the W10 concern.
+    fn refetch_beats_storage_at_bulk_transit_but_not_at_retail_egress() {
         let storage = honest_storage_cost_per_epoch(STORAGE_FIAT_PER_BYTE_YEAR);
-        for &fp in &FETCH_FIAT_PER_BYTE_BAND {
-            let refetch = proxy_refetch_cost_per_epoch(RESPONSE_BYTES, fp);
-            assert!(
-                refetch < storage,
-                "re-fetch {refetch} must be < storage {storage} at fetch price {fp}"
-            );
-        }
+
+        let bulk = proxy_refetch_cost_per_epoch(RESPONSE_BYTES, FETCH_FIAT_PER_BYTE_BAND[0]);
+        assert!(
+            bulk < storage,
+            "at bulk transit re-fetch {bulk} must still undercut storage {storage} \
+             — this is the surviving half of the W10 concern"
+        );
+
+        let retail = proxy_refetch_cost_per_epoch(RESPONSE_BYTES, FETCH_FIAT_PER_BYTE_BAND[1]);
+        assert!(
+            retail > storage,
+            "at retail egress re-fetch {retail} must EXCEED storage {storage} — if this \
+             flips back, either RESPONSE_BYTES shrank or the price band moved, and the \
+             W10 re-verdict this pins is stale"
+        );
     }
 
     #[test]
@@ -752,33 +788,71 @@ mod tests {
         assert!((slash_prob_per_epoch(1.0, SLASH_M, SLASH_N) - 1.0).abs() < 1e-9);
     }
 
+    /// W10 fails at bulk transit and **no longer** fails at retail egress.
+    ///
+    /// **Restated 2026-08-18 with the `RESPONSE_BYTES` correction (CR-D2).** This
+    /// tested only retail egress, chosen *because* it was "proxy-unfavourable":
+    /// failure there implied failure across the band. That implication is gone —
+    /// retail egress is now the end where the proxy loses — so the band's two ends
+    /// are asserted separately and the strong form is not reinstated by accident.
+    ///
+    /// **What this does NOT decide.** The correction moves in the *safe* direction
+    /// for the retention argument: re-fetching got more expensive, so the
+    /// free-riding case is weaker, not stronger. But W10 still fails at bulk
+    /// transit, so **the overall A5/W10 verdict may be unchanged even though one
+    /// end of it flipped.** "One band member crossed over" and "the finding is
+    /// retired" are different claims, and only the first is established here. The
+    /// verdict is `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`'s to re-run; this
+    /// test pins the arithmetic it must start from.
     #[test]
-    fn w10_fails_at_loose_grace_and_crossover_is_defined() {
-        // At q≈0 (loose grace, reliable re-fetch) the margin is negative — W10 FAILS.
-        let fp = FETCH_FIAT_PER_BYTE_BAND[1]; // retail egress (proxy-unfavourable)
+    fn w10_fails_at_bulk_transit_and_the_retail_end_no_longer_free_rides() {
         let slash_loss = bond_loss_fiat(0.10) + 0.0; // bond only, mid SKL price
+
+        // Bulk transit: at q≈0 the margin is negative — the proxy free-rides, and
+        // a crossover q* exists, which is the "how tight must grace be" number.
+        let bulk = FETCH_FIAT_PER_BYTE_BAND[0];
         assert!(
             margin_per_epoch(
                 RESPONSE_BYTES,
-                fp,
+                bulk,
                 STORAGE_FIAT_PER_BYTE_YEAR,
                 0.0,
                 slash_loss,
                 0.0,
                 131
-            ) < 0.0
+            ) < 0.0,
+            "W10's surviving half: at bulk transit the proxy still free-rides at loose grace"
         );
-        // A crossover q* exists (bond exposure can close it if re-fetch is forced
-        // unreliable enough) — the "how tight must grace be" number.
         let qc = crossover_q(
             RESPONSE_BYTES,
-            fp,
+            bulk,
             STORAGE_FIAT_PER_BYTE_YEAR,
             slash_loss,
             0.0,
             131,
         );
-        assert!(qc.is_some_and(|q| q > 0.0 && q < 1.0));
+        assert!(
+            qc.is_some_and(|q| q > 0.0 && q < 1.0),
+            "a crossover must still exist at bulk transit, or there is no grace-tightening \
+             target to compute"
+        );
+
+        // Retail egress: the margin is now POSITIVE at q≈0 — the proxy loses without
+        // any grace tightening at all, so its crossover sits at zero.
+        let retail = FETCH_FIAT_PER_BYTE_BAND[1];
+        assert!(
+            margin_per_epoch(
+                RESPONSE_BYTES,
+                retail,
+                STORAGE_FIAT_PER_BYTE_YEAR,
+                0.0,
+                slash_loss,
+                0.0,
+                131
+            ) > 0.0,
+            "at retail egress the proxy must now LOSE at loose grace; if this goes negative \
+             again the re-verdict above is stale"
+        );
     }
 
     #[test]

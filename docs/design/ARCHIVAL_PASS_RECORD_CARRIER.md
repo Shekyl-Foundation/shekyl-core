@@ -218,8 +218,8 @@ are exactly what `verify_segment_path` consumes, and they are gone. A reader who
 expects a pruned record's membership proof to be re-checkable later will be
 wrong, and that is a property of the design rather than an oversight.
 
-**Sibling finding, deliberately NOT in this PR: `proxy.rs`'s constant is wrong,
-and correcting it moves a ratified economics verdict.**
+**Sibling finding, corrected IN this PR: `proxy.rs`'s constant was wrong, and
+correcting it moves one end of a ratified economics verdict.**
 [`RESPONSE_BYTES`](../../rust/shekyl-economics-sim/src/proxy.rs) is
 `128 + (38 + 18 + 38)·32 ≈ 3.1 KB` — wrong in *both directions at once*: three
 branch layers where the assembler yields two, and the leaf layer as 38 scalars
@@ -246,18 +246,34 @@ it flipped.** That is precisely why it needs reasoning rather than a number
 swap: "one band member crossed over" and "the finding is retired" are different
 claims, and only the first is established.
 
-That is an **economics re-verdict**, not a number fix, and it rides its own
-review surface under [rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)
-— bundling it here would let it in on the carrier round's review, which is the
-defect this round already declined to commit for `EndpointUpdate`. The partition
-above is ruled on arithmetic that does not depend on it.
+**Why it lands here rather than in its own round, correcting an earlier call.**
+This was first held out under [rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)
+on the reasoning that an economics re-verdict should not ride in on a
+byte-layout review. That over-applied the rule. Rule 19 asks whether a bundle
+*collapses* two validation surfaces or *conflates* two under a topic — and the
+constant and CR-D2's arithmetic are **the same surface**: both are "did we count
+the segment opening correctly?", checked by one reviewer with one body of
+knowledge. That is rule 19's **bundle** case. Leaving a known-wrong constant
+live in the tree while a doc described it as wrong would have been debt with a
+note attached, which is what rules 15/16 say not to ship pre-genesis.
+
+**What is bundled is the arithmetic; the verdict is not settled here.** The two
+`shekyl-economics-sim` tests are restated to assert only what the shipped
+functions now compute — W10 still fails at bulk transit (`q* ≈ 0.274`), and the
+retail-egress end no longer free-rides (`margin > 0` at `q ≈ 0`, `q* = 0`). The
+strong form they encoded — *failure at the proxy-unfavourable end implies
+failure across the band* — is removed because the implication no longer holds,
+not replaced with a new verdict. Whether A5/W10 survives overall belongs to
+`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`, and the restated tests pin the
+arithmetic that round must start from.
 
 **The constant's own caveat is why this travelled.** It read *"the verdict is
 robust to it: any KB-scale opening is ≪ the 3.33 MB segment"* — **true for that
 use**, where the proxy compares re-fetch against holding and both readings are
 ≪ a segment. Not true where the opening is the dominant term. A robustness
 caveat is a property of the **use**, not of the constant, and it does not travel
-when the constant does.
+when the constant does — so the corrected doc-comment states it per-use rather
+than as a blanket claim.
 
 **Note for the format round: the leaf chunk is not on the wire today.**
 `txin_archival_serve_credit_response` has no leaf-chunk field, and

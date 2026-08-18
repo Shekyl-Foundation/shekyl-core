@@ -78,6 +78,16 @@
   enough to re-verify the opening, which is stated on the ruling rather than
   left to be discovered.
 
+  The same read corrects `shekyl-economics-sim`'s `RESPONSE_BYTES`, which
+  understated the opening **2.16×** (three branch layers where the assembler
+  yields two; the leaf layer as 38 scalars where it is 152). It moves one end of
+  the Stage-2 **A5/W10** finding: re-fetch still undercuts holding at bulk
+  transit (`q* ≈ 0.274`), and at retail egress the proxy now **loses** at loose
+  grace rather than free-riding. The two proxy tests are restated to assert both
+  ends separately — the strong form they encoded (failure at the
+  proxy-unfavourable end implies failure across the band) no longer follows.
+  Whether A5/W10 survives overall is not settled here.
+
 - **The Foundation CompleteTree posture is reachable, warned, and served —
   and it is no longer the default anything.** Round record:
   [`docs/design/COMPLETETREE_ACTIVATION.md`](design/COMPLETETREE_ACTIVATION.md).
