@@ -8,8 +8,7 @@ hardening pass (see [`docs/MID_REWIRE_HARDENING.md`](../MID_REWIRE_HARDENING.md)
 ```text
 docs/benchmarks/
 ├── README.md                           (this file)
-├── wallet2_baseline_v0.manifest.md     C++ baseline: operation lists + fixture shapes
-├── wallet2_baseline_v0.json            C++ baseline: frozen numbers (captured post-PR)
+├── wallet2_baseline_v0.manifest.md     C++ baseline: RETIRED (frozen history)
 ├── shekyl_rust_v0.manifest.md          Rust baseline: operation lists + fixture shapes
 ├── shekyl_rust_v0.json                 Rust baseline: frozen numbers (criterion + iai)
 └── shekyl_rust_v0.iai.snapshot         Rust baseline: raw iai-callgrind stdout
@@ -27,32 +26,20 @@ diffs are comparing like against like. These are rolling baselines;
 they advance on every merge to `dev` via the bench-baseline branch
 workflow (commit 3.3 wires this).
 
-## Capturing the C++ baseline
+## The C++ baseline is retired
 
-On a reference machine (consistent toolchain, no background workload,
-CPU frequency scaling pinned to a stable setting):
+The C++ harness (`tests/wallet_bench/`) and its capture script were
+deleted with the `wallet2` layer in the Phase-5 cutover: the harness
+existed to measure the C++ baseline the Rust stack was replacing, and
+that comparison ends when the thing being compared against is gone.
 
-```bash
-./scripts/bench/capture_cpp_baseline.sh
-```
+`wallet2_baseline_v0.manifest.md` is **kept as frozen history** — the
+Rust manifest cross-references it for operation lists and for the
+rationale behind the `SkipWithError`-gated and Rust-only benchmarks.
+Nothing regenerates it; treat every number and status in it as a
+statement about the tree as it stood before the cutover.
 
-This script:
-
-1. Configures a release build with `BUILD_SHEKYL_WALLET_BENCH=ON`.
-2. Builds the `shekyl-wallet-bench` target only (does not rebuild the
-   whole tree).
-3. Runs the binary with `--benchmark_format=json`,
-   `--benchmark_repetitions=5`, `--benchmark_report_aggregates_only=false`
-   so every repetition + aggregates are preserved.
-4. Captures `uname -a`, compiler version, CPU model, and the git
-   commit of the tree under test.
-5. Emits `docs/benchmarks/wallet2_baseline_v0.json` as a single
-   self-contained artifact.
-
-Commit the resulting JSON as a follow-up to the commit that ships the
-harness. The harness commit intentionally does **not** carry numbers
-captured on an arbitrary machine — the reference machine is part of
-the measurement.
+Rust baselines continue to roll forward as below.
 
 ## Capturing the Rust baseline
 

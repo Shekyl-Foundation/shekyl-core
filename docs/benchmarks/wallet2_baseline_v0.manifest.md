@@ -1,10 +1,19 @@
 # wallet2 baseline v0 — benchmark manifest
 
-**Status.** Pinned prose specification for the C++ benchmarks captured
-by `tests/wallet_bench/bench_wallet2.cpp`. This manifest is
-load-bearing: the Rust harness in commit 3.2 mirrors these operation
-lists, and the bench-comparison script (commit 3.3) emits both manifest
-lines side by side in the PR comment against every regression signal.
+**Status: RETIRED — frozen history (Phase-5 wallet2 cutover).** The
+harness this specifies (`tests/wallet_bench/bench_wallet2.cpp`) and its
+capture script are deleted along with the `wallet2` layer, so nothing
+regenerates this document and no comparison consumes it. It is kept
+because the Rust manifest (`shekyl_rust_v0.manifest.md`)
+cross-references it for operation lists and for why several benchmarks
+are Rust-only or `SkipWithError`-gated.
+
+Everything below describes the tree **as it stood before the cutover**;
+read it as a record, not as a live specification. Originally: pinned
+prose specification for the C++ benchmarks, load-bearing because the
+Rust harness mirrors these operation lists and the bench-comparison
+script emitted both manifest lines side by side against every
+regression signal.
 
 **Scope.** Of the Five hot paths identified in §3.1 of
 `docs/MID_REWIRE_HARDENING.md`, **one ships with a live C++ baseline on

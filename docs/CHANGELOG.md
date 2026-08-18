@@ -2,8 +2,68 @@
 
 ## [Unreleased]
 
+### Added
+
+- **The CMake build now produces the Rust `shekyl-cli` and
+  `shekyl-wallet-rpc` binaries** (C1/C2 install cutover).
+  `cmake/BuildRust.cmake` previously invoked `cargo` only for the two
+  staticlibs, so `shekyl-cli` — listed as a build output in
+  `INSTALLATION_GUIDE.md` for as long as that guide has existed — was
+  never actually produced by a CMake build, and `bin/shekyl-wallet-rpc`
+  was the C++ `wallet_rpc_server` wearing that `OUTPUT_NAME`. Both Rust
+  binaries are now built, staged into `bin/` (which is what
+  `contrib/gitian/` tars into the release archives), and installed.
+  **Not on Windows:** the Rust wallet stack is Unix-only today (UDS
+  transport, 0600 socket backing "auth rides the transport", 0600 seed
+  export), so `BuildRust.cmake` skips the binaries for Windows targets.
+  Combined with the `wallet_rpc_server` deletion below, Windows release
+  archives carry the daemon but no wallet until that port lands —
+  tracked in `docs/FOLLOWUPS.md` ("Rust wallet stack: no Windows
+  support"). macOS is unaffected: it is Unix, and needed only
+  cross-linker wiring — rustc's link step now inherits the depends
+  toolchain's `-B` / `--target` / `--sysroot`, which it never got while
+  this file built staticlibs only, because an archive is never linked.
+
+### Removed
+
+- **The C++ `wallet_rpc_server` executable is deleted**, in the same PR
+  that handed its binary name and install slot to the Rust
+  `shekyl-wallet-rpc`. Keeping it would have left an uninstalled second
+  implementation of a surface the Rust binary already owns — built on
+  every CI run, shipped to nobody, and available to accrete fixes that
+  would then have to be paid for twice. `wallet_rpc_server.{h,cpp}` and
+  the CMake target are gone; `wallet_rpc_server_commands_defs.h` and
+  `wallet_rpc_server_error_codes.h` remain **only** because
+  `wallet2_ffi.cpp` still includes them, and go with `wallet2` at
+  Phase 5. The Windows removed-flag CI assertions now cover `shekyld`
+  alone (they grep a message emitted by C++ `src/common/removed_flags`,
+  which the Rust binary's argument parser does not produce).
+- **Trezor hardware-wallet backend deleted** (`src/device_trezor/`,
+  `tests/trezor/`, `cmake/CheckTrezor.cmake`, and the `TREZOR_DEBUG` /
+  `USE_DEVICE_TREZOR` build arms). It was dead code under the V3
+  default — protobuf generation never ran, `protocol.cpp` carried a
+  `#error` against accidental compilation — and Trezor firmware has no
+  post-quantum support, which V3 addresses require from genesis.
+  Reopen criterion: Trezor ships firmware implementing the primitives
+  in `docs/HARDWARE_WALLETS.md` §V4 Roadmap. The dormant Ledger
+  backend under `src/device/` is unaffected (separate retirement
+  track).
+
 ### Changed
 
+- **`shekyl-wallet-rpc` now names the Rust binary, everywhere.** The C++
+  `wallet_rpc_server` keeps building under its own target name through
+  the transition but is no longer installed and no longer claims that
+  `OUTPUT_NAME`; it is deleted wholesale with `wallet2` in the Phase-5
+  commit. Two different programs sharing one installed name was the
+  failure this cutover exists to prevent. The Windows CI removed-flag
+  assertions follow the C++ binary (the V3.1 migration message they grep
+  for comes from `src/common/removed_flags.{h,cpp}` and cannot transfer
+  to the Rust binary's argument parser); the shipped Rust binaries gain
+  their own runs-and-responds check. The gitian packaging copies for
+  `shekyl-cli` and `shekyl-wallet-rpc` now hard-fail instead of
+  `|| true` — they are guaranteed products, and tolerating their absence
+  meant a release with no wallet-rpc could be staged silently.
 - **The pass-record carrier round is a record partition, not a signature split
   (`CR-D2`).** Sizing the whole record was arithmetic, not measurement: the
   segment layout (`SEGMENT_LAYER_J = 2`, Selene/Helios 38/18) fixes the opening
@@ -21111,11 +21171,12 @@ production callers.
   un-skip criteria for the two gated paths),
   [`docs/benchmarks/README.md`](benchmarks/README.md) (capture
   procedure + baseline-update policy),
-  [`scripts/bench/capture_cpp_baseline.sh`](../scripts/bench/capture_cpp_baseline.sh)
+  `scripts/bench/capture_cpp_baseline.sh`
   (reference-machine capture wrapper emitting a schema-versioned
   JSON envelope with toolchain + host CPU + git-rev metadata),
-  [`tests/wallet_bench/README.md`](../tests/wallet_bench/README.md)
-  (local build + run instructions + known gaps). The frozen
+  `tests/wallet_bench/README.md`
+  (local build + run instructions + known gaps). *(Both deleted in the
+  Phase-5 wallet2 cutover; the paths above are historical.)* The frozen
   `wallet2_baseline_v0.json` is captured on a reference machine by
   the commit author and landed as a follow-up — this commit ships
   the harness, not the numbers, because the reference machine is

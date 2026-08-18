@@ -107,9 +107,10 @@ namespace daemon_args
 
 
   // shekyld's local --non-interactive flag. This is the only surviving piece
-  // of the old daemonizer CLI on either binary: it suppresses the interactive
-  // readline command console without touching process lifecycle. The wallet
-  // RPC server declares its own separate copy of this flag in wallet_rpc_server.cpp.
+  // of the old daemonizer CLI: it suppresses the interactive readline command
+  // console without touching process lifecycle. It is now shekyld's alone —
+  // the C++ wallet RPC server, which declared its own separate copy, was
+  // deleted when the `shekyl-wallet-rpc` name went to the Rust binary.
   const command_line::arg_descriptor<bool> arg_non_interactive = {
     "non-interactive"
   , "Run non-interactive (suppress readline console; signals still work)"

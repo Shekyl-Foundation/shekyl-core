@@ -228,7 +228,9 @@ char* wallet2_ffi_get_scanner_keys(wallet2_handle* w);
 // ── Generic JSON-RPC dispatcher ──────────────────────────────────────────────
 
 // Dispatch any wallet RPC method by name with JSON params.
-// This covers the full 98-method surface of the C++ wallet_rpc_server.
+// This covers the full 98-method surface of the former C++
+// wallet_rpc_server (deleted; the Rust `shekyl-wallet-rpc` serves that
+// surface now). This facade is deleted with `wallet2` at Phase 5.
 // `method`: JSON-RPC method name (e.g., "get_accounts", "sweep_all").
 // `params_json`: JSON object string with method parameters.
 // Returns: JSON result string on success, NULL on failure (check last_error).

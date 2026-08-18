@@ -36,9 +36,14 @@
 #include <variant>
 #include <vector>
 #include <boost/archive/portable_binary_iarchive.hpp>
+#include <boost/archive/portable_binary_oarchive.hpp>
+#include <boost/serialization/vector.hpp>
 #include <boost/type_traits/make_unsigned.hpp>
+#include "string_tools.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
+#include "cryptonote_basic/cryptonote_boost_serialization.h"
+#include "cryptonote_basic/difficulty.h"
 #include "cryptonote_config.h"
 #include "fcmp/rctSigs.h"
 #include "serialization/binary_archive.h"
@@ -46,8 +51,8 @@
 #include "serialization/debug_archive.h"
 #include "serialization/variant.h"
 #include "serialization/containers.h"
+#include "serialization/string.h"
 #include "serialization/binary_utils.h"
-#include "wallet/wallet2.h"
 #include "gtest/gtest.h"
 #include "unit_tests_utils.h"
 #include "device/device.hpp"

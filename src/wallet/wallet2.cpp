@@ -87,7 +87,6 @@ using namespace epee;
 #include "fcmp/rctOps.h"
 #include "fcmp/bulletproofs_plus.h"
 #include "device/device_cold.hpp"
-#include "device_trezor/device_trezor.hpp"
 #include "net/socks_connect.h"
 
 extern "C"
@@ -8251,7 +8250,8 @@ fee_priority wallet2::adjust_priority(fee_priority priority)
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::register_devices(){
-  hw::trezor::register_all();
+  // Trezor backend deleted (no PQC support); nothing to register until a
+  // hardware vendor ships post-quantum firmware. See docs/HARDWARE_WALLETS.md.
 }
 
 hw::device& wallet2::lookup_device(const std::string & device_descriptor){

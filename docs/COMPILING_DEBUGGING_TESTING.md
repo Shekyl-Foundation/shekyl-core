@@ -358,16 +358,17 @@ Daemon only:
 cmake --build build/testnet-release --target daemon -- -j"$(nproc)"
 ```
 
-Wallet CLI:
+Wallet CLI and wallet RPC (both Rust, one CMake target since the C1/C2
+install cutover — an ordinary full build produces them too):
 
 ```bash
-cargo build -p shekyl-cli --release
+cmake --build build/testnet-release --target shekyl_rust_bins -- -j"$(nproc)"
 ```
 
-Wallet RPC:
+Or straight from cargo, if you do not want the CMake staging copy:
 
 ```bash
-cmake --build build/testnet-release --target wallet_rpc_server -- -j"$(nproc)"
+cargo build -p shekyl-cli -p shekyl-wallet-rpc --release
 ```
 
 Primary C++ test binaries:
