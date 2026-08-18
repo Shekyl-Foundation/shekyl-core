@@ -4,6 +4,15 @@
 
 ### Changed
 
+- **Cover restoration is PR 1 of the relay-logic Rust cutover, not a C++
+  feature with a Rust mirror.** `COVER_TRAFFIC_RESTORATION.md` §2.9 names
+  the five-step series; the C++ `broadcast_all_zones` loop is condemned
+  glue that step 3 deletes. Review polarity: Rust owns remaining relay
+  logic, C++ is the shim the series removes. `RelayCarrier::Covert`
+  carries `SlotIndex`; `CovertQueues` slices at the fragment window so
+  CV-1 is a restart, not a name; CV-4 threads the queues into the
+  cadence collector; the dispatch FFI crossing is in `shekyl_ffi.h`.
+
 - **The Foundation CompleteTree posture is reachable, warned, and served —
   and it is no longer the default anything.** Round record:
   [`docs/design/COMPLETETREE_ACTIVATION.md`](design/COMPLETETREE_ACTIVATION.md).

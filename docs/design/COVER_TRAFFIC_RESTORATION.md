@@ -1,7 +1,9 @@
 # Cover traffic restoration — audit, plan, and status
 
-**Status: audit and plan complete; implementation not started. Stages 1–3 are
-unblocked, stage 4 is not — see §3.**
+**Status: PR 1 of the relay-logic Rust cutover is on this branch.** The C++
+covert restructure (§2.1 stages 1–3) is not being pursued; stage 4 enablement
+is not startable. See §2.9 for the series, §3 for what this PR actually
+landed.
 
 This document exists because the cover mechanism is **deliberately inert, fully
 built, and has no production caller** — which is indistinguishable, to a
@@ -245,14 +247,26 @@ which is what they actually need.
 > hiding. Any future covert test — in any language — needs a determined epoch,
 > not a wider drive budget.
 
-**Kept deliberately: Design A's C++ arm** (`dc1c57d31`). Cheap, and the
-`levin.cpp` migration oracle is the only thing that can prove the new byte
-actually crosses the FFI rather than the two sides agreeing separately. Until
-the cutover, a node built from this tree really does flood every zone.
+**The C++ flood arm is condemned glue, not the deliverable.** It exists so a
+node built from this tree implements Design A *until the cutover deletes
+`net_node.inl`*. It is on the dies-with-it list above. A reviewer who treats
+that loop as the keep, and the Rust truth table / `RelayCarrier` /
+`RelayDispatch` / covert queue as optional ceremony, has the polarity
+backwards: **all remaining relay logic belongs in Rust; the C++ is what the
+series deletes.** Duplicates across the FFI exist for that reason — Rust is
+the owner, C++ is a temporary shim — not because the two sides are meant to
+keep agreeing in parallel.
+
+The `levin.cpp` migration oracle is retained only while the byte still
+crosses the FFI. It dies with the C++ half. The Rust truth table is what
+survives.
 
 ## 2.7 The Rust covert state machine — the work that survives
 
-**Unbuilt, unassigned, and forced by the cutover regardless of §42.**
+**Forced by the cutover regardless of §42.** Step 1 of §2.9 lands the
+module split and the CV-4 shape; the executor body is step 2. Do not read
+"unbuilt" below the inventory table as "the Rust side does not exist" —
+`CovertQueues` is on this branch. The C++ inventory is what still *executes*.
 
 ### What C++ owns today
 
@@ -288,9 +302,10 @@ reads as a latency improvement. That is §20.2's named failure mode.
 > **So the move is permitted and the barrier must be rebuilt in types.** A
 > private queue module the scheduler holds no handle to; an effect type that
 > structurally cannot name payload state; and **the test that fails when the
-> scheduler gains a queue-shaped input** — which does not exist today, because
-> the boundary has been doing that test's job. Writing that test is the first
-> task of the move, not the last.
+> scheduler gains a queue-shaped input.** The module exists on this branch
+> (`CovertQueues`). The test is only a barrier if the two depths are an
+> input to the cadence under observation — unused locals plus an essay are
+> not a substitute for the FFI friction they replace.
 
 ### Owned by the cutover, not by §42
 
@@ -307,7 +322,8 @@ quantity turned out not to be the one the ruling needed.
 
 The outstanding computation is α at the covert hop: four
 `full_travel_probability` calls, and the one place the fragment arithmetic
-(§2.6's 3-of-20 modal transaction) and the embargo derivation actually meet.
+(§2.6's modal transaction of three fragments in a 20-fragment envelope)
+and the embargo derivation actually meet.
 
 **The decision rule, fixed before the value is known:**
 
@@ -329,19 +345,51 @@ exactly the shape that invites re-litigating a pin rather than re-deriving a
 constant, and the invitation is strongest in the minutes after the number
 appears. The rule above is checkable against the value whenever it arrives.
 
+## 2.9 This PR is the first of the relay-logic Rust cutover
+
+**This document is the plan for that series.** It is not a cover-only audit
+that happens to mention a cutover in passing, and it is not the whole daemon
+rewrite (mempool, p2p, RPC stay out — same discipline as §2.0). It is the
+series that moves *the remaining relay logic* into Rust so the ~30-day C++
+deletion is a delete, not a rewrite.
+
+Rule 20: new logic and bug fixes belong in Rust; C++ that remains is a
+transport/marshaling shim. Every PR in this series is judged on whether it
+advances that boundary, not on whether the condemned C++ still "works."
+
+| step | what Rust must own | this PR (`feat/cover-restoration`) | next PR that owns it |
+| --- | --- | --- | --- |
+| **1** | **The decisions.** Fluff floods every zone (`BroadcastAllZones`). Carrier is a function of phase (`RelayCarrier` / `RelayDispatch`). Covert cadence is queue-blind (CV-4's type barrier). | **This PR.** Truth table, dispatch types (`RelayCarrier::Covert` carries `SlotIndex`), `CovertQueues` as a module `Driver` does not hold, complete `shekyl_relay_zone_plan_dispatch_with_refresh` crossing (header + signature gate + null-handle). The C++ flood arm is a **shim so production is correct until step 3 deletes it** — do not extend it. | Step 2. |
+| **2** | **The covert executor.** Per-channel pending, in-flight remainder, bind, CV-1 discard — today's `send_noise` / `queue_covert_notify` / `clear_channel`. | Skeleton only (`CovertQueues`). Must become a real port or stop claiming CV-1. | The PR that ports `send_noise`. Fragment window lives where remainder length is observable. `Driver::poll` still takes no queue. |
+| **3** | **Zone fan-out.** Which configured zones receive a fluff. | C++ `broadcast_all_zones` loop in `net_node.inl`. **Delete target.** | The PR that names the zone set in Rust and reduces C++ to "send these bytes on this zone." The loop in `net_node.inl` does not grow another arm. |
+| **4** | **Production notify.** `send_txs` consumes `plan_dispatch` (phase + carrier + slot in one call). The inherited covert branch — carrier above phase, stem→`local`, all-channels broadcast — is deleted, not repaired. | FFI exists; no C++ caller. That is step 1's seam, not a finished notify path. | Wire the shim, *or* skip if step 5 lands first and notify is already Rust. Do not restructure `levin_notify.cpp` "for a month of life" — §2.6 already discarded that. |
+| **5** | **C++ relay path gone.** `levin_notify.cpp`, `net_node.inl`'s `send_txs` routing, the `zone_route` token in `enums.h`, every `levin.cpp` covert/route oracle, and any `shekyl_relay_zone_*` crossing that exists only for C++. | — | The cutover PR. In-process Rust calls `Zone` / `Driver` directly. A crossing with no remaining C++ consumer is deleted in this step, not kept as a souvenir. |
+
+**How to review a PR in this series.** Ask: does this make the cutover a
+smaller delete? If the change is a new C++ branch that the cutover must
+re-implement, it is the wrong polarity — even when it makes today's node
+behave correctly. If the change is a Rust type with no C++ caller yet, that
+is the design (the P-transport precedent), provided the type actually locks
+the invariant it names.
+
+**Not in this series** (tracked elsewhere, §2.0): Tor transit measurement,
+flood-suite reconciliation, stage-4 cover *enablement* (§2.3 / §92.5).
+
 ## 3. Status against the plan
 
-**Verified against `dev` at the audit commit.**
+**Verified against this branch (`feat/cover-restoration`), 2026-08-18.**
 
-| stage | status | evidence |
+| item | status | evidence |
 | --- | --- | --- |
 | audit | **done** | §1, this document |
-| 1 — delete the stem→`local` downgrade | not started | `levin_notify.cpp` covert branch still downgrades |
-| 2 — carrier below phase | not started | carrier check still above the `switch (tx_relay)` |
-| 3 — per-stem-slot send | not started | send loop still iterates all channels |
-| **1–3 done-condition: correct and inert** | **not reached, and not being pursued in C++** | §2.6 — the restructure was written, validated and discarded; the C++ dies with the cutover |
+| C++ stages 1–3 (stem→`local`, carrier-below-phase, per-slot send) | **not being pursued in C++** | §2.6 — written, validated, discarded; dies with the cutover |
 | 4 — enablement | **not startable** | §2.3's two criteria both unmet |
-| §2.7 Rust covert state machine | **unbuilt, unassigned** | forced by the cutover regardless of §42; first task is CV-4's missing test |
+| **§2.9 step 1 — decisions in Rust (this PR)** | **landed** | `BroadcastAllZones` truth table; `RelayCarrier::Covert` carries `SlotIndex`; `CovertQueues` fragments + CV-1 restart; CV-4 hands distinct queues to `covert_cadence`; FFI export in `shekyl_ffi.h` with null-handle fail-closed. C++ flood arm is the step-3 delete target, present as a shim. |
+| §2.9 step 2 — covert executor | **skeleton only** | `rust/shekyl-relay/src/covert_queue/` exists; `send_noise` still owns the real remainder |
+| §2.9 step 3 — zone fan-out in Rust | **not started** | `net_node.inl` still iterates `m_network_zones` |
+| §2.9 step 4 — notify consumes `plan_dispatch` | **not started** | no C++ caller of the new FFI |
+| §2.9 step 5 — C++ relay path deleted | **not started** | cutover PR |
+| §2.8 α rule | **pre-registered** | no number yet; the rule is the artifact |
 
 **Non-scope, tracked separately (§2.0):** Tor transit measurement — *unblocked,
 not started*; flood-suite reconciliation — *unblocked, not started*.

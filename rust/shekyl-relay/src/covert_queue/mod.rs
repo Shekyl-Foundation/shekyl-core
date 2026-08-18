@@ -28,19 +28,27 @@
 //! line that reads as a latency improvement. That is §20.2's named failure
 //! mode, and `cv4_the_cadence_does_not_depend_on_queue_depth` is what replaces
 //! the friction.
+//!
+//! This type does **not** expose a depth query. A `len` / `is_empty` /
+//! `has_pending` method would be the API the leak writes itself against.
 
 use std::collections::VecDeque;
 
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
-/// One channel's pending work.
+/// One channel's pending work, matching `noise_channel` (`levin_notify.cpp`).
+///
+/// `pending` holds the original framed messages. `active` is the unsent
+/// remainder of the message currently being sliced. The original stays in
+/// `pending` until every fragment has gone, so a CV-1 rebind can *restart*
+/// the same message rather than resume a mid-message remainder (length is
+/// the leak) or drop the payload (liveness).
 #[derive(Debug, Default)]
 struct ChannelQueue {
-    /// Framed messages waiting for this channel's next due tick.
     pending: VecDeque<Vec<u8>>,
-    /// The message currently mid-flight, if any.
+    /// Unsent tail of the current message. `None` / empty means the next
+    /// take clones `pending.front()` and starts from the beginning.
     active: Option<Vec<u8>>,
-    /// The peer this channel was bound to when `active` was taken.
     bound: Option<ConnectionId>,
 }
 
@@ -85,28 +93,48 @@ impl CovertQueues {
         }
     }
 
-    /// Take what `channel` should put on the wire for `peer`.
+    /// Take the next `fragment_len` bytes `channel` should put on the wire
+    /// for `peer`.
     ///
-    /// `None` means **send a dummy** — which is the common case and is not an
-    /// error.
+    /// `None` means **send a dummy** — the common case, not an error.
+    /// `fragment_len` is the covert fragment window (`CRYPTONOTE_NOISE_BYTES`
+    /// in production). A zero window is a caller bug: nothing is consumed.
     ///
-    /// **CV-1: a rebind discards the in-flight remainder.** If `peer` differs
-    /// from the binding the active message was taken under, that message is
-    /// dropped rather than resumed: resuming would let the extra send time leak
-    /// that this node was pushing something real (§20.5). The discard is here,
-    /// at the one site that learns the new binding.
-    pub fn take_for_send(&mut self, channel: usize, peer: ConnectionId) -> Option<Vec<u8>> {
+    /// **CV-1: a rebind discards the in-flight remainder and restarts.** If
+    /// `peer` differs from the binding the active tail was taken under, that
+    /// tail is dropped and the next take clones `pending.front()` from the
+    /// start. Resuming would let the extra send time leak that this node was
+    /// pushing something real (§20.5). Restarting keeps the payload live
+    /// (the C++ `send_noise` shape) without the length leak.
+    pub fn take_for_send(
+        &mut self,
+        channel: usize,
+        peer: ConnectionId,
+        fragment_len: usize,
+    ) -> Option<Vec<u8>> {
+        if fragment_len == 0 {
+            debug_assert!(false, "covert fragment window must be non-zero");
+            return None;
+        }
         let q = self.channels.get_mut(channel)?;
         if q.bound != Some(peer) {
-            // Rebind (or first bind): whatever was mid-flight belongs to the
-            // previous peer and does not travel.
             q.active = None;
             q.bound = Some(peer);
         }
-        if q.active.is_none() {
-            q.active = q.pending.pop_front();
+        if q.active.as_ref().is_none_or(Vec::is_empty) {
+            q.active = q.pending.front().cloned();
         }
-        q.active.take()
+        let active = q.active.as_mut()?;
+        if active.is_empty() {
+            return None;
+        }
+        let n = fragment_len.min(active.len());
+        let fragment: Vec<u8> = active.drain(..n).collect();
+        if active.is_empty() {
+            q.active = None;
+            let _ = q.pending.pop_front();
+        }
+        Some(fragment)
     }
 
     /// The channel's stem slot went unbound: drop everything it held.

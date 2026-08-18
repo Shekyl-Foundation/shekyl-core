@@ -41,7 +41,10 @@
 //! - Zone state — peer fluff queues, the stem map, the epoch role, and the
 //!   covert schedule — is owned **here**, mutated only through `&mut Zone`.
 //!   C++ connection events do not mutate it; they arrive as calls into the
-//!   owner. Covert buffers stay C++ (§20.2 / §20.4).
+//!   owner. Covert **schedule** is owned here. Covert **buffers** are moving
+//!   here (`CovertQueues`) ahead of the daemon cutover
+//!   (`COVER_TRAFFIC_RESTORATION.md` §2.7 / §2.9); C++ `send_noise` still
+//!   owns the live remainder until that step lands.
 //! - `connection_count` was the one genuine straddle in the inherited code
 //!   (*"only update in strand, can be read at any time"*). It stays derived
 //!   here and is published by the boundary as a single-writer atomic.
@@ -72,6 +75,7 @@ pub mod zone_route;
 pub use covert_queue::CovertQueues;
 pub use driver::{Driver, Effect};
 pub use floor_diag::{AchievedOutConnections, FloorSnapshot, FloorTransition, FloorWatch};
+pub use shekyl_relay_privacy::SlotIndex;
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
 pub use zone::{FluffReach, PeerFluff, RelayCarrier, RelayDispatch, RelayPlan, TxBlob, Zone};
 pub use zone_route::{

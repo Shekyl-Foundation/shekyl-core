@@ -189,7 +189,7 @@ pub use schedule::{
     DelayFamily, EmbargoTimer, Epoch, EpochScheduler, FluffScheduler, Millis, NoiseCadence,
     PeerDirection, DEFAULT_EMBARGO_TICK_MILLIS,
 };
-pub use stem_map::{ConnectionId, SourceId, StemMap, StemSetChange};
+pub use stem_map::{ConnectionId, SlotIndex, SourceId, StemMap, StemSetChange};
 pub use verify_cost::{
     adopted_hop_ms, Provenance, SpecVerifyCost, TreeBasis, VerifyCell, VerifyCostRefusal,
     ADOPTED_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH, MAX_TABLE_DEPTH, MAX_TABLE_INPUTS,

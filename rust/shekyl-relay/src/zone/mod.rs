@@ -8,9 +8,10 @@
 //! A zone is the unit the inherited C++ calls `detail::zone` — public,
 //! or i2p/tor. This type owns the state §18.5's inventory assigned to Rust:
 //! peer fluff queues, the stem map, the epoch role, and the covert **schedule**
-//! (enable bit, cadence, per-channel deadlines). Covert **buffers** and
-//! transport (framing, padding, the socket) stay C++ permanently, so a
-//! transaction body crosses the boundary only as an opaque blob. See
+//! (enable bit, cadence, per-channel deadlines). Covert **buffers** are
+//! moving to [`crate::CovertQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.7 /
+//! §2.9 step 2); transport (framing, padding, the socket) stays on the I/O
+//! side. A transaction body is still an opaque blob here. See
 //! `DAEMON_RELAY_PRIVACY.md` §20.2 / §20.4 for the post-RP-3b inventory.
 
 use std::collections::BTreeMap;
@@ -21,7 +22,7 @@ use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
-use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap};
+use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex, StemMap};
 
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
@@ -790,9 +791,11 @@ pub enum RelayCarrier {
     /// A covert channel, bound to the stem slot the plan chose.
     ///
     /// `channel` **is** the slot index: `CovertSchedule` binds channel `i` to
-    /// stem slot `i` (§20.3), and the C++ send loop must come to respect that
-    /// binding rather than broadcasting to every channel (§42.5a).
-    Covert { channel: usize },
+    /// stem slot `i` (§20.3). Carried as [`SlotIndex`] so a crate-boundary
+    /// caller cannot swap it with a walk cursor — the property the newtype
+    /// exists for. The send loop must respect that binding rather than
+    /// broadcasting to every channel (§42.5a).
+    Covert { channel: SlotIndex },
 }
 
 /// A plan together with the wire that carries it — the whole answer in one
@@ -833,9 +836,7 @@ impl Zone {
         match plan {
             RelayPlan::Stem(destination) if self.covert_enabled() => {
                 match self.map.slot_of(destination) {
-                    Some(slot) => RelayCarrier::Covert {
-                        channel: slot.get(),
-                    },
+                    Some(slot) => RelayCarrier::Covert { channel: slot },
                     None => {
                         debug_assert!(
                             false,

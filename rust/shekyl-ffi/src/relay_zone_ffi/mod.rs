@@ -81,6 +81,11 @@ pub const SHEKYL_RELAY_CARRIER_ORDINARY: u8 = 0;
 /// Carrier: a covert channel, bound to the stem slot (§20.3).
 pub const SHEKYL_RELAY_CARRIER_COVERT: u8 = 1;
 
+const _: () = {
+    assert!(SHEKYL_RELAY_CARRIER_ORDINARY == 0);
+    assert!(SHEKYL_RELAY_CARRIER_COVERT == 1);
+};
+
 /// One transaction blob: pointer and length, borrowed for the call.
 ///
 /// Two scalars, and the reason a struct is acceptable here where a marshalled
@@ -1075,7 +1080,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
             *out_carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
             *out_channel = 0;
         }
-        RelayCarrier::Covert { channel } => match u32::try_from(channel) {
+        RelayCarrier::Covert { channel } => match u32::try_from(channel.get()) {
             Ok(channel) => {
                 *out_carrier = SHEKYL_RELAY_CARRIER_COVERT;
                 *out_channel = channel;
@@ -1092,7 +1097,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
                 over the ordinary connection. §92.4's rule is that carrier
                 unavailability must never travel as a routing verdict, which
                 is why this is not a NO_ROUTE. */
-                debug_assert!(false, "covert channel {channel} exceeds u32");
+                debug_assert!(false, "covert channel {} exceeds u32", channel.get());
                 *out_carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
                 *out_channel = 0;
             }
