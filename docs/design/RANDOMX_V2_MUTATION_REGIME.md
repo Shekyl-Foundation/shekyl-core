@@ -931,6 +931,83 @@ use.
 
 ---
 
+
+### 6.6 Post-item-1 measured yield (re-derivation, not inheritance)
+
+Item 1 landed on `feat/randomx-verdict-negative-tests` (`1cbb21fab`).
+Row E's yield was re-measured against it, per the §7.5 rule that row
+E's **cost** carries over but its **yield** must not be inherited.
+
+`cargo-mutants` over the two refactored files, release profile,
+`Mutated` scoping:
+
+| File | Mutants | Caught | Missed | Unviable | Wall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `cache_precondition.rs` | 58 | 45 | 13 | 0 | 4 min |
+| `mode_correctness.rs` | 38 | 12 | 24 | 2 | 5 min |
+
+Split by surface — this is the number that matters:
+
+| Surface | Mutants | Caught | Kill rate |
+| --- | ---: | ---: | ---: |
+| **Verdict functions** (the T-A1 surface) | 9 | **9** | **100%** |
+| Everything else in the same files | 27 | 3 | 11% |
+
+Every mutant on both new pure functions dies:
+`three_leg_verdict -> Ok(())`, `cache_canonical_verdict -> Ok(())`,
+both `!=` → `==` flips, and all four match-guard forcings
+(`true`/`false` on each guard). Before item 1 that surface had **zero**
+killable mutants — not a low kill rate, an unreachable branch set.
+
+#### What the survivors actually are, and what it means for item 3
+
+The 24 misses in `mode_correctness.rs` are **not** verdict mutants.
+They are loop and index arithmetic inside `run` (corpus-subset
+slicing, `+= 1` counters) plus a `Display` impl — and `run` requires
+live sessions, so no unit test reaches it. The 13 misses in
+`cache_precondition.rs` are the same shape: `byte_diff` /
+`build_divergence_window` arithmetic, plus `rust_cache_sha256`
+returning a constant, plus the `assert_equivalent` wrapper.
+
+So the residual is **MR-F10 one level up**: orchestration is
+untestable without the expensive path, exactly as the verdicts were.
+
+**This refines item 3's scope, and the refinement is measured rather
+than argued.** "Assertion modules only" is still too broad — those
+modules are dominated by orchestration whose survivors are the API-
+shape artifacts MR-F10 predicted. The scope that carries signal is the
+**verdict functions themselves**, which `cargo-mutants` can target
+directly with `--re`. At 9 mutants and ~10 s each, that lane is
+**seconds, not shards** — and its claim is exactly the narrow true one
+§7.5 item 3 specifies: *the negative tests are load-bearing.*
+
+This also answers MR-DQ-4 by dissolving it: a verdict-scoped ratchet
+needs **no denominator at all**. Recorded here rather than
+dispositioned, per the ratification note that MR-DQ-4 be re-derived
+once item 1 exists.
+
+#### A yield the round did not predict
+
+Nine of `cache_precondition.rs`'s survivors are arithmetic in
+`byte_diff` / `build_divergence_window` — functions that **do** have
+tests (`find_first_divergence_*`, `build_divergence_window_*`), which
+pass while the arithmetic is mutated. Those tests assert something
+weaker than the arithmetic they cover. That is a real assertion gap,
+found in four minutes on one file, and it is the first genuine
+T18-style yield the project has produced.
+
+It qualifies MR-F10 in one direction worth stating: outside the verdict
+surface the yield is **not** purely paperwork. It does not revive C1 —
+these are diagnostic-path helpers, not the T-A1 surface, and finding
+them cost minutes rather than 12.6 h — but "mutation testing here
+produces only artifacts" would be too strong a reading of MR-F10, and
+the record should not overstate it.
+
+Filed as its own item per rule 19 (different validation surface); not
+fixed in item 1.
+
+---
+
 ## 7. Recommended regime
 
 **Not binding until §5 is ratified.** Recorded now so ratification is a
@@ -1061,9 +1138,12 @@ Without that negative half stated in the row itself, a reader eighteen
 months out sees "corpus lane, weekly" and credits it with accumulation
 it does not do — the exact decay this round exists to stop.
 
-**Item 3 — mutation as a narrow ratchet, after item 1.** Assertion
-modules only, judged by the differential harness, sized to one
-unsharded job. Re-derive against the §6.3 row-E slice — **but note row
+**Item 3 — mutation as a narrow ratchet, after item 1.** **Scope
+re-derived post-item-1 in §6.6: the verdict functions, not whole
+assertion modules.** The modules are dominated by orchestration whose
+survivors are API-shape artifacts; the verdict functions kill 9/9. At
+that scope the lane is seconds, needs no sharding, and MR-DQ-4
+dissolves rather than being answered. Re-derive against the §6.3 row-E slice — **but note row
 E was measured before item 1 exists**, so its survivor profile will
 change substantially. Precisely: row E's **cost** carries over, its
 **yield** does not. After item 1 some fraction of those 305 mutants
