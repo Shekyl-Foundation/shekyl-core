@@ -506,6 +506,32 @@ choke point, the gate cannot be half-applied.
 **Required builder shape (make-bad-states-unrepresentable, applied to the
 API):**
 
+> **AMENDED 2026-08-16 — items 1–2 are superseded by the CompleteTree
+> activation round (D-3, [`COMPLETETREE_ACTIVATION.md`](COMPLETETREE_ACTIVATION.md)).**
+> The shape is now **one entry with a mandatory posture enum**:
+> `first_stake(slot, StakePosture::{Market, FoundationCompleteTree})`, with
+> **no default**. The property these two items exist to protect is preserved
+> and strengthened — opt-in by intent, no default to override, and no
+> select-all affordance (item 3 stands unchanged) — but it is carried by a
+> parameter every caller must fill in rather than by two constructors.
+>
+> **Why the change was the safer shape, not merely a different one.** Two
+> constructors leave the safe one reachable *without stating intent*, so an
+> entry that silently posted `CompleteTree` could exist and did: the
+> `bond_orchestrator` hardcode ("Genesis posture", the PR-4c deviation) made
+> **every** first-stake wallet owe the whole corpus with nobody asking for
+> it. A mandatory enum makes that unrepresentable — the compiler refuses a
+> caller that has not chosen — and the hardcode was deleted in the same
+> change that gave the serving side its CompleteTree arm, so no code state
+> ever existed in which an ordinary staker silently owed the corpus.
+>
+> The `--complete-tree-foundation` CLI flag in item 2 landed exactly as
+> written, and the warning gate is stronger than this note anticipated: the
+> RPC requires an `acknowledge_non_earning_unbounded` field whose absence
+> returns the full statement of terms as the error body (D-4), and the CLI
+> requires the operator to type `serve without reward` before it will send
+> it.
+
 1. The **standard** market bond constructor takes **no holdings-kind
    argument** and yields `ShardSetCompact` by construction. "The normal path
    produces the safe kind" is enforced by the *type of the API*, not by
