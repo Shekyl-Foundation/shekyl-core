@@ -7078,13 +7078,27 @@ sustainability is unaffected by the recalibration.
 
 - **Wallet-CLI password copies survive in `serde_json` values**
   (surfaced 2026-08-17 in the PR #492 review; rule 35). Every
-  password-carrying CLI call builds `json!({ "password": password,
-  … })` and then zeroizes only its own `String`: the copy inside the
-  `serde_json::Value` — and the serialized request body after it — is
-  never wiped. Pre-existing and cross-cutting, **five call sites**:
-  `commands/lifecycle.rs` (create, open, change_password),
-  `commands/staking.rs` (`stake`, both postures), and
-  `commands/scripted.rs` (non-interactive create/restore). The fix is
+  password-carrying CLI call moves the secret into a `serde_json::Value`
+  and then zeroizes only its own `String`: the copy inside the value —
+  and the serialized request body after it — is never wiped.
+  Pre-existing and cross-cutting. **Nine call sites in four files, and
+  the enumeration is the work list — audit against it, not against a
+  count:**
+  - `commands/lifecycle.rs:50` create, `:85` open, `:149` **restore**,
+    `:321` change_password
+  - `commands/staking.rs:53` stake (market), `:111` stake (foundation)
+  - `commands/scripted.rs:82` create, `:127` restore
+  - `main.rs:262` — the `--engine-file` open in `run_repl`. **Outside
+    `commands/` entirely**, so a sweep scoped to that directory misses
+    it; it is listed first in any grep, not last.
+
+  Two shape notes for whoever fixes this. `change_password` (`:321`) does
+  **not** match the single-`"password"`-key pattern — it carries
+  `{"old_password", "new_password"}`, two secrets under different keys,
+  so a fix keyed on the literal `"password"` skips it. And
+  `scripted.rs` passes `password.as_str()` off a `Zeroizing`, which wipes
+  the *original* while leaving the JSON copy exactly as exposed as the
+  others — the wrapper is not the fix. The fix is
   not local to any of them — `RpcSession::call` takes a
   `serde_json::Value`, so closing this means giving that interface a
   wipeable secret type and updating every caller, which is why it was

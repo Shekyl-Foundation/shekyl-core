@@ -59,7 +59,11 @@ at close):
   (`FOUNDATION_GENESIS_IDENTITY_SET.md` §2 factored rule, RULING 2026-07-19).
 - Slash side is live for CompleteTree — not exempt
   (`ARCHIVAL_CHALLENGE_MECHANISM.md` §6, closed 2026-08-07).
-- A foundation record cannot `HoldingsUpdate` (`db_lmdb.cpp:5226`).
+- A foundation record cannot `HoldingsUpdate` — enforced in
+  `bond_post.rs:210-213` (`BondPostError::HoldingsUpdateOnCompleteTree`:
+  a `HoldingsUpdate` whose record kind is not `ShardSetCompact` is
+  refused). `db_lmdb.cpp:5226` restates it in a comment; the rule lives
+  in the Rust verifier.
 - Empty `ShardSetCompact` is **consensus-invalid** at JoinMarket
   (`bond_post.rs:516-518`; KATs `bond_post_tests.rs:44-51`,
   `rejects_floor_zero_via_empty_shards`). Floor scales per shard and is 0 for
@@ -132,9 +136,9 @@ at close):
   path (`lifecycle.rs:674`) is **fail-closed** (a staker whose serving path
   will not configure does not open; the already-spawned P-scan is shut down
   *and awaited*; the error surfaces in the open result — SH-2b-2, citing §9.6
-  item 4); the first-stake intent reopen (`lifecycle.rs:1006`) is
+  item 4); the first-stake intent reopen (`lifecycle.rs:1065`) is
   **best-effort** (a serving failure must not block the stake in progress;
-  re-arms at next open); the failed-close restore (`lifecycle.rs:1070`) is
+  re-arms at next open); the failed-close restore (`lifecycle.rs:1129`) is
   **best-effort** (the wallet is staying open; refusing would leave no close
   path; a fresh launch standoff is drawn). Auto-resume already existed and is
   better-reasoned than the retracted brief demanded. One named residual, not
@@ -149,8 +153,12 @@ at close):
 2026-08-15.)* `ServeSet` gains a prefix arm (`CompleteTreePrefix`). The store
 gains a **prune-disabled posture flag**. No per-segment pins for CompleteTree:
 the bad state (a foundation node pruning bytes it owes) is made
-unrepresentable rather than pinned-against (rule 12). Membership on the
-request path is `id < frozen_count`. Rejected alternative (materialize
+unrepresentable rather than pinned-against (rule 12). Membership is `id < frozen_count`.
+**Exposed, not wired** — see §8 slice 2: `ServeSet::contains` is the
+predicate's one home, and no request path consults it. `StoreShardProvider`
+answers reads from the store, and its per-read `Ok(None)` for an uncommitted
+segment remains the live servability authority. Wiring it would be new
+request-path behaviour, which this round deliberately did not invent. Rejected alternative (materialize
 `(0..k)` as a Vec through the existing machinery): O(D) pin writes per refresh
 forever over a monotone D, a pin table permanently restating a structural
 fact, and a freeze→pin race window that Option B removes entirely.
@@ -378,7 +386,7 @@ corrected.
    `CAUGHT_UP_SLACK_BLOCKS` has a real window where the chain challenges a
    shard the wallet has not yet frozen-and-begun-serving. The m-of-n sliding
    window (m = 11) absorbs it by design (the daemon's own scan-cost note at
-   `db_lmdb.cpp:6074-6085` already prices the absorb window). Documented at
+   `db_lmdb.cpp:6072-6083` already prices the absorb window). Documented at
    the prefix arm, so it is explicitly rather than accidentally safe.
 3. **Posture is one-way in this round:** the prune-disabled flag has no clear
    path (a foundation node un-declaring its posture while holding a live bond
