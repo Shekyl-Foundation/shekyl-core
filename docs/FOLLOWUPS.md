@@ -7076,7 +7076,18 @@ sustainability is unaffected by the recalibration.
   today **only because no production pruner exists**; named here so F5
   discovers the constraint by reading rather than by incident.
 
-- **Wallet-CLI password copies survive in `serde_json` values**
+- ~~**Wallet-CLI password copies survive in `serde_json` values**~~
+  **Closed 2026-08-18** (`fix/cli-password-copies`). All nine sites now
+  route through borrowed `rpc_client::params` shapes, `RpcSession::call`
+  is generic over `Serialize` and serializes the typed envelope straight
+  into a `Zeroizing<Vec<u8>>`, and `prompt_password` / `read_password`
+  return `Zeroizing<String>` so the wipe is structural rather than a
+  per-return-path `zeroize()` call. Two tests hold it: a grep gate over
+  the four sender files (a tenth `json!` site with a secret key fails
+  CI) and a pin that `call` never re-acquires a `Value` hop. Both were
+  negative-controlled against compiling regressions. The original entry
+  follows, for the shape notes it records.
+
   (surfaced 2026-08-17 in the PR #492 review; rule 35). Every
   password-carrying CLI call moves the secret into a `serde_json::Value`
   and then zeroizes only its own `String`: the copy inside the value —
@@ -7106,6 +7117,30 @@ sustainability is unaffected by the recalibration.
   reads as though the hole were closed while four remain open).
   **Scheduled: its own PR immediately after the CompleteTree round
   closes** — follow-on means next, not someday.
+
+- **The wallet-RPC server parses every request into a `serde_json::Value`**
+  (surfaced 2026-08-18 while closing the CLI half above; rule 35).
+  `json_rpc_handler` (`shekyl-wallet-rpc/src/server.rs:166`) does
+  `serde_json::from_slice::<Value>(&body)` on the whole request before
+  dispatch, so a password sent to `create_wallet` / `open_wallet` /
+  `restore_wallet` / `change_password` / `stake` exists as an unwiped
+  heap `String` inside that `Value` — plus the axum `Bytes` body it was
+  read from — for the life of the request. This is the *same defect the
+  CLI half just closed*, one process over, and the CLI fix does not
+  touch it: the client can only control what it sends, not how the
+  server holds it. The handlers themselves are already careful
+  (`lifecycle.rs` consumes the serde `String` into `Zeroizing` via
+  `into_bytes()`, moving rather than copying) — the exposure is strictly
+  upstream of them, in the generic dispatch hop.
+
+  **Not folded into the CLI PR deliberately** (rule 19): closing it
+  means typed per-method deserialization at the dispatch router instead
+  of a `Value` walk, which is the router's validation surface, not the
+  client's — a different review, a different set of tests, and a change
+  that touches every method rather than the five that carry secrets.
+  **Reopening trigger: the next change to `handlers::dispatch`'s
+  routing shape** — the typed-envelope work is nearly free while that
+  seam is already open, and expensive as a standalone rewrite.
 
 - **Emission-claim retire/resubmit driver legs** (surfaced 2026-07-12
   at the CB-3 seam, PR-4a review round #8 "retirement/resubmit = the

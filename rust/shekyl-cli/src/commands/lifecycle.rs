@@ -7,10 +7,10 @@
 //! create, open, close, restore, refresh, rescan, status, password.
 
 use serde_json::{json, Value};
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use super::{read_password, require_closed, require_open};
-use crate::rpc_client::{RpcError, RpcSession};
+use crate::rpc_client::{params, RpcError, RpcSession};
 
 pub fn cmd_create(rpc: &RpcSession, filename: &str) {
     if !require_closed(rpc) {
@@ -30,26 +30,25 @@ pub fn cmd_create(rpc: &RpcSession, filename: &str) {
         );
         return;
     }
-    let Some(mut password) = read_password("New wallet password: ") else {
+    let Some(password) = read_password("New wallet password: ") else {
         return;
     };
-    let Some(mut confirm) = read_password("Confirm password: ") else {
-        password.zeroize();
+    let Some(confirm) = read_password("Confirm password: ") else {
         return;
     };
     if password != confirm {
-        password.zeroize();
-        confirm.zeroize();
         eprintln!("Passwords do not match.");
         return;
     }
-    confirm.zeroize();
+    drop(confirm);
 
     let result = rpc.call(
         "create_wallet",
-        json!({ "name": filename, "password": password }),
+        params::NamedPassword {
+            name: filename,
+            password: &password,
+        },
     );
-    password.zeroize();
 
     match result {
         Ok(val) => {
@@ -77,14 +76,16 @@ pub fn cmd_open(rpc: &RpcSession, filename: &str) {
     if !require_closed(rpc) {
         return;
     }
-    let Some(mut password) = read_password("Wallet password: ") else {
+    let Some(password) = read_password("Wallet password: ") else {
         return;
     };
     let result = rpc.call(
         "open_wallet",
-        json!({ "name": filename, "password": password }),
+        params::NamedPassword {
+            name: filename,
+            password: &password,
+        },
     );
-    password.zeroize();
 
     match result {
         Ok(_) => {
@@ -112,9 +113,10 @@ pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
     if !require_closed(rpc) {
         return;
     }
-    let mut mnemonic = seed_words.join(" ");
-    let Some(mut password) = read_password("New wallet password: ") else {
-        mnemonic.zeroize();
+    // Seed material: wiped on drop like the password, on every path out of
+    // this function rather than on the paths somebody remembered to annotate.
+    let mnemonic = Zeroizing::new(seed_words.join(" "));
+    let Some(password) = read_password("New wallet password: ") else {
         return;
     };
 
@@ -122,8 +124,6 @@ pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
     drop(std::io::Write::flush(&mut std::io::stderr()));
     let mut height_input = String::new();
     if std::io::stdin().read_line(&mut height_input).is_err() {
-        mnemonic.zeroize();
-        password.zeroize();
         eprintln!("Failed to read restore height.");
         return;
     }
@@ -134,8 +134,6 @@ pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
         match height_input.parse() {
             Ok(h) => h,
             Err(_) => {
-                mnemonic.zeroize();
-                password.zeroize();
                 eprintln!("Invalid restore height: expected a block height number.");
                 return;
             }
@@ -144,15 +142,13 @@ pub fn cmd_restore(rpc: &RpcSession, filename: &str, seed_words: &[String]) {
 
     let result = rpc.call(
         "restore_wallet",
-        json!({
-            "name": filename,
-            "password": password,
-            "mnemonic": mnemonic,
-            "restore_height": restore_height,
-        }),
+        params::Restore {
+            name: filename,
+            password: &password,
+            mnemonic: &mnemonic,
+            restore_height,
+        },
     );
-    mnemonic.zeroize();
-    password.zeroize();
 
     match result {
         Ok(_) => {
@@ -295,33 +291,28 @@ pub fn cmd_password(rpc: &RpcSession) {
     if !require_open(rpc) {
         return;
     }
-    let Some(mut old_password) = read_password("Current password: ") else {
+    let Some(old_password) = read_password("Current password: ") else {
         return;
     };
-    let Some(mut new_password) = read_password("New password: ") else {
-        old_password.zeroize();
+    let Some(new_password) = read_password("New password: ") else {
         return;
     };
-    let Some(mut confirm) = read_password("Confirm new password: ") else {
-        old_password.zeroize();
-        new_password.zeroize();
+    let Some(confirm) = read_password("Confirm new password: ") else {
         return;
     };
     if new_password != confirm {
-        old_password.zeroize();
-        new_password.zeroize();
-        confirm.zeroize();
         eprintln!("Passwords do not match.");
         return;
     }
-    confirm.zeroize();
+    drop(confirm);
 
     let result = rpc.call(
         "change_password",
-        json!({ "old_password": old_password, "new_password": new_password }),
+        params::ChangePassword {
+            old_password: &old_password,
+            new_password: &new_password,
+        },
     );
-    old_password.zeroize();
-    new_password.zeroize();
 
     match result {
         Ok(_) => println!("Password changed."),
