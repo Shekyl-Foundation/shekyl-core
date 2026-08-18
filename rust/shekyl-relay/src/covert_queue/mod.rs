@@ -79,11 +79,36 @@ impl CovertQueues {
 
     /// Offer a framed message to `channel`.
     ///
-    /// Refused when the channel index is out of range. **Not** refused on an
-    /// unbound channel here: binding is the scheduler's fact and travels with
-    /// each send, so the discard happens at [`Self::take_for_send`] where the
-    /// current binding is known (CV-1) rather than against a copy kept here.
+    /// Refused when the channel index is out of range, **or when `message` is
+    /// empty**. Not refused on an unbound channel: binding is the scheduler's
+    /// fact and travels with each send, so the discard happens at
+    /// [`Self::take_for_send`] where the current binding is known (CV-1)
+    /// rather than against a copy kept here.
+    ///
+    /// # Why empty is refused at the boundary
+    ///
+    /// A framed levin notify always carries a header, so an empty message is a
+    /// caller bug rather than a state the wire can produce. Refusing it here —
+    /// the queue's only insertion point — establishes the invariant
+    /// *`pending` never holds an empty message*, which
+    /// [`Self::take_for_send`] depends on to make progress.
+    ///
+    /// **Without it the channel wedges silently and permanently.** An empty
+    /// head is reloaded on every take and never popped, so every later message
+    /// on that channel is blocked forever — and the failure is *invisible by
+    /// construction*: a wedged channel keeps emitting dummies, which is
+    /// precisely what a healthy idle channel looks like. Constant-rate cover
+    /// means nothing observable changes when the queue stops draining.
     pub fn enqueue(&mut self, channel: usize, message: Vec<u8>) -> bool {
+        // Refusal travels in the return value, not a `debug_assert!`. The
+        // out-of-range arm below already signals that way, and a debug-only
+        // panic would both break the symmetry and make the guard untestable —
+        // any test exercising the refusal would abort instead of observing it.
+        // A `false` return is also the stronger signal: it survives into
+        // release, where a caller bug is no less a bug.
+        if message.is_empty() {
+            return false;
+        }
         match self.channels.get_mut(channel) {
             Some(q) => {
                 q.pending.push_back(message);
@@ -126,6 +151,17 @@ impl CovertQueues {
         }
         let active = q.active.as_mut()?;
         if active.is_empty() {
+            /* Unreachable: `enqueue` refuses empty messages, so `pending`
+            cannot hold one. Handled anyway, and **by discarding rather than
+            returning early**, because the early return is what wedges the
+            channel: the empty head would be reloaded on every subsequent
+            take and never popped, blocking the queue permanently while the
+            channel went on emitting dummies — indistinguishable from idle.
+
+            Discarding costs one dummy tick and the channel recovers. */
+            debug_assert!(false, "covert queue holds an empty message");
+            q.active = None;
+            let _ = q.pending.pop_front();
             return None;
         }
         let n = fragment_len.min(active.len());

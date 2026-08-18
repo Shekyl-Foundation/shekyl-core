@@ -237,3 +237,31 @@ fn cv4_the_comparison_can_distinguish_cadences() {
          not observing the schedule, so CV-4's assertion proves nothing"
     );
 }
+
+/// An empty framed message is refused, and — the property that matters — it
+/// cannot wedge the channel behind it.
+///
+/// Before the guard, an empty head was reloaded on every take and never
+/// popped, so every later message was blocked permanently. The failure was
+/// **invisible by construction**: the channel kept emitting dummies, which is
+/// exactly what a healthy idle channel looks like. Nothing observable changes
+/// when constant-rate cover stops carrying anything, which is why this needs a
+/// test rather than an operator noticing.
+#[test]
+fn an_empty_message_is_refused_and_cannot_wedge_the_channel() {
+    let mut q = CovertQueues::new(1);
+
+    assert!(
+        !q.enqueue(0, Vec::new()),
+        "an empty framed message is a caller bug; a levin notify always has a header"
+    );
+
+    // The real message behind it must still go out. This is the regression:
+    // with the empty accepted, this send never happened — ever.
+    assert!(q.enqueue(0, vec![9; 8]));
+    assert_eq!(
+        q.take_for_send(0, id(1), 4096),
+        Some(vec![9; 8]),
+        "a refused empty must not block the message behind it"
+    );
+}
