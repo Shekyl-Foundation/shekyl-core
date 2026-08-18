@@ -304,10 +304,19 @@ unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
         debug_assert!(false, "read_ids: n * 16 overflows");
         return Vec::new();
     };
-    if len == 0 || ids.is_null() {
+    // Through the crate's FFI-read seam, which owns the `isize::MAX` bound that
+    // `from_raw_parts` requires at the LANGUAGE level — violating it is UB even
+    // when the caller really did provide that much memory, so `checked_mul`
+    // alone was not enough. `slice_from_ptr` also owns the null / zero-length
+    // arms, so those checks come out with it (SA-R-7's residual, closed here
+    // for the two readers this crossing exercises).
+    let Some(bytes) = crate::legacy_util::slice_from_ptr(ids, len) else {
+        debug_assert!(
+            isize::try_from(len).is_ok(),
+            "read_ids: {len} bytes exceeds the isize::MAX slice bound"
+        );
         return Vec::new();
-    }
-    let bytes = slice::from_raw_parts(ids, len);
+    };
     (0..n)
         .filter_map(|i| {
             let mut b = [0u8; 16];
@@ -336,10 +345,17 @@ unsafe fn read_tx_ids(hashes: *const u8, n: usize) -> Vec<TxId> {
         debug_assert!(false, "read_tx_ids: n * 32 overflows");
         return Vec::new();
     };
-    if len == 0 || hashes.is_null() {
+    // Same seam as `read_ids`: fixing one reader and leaving its sibling on a
+    // raw `from_raw_parts` is the synchronize-the-duplicate shape, so both move
+    // together.
+    let Some(bytes) = crate::legacy_util::slice_from_ptr(hashes, len) else {
+        debug_assert!(
+            isize::try_from(len).is_ok(),
+            "read_tx_ids: {len} bytes exceeds the isize::MAX slice bound"
+        );
         return Vec::new();
-    }
-    slice::from_raw_parts(hashes, len)
+    };
+    bytes
         .chunks_exact(32)
         .map(|c| TxId::from_bytes(c.try_into().expect("chunks_exact(32) yields 32 bytes")))
         .collect()
@@ -361,6 +377,9 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
         return None;
     }
     let mut b = [0u8; 16];
+    // Not routed through `slice_from_ptr`: the length is the literal 16, which
+    // is provably inside the `isize::MAX` bound the seam exists to enforce.
+    // Only caller-controlled lengths need the seam.
     b.copy_from_slice(slice::from_raw_parts(p, 16));
     (b != NIL).then(|| ConnectionId::from_bytes(b))
 }

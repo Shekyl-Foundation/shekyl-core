@@ -82,7 +82,10 @@ const BASELINE: &[(&str, usize, usize)] = &[
     ("legacy_tx.rs", 1, 2),
     ("levin_ffi.rs", 4, 0),
     ("pow_randomx_ffi.rs", 1, 0),
-    ("relay_zone_ffi/mod.rs", 5, 1),
+    // 5 -> 3: `read_ids` and `read_tx_ids` moved onto `slice_from_ptr`, which
+    // owns the `isize::MAX` bound `from_raw_parts` requires at the language
+    // level (PR #498 review). Tightened so the win cannot grow back.
+    ("relay_zone_ffi/mod.rs", 3, 1),
     ("relay_zone_ffi/tests.rs", 4, 0),
 ];
 
