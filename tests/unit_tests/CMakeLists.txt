@@ -139,6 +139,10 @@ target_link_libraries(unit_tests
     rpc
     net
     serialization
+    # Direct, not inherited: mnemonics.cpp tests crypto::ElectrumWords, which
+    # reached this link line transitively through the C++ `wallet` library
+    # until the Phase-5 cutover unlinked it.
+    mnemonics
     p2p
     # Resolves to libshekyl_daemon_image.a (not libshekyl_ffi.a) because of
     # the SHEKYL_RUST_IMAGE_DAEMON property set below. The daemon image is
