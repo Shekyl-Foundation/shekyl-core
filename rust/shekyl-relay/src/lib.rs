@@ -62,12 +62,14 @@
 //! the force-step hooks stay honest and how this crate's own tests avoid
 //! wall-clock dependence.
 
+mod covert_queue;
 pub mod driver;
 pub mod floor_diag;
 pub mod stem_watch;
 pub mod zone;
 pub mod zone_route;
 
+pub use covert_queue::CovertQueues;
 pub use driver::{Driver, Effect};
 pub use floor_diag::{AchievedOutConnections, FloorSnapshot, FloorTransition, FloorWatch};
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
