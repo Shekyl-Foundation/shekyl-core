@@ -180,8 +180,19 @@ sustainability is unaffected by the recalibration.
   mis-reports *where* a consensus divergence sits, without affecting
   whether one is detected. Not consensus-critical, which is why it is
   filed rather than fixed in the item-1 PR (different validation
-  surface, rule 19). Fix shape: assert the window's exact bounds at
-  block boundaries rather than its membership. Notable as evidence:
+  surface, rule 19). Root cause is the **fixture, not the assertions**: `fill_block` returns
+  `[sentinel; 1024]`, a uniform block, so copying `[10..139]` versus
+  `[11..140]` of it is byte-identical — the tests assert window length,
+  window start, and per-source byte *counts*, all invariant under an
+  off-by-one *inside* a block. They therefore catch boundary-crossing
+  errors and miss intra-block index errors. Fix shape is two lines and
+  touches no production code: make `fill_block` position-derived
+  (`block[i] = sentinel ^ (i as u8)`) and assert the window's byte
+  *sequence* rather than its composition; every intra-block index
+  mutant then dies. Note this is a fixture weakness, distinct from the
+  `assert_equivalent`-wrapper survivor, which is a genuine skip-list
+  entry — conflating them would credit the fixture with mutants it
+  never covered. Notable as evidence:
   this is the **first genuine T18-style yield** the project has
   produced, and it cost four minutes on one file — see
   [`RANDOMX_V2_MUTATION_REGIME.md`](./design/RANDOMX_V2_MUTATION_REGIME.md)

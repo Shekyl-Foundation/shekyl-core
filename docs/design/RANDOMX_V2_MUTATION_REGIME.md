@@ -4,7 +4,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **RATIFIED 2026-08-18 — design round 1 CLOSED on the §7.5 re-scope; implementation authorised, item 1 first.** MR-DQ-1 RULED; MR-DQ-8 HELD (C1 withdrawn); item 2 carries construction requirements MR-R1–MR-R4 (§7.9). MR-DQ-2/4/6 remain open by design — they change meaning under the re-scope, and MR-DQ-4 is to be **re-derived, not dispositioned**, once item 1 lands. Substrate survey (§2) is measured and complete; findings MR-F1–MR-F11 (§4) are source-verified (MR-F2 superseded by **MR-F2′**); MR-DQ-1 + MR-DQ-8 are ruled (§5). The rule-26 halt is **discharged for item 1 only**; items 2 and 3 remain design-gated per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). |
+| Status | **RATIFIED 2026-08-18 — round 1 CLOSED on the §7.5 re-scope; item 1 LANDED (`1cbb21fab`, 9/9 on the verdict surface). MR-F12 then established that §4.6 M2's T-A1 mechanism was never mechanically possible, which makes item 1 its precondition rather than a convenience.** MR-DQ-1 RULED; MR-DQ-8 HELD (C1 withdrawn); item 2 carries construction requirements MR-R1–MR-R4 (§7.9). MR-DQ-2/4/6 remain open by design — they change meaning under the re-scope, and MR-DQ-4 is to be **re-derived, not dispositioned**, once item 1 lands. Substrate survey (§2) is measured and complete; findings MR-F1–MR-F12 (§4) are source-verified (MR-F2 superseded by **MR-F2′**); MR-DQ-1 + MR-DQ-8 are ruled (§5). The rule-26 halt is **discharged for item 1 only**; items 2 and 3 remain design-gated per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). |
 | Kind | Test-regime redesign. **Opened** as execution-shape-only; the second review round established that T18 is the wrong instrument for two of its three claimed threats (MR-F10, MR-F11), so the round now also re-scopes **what T18 is for** — §7.5. §4.6 M2's premise is amended, not merely its cadence. |
 | Amends | [`RANDOMX_V2_PHASE2G_PLAN.md`](../completed/RANDOMX_V2_PHASE2G_PLAN.md) **§5.5.6** (the nightly-mutants CI row) and **§4.6 M2** (mutation testing as active-threat-surface mitigation). The 2g plan's §5.7 + §8.3 require that any change to harness behavior carry a plan-doc amendment; this document **is** that amendment carrier. The 2g plan is in `docs/completed/` and is not reopened as an active design — §11 records the amendment against it. |
 | Spec authority | 2g plan §4.5 (active threat surface T-A1–T-A11), §4.6 M2 (mitigation premise), §6 T18 row (the assertion). This doc **cites**; it does not re-derive the threat model. |
@@ -451,6 +451,86 @@ directing verifier mutants at the harness's suite would genuinely wire
 M2's T-A1 layer rather than merely appearing to. It also raises
 per-mutant cost, which §6 prices.
 
+### MR-F12 — assertion macros are invisible to the tool, so M2's T-A1 mechanism was never possible
+
+**This is the round's largest finding, and it subsumes MR-F5.**
+
+cargo-mutants does not mutate macro invocations. Its own book is
+explicit: *"cargo-mutants does not currently mutate calls to macros, or
+the expansion of a macro."* Structurally: the visitors are syn `Visit`
+impls over typed expression nodes, and a macro call parses as
+`Expr::Macro` whose body is an unparsed `TokenStream` — there is no
+`Expr::Binary` inside it to visit.
+
+**Confirmed empirically on this branch**, which is the evidence that
+matters because it rules out "currently" having changed:
+
+| Site | Contents | Mutants generated |
+| --- | --- | ---: |
+| `cache_precondition.rs:378` | `debug_assert_eq!(prev_start + prev_bytes.len(), …)` | **0** |
+| `cache_precondition.rs:364` | `-` in ordinary code | 1 |
+| `cache_precondition.rs:379` | `-` in ordinary code | 1 |
+| `cache_precondition.rs:389` | `>` in ordinary code | 1 |
+
+Structurally identical arithmetic, one inside a macro and the rest not.
+Only the non-macro sites are mutation sites. (Two mutants *anchor* at
+lines that happen to hold a `debug_assert` — `:156`, `:286` — but both
+are whole-function-body replacements reported at the function's first
+statement, not mutations of the macro.)
+
+**The consequence for §4.6 M2.** Its flagship T-A1 mechanism is *"weaken
+the byte-equality assertion and mutants it used to catch now survive."*
+The artifact under attack — `assert_eq!(rust_hash, c_hash)` — **is not
+a mutable expression**. The mechanism could not fire at any scoping, any
+profile, any budget. MR-F5 diagnosed a scoping defect
+(`TestPackages::Mutated`) and that diagnosis is correct, but it sits
+downstream of this harder fact: fix the scoping perfectly and the
+mechanism still cannot fire, because the target is invisible to the
+tool. **The 2g plan specified a defense whose stated mechanism the
+chosen tool cannot implement.**
+
+#### What this makes item 1
+
+Item 1 was recorded as a testability refactor. It is more than that:
+moving the verdicts out of macro-space into functions returning
+`Result` is what made them **visible to the gate at all**. The §6.6
+result — 9/9 on the verdict surface — is the first time in this
+project's history that the T-A1 surface has been mutation-reachable,
+and §6.6's phrase "not a low kill rate, an unreachable branch set" is
+more literally true than it was written: the branches were not merely
+untested, they were not *there* in the sense the tool operates on.
+
+#### The construction constraint this generates
+
+> **Harness verdicts are functions returning `Result`, never bare
+> assertion macros.**
+
+This is the invariant item 3's ratchet silently depends on. A future
+comparison written as a bare `assert_eq!` drops out of the gate's
+coverage **without changing a single number** — the survivor count
+stays clean because the surface vanished. That is this round's
+signature failure mode (a gate that reads as armed) in its purest form,
+and it would be undetectable by inspection of the gate's own output.
+
+Enforcement, not documentation, is the answer — the doc line is the
+thing that decays. A grep gate over the verdict modules in
+`scripts/ci/check_randomx_crate_invariants.sh`, in the shape that
+script already uses, costs one rule and fails loudly.
+
+#### Retraction recorded
+
+A prior review turn raised a `debug_assert`-under-release-profile
+hazard — that release builds compile the assertions out, manufacturing
+unkillable survivors, and that item 3 therefore needed either a
+class-level `exclude_re` or a debug-profile lane. **That hazard does
+not exist**, for the reason above: those expressions are not mutation
+sites in *either* profile. The proposed `exclude_re` would have been a
+skip-list entry defending against a class that cannot occur — a
+justified-sounding exclusion covering nothing, which is precisely the
+shape this round exists to catch. It is recorded rather than deleted
+because a withdrawn hazard that leaves no trace invites its own
+rediscovery.
+
 ### MR-F6 — every `workflow_dispatch` launches the doomed mutants job
 
 The job's condition is:
@@ -669,7 +749,7 @@ Argon2d. §2.2.1 settles it by measurement.
 **Recommendation: see §2.2.1 and §6** — this question is answered by
 the measured build/test trade, not by argument.
 
-### MR-DQ-4 — sharding, and at what denominator?
+### MR-DQ-4 — sharding, and at what denominator? — **DISSOLVED 2026-08-18 (not answered)**
 
 `--shard k/n` is cargo-mutants' designed answer to a per-job wall-clock
 ceiling, and composes with `--in-diff` and with filters so long as
@@ -677,8 +757,24 @@ every shard sees identical arguments. It converts a wall-clock problem
 into a runner-cost problem. The denominator falls out of §2.2.1's
 per-mutant cost against the 360-minute ceiling, with margin.
 
-**Recommendation: shard the periodic sweep; do not shard the per-PR
-leg** (an `--in-diff` run small enough to be merge-blocking should not
+**DISSOLVED, with reasoning — a struck row reads as abandoned and the
+next reader re-asks it.** A denominator is only meaningful over a
+population where survival is *informative*. Once item 3's scope is the
+verdict functions (§6.6), every mutant in the population is
+informative, the run is seconds, and the ratio carries no information
+the raw list does not. There is nothing left to divide.
+
+**But the ratchet still needs a guard — a different one.** At 9 mutants
+and seconds of runtime the failure mode is not budget, it is **the
+scope regex silently matching nothing**. `--re` targeting is name-based,
+so a renamed verdict function yields a *clean green run over an empty
+set* — the round's signature failure mode once more, this time inside
+the fix. The fail-loud shape is a **minimum-mutant-count assertion**:
+fail if fewer than N mutants were generated. Same defensive pattern as
+`ctest --no-tests=error`, already used in the full-parity job.
+
+Superseded recommendation, retained for its reasoning: **shard the
+periodic sweep; do not shard the per-PR leg** (an `--in-diff` run small enough to be merge-blocking should not
 need a matrix). Denominator pinned in §7 from measurement, with the
 sizing rule recorded so it can be re-derived when the suite grows
 again — the failure this round is fixing is precisely a budget that
@@ -986,6 +1082,44 @@ needs **no denominator at all**. Recorded here rather than
 dispositioned, per the ratification note that MR-DQ-4 be re-derived
 once item 1 exists.
 
+
+#### The `assert_equivalent -> Ok(())` survivor, justified properly
+
+This mutant is the T-A1 attack applied one layer up, so its skip-list
+entry must name **both** halves rather than stopping at "the wrapper
+still needs live sessions":
+
+- **What still bites.** The hash-comparison legs are independent of the
+  cache precondition, so a dead precondition does not blind
+  `rust == c` or `rust == canonical`. A divergence still surfaces.
+- **What stops biting.** Cache-level divergence between the two
+  implementations goes undetected *until* it manifests as a hash
+  divergence — which it will, but later and with materially worse
+  diagnostics (the operator loses the R1-D14 fingerprint and the
+  `--debug-cache-divergence` offset window).
+
+A narrow, honest, non-zero residual. Stating both halves is what stops
+a future reader from either over- or under-crediting the skip. Item 1
+already minimised it by construction — the smaller the wrapper's body,
+the less a wrapper mutant can hide — and that is the principled
+stopping point, not a compromise.
+
+#### Ordering-as-triage-routing is its own property class
+
+The leg-ordering test (§7.5 item 1) generalises past the case it
+covers. A verdict that evaluates the canonical leg first is **green on
+every equality property** and still wrong: it routes a genuine rust/C
+divergence to a *canonical-regeneration* PR instead of the §7.3
+consensus escalation. The defect is not in what the code computes but
+in **which incident class it declares**, and no equality assertion
+catches it.
+
+That failure mode recurs anywhere the harness maps a comparison result
+onto a triage path — the concurrent mode's cross-worker-versus-rust/C
+distinction and the adversarial-ratio mode's category assignment are
+the immediate other instances. Pinned here as a property class so it is
+tested deliberately rather than rediscovered.
+
 #### A yield the round did not predict
 
 Nine of `cache_precondition.rs`'s survivors are arithmetic in
@@ -1149,9 +1283,22 @@ change substantially. Precisely: row E's **cost** carries over, its
 **yield** does not. After item 1 some fraction of those 305 mutants
 become genuinely killable, so the survivor profile must be
 **re-measured post-item-1, never inherited** — that is this round's own
-trap in miniature, named here so it is not walked into twice. The claim then becomes narrow and true: *"the
-harness's negative tests are load-bearing."* Not a T-A9 defense; §4.6
-M2 amends to say so.
+trap in miniature, named here so it is not walked into twice. The claim then becomes narrow and true, and per MR-F12 it has **two**
+halves rather than one:
+
+> Item 3 asserts that the harness's verdicts **stay mutation-reachable**
+> (they remain functions, not macros) **and** that their negative tests
+> **stay load-bearing**. It makes no T-A9 claim.
+
+The first half is new and is the one MR-F12 forces: before item 1 the
+verdicts were not reachable at all, so "the tests are load-bearing" was
+not merely unverified, it was unaskable. §4.6 M2's amended text must
+say that its original T-A1 mechanism was **unavailable by construction
+until item 1**, not merely mis-scoped — MR-F5's scoping defect is real
+but downstream.
+
+Guarded by the minimum-mutant-count assertion (MR-DQ-4), without which
+a rename turns the whole lane into a clean green over an empty set.
 
 
 ### 7.9 Item 2 construction requirements (MR-R1–MR-R4)
@@ -1362,3 +1509,4 @@ Per the 2g plan's own §5.7 + §8.3, this is the required carrier.)*
 | Review | 2026-08-18 | Reviewer verdicts: MR-F1/F3/F4/F5 CONFIRMED at source; **MR-F2 CONFIRMED BUT UNDERSTATED → superseded by MR-F2′** (the config file is never loaded in CI; the "timeout_multiplier proves it is read" argument withdrawn as unsound, since 5.0 is also the tool default). Three new findings recorded: **MR-F6** (`&&`/`||` precedence sends every `workflow_dispatch` into the doomed job), **MR-F7** (`--locked` does not pin the tool version), **MR-F8** (cadence fossil). **MR-DQ-1 RULED** (drop `--check`; fold in MR-F8). **MR-DQ-8 RULED C1** after the per-crate suite measurement inverted the expected trade — harness suite 26 s vs verifier 63 s — with §6.5 establishing that C2 masks the T-A1 signal. Placement (MR-F2′) made a prerequisite of the ruling. MR-DQ-2–MR-DQ-7 remain open. |
 | Re-scope | 2026-08-18 | Second review round, read against the threat model and harness source rather than this doc's own artifacts. Three findings recorded: **MR-F9** — the "random" corpus is a pinned `ChaCha20Rng` seed, so five lanes re-verify the same 1024 pairs forever, and `shekyl-pow-randomx` is the **only** crate with a byte-exact reference oracle and **no** `cargo-fuzz` lane (eight other crates have one); **MR-F10** — `assert_equivalent` takes live sessions, so its verdict has no negative test anywhere and mutating it would survive for API-shape reasons, meaning C1's first skip-list would be a refactor catalogue; **MR-F11** — §4.6 M2's T-A9 claim exceeds §4.5 T-A9's own "cannot defend structurally" disposition, and cargo-mutants' mutation distribution is not the laundering distribution. **MR-DQ-8's C1 ruling WITHDRAWN → HELD**: sound on its own terms, but it priced an instrument whose yield was never derived. Re-scoped into three separable items (§7.5): verdict-path testability + negative tests; a rotating-seed differential lane that promotes divergences into the pinned corpus; mutation as a narrow ratchet over assertion modules only, after item 1. §7.6 answers necessary-vs-sufficient-vs-additive; §7.7 answers the cadence question. MR-DQ-1, MR-F6, MR-F7 survive unchanged. |
 | Ratification | 2026-08-18 | Re-scope **RATIFIED**, item 1 first — the sequencing is self-reinforcing: item 1 is what converts "assertion mutant survives" from an API-shape artifact into a real signal, so item 3 cannot be sized honestly until item 1 exists, and item 1 is the only one of the three that is merge-blocking-cheap. Item 2 gained four construction requirements from a source read (§7.9): **MR-R1** — a rotating seed makes its own red self-erasing, since rerunning *does* turn it green with a different innocent input set; countered by artifact-uploading the `failure_output` JSON line (which already carries `seedhash` + `data`, so no T11 amendment) and documenting replay-the-pair, never re-run-the-lane. **MR-R2** — the promotion target cannot be the random corpus (length- and index-coupled per `canonical_outputs.rs`); it is the adversarial corpus, whose methodology `§3.19 R7-D4` explicitly deferred to a post-2g round — this one. **MR-R3** — promotion must follow divergence → halt → root-cause → fix → *then* promote against the fixed build, or a wrong canonical is pinned permanently (T-A10 laundering shape). **MR-R4** — the seed and its provenance must reach the M4 banner with a T17 assertion, since an operator-suppliable seed is attacker-selectable. Also corrected item 2's claim: the **explored** boundary advances, the **pinned** one does not, and the negative half of that rationale belongs in the T# row. Item 3 sizing: row E's **cost** carries over, its **yield** must be re-measured post-item-1. |
+| Macro finding | 2026-08-18 | **MR-F12 — the round's largest finding, and it subsumes MR-F5.** cargo-mutants does not mutate macro invocations (its book says so; the visitors are syn `Visit` impls and a macro body is an unparsed `TokenStream`). Confirmed empirically on this branch: the `+` inside `debug_assert_eq!` at `cache_precondition.rs:378` produced **zero** mutants while structurally identical arithmetic at `:364`, `:379`, `:389` outside macros each produced one. So `assert_eq!(rust_hash, c_hash)` — §4.6 M2's flagship T-A1 target — **is not a mutable expression**, and the mechanism could not fire at any scoping, profile, or budget. MR-F5's scoping defect is real but downstream. This makes **item 1 the precondition** for M2's T-A1 claim to be mechanically true rather than aspirational, and generates the construction constraint *"harness verdicts are functions returning `Result`, never bare assertion macros"* — enforced by a grep gate, because the doc line is what decays. A prior turn's `debug_assert`-under-release-profile hazard is **retracted and recorded as retracted**: those expressions are not mutation sites in either profile, so the proposed class-level `exclude_re` would have been an exclusion covering nothing — this round's own signature failure shape. **MR-DQ-4 DISSOLVED** with reasoning (a denominator needs a population where survival is informative; at verdict scope every mutant is), and replaced by the guard the new scope actually needs: a **minimum-mutant-count assertion**, since `--re` is name-based and a rename yields a clean green over an empty set. Also pinned: the `assert_equivalent` skip-list entry states both halves of its residual, and **ordering-as-triage-routing** is named as its own property class. |
