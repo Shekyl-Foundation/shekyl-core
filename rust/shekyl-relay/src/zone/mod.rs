@@ -775,5 +775,108 @@ impl Zone {
     }
 }
 
+/// Which wire carries a planned batch.
+///
+/// **§42.3's split, as a type.** Covert channels carry the **stem phase**;
+/// fluff takes the zone's ordinary connection. The inherited C++ chose a
+/// carrier *instead of* a phase — the covert branch sat above the phase switch
+/// and downgraded a stem to `local` (§42.5a) — so carrier and phase were
+/// mutually exclusive answers to the same question. Here the carrier is a
+/// **function of** the phase, which is what makes the two composable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayCarrier {
+    /// The zone's ordinary connection.
+    Ordinary,
+    /// A covert channel, bound to the stem slot the plan chose.
+    ///
+    /// `channel` **is** the slot index: `CovertSchedule` binds channel `i` to
+    /// stem slot `i` (§20.3), and the C++ send loop must come to respect that
+    /// binding rather than broadcasting to every channel (§42.5a).
+    Covert { channel: usize },
+}
+
+/// A plan together with the wire that carries it — the whole answer in one
+/// value.
+///
+/// Returned as a unit so a caller cannot obtain a phase and then choose a
+/// carrier for it independently, which is the shape that let the covert branch
+/// substitute one for the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelayDispatch {
+    /// Stem (with destination), no-route, or fluff epoch.
+    pub plan: RelayPlan,
+    /// The wire.
+    pub carrier: RelayCarrier,
+}
+
+impl Zone {
+    /// Attach a carrier to a plan, per §42.3.
+    ///
+    /// Covert carries a **stem** and only a stem, and only when covert is
+    /// enabled on this zone. A fluff epoch and a no-route both take the
+    /// ordinary connection: fluff by §42.3's design, no-route because there is
+    /// nothing to carry.
+    ///
+    /// The slot lookup is consistent by construction — the destination came
+    /// from this same map in this same call, so `slot_of` cannot miss it. The
+    /// `None` arm is therefore unreachable rather than a fallback, and it
+    /// asserts in debug rather than degrading quietly: a stem that lost its
+    /// slot between planning and carrier selection is map corruption, not a
+    /// configuration state, and §92.4's rule is that carrier unavailability
+    /// must never travel as a routing degradation.
+    fn carrier_for(&self, plan: RelayPlan) -> RelayCarrier {
+        match plan {
+            RelayPlan::Stem(destination) if self.covert_enabled() => {
+                match self.map.slot_of(destination) {
+                    Some(slot) => RelayCarrier::Covert {
+                        channel: slot.get(),
+                    },
+                    None => {
+                        debug_assert!(
+                            false,
+                            "planned a stem to a peer with no slot: the destination came from \
+                             this map in this call, so this is map corruption, not a posture"
+                        );
+                        RelayCarrier::Ordinary
+                    }
+                }
+            }
+            _ => RelayCarrier::Ordinary,
+        }
+    }
+
+    /// [`Self::plan_relay`] plus the carrier that serves it (§42.3).
+    pub fn plan_dispatch<R: RelayRng + ?Sized>(
+        &mut self,
+        source: Option<ConnectionId>,
+        local_origin: bool,
+        rng: &mut R,
+    ) -> RelayDispatch {
+        let plan = self.plan_relay(source, local_origin, rng);
+        RelayDispatch {
+            carrier: self.carrier_for(plan),
+            plan,
+        }
+    }
+
+    /// [`Self::plan_relay_with_refresh`] plus the carrier that serves it.
+    ///
+    /// The production shape: **one** call yielding phase *and* carrier *and*
+    /// slot, per rule 40's coarse-call rule.
+    pub fn plan_dispatch_with_refresh<R: RelayRng + ?Sized>(
+        &mut self,
+        source: Option<ConnectionId>,
+        local_origin: bool,
+        outbound: Vec<ConnectionId>,
+        rng: &mut R,
+    ) -> RelayDispatch {
+        let plan = self.plan_relay_with_refresh(source, local_origin, outbound, rng);
+        RelayDispatch {
+            carrier: self.carrier_for(plan),
+            plan,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

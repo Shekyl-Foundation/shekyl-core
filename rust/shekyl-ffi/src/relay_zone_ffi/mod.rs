@@ -56,8 +56,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shekyl_relay::{
-    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, RelayPlan,
-    StemTallySnapshot, TxBlob, TxId, Zone,
+    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, RelayCarrier,
+    RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
 };
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -75,6 +75,11 @@ pub const SHEKYL_RELAY_PLAN_STEM: i32 = 0;
 pub const SHEKYL_RELAY_PLAN_NO_ROUTE: i32 = 1;
 /// Settled for this epoch: fluff. Retrying cannot change the answer.
 pub const SHEKYL_RELAY_PLAN_FLUFF_EPOCH: i32 = 2;
+
+/// Carrier: the zone's ordinary connection.
+pub const SHEKYL_RELAY_CARRIER_ORDINARY: u8 = 0;
+/// Carrier: a covert channel, bound to the stem slot (§20.3).
+pub const SHEKYL_RELAY_CARRIER_COVERT: u8 = 1;
 
 /// One transaction blob: pointer and length, borrowed for the call.
 ///
@@ -997,6 +1002,79 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
             SHEKYL_RELAY_PLAN_FLUFF_EPOCH
         }
     }
+}
+
+/// Plan a relay **and** the wire that carries it — phase, carrier and slot in
+/// **one** crossing (rule 40).
+///
+/// Supersedes [`shekyl_relay_zone_plan_relay_with_refresh`] for the covert
+/// path. The precedent for folding a decision and its mapping into a single
+/// call rather than shuttling an intermediate verdict is
+/// `shekyl_relay_zone_roll_originated_zone`.
+///
+/// Return value is the same `SHEKYL_RELAY_PLAN_*` code as the older entry
+/// point, so a caller that ignores the carrier reads exactly what it read
+/// before. `out_carrier` receives `SHEKYL_RELAY_CARRIER_*`; `out_channel`
+/// receives the covert channel — **which is the stem slot index** — and is
+/// meaningful **only** when the carrier is covert. It is written as `0` on the
+/// ordinary carrier rather than left untouched, so a caller cannot read a stale
+/// slot from a previous call.
+///
+/// # This entry point deliberately has NO production caller yet
+///
+/// `DAEMON_RELAY_PRIVACY.md` §42.5b's ownership split lands the decision half
+/// first; the C++ covert branch is restructured to consume it in a following
+/// change (`COVER_TRAFFIC_RESTORATION.md` §2.1 stages 2–3). **Do not delete
+/// this as unused** — it is the seam that restructure lands against, and the
+/// audit at `COVER_TRAFFIC_RESTORATION.md` §1.6 states the conditions under
+/// which the cover mechanism may be removed, none of which is a caller grep.
+///
+/// # Safety
+/// `handle` must be live; `source` must point to 16 readable bytes or be null;
+/// `outbound` must point to `n * 16` readable bytes or be null with `n == 0`;
+/// `out_dest` must point to 16 writable bytes; `out_carrier` must point to one
+/// writable byte; `out_channel` must point to a writable `u32`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
+    handle: *mut RelayZoneHandle,
+    source: *const u8,
+    local_origin: bool,
+    outbound: *const u8,
+    n: usize,
+    out_dest: *mut u8,
+    out_carrier: *mut u8,
+    out_channel: *mut u32,
+) -> i32 {
+    if handle.is_null() || out_dest.is_null() || out_carrier.is_null() || out_channel.is_null() {
+        // Fail closed on every out-param: a caller that got NO_ROUTE must not
+        // then read an uninitialised carrier and treat it as covert.
+        if !out_carrier.is_null() {
+            *out_carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
+        }
+        if !out_channel.is_null() {
+            *out_channel = 0;
+        }
+        return SHEKYL_RELAY_PLAN_NO_ROUTE;
+    }
+    let peers = read_ids(outbound, n);
+    let h = &mut *handle;
+    let source = read_id(source);
+    let dispatch =
+        h.driver
+            .zone_mut()
+            .plan_dispatch_with_refresh(source, local_origin, peers, &mut h.rng);
+    h.publish();
+    match dispatch.carrier {
+        RelayCarrier::Ordinary => {
+            *out_carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
+            *out_channel = 0;
+        }
+        RelayCarrier::Covert { channel } => {
+            *out_carrier = SHEKYL_RELAY_CARRIER_COVERT;
+            *out_channel = u32::try_from(channel).unwrap_or(u32::MAX);
+        }
+    }
+    write_plan(dispatch.plan, out_dest)
 }
 
 /// Merge the caller's current outbound set into the stem map mid-epoch.

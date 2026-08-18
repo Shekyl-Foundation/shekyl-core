@@ -666,3 +666,100 @@ fn covert_enabled_pins_stem_width_to_noise_channels() {
         .is_some());
     assert!(z.covert_deadline_at(inherited::NOISE_CHANNELS).is_none());
 }
+
+/// §42.3 as a table: the carrier is a FUNCTION of the phase, never a
+/// substitute for it.
+///
+/// The inherited C++ chose a carrier *instead of* a phase — covert above the
+/// switch, stem downgraded to `local` (§42.5a). These assert the composition
+/// the restructure has to produce, so the C++ has something to land against.
+#[test]
+fn covert_carries_the_stem_and_only_the_stem() {
+    let mut rng = SplitMix64::new(0xC0BE_0001);
+    // covert ON — otherwise every arm is Ordinary and this is vacuous.
+    let mut z = Zone::new(
+        DandelionParams::inherited(),
+        2,
+        FluffReach::OutboundOnly,
+        true,
+        0,
+        &mut rng,
+    );
+    z.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+
+    let d = z.plan_dispatch(Some(id(9)), false, &mut rng);
+    match (d.plan, d.carrier) {
+        (RelayPlan::Stem(_), RelayCarrier::Covert { channel }) => {
+            assert!(
+                channel < 2,
+                "the covert channel IS the stem slot (§20.3), so it must be inside the \
+                 stem width; broadcasting to any other channel is the §42.5a defect"
+            );
+        }
+        (RelayPlan::Stem(_), RelayCarrier::Ordinary) => {
+            panic!("covert is enabled and this is a stem — §42.3 says covert carries it")
+        }
+        (other, carrier) => panic!("expected a stem, got {other:?} on {carrier:?}"),
+    }
+}
+
+/// Covert OFF ⇒ every phase takes the ordinary connection. The negative
+/// control: without it the test above passes on a zone that always says covert.
+#[test]
+fn covert_disabled_never_selects_a_covert_carrier() {
+    let mut rng = SplitMix64::new(0xC0BE_0002);
+    let mut z = Zone::new(
+        DandelionParams::inherited(),
+        2,
+        FluffReach::OutboundOnly,
+        false,
+        0,
+        &mut rng,
+    );
+    z.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+
+    for local_origin in [true, false] {
+        let d = z.plan_dispatch(Some(id(9)), local_origin, &mut rng);
+        assert_eq!(
+            d.carrier,
+            RelayCarrier::Ordinary,
+            "covert is disabled; no phase may select a covert carrier"
+        );
+    }
+}
+
+/// The plan a dispatch reports must be the plan the older entry point reports.
+///
+/// `plan_dispatch` is additive: it attaches a carrier, it does not re-decide
+/// the phase. If these diverge, the seam has started making routing decisions
+/// of its own — the substitution §42.5a records.
+#[test]
+fn dispatch_does_not_re_decide_the_phase() {
+    for local_origin in [true, false] {
+        let mut a = SplitMix64::new(0xC0BE_0003);
+        let mut za = Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            true,
+            0,
+            &mut a,
+        );
+        za.update_stems(vec![id(1), id(2), id(3), id(4)], &mut a);
+        let via_dispatch = za.plan_dispatch(Some(id(9)), local_origin, &mut a).plan;
+
+        let mut b = SplitMix64::new(0xC0BE_0003);
+        let mut zb = Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            true,
+            0,
+            &mut b,
+        );
+        zb.update_stems(vec![id(1), id(2), id(3), id(4)], &mut b);
+        let via_plan = zb.plan_relay(Some(id(9)), local_origin, &mut b);
+
+        assert_eq!(via_dispatch, via_plan, "local_origin={local_origin}");
+    }
+}
