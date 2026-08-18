@@ -236,6 +236,16 @@ longer holds uniformly:
 | retail egress `1e-10` | 0.003854 | **0.008336** | **now more expensive** — the proxy attack stops being free |
 
 So a 2.16× correction to one constant flips the retail-egress end of the band.
+
+**Which direction it moves, so its own round starts from the right question.**
+The correction makes re-fetching *more* expensive, so the free-riding case the
+fetch-price analysis was built to price gets **weaker, not stronger** — it moves
+in the **safe direction for the retention argument**. But W10 still fails at
+bulk transit, so **the overall verdict may be unchanged even though one end of
+it flipped.** That is precisely why it needs reasoning rather than a number
+swap: "one band member crossed over" and "the finding is retired" are different
+claims, and only the first is established.
+
 That is an **economics re-verdict**, not a number fix, and it rides its own
 review surface under [rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)
 — bundling it here would let it in on the carrier round's review, which is the
@@ -340,6 +350,17 @@ vacuously ([a seal is not coverage](../../.cursor/rules/50-testing.mdc)).
   — hash-equivalence and preimage/domain-separation are independent validation
   surfaces, and "coupled through the framing" is topic adjacency, not a shared
   surface).
+
+  **Constraint it inherits, written down now because the failure mode is
+  tidiness rather than disagreement.** The **leaf chunk is pruned-side by
+  construction.** `leaf_bytes` is already on the kept side, and the leaf chunk
+  is the same conceptual object in the same neighbourhood — so putting them
+  together is the obvious, unremarkable move, and it silently reintroduces
+  ~124 GB/yr that this ruling exists to avoid. A format that groups them for
+  structural neatness is not disagreeing with `CR-D2`; it is **not noticing
+  it**, which is why the constraint is recorded here rather than left to be
+  re-derived. The two are separated deliberately: one identifies the record,
+  the other proves it, and only the first survives pruning.
 - **The `r` field's deletion.** Rides the response-format round. Its falsifier
   is *"block `h`'s producer may also have produced `h−1`"* — the same `q²` case
   already ruled on pool grinding, an edge gated behind a discarded-block cost
