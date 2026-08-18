@@ -4,17 +4,17 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Design round 1 — OPEN.** Substrate survey (§2) is measured and complete; findings MR-F1–MR-F5 (§4) are source-verified; design questions MR-DQ-1–MR-DQ-8 (§5) are **awaiting ratification**. No implementation commit lands before the round closes, per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). |
+| Status | **Design round 1 — review round closed 2026-08-18; MR-DQ-1 and MR-DQ-8 RULED, MR-DQ-2..7 still open.** Substrate survey (§2) is measured and complete; findings MR-F1–MR-F8 (§4) are source-verified (MR-F2 superseded by **MR-F2′**); MR-DQ-1 + MR-DQ-8 are ruled (§5); MR-DQ-2–MR-DQ-7 remain **awaiting ratification**. No implementation commit lands before the round closes, per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). |
 | Kind | Test-regime redesign (assurance-gate execution shape). **Not** a change to what T18 asserts — the gate's premise is unchanged; only how it is executed. |
 | Amends | [`RANDOMX_V2_PHASE2G_PLAN.md`](../completed/RANDOMX_V2_PHASE2G_PLAN.md) **§5.5.6** (the nightly-mutants CI row) and **§4.6 M2** (mutation testing as active-threat-surface mitigation). The 2g plan's §5.7 + §8.3 require that any change to harness behavior carry a plan-doc amendment; this document **is** that amendment carrier. The 2g plan is in `docs/completed/` and is not reopened as an active design — §11 records the amendment against it. |
 | Spec authority | 2g plan §4.5 (active threat surface T-A1–T-A11), §4.6 M2 (mitigation premise), §6 T18 row (the assertion). This doc **cites**; it does not re-derive the threat model. |
 | Substrate pin | `6441c1e29` (`dev` tip at survey time). All mutant counts, timings, and line references in §2 are against this commit. |
 | Fork pin | `external/randomx-v2` at `aaafe71` (v2.0.1) — unchanged by this round. |
-| Tooling pin | `cargo-mutants 27.1.0` (the version measured in §2; CI installs via `cargo install cargo-mutants --locked`). |
+| Tooling pin | `cargo-mutants 27.1.0` (the version measured in §2). CI currently installs via `cargo install cargo-mutants --locked`, which does **not** pin the version — see MR-F7. |
 | Working branch | `design/randomx-mutation-regime` (off `dev`; design docs land on `dev` per [`06-branching`](../../.cursor/rules/06-branching.mdc) and the design-branch policy). |
 | Scope | The **execution shape** of T18 only: invocation, cadence, scoping, parallelism, branch coverage, and the skip-list mechanism. See §1. |
 | Out of scope | (a) The `dev` → `main` sync carrying `50cf03545` (T8 ceiling) + `477a448b1` (severed-header restore) — a separate validation surface per [`19-validation-surface-discipline`](../../.cursor/rules/19-validation-surface-discipline.mdc); this round neither blocks nor depends on it. (b) What T18 asserts (survival bounded by the skip-list) — unchanged. (c) The T5/T7/T8 runtime modes. (d) Any change to the verifier or harness under test. |
-| Predecessor record | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) T18 entry (added 2026-08-10, dispatch run `31346130482`). This round **extends** that entry rather than contradicting it: the entry's diagnosis (suite outgrew the budget) is confirmed and its four candidate options are carried into §6 with measurements attached. The entry did not have MR-F1 or MR-F2. |
+| Predecessor record | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) T18 entry (added 2026-08-10, dispatch run `31346130482`). This round **extends** that entry rather than contradicting it: the entry's diagnosis (suite outgrew the budget) is confirmed and its four candidate options are carried into §6 with measurements attached. The entry did not have MR-F1, MR-F2′, or MR-F5. |
 
 ---
 
@@ -41,8 +41,8 @@ to triage.
 
 This document exists because fixing that is not a parameter change.
 The survey below found that the gate as specified is **internally
-contradictory** (MR-F1), that its skip-list mechanism is **inert**
-(MR-F2), that it has **no coverage of the branch where the threat
+contradictory** (MR-F1), that its skip-list config **is never loaded at all**
+(MR-F2′), that it has **no coverage of the branch where the threat
 arrives** (MR-F3), that its invocation **forecloses the parallelism**
 that would make it affordable (MR-F4), and — the finding that outranks
 the budget problem — that **the differential harness never participates
@@ -68,8 +68,8 @@ The execution shape of T18:
 
 1. **Invocation** — the `cargo mutants` command line and its
    relationship to the §5.5.6 pinned contract (MR-F1).
-2. **Skip-list mechanism** — `.cargo/mutants.toml` discovery and
-   glob semantics (MR-F2).
+2. **Skip-list mechanism** — `.cargo/mutants.toml` **placement**,
+   discovery, and glob semantics (MR-F2′).
 3. **Scoping** — which crates/modules are mutated, and on what
    trigger.
 4. **Parallelism and sharding** — how the work is divided to fit a
@@ -88,7 +88,7 @@ The execution shape of T18:
   causes (a stale T8 ceiling and the severed mutants-job header), both
   already fixed on `dev`. That is a different validation surface and a
   different PR. It is noted here only because the severed header is
-  what kept MR-F1–MR-F5 latent: with T18 never triggering, none of
+  what kept MR-F1–MR-F8 latent: with T18 never triggering, none of
   them could surface.
 - **The verifier and harness under test.** No `shekyl-pow-randomx` or
   `shekyl-randomx-differential` behavior changes in this round.
@@ -281,7 +281,10 @@ and, in the same row, pins T18 as *"Zero surviving mutations OR all
 surviving mutations in `.cargo/mutants.toml`'s skip-list."*
 
 These are incompatible. `--check` runs `[Phase::Check]` only — it
-verifies that each mutant *builds*, and never runs a test. A
+verifies that each mutant *builds*, and never runs a test. The tool is
+explicit about this beyond the phase list: under `check_only` the test
+timeout is set to literally zero, with the comment *"We won't have run
+baseline tests, and we won't run any other tests either."* A
 check-only pass cannot classify a mutant as caught or survived, so it
 cannot produce the survival set that T18's assertion is defined over.
 
@@ -297,44 +300,70 @@ discovery. It is the root finding of this round: whichever regime §5
 selects, §5.5.6's invocation text must be corrected, because as written
 it specifies a gate that cannot fail for the reason it claims to.
 
-### MR-F2 — the skip-list is inert
+### MR-F2′ — the skip-list config is never loaded (supersedes MR-F2)
 
-`.cargo/mutants.toml` `exclude_globs` are:
+**Supersede note.** MR-F2 as first written said the skip-list globs are
+inert because they carry a dead `rust/` prefix. That is true and
+insufficient. The deeper fault is that **the config file is never read
+at all** in the CI invocation, so the entire skip-list discipline —
+not merely two globs — is unwired. MR-F2's glob claim is retained
+below as the second of two independent defects. The original
+supporting argument ("`timeout_multiplier` demonstrably applies, so
+the file is read") is **withdrawn as unsound**; see "the trap" below.
 
-```toml
-"rust/shekyl-randomx-differential/src/bin/**",
-"rust/shekyl-randomx-differential/src/canonical_outputs.rs",
-```
+**Defect 1 — wrong path.** cargo-mutants reads its config from
+`<workspace_root>/.cargo/mutants.toml`. The Cargo workspace root is
+`rust/` (the workspace manifest is `rust/Cargo.toml`), and the mutants
+job runs with `working-directory: rust` and passes neither `-d` nor
+`--config-file`. So the file it looks for is
+`rust/.cargo/mutants.toml`. That does not exist — `rust/.cargo/`
+contains only `audit.toml`. The one `mutants.toml` sits at the **repo
+root**, where nothing reads it. A missing config silently defaults to
+empty.
 
-The Cargo workspace root is `rust/`, and cargo-mutants matches paths
-relative to that root — so the actual path of the first file is
-`shekyl-randomx-differential/src/bin/gen_canonical_outputs.rs`. The
-leading `rust/` means neither glob ever matches.
+**Defect 2 — dead prefix.** Independently, both `exclude_globs` are
+written as `rust/shekyl-randomx-differential/…`, but globs match
+against the tree-relative path, which is already relative to `rust/`.
+So even once the file is placed where the tool reads it, the globs
+match nothing until the prefix is removed.
 
-Measured, at `6441c1e29`:
+**The decisive measurement**, at `6441c1e29`, bare `--list` with no
+`--config`:
 
-| Invocation | Mutants |
+| Config situation | Mutants |
 | --- | ---: |
-| default discovery | 1322 |
-| explicit `--config ../.cargo/mutants.toml` | 1322 |
-| same config, `rust/` prefix removed from both globs | **1290** |
+| repo-root `.cargo/mutants.toml` only (**this is CI**) | 1322 |
+| corrected globs planted at `rust/.cargo/mutants.toml` | **1290** |
 
-The 32-mutant delta is exactly the tooling binaries (26
-`gen_canonical_outputs.rs` + 6 `gen_parity_corpus.rs`) that the
-skip-list's own inline comments justify excluding.
+Planting the file at the workspace root changes the count; the
+repo-root file does not. That isolates defect 1 cleanly, and the
+1322 → 1290 delta isolates defect 2.
 
-The file is **half-working**, which is why this went unnoticed:
-`timeout_multiplier = 5.0` from the same file *does* apply (CI's
-auto-set timeout is 5.001 × the baseline), so the config is
-demonstrably read. Only the path-dependent keys silently no-op.
+**The trap, recorded because it nearly closed this finding wrongly.**
+The earlier reasoning was: CI's auto-set timeout is 5.001 × baseline,
+`timeout_multiplier = 5.0` is in the config, therefore the config is
+read. This is **wrong**: cargo-mutants' *default* multiplier is also
+5.0 (`test_timeout_multiplier.unwrap_or(5.0)`). The configured value
+coincides with the tool default, so on that axis an unread file is
+observationally identical to a read one. The two earlier probe rows
+that both returned 1322 (default discovery, and explicit
+`--config ../.cargo/mutants.toml`) returned the same number for
+**different reasons** — not-loaded versus loaded-but-globs-inert — and
+reading them as one result is what hid defect 1. The probe found the
+config only because it was pointed at it explicitly; that is precisely
+the axis under test, and CI does not do it.
 
-The consequence is larger than 32 mutants. §4.6 M2's entire
+**Consequence, and why this outranks a 32-mutant miscount.** §4.6 M2's
 survivor-triage discipline — *"every entry in `exclude_globs` /
 `exclude_re` must cite a substrate-anchored justification"* — is
-enforced through a mechanism that has never excluded anything. Any
-future skip-list entry written in the same style would also silently
-no-op, and the gate would report survivors the discipline believed
-were carved out.
+enforced through a file the gate has never read. Every future entry
+written in good faith would silently no-op.
+
+**This also reshapes MR-DQ-8.** Pinning `test_package` in
+`.cargo/mutants.toml` at its current location would be a **no-op that
+reads as fixed** — reproducing, inside the fix, the exact failure mode
+this round exists to end. Placement is therefore a prerequisite of
+MR-DQ-8 option C, not a detail of it.
 
 ### MR-F3 — T18 has no coverage of `dev`
 
@@ -354,45 +383,6 @@ harness-affecting commits behind.
 So even a T18 that fit its budget would be testing the branch where
 the threat has already been merged past, rather than the branch where
 it arrives.
-
-   tests in the mutated package are run."*
-2. cargo-mutants' source: with no `--test-workspace`, no
-   `--test-package`, and neither key in config, `test_package` falls
-   through to `TestPackages::Mutated`.
-3. `.cargo/mutants.toml` sets neither `test_workspace` nor
-   `test_package`, and the workflow invocation passes neither flag.
-
-**Why it matters.** M2's T-A1 layer is defined as: weaken the
-byte-equality assertion, and mutants it used to catch now survive. That
-signal requires harness tests to run against verifier mutants. They
-never do — so **M2's layer of the T-A1 defense is not operative as
-configured.** A weakened `assert_eq!(rust_hash, c_hash)` in
-`mode_correctness.rs` cannot change the survival count of a single
-`vm.rs` mutant, because `vm.rs` mutants are judged solely by the
-verifier's own unit tests, which harness tampering does not touch.
-
-**What this does not say.** T-A1 is not undefended. Its 2g disposition
-is explicitly a **three-layer** mitigation, and M1 (committed canonical
-outputs, `rust == c == committed_canonical`) is layer 1 and is
-operative. What is inoperative is M2's layer. The residual T-A1 signal
-M2 does provide comes from mutating the assertion-bearing harness
-modules themselves (305 mutants), which *are* judged by harness tests.
-
-**Latent spec ambiguity.** The 2g plan never pinned test scoping at
-all — §5.5.6's invocation names packages to *mutate* and is silent on
-packages to *test*. The tool's default was silently load-bearing. So
-this is not only a misconfiguration; it is a gap in the pinned
-contract, and the amendment must close it explicitly (MR-DQ-8).
-
-**Fixable, and worth pricing.** The harness's integration tests do
-perform real rust-vs-C comparison — `adversarial_corpus_byte_equality.rs`,
-`c_oracle_session_round_trip.rs`, `divergence_triage.rs`,
-`worst_case_ratio.rs`, `canonical_pins_full.rs` all drive
-`COracleSession` / `compute_hash`. (The mode modules' in-src
-`#[cfg(test)]` blocks do not; the differential lives in `tests/`.) So
-directing verifier mutants at the harness's suite would genuinely wire
-M2's T-A1 layer rather than merely appearing to. It also raises
-per-mutant cost, which §6 prices.
 
 ### MR-F4 — the invocation forecloses its own parallelism
 
@@ -417,12 +407,107 @@ never execute against a verifier mutant.
 **Evidence, three parts:**
 
 1. cargo-mutants' `--help`: *"`--test-workspace` … If false, only the
+   tests in the mutated package are run."*
+2. cargo-mutants' source: with no `--test-workspace`, no
+   `--test-package`, and neither key in config, `test_package` falls
+   through to `TestPackages::Mutated`.
+3. `.cargo/mutants.toml` sets neither `test_workspace` nor
+   `test_package`, and the workflow invocation passes neither flag —
+   and per MR-F2′ that file is not read in CI regardless.
+
+The dependency direction seals it: the harness path-depends on the
+verifier (`rust/shekyl-randomx-differential/Cargo.toml`), so a
+verifier mutant is judged solely by the verifier's own tests. Nothing
+in the harness executes.
+
+**Why it matters.** M2's T-A1 layer is defined as: weaken the
+byte-equality assertion, and mutants it used to catch now survive. That
+signal requires harness tests to run against verifier mutants. They
+never do — so **M2's layer of the T-A1 defense is not operative as
+configured.** A weakened `assert_eq!(rust_hash, c_hash)` in
+`mode_correctness.rs` cannot change the survival count of a single
+`vm.rs` mutant.
+
+**What this does not say.** T-A1 is not undefended. Its 2g disposition
+is explicitly a **three-layer** mitigation, and M1 (committed canonical
+outputs, `rust == c == committed_canonical`) is layer 1 and is
+operative. What is inoperative is M2's layer. The residual T-A1 signal
+M2 does provide comes from mutating the assertion-bearing harness
+modules themselves (305 mutants), which *are* judged by harness tests.
+
+**Latent spec ambiguity.** The 2g plan never pinned test scoping at
+all — §5.5.6's invocation names packages to *mutate* and is silent on
+packages to *test*. The tool's default was silently load-bearing. So
+this is not only a misconfiguration; it is a gap in the pinned
+contract, and the amendment must close it explicitly (MR-DQ-8).
+
+**Fixable, and worth pricing.** The harness's integration tests do
+perform real rust-vs-C comparison — `adversarial_corpus_byte_equality.rs`,
+`c_oracle_session_round_trip.rs`, `divergence_triage.rs`,
+`worst_case_ratio.rs`, `canonical_pins_full.rs` all drive
+`COracleSession` / `compute_hash`. (The mode modules' in-src
+`#[cfg(test)]` blocks do not; the differential lives in `tests/`.) So
+directing verifier mutants at the harness's suite would genuinely wire
+M2's T-A1 layer rather than merely appearing to. It also raises
+per-mutant cost, which §6 prices.
+
+### MR-F6 — every `workflow_dispatch` launches the doomed mutants job
+
+The job's condition is:
+
+```yaml
+if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1' || github.event_name == 'workflow_dispatch'
+```
+
+`&&` binds tighter than `||`, so this parses as
+`(schedule && monday-cron) || dispatch` — **any** dispatch runs
+mutants, including a `parity_scope=full` parity-recovery dispatch that
+has nothing to do with T18. Each such dispatch spends a 6-hour runner
+on a run guaranteed to red.
+
+This is corroborated rather than theoretical: the job's only execution
+ever (`31346130482`) was a `workflow_dispatch`, not the Monday cron.
+
+The house pattern already exists in this same workflow — `runtime-modes`
+is gated on an explicit `inputs.runtime_modes` boolean precisely so a
+dispatch does not spend a runner on an unrelated leg. Mutants should
+take the same shape.
+
+### MR-F7 — the tool version is unpinned
+
+```yaml
+run: cargo install cargo-mutants --locked
+```
+
+`--locked` pins cargo-mutants' *own dependency tree*, not the
+cargo-mutants **version**. Every behavior this round calibrates
+against — the 5.0 default timeout multiplier, `TestPackages::Mutated`
+scoping, shard semantics, config discovery, and the measured
+per-mutant costs — can shift silently under the gate on any release
+day.
+
+Given that this round's findings are *specifically* about defaults
+that were load-bearing without being pinned (MR-F5, and the
+multiplier trap in MR-F2′), leaving the tool version floating would
+re-arm the same class of failure. Pin `cargo-mutants@<version>` so a
+bump is a reviewed change.
+
+### MR-F8 — cadence language is a fossil
+
+`.cargo/mutants.toml`'s header says *"Cadence: nightly only"* in five
+places and refers to a `mutants-nightly` job that does not exist; the
+2g plan §5.5.6 row likewise says nightly. The landed cadence is
+**weekly, Monday 06:00 UTC**. Low severity on its own, but it is
+documentation that describes a gate other than the one running, and it
+belongs in the same amendment as MR-DQ-1 rather than a separate sweep
+(rule 91's sweep-the-indexes clause).
+
 ## 5. Design questions
 
 Each carries a recommendation with its substrate. **None is closed
 until ratified.**
 
-### MR-DQ-1 — how is MR-F1 resolved: correct the invocation, or correct the assertion?
+### MR-DQ-1 — how is MR-F1 resolved: correct the invocation, or correct the assertion? — **RULED 2026-08-18**
 
 Two coherent regimes exist. (a) Keep `--check` and redefine T18 as a
 *build-viability* gate — cheap, but it defends none of T-A1/T-A3/T-A9,
@@ -433,9 +518,21 @@ MR-DQ-2–MR-DQ-5.
 
 **Recommendation: (b).** Option (a) preserves the gate's name and
 discards its content; the 2g threat table would then cite a mitigation
-that mitigates nothing. §5.5.6's invocation text is corrected by
-amendment (§11), and the `--check` flag is recorded as a
-specification error, not re-litigated.
+that mitigates nothing.
+
+**RULING (2026-08-18): (b). Option (a) is not live.** T18's row asserts
+survival bounded by the skip-list and names T-A1/T-A3/T-A9 — properties
+`[Phase::Check]` cannot observe, since under `check_only` the test
+timeout is zero by construction and no test ever runs. Keeping the name
+while discarding the content manufactures a documented-but-false gate,
+which is the exact failure this round exists to end.
+
+**Amendment scope pinned by this ruling:** §5.5.6's invocation text and
+the §6 T18 row are corrected **together**, and the MR-F8 cadence fossil
+("nightly" → weekly Monday) folds into the same amendment rather than a
+separate sweep. The 2g plan lives in `docs/completed/`, so the
+amendment follows the completed-doc convention (§11) — the doc is not
+reopened as an active design.
 
 ### MR-DQ-2 — per-PR `--in-diff`, weekly whole-crate sweep, or both?
 
@@ -527,7 +624,7 @@ is a bug, not a no-op.
 
 ---
 
-### MR-DQ-8 — how is test scoping pinned (MR-F5)?
+### MR-DQ-8 — how is test scoping pinned (MR-F5)? — **RULED 2026-08-18**
 
 The 2g contract never pinned which packages *test* a mutant; the tool's
 `TestPackages::Mutated` default silently became the contract, and it is
@@ -544,12 +641,50 @@ as described, at higher per-mutant cost (the harness suite replaces the
 verifier suite); (c) `test_workspace = true` — broadest, most
 expensive.
 
-**Recommendation: (b), pinned in `.cargo/mutants.toml` with a comment
-naming MR-F5**, contingent on §6's price. (a) is acceptable only if
-§6 shows (b) is unaffordable, and then the 2g threat table must be
-amended to stop claiming an M2 T-A1 layer it does not have — an
-inoperative-but-documented gate is recoverable; an inoperative gate
-described as operative is the failure mode of this entire round.
+**RULING (2026-08-18): C1 — harness-only scoping — with B as the named
+fallback.** §6.4 prices it and §6.5 explains why the maximal-looking
+option is wrong:
+
+- **C1 costs less than the status quo** (12.6 h vs 23.9 h CI, 5 shards
+  vs 8), because the harness suite is 2.4× cheaper than the verifier's.
+- **C1 is the only configuration where the T-A1 signal exists**, because
+  it is the only one where the harness assertion is the sole judge.
+  C2 ("run both suites") re-masks the signal exactly as today.
+
+**Two prerequisites, both of which must land with the ruling:**
+
+1. **Placement is a prerequisite, not a detail (MR-F2′).** Pinning
+   `test_package` in `.cargo/mutants.toml` at its current repo-root
+   location would be a **no-op that reads as fixed** — the fix
+   reproducing the round's own failure mode. The file moves to
+   `rust/.cargo/mutants.toml` (where the tool reads it) with the dead
+   `rust/` glob prefix removed **in the same motion**. Policy stays in
+   the config file rather than on the CLI: the file already hosts the
+   skip-list discipline, so it should own scoping too — one source of
+   truth, relocated to where it is actually read.
+2. **A structural guard, so this cannot silently regress.** The
+   crate-invariant script (or the job itself) asserts that
+   `rust/.cargo/mutants.toml` exists **and** that the excludes are
+   live — the measured 1322 → 1290 count delta is a ready-made
+   assertion. A config that is present but unread must fail loudly.
+
+**Rule-21 reversion trigger, named now rather than left implicit:** if
+the priced regime ever exceeds **8 shards × 6 h**, fall back to B,
+amend §4.6 M2 in the same PR to stop claiming the T-A1 layer, and queue
+C1 in `docs/FOLLOWUPS.md` with the timing evidence attached. C1 sits at
+5 shards today, so the trigger has 60% headroom against measured cost.
+
+The decision rule behind all of this: an inoperative-but-documented
+gate is recoverable; an inoperative gate described as operative is
+not — and that principle has to survive the fix's own wiring, which is
+what prerequisite 1 protects.
+
+**Deliberately left open for implementation-time measurement:** C1's
+first run is expected to surface genuine survivors (§6.4), since
+verifier mutants stop being judged by the verifier's fast unit tests.
+The skip-list's intended first use is triaging that output. The
+implementation PR reports the survivor count; it is not pre-declared
+here.
 
 ## 6. Option matrix
 
@@ -600,7 +735,8 @@ per MR-DQ-1(b).
 | --- | --- | ---: | ---: | --- | --- |
 | **A** | **Status quo** — debug, default scoping, serial, unsharded | **~282 h** | 47 | partial (assertion modules only) | ✓ |
 | **B** | Release, default scoping, sharded | **~23.3 h** | **6** (≈3.9 h each) | partial (assertion modules only) | ✓ |
-| **C** | Release, **corrected scoping** (MR-DQ-8b), sharded | §6.4 | §6.4 | **✓ (M2 layer operative)** | ✓ |
+| **C1** | Release, **harness-only scoping**, sharded | **~12.6 h** | **5** | **✓ (M2 layer operative)** | ✓ |
+| **C2** | Release, **both-suites scoping**, sharded | ~41.9 h | 14 | masked — see §6.5 | ✓ |
 | **D** | Per-PR `--in-diff`, release, unsharded | minutes (bounded by diff) | 1 | ✗ (§3.1) | **✓ at arrival, incl. `dev`** |
 | **E** | Release, **assertion-module slice only** (305), sharded | **~5.5 h** | 1 | ✓ direct signal | ✗ |
 
@@ -617,7 +753,71 @@ full sweep.
 
 ### 6.4 Pricing corrected scoping (row C)
 
-*(Filled from the per-crate suite measurement.)*
+Per-crate release suites, measured separately on the local box (same
+`--skip canonical_pins_full` as CI):
+
+| Suite | Wall | Note |
+| --- | ---: | --- |
+| `shekyl-pow-randomx` alone | **63 s** | 130 passed, 2 ignored |
+| `shekyl-randomx-differential` alone | **26 s** | 90 + 35 + 3 + 1 passed; the 17.4 s binary is the differential integration leg |
+
+**This inverts the expected trade.** The assumption behind "corrected
+scoping costs more" was that the differential is the expensive side. It
+is not: the harness suite is **2.4× cheaper** than the verifier's own.
+
+Per-mutant cost model, with the measured 0.18 unviable fraction (an
+unviable mutant pays build only, ~1 s):
+
+`c = 0.82 × (build + suite) + 0.18 × build`
+
+| Scoping | Suite(s) per mutant | `c` (local) |
+| --- | --- | ---: |
+| `Mutated` (today) | verifier 63 s / harness 26 s by crate | 52.7 s / 22.3 s |
+| `Named(["shekyl-randomx-differential"])` | harness 26 s for **every** mutant | **22.3 s** |
+| `Named([both])` | 89 s for every mutant | 74.0 s |
+
+Scaled by the 1.58× CI factor and sharded by the §7.4 rule:
+
+| Row | Regime | CI cost | Shards (§7.4 rule) |
+| --- | --- | ---: | ---: |
+| **B** | `Mutated` (today's scoping) | 23.9 h | 8 |
+| **C1** | harness-only scoping | **12.6 h** | **5** |
+| **C2** | both-suites scoping | 41.9 h | 14 |
+
+**C1 is cheaper than the status quo *and* wires the T-A1 layer.**
+
+### 6.5 Why C2 ("strictly stronger") is in fact weaker for T-A1
+
+C2 looks like the safe maximal choice and is not, because T18's
+assertion is *survival*, and running more suites can only **reduce**
+survivors. A verifier mutant caught by the verifier's own unit tests is
+caught under C2 no matter what the harness does — so weakening the
+harness assertion changes nothing, and the T-A1 signal is masked
+exactly as it is today (MR-F5).
+
+The signal exists only where the harness assertion is **load-bearing**
+— i.e. where it is the sole judge. That is C1.
+
+| Row | T-A1 signal from a weakened harness assertion |
+| --- | --- |
+| B | none from verifier mutants (MR-F5); residual from the 305 assertion-module mutants only |
+| **C1** | **present** — verifier mutants survive when the assertion stops catching |
+| C2 | masked again — verifier unit tests catch regardless |
+
+So "add more tests to be safer" is the wrong instinct for a mutation
+gate. C1 wins on cost *and* on the property the gate exists to
+provide, which is a rare enough alignment to state explicitly rather
+than leave the reader to infer.
+
+**The honest cost of C1**, which ratification should price in: verifier
+mutants stop being judged by the verifier's fast unit tests, so mutants
+the differential corpus does not exercise will **survive**. The first
+run may well be red with real survivors. That is not a regression — it
+is precisely the assertion-gap discovery §4.6 M2 promises, arriving for
+the first time. It does mean the first run's output is a triage
+workload, and the skip-list discipline finally gets its intended first
+use.
+
 
 ---
 
@@ -647,7 +847,10 @@ backstops **T-A9** across code that reached `dev` without a PR.
 | Profile | `--profile release` | MR-DQ-3; §6.2 — the single largest lever (12.1×) |
 | Mutant set | 1290 (skip-list repaired) | MR-F2 / MR-DQ-7 |
 | `--check` | **removed** from §5.5.6's pinned text | MR-F1 / MR-DQ-1(b) |
-| Test scoping | **explicitly pinned**, never inherited | MR-F5 / MR-DQ-8 |
+| Test scoping | `test_package = ["shekyl-randomx-differential"]`, explicit | MR-F5 / MR-DQ-8 (C1) |
+| Config location | **moves** to `rust/.cargo/mutants.toml` + guard | MR-F2′ / MR-DQ-8 |
+| Dispatch trigger | boolean input, house `runtime_modes` pattern | MR-F6 |
+| Tool version | `cargo-mutants@<pinned>` | MR-F7 |
 | Parallelism | sharding, not `--jobs`; `--in-place` retained per shard | MR-DQ-4 / MR-DQ-5 |
 | Branch coverage | leg 1 covers `dev` inherently; leg 2 carries a `[main, dev]` matrix | MR-F3 / MR-DQ-6 |
 | Skip-list | repaired **and** guarded by a liveness assertion | MR-DQ-7 |
@@ -664,13 +867,20 @@ prices it:
   M2 as written, at higher per-mutant cost absorbed by a larger shard
   denominator.
 
-**Recommendation: row C**, with row B as the named fallback if §6.4
-puts C beyond a defensible weekly runner budget. The reversion
-criterion per
+**RULED (2026-08-18): C1**, per MR-DQ-8. §6.4 priced it below the
+status quo (12.6 h / 5 shards vs 23.9 h / 8), and §6.5 showed C2 —
+the maximal-looking option — re-masks the very signal the fix exists to
+restore. Reversion trigger per
 [`21-reversion-clause-discipline`](../../.cursor/rules/21-reversion-clause-discipline.mdc):
-if C's shard count exceeds what the project will spend weekly, take B
-**and** amend §4.6 M2's T-A1 claim in the same PR — never leave the
-threat table asserting a layer the regime does not run.
+**if the priced regime exceeds 8 shards × 6 h**, fall back to B, amend
+§4.6 M2's T-A1 claim in the same PR, and queue C1 in FOLLOWUPS with the
+timing evidence — never leave the threat table asserting a layer the
+regime does not run.
+
+Two prerequisites ride with it (MR-DQ-8): the config file **moves** to
+`rust/.cargo/mutants.toml` with the dead glob prefix removed, and a
+structural guard asserts the excludes are live. Without the move, the
+scoping pin is a no-op that reads as fixed.
 
 ### 7.4 Sizing rule (so this does not recur)
 
@@ -738,3 +948,4 @@ Per the 2g plan's own §5.7 + §8.3, this is the required carrier.)*
 | Round | Date | Substance |
 | --- | --- | --- |
 | Survey | 2026-08-18 | Substrate measured at `6441c1e29` (§2): 1322-mutant inventory by file, config/glob behavior, `--check` semantics from cargo-mutants 27.1.0 source, branch-coverage read. Findings MR-F1–MR-F5 recorded (MR-F5 — default `TestPackages::Mutated` scoping — found by reading cargo-mutants' source while pricing MR-DQ-3). Design questions MR-DQ-1–MR-DQ-8 opened with recommendations. **Round 1 not closed.** |
+| Review | 2026-08-18 | Reviewer verdicts: MR-F1/F3/F4/F5 CONFIRMED at source; **MR-F2 CONFIRMED BUT UNDERSTATED → superseded by MR-F2′** (the config file is never loaded in CI; the "timeout_multiplier proves it is read" argument withdrawn as unsound, since 5.0 is also the tool default). Three new findings recorded: **MR-F6** (`&&`/`||` precedence sends every `workflow_dispatch` into the doomed job), **MR-F7** (`--locked` does not pin the tool version), **MR-F8** (cadence fossil). **MR-DQ-1 RULED** (drop `--check`; fold in MR-F8). **MR-DQ-8 RULED C1** after the per-crate suite measurement inverted the expected trade — harness suite 26 s vs verifier 63 s — with §6.5 establishing that C2 masks the T-A1 signal. Placement (MR-F2′) made a prerequisite of the ruling. MR-DQ-2–MR-DQ-7 remain open. |

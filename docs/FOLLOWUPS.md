@@ -138,15 +138,34 @@ sustainability is unaffected by the recalibration.
   `[Phase::Check]` only and therefore cannot classify a mutant as
   caught or survived, so the pinned command cannot assert the pinned
   property; the landed workflow silently dropped the flag without an
-  amendment. **MR-F2** — the `.cargo/mutants.toml` skip-list is
-  **inert**: both `exclude_globs` carry a `rust/` prefix that is not
-  part of the workspace-relative path, so the carve-out has never
-  applied (measured: 1322 mutants with the globs as written, 1290 with
-  the prefix removed). The `timeout_multiplier` in the same file does
-  apply, which is why the file reads as working. A third finding,
-  **MR-F3**, is that a scheduled T18 tests `main` only — the
-  `mutants` job has no branch matrix, so it has no coverage of `dev`,
-  where the T-A1/T-A3 attacks it defends against actually arrive.
+  amendment. **MR-F2′** — the `.cargo/mutants.toml` skip-list is
+  not merely mis-globbed, it is **never loaded**: cargo-mutants reads
+  `<workspace_root>/.cargo/mutants.toml`, the workspace root is
+  `rust/`, and `rust/.cargo/` holds only `audit.toml` — the sole
+  `mutants.toml` sits at the repo root where nothing reads it.
+  Measured with bare `--list`: 1322 with the repo-root file (CI's
+  situation), 1290 with a corrected file planted at
+  `rust/.cargo/mutants.toml`. A second, independent defect is that the
+  globs carry a dead `rust/` prefix. (An earlier draft argued the file
+  *was* read because `timeout_multiplier = 5.0` appeared to apply; that
+  is withdrawn — 5.0 is also cargo-mutants' default, so the configured
+  value is observationally indistinguishable from no config at all.)
+  Consequence: the entire §4.6 M2 skip-list discipline is unwired, and
+  any fix that pins scoping in that file *without moving it* would be a
+  no-op that reads as fixed. Further findings: **MR-F3** — a scheduled T18
+  tests `main` only (no branch matrix), so it has no coverage of `dev`;
+  **MR-F5** — default `TestPackages::Mutated` scoping means the
+  differential harness never judges a verifier mutant (848 of 1290), so
+  M2's layer of the T-A1 defense is not operative at all; **MR-F6** —
+  `&&` binds tighter than `||` in the job's `if:`, so every
+  `workflow_dispatch` launches the doomed 6-hour run; **MR-F7** — the
+  tool version is unpinned (`--locked` pins deps, not the version).
+
+  **Round state 2026-08-18:** MR-DQ-1 ruled (drop `--check`) and
+  MR-DQ-8 ruled C1 (harness-only test scoping) after measurement showed
+  the harness suite is *cheaper* than the verifier's (26 s vs 63 s), so
+  the corrected scoping costs **less** than the status quo — 12.6 h / 5
+  shards against 23.9 h / 8. MR-DQ-2–MR-DQ-7 remain open.
 
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) —
   REQUIRED BEFORE THE FORMAT FREEZE (added 2026-08-08, escalated from
