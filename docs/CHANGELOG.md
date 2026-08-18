@@ -21095,11 +21095,12 @@ production callers.
   un-skip criteria for the two gated paths),
   [`docs/benchmarks/README.md`](benchmarks/README.md) (capture
   procedure + baseline-update policy),
-  [`scripts/bench/capture_cpp_baseline.sh`](../scripts/bench/capture_cpp_baseline.sh)
+  `scripts/bench/capture_cpp_baseline.sh`
   (reference-machine capture wrapper emitting a schema-versioned
   JSON envelope with toolchain + host CPU + git-rev metadata),
-  [`tests/wallet_bench/README.md`](../tests/wallet_bench/README.md)
-  (local build + run instructions + known gaps). The frozen
+  `tests/wallet_bench/README.md`
+  (local build + run instructions + known gaps). *(Both deleted in the
+  Phase-5 wallet2 cutover; the paths above are historical.)* The frozen
   `wallet2_baseline_v0.json` is captured on a reference machine by
   the commit author and landed as a follow-up — this commit ships
   the harness, not the numbers, because the reference machine is

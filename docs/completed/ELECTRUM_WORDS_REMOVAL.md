@@ -1566,7 +1566,9 @@ exposed via friend) is Phase 1 commit-author discretion provided
 
 **Tripwire honored.** This disposition honors the 2026-05-05
 audit-trail tripwire at
-[`tests/unit_tests/wallet_storage.cpp:42–144`](../../tests/unit_tests/wallet_storage.cpp),
+`tests/unit_tests/wallet_storage.cpp:42–144` (deleted in the Phase-5
+wallet2 cutover — the `static_assert` tripwire went with the layer it
+guarded, since `wallet2` itself is being removed),
 which uses `static_assert` to refuse `wallet2::generate_from_bip39`
 in three detector signatures (string/string/nettype;
 wipeable_string/wipeable_string/nettype; string/nettype). The

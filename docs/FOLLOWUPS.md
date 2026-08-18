@@ -1839,8 +1839,16 @@ sustainability is unaffected by the recalibration.
   (REST + json_rpc, unrestricted only). Caps flow from `core_rpc_server::init`
   through `shekyl_daemon_rpc_start` (0 = unlimited). See `DAEMON_RPC_RUST.md`.
 
-- **Hardware-device C++ surface: B2 DECIDED — delete with Phase 5, not
-  re-home** (decided 2026-08-06, roadmap review; supersedes the
+- **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
+  (decided 2026-08-06, executed in the Phase-5 wallet2 cutover;
+  `src/device_trezor/`, `tests/trezor/`, `cmake/CheckTrezor.cmake` and
+  the `TREZOR_DEBUG` / `USE_DEVICE_TREZOR` build arms are gone, and
+  `wallet2::register_devices()` is now an empty seam — the default
+  software device registers independently, so ordinary wallets are
+  unaffected). The **reversion clause below remains the live
+  contract**: this entry stays open-as-record for it, not as pending
+  work. Original decision follows.
+  (decided 2026-08-06, roadmap review; supersedes the
   2026-07-10 "Trezor test harness: migrate `mock_rpc_daemon` off epee
   HTTP map" entry — the harness dies with the driver, so the migration
   is moot). Scope: `src/device_trezor/` (23 files, 6,348 lines),

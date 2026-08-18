@@ -567,7 +567,9 @@ Production `src/` targets:
 - `src/cryptonote_core/CMakeLists.txt` (`cryptonote_core` PUBLIC)
 - `src/daemon/CMakeLists.txt` (`daemon`)
 - `src/device/CMakeLists.txt` (`device`, PUBLIC)
-- `src/device_trezor/CMakeLists.txt` (`device_trezor` PUBLIC)
+- ~~`src/device_trezor/CMakeLists.txt` (`device_trezor` PUBLIC)~~ —
+  deleted in the Phase-5 wallet2 cutover (Trezor backend removed, no
+  PQC firmware support); not part of the link-drop checklist.
 - `src/fcmp/CMakeLists.txt` (two targets PUBLIC: `fcmp_basic` and
   `fcmp`)
 - `src/crypto/wallet/CMakeLists.txt` (`wallet-crypto`)
@@ -576,7 +578,9 @@ Production `src/` targets:
 Test targets:
 
 - `tests/CMakeLists.txt` (`shekyl-wallet-crypto-bench`)
-- `tests/wallet_bench/CMakeLists.txt` (`shekyl-wallet-bench`)
+- ~~`tests/wallet_bench/CMakeLists.txt` (`shekyl-wallet-bench`)~~ —
+  deleted in the Phase-5 wallet2 cutover with the C++ baseline harness;
+  not part of the link-drop checklist.
 - `tests/daemon_tests/CMakeLists.txt`
 - ~~`tests/functional_tests/CMakeLists.txt` (`functional_tests`,
   `make_test_signature`)~~ — deleted outright in Phase 2 of the
