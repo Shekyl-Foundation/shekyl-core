@@ -128,6 +128,26 @@ sustainability is unaffected by the recalibration.
   pre-genesis assurance gate; an inoperative mutation leg weakens the
   §4.6 M2 mitigation the harness's threat table relies on).
 
+  **UPDATE 2026-08-18:** the re-design this entry calls for is open as
+  [`design/RANDOMX_V2_MUTATION_REGIME.md`](./design/RANDOMX_V2_MUTATION_REGIME.md)
+  (identifiers `MR-F#` / `MR-DQ-#`, registered in
+  [`IMPLEMENTATION_INDEX.md`](./design/IMPLEMENTATION_INDEX.md) §2).
+  The survey confirms this entry's diagnosis and adds two findings it
+  did not have, both of which change the scope: **MR-F1** — the
+  §5.5.6 *pinned* invocation carries `--check`, which runs
+  `[Phase::Check]` only and therefore cannot classify a mutant as
+  caught or survived, so the pinned command cannot assert the pinned
+  property; the landed workflow silently dropped the flag without an
+  amendment. **MR-F2** — the `.cargo/mutants.toml` skip-list is
+  **inert**: both `exclude_globs` carry a `rust/` prefix that is not
+  part of the workspace-relative path, so the carve-out has never
+  applied (measured: 1322 mutants with the globs as written, 1290 with
+  the prefix removed). The `timeout_multiplier` in the same file does
+  apply, which is why the file reads as working. A third finding,
+  **MR-F3**, is that a scheduled T18 tests `main` only — the
+  `mutants` job has no branch matrix, so it has no coverage of `dev`,
+  where the T-A1/T-A3 attacks it defends against actually arrive.
+
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) —
   REQUIRED BEFORE THE FORMAT FREEZE (added 2026-08-08, escalated from
   the message-signing round, SM-DQ-7).** Address v1 anchors signatures
