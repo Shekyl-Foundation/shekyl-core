@@ -18,10 +18,9 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
 use zeroize::Zeroizing;
 
-use crate::rpc_client::RpcSession;
+use crate::rpc_client::{params, RpcSession};
 
 type BoxErr = Box<dyn std::error::Error>;
 
@@ -79,7 +78,10 @@ pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> Result<(), BoxErr> {
 
     let result = rpc.call(
         "create_wallet",
-        json!({ "name": args.name, "password": password.as_str() }),
+        params::NamedPassword {
+            name: &args.name,
+            password: &password,
+        },
     );
     drop(password);
 
@@ -122,12 +124,12 @@ pub fn run_restore(rpc: &RpcSession, args: &RestoreArgs) -> Result<(), BoxErr> {
 
     let result = rpc.call(
         "restore_wallet",
-        json!({
-            "name": args.name,
-            "password": password.as_str(),
-            "mnemonic": seed.trim(),
-            "restore_height": args.restore_height.unwrap_or(0),
-        }),
+        params::Restore {
+            name: &args.name,
+            password: &password,
+            mnemonic: seed.trim(),
+            restore_height: args.restore_height.unwrap_or(0),
+        },
     );
     drop(password);
     drop(seed);

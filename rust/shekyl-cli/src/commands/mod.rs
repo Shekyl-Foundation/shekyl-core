@@ -26,6 +26,7 @@ use crate::daemon::DaemonClient;
 use crate::rpc_client::RpcSession;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use zeroize::Zeroizing;
 
 const HELP_TEXT: &str = "\
 Wallet lifecycle:
@@ -390,7 +391,14 @@ pub(crate) fn require_closed(rpc: &RpcSession) -> bool {
     true
 }
 
-pub(crate) fn read_password(prompt: &str) -> Option<String> {
+/// Prompt for a password, returning it in a wrapper that wipes on drop.
+///
+/// **`Zeroizing` rather than `String`, so the wipe is structural** (rule 35).
+/// The previous signature handed back a bare `String` and left every call
+/// site to remember `password.zeroize()` before each return path — a
+/// discipline that held only as long as nobody added an early `return`, and
+/// which said nothing about the copies the value was handed to.
+pub(crate) fn read_password(prompt: &str) -> Option<Zeroizing<String>> {
     match crate::prompt_password(prompt) {
         Ok(p) => Some(p),
         Err(e) => {

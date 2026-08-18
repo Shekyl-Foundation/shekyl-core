@@ -3795,6 +3795,7 @@ dependencies = [
  "proptest",
  "rpassword",
  "rustyline",
+ "serde",
  "serde_json",
  "shekyl-crypto-pq",
  "shekyl-logging",

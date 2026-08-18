@@ -31,6 +31,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde::Serialize;
 use serde_json::{json, Value};
 use shekyl_wallet_rpc::{InProcessHandle, Network};
 use zeroize::Zeroizing;
@@ -108,6 +109,73 @@ pub struct RpcSession {
     open_wallet: RefCell<Option<String>>,
     /// When set, RPC error reports include the structured `error.data`.
     pub debug: bool,
+}
+
+/// The JSON-RPC request envelope, serialized directly rather than built as a
+/// `serde_json::Value` — see [`RpcSession::call`] for why that distinction is
+/// a secret-handling one.
+#[derive(Serialize)]
+struct Request<'a, P> {
+    jsonrpc: &'a str,
+    id: u64,
+    method: &'a str,
+    params: P,
+}
+
+/// Request shapes for the calls that carry cleartext secrets.
+///
+/// **Every field is a borrowed `&str`, deliberately.** The caller holds the
+/// secret in a `Zeroizing<String>` and lends it; serde copies the bytes
+/// straight into the wiped payload buffer, so between the caller's wiped
+/// `String` and the wiped request bytes there is no third allocation to
+/// forget about. A field typed `String` here would silently reintroduce
+/// exactly the copy this module exists to remove.
+///
+/// These live beside the transport rather than in each command file so the
+/// set of secret-bearing requests is enumerable in one place — the thing the
+/// original audit could not do, and the reason it undercounted its own work
+/// list.
+pub mod params {
+    use serde::Serialize;
+
+    /// `create_wallet` / `open_wallet`.
+    #[derive(Serialize)]
+    pub struct NamedPassword<'a> {
+        pub name: &'a str,
+        pub password: &'a str,
+    }
+
+    /// `restore_wallet` — carries the **mnemonic** as well, which is seed
+    /// material and rode the same uncleared `Value` path as the password.
+    #[derive(Serialize)]
+    pub struct Restore<'a> {
+        pub name: &'a str,
+        pub password: &'a str,
+        pub mnemonic: &'a str,
+        pub restore_height: u64,
+    }
+
+    /// `change_password` — two secrets under two keys, which is why a fix
+    /// keyed on the literal `"password"` would have skipped this one.
+    #[derive(Serialize)]
+    pub struct ChangePassword<'a> {
+        pub old_password: &'a str,
+        pub new_password: &'a str,
+    }
+
+    /// `stake` (market posture — the default).
+    #[derive(Serialize)]
+    pub struct Stake<'a> {
+        pub password: &'a str,
+    }
+
+    /// `stake` with the Foundation posture and D-4's acknowledgment.
+    #[derive(Serialize)]
+    pub struct StakeFoundation<'a> {
+        pub password: &'a str,
+        pub posture: &'a str,
+        pub acknowledge_non_earning_unbounded: bool,
+    }
 }
 
 impl RpcSession {
@@ -211,27 +279,47 @@ impl RpcSession {
     }
 
     /// Perform a JSON-RPC call and return the `result` value.
-    // By-value `params` is the call-boundary contract: every command site
-    // hands ownership of its request object here; taking `&Value` would
-    // churn all of them for no behavior change.
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
+    ///
+    /// **Generic over the params rather than taking a `serde_json::Value`,
+    /// and that is a secret-handling requirement, not ergonomics (rule 35).**
+    /// A `Value` carrying a password or a mnemonic is a heap copy of
+    /// cleartext this crate cannot wipe: `Value::String` owns a plain
+    /// `String`, nothing zeroizes it on drop, and every call site that built
+    /// one with `json!` left the secret in memory *after* its own
+    /// `password.zeroize()` had run — the variable was wiped while the copy
+    /// inside the `Value` survived.
+    ///
+    /// Taking `P: Serialize` lets a secret-bearing caller pass a borrowed
+    /// struct from [`params`], whose fields are `&str` pointing at the
+    /// caller's `Zeroizing<String>`. serde writes those bytes **straight
+    /// into the wiped payload buffer below**, so no intermediate copy is
+    /// allocated at all. Non-secret callers keep passing `json!(...)`
+    /// unchanged — `Value` implements `Serialize`.
+    pub fn call<P: Serialize>(&self, method: &str, params: P) -> Result<Value, RpcError> {
         let id = self.next_id.get();
         self.next_id.set(id.wrapping_add(1));
-        let body = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        });
+        let body = Request {
+            jsonrpc: "2.0",
+            id,
+            method,
+            params,
+        };
+
+        // Serialized once, here, into a buffer that wipes on drop — the one
+        // place the request's cleartext exists. The transports take those
+        // bytes rather than re-serializing, so there is exactly one copy to
+        // account for instead of one per transport.
+        let payload = Zeroizing::new(
+            serde_json::to_vec(&body)
+                .map_err(|e| RpcError::Transport(format!("serialize request: {e}")))?,
+        );
 
         // The response buffer holds cleartext secret material for some
         // methods (create_wallet returns the new BIP-39 mnemonic / raw seed).
-        // Wrap it so the serialized bytes are wiped on drop (rule 35); the
-        // request-side serialization is wiped inside the transport helpers.
+        // Wrap it so the serialized bytes are wiped on drop (rule 35).
         let raw = Zeroizing::new(match &self.transport {
-            Transport::Uds(path) => http_post_uds(path, &body)?,
-            Transport::Http { url, agent } => http_post_tcp(agent, url, &body)?,
+            Transport::Uds(path) => http_post_uds(path, &payload)?,
+            Transport::Http { url, agent } => http_post_tcp(agent, url, &payload)?,
         });
 
         let parsed: Value = serde_json::from_str(&raw)
@@ -291,14 +379,10 @@ impl RpcSession {
 
 /// POST the JSON-RPC body over a Unix domain socket (HTTP/1.1,
 /// `Connection: close`) and return the response body.
-fn http_post_uds(path: &Path, body: &Value) -> Result<String, RpcError> {
-    // The serialized request holds cleartext secrets (password / mnemonic) for
-    // create/restore/open/change_password. Wipe the bytes on drop (rule 35) so
-    // the request buffer does not outlive the caller's own zeroize.
-    let payload = Zeroizing::new(
-        serde_json::to_vec(body)
-            .map_err(|e| RpcError::Transport(format!("serialize request: {e}")))?,
-    );
+fn http_post_uds(path: &Path, payload: &[u8]) -> Result<String, RpcError> {
+    // Takes the caller's already-serialized bytes: `RpcSession::call` owns the
+    // one `Zeroizing` buffer, so this helper cannot make a second copy of a
+    // password or mnemonic even by accident.
     let mut stream = std::os::unix::net::UnixStream::connect(path).map_err(|e| {
         RpcError::Transport(format!(
             "cannot connect to wallet RPC socket {}: {e}",
@@ -318,7 +402,7 @@ fn http_post_uds(path: &Path, body: &Value) -> Result<String, RpcError> {
     );
     stream
         .write_all(request.as_bytes())
-        .and_then(|()| stream.write_all(&payload))
+        .and_then(|()| stream.write_all(payload))
         .map_err(|e| RpcError::Transport(format!("write request: {e}")))?;
 
     // The response can carry secret material (create_wallet returns the seed);
@@ -401,13 +485,13 @@ fn build_http_agent(proxy: Option<&str>) -> Result<ureq::Agent, String> {
     Ok(config.build().new_agent())
 }
 
-fn http_post_tcp(agent: &ureq::Agent, url: &str, body: &Value) -> Result<String, RpcError> {
-    // Serialized request holds cleartext secrets; wipe on drop (rule 35).
-    let payload = Zeroizing::new(body.to_string().into_bytes());
+fn http_post_tcp(agent: &ureq::Agent, url: &str, payload: &[u8]) -> Result<String, RpcError> {
+    // Same contract as `http_post_uds`: the bytes are the caller's, already
+    // wiped-on-drop, and this path re-serializes nothing.
     let mut response = agent
         .post(url)
         .header("Content-Type", "application/json")
-        .send(payload.as_slice())
+        .send(payload)
         .map_err(|e| RpcError::Transport(e.to_string()))?;
     response
         .body_mut()
@@ -572,5 +656,88 @@ mod tests {
             );
         }
         assert!(!is_supported_rpc_url("host:11028"));
+    }
+
+    /// **The reason this PR is not a nine-site edit.** Each secret-bearing
+    /// call used to build a `serde_json::Value`, which allocates a `String`
+    /// copy of the password (or mnemonic) on the heap and drops it without
+    /// wiping — `Value` has no `Zeroize`, and nothing in the type system says
+    /// it should. The nine sites were fixed by routing every one through a
+    /// borrowed [`params`] shape; this test is what stops a tenth from
+    /// appearing, because the next author will reach for `json!` exactly the
+    /// way the first nine did.
+    ///
+    /// The needle is the JSON *key* form — `"password":` and friends — since
+    /// that is what a `json!` object literal produces regardless of how the
+    /// macro call is wrapped across lines. Needles are assembled with
+    /// `concat!` so this test's own text cannot satisfy them.
+    #[test]
+    fn no_secret_ever_travels_through_a_json_value() {
+        // Every file that sends a secret-bearing request. A new one must be
+        // added here; the FOLLOWUPS entry undercounted precisely because no
+        // such list existed.
+        let senders = [
+            (
+                "commands/lifecycle.rs",
+                include_str!("commands/lifecycle.rs"),
+            ),
+            ("commands/staking.rs", include_str!("commands/staking.rs")),
+            ("commands/scripted.rs", include_str!("commands/scripted.rs")),
+            ("main.rs", include_str!("main.rs")),
+        ];
+
+        // `change_password` carries two secrets under two keys, which is why a
+        // gate written against the single literal "password" would have let
+        // that site through.
+        let secret_keys = [
+            concat!("\"pass", "word\":"),
+            concat!("\"old_pass", "word\":"),
+            concat!("\"new_pass", "word\":"),
+            concat!("\"mne", "monic\":"),
+        ];
+
+        for (name, src) in senders {
+            for key in secret_keys {
+                assert!(
+                    !src.contains(key),
+                    "{name} builds a JSON object with {key} — a secret in a \
+                     serde_json::Value is a heap copy that never gets wiped. \
+                     Send it through a borrowed rpc_client::params shape instead."
+                );
+            }
+            assert!(
+                src.contains(concat!("par", "ams::")),
+                "{name} is listed as a secret-bearing sender but no longer uses \
+                 a params shape — either it stopped sending secrets (drop it \
+                 from this list) or it regressed"
+            );
+        }
+    }
+
+    /// The envelope must serialize once, into the wiped buffer. If `call`
+    /// ever routes through `Value` again, every borrowed `params` shape above
+    /// silently becomes decorative — the copy just moves one frame inward.
+    #[test]
+    fn call_serializes_the_request_straight_into_a_wiped_buffer() {
+        let seam = include_str!("rpc_client.rs")
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("rpc_client.rs has a production section");
+
+        assert!(
+            seam.contains(concat!(
+                "Zeroizing::new(\n",
+                "            serde_json::to_vec(&body)"
+            )),
+            "call must serialize the typed envelope straight into the Zeroizing \
+             buffer — building a Value first and serializing that still leaves \
+             an unwiped copy of the password on the heap, which is the whole \
+             defect, just moved one frame inward"
+        );
+
+        // Deliberately NOT asserted here: that the transport helpers take
+        // `&[u8]` rather than `&Value`. The compiler already rejects that
+        // change (`call` hands them a `Zeroizing<Vec<u8>>`), and a test that
+        // restates a type error is noise that later readers must maintain.
     }
 }

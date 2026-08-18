@@ -256,12 +256,14 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if let Some(ref filename) = cli.engine_file {
-        let mut password = prompt_password("Wallet password: ")?;
+        let password = prompt_password("Wallet password: ")?;
         let opened = rpc.call(
             "open_wallet",
-            serde_json::json!({ "name": filename, "password": password }),
+            rpc_client::params::NamedPassword {
+                name: filename,
+                password: &password,
+            },
         );
-        zeroize::Zeroize::zeroize(&mut password);
         match opened {
             Ok(_) => {
                 rpc.set_open(filename);

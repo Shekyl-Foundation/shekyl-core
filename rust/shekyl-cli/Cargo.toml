@@ -17,6 +17,11 @@ shekyl-wallet-rpc = { path = "../shekyl-wallet-rpc" }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"
 tokio = { version = "1", features = ["full"] }
+# Derives the request shapes in `rpc_client::params`, whose borrowed `&str`
+# fields are what keep a password out of an unwipeable `serde_json::Value`
+# (rule 35). The workspace entry, already locked and already compiled here
+# through `serde_json` — a direct edge onto a vetted dependency, not a new one.
+serde = { workspace = true }
 serde_json = "1"
 zeroize = { workspace = true }
 rpassword = "7"

@@ -12,10 +12,9 @@
 //! it.
 
 use serde_json::{json, Value};
-use zeroize::Zeroize;
 
 use super::{confirm, opt_amount, read_password, require_open};
-use crate::rpc_client::RpcSession;
+use crate::rpc_client::{params, RpcSession};
 
 /// The exact phrase a foundation stake requires, typed by the operator.
 ///
@@ -46,12 +45,16 @@ pub fn cmd_stake(rpc: &RpcSession, foundation: bool) {
     }
     // Load-bearing, not UX: a mid-session wallet holds no seed, and only a
     // credentialed reopen re-materializes it for the persona derivation.
-    let Some(mut password) = read_password("Wallet password: ") else {
+    let Some(password) = read_password("Wallet password: ") else {
         return;
     };
     println!("Staking (this may take a while)...");
-    let result = rpc.call("stake", json!({ "password": password }));
-    password.zeroize();
+    let result = rpc.call(
+        "stake",
+        params::Stake {
+            password: &password,
+        },
+    );
 
     match result {
         Ok(val) => {
@@ -101,19 +104,18 @@ fn cmd_stake_foundation(rpc: &RpcSession) {
         return;
     }
 
-    let Some(mut password) = read_password("Wallet password: ") else {
+    let Some(password) = read_password("Wallet password: ") else {
         return;
     };
     println!("Staking as a Foundation CompleteTree node (this may take a while)...");
     let result = rpc.call(
         "stake",
-        json!({
-            "password": password,
-            "posture": "foundation_complete_tree",
-            "acknowledge_non_earning_unbounded": true
-        }),
+        params::StakeFoundation {
+            password: &password,
+            posture: "foundation_complete_tree",
+            acknowledge_non_earning_unbounded: true,
+        },
     );
-    password.zeroize();
 
     match result {
         Ok(val) => {
