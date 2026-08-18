@@ -1054,6 +1054,12 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
         if !out_channel.is_null() {
             *out_channel = 0;
         }
+        // `out_dest` too: the comment above claims EVERY out-param, and it did
+        // not cover this one. A caller that mishandles the return code would
+        // otherwise read whatever was in its buffer as a stem successor.
+        if !out_dest.is_null() {
+            std::ptr::copy_nonoverlapping(NIL.as_ptr(), out_dest, 16);
+        }
         return SHEKYL_RELAY_PLAN_NO_ROUTE;
     }
     let peers = read_ids(outbound, n);
@@ -1069,10 +1075,28 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
             *out_carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
             *out_channel = 0;
         }
-        RelayCarrier::Covert { channel } => {
-            *out_carrier = SHEKYL_RELAY_CARRIER_COVERT;
-            *out_channel = u32::try_from(channel).unwrap_or(u32::MAX);
-        }
+        RelayCarrier::Covert { channel } => match u32::try_from(channel) {
+            Ok(channel) => {
+                *out_carrier = SHEKYL_RELAY_CARRIER_COVERT;
+                *out_channel = channel;
+            }
+            Err(_) => {
+                /* Unreachable: `channel` is a stem slot index, bounded by the
+                stem width. Handled anyway because the previous spelling was
+                `unwrap_or(u32::MAX)`, and `u32::MAX` is the worst possible
+                value to hand across a boundary where it becomes an index —
+                a clamp that fabricates an out-of-bounds channel is strictly
+                worse than no clamp.
+
+                Degrades the CARRIER, not the routing: the stem still goes,
+                over the ordinary connection. §92.4's rule is that carrier
+                unavailability must never travel as a routing verdict, which
+                is why this is not a NO_ROUTE. */
+                debug_assert!(false, "covert channel {channel} exceeds u32");
+                *out_carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
+                *out_channel = 0;
+            }
+        },
     }
     write_plan(dispatch.plan, out_dest)
 }

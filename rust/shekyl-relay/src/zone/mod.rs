@@ -818,12 +818,17 @@ impl Zone {
     /// nothing to carry.
     ///
     /// The slot lookup is consistent by construction — the destination came
-    /// from this same map in this same call, so `slot_of` cannot miss it. The
-    /// `None` arm is therefore unreachable rather than a fallback, and it
-    /// asserts in debug rather than degrading quietly: a stem that lost its
-    /// slot between planning and carrier selection is map corruption, not a
-    /// configuration state, and §92.4's rule is that carrier unavailability
-    /// must never travel as a routing degradation.
+    /// from this same map in this same call, so `slot_of` cannot miss it, and
+    /// the `None` arm is unreachable rather than a fallback.
+    ///
+    /// **What it does when reached, stated exactly.** It `debug_assert!`s, and
+    /// in release it returns [`RelayCarrier::Ordinary`] — so the stem still
+    /// goes out, over the ordinary connection. That is a **cover** degradation,
+    /// not a routing one, and it is deliberate: §92.4's rule is that carrier
+    /// unavailability must never travel as a routing verdict. Dropping the send
+    /// would convert a map inconsistency into a routing failure, which is the
+    /// inversion the inherited covert branch made in the other direction —
+    /// keeping the carrier and degrading the phase (§42.5a).
     fn carrier_for(&self, plan: RelayPlan) -> RelayCarrier {
         match plan {
             RelayPlan::Stem(destination) if self.covert_enabled() => {
