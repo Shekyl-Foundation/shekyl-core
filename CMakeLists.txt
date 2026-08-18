@@ -139,7 +139,7 @@ include(CheckFunctionExists)
 # Python3_Interpreter_FOUND; we alias the legacy PYTHON_EXECUTABLE and
 # PYTHONINTERP_FOUND names for backward compatibility with consumers that
 # have not yet been migrated (tests/difficulty/CMakeLists.txt,
-# tests/block_weight/CMakeLists.txt, cmake/CheckTrezor.cmake fallback arm).
+# tests/block_weight/CMakeLists.txt).
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
 set(PYTHONINTERP_FOUND "${Python3_Interpreter_FOUND}")
@@ -733,13 +733,12 @@ if (WIN32)
   list(APPEND OPENSSL_LIBRARIES ws2_32 crypt32)
 endif()
 
-option(USE_HW_DEVICE "Build with hardware wallet support (Ledger/Trezor). Disabled in V3 -- see docs/HARDWARE_WALLETS.md" OFF)
+option(USE_HW_DEVICE "Build with hardware wallet support (Ledger). Disabled in V3 -- see docs/HARDWARE_WALLETS.md" OFF)
 if(USE_HW_DEVICE)
   find_package(HIDAPI)
 else()
   message(STATUS "Hardware wallet support disabled (USE_HW_DEVICE=OFF) -- see docs/HARDWARE_WALLETS.md")
   set(HIDAPI_FOUND FALSE)
-  set(USE_DEVICE_TREZOR OFF CACHE BOOL "Trezor support compilation" FORCE)
 endif()
 
 add_definition_if_library_exists(c memset_s "string.h" HAVE_MEMSET_S)
@@ -877,9 +876,6 @@ if (HIDAPI_FOUND)
 else()
   message(STATUS "Could not find HIDAPI")
 endif()
-
-# Trezor support check
-include(CheckTrezor)
 
 if(MSVC)
   add_definitions("/bigobj /MP /FS /W3 /GS- /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__ /Zc:preprocessor")

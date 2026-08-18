@@ -2,8 +2,19 @@
 
 ## V3 Status: Not Supported
 
-Hardware wallet backends (Ledger and Trezor) are **disabled by default** in Shekyl V3.
-The CMake option `USE_HW_DEVICE` defaults to `OFF`.
+Hardware wallet backends are not supported in Shekyl V3.
+
+- **Trezor**: the inherited backend (`src/device_trezor/`, `tests/trezor/`,
+  `cmake/CheckTrezor.cmake`) is **deleted** (2026-08-18, Phase-5 cutover).
+  It was dead code under the V3 default — protobuf generation never ran and
+  `protocol.cpp` carried a `#error` against accidental compilation — and
+  Trezor firmware has no post-quantum support. **Reopen criterion**: Trezor
+  ships firmware implementing the V4-roadmap primitives below; reintroduce
+  the backend from the archive tags / Monero lineage rather than reviving
+  the deleted tree wholesale, since the wallet stack it integrated against
+  (`wallet2`) is also gone.
+- **Ledger**: the dormant backend under `src/device/` remains in-tree,
+  disabled. The CMake option `USE_HW_DEVICE` defaults to `OFF`.
 
 ### Rationale
 
@@ -33,21 +44,16 @@ hardware wallet firmware:
 
 ### Build Behavior
 
-- `USE_HW_DEVICE=OFF` (default): HIDAPI is not searched, Ledger sources are not
-  compiled, Trezor protobuf generation is skipped, `protocol.cpp` is excluded
-  from the build.
+- `USE_HW_DEVICE=OFF` (default): HIDAPI is not searched and Ledger sources are
+  not compiled.
 
 - `USE_DEVICE_LEDGER` in `src/device/device.hpp` defaults to `0` as a
   belt-and-suspenders guard even if `HAVE_HIDAPI` is somehow defined.
 
-- `protocol.cpp` contains a `#error` that fires if `DEVICE_TREZOR_READY` is
-  defined, preventing accidental Trezor compilation without firmware support.
-
-- The `external/trezor-common` submodule is **removed** while hardware wallets
-  are unsupported. It existed only to feed Trezor protobuf generation, which
-  never runs under the V3 default. Re-add it from
-  `https://github.com/trezor/trezor-common.git` if/when Trezor support returns
-  (see V4 roadmap below).
+- The Trezor backend is deleted entirely (see above); there is no Trezor
+  build arm. The `external/trezor-common` submodule was removed earlier for
+  the same reason. Re-add both from the Trezor upstream if/when support
+  returns (see V4 roadmap below).
 
 ### V4 Roadmap
 

@@ -1,7 +1,14 @@
 # Mid-Rewire Hardening Plan — wallet2 → Rust Migration
 
-**Status:** design spec. No normative code reference yet; this document
-is the contract that the eight commits below implement.
+**Status:** design spec (executed). This document is the contract that
+the eight commits below implement.
+**Superseded in part (2026-08-18, Phase-5 wallet2 cutover):** the C++
+side of the benchmark comparison — `tests/wallet_bench/`,
+`scripts/bench/capture_cpp_baseline.sh`, and the regeneration of
+`docs/benchmarks/wallet2_baseline_v0.json` — is **deleted with the
+`wallet2` layer it measured**. References to that harness below are
+historical; the Rust baseline path (`capture_rust_baseline.sh`) is
+unaffected and still live.
 **Scope:** a bounded instrumentation and mechanical-check pass executed
 mid-migration, between the Rust-side FFI surface (commits 2a…2k.4,
 landed) and the C++ consumer rewire (commits 2k.5a onward, deferred).

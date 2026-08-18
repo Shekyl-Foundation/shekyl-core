@@ -45,7 +45,7 @@ todos:
     content: "Phase 4b: shekyl-wallet-rpc method set (~30 methods, Shekyl-native JSON shapes — atomic units only, staking + capability mode + hybrid PQC sigs first-class, no Monero shape compatibility); OpenAPI spec at docs/api/wallet_rpc.yaml lands BEFORE OR ALONGSIDE the first method (spec is the contract)"
     status: pending
   - id: phase5_cpp_delete
-    content: "Phase 5: single commit deleting wallet2.{h,cpp}, wallet2_ffi.{h,cpp}, wallet/api/, simplewallet/, wallet_rpc_server*.{h,cpp}, related unit tests, account_base::load_from_shkw1 + forget_master_seed (transitional helpers), shekyl_wallet_* C-ABI exports + wallet_ledger_ffi.rs (FFI surface that existed only for wallet2.cpp), wallet sections of shekyl_ffi.h, shekyl_ffi_*.cpp tests; CMake cleanup so shekyld still builds; long commit message naming every deleted path"
+    content: "Phase 5: single commit deleting wallet2.{h,cpp}, wallet2_ffi.{h,cpp}, wallet/api/, simplewallet/, the remaining wallet_rpc_server*.h headers (**the wallet_rpc_server executable + wallet_rpc_server.{h,cpp} landed early, 2026-08-18, with the C1/C2 install cutover — the two *_defs.h / *_error_codes.h headers stay only because wallet2_ffi.cpp includes them**), related unit tests, account_base::load_from_shkw1 + forget_master_seed (transitional helpers), shekyl_wallet_* C-ABI exports + wallet_ledger_ffi.rs (FFI surface that existed only for wallet2.cpp), wallet sections of shekyl_ffi.h, shekyl_ffi_*.cpp tests; CMake cleanup so shekyld still builds; long commit message naming every deleted path"
     status: pending
   - id: phase6_tests
     content: "Phase 6a: tests/integration/wallet_e2e harness against REAL shekyld regtest daemon (no mock) exercising the wallet-rpc surface end-to-end; one harness covers both binaries via Shape B; regtest-mode prerequisite already audited in PR 0.3; proptest balance/transfer invariants in shekyl-wallet-core; KAT tests run as plain cargo test --workspace (no special feature flag), protection via CODEOWNERS on docs/test_vectors/** added in PR 0.1; KAT corpora WALLET_FILE_FORMAT_V1 + ADDRESS_DERIVATION_V1 continue to gate. REGTEST CAVEAT (per PR 0.3 audit, docs/SHEKYLD_PREREQUISITES.md §1): regtest mode bypasses some V3 consensus gates (FCMP++ tx-type enforcement, curve_tree_root header check) but FCMP++ proof verification and reference-block age rules still apply. The harness must mine sufficient blocks for curve-tree validity before any transfer construction; a green regtest wallet test does not prove mainnet validity. KAT-level validation of FCMP++ proof bytes is a separate test layer (covered by the existing Tier-1/2/3/4 KAT regression). Phase 6 covers wallet behavior end-to-end against a live daemon; it does not replace the KAT gates."
@@ -725,10 +725,12 @@ After Phase 4 lands and the binaries pass acceptance tests. Single commit, separ
 - Delete `src/wallet/api/` (Qt-API surface).
 - Delete `src/simplewallet/`.
 - Delete `src/wallet/wallet_rpc_server.{h,cpp}`, `wallet_rpc_server_commands_defs.h`, `wallet_rpc_server_error_codes.h`.
-- Delete `src/device_trezor/` (23 files, 6,348 lines) + `tests/trezor/` (7
+- ~~Delete `src/device_trezor/` (23 files, 6,348 lines) + `tests/trezor/` (7
   files, 2,932 lines) + `cmake/CheckTrezor.cmake` and the `src/CMakeLists.txt`
-  / `src/wallet/CMakeLists.txt` wiring — **B2 DECIDED 2026-08-06: delete, not
-  re-home.** Verified: `device_trezor`'s only consumers outside itself are
+  / `src/wallet/CMakeLists.txt` wiring~~ — **B2 LANDED 2026-08-18** (decided
+  2026-08-06: delete, not re-home). Executed ahead of the wallet2 deletion
+  itself, as its own commit, since the driver's only non-build consumer was
+  `wallet2.cpp`. Verified: `device_trezor`'s only consumers outside itself are
   `wallet2.cpp` and build wiring — no daemon code touches it — and re-homing
   would keep wallet2's type surface alive purely to serve a device driver,
   breaking this phase's single-commit principle. This is not deferred hardware
@@ -767,7 +769,7 @@ After Phase 4 lands and the binaries pass acceptance tests. Single commit, separ
 
 ### C++ tests
 
-- Delete `tests/unit_tests/wallet*.cpp` for tests that exercised `wallet2` specifically. **Closes the [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) §V3.2 entry "Test code `wallet_tools.cpp` still uses mixin/decoy infrastructure" by deletion** — `wallet_tools.cpp`'s `gen_tx_src` mixin/decoy infrastructure is `wallet2`-adjacent test code, swept up here.
+- ~~Delete `tests/unit_tests/wallet*.cpp` for tests that exercised `wallet2` specifically.~~ **B3 LANDED 2026-08-18**, ahead of the wallet2 deletion itself: every consumer that linked the C++ `wallet` library is gone (`unit_tests` — `uri`, `wallet_storage`, `wallet_bip39`, `subaddress`, `hashchain`, `transfer_details_wipe`; `core_tests/wallet_tools.{h,cpp}`; three `fuzz` targets — `signature`, `cold-outputs`, `cold-transaction`; `performance_tests/subaddress_expand.h`; the whole `tests/wallet_bench/` harness and its `BUILD_SHEKYL_WALLET_BENCH` option), plus the header-only consumer the link enumeration could not see (`src/debug_utilities/object_sizes.cpp`). `tests/unit_tests/serialization.cpp` was the sole retarget: an unused `wallet2.h` include dropped, coverage kept. **Closes the [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) §V3.2 entry "Test code `wallet_tools.cpp` still uses mixin/decoy infrastructure" by deletion** — with the correction that `wallet_tools` was not independently dead: its only includer was `tests/trezor/trezor_tests.h`, so it fell with the B2 Trezor delete in the preceding commit.
 - Delete `tests/unit_tests/shekyl_ffi_*.cpp` (or any test that pinned the wallet FFI shape) — the shape is gone.
 - Rebuild equivalents in Rust under each crate's `tests/`. The Phase 6 integration harness covers the end-to-end story; per-crate Rust tests cover the units.
 

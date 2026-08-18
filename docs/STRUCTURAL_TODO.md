@@ -446,7 +446,28 @@ Cross-refs:
 
 ## Test Surface
 
-### Trezor test path still uses ring-signature test scaffolding
+### ~~Trezor test path still uses ring-signature test scaffolding~~ — RESOLVED
+**Resolved 2026-08-18 (Phase-5 wallet2 cutover), by deletion.** The
+entry's own conclusion — "this is not dead code… the seam where
+Shekyl's Trezor integration continues to exercise the pre-FCMP++
+transaction-construction model" — was correct while both ends existed.
+Both ends are now deleted: the Trezor backend and its test suite (B2
+ruling: no PQC firmware, reopen when a vendor ships it) and, with the
+suite's disappearance, `tests/core_tests/wallet_tools.{h,cpp}` — whose
+*only* includer was `tests/trezor/trezor_tests.h`. So the ring-shaped
+`gen_tx_src` scaffolding is gone rather than cleaned up, which is the
+outcome the entry argued for: it warned against removing the harness
+while a hardware target remained, and there is no longer a hardware
+target to strand.
+
+The coupling below to "PQC Multisig V3.1 hardware wallet integration"
+survives as the **reopen** path, not as pending cleanup: if hardware
+support returns, it returns as a Rust `Signer` against FCMP++, with no
+inherited ring scaffolding to carry forward.
+
+The original entry follows, unedited, as the record of why this was
+not cleaned up earlier.
+
 **Priority**: Low — test-only, but tangled with a real feature gap.
 **Target**: Resolved as part of PQC Multisig V3.1 hardware wallet
 integration (`docs/FOLLOWUPS.md`, currently TBD, code work deferred
