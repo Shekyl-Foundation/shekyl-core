@@ -111,6 +111,71 @@ pub struct RpcSession {
     pub debug: bool,
 }
 
+/// Initial capacity for a serialized request.
+///
+/// Sized so the largest secret-bearing request — `restore_wallet`, which
+/// carries a wallet name, a password and a 25-word mnemonic — serializes
+/// without the buffer having to grow at all: envelope ~80 B, name up to a
+/// filesystem name's 255 B, mnemonic ~200 B, password typically far less.
+/// Growth is safe (see [`WipedBuf`]), so this is an allocation-count choice
+/// rather than a correctness bound: a longer password simply grows the
+/// buffer, wiping as it goes.
+const REQUEST_BUF_CAPACITY: usize = 1024;
+
+/// A byte sink that wipes **every allocation it has ever owned**, not only
+/// the last one.
+///
+/// A `Zeroizing<Vec<u8>>` is not by itself a safe place to serialize a secret
+/// *into*. Serializing with serde_json's `to_vec` fills a plain `Vec` and
+/// only wraps it afterwards — which rule 35 forbids at point of creation, and
+/// which loses on two counts:
+///
+/// 1. an error partway through serialization drops that bare buffer with the
+///    secret fields already written into it, unwiped;
+/// 2. worse, and on the *success* path: `Vec` growth copies into a fresh
+///    allocation and frees the old one without wiping. The zeroize crate says
+///    so itself — "Cannot ensure that previous reallocations did not leave
+///    values on the heap." serde_json starts that buffer at 128 bytes, and a
+///    `restore_wallet` request exceeds 128 bytes every single time, so the
+///    **seed phrase was guaranteed** to be left behind in released heap while
+///    the wrapper dutifully wiped the final buffer and reported success.
+///
+/// This sink grows by hand instead: it allocates the replacement, copies into
+/// it, and drops the outgrown `Zeroizing` — wiping it — before the allocator
+/// can hand that memory to anything else.
+struct WipedBuf(Zeroizing<Vec<u8>>);
+
+impl WipedBuf {
+    fn with_capacity(capacity: usize) -> Self {
+        Self(Zeroizing::new(Vec::with_capacity(capacity)))
+    }
+
+    fn into_inner(self) -> Zeroizing<Vec<u8>> {
+        self.0
+    }
+}
+
+impl Write for WipedBuf {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let needed = self.0.len() + buf.len();
+        if needed > self.0.capacity() {
+            // Amortized doubling, performed here rather than left to `Vec` so
+            // that the outgrown allocation is wiped rather than merely freed.
+            let grown_to = self.0.capacity().saturating_mul(2).max(needed);
+            let mut grown = Zeroizing::new(Vec::with_capacity(grown_to));
+            grown.extend_from_slice(&self.0);
+            self.0 = grown;
+        }
+        // Within capacity now, so this cannot reallocate behind our back.
+        self.0.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// The JSON-RPC request envelope, serialized directly rather than built as a
 /// `serde_json::Value` — see [`RpcSession::call`] for why that distinction is
 /// a secret-handling one.
@@ -135,6 +200,13 @@ struct Request<'a, P> {
 /// set of secret-bearing requests is enumerable in one place — the thing the
 /// original audit could not do, and the reason it undercounted its own work
 /// list.
+///
+/// Rule 35 asks that a `Serialize` derive on a secret-bearing type carry an
+/// explicit reason, so: these types exist **only** to be serialized, once,
+/// into the wiped sink in [`RpcSession::call`], and that is the whole of
+/// their lifetime. They borrow rather than own, so serializing one cannot
+/// outlive the caller's secret; and none derives `Debug` or `Clone`, so
+/// there is no second path by which a field could reach a log or a copy.
 pub mod params {
     use serde::Serialize;
 
@@ -305,14 +377,16 @@ impl RpcSession {
             params,
         };
 
-        // Serialized once, here, into a buffer that wipes on drop — the one
-        // place the request's cleartext exists. The transports take those
-        // bytes rather than re-serializing, so there is exactly one copy to
-        // account for instead of one per transport.
-        let payload = Zeroizing::new(
-            serde_json::to_vec(&body)
-                .map_err(|e| RpcError::Transport(format!("serialize request: {e}")))?,
-        );
+        // Serialized once, here, into a sink that wipes every buffer it
+        // touches including any it outgrows (see `WipedBuf`) — the one place
+        // the request's cleartext exists. On the error path the sink drops
+        // with the partial request inside it, so that wipes too. The
+        // transports take these bytes rather than re-serializing, so there is
+        // exactly one copy to account for instead of one per transport.
+        let mut sink = WipedBuf::with_capacity(REQUEST_BUF_CAPACITY);
+        serde_json::to_writer(&mut sink, &body)
+            .map_err(|e| RpcError::Transport(format!("serialize request: {e}")))?;
+        let payload = sink.into_inner();
 
         // The response buffer holds cleartext secret material for some
         // methods (create_wallet returns the new BIP-39 mnemonic / raw seed).
@@ -689,7 +763,7 @@ mod tests {
         // `change_password` carries two secrets under two keys, which is why a
         // gate written against the single literal "password" would have let
         // that site through.
-        let secret_keys = [
+        let forbidden_json_fields = [
             concat!("\"pass", "word\":"),
             concat!("\"old_pass", "word\":"),
             concat!("\"new_pass", "word\":"),
@@ -697,10 +771,10 @@ mod tests {
         ];
 
         for (name, src) in senders {
-            for key in secret_keys {
+            for field in forbidden_json_fields {
                 assert!(
-                    !src.contains(key),
-                    "{name} builds a JSON object with {key} — a secret in a \
+                    !src.contains(field),
+                    "{name} builds a JSON object with {field} — a secret in a \
                      serde_json::Value is a heap copy that never gets wiped. \
                      Send it through a borrowed rpc_client::params shape instead."
                 );
@@ -737,22 +811,87 @@ mod tests {
         let flat: String = production.chars().filter(|c| !c.is_whitespace()).collect();
 
         assert!(
-            flat.contains(concat!("Zeroizing::new(serde_json::", "to_vec(&body)")),
-            "call must serialize the typed envelope straight into the Zeroizing \
-             buffer — building a Value first and serializing that still leaves \
-             an unwiped copy of the password on the heap, which is the whole \
-             defect, just moved one frame inward"
+            flat.contains(concat!("serde_json::", "to_writer(&mutsink,&body)")),
+            "call must serialize *into* the wiped sink. Anything that returns a \
+             buffer and wraps it afterwards leaves the secret in a bare \
+             allocation first — which is what rule 35 forbids at point of \
+             creation, and what leaves seed bytes in released heap when the \
+             buffer grows"
         );
-        assert!(
-            !flat.contains(concat!("serde_json::", "to_value")),
-            "nothing in this seam may convert the request into a serde_json::Value \
-             — that is the copy the params shapes exist to avoid, and routing \
-             through it would make every borrowed shape decorative"
-        );
+        // The two ways the destination gets lost. `to_vec` builds the buffer
+        // bare and wraps it after; `to_value` reintroduces the `Value` copy
+        // the params shapes exist to avoid. Note the prose above deliberately
+        // never spells either path in full, so these needles cannot be
+        // satisfied by a doc comment describing the very thing they forbid.
+        for forbidden in [
+            concat!("serde_json::", "to_vec"),
+            concat!("serde_json::", "to_value"),
+        ] {
+            assert!(
+                !flat.contains(forbidden),
+                "the request must not travel through {forbidden} — that is an \
+                 allocation this crate cannot wipe, and routing through it \
+                 makes every borrowed params shape decorative"
+            );
+        }
 
         // Deliberately NOT asserted here: that the transport helpers take
         // `&[u8]` rather than `&Value`. The compiler already rejects that
         // change (`call` hands them a `Zeroizing<Vec<u8>>`), and a test that
         // restates a type error is noise that later readers must maintain.
+    }
+
+    /// Hand-rolled growth is the price of wiping what we outgrow, and the
+    /// risk it introduces is a content bug rather than a leak — the wiping
+    /// itself is `Zeroizing`'s contract, but copying the old buffer forward
+    /// correctly is ours. Write in many small chunks so the buffer crosses
+    /// several growths mid-stream.
+    #[test]
+    fn wiped_buf_preserves_content_across_repeated_growth() {
+        let mut buf = WipedBuf::with_capacity(4);
+        let mut expected = Vec::new();
+        for i in 0..500u32 {
+            let chunk = format!("{i},");
+            buf.write_all(chunk.as_bytes()).expect("sink never fails");
+            expected.extend_from_slice(chunk.as_bytes());
+        }
+        let got = buf.into_inner();
+        assert_eq!(
+            got.as_slice(),
+            expected.as_slice(),
+            "growth must carry every earlier byte forward intact"
+        );
+    }
+
+    /// The sink must be usable as a serde_json destination, and must hold the
+    /// request the transports are about to send — if `to_writer` and the sink
+    /// disagreed about `write`'s contract, `call` would ship a truncated body.
+    #[test]
+    fn wiped_buf_round_trips_a_request_larger_than_its_capacity() {
+        let long_mnemonic = vec!["abandon"; 25].join(" ");
+        let body = Request {
+            jsonrpc: "2.0",
+            id: 7,
+            method: "restore_wallet",
+            params: params::Restore {
+                name: "wallet",
+                password: "hunter2",
+                mnemonic: &long_mnemonic,
+                restore_height: 0,
+            },
+        };
+
+        // Deliberately smaller than the payload, so the growth path runs.
+        let mut sink = WipedBuf::with_capacity(8);
+        serde_json::to_writer(&mut sink, &body).expect("envelope serializes");
+        let payload = sink.into_inner();
+
+        assert!(
+            payload.len() > 8,
+            "the fixture must actually exercise growth"
+        );
+        let parsed: Value = serde_json::from_slice(&payload).expect("valid JSON out");
+        assert_eq!(parsed["params"]["mnemonic"], long_mnemonic);
+        assert_eq!(parsed["method"], "restore_wallet");
     }
 }
