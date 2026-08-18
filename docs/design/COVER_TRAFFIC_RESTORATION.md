@@ -298,6 +298,37 @@ The stage-4 gate (`DAEMON_RELAY_PRIVACY.md` §92.5's disarm scope) is unchanged
 and still governs *enabling* cover. §2.7 is about *where the mechanism lives*,
 which the cutover decides on its own schedule.
 
+### 2.8 PRE-REGISTERED before the number exists: α at the covert hop
+
+**Recorded now, deliberately, because pre-registration is worthless written
+afterwards.** §16.4's α gate is this arc's worked example of what it buys — the
+rule was frozen before the instrument ran, and it held when the measured
+quantity turned out not to be the one the ruling needed.
+
+The outstanding computation is α at the covert hop: four
+`full_travel_probability` calls, and the one place the fragment arithmetic
+(§2.6's 3-of-20 modal transaction) and the embargo derivation actually meet.
+
+**The decision rule, fixed before the value is known:**
+
+- A covert hop's added latency is an **input to `F′`**, not a reason to revisit
+  [`EMBARGO_FULL_TRAVEL_PROBABILITY`]. The 0.90 pin is a *design input*
+  (§16.4): the embargo is solved **for** it. A low α at the shipped embargo
+  means the embargo was solved against a hop cost the carrier changes — so the
+  embargo re-derives, and 0.90 does not move.
+- **Re-opening 0.90 requires its own round**, on privacy grounds, with the
+  wire-observer and peer-adversary rows priced separately (§32.6). *"The number
+  came out low"* is not such a ground.
+- If α at the covert hop is materially below 0.90, the ranked responses are, in
+  order: re-derive `F′` with the carrier's hop; reduce fragments per hop (the
+  modal transaction is 3 of 20, so there is headroom); and only then question
+  whether the stem phase belongs on the carrier at all (§42.3).
+
+**Why this is written first.** A figure in the 0.6s at the shipped embargo is
+exactly the shape that invites re-litigating a pin rather than re-deriving a
+constant, and the invitation is strongest in the minutes after the number
+appears. The rule above is checkable against the value whenever it arrives.
+
 ## 3. Status against the plan
 
 **Verified against `dev` at the audit commit.**

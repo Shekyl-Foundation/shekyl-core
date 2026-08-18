@@ -113,6 +113,20 @@ fn covert_cadence(seed: u64, polls: usize) -> Vec<(u64, usize, bool)> {
 ///
 /// `cv4_the_comparison_can_distinguish_cadences` proves the comparison has
 /// teeth, so a green result here is not a comparison that cannot fail.
+///
+/// # READ BEFORE "SIMPLIFYING" THIS
+///
+/// **There is no edit in the current tree that makes this red, and that is the
+/// point.** It is a tripwire armed against a change that has not landed, not a
+/// mirror oracle. A reviewer asking rule 8's question — *what edit reds this?*
+/// — will find none today and may conclude the queues are dead weight.
+///
+/// **They are not, and removing them defeats the test silently.** The
+/// assertion is the *comparison*; the queues are the *bait*. Delete them, pass
+/// the same queue twice, or collapse the two runs into one, and this file still
+/// compiles, still passes, and no longer detects anything. It goes red the
+/// moment `Driver::poll` gains a queue parameter and anything branches on
+/// depth — which is the only thing it was ever meant to catch.
 #[test]
 fn cv4_the_cadence_does_not_depend_on_queue_depth() {
     const POLLS: usize = 40;
