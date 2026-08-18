@@ -355,16 +355,6 @@ So even a T18 that fit its budget would be testing the branch where
 the threat has already been merged past, rather than the branch where
 it arrives.
 
-### MR-F5 — the harness never participates in catching verifier mutants
-
-**The finding.** For all 848 `shekyl-pow-randomx` mutants — 64% of the
-run — cargo-mutants runs **only `shekyl-pow-randomx`'s own tests**. The
-differential harness, its C oracle, and its byte-equality assertions
-never execute against a verifier mutant.
-
-**Evidence, three parts:**
-
-1. cargo-mutants' `--help`: *"`--test-workspace` … If false, only the
    tests in the mutated package are run."*
 2. cargo-mutants' source: with no `--test-workspace`, no
    `--test-package`, and neither key in config, `test_package` falls
@@ -417,6 +407,16 @@ anyone to see the cost.
 
 ---
 
+### MR-F5 — the harness never participates in catching verifier mutants
+
+**The finding.** For all 848 `shekyl-pow-randomx` mutants — 64% of the
+run — cargo-mutants runs **only `shekyl-pow-randomx`'s own tests**. The
+differential harness, its C oracle, and its byte-equality assertions
+never execute against a verifier mutant.
+
+**Evidence, three parts:**
+
+1. cargo-mutants' `--help`: *"`--test-workspace` … If false, only the
 ## 5. Design questions
 
 Each carries a recommendation with its substrate. **None is closed
@@ -458,30 +458,6 @@ as the merge-blocking T-A9 leg, and a periodic sweep carrying
 T-A1/T-A3. §6 prices whether that sweep is the 305-mutant
 assertion-module slice, the full 1290, or the full set under corrected
 scoping.
-
-### MR-DQ-8 — how is test scoping pinned (MR-F5)?
-
-The 2g contract never pinned which packages *test* a mutant; the tool's
-`TestPackages::Mutated` default silently became the contract, and it is
-the reason M2's T-A1 layer is inoperative. Whatever §7 selects, the
-amendment must state test scoping explicitly rather than inherit a
-default — that is the specific failure this whole round exists to stop
-recurring.
-
-Options: (a) leave `Mutated` and record honestly that M2 covers T-A9
-plus assertion-module T-A1, with M1 carrying the rest — cheap, and
-truthful once written down; (b) `test_package = ["shekyl-randomx-differential"]`
-for verifier mutants, so the differential judges them — implements M2
-as described, at higher per-mutant cost (the harness suite replaces the
-verifier suite); (c) `test_workspace = true` — broadest, most
-expensive.
-
-**Recommendation: (b), pinned in `.cargo/mutants.toml` with a comment
-naming MR-F5**, contingent on §6's price. (a) is acceptable only if
-§6 shows (b) is unaffordable, and then the 2g threat table must be
-amended to stop claiming an M2 T-A1 layer it does not have — an
-inoperative-but-documented gate is recoverable; an inoperative gate
-described as operative is the failure mode of this entire round.
 
 ### MR-DQ-3 — release-mode or debug-mode per-mutant test runs?
 
@@ -551,15 +527,164 @@ is a bug, not a no-op.
 
 ---
 
+### MR-DQ-8 — how is test scoping pinned (MR-F5)?
+
+The 2g contract never pinned which packages *test* a mutant; the tool's
+`TestPackages::Mutated` default silently became the contract, and it is
+the reason M2's T-A1 layer is inoperative. Whatever §7 selects, the
+amendment must state test scoping explicitly rather than inherit a
+default — that is the specific failure this whole round exists to stop
+recurring.
+
+Options: (a) leave `Mutated` and record honestly that M2 covers T-A9
+plus assertion-module T-A1, with M1 carrying the rest — cheap, and
+truthful once written down; (b) `test_package = ["shekyl-randomx-differential"]`
+for verifier mutants, so the differential judges them — implements M2
+as described, at higher per-mutant cost (the harness suite replaces the
+verifier suite); (c) `test_workspace = true` — broadest, most
+expensive.
+
+**Recommendation: (b), pinned in `.cargo/mutants.toml` with a comment
+naming MR-F5**, contingent on §6's price. (a) is acceptable only if
+§6 shows (b) is unaffordable, and then the 2g threat table must be
+amended to stop claiming an M2 T-A1 layer it does not have — an
+inoperative-but-documented gate is recoverable; an inoperative gate
+described as operative is the failure mode of this entire round.
+
 ## 6. Option matrix
 
-*(Filled from §2.2.1 measurements — see §6.1.)*
+### 6.1 The empirical per-mutant cost
+
+Probe: `--shard 0/128` of the repaired 1290-mutant set, release
+profile, default (`Mutated`) scoping, `--in-place`, on the local box.
+
+```text
+Found 11 mutants to test
+ok  Unmutated baseline in 1s build + 45s test
+INFO Auto-set test timeout to 230s
+11 mutants tested in 8m: 9 caught, 2 unviable
+```
+
+| Quantity | Value |
+| --- | ---: |
+| Mutants in shard | 11 |
+| Outcome | 9 caught, 2 unviable, **0 survivors** |
+| Mean per mutant (all) | **41.2 s** |
+| Mean per mutant (viable only) | 50.2 s |
+| Unviable fraction | 0.18 |
+| Per-mutant build phase | ~1.0 s |
+| Per-mutant test phase | ~45–53 s |
+
+The build phase is negligible (~1 s incremental) — the FOLLOWUPS
+entry's worry that release mode would cost "slower per-mutant rebuilds"
+does not materialize at this scale, because only the mutated crate
+rebuilds and the link is warm. **Per-mutant cost is essentially the
+test suite.**
+
+### 6.2 Sizing constants
+
+- `N` = **1290** mutants (skip-list repaired, MR-F2)
+- local mean per mutant, release, default scoping = **41.2 s**
+- CI hardware factor = **1.58×** → **65.1 s** per mutant on CI
+- debug/release factor = **12.1×**
+- shard ceiling = **360 min = 21 600 s**
+- assertion-bearing slice = **305** mutants; verifier = **848**;
+  harness = **442**
+
+### 6.3 The matrix
+
+Every row assumes MR-F2 repaired (1290, not 1322) and MR-F1 resolved
+per MR-DQ-1(b).
+
+| # | Regime | CI cost | Shards @ 6 h | T-A1 / T-A3 | T-A9 |
+| --- | --- | ---: | ---: | --- | --- |
+| **A** | **Status quo** — debug, default scoping, serial, unsharded | **~282 h** | 47 | partial (assertion modules only) | ✓ |
+| **B** | Release, default scoping, sharded | **~23.3 h** | **6** (≈3.9 h each) | partial (assertion modules only) | ✓ |
+| **C** | Release, **corrected scoping** (MR-DQ-8b), sharded | §6.4 | §6.4 | **✓ (M2 layer operative)** | ✓ |
+| **D** | Per-PR `--in-diff`, release, unsharded | minutes (bounded by diff) | 1 | ✗ (§3.1) | **✓ at arrival, incl. `dev`** |
+| **E** | Release, **assertion-module slice only** (305), sharded | **~5.5 h** | 1 | ✓ direct signal | ✗ |
+
+Row A is what runs today, and it is the arithmetic that explains the
+timeout: 282 h against a 6 h ceiling is not a budget overrun, it is a
+regime that could never have completed. **The single largest lever is
+the profile** — release alone takes A to B, a 12.1× reduction, and is
+the difference between "needs 47 runners" and "needs 6."
+
+Row E is notable: the slice that carries the *direct* T-A1/T-A3 signal
+fits in a **single** unsharded job with margin. That makes an
+assertion-module sweep affordable at a much tighter cadence than the
+full sweep.
+
+### 6.4 Pricing corrected scoping (row C)
+
+*(Filled from the per-crate suite measurement.)*
 
 ---
 
 ## 7. Recommended regime
 
-*(Pinned after §5 ratification.)*
+**Not binding until §5 is ratified.** Recorded now so ratification is a
+decision about a concrete proposal rather than an open field.
+
+### 7.1 Two legs, mapped to the threats they actually detect
+
+**Leg 1 — per-PR `--in-diff` (merge-blocking).** Release profile,
+unsharded, mutating the diff of the PR against its base. Bounded by
+change size, so it runs in minutes and can block a merge. Detects
+**T-A9** at the moment new code arrives, and — because PRs target
+`dev` — it is also the part of MR-F3's fix that matters, putting
+mutation coverage on `dev` for the first time.
+
+**Leg 2 — periodic sweep (sharded).** Release profile, `--in-place`
+per shard, `--shard k/n` across a matrix, on both `main` and `dev`.
+Carries **T-A1/T-A3** (per §3.1, the surface the assertion covers) and
+backstops **T-A9** across code that reached `dev` without a PR.
+
+### 7.2 Pins
+
+| Item | Value | Source |
+| --- | --- | --- |
+| Profile | `--profile release` | MR-DQ-3; §6.2 — the single largest lever (12.1×) |
+| Mutant set | 1290 (skip-list repaired) | MR-F2 / MR-DQ-7 |
+| `--check` | **removed** from §5.5.6's pinned text | MR-F1 / MR-DQ-1(b) |
+| Test scoping | **explicitly pinned**, never inherited | MR-F5 / MR-DQ-8 |
+| Parallelism | sharding, not `--jobs`; `--in-place` retained per shard | MR-DQ-4 / MR-DQ-5 |
+| Branch coverage | leg 1 covers `dev` inherently; leg 2 carries a `[main, dev]` matrix | MR-F3 / MR-DQ-6 |
+| Skip-list | repaired **and** guarded by a liveness assertion | MR-DQ-7 |
+
+### 7.3 The one genuinely open trade
+
+MR-DQ-8 is the decision that changes what the gate *means*, and §6.4
+prices it:
+
+- **Row B** (keep `Mutated` scoping) is cheap and honest-if-documented,
+  but M2's T-A1 layer stays inoperative and the 2g threat table must be
+  amended to stop claiming it.
+- **Row C** (verifier mutants judged by the harness suite) implements
+  M2 as written, at higher per-mutant cost absorbed by a larger shard
+  denominator.
+
+**Recommendation: row C**, with row B as the named fallback if §6.4
+puts C beyond a defensible weekly runner budget. The reversion
+criterion per
+[`21-reversion-clause-discipline`](../../.cursor/rules/21-reversion-clause-discipline.mdc):
+if C's shard count exceeds what the project will spend weekly, take B
+**and** amend §4.6 M2's T-A1 claim in the same PR — never leave the
+threat table asserting a layer the regime does not run.
+
+### 7.4 Sizing rule (so this does not recur)
+
+The failure this round fixes is a budget written once from intuition
+and never re-derived. So §7 pins a **rule**, not just a number:
+
+> Shard denominator `n` = `ceil(N × c × f / (0.5 × ceiling))`, where
+> `N` = mutant count, `c` = measured local mean per-mutant cost, `f` =
+> the CI hardware factor, and `ceiling` = 21 600 s. The 0.5 keeps a
+> 2× margin.
+
+The test plan (§9) asserts this arithmetic against the live mutant
+count, so the gate reds when the suite outgrows its shards **as a
+loud assertion**, not as a six-hour timeout.
 
 ---
 
