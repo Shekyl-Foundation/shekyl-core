@@ -60,14 +60,31 @@ namespace {
 // The re-serialize path's own output, reproduced here so its LENGTH can be compared
 // against the blob tail. `calculate_transaction_prunable_hash` hashes this and
 // discards the bytes, so the size is not otherwise observable.
-bool prunable_reserialized_size(const transaction &t, size_t &out)
+//
+// # Why `transaction&` and not `const transaction&`
+//
+// Binary serialization MUTATES the transaction: `unprunable_size` is a
+// non-`mutable` `std::atomic<unsigned int>` assigned inside the serializer
+// (cryptonote_basic.h:635/707), and `serialize_rctsig_prunable` is a non-const
+// member. Production reaches it through a `const transaction&` plus a local
+// `const_cast` (cryptonote_format_utils.cpp:1147) -- an inherited shape that is
+// well-defined only because every caller happens to hold a non-const object, and
+// undefined the moment one does not.
+//
+// This test deliberately does NOT reproduce that. Mirroring the production
+// *computation* is the point; mirroring its const-incorrectness is not, and a
+// `const_cast` here would be a second instance of the hazard rather than a
+// faithful copy of anything. Taking the reference non-const states the mutation
+// in the signature and needs no cast at all. (The production cast is inherited
+// C++ and stays put under rules 16/20 -- it is fixed by the move to
+// `shekyl-wire`, not by patching it in place.)
+bool prunable_reserialized_size(transaction &t, size_t &out)
 {
   if (t.rct_signatures.type == rct::CTTypeNull)
     return false;
-  transaction &tt = const_cast<transaction &>(t);
   std::stringstream ss;
   binary_archive<true> ba(ss);
-  if (!tt.rct_signatures.p.serialize_rctsig_prunable(
+  if (!t.rct_signatures.p.serialize_rctsig_prunable(
           ba, t.rct_signatures.type, count_spend_inputs(t.vin), t.vout.size()))
     return false;
   out = ss.str().size();
@@ -77,7 +94,7 @@ bool prunable_reserialized_size(const transaction &t, size_t &out)
 // The property, asserted against one transaction. Callers supply the fixtures; a
 // single hand-built tx would pass vacuously the moment someone adds an optional
 // field that fixture does not populate (rule 50 -- a seal is not coverage).
-void expect_prunable_region_has_one_occupant(const transaction &t, const char *what)
+void expect_prunable_region_has_one_occupant(transaction &t, const char *what)
 {
   SCOPED_TRACE(what);
 
