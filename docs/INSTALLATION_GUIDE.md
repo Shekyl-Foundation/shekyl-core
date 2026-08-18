@@ -175,9 +175,13 @@ make release-static-win64
 
 The current CMake targets produce:
 
-- daemon: `shekyld`
-- CLI wallet: `shekyl-cli`
-- wallet RPC: `shekyl-wallet-rpc`
+- daemon: `shekyld` (C++)
+- CLI wallet: `shekyl-cli` (Rust)
+- wallet RPC: `shekyl-wallet-rpc` (Rust)
+
+The two wallet binaries are built from the Rust workspace by
+`cmake/BuildRust.cmake` as part of the ordinary CMake build — no separate
+`cargo` step is needed, and `cargo` is already a build prerequisite.
 
 Typical output location:
 

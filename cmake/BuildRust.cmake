@@ -312,3 +312,61 @@ elseif(APPLE)
 else()
     set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 endif()
+
+# ── Rust user-facing binaries (shekyl-cli, shekyl-wallet-rpc) ────────────────
+#
+# C1/C2 install cutover. Until this landed, `cargo` was invoked here only for
+# the two staticlibs, so the CMake build produced no wallet binaries at all:
+# `shekyl-wallet-rpc` in `bin/` was the C++ `wallet_rpc_server` wearing that
+# OUTPUT_NAME, and `shekyl-cli` — which INSTALLATION_GUIDE.md has always
+# listed as a build output — did not exist. Deleting wallet2 in Phase 5 would
+# therefore have shipped a release with no wallet-rpc and no CLI.
+#
+# The binaries are built and staged here, not in `src/wallet/CMakeLists.txt`,
+# because that file is deleted wholesale with wallet2: install rules parked
+# there would have to be re-cut by the very commit this one exists to unblock.
+#
+# Staging into `${CMAKE_BINARY_DIR}/bin` is load-bearing beyond developer
+# convenience: contrib/gitian/gitian-*.yml does not run `make install`, it
+# tars whatever `bin/` holds, so this copy is what puts the binaries into the
+# release archives.
+if(NOT IOS)
+    set(_shekyl_rust_bins shekyl-cli shekyl-wallet-rpc)
+
+    # Match where the C++ executables land (src/CMakeLists.txt sets
+    # RUNTIME_OUTPUT_DIRECTORY to ${CMAKE_BINARY_DIR}/bin, which multi-config
+    # generators suffix with the config — the Windows CI path is literally
+    # `build\bin\Release\`).
+    if(CMAKE_CONFIGURATION_TYPES)
+        set(_shekyl_rust_bin_dir "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+    else()
+        set(_shekyl_rust_bin_dir "${CMAKE_BINARY_DIR}/bin")
+    endif()
+
+    set(_shekyl_rust_bin_pkg_args "")
+    set(_shekyl_rust_bin_outputs "")
+    foreach(_bin IN LISTS _shekyl_rust_bins)
+        list(APPEND _shekyl_rust_bin_pkg_args -p "${_bin}")
+        list(APPEND _shekyl_rust_bin_outputs
+            "${RUST_BUILD_DIR}/${_bin}${CMAKE_EXECUTABLE_SUFFIX}")
+    endforeach()
+
+    add_custom_command(
+        OUTPUT ${_shekyl_rust_bin_outputs}
+        COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
+            ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
+            ${_shekyl_rust_bin_pkg_args}
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_shekyl_rust_bin_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${_shekyl_rust_bin_outputs} "${_shekyl_rust_bin_dir}"
+        WORKING_DIRECTORY ${RUST_SOURCE_DIR}
+        DEPENDS ${_shekyl_rust_deps}
+        COMMENT "${_rust_comment} (shekyl-cli + shekyl-wallet-rpc binaries)"
+        VERBATIM
+    )
+
+    add_custom_target(shekyl_rust_bins ALL DEPENDS ${_shekyl_rust_bin_outputs})
+
+    # PROGRAMS, not FILES: this sets the executable bit.
+    install(PROGRAMS ${_shekyl_rust_bin_outputs} DESTINATION bin)
+endif()

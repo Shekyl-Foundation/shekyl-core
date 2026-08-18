@@ -202,5 +202,13 @@ driver contract.
 - `src/wallet/wallet2.{h,cpp}` and the C++ `wallet_rpc_server` — deleted
   wholesale by the Phase 5 single commit
   ([`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md) §Phase 5).
-- The C++ `shekyl-wallet-rpc` binary name collision resolves at the same
-  point: only the Rust binary remains.
+- ~~The C++ `shekyl-wallet-rpc` binary name collision resolves at the same
+  point: only the Rust binary remains.~~ **Resolved earlier, 2026-08-18
+  (C1/C2 install cutover), deliberately ahead of Phase 5:** the name and
+  the install slot now belong to the Rust binary, which
+  `cmake/BuildRust.cmake` builds, stages into `bin/`, and installs. The
+  C++ target still builds under its own target name (`wallet_rpc_server`)
+  until Phase 5 deletes it, but is no longer installed — deferring the
+  handover to Phase 5 would have meant the deletion commit either shipped
+  a release with no wallet-rpc or had to grow the whole build-system
+  change alongside it.

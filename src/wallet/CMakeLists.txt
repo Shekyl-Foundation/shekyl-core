@@ -91,8 +91,10 @@ if(NOT IOS)
       ${Boost_THREAD_LIBRARY}
       ${CMAKE_THREAD_LIBS_INIT}
       ${EXTRA_LIBRARIES})
-  set_property(TARGET wallet_rpc_server
-    PROPERTY
-      OUTPUT_NAME "shekyl-wallet-rpc")
-  install(TARGETS wallet_rpc_server DESTINATION bin)
+  # The `shekyl-wallet-rpc` name and the install slot now belong to the Rust
+  # binary (cmake/BuildRust.cmake). This target keeps building under its own
+  # target name through the transition — it is deleted wholesale with
+  # `wallet2` in the Phase-5 commit, so it is deliberately NOT installed:
+  # shipping two different programs under one name is the failure this
+  # cutover exists to prevent.
 endif()

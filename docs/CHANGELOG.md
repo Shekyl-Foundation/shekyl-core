@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Added
+
+- **The CMake build now produces the Rust `shekyl-cli` and
+  `shekyl-wallet-rpc` binaries** (C1/C2 install cutover).
+  `cmake/BuildRust.cmake` previously invoked `cargo` only for the two
+  staticlibs, so `shekyl-cli` — listed as a build output in
+  `INSTALLATION_GUIDE.md` for as long as that guide has existed — was
+  never actually produced by a CMake build, and `bin/shekyl-wallet-rpc`
+  was the C++ `wallet_rpc_server` wearing that `OUTPUT_NAME`. Both Rust
+  binaries are now built, staged into `bin/` (which is what
+  `contrib/gitian/` tars into the release archives), and installed.
+
+### Changed
+
+- **`shekyl-wallet-rpc` now names the Rust binary, everywhere.** The C++
+  `wallet_rpc_server` keeps building under its own target name through
+  the transition but is no longer installed and no longer claims that
+  `OUTPUT_NAME`; it is deleted wholesale with `wallet2` in the Phase-5
+  commit. Two different programs sharing one installed name was the
+  failure this cutover exists to prevent. The Windows CI removed-flag
+  assertions follow the C++ binary (the V3.1 migration message they grep
+  for comes from `src/common/removed_flags.{h,cpp}` and cannot transfer
+  to the Rust binary's argument parser); the shipped Rust binaries gain
+  their own runs-and-responds check. The gitian packaging copies for
+  `shekyl-cli` and `shekyl-wallet-rpc` now hard-fail instead of
+  `|| true` — they are guaranteed products, and tolerating their absence
+  meant a release with no wallet-rpc could be staged silently.
+
 ### Removed
 
 - **Trezor hardware-wallet backend deleted** (`src/device_trezor/`,

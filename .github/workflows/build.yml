@@ -421,14 +421,24 @@ jobs:
       - name: build daemon, wallet, and wallet-rpc
         shell: pwsh
         run: |
-          cmake --build build --config Release --target daemon wallet wallet_rpc_server --parallel 2
+          cmake --build build --config Release --target daemon wallet wallet_rpc_server shekyl_rust_bins --parallel 2
       - name: smoke-test daemonizer removal
         shell: pwsh
-        # After the V3.1 daemonizer removal, shekyld.exe and
-        # shekyl-wallet-rpc.exe must (a) link cleanly on MSVC without the
+        # After the V3.1 daemonizer removal, shekyld.exe and the C++
+        # wallet_rpc_server.exe must (a) link cleanly on MSVC without the
         # src/daemonizer/ subsystem, (b) run without invoking the removed
         # POSIX fork() / Windows SCM code paths, and (c) intercept the
-        # retired CLI flags via src/common/removed_flags.{h,cpp}. --help
+        # retired CLI flags via src/common/removed_flags.{h,cpp}.
+        #
+        # These removed-flag assertions target the C++ binary under its own
+        # target name: the migration message they grep for comes from
+        # src/common/removed_flags.{h,cpp}, so they cannot transfer to the
+        # Rust shekyl-wallet-rpc.exe (clap answers "unexpected argument").
+        # They pin the C++ shim and are deleted with it when Phase 5 removes
+        # wallet2. The Rust binary — which owns the shipped
+        # `shekyl-wallet-rpc` name since the C1/C2 install cutover — gets an
+        # existence-and-runs check here so redirecting the assertions does
+        # not leave the shipped name untested on Windows. --help
         # exits 0 after printing the option list, which exercises the full
         # argument-parsing + logger-init path without waiting on a network
         # port. --detach is expected to exit nonzero with the V3.1
@@ -449,7 +459,9 @@ jobs:
           # "Select-String on a file," which are the well-behaved parts.
           $ErrorActionPreference = 'Stop'
           $daemon = 'build\bin\Release\shekyld.exe'
-          $wrpc   = 'build\bin\Release\shekyl-wallet-rpc.exe'
+          $wrpc   = 'build\bin\Release\wallet_rpc_server.exe'
+          $rustw  = 'build\bin\Release\shekyl-wallet-rpc.exe'
+          $rustc  = 'build\bin\Release\shekyl-cli.exe'
 
           function Assert-HelpOk([string]$exe, [string]$label) {
             cmd /c "`"$exe`" --help > NUL 2>&1"
@@ -476,9 +488,14 @@ jobs:
           }
 
           Assert-HelpOk $daemon 'shekyld'
-          Assert-HelpOk $wrpc   'shekyl-wallet-rpc'
+          Assert-HelpOk $wrpc   'wallet_rpc_server'
           Assert-RemovedFlag $daemon 'shekyld'           '--detach'
-          Assert-RemovedFlag $wrpc   'shekyl-wallet-rpc' '--pidfile=C:\temp\x'
+          Assert-RemovedFlag $wrpc   'wallet_rpc_server' '--pidfile=C:\temp\x'
+
+          # The shipped binaries (Rust) must exist and run. No removed-flag
+          # assertion: the V3.1 shim is C++-side, asserted above.
+          Assert-HelpOk $rustw  'shekyl-wallet-rpc'
+          Assert-HelpOk $rustc  'shekyl-cli'
 
           # Both Assert-RemovedFlag calls deliberately leave $LASTEXITCODE
           # nonzero — that's exactly what we're asserting on. GitHub Actions'
