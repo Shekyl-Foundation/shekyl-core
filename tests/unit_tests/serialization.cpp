@@ -47,7 +47,6 @@
 #include "serialization/variant.h"
 #include "serialization/containers.h"
 #include "serialization/binary_utils.h"
-#include "wallet/wallet2.h"
 #include "gtest/gtest.h"
 #include "unit_tests_utils.h"
 #include "device/device.hpp"
