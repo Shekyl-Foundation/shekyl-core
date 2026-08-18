@@ -167,14 +167,14 @@ close** from bond state — not merely a current `good_standing` flag. See emiss
 
 **Encoding (F3, 2026-06-07):** **Bonded/slashed event log with interval semantics**
 evaluated at `E`-close — **not** a scalar `slash_epoch` cutoff (`slash_epoch > E` is
-wrong). Re-bond is a first-class lifecycle event (market "replace shard bond", and
+wrong). Re-bond is a first-class lifecycle event (market "replace shard bond";
 post-slash reinstatement); good-standing is an **interval set**, not a monotone cutoff.
 
 > **Corrected 2026-08-16 (F-2, [`COMPLETETREE_ACTIVATION.md`](COMPLETETREE_ACTIVATION.md)).**
 > This line previously read "CompleteTree resume", which names a transition
 > the code does not have. The coded ladder: a slash on a `CompleteTree`
 > record **demotes** it — kind flips to `ShardSetCompact` and holdings are
-> cleared atomically — so what Rebond reinstates is a **market**
+> cleared atomically — so what Re-bond reinstates is a **market**
 > participant, never the foundation posture. Returning to `CompleteTree`
 > requires a **fresh foundation bond under a new persona** (`RecordExists`
 > blocks the slashed slot; matches `FOUNDATION_GENESIS_IDENTITY_SET.md`
