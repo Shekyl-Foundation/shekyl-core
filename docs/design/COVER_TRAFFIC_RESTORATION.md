@@ -213,6 +213,91 @@ index rather than only from this page.
 
 ---
 
+## 2.6 SCOPE CHANGE (2026-08-18): the C++ half is not worth building
+
+**The daemon Rust cutover is roughly a month out.** Everything §2.1's stages
+touch — `levin_notify.cpp`, `net_node.inl`, the `zone_route` token in
+`enums.h`, and every `levin.cpp` gtest — is deleted by it. Work sorted by
+lifespan:
+
+| survives the cutover | dies with it |
+| --- | --- |
+| `RelayCarrier` / `RelayDispatch` and the slot-carrying dispatch | the `levin_notify.cpp` restructure |
+| `zone_route::BroadcastAllZones` + its truth table | `net_node.inl`'s broadcast arm |
+| this document, §91, §92, §42.5a/b | every covert gtest, incl. `noise_stem` |
+| the Rust covert state machine (§2.7 — **unbuilt**) | the C++ `zone_route` token |
+
+**The §42.3 C++ restructure was written, validated, and then discarded.** It
+proved the three changes are implementable and that `noise_stem` flips exactly
+as its annotation specified — `take_relayed(stem)`, `notified_size() == 1`.
+That validation is banked here; the code had a month to live and a flaky test,
+and §1.4 already tells a Rust implementer what the covert branch does wrong,
+which is what they actually need.
+
+> **The flake is diagnosed and the diagnosis outlives the code.** `noise_stem`
+> sends `relay_method::stem`, so `local_origin = false`, and `plan_relay`'s
+> predicate is `!fluffing || local_origin` — during a **fluff epoch** the
+> transaction correctly fluffs and `take_relayed(stem)` finds nothing. ~40 %
+> pass. `noise_repoint` sends `local`, where RD-4 makes the origin always stem,
+> and is deterministic. **The inherited covert branch never consulted the
+> planner at all**, so the epoch roll never reached the test: routing covert
+> through the real Dandelion++ plan exposed a nondeterminism the bypass had been
+> hiding. Any future covert test — in any language — needs a determined epoch,
+> not a wider drive budget.
+
+**Kept deliberately: Design A's C++ arm** (`dc1c57d31`). Cheap, and the
+`levin.cpp` migration oracle is the only thing that can prove the new byte
+actually crosses the FFI rather than the two sides agreeing separately. Until
+the cutover, a node built from this tree really does flood every zone.
+
+## 2.7 The Rust covert state machine — the work that survives
+
+**Unbuilt, unassigned, and forced by the cutover regardless of §42.**
+
+### What C++ owns today
+
+| state | where |
+| --- | --- |
+| dummy payload bytes | `detail::zone::covert_payload` |
+| per-channel `active` fragment buffer | `noise_channel::active` |
+| per-channel pending queue | `noise_channel::queue` |
+| per-channel bound peer | `noise_channel::connection` |
+| enqueue guard (nil binding) | `queue_covert_notify` |
+| unbind: nil the binding, discard buffers | `clear_channel` |
+| rebind-at-send + **CV-1 discard** | `send_noise` |
+
+### The invariant that must survive the move, and it is NOT the language split
+
+**CV-4: the covert schedule must carry no information about whether real
+traffic is pending.** Cadence that reacts to queue depth is a timing channel,
+and constant-rate cover is exactly the thing it defeats.
+
+Today that holds because `Effect::CovertSend` carries no payload discriminant
+**and** the Rust scheduler holds no covert queue. Both are true; **neither is a
+language fact.** `Zone` already owns the *fluff* queue
+(`contexts: BTreeMap<ConnectionId, PeerFluff>`), so there is no rule that
+queues live in C++ — the rule is narrower: *the covert scheduler does not see
+the covert queue.*
+
+What the FFI boundary actually contributes is **friction, not impossibility**:
+today the violating change is a `#[repr(C)]` field or a new entry point — a
+cross-language, header-touching edit that is loud in review. In one Rust crate
+the same violation is `if self.queue.has_pending() { … }`, one line, and it
+reads as a latency improvement. That is §20.2's named failure mode.
+
+> **So the move is permitted and the barrier must be rebuilt in types.** A
+> private queue module the scheduler holds no handle to; an effect type that
+> structurally cannot name payload state; and **the test that fails when the
+> scheduler gains a queue-shaped input** — which does not exist today, because
+> the boundary has been doing that test's job. Writing that test is the first
+> task of the move, not the last.
+
+### Owned by the cutover, not by §42
+
+The stage-4 gate (`DAEMON_RELAY_PRIVACY.md` §92.5's disarm scope) is unchanged
+and still governs *enabling* cover. §2.7 is about *where the mechanism lives*,
+which the cutover decides on its own schedule.
+
 ## 3. Status against the plan
 
 **Verified against `dev` at the audit commit.**
@@ -223,8 +308,9 @@ index rather than only from this page.
 | 1 — delete the stem→`local` downgrade | not started | `levin_notify.cpp` covert branch still downgrades |
 | 2 — carrier below phase | not started | carrier check still above the `switch (tx_relay)` |
 | 3 — per-stem-slot send | not started | send loop still iterates all channels |
-| **1–3 done-condition: correct and inert** | **not reached** | current state: *wrong* and inert |
+| **1–3 done-condition: correct and inert** | **not reached, and not being pursued in C++** | §2.6 — the restructure was written, validated and discarded; the C++ dies with the cutover |
 | 4 — enablement | **not startable** | §2.3's two criteria both unmet |
+| §2.7 Rust covert state machine | **unbuilt, unassigned** | forced by the cutover regardless of §42; first task is CV-4's missing test |
 
 **Non-scope, tracked separately (§2.0):** Tor transit measurement — *unblocked,
 not started*; flood-suite reconciliation — *unblocked, not started*.
