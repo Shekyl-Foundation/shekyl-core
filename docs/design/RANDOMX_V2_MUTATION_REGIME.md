@@ -4,7 +4,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Design round 1 — two review rounds closed 2026-08-18. MR-DQ-1 RULED; MR-DQ-8 HELD (C1 ruling withdrawn); re-scoped to three separable items per §7.5. MR-DQ-2..7 deliberately left open — all three change meaning under the re-scope.** Substrate survey (§2) is measured and complete; findings MR-F1–MR-F11 (§4) are source-verified (MR-F2 superseded by **MR-F2′**); MR-DQ-1 + MR-DQ-8 are ruled (§5); MR-DQ-2–MR-DQ-7 remain **awaiting ratification**. No implementation commit lands before the round closes, per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). |
+| Status | **RATIFIED 2026-08-18 — design round 1 CLOSED on the §7.5 re-scope; implementation authorised, item 1 first.** MR-DQ-1 RULED; MR-DQ-8 HELD (C1 withdrawn); item 2 carries construction requirements MR-R1–MR-R4 (§7.9). MR-DQ-2/4/6 remain open by design — they change meaning under the re-scope, and MR-DQ-4 is to be **re-derived, not dispositioned**, once item 1 lands. Substrate survey (§2) is measured and complete; findings MR-F1–MR-F11 (§4) are source-verified (MR-F2 superseded by **MR-F2′**); MR-DQ-1 + MR-DQ-8 are ruled (§5). The rule-26 halt is **discharged for item 1 only**; items 2 and 3 remain design-gated per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). |
 | Kind | Test-regime redesign. **Opened** as execution-shape-only; the second review round established that T18 is the wrong instrument for two of its three claimed threats (MR-F10, MR-F11), so the round now also re-scopes **what T18 is for** — §7.5. §4.6 M2's premise is amended, not merely its cadence. |
 | Amends | [`RANDOMX_V2_PHASE2G_PLAN.md`](../completed/RANDOMX_V2_PHASE2G_PLAN.md) **§5.5.6** (the nightly-mutants CI row) and **§4.6 M2** (mutation testing as active-threat-surface mitigation). The 2g plan's §5.7 + §8.3 require that any change to harness behavior carry a plan-doc amendment; this document **is** that amendment carrier. The 2g plan is in `docs/completed/` and is not reopened as an active design — §11 records the amendment against it. |
 | Spec authority | 2g plan §4.5 (active threat surface T-A1–T-A11), §4.6 M2 (mitigation premise), §6 T18 row (the assertion). This doc **cites**; it does not re-derive the threat model. |
@@ -1039,19 +1039,126 @@ has been missing:
 1. the seed is **recorded in the run**, so any divergence is
    reproducible — preserving the T9 rationale that motivated the fixed
    seed in the first place;
-2. any divergent pair found is **promoted into the pinned corpus and
-   canonical outputs**, so leg-3's coverage boundary actually advances.
+2. any divergent pair found is **promoted into the adversarial corpus**
+   (§7.9 MR-R2), under the ordering in §7.9 MR-R3.
 
 Budgeted against the same runner-hours C1 wanted, this buys thousands
 of genuinely new pairs per week instead of zero.
+
+**Claim discipline — the *explored* boundary advances, the *pinned* one
+does not.** An earlier draft of this item said "leg-3's coverage
+boundary actually advances," which is true of exploration and false of
+the pinned corpus: the pinned corpus grows **only on divergence**,
+which — if the verifier is correct — is never. The lane's value is
+exploration. Its `50-testing.mdc` coverage-boundary rationale, which
+belongs verbatim in the T# row and not only here:
+
+> *Bites against spec-non-equivalence on inputs outside the pinned
+> corpus. Does **not** grow the regression corpus absent a finding, and
+> does **not** prove spec-equivalence at any sizing.*
+
+Without that negative half stated in the row itself, a reader eighteen
+months out sees "corpus lane, weekly" and credits it with accumulation
+it does not do — the exact decay this round exists to stop.
 
 **Item 3 — mutation as a narrow ratchet, after item 1.** Assertion
 modules only, judged by the differential harness, sized to one
 unsharded job. Re-derive against the §6.3 row-E slice — **but note row
 E was measured before item 1 exists**, so its survivor profile will
-change substantially. The claim then becomes narrow and true: *"the
+change substantially. Precisely: row E's **cost** carries over, its
+**yield** does not. After item 1 some fraction of those 305 mutants
+become genuinely killable, so the survivor profile must be
+**re-measured post-item-1, never inherited** — that is this round's own
+trap in miniature, named here so it is not walked into twice. The claim then becomes narrow and true: *"the
 harness's negative tests are load-bearing."* Not a T-A9 defense; §4.6
 M2 amends to say so.
+
+
+### 7.9 Item 2 construction requirements (MR-R1–MR-R4)
+
+Item 2 carries the least design and the subtlest failure modes. These
+four are **construction requirements**, not nice-to-haves: each is a
+property the lane must have on the day it lands.
+
+#### MR-R1 — a rotating seed makes its own red self-erasing
+
+This is the structural hazard the fixed seed did not have. Under a
+pinned corpus a red reproduces on every rerun, so rerun-until-green is
+bounded by not working. **Under a rotating seed, rerunning does make it
+green** — with a different, innocent input set — and the run looks
+identical in the UI. Every halt-and-escalate posture in this workflow
+(concurrent, native-arm) rests implicitly on a reproducibility that
+item 2 removes.
+
+The fix is cheap and entirely outside the harness. `failure_output.rs`
+already carries `seedhash` (64-char hex) and `data` (hex) verbatim in
+its 11-field schema, so **a divergent pair is fully reproducible
+without the corpus seed** — no T11 schema amendment is needed. The gap
+is *persistence*:
+
+- the lane **must upload the emitted JSON line as a workflow artifact**;
+- the documented triage path is **"replay the recorded `(seedhash,
+  data)` pair"**, never "re-run the lane."
+
+Absent that, the record lives only in CI logs under GitHub's retention
+window, and a red discovered late is a consensus finding that can no
+longer be reproduced. Artifact upload is a **construction requirement**:
+this is the one respect in which item 2 is strictly more fragile than
+what it supplements.
+
+#### MR-R2 — the promotion target is the adversarial corpus, not the random one
+
+"Promote into the pinned corpus" cannot mean the random corpus. That
+corpus is seed-derived and positionally index-coupled:
+`canonical_outputs.rs` asserts
+`CANONICAL_RANDOM_HASHES.len() == NIGHTLY_SEEDHASH_COUNT * NIGHTLY_DATA_PER_SEEDHASH`
+and `CANONICAL_CACHE_SHAS.len() == NIGHTLY_SEEDHASH_COUNT`. Appending a
+pair breaks the length invariant and desynchronises the index mapping.
+
+The correct destination exists and is better shaped: `adversarial_corpus.rs`
+(T10-pinned `ADVERSARIAL_CORPUS_SHA256`, per-class arrays, the
+`Category N:` rationale requirement) plus its
+`adversarial_canonical_outputs.rs` counterpart. A new
+**divergence-discovered** class inherits the whole pin-and-justify
+discipline for free, and makes the promotion PR reviewable in the shape
+§4.6 M1 already specifies for canonical regeneration.
+
+Corroboration from source: `canonical_outputs.rs` records that the
+adversarial corpus "stays empty through 2g per §3.19 R7-D4 (post-2g
+design round decides the replacement methodology)." **This is that
+round.** The destination was designed to be decided here.
+
+#### MR-R3 — promotion ordering, or the wrong value gets pinned
+
+At the moment of discovery `rust != c`, and **neither leg is
+authoritative** — that is what a divergence means. So promotion cannot
+happen at discovery. The required ordering:
+
+> divergence → **halt and escalate** → root-cause → **fix lands** →
+> *then* the pair is promoted, with its canonical derived by
+> `gen-canonical-outputs` against the **fixed** build.
+
+Promoting at discovery would either pin whichever leg happened to be
+sampled — a wrong canonical, permanently, with T16 defending it — or
+let a promotion PR encode the divergent value as "expected," which is
+exactly the §4.5 T-A10 harness-extension-laundering shape. The ordering
+goes in the lane's T# row **explicitly**, because the natural
+automation instinct is to promote automatically and that instinct is
+wrong here.
+
+#### MR-R4 — seed provenance must reach the banner
+
+MR-R1's replay path requires an operator-suppliable seed, which is by
+construction attacker-selectable: a contributor can dispatch the lane
+with a seed known to be benign and cite the green run. That is
+T-A7/T-A11 (trust laundering, rubber-stamp) with a new lever.
+
+The M4 banner substrate is already the right answer —
+`invocation_banner.rs`'s `emit_banner` writes mode and fork-pin before
+any test output, and T17 pins the substrings. Extend it to carry **the
+seed and its provenance** (schedule-derived vs operator-supplied), with
+a T17 assertion on both. A green replay then cannot be read as a sweep,
+because the banner says which it was.
 
 ### 7.6 Necessary, sufficient, or additive?
 
@@ -1174,3 +1281,4 @@ Per the 2g plan's own §5.7 + §8.3, this is the required carrier.)*
 | Survey | 2026-08-18 | Substrate measured at `6441c1e29` (§2): 1322-mutant inventory by file, config/glob behavior, `--check` semantics from cargo-mutants 27.1.0 source, branch-coverage read. Findings MR-F1–MR-F5 recorded (MR-F5 — default `TestPackages::Mutated` scoping — found by reading cargo-mutants' source while pricing MR-DQ-3). Design questions MR-DQ-1–MR-DQ-8 opened with recommendations. **Round 1 not closed.** |
 | Review | 2026-08-18 | Reviewer verdicts: MR-F1/F3/F4/F5 CONFIRMED at source; **MR-F2 CONFIRMED BUT UNDERSTATED → superseded by MR-F2′** (the config file is never loaded in CI; the "timeout_multiplier proves it is read" argument withdrawn as unsound, since 5.0 is also the tool default). Three new findings recorded: **MR-F6** (`&&`/`||` precedence sends every `workflow_dispatch` into the doomed job), **MR-F7** (`--locked` does not pin the tool version), **MR-F8** (cadence fossil). **MR-DQ-1 RULED** (drop `--check`; fold in MR-F8). **MR-DQ-8 RULED C1** after the per-crate suite measurement inverted the expected trade — harness suite 26 s vs verifier 63 s — with §6.5 establishing that C2 masks the T-A1 signal. Placement (MR-F2′) made a prerequisite of the ruling. MR-DQ-2–MR-DQ-7 remain open. |
 | Re-scope | 2026-08-18 | Second review round, read against the threat model and harness source rather than this doc's own artifacts. Three findings recorded: **MR-F9** — the "random" corpus is a pinned `ChaCha20Rng` seed, so five lanes re-verify the same 1024 pairs forever, and `shekyl-pow-randomx` is the **only** crate with a byte-exact reference oracle and **no** `cargo-fuzz` lane (eight other crates have one); **MR-F10** — `assert_equivalent` takes live sessions, so its verdict has no negative test anywhere and mutating it would survive for API-shape reasons, meaning C1's first skip-list would be a refactor catalogue; **MR-F11** — §4.6 M2's T-A9 claim exceeds §4.5 T-A9's own "cannot defend structurally" disposition, and cargo-mutants' mutation distribution is not the laundering distribution. **MR-DQ-8's C1 ruling WITHDRAWN → HELD**: sound on its own terms, but it priced an instrument whose yield was never derived. Re-scoped into three separable items (§7.5): verdict-path testability + negative tests; a rotating-seed differential lane that promotes divergences into the pinned corpus; mutation as a narrow ratchet over assertion modules only, after item 1. §7.6 answers necessary-vs-sufficient-vs-additive; §7.7 answers the cadence question. MR-DQ-1, MR-F6, MR-F7 survive unchanged. |
+| Ratification | 2026-08-18 | Re-scope **RATIFIED**, item 1 first — the sequencing is self-reinforcing: item 1 is what converts "assertion mutant survives" from an API-shape artifact into a real signal, so item 3 cannot be sized honestly until item 1 exists, and item 1 is the only one of the three that is merge-blocking-cheap. Item 2 gained four construction requirements from a source read (§7.9): **MR-R1** — a rotating seed makes its own red self-erasing, since rerunning *does* turn it green with a different innocent input set; countered by artifact-uploading the `failure_output` JSON line (which already carries `seedhash` + `data`, so no T11 amendment) and documenting replay-the-pair, never re-run-the-lane. **MR-R2** — the promotion target cannot be the random corpus (length- and index-coupled per `canonical_outputs.rs`); it is the adversarial corpus, whose methodology `§3.19 R7-D4` explicitly deferred to a post-2g round — this one. **MR-R3** — promotion must follow divergence → halt → root-cause → fix → *then* promote against the fixed build, or a wrong canonical is pinned permanently (T-A10 laundering shape). **MR-R4** — the seed and its provenance must reach the M4 banner with a T17 assertion, since an operator-suppliable seed is attacker-selectable. Also corrected item 2's claim: the **explored** boundary advances, the **pinned** one does not, and the negative half of that rationale belongs in the T# row. Item 3 sizing: row E's **cost** carries over, its **yield** must be re-measured post-item-1. |
