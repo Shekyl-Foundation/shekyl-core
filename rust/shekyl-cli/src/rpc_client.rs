@@ -719,20 +719,35 @@ mod tests {
     /// silently becomes decorative — the copy just moves one frame inward.
     #[test]
     fn call_serializes_the_request_straight_into_a_wiped_buffer() {
-        let seam = include_str!("rpc_client.rs")
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("rpc_client.rs has a production section");
+        // `split_once`, not `split(..).next()`: the latter cannot return
+        // `None`, so its `expect` was decorative — if the delimiter ever
+        // drifted, the whole file (this test module included) would flow into
+        // the assertions and the gate would keep passing on its own text.
+        // This form fails loudly on the drift instead.
+        let (production, _tests) = include_str!("rpc_client.rs")
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("rpc_client.rs must keep its production section separable from its tests");
+
+        // Whitespace removed, so the pin describes the *code* and not one
+        // rustfmt layout of it. Matching an exact indentation would fail the
+        // day `call` moves out of the impl or a line settles differently —
+        // and it would fail accusing the author of reintroducing a secret
+        // copy they never touched. A gate that cries wolf gets deleted, and
+        // then it guards nothing.
+        let flat: String = production.chars().filter(|c| !c.is_whitespace()).collect();
 
         assert!(
-            seam.contains(concat!(
-                "Zeroizing::new(\n",
-                "            serde_json::to_vec(&body)"
-            )),
+            flat.contains(concat!("Zeroizing::new(serde_json::", "to_vec(&body)")),
             "call must serialize the typed envelope straight into the Zeroizing \
              buffer — building a Value first and serializing that still leaves \
              an unwiped copy of the password on the heap, which is the whole \
              defect, just moved one frame inward"
+        );
+        assert!(
+            !flat.contains(concat!("serde_json::", "to_value")),
+            "nothing in this seam may convert the request into a serde_json::Value \
+             — that is the copy the params shapes exist to avoid, and routing \
+             through it would make every borrowed shape decorative"
         );
 
         // Deliberately NOT asserted here: that the transport helpers take

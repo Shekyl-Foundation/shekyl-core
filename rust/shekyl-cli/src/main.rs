@@ -256,14 +256,22 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if let Some(ref filename) = cli.engine_file {
-        let password = prompt_password("Wallet password: ")?;
-        let opened = rpc.call(
-            "open_wallet",
-            rpc_client::params::NamedPassword {
-                name: filename,
-                password: &password,
-            },
-        );
+        // The password lives in this inner scope and nowhere else, so it is
+        // wiped before the match below — which can reach `process::exit`, and
+        // `exit` bypasses Drop. A `Zeroizing` still in scope at that call is a
+        // secret that never gets wiped at all. Scoping keeps that structural:
+        // the compiler ends the lifetime here, so a later branch added to the
+        // match cannot extend a secret's life past the exit by accident.
+        let opened = {
+            let password = prompt_password("Wallet password: ")?;
+            rpc.call(
+                "open_wallet",
+                rpc_client::params::NamedPassword {
+                    name: filename,
+                    password: &password,
+                },
+            )
+        };
         match opened {
             Ok(_) => {
                 rpc.set_open(filename);
