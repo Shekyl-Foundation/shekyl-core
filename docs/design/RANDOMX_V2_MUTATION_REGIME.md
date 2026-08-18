@@ -4,8 +4,8 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Design round 1 — review round closed 2026-08-18; MR-DQ-1 and MR-DQ-8 RULED, MR-DQ-2..7 still open.** Substrate survey (§2) is measured and complete; findings MR-F1–MR-F8 (§4) are source-verified (MR-F2 superseded by **MR-F2′**); MR-DQ-1 + MR-DQ-8 are ruled (§5); MR-DQ-2–MR-DQ-7 remain **awaiting ratification**. No implementation commit lands before the round closes, per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). |
-| Kind | Test-regime redesign (assurance-gate execution shape). **Not** a change to what T18 asserts — the gate's premise is unchanged; only how it is executed. |
+| Status | **Design round 1 — two review rounds closed 2026-08-18. MR-DQ-1 RULED; MR-DQ-8 HELD (C1 ruling withdrawn); re-scoped to three separable items per §7.5. MR-DQ-2..7 deliberately left open — all three change meaning under the re-scope.** Substrate survey (§2) is measured and complete; findings MR-F1–MR-F11 (§4) are source-verified (MR-F2 superseded by **MR-F2′**); MR-DQ-1 + MR-DQ-8 are ruled (§5); MR-DQ-2–MR-DQ-7 remain **awaiting ratification**. No implementation commit lands before the round closes, per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). |
+| Kind | Test-regime redesign. **Opened** as execution-shape-only; the second review round established that T18 is the wrong instrument for two of its three claimed threats (MR-F10, MR-F11), so the round now also re-scopes **what T18 is for** — §7.5. §4.6 M2's premise is amended, not merely its cadence. |
 | Amends | [`RANDOMX_V2_PHASE2G_PLAN.md`](../completed/RANDOMX_V2_PHASE2G_PLAN.md) **§5.5.6** (the nightly-mutants CI row) and **§4.6 M2** (mutation testing as active-threat-surface mitigation). The 2g plan's §5.7 + §8.3 require that any change to harness behavior carry a plan-doc amendment; this document **is** that amendment carrier. The 2g plan is in `docs/completed/` and is not reopened as an active design — §11 records the amendment against it. |
 | Spec authority | 2g plan §4.5 (active threat surface T-A1–T-A11), §4.6 M2 (mitigation premise), §6 T18 row (the assertion). This doc **cites**; it does not re-derive the threat model. |
 | Substrate pin | `6441c1e29` (`dev` tip at survey time). All mutant counts, timings, and line references in §2 are against this commit. |
@@ -502,6 +502,107 @@ documentation that describes a gate other than the one running, and it
 belongs in the same amendment as MR-DQ-1 rather than a separate sweep
 (rule 91's sweep-the-indexes clause).
 
+### MR-F9 — the corpus never grows, and that is the gap T18 was hired to cover
+
+`corpus_random.rs` generates the "random" corpus from
+`ChaCha20Rng::from_seed(RANDOM_CORPUS_SEED_V1)` — a pinned constant
+(`SHA-256("shekyl-randomx-differential-corpus-v1")` per §3.18 R6-D1).
+Deterministic by design, and the rationale is sound in itself
+(reproducible failures, T9 byte-stability).
+
+The consequence compounds, though. Five lanes — x86 per-PR, x86 cron,
+native-arm per-PR, native-arm cron, full-dataset parity — re-verify the
+**same 1024 pairs**, every branch, every day since 2g landed. Total
+input space ever explored by the project's flagship consensus gate:
+1024 random pairs plus 8 adversarial recipes, **constant**.
+
+Meanwhile the C oracle is built in every one of those lanes, and
+`--mode=latency` already prices 1024 interleaved rust+C pairs at
+10–20 min. **A never-before-tested input costs about what a re-verified
+one costs.**
+
+And the house already knows this pattern. Eight crates carry
+`cargo-fuzz` lanes — `shekyl-fcmp`, `shekyl-proofs`,
+`shekyl-crypto-pq`, `shekyl-engine-state`, `shekyl-multisig`,
+`shekyl-tx-builder`, `shekyl-daemon-rpc`, `shekyl-archival-retention`.
+`shekyl-pow-randomx` is **not** among them. The one crate with a free,
+executable, byte-exact reference oracle — the ideal differential-fuzz
+target — is the one without a fuzz lane.
+
+§4.5 T-A9's own disposition concedes that "no finite corpus can prove
+spec-equivalence." True, and beside the point: **a static finite corpus
+and a growing one are not the same object.** A rotating-seed lane moves
+the coverage boundary every run. Mutation testing does not move it at
+all.
+
+### MR-F10 — the verdict is untestable by construction, so C1 would misreport
+
+`cache_precondition.rs`:
+
+```rust
+pub fn assert_equivalent(
+    rust_subject: &RustSubjectSession,
+    c_oracle: &COracleSession,
+) -> Result<(), PreconditionMismatch> {
+    …
+    if rust_sha == c_sha { Ok(()) } else { Err(PreconditionMismatch { … }) }
+}
+```
+
+The verdict is two SHA-256 values compared — but the function takes
+**live sessions**, so reaching the `Err` branch requires a 256 MiB
+Argon2d derive and a linked C oracle. Predictably, there is no negative
+test: the module's tests cover `find_first_divergence` and the `Display`
+impls; the verdict itself has none. Repo-wide, the harness's only
+`#[should_panic]` tests are input validation in
+`adversarial/interpreter.rs` and a rationale-format check in
+`mode_adversarial_ratio.rs`. **Nothing anywhere induces a divergence and
+asserts the harness reports it.** The three call sites
+(`mode_correctness.rs` ×2, `mode_latency.rs`) all pass live sessions.
+
+This breaks C1's premise. Mutation testing detects a vacuous assertion
+only through a test that fails when the assertion is weakened. Mutate
+`rust_sha == c_sha` to `true` and nothing fails — **not** because of an
+assertion gap worth acting on, but because the signature forbids the
+cheap test. So under C1, harness assertion mutants survive and the
+skip-list's first population is a catalogue of **API-shape artifacts**,
+each demanding a substrate-anchored justification and a FOLLOWUPS cite
+per the M2 discipline. A 12.6 h weekly gate generating paperwork about
+a refactor.
+
+**Direct enforcement is cheaper and stronger.** Split the verdict into
+a pure `fn verdict(seedhash, rust_sha, c_sha) -> Result<(), PreconditionMismatch>`
+with the session-taking wrapper calling it. The negative test is then
+three lines and no cache derive. That is
+[`19-validation-surface-discipline`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+and "make bad states unrepresentable" pointing the same way, and
+[`50-testing`](../../.cursor/rules/50-testing.mdc)'s
+test-the-production-code rule is satisfied because the wrapper still
+runs the real path.
+
+### MR-F11 — the T-A9 leg claims a defense §4.5 says is unavailable
+
+§4.6 M2 asserts verifier mutation "catches more edge-case-mutations
+than corpus-bounded byte-equality tests can." Read against §4.5 T-A9's
+own text — the harness "cannot defend against this class structurally"
+— that is the weaker claim dressed as the stronger one.
+
+The mechanism does not hold either. A surviving verifier mutant means
+some implementation variant agrees on the 1024 fixed pairs; for
+operator swaps and constant perturbations that is the **expected**
+outcome across a large fraction of 848 mutants, and it localizes no
+real input. And cargo-mutants' mutation distribution (comparison swaps,
+return-value perturbation, branch inversion) is not the distribution of
+plausible laundering changes (inlining, constant folding, strength
+reduction) — the attack §4.5 actually describes.
+
+§6.5's own reasoning contains the seed of this: survival can only fall
+as suites are added. Push it one step and the question becomes *what a
+survivor would license you to do* — and for verifier mutants under a
+frozen corpus, the answer is "add corpus." Which is MR-F9, reached from
+the other direction, and reachable **without** first spending 12.6 h of
+mutation.
+
 ## 5. Design questions
 
 Each carries a recommendation with its substrate. **None is closed
@@ -624,7 +725,7 @@ is a bug, not a no-op.
 
 ---
 
-### MR-DQ-8 — how is test scoping pinned (MR-F5)? — **RULED 2026-08-18**
+### MR-DQ-8 — how is test scoping pinned (MR-F5)? — **HELD 2026-08-18 (ruling withdrawn)**
 
 The 2g contract never pinned which packages *test* a mutant; the tool's
 `TestPackages::Mutated` default silently became the contract, and it is
@@ -641,8 +742,17 @@ as described, at higher per-mutant cost (the harness suite replaces the
 verifier suite); (c) `test_workspace = true` — broadest, most
 expensive.
 
-**RULING (2026-08-18): C1 — harness-only scoping — with B as the named
-fallback.** §6.4 prices it and §6.5 explains why the maximal-looking
+**HELD (2026-08-18, superseding the same-day C1 ruling).** The C1
+reasoning below stands *on its own terms* — the timing inversion is
+real and C1-over-C2 is correct — but it prices an instrument whose
+**yield has never been derived**. The round built a rigorous cost model
+and no yield model, and per MR-F10 the yield is predictable: C1's first
+survivors are API-shape artifacts, not assertion gaps. Derive-don't-
+hardcode applies to test regimes too. Superseded by the re-scope in
+§7.5; retained here because the cost analysis feeds item 3.
+
+**Withdrawn ruling, retained for its analysis: C1 — harness-only
+scoping — with B as the named fallback.** §6.4 prices it and §6.5 explains why the maximal-looking
 option is wrong:
 
 - **C1 costs less than the status quo** (12.6 h vs 23.9 h CI, 5 shards
@@ -826,7 +936,7 @@ use.
 **Not binding until §5 is ratified.** Recorded now so ratification is a
 decision about a concrete proposal rather than an open field.
 
-### 7.1 Two legs, mapped to the threats they actually detect
+### 7.1 Two legs, mapped to the threats they actually detect — **SUPERSEDED by §7.5**
 
 **Leg 1 — per-PR `--in-diff` (merge-blocking).** Release profile,
 unsharded, mutating the diff of the PR against its base. Bounded by
@@ -898,6 +1008,120 @@ loud assertion**, not as a six-hour timeout.
 
 ---
 
+
+### 7.5 Re-scope: three separable items (supersedes §7.1)
+
+The re-scope follows from MR-F9–MR-F11: T18 is the wrong instrument for
+two of its three claimed jobs, and the instrument that was missing is
+the one the house already uses in eight other crates.
+
+Procedural freedom worth naming: **T18 has never produced a verdict**,
+so no skip-list exists, no survivor has ever been dispositioned, and
+nothing downstream consumes a T18 result. There is no regression risk
+in re-scoping and no sunk verdict to preserve.
+
+**Item 1 — verdict-path testability + negative tests.** Refactor
+`assert_equivalent` and the analogous verdict points
+(`mode_correctness.rs` ×2, `mode_latency.rs`) into pure `verdict(…)`
+functions with session-taking wrappers; add induced-divergence negative
+tests. **Minutes of CI, per-PR, runnable locally.** This delivers the
+T-A1 defense *structurally* rather than detecting its absence weekly.
+Per [`50-testing`](../../.cursor/rules/50-testing.mdc)'s
+coverage-boundary rule each test carries a "bites against X; does NOT
+cover Y" rationale.
+
+**Item 2 — rotating-seed differential lane (new T#).** Fresh seed per
+run, derived from run ID or date; N new pairs against the C oracle;
+halt-and-escalate on divergence, the posture already pinned for the
+concurrent and arm lanes. Two properties make this the ratchet the plan
+has been missing:
+
+1. the seed is **recorded in the run**, so any divergence is
+   reproducible — preserving the T9 rationale that motivated the fixed
+   seed in the first place;
+2. any divergent pair found is **promoted into the pinned corpus and
+   canonical outputs**, so leg-3's coverage boundary actually advances.
+
+Budgeted against the same runner-hours C1 wanted, this buys thousands
+of genuinely new pairs per week instead of zero.
+
+**Item 3 — mutation as a narrow ratchet, after item 1.** Assertion
+modules only, judged by the differential harness, sized to one
+unsharded job. Re-derive against the §6.3 row-E slice — **but note row
+E was measured before item 1 exists**, so its survivor profile will
+change substantially. The claim then becomes narrow and true: *"the
+harness's negative tests are load-bearing."* Not a T-A9 defense; §4.6
+M2 amends to say so.
+
+### 7.6 Necessary, sufficient, or additive?
+
+The question the round had not asked. Answering it is what re-scoped it.
+
+| Instrument | T-A1 / T-A3 | T-A9 | Verdict |
+| --- | --- | --- | --- |
+| Three-leg correctness + canonical pins | partial | partial | **Necessary core** — already live |
+| Item 1 negative tests | **necessary & near-sufficient** — enforces the property directly | — | The right instrument, absent today |
+| Item 2 rotating corpus | — | **closest to necessary** for the residual | Absent today; the real gap (MR-F9) |
+| Item 3 mutation ratchet | **uniquely correct, narrowly** — nothing else verifies tests are load-bearing | no | Additive, and only after item 1 |
+| T18 as specified (B / C1 / C2) | additive at best; misreports today (MR-F10) | **neither** (MR-F11) | Additive everywhere, necessary nowhere |
+
+So: **T18 is additive everywhere and necessary nowhere — while being
+documented as a primary defense in two places it is not.** That is the
+same decayed-claim shape this round has been chasing throughout: a
+statement about state that was true when written, carried forward
+because it was written down.
+
+Mutation testing does retain one property nothing else has — it
+verifies that tests are load-bearing. That makes item 3 *uniquely
+correct* for the narrow question "are the negative tests vacuous?", and
+worthless for the two questions §4.6 M2 hired it for.
+
+### 7.7 Cadence: local, sharded, or spread across days?
+
+The three items answer differently, and the difference is structural
+rather than a matter of taste:
+
+| Item | Cadence | Why |
+| --- | --- | --- |
+| 1 — negative tests | **per-PR, local-runnable** | Minutes. A merge-blocking structural gate; no reason to defer it to a cron |
+| 2 — rotating corpus | **spread across days, cumulative** | Its value *is* the union over time |
+| 3 — mutation ratchet | **periodic, one unsharded job** | Same answer each run; only needs to be recent, not constant |
+
+The decisive distinction for the budget question:
+
+> **Sharding a mutation sweep across five runners buys the same answer
+> faster. Distributing a rotating-seed lane across five days buys a
+> different, larger answer each day.** Identical runner-hours;
+> monotonically increasing coverage versus constant coverage.
+
+That is the argument for spending the recovered C1 budget on item 2
+rather than on shards, and it is why "break it up across days" is the
+right instinct — but applied to the corpus lane, not to the mutation
+sweep. Breaking a mutation sweep across days would just be the same
+1290 verdicts arriving more slowly.
+
+**Local runnability is a requirement, not a nicety.** Items 1 and 3 must
+both be invocable locally with a documented command — the full probe in
+§6.1 ran here in 8 minutes, and the per-crate baselines in ~90 s. A
+gate that only exists in CI is a gate nobody runs before pushing, which
+is how the suite outgrew its budget unobserved in the first place.
+
+### 7.8 Rule-21 reopen criteria for the re-scope
+
+- **Item 3 scope reopens** if a negative test is ever found vacuous by
+  other means — that is the mutation gate's premise failing, and it
+  would argue for widening the ratchet.
+- **The fixed-corpus decision reopens as closed** if item 2 runs N
+  consecutive weeks with zero divergences: evidence the input space is
+  saturated *at that sizing*, which argues either to grow the sizing or
+  to retire the lane. Pin N at ratification.
+- **The re-scope itself reopens** if item 1's refactor proves
+  infeasible without changing harness behavior — the §5.7 scope-creep
+  boundary — in which case C1 returns as the detection fallback with
+  its cost model intact.
+
+---
+
 ## 8. Commit plan
 
 *(Pinned after §5 ratification; ≤10 commits per rule-26 / rule-06
@@ -949,3 +1173,4 @@ Per the 2g plan's own §5.7 + §8.3, this is the required carrier.)*
 | --- | --- | --- |
 | Survey | 2026-08-18 | Substrate measured at `6441c1e29` (§2): 1322-mutant inventory by file, config/glob behavior, `--check` semantics from cargo-mutants 27.1.0 source, branch-coverage read. Findings MR-F1–MR-F5 recorded (MR-F5 — default `TestPackages::Mutated` scoping — found by reading cargo-mutants' source while pricing MR-DQ-3). Design questions MR-DQ-1–MR-DQ-8 opened with recommendations. **Round 1 not closed.** |
 | Review | 2026-08-18 | Reviewer verdicts: MR-F1/F3/F4/F5 CONFIRMED at source; **MR-F2 CONFIRMED BUT UNDERSTATED → superseded by MR-F2′** (the config file is never loaded in CI; the "timeout_multiplier proves it is read" argument withdrawn as unsound, since 5.0 is also the tool default). Three new findings recorded: **MR-F6** (`&&`/`||` precedence sends every `workflow_dispatch` into the doomed job), **MR-F7** (`--locked` does not pin the tool version), **MR-F8** (cadence fossil). **MR-DQ-1 RULED** (drop `--check`; fold in MR-F8). **MR-DQ-8 RULED C1** after the per-crate suite measurement inverted the expected trade — harness suite 26 s vs verifier 63 s — with §6.5 establishing that C2 masks the T-A1 signal. Placement (MR-F2′) made a prerequisite of the ruling. MR-DQ-2–MR-DQ-7 remain open. |
+| Re-scope | 2026-08-18 | Second review round, read against the threat model and harness source rather than this doc's own artifacts. Three findings recorded: **MR-F9** — the "random" corpus is a pinned `ChaCha20Rng` seed, so five lanes re-verify the same 1024 pairs forever, and `shekyl-pow-randomx` is the **only** crate with a byte-exact reference oracle and **no** `cargo-fuzz` lane (eight other crates have one); **MR-F10** — `assert_equivalent` takes live sessions, so its verdict has no negative test anywhere and mutating it would survive for API-shape reasons, meaning C1's first skip-list would be a refactor catalogue; **MR-F11** — §4.6 M2's T-A9 claim exceeds §4.5 T-A9's own "cannot defend structurally" disposition, and cargo-mutants' mutation distribution is not the laundering distribution. **MR-DQ-8's C1 ruling WITHDRAWN → HELD**: sound on its own terms, but it priced an instrument whose yield was never derived. Re-scoped into three separable items (§7.5): verdict-path testability + negative tests; a rotating-seed differential lane that promotes divergences into the pinned corpus; mutation as a narrow ratchet over assertion modules only, after item 1. §7.6 answers necessary-vs-sufficient-vs-additive; §7.7 answers the cadence question. MR-DQ-1, MR-F6, MR-F7 survive unchanged. |

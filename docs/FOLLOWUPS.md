@@ -167,6 +167,35 @@ sustainability is unaffected by the recalibration.
   the corrected scoping costs **less** than the status quo — 12.6 h / 5
   shards against 23.9 h / 8. MR-DQ-2–MR-DQ-7 remain open.
 
+- **Plan-doc structural integrity gate: assert every identifier heading
+  has a non-empty body (added 2026-08-18).** During the T18
+  mutation-regime round, a scripted section reorder silently orphaned
+  the body of an `MR-F#` finding under a neighbouring heading, leaving
+  a heading with a truncated stub. It was caught by eye, one edit
+  before it would have been committed as the round's record. The
+  failure class is general — `docs/FOLLOWUPS.md` and
+  `docs/design/IMPLEMENTATION_INDEX.md` are both edited by script and
+  both read by heading — and vigilance is the wrong countermeasure. A
+  cheap structural check (every `MR-F#` / `T-A#` / `DQ-#`-style heading
+  in a plan doc is followed by a non-empty body before the next heading
+  of equal or higher level) would have caught it mechanically. Scope
+  note: this is a **doc-hygiene** surface, deliberately not bundled
+  into the mutation-regime round per
+  [`19-validation-surface-discipline`](../.cursor/rules/19-validation-surface-discipline.mdc).
+  Natural home is `scripts/ci/` alongside `check_doc_links.py`, which
+  already walks the same files. **Target: V3.0 pre-genesis.**
+
+- **Agent-brief boilerplate: `pgrep -f` / `pkill -f` match the caller
+  (added 2026-08-18).** A wait-loop written as
+  `until ! pgrep -f cargo-mutants; do sleep 15; done` never terminates,
+  because the pattern matches the waiting shell's own command line. Cost
+  the T18 round a 19-minute measurement stall before the self-match was
+  spotted. Fixes: filter the caller (`pgrep -f pat | grep -v $$`), match
+  the binary rather than the command line (`pgrep -x`), or wait on the
+  process/PID directly. Worth landing in the agent-brief boilerplate
+  rather than being rediscovered — it is silent, and it looks exactly
+  like a slow job. **Target: V3.0 pre-genesis (docs-only).**
+
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) —
   REQUIRED BEFORE THE FORMAT FREEZE (added 2026-08-08, escalated from
   the message-signing round, SM-DQ-7).** Address v1 anchors signatures
