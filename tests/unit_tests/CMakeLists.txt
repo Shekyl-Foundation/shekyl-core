@@ -56,7 +56,6 @@ set(unit_tests_sources
   fee.cpp
   json_serialization.cpp
   get_xtype_from_string.cpp
-  hashchain.cpp
   hmac_keccak.cpp
   http.cpp
   keccak.cpp
@@ -67,7 +66,6 @@ set(unit_tests_sources
   main.cpp
   memwipe.cpp
   mining_parity.cpp
-  transfer_details_wipe.cpp
   mlocker.cpp
   mnemonics.cpp
   mul_div.cpp
@@ -89,19 +87,15 @@ set(unit_tests_sources
   slow_memmem.cpp
   stall_detection_calibration.cpp
   stack_trace.cpp
-  subaddress.cpp
   test_tx_utils.cpp
   test_peerlist.cpp
   test_protocol_pack.cpp
   threadpool.cpp
   hardfork.cpp
-  uri.cpp
   util.cpp
   varint.cpp
   fcmp.cpp
   vercmp.cpp
-  wallet_storage.cpp
-  wallet_bip39.cpp
   wallet_bip39_residency.cpp
   wipeable_string.cpp
   is_hdd.cpp
@@ -123,6 +117,7 @@ set(unit_tests_sources
   deferred_insertion.cpp
   economics_b5_fee_coinbase.cpp
   tx_data_pruning_lmdb.cpp
+  tx_prunable_region_sole_occupant.cpp
   txpool_ref_age.cpp
   txpool_origin_zone.cpp
   txpool_relay_timers.cpp
@@ -145,7 +140,10 @@ target_link_libraries(unit_tests
     rpc
     net
     serialization
-    wallet
+    # Direct, not inherited: mnemonics.cpp tests crypto::ElectrumWords, which
+    # reached this link line transitively through the C++ `wallet` library
+    # until the Phase-5 cutover unlinked it.
+    mnemonics
     p2p
     # Resolves to libshekyl_daemon_image.a (not libshekyl_ffi.a) because of
     # the SHEKYL_RUST_IMAGE_DAEMON property set below. The daemon image is
@@ -208,7 +206,6 @@ SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_FLAGS
   -DEMISSION_CONNECT_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/emission_connect_kat_v1.json\\"")
 
 SET_PROPERTY(SOURCE memwipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
-SET_PROPERTY(SOURCE transfer_details_wipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
 
 add_test(
   NAME    unit_tests

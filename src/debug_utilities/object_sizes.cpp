@@ -37,7 +37,6 @@
 #include "p2p/net_node.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
 #include "blockchain_db/lmdb/db_lmdb.h"
-#include "wallet/wallet2.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "debugtools.objectsizes"
@@ -96,14 +95,6 @@ int main(int argc, char* argv[])
   SL(nodetool::basic_node_data);
   SL(cryptonote::CORE_SYNC_DATA);
 
-  SL(tools::wallet2::transfer_details);
-  SL(tools::wallet2::payment_details);
-  SL(tools::wallet2::unconfirmed_transfer_details);
-  SL(tools::wallet2::confirmed_transfer_details);
-  SL(tools::wallet2::tx_construction_data);
-  SL(tools::wallet2::pending_tx);
-  SL(tools::wallet2::unsigned_tx_set);
-  SL(tools::wallet2::signed_tx_set);
 
   return 0;
 }

@@ -16,6 +16,14 @@ pub mod session;
 pub mod validate;
 
 /// Prompt for a password without echoing it.
-pub fn prompt_password(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
-    rpassword::prompt_password(prompt).map_err(Into::into)
+///
+/// Returns the secret in a `Zeroizing` wrapper so it is wiped when the caller
+/// drops it, on every path including `?` and unwinding (rule 35). The
+/// bare-`String` version put that obligation on each caller's return paths.
+pub fn prompt_password(
+    prompt: &str,
+) -> Result<zeroize::Zeroizing<String>, Box<dyn std::error::Error>> {
+    rpassword::prompt_password(prompt)
+        .map(zeroize::Zeroizing::new)
+        .map_err(Into::into)
 }

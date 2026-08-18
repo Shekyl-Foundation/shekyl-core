@@ -161,6 +161,63 @@ if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER AND NOT MSVC)
     if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_CROSSCOMPILING)
         list(APPEND _rust_env_clear "MACOSX_DEPLOYMENT_TARGET=10.16")
     endif()
+
+    # The same flags, forwarded to rustc's OWN link step.
+    #
+    # `CFLAGS_<triple>` above reaches cc-rs — the C compiled *inside* crates
+    # like ring. It does not reach the link that produces a Rust executable,
+    # which rustc drives itself by invoking `CARGO_TARGET_<TRIPLE>_LINKER`
+    # with only the flags it generates. That gap was invisible while this
+    # file built staticlibs only: an archive is `ar`, never a link. The
+    # moment it also built binaries, the depends darwin cross failed twice
+    # over — without `-B<prefix>` clang falls back to the host GNU ld, which
+    # rejects Mach-O's `-dead_strip`, and without `--sysroot` rustc shells
+    # out to `xcrun`, which does not exist in the cross container.
+    #
+    # Derived from the toolchain's own flags rather than hand-written per
+    # platform: whatever CMake decided the target needs is what rustc links
+    # with, so a new cross target inherits this for free instead of
+    # rediscovering the same failure.
+    if(CMAKE_CROSSCOMPILING AND _upper_triple)
+        set(_rust_link_args "")
+        if(_target_cflags)
+            separate_arguments(_target_cflag_list NATIVE_COMMAND "${_target_cflags}")
+            foreach(_flag IN LISTS _target_cflag_list)
+                string(APPEND _rust_link_args " -C link-arg=${_flag}")
+            endforeach()
+        endif()
+
+        # Same clang-9 version-spelling problem as MACOSX_DEPLOYMENT_TARGET
+        # above, one layer down. On the link line rustc emits
+        # `-mmacosx-version-min=11.0.0`, which the depends clang rejects
+        # outright ("invalid version number"). The environment variable
+        # cannot fix this one: rustc floors `aarch64-apple-darwin` at 11.0
+        # because no arm64 Mac predates it, so it emits 11.0.0 whatever
+        # MACOSX_DEPLOYMENT_TARGET says. Apple's own alias for that release
+        # is 10.16 — the spelling this file already relies on — and clang
+        # honours the last `-mmacosx-version-min` it is given, so appending
+        # it after the forwarded flags is what takes effect.
+        #
+        # Deliberately aarch64-only: forcing 10.16 on x86_64 would raise
+        # that binary's floor from the 10.15 the C++ side ships to 11.0,
+        # dropping macOS versions still supported elsewhere in the build.
+        # On arm64 it costs nothing, 11.0 being the floor already.
+        if(RUST_TARGET_TRIPLE STREQUAL "aarch64-apple-darwin")
+            string(APPEND _rust_link_args " -C link-arg=-mmacosx-version-min=10.16")
+        endif()
+
+        string(STRIP "${_rust_link_args}" _rust_link_args)
+        if(_rust_link_args)
+            list(APPEND _rust_env_clear
+                "CARGO_TARGET_${_upper_triple}_RUSTFLAGS=${_rust_link_args}")
+        endif()
+    endif()
+
+    # rustc consults SDKROOT before falling back to `xcrun` for the Apple
+    # SDK path; the depends SDK is already named by CMAKE_OSX_SYSROOT.
+    if(CMAKE_OSX_SYSROOT AND CMAKE_CROSSCOMPILING)
+        list(APPEND _rust_env_clear "SDKROOT=${CMAKE_OSX_SYSROOT}")
+    endif()
 endif()
 
 # For native Darwin builds, align ring/cc-rs deployment target with CMake's
@@ -311,4 +368,96 @@ elseif(APPLE)
     set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 else()
     set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
+endif()
+
+# ── Rust user-facing binaries (shekyl-cli, shekyl-wallet-rpc) ────────────────
+#
+# C1/C2 install cutover. Until this landed, `cargo` was invoked here only for
+# the two staticlibs, so the CMake build produced no wallet binaries at all:
+# `shekyl-wallet-rpc` in `bin/` was the C++ `wallet_rpc_server` wearing that
+# OUTPUT_NAME, and `shekyl-cli` — which INSTALLATION_GUIDE.md has always
+# listed as a build output — did not exist.
+#
+# The binaries are built and staged here, not in `src/wallet/CMakeLists.txt`,
+# because that file is deleted wholesale with wallet2: install rules parked
+# there would have to be re-cut by the very commit this one exists to unblock.
+#
+# Staging into `${CMAKE_BINARY_DIR}/bin` is load-bearing beyond developer
+# convenience: contrib/gitian/gitian-*.yml does not run `make install`, it
+# tars whatever `bin/` holds, so this copy is what puts the binaries into the
+# release archives.
+#
+# NOT built for Windows. The Rust wallet stack is Unix-only today, and not by
+# oversight: `shekyl-cli` speaks to the RPC over a Unix domain socket, and
+# `shekyl-wallet-rpc` gates that socket to 0600 because its UDS deployments
+# run with HTTP auth disabled ("auth rides the transport"), as does the
+# scripted seed export. Those are security boundaries, so a Windows port is a
+# design question (named-pipe ACLs vs. UDS) and not a `cfg` sweep — see
+# docs/FOLLOWUPS.md "Rust wallet stack: no Windows support". Building here
+# would fail the whole Windows tree on the first of many such sites; skipping
+# keeps the C++ daemon building exactly as before and leaves one tracked
+# blocker instead of a half-ported wallet.
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT IOS)
+    set(_shekyl_rust_bins shekyl-cli shekyl-wallet-rpc)
+
+    # Match where the C++ executables land (src/CMakeLists.txt sets
+    # RUNTIME_OUTPUT_DIRECTORY to ${CMAKE_BINARY_DIR}/bin, which multi-config
+    # generators suffix with the config).
+    if(CMAKE_CONFIGURATION_TYPES)
+        set(_shekyl_rust_bin_dir "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+    else()
+        set(_shekyl_rust_bin_dir "${CMAKE_BINARY_DIR}/bin")
+    endif()
+
+    set(_shekyl_rust_bin_pkg_args "")
+    set(_shekyl_rust_bin_outputs "")
+    set(_shekyl_rust_bin_staged "")
+    foreach(_bin IN LISTS _shekyl_rust_bins)
+        list(APPEND _shekyl_rust_bin_pkg_args -p "${_bin}")
+        list(APPEND _shekyl_rust_bin_outputs
+            "${RUST_BUILD_DIR}/${_bin}${CMAKE_EXECUTABLE_SUFFIX}")
+        list(APPEND _shekyl_rust_bin_staged
+            "${_shekyl_rust_bin_dir}/${_bin}${CMAKE_EXECUTABLE_SUFFIX}")
+    endforeach()
+
+    add_custom_command(
+        OUTPUT ${_shekyl_rust_bin_outputs}
+        COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
+            ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
+            ${_shekyl_rust_bin_pkg_args}
+        WORKING_DIRECTORY ${RUST_SOURCE_DIR}
+        DEPENDS ${_shekyl_rust_deps}
+        COMMENT "${_rust_comment} (shekyl-cli + shekyl-wallet-rpc binaries)"
+        VERBATIM
+    )
+
+    add_custom_target(shekyl_rust_bins ALL DEPENDS ${_shekyl_rust_bin_outputs})
+
+    # The staging copy hangs off the TARGET, not the cargo custom command.
+    # A custom command is skipped whenever its OUTPUTs are newer than its
+    # DEPENDS — and its OUTPUTs are the cargo artifacts, which say nothing
+    # about whether `bin/` still holds them. Deleting `bin/` (or a
+    # generator `clean`) would then leave the staged copies permanently
+    # missing while cargo reported everything up to date, and the things
+    # that read `bin/` are release packaging and the CI smoke tests. A
+    # custom target always runs, so POST_BUILD always re-checks; the copy
+    # itself is `copy_if_different`, so the common case is a stat.
+    add_custom_command(TARGET shekyl_rust_bins POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_shekyl_rust_bin_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${_shekyl_rust_bin_outputs} "${_shekyl_rust_bin_dir}"
+        VERBATIM
+    )
+
+    # Install the STAGED copies, not the cargo target directory, so there is
+    # exactly one answer to "which binary is this release" — the same file
+    # gitian tars. PROGRAMS, not FILES: it sets the executable bit.
+    #
+    # Note the Rust profile is chosen at configure time from
+    # CMAKE_BUILD_TYPE (see RUST_PROFILE above) and is therefore shared by
+    # every config a multi-config generator builds. That predates this block
+    # — SHEKYL_FFI_LIBRARY resolves the same way — so it is left alone here
+    # rather than fixed for the binaries only, which would leave the
+    # staticlibs and the binaries disagreeing about what `--config` means.
+    install(PROGRAMS ${_shekyl_rust_bin_staged} DESTINATION bin)
 endif()

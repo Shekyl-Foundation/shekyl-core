@@ -1839,8 +1839,52 @@ sustainability is unaffected by the recalibration.
   (REST + json_rpc, unrestricted only). Caps flow from `core_rpc_server::init`
   through `shekyl_daemon_rpc_start` (0 = unlimited). See `DAEMON_RPC_RUST.md`.
 
-- **Hardware-device C++ surface: B2 DECIDED — delete with Phase 5, not
-  re-home** (decided 2026-08-06, roadmap review; supersedes the
+- **Rust wallet stack: no Windows support (blocks Windows wallet
+  releases once `wallet2` is deleted).** Surfaced 2026-08-18 by the C1/C2
+  install cutover, which is the first time `shekyl-cli` /
+  `shekyl-wallet-rpc` were ever built for a Windows target. They do not
+  compile there, and not by oversight — the Unix-only surface is
+  load-bearing security design:
+  - `shekyl-cli` reaches the RPC over a Unix domain socket
+    (`rpc_client.rs::http_post_uds`).
+  - `shekyl-wallet-rpc` chmods that socket to 0600
+    (`server.rs::restrict_socket_perms`) *because* its UDS deployments run
+    with HTTP auth disabled — "auth rides the transport" (`wallet_rpc.yaml`).
+  - the scripted seed export writes 0600 via `OpenOptionsExt::mode`
+    (`commands/scripted.rs`).
+  - `engine-core`'s disk-headroom probe calls `rustix::fs::statvfs`
+    (the one genuinely mechanical item: `GetDiskFreeSpaceExW`'s
+    `lpFreeBytesAvailableToCaller` is the exact analog of `f_bavail`).
+
+  So this is a **design question, not a `cfg` sweep**: Windows needs a
+  transport with an equivalent authenticated-by-construction boundary
+  (named pipes with an ACL is the obvious candidate) and an equivalent
+  answer for 0600 files. Improvising it inside a build-system PR would be
+  choosing a security boundary by accident (rules 30/36, mission §1).
+  `cmake/BuildRust.cmake` therefore does not build the Rust binaries for
+  Windows targets; the C++ daemon is unaffected.
+
+  **Consequence, stated rather than discovered later:** the C++
+  `wallet_rpc_server` — which did build on Windows — is deleted, so from
+  this PR until the port lands, **Windows release archives carry the
+  daemon but no wallet**. macOS is unaffected (it is Unix; it needed only
+  cross-linker wiring, fixed in the same PR).
+
+  **Reopen / done criteria (rule 21):** a design round settles the Windows
+  transport + file-permission equivalents; `shekyl-cli` and
+  `shekyl-wallet-rpc` compile for `x86_64-pc-windows-*`; the Windows CI job
+  builds and smoke-tests them; `BuildRust.cmake` drops the platform gate.
+
+- **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
+  (decided 2026-08-06, executed in the Phase-5 wallet2 cutover;
+  `src/device_trezor/`, `tests/trezor/`, `cmake/CheckTrezor.cmake` and
+  the `TREZOR_DEBUG` / `USE_DEVICE_TREZOR` build arms are gone, and
+  `wallet2::register_devices()` is now an empty seam — the default
+  software device registers independently, so ordinary wallets are
+  unaffected). The **reversion clause below remains the live
+  contract**: this entry stays open-as-record for it, not as pending
+  work. Original decision follows.
+  (decided 2026-08-06, roadmap review; supersedes the
   2026-07-10 "Trezor test harness: migrate `mock_rpc_daemon` off epee
   HTTP map" entry — the harness dies with the driver, so the migration
   is moot). Scope: `src/device_trezor/` (23 files, 6,348 lines),
@@ -7076,7 +7120,18 @@ sustainability is unaffected by the recalibration.
   today **only because no production pruner exists**; named here so F5
   discovers the constraint by reading rather than by incident.
 
-- **Wallet-CLI password copies survive in `serde_json` values**
+- ~~**Wallet-CLI password copies survive in `serde_json` values**~~
+  **Closed 2026-08-18** (`fix/cli-password-copies`). All nine sites now
+  route through borrowed `rpc_client::params` shapes, `RpcSession::call`
+  is generic over `Serialize` and serializes the typed envelope straight
+  into a `Zeroizing<Vec<u8>>`, and `prompt_password` / `read_password`
+  return `Zeroizing<String>` so the wipe is structural rather than a
+  per-return-path `zeroize()` call. Two tests hold it: a grep gate over
+  the four sender files (a tenth `json!` site with a secret key fails
+  CI) and a pin that `call` never re-acquires a `Value` hop. Both were
+  negative-controlled against compiling regressions. The original entry
+  follows, for the shape notes it records.
+
   (surfaced 2026-08-17 in the PR #492 review; rule 35). Every
   password-carrying CLI call moves the secret into a `serde_json::Value`
   and then zeroizes only its own `String`: the copy inside the value —
@@ -7106,6 +7161,30 @@ sustainability is unaffected by the recalibration.
   reads as though the hole were closed while four remain open).
   **Scheduled: its own PR immediately after the CompleteTree round
   closes** — follow-on means next, not someday.
+
+- **The wallet-RPC server parses every request into a `serde_json::Value`**
+  (surfaced 2026-08-18 while closing the CLI half above; rule 35).
+  `json_rpc_handler` (`shekyl-wallet-rpc/src/server.rs:166`) does
+  `serde_json::from_slice::<Value>(&body)` on the whole request before
+  dispatch, so a password sent to `create_wallet` / `open_wallet` /
+  `restore_wallet` / `change_password` / `stake` exists as an unwiped
+  heap `String` inside that `Value` — plus the axum `Bytes` body it was
+  read from — for the life of the request. This is the *same defect the
+  CLI half just closed*, one process over, and the CLI fix does not
+  touch it: the client can only control what it sends, not how the
+  server holds it. The handlers themselves are already careful
+  (`lifecycle.rs` consumes the serde `String` into `Zeroizing` via
+  `into_bytes()`, moving rather than copying) — the exposure is strictly
+  upstream of them, in the generic dispatch hop.
+
+  **Not folded into the CLI PR deliberately** (rule 19): closing it
+  means typed per-method deserialization at the dispatch router instead
+  of a `Value` walk, which is the router's validation surface, not the
+  client's — a different review, a different set of tests, and a change
+  that touches every method rather than the five that carry secrets.
+  **Reopening trigger: the next change to `handlers::dispatch`'s
+  routing shape** — the typed-envelope work is nearly free while that
+  seam is already open, and expensive as a standalone rewrite.
 
 - **Emission-claim retire/resubmit driver legs** (surfaced 2026-07-12
   at the CB-3 seam, PR-4a review round #8 "retirement/resubmit = the

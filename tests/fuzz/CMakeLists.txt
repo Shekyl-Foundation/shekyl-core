@@ -54,51 +54,6 @@ set_property(TARGET transaction_fuzz_tests
   PROPERTY
     FOLDER "tests")
 
-monero_add_minimal_executable(signature_fuzz_tests signature.cpp fuzzer.cpp)
-target_link_libraries(signature_fuzz_tests
-  PRIVATE
-    wallet
-    cryptonote_core
-    p2p
-    epee
-    device
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${EXTRA_LIBRARIES}
-    $ENV{LIB_FUZZING_ENGINE})
-set_property(TARGET signature_fuzz_tests
-  PROPERTY
-    FOLDER "tests")
-
-monero_add_minimal_executable(cold-outputs_fuzz_tests cold-outputs.cpp fuzzer.cpp)
-target_link_libraries(cold-outputs_fuzz_tests
-  PRIVATE
-    wallet
-    cryptonote_core
-    p2p
-    epee
-    device
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${EXTRA_LIBRARIES}
-    $ENV{LIB_FUZZING_ENGINE})
-set_property(TARGET cold-outputs_fuzz_tests
-  PROPERTY
-    FOLDER "tests")
-
-monero_add_minimal_executable(cold-transaction_fuzz_tests cold-transaction.cpp fuzzer.cpp)
-target_link_libraries(cold-transaction_fuzz_tests
-  PRIVATE
-    wallet
-    cryptonote_core
-    p2p
-    epee
-    device
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${EXTRA_LIBRARIES}
-    $ENV{LIB_FUZZING_ENGINE})
-set_property(TARGET cold-transaction_fuzz_tests
-  PROPERTY
-    FOLDER "tests")
-
 monero_add_minimal_executable(load-from-binary_fuzz_tests load_from_binary.cpp fuzzer.cpp)
 target_link_libraries(load-from-binary_fuzz_tests
   PRIVATE

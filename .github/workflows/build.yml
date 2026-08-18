@@ -371,7 +371,7 @@ jobs:
           cmake --build build --target test
 
   build-windows-msvc:
-    name: 'Windows (MSVC, daemon+wallet+wallet-rpc)'
+    name: 'Windows (MSVC, daemon+wallet)'
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
@@ -421,14 +421,30 @@ jobs:
       - name: build daemon, wallet, and wallet-rpc
         shell: pwsh
         run: |
-          cmake --build build --config Release --target daemon wallet wallet_rpc_server --parallel 2
+          cmake --build build --config Release --target daemon wallet --parallel 2
       - name: smoke-test daemonizer removal
         shell: pwsh
-        # After the V3.1 daemonizer removal, shekyld.exe and
-        # shekyl-wallet-rpc.exe must (a) link cleanly on MSVC without the
-        # src/daemonizer/ subsystem, (b) run without invoking the removed
-        # POSIX fork() / Windows SCM code paths, and (c) intercept the
-        # retired CLI flags via src/common/removed_flags.{h,cpp}. --help
+        # After the V3.1 daemonizer removal, shekyld.exe must (a) link
+        # cleanly on MSVC without the src/daemonizer/ subsystem, (b) run
+        # without invoking the removed POSIX fork() / Windows SCM code
+        # paths, and (c) intercept the retired CLI flags via
+        # src/common/removed_flags.{h,cpp}.
+        #
+        # The removed-flag assertions cover shekyld alone. They used to
+        # cover the C++ wallet-rpc too, but that binary is deleted (its
+        # name and install slot went to the Rust shekyl-wallet-rpc in the
+        # C1/C2 cutover). They cannot transfer to the Rust binary: the
+        # migration message they grep for comes from
+        # src/common/removed_flags.{h,cpp}, and clap answers "unexpected
+        # argument" instead. The shim's wallet-side caller
+        # (src/wallet/wallet_args.cpp) survives only as library code with
+        # no binary to exercise it, and is deleted with wallet2 at Phase 5.
+        #
+        # No wallet binary is checked on Windows because none is built
+        # there: the Rust wallet stack is Unix-only (UDS transport, 0600
+        # socket, 0600 seed export), tracked in docs/FOLLOWUPS.md under
+        # "Rust wallet stack: no Windows support". This job is the daemon's
+        # MSVC gate until that lands. --help
         # exits 0 after printing the option list, which exercises the full
         # argument-parsing + logger-init path without waiting on a network
         # port. --detach is expected to exit nonzero with the V3.1
@@ -449,7 +465,6 @@ jobs:
           # "Select-String on a file," which are the well-behaved parts.
           $ErrorActionPreference = 'Stop'
           $daemon = 'build\bin\Release\shekyld.exe'
-          $wrpc   = 'build\bin\Release\shekyl-wallet-rpc.exe'
 
           function Assert-HelpOk([string]$exe, [string]$label) {
             cmd /c "`"$exe`" --help > NUL 2>&1"
@@ -476,9 +491,7 @@ jobs:
           }
 
           Assert-HelpOk $daemon 'shekyld'
-          Assert-HelpOk $wrpc   'shekyl-wallet-rpc'
-          Assert-RemovedFlag $daemon 'shekyld'           '--detach'
-          Assert-RemovedFlag $wrpc   'shekyl-wallet-rpc' '--pidfile=C:\temp\x'
+          Assert-RemovedFlag $daemon 'shekyld' '--detach'
 
           # Both Assert-RemovedFlag calls deliberately leave $LASTEXITCODE
           # nonzero — that's exactly what we're asserting on. GitHub Actions'

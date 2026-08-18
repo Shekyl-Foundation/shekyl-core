@@ -117,6 +117,12 @@ jobs:
           # --- Linux x86_64: .deb and .rpm ---
           LINUX_X86=$(find gitian-out -name "shekyl-x86_64-linux-gnu-*.tar.bz2" | head -1)
           if [ -n "$LINUX_X86" ]; then
+            # The three wallet binaries are guaranteed products since the
+            # C1/C2 install cutover (shekyld from C++, shekyl-cli and
+            # shekyl-wallet-rpc from cmake/BuildRust.cmake, staged into
+            # bin/ which is what gitian tars). These copies deliberately
+            # hard-fail: `|| true` here previously meant a release with no
+            # wallet-rpc and no CLI packaged successfully and silently.
             echo "=== Packaging Linux x86_64 .deb/.rpm from $LINUX_X86 ==="
             TMPDIR_X86=$(mktemp -d)
             tar xjf "$LINUX_X86" -C "$TMPDIR_X86"
@@ -125,8 +131,8 @@ jobs:
             STAGE="$(pwd)/stage-deb-amd64"
             mkdir -p "$STAGE/usr/local/bin"
             cp "$BIN_X86"/shekyld "$STAGE/usr/local/bin/"
-            cp "$BIN_X86"/shekyl-cli "$STAGE/usr/local/bin/" 2>/dev/null || true
-            cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_X86"/shekyl-cli "$STAGE/usr/local/bin/"
+            cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
             fpm -s dir -t deb \
               -p "$RELEASE/shekyl_${VERSION}_amd64.deb" \
               --name shekyl --version "$VERSION" \
@@ -141,8 +147,8 @@ jobs:
             STAGE_RPM="$(pwd)/stage-rpm-x86_64"
             mkdir -p "$STAGE_RPM/usr/local/bin"
             cp "$BIN_X86"/shekyld "$STAGE_RPM/usr/local/bin/"
-            cp "$BIN_X86"/shekyl-cli "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
-            cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_X86"/shekyl-cli "$STAGE_RPM/usr/local/bin/"
+            cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.x86_64.rpm" \
               --name shekyl --version "$VERSION" \
@@ -166,8 +172,8 @@ jobs:
             STAGE="$(pwd)/stage-deb-arm64"
             mkdir -p "$STAGE/usr/local/bin"
             cp "$BIN_ARM"/shekyld "$STAGE/usr/local/bin/"
-            cp "$BIN_ARM"/shekyl-cli "$STAGE/usr/local/bin/" 2>/dev/null || true
-            cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_ARM"/shekyl-cli "$STAGE/usr/local/bin/"
+            cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
             fpm -s dir -t deb \
               -p "$RELEASE/shekyl_${VERSION}_arm64.deb" \
               --name shekyl --version "$VERSION" \
@@ -182,8 +188,8 @@ jobs:
             STAGE_RPM="$(pwd)/stage-rpm-aarch64"
             mkdir -p "$STAGE_RPM/usr/local/bin"
             cp "$BIN_ARM"/shekyld "$STAGE_RPM/usr/local/bin/"
-            cp "$BIN_ARM"/shekyl-cli "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
-            cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_ARM"/shekyl-cli "$STAGE_RPM/usr/local/bin/"
+            cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.aarch64.rpm" \
               --name shekyl --version "$VERSION" \

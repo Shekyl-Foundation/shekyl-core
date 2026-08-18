@@ -209,9 +209,11 @@ exists as a ~1000-line C++ implementation with active callers:
 
 - [`src/wallet/wallet2.cpp:10036`](../src/wallet/wallet2.cpp) calls
   `rct::bulletproof_plus_PROVE`.
-- [`src/device_trezor/trezor/protocol.cpp:700`](../src/device_trezor/trezor/protocol.cpp)
-  calls `bulletproof_plus_PROVE` and (line 720)
-  `rct::bulletproof_plus_VERIFY`.
+- ~~`src/device_trezor/trezor/protocol.cpp:700` called
+  `bulletproof_plus_PROVE` and (line 720)
+  `rct::bulletproof_plus_VERIFY`.~~ **Retired 2026-08-18:** the Trezor
+  backend is deleted (no PQC firmware support), so this caller no
+  longer exists.
 - [`src/fcmp/rctSigs.cpp:135,142,326`](../src/fcmp/rctSigs.cpp) calls
   `bulletproof_plus_VERIFY` and `bulletproof_plus_PROVE` (the
   `make_dummy_bulletproof_plus` at lines 53-81 is the
