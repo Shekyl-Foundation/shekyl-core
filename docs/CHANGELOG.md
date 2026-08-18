@@ -13,22 +13,16 @@
   was the C++ `wallet_rpc_server` wearing that `OUTPUT_NAME`. Both Rust
   binaries are now built, staged into `bin/` (which is what
   `contrib/gitian/` tars into the release archives), and installed.
-
-### Changed
-
-- **`shekyl-wallet-rpc` now names the Rust binary, everywhere.** The C++
-  `wallet_rpc_server` keeps building under its own target name through
-  the transition but is no longer installed and no longer claims that
-  `OUTPUT_NAME`; it is deleted wholesale with `wallet2` in the Phase-5
-  commit. Two different programs sharing one installed name was the
-  failure this cutover exists to prevent. The Windows CI removed-flag
-  assertions follow the C++ binary (the V3.1 migration message they grep
-  for comes from `src/common/removed_flags.{h,cpp}` and cannot transfer
-  to the Rust binary's argument parser); the shipped Rust binaries gain
-  their own runs-and-responds check. The gitian packaging copies for
-  `shekyl-cli` and `shekyl-wallet-rpc` now hard-fail instead of
-  `|| true` — they are guaranteed products, and tolerating their absence
-  meant a release with no wallet-rpc could be staged silently.
+  **Not on Windows:** the Rust wallet stack is Unix-only today (UDS
+  transport, 0600 socket backing "auth rides the transport", 0600 seed
+  export), so `BuildRust.cmake` skips the binaries for Windows targets.
+  Combined with the `wallet_rpc_server` deletion below, Windows release
+  archives carry the daemon but no wallet until that port lands —
+  tracked in `docs/FOLLOWUPS.md` ("Rust wallet stack: no Windows
+  support"). macOS is unaffected: it is Unix, and needed only
+  cross-linker wiring — rustc's link step now inherits the depends
+  toolchain's `-B` / `--target` / `--sysroot`, which it never got while
+  this file built staticlibs only, because an archive is never linked.
 
 ### Removed
 
@@ -56,6 +50,20 @@
   track).
 
 ### Changed
+
+- **`shekyl-wallet-rpc` now names the Rust binary, everywhere.** The C++
+  `wallet_rpc_server` keeps building under its own target name through
+  the transition but is no longer installed and no longer claims that
+  `OUTPUT_NAME`; it is deleted wholesale with `wallet2` in the Phase-5
+  commit. Two different programs sharing one installed name was the
+  failure this cutover exists to prevent. The Windows CI removed-flag
+  assertions follow the C++ binary (the V3.1 migration message they grep
+  for comes from `src/common/removed_flags.{h,cpp}` and cannot transfer
+  to the Rust binary's argument parser); the shipped Rust binaries gain
+  their own runs-and-responds check. The gitian packaging copies for
+  `shekyl-cli` and `shekyl-wallet-rpc` now hard-fail instead of
+  `|| true` — they are guaranteed products, and tolerating their absence
+  meant a release with no wallet-rpc could be staged silently.
 
 - **The Foundation CompleteTree posture is reachable, warned, and served —
   and it is no longer the default anything.** Round record:

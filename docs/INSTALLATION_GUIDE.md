@@ -183,6 +183,12 @@ The two wallet binaries are built from the Rust workspace by
 `cmake/BuildRust.cmake` as part of the ordinary CMake build — no separate
 `cargo` step is needed, and `cargo` is already a build prerequisite.
 
+**Platform note.** The wallet binaries are produced for Unix targets
+(Linux, macOS). They are **not built for Windows**: the Rust wallet stack
+is Unix-only today — see `docs/FOLLOWUPS.md`, "Rust wallet stack: no
+Windows support". A Windows build produces `shekyld` and the blockchain
+utilities as before.
+
 Typical output location:
 
 - `<build_dir>/bin/`
