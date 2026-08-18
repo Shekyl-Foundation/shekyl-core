@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **Trezor hardware-wallet backend deleted** (`src/device_trezor/`,
+  `tests/trezor/`, `cmake/CheckTrezor.cmake`, and the `TREZOR_DEBUG` /
+  `USE_DEVICE_TREZOR` build arms). It was dead code under the V3
+  default — protobuf generation never ran, `protocol.cpp` carried a
+  `#error` against accidental compilation — and Trezor firmware has no
+  post-quantum support, which V3 addresses require from genesis.
+  Reopen criterion: Trezor ships firmware implementing the primitives
+  in `docs/HARDWARE_WALLETS.md` §V4 Roadmap. The dormant Ledger
+  backend under `src/device/` is unaffected (separate retirement
+  track).
+
 ### Changed
 
 - **Fee sanity ceiling is live (interim form) — `-29109 DAEMON_FEE_UNREASONABLE`.**

@@ -91,10 +91,6 @@ else ()
 endif()
 
 
-if (TREZOR_DEBUG)
-  add_subdirectory(trezor)
-endif()
-
 if (BUILD_SHEKYL_WALLET_BENCH)
   add_subdirectory(wallet_bench)
 endif()
