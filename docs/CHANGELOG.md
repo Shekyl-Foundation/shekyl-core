@@ -4,6 +4,20 @@
 
 ### Changed
 
+- **The pass-record carrier round is a record partition, not a signature split
+  (`CR-D2`).** Sizing the whole record was arithmetic, not measurement: the
+  segment layout (`SEGMENT_LAYER_J = 2`, Selene/Helios 38/18) fixes the opening
+  at two branch layers (`1,792 B`) plus a leaf chunk (`4·38·32 = 4,864 B`) that
+  is on-wire cost despite no struct declaring it — `verify_segment_path` takes
+  `leaf_layer_scalars` as a separate parameter and cannot derive it. The whole
+  record is ~10,243 B ≈ 262 GB/yr, so **`path` is the dominant term and the
+  signature is not**: pruning only the ML-DSA leg keeps ~177 GB/yr, twice the
+  figure that disqualified doing nothing. The surviving option prunes the leaf
+  chunk, branch layers, and ML-DSA leg together, keeping ~278 B ≈ 7.1 GB/yr —
+  enough to identify the record and check the classical signature, **not**
+  enough to re-verify the opening, which is stated on the ruling rather than
+  left to be discovered.
+
 - **The Foundation CompleteTree posture is reachable, warned, and served —
   and it is no longer the default anything.** Round record:
   [`docs/design/COMPLETETREE_ACTIVATION.md`](design/COMPLETETREE_ACTIVATION.md).

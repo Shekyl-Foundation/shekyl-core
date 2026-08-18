@@ -1,6 +1,8 @@
 # Pass-record carrier — design round (CR)
 
-**Status:** OPEN. Round opened 2026-08-17. No option chosen.
+**Status:** OPEN. Round opened 2026-08-17. **`CR-D2` resolved 2026-08-18: the
+round is a record partition, not a signature split — `CR-O1` rejected, `CR-O1′`
+survives. `CR-D1` still open.**
 **Scope:** where the pass record's kept and pruned parts live in the tx wire.
 **Blocks:** the response-format round (framing depends on this answer).
 **Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -157,16 +159,104 @@ what the archival system exists to offload. So the `pqc_auths` precedent alone
 cannot answer the carrier: **something has to be prunable.** That much is
 settled.
 
-**`CR-D2` (OPEN): size the whole vin, not the signature.** The record also
-carries `leaf_bytes` and `path`, both in the prefix, both unpruned.
-`archival_segment_path_opening` is bounded at
-[`ARCHIVAL_MAX_PATH_LAYERS_PER_KIND = 64`](../../src/cryptonote_config.h#L414)
-× [`ARCHIVAL_MAX_BRANCH_SCALARS = 256`](../../src/cryptonote_config.h#L415) ×
-32 B **per kind** — a DoS ceiling, not a typical size, and the typical size
-needs the real segment depth and branch factor. If `path` is comparable to the
-ML-DSA leg, **the kept/pruned line has to be drawn across the whole record**,
-not just the countersignature, and this round's scope widens accordingly. The
-round must not quote 88 GB as the number; 88 GB is the *floor* of the number.
+### `CR-D2` — RESOLVED 2026-08-18: `path` dominates, and the round is a record partition
+
+The 88 GB above counts the signature only, and it is **the floor of the number,
+not the number.** Sizing the whole record was an arithmetic read, not a
+measurement: the segment layout fixes it.
+
+`SEGMENT_LAYER_J = 2` ([`segment.rs:18`](../../rust/shekyl-curve-tree/src/segment.rs#L18))
+with Selene/Helios widths 38/18
+([`fcmps/src/lib.rs:57,59`](../../rust/shekyl-oxide/crypto/fcmps/src/lib.rs#L57))
+gives a segment of `38·18·38 = 25,992` leaves. The path assembler loops
+`for layer in 1..depth`
+([`assemble.rs:164`](../../rust/shekyl-curve-tree/src/assemble.rs#L164)), so the
+**leaf layer is excluded** from `c1_layers`/`c2_layers` — depth 3 yields exactly
+**two** branch layers, one Helios (≤18) and one Selene (≤38).
+
+**The leaf chunk is on-wire cost even though no struct declares it.**
+`SegmentPathOpening` holds only the two layer vectors
+([`path.rs:52-55`](../../rust/shekyl-archival-retention/src/path.rs#L52-L55)),
+but `verify_segment_path` takes `leaf_layer_scalars` as a **separate parameter**
+([`path.rs:116-118`](../../rust/shekyl-archival-retention/src/path.rs#L116-L118)),
+and `leaf_bytes_in_layer` requires it be a multiple of `SCALARS_PER_LEAF`
+*containing* the challenged leaf ([`path.rs:95-108`](../../rust/shekyl-archival-retention/src/path.rs#L95-L108))
+— the full chunk, not one leaf. The verifier cannot run without it and cannot
+derive it. **Anything a verifier requires and cannot derive must be transmitted**,
+so it is part of the record's cost regardless of which struct names it.
+
+| Component | Bytes | GB/yr |
+| --- | ---: | ---: |
+| record header (`p_canonical_id`, `shard_id`, `settlement_epoch`, `segment_subroot_rk`, `leaf_index_in_segment`) | 74 | 1.9 |
+| `leaf_bytes` (challenged leaf) | 128 | 3.3 |
+| Ed25519 leg + framing | 76 | 1.9 |
+| **leaf chunk** (`4 · 38 · 32`) | **4,864** | **124.3** |
+| **branch layers** (`(18 + 38) · 32`) | **1,792** | **45.8** |
+| ML-DSA-65 leg | 3,309 | 84.6 |
+| **total per record** | **10,243** | **261.8** |
+
+At maturity `D ≈ 324k`, `λ = 3` ⇒ ~972k records/epoch × ~26.3 epochs/yr ≈ 25.6M
+records/yr.
+
+**The ruling: `path` goes on the pruned side with the ML-DSA leg.** Kept ≈
+**278 B/record ≈ 7.1 GB/yr**; pruned ≈ 9,965 B.
+
+**`CR-O1` as scoped — split the signature legs — does not solve the problem,
+and the verdict is overdetermined.** Keeping `path` leaves ~6,934 B/record ≈
+**177 GB/yr**, twice the figure that disqualified doing nothing. It fails at
+every reading of the leaf-chunk question, including the smallest (branch layers
+only, ~53 GB/yr) — so the partition can be ruled *now*, and the
+`proxy.rs` constant corrected separately, without either blocking the other.
+The leg split survives as a **sub-decision of the partition**, not as the
+partition.
+
+**What survives pruning, stated on the ruling rather than discovered later.**
+The kept side is the 64 B Ed25519 leg, `leaf_bytes`, and the record header. That
+is enough to **identify the record and check the classical signature**, and
+**not** enough to **re-verify the opening** — the leaf chunk and branch layers
+are exactly what `verify_segment_path` consumes, and they are gone. A reader who
+expects a pruned record's membership proof to be re-checkable later will be
+wrong, and that is a property of the design rather than an oversight.
+
+**Sibling finding, deliberately NOT in this PR: `proxy.rs`'s constant is wrong,
+and correcting it moves a ratified economics verdict.**
+[`RESPONSE_BYTES`](../../rust/shekyl-economics-sim/src/proxy.rs) is
+`128 + (38 + 18 + 38)·32 ≈ 3.1 KB` — wrong in *both directions at once*: three
+branch layers where the assembler yields two, and the leaf layer as 38 scalars
+where it is 152. The correct value is `128 + 4·38·32 + (18 + 38)·32 = 6,784 B`,
+a **2.16×** understatement.
+
+Correcting it turns two `shekyl-economics-sim` tests red, and they are right to
+go red. The Stage-2 **A5/W10** verdict — *"re-fetch beats holding 4–40×"* — no
+longer holds uniformly:
+
+| Fetch price | old re-fetch | new re-fetch | vs storage `0.00519` |
+| --- | ---: | ---: | --- |
+| bulk transit `1e-11` | 0.000385 | 0.000834 | still cheaper — W10 still fails |
+| retail egress `1e-10` | 0.003854 | **0.008336** | **now more expensive** — the proxy attack stops being free |
+
+So a 2.16× correction to one constant flips the retail-egress end of the band.
+That is an **economics re-verdict**, not a number fix, and it rides its own
+review surface under [rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)
+— bundling it here would let it in on the carrier round's review, which is the
+defect this round already declined to commit for `EndpointUpdate`. The partition
+above is ruled on arithmetic that does not depend on it.
+
+**The constant's own caveat is why this travelled.** It read *"the verdict is
+robust to it: any KB-scale opening is ≪ the 3.33 MB segment"* — **true for that
+use**, where the proxy compares re-fetch against holding and both readings are
+≪ a segment. Not true where the opening is the dominant term. A robustness
+caveat is a property of the **use**, not of the constant, and it does not travel
+when the constant does.
+
+**Note for the format round: the leaf chunk is not on the wire today.**
+`txin_archival_serve_credit_response` has no leaf-chunk field, and
+`verify_segment_path` has **no production caller** — only
+`assembled_path_crosscheck.rs`. So today's record is not verifiable from the
+wire at all, and the 261.8 GB figure prices *making it verifiable*. That the
+addition lands on the pruned side is the point of ruling now: had the leaf chunk
+followed `leaf_bytes` onto the kept side by default, the mandatory baseline
+would have been ~130 GB/yr before anyone noticed.
 
 ---
 
@@ -174,16 +264,27 @@ round must not quote 88 GB as the number; 88 GB is the *floor* of the number.
 
 Each option is stated with what would decide it. None is chosen.
 
-### CR-O1 — Split the legs across the two regions that already exist
+### CR-O1 — Split the signature legs only — **REJECTED (CR-D2, 2026-08-18)**
 
 Kept Ed25519 leg (64 B) unprunable; pruned ML-DSA leg (3,309 B) as a fourth
-block **inside** `serialize_rctsig_prunable`. ~2.9 GB/year permanent instead of
-~88 GB.
+block **inside** `serialize_rctsig_prunable`.
 
-*Decided by:* `CR-D1` (does the kept leg ride `pqc_auths`, requiring the
-exemption removal, or stay in a slimmed `hybrid_signature` in the vin?);
-`CR-D2` (does `path` force the same treatment?); and the cost of the
-`prefix_hash` change in `CR-F2`.
+*Rejected because it leaves ~6,934 B/record ≈ 177 GB/yr* — `path` is the
+dominant term, not the signature. Retained because the leg split itself is
+**correct and survives as a sub-decision of `CR-O1′`**: which side the Ed25519
+leg lands on is still open, and still turns on `CR-D1`.
+
+### CR-O1′ — Partition the record — **the surviving option**
+
+Pruned, inside `serialize_rctsig_prunable` where both hash paths see it by
+construction: the **leaf chunk**, the **branch layers**, and the **ML-DSA leg**
+(~9,965 B). Kept: the record header, `leaf_bytes`, and the Ed25519 leg (~278 B,
+≈7.1 GB/yr).
+
+*Still decided by:* `CR-D1` — does the kept Ed25519 leg ride `pqc_auths`,
+requiring removal of the `is_archival_serve_credit_only` exemption, or stay in a
+slimmed `hybrid_signature` on the vin? — and the cost of the `prefix_hash`
+change in `CR-F2`.
 
 ### CR-O2 — Whole container prunable
 
