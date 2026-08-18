@@ -70,7 +70,7 @@ const PRODUCTION_PINS: [(&str, usize, usize); 6] = [
 ];
 /// Pinned counts for the non-production sections.
 const EXCLUDED_EXPECTED: usize = 8;
-const TEST_ONLY_EXPECTED: usize = 6;
+const TEST_ONLY_EXPECTED: usize = 7;
 
 /// Well-formed mechanism ids: `1`..`6` (live mechanisms) or `x` (excluded).
 fn is_valid_mech(mech: &str) -> bool {

@@ -175,7 +175,7 @@ count_pattern() {
 # SA-3c: 37 -> 40. snapshot-id retargeted cn_fast_hash -> cSHAKE, adding one
 # production call site plus two in its rewritten domain-separation test (inline
 # #[cfg(test)] sites are counted by design; see the header).
-MECH1_EXPECTED=40
+MECH1_EXPECTED=41
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

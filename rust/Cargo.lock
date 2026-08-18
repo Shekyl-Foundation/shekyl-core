@@ -4379,6 +4379,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shekyl-crypto-hash",
  "shekyl-pow-randomx",
 ]
 
