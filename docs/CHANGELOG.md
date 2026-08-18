@@ -4,6 +4,22 @@
 
 ### Changed
 
+- **The prunable region's sole-occupant invariant now has a name and a test.**
+  `calculate_transaction_prunable_hash` computes the prunable hash two ways —
+  the blob tail after `unprunable_size`, or a re-serialization of
+  `rct_signatures.p` — and they agree **only because `ctsig_prunable` is the
+  last thing the transaction serializer writes**. That equivalence is
+  positional, and it had no name in the code and no test. An append after
+  `ctsig_prunable` diverges the two paths silently: a node that kept the blob
+  hashes the new bytes, a node re-serializing from the parsed struct does not,
+  and the disagreement surfaces as a `"tx hash cash integrity failure"` throw
+  on blob-holding nodes only. `tx_prunable_region_sole_occupant.cpp` asserts
+  tail length *equals* re-serialized length — naming the defect ("the prunable
+  region has a second occupant") rather than reporting a hash mismatch — plus
+  the blob-present/blob-absent hash equality it implies. Deliberately C++
+  despite rule 20: the invariant is a property of the C++ serializer's
+  ordering, so a Rust test would be blind to the append it exists to catch.
+
 - **Fee sanity ceiling is live (interim form) — `-29109 DAEMON_FEE_UNREASONABLE`.**
   Named fee tiers were previously accepted from the daemon unchecked
   (only `Custom` rates were capped). The wallet now refuses a snapshot
