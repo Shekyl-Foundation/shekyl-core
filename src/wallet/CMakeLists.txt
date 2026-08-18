@@ -60,41 +60,14 @@ target_link_libraries(wallet
   PRIVATE
     ${EXTRA_LIBRARIES})
 
-if(NOT IOS)
-  set(wallet_rpc_sources
-    wallet_rpc_server.cpp)
-
-  set(wallet_rpc_headers)
-
-  set(wallet_rpc_private_headers
-    wallet_rpc_server.h)
-
-  monero_private_headers(wallet_rpc_server
-    ${wallet_rpc_private_headers})
-  shekyl_add_executable(wallet_rpc_server
-    ${wallet_rpc_sources}
-    ${wallet_rpc_headers}
-    ${wallet_rpc_private_headers})
-
-  target_link_libraries(wallet_rpc_server
-    PRIVATE
-      wallet
-      rpc_base
-      cryptonote_core
-      cncrypto
-      common
-      version
-      ${EPEE_READLINE}
-      ${Boost_CHRONO_LIBRARY}
-      ${Boost_PROGRAM_OPTIONS_LIBRARY}
-      ${Boost_FILESYSTEM_LIBRARY}
-      ${Boost_THREAD_LIBRARY}
-      ${CMAKE_THREAD_LIBS_INIT}
-      ${EXTRA_LIBRARIES})
-  # The `shekyl-wallet-rpc` name and the install slot now belong to the Rust
-  # binary (cmake/BuildRust.cmake). This target keeps building under its own
-  # target name through the transition — it is deleted wholesale with
-  # `wallet2` in the Phase-5 commit, so it is deliberately NOT installed:
-  # shipping two different programs under one name is the failure this
-  # cutover exists to prevent.
-endif()
+# The C++ `wallet_rpc_server` executable is deleted. Its binary name and
+# install slot went to the Rust `shekyl-wallet-rpc` in the C1/C2 cutover,
+# so the target that remained was an uninstalled second implementation of
+# a surface the Rust binary already owns — kept building, shipped to
+# nobody, and available to accrete fixes that would have to be paid for
+# twice. Deleting it here keeps the RPC server's removal with the RPC
+# changeover instead of splitting one concern across two PRs.
+#
+# `wallet_rpc_server_commands_defs.h` and `wallet_rpc_server_error_codes.h`
+# deliberately REMAIN: `wallet2_ffi.cpp` still includes both, and that
+# facade is deleted with `wallet2` in the Phase-5 commit.

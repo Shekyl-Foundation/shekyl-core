@@ -32,6 +32,18 @@
 
 ### Removed
 
+- **The C++ `wallet_rpc_server` executable is deleted**, in the same PR
+  that handed its binary name and install slot to the Rust
+  `shekyl-wallet-rpc`. Keeping it would have left an uninstalled second
+  implementation of a surface the Rust binary already owns — built on
+  every CI run, shipped to nobody, and available to accrete fixes that
+  would then have to be paid for twice. `wallet_rpc_server.{h,cpp}` and
+  the CMake target are gone; `wallet_rpc_server_commands_defs.h` and
+  `wallet_rpc_server_error_codes.h` remain **only** because
+  `wallet2_ffi.cpp` still includes them, and go with `wallet2` at
+  Phase 5. The Windows removed-flag CI assertions now cover `shekyld`
+  alone (they grep a message emitted by C++ `src/common/removed_flags`,
+  which the Rust binary's argument parser does not produce).
 - **Trezor hardware-wallet backend deleted** (`src/device_trezor/`,
   `tests/trezor/`, `cmake/CheckTrezor.cmake`, and the `TREZOR_DEBUG` /
   `USE_DEVICE_TREZOR` build arms). It was dead code under the V3

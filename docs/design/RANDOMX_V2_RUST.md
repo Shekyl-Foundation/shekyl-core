@@ -573,7 +573,9 @@ Production `src/` targets:
 - `src/fcmp/CMakeLists.txt` (two targets PUBLIC: `fcmp_basic` and
   `fcmp`)
 - `src/crypto/wallet/CMakeLists.txt` (`wallet-crypto`)
-- `src/wallet/CMakeLists.txt` (`wallet_rpc_server`)
+- ~~`src/wallet/CMakeLists.txt` (`wallet_rpc_server`)~~ — the executable
+  is deleted (its name and install slot went to the Rust
+  `shekyl-wallet-rpc`); the `wallet` library itself remains until Phase 5.
 
 Test targets:
 
