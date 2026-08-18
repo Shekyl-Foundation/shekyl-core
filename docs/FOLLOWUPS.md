@@ -7006,6 +7006,106 @@ sustainability is unaffected by the recalibration.
   identity set gets built for durability credit only — the
   `is_foundation_complete_tree`-populated-from-shape flag at the
   gather is then correct as a market operand and misnamed at worst.
+  **UPDATE 2026-08-16 — the hardcode half is DISCHARGED BY DELETION;
+  the market-entry half moves to the shard-assignment entry below**
+  (`COMPLETETREE_ACTIVATION.md` D-3, PR #489). Every sentence above
+  that says `first_stake` *hardcodes* CompleteTree is now historical:
+  the "Genesis posture" block is deleted, not re-anchored, and the
+  entry takes a **mandatory** `StakePosture::{Market,
+  FoundationCompleteTree}` — no default, so no caller reaches either
+  posture without naming it. The two blockers this item named are
+  also resolved: the gate-6 serving stack **landed** (the wallet
+  serves its bonded shards, and a CompleteTree persona serves the
+  store's frozen prefix), and the `is_complete_tree()` conflation was
+  ruled correct as a shape rule rather than needing foundation
+  identity. What is genuinely left is **only shard selection** — the
+  `Market` arm refuses `FirstStakeError::NoShardsAvailable` (RPC
+  `-29505`) rather than posting an empty `ShardSetCompact`, which
+  consensus rejects at JoinMarket anyway. That remainder is carried,
+  with its pre-work, by the entry immediately below; **this item is
+  closed** and should not be read as open work.
+
+- **Shard assignment for market staking — the `NoShardsAvailable`
+  stub's discharge** (opened 2026-08-16 by the CompleteTree activation
+  round; `COMPLETETREE_ACTIVATION.md` §10 item 1). `first_stake(slot,
+  StakePosture::Market)` refuses `FirstStakeError::NoShardsAvailable`
+  (RPC `-29505`) because nothing picks which shards a market bond
+  covers. **Not a code gap — a missing design decision**, and the
+  refusal is typed with its remedy named rather than deferred silently
+  (rule 22). When this round opens, the caller shape does **not**
+  change: `first_stake` keeps taking a *posture*, never a shard set,
+  so no select-all affordance appears (`ARCHIVAL_BOND_CONSTRUCTION.md`
+  §9.1 item 3).
+  **Pre-work notes, recorded from that round's wargaming and to be
+  re-verified at source when it opens** — none of these are rulings:
+  selection from the **local** frozen prefix satisfies rule 81
+  trivially (the V3.0 store never prunes, so the node holds everything
+  frozen); uniform random over `[0, next_freeze_seg)` with OS RNG
+  avoids both a constant-shard distribution failure and a
+  persona→shard public function; the draw must be **captured once at
+  or before the durable point and reused across W2 resume**
+  (`first_stake` re-entrancy) — a resume that re-draws would bond a
+  different shard than the one already recorded; the drawn shard must
+  be pinned through the derive-from-record refresh, never a list kept
+  beside it; one shard at the per-shard floor, grown later via
+  `HoldingsUpdate`-add. Assignment is **not** a security boundary
+  (holdings are poster-chosen and public) — it is a distribution/UX
+  default, and its decision rule should be pre-registered (rule 11) at
+  the round's opening.
+  **This entry also owns `PostureMismatch`** (AF-1): a W2 resume that
+  names a different posture than the durable record cannot be refused
+  today because **nothing posture-shaped is durable wallet-side** —
+  there is no oracle to check against. The persisted draw this round
+  creates *is* that oracle, so the check belongs here. Note for
+  whoever builds it: an *implicit* oracle exists in today's code
+  (`Market` never reaches W2, so a resumable slot is definitionally
+  Foundation) — **do not build on it**; it inverts the moment `Market`
+  becomes resumable, which is precisely what this round does.
+
+- **F5 pruning inherits two constraints from the CompleteTree round**
+  (recorded 2026-08-16; `COMPLETETREE_ACTIVATION.md` §10 item 2).
+  Whenever a production pruner lands: (i) `LeafStore::prune_frozen`
+  refuses outright with `StoreError::PruneDisabledPosture` on a store
+  whose one-way prune-disabled posture is declared — that is the
+  CompleteTree retention guarantee, and it is a refusal rather than a
+  silent no-op on purpose (rule 82), so a pruner must handle it as a
+  legitimate answer and not as a fault; (ii) the market arm has a
+  post→first-refresh **pin gap** — a bond posts before the first
+  serve-set refresh pins its shards, so a pruner running in that
+  window could discard bytes the record already obligates. Harmless
+  today **only because no production pruner exists**; named here so F5
+  discovers the constraint by reading rather than by incident.
+
+- **Wallet-CLI password copies survive in `serde_json` values**
+  (surfaced 2026-08-17 in the PR #492 review; rule 35). Every
+  password-carrying CLI call moves the secret into a `serde_json::Value`
+  and then zeroizes only its own `String`: the copy inside the value —
+  and the serialized request body after it — is never wiped.
+  Pre-existing and cross-cutting. **Nine call sites in four files, and
+  the enumeration is the work list — audit against it, not against a
+  count:**
+  - `commands/lifecycle.rs:50` create, `:85` open, `:149` **restore**,
+    `:321` change_password
+  - `commands/staking.rs:53` stake (market), `:111` stake (foundation)
+  - `commands/scripted.rs:82` create, `:127` restore
+  - `main.rs:262` — the `--engine-file` open in `run_repl`. **Outside
+    `commands/` entirely**, so a sweep scoped to that directory misses
+    it; it is listed first in any grep, not last.
+
+  Two shape notes for whoever fixes this. `change_password` (`:321`) does
+  **not** match the single-`"password"`-key pattern — it carries
+  `{"old_password", "new_password"}`, two secrets under different keys,
+  so a fix keyed on the literal `"password"` skips it. And
+  `scripted.rs` passes `password.as_str()` off a `Zeroizing`, which wipes
+  the *original* while leaving the JSON copy exactly as exposed as the
+  others — the wrapper is not the fix. The fix is
+  not local to any of them — `RpcSession::call` takes a
+  `serde_json::Value`, so closing this means giving that interface a
+  wipeable secret type and updating every caller, which is why it was
+  **not** folded into the round that found it (a half-fix on one path
+  reads as though the hole were closed while four remain open).
+  **Scheduled: its own PR immediately after the CompleteTree round
+  closes** — follow-on means next, not someday.
 
 - **Emission-claim retire/resubmit driver legs** (surfaced 2026-07-12
   at the CB-3 seam, PR-4a review round #8 "retirement/resubmit = the

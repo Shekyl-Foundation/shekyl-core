@@ -17,6 +17,41 @@
 
 ### Changed
 
+- **The Foundation CompleteTree posture is reachable, warned, and served —
+  and it is no longer the default anything.** Round record:
+  [`docs/design/COMPLETETREE_ACTIVATION.md`](design/COMPLETETREE_ACTIVATION.md).
+  Before this, `first_stake` **hardcoded** `CompleteTree` holdings, so every
+  wallet that staked silently took on the whole-corpus obligation — while the
+  serving side refused to serve it, because a shard-id serve-set cannot
+  express "all". Both halves are closed, in the same round, so no code state
+  ever existed where an ordinary staker silently owed the corpus.
+  - **The obligation is derived, never stored.** A CompleteTree persona's
+    serve-set is the store's frozen prefix `[0, next_freeze_seg)` — one
+    growing number, re-read every refresh, so shards join the served set as
+    they freeze with no list maintained anywhere that could drift. Retention
+    is a **one-way prune-disabled posture** on the store rather than per-shard
+    pins: `prune_frozen` refuses outright under it, which makes "a foundation
+    node prunes bytes it owes" unrepresentable instead of merely guarded
+    against.
+  - **Choosing it is now an act, not a default.** `first_stake` takes a
+    mandatory `StakePosture`; the hardcode is deleted. The RPC requires
+    `acknowledge_non_earning_unbounded`, and the refusal body when it is
+    missing (`-29506`) **is the full statement of terms** — never earns,
+    grows forever, slash side live — so a client either shows the operator
+    those terms or deliberately echoes an acknowledgment it was handed. The
+    CLI's `stake --complete-tree-foundation` prints the same text and will not
+    proceed until the operator types `serve without reward`. The GUI never
+    sends the field.
+  - **Market staking refuses honestly in the meantime.** `-29505
+    STAKE_NO_SHARDS_AVAILABLE`: shard assignment is its own round, so a
+    well-funded wallet is told so rather than posting an empty holdings set
+    that consensus would reject.
+  - **Operators can see it.** `staking_info` and the CLI report the live
+    serving posture (absent renders "not serving" — the honest reading for a
+    host that has not started), and a disk-headroom alarm watches the volume
+    the corpus grows on, for **any** serving posture. A failed probe reads
+    *disarmed*, never healthy.
+
 - **Fee sanity ceiling is live (interim form) — `-29109 DAEMON_FEE_UNREASONABLE`.**
   Named fee tiers were previously accepted from the daemon unchecked
   (only `Custom` rates were capped). The wallet now refuses a snapshot
