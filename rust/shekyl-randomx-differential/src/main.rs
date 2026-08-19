@@ -336,16 +336,12 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             if rotation_provenance.is_some() {
                 return Err("--rotation-provenance specified more than once".to_owned());
             }
-            rotation_provenance = Some(match value {
-                "schedule-derived" => IndexProvenance::ScheduleDerived,
-                "operator-supplied" => IndexProvenance::OperatorSupplied,
-                "pull-request" => IndexProvenance::PullRequest,
-                other => {
-                    return Err(format!(
-                        "--rotation-provenance expects schedule-derived, operator-supplied or pull-request; got '{other}'"
-                    ))
-                }
-            });
+            rotation_provenance = Some(IndexProvenance::from_tag(value).ok_or_else(|| {
+                format!(
+                    "--rotation-provenance expects one of: {}; got '{value}'",
+                    IndexProvenance::accepted_values()
+                )
+            })?);
             continue;
         }
         if let Some(value) = arg.strip_prefix("--seedhash=") {
@@ -469,8 +465,10 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
         let index = rotation_index
             .ok_or_else(|| "--mode=rotating requires --rotation-index=<N>".to_owned())?;
         let provenance = rotation_provenance.ok_or_else(|| {
-            "--mode=rotating requires --rotation-provenance=<schedule-derived|operator-supplied>"
-                .to_owned()
+            format!(
+                "--mode=rotating requires --rotation-provenance=<one of: {}>",
+                IndexProvenance::accepted_values()
+            )
         })?;
         Some(RotationContext::new(index, provenance))
     } else {

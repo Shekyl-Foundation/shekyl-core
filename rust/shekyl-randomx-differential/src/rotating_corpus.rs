@@ -94,6 +94,68 @@ pub enum IndexProvenance {
 }
 
 impl IndexProvenance {
+    /// Every provenance, exhaustively.
+    ///
+    /// The single source of truth for anything that enumerates the set
+    /// — CLI diagnostics, tests. Kept honest by
+    /// [`tests::all_is_exhaustive`], whose `match` stops compiling if a
+    /// variant is added without being listed here.
+    pub const ALL: [Self; 3] = [
+        Self::ScheduleDerived,
+        Self::OperatorSupplied,
+        Self::PullRequest,
+    ];
+
+    /// Whether a run under this provenance may be credited as
+    /// **coverage** of the input space.
+    ///
+    /// The `match` is deliberately exhaustive and deliberately has no
+    /// catch-all arm: adding a provenance **must not compile** until
+    /// someone decides, explicitly, whether it advances the explored
+    /// boundary. Only a scheduled sweep does. An operator replay does
+    /// not — it re-checks an already-explored index that the operator
+    /// chose (§4.5 T-A11). A per-PR tripwire does not — every PR on a
+    /// given day derives the same index, so it re-checks identical
+    /// inputs (MR-DQ-6).
+    ///
+    /// This is the round's own lesson turned on itself: an invariant
+    /// carried only by prose and a test decays; one the compiler
+    /// enforces cannot.
+    #[must_use]
+    pub fn counts_as_coverage(self) -> bool {
+        match self {
+            Self::ScheduleDerived => true,
+            Self::OperatorSupplied | Self::PullRequest => false,
+        }
+    }
+
+    /// The accepted `--rotation-provenance` values, for CLI
+    /// diagnostics.
+    ///
+    /// **Derived from [`Self::ALL`], never spelled by hand.** Two
+    /// hand-maintained copies of this list had already drifted — one
+    /// error path listed three values, another listed two — which is
+    /// the same one-fact-in-two-places failure this crate keeps
+    /// finding elsewhere.
+    #[must_use]
+    pub fn accepted_values() -> String {
+        Self::ALL
+            .iter()
+            .map(|p| p.tag())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Parse a provenance from its banner/CLI tag.
+    ///
+    /// Derived from [`Self::ALL`] + [`Self::tag`] so the parser and the
+    /// emitter cannot disagree about spelling.
+    #[must_use]
+    pub fn from_tag(tag: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|p| p.tag() == tag)
+    }
+
+
     /// Banner-facing tag. Pinned by the T17 banner assertion; changing
     /// these strings changes what a reviewer greps for.
     #[must_use]
@@ -360,30 +422,84 @@ mod tests {
         assert_eq!(IndexProvenance::PullRequest.tag(), "pull-request");
     }
 
-    /// Exactly one provenance may be credited as coverage.
+    /// `ALL` really is every variant.
     ///
-    /// Bites against a future variant being added that silently reads
-    /// as a sweep — the §4.5 T-A11 laundering the label exists to
-    /// prevent. Does NOT check what any lane *does* with the label;
-    /// that is the workflow's surface.
+    /// Bites against a variant being added without being listed: the
+    /// `match` below stops compiling, which is the point — a list that
+    /// silently misses a member is the same defect class as a gate
+    /// whose subject does not exist. Does NOT check `ALL`'s order,
+    /// which nothing depends on.
+    #[test]
+    fn all_is_exhaustive() {
+        for p in IndexProvenance::ALL {
+            match p {
+                IndexProvenance::ScheduleDerived
+                | IndexProvenance::OperatorSupplied
+                | IndexProvenance::PullRequest => {}
+            }
+        }
+        assert_eq!(
+            IndexProvenance::ALL.len(),
+            3,
+            "a provenance was added or removed; decide deliberately whether it \
+             counts as coverage, then update this pin"
+        );
+    }
+
+    /// Coverage semantics, asserted **per variant** rather than by
+    /// filtering a hand-maintained list.
+    ///
+    /// The compile-time guarantee lives in `counts_as_coverage`'s
+    /// exhaustive `match`; this records the decision that match
+    /// encodes, so intent is visible without reading the body. Bites
+    /// against a silent flip of any variant's coverage status.
     #[test]
     fn only_schedule_derived_counts_as_coverage() {
-        let all = [
-            IndexProvenance::ScheduleDerived,
-            IndexProvenance::OperatorSupplied,
-            IndexProvenance::PullRequest,
-        ];
-        let coverage: Vec<_> = all
-            .iter()
-            .filter(|p| **p == IndexProvenance::ScheduleDerived)
-            .collect();
+        assert!(
+            IndexProvenance::ScheduleDerived.counts_as_coverage(),
+            "a scheduled sweep is the only thing that advances the explored boundary"
+        );
+        assert!(
+            !IndexProvenance::OperatorSupplied.counts_as_coverage(),
+            "an operator replay must never be citable as coverage (T-A11)"
+        );
+        assert!(
+            !IndexProvenance::PullRequest.counts_as_coverage(),
+            "a per-PR tripwire re-checks the same daily index; it advances nothing"
+        );
         assert_eq!(
-            coverage.len(),
+            IndexProvenance::ALL
+                .iter()
+                .filter(|p| p.counts_as_coverage())
+                .count(),
             1,
             "exactly one provenance may be credited as coverage"
         );
-        for p in &all {
-            assert!(!p.tag().is_empty(), "every provenance needs a banner tag");
+    }
+
+    /// The accepted-values string is derived from the variant set.
+    ///
+    /// Bites against the CLI diagnostic drifting from the enum — the
+    /// defect this replaced, where one error path listed three values
+    /// and another listed two.
+    #[test]
+    fn accepted_values_lists_every_variant() {
+        let listed = IndexProvenance::accepted_values();
+        for p in IndexProvenance::ALL {
+            assert!(
+                listed.contains(p.tag()),
+                "accepted_values() omits {}: {listed}",
+                p.tag()
+            );
         }
+    }
+
+    /// `from_tag` round-trips every variant and rejects an unknown.
+    #[test]
+    fn from_tag_round_trips() {
+        for p in IndexProvenance::ALL {
+            assert_eq!(IndexProvenance::from_tag(p.tag()), Some(p));
+        }
+        assert_eq!(IndexProvenance::from_tag("schedule"), None);
     }
 }

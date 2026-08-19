@@ -754,7 +754,19 @@ jobs:
         # §13: a green tick that does not evidence its own subject is
         # not evidence. Without this, a run checking 1024 pairs and one
         # checking zero look identical.
-        run: cat rust/rotating-pr.log
+        run: |
+          set -euo pipefail
+          # Guarded: if the job failed BEFORE the lane wrote its log —
+          # a toolchain install stall, a C-reference build failure —
+          # then an unguarded `cat` fails too and buries the real error
+          # under a missing-file message. A diagnostic step that can
+          # itself fail is a diagnostic that obscures.
+          if [ -f "rust/rotating-pr.log" ]; then
+            cat "rust/rotating-pr.log"
+          else
+            echo "no rotating log at rust/rotating-pr.log — the lane did not reach its run step."
+            echo "The failure is in an earlier step; this is not a divergence."
+          fi
       - name: Upload divergence forensics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -929,7 +941,19 @@ jobs:
         # evidence its own subject. `always()` so the record appears on
         # success and failure alike, and the banner's rotation binding
         # is readable without downloading an artifact.
-        run: cat "rust/rotating-${{ matrix.branch }}.log"
+        run: |
+          set -euo pipefail
+          # Guarded: if the job failed BEFORE the lane wrote its log —
+          # a toolchain install stall, a C-reference build failure —
+          # then an unguarded `cat` fails too and buries the real error
+          # under a missing-file message. A diagnostic step that can
+          # itself fail is a diagnostic that obscures.
+          if [ -f "rust/rotating-${{ matrix.branch }}.log" ]; then
+            cat "rust/rotating-${{ matrix.branch }}.log"
+          else
+            echo "no rotating log at rust/rotating-${{ matrix.branch }}.log — the lane did not reach its run step."
+            echo "The failure is in an earlier step; this is not a divergence."
+          fi
       - name: Upload divergence forensics
         if: failure()
         uses: actions/upload-artifact@v4
