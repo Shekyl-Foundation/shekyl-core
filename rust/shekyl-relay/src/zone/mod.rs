@@ -338,7 +338,12 @@ impl Zone {
     /// without making it anonymous, and `RelayZone::is_encrypted` is the one
     /// place that would change. [`LinkSecrecy`] can only be constructed from a
     /// [`shekyl_relay_privacy::RelayZone`], so a caller cannot mint "encrypted"
-    /// beside a cleartext identity.
+    /// beside a cleartext identity. This constructor still takes secrecy as a
+    /// **parameter**, not a [`shekyl_relay_privacy::RelayZone`]: Design A is
+    /// that transport is a parameter, not a topology, and handing the
+    /// scheduler the overlay identity would recouple the axes this type exists
+    /// to keep apart. The FFI (and the cutover's in-process caller) derives
+    /// params, reach, and secrecy from one discriminant at the adapter.
     ///
     /// **A noise carrier's channel count must equal
     /// [`inherited::NOISE_CHANNELS`]** — `stems` doubles as the channel count

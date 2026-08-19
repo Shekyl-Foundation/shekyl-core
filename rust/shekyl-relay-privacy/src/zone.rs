@@ -55,6 +55,13 @@ impl RelayZone {
     /// earns no noise. Both choose the answer that cannot silently weaken a
     /// protection — which is why they point opposite ways.
     ///
+    /// **The hop that matters is the overlay leaving the machine.** A loopback
+    /// SOCKS into a local Tor/i2p daemon (`--tx-proxy tor,127.0.0.1:9050`) is
+    /// the standard first hop and is not a wire observer: Tor/i2p encrypts
+    /// what leaves. Do not re-key this predicate on the SOCKS endpoint's
+    /// address — that collapses overlay secrecy into first-hop locality, which
+    /// is a connect-path concern and a different axis.
+    ///
     /// Callers that need secrecy as a *value* (a zone constructor argument,
     /// a stored axis) go through [`LinkSecrecy::of`], which is the only way
     /// to mint one. This predicate stays the defining function.
