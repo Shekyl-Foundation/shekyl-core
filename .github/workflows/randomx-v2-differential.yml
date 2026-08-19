@@ -241,15 +241,33 @@ jobs:
         # sites add a separate `rustup target add` step, the
         # depends.yml pattern).
         uses: ./.github/actions/install-rust
-      - name: Install Ninja (CMake is preinstalled on the runner image)
-        # `ubuntu-latest` images carry CMake by default, but we pin
-        # Ninja explicitly because the submodule's CMakeLists builds
-        # ~50 translation units and Ninja's parallelism is materially
-        # faster than the default Makefile generator on the 4-vCPU
-        # runner. Cost: a few seconds of `apt install`.
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. The submodule's CMakeLists wants
+        # Ninja (it builds ~50 translation units and Ninja's parallelism
+        # beats the Makefile generator on a 4-vCPU runner) — but
+        # ubuntu-24.04 already ships Ninja 1.13.2 and CMake 3.31.6, so
+        # the old `apt-get install ninja-build` fetched an OLDER ninja
+        # (1.11.1) over the network for no benefit.
+        #
+        # That step has cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and a merge gate on 2026-08-19 cancelled at 30 minutes
+        # with its actual checks never run. Verifying instead removes
+        # the network from this job and asserts the prerequisites exist
+        # rather than assuming them.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  and ubuntu-24.04-arm both ship CMake + Ninja). If the image" >&2
+              echo "  changed, install it here explicitly rather than assuming." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         # Composite action (.github/actions/build-randomx-v2-ref): one
         # recipe for every lane — the rationale (out-of-band submodule
@@ -425,10 +443,36 @@ jobs:
         # Composite action (.github/actions/install-rust); see the
         # structural-validate job's step comment.
         uses: ./.github/actions/install-rust
-      - name: Install Ninja (CMake is preinstalled on the runner image)
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         uses: ./.github/actions/build-randomx-v2-ref
       - name: concurrent mode (T7 byte-equality + T8 RSS ceiling)
@@ -520,10 +564,36 @@ jobs:
         # Composite action (.github/actions/install-rust); see the
         # structural-validate job's step comment.
         uses: ./.github/actions/install-rust
-      - name: Install Ninja (CMake is preinstalled on the runner image)
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         uses: ./.github/actions/build-randomx-v2-ref
       - name: Install cargo-mutants
@@ -598,10 +668,36 @@ jobs:
           submodules: recursive
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
-      - name: Install Ninja (CMake is preinstalled on the runner image)
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         uses: ./.github/actions/build-randomx-v2-ref
       - name: Install cargo-mutants
@@ -718,10 +814,36 @@ jobs:
           submodules: recursive
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
-      - name: Install Ninja (CMake is preinstalled on the runner image)
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         uses: ./.github/actions/build-randomx-v2-ref
       - name: Resolve rotation index
@@ -857,10 +979,36 @@ jobs:
           ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || matrix.branch }}
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
-      - name: Install Ninja (CMake is preinstalled on the runner image)
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         uses: ./.github/actions/build-randomx-v2-ref
       - name: Resolve rotation index
@@ -1164,14 +1312,32 @@ jobs:
         # Composite action (.github/actions/install-rust); rustup-init
         # resolves the aarch64 host triple itself.
         uses: ./.github/actions/install-rust
-      - name: Install Ninja (CMake is preinstalled on the runner image)
-        # cmake is listed explicitly (unlike the x86 jobs, which lean on
-        # ubuntu-latest carrying it): the arm image is a separate build
-        # and this lane must not die at `cmake: command not found`
-        # before its actual checks run. Idempotent if preinstalled.
+      - name: Verify CMake + Ninja are present
+        # The arm image is a separate build, so its inventory was
+        # checked separately rather than assumed to match x86:
+        # ubuntu-24.04-arm ships CMake 3.31.6 and Ninja 1.13.2, the same
+        # as ubuntu-24.04. The old apt step was therefore not merely
+        # redundant here — it installed cmake 3.28.3 over the image's
+        # 3.31.6, actively DOWNGRADING the toolchain this lane tests
+        # with, on top of the mirror-stall risk that killed four jobs
+        # across 2026-08-18/19.
+        #
+        # The concern the old comment named — dying at `cmake: command
+        # not found` before the real checks run — is now met directly by
+        # asserting both tools rather than by installing them.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  and ubuntu-24.04-arm both ship CMake + Ninja). If the image" >&2
+              echo "  changed, install it here explicitly rather than assuming." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference (aarch64)
         # Composite action: the SAME recipe as the x86 lanes by
         # construction — on this runner it produces the arm
