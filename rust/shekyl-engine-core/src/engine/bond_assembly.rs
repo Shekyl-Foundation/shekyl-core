@@ -474,15 +474,27 @@ pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
 /// vin's `write`/`read` coupling guarantees a JoinMarket vin carries a
 /// canonical-length key.
 ///
-/// Refuses a non-JoinMarket vin: JoinMarket is the only post kind valid at
-/// genesis, and the `bond_spend_pk` coupling below is JoinMarket-specific.
+/// Refuses a non-JoinMarket vin, because this assembler only knows how to
+/// build a JoinMarket one — the `bond_spend_pk` coupling below is
+/// JoinMarket-specific.
+///
+/// It does **not** refuse because other kinds are consensus-invalid. They are
+/// not: `ARCHIVAL_BOND_GATE4.md` §3.4 gives `Unbond` a full allowed-terms row
+/// with implemented verify, and marks both `HoldingsUpdate` arms V3.0. The
+/// gap is that the wallet has no producer for them, which is drift rather
+/// than a decided posture — filed in `docs/FOLLOWUPS.md` ("Staking has no
+/// exit") with a pre-genesis deadline, since staking is default-on and
+/// genesis-frozen.
 pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, BondAssemblyError> {
     match vin.post_kind {
         RetentionBondPostKind::JoinMarket => {}
         other => {
             return Err(BondAssemblyError::build(
                 "wire bond-post mapping",
-                format!("non-JoinMarket post kind {other:?} is invalid at genesis"),
+                format!(
+                    "post kind {other:?} has no wallet-side producer yet; \
+                     only JoinMarket can be assembled"
+                ),
             ));
         }
     }

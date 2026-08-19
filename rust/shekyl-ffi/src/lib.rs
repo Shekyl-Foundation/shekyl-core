@@ -63,27 +63,6 @@ compile_error!(
 // them.
 pub mod account_ffi;
 
-// Engine-file envelope (WALLET_FILE_FORMAT_V1) FFI surface. Six entry points
-// matching `shekyl_crypto_pq::wallet_envelope`:
-//   - shekyl_wallet_keys_inspect    (AAD-only header view)
-//   - shekyl_wallet_keys_seal       (create .wallet.keys)
-//   - shekyl_wallet_keys_open       (decrypt .wallet.keys)
-//   - shekyl_wallet_keys_rewrap_password (rotate wrapping password)
-//   - shekyl_engine_state_seal      (seal .wallet)
-//   - shekyl_engine_state_open      (open .wallet)
-// Each function follows the two-call sizing + zeroize-on-failure + narrow
-// error-code discipline documented in the module header. Consumed by
-// wallet2.cpp in the commit 2 slice.
-pub mod wallet_envelope_ffi;
-
-// Opaque high-level `ShekylWallet` handle wrapping `WalletFile` and
-// the loaded `WalletLedger`. Where `wallet_envelope_ffi` exposes the raw
-// envelope primitives so C++ can compose its own orchestration, this
-// module exposes a single lifecycle surface (create / open / save /
-// rotate / free) plus a non-secret metadata getter and a postcard ledger
-// export. Consumed by wallet2.cpp in the 2k/2l rewire slices.
-pub mod engine_file_ffi;
-
 // LWMA-1 difficulty-adjustment FFI export. Wraps `shekyl_difficulty::
 // lwma1_next` in a C-ABI surface using the `ShekylU128` two-u64
 // decomposition per `DAA_LWMA1.md` §6.1. Consumed by the Phase 2

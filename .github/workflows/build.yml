@@ -371,7 +371,7 @@ jobs:
           cmake --build build --target test
 
   build-windows-msvc:
-    name: 'Windows (MSVC, daemon+wallet)'
+    name: 'Windows (MSVC, daemon)'
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
@@ -418,10 +418,16 @@ jobs:
             -DUSE_DEVICE_TREZOR=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
-      - name: build daemon, wallet, and wallet-rpc
+      # Daemon only. The C++ wallet stack was deleted at Phase 5, and the
+      # Rust wallet binaries are not built for Windows targets — see
+      # docs/design/WINDOWS_WALLET_SUPPORT.md. The Windows wallet gap is
+      # neither caused nor widened here: the `wallet` target built a binary
+      # that has not shipped since the C1/C2 install cutover (#500). Slice
+      # W-4 of that design round owns renaming this job back.
+      - name: build daemon
         shell: pwsh
         run: |
-          cmake --build build --config Release --target daemon wallet --parallel 2
+          cmake --build build --config Release --target daemon --parallel 2
       - name: smoke-test daemonizer removal
         shell: pwsh
         # After the V3.1 daemonizer removal, shekyld.exe must (a) link
@@ -437,8 +443,8 @@ jobs:
         # migration message they grep for comes from
         # src/common/removed_flags.{h,cpp}, and clap answers "unexpected
         # argument" instead. The shim's wallet-side caller
-        # (src/wallet/wallet_args.cpp) survives only as library code with
-        # no binary to exercise it, and is deleted with wallet2 at Phase 5.
+        # (src/wallet/wallet_args.cpp) was deleted with wallet2 at Phase 5,
+        # so shekyld is now the shim's only caller.
         #
         # No wallet binary is checked on Windows because none is built
         # there: the Rust wallet stack is Unix-only (UDS transport, 0600

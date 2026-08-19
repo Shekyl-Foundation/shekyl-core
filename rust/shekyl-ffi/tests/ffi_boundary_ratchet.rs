@@ -72,7 +72,11 @@ const BASELINE: &[(&str, usize, usize)] = &[
     ("archival_ffi/tests.rs", 0, 3),
     ("ct_balance_ffi.rs", 5, 0),
     ("difficulty_ffi.rs", 2, 0),
-    ("engine_file_ffi.rs", 2, 1),
+    // RETIRED (Phase 5): `engine_file_ffi.rs` was deleted with the C++ wallet
+    // stack — it existed only to serve `wallet2.cpp`. The pin is retired, not
+    // retargeted: a check that measured a C++ boundary does not become a check
+    // of the Rust wallet stack by re-pointing it. `shekyl-engine-file` is
+    // consumed directly as a Rust crate now, with no `extern "C"` edge to bound.
     ("legacy_core.rs", 4, 0),
     ("legacy_curve_tree.rs", 4, 0),
     ("legacy_fcmp.rs", 1, 6),

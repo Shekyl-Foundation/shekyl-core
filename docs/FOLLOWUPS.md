@@ -47,6 +47,45 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Staking has no exit: the wallet can build one of the four bond-post
+  kinds, and the refusal cites a consensus fact that is not true**
+  (added 2026-08-19, surfaced while scoping the Phase-5 deletion).
+  `bond_assembly.rs::wire_bond_post_input` accepts `JoinMarket` and
+  refuses every other `post_kind` with *"invalid at genesis"*. That
+  statement does not match consensus:
+  [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md) §3.4 gives
+  `Unbond` (`post_kind` 2) a full allowed-terms row with implemented
+  verify (`verify_unbond_bond_post` / `unbond_connect` / `unbond_pop`,
+  all FFI-exported), and marks **both `HoldingsUpdate` arms "V3.0"**.
+  `MAX_BOND_BAD_INTERVALS` is even documented as genesis-frozen
+  *because* `Unbond` verify rejects on it.
+
+  **This is drift, not a posture** (ruled 2026-08-19). It accumulated
+  across concurrent plan rounds and was never decided; the parity
+  matrix's row 9 note ("unbonding entry design pending") understates it,
+  because the blocker is an explicit refusal in the assembler, not an
+  absent design.
+
+  **Consequences as the code stands:** a staker can bond in and cannot
+  bond out or adjust holdings. `stake_engine/retire.rs` performs an
+  irreversible persona-key wipe on a confirmed `Unbond` witness, so a
+  consumer ships without its producer — `RetireBondedPersona` carries
+  `#[allow(dead_code)]` naming the absent sender. Staking is default-on
+  and genesis-frozen, which is what gives this a deadline rather than a
+  backlog slot.
+
+  **Explicitly NOT a Phase-5 blocker** (V3_WALLET_DECISION_LOG,
+  2026-08-19): the C++ wallet never had a staking surface, so the
+  deletion neither caused this nor is its fix. The work is Rust-only by
+  construction.
+
+  **Closed when** the wallet can produce `Unbond` and both
+  `HoldingsUpdate` arms, the assembler's refusal states an accurate
+  reason for whatever remains refused, and the three legs of `unstake`
+  (the `Unbond` producer, the decorrelated `P`→principal drain, the
+  emission claim) have a plan-doc home. *Target: V3.0 pre-genesis —
+  this is a genesis-freeze-sensitive surface, not a V3.1 item.*
+
 - **Release-asset manifest signing owed before the first non-RC release
   tag (added 2026-08-14, SA-6 CBOM close; CORRECTED 2026-08-15 — a wiring
   task, not an open decision).** The original entry posed a three-way
@@ -1876,8 +1915,16 @@ sustainability is unaffected by the recalibration.
     `&BoundClassicalSegment` (keys and bound bytes are one object);
     `-29803` retired unused.
   - **Offline cold-signing** (`describe_transfer`, `sign_transfer`,
-    `submit_transfer`, `transfer --do-not-relay`) — blocked on Phase 2d
-    (`UnsignedTxBundle`/`SignedTxBundle` air-gapped bundles).
+    `submit_transfer`, `transfer --do-not-relay`) — **NOT a pending gate.**
+    A4 (2026-08-06, entry above) descoped air-gapped cold bundles from
+    V3.0: V3.0 ships cold *storage*, not cold *signing*, and
+    `export_unsigned`/`submit_signed` are REJECTED in `wallet_rpc.yaml`.
+    The Phase-2d framing below predates that ruling and does not apply to
+    this bullet. **Rule-21 reopen:** a concrete offline-signing workflow,
+    landed as `UnsignedTxBundle`/`SignedTxBundle` — never as a resurrected
+    wallet2-era binary format. The `-29700..-29799` range stays reserved
+    and unused against that reopening (see the range table in
+    `docs/api/wallet_rpc.yaml`).
   - **`engine_info` wallet-info display** — **CLOSED 2026-08-07 (WI-RPC-4,
     `feat/wallet-rpc-wi-rpc-4-thin`)**. Native `get_wallet_info` aggregates
     live reads; CLI `engine_info` un-stubbed in the same PR.
@@ -1888,8 +1935,10 @@ sustainability is unaffected by the recalibration.
   **Reopen when** the named gating surface lands in `wallet_rpc.yaml` +
   `shekyl-wallet-rpc`; the re-evaluation shape is the landing PR wiring the
   CLI command in the same change (un-stubbing is part of the surface PR's
-  scope, not a separate follow-up). **Target: V3.0 pre-genesis** (all gates
-  are Phase 2c/2d/4b items already in this queue or the phase plan).
+  scope, not a separate follow-up). **Target: V3.0 pre-genesis** for the
+  gated bullets — which, after A4, is none of them: every bullet above is
+  now either CLOSED or descoped-with-a-reversion-clause. This entry stays
+  open-as-record for those clauses, not as pending work.
 
 - **`sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide
   whether a sweep primitive returns** (added 2026-07-22; WI-RPC-2b,
@@ -6495,11 +6544,13 @@ sustainability is unaffected by the recalibration.
   the deferral surfaces; rule 17 amendment cycle is the natural home
   for §4 protocol clarification.
 
-- **`wallet2_ffi_create_wallet` / `on_create_wallet` mainnet-broken
+- **CLOSED BY DELETION 2026-08-19 (Phase 5)** — the subject was deleted
+  with the C++ wallet stack; kept as record. Original entry follows.
+  **`wallet2_ffi_create_wallet` / `on_create_wallet` mainnet-broken
   FFI cleanup (post-Electrum-words-removal cleanup series; pre
   Stage 1 PR 4 kickoff).** The wallet2 FFI / RPC fresh-wallet
   entry points (`wallet2_ffi_create_wallet` per
-  [`src/wallet/wallet2_ffi.cpp:299`](../src/wallet/wallet2_ffi.cpp);
+  `src/wallet/wallet2_ffi.cpp:299`;
   `on_create_wallet` per the RPC handler) route through
   `wallet2::generate(...)` → `account_base::generate(...)` →
   `shekyl_account_generate_from_raw_seed`, which is testnet /
@@ -6586,9 +6637,9 @@ sustainability is unaffected by the recalibration.
   fires first.
 
   **Cross-references.**
-  [`src/wallet/wallet2_ffi.cpp:299`](../src/wallet/wallet2_ffi.cpp)
+  `src/wallet/wallet2_ffi.cpp:299`
   (`wallet2_ffi_create_wallet` definition);
-  [`src/wallet/wallet2_ffi.h`](../src/wallet/wallet2_ffi.h)
+  `src/wallet/wallet2_ffi.h`
   (corresponding declaration);
   [`src/cryptonote_basic/account.cpp:443–446`](../src/cryptonote_basic/account.cpp)
   (the raw-seed-on-mainnet restriction that drives the
@@ -6681,6 +6732,19 @@ sustainability is unaffected by the recalibration.
   the stressnet-readiness review for (a); the introducing PR's
   review for (b). *Target:* retired by the Phase 5 deletion commit,
   or implemented at whichever reopening criterion fires first.
+
+  **RETIRED 2026-08-19 — Phase 5 landed and neither criterion fired.**
+  The seed-material transit buffers this entry scoped lived on the
+  `wallet2_ffi` BIP-39 ingestion path (`query_key("mnemonic")`
+  regeneration), which was deleted with the C++ wallet stack. Criterion
+  (a) did not fire (Phase 5 did not slip past stressnet start) and
+  neither did (b) (no new C++ consumer routed seed or passphrase material
+  through `wipeable_string` before the deletion). `epee::wipeable_string`
+  survives in the daemon, but with no C++ seed-material consumer left, the
+  `ELECTRUM_WORDS_REMOVAL.md` §4.8 residual has no remaining exposure to
+  commit to. **Reopen only if** a daemon-side consumer routes seed or
+  passphrase material through it — at which point the mlock-backed
+  allocator lands with that consumer, not before.
 
   **Cross-references.**
   [`contrib/epee/include/wipeable_string.h:83`](../contrib/epee/include/wipeable_string.h)
@@ -7511,7 +7575,10 @@ sustainability is unaffected by the recalibration.
   itself** (added 2026-08-05, credit-wire CW-3 shim). Phase 2 landed
   `Blockchain::verify_block_attestation` (recompute-and-compare + per-pass
   countersignature) at both admission sites, replacing the interim
-  empty-root check. Two things must land in the cutover PR (Phase 5) *before*
+  empty-root check. Two things must land in the credit-wire cutover PR
+  (**CW-3…CW-5**, not the wallet rewrite's Phase 5 — this entry sits in the
+  wallet section but its subject is block production, which wallet Phase 5
+  does not touch; rule 94 §2) *before*
   producers emit populated blocks, and neither is visible to the empty-witness
   gates that pass pre-cutover:
   1. **Miner-local witness wiring.** `handle_block_found`
@@ -9404,8 +9471,8 @@ sustainability is unaffected by the recalibration.
   V3.1 scope; this row makes the work item explicit.) Today two parallel
   representations of "a wallet's view of one of its own outputs" coexist:
   the inherited C++ `struct transfer_details` in
-  [`src/wallet/wallet2.h`](../src/wallet/wallet2.h) and
-  [`src/wallet/wallet_rpc_server_commands_defs.h`](../src/wallet/wallet_rpc_server_commands_defs.h)
+  `src/wallet/wallet2.h` and
+  `src/wallet/wallet_rpc_server_commands_defs.h`
   (Monero-genesis layout, owns the wallet2 spend-detection / balance /
   payment-id-matching / change-password / store-load paths), and the
   Rust `TransferDetails` in
@@ -10482,7 +10549,9 @@ its wake.
   V3.1+** (defense-in-depth; no chain-state migration cost; daemon relay is
   the authoritative validator).
 
-- **`wallet2` has no `generate_from_bip39` entry point — by design;
+- **CLOSED BY DELETION 2026-08-19 (Phase 5)** — the subject was deleted
+  with the C++ wallet stack; kept as record. Original entry follows.
+  **`wallet2` has no `generate_from_bip39` entry point — by design;
   do not add one.** Surfaced 2026-05-05 (Bug 4 in
   `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`) when an
   attempt to add C++/FFI coverage for the wallet2 BIP-39 round-trip
@@ -10522,7 +10591,9 @@ its wake.
   with `wallet_storage.cpp`; the Rust BIP-39 round-trip test is the
   only remaining functional artifact, which is correct.
 
-- **`wallet2` 0-change dummy-destination address generation should
+- **CLOSED BY DELETION 2026-08-19 (Phase 5)** — the subject was deleted
+  with the C++ wallet stack; kept as record. Original entry follows.
+  **`wallet2` 0-change dummy-destination address generation should
   migrate to a deterministic per-network burn address.**
   `src/wallet/wallet2.cpp::transfer_selected_rct` calls the
   network-aware `account_base::generate(...)` overload with
@@ -10551,7 +10622,9 @@ its wake.
   whatever the Rust transfer pipeline picks for this slot replaces
   the C++ dummy.
 
-- **Add a BIP-39 / raw-seed recovery entry to
+- **CLOSED BY DELETION 2026-08-19 (Phase 5)** — the subject was deleted
+  with the C++ wallet stack; kept as record. Original entry follows.
+  **Add a BIP-39 / raw-seed recovery entry to
   `stop_background_sync` in the Rust JSON-RPC server.** Pre-Phase-2
   this entry was framed as "replace the Electrum-words seed-
   recovery branch with BIP-39." The Electrum-words branch
@@ -10580,7 +10653,9 @@ its wake.
   §2.4 G1; commit `255ea0abb` (`wallet-rpc: drop seed-recovery
   branch from stop_background_sync`).
 
-- **Replace `wallet_rpc_server::on_create_wallet` and
+- **CLOSED BY DELETION 2026-08-19 (Phase 5)** — the subject was deleted
+  with the C++ wallet stack; kept as record. Original entry follows.
+  **Replace `wallet_rpc_server::on_create_wallet` and
   `wallet2_ffi::create` raw-seed wallet creation with a BIP-39
   entry on MAINNET / STAGENET.** Bug 4-adjacent in
   `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`. Both RPCs
@@ -10607,7 +10682,9 @@ its wake.
   the MAINNET / STAGENET native flow; the C++ raw-seed RPCs retire
   with `wallet_rpc_server.cpp` / `wallet2_ffi.cpp`.
 
-- **`wallet2::get_daemon_blockchain_target_height` lets asio
+- **CLOSED BY DELETION 2026-08-19 (Phase 5)** — the subject was deleted
+  with the C++ wallet stack; kept as record. Original entry follows.
+  **`wallet2::get_daemon_blockchain_target_height` lets asio
   `system_error` escape the `err`-string contract.**
   `tools::wallet2::get_daemon_blockchain_target_height(string& err)`
   documents an `err`-out-parameter contract: on RPC failure, `err`
@@ -10653,7 +10730,7 @@ by the rewrite plan's half-day review gate, item 3):
 | Cross-linked, not absorbed | `monero-oxide` un-pin Operation B (40 upstream commits) | V3.1.x un-pin plan (peer to rewrite, parallelizable) |
 | Cross-linked, not absorbed | Workspace clippy `-D warnings` cleanup | V3.1.x dedicated pass (after rewrite stabilizes) |
 | Cross-linked, optional | `shekyl-cli` offline signing QR-chunked transfer (V3.2 below) | Phase 3b (optional `--format=qr-chunks` on bundles) |
-| Independent of rewrite | `removed_flags` shim sunset (V3.2 below) | V3.2 cleanup pass — naturally retires when `shekyl-wallet-rpc` Rust cutover lands |
+| Independent of rewrite | `removed_flags` shim sunset (V3.2 below) | V3.2 cleanup pass — **not** coupled to the Rust cutover (that landed at #500 without retiring the shim); one call site remains in `shekyld` |
 | Independent of rewrite | Chore #4 platform-gate audit (V3.2 below) | V4 pre-audit |
 | Independent of rewrite | Restore semantic thread labels (V3.2 below) | V3.2 |
 | Independent of rewrite | `rand` 0.9 / `curve25519-dalek` 5.x migration (V3.1.x above) | Gated on upstream releases |
@@ -10664,7 +10741,9 @@ the tx-pool / monero-oxide / clippy items keep their existing target
 versions; they are listed here only so the rewrite's review gate has
 one place to confirm each item's relationship to the wallet stack.
 
-- **`wallet2.cpp` absorption — sub-commits 2l/2m/2n.** The
+- **CLOSED BY DELETION 2026-08-19 (Phase 5)** — the subject was deleted
+  with the C++ wallet stack; kept as record. Original entry follows.
+  **`wallet2.cpp` absorption — sub-commits 2l/2m/2n.** The
   `wallet-state-promotion` plan's
   2l cache rewire (Cursor plan `2l-cache-rewire_80a08559`, absorbed —
   see the deferral note in
@@ -11548,11 +11627,22 @@ one place to confirm each item's relationship to the wallet stack.
   when they pass `--detach`, `--pidfile`, or the Windows `--*-service`
   flags that the daemonizer removal retired. The flag list is
   maintained there as a single source of truth — `CHANGELOG.md` entries
-  reference the file rather than duplicating the list. The file is
-  deleted in V3.2 alongside the `shekyl-wallet-rpc` Rust cutover (which
-  removes one of the two call sites); `shekyld`'s call site is deleted
-  in the same V3.2 cleanup pass. Greppable as `TODO(v3.2)` in the file
-  header.
+  reference the file rather than duplicating the list. Greppable as
+  `TODO(v3.2)` in the file header.
+
+  **Trigger corrected 2026-08-19 (PR #507).** This entry said the file
+  "is deleted in V3.2 alongside the `shekyl-wallet-rpc` Rust cutover
+  (which removes one of the two call sites)". That cutover landed at
+  #500 and the wallet-side call site (`src/wallet/wallet_args.cpp`) died
+  at Phase 5 — so the stated trigger **fired without retiring anything**,
+  because `shekyld`'s call site was never coupled to it. A trigger that
+  can fire unnoticed is the failure mode this queue exists to prevent, so
+  the condition is restated as what it actually is: **there is one call
+  site (`src/daemon/main.cpp:196`), and the shim retires when we judge
+  V3.1's removed flags to have been gone long enough that an operator
+  passing one should get a parser error instead of a migration note.**
+  That is a judgement call with no upstream dependency — nothing else
+  needs to land first. *Target: V3.2.*
 
 - **`shekyl-daemon-rpc` staticlib: `tracing::*` calls silently dropped.**
   The Rust `shekyl-daemon-rpc` crate at `rust/shekyl-daemon-rpc` is

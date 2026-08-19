@@ -4831,3 +4831,45 @@ tx_fee_model,daemon,bond_orchestrator}.rs`;
 `rust/shekyl-wallet-rpc/src/lifecycle.rs`; PR #490 review round 2.
 
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
+
+## 2026-08-19 — Phase 5 does not wait on staking: the C++ wallet never had it
+
+**Decision.** `unstake` and `claim` are **out of the Phase-4 completion
+gate**, and the Phase-5 deletion of the C++ wallet stack lands without
+them. Staking exit is built once, in Rust, after the deletion — not
+before it and not on both sides of the FFI.
+
+**Why.** `WALLET_REWRITE_PLAN.md` gates Phase 5 on "after Phase 4 lands,"
+and Phase 4's specified method list names `unstake` and `claim`, neither
+of which is routed in `shekyl-wallet-rpc`. Read literally, that made the
+deletion wait on a staking surface.
+
+It inverts on one fact, verified at source: **`wallet2` has never had a
+staking surface at all.** `grep -ci` for stake or bond over
+`src/wallet/wallet2.cpp`, `wallet2.h`, and
+`wallet_rpc_server_commands_defs.h` returns 0, 0, 0. So holding the
+deletion would have kept 13,360 lines of C++ compiling in order to serve
+a capability they never carried — and, while they compiled, invited more
+work to be built against them. That is the same dynamic that forced the
+C1/C2 install cutover to land inside its own PR rather than after it.
+
+The wallet-side unbond assembler is *already* Rust
+(`shekyl-engine-core/src/engine/bond_assembly.rs`), so cutting first
+strands nothing. It removes the C++ surface that Rust-only staking work
+would otherwise have had to stay compatible with.
+
+**What this does NOT decide.** The staking-exit gap itself is real and
+keeps its own deadline: no code in the tree produces an `Unbond` post,
+while `stake_engine/retire.rs` consumes one, and
+`bond_assembly.rs::wire_bond_post_input` refuses every non-JoinMarket
+post kind as "invalid at genesis" — which contradicts
+`ARCHIVAL_BOND_GATE4.md`, where `Unbond` has implemented consensus verify
+and both `HoldingsUpdate` arms are marked V3.0. That contradiction is
+**drift**, not a posture: it accumulated across concurrent plan rounds
+and was never ruled. It is filed as its own lane with a genesis deadline;
+this entry only removes it from Phase 5's critical path.
+
+**Reference.** `WALLET_REWRITE_PLAN.md` §Phase 5 (principle 3, single
+commit); the Phase-5 deletion commit message (dispositions D1/D2);
+`ARCHIVAL_BOND_GATE4.md` §3.4 allowed-terms table;
+`docs/CLI_PARITY_MATRIX.md` row 9.
