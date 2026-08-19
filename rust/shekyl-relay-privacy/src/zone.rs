@@ -46,6 +46,14 @@ impl RelayZone {
     /// ordinary internet traffic is not encrypted. Encrypting it would make
     /// [`Self::Public`] eligible for noise **without** making it anonymous,
     /// and this is the one place that would change.
+    ///
+    /// [`Self::Invalid`] answers **false**, and the asymmetry with
+    /// [`Self::from_ffi_u8`] is deliberate rather than an oversight. A corrupt
+    /// byte draws the *anonymity* parameters there because the longer embargo
+    /// is the safe direction when the zone is unknown. Here the safe direction
+    /// is the opposite one: an unknown link is not presumed encrypted, so it
+    /// earns no noise. Both choose the answer that cannot silently weaken a
+    /// protection — which is why they point opposite ways.
     #[must_use]
     pub const fn is_encrypted(self) -> bool {
         matches!(self, Self::I2p | Self::Tor)

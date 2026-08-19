@@ -1298,71 +1298,65 @@ namespace levin
        What is *not* symmetric is the txpool class an origin keeps — see
        `originated_stays_in_zone` at the record sites in `dandelionpp_notify`. */
 
-    if (shekyl_relay_zone_covert_enabled(zone_->relay.get()) && !zone_->channels.empty())
+    /* The inherited covert branch stood here and is DELETED, not repaired
+       (§2.9 step 4). Ruling of 2026-08-19: **Dandelion++ runs on every zone
+       regardless of noise.** The carrier and the phase are independent axes,
+       and that branch collapsed them in both directions at once — it demoted
+       a `stem` to `local` under `MWARNING("Dandelion++ stem not supported over
+       noise networks")`, and then broadcast the result to *every* channel,
+       which is the opposite of what a stem is. Its premise was the
+       sybil-substitution fallacy §64 named: that a noise network stands in for
+       Dandelion++. It does not. Noise masks the node↔proxy wire against an
+       **external** observer; Dandelion++ defends against an **internal**
+       adversarial peer. Enabling one is not a reason to disable the other.
+
+       Nothing replaces it here. The Rust executor (`CovertQueues`) owns the
+       carrier now, and it attaches *below* the phase rather than above it —
+       `plan_dispatch` decides phase and carrier in one call and the carrier
+       never re-decides the plan. Until the daemon cutover gives that executor
+       an in-process caller, a noise-configured zone runs its channels and
+       carries nothing, which is honest: it spends bandwidth and leaks no
+       phase. The branch was unreachable in production either way — both
+       notifier constructions pass a null covert payload.
+
+       Recording parity was checked before the deletion, since this is the one
+       place it could have regressed state rather than routing. `fluff` makes
+       the identical `on_transactions_relayed` call below. `stem`/`local` are
+       recorded inside `dandelionpp_notify`'s `record_relayed`, with
+       `originated_stays_in_zone` applied — the *planned* method rather than
+       the blanket `local` downgrade, which is the repair and not a loss.
+       `none`/`block` were being RELAYED by the deleted branch, which had no
+       switch at all; the arm below refuses them, and `none` means do not
+       relay. */
+
+    switch (tx_relay)
     {
-      // covert send in "noise" channel
-      static_assert(
-        CRYPTONOTE_MAX_FRAGMENTS * CRYPTONOTE_NOISE_BYTES <= LEVIN_DEFAULT_MAX_PACKET_SIZE, "most nodes will reject this fragment setting"
-      );
-
-      if (tx_relay == relay_method::stem)
-      {
-        MWARNING("Dandelion++ stem not supported over noise networks");
-        tx_relay = relay_method::local; // do not put into stempool embargo (hopefully not there already!).
-      }
-
-      core_->on_transactions_relayed(epee::to_span(txs), tx_relay, zone_->nzone);
-
-      // Padding is not useful when using noise mode. Send as stem so receiver
-      // forwards in Dandelion++ mode.
-      epee::byte_slice message = epee::levin::make_fragmented_notify(
-        zone_->covert_payload.size(), NOTIFY_NEW_TRANSACTIONS::ID, make_tx_message(std::move(txs), false, false)
-      );
-      if (CRYPTONOTE_MAX_FRAGMENTS * zone_->covert_payload.size() < message.size())
-      {
-        MERROR("notify::send_txs provided message exceeding covert fragment size");
+      default:
+      case relay_method::none:
+      case relay_method::block:
         return false;
-      }
+      case relay_method::stem:
+      case relay_method::local:
+        /* GATE 3 of 3, deleted at §89.5. This was gated on
+           `zone_->nzone == public_`, so stem/local on i2p/tor fell
+           through into the fluff arm and the anonymity zone diffused where
+           the design said it stemmed (§63). Tor is a transport like the
+           clear internet; changing the transport does not change the graph.
 
-      for (std::size_t channel = 0; channel < zone_->channels.size(); ++channel)
-      {
+           The outbound-only fluff rule is unaffected and still applies when
+           this stem later fluffs — it travels with the zone's `reach`
+           (`FluffReach::OutboundOnly`, set from `nzone != public_` in
+           `make_relay_zone`), which no stemming decision touches. */
+        // this will change a local tx to stem or fluff ...
         boost::asio::dispatch(
-          zone_->channels[channel].strand,
-          queue_covert_notify{zone_, message.clone(), channel}
+          zone_->strand,
+          dandelionpp_notify{zone_, core_, std::move(txs), source, tx_relay}
         );
-      }
-    }
-    else
-    {
-      switch (tx_relay)
-      {
-        default:
-        case relay_method::none:
-        case relay_method::block:
-          return false;
-        case relay_method::stem:
-        case relay_method::local:
-          /* GATE 3 of 3, deleted at §89.5. This was gated on
-             `zone_->nzone == public_`, so stem/local on i2p/tor fell
-             through into the fluff arm and the anonymity zone diffused where
-             the design said it stemmed (§63). Tor is a transport like the
-             clear internet; changing the transport does not change the graph.
-
-             The outbound-only fluff rule is unaffected and still applies when
-             this stem later fluffs — it travels with the zone's `reach`
-             (`FluffReach::OutboundOnly`, set from `nzone != public_` in
-             `make_relay_zone`), which no stemming decision touches. */
-          // this will change a local tx to stem or fluff ...
-          boost::asio::dispatch(
-            zone_->strand,
-            dandelionpp_notify{zone_, core_, std::move(txs), source, tx_relay}
-          );
-          break;
-        case relay_method::fluff:
-          core_->on_transactions_relayed(epee::to_span(txs), tx_relay, zone_->nzone);
-          boost::asio::dispatch(zone_->strand, relay_fluff{zone_, std::move(txs), source, core_});
-          break;
-      }
+        break;
+      case relay_method::fluff:
+        core_->on_transactions_relayed(epee::to_span(txs), tx_relay, zone_->nzone);
+        boost::asio::dispatch(zone_->strand, relay_fluff{zone_, std::move(txs), source, core_});
+        break;
     }
     return true;
   }

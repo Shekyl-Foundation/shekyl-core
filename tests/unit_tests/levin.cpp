@@ -2531,86 +2531,6 @@ TEST_F(levin_notify, fluff_via_scheduled_drive)
     expect_fluff_totals(txs);
 }
 
-TEST_F(levin_notify, noise)
-{
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    std::vector<cryptonote::blobdata> txs(1);
-    txs[0].resize(1900, 'h');
-
-    const boost::uuids::uuid incoming_id = random_generator_();
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(2048, false, true);
-    auto &notifier = *notifier_ptr;
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_TRUE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_FALSE(status.has_outgoing);
-    }
-    ASSERT_LT(0u, io_service_.poll());
-    {
-        const auto status = notifier.get_status();
-        EXPECT_TRUE(status.has_noise);
-        EXPECT_TRUE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-
-    {
-        // Dummies only: advance until both sends are out. Which channel fired
-        // per advance is deliberately not asserted here — cadence is the Rust
-        // witness's job (see drive_schedule).
-        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 2u <= s; });
-        EXPECT_EQ(2u, sent);
-        EXPECT_EQ(0u, receiver_.notified_size());
-    }
-
-    EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::local));
-    {
-        const std::size_t sent =
-            drive_schedule(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
-        // ≥ rather than ==: a channel that comes due again after draining its
-        // queue sends a dummy, so real-notification count is the stop
-        // condition and the send count is a floor.
-        EXPECT_LE(2u, sent);
-        // KNOWN-WRONG (§42.5a): every channel receives it, rather than the one
-        // bound to this stem slot. Under §42.3 this becomes 1u.
-        ASSERT_EQ(2u, receiver_.notified_size());
-        for (unsigned i = 0; i < 2u; ++i)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_TRUE(notification._.empty());
-            EXPECT_FALSE(notification.dandelionpp_fluff);
-        }
-    }
-
-    txs[0].resize(3000, 'r');
-    EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::fluff));
-    {
-        const std::size_t sent =
-            drive_schedule(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
-        /* 3000 bytes against a 2048-byte covert payload fragments, so each
-           channel takes two sends per complete notification: two notifications
-           cost at least four sends. `sent == 2` here would mean the message
-           was not fragmented — the property the old two-block structure
-           (first fragments, then completions) could only see through hook
-           synchronization. */
-        EXPECT_LE(4u, sent);
-        ASSERT_EQ(2u, receiver_.notified_size());
-        for (unsigned i = 0; i < 2u; ++i)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_TRUE(notification._.empty());
-            EXPECT_FALSE(notification.dandelionpp_fluff);
-        }
-    }
-}
-
 /*! **TRIPWIRE — this test PINS INHERITED BEHAVIOUR THAT §89 CONTRADICTS.**
 
     Read this before "fixing" it. Both assertions below are deliberate records
@@ -2637,60 +2557,6 @@ TEST_F(levin_notify, noise)
     This annotation exists because the failure mode is specific and cheap: an
     implementer hits a failing regression test and silences the oracle. The
     edit that reds this test is the edit that matters. */
-TEST_F(levin_notify, noise_stem)
-{
-    for (unsigned count = 0; count < 10; ++count)
-        add_connection(count % 2 == 0);
-
-    std::vector<cryptonote::blobdata> txs(1);
-    txs[0].resize(1900, 'h');
-
-    const boost::uuids::uuid incoming_id = random_generator_();
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(2048, false, true);
-    auto &notifier = *notifier_ptr;
-
-    {
-        const auto status = notifier.get_status();
-        EXPECT_TRUE(status.has_noise);
-        EXPECT_FALSE(status.connections_filled);
-        EXPECT_FALSE(status.has_outgoing);
-    }
-    ASSERT_LT(0u, io_service_.poll());
-    {
-        const auto status = notifier.get_status();
-        EXPECT_TRUE(status.has_noise);
-        EXPECT_TRUE(status.connections_filled);
-        EXPECT_TRUE(status.has_outgoing);
-    }
-
-    {
-        // Dummies only: advance until both sends are out. Which channel fired
-        // per advance is deliberately not asserted here — cadence is the Rust
-        // witness's job (see drive_schedule).
-        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 2u <= s; });
-        EXPECT_EQ(2u, sent);
-        EXPECT_EQ(0u, receiver_.notified_size());
-    }
-
-    EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::stem));
-    {
-        const std::size_t sent =
-            drive_schedule(notifier, [this](std::size_t) { return 2u <= receiver_.notified_size(); });
-        // KNOWN-WRONG (§42.5a): the covert branch downgrades stem -> local.
-        // Under §42.3 this becomes `relay_method::stem`.
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
-        EXPECT_LE(2u, sent);
-        ASSERT_EQ(2u, receiver_.notified_size());
-        for (unsigned i = 0; i < 2u; ++i)
-        {
-            auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-            EXPECT_EQ(txs, notification.txs);
-            EXPECT_TRUE(notification._.empty());
-            EXPECT_FALSE(notification.dandelionpp_fluff);
-        }
-    }
-}
-
 /*! CV-1 (§20.5): repointing a covert channel discards any in-flight message
     remainder — the message is restarted from its first fragment or dropped,
     never resumed. The inherited rule lived in `update_channel` as an
@@ -2722,60 +2588,6 @@ TEST_F(levin_notify, noise_stem)
     Negative control (run and observed to fail): removing the rebind's
     `channel.active = nullptr;` in `send_noise` fails this test — the final
     drive exhausts its advances with zero notifications. */
-TEST_F(levin_notify, noise_repoint_discards_in_flight_remainder)
-{
-    add_connection(false); // the one outbound peer; channel 0's slot
-
-    std::vector<cryptonote::blobdata> txs(1);
-    txs[0].resize(3000, 'r'); // > 2048 ⇒ two fragments ⇒ interruptible
-
-    const boost::uuids::uuid incoming_id = random_generator_();
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(2048, false, true);
-    auto &notifier = *notifier_ptr;
-    ASSERT_LT(0u, io_service_.poll());
-
-    // Bind channel 0 at its first (dummy) send. The enqueue guard opens at
-    // send time (§20.3), so the real message below must find it open, or it
-    // is dropped as unbound and nothing is ever in flight to interrupt.
-    {
-        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 1u <= s; });
-        ASSERT_EQ(1u, sent);
-        EXPECT_EQ(0u, receiver_.notified_size());
-    }
-
-    EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::local));
-    EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
-
-    // One more send = the first fragment, and only the first: the message
-    // is now genuinely in flight, and the send below proves it by NOT
-    // having completed a notification.
-    {
-        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 1u <= s; });
-        ASSERT_EQ(1u, sent);
-        ASSERT_EQ(0u, receiver_.notified_size())
-            << "fixture: 3000 bytes must not complete in one 2048-byte send";
-    }
-
-    // Repoint mid-message: successor up, holder down, map refreshed — the
-    // production order for connection churn. All three queue onto the zone
-    // strand; one poll runs them.
-    add_connection(false);  // the successor
-    contexts_.pop_front();  // the holder closes; del_connection notifies
-    notifier.new_out_connection();
-    ASSERT_LT(0u, io_service_.poll());
-
-    {
-        drive_schedule(notifier, [this](std::size_t) { return 1u <= receiver_.notified_size(); });
-        ASSERT_EQ(1u, receiver_.notified_size());
-        auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>();
-        EXPECT_EQ(contexts_.front().get_id(), notification.first)
-            << "the restarted message must land on the successor";
-        EXPECT_EQ(txs, notification.second.txs);
-        EXPECT_TRUE(notification.second._.empty());
-        EXPECT_FALSE(notification.second.dandelionpp_fluff);
-    }
-}
-
 TEST_F(levin_notify, command_max_bytes)
 {
     static constexpr int ping_command = nodetool::COMMAND_PING::ID;
@@ -2901,4 +2713,87 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
 
     EXPECT_EQ(0u, notifier.stem_in_flight())
         << "the same txs arriving from another peer must resolve the observations";
+}
+
+/*! Ruling of 2026-08-19: **Dandelion++ runs on every zone regardless of
+    noise**, and **noise runs only on an encrypted zone**. Three independent
+    axes: *cleartext* versus *encrypted* for the network, *stem* versus *fluff*
+    for the phase, *ordinary* versus *noise* for the carrier.
+
+    The inherited covert branch collapsed the phase into the carrier in both
+    directions at once — it demoted a `stem` to `local` under a warning that
+    "Dandelion++ stem not supported over noise networks", and then broadcast
+    the result to EVERY channel, which is the opposite of what a stem is. Its
+    premise was the sybil-substitution fallacy (§64): that a noise network
+    stands in for Dandelion++. It does not. Noise masks the node↔proxy wire
+    against an EXTERNAL observer; Dandelion++ defends against an INTERNAL
+    adversarial peer.
+
+    That branch is deleted, and this is the witness. The discriminant is the
+    peer count, because it is the assertion the deleted branch would fail:
+    a stem reaches ONE peer; the all-channel broadcast reached two, and the
+    three tests removed with the branch pinned that two as though it were the
+    specification.
+
+    Driven on `relay_method::local` rather than `stem` deliberately. RD-4 makes
+    a local origin always attempt a stem, epoch roll or not, so this is
+    deterministic. The `stem` arm rides the epoch and fluffs correctly during a
+    fluff epoch — which is how the removed `noise_stem` came to pass only ~40%
+    of the time, a flake whose diagnosis was drive-independent and is recorded
+    at §2.6. Any future covert test, in any language, needs a determined epoch
+    rather than a wider drive budget. */
+TEST_F(levin_notify, noise_does_not_override_the_phase)
+{
+    for (unsigned count = 0; count < 10; ++count)
+        add_connection(count % 2 == 0);
+
+    std::vector<cryptonote::blobdata> txs(1);
+    txs[0].resize(1900, 'h');
+
+    const boost::uuids::uuid incoming_id = random_generator_();
+    // i2p: a noise carrier exists only on an encrypted zone, and `Zone::new`
+    // now refuses the cleartext pairing outright rather than downgrading it.
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(2048, false, true);
+    auto &notifier = *notifier_ptr;
+
+    ASSERT_LT(0u, io_service_.poll());
+    {
+        const auto status = notifier.get_status();
+        EXPECT_TRUE(status.has_noise) << "the carrier machinery is still built and scheduled";
+        EXPECT_TRUE(status.connections_filled);
+    }
+
+    {
+        // Dummies still flow with nothing queued. The carrier is not disabled
+        // by this change — it is merely no longer allowed to decide the phase.
+        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 2u <= s; });
+        EXPECT_EQ(2u, sent);
+        EXPECT_EQ(0u, receiver_.notified_size());
+    }
+
+    EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::local));
+    {
+        /* The stop condition counts SENDS, never `notified_size()`. A first
+           version stopped at `1u <= receiver_.notified_size()` and passed with
+           the deleted branch restored — because it halted the drive the moment
+           the first notification landed, so a second one arriving on the next
+           advance was never observed. The oracle was iterating on the very
+           quantity it asserts. Verified by restoring `origin/dev`'s
+           `levin_notify.cpp` and rebuilding: it stayed green, which is the
+           whole reason this control is run rather than assumed. */
+        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 6u <= s; });
+        EXPECT_LE(1u, sent);
+        ASSERT_EQ(1u, receiver_.notified_size())
+            << "a stem reaches one peer; two is the deleted all-channel broadcast";
+
+        auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
+        EXPECT_EQ(txs, notification.txs);
+        EXPECT_FALSE(notification.dandelionpp_fluff) << "stemming, not fluffing";
+
+        // An origin on an anonymity zone keeps its `local` pool class
+        // (`originated_stays_in_zone`) — that is the backstop staying in-zone
+        // per §30.5, and is unrelated to the deleted downgrade, which applied
+        // the same class to transactions that were merely passing through.
+        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
+    }
 }

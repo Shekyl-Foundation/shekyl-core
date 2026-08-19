@@ -824,6 +824,19 @@ fn zone_flag_bits_do_not_transpose() {
         );
         shekyl_relay_zone_free(h);
 
+        /* An OUT-OF-DOMAIN zone byte with noise flags — refused. The two
+        fail-safe directions point opposite ways on purpose: an unknown zone
+        draws the *anonymity* parameters (the longer embargo, the safe
+        direction there), but it is not presumed *encrypted*, so it earns no
+        noise. Pinned because an asymmetry that is not stated reads as an
+        accident, and the next reader "fixing" it would silently hand a
+        noise carrier to a link nobody could identify. */
+        let h = shekyl_relay_zone_new(0, 0xFF, 2, 600, 30, COVERT_ON_ENCRYPTED);
+        assert!(
+            h.is_null(),
+            "an unknown link is not presumed encrypted and earns no noise"
+        );
+
         /* Both flags on a CLEARTEXT zone — refused. This pins the axis split
         the flags used to hide: outbound-only fluff does not imply an
         encrypted link. It is a real configuration (§25.5 keeps

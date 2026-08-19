@@ -8448,6 +8448,14 @@ that option is 4.3× over capacity and was never available.**
 
 ### 42.5a The covert branch REFUSES to stem, and that is inherited Monero (2026-08-17)
 
+> **CLOSED 2026-08-19 by deletion, not repair — see §93.** The branch this
+> section describes no longer exists. Its two defects were the same mistake in
+> two directions, and §93.1's ruling removed their shared premise rather than
+> patching either one. The three gtests that pinned the inherited behaviour
+> went with it; the protection transfer is tabled at
+> `COVER_TRAFFIC_RESTORATION.md` §1.5a. **The diagnosis below stays quotable;
+> the code it describes does not exist.**
+
 **Found while scoping the restoration.** The covert branch in `levin_notify.cpp`
 is not merely a different carrier — it is a different *architecture*, and it
 contradicts §89:
@@ -8646,6 +8654,14 @@ question about who owns it — but **"one process-wide value" was a convenience,
 not a derivation**, and it should be defended or dropped on that basis.
 
 ### 43.3 The substrate jig already exists; what is missing is a *deletion* guard
+
+> **Stale as of 2026-08-19 — the three gtests named below no longer exist.**
+> They pinned the inherited covert branch, and §93.1 deleted it; a test whose
+> subject is gone is not coverage. One C++ witness replaced them
+> (`levin_notify.noise_does_not_override_the_phase`) and the rest of the
+> protection moved to Rust. The current table is `COVER_TRAFFIC_RESTORATION.md`
+> §1.5a. **The reasoning below stands as the record of that round; its
+> inventory does not describe the tree.**
 
 **Correction to the review's premise.** The covert machinery is **not**
 unobserved. Three `levin_notify` gtests — `noise`, `noise_stem`,
@@ -14683,3 +14699,77 @@ to generate keys."* It names `rust/shekyl-relay/src/zone/mod.rs`'s
 `FluffReach::OutboundOnly` doc as the load-bearing misattribution — **the exact
 site corrected two rounds later**, without the connection being made at the time.
 Cross-referenced here so the next reader gets it in one hop.
+
+---
+
+## 93. Two rulings that separate the axes this subsystem keeps collapsing (2026-08-19)
+
+Every defect in the noise half of this arc has had one shape: **two independent
+axes named by one word, so a decision on one silently made a decision on the
+other.** §64 caught it once as the sybil-substitution fallacy. §42.5a caught it
+again in the covert branch. These two rulings separate the axes explicitly and
+name the vocabulary, so the collapse has nowhere left to hide.
+
+The axes are:
+
+| axis | values | what it answers |
+| --- | --- | --- |
+| **network** | *cleartext* / *encrypted* | what can a wire observer read? |
+| **phase** | *stem* / *fluff* | Dandelion++ — who is this transaction handed to next? |
+| **carrier** | *ordinary* / *noise* | how do the bytes cross the wire? |
+| **reach** | every peer / outbound only | who receives a fluff? |
+
+### 93.1 Dandelion++ runs on every zone, regardless of noise
+
+Noise is not a substitute for Dandelion++ and never was. **Noise masks the
+node↔proxy wire against an *external* observer; Dandelion++ defends against an
+*internal* adversarial peer.** They defend against different adversaries on
+different surfaces, so enabling one is not a reason — or an excuse — to disable
+the other. Minting onion addresses is free, so the anonymity network never
+supplied sybil resistance either; that was §64's finding and this is its
+operational consequence.
+
+**The carrier attaches below the phase, never above it.** `plan_dispatch`
+decides the phase and then attaches a carrier to it; a carrier never re-decides
+a plan. The inherited covert branch inverted exactly this, in both directions
+at once — it demoted a `stem` to `local` under *"Dandelion++ stem not supported
+over noise networks"*, and then broadcast the result to **every** channel,
+which is the opposite of what a stem is. **Deleted, not repaired** (§2.9 step
+4): with the premise gone there was nothing left to fix.
+
+### 93.2 Noise runs only on an encrypted network
+
+What noise buys is concealment of **packet sizing**, and sizing is the only
+thing left for a network observer to read once the link is encrypted. On a
+cleartext link that observer reads the contents outright, so padding the sizes
+conceals nothing and the bandwidth is spent for no privacy.
+
+**The binding property is encryption, not anonymity, and not reach.** The three
+coincide for the current zone set only because ordinary internet traffic is not
+encrypted. **If we ever encrypt ordinary internet traffic it gets noise too** —
+that is a live expectation, not a hypothetical carve-out, and it is why the
+predicate is named for the property that actually decides.
+
+Enforced as a refusal at `Zone::new` rather than a silent downgrade to
+carrier-off: a node configured for a protection it is not receiving is the
+failure worth being loud about, and a silent downgrade is indistinguishable
+from working. It lives in `Zone::new` rather than at the FFI edge because the
+daemon Rust cutover makes Rust the in-process caller, and an edge check is one
+it would route straight around. `RelayZone::is_encrypted` is the single site
+that changes when the clearnet answer changes.
+
+**One consequence landed immediately:** ten Rust fixtures had been building
+noise zones on `FluffReach::EveryPeer` — a configuration production cannot
+hold — and an FFI test asserted that outbound-only fluff plus noise on the
+*clearnet* zone builds. It does not, and §25.5 keeps outbound-only fluff on
+clearnet open as a real configuration in its own right. Reach had been standing
+in for encryption, which is the collapse in miniature.
+
+### 93.3 On the vocabulary itself
+
+**"Covert" is retired as a term of art.** It describes neither the network, nor
+the traffic pattern, nor the intent — it is marketing, and a word that means
+nothing precise is exactly the kind of word two axes collapse behind. The
+mechanism is **noise**; the network is **encrypted** or **cleartext**. Landed
+identifiers still spelling `Covert*` are named in the sweep tracked at §2.9 and
+are not evidence of a second concept.

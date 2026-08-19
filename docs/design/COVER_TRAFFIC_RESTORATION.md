@@ -89,6 +89,13 @@ landed. That is why §1.1's change is the *last* step of the plan, not the first
 
 ### 1.5 What keeps it exercised — the evidence a dead-code sweep would miss
 
+> **Superseded in part by §2.9 step 4 (2026-08-19). The finding stands; the
+> C++ half of its evidence does not.** The three gtests named below pinned the
+> inherited covert branch, and that branch is now deleted rather than repaired.
+> They went with it — a test whose subject no longer exists is not coverage.
+> **Read §1.5a for where the protection now lives**, and do not cite the list
+> below as current.
+
 **The machinery is not untested. It is unreachable in the production
 *configuration* only.** Three gtests construct notifiers with an explicit
 payload via `make_notifier(2048, …)`, bypassing the config path entirely:
@@ -106,6 +113,35 @@ Rust side (`zone/tests.rs`, `relay_zone_ffi/tests.rs`), including
 
 **So: coverage exists, callers do not.** A sweep keyed on "no production
 caller" deletes a mechanism with live tests and a ruled restoration plan.
+
+### 1.5a Where the protection lives after step 4
+
+**The transfer was checked before the C++ witnesses were deleted, not
+asserted afterwards.** Each property the three gtests held is now held in
+Rust, where it survives the daemon cutover that deletes `levin_notify.cpp`
+entirely:
+
+| property | was | is now |
+| --- | --- | --- |
+| CV-1 — a rebind discards the in-flight remainder | `noise_repoint_discards_in_flight_remainder` | `cv1_a_rebind_restarts_the_message_rather_than_resuming_it` |
+| a real fragment is indistinguishable from a dummy | `noise` (length, incidentally) | `a_real_fragment_and_a_dummy_are_indistinguishable_by_length` |
+| CV-4 — the cadence carries no queue-depth information | never held in C++ | `cv4_the_cadence_does_not_depend_on_queue_depth`, with its negative control |
+| the carrier does not decide the phase | pinned **inverted** (`noise_stem` asserted the downgrade) | `a_noise_carrier_does_not_change_the_phase`, plus `covert_carries_the_stem_and_only_the_stem` |
+
+One C++ witness replaced them rather than none:
+`levin_notify.noise_does_not_override_the_phase`. Its discriminant is the peer
+count — a stem reaches **one** peer, and the deleted all-channel broadcast
+reached two — which is the assertion the deleted branch would fail. It is
+driven on `relay_method::local` because RD-4 makes that arm deterministic;
+§2.6 records why the `stem` arm cannot be.
+
+**What this changes for §1.6.** The C++ noise machinery (`send_noise`,
+`clear_channel`, the channel ctor loop) is now **superseded rather than
+pending**: `CovertQueues` is the restoration, and the C++ half is step 5's
+delete target. `queue_covert_notify` had one construction site — inside the
+deleted branch — and went with it. §1.6's conditions are unchanged and still
+protect *the mechanism*; they no longer protect the *C++ implementation of
+it*, because a replacement exists and is tested.
 
 ### 1.6 The ONLY conditions under which deletion is correct
 
@@ -388,8 +424,8 @@ flood-suite reconciliation, stage-4 cover *enablement* (§2.3 / §92.5).
 | 4 — enablement | **not startable** | §2.3's two criteria both unmet |
 | **§2.9 step 1 — decisions in Rust** | **landed (#498)** | `BroadcastAllZones` truth table; `RelayCarrier::Covert` carries `SlotIndex`; `CovertQueues` as a module `Driver` does not hold; CV-4 hands distinct queues to `covert_cadence`; FFI export in `shekyl_ffi.h` with null-handle fail-closed. C++ flood arm is the step-3 delete target, present as a shim. |
 | **§2.9 step 2 — covert executor (this PR)** | **landed (type)** | `CovertQueues` is a real port: constant window, CV-1 restart, epoch-bound `CovertSend`, enqueue refuses a non-multiple. CV-4 still threads distinct queues through `covert_cadence`. No production caller — that is step 4. C++ `send_noise` still owns the live remainder. |
-| §2.9 step 3 — zone fan-out in Rust | **not started** | `net_node.inl` still iterates `m_network_zones` |
-| §2.9 step 4 — notify consumes `plan_dispatch` | **not started** | no C++ caller of the new FFI |
+| **§2.9 step 3 — zone fan-out in Rust** | **satisfied by step 1 — reinterpreted, not skipped** | The step asked that Rust "name the zone set" and C++ reduce to "send these bytes on this zone". `ZoneRouteDecision::BroadcastAllZones` **is** that naming: Rust decides, and `net_node.inl` enumerates its own configured map without deciding anything. Under Design A the fan-out is *every* configured zone, so a Rust `fanout(configured) -> configured` behind the FFI would be an **identity function** — machinery with no content, and rule 21's shape. The loop's literal deletion belongs to step 5, where it goes with the rest of the file. **The step's real constraint holds: the loop did not grow another arm.** |
+| **§2.9 step 4 — the inherited covert branch is deleted** | **landed (deletion)** | The branch is **gone, not repaired**, per the step's own wording. The shim is **skipped** under the step's escape clause ("*or* skip if step 5 lands first"): with the branch deleted there is no C++ consumer for a carrier, so wiring `plan_dispatch` into `levin_notify.cpp` would be month-of-life plumbing §2.6 already discarded. `queue_covert_notify` went with the branch. A noise-configured zone now runs its channels and carries nothing until step 5 gives `CovertQueues` an in-process caller — it spends bandwidth and leaks no phase, which is the honest interim state. |
 | §2.9 step 5 — C++ relay path deleted | **not started** | cutover PR |
 | §2.8 α rule | **pre-registered** | no number yet; the rule is the artifact |
 
