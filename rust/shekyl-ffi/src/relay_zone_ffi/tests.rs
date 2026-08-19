@@ -738,7 +738,7 @@ fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
     }
 }
 
-/// The zone-flag bits do not transpose, and the covert bit round-trips.
+/// The zone-flag bits do not transpose, and the noise bit round-trips.
 ///
 /// This test is the *reason* [`SHEKYL_RELAY_ZONE_NOISE_ENABLED`] is a named bit
 /// rather than a second `bool` parameter, so it must be able to fail if the two
@@ -776,26 +776,27 @@ fn zone_flag_bits_do_not_transpose() {
     );
 
     unsafe {
-        /* Covert bit ALONE. This is now a REFUSED configuration, not a
-        readback: covert without outbound-fluff-only is a noise carrier on
-        a cleartext zone, which `Zone::new` rejects (ruling of 2026-08-19).
+        /* Noise bit ALONE on the CLEARTEXT zone byte. Refused because the
+        zone is cleartext, not because the fluff-reach bit is missing —
+        secrecy is the discriminant, reach is a different axis.
 
-        The negative control survives the change and is strictly sharper.
-        Under a transposition this call would decode as *fluff-only*, which
-        is a perfectly ordinary zone and would build — so a swap turns this
+        The negative control survives and is strictly sharper. Under a
+        transposition this call would decode as *fluff-only*, which is a
+        perfectly ordinary zone and would build — so a swap turns this
         null into a handle, and the assertion flips. The refusal is the
         observation; a readback is no longer available here because the
         zone does not exist to be read. */
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_NOISE_ENABLED);
         assert!(
             h.is_null(),
-            "covert bit set alone is a noise carrier on a cleartext zone and \
-             must be refused; a handle here means the bits are transposed and \
-             this decoded as the harmless fluff-only zone"
+            "noise bit set alone on the cleartext zone is refused; a handle \
+             here means the bits are transposed and this decoded as the \
+             harmless fluff-only zone"
         );
 
-        // Fluff bit ALONE. A swap makes this read the covert bit → refused,
-        // so the handle would be null and BOTH assertions below would fail.
+        // Fluff bit ALONE. A swap makes this read the noise bit → refused
+        // on this cleartext zone, so the handle would be null and BOTH
+        // assertions below would fail.
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY);
         assert!(
             !h.is_null(),
@@ -803,7 +804,7 @@ fn zone_flag_bits_do_not_transpose() {
         );
         assert!(
             !shekyl_relay_zone_noise_enabled(h),
-            "outbound-fluff bit set alone must NOT enable covert; \
+            "outbound-fluff bit set alone must NOT enable noise; \
              reading true here means the bits are transposed"
         );
         shekyl_relay_zone_free(h);
@@ -811,7 +812,7 @@ fn zone_flag_bits_do_not_transpose() {
         // Neither, and both — the two ends, so an always-true or always-false
         // decode cannot pass the set above by accident.
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        assert!(!shekyl_relay_zone_noise_enabled(h), "no flags ⇒ no covert");
+        assert!(!shekyl_relay_zone_noise_enabled(h), "no flags ⇒ no noise");
         shekyl_relay_zone_free(h);
 
         /* Both flags, on an ENCRYPTED zone — the only configuration a noise
@@ -820,7 +821,7 @@ fn zone_flag_bits_do_not_transpose() {
         let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
         assert!(
             shekyl_relay_zone_noise_enabled(h),
-            "both flags on an encrypted zone ⇒ covert on"
+            "both flags on an encrypted zone ⇒ noise on"
         );
         shekyl_relay_zone_free(h);
 
@@ -850,8 +851,24 @@ fn zone_flag_bits_do_not_transpose() {
              noise however its fluff reach is configured"
         );
 
+        /* Noise bit ALONE on an ENCRYPTED zone — builds. Missing the fluff
+        bit is not "noise on cleartext": secrecy comes from TOR, reach
+        defaults to EveryPeer, and that pairing is the case the axis exists
+        for. A comment that treated the flag pair as the encryption proxy
+        would refuse this. */
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, SHEKYL_RELAY_ZONE_NOISE_ENABLED);
+        assert!(
+            !h.is_null(),
+            "noise on an encrypted zone is not refused for lack of the fluff bit"
+        );
+        assert!(
+            shekyl_relay_zone_noise_enabled(h),
+            "encrypted + noise, reach = every peer — the axis split, built"
+        );
+        shekyl_relay_zone_free(h);
+
         // A null handle answers false rather than aborting: a caller that lost
-        // its zone has no covert channels by construction.
+        // its zone has no noise channels by construction.
         assert!(!shekyl_relay_zone_noise_enabled(std::ptr::null()));
     }
 }

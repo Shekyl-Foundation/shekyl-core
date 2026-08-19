@@ -14755,7 +14755,11 @@ carrier-off: a node configured for a protection it is not receiving is the
 failure worth being loud about, and a silent downgrade is indistinguishable
 from working. It lives in `Zone::new` rather than at the FFI edge because the
 daemon Rust cutover makes Rust the in-process caller, and an edge check is one
-it would route straight around. `RelayZone::is_encrypted` is the single site
+it would route straight around. `LinkSecrecy` is constructed only from a
+`RelayZone` (`LinkSecrecy::of`) — there is no `Encrypted` variant a caller
+can mint beside the wrong reach — and `Zone::new` returns `Result<_, ZoneNewError>`
+so the two refusals (noise on cleartext; wrong channel count) stay distinct.
+The FFI maps both to null. `RelayZone::is_encrypted` is the single site
 that changes when the clearnet answer changes.
 
 **One consequence landed immediately:** ten Rust fixtures had been building

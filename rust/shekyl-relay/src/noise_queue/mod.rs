@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Per-channel covert fragment queues — the **executor** half of the covert
+//! Per-channel noise fragment queues — the **executor** half of the noise
 //! path, deliberately separated from the scheduler.
 //!
 //! Step 2 of the relay-logic cutover (`COVER_TRAFFIC_RESTORATION.md` §2.9):
@@ -12,7 +12,7 @@
 //!
 //! # CV-4: why this is its own module and not a field of [`crate::Zone`]
 //!
-//! **The covert schedule must carry no information about whether real traffic
+//! **The noise schedule must carry no information about whether real traffic
 //! is pending** (§20.2). A cadence that reacts to queue depth is a timing
 //! channel, and constant-rate cover exists to defeat exactly that. The
 //! scheduler decides *when* and *who*; this decides *what*.
@@ -20,15 +20,15 @@
 //! Before the cutover that separation was enforced by an accident of the
 //! C++/Rust split — the queue lived in `levin_notify.cpp` and Rust had no
 //! handle to it. **That was never the mechanism**, only friction: `Zone`
-//! already owns the *fluff* queue, so the rule is narrower — *the covert
-//! scheduler does not see the covert queue* — and once both halves are Rust it
+//! already owns the *fluff* queue, so the rule is narrower — *the noise
+//! scheduler does not see the noise queue* — and once both halves are Rust it
 //! has to hold in types. `cv4_the_cadence_does_not_depend_on_queue_depth` is
 //! what replaces the friction.
 //!
 //! # Length is the invariant, and it has ONE owner
 //!
 //! **Every emission is exactly [`NoiseQueues::window`] bytes — real fragment
-//! and dummy alike.** Length is the one thing a covert channel holds constant,
+//! and dummy alike.** Length is the one thing a noise channel holds constant,
 //! so anything that can make a real send a different size from a dummy is a
 //! leak, not a degradation.
 //!
@@ -91,7 +91,7 @@ impl ChannelQueue {
 /// different message — take → unbind → enqueue → `sent()` would otherwise
 /// walk into the successor. The type exists to cross an await; without the
 /// epoch it would only be safe to drop, not to resolve late.
-#[must_use = "a covert send must be resolved with `sent()` or `failed()`; \
+#[must_use = "a noise send must be resolved with `sent()` or `failed()`; \
               dropping it restarts the fragment on the next take"]
 #[derive(Debug)]
 pub struct NoiseSend {
@@ -132,7 +132,7 @@ impl NoiseSend {
             .offset
             .unwrap_or(0)
             .checked_add(window)
-            .expect("covert offset + window");
+            .expect("noise offset + window");
         if next >= message.len() {
             q.offset = None;
             let _ = q.pending.pop_front();
@@ -170,7 +170,7 @@ impl NoiseSend {
     }
 }
 
-/// Per-channel covert queues, indexed by channel — which **is** the stem slot
+/// Per-channel noise queues, indexed by channel — which **is** the stem slot
 /// (§20.3).
 ///
 /// Holds no schedule and no clock. It cannot advance time, and nothing here is
@@ -244,7 +244,7 @@ impl NoiseQueues {
     /// exactly [`Self::window`] bytes**, real or cover.
     ///
     /// `None` means *no such channel*, a caller bug. It never means "nothing to
-    /// send": a bound covert channel always sends, which is what constant-rate
+    /// send": a bound noise channel always sends, which is what constant-rate
     /// cover is. An unbound slot emits nothing, but that is the scheduler's
     /// call — it yields `Effect::NoiseUnbind` rather than asking here.
     ///
@@ -276,7 +276,7 @@ impl NoiseQueues {
         }
 
         let offset = q.offset.unwrap_or(0);
-        let end = offset.checked_add(window).expect("covert offset + window");
+        let end = offset.checked_add(window).expect("noise offset + window");
         // A short slice would PUBLISH — length is the invariant. Enqueue
         // proved the message is a whole number of windows, and `sent` only
         // advances by one window, so this is unreachable except as a bug.
@@ -284,7 +284,7 @@ impl NoiseQueues {
         // dummy-without-pop (the empty-head wedge this type already knows).
         let Some(bytes) = q.pending.front().and_then(|m| m.get(offset..end)) else {
             panic!(
-                "covert fragment [{offset}, {end}) is not a slice of a message \
+                "noise fragment [{offset}, {end}) is not a slice of a message \
                  that enqueue proved to be a whole number of windows"
             );
         };

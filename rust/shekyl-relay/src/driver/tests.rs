@@ -9,6 +9,7 @@ use crate::LinkSecrecy;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::schedule::PeerDirection;
+use shekyl_relay_privacy::RelayZone;
 
 fn id(byte: u8) -> ConnectionId {
     let mut b = [0u8; 16];
@@ -30,7 +31,7 @@ fn driver(rng: &mut SplitMix64) -> Driver {
             DandelionParams::inherited(),
             2,
             FluffReach::EveryPeer,
-            LinkSecrecy::Cleartext,
+            LinkSecrecy::of(RelayZone::Public),
             false,
             0,
             rng,
@@ -177,7 +178,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
             DandelionParams::inherited(),
             2,
             FluffReach::OutboundOnly,
-            LinkSecrecy::Encrypted,
+            LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
             &mut rng,
@@ -267,7 +268,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
             DandelionParams::inherited(),
             2,
             FluffReach::OutboundOnly,
-            LinkSecrecy::Encrypted,
+            LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
             &mut rng,
@@ -377,7 +378,7 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
     assert_ne!(d.zone().epoch_deadline(), before, "a new epoch was drawn");
 }
 
-/// Covert channels emit **independently**: one `NoiseSend` per advance.
+/// Noise channels emit **independently**: one `NoiseSend` per advance.
 ///
 /// **This is a soundness property, not an implementation preference.**
 /// Constant-rate cover works because the aggregate rate is constant. Two
@@ -417,7 +418,7 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
             DandelionParams::inherited(),
             2,
             FluffReach::OutboundOnly,
-            LinkSecrecy::Encrypted,
+            LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
             &mut rng,
@@ -502,7 +503,7 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
             DandelionParams::inherited(),
             2,
             FluffReach::OutboundOnly,
-            LinkSecrecy::Encrypted,
+            LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
             &mut rng,
@@ -575,7 +576,7 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
             DandelionParams::inherited(),
             2,
             FluffReach::OutboundOnly,
-            LinkSecrecy::Encrypted,
+            LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
             &mut rng,
@@ -651,7 +652,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
             DandelionParams::inherited(),
             2,
             FluffReach::OutboundOnly,
-            LinkSecrecy::Encrypted,
+            LinkSecrecy::of(RelayZone::Tor),
             true,
             0,
             &mut rng,

@@ -56,13 +56,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shekyl_relay::{
-    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, LinkSecrecy,
-    RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
+    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, RelayCarrier,
+    RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
 };
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::stem_map::ConnectionId;
-use shekyl_relay_privacy::zone::RelayZone;
+use shekyl_relay_privacy::zone::{LinkSecrecy, RelayZone};
 
 use crate::secure_relay_rng::SecureRelayRng;
 
@@ -411,15 +411,20 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// but harmful, since every wake would find the epoch expired and the daemon's
 /// relay timer would spin. The caller treats null as a startup logic error.
 ///
-/// It also returns null on a flag pair the design refuses rather than a
-/// malformed one: `SHEKYL_RELAY_ZONE_NOISE_ENABLED` without
-/// `SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY` asks for a noise carrier on a
-/// cleartext zone, where padding sizes conceals nothing an observer cannot
-/// already read outright. Covert with a `stems` other than the inherited
-/// channel count is refused for the same reason it was a `debug_assert!`
-/// before — C++ indexes its channel deque by that count. Both are stated at
-/// [`Zone::new`], which is where they are enforced, so an in-process Rust
-/// caller after the daemon cutover cannot route around them.
+/// It also returns null on a configuration [`Zone::new`] refuses, not only a
+/// malformed one. Secrecy is read from the **zone discriminant**, not from a
+/// flag bit: `SHEKYL_RELAY_ZONE_NOISE_ENABLED` on a cleartext `zone` byte
+/// (public, or out-of-domain) is noise on a link where padding sizes conceals
+/// nothing an observer cannot already read. The fluff-reach bit is a different
+/// axis — `NOISE_ENABLED` without `OUTBOUND_FLUFF_ONLY` on an *encrypted*
+/// zone is a valid configuration (encrypted clearnet, when that exists) and
+/// builds. Noise with a `stems` other than the inherited channel count is
+/// refused for the same reason it was a `debug_assert!` before — C++ indexes
+/// its channel deque by that count. Both refusals are distinct
+/// [`shekyl_relay::ZoneNewError`] variants; this export maps them to null
+/// because that is the only channel a C ABI has. They are enforced at
+/// [`Zone::new`], so an in-process Rust caller after the daemon cutover
+/// cannot route around them.
 #[no_mangle]
 pub extern "C" fn shekyl_relay_zone_new(
     now_ms: u64,
@@ -434,6 +439,7 @@ pub extern "C" fn shekyl_relay_zone_new(
     }
     let outbound_fluff_only = flags & SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY != 0;
     let noise_enabled = flags & SHEKYL_RELAY_ZONE_NOISE_ENABLED != 0;
+    let relay_zone = RelayZone::from_ffi_u8(zone);
     let params = DandelionParams {
         min_epoch_secs,
         epoch_jitter_secs,
@@ -445,28 +451,24 @@ pub extern "C" fn shekyl_relay_zone_new(
         // to re-relay, so `stem_tallies` would report the whole anonymity peer
         // set as withholding. The epoch pair stays C++-owned and crosses as
         // the arguments above.
-        ..DandelionParams::adopted_for(RelayZone::from_ffi_u8(zone))
+        ..DandelionParams::adopted_for(relay_zone)
     };
     let reach = if outbound_fluff_only {
         FluffReach::OutboundOnly
     } else {
         FluffReach::EveryPeer
     };
-    /* Secrecy is read from the zone discriminant, not from a flag bit. The
-    zone byte already crosses and encryption is a property of the network,
-    so deriving it here keeps one transposable bit off the ABI and keeps the
-    eligibility rule in one place — `RelayZone::is_encrypted`. */
-    let secrecy = if RelayZone::from_ffi_u8(zone).is_encrypted() {
-        LinkSecrecy::Encrypted
-    } else {
-        LinkSecrecy::Cleartext
-    };
+    // Secrecy is a function of the zone discriminant, not a flag bit. The
+    // zone byte already crosses and encryption is a property of the network,
+    // so `LinkSecrecy::of` keeps one transposable bit off the ABI and keeps
+    // the eligibility rule in one place — `RelayZone::is_encrypted`.
+    let secrecy = LinkSecrecy::of(relay_zone);
     let mut rng = SecureRelayRng;
-    // `None` is a refused configuration, not an allocation failure — a noise
+    // `Err` is a refused configuration, not an allocation failure — a noise
     // carrier on a cleartext zone, or a channel count C++'s deque cannot index.
     // See `Zone::new`. Null is the only channel a C ABI has for saying so, and
     // the one C++ construction site checks it.
-    let Some(zone) = Zone::new(
+    let Ok(zone) = Zone::new(
         params,
         stems,
         reach,
@@ -557,8 +559,8 @@ pub unsafe extern "C" fn shekyl_relay_zone_live_stems(handle: *const RelayZoneHa
     (*handle).live_stems.load(Ordering::Acquire)
 }
 
-/// Configured stem width (slot count). When covert is enabled this is also the
-/// covert channel count — channel `i` follows slot `i`. C++ sizes its channel
+/// Configured stem width (slot count). When noise is enabled this is also the
+/// noise channel count — channel `i` follows slot `i`. C++ sizes its channel
 /// deque from this rather than from a parallel `#define`, so the two widths
 /// cannot silently diverge.
 ///
@@ -572,7 +574,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_width(handle: *const RelayZoneHa
     }
 }
 
-/// Whether this zone runs covert (noise) channels.
+/// Whether this zone runs noise channels.
 ///
 /// The **single owner** of a fact C++ used to re-derive at nine sites from
 /// `!zone::noise.empty()` — a byte payload doing double duty as its own enable
@@ -581,7 +583,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_width(handle: *const RelayZoneHa
 /// Frozen at construction, so this is a plain read with no publish/atomic
 /// dance: unlike `live_stems` there is no writer after `new`, and nothing to
 /// race. Returns `false` for a null handle — a caller that lost its zone has no
-/// covert channels by construction, and the alternative (abort) would turn a
+/// noise channels by construction, and the alternative (abort) would turn a
 /// C++ lifetime bug into a daemon crash at a read that cannot itself be wrong.
 ///
 /// # Safety

@@ -195,4 +195,4 @@ pub use verify_cost::{
     ADOPTED_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH, MAX_TABLE_DEPTH, MAX_TABLE_INPUTS,
     SPEC_VERIFY_COST,
 };
-pub use zone::RelayZone;
+pub use zone::{LinkSecrecy, RelayZone};

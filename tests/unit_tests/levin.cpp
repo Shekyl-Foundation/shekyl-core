@@ -2782,7 +2782,12 @@ TEST_F(levin_notify, noise_does_not_override_the_phase)
            `levin_notify.cpp` and rebuilding: it stayed green, which is the
            whole reason this control is run rather than assumed. */
         const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 6u <= s; });
-        EXPECT_LE(1u, sent);
+        /* The window is the assertion. Stopping at `sent >= 1` would pass on a
+           drive that died after the first send, which is the oracle bug the
+           first version of this test had — it never looked for the second
+           notification. Six sends is past both channels twice; if a second
+           notification were coming, it would have arrived. */
+        ASSERT_GE(sent, 6u) << "drive died before the observation window; cannot claim one peer";
         ASSERT_EQ(1u, receiver_.notified_size())
             << "a stem reaches one peer; two is the deleted all-channel broadcast";
 

@@ -1292,53 +1292,34 @@ namespace levin
     if (!zone_)
       return false;
 
-    /* If noise is enabled in a zone, it always takes precedence. The technique
-       provides good protection against ISP adversaries, but not sybil
-       adversaries. Noise is currently only enabled over I2P/Tor - those
-       networks provide protection against sybil attacks (we only send to
-       outgoing connections).
+    /* Dandelion++ runs on every zone, regardless of noise (§93.1). The
+       inherited covert branch that stood here — noise taking precedence,
+       stem demoted to local, all-channel broadcast — is DELETED, not
+       repaired (§2.9 step 4). Its opening sentence ("If noise is enabled
+       in a zone, it always takes precedence") was the architecture; the
+       code no longer does that, and a comment that still said so would
+       instruct the next reader to rebuild it.
 
-       If noise is disabled, Dandelion++ runs on **every** zone (§89). The
-       inherited comment here said "public networks only", and named the
-       blocker as the mempool/stempool needing to know a tx's originating zone.
-       Both are retired: Tor is a transport like the clear internet, and
-       changing the transport does not change the graph; and the zone travels
-       as a parameter beside `tx_relay` into `set_relayed`, so nothing has to
-       be remembered to draw the embargo per zone (§89.2).
+       Noise masks the node↔proxy wire against an **external** observer;
+       Dandelion++ defends against an **internal** adversarial peer. Enabling
+       one is not a reason to disable the other. The Rust executor
+       (`NoiseQueues`) owns the carrier and attaches it *below* the phase
+       (`plan_dispatch`). Until step 5 gives that executor an in-process
+       caller, a noise-configured zone runs its channels and carries nothing:
+       it spends bandwidth and leaks no phase. The branch was unreachable in
+       production either way — both notifier constructions pass a null noise
+       payload.
+
+       Recording parity was checked before the deletion. `fluff` makes the
+       identical `on_transactions_relayed` call below. `stem`/`local` are
+       recorded inside `dandelionpp_notify`'s `record_relayed`, with
+       `originated_stays_in_zone` applied — the *planned* method rather than
+       the blanket `local` downgrade. `none`/`block` were being RELAYED by
+       the deleted branch, which had no switch at all; the arm below refuses
+       them, and `none` means do not relay.
 
        What is *not* symmetric is the txpool class an origin keeps — see
        `originated_stays_in_zone` at the record sites in `dandelionpp_notify`. */
-
-    /* The inherited covert branch stood here and is DELETED, not repaired
-       (§2.9 step 4). Ruling of 2026-08-19: **Dandelion++ runs on every zone
-       regardless of noise.** The carrier and the phase are independent axes,
-       and that branch collapsed them in both directions at once — it demoted
-       a `stem` to `local` under `MWARNING("Dandelion++ stem not supported over
-       noise networks")`, and then broadcast the result to *every* channel,
-       which is the opposite of what a stem is. Its premise was the
-       sybil-substitution fallacy §64 named: that a noise network stands in for
-       Dandelion++. It does not. Noise masks the node↔proxy wire against an
-       **external** observer; Dandelion++ defends against an **internal**
-       adversarial peer. Enabling one is not a reason to disable the other.
-
-       Nothing replaces it here. The Rust executor (`CovertQueues`) owns the
-       carrier now, and it attaches *below* the phase rather than above it —
-       `plan_dispatch` decides phase and carrier in one call and the carrier
-       never re-decides the plan. Until the daemon cutover gives that executor
-       an in-process caller, a noise-configured zone runs its channels and
-       carries nothing, which is honest: it spends bandwidth and leaks no
-       phase. The branch was unreachable in production either way — both
-       notifier constructions pass a null covert payload.
-
-       Recording parity was checked before the deletion, since this is the one
-       place it could have regressed state rather than routing. `fluff` makes
-       the identical `on_transactions_relayed` call below. `stem`/`local` are
-       recorded inside `dandelionpp_notify`'s `record_relayed`, with
-       `originated_stays_in_zone` applied — the *planned* method rather than
-       the blanket `local` downgrade, which is the repair and not a loss.
-       `none`/`block` were being RELAYED by the deleted branch, which had no
-       switch at all; the arm below refuses them, and `none` means do not
-       relay. */
 
     switch (tx_relay)
     {

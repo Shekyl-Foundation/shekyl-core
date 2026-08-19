@@ -7,6 +7,7 @@ use super::*;
 use crate::{Driver, Effect, FluffReach, LinkSecrecy, Zone};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
+use shekyl_relay_privacy::RelayZone;
 
 const W: usize = 64; // the window, via the dummy's length
 
@@ -276,8 +277,8 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
         DandelionParams::inherited(),
         2,
         FluffReach::OutboundOnly,
-        LinkSecrecy::Encrypted,
-        true, // covert ON, or there are no deadlines and this is vacuous
+        LinkSecrecy::of(RelayZone::Tor),
+        true, // noise ON, or there are no deadlines and this is vacuous
         0,
         &mut rng,
     )

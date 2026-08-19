@@ -7,15 +7,16 @@
 //!
 //! A zone is the unit the inherited C++ calls `detail::zone` — public,
 //! or i2p/tor. This type owns the state §18.5's inventory assigned to Rust:
-//! peer fluff queues, the stem map, the epoch role, and the covert **schedule**
-//! (enable bit, cadence, per-channel deadlines). Covert **buffers** live in
+//! peer fluff queues, the stem map, the epoch role, and the noise **schedule**
+//! (enable bit, cadence, per-channel deadlines). Noise **buffers** live in
 //! [`crate::NoiseQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2);
-//! production still runs C++ `send_noise` until step 4 wires notify.
+//! production still runs C++ `send_noise` until step 5's in-process caller.
 //! Transport (framing, padding, the socket) stays on the I/O side. A
 //! transaction body is still an opaque blob here. See
 //! `DAEMON_RELAY_PRIVACY.md` §20.2 / §20.4 for the post-RP-3b inventory.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::sync::Arc;
 
 use shekyl_relay_privacy::params::{inherited, DandelionParams};
@@ -24,6 +25,7 @@ use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
 use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex, StemMap};
+use shekyl_relay_privacy::LinkSecrecy;
 
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
@@ -99,27 +101,37 @@ pub enum RelayPlan {
     FluffEpoch,
 }
 
-/// Whether the zone's links are encrypted — the **network secrecy** axis.
+/// Why [`Zone::new`] refused a configuration.
 ///
-/// Kept as its own type rather than folded into [`FluffReach`] or derived from
-/// the zone discriminant at each site, because it is a third independent axis
-/// and this subsystem's recurring defect is axes collapsing into one another.
-/// The three are: *cleartext* versus *encrypted* for the network, *stem*
-/// versus *fluff* for the phase, and *ordinary* versus *noise* for the
-/// carrier. Reach is a fourth and is not this: reach says **who receives a
-/// fluff**, secrecy says **what a wire observer can read**.
-///
-/// It is a type and not a `bool` beside `FluffReach` for the reason
-/// `make_relay_zone` gives for its named flag bits — adjacent same-typed
-/// arguments transpose silently across a C ABI. Two distinct enums make the
-/// transposition a compile error instead.
+/// Two refusals, two variants — collapsing them to `None` would be the same
+/// axis-merge this type exists to prevent. The FFI maps both to a null handle;
+/// a future in-process caller matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LinkSecrecy {
-    /// Ordinary internet traffic. A wire observer reads the contents.
-    Cleartext,
-    /// Tor, i2p — and ordinary internet traffic if it is ever encrypted, which
-    /// is the case this axis exists to be ready for rather than to exclude.
-    Encrypted,
+pub enum ZoneNewError {
+    /// Noise conceals packet sizing. On a cleartext link the observer reads
+    /// the contents outright, so padding sizes conceals nothing.
+    NoiseOnCleartext,
+    /// `stems` doubles as the channel count and C++ indexes its channel deque
+    /// by [`inherited::NOISE_CHANNELS`]. A mismatch is a silent out-of-bounds
+    /// drop on that side.
+    NoiseChannelCount {
+        /// The stem/channel count that was requested.
+        got: usize,
+    },
+}
+
+impl fmt::Display for ZoneNewError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoiseOnCleartext => {
+                write!(f, "noise carrier requires an encrypted link")
+            }
+            Self::NoiseChannelCount { got } => write!(
+                f,
+                "noise channel count must equal inherited::NOISE_CHANNELS (got {got})"
+            ),
+        }
+    }
 }
 
 /// Which peers a fluff batch may reach in this zone.
@@ -169,7 +181,7 @@ pub enum FluffReach {
     OutboundOnly,
 }
 
-/// Covert-channel schedule for a zone — or its deliberate absence.
+/// Noise-channel schedule for a zone — or its deliberate absence.
 ///
 /// One type so "enabled" and "has deadlines" cannot disagree: a disabled zone
 /// has no schedule; an enabled zone always has one deadline per stem slot.
@@ -182,7 +194,7 @@ pub enum FluffReach {
 /// scheduler, an epoch rollover, or another channel coming due must leave every
 /// other entry untouched. Re-drawing on a foreign wake resamples
 /// `min + U(0, jitter)` and keeps the minimum, which biases the effective
-/// covert interval **short** — a privacy defect no count assertion and no
+/// noise interval **short** — a privacy defect no count assertion and no
 /// goodness-of-fit grade can see (§20.2a).
 #[derive(Debug)]
 enum NoiseSchedule {
@@ -275,12 +287,12 @@ pub struct Zone {
     params: DandelionParams,
     /// Configured stem width — how many slots the map keeps.
     ///
-    /// When covert is enabled this is also the covert channel count (channel
+    /// When noise is enabled this is also the noise channel count (channel
     /// `i` ↔ slot `i`). Production pins it to [`inherited::NOISE_CHANNELS`].
     stems: usize,
     /// Which peers a fluff batch may reach. See [`FluffReach`].
     reach: FluffReach,
-    /// Covert schedule (enable + cadence + per-channel deadlines), or off.
+    /// Noise schedule (enable + cadence + per-channel deadlines), or off.
     ///
     /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
     /// in C++, encoded as `!zone::noise.empty()` — the byte payload doing
@@ -302,7 +314,7 @@ pub struct Zone {
 }
 
 impl Zone {
-    /// Open a zone at `now` with no connections yet, or `None` when the
+    /// Open a zone at `now` with no connections yet, or [`Err`] when the
     /// requested configuration is one the design forbids.
     ///
     /// The first epoch is drawn immediately, matching the inherited
@@ -324,7 +336,9 @@ impl Zone {
     /// says who can be identified, and neither is the question. Encrypting
     /// ordinary internet traffic would make a clearnet zone eligible for noise
     /// without making it anonymous, and `RelayZone::is_encrypted` is the one
-    /// place that would change.
+    /// place that would change. [`LinkSecrecy`] can only be constructed from a
+    /// [`shekyl_relay_privacy::RelayZone`], so a caller cannot mint "encrypted"
+    /// beside a cleartext identity.
     ///
     /// **A noise carrier's channel count must equal
     /// [`inherited::NOISE_CHANNELS`]** — `stems` doubles as the channel count
@@ -332,6 +346,10 @@ impl Zone {
     /// mismatch is a silent out-of-bounds drop on that side. This was a
     /// `debug_assert!`, which compiles out in release and therefore let the
     /// mismatched zone be built in exactly the configuration that ships.
+    ///
+    /// The two refusals are distinct [`ZoneNewError`] variants. The FFI maps
+    /// both to null because that is the only channel a C ABI has; an
+    /// in-process caller after the daemon cutover matches.
     ///
     /// # Who can reach the refusals
     ///
@@ -353,11 +371,12 @@ impl Zone {
         noise_enabled: bool,
         now: Millis,
         rng: &mut R,
-    ) -> Option<Self> {
-        if noise_enabled
-            && (matches!(secrecy, LinkSecrecy::Cleartext) || stems != inherited::NOISE_CHANNELS)
-        {
-            return None;
+    ) -> Result<Self, ZoneNewError> {
+        if noise_enabled && !secrecy.is_encrypted() {
+            return Err(ZoneNewError::NoiseOnCleartext);
+        }
+        if noise_enabled && stems != inherited::NOISE_CHANNELS {
+            return Err(ZoneNewError::NoiseChannelCount { got: stems });
         }
         let epoch = EpochScheduler::new(params).start(now, rng);
         let noise = if noise_enabled {
@@ -368,7 +387,7 @@ impl Zone {
         // Observation window shares the zone's params, not a second
         // `DandelionParams::inherited()` rebuild at the FFI edge.
         let observation_timer = EmbargoTimer::adopted(&params);
-        Some(Self {
+        Ok(Self {
             stem_watch: StemWatch::default(),
             observation_timer,
             contexts: BTreeMap::new(),
@@ -387,7 +406,7 @@ impl Zone {
         })
     }
 
-    /// The earliest covert send deadline, or `None` when covert is disabled.
+    /// The earliest noise send deadline, or `None` when noise is disabled.
     pub fn noise_deadline(&self) -> Option<Millis> {
         self.noise.earliest()
     }
@@ -410,7 +429,7 @@ impl Zone {
         self.noise.deadline_at(channel)
     }
 
-    /// Whether this zone runs covert (noise) channels.
+    /// Whether this zone runs noise channels.
     ///
     /// The single owner of the fact (§20.4). C++ reads it back through
     /// `shekyl_relay_zone_noise_enabled` rather than re-deriving it from the
@@ -421,7 +440,7 @@ impl Zone {
         self.noise.enabled()
     }
 
-    /// Configured stem width (slot count). When covert is on, also the channel
+    /// Configured stem width (slot count). When noise is on, also the channel
     /// count — channel `i` follows slot `i`.
     #[must_use]
     pub fn stem_width(&self) -> usize {
@@ -485,7 +504,7 @@ impl Zone {
     /// function of the same clock every other relay decision uses — no second
     /// reactor. The earliest pending deadline is also folded into
     /// [`crate::Driver::next_wake`], so the asio timer wakes for silences on
-    /// time rather than only when fluff/epoch/covert happen to fire. Returns
+    /// time rather than only when fluff/epoch/noise happen to fire. Returns
     /// how many resolved, so a witness can assert the drive ran.
     pub fn expire_stem_observations(&mut self, now: Millis) -> usize {
         self.stem_watch.expire(now)
@@ -837,7 +856,7 @@ impl Zone {
 
 /// Which wire carries a planned batch.
 ///
-/// **§42.3's split, as a type.** Covert channels carry the **stem phase**;
+/// **§42.3's split, as a type.** Noise channels carry the **stem phase**;
 /// fluff takes the zone's ordinary connection. The inherited C++ chose a
 /// carrier *instead of* a phase — the covert branch sat above the phase switch
 /// and downgraded a stem to `local` (§42.5a) — so carrier and phase were
@@ -874,7 +893,7 @@ pub struct RelayDispatch {
 impl Zone {
     /// Attach a carrier to a plan, per §42.3.
     ///
-    /// Covert carries a **stem** and only a stem, and only when covert is
+    /// Noise carries a **stem** and only a stem, and only when noise is
     /// enabled on this zone. A fluff epoch and a no-route both take the
     /// ordinary connection: fluff by §42.3's design, no-route because there is
     /// nothing to carry.

@@ -2713,7 +2713,7 @@ static_assert(sizeof(ShekylRelayBlob) == sizeof(const std::uint8_t*) + sizeof(st
 //! N notifications, leaking the batch size as a per-peer message count.
 typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
                                    const ShekylRelayBlob* blobs, std::size_t n);
-//! Covert channel `channel` came due with its stem slot unbound: clear it —
+//! Noise channel `channel` came due with its stem slot unbound: clear it —
 //! nil the binding, discard buffers — on the channel's own strand. The other
 //! half of the deleted slot array: the binding itself travels with each noise
 //! send, and the LOSS of a binding travels here, because an unbound channel
@@ -2730,7 +2730,7 @@ typedef void (*ShekylRelayNoiseUnbindCb)(void* ctx, std::size_t channel);
 //! connection scan. Must not throw across the FFI boundary.
 typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out_n);
 
-//! Covert channel `channel` is due to send.
+//! Noise channel `channel` is due to send.
 //!
 //! Carries NO payload discriminant, and that is deliberate (CV-4): whether the
 //! send is a dummy or drains a queued real fragment is a queue question, and the
@@ -2781,8 +2781,13 @@ typedef void (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std
 //! transit latency follows the transport, and outbound-only fluff on clearnet
 //! is still open (§25.5).
 //! `flags` is a mask of the `SHEKYL_RELAY_ZONE_*` bits above.
-//! Null when a zone cannot be built: SIZE_MAX stems, or a zero epoch — which
-//! would expire at every wake and spin the relay timer. Treat null as fatal.
+//! Null when a zone cannot be built: SIZE_MAX stems, a zero epoch (would
+//! expire at every wake and spin the relay timer), noise enabled on a
+//! cleartext `zone` byte (padding sizes conceals nothing an observer cannot
+//! already read), or a noise channel count other than
+//! `CRYPTONOTE_NOISE_CHANNELS`. Secrecy is the zone discriminant, not the
+//! fluff-reach bit — `NOISE_ENABLED` without `OUTBOUND_FLUFF_ONLY` on an
+//! encrypted zone is valid. Treat null as fatal.
 RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::uint8_t zone,
                                        std::size_t stems,
                                        std::uint32_t min_epoch_secs,

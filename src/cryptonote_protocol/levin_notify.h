@@ -125,15 +125,13 @@ namespace levin
     void run_fluff();
 
     /*! Send txs using `cryptonote_protocol_defs.h` payload format wrapped in a
-        levin header. The message will be sent in a "discreet" manner if the
-        zone runs covert channels (`shekyl_relay_zone_noise_enabled` — the
-        zone's fact since §20.4, no longer the payload's emptiness) — then the
-        `command`/`payload` will be queued to send at the next available
-        covert interval. Otherwise, a Dandelion++ fluff algorithm will be
-        used.
-
-        \note Eventually Dandelion++ stem sending will be used here when
-          enabled.
+        levin header. Dandelion++ decides the phase on every zone, regardless
+        of whether the zone also runs noise channels
+        (`shekyl_relay_zone_noise_enabled`). Noise is a carrier, not a routing
+        verdict: it does not demote a stem, and it does not broadcast to every
+        channel. Until the daemon cutover gives `NoiseQueues` an in-process
+        caller, a noise-configured zone still emits its dummy cadence but this
+        method does not queue the transaction onto it.
 
         \param txs The transactions that need to be serialized and relayed.
         \param source The source of the notification. `is_nil()` indicates this

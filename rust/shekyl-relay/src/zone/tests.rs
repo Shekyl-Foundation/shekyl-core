@@ -6,7 +6,9 @@
 use super::*;
 use std::sync::Arc;
 
+use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
+use shekyl_relay_privacy::{LinkSecrecy, RelayZone};
 
 /// Frozen draws from seed `0xF1FF` for the wired fluff path. Not chosen —
 /// observed, then pinned. Note the shape is memoryless: a 250 ms draw sits
@@ -26,7 +28,7 @@ fn zone(rng: &mut SplitMix64) -> Zone {
         DandelionParams::inherited(),
         2,
         FluffReach::EveryPeer,
-        LinkSecrecy::Cleartext,
+        LinkSecrecy::of(RelayZone::Public),
         false,
         0,
         rng,
@@ -297,18 +299,20 @@ fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Zone {
     zone_with_role_cover(fluffing, false, rng)
 }
 
-/// Same as [`zone_with_role`], with the covert bit chosen. Covert tests that
-/// need a determined epoch must go through here — a lucky seed is
-/// determinism, not a determined epoch, and is the flake `noise_stem`
-/// exposed once covert consults the planner.
+/// Same as [`zone_with_role`], with noise on a production-shaped encrypted
+/// zone. Reach is **not** a function of the carrier: this is the i2p/tor
+/// pairing production forms (`OutboundOnly` + encrypted). Tests that need
+/// encrypted-clearnet (`EveryPeer` + encrypted) construct that pair
+/// explicitly — see `a_noise_carrier_is_refused_where_it_buys_nothing`.
+///
+/// Noise tests that need a determined epoch must go through here — a lucky
+/// seed is determinism, not a determined epoch, and is the flake
+/// `noise_stem` exposed once noise consults the planner.
 fn zone_with_role_cover(fluffing: bool, noise: bool, rng: &mut SplitMix64) -> Zone {
-    // A noise carrier only exists on an encrypted zone, so the reach follows
-    // the carrier rather than being a fixed convenience default — the fixture
-    // has to be a configuration production can actually hold.
     let (reach, secrecy) = if noise {
-        (FluffReach::OutboundOnly, LinkSecrecy::Encrypted)
+        (FluffReach::OutboundOnly, LinkSecrecy::of(RelayZone::Tor))
     } else {
-        (FluffReach::EveryPeer, LinkSecrecy::Cleartext)
+        (FluffReach::EveryPeer, LinkSecrecy::of(RelayZone::Public))
     };
     for _ in 0..10_000 {
         let z = Zone::new(
@@ -435,17 +439,17 @@ fn a_private_zone_fluffs_only_to_outbound_peers() {
     //
     // It is a *privacy* rule wearing the clothes of a delivery detail. On a
     // hidden service an inbound peer is a stranger who dialled us; fluffing
-    // to it hands a transaction to a peer this node never chose, which is
-    // exactly the sybil exposure i2p/tor is meant to stand in for now that
-    // Dandelion++ stemming is off. Nothing about *delivery* looks wrong when
-    // it breaks — the transaction still propagates — so the assertion has to
-    // be on who received it, not on whether it went anywhere.
+    // to it hands a transaction to a peer this node never chose. Dandelion++
+    // still runs on this zone (§93.1) — outbound-only fluff is not a
+    // substitute for stemming. Nothing about *delivery* looks wrong when it
+    // breaks — the transaction still propagates — so the assertion has to be
+    // on who received it, not on whether it went anywhere.
     let mut rng = SplitMix64::new(77);
     let mut z = Zone::new(
         DandelionParams::inherited(),
         2,
         FluffReach::OutboundOnly,
-        LinkSecrecy::Encrypted,
+        LinkSecrecy::of(RelayZone::Tor),
         false,
         0,
         &mut rng,
@@ -473,7 +477,7 @@ fn a_private_zone_fluffs_only_to_outbound_peers() {
         DandelionParams::inherited(),
         2,
         FluffReach::EveryPeer,
-        LinkSecrecy::Cleartext,
+        LinkSecrecy::of(RelayZone::Public),
         false,
         0,
         &mut rng,
@@ -607,8 +611,8 @@ fn a_noise_deadline_survives_wakes_it_did_not_cause() {
         DandelionParams::inherited(),
         2,
         FluffReach::OutboundOnly,
-        LinkSecrecy::Encrypted,
-        true, // covert on — otherwise there are no deadlines and this is vacuous
+        LinkSecrecy::of(RelayZone::Tor),
+        true, // noise on — otherwise there are no deadlines and this is vacuous
         0,
         &mut rng,
     )
@@ -673,7 +677,7 @@ fn noise_enabled_pins_stem_width_to_noise_channels() {
         DandelionParams::inherited(),
         inherited::NOISE_CHANNELS,
         FluffReach::OutboundOnly,
-        LinkSecrecy::Encrypted,
+        LinkSecrecy::of(RelayZone::Tor),
         true,
         0,
         &mut rng,
@@ -780,7 +784,7 @@ fn dispatch_does_not_re_decide_the_phase() {
                 DandelionParams::inherited(),
                 2,
                 FluffReach::OutboundOnly,
-                LinkSecrecy::Encrypted,
+                LinkSecrecy::of(RelayZone::Tor),
                 true,
                 0,
                 &mut rng,
@@ -802,7 +806,7 @@ fn dispatch_does_not_re_decide_the_phase() {
                     DandelionParams::inherited(),
                     2,
                     FluffReach::OutboundOnly,
-                    LinkSecrecy::Encrypted,
+                    LinkSecrecy::of(RelayZone::Tor),
                     true,
                     0,
                     &mut rng,
@@ -848,7 +852,7 @@ fn a_noise_carrier_does_not_change_the_phase() {
             DandelionParams::inherited(),
             shekyl_relay_privacy::params::inherited::NOISE_CHANNELS,
             FluffReach::OutboundOnly,
-            LinkSecrecy::Encrypted,
+            LinkSecrecy::of(RelayZone::Tor),
             noise,
             0,
             &mut rng,
@@ -880,45 +884,59 @@ fn a_noise_carrier_does_not_change_the_phase() {
 /// configured for a protection it is not receiving is the failure worth being
 /// loud about, and a silent downgrade is indistinguishable from working.
 ///
-/// The reopening criterion is stated at `Zone::new`: a zone that is encrypted
-/// but *not* an anonymity network would be eligible for noise, and
-/// `FluffReach::EveryPeer` would then be naming the wrong property.
+/// **This bites against a `Zone::new` that keys noise on reach instead of
+/// secrecy; it does NOT cover the FFI flag-decode.** Reach is an independent
+/// argument, not a proxy for encryption — `Encrypted + EveryPeer` is the
+/// case the axis exists for (encrypted clearnet), and
+/// `Cleartext + OutboundOnly` is §25.5's live configuration. The two
+/// refusals are distinct [`ZoneNewError`] variants so they cannot collapse
+/// into one `None`.
 #[test]
 fn a_noise_carrier_is_refused_where_it_buys_nothing() {
-    let build = |secrecy: LinkSecrecy, stems: usize, noise: bool| {
-        let reach = FluffReach::OutboundOnly;
+    let build = |zone: RelayZone, reach: FluffReach, stems: usize, noise: bool| {
         let mut rng = SplitMix64::new(0x0819);
         Zone::new(
             DandelionParams::inherited(),
             stems,
             reach,
-            secrecy,
+            LinkSecrecy::of(zone),
             noise,
             0,
             &mut rng,
         )
-        .is_some()
     };
     const CHANNELS: usize = shekyl_relay_privacy::params::inherited::NOISE_CHANNELS;
 
-    assert!(
-        !build(LinkSecrecy::Cleartext, CHANNELS, true),
-        "noise on a cleartext zone conceals nothing an observer cannot read"
+    assert_eq!(
+        build(RelayZone::Public, FluffReach::OutboundOnly, CHANNELS, true).err(),
+        Some(ZoneNewError::NoiseOnCleartext),
+        "outbound-only fluff is not encryption; a cleartext zone earns no noise"
     );
     assert!(
-        build(LinkSecrecy::Encrypted, CHANNELS, true),
-        "and it is accepted on an encrypted zone, or the refusal is total"
+        build(RelayZone::Tor, FluffReach::EveryPeer, CHANNELS, true).is_ok(),
+        "encrypted + every-peer is the case the secrecy axis exists for — \
+         encrypting clearnet must not require renaming reach"
     );
     assert!(
-        build(LinkSecrecy::Cleartext, CHANNELS, false),
+        build(RelayZone::Tor, FluffReach::OutboundOnly, CHANNELS, true).is_ok(),
+        "production i2p/tor pairing still builds"
+    );
+    assert!(
+        build(RelayZone::Public, FluffReach::EveryPeer, CHANNELS, false).is_ok(),
         "a cleartext zone without noise is the ordinary case"
+    );
+    assert_eq!(
+        build(RelayZone::Invalid, FluffReach::OutboundOnly, CHANNELS, true).err(),
+        Some(ZoneNewError::NoiseOnCleartext),
+        "an unknown link is not presumed encrypted and earns no noise"
     );
 
     // Was a `debug_assert!`, which compiles out in release and therefore
     // admitted the mismatch in exactly the build that ships. C++ indexes its
     // channel deque by this count, so the mismatch is a silent OOB drop there.
-    assert!(
-        !build(LinkSecrecy::Encrypted, CHANNELS + 1, true),
+    assert_eq!(
+        build(RelayZone::Tor, FluffReach::OutboundOnly, CHANNELS + 1, true).err(),
+        Some(ZoneNewError::NoiseChannelCount { got: CHANNELS + 1 }),
         "a channel count C++'s deque cannot index is refused, not asserted"
     );
 }
