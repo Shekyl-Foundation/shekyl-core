@@ -71,7 +71,6 @@ fn one_pass(
     };
     Scenario {
         witness: BlockAttestationWitness {
-            r: R,
             pass_signatures: vec![sig],
         }
         .to_canonical_bytes()
@@ -105,6 +104,7 @@ fn call(
     pairs: &[ShekylArchivalPidPubkey],
 ) -> u8 {
     let ctx = ShekylArchivalAttestationVerifyCtx {
+        prev_block_hash: R,
         attestation_root: root,
         cb_out_key: CB,
         cb_out_key_readable: cb_readable,
@@ -352,6 +352,7 @@ fn unreadable_coinbase_key_is_cbkey_unreadable() {
 #[test]
 fn unreadable_headers_is_headers_unreadable() {
     let ctx = ShekylArchivalAttestationVerifyCtx {
+        prev_block_hash: R,
         attestation_root: empty_attestation_root(),
         cb_out_key: CB,
         cb_out_key_readable: 1,

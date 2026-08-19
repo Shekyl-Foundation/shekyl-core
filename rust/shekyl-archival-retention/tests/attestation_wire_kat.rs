@@ -171,11 +171,13 @@ fn attestation_constants_are_pinned() {
     // Exact witness maximum = WITNESS_PREFIX_LEN + 256 × HybridSignature::CANONICAL_LEN.
     // Pinned to the literal so a signature-size change surfaces here rather than
     // silently in the coarse C++ cap.
-    assert_eq!(WITNESS_PREFIX_LEN, 40);
-    assert_eq!(MAX_ATTESTATION_WITNESS_BYTES, 866_600);
+    // RF-D3 (2026-08-19): the 32-byte `r` prefix is gone, so the framing is the
+    // count alone and the maximum drops by exactly 32.
+    assert_eq!(WITNESS_PREFIX_LEN, 8);
+    assert_eq!(MAX_ATTESTATION_WITNESS_BYTES, 866_568);
 }
 
-// ---- Witness (r ‖ count ‖ pass signatures) canonical-encoding vectors ----
+// ---- Witness (count ‖ pass signatures) canonical-encoding vectors ----
 //
 // The block-hash differential is structurally blind to the witness (it rides no
 // hashed field), so this is the freeze for the transport encoding. `count` is
@@ -190,7 +192,6 @@ const WITNESS_R: [u8; 32] = [0x5A; 32];
 fn witness_two_sig() -> BlockAttestationWitness {
     let (sa, sb) = dummy_sig_pair();
     BlockAttestationWitness {
-        r: WITNESS_R,
         pass_signatures: vec![sa, sb],
     }
 }
@@ -202,17 +203,21 @@ fn witness_canonical_encoding_is_pinned_by_structure() {
     let (sa, sb) = dummy_sig_pair();
 
     // Structure asserted against the operands directly (not via to_canonical_bytes),
-    // so an encoder bug — wrong r offset, big-endian count, wrong sig order — fails here.
-    assert_eq!(&bytes[0..32], &WITNESS_R, "r must be the 32-byte prefix");
+    // so an encoder bug — big-endian count, wrong sig order — fails here.
+    //
+    // The 32-byte `r` prefix this used to pin is GONE (RF-D3, 2026-08-19): the
+    // nonce anchors to the validated predecessor hash, which the verifier already
+    // holds as chain state, so nothing about it is transported. A witness blob is
+    // now framing plus signatures and nothing else.
     assert_eq!(
-        u64::from_le_bytes(bytes[32..WITNESS_PREFIX_LEN].try_into().unwrap()),
+        u64::from_le_bytes(bytes[0..WITNESS_PREFIX_LEN].try_into().unwrap()),
         2,
-        "count is a u64 little-endian prefix"
+        "count is a u64 little-endian prefix, and is now the WHOLE framing"
     );
     assert_eq!(
         bytes.len(),
         WITNESS_PREFIX_LEN + 2 * sig_len,
-        "exact r + count + 2 signatures"
+        "exact count + 2 signatures — no r"
     );
     assert_eq!(
         &bytes[WITNESS_PREFIX_LEN..WITNESS_PREFIX_LEN + sig_len],
@@ -237,19 +242,30 @@ fn witness_decode_rejects_corruption_of_the_pin() {
     let good = witness_two_sig().to_canonical_bytes().unwrap();
     let sig_len = HybridSignature::CANONICAL_LEN;
 
-    // (1) Flip one byte of r: decodes, but to a DIFFERENT witness — r is bound.
-    let mut r_flip = good.clone();
-    r_flip[0] ^= 0x01;
-    assert_ne!(
-        BlockAttestationWitness::from_canonical_bytes(&r_flip).unwrap(),
-        witness_two_sig(),
-        "a flipped r must not decode to the pinned witness"
+    // (1) Flip one byte of the FIRST SIGNATURE: decodes, but to a DIFFERENT
+    //     witness. This arm used to flip `r`; with `r` gone (RF-D3) the leading
+    //     bytes are the count, and flipping those is the length-mismatch arm
+    //     below rather than a content-binding arm. Retargeted onto signature
+    //     bytes so the arm still tests what it was written to test — that
+    //     content is bound — instead of quietly becoming a duplicate of (2).
+    let mut sig_flip = good.clone();
+    sig_flip[WITNESS_PREFIX_LEN] ^= 0x01;
+    // Either outcome is a rejection of the corrupted blob: it decodes to a
+    // DIFFERENT witness (content is bound), or it fails to decode at all (the
+    // flipped byte landed in a field the signature codec validates). Asserting
+    // only the first would make the arm depend on which byte the flip hits.
+    assert!(
+        !matches!(
+            BlockAttestationWitness::from_canonical_bytes(&sig_flip),
+            Ok(ref w) if *w == witness_two_sig()
+        ),
+        "a flipped signature byte must not decode to the pinned witness"
     );
 
     // (2) Bump the count field without adding a signature: the derive-on-encode /
     // validate-on-decode guard rejects the disagreement loudly.
     let mut count_bump = good.clone();
-    count_bump[32..WITNESS_PREFIX_LEN].copy_from_slice(&3u64.to_le_bytes());
+    count_bump[0..WITNESS_PREFIX_LEN].copy_from_slice(&3u64.to_le_bytes());
     assert!(
         matches!(
             BlockAttestationWitness::from_canonical_bytes(&count_bump),
