@@ -1,6 +1,7 @@
 # Serve-credit response format — design round (RF)
 
-**Status:** OPEN. Round opened 2026-08-18.
+**Status:** OPEN — `RF-D3` and `RF-D5` **resolved and implemented** 2026-08-19;
+`RF-D1`, `RF-D2`, `RF-D4` remain (the wire's own layout). Round opened 2026-08-18.
 **Unblocked by:** the carrier round
 ([`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md)) — **RULED
 2026-08-18, merged to `dev` in PR #501.**
@@ -17,9 +18,9 @@ change after genesis, which is the only reason the round exists as a round.
 Disposition IDs **`RF-D1` … `RF-Dn`**, registered at birth per
 [`94-tracking-index`](../../.cursor/rules/94-tracking-index.mdc).
 
-**Every input below is pinned; one implementation question is open** (`RF-D5`,
-§2.5 — surfaced by grounding the deletion, not by the ruling). `RF-D3` was
-carried as the round's one open test
+**Every input below is pinned, and `RF-D3` is now implemented.** `RF-D5`
+(§2.5 — surfaced by grounding the deletion, not by the ruling) is resolved with
+it. `RF-D3` was carried as the round's one open test
 — *whether `r` survives* — and it **dissolved on grounding** (§2): the ruling had
 already settled it on 2026-08-10, by an argument my restatement had replaced with
 a weaker one. So the round is **pure transcription of settled rulings into
@@ -165,46 +166,167 @@ and here the *benefit* is zero, which makes the cost moot.
 | Wire side-table field | `shekyl-wire/src/transaction.rs:932` (`pub r: Vec<[u8; 32]>`) |
 | Pinned nonce KATs — **regenerate under [rule 30](../../.cursor/rules/30-cryptography.mdc)** | `attestation_wire_kat.rs:48`, `:147`, `:278` |
 
-The KAT regeneration is the part to plan for: the nonce preimage changes shape,
-so the pinned vectors change, and a pinned vector that changes without its
-derivation changing is exactly what those KATs exist to catch.
+**The KAT outcome is the payoff for a distinction that looked pedantic.**
+Insisting that `r` is **replaced** — same arity, new source — rather than
+*deleted* is what let the frozen cross-language vector re-anchor **without
+regenerating a signature**. Feed the same 32 bytes through the new term and the
+nonce, the countersignature and the `attestation_root` are **byte-identical**;
+only the blob changes, losing a prefix it no longer needs to transport.
 
-### 2.5 `RF-D5` (OPEN) — **`r` does not merely delete: `block_hash(h−1)` has to arrive**
+That matters because **a regenerated vector is a vector nobody can check against
+anything.** Its correctness rests on the code that produced it — the code it is
+supposed to be testing. Preserving arity turned a rule-30 regeneration ceremony
+into rule 30 satisfied **by construction**: the vector still pins exactly what it
+always pinned. Had the term been dropped and the preimage reshaped, every pinned
+value would have moved and the only available check would have been "the new code
+says so."
+
+The structural pins did still move, and were re-anchored rather than deleted:
+`WITNESS_PREFIX_LEN` 40 → 8, `MAX_ATTESTATION_WITNESS_BYTES` 866,600 → **866,568**
+in **three** places with three different enforcement mechanisms — the C++
+transport cap (runtime FFI equality gate against Rust), `shekyl-archival-retention`
+(the authority), and `shekyl-levin`'s deliberate duplicate (compile-time
+`const _: () = assert!` plus a test), which exists because that crate refuses the
+retention stack as a production dependency.
+
+### 2.5 `RF-D5` — RESOLVED 2026-08-19: `r` is **replaced**, not deleted, and the anchor is refused when unpopulated
 
 Found while grounding the deletion surface, and recorded because the ruling's
-phrasing (*"the nonce's `r` term DELETES"*) reads as a pure removal and **is
-not one**.
+phrasing (*"the nonce's `r` term DELETES"*) reads as a pure removal and **is not
+one**.
 
-`attestation_nonce`'s first term is *replaced*, not dropped — same arity, new
-source — and the new source is **chain state the verifier does not currently
-receive**. `ShekylArchivalAttestationVerifyCtx`
-(`shekyl-ffi/src/archival_ffi/attestation.rs:81-90`) carries `attestation_root`,
-`cb_out_key`, `headers`, and `pairs`. **There is no previous-block hash**, and
-Rust has no chain access at that call site — admission calls in from C++.
+`attestation_nonce`'s first term is *replaced* — same arity, new source — and the
+new source is **chain state the verifier did not receive**.
+`ShekylArchivalAttestationVerifyCtx` carried `attestation_root`, `cb_out_key`,
+`headers`, `pairs`, and **no predecessor hash**; Rust has no chain access at that
+call site, since admission calls in from C++. So the deletion is one indivisible
+change across the surfaces in §2.4 plus an **FFI ABI widening** and a C++
+call-site populate.
 
-So the deletion implies, as one indivisible change:
+#### The decision: reject all-zeros, no readability flag
 
-| Surface | Change | Rule |
-| --- | --- | --- |
-| `ShekylArchivalAttestationVerifyCtx` | gains `prev_block_hash: [u8; 32]` — a `#[repr(C)]` **ABI widening** | [40](../../.cursor/rules/40-ffi-discipline.mdc) |
-| The C++ admission call site | must populate it | [20](../../.cursor/rules/20-rust-vs-cpp-policy.mdc) — a boundary advance, not a C++ patch |
-| Witness blob | `r ‖ count ‖ sigs` → `count ‖ sigs` | — |
-| `cryptonote_config.h:444` | `32 + 8 + MAX·SIG` → `8 + MAX·SIG`, plus the `:429`/`:437` comments | — |
-| Persisted-block wire | version-constant bump, CI-enforced | [42](../../.cursor/rules/42-serialization-policy.mdc) |
-| Pinned nonce + witness KATs | regenerate | [30](../../.cursor/rules/30-cryptography.mdc) |
+`cb_out_key` sits two fields away with a `cb_out_key_readable` companion, so the
+asymmetry would read as an oversight to a later reader and invite a well-meaning
+symmetry patch. Stating it as a decision:
 
-**`RF-D5` is: does `cb_out_key`'s existing readability protocol extend to the new
-term, or does an unreadable predecessor hash need its own failure code?** The ctx
-already models "C++ could not read this" explicitly — `cb_out_key_readable == 0`
-→ `ERR_CBKEY_UNREADABLE`, *"never garbage"* — and a new required term inherits
-that question rather than the answer. A field added without a readability arm
-would be the one input that fails silently.
+**`cb_out_key_readable` models a state that can genuinely occur.** Extracting the
+coinbase output key requires parsing the coinbase transaction, and that can fail
+on a malformed one. The flag has a real condition behind it.
 
-**Why this belongs in the round rather than the cut.** It is the only part of the
-`r` deletion that is *not* transcription: every other surface follows mechanically
-from the ruling, and this one asks a question the ruling never reached, because
-the ruling was reasoning about a nonce term and not about who hands it across a
-boundary.
+**`prev_block_hash` is not like that.** It is `prev_id` from the header of the
+block being connected — mandatory, and already parsed to have reached attestation
+verification at all. There is no path where a verifier holds a block but not its
+predecessor's hash, so a readability arm **could never legitimately fire**. This
+round has now found three times that a check which never fires is worse than no
+check, because it reads as protective: the vacuous KAT arm, `is_floor_datum`
+fading open, and the `CTTypeNull`-only test. On a genesis-frozen surface that is
+permanent.
+
+**The flag would not buy the property anyway.** The hazard is an *unpopulated*
+field, and the flag is itself caller-populated — a caller that forgets the hash
+forgets the flag. What makes it fail closed is **zero-initialisation**, and
+zero-rejection gets that same property without a second field the caller must get
+right.
+
+**All-zeros is a sound sentinel here.** A real block hash under RandomX has
+leading zeros, never thirty-two of them. The genesis edge does not collide: a
+record at height 1 anchors to `block_hash(0)` — the genesis block's *hash*, not
+its null `prev_id`. So all-zeros is unreachable as a legitimate value, and
+rejecting it catches exactly the memset-zero case.
+
+**The rejection carries its own verdict code** (`ERR_PREVHASH_UNPOPULATED`)
+rather than folding into a generic malformed-ctx path. A distinguishable failure
+is what tells the next person the *field* was unpopulated rather than the
+*record* bad — the only way that value arises.
+
+#### The empirical half: five call sites forgot it
+
+The disanalogy argument stands on its own, but it was also **tested against real
+call sites**. On the first C++ run after the ABI widened, **five tests failed** —
+`pinned_valid_vector_verifies_ok`, `flipped_root_is_root_mismatch`,
+`absent_bond_is_bond_absent`, `wrong_pair_pid_is_set_mismatch`,
+`empty_shape_across_ffi` — every one because it built the ctx without the new
+field.
+
+**Under the flag design each of those five would have passed silently**, with a
+zeroed flag read either as *"unreadable, skip"* or as *"readable, here are your
+zeros"*. Both are silent, on a consensus path. Zero-rejection turned all five
+into loud failures at build time.
+
+That is the argument made concrete rather than asserted: the alternative design
+was tested against real callers and **five of them would have been wrong**.
+
+#### The predecessor must be *validated*, not merely supplied
+
+Stated on the field itself (`attestation_nonce`'s doc comment and the ctx field),
+because call-site ordering is the only thing that currently enforces it:
+
+> The term must be a **validated** predecessor hash, not `prev_id` as supplied.
+
+An unvalidated header field is producer-chosen — exactly the property `r` was
+deleted for having. See §2.6 for what the trace found about the two paths.
+
+### 2.6 The ordering trace — bounded, and it settled the constraint's wording
+
+The concern: on the main-chain path `prev_id` is validated against `top_hash`
+(`blockchain.cpp:5690`) **before** the attestation call at `:5723`. On the
+alt-chain path (`handle_alternative_block`), the call at `:2237` is preceded only
+by a height check, an alternative-allowed check, and a hardfork check — **nothing
+validates `prev_id`**. Parent existence is established later, inside
+`build_alt_chain`.
+
+The discriminating question was not "trace the alt path" (a round) but **"is
+`verify_block_attestation` a pure predicate?"** (one function read). It is: only
+reads — `parse_archival_attestation_from_extra`, the pure step-1 Rust call,
+`get_archival_bond_hybrid_pubkey`, `get_output_public_key` — no DB write, no
+member mutation, no cache insert. Its own header says it *"parses nothing
+structural and decides nothing."*
+
+**So a losing alt block leaves no residue: this is an ordering smell, not a
+soundness hole.** The interesting case is not a fabricated `prev_id` but a *real
+but non-tip* one, since alt-chain building on a historical block is legitimate —
+but the choice set is bounded by the record's own `E` term (a pass record for
+epoch `E` lands in a block within `E`, whose predecessor is in `E`), and to make
+any of it land the alt chain must **win**, at which point `prev_id` is a
+validated predecessor and the lead time collapses to one block. Winning a reorg
+that deep is a majority capability, already outside what this defends against.
+
+**The constraint is written at full strength regardless**, because it is true
+under both outcomes and it is what a later implementer needs. **The alt-path
+reorder is its own item** — validating `prev_id` before `:2237` rather than
+inside `build_alt_chain`. It is filed separately on purpose: the trace showed the
+current ordering is *sound but unnamed*, so the reorder is **independent
+hardening, not a fix riding a format change**. Bundled, a reviewer would read it
+as necessary to the format, which it is not.
+
+### 2.7 Rule 42 — checked, and there is **no instance here**
+
+[Rule 42](../../.cursor/rules/42-serialization-policy.mdc) pairs every persisted
+wire-format change with a version-constant bump, CI-enforced. It was checked
+rather than assumed, because **a bump performed on the wrong constant is worse
+than none — it would read as satisfied**.
+
+Three independent confirmations that it does not reach this change:
+
+1. **The rule's own `globs`** are `rust/shekyl-engine-state/**` and
+   `rust/shekyl-engine-file/**`. The attestation witness is in
+   `shekyl-archival-retention` — neither.
+2. **The CI gate is scoped by construction.** `ci/schema-snapshot`'s
+   `assert-snapshots` runs *"the `schema_snapshot` tests in
+   `shekyl-engine-state`"*, and `enforce-version-bump` triggers only when *"any
+   `.snap` under `rust/shekyl-engine-state/schemas/`"* changed. The workflow does
+   not mention this crate.
+3. **The purpose does not transfer.** The rule exists so *"a binary can reject a
+   file whose wire format it cannot read"* — a wallet-side persisted block read
+   later by a possibly-older binary. The witness is a consensus transport blob
+   carried alongside the block into a node-side side table, and its integrity
+   comes from `attestation_root` being **mined into the block hash**, not from a
+   version constant.
+
+**Pre-genesis there is no prior encoding that could coexist with this one.** A
+version field exists to let a reader distinguish encodings that coexist; where
+none can, the field is ceremony. **No bump is owed**, and this section exists so
+the next reader does not re-derive it — or, worse, add one.
 
 ---
 

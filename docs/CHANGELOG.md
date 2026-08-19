@@ -51,6 +51,31 @@
 
 ### Changed
 
+- **`r` deletes from the attestation nonce and the witness — replaced, not
+  removed (`RF-D3`/`RF-D5`).** The nonce's first term becomes the block's
+  **validated** predecessor hash: `r` and `cb_out_key` were chosen by the same
+  party, so `r` never provided pre-signing resistance, while `block_hash(h−1)`
+  cannot exist before block `h−1` does. The witness blob drops its 32-byte
+  prefix (`count ‖ sigs`), and the transport cap moves 866,600 → 866,568 in
+  three places with three enforcement mechanisms.
+
+  `RF-D5`: the deletion is **not** a removal — it requires the anchor to *arrive*,
+  so the `#[repr(C)]` FFI ctx widens by `prev_block_hash` and C++ populates it.
+  All-zeros is refused with its own verdict code rather than a generic
+  malformed-ctx path, and there is deliberately **no readability flag**: a
+  verifier holding a block has parsed its header, so that arm could never fire,
+  and a flag is itself caller-populated so it would be forgotten alongside the
+  hash. Tested against real callers — **five C++ call sites forgot the field and
+  were refused loudly at build time**; under the flag design all five would have
+  passed silently on a consensus path.
+
+  Preserving the term's **arity** let the frozen cross-language KAT re-anchor
+  with nonce, countersignature and `attestation_root` byte-identical — rule 30
+  satisfied by construction rather than by regenerating a vector checkable only
+  against the code it tests. Rule 42 was checked and has **no instance** here
+  (globs, CI-gate scope, and purpose all exclude a consensus transport blob whose
+  integrity is the mined root); no bump owed, recorded so none is added.
+
 - **The serve-credit response-format round is open (`RF-D1…RF-Dn`).** Unblocked
   by the carrier round's ruling (merged in PR #501), and **now pure
   transcription: every input is pinned.** `RF-D3` — whether `r` survives — was
