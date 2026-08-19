@@ -8,9 +8,10 @@
 //! A zone is the unit the inherited C++ calls `detail::zone` — public,
 //! or i2p/tor. This type owns the state §18.5's inventory assigned to Rust:
 //! peer fluff queues, the stem map, the epoch role, and the covert **schedule**
-//! (enable bit, cadence, per-channel deadlines). Covert **buffers** and
-//! transport (framing, padding, the socket) stay C++ permanently, so a
-//! transaction body crosses the boundary only as an opaque blob. See
+//! (enable bit, cadence, per-channel deadlines). Covert **buffers** are
+//! moving to [`crate::CovertQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.7 /
+//! §2.9 step 2); transport (framing, padding, the socket) stays on the I/O
+//! side. A transaction body is still an opaque blob here. See
 //! `DAEMON_RELAY_PRIVACY.md` §20.2 / §20.4 for the post-RP-3b inventory.
 
 use std::collections::BTreeMap;
@@ -21,7 +22,7 @@ use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
-use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap};
+use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex, StemMap};
 
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
@@ -772,6 +773,114 @@ impl Zone {
     /// A peer's pending batch, if the zone knows the peer.
     pub fn peer(&self, id: &ConnectionId) -> Option<&PeerFluff> {
         self.contexts.get(id)
+    }
+}
+
+/// Which wire carries a planned batch.
+///
+/// **§42.3's split, as a type.** Covert channels carry the **stem phase**;
+/// fluff takes the zone's ordinary connection. The inherited C++ chose a
+/// carrier *instead of* a phase — the covert branch sat above the phase switch
+/// and downgraded a stem to `local` (§42.5a) — so carrier and phase were
+/// mutually exclusive answers to the same question. Here the carrier is a
+/// **function of** the phase, which is what makes the two composable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayCarrier {
+    /// The zone's ordinary connection.
+    Ordinary,
+    /// A covert channel, bound to the stem slot the plan chose.
+    ///
+    /// `channel` **is** the slot index: `CovertSchedule` binds channel `i` to
+    /// stem slot `i` (§20.3). Carried as [`SlotIndex`] so a crate-boundary
+    /// caller cannot swap it with a walk cursor — the property the newtype
+    /// exists for. The send loop must respect that binding rather than
+    /// broadcasting to every channel (§42.5a).
+    Covert { channel: SlotIndex },
+}
+
+/// A plan together with the wire that carries it — the whole answer in one
+/// value.
+///
+/// Returned as a unit so a caller cannot obtain a phase and then choose a
+/// carrier for it independently, which is the shape that let the covert branch
+/// substitute one for the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelayDispatch {
+    /// Stem (with destination), no-route, or fluff epoch.
+    pub plan: RelayPlan,
+    /// The wire.
+    pub carrier: RelayCarrier,
+}
+
+impl Zone {
+    /// Attach a carrier to a plan, per §42.3.
+    ///
+    /// Covert carries a **stem** and only a stem, and only when covert is
+    /// enabled on this zone. A fluff epoch and a no-route both take the
+    /// ordinary connection: fluff by §42.3's design, no-route because there is
+    /// nothing to carry.
+    ///
+    /// The slot lookup is consistent by construction — the destination came
+    /// from this same map in this same call, so `slot_of` cannot miss it, and
+    /// the `None` arm is unreachable rather than a fallback.
+    ///
+    /// **What it does when reached, stated exactly.** It `debug_assert!`s, and
+    /// in release it returns [`RelayCarrier::Ordinary`] — so the stem still
+    /// goes out, over the ordinary connection. That is a **cover** degradation,
+    /// not a routing one, and it is deliberate: §92.4's rule is that carrier
+    /// unavailability must never travel as a routing verdict. Dropping the send
+    /// would convert a map inconsistency into a routing failure, which is the
+    /// inversion the inherited covert branch made in the other direction —
+    /// keeping the carrier and degrading the phase (§42.5a).
+    fn carrier_for(&self, plan: RelayPlan) -> RelayCarrier {
+        match plan {
+            RelayPlan::Stem(destination) if self.covert_enabled() => {
+                match self.map.slot_of(destination) {
+                    Some(slot) => RelayCarrier::Covert { channel: slot },
+                    None => {
+                        debug_assert!(
+                            false,
+                            "planned a stem to a peer with no slot: the destination came from \
+                             this map in this call, so this is map corruption, not a posture"
+                        );
+                        RelayCarrier::Ordinary
+                    }
+                }
+            }
+            _ => RelayCarrier::Ordinary,
+        }
+    }
+
+    /// [`Self::plan_relay`] plus the carrier that serves it (§42.3).
+    pub fn plan_dispatch<R: RelayRng + ?Sized>(
+        &mut self,
+        source: Option<ConnectionId>,
+        local_origin: bool,
+        rng: &mut R,
+    ) -> RelayDispatch {
+        let plan = self.plan_relay(source, local_origin, rng);
+        RelayDispatch {
+            carrier: self.carrier_for(plan),
+            plan,
+        }
+    }
+
+    /// [`Self::plan_relay_with_refresh`] plus the carrier that serves it.
+    ///
+    /// The production shape: **one** call yielding phase *and* carrier *and*
+    /// slot, per rule 40's coarse-call rule.
+    pub fn plan_dispatch_with_refresh<R: RelayRng + ?Sized>(
+        &mut self,
+        source: Option<ConnectionId>,
+        local_origin: bool,
+        outbound: Vec<ConnectionId>,
+        rng: &mut R,
+    ) -> RelayDispatch {
+        let plan = self.plan_relay_with_refresh(source, local_origin, outbound, rng);
+        RelayDispatch {
+            carrier: self.carrier_for(plan),
+            plan,
+        }
     }
 }
 
