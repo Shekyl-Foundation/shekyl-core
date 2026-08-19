@@ -99,6 +99,29 @@ pub enum RelayPlan {
     FluffEpoch,
 }
 
+/// Whether the zone's links are encrypted — the **network secrecy** axis.
+///
+/// Kept as its own type rather than folded into [`FluffReach`] or derived from
+/// the zone discriminant at each site, because it is a third independent axis
+/// and this subsystem's recurring defect is axes collapsing into one another.
+/// The three are: *cleartext* versus *encrypted* for the network, *stem*
+/// versus *fluff* for the phase, and *ordinary* versus *noise* for the
+/// carrier. Reach is a fourth and is not this: reach says **who receives a
+/// fluff**, secrecy says **what a wire observer can read**.
+///
+/// It is a type and not a `bool` beside `FluffReach` for the reason
+/// `make_relay_zone` gives for its named flag bits — adjacent same-typed
+/// arguments transpose silently across a C ABI. Two distinct enums make the
+/// transposition a compile error instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkSecrecy {
+    /// Ordinary internet traffic. A wire observer reads the contents.
+    Cleartext,
+    /// Tor, i2p — and ordinary internet traffic if it is ever encrypted, which
+    /// is the case this axis exists to be ready for rather than to exclude.
+    Encrypted,
+}
+
 /// Which peers a fluff batch may reach in this zone.
 ///
 /// A zone-lifetime policy, not a per-batch choice, which is why it is set at
@@ -279,28 +302,63 @@ pub struct Zone {
 }
 
 impl Zone {
-    /// Open a zone at `now` with no connections yet.
+    /// Open a zone at `now` with no connections yet, or `None` when the
+    /// requested configuration is one the design forbids.
     ///
     /// The first epoch is drawn immediately, matching the inherited
     /// `start_epoch` running once at construction.
     ///
-    /// When `covert_enabled`, `stems` is also the covert channel count and
-    /// must equal [`inherited::NOISE_CHANNELS`] in production (C++ sizes its
-    /// channel deque from `CRYPTONOTE_NOISE_CHANNELS`). A mismatch is a
-    /// debug assertion here and a silent OOB drop on the C++ side.
+    /// # Refusals
+    ///
+    /// **A noise carrier requires an encrypted zone** (ruling of 2026-08-19).
+    /// Noise conceals *packet sizing*, and sizing is the only thing left for a
+    /// network observer to read once the link is encrypted. On a cleartext
+    /// link that observer reads the contents, so padding the sizes conceals
+    /// nothing and the bandwidth buys nothing. This is a refusal rather than a
+    /// silent downgrade to [`CovertSchedule::Off`], because a node configured
+    /// for a protection it is not getting is the failure mode worth being loud
+    /// about.
+    ///
+    /// The predicate is [`LinkSecrecy`] and nothing else. It is **not** reach,
+    /// and it is **not** anonymity: reach says who receives a fluff, anonymity
+    /// says who can be identified, and neither is the question. Encrypting
+    /// ordinary internet traffic would make a clearnet zone eligible for noise
+    /// without making it anonymous, and `RelayZone::is_encrypted` is the one
+    /// place that would change.
+    ///
+    /// **A noise carrier's channel count must equal
+    /// [`inherited::NOISE_CHANNELS`]** — `stems` doubles as the channel count
+    /// and C++ sizes its channel deque from `CRYPTONOTE_NOISE_CHANNELS`, so a
+    /// mismatch is a silent out-of-bounds drop on that side. This was a
+    /// `debug_assert!`, which compiles out in release and therefore let the
+    /// mismatched zone be built in exactly the configuration that ships.
+    ///
+    /// # Who can reach the refusals
+    ///
+    /// No caller in the tree violates either today: every noise construction —
+    /// production and gtest alike — is on an encrypted zone, and production
+    /// supplies no noise payload at all. Two callers can reach them. The
+    /// nearer one is a misconfiguration: `make_relay_zone` derives the noise
+    /// flag from the payload and the secrecy from `nzone`, so a noise payload
+    /// on the clearnet zone forms the refused pair, and the FFI answers null
+    /// rather than building a node that pays for a protection it is not
+    /// getting. The further one is the daemon Rust cutover, which forms the
+    /// pair in Rust and stops routing it through that single derivation site
+    /// — which is why the check is here and not at the FFI edge.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
         reach: FluffReach,
+        secrecy: LinkSecrecy,
         covert_enabled: bool,
         now: Millis,
         rng: &mut R,
-    ) -> Self {
-        debug_assert!(
-            !covert_enabled || stems == inherited::NOISE_CHANNELS,
-            "covert channel count must equal inherited::NOISE_CHANNELS \
-             (CRYPTONOTE_NOISE_CHANNELS); got stems={stems}"
-        );
+    ) -> Option<Self> {
+        if covert_enabled
+            && (matches!(secrecy, LinkSecrecy::Cleartext) || stems != inherited::NOISE_CHANNELS)
+        {
+            return None;
+        }
         let epoch = EpochScheduler::new(params).start(now, rng);
         let covert = if covert_enabled {
             CovertSchedule::on(stems, now, rng)
@@ -310,7 +368,7 @@ impl Zone {
         // Observation window shares the zone's params, not a second
         // `DandelionParams::inherited()` rebuild at the FFI edge.
         let observation_timer = EmbargoTimer::adopted(&params);
-        Self {
+        Some(Self {
             stem_watch: StemWatch::default(),
             observation_timer,
             contexts: BTreeMap::new(),
@@ -326,7 +384,7 @@ impl Zone {
             stems,
             reach,
             covert,
-        }
+        })
     }
 
     /// The earliest covert send deadline, or `None` when covert is disabled.

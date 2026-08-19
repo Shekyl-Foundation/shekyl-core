@@ -26,10 +26,12 @@ fn zone(rng: &mut SplitMix64) -> Zone {
         DandelionParams::inherited(),
         2,
         FluffReach::EveryPeer,
+        LinkSecrecy::Cleartext,
         false,
         0,
         rng,
     )
+    .unwrap()
 }
 
 #[test]
@@ -300,15 +302,25 @@ fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Zone {
 /// determinism, not a determined epoch, and is the flake `noise_stem`
 /// exposed once covert consults the planner.
 fn zone_with_role_cover(fluffing: bool, covert: bool, rng: &mut SplitMix64) -> Zone {
+    // A noise carrier only exists on an encrypted zone, so the reach follows
+    // the carrier rather than being a fixed convenience default — the fixture
+    // has to be a configuration production can actually hold.
+    let (reach, secrecy) = if covert {
+        (FluffReach::OutboundOnly, LinkSecrecy::Encrypted)
+    } else {
+        (FluffReach::EveryPeer, LinkSecrecy::Cleartext)
+    };
     for _ in 0..10_000 {
         let z = Zone::new(
             DandelionParams::inherited(),
             2,
-            FluffReach::EveryPeer,
+            reach,
+            secrecy,
             covert,
             0,
             rng,
-        );
+        )
+        .unwrap();
         if z.is_fluffing() == fluffing {
             return z;
         }
@@ -433,10 +445,12 @@ fn a_private_zone_fluffs_only_to_outbound_peers() {
         DandelionParams::inherited(),
         2,
         FluffReach::OutboundOnly,
+        LinkSecrecy::Encrypted,
         false,
         0,
         &mut rng,
-    );
+    )
+    .unwrap();
     z.on_handshake_complete(id(1), PeerDirection::Inbound);
     z.on_handshake_complete(id(2), PeerDirection::Outbound);
     z.on_handshake_complete(id(3), PeerDirection::Inbound);
@@ -459,10 +473,12 @@ fn a_private_zone_fluffs_only_to_outbound_peers() {
         DandelionParams::inherited(),
         2,
         FluffReach::EveryPeer,
+        LinkSecrecy::Cleartext,
         false,
         0,
         &mut rng,
-    );
+    )
+    .unwrap();
     z.on_handshake_complete(id(1), PeerDirection::Inbound);
     z.on_handshake_complete(id(2), PeerDirection::Outbound);
     z.on_handshake_complete(id(3), PeerDirection::Inbound);
@@ -590,11 +606,13 @@ fn a_covert_deadline_survives_wakes_it_did_not_cause() {
     let mut z = Zone::new(
         DandelionParams::inherited(),
         2,
-        FluffReach::EveryPeer,
+        FluffReach::OutboundOnly,
+        LinkSecrecy::Encrypted,
         true, // covert on — otherwise there are no deadlines and this is vacuous
         0,
         &mut rng,
-    );
+    )
+    .unwrap();
 
     // Fixture requirement: the two channels must be armed, and armed
     // *differently*, or "channel 1 unchanged" could hold by coincidence.
@@ -654,11 +672,13 @@ fn covert_enabled_pins_stem_width_to_noise_channels() {
     let z = Zone::new(
         DandelionParams::inherited(),
         inherited::NOISE_CHANNELS,
-        FluffReach::EveryPeer,
+        FluffReach::OutboundOnly,
+        LinkSecrecy::Encrypted,
         true,
         0,
         &mut rng,
-    );
+    )
+    .unwrap();
     assert!(z.covert_enabled());
     assert_eq!(
         z.stem_width(),
@@ -761,11 +781,13 @@ fn dispatch_does_not_re_decide_the_phase() {
             let z = Zone::new(
                 DandelionParams::inherited(),
                 2,
-                FluffReach::EveryPeer,
+                FluffReach::OutboundOnly,
+                LinkSecrecy::Encrypted,
                 true,
                 0,
                 &mut rng,
-            );
+            )
+            .unwrap();
             if z.is_fluffing() == fluffing {
                 break seed;
             }
@@ -781,11 +803,13 @@ fn dispatch_does_not_re_decide_the_phase() {
                 let mut z = Zone::new(
                     DandelionParams::inherited(),
                     2,
-                    FluffReach::EveryPeer,
+                    FluffReach::OutboundOnly,
+                    LinkSecrecy::Encrypted,
                     true,
                     0,
                     &mut rng,
-                );
+                )
+                .unwrap();
                 z.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
                 (z, rng)
             };
@@ -799,4 +823,104 @@ fn dispatch_does_not_re_decide_the_phase() {
             );
         }
     }
+}
+
+/// Ruling of 2026-08-19: **Dandelion++ runs on every zone regardless of
+/// noise.** The carrier and the phase are independent axes, and the inherited
+/// C++ covert branch collapsed them in both directions at once — it demoted a
+/// `stem` to `local` under `MWARNING("Dandelion++ stem not supported over
+/// noise networks")`, and then broadcast the result to *every* channel, which
+/// is the opposite of what a stem is.
+///
+/// The premise behind the demotion was the sybil-substitution fallacy §64
+/// named: that a noise network stands in for Dandelion++. It does not. Noise
+/// masks the node↔proxy wire against an **external** observer; Dandelion++
+/// defends against an **internal** adversarial peer. Neither substitutes for
+/// the other, so enabling one is not a reason to disable the other.
+///
+/// Asserted on the local-origin arm because RD-4 makes that one deterministic:
+/// a local origin always attempts a stem, epoch roll or not. The stem arm
+/// would ride the epoch and pass only outside a fluff epoch — which is exactly
+/// how the C++ `noise_stem` test came to flake at ~40%.
+#[test]
+fn a_noise_carrier_does_not_change_the_phase() {
+    let plan_with_covert = |covert: bool| {
+        let mut rng = SplitMix64::new(0x0819);
+        let mut z = Zone::new(
+            DandelionParams::inherited(),
+            shekyl_relay_privacy::params::inherited::NOISE_CHANNELS,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::Encrypted,
+            covert,
+            0,
+            &mut rng,
+        )
+        .unwrap();
+        z.update_stems(vec![id(1), id(2), id(3)], &mut rng);
+        assert_eq!(z.covert_enabled(), covert, "fixture did not take");
+        matches!(z.plan_relay(None, true, &mut rng), RelayPlan::Stem(_))
+    };
+
+    assert!(
+        plan_with_covert(false),
+        "control: a local origin stems on an encrypted zone"
+    );
+    assert!(
+        plan_with_covert(true),
+        "the noise carrier must not demote the phase — this is the assertion \
+         the deleted C++ covert branch would have failed"
+    );
+}
+
+/// Ruling of 2026-08-19: **noise runs only on an encrypted zone.** What noise
+/// buys is concealment of packet *sizing*, and sizing is the only thing left
+/// for a network observer to read once the link is encrypted. On a cleartext
+/// link that observer reads the contents outright, so padding the sizes
+/// conceals nothing and the bandwidth is spent for no privacy.
+///
+/// Refused rather than silently downgraded to `CovertSchedule::Off`: a node
+/// configured for a protection it is not receiving is the failure worth being
+/// loud about, and a silent downgrade is indistinguishable from working.
+///
+/// The reopening criterion is stated at `Zone::new`: a zone that is encrypted
+/// but *not* an anonymity network would be eligible for noise, and
+/// `FluffReach::EveryPeer` would then be naming the wrong property.
+#[test]
+fn a_noise_carrier_is_refused_where_it_buys_nothing() {
+    let build = |secrecy: LinkSecrecy, stems: usize, covert: bool| {
+        let reach = FluffReach::OutboundOnly;
+        let mut rng = SplitMix64::new(0x0819);
+        Zone::new(
+            DandelionParams::inherited(),
+            stems,
+            reach,
+            secrecy,
+            covert,
+            0,
+            &mut rng,
+        )
+        .is_some()
+    };
+    const CHANNELS: usize = shekyl_relay_privacy::params::inherited::NOISE_CHANNELS;
+
+    assert!(
+        !build(LinkSecrecy::Cleartext, CHANNELS, true),
+        "noise on a cleartext zone conceals nothing an observer cannot read"
+    );
+    assert!(
+        build(LinkSecrecy::Encrypted, CHANNELS, true),
+        "and it is accepted on an encrypted zone, or the refusal is total"
+    );
+    assert!(
+        build(LinkSecrecy::Cleartext, CHANNELS, false),
+        "a cleartext zone without noise is the ordinary case"
+    );
+
+    // Was a `debug_assert!`, which compiles out in release and therefore
+    // admitted the mismatch in exactly the build that ships. C++ indexes its
+    // channel deque by this count, so the mismatch is a silent OOB drop there.
+    assert!(
+        !build(LinkSecrecy::Encrypted, CHANNELS + 1, true),
+        "a channel count C++'s deque cannot index is refused, not asserted"
+    );
 }

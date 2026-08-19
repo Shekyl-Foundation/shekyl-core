@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 use super::*;
-use crate::{Driver, Effect, FluffReach, Zone};
+use crate::{Driver, Effect, FluffReach, LinkSecrecy, Zone};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
 
@@ -276,10 +276,12 @@ fn covert_cadence(seed: u64, polls: usize, queues: &mut CovertQueues) -> Vec<(u6
         DandelionParams::inherited(),
         2,
         FluffReach::OutboundOnly,
+        LinkSecrecy::Encrypted,
         true, // covert ON, or there are no deadlines and this is vacuous
         0,
         &mut rng,
-    );
+    )
+    .unwrap();
     assert_eq!(
         queues.channels(),
         zone.stem_width(),

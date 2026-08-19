@@ -10,6 +10,12 @@ use std::cell::RefCell;
 /// Spelled out rather than `1` so a change to the discriminant cannot silently
 /// re-point every fixture at a different transport.
 const PUBLIC: u8 = RelayZone::Public.as_u8();
+/// A noise carrier only exists on an encrypted zone, so covert fixtures build
+/// on tor rather than on the cleartext default. Both flags travel together for
+/// the same reason: the pair is what production forms at `make_relay_zone`.
+const TOR: u8 = RelayZone::Tor.as_u8();
+const COVERT_ON_ENCRYPTED: u32 =
+    SHEKYL_RELAY_ZONE_COVERT_ENABLED | SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
 
 // The "C++ side", simulated: recording callbacks that capture exactly what
 // crosses the boundary. This is the Effect seam test §18.4a asks for, and it
@@ -185,7 +191,7 @@ fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
     reset();
     unsafe {
         let peers: Vec<u8> = [id(1), id(2)].concat();
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, COVERT_ON_ENCRYPTED);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
         shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
@@ -643,7 +649,7 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
     reset();
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, COVERT_ON_ENCRYPTED);
         assert!(
             shekyl_relay_zone_covert_enabled(h),
             "fixture must actually have covert on or the carrier cell is vacuous"
@@ -660,7 +666,7 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
         );
 
         shekyl_relay_zone_free(h);
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, COVERT_ON_ENCRYPTED);
         let mut dest_dispatch = [0u8; 16];
         let mut carrier = 0xFFu8;
         let mut channel = 0xFFFF_FFFFu32;
@@ -770,17 +776,31 @@ fn zone_flag_bits_do_not_transpose() {
     );
 
     unsafe {
-        // Covert bit ALONE. A swap makes this read the fluff bit → false.
+        /* Covert bit ALONE. This is now a REFUSED configuration, not a
+        readback: covert without outbound-fluff-only is a noise carrier on
+        a cleartext zone, which `Zone::new` rejects (ruling of 2026-08-19).
+
+        The negative control survives the change and is strictly sharper.
+        Under a transposition this call would decode as *fluff-only*, which
+        is a perfectly ordinary zone and would build — so a swap turns this
+        null into a handle, and the assertion flips. The refusal is the
+        observation; a readback is no longer available here because the
+        zone does not exist to be read. */
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
         assert!(
-            shekyl_relay_zone_covert_enabled(h),
-            "covert bit set alone must read back as covert-enabled; \
-             reading false here means the bits are transposed"
+            h.is_null(),
+            "covert bit set alone is a noise carrier on a cleartext zone and \
+             must be refused; a handle here means the bits are transposed and \
+             this decoded as the harmless fluff-only zone"
         );
-        shekyl_relay_zone_free(h);
 
-        // Fluff bit ALONE. A swap makes this read the covert bit → true.
+        // Fluff bit ALONE. A swap makes this read the covert bit → refused,
+        // so the handle would be null and BOTH assertions below would fail.
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY);
+        assert!(
+            !h.is_null(),
+            "an outbound-fluff-only zone is ordinary and builds"
+        );
         assert!(
             !shekyl_relay_zone_covert_enabled(h),
             "outbound-fluff bit set alone must NOT enable covert; \
@@ -794,13 +814,28 @@ fn zone_flag_bits_do_not_transpose() {
         assert!(!shekyl_relay_zone_covert_enabled(h), "no flags ⇒ no covert");
         shekyl_relay_zone_free(h);
 
-        let both = SHEKYL_RELAY_ZONE_COVERT_ENABLED | SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, both);
+        /* Both flags, on an ENCRYPTED zone — the only configuration a noise
+        carrier is allowed in. Swap-blind by construction (both bits set),
+        so it is the positive readback and not part of the control. */
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, COVERT_ON_ENCRYPTED);
         assert!(
             shekyl_relay_zone_covert_enabled(h),
-            "both flags ⇒ covert on"
+            "both flags on an encrypted zone ⇒ covert on"
         );
         shekyl_relay_zone_free(h);
+
+        /* Both flags on a CLEARTEXT zone — refused. This pins the axis split
+        the flags used to hide: outbound-only fluff does not imply an
+        encrypted link. It is a real configuration (§25.5 keeps
+        outbound-only fluff on clearnet open) and it is still cleartext, so
+        it earns no noise. Before secrecy was read from the zone byte this
+        case built a zone, because reach was standing in for encryption. */
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, COVERT_ON_ENCRYPTED);
+        assert!(
+            h.is_null(),
+            "outbound-only fluff is not encryption; a cleartext zone earns no \
+             noise however its fluff reach is configured"
+        );
 
         // A null handle answers false rather than aborting: a caller that lost
         // its zone has no covert channels by construction.

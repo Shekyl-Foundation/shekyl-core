@@ -56,8 +56,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shekyl_relay::{
-    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, RelayCarrier,
-    RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
+    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, LinkSecrecy,
+    RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
 };
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -410,6 +410,16 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// overflow the slot arithmetic, or a zero epoch — which is not merely useless
 /// but harmful, since every wake would find the epoch expired and the daemon's
 /// relay timer would spin. The caller treats null as a startup logic error.
+///
+/// It also returns null on a flag pair the design refuses rather than a
+/// malformed one: `SHEKYL_RELAY_ZONE_COVERT_ENABLED` without
+/// `SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY` asks for a noise carrier on a
+/// cleartext zone, where padding sizes conceals nothing an observer cannot
+/// already read outright. Covert with a `stems` other than the inherited
+/// channel count is refused for the same reason it was a `debug_assert!`
+/// before — C++ indexes its channel deque by that count. Both are stated at
+/// [`Zone::new`], which is where they are enforced, so an in-process Rust
+/// caller after the daemon cutover cannot route around them.
 #[no_mangle]
 pub extern "C" fn shekyl_relay_zone_new(
     now_ms: u64,
@@ -442,8 +452,31 @@ pub extern "C" fn shekyl_relay_zone_new(
     } else {
         FluffReach::EveryPeer
     };
+    /* Secrecy is read from the zone discriminant, not from a flag bit. The
+    zone byte already crosses and encryption is a property of the network,
+    so deriving it here keeps one transposable bit off the ABI and keeps the
+    eligibility rule in one place — `RelayZone::is_encrypted`. */
+    let secrecy = if RelayZone::from_ffi_u8(zone).is_encrypted() {
+        LinkSecrecy::Encrypted
+    } else {
+        LinkSecrecy::Cleartext
+    };
     let mut rng = SecureRelayRng;
-    let zone = Zone::new(params, stems, reach, covert_enabled, now_ms, &mut rng);
+    // `None` is a refused configuration, not an allocation failure — a noise
+    // carrier on a cleartext zone, or a channel count C++'s deque cannot index.
+    // See `Zone::new`. Null is the only channel a C ABI has for saying so, and
+    // the one C++ construction site checks it.
+    let Some(zone) = Zone::new(
+        params,
+        stems,
+        reach,
+        secrecy,
+        covert_enabled,
+        now_ms,
+        &mut rng,
+    ) else {
+        return core::ptr::null_mut();
+    };
     let handle = RelayZoneHandle {
         driver: Driver::new(zone),
         rng,

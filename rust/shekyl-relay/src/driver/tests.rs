@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::stem_watch::TxId;
+use crate::LinkSecrecy;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -24,14 +25,18 @@ fn no_gather() -> Vec<ConnectionId> {
 }
 
 fn driver(rng: &mut SplitMix64) -> Driver {
-    Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        false,
-        0,
-        rng,
-    ))
+    Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::EveryPeer,
+            LinkSecrecy::Cleartext,
+            false,
+            0,
+            rng,
+        )
+        .unwrap(),
+    )
 }
 
 #[test]
@@ -167,14 +172,18 @@ fn a_mid_epoch_refresh_fills_the_map_without_rolling_the_epoch() {
 #[test]
 fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
     let mut rng = SplitMix64::new(31);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::Encrypted,
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     d.zone_mut()
         .on_handshake_complete(id(1), PeerDirection::Outbound);
     d.zone_mut()
@@ -253,14 +262,18 @@ fn a_rebind_and_a_covert_disabled_zone_emit_no_unbind() {
     // Rebind: close slot 0's peer but offer a replacement, so the churned
     // slot refills — bound again by the time any tick comes due.
     let mut rng = SplitMix64::new(37);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::Encrypted,
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     d.zone_mut()
         .on_handshake_complete(id(1), PeerDirection::Outbound);
     d.zone_mut()
@@ -399,14 +412,18 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
 #[test]
 fn covert_channels_emit_one_per_advance_not_synchronized() {
     let mut rng = SplitMix64::new(11);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::Encrypted,
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     // Bind both slots: since the inversion, an unbound slot emits no send
     // (CV-2), and this test is about cadence, not binding.
     d.zone_mut()
@@ -480,14 +497,18 @@ fn covert_channels_emit_one_per_advance_not_synchronized() {
 #[test]
 fn covert_sends_carry_the_slots_own_peer_at_its_own_index() {
     let mut rng = SplitMix64::new(23);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::Encrypted,
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     d.zone_mut()
         .on_handshake_complete(id(1), PeerDirection::Outbound);
     d.zone_mut()
@@ -549,14 +570,18 @@ fn covert_sends_carry_the_slots_own_peer_at_its_own_index() {
 #[test]
 fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
     let mut rng = SplitMix64::new(29);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::Encrypted,
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     d.zone_mut()
         .on_handshake_complete(id(1), PeerDirection::Outbound);
     d.zone_mut()
@@ -621,14 +646,18 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
 #[test]
 fn a_late_poll_emits_at_most_one_covert_channel() {
     let mut rng = SplitMix64::new(13);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::Encrypted,
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     d.zone_mut()
         .on_handshake_complete(id(1), PeerDirection::Outbound);
     d.zone_mut()
