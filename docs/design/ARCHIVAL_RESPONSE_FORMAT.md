@@ -228,11 +228,36 @@ forgets the flag. What makes it fail closed is **zero-initialisation**, and
 zero-rejection gets that same property without a second field the caller must get
 right.
 
-**All-zeros is a sound sentinel here.** A real block hash under RandomX has
-leading zeros, never thirty-two of them. The genesis edge does not collide: a
-record at height 1 anchors to `block_hash(0)` — the genesis block's *hash*, not
-its null `prev_id`. So all-zeros is unreachable as a legitimate value, and
-rejecting it catches exactly the memset-zero case.
+**All-zeros is a sound sentinel — but only where a record consumes the anchor,
+and getting that wrong would have halted the chain.**
+
+The reasoning first recorded here was *"a real block hash under RandomX has
+leading zeros, never thirty-two of them"*. **That is wrong, and it is worth
+recording why rather than quietly replacing it.** `prev_id` is the block *object*
+hash (`get_block_hash`), not the RandomX PoW value — no difficulty target
+constrains it, so nothing about mining excludes an all-zero id. The
+PoW-difficulty intuition was imported from the wrong hash.
+
+**And the genesis block's `prev_id` is all-zeros, while genesis reaches this
+path.** `top_block_hash()` returns `null_hash` on an empty chain, so
+`bl.prev_id == get_tail_id()` holds and `add_new_block` routes genesis to
+`handle_block_to_main_chain` → `verify_block_attestation`. A ctx-level gate would
+have **rejected genesis, and the chain could never have initialised.** The
+earlier note that "the genesis edge does not collide" reasoned about *records* at
+height 1 and missed that the *block* itself is the case.
+
+**The fix is scoping, not a special-case:** the anchor is checked where it is
+**load-bearing** — when at least one pass record will be verified against it.
+With no records no nonce is computed, so enforcing it there asserts on a value
+nothing reads. Every record-bearing block is at height ≥ 1 with a real
+predecessor hash, so within that scope all-zeros is again unreachable except by a
+caller that failed to populate the field.
+
+**Pinned by a negative-controlled pair** in `attestation_verify_tests.rs`:
+`genesis_all_zero_prev_hash_with_no_records_verifies_ok` goes red if the scope is
+removed, and `all_zero_prev_hash_with_a_record_is_refused` goes red if the check
+is. The unit suite missed the original defect because no test drives a full
+`Blockchain::init`.
 
 **The rejection carries its own verdict code** (`ERR_PREVHASH_UNPOPULATED`)
 rather than folding into a generic malformed-ctx path. A distinguishable failure

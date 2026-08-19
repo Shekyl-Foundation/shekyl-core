@@ -79,10 +79,18 @@ pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE: u8 = 11;
 ///   hash equally forgets the flag. What makes it fail-closed is
 ///   zero-initialisation — and zero-rejection gets that without a second field
 ///   the caller must get right.
-/// - All-zeros is a sound sentinel: a real block hash under RandomX has leading
-///   zeros, never thirty-two of them, and the genesis edge does not collide (a
-///   record at height 1 anchors to the **genesis block's hash**, not its null
-///   `prev_id`).
+/// - **All-zeros is a sound sentinel only where a record consumes the anchor**,
+///   which is where the check lives. The reasoning first recorded here — *"a real
+///   block hash under RandomX has leading zeros, never thirty-two"* — was **wrong**:
+///   `prev_id` is the block *object* hash, not the RandomX PoW value, so no
+///   difficulty target constrains it. And the genesis block's `prev_id` **is**
+///   all-zeros, while genesis does reach this path (`top_block_hash()` returns
+///   `null_hash` on an empty chain, so `add_new_block` routes it to
+///   `handle_block_to_main_chain`). Gating on the ctx unconditionally would have
+///   **rejected genesis and prevented chain initialisation**. Scoped to
+///   record-bearing blocks — all of which are at height ≥ 1 with a real
+///   predecessor hash — all-zeros is again unreachable except by a caller that
+///   failed to populate the field.
 pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED: u8 = 12;
 
 /// One `(p_id, hybrid pubkey)` pair C++ resolved for a distinct pass `p_id` that step-1 named.
@@ -150,12 +158,6 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
     }
     if ctx.headers_readable == 0 {
         return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE;
-    }
-    // The nonce's anchor term. All-zeros is unreachable as a legitimate value, so
-    // it means the caller never populated the field — refuse rather than verify
-    // every countersignature against `H(0…0 ‖ …)`.
-    if ctx.prev_block_hash == [0u8; 32] {
-        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED;
     }
 
     // 1. Header blob: cap FIRST (structural, before per-record work), then parse ONCE. The parsed
@@ -260,6 +262,30 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
     }
 
     // 7. Per-pass countersignature — only after the root agrees.
+    // The nonce's anchor term, checked HERE rather than with the other ctx gates:
+    // all-zeros is refused only when a countersignature will actually be verified
+    // against it.
+    //
+    // **The genesis block is why.** `prev_id` is the block *object* hash, not the
+    // RandomX PoW value, so nothing about mining excludes an all-zero block id —
+    // and the genesis block's `prev_id` **is** all-zeros by construction. Genesis
+    // reaches this path: `top_block_hash()` returns `null_hash` on an empty chain,
+    // so `bl.prev_id == get_tail_id()` holds and `add_new_block` routes genesis to
+    // `handle_block_to_main_chain`. Gating on the ctx would have rejected genesis
+    // and the chain could never have initialised.
+    //
+    // Scoping the check to "a record will consume this" is not a genesis
+    // special-case; it is checking the value where it is load-bearing. With no
+    // pass records no nonce is computed, so the anchor is read by nothing and
+    // enforcing it there would be asserting on a value the code never uses. Every
+    // block that *does* carry a record is at height ≥ 1, whose `prev_id` is a real
+    // predecessor hash — so within this scope all-zeros remains unreachable except
+    // by a caller that failed to populate the field, which is exactly what the
+    // sentinel is for.
+    if !records.is_empty() && ctx.prev_block_hash == [0u8; 32] {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED;
+    }
+
     for record in &records {
         let (_, pk) = resolved
             .iter()
