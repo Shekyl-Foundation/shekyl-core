@@ -2,16 +2,14 @@
 
 **Status:** OPEN. Round opened 2026-08-18.
 **Unblocked by:** the carrier round
-([`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md)) — **ruled
-in PR #501, which is not yet merged.**
+([`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md)) — **RULED
+2026-08-18, merged to `dev` in PR #501.**
 
-> **⚠️ MERGE ORDER: #501 before #504.** On `dev` today the carrier doc still
-> reads *"Status: OPEN. No option chosen."* and *"Blocks: the response-format
-> round"* — the ruling lives in #501. If this round merges first, `dev` carries a
-> direct contradiction: this doc citing a ruling the carrier doc does not yet
-> record. The dependency is on the **ruling**, not on the merge, so the round is
-> correctly opened now; but the merge is ordered and this note is the only thing
-> enforcing it.
+*(A `⚠️ MERGE ORDER: #501 before #504` note stood here while #501 was open,
+because `dev` then still read "Status: OPEN" for the carrier round and this doc
+cited a ruling `dev` did not yet record. #501 merged 2026-08-19; the ordering it
+enforced is satisfied, so the note is retired rather than left to read as a live
+constraint.)*
 
 **Freezes:** a genesis-frozen wire. Everything decided here is impossible to
 change after genesis, which is the only reason the round exists as a round.

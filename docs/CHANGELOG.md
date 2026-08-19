@@ -52,9 +52,7 @@
 ### Changed
 
 - **The serve-credit response-format round is open (`RF-D1…RF-Dn`).** Unblocked
-  by the carrier round's ruling — which lands in PR #501, so that PR merges
-  first; until it does, the carrier doc on `dev` still reads "OPEN". Unusual in
-  shape: **every input is pinned
+  by the carrier round's ruling (merged in PR #501). Unusual in shape: **every input is pinned
   except one**, so it is mostly transcription of settled rulings into bytes. The
   exception is `RF-D3` — whether `r` survives. The nonce is re-pinned as
   `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` with `r` deleted on the ground
@@ -78,6 +76,50 @@
   `shekyl-cli` and `shekyl-wallet-rpc` now hard-fail instead of
   `|| true` — they are guaranteed products, and tolerating their absence
   meant a release with no wallet-rpc could be staged silently.
+- **Cover restoration is PR 1 of the relay-logic Rust cutover, not a C++
+  feature with a Rust mirror.** `COVER_TRAFFIC_RESTORATION.md` §2.9 names
+  the five-step series; the C++ `broadcast_all_zones` loop is condemned
+  glue that step 3 deletes. Review polarity: Rust owns remaining relay
+  logic, C++ is the shim the series removes. `RelayCarrier::Covert`
+  carries `SlotIndex`; `CovertQueues` slices at the fragment window so
+  CV-1 is a restart, not a name; CV-4 threads the queues into the
+  cadence collector; the dispatch FFI crossing is in `shekyl_ffi.h`.
+- **The pass-record carrier round is a record partition, not a signature split
+  (`CR-D2`).** Sizing the whole record was arithmetic, not measurement: the
+  segment layout (`SEGMENT_LAYER_J = 2`, Selene/Helios 38/18) fixes the opening
+  at two branch layers (`1,792 B`) plus a leaf chunk (`4·38·32 = 4,864 B`) that
+  is on-wire cost despite no struct declaring it — `verify_segment_path` takes
+  `leaf_layer_scalars` as a separate parameter and cannot derive it. The whole
+  record is ~10,243 B ≈ 262 GB/yr, so **`path` is the dominant term and the
+  signature is not**: pruning only the ML-DSA leg keeps ~177 GB/yr, twice the
+  figure that disqualified doing nothing. The surviving option prunes the leaf
+  chunk, branch layers, and ML-DSA leg together, keeping ~278 B ≈ 7.1 GB/yr —
+  enough to identify the record and check the classical signature, **not**
+  enough to re-verify the opening, which is stated on the ruling rather than
+  left to be discovered.
+
+  The same read corrects `shekyl-economics-sim`'s `RESPONSE_BYTES`, which
+  understated the opening **2.16×** (three branch layers where the assembler
+  yields two; the leaf layer as 38 scalars where it is 152). It moves one end of
+  the Stage-2 **A5/W10** finding: re-fetch still undercuts holding at bulk
+  transit (`q* ≈ 0.274`), and at retail egress the proxy now **loses** at loose
+  grace rather than free-riding. The two proxy tests are restated to assert both
+  ends separately — the strong form they encoded (failure at the
+  proxy-unfavourable end implies failure across the band) no longer follows.
+  Whether A5/W10 survives overall is not settled here.
+
+  `CR-D1` resolved by reading, completing the round: there was **no tension**
+  between `blockchain.cpp:3726` and `cryptonote_basic.h:620-621`. The count
+  check is skipped for serve-credit txs precisely because `:3746-3754` imposes a
+  **stricter** rule twenty lines later — `pqc_auths` must be *empty*, error
+  string *"signature is on the vin"* — and `:3630` skips the spend arm as
+  non-spending. So the slot is **forbidden, not occupied**, and it is a category
+  error besides: `pqc_auths` is per-input *spend* authorization while a
+  countersignature attests to a *read*. The kept Ed25519 leg therefore stays on
+  the vin, no consensus assertion is inverted, and the carrier round is **RULED**
+  — kept (header + `leaf_bytes` + Ed25519) on the vin in the prefix, pruned
+  (ML-DSA leg + `path`) as a parallel structure keyed to the vin **inside**
+  `serialize_rctsig_prunable`, since a vin cannot straddle `unprunable_size`.
 
 - **The Foundation CompleteTree posture is reachable, warned, and served —
   and it is no longer the default anything.** Round record:

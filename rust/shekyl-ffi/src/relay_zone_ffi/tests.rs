@@ -568,6 +568,28 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
             ),
             SHEKYL_RELAY_PLAN_NO_ROUTE,
         );
+        let mut carrier = 0xFFu8;
+        let mut channel = 0xFFFF_FFFFu32;
+        out.fill(0xAA);
+        assert_eq!(
+            shekyl_relay_zone_plan_dispatch_with_refresh(
+                null,
+                id(1).as_ptr(),
+                true,
+                std::ptr::null(),
+                0,
+                out.as_mut_ptr(),
+                &raw mut carrier,
+                &raw mut channel,
+            ),
+            SHEKYL_RELAY_PLAN_NO_ROUTE,
+        );
+        assert_eq!(out, NIL, "null handle must nil-write out_dest");
+        assert_eq!(
+            carrier, SHEKYL_RELAY_CARRIER_ORDINARY,
+            "null handle must not leave a stale covert carrier"
+        );
+        assert_eq!(channel, 0, "null handle must not leave a stale slot");
         shekyl_relay_zone_update_stems(null, std::ptr::null(), 0);
         shekyl_relay_zone_force_epoch(null, 0, std::ptr::null(), 0);
         shekyl_relay_zone_poll(
@@ -607,6 +629,65 @@ fn plan_relay_with_refresh_fills_an_empty_map() {
         );
         assert_ne!(out, NIL, "successor written");
         assert_eq!(shekyl_relay_zone_live_stems(h), 2);
+        shekyl_relay_zone_free(h);
+    }
+}
+
+/// The dispatch crossing is additive: same plan as `plan_relay_with_refresh`,
+/// plus a carrier. Covert-on + local origin (RD-4: always stems) so the
+/// epoch cannot make this vacuous. This bites against a seam that starts
+/// re-deciding the phase, and against a covert-on stem that forgets to
+/// name a slot inside the stem width.
+#[test]
+fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
+    reset();
+    unsafe {
+        let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        assert!(
+            shekyl_relay_zone_covert_enabled(h),
+            "fixture must actually have covert on or the carrier cell is vacuous"
+        );
+
+        let mut dest_plan = [0u8; 16];
+        let via_plan = shekyl_relay_zone_plan_relay_with_refresh(
+            h,
+            std::ptr::null(),
+            true,
+            peers.as_ptr(),
+            3,
+            dest_plan.as_mut_ptr(),
+        );
+
+        shekyl_relay_zone_free(h);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        let mut dest_dispatch = [0u8; 16];
+        let mut carrier = 0xFFu8;
+        let mut channel = 0xFFFF_FFFFu32;
+        let via_dispatch = shekyl_relay_zone_plan_dispatch_with_refresh(
+            h,
+            std::ptr::null(),
+            true,
+            peers.as_ptr(),
+            3,
+            dest_dispatch.as_mut_ptr(),
+            &raw mut carrier,
+            &raw mut channel,
+        );
+
+        assert_eq!(
+            via_dispatch, via_plan,
+            "dispatch must not re-decide the phase"
+        );
+        assert_eq!(via_dispatch, SHEKYL_RELAY_PLAN_STEM, "RD-4: origin stems");
+        assert_eq!(
+            carrier, SHEKYL_RELAY_CARRIER_COVERT,
+            "covert is on and this is a stem"
+        );
+        assert!(
+            (channel as usize) < 2,
+            "channel is the stem slot (§20.3); {channel} is outside the width"
+        );
         shekyl_relay_zone_free(h);
     }
 }

@@ -3191,6 +3191,11 @@ typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel, const st
 //! Settled for this epoch: fluff. Retrying cannot change the answer.
 #define SHEKYL_RELAY_PLAN_FLUFF_EPOCH 2
 
+//! Carrier: the zone's ordinary connection.
+#define SHEKYL_RELAY_CARRIER_ORDINARY 0
+//! Carrier: a covert channel, bound to the stem slot (channel i follows slot i).
+#define SHEKYL_RELAY_CARRIER_COVERT   1
+
 //! Zone-shape flags for `shekyl_relay_zone_new`.
 //!
 //! Named bits rather than two `bool` parameters, deliberately. Adjacent bools
@@ -3370,6 +3375,19 @@ std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::ui
 std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
     const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest);
+//! Plan a relay AND the wire that carries it — phase, carrier and slot in
+//! one crossing (rule 40). Return is the same SHEKYL_RELAY_PLAN_* code as
+//! plan_relay_with_refresh. out_carrier is SHEKYL_RELAY_CARRIER_*;
+//! out_channel is the stem slot and is meaningful only when the carrier is
+//! covert (written 0 otherwise). Every out-param is written on the
+//! null-handle path so a mishandled NO_ROUTE cannot be read as a covert
+//! stem. Deliberately unused by production notify yet —
+//! COVER_TRAFFIC_RESTORATION.md §2.9 step 1; do not delete on a
+//! caller grep (§1.6).
+std::int32_t shekyl_relay_zone_plan_dispatch_with_refresh(
+    RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
+    const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest,
+    std::uint8_t* out_carrier, std::uint32_t* out_channel);
 //! Merge the current outbound set into the stem map mid-epoch. Used for
 //! connection churn, covert-send recovery, and the forced refresh after a stem
 //! send failure. No callback — see plan_relay_with_refresh.

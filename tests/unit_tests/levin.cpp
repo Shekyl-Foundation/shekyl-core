@@ -704,10 +704,18 @@ TEST(once_at_origin_route, table)
     EXPECT_EQ(zone_route::decision::public_clearnet,
               cryptonote::once_at_origin_route(relay_method::local, zone::public_).get());
 
-    // Fluff is the exit on every origin.
-    EXPECT_EQ(zone_route::decision::public_clearnet,
+    /* DESIGN A (sec 91): a fluff floods EVERY configured zone, from every
+       origin. It was `public_clearnet` — clearnet alone — which made an
+       anonymity zone a depth-one injection point and left a Tor-only node
+       unable to maintain a mempool (sec 91.1). Coherence still refuses a
+       fluff; what changed is where a refused fluff goes. */
+    EXPECT_EQ(zone_route::decision::broadcast_all_zones,
               cryptonote::once_at_origin_route(relay_method::fluff, zone::tor).get());
-    EXPECT_EQ(zone_route::decision::public_clearnet,
+    EXPECT_EQ(zone_route::decision::broadcast_all_zones,
+              cryptonote::once_at_origin_route(relay_method::fluff, zone::i2p).get());
+    EXPECT_EQ(zone_route::decision::broadcast_all_zones,
+              cryptonote::once_at_origin_route(relay_method::fluff, zone::public_).get());
+    EXPECT_EQ(zone_route::decision::broadcast_all_zones,
               cryptonote::once_at_origin_route(relay_method::fluff, zone::invalid).get());
 }
 
