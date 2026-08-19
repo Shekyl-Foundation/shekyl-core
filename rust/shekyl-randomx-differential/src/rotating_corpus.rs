@@ -155,7 +155,6 @@ impl IndexProvenance {
         Self::ALL.iter().copied().find(|p| p.tag() == tag)
     }
 
-
     /// Banner-facing tag. Pinned by the T17 banner assertion; changing
     /// these strings changes what a reviewer greps for.
     #[must_use]
