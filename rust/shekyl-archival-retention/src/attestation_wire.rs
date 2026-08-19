@@ -334,7 +334,7 @@ impl Eq for BlockAttestationWitness {}
 pub enum WitnessError {
     /// Shorter than the fixed `count(8)` prefix ([`WITNESS_PREFIX_LEN`]).
     #[error(
-        "attestation witness shorter than the {WITNESS_PREFIX_LEN}-byte r‖count prefix: got {0}"
+        "attestation witness shorter than the {WITNESS_PREFIX_LEN}-byte count prefix: got {0}"
     )]
     TooShort(usize),
     /// The declared (or encode-side) count exceeds [`MAX_ATTESTATION_RECORDS`].

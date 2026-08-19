@@ -27,6 +27,8 @@
 #include <vector>
 
 #include "cryptonote_config.h"
+#include <stdexcept>
+
 #include "shekyl/shekyl_ffi.h"
 
 namespace
@@ -63,6 +65,22 @@ const std::string KAT_WITNESS =
 const std::string KAT_PUBKEY =
   "0101000020000000539a0673ce6b6f759cc093f790c488c98937bebe9b82a1d0c1e521b65502088ba0070000d1d5abdd90626d8ad8703b2fa94009acdde3b126d417f416dcf3d614da5a7194504c786f32dbcb76f24795f19ac7a78ea475eb5bd10032c598cf543e69271b2dc177d64962a7275ca11260e8038e1d290b69a2fe83f15f7773b9799767e0dadde5a4ee3b0a4525f34996faf7922d333ea7d028c741bf1fdcc00d7fc864a70551cd533eb715c400d1544e97e490c6bba8a91d63aac5e94340f213c5b2dfdd032b852a3069c02122e6d4be9a425cb36d80f5cba33818d4a79961be66074e9954ce5494493f6f3224f2f58b3f0d2dd6e9bf12e20ceb2ca82354f4483a144fe33d07af629542a538e0fe16855637c135df80f11514003c683b1bf04e82fc7dcd1ea6493b48a39894f95f9a0065a351e3f36e4ffc66dcb08f8dbf7da51cb5db83effd9666a1faea2fff632655a932fcc51d71a8074c68dde3701986df42097fcff148ea436552e95de6045c00aba901503c71002cd8db790eb0fd6b16243ead02dd073f07d74863ef287a1d09cc827b78c5c8a81f432e0007ab39f5bee5f8b2188fc4e6d254ab26d557e32ded1e1eba101bf17f7228d51e94f3f215e0234b42b1eed23bc938607141f91e01418eccafa3fb4b1d3e7916edebef4f8d4bb04ec5e06f0e260834e86a066bd3561b402a2278e43fe8f7d3d1157c481941ce00af11bacb1ace2d3a638a0e1b947948ca14f90b072ea0c0b1e93447af9f7f5f44061a654fac1f9c100fea340f56b81abb68dcfacc438cdadaeb9bca42a3294eb0151200cb4392fdb6ed177fa46ca41baf822e26168e8176cc9beb2a991f9b9afdefe7ea60aa50baab5e61af70a873d67b30ca0292353833f57de20254446f83cc1e721ed1b677ce63a3cc1427d4240d11150b87e9ed5db3458af732a9b1f94bfb7260f74546f77d4deb3e3b60ae4fe296ae1c2e1ada7a93481cd286ea3cb9586bd68bd93b803020bfbecf155b80190e539e7cbca37b95d724ac99fa715d95a3d31e954fb53aa5c797066c2c00fc26d0bce9fd8b0920d4a87a92aab825972afd83e43f3f21cae82ebb3e449586f854f29950c2ac1fc5361e00d28844590116b15c51da46834710084e98c316ccf1e242aa1a1c9e3b3a2e14ceda2cf94d3990f378ef1e8fcd6bfa8178f96fb740d8a69bef620601a1d5c0a2402f794acc533230060ae64dcadb6f68a9c8911170e653d6a80b68a14011d40cb4ad0a085c0d680bc1cc14217b17d788898e5221e2f16b1588bfde5af95c7f3c83c73d603e92cf6407acce99be24452f3c7b6dbbdb90f32be7b2ae68e03cae31ec81d60fef0f944858f61c5ef0f638eac7d1e315f626021f6184ae4d9e307864ae45dc2cc90a06d0fab9b25a5cde48e2e9ed5f52df547b419e8d35e4697b71dda20cf0976efe5551086b756061e82e8bb3e4b7ad2788f3bcc1fa49044edc6085c35c84b66b1db9d3062e4a7c5de8ed5e7acf2a2d8a0f1c12e8b35d244f6cade3b0c7b385494276a2d744cd3f72028a17d75559eed2a4eaca2a2ad83d4110183ee8ebb495b0300c3486bf6db70cfe7dbf96337b96cf51d44c51dd72404e624d94098991f2d9521f47783b3a0e8592d24513fbe3413357bda7dead7b940156d632832a3717144a88d76938fdebdc6cb914ad2eead0b97c6b0851ce43b848881ff567f59f2c759c21f564a64aa36d087b5a722de8720b9660369f37c6b675c9797acd1765dec81b3a4c0ccd38947853893c0f1381e7b05409312151fdb4526773863e674de7a9d68297f54596406b593152380466f03fae97efedf9bcb512a8174c32f297fd6f2eac8101e8404af7a5ce9a1fe948dcdbc45d5441f2357f6b0d204cfeded63e615b01ade8bb5880773436029f2320acabde401f4ae26435243d6b02c2cbb7a41de95e68fc57ee10b5889575482d299d8b98118349f480351c3bec268f79d2140812545803f57d9991e094641d9c6c90428cce7020d437216ef07c6790cd67d2f3aac2fa3adb95bc260d3981ee40a3faae621ec7e1da4d5434989920cd9b942c6925bd4ae17d7b7d80b7ee91faab78dc97d39a94889a84c7eb8f89be99523208cc29bd609e628ae1ba87d4ad1cf2ae5ff506b1db5875a0ceaee60544f540c39abe5c975b225ac450dd63018892d5cbdba8b8ba8867207fe2f9f8f84bd057e127823f096d6fa63b3eae86a76b7c3c474ff9e7c6e3aae52c583024b4a894cfedb2326d19f5b8d48abc70c66be577c226ae63326caaccbc18ee8df9e4317fa00194c99238040889402ac209b60235e466ac3a194b37a9df169380a811a0b81a54080f71c8adcd78715e15f6d75f190d5614db4e802486e45aff7b114e6ccddfefad73ba0e53d59384a8c17d59a0a4b86501a96d0e07cc460051003032293c522e6e476efe70e24c7f42dfcea8399e72cb03ddcc6579a8469c1ff8fea3c614825e473f362317dcdc8f21e8b609e0e5f19bee8ac7c27cd10ad04c1a8ee07d70d727abd67cba4698dc46b3f66aa9d04a9faeaca6876fae5c2ec28a5d99d39f4249bd72cdc8dea5952c71c4399e461f8208e8b720ce8a1ac6ca01f71cacae8e732ec6c08d8a3a25ecdb618ea29f29de6665627e65e99857f496725a8e570d8d89f060fc910d692f4b8850b11d4668a9a79ea156ed89842d6a79e84cfc5003247b29abeb15df8909db7bb4711c1cd109c35cae54f7d3c5df78a3ea227e12da91612c9bc5f3b94570ea387f390a3611a84a8dfd698ed909b0dbea97ff5bf43f75255ee1fb88f9e69ccb543018ccc4";
 
+// Copy exactly 32 bytes out of a pinned hex constant, or fail loudly.
+//
+// from_hex() truncates on odd-length input and validates no length, so a mistyped
+// vector would memcpy past the end of a short buffer -- silent UB in a test whose
+// entire job is pinning bytes. Applied to EVERY 32-byte source here rather than the
+// one the reviewer named: they all share the property, and guarding one would leave
+// the class open while looking closed. Throwing is caught by gtest and reported as a
+// test failure, which is what a mis-edited vector should produce.
+void copy32(uint8_t (&dst)[32], const std::vector<uint8_t>& src, const char* what)
+{
+  if (src.size() != 32)
+    throw std::logic_error(std::string("attestation test vector '") + what
+      + "' is " + std::to_string(src.size()) + " bytes, expected 32");
+  std::memcpy(dst, src.data(), 32);
+}
+
 // Verify the pinned vector with one (pair_pid, pair_pubkey) pair, a chosen root and a
 // chosen cb-readable flag. Every buffer lives for the synchronous FFI call.
 uint8_t run_verify(const std::vector<uint8_t>& root, uint8_t cb_readable,
@@ -73,15 +91,15 @@ uint8_t run_verify(const std::vector<uint8_t>& root, uint8_t cb_readable,
   const std::vector<uint8_t> cbkey = from_hex(KAT_CBKEY);
 
   shekyl_archival_pid_pubkey pair{};
-  std::memcpy(pair.p_id, pair_pid.data(), 32);
+  copy32(pair.p_id, pair_pid, "pair_pid");
   pair.pubkey_ptr = pair_pubkey.empty() ? nullptr : pair_pubkey.data();
   pair.pubkey_len = pair_pubkey.size();
 
   const std::vector<uint8_t> prev_block_hash = from_hex(KAT_PREV_BLOCK_HASH);
   shekyl_archival_attestation_verify_ctx ctx{};
-  std::memcpy(ctx.attestation_root, root.data(), 32);
-  std::memcpy(ctx.cb_out_key, cbkey.data(), 32);
-  std::memcpy(ctx.prev_block_hash, prev_block_hash.data(), 32);
+  copy32(ctx.attestation_root, root, "attestation_root");
+  copy32(ctx.cb_out_key, cbkey, "cb_out_key");
+  copy32(ctx.prev_block_hash, prev_block_hash, "prev_block_hash");
   ctx.cb_out_key_readable = cb_readable;
   ctx.headers_readable = 1;
   ctx.headers_ptr = headers.data();
