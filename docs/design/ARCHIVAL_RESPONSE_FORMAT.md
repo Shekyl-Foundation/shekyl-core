@@ -1,7 +1,18 @@
 # Serve-credit response format — design round (RF)
 
 **Status:** OPEN. Round opened 2026-08-18.
-**Unblocked by:** the carrier round ([`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md)) — RULED.
+**Unblocked by:** the carrier round
+([`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md)) — **ruled
+in PR #501, which is not yet merged.**
+
+> **⚠️ MERGE ORDER: #501 before #504.** On `dev` today the carrier doc still
+> reads *"Status: OPEN. No option chosen."* and *"Blocks: the response-format
+> round"* — the ruling lives in #501. If this round merges first, `dev` carries a
+> direct contradiction: this doc citing a ruling the carrier doc does not yet
+> record. The dependency is on the **ruling**, not on the merge, so the round is
+> correctly opened now; but the merge is ordered and this note is the only thing
+> enforcing it.
+
 **Freezes:** a genesis-frozen wire. Everything decided here is impossible to
 change after genesis, which is the only reason the round exists as a round.
 **Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
@@ -89,9 +100,13 @@ partly of its own making.
 
 **Precedent, cited so the disposition is not re-litigated as novel.** This is the
 same `q²` case already ruled on pool grinding — an edge gated behind a
-**discarded-block cost**, dismissed on the merits (`ARCHIVAL_CHALLENGE_MECHANISM.md`
-§: *"countersigning-as-P harmless (the priced q² case)"*; the success arithmetic
-`3q²(1−q)+q³` at `:222`). The disposition is **likely the same**. It is still
+**discarded-block cost**, dismissed on the merits:
+[`ARCHIVAL_CHALLENGE_MECHANISM.md:958`](ARCHIVAL_CHALLENGE_MECHANISM.md#L958)
+(*"countersigning-as-P harmless (the priced q² case)"*) with the success
+arithmetic at
+[`:222`](ARCHIVAL_CHALLENGE_MECHANISM.md#L222) — `3q²(1−q)+q³` at hashrate share
+`q`, i.e. `0.10` at `q = 0.2` against `0.20` unpriced. The disposition is
+**likely the same**. It is still
 tested, because "likely the same" and "the same" differ, and the cost of being
 wrong is a field that cannot be added back.
 

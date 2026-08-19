@@ -52,7 +52,9 @@
 ### Changed
 
 - **The serve-credit response-format round is open (`RF-D1…RF-Dn`).** Unblocked
-  by the carrier round's ruling, and unusual in shape: **every input is pinned
+  by the carrier round's ruling — which lands in PR #501, so that PR merges
+  first; until it does, the carrier doc on `dev` still reads "OPEN". Unusual in
+  shape: **every input is pinned
   except one**, so it is mostly transcription of settled rulings into bytes. The
   exception is `RF-D3` — whether `r` survives. The nonce is re-pinned as
   `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` with `r` deleted on the ground
