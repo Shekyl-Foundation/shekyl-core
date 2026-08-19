@@ -14770,6 +14770,21 @@ in for encryption, which is the collapse in miniature.
 **"Covert" is retired as a term of art.** It describes neither the network, nor
 the traffic pattern, nor the intent — it is marketing, and a word that means
 nothing precise is exactly the kind of word two axes collapse behind. The
-mechanism is **noise**; the network is **encrypted** or **cleartext**. Landed
-identifiers still spelling `Covert*` are named in the sweep tracked at §2.9 and
-are not evidence of a second concept.
+mechanism is **noise**; the network is **encrypted** or **cleartext**.
+
+Renamed with the rulings rather than after them, because a document retiring a
+word while the code still spells it is a contradiction the next reader has to
+resolve on their own. `CovertQueues`/`CovertSend`/`CovertSchedule` →
+`Noise*`, `RelayCarrier::Covert` → `::Noise`, the module `covert_queue` →
+`noise_queue`, and the three ABI names — `SHEKYL_RELAY_CARRIER_COVERT`,
+`SHEKYL_RELAY_ZONE_COVERT_ENABLED`, `shekyl_relay_zone_covert_enabled` — with
+`shekyl_ffi.h` and the C++ call sites the compiler then forced.
+
+**Two things were deliberately NOT renamed.** C++ internals that are not part
+of the ABI (`covert_payload`, the channel machinery) keep their names: they are
+step 5's delete target and die under whatever spelling, so churning them is the
+month-of-life edit §2.6 discarded. And **prose describing the deleted branch
+keeps the word** — "the covert branch" in §42.5a and §93.1 names a historical
+object, and renaming it there would falsify the record rather than correct it.
+A `Covert*` spelling surviving in either place is not evidence of a second
+concept.

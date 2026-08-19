@@ -126,7 +126,7 @@ namespace levin
 
     /*! Send txs using `cryptonote_protocol_defs.h` payload format wrapped in a
         levin header. The message will be sent in a "discreet" manner if the
-        zone runs covert channels (`shekyl_relay_zone_covert_enabled` — the
+        zone runs covert channels (`shekyl_relay_zone_noise_enabled` — the
         zone's fact since §20.4, no longer the payload's emptiness) — then the
         `command`/`payload` will be queued to send at the next available
         covert interval. Otherwise, a Dandelion++ fluff algorithm will be

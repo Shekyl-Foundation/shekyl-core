@@ -16,8 +16,8 @@ fn id(byte: u8) -> ConnectionId {
     ConnectionId::from_bytes(b)
 }
 
-fn queues(channels: usize) -> CovertQueues {
-    CovertQueues::new(channels, vec![0xDD; W]).expect("non-empty dummy")
+fn queues(channels: usize) -> NoiseQueues {
+    NoiseQueues::new(channels, vec![0xDD; W]).expect("non-empty dummy")
 }
 
 /// `n` windows, window `i` filled with byte `i`. Continuation and restart
@@ -28,7 +28,7 @@ fn striped(n: u8) -> Vec<u8> {
 
 #[test]
 fn a_zero_length_dummy_is_refused_because_it_is_not_cover() {
-    assert!(CovertQueues::new(2, Vec::new()).is_none());
+    assert!(NoiseQueues::new(2, Vec::new()).is_none());
 }
 
 #[test]
@@ -270,7 +270,7 @@ fn unbind_drops_everything_the_channel_held() {
 /// queue, and the two depths the CV-4 test built already flow in. A `_queues`
 /// that is never mentioned, or a cadence helper that does not take one, is
 /// the decorative fixture this test exists to refuse.
-fn covert_cadence(seed: u64, polls: usize, queues: &mut CovertQueues) -> Vec<(u64, usize, bool)> {
+fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64, usize, bool)> {
     let mut rng = SplitMix64::new(seed);
     let zone = Zone::new(
         DandelionParams::inherited(),
@@ -299,8 +299,8 @@ fn covert_cadence(seed: u64, polls: usize, queues: &mut CovertQueues) -> Vec<(u6
         now += 1_000;
         for effect in driver.poll(now, || peers.clone(), &mut rng) {
             match effect {
-                Effect::CovertSend { channel, .. } => out.push((now, channel, true)),
-                Effect::CovertUnbind { channel } => out.push((now, channel, false)),
+                Effect::NoiseSend { channel, .. } => out.push((now, channel, true)),
+                Effect::NoiseUnbind { channel } => out.push((now, channel, false)),
                 Effect::Fluff { .. } => {}
             }
         }
@@ -319,7 +319,7 @@ fn covert_cadence(seed: u64, polls: usize, queues: &mut CovertQueues) -> Vec<(u6
 ///
 /// **They are not, and removing them defeats the test silently.** The
 /// assertion is the *comparison*; the queues are the *bait*. Delete them
-/// from [`covert_cadence`], pass the same queue twice, or collapse the two
+/// from [`noise_cadence`], pass the same queue twice, or collapse the two
 /// runs into one, and this file still compiles, still passes, and no longer
 /// detects anything. It goes red the moment `Driver::poll` gains a queue
 /// parameter and anything branches on depth — the only thing it was ever
@@ -347,8 +347,8 @@ fn cv4_the_cadence_does_not_depend_on_queue_depth() {
     assert_eq!(e.bytes(), &vec![0xDD; W][..], "the empty queue emits cover");
     e.sent(&mut empty);
 
-    let with_empty = covert_cadence(SEED, POLLS, &mut empty);
-    let with_full = covert_cadence(SEED, POLLS, &mut full);
+    let with_empty = noise_cadence(SEED, POLLS, &mut empty);
+    let with_full = noise_cadence(SEED, POLLS, &mut full);
 
     assert!(
         !with_empty.is_empty(),
@@ -366,8 +366,8 @@ fn cv4_the_cadence_does_not_depend_on_queue_depth() {
 fn cv4_the_comparison_can_distinguish_cadences() {
     let mut qa = queues(2);
     let mut qb = queues(2);
-    let a = covert_cadence(0xA1, 40, &mut qa);
-    let b = covert_cadence(0xB2, 40, &mut qb);
+    let a = noise_cadence(0xA1, 40, &mut qa);
+    let b = noise_cadence(0xB2, 40, &mut qb);
     assert!(!a.is_empty() && !b.is_empty());
     assert_ne!(
         a, b,

@@ -27,7 +27,7 @@
 //!
 //! # Length is the invariant, and it has ONE owner
 //!
-//! **Every emission is exactly [`CovertQueues::window`] bytes — real fragment
+//! **Every emission is exactly [`NoiseQueues::window`] bytes — real fragment
 //! and dummy alike.** Length is the one thing a covert channel holds constant,
 //! so anything that can make a real send a different size from a dummy is a
 //! leak, not a degradation.
@@ -35,7 +35,7 @@
 //! The window is `dummy.len()` and nothing else. There is no exported
 //! constant to disagree with it: the dummy is built by
 //! `shekyl_levin::noise_notify(n)`, which produces exactly `n` bytes, and a
-//! caller that needs the window reads [`CovertQueues::window`]. A second
+//! caller that needs the window reads [`NoiseQueues::window`]. A second
 //! readable source would be the `transit_for` literal one layer up — a
 //! duplicate that drifts.
 
@@ -47,15 +47,15 @@ use shekyl_relay_privacy::stem_map::ConnectionId;
 #[derive(Debug, Default)]
 struct ChannelQueue {
     /// Framed messages waiting for this channel's due ticks. Each is a whole
-    /// multiple of the window (enforced at [`CovertQueues::enqueue`]).
+    /// multiple of the window (enforced at [`NoiseQueues::enqueue`]).
     pending: VecDeque<Vec<u8>>,
     /// How far into `pending.front()` the send has got. `None` when no message
     /// is mid-flight.
     offset: Option<usize>,
     /// The peer this channel was bound to when the in-flight run started.
     bound: Option<ConnectionId>,
-    /// Invalidates outstanding [`CovertSend`] tokens. Bumped on take, on
-    /// [`CovertSend::failed`], and on [`CovertQueues::unbind`] — the three
+    /// Invalidates outstanding [`NoiseSend`] tokens. Bumped on take, on
+    /// [`NoiseSend::failed`], and on [`NoiseQueues::unbind`] — the three
     /// events that mean a previously taken fragment is no longer the live
     /// send. `sent`/`failed` apply only when this still matches the token.
     epoch: u64,
@@ -71,8 +71,8 @@ impl ChannelQueue {
 ///
 /// # Dropping this is a FAILURE, and that is correct without any `Drop` code
 ///
-/// [`CovertQueues::take_for_send`] is **non-destructive**: it computes the
-/// fragment without advancing anything. Only [`CovertSend::sent`] advances.
+/// [`NoiseQueues::take_for_send`] is **non-destructive**: it computes the
+/// fragment without advancing anything. Only [`NoiseSend::sent`] advances.
 /// So a token that is dropped, forgotten, or lost to an early return leaves the
 /// queue exactly as it was, and the next take on that channel produces the same
 /// fragment — a restart, which is the CV-1 behaviour anyway.
@@ -94,7 +94,7 @@ impl ChannelQueue {
 #[must_use = "a covert send must be resolved with `sent()` or `failed()`; \
               dropping it restarts the fragment on the next take"]
 #[derive(Debug)]
-pub struct CovertSend {
+pub struct NoiseSend {
     channel: usize,
     bytes: Vec<u8>,
     /// False for a dummy: there is nothing to advance on success.
@@ -102,8 +102,8 @@ pub struct CovertSend {
     epoch: u64,
 }
 
-impl CovertSend {
-    fn live<'a>(&self, queues: &'a mut CovertQueues) -> Option<&'a mut ChannelQueue> {
+impl NoiseSend {
+    fn live<'a>(&self, queues: &'a mut NoiseQueues) -> Option<&'a mut ChannelQueue> {
         let q = queues.channels.get_mut(self.channel)?;
         (q.epoch == self.epoch).then_some(q)
     }
@@ -117,7 +117,7 @@ impl CovertSend {
     /// twice — and takes the queue as an argument rather than holding a
     /// reference, which is what lets the token cross an await. A stale token
     /// (epoch moved on) is a no-op rather than a mutation of a later send.
-    pub fn sent(self, queues: &mut CovertQueues) {
+    pub fn sent(self, queues: &mut NoiseQueues) {
         if !self.real {
             return; // A dummy advances nothing.
         }
@@ -148,7 +148,7 @@ impl CovertSend {
     /// dropped — it restarts on the next take, so a failed send costs a
     /// fragment rather than a transaction. A stale token is a no-op: it must
     /// not unbind a later binding.
-    pub fn failed(self, queues: &mut CovertQueues) {
+    pub fn failed(self, queues: &mut NoiseQueues) {
         let Some(q) = self.live(queues) else {
             return;
         };
@@ -176,14 +176,14 @@ impl CovertSend {
 /// Holds no schedule and no clock. It cannot advance time, and nothing here is
 /// reachable from [`crate::Driver::poll`].
 #[derive(Debug)]
-pub struct CovertQueues {
+pub struct NoiseQueues {
     channels: Vec<ChannelQueue>,
     /// The dummy payload. **Its length is the fragment window** — one value, so
     /// a real fragment and a dummy cannot disagree about length.
     dummy: Vec<u8>,
 }
 
-impl CovertQueues {
+impl NoiseQueues {
     /// `None` when `dummy` is empty: a zero window would make every emission
     /// zero-length, which is not cover.
     #[must_use]
@@ -246,7 +246,7 @@ impl CovertQueues {
     /// `None` means *no such channel*, a caller bug. It never means "nothing to
     /// send": a bound covert channel always sends, which is what constant-rate
     /// cover is. An unbound slot emits nothing, but that is the scheduler's
-    /// call — it yields `Effect::CovertUnbind` rather than asking here.
+    /// call — it yields `Effect::NoiseUnbind` rather than asking here.
     ///
     /// **CV-1: a rebind discards the in-flight remainder.** If `peer` differs
     /// from the binding the run started under, the offset is dropped and the
@@ -254,8 +254,8 @@ impl CovertQueues {
     /// the tail of a run rather than a whole window — and length is the one
     /// thing held constant (§20.5).
     ///
-    /// Non-destructive: see [`CovertSend`].
-    pub fn take_for_send(&mut self, channel: usize, peer: ConnectionId) -> Option<CovertSend> {
+    /// Non-destructive: see [`NoiseSend`].
+    pub fn take_for_send(&mut self, channel: usize, peer: ConnectionId) -> Option<NoiseSend> {
         let window = self.window();
         let q = self.channels.get_mut(channel)?;
 
@@ -267,7 +267,7 @@ impl CovertQueues {
         let epoch = q.epoch;
 
         if q.pending.is_empty() {
-            return Some(CovertSend {
+            return Some(NoiseSend {
                 channel,
                 bytes: self.dummy.clone(),
                 real: false,
@@ -288,7 +288,7 @@ impl CovertQueues {
                  that enqueue proved to be a whole number of windows"
             );
         };
-        Some(CovertSend {
+        Some(NoiseSend {
             channel,
             bytes: bytes.to_vec(),
             real: true,

@@ -262,7 +262,7 @@ namespace levin
       if (nzone != epee::net_utils::zone::public_)
         flags |= SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
       if (covert_enabled)
-        flags |= SHEKYL_RELAY_ZONE_COVERT_ENABLED;
+        flags |= SHEKYL_RELAY_ZONE_NOISE_ENABLED;
 
       return shekyl_relay_zone_new(
         now_ms(), std::uint8_t(nzone), params.stems,
@@ -408,7 +408,7 @@ namespace levin
            declaration order and this is the constructor body. */
         const std::size_t channel_width = shekyl_relay_zone_stem_width(relay.get());
         for (std::size_t count = 0;
-             shekyl_relay_zone_covert_enabled(relay.get()) && count < channel_width;
+             shekyl_relay_zone_noise_enabled(relay.get()) && count < channel_width;
              ++count)
           channels.emplace_back(io_service);
       }
@@ -416,7 +416,7 @@ namespace levin
       const std::shared_ptr<connections> p2p;
       /*! The dummy covert packet, and the fragment unit every covert send is
           cut to. Payload ONLY: whether the zone runs covert channels is the
-          zone's fact now (`shekyl_relay_zone_covert_enabled`), not this
+          zone's fact now (`shekyl_relay_zone_noise_enabled`), not this
           field's emptiness. It used to be both, which is why nine sites
           re-derived an enable flag from a byte buffer (§20.4). */
       const epee::byte_slice covert_payload;
@@ -606,9 +606,9 @@ namespace levin
       //! index, no array, no width to reconcile. Fires per due tick while the
       //! slot stays unbound (see `clear_channel` for why that repetition is
       //! the design). Runs on the zone strand (the wake fired there) and posts
-      //! to the channel's own strand, exactly like `on_covert` — nothing reads
+      //! to the channel's own strand, exactly like `on_noise` — nothing reads
       //! the zone handle off the zone strand.
-      static void on_covert_unbind(void* ctx, std::size_t channel) noexcept
+      static void on_noise_unbind(void* ctx, std::size_t channel) noexcept
       {
         assert(ctx != nullptr);
         try
@@ -638,7 +638,7 @@ namespace levin
       //!
       //! Note what it does NOT take: any hint of what is being sent (CV-4).
       //! C++ picks dummy-or-real from a queue Rust cannot see.
-      static void on_covert(void* ctx, std::size_t channel, const std::uint8_t* peer) noexcept
+      static void on_noise(void* ctx, std::size_t channel, const std::uint8_t* peer) noexcept
       {
         assert(ctx != nullptr);
         try
@@ -747,8 +747,8 @@ namespace levin
         shekyl_relay_zone_poll(
           zone_->relay.get(), now_ms(),
           std::addressof(sink), relay_effects::on_outbound,
-          relay_effects::on_fluff, relay_effects::on_covert_unbind,
-          relay_effects::on_covert
+          relay_effects::on_fluff, relay_effects::on_noise_unbind,
+          relay_effects::on_noise
         );
 
         arm(std::move(zone_), core_);
@@ -1007,7 +1007,7 @@ namespace levin
        single-writer atomic precisely because this method is callable from any
        thread (§18.5 finding 1). */
     const std::size_t connection_count = shekyl_relay_zone_live_stems(zone_->relay.get());
-    const bool noise = shekyl_relay_zone_covert_enabled(zone_->relay.get());
+    const bool noise = shekyl_relay_zone_noise_enabled(zone_->relay.get());
     bool has_outgoing = connection_count;
     if (!noise)
       has_outgoing = zone_->p2p->get_out_connections_count();
@@ -1134,7 +1134,7 @@ namespace levin
       shekyl_relay_zone_poll(
         z->relay.get(), shekyl_relay_zone_next_wake(z->relay.get()),
         std::addressof(sink), relay_effects::on_outbound,
-        relay_effects::on_fluff, relay_effects::on_covert_unbind, relay_effects::on_covert
+        relay_effects::on_fluff, relay_effects::on_noise_unbind, relay_effects::on_noise
       );
       relay_wake::arm(z, core);
     });

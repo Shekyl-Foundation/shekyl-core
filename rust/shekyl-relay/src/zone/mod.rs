@@ -9,7 +9,7 @@
 //! or i2p/tor. This type owns the state §18.5's inventory assigned to Rust:
 //! peer fluff queues, the stem map, the epoch role, and the covert **schedule**
 //! (enable bit, cadence, per-channel deadlines). Covert **buffers** live in
-//! [`crate::CovertQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2);
+//! [`crate::NoiseQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2);
 //! production still runs C++ `send_noise` until step 4 wires notify.
 //! Transport (framing, padding, the socket) stays on the I/O side. A
 //! transaction body is still an opaque blob here. See
@@ -185,7 +185,7 @@ pub enum FluffReach {
 /// covert interval **short** — a privacy defect no count assertion and no
 /// goodness-of-fit grade can see (§20.2a).
 #[derive(Debug)]
-enum CovertSchedule {
+enum NoiseSchedule {
     Off,
     On {
         cadence: NoiseCadence,
@@ -194,7 +194,7 @@ enum CovertSchedule {
     },
 }
 
-impl CovertSchedule {
+impl NoiseSchedule {
     fn on<R: RelayRng + ?Sized>(channels: usize, now: Millis, rng: &mut R) -> Self {
         let cadence = NoiseCadence::inherited();
         let deadlines = (0..channels).map(|_| cadence.next_send(now, rng)).collect();
@@ -286,7 +286,7 @@ pub struct Zone {
     /// in C++, encoded as `!zone::noise.empty()` — the byte payload doing
     /// double duty as its own enable flag. C++ still holds the payload buffers;
     /// Rust owns *whether* and *when* channels fire.
-    covert: CovertSchedule,
+    noise: NoiseSchedule,
     /// Per-successor stem outcomes — §12.11's signal, **derived here rather
     /// than imported from `tx_pool`** (§38.1). Records; never judges.
     stem_watch: StemWatch,
@@ -315,7 +315,7 @@ impl Zone {
     /// network observer to read once the link is encrypted. On a cleartext
     /// link that observer reads the contents, so padding the sizes conceals
     /// nothing and the bandwidth buys nothing. This is a refusal rather than a
-    /// silent downgrade to [`CovertSchedule::Off`], because a node configured
+    /// silent downgrade to [`NoiseSchedule::Off`], because a node configured
     /// for a protection it is not getting is the failure mode worth being loud
     /// about.
     ///
@@ -350,20 +350,20 @@ impl Zone {
         stems: usize,
         reach: FluffReach,
         secrecy: LinkSecrecy,
-        covert_enabled: bool,
+        noise_enabled: bool,
         now: Millis,
         rng: &mut R,
     ) -> Option<Self> {
-        if covert_enabled
+        if noise_enabled
             && (matches!(secrecy, LinkSecrecy::Cleartext) || stems != inherited::NOISE_CHANNELS)
         {
             return None;
         }
         let epoch = EpochScheduler::new(params).start(now, rng);
-        let covert = if covert_enabled {
-            CovertSchedule::on(stems, now, rng)
+        let noise = if noise_enabled {
+            NoiseSchedule::on(stems, now, rng)
         } else {
-            CovertSchedule::Off
+            NoiseSchedule::Off
         };
         // Observation window shares the zone's params, not a second
         // `DandelionParams::inherited()` rebuild at the FFI edge.
@@ -383,42 +383,42 @@ impl Zone {
             params,
             stems,
             reach,
-            covert,
+            noise,
         })
     }
 
     /// The earliest covert send deadline, or `None` when covert is disabled.
-    pub fn covert_deadline(&self) -> Option<Millis> {
-        self.covert.earliest()
+    pub fn noise_deadline(&self) -> Option<Millis> {
+        self.noise.earliest()
     }
 
     /// The single earliest channel due at `now`, re-armed from `now` (CV-3).
     ///
-    /// See [`CovertSchedule::due_one`]: at most one channel per call so a late
+    /// See [`NoiseSchedule::due_one`]: at most one channel per call so a late
     /// poll cannot emit a multi-channel burst.
-    pub fn due_covert_channel<R: RelayRng + ?Sized>(
+    pub fn due_noise_channel<R: RelayRng + ?Sized>(
         &mut self,
         now: Millis,
         rng: &mut R,
     ) -> Option<usize> {
-        self.covert.due_one(now, rng)
+        self.noise.due_one(now, rng)
     }
 
     /// A channel's armed deadline, for CV-3's witness.
     #[cfg(test)]
-    pub(crate) fn covert_deadline_at(&self, channel: usize) -> Option<Millis> {
-        self.covert.deadline_at(channel)
+    pub(crate) fn noise_deadline_at(&self, channel: usize) -> Option<Millis> {
+        self.noise.deadline_at(channel)
     }
 
     /// Whether this zone runs covert (noise) channels.
     ///
     /// The single owner of the fact (§20.4). C++ reads it back through
-    /// `shekyl_relay_zone_covert_enabled` rather than re-deriving it from the
+    /// `shekyl_relay_zone_noise_enabled` rather than re-deriving it from the
     /// payload it happens to hold, so there is exactly one place the answer
     /// comes from.
     #[must_use]
-    pub fn covert_enabled(&self) -> bool {
-        self.covert.enabled()
+    pub fn noise_enabled(&self) -> bool {
+        self.noise.enabled()
     }
 
     /// Configured stem width (slot count). When covert is on, also the channel
@@ -807,8 +807,8 @@ impl Zone {
     /// The stem slots in index order, `None` for an emptied slot.
     ///
     /// Owned here; never pushed as an array and never pulled by C++ on its own
-    /// schedule. Post-§20.3 the binding travels with each [`crate::Effect::CovertSend`]
-    /// (or [`crate::Effect::CovertUnbind`] when unbound). A caller-initiated
+    /// schedule. Post-§20.3 the binding travels with each [`crate::Effect::NoiseSend`]
+    /// (or [`crate::Effect::NoiseUnbind`] when unbound). A caller-initiated
     /// read would race this zone's mutations — §18.5 finding 3.
     pub fn stem_slots(&self) -> &[Option<ConnectionId>] {
         self.map.slots()
@@ -847,14 +847,14 @@ impl Zone {
 pub enum RelayCarrier {
     /// The zone's ordinary connection.
     Ordinary,
-    /// A covert channel, bound to the stem slot the plan chose.
+    /// A noise channel, bound to the stem slot the plan chose.
     ///
-    /// `channel` **is** the slot index: `CovertSchedule` binds channel `i` to
+    /// `channel` **is** the slot index: `NoiseSchedule` binds channel `i` to
     /// stem slot `i` (§20.3). Carried as [`SlotIndex`] so a crate-boundary
     /// caller cannot swap it with a walk cursor — the property the newtype
     /// exists for. The send loop must respect that binding rather than
     /// broadcasting to every channel (§42.5a).
-    Covert { channel: SlotIndex },
+    Noise { channel: SlotIndex },
 }
 
 /// A plan together with the wire that carries it — the whole answer in one
@@ -893,9 +893,9 @@ impl Zone {
     /// keeping the carrier and degrading the phase (§42.5a).
     fn carrier_for(&self, plan: RelayPlan) -> RelayCarrier {
         match plan {
-            RelayPlan::Stem(destination) if self.covert_enabled() => {
+            RelayPlan::Stem(destination) if self.noise_enabled() => {
                 match self.map.slot_of(destination) {
-                    Some(slot) => RelayCarrier::Covert { channel: slot },
+                    Some(slot) => RelayCarrier::Noise { channel: slot },
                     None => {
                         debug_assert!(
                             false,

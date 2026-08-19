@@ -28,10 +28,10 @@
 //! pushed-array contract through RP-3a before §20.3 retired the array itself.
 //! The binding now travels with each covert send, and a slot going unbound
 //! crosses as its own per-channel decision. Witnesses live in `shekyl-relay`'s
-//! `covert_sends_carry_the_slots_own_peer_at_its_own_index` /
+//! `noise_sends_carry_the_slots_own_peer_at_its_own_index` /
 //! `an_unbound_channel_emits_no_send_and_shifts_no_other` (the decision) and
 //! `relay_zone_ffi`'s
-//! `an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index` (the
+//! `an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index` (the
 //! marshalling, including peer bytes).
 
 use shekyl_relay_privacy::params::DandelionParams;

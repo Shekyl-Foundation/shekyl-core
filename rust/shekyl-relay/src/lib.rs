@@ -42,15 +42,15 @@
 //!   covert schedule — is owned **here**, mutated only through `&mut Zone`.
 //!   C++ connection events do not mutate it; they arrive as calls into the
 //!   owner. Covert **schedule** is owned here. Covert **buffers** live here
-//!   (`CovertQueues`) as the §2.9 step-2 executor; C++ `send_noise` still
+//!   (`NoiseQueues`) as the §2.9 step-2 executor; C++ `send_noise` still
 //!   runs the production remainder until the notify cutover (step 4)
 //!   deletes the inherited covert branch.
 //! - `connection_count` was the one genuine straddle in the inherited code
 //!   (*"only update in strand, can be read at any time"*). It stays derived
 //!   here and is published by the boundary as a single-writer atomic.
 //! - Stem bindings never cross as an array. Post-§20.3 each
-//!   [`Effect::CovertSend`] carries its peer, and an unbound slot clears via
-//!   [`Effect::CovertUnbind`] at its own cadence. C++ never pulls the map: a
+//!   [`Effect::NoiseSend`] carries its peer, and an unbound slot clears via
+//!   [`Effect::NoiseUnbind`] at its own cadence. C++ never pulls the map: a
 //!   caller-initiated read would race this crate's mutations (§18.5 finding 3).
 //!
 //! Any new shared state is a new inventory line that must resolve to
@@ -65,16 +65,16 @@
 //! the force-step hooks stay honest and how this crate's own tests avoid
 //! wall-clock dependence.
 
-mod covert_queue;
 pub mod driver;
 pub mod floor_diag;
+mod noise_queue;
 pub mod stem_watch;
 pub mod zone;
 pub mod zone_route;
 
-pub use covert_queue::{CovertQueues, CovertSend};
 pub use driver::{Driver, Effect};
 pub use floor_diag::{AchievedOutConnections, FloorSnapshot, FloorTransition, FloorWatch};
+pub use noise_queue::{NoiseQueues, NoiseSend};
 pub use shekyl_relay_privacy::SlotIndex;
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
 pub use zone::{
