@@ -26,16 +26,20 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// TODO(v3.2): delete this file and its .cpp. Coordinated with the
-// wallet_rpc_server Rust cutover (see docs/FOLLOWUPS.md §"removed_flags
-// shim"). The shim exists only to give users a friendly migration message
-// for flags removed in V3.1: the daemonizer flags (--detach, --pidfile, the
-// Windows --*-service set), shekyld's inbound RPC TLS/auth flags (--rpc-login,
-// --rpc-ssl*), and the transitional --no-rust-rpc opt-out. Call sites are the
-// the daemon main() in src/daemon/main.cpp (the second site, the C++
-// wallet's src/wallet/wallet_args.cpp, was deleted at Phase 5);
-// both disappear at V3.2 (shekyld keeps its caller, shekyl-wallet-rpc is
-// replaced by the Rust binary).
+// TODO(v3.2): delete this file and its .cpp (see docs/FOLLOWUPS.md
+// §"removed_flags shim sunset"). The shim exists only to give users a
+// friendly migration message for flags removed in V3.1: the daemonizer flags
+// (--detach, --pidfile, the Windows --*-service set), shekyld's inbound RPC
+// TLS/auth flags (--rpc-login, --rpc-ssl*), and the transitional
+// --no-rust-rpc opt-out.
+//
+// There is now exactly one call site: the daemon main() in
+// src/daemon/main.cpp. The second, the C++ wallet's
+// src/wallet/wallet_args.cpp, was deleted at Phase 5 along with the rest of
+// the C++ wallet stack. So the sunset no longer waits on any cutover — what
+// remains is the judgement that V3.1's flags have been gone long enough that
+// an operator passing one deserves a parser error rather than a migration
+// note.
 
 #pragma once
 

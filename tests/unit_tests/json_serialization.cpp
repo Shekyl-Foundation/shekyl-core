@@ -386,8 +386,9 @@ namespace test
         EXPECT_TRUE(result.proofs_json.ptr != nullptr && result.proofs_json.len > 0)
             << "DEBUG: proofs_json is empty on success";
 
-        // --- 9. Parse SignedProofs JSON (the pattern wallet2.cpp used, before
-//        it was deleted at Phase 5; the shape is the contract here) ---
+        // --- 9. Parse SignedProofs JSON (the pattern wallet2.cpp used,
+        //        before it was deleted at Phase 5; the shape is the
+        //        contract here) ---
         std::string proofs_str(
             reinterpret_cast<const char*>(result.proofs_json.ptr),
             result.proofs_json.len);

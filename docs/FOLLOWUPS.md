@@ -10698,7 +10698,7 @@ by the rewrite plan's half-day review gate, item 3):
 | Cross-linked, not absorbed | `monero-oxide` un-pin Operation B (40 upstream commits) | V3.1.x un-pin plan (peer to rewrite, parallelizable) |
 | Cross-linked, not absorbed | Workspace clippy `-D warnings` cleanup | V3.1.x dedicated pass (after rewrite stabilizes) |
 | Cross-linked, optional | `shekyl-cli` offline signing QR-chunked transfer (V3.2 below) | Phase 3b (optional `--format=qr-chunks` on bundles) |
-| Independent of rewrite | `removed_flags` shim sunset (V3.2 below) | V3.2 cleanup pass — naturally retires when `shekyl-wallet-rpc` Rust cutover lands |
+| Independent of rewrite | `removed_flags` shim sunset (V3.2 below) | V3.2 cleanup pass — **not** coupled to the Rust cutover (that landed at #500 without retiring the shim); one call site remains in `shekyld` |
 | Independent of rewrite | Chore #4 platform-gate audit (V3.2 below) | V4 pre-audit |
 | Independent of rewrite | Restore semantic thread labels (V3.2 below) | V3.2 |
 | Independent of rewrite | `rand` 0.9 / `curve25519-dalek` 5.x migration (V3.1.x above) | Gated on upstream releases |
@@ -11595,11 +11595,22 @@ one place to confirm each item's relationship to the wallet stack.
   when they pass `--detach`, `--pidfile`, or the Windows `--*-service`
   flags that the daemonizer removal retired. The flag list is
   maintained there as a single source of truth — `CHANGELOG.md` entries
-  reference the file rather than duplicating the list. The file is
-  deleted in V3.2 alongside the `shekyl-wallet-rpc` Rust cutover (which
-  removes one of the two call sites); `shekyld`'s call site is deleted
-  in the same V3.2 cleanup pass. Greppable as `TODO(v3.2)` in the file
-  header.
+  reference the file rather than duplicating the list. Greppable as
+  `TODO(v3.2)` in the file header.
+
+  **Trigger corrected 2026-08-19 (PR #507).** This entry said the file
+  "is deleted in V3.2 alongside the `shekyl-wallet-rpc` Rust cutover
+  (which removes one of the two call sites)". That cutover landed at
+  #500 and the wallet-side call site (`src/wallet/wallet_args.cpp`) died
+  at Phase 5 — so the stated trigger **fired without retiring anything**,
+  because `shekyld`'s call site was never coupled to it. A trigger that
+  can fire unnoticed is the failure mode this queue exists to prevent, so
+  the condition is restated as what it actually is: **there is one call
+  site (`src/daemon/main.cpp:196`), and the shim retires when we judge
+  V3.1's removed flags to have been gone long enough that an operator
+  passing one should get a parser error instead of a migration note.**
+  That is a judgement call with no upstream dependency — nothing else
+  needs to land first. *Target: V3.2.*
 
 - **`shekyl-daemon-rpc` staticlib: `tracing::*` calls silently dropped.**
   The Rust `shekyl-daemon-rpc` crate at `rust/shekyl-daemon-rpc` is
