@@ -339,9 +339,10 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             rotation_provenance = Some(match value {
                 "schedule-derived" => IndexProvenance::ScheduleDerived,
                 "operator-supplied" => IndexProvenance::OperatorSupplied,
+                "pull-request" => IndexProvenance::PullRequest,
                 other => {
                     return Err(format!(
-                        "--rotation-provenance expects schedule-derived or operator-supplied; got '{other}'"
+                        "--rotation-provenance expects schedule-derived, operator-supplied or pull-request; got '{other}'"
                     ))
                 }
             });

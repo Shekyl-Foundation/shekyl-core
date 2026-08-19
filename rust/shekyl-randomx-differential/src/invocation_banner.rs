@@ -291,6 +291,7 @@ mod tests {
         for (provenance, tag) in [
             (IndexProvenance::ScheduleDerived, "schedule-derived"),
             (IndexProvenance::OperatorSupplied, "operator-supplied"),
+            (IndexProvenance::PullRequest, "pull-request"),
         ] {
             let mut buf: Vec<u8> = Vec::new();
             emit_banner(

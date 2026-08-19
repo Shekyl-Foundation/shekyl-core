@@ -76,6 +76,21 @@ pub enum IndexProvenance {
     /// Supplied by an operator on `workflow_dispatch`, i.e. a replay
     /// of a previously-explored index.
     OperatorSupplied,
+    /// Derived from the date on a `pull_request` run (MR-DQ-6).
+    ///
+    /// Distinct from both siblings, and the distinction is load-
+    /// bearing rather than cosmetic. It is not `ScheduleDerived`: a
+    /// per-PR run does **not** advance the explored boundary, because
+    /// every PR on a given day derives the *same* index and therefore
+    /// re-checks the same inputs. It is not `OperatorSupplied` either:
+    /// nobody chose the index, so labelling it as a replay would be
+    /// untrue in the other direction.
+    ///
+    /// Its purpose is a **tripwire on the change**, not coverage of the
+    /// input space: does this diff diverge on a non-pinned input set?
+    /// Only [`Self::ScheduleDerived`] may ever be credited as coverage
+    /// (§4.5 T-A11).
+    PullRequest,
 }
 
 impl IndexProvenance {
@@ -86,6 +101,7 @@ impl IndexProvenance {
         match self {
             Self::ScheduleDerived => "schedule-derived",
             Self::OperatorSupplied => "operator-supplied",
+            Self::PullRequest => "pull-request",
         }
     }
 }
@@ -341,5 +357,33 @@ mod tests {
     fn provenance_tags_are_stable() {
         assert_eq!(IndexProvenance::ScheduleDerived.tag(), "schedule-derived");
         assert_eq!(IndexProvenance::OperatorSupplied.tag(), "operator-supplied");
+        assert_eq!(IndexProvenance::PullRequest.tag(), "pull-request");
+    }
+
+    /// Exactly one provenance may be credited as coverage.
+    ///
+    /// Bites against a future variant being added that silently reads
+    /// as a sweep — the §4.5 T-A11 laundering the label exists to
+    /// prevent. Does NOT check what any lane *does* with the label;
+    /// that is the workflow's surface.
+    #[test]
+    fn only_schedule_derived_counts_as_coverage() {
+        let all = [
+            IndexProvenance::ScheduleDerived,
+            IndexProvenance::OperatorSupplied,
+            IndexProvenance::PullRequest,
+        ];
+        let coverage: Vec<_> = all
+            .iter()
+            .filter(|p| **p == IndexProvenance::ScheduleDerived)
+            .collect();
+        assert_eq!(
+            coverage.len(),
+            1,
+            "exactly one provenance may be credited as coverage"
+        );
+        for p in &all {
+            assert!(!p.tag().is_empty(), "every provenance needs a banner tag");
+        }
     }
 }

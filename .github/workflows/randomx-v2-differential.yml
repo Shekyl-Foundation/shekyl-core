@@ -662,6 +662,110 @@ jobs:
             rust/mutants.out/
           retention-days: 30
 
+  rotating-pr:
+    # MR-DQ-6 RULED (2026-08-19): single leg on pull_request.
+    #
+    # WHAT THIS IS, and what it deliberately is NOT. The index is
+    # days-since-epoch, so every PR on a given day derives the SAME
+    # index and re-checks the SAME inputs. This leg therefore does
+    # **not** advance the explored boundary — that still moves once per
+    # day, on the cron. It is a TRIPWIRE ON THE CHANGE: does this diff
+    # diverge against the C oracle on a non-pinned input set?
+    #
+    # Reading it as coverage would be the decay this round exists to
+    # stop, so the banner labels it `pull-request`, a provenance
+    # distinct from both siblings: not schedule-derived (it advances
+    # nothing) and not operator-supplied (nobody chose the index).
+    # Only `schedule-derived` may ever be credited as coverage (T-A11).
+    #
+    # WHY IT EARNS ITS RUNNER. Before this leg, no per-PR gate
+    # exercised a single input outside the pinned corpus:
+    # structural-validate runs --mode=correctness at per-PR sizing over
+    # the PINNED corpus, native-arm runs the pinned 1024, and the
+    # verdict ratchet mutates verdict functions. A verifier change that
+    # diverges only OFF-corpus passed every per-PR gate, landed on dev,
+    # and waited for the daily cron — which, per MR-R1a, does not exist
+    # until dev reaches main. That class of regression had no per-PR
+    # tripwire at all and an unbounded window before detection.
+    #
+    # BUDGET (measured, run 32214326519): 444 s in the mode plus ~44 s
+    # of setup and builds. The per-PR critical path is
+    # structural-validate at ~26 min, so this hides inside it entirely:
+    # +8 runner-minutes, +0 wall-clock. Unrelated PRs never reach here
+    # — the workflow-level positive `paths:` filter (R1-D12) is the
+    # gate, exactly as it is for structural-validate.
+    #
+    # SINGLE LEG, NO MATRIX, on purpose: the cron's [main, dev] matrix
+    # is meaningless here. A PR is one head, checked out once by the
+    # default checkout.
+    #
+    # TRIAGING A RED. It is ambiguous between "this PR broke it" and
+    # "today's index already diverges on dev". Disambiguate by REPLAYING
+    # THE SAME INDEX against dev — which is exactly what the derived
+    # seed buys, and which is a one-command question rather than an
+    # investigation. Do not escalate as a consensus finding before that
+    # replay; do not re-run this job to retest, since a same-day re-run
+    # re-checks identical inputs and a next-day one changes them.
+    name: 'pr: rotating tripwire (non-pinned inputs)'
+    runs-on: ubuntu-latest
+    # Mode measured at 444 s; 30 leaves room for a slow runner without
+    # becoming a place a hang can hide.
+    timeout-minutes: 30
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+      - name: Install CMake + Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Configure + build randomx-v2 C reference
+        uses: ./.github/actions/build-randomx-v2-ref
+      - name: Resolve rotation index
+        id: rotation
+        # Same derivation as the cron leg, resolved once. Deliberately
+        # NOT accepting an override here: a PR tripwire whose index a
+        # contributor could choose would let a diff be checked against
+        # an input set the contributor picked (§4.5 T-A7/T-A11).
+        run: |
+          set -euo pipefail
+          index=$(( $(date -u +%s) / 86400 ))
+          echo "index=${index}" >> "$GITHUB_OUTPUT"
+          echo "rotation index ${index} (pull-request tripwire)"
+      - name: rotating tripwire (non-pinned inputs vs the C oracle)
+        working-directory: rust
+        # Verdict unpiped (rule 46). Same sizing as the cron leg so a
+        # PR red and a cron red are directly comparable.
+        run: |
+          set -euo pipefail
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- \
+            --mode=rotating \
+            --rotation-index=${{ steps.rotation.outputs.index }} \
+            --rotation-provenance=pull-request \
+            --random-corpus-seedhashes=32 \
+            --random-corpus-data-per-seedhash=32 \
+            > rotating-pr.log 2>&1
+      - name: Surface the lane's own record
+        if: always()
+        # §13: a green tick that does not evidence its own subject is
+        # not evidence. Without this, a run checking 1024 pairs and one
+        # checking zero look identical.
+        run: cat rust/rotating-pr.log
+      - name: Upload divergence forensics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        # Forensics, not recovery: the INPUTS are reconstructable from
+        # the index alone; what is not reconstructable is the observed
+        # output on this runner at this toolchain state.
+        with:
+          name: randomx-rotating-pr-idx${{ steps.rotation.outputs.index }}-failure-${{ github.run_id }}
+          path: rust/rotating-pr.log
+          retention-days: 90
+
   rotating:
     # The exploring differential lane (RANDOMX_V2_MUTATION_REGIME.md
     # §7.5 item 2). Every other differential lane re-verifies the same
