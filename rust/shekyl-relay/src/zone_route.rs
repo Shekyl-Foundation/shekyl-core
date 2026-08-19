@@ -55,6 +55,7 @@ const _: () = {
     assert!(ZoneRouteDecision::KeepArrival as u8 == 0);
     assert!(ZoneRouteDecision::AnonymityFailClosed as u8 == 1);
     assert!(ZoneRouteDecision::PublicClearnet as u8 == 2);
+    assert!(ZoneRouteDecision::BroadcastAllZones as u8 == 3);
 };
 
 /// How a transaction was received, mirrored from C++ `cryptonote::relay_method`
@@ -143,9 +144,23 @@ pub enum ZoneRouteDecision {
     /// take the zone, **send nothing if it is unusable** (§30.5). Never
     /// clearnet.
     AnonymityFailClosed = 1,
-    /// Clearnet inherit, the fluff exit, or the roll choosing clearnet by
-    /// design.
+    /// Clearnet inherit, or the roll choosing clearnet by design.
+    ///
+    /// **No longer the fluff exit** — see [`Self::BroadcastAllZones`] (§91).
     PublicClearnet = 2,
+    /// **Design A (§91): a fluff goes to EVERY configured zone.**
+    ///
+    /// Transport is a parameter, not a topology: clearnet, Tor and i2p are
+    /// link classes in one propagation graph, so a fluff floods all of them.
+    ///
+    /// Before §91 a fluff took [`Self::PublicClearnet`], which is
+    /// `send(*m_network_zones.begin())` — the clearnet zone, **singular**. That
+    /// made the anonymity zone a depth-one injection point into clearnet: a
+    /// Tor-only node saw only anonymity-originated traffic, so it could not
+    /// maintain a mempool, disarm embargoes against the real flood, or mine on
+    /// a current template. **Tor-only was not a working posture — by routing,
+    /// not by ruling** (§91.1).
+    BroadcastAllZones = 3,
 }
 
 impl fmt::Display for ZoneRouteDecision {
@@ -154,6 +169,7 @@ impl fmt::Display for ZoneRouteDecision {
             Self::KeepArrival => "keep_arrival",
             Self::AnonymityFailClosed => "anonymity_fail_closed",
             Self::PublicClearnet => "public_clearnet",
+            Self::BroadcastAllZones => "broadcast_all_zones",
         })
     }
 }
@@ -208,6 +224,14 @@ pub const fn r1_coherence_keeps_origin(tx_relay: RelayMethod, origin: NetZone) -
 /// forwarding `once_at_origin_route`, or calling `send_txs` without one.
 #[must_use]
 pub const fn once_at_origin_route(tx_relay: RelayMethod, origin: NetZone) -> ZoneRouteDecision {
+    // §91 Design A: a fluff floods every link class, whatever it arrived on.
+    // Checked FIRST because fluff can never cohere (`is_pre_fluff_relay` is
+    // `Stem | Local`), so the coherence arm below would never claim it — but
+    // stating the fluff rule first is what makes the ordering an assertion
+    // rather than a coincidence of the arms beneath it.
+    if matches!(tx_relay, RelayMethod::Fluff) {
+        return ZoneRouteDecision::BroadcastAllZones;
+    }
     if r1_coherence_keeps_origin(tx_relay, origin) {
         ZoneRouteDecision::KeepArrival
     } else if matches!(origin, NetZone::Invalid) && is_pre_fluff_relay(tx_relay) {
@@ -272,8 +296,10 @@ mod tests {
                     // Originated chose anon (or pool re-relay of Local):
                     // fail closed, never clearnet (§30.5).
                     (M::Stem | M::Local, NetZone::Invalid) => D::AnonymityFailClosed,
-                    // Everything else exits public: clearnet inherit, the
-                    // fluff exit, and the non-relay classes.
+                    // §91 Design A: a fluff floods every configured zone.
+                    (M::Fluff, _) => D::BroadcastAllZones,
+                    // Everything else exits public: clearnet inherit and the
+                    // non-relay classes.
                     _ => D::PublicClearnet,
                 };
                 assert_eq!(
@@ -308,9 +334,12 @@ mod tests {
     fn fluff_never_coheres() {
         for &zone in &ZONES {
             assert!(!r1_coherence_keeps_origin(RelayMethod::Fluff, zone));
+            // Coherence is still refused — that is the invariant. What §91
+            // changed is where a fluff goes once refused: every zone, not
+            // clearnet alone.
             assert_eq!(
                 once_at_origin_route(RelayMethod::Fluff, zone),
-                ZoneRouteDecision::PublicClearnet
+                ZoneRouteDecision::BroadcastAllZones
             );
         }
     }
@@ -366,5 +395,20 @@ mod tests {
         }
         assert_eq!(RelayMethod::from_byte(5), None);
         assert_eq!(NetZone::from_byte(4), None);
+    }
+
+    /// §91: a fluff floods every zone, from every zone. Asserted as its own
+    /// row because the whole Design A ruling reduces to this one mapping, and
+    /// a reversion to `PublicClearnet` re-creates the depth-one injection that
+    /// made Tor-only unworkable (§91.1).
+    #[test]
+    fn a_fluff_broadcasts_from_every_zone() {
+        for &zone in &ZONES {
+            assert_eq!(
+                once_at_origin_route(RelayMethod::Fluff, zone),
+                ZoneRouteDecision::BroadcastAllZones,
+                "fluff arriving on {zone:?} must flood every zone (§91)"
+            );
+        }
     }
 }

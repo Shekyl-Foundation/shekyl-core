@@ -2438,6 +2438,39 @@ namespace nodetool
         return enet::zone::invalid;
       case cryptonote::zone_route::decision::public_clearnet:
         return send(*m_network_zones.begin());
+      case cryptonote::zone_route::decision::broadcast_all_zones:
+      {
+        /* DESIGN A (sec 91): transport is a parameter, not a topology, so a
+           fluff floods EVERY configured zone rather than clearnet alone.
+
+           Before this arm existed a fluff took `public_clearnet` —
+           `*m_network_zones.begin()`, the clearnet zone, singular — which made
+           an anonymity zone a depth-one injection point into clearnet. A
+           Tor-only node therefore saw only anonymity-originated traffic and
+           could not maintain a mempool, disarm embargoes against the real
+           flood, or mine on a current template. Tor-only was not a working
+           posture by ROUTING, not by ruling (sec 91.1).
+
+           Every zone gets its own copy; the last takes the move. Success is
+           reported if ANY zone accepted, and the returned zone is the first
+           that did — a fluff that reached clearnet but not tor is a partial
+           flood, not a failure, and reporting `invalid` there would tell the
+           caller nothing was sent when something was. */
+        epee::net_utils::zone accepted = enet::zone::invalid;
+        for (auto network = m_network_zones.begin(); network != m_network_zones.end(); ++network)
+        {
+          const bool last = (std::next(network) == m_network_zones.end());
+          std::vector<cryptonote::blobdata> copy = last ? std::move(txs) : txs;
+          if (network->second.m_notifier.send_txs(std::move(copy), source, tx_relay)
+              && accepted == enet::zone::invalid)
+          {
+            accepted = network->first;
+          }
+        }
+        if (accepted == enet::zone::invalid)
+          MWARNING("Unable to fluff " << "transaction(s): no configured zone accepted");
+        return accepted;
+      }
     }
     return enet::zone::invalid;
   }

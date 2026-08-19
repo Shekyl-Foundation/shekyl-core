@@ -56,8 +56,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shekyl_relay::{
-    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, RelayPlan,
-    StemTallySnapshot, TxBlob, TxId, Zone,
+    AchievedOutConnections, Driver, Effect, FloorTransition, FloorWatch, FluffReach, RelayCarrier,
+    RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
 };
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -75,6 +75,16 @@ pub const SHEKYL_RELAY_PLAN_STEM: i32 = 0;
 pub const SHEKYL_RELAY_PLAN_NO_ROUTE: i32 = 1;
 /// Settled for this epoch: fluff. Retrying cannot change the answer.
 pub const SHEKYL_RELAY_PLAN_FLUFF_EPOCH: i32 = 2;
+
+/// Carrier: the zone's ordinary connection.
+pub const SHEKYL_RELAY_CARRIER_ORDINARY: u8 = 0;
+/// Carrier: a covert channel, bound to the stem slot (§20.3).
+pub const SHEKYL_RELAY_CARRIER_COVERT: u8 = 1;
+
+const _: () = {
+    assert!(SHEKYL_RELAY_CARRIER_ORDINARY == 0);
+    assert!(SHEKYL_RELAY_CARRIER_COVERT == 1);
+};
 
 /// One transaction blob: pointer and length, borrowed for the call.
 ///
@@ -294,10 +304,19 @@ unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
         debug_assert!(false, "read_ids: n * 16 overflows");
         return Vec::new();
     };
-    if len == 0 || ids.is_null() {
+    // Through the crate's FFI-read seam, which owns the `isize::MAX` bound that
+    // `from_raw_parts` requires at the LANGUAGE level — violating it is UB even
+    // when the caller really did provide that much memory, so `checked_mul`
+    // alone was not enough. `slice_from_ptr` also owns the null / zero-length
+    // arms, so those checks come out with it (SA-R-7's residual, closed here
+    // for the two readers this crossing exercises).
+    let Some(bytes) = crate::legacy_util::slice_from_ptr(ids, len) else {
+        debug_assert!(
+            isize::try_from(len).is_ok(),
+            "read_ids: {len} bytes exceeds the isize::MAX slice bound"
+        );
         return Vec::new();
-    }
-    let bytes = slice::from_raw_parts(ids, len);
+    };
     (0..n)
         .filter_map(|i| {
             let mut b = [0u8; 16];
@@ -326,10 +345,17 @@ unsafe fn read_tx_ids(hashes: *const u8, n: usize) -> Vec<TxId> {
         debug_assert!(false, "read_tx_ids: n * 32 overflows");
         return Vec::new();
     };
-    if len == 0 || hashes.is_null() {
+    // Same seam as `read_ids`: fixing one reader and leaving its sibling on a
+    // raw `from_raw_parts` is the synchronize-the-duplicate shape, so both move
+    // together.
+    let Some(bytes) = crate::legacy_util::slice_from_ptr(hashes, len) else {
+        debug_assert!(
+            isize::try_from(len).is_ok(),
+            "read_tx_ids: {len} bytes exceeds the isize::MAX slice bound"
+        );
         return Vec::new();
-    }
-    slice::from_raw_parts(hashes, len)
+    };
+    bytes
         .chunks_exact(32)
         .map(|c| TxId::from_bytes(c.try_into().expect("chunks_exact(32) yields 32 bytes")))
         .collect()
@@ -351,6 +377,9 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
         return None;
     }
     let mut b = [0u8; 16];
+    // Not routed through `slice_from_ptr`: the length is the literal 16, which
+    // is provably inside the `isize::MAX` bound the seam exists to enforce.
+    // Only caller-controlled lengths need the seam.
     b.copy_from_slice(slice::from_raw_parts(p, 16));
     (b != NIL).then(|| ConnectionId::from_bytes(b))
 }
@@ -997,6 +1026,103 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
             SHEKYL_RELAY_PLAN_FLUFF_EPOCH
         }
     }
+}
+
+/// Plan a relay **and** the wire that carries it — phase, carrier and slot in
+/// **one** crossing (rule 40).
+///
+/// Supersedes [`shekyl_relay_zone_plan_relay_with_refresh`] for the covert
+/// path. The precedent for folding a decision and its mapping into a single
+/// call rather than shuttling an intermediate verdict is
+/// `shekyl_relay_zone_roll_originated_zone`.
+///
+/// Return value is the same `SHEKYL_RELAY_PLAN_*` code as the older entry
+/// point, so a caller that ignores the carrier reads exactly what it read
+/// before. `out_carrier` receives `SHEKYL_RELAY_CARRIER_*`; `out_channel`
+/// receives the covert channel — **which is the stem slot index** — and is
+/// meaningful **only** when the carrier is covert. It is written as `0` on the
+/// ordinary carrier rather than left untouched, so a caller cannot read a stale
+/// slot from a previous call.
+///
+/// # This entry point deliberately has NO production caller yet
+///
+/// `DAEMON_RELAY_PRIVACY.md` §42.5b's ownership split lands the decision half
+/// first; the C++ covert branch is restructured to consume it in a following
+/// change (`COVER_TRAFFIC_RESTORATION.md` §2.1 stages 2–3). **Do not delete
+/// this as unused** — it is the seam that restructure lands against, and the
+/// audit at `COVER_TRAFFIC_RESTORATION.md` §1.6 states the conditions under
+/// which the cover mechanism may be removed, none of which is a caller grep.
+///
+/// # Safety
+/// `handle` must be live; `source` must point to 16 readable bytes or be null;
+/// `outbound` must point to `n * 16` readable bytes or be null with `n == 0`;
+/// `out_dest` must point to 16 writable bytes; `out_carrier` must point to one
+/// writable byte; `out_channel` must point to a writable `u32`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
+    handle: *mut RelayZoneHandle,
+    source: *const u8,
+    local_origin: bool,
+    outbound: *const u8,
+    n: usize,
+    out_dest: *mut u8,
+    out_carrier: *mut u8,
+    out_channel: *mut u32,
+) -> i32 {
+    if handle.is_null() || out_dest.is_null() || out_carrier.is_null() || out_channel.is_null() {
+        // Fail closed on every out-param: a caller that got NO_ROUTE must not
+        // then read an uninitialised carrier and treat it as covert.
+        if !out_carrier.is_null() {
+            *out_carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
+        }
+        if !out_channel.is_null() {
+            *out_channel = 0;
+        }
+        // `out_dest` too: the comment above claims EVERY out-param, and it did
+        // not cover this one. A caller that mishandles the return code would
+        // otherwise read whatever was in its buffer as a stem successor.
+        if !out_dest.is_null() {
+            std::ptr::copy_nonoverlapping(NIL.as_ptr(), out_dest, 16);
+        }
+        return SHEKYL_RELAY_PLAN_NO_ROUTE;
+    }
+    let peers = read_ids(outbound, n);
+    let h = &mut *handle;
+    let source = read_id(source);
+    let dispatch =
+        h.driver
+            .zone_mut()
+            .plan_dispatch_with_refresh(source, local_origin, peers, &mut h.rng);
+    h.publish();
+    match dispatch.carrier {
+        RelayCarrier::Ordinary => {
+            *out_carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
+            *out_channel = 0;
+        }
+        RelayCarrier::Covert { channel } => match u32::try_from(channel.get()) {
+            Ok(channel) => {
+                *out_carrier = SHEKYL_RELAY_CARRIER_COVERT;
+                *out_channel = channel;
+            }
+            Err(_) => {
+                /* Unreachable: `channel` is a stem slot index, bounded by the
+                stem width. Handled anyway because the previous spelling was
+                `unwrap_or(u32::MAX)`, and `u32::MAX` is the worst possible
+                value to hand across a boundary where it becomes an index —
+                a clamp that fabricates an out-of-bounds channel is strictly
+                worse than no clamp.
+
+                Degrades the CARRIER, not the routing: the stem still goes,
+                over the ordinary connection. §92.4's rule is that carrier
+                unavailability must never travel as a routing verdict, which
+                is why this is not a NO_ROUTE. */
+                debug_assert!(false, "covert channel {} exceeds u32", channel.get());
+                *out_carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
+                *out_channel = 0;
+            }
+        },
+    }
+    write_plan(dispatch.plan, out_dest)
 }
 
 /// Merge the caller's current outbound set into the stem map mid-epoch.

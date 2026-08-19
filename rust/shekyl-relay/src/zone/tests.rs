@@ -292,12 +292,20 @@ fn forcing_a_flush_runs_the_same_release_path() {
 /// test-only setter — the role must come from the same draw production
 /// uses, or the fixture would not exercise the real path.
 fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Zone {
+    zone_with_role_cover(fluffing, false, rng)
+}
+
+/// Same as [`zone_with_role`], with the covert bit chosen. Covert tests that
+/// need a determined epoch must go through here — a lucky seed is
+/// determinism, not a determined epoch, and is the flake `noise_stem`
+/// exposed once covert consults the planner.
+fn zone_with_role_cover(fluffing: bool, covert: bool, rng: &mut SplitMix64) -> Zone {
     for _ in 0..10_000 {
         let z = Zone::new(
             DandelionParams::inherited(),
             2,
             FluffReach::EveryPeer,
-            false,
+            covert,
             0,
             rng,
         );
@@ -305,7 +313,7 @@ fn zone_with_role(fluffing: bool, rng: &mut SplitMix64) -> Zone {
             return z;
         }
     }
-    panic!("no epoch with fluffing={fluffing} in 10k draws");
+    panic!("no epoch with fluffing={fluffing} covert={covert} in 10k draws");
 }
 
 #[test]
@@ -665,4 +673,130 @@ fn covert_enabled_pins_stem_width_to_noise_channels() {
         .covert_deadline_at(inherited::NOISE_CHANNELS - 1)
         .is_some());
     assert!(z.covert_deadline_at(inherited::NOISE_CHANNELS).is_none());
+}
+
+/// §42.3 as a table: the carrier is a FUNCTION of the phase, never a
+/// substitute for it.
+///
+/// The inherited C++ chose a carrier *instead of* a phase — covert above the
+/// switch, stem downgraded to `local` (§42.5a). Both cells of the table are
+/// here: a stem under covert-on is Covert, and a fluff under covert-on stays
+/// Ordinary. A test that only checked the stem cell would stay green if fluff
+/// also took a covert carrier.
+///
+/// Epochs are determined via [`zone_with_role_cover`]. A lucky seed is
+/// determinism, not a determined epoch — that is the flake routing covert
+/// through the planner exposed in `noise_stem`.
+#[test]
+fn covert_carries_the_stem_and_only_the_stem() {
+    let mut rng = SplitMix64::new(0xC0BE_0001);
+    let mut stem_zone = zone_with_role_cover(false, true, &mut rng);
+    stem_zone.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+    assert!(!stem_zone.is_fluffing(), "fixture must be in a stem epoch");
+
+    let d = stem_zone.plan_dispatch(Some(id(9)), false, &mut rng);
+    match (d.plan, d.carrier) {
+        (RelayPlan::Stem(_), RelayCarrier::Covert { channel }) => {
+            assert!(
+                channel.get() < 2,
+                "the covert channel IS the stem slot (§20.3), so it must be inside the \
+                 stem width; broadcasting to any other channel is the §42.5a defect"
+            );
+        }
+        (RelayPlan::Stem(_), RelayCarrier::Ordinary) => {
+            panic!("covert is enabled and this is a stem — §42.3 says covert carries it")
+        }
+        (other, carrier) => panic!("expected a stem, got {other:?} on {carrier:?}"),
+    }
+
+    let mut fluff_zone = zone_with_role_cover(true, true, &mut rng);
+    fluff_zone.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+    assert!(fluff_zone.is_fluffing(), "fixture must be in a fluff epoch");
+    let fluff = fluff_zone.plan_dispatch(Some(id(9)), false, &mut rng);
+    assert_eq!(fluff.plan, RelayPlan::FluffEpoch);
+    assert_eq!(
+        fluff.carrier,
+        RelayCarrier::Ordinary,
+        "covert carries the stem and only the stem — a fluff on a covert \
+         carrier is the substitution §42.3 forbids"
+    );
+}
+
+/// Covert OFF ⇒ every phase takes the ordinary connection. The negative
+/// control: without it the test above passes on a zone that always says covert.
+#[test]
+fn covert_disabled_never_selects_a_covert_carrier() {
+    let mut rng = SplitMix64::new(0xC0BE_0002);
+    for fluffing in [true, false] {
+        let mut z = zone_with_role_cover(fluffing, false, &mut rng);
+        z.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+        for local_origin in [true, false] {
+            let d = z.plan_dispatch(Some(id(9)), local_origin, &mut rng);
+            assert_eq!(
+                d.carrier,
+                RelayCarrier::Ordinary,
+                "covert is disabled; no phase may select a covert carrier \
+                 (fluffing={fluffing}, local_origin={local_origin})"
+            );
+        }
+    }
+}
+
+/// The plan a dispatch reports must be the plan the older entry point reports.
+///
+/// `plan_dispatch` is additive: it attaches a carrier, it does not re-decide
+/// the phase. If these diverge, the seam has started making routing decisions
+/// of its own — the substitution §42.5a records.
+///
+/// Both epoch roles, both origin flags: a pair that happens to draw a stem
+/// epoch would miss a fluff-path re-decision. The two zones are rebuilt
+/// from the **same seed** so a stem-map difference cannot masquerade as a
+/// phase re-decision.
+#[test]
+fn dispatch_does_not_re_decide_the_phase() {
+    let mut seed = 0xC0BE_0003_u64;
+    for fluffing in [true, false] {
+        let found = loop {
+            let mut rng = SplitMix64::new(seed);
+            let z = Zone::new(
+                DandelionParams::inherited(),
+                2,
+                FluffReach::EveryPeer,
+                true,
+                0,
+                &mut rng,
+            );
+            if z.is_fluffing() == fluffing {
+                break seed;
+            }
+            seed = seed.wrapping_add(1);
+            assert!(
+                seed < 0xC0BE_0003 + 10_000,
+                "no epoch with fluffing={fluffing}"
+            );
+        };
+        for local_origin in [true, false] {
+            let make = || {
+                let mut rng = SplitMix64::new(found);
+                let mut z = Zone::new(
+                    DandelionParams::inherited(),
+                    2,
+                    FluffReach::EveryPeer,
+                    true,
+                    0,
+                    &mut rng,
+                );
+                z.update_stems(vec![id(1), id(2), id(3), id(4)], &mut rng);
+                (z, rng)
+            };
+            let (mut za, mut ra) = make();
+            let (mut zb, mut rb) = make();
+            let via_dispatch = za.plan_dispatch(Some(id(9)), local_origin, &mut ra).plan;
+            let via_plan = zb.plan_relay(Some(id(9)), local_origin, &mut rb);
+            assert_eq!(
+                via_dispatch, via_plan,
+                "fluffing={fluffing} local_origin={local_origin}"
+            );
+        }
+    }
 }

@@ -161,7 +161,8 @@ namespace cryptonote
     {
       keep_arrival,          //!< still-stemming on a real anonymity origin
       anonymity_fail_closed, //!< originated chose anon, or local re-relay backstop
-      public_clearnet        //!< clearnet inherit, fluff exit, or originated chose clearnet
+      public_clearnet,       //!< clearnet inherit, or originated chose clearnet
+      broadcast_all_zones    //!< DESIGN A (sec 91): a fluff floods EVERY configured zone
     };
 
     constexpr decision get() const noexcept { return k_; }
@@ -182,13 +183,15 @@ namespace cryptonote
   {
     static_assert(unsigned(zone_route::decision::keep_arrival) == 0
                && unsigned(zone_route::decision::anonymity_fail_closed) == 1
-               && unsigned(zone_route::decision::public_clearnet) == 2,
+               && unsigned(zone_route::decision::public_clearnet) == 2
+               && unsigned(zone_route::decision::broadcast_all_zones) == 3,
       "decision bytes are the FFI contract with shekyl-relay::zone_route");
     switch (shekyl_relay_zone_once_at_origin_route(
       static_cast<std::uint8_t>(tx_relay), static_cast<std::uint8_t>(origin)))
     {
       case 0: return zone_route(zone_route::decision::keep_arrival);
       case 2: return zone_route(zone_route::decision::public_clearnet);
+      case 3: return zone_route(zone_route::decision::broadcast_all_zones);
       /* 1, and defensively anything else: fail closed — send nothing is the
          one default that cannot leak (§30.5). */
       default: return zone_route(zone_route::decision::anonymity_fail_closed);
