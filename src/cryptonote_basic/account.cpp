@@ -106,7 +106,7 @@ DISABLE_VS_WARNINGS(4244 4345)
       // already paid for. Encode paths read this; they must not invent it.
       std::memcpy(
           keys.m_msg_sign_pk,
-          blob.classical_address_bytes + SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES,
+          blob.classical_address_bytes + SHEKYL_CLASSICAL_ADDRESS_PREFIX_BYTES,
           SHEKYL_MSG_SIGN_PK_BYTES);
       keys.m_has_msg_sign_pk = true;
 
