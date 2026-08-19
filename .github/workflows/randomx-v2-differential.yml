@@ -241,7 +241,7 @@ jobs:
         # sites add a separate `rustup target add` step, the
         # depends.yml pattern).
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Install Ninja (CMake is preinstalled on the runner image)
         # `ubuntu-latest` images carry CMake by default, but we pin
         # Ninja explicitly because the submodule's CMakeLists builds
         # ~50 translation units and Ninja's parallelism is materially
@@ -425,7 +425,7 @@ jobs:
         # Composite action (.github/actions/install-rust); see the
         # structural-validate job's step comment.
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Install Ninja (CMake is preinstalled on the runner image)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build
@@ -520,7 +520,7 @@ jobs:
         # Composite action (.github/actions/install-rust); see the
         # structural-validate job's step comment.
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Install Ninja (CMake is preinstalled on the runner image)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build
@@ -598,7 +598,7 @@ jobs:
           submodules: recursive
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Install Ninja (CMake is preinstalled on the runner image)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build
@@ -718,7 +718,7 @@ jobs:
           submodules: recursive
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Install Ninja (CMake is preinstalled on the runner image)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build
@@ -857,7 +857,7 @@ jobs:
           ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || matrix.branch }}
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Install Ninja (CMake is preinstalled on the runner image)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build
@@ -1164,7 +1164,7 @@ jobs:
         # Composite action (.github/actions/install-rust); rustup-init
         # resolves the aarch64 host triple itself.
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Install Ninja (CMake is preinstalled on the runner image)
         # cmake is listed explicitly (unlike the x86 jobs, which lean on
         # ubuntu-latest carrying it): the arm image is a separate build
         # and this lane must not die at `cmake: command not found`
