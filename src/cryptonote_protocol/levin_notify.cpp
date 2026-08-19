@@ -406,6 +406,17 @@ namespace levin
            parallel `#define`, so the two sides cannot silently diverge.
            `relay` is fully initialized here because members initialize in
            declaration order and this is the constructor body. */
+        /* Re-homed from the deleted covert branch (§93.1), NOT dropped with it.
+           The branch was the only site holding this, but the constraint it
+           guards outlives it: the channels built below emit dummies at the
+           payload's fragment size whether or not anything is ever queued, so a
+           fragment setting most nodes would reject is still reachable. Here is
+           where the channels are born, which is where it belongs. */
+        static_assert(
+          CRYPTONOTE_MAX_FRAGMENTS * CRYPTONOTE_NOISE_BYTES <= LEVIN_DEFAULT_MAX_PACKET_SIZE,
+          "most nodes will reject this fragment setting"
+        );
+
         const std::size_t channel_width = shekyl_relay_zone_stem_width(relay.get());
         for (std::size_t count = 0;
              shekyl_relay_zone_noise_enabled(relay.get()) && count < channel_width;

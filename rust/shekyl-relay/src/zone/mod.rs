@@ -315,7 +315,7 @@ impl Zone {
     /// network observer to read once the link is encrypted. On a cleartext
     /// link that observer reads the contents, so padding the sizes conceals
     /// nothing and the bandwidth buys nothing. This is a refusal rather than a
-    /// silent downgrade to [`NoiseSchedule::Off`], because a node configured
+    /// silent downgrade to carrier-off, because a node configured
     /// for a protection it is not getting is the failure mode worth being loud
     /// about.
     ///

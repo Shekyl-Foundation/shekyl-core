@@ -50,7 +50,7 @@ what that change would wake up.
 | --- | --- | --- |
 | `detail::zone::covert_payload` | `levin_notify.cpp` | built; empty in production |
 | `detail::zone::channels` (per-channel strands) | `levin_notify.cpp` | built; sized from `CRYPTONOTE_NOISE_CHANNELS` |
-| `queue_covert_notify` | `levin_notify.cpp` | complete; posts a covert send to a channel's strand |
+| ~~`queue_covert_notify`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-19 with the covert branch (§2.9 step 4)** — its one construction site was inside it. The enqueue path is now Rust's `NoiseQueues::enqueue`. |
 | `clear_channel` | `levin_notify.cpp` | complete; nils the binding at an unbound due tick |
 | `send_noise` | `levin_notify.cpp` | complete; **owns CV-1's rebind-at-send discard** — the single discard site |
 | the covert branch in `send_txs` | `levin_notify.cpp` | complete **and wrong** — see §1.4 |
@@ -192,7 +192,7 @@ production exposure**:
 
 | stage | change | done when |
 | --- | --- | --- |
-| **1** | Delete the stem→`local` downgrade | `noise_stem` reds; expectation becomes `take_relayed(stem)` per its annotation |
+| **1** | Delete the stem→`local` downgrade | ~~`noise_stem` reds~~ — **superseded by execution 2026-08-19.** §93.1 removed the downgrade's *premise*, so the whole branch was deleted rather than the one line, and `noise_stem` went with it instead of turning red: a test whose subject no longer exists cannot be the criterion. Met instead by `levin_notify.noise_does_not_override_the_phase`, which was **verified red** against the restored branch at 1-peer-vs-2. |
 | **2** | Move the carrier decision **below** the phase decision — carrier chosen *for* a phase, not *instead of* one | covert branch consumes `shekyl_relay_zone_plan_relay_with_refresh` rather than bypassing it (§42.5b) |
 | **3** | Replace the all-channels broadcast with a **per-stem-slot** send | `noise_stem`'s `notified_size()` becomes **1**; C++ send loop now respects `CovertSchedule`'s `i ↔ i` binding |
 
