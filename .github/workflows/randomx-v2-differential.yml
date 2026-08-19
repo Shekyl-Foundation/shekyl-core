@@ -713,6 +713,14 @@ jobs:
     # reassurance rather than derivation. At the ~1.58x runner factor
     # (RANDOMX_V2_MUTATION_REGIME.md §2.2.1) that is ~13.6 min. 40
     # leaves margin without becoming a place a hang can hide.
+    #
+    # FIRST REHEARSAL (run 32214326519, 2026-08-19): the whole job —
+    # C-reference build, cargo build and the rotation — took 8-9 min
+    # per leg, i.e. the ~13.6 min projection for the rotation ALONE
+    # was conservative. Recorded rather than re-tuned: the 1.58x factor
+    # was derived from a debug test-suite baseline and evidently does
+    # not transfer uniformly to this workload either, which is the same
+    # lesson as the extrapolation it replaced. 40 stays.
     timeout-minutes: 40
     if: (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.rotation_index != '')
     strategy:
@@ -804,6 +812,20 @@ jobs:
             --random-corpus-seedhashes=32 \
             --random-corpus-data-per-seedhash=32 \
             > "rotating-${{ matrix.branch }}.log" 2>&1
+      - name: Surface the lane's own record
+        if: always()
+        # The run step redirects to a log (rule 46: the verdict must
+        # not travel through a `tee`), which means that on a GREEN run
+        # nothing the harness printed reaches the job log — the
+        # artifact only uploads `if: failure()`. So a lane that checked
+        # 1024 pairs and a lane that checked ZERO would look
+        # identical: the same green tick, the same absent output.
+        #
+        # That is §13 in this job: a clean signal that does not
+        # evidence its own subject. `always()` so the record appears on
+        # success and failure alike, and the banner's rotation binding
+        # is readable without downloading an artifact.
+        run: cat "rust/rotating-${{ matrix.branch }}.log"
       - name: Upload divergence forensics
         if: failure()
         uses: actions/upload-artifact@v4
