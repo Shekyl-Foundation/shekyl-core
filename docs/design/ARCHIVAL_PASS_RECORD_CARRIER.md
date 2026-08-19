@@ -1,8 +1,10 @@
 # Pass-record carrier — design round (CR)
 
-**Status:** OPEN. Round opened 2026-08-17. **`CR-D2` resolved 2026-08-18: the
-round is a record partition, not a signature split — `CR-O1` rejected, `CR-O1′`
-survives. `CR-D1` still open.**
+**Status: RULED 2026-08-18.** Opened 2026-08-17. `CR-D2` resolved — the round is
+a **record partition**, not a signature split (`CR-O1` rejected, `CR-O1′`
+survives). `CR-D1` resolved by reading — **no tension**; `pqc_auths` is
+forbidden, not merely occupied, so the kept leg stays on the vin. The carrier has
+a **shape and a placement**; see §3.1.
 **Scope:** where the pass record's kept and pruned parts live in the tx wire.
 **Blocks:** the response-format round (framing depends on this answer).
 **Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -82,17 +84,54 @@ this tx class:
   — serialization, by contrast, does `PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(),
   pqc_auths); if (pqc_auths.size() != vin.size()) return false;`
 
-**These two do not obviously agree, and the round must resolve it before
-leaning on the slot.** Serialization demands `vin.size()` entries for any v3
-non-`txin_gen` tx; consensus explicitly excuses this tx class from the matching
-count check. Whether serve-credit txs today carry `vin.size()` default-
-constructed auths, or reach the `ar.eof()` early-out at
-[`:609-614`](../../src/cryptonote_basic/cryptonote_basic.h#L609-L614), is
-**`CR-D1`** and is unresolved.
+### `CR-D1` — RESOLVED 2026-08-18: **no tension**, and this is a finding about reading, not a decision
 
-Using `pqc_auths` for the kept leg therefore means **removing a live consensus
-exemption**, not filling an empty slot. That may still be the right call — the
-shape genuinely fits — but it is a consensus edit and prices accordingly.
+There is nothing to decide. Twenty lines below the skip, the *same* tx class is
+held to a **stricter** rule:
+
+```cpp
+// blockchain.cpp:3746-3754
+if (is_archival_serve_credit_only) {
+  if (!tx.pqc_auths.empty()) {
+    MERROR_VER("Archival serve-credit tx " << … <<
+      " must not carry pqc_auths (signature is on the vin)");
+```
+
+So [`:3726`](../../src/cryptonote_core/blockchain.cpp#L3726) is **not an
+exemption from a rule — it is a substitution of a stricter one.** The generic
+rule is *one auth per input*; serve-credit's rule is *zero auths, ever*. The
+count check is skipped **because** the emptiness check supersedes it.
+[`:3630`](../../src/cryptonote_core/blockchain.cpp#L3630) completes the picture,
+skipping the whole spend-verification arm for these txs — *"non-spending
+archival vins; hybrid signature lives on the vin (gate-2 §5)"*.
+
+The serialization demand at
+[`cryptonote_basic.h:620-621`](../../src/cryptonote_basic/cryptonote_basic.h#L620-L621)
+is then satisfied trivially: the gate at
+[`:605`](../../src/cryptonote_basic/cryptonote_basic.h#L605) means `pqc_auths` is
+only read when the region is present, and a serve-credit tx never writes one.
+
+**The appearance of tension came from reading `:3726` alone.** The two sites are
+twenty lines apart and only make sense together — which is why this is recorded
+as *resolved by reading* rather than as a ruling. Nothing was decided; something
+was finished being read.
+
+**What it does to the carrier, which is stronger than "the slot is occupied."**
+The slot is **forbidden by an explicit consensus check carrying its own error
+message**, and the message states the design intent. Putting the kept Ed25519
+leg there means deleting `:3746-3754` and inverting an assertion from *must be
+empty* to *must contain exactly one*.
+
+And the rule exists for a reason that survives the edit: `pqc_auths` is
+**per-input spend authorization**, and a serve-credit vin does not spend. A
+countersignature is a third party attesting to a **read**. Putting it in a
+container whose semantic is *this input's spend auth* is a category error even
+where the check permits it — so the check is not the obstacle, it is the
+symptom.
+
+**Therefore the kept leg stays on the vin, and `CR-F3`'s blast radius
+dissolves.** There is no live exemption to remove, because the slot is no longer
+wanted. `:3630`, `:3726` and `:3746` all survive unchanged.
 
 **Dissolved:** the coinbase-guard worry
 ([`:605`](../../src/cryptonote_basic/cryptonote_basic.h#L605), `pqc_auths`
@@ -297,20 +336,46 @@ block **inside** `serialize_rctsig_prunable`.
 
 *Rejected because it leaves ~6,934 B/record ≈ 177 GB/yr* — `path` is the
 dominant term, not the signature. Retained because the leg split itself is
-**correct and survives as a sub-decision of `CR-O1′`**: which side the Ed25519
-leg lands on is still open, and still turns on `CR-D1`.
+**correct and survives as a sub-decision of `CR-O1′`** — and `CR-D1` has since
+settled where the kept leg lands: **on the vin**, in a slimmed
+`hybrid_signature`, never `pqc_auths`.
 
-### CR-O1′ — Partition the record — **the surviving option**
+### CR-O1′ — Partition the record — **RULED**
 
 Pruned, inside `serialize_rctsig_prunable` where both hash paths see it by
 construction: the **leaf chunk**, the **branch layers**, and the **ML-DSA leg**
 (~9,965 B). Kept: the record header, `leaf_bytes`, and the Ed25519 leg (~278 B,
 ≈7.1 GB/yr).
 
-*Still decided by:* `CR-D1` — does the kept Ed25519 leg ride `pqc_auths`,
-requiring removal of the `is_archival_serve_credit_only` exemption, or stay in a
-slimmed `hybrid_signature` on the vin? — and the cost of the `prefix_hash`
-change in `CR-F2`.
+`CR-D1` supplied the placement: the kept leg stays **on the vin**, in a slimmed
+`hybrid_signature`. `pqc_auths` is out — forbidden by consensus and a category
+error besides.
+
+## 3.1 The ruling, with the structural consequence `CR-D1` was gating
+
+| | Where | Bytes | GB/yr |
+| --- | --- | ---: | ---: |
+| **Kept** | the vin, in the prefix — header + `leaf_bytes` + 64 B Ed25519 | 278 | **7.1** |
+| **Pruned** | a new block **inside** `serialize_rctsig_prunable` — ML-DSA leg + `path` (incl. leaf chunk) | 9,965 | — |
+
+**A vin cannot have fields on both sides of `unprunable_size`.** `tx.vin`
+serializes inside the prefix, wholly. So the pruned parts cannot be *fields
+within* the vin — they become a **parallel structure keyed to the vin**, and by
+[§1](#1-the-invariant-this-round-must-not-break-which-nothing-currently-protects)
+that structure lives **inside `serialize_rctsig_prunable`**, never appended after
+`ctsig_prunable`. Inside, both hash paths see it by construction; after, they
+diverge silently and throw on blob-holding nodes only — the invariant
+`tx_prunable_region_sole_occupant.cpp` now guards.
+
+**What this ruling does not disturb:** `pqc_auths` is untouched;
+`blockchain.cpp` `:3630`, `:3726` and `:3746` all survive unchanged; no consensus
+assertion is inverted; and the two-path equivalence is preserved by construction
+rather than by ordering luck.
+
+**Still priced, not free:** `CR-F2`'s `prefix_hash` change. Slimming
+`hybrid_signature` on the vin changes the prefix bytes and therefore the tx id
+for the same logical record. Affordable pre-genesis; it is the format round's to
+land, not a residual.
 
 ### CR-O2 — Whole container prunable
 
@@ -361,8 +426,8 @@ vacuously ([a seal is not coverage](../../.cursor/rules/50-testing.mdc)).
 
 ## 5. What this round does not decide
 
-- **The response format.** Its framing depends on this answer; it is the next
-  round, its own PR ([rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)
+- **The response format — now unblocked, and it is next.** Its framing depended
+  on this answer, which §3.1 supplies; it is its own PR ([rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)
   — hash-equivalence and preimage/domain-separation are independent validation
   surfaces, and "coupled through the framing" is topic adjacency, not a shared
   surface).

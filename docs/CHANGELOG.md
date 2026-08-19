@@ -88,6 +88,19 @@
   proxy-unfavourable end implies failure across the band) no longer follows.
   Whether A5/W10 survives overall is not settled here.
 
+  `CR-D1` resolved by reading, completing the round: there was **no tension**
+  between `blockchain.cpp:3726` and `cryptonote_basic.h:620-621`. The count
+  check is skipped for serve-credit txs precisely because `:3746-3754` imposes a
+  **stricter** rule twenty lines later — `pqc_auths` must be *empty*, error
+  string *"signature is on the vin"* — and `:3630` skips the spend arm as
+  non-spending. So the slot is **forbidden, not occupied**, and it is a category
+  error besides: `pqc_auths` is per-input *spend* authorization while a
+  countersignature attests to a *read*. The kept Ed25519 leg therefore stays on
+  the vin, no consensus assertion is inverted, and the carrier round is **RULED**
+  — kept (header + `leaf_bytes` + Ed25519) on the vin in the prefix, pruned
+  (ML-DSA leg + `path`) as a parallel structure keyed to the vin **inside**
+  `serialize_rctsig_prunable`, since a vin cannot straddle `unprunable_size`.
+
 - **The Foundation CompleteTree posture is reachable, warned, and served —
   and it is no longer the default anything.** Round record:
   [`docs/design/COMPLETETREE_ACTIVATION.md`](design/COMPLETETREE_ACTIVATION.md).
