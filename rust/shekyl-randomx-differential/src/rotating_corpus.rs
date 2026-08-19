@@ -112,6 +112,63 @@ pub fn rotating_seed(index: u64) -> [u8; 32] {
     cshake256_32(ROTATING_CORPUS_CUSTOMIZATION, &index.to_le_bytes())
 }
 
+/// A lane's rotation binding: which index it explored, and where that
+/// index came from.
+///
+/// Carried into the M4 banner so a reader of the run — or of a
+/// three-year-old log — can reconstruct the exact input set from the
+/// integer, and can tell a forward sweep from a replay (§7.9 MR-R4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RotationContext {
+    /// The rotation index. Computed **once at lane start**: a lane
+    /// straddling midnight UTC that re-derived mid-run would emit a
+    /// banner index that does not describe all of its own inputs — a
+    /// record that lies while looking complete.
+    pub index: u64,
+    /// Whether `index` came from the schedule or from an operator.
+    pub provenance: IndexProvenance,
+}
+
+impl RotationContext {
+    /// Bind an index to its provenance.
+    #[must_use]
+    pub fn new(index: u64, provenance: IndexProvenance) -> Self {
+        Self { index, provenance }
+    }
+
+    /// The seed this rotation explores.
+    #[must_use]
+    pub fn seed(&self) -> [u8; 32] {
+        rotating_seed(self.index)
+    }
+}
+
+/// Generate this rotation's corpus.
+///
+/// Delegates to [`crate::corpus_random::generate_corpus_from_seed`] so
+/// the rotating and pinned lanes share **one** expansion — see that
+/// function's note on why a second copy would be a latent divergence.
+///
+/// # Coverage boundary
+///
+/// Bites against a rotation exploring the wrong input set for its
+/// index. Does **not** bound *how much* of the input space is covered;
+/// per §7.5 item 2's claim discipline, this lane advances the
+/// **explored** boundary, never the **pinned** one, and proves
+/// spec-equivalence at no sizing.
+#[must_use]
+pub fn generate_rotating_corpus(
+    rotation: RotationContext,
+    seedhash_count: usize,
+    data_per_seedhash: usize,
+) -> Vec<crate::corpus_random::RandomCorpusPair> {
+    crate::corpus_random::generate_corpus_from_seed(
+        rotation.seed(),
+        seedhash_count,
+        data_per_seedhash,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +261,78 @@ mod tests {
             rotating_seed(47),
             PINNED_SEED_INDEX_47,
             "index 47 drifted; the replay-by-index rule is broken"
+        );
+    }
+
+    /// A rotation's corpus is a function of its index alone.
+    ///
+    /// Bites against the corpus depending on wall-clock or process
+    /// state — the property the replay-by-index triage rule needs.
+    /// Does NOT cover the expansion's distribution (that is
+    /// `corpus_random`'s surface).
+    #[test]
+    fn rotating_corpus_is_reproducible_from_the_index_alone() {
+        let a = generate_rotating_corpus(
+            RotationContext::new(47, IndexProvenance::ScheduleDerived),
+            2,
+            2,
+        );
+        // Same index, different provenance: provenance is a label and
+        // must not touch the inputs.
+        let b = generate_rotating_corpus(
+            RotationContext::new(47, IndexProvenance::OperatorSupplied),
+            2,
+            2,
+        );
+        assert_eq!(a.len(), 4);
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.seedhash, y.seedhash, "provenance must not affect inputs");
+            assert_eq!(x.data, y.data, "provenance must not affect inputs");
+        }
+    }
+
+    /// Different rotations explore different inputs.
+    ///
+    /// Bites against a lane that reports a rotating index while
+    /// re-verifying one fixed set — the failure that would make the
+    /// whole lane theatre while every other test passed.
+    #[test]
+    fn distinct_rotations_explore_distinct_inputs() {
+        let a = generate_rotating_corpus(
+            RotationContext::new(46, IndexProvenance::ScheduleDerived),
+            2,
+            2,
+        );
+        let b = generate_rotating_corpus(
+            RotationContext::new(47, IndexProvenance::ScheduleDerived),
+            2,
+            2,
+        );
+        assert_ne!(
+            a.iter().map(|p| p.seedhash).collect::<Vec<_>>(),
+            b.iter().map(|p| p.seedhash).collect::<Vec<_>>(),
+            "consecutive rotations produced identical seedhashes"
+        );
+    }
+
+    /// The rotating lane never re-explores the pinned corpus.
+    ///
+    /// Bites against the namespaces silently converging — the
+    /// module-level prohibition, checked at corpus level rather than
+    /// only at seed level.
+    #[test]
+    fn rotation_zero_does_not_reproduce_the_pinned_corpus() {
+        use crate::corpus_random::generate_random_corpus;
+        let pinned = generate_random_corpus(2, 2);
+        let rotating = generate_rotating_corpus(
+            RotationContext::new(0, IndexProvenance::ScheduleDerived),
+            2,
+            2,
+        );
+        assert_ne!(
+            pinned.iter().map(|p| p.seedhash).collect::<Vec<_>>(),
+            rotating.iter().map(|p| p.seedhash).collect::<Vec<_>>(),
+            "rotation 0 reproduced the pinned corpus; the namespaces have converged"
         );
     }
 

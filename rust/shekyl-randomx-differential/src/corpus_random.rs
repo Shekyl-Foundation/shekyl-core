@@ -126,7 +126,33 @@ pub fn generate_random_corpus(
     seedhash_count: usize,
     data_per_seedhash: usize,
 ) -> Vec<RandomCorpusPair> {
-    let mut rng = ChaCha20Rng::from_seed(RANDOM_CORPUS_SEED_V1);
+    generate_corpus_from_seed(RANDOM_CORPUS_SEED_V1, seedhash_count, data_per_seedhash)
+}
+
+/// The seed-to-corpus expansion, parameterised by seed.
+///
+/// [`generate_random_corpus`] is this function bound to the pinned
+/// [`RANDOM_CORPUS_SEED_V1`]; the rotating lane
+/// ([`crate::rotating_corpus`]) binds it to an index-derived seed.
+/// **One expansion implementation on purpose**: two corpora generated
+/// by two copies of this loop could drift in data-length distribution
+/// or draw order while both looked correct, and the rotating lane's
+/// whole claim is that it explores the same *kind* of input the pinned
+/// corpus does, at inputs the pinned corpus does not contain.
+///
+/// # Coverage boundary
+///
+/// Bites against expansion drift between the two lanes. Does **not**
+/// assert anything about seed *derivation* — the pinned lane's seed is
+/// a SHA-256 of a source string, the rotating lane's is cSHAKE256 over
+/// an index, and those are deliberately separate namespaces
+/// (`rotating_corpus`'s module-level prohibition).
+pub fn generate_corpus_from_seed(
+    seed: [u8; 32],
+    seedhash_count: usize,
+    data_per_seedhash: usize,
+) -> Vec<RandomCorpusPair> {
+    let mut rng = ChaCha20Rng::from_seed(seed);
     let mut pairs = Vec::with_capacity(seedhash_count * data_per_seedhash);
     for _ in 0..seedhash_count {
         let mut seedhash_bytes = [0u8; 32];

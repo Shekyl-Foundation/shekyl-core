@@ -118,6 +118,18 @@ on:
           - daily
           - full
         default: daily
+      rotation_index:
+        description: >-
+          Replay a specific rotating-lane index. Leave empty for a
+          normal run (the scheduled lane derives its own index from
+          the date). A value here is a REPLAY of an already-explored
+          index, and the harness banner labels it `operator-supplied`
+          so a green replay cannot be cited as a green sweep (§4.5
+          T-A11). The corresponding input set is reconstructable by
+          anyone from the integer alone, so the choice is auditable
+          rather than trusted.
+        type: string
+        default: ''
       runtime_modes:
         description: >-
           Also run the runtime-modes job (T5 latency + T7/T8
@@ -504,6 +516,122 @@ jobs:
         # job is arch parity, not mutant killing. (First `--` = cargo
         # test args, second = test-binary args.)
         run: cargo mutants --package shekyl-randomx-differential --package shekyl-pow-randomx --in-place -- -- --skip canonical_pins_full
+
+  rotating:
+    # The exploring differential lane (RANDOMX_V2_MUTATION_REGIME.md
+    # §7.5 item 2). Every other differential lane re-verifies the same
+    # 1024 pinned pairs; this one derives a fresh input set per
+    # rotation index and runs rust-vs-C over inputs the project has
+    # never tested.
+    #
+    # COVERAGE CLAIM, stated in full because the short version gets
+    # miscredited: this lane advances the EXPLORED boundary, never the
+    # PINNED one. It bites against spec-non-equivalence on inputs
+    # outside the pinned corpus; it does NOT grow the regression corpus
+    # absent a finding, and does NOT prove spec-equivalence at any
+    # sizing. The pinned corpus grows only through the §7.9 MR-R3
+    # promotion path — divergence, halt, root-cause, fix, THEN promote
+    # against the fixed build. Never at discovery: at discovery
+    # rust != c and neither leg is authoritative.
+    #
+    # Branch matrix per the house pattern (runtime-modes) and MR-F3:
+    # schedule events fire on the default branch only, so without a
+    # matrix this cron would never exercise dev, where verifier work
+    # lands first.
+    name: 'cron: rotating differential lane (${{ matrix.branch }})'
+    runs-on: ubuntu-latest
+    # Measured: 8x16 = 128 pairs in 69 s locally; the 1024-pair sizing
+    # below is ~8x that, and the committed runner class is ~1.58x
+    # slower than the measurement box (RANDOMX_V2_MUTATION_REGIME.md
+    # §2.2.1), giving ~15 min. 40 leaves margin without becoming a
+    # place a hang can hide.
+    timeout-minutes: 40
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.rotation_index != '')
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, dev]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          ref: ${{ matrix.branch }}
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+      - name: Install CMake + Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Configure + build randomx-v2 C reference
+        uses: ./.github/actions/build-randomx-v2-ref
+      - name: Resolve rotation index
+        id: rotation
+        # Computed ONCE here and consumed by the run step, per §7.9
+        # MR-R1: a lane straddling midnight UTC that re-derived the
+        # index mid-run would emit a banner index that does not
+        # describe all of its own inputs — a record that lies while
+        # looking complete.
+        #
+        # Schedule runs take days-since-epoch, so consecutive days
+        # explore different inputs and the sequence is reconstructable
+        # from a date alone. A dispatch supplies its own index, which
+        # is a REPLAY and is labelled as such: an operator-chosen index
+        # must never be citable as routine coverage (§4.5 T-A11).
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.rotation_index }}" ]; then
+            index="${{ inputs.rotation_index }}"
+            provenance="operator-supplied"
+          else
+            index=$(( $(date -u +%s) / 86400 ))
+            provenance="schedule-derived"
+          fi
+          echo "index=${index}"           >> "$GITHUB_OUTPUT"
+          echo "provenance=${provenance}" >> "$GITHUB_OUTPUT"
+          echo "rotation index ${index} (${provenance})"
+      - name: rotating mode (fresh inputs vs the C oracle)
+        working-directory: rust
+        # 32 x 32 = 1024 pairs the project has never tested, matching
+        # the pinned lane's nightly sizing so the two are comparable.
+        #
+        # The verdict is NOT piped (rule 46): a `| tee` pipeline exits
+        # with tee's status under `bash -e` without pipefail, which
+        # would make this gate structurally incapable of failing. The
+        # binary writes to a log via redirection and the exit code is
+        # the step's own.
+        #
+        # A divergence here is a plausible REAL consensus finding:
+        # halt and escalate per RANDOMX_V2_PHASE3_PLAN.md §7.3. Under a
+        # rotating seed that needs saying twice — re-running on a later
+        # index WOULD come back green. Replay the recorded
+        # (seedhash, data) pair from the failure record instead.
+        run: |
+          set -euo pipefail
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- \
+            --mode=rotating \
+            --rotation-index=${{ steps.rotation.outputs.index }} \
+            --rotation-provenance=${{ steps.rotation.outputs.provenance }} \
+            --random-corpus-seedhashes=32 \
+            --random-corpus-data-per-seedhash=32 \
+            > "rotating-${{ matrix.branch }}.log" 2>&1
+      - name: Upload divergence forensics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        # FORENSICS, not recovery — the division matters and §7.9 MR-R1
+        # records which half may be lost. The *inputs* are
+        # reconstructable from the rotation index alone, forever, with
+        # no artifact and no retention window; that is why the seed is
+        # derived rather than drawn. What the artifact carries is the
+        # *observed outputs on this runner at this toolchain state* —
+        # both hashes, both cache SHAs, the harness version and the
+        # fork pin — which are NOT reconstructable, and which are the
+        # whole investigation when a divergence later fails to
+        # reproduce locally.
+        with:
+          name: randomx-rotating-${{ matrix.branch }}-idx${{ steps.rotation.outputs.index }}-failure-${{ github.run_id }}
+          path: rust/rotating-${{ matrix.branch }}.log
+          retention-days: 90
 
   full-parity:
     # Phase 3a Hole-1 gate wiring (RandomX v2 test-regime hardening F1):
