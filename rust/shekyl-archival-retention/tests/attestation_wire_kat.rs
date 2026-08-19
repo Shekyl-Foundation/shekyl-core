@@ -183,11 +183,14 @@ fn attestation_constants_are_pinned() {
 // hashed field), so this is the freeze for the transport encoding. `count` is
 // DERIVED on encode (pass_signatures.len()) and VALIDATED on decode
 // (LengthMismatch) — there is no redundant stored count field, so no bad state to
-// represent; a maintainer must not add one. Fixed `r` + the deterministic
-// dummy_sig_pair make every byte a pinned function of the operands, so the
-// structural asserts below ARE the byte pin (and name which field drifted), with
-// no lockstep encoder/regenerator hazard.
-const WITNESS_R: [u8; 32] = [0x5A; 32];
+// represent; a maintainer must not add one. The deterministic dummy_sig_pair
+// makes every byte a pinned function of the operands, so the structural asserts
+// below ARE the byte pin (and name which field drifted), with no lockstep
+// encoder/regenerator hazard.
+//
+// The fixed `r` that used to seed this alongside the signatures is gone with the
+// field itself (RF-D3): the nonce anchors to the validated predecessor hash,
+// which the verifier holds as chain state and the witness never transports.
 
 fn witness_two_sig() -> BlockAttestationWitness {
     let (sa, sb) = dummy_sig_pair();
