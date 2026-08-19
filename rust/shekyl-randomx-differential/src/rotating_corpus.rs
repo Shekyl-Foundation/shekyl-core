@@ -60,83 +60,112 @@ use shekyl_crypto_hash::cshake256_32;
 /// [`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv`]: ../../../docs/design/CRYPTO_DOMAIN_REGISTRY.tsv
 pub const ROTATING_CORPUS_CUSTOMIZATION: &[u8] = b"shekyl/randomx-rotating-corpus-v1";
 
-/// Where a lane's rotation index came from.
+/// Declares [`IndexProvenance`] and everything derived from it from a
+/// **single table**, so a variant cannot exist without a tag, a
+/// coverage decision, and membership in `ALL`.
 ///
-/// Per §7.9 MR-R4 this is a **provenance label**, not the load-bearing
-/// control: because an index-derived seed is a bounded integer whose
-/// input set anyone can regenerate offline, "the operator picked a
-/// benign one" is a falsifiable claim rather than an unbounded
-/// attacker choice. The label exists so a green *replay* cannot be
-/// cited as a green *sweep* (§4.5 T-A11).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndexProvenance {
+/// # Why a macro for a three-variant enum
+///
+/// An earlier hand-written form kept the variant list, `tag()` and
+/// `counts_as_coverage()` as parallel `match`es plus a hand-built
+/// `ALL`. The exhaustive matches forced a *compile* error when a
+/// variant was added — but a maintainer fixing that error could add the
+/// arms and still omit the variant from `ALL`, leaving the length pin
+/// satisfied, every test passing, and `from_tag` silently rejecting the
+/// new value. A guard that appears to assert completeness and does not
+/// is precisely the failure this crate's design round
+/// (`RANDOMX_V2_MUTATION_REGIME.md` §13) exists to name, so it is not
+/// one to leave standing here.
+///
+/// Rust cannot enumerate an enum's variants without one list somewhere;
+/// the guarantee has to come from making that list the *only*
+/// declaration. This is that list. A `derive` from an external crate
+/// would do the same job, but adding a proc-macro dependency to a
+/// test-only harness for three variants is not proportionate under
+/// `17-dependency-discipline`.
+macro_rules! define_index_provenance {
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident => tag: $tag:literal, counts_as_coverage: $coverage:literal
+        ),+ $(,)?
+    ) => {
+        /// Where a lane's rotation index came from.
+        ///
+        /// Per §7.9 MR-R4 this is a **provenance label**, not the
+        /// load-bearing control: because an index-derived seed is a
+        /// bounded integer whose input set anyone can regenerate
+        /// offline, "the operator picked a benign one" is a falsifiable
+        /// claim rather than an unbounded attacker choice. The label
+        /// exists so a green *replay* cannot be cited as a green
+        /// *sweep* (§4.5 T-A11).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum IndexProvenance {
+            $( $(#[$variant_meta])* $variant, )+
+        }
+
+        impl IndexProvenance {
+            /// Every provenance, generated from the same table that
+            /// declares the variants — so it **cannot** omit one.
+            pub const ALL: &'static [Self] = &[ $( Self::$variant ),+ ];
+
+            /// Banner-facing tag. Pinned by the T17 banner assertion;
+            /// changing these strings changes what a reviewer greps for.
+            #[must_use]
+            pub fn tag(self) -> &'static str {
+                match self { $( Self::$variant => $tag, )+ }
+            }
+
+            /// Whether a run under this provenance may be credited as
+            /// **coverage** of the input space.
+            ///
+            /// Only a scheduled sweep advances the explored boundary.
+            /// An operator replay does not — it re-checks an
+            /// already-explored index that the operator chose (§4.5
+            /// T-A11). A per-PR tripwire does not — every PR on a given
+            /// day derives the same index, so it re-checks identical
+            /// inputs (MR-DQ-6).
+            #[must_use]
+            pub fn counts_as_coverage(self) -> bool {
+                match self { $( Self::$variant => $coverage, )+ }
+            }
+        }
+    };
+}
+
+define_index_provenance! {
     /// Derived from the run's own clock at lane start — a genuine
     /// forward step of the coverage boundary.
-    ScheduleDerived,
-    /// Supplied by an operator on `workflow_dispatch`, i.e. a replay
-    /// of a previously-explored index.
-    OperatorSupplied,
+    ScheduleDerived => tag: "schedule-derived", counts_as_coverage: true,
+
+    /// Supplied by an operator on `workflow_dispatch`, i.e. a replay of
+    /// a previously-explored index.
+    OperatorSupplied => tag: "operator-supplied", counts_as_coverage: false,
+
     /// Derived from the date on a `pull_request` run (MR-DQ-6).
     ///
-    /// Distinct from both siblings, and the distinction is load-
-    /// bearing rather than cosmetic. It is not `ScheduleDerived`: a
-    /// per-PR run does **not** advance the explored boundary, because
+    /// Distinct from both siblings, and the distinction is
+    /// load-bearing rather than cosmetic. It is not `ScheduleDerived`:
+    /// a per-PR run does **not** advance the explored boundary, because
     /// every PR on a given day derives the *same* index and therefore
     /// re-checks the same inputs. It is not `OperatorSupplied` either:
-    /// nobody chose the index, so labelling it as a replay would be
-    /// untrue in the other direction.
+    /// nobody chose the index, so labelling it a replay would be untrue
+    /// in the other direction.
     ///
     /// Its purpose is a **tripwire on the change**, not coverage of the
     /// input space: does this diff diverge on a non-pinned input set?
-    /// Only [`Self::ScheduleDerived`] may ever be credited as coverage
-    /// (§4.5 T-A11).
-    PullRequest,
+    PullRequest => tag: "pull-request", counts_as_coverage: false,
 }
 
 impl IndexProvenance {
-    /// Every provenance, exhaustively.
-    ///
-    /// The single source of truth for anything that enumerates the set
-    /// — CLI diagnostics, tests. Kept honest by
-    /// [`tests::all_is_exhaustive`], whose `match` stops compiling if a
-    /// variant is added without being listed here.
-    pub const ALL: [Self; 3] = [
-        Self::ScheduleDerived,
-        Self::OperatorSupplied,
-        Self::PullRequest,
-    ];
-
-    /// Whether a run under this provenance may be credited as
-    /// **coverage** of the input space.
-    ///
-    /// The `match` is deliberately exhaustive and deliberately has no
-    /// catch-all arm: adding a provenance **must not compile** until
-    /// someone decides, explicitly, whether it advances the explored
-    /// boundary. Only a scheduled sweep does. An operator replay does
-    /// not — it re-checks an already-explored index that the operator
-    /// chose (§4.5 T-A11). A per-PR tripwire does not — every PR on a
-    /// given day derives the same index, so it re-checks identical
-    /// inputs (MR-DQ-6).
-    ///
-    /// This is the round's own lesson turned on itself: an invariant
-    /// carried only by prose and a test decays; one the compiler
-    /// enforces cannot.
-    #[must_use]
-    pub fn counts_as_coverage(self) -> bool {
-        match self {
-            Self::ScheduleDerived => true,
-            Self::OperatorSupplied | Self::PullRequest => false,
-        }
-    }
-
     /// The accepted `--rotation-provenance` values, for CLI
     /// diagnostics.
     ///
     /// **Derived from [`Self::ALL`], never spelled by hand.** Two
     /// hand-maintained copies of this list had already drifted — one
     /// error path listed three values, another listed two — which is
-    /// the same one-fact-in-two-places failure this crate keeps
-    /// finding elsewhere.
+    /// the same one-fact-in-two-places failure this crate keeps finding
+    /// elsewhere.
     #[must_use]
     pub fn accepted_values() -> String {
         Self::ALL
@@ -153,17 +182,6 @@ impl IndexProvenance {
     #[must_use]
     pub fn from_tag(tag: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|p| p.tag() == tag)
-    }
-
-    /// Banner-facing tag. Pinned by the T17 banner assertion; changing
-    /// these strings changes what a reviewer greps for.
-    #[must_use]
-    pub fn tag(self) -> &'static str {
-        match self {
-            Self::ScheduleDerived => "schedule-derived",
-            Self::OperatorSupplied => "operator-supplied",
-            Self::PullRequest => "pull-request",
-        }
     }
 }
 
@@ -421,21 +439,31 @@ mod tests {
         assert_eq!(IndexProvenance::PullRequest.tag(), "pull-request");
     }
 
-    /// `ALL` really is every variant.
+    /// `ALL`'s members round-trip and are tagged.
     ///
-    /// Bites against a variant being added without being listed: the
-    /// `match` below stops compiling, which is the point — a list that
-    /// silently misses a member is the same defect class as a gate
-    /// whose subject does not exist. Does NOT check `ALL`'s order,
-    /// which nothing depends on.
+    /// The completeness guarantee is **structural**, not asserted here:
+    /// `ALL`, `tag()` and `counts_as_coverage()` are generated from the
+    /// one `define_index_provenance!` table, so a variant cannot exist
+    /// without appearing in each. This test guards the *consequences* —
+    /// round-tripping and non-empty tags.
+    ///
+    /// An earlier version claimed to prove completeness and did not: it
+    /// matched exhaustively over values drawn from `ALL`, which only
+    /// ever visits members of `ALL` and so could never notice one
+    /// missing. A maintainer who added a variant, fixed the resulting
+    /// compile error in the match, and forgot `ALL` would have had a
+    /// green suite and a `from_tag` that silently rejected the new
+    /// value. Does NOT check ordering, which nothing depends on.
     #[test]
-    fn all_is_exhaustive() {
-        for p in IndexProvenance::ALL {
-            match p {
-                IndexProvenance::ScheduleDerived
-                | IndexProvenance::OperatorSupplied
-                | IndexProvenance::PullRequest => {}
-            }
+    fn all_members_round_trip_and_are_tagged() {
+        for p in IndexProvenance::ALL.iter().copied() {
+            assert!(!p.tag().is_empty(), "every provenance needs a banner tag");
+            assert_eq!(
+                IndexProvenance::from_tag(p.tag()),
+                Some(p),
+                "{} does not round-trip through from_tag",
+                p.tag()
+            );
         }
         assert_eq!(
             IndexProvenance::ALL.len(),
@@ -445,12 +473,11 @@ mod tests {
         );
     }
 
-    /// Coverage semantics, asserted **per variant** rather than by
-    /// filtering a hand-maintained list.
+    /// Coverage semantics, asserted **per variant**.
     ///
-    /// The compile-time guarantee lives in `counts_as_coverage`'s
-    /// exhaustive `match`; this records the decision that match
-    /// encodes, so intent is visible without reading the body. Bites
+    /// The compile-time guarantee lives in the generated
+    /// `counts_as_coverage` match; this records the decision that match
+    /// encodes, so intent is visible without reading the table. Bites
     /// against a silent flip of any variant's coverage status.
     #[test]
     fn only_schedule_derived_counts_as_coverage() {
@@ -476,28 +503,21 @@ mod tests {
         );
     }
 
-    /// The accepted-values string is derived from the variant set.
+    /// The accepted-values string lists every variant, and an unknown
+    /// tag is rejected.
     ///
-    /// Bites against the CLI diagnostic drifting from the enum — the
+    /// Bites against the CLI diagnostic drifting from the table — the
     /// defect this replaced, where one error path listed three values
     /// and another listed two.
     #[test]
     fn accepted_values_lists_every_variant() {
         let listed = IndexProvenance::accepted_values();
-        for p in IndexProvenance::ALL {
+        for p in IndexProvenance::ALL.iter().copied() {
             assert!(
                 listed.contains(p.tag()),
                 "accepted_values() omits {}: {listed}",
                 p.tag()
             );
-        }
-    }
-
-    /// `from_tag` round-trips every variant and rejects an unknown.
-    #[test]
-    fn from_tag_round_trips() {
-        for p in IndexProvenance::ALL {
-            assert_eq!(IndexProvenance::from_tag(p.tag()), Some(p));
         }
         assert_eq!(IndexProvenance::from_tag("schedule"), None);
     }
