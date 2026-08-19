@@ -161,6 +161,17 @@ sustainability is unaffected by the recalibration.
   `workflow_dispatch` launches the doomed 6-hour run; **MR-F7** — the
   tool version is unpinned (`--locked` pins deps, not the version).
 
+  **UPDATE 2026-08-19: MR-F6 and MR-F7 are FIXED** (PR #505). MR-F6 is
+  now gated on an explicit `run_mutants` boolean input, the shape
+  `runtime_modes` already uses, with the schedule arm parenthesised so
+  precedence is stated rather than relied on — fixed there rather than
+  filed because it directly obstructed the lane-rehearsal dispatch that
+  PR adds. MR-F7 is pinned at `cargo-mutants --version 27.1.0` on the
+  new per-PR verdict ratchet. **The mutants job itself remains
+  inoperative** — this entry's substance is unchanged: it will still
+  exceed the ceiling whenever it is deliberately run, until the
+  re-scope's remaining work lands.
+
   **Round state 2026-08-18:** MR-DQ-1 ruled (drop `--check`) and
   MR-DQ-8 ruled C1 (harness-only test scoping) after measurement showed
   the harness suite is *cheaper* than the verifier's (26 s vs 63 s), so

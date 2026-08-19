@@ -118,6 +118,14 @@ on:
           - daily
           - full
         default: daily
+      run_mutants:
+        description: >-
+          Also run the weekly cargo-mutants job (T18) on this dispatch.
+          Off by default: until the re-scope lands, that job exceeds
+          the 6-hour hosted-runner ceiling and is guaranteed to red, so
+          an unrelated dispatch must not spend a runner on it (MR-F6).
+        type: boolean
+        default: false
       checkout_ref:
         description: >-
           Git ref the matrix lanes check out, instead of the matrix
@@ -490,7 +498,20 @@ jobs:
     name: 'weekly: cargo-mutants (T18)'
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1' || github.event_name == 'workflow_dispatch'
+    # MR-F6: `&&` binds tighter than `||`, so the previous condition
+    # parsed as `(schedule && monday) || dispatch` — EVERY dispatch,
+    # including an unrelated parity-recovery or lane-rehearsal one,
+    # spent a 6-hour runner on a run that is guaranteed to red until
+    # the T18 re-scope lands. The job's only execution ever (run
+    # 31346130482) was in fact a dispatch. Now gated on an explicit
+    # boolean input, the same shape `runtime_modes` already uses, with
+    # the schedule arm parenthesised so precedence is stated rather
+    # than relied on.
+    #
+    # Fixed here rather than filed because it directly obstructs the
+    # rehearsal mechanism this PR adds: dispatching to exercise the
+    # rotating lane would otherwise launch this job too.
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.run_mutants)
     steps:
       - uses: actions/checkout@v5
         with:
