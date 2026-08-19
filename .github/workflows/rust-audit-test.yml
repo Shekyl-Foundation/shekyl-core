@@ -346,55 +346,84 @@ jobs:
         run: bash scripts/lint_cpp_clamp_ban.sh
       - name: "CI grep gate: no shekyl_y in C++ source"
         run: |
-          # src/wallet/ was deleted at Phase 5. Left in the path list it would
-          # make grep exit 2 (error) even on a match, which `if` reads as
-          # "not found" — the gate would pass while blind.
-          if grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'; then
-            echo "FATAL: 'shekyl_y' salt still present in C++ source"
-            exit 1
-          fi
+          # grep exits 2 on *error* (a path that no longer exists, an unreadable
+          # file) and `if grep ...; then` cannot distinguish that from exit 1
+          # "no match" — so a deleted directory silently disables the gate, even
+          # when the forbidden pattern is present. Capture the status instead:
+          # 1 is the only passing value.
+          grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h' && rc=0 || rc=$?
+          [ "$rc" -eq 1 ] || { echo "FATAL: 'shekyl_y' salt still present in C++ source (grep rc=$rc)"; exit 1; }
           echo "PASS: no shekyl_y in C++ source"
       - name: "CI grep gate: no derivation_to_y_scalar in C++ source"
         run: |
-          # src/wallet/ was deleted at Phase 5. Left in the path list it would
-          # make grep exit 2 (error) even on a match, which `if` reads as
-          # "not found" — the gate would pass while blind.
-          if grep -rn 'derivation_to_y_scalar' src/crypto/ --include='*.cpp' --include='*.h'; then
-            echo "FATAL: derivation_to_y_scalar still present in C++ source"
-            exit 1
-          fi
+          # grep exits 2 on *error* (a path that no longer exists, an unreadable
+          # file) and `if grep ...; then` cannot distinguish that from exit 1
+          # "no match" — so a deleted directory silently disables the gate, even
+          # when the forbidden pattern is present. Capture the status instead:
+          # 1 is the only passing value.
+          grep -rn 'derivation_to_y_scalar' src/crypto/ --include='*.cpp' --include='*.h' && rc=0 || rc=$?
+          [ "$rc" -eq 1 ] || { echo "FATAL: derivation_to_y_scalar still present in C++ source (grep rc=$rc)"; exit 1; }
           echo "PASS: no derivation_to_y_scalar in C++ source"
       - name: "CI grep gate: no RCTTypeFull/Simple/Bulletproof in C++ source"
         run: |
-          if grep -rn 'RCTTypeFull\|RCTTypeSimple\|RCTTypeBulletproof[^P]' src/ --include='*.cpp' --include='*.h'; then
-            echo "FATAL: legacy RCT types still referenced in C++ source"
-            exit 1
-          fi
+          # grep exits 2 on *error* (a path that no longer exists, an unreadable
+          # file) and `if grep ...; then` cannot distinguish that from exit 1
+          # "no match" — so a deleted directory silently disables the gate, even
+          # when the forbidden pattern is present. Capture the status instead:
+          # 1 is the only passing value.
+          grep -rn 'RCTTypeFull\|RCTTypeSimple\|RCTTypeBulletproof[^P]' src/ --include='*.cpp' --include='*.h' && rc=0 || rc=$?
+          [ "$rc" -eq 1 ] || { echo "FATAL: legacy RCT types still referenced in C++ source (grep rc=$rc)"; exit 1; }
           echo "PASS: no legacy RCT types"
       - name: "CI grep gate: no v1/v2 tx version branches"
         run: |
-          if grep -rn 'tx\.version\s*==\s*1\b\|tx\.version\s*<\s*2\b\|hf_version\s*<\s*1\b' src/ --include='*.cpp' --include='*.h'; then
-            echo "FATAL: legacy v1/v2 transaction version checks still present"
-            exit 1
-          fi
+          # grep exits 2 on *error* (a path that no longer exists, an unreadable
+          # file) and `if grep ...; then` cannot distinguish that from exit 1
+          # "no match" — so a deleted directory silently disables the gate, even
+          # when the forbidden pattern is present. Capture the status instead:
+          # 1 is the only passing value.
+          grep -rn 'tx\.version\s*==\s*1\b\|tx\.version\s*<\s*2\b\|hf_version\s*<\s*1\b' src/ --include='*.cpp' --include='*.h' && rc=0 || rc=$?
+          [ "$rc" -eq 1 ] || { echo "FATAL: legacy v1/v2 transaction version checks still present (grep rc=$rc)"; exit 1; }
           echo "PASS: no v1/v2 tx version branches"
       - name: "CI grep gate: no HASH_KEY_TXPROOF in C++ source"
         run: |
-          if grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/; then
-            echo "FATAL: legacy HASH_KEY_TXPROOF still referenced"
-            exit 1
-          fi
+          # grep exits 2 on *error* (a path that no longer exists, an unreadable
+          # file) and `if grep ...; then` cannot distinguish that from exit 1
+          # "no match" — so a deleted directory silently disables the gate, even
+          # when the forbidden pattern is present. Capture the status instead:
+          # 1 is the only passing value.
+          grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/ && rc=0 || rc=$?
+          [ "$rc" -eq 1 ] || { echo "FATAL: legacy HASH_KEY_TXPROOF still referenced (grep rc=$rc)"; exit 1; }
           echo "PASS: no HASH_KEY_TXPROOF"
       - name: "CI grep gate: combined_shared_secret confined to wallet"
         run: |
-          if grep -rn 'combined_shared_secret' --include='*.cpp' --include='*.h' src/common/ src/rpc/ src/cryptonote_protocol/; then
-            echo "FATAL: combined_shared_secret leaked outside wallet boundary"
-            exit 1
-          fi
-          echo "PASS: combined_shared_secret confined"
+          # grep exits 2 on *error* (a path that no longer exists, an unreadable
+          # file) and `if grep ...; then` cannot distinguish that from exit 1
+          # "no match" — so a deleted directory silently disables the gate, even
+          # when the forbidden pattern is present. Capture the status instead:
+          # 1 is the only passing value.
+          # NOTE: this gate is currently VACUOUS — `combined_shared_secret` has
+          # zero occurrences anywhere in src/ or tests/, and the "wallet
+          # boundary" it names was deleted at Phase 5. Its message is corrected
+          # here to describe what it actually checks; whether it is deleted or
+          # re-pointed at the Rust surface is a filed decision — see
+          # docs/FOLLOWUPS.md "combined_shared_secret gate is vacuous".
+          grep -rn 'combined_shared_secret' --include='*.cpp' --include='*.h' src/common/ src/rpc/ src/cryptonote_protocol/ && rc=0 || rc=$?
+          [ "$rc" -eq 1 ] || { echo "FATAL: combined_shared_secret appeared in src/common, src/rpc or src/cryptonote_protocol (grep rc=$rc)"; exit 1; }
+          echo "PASS: no combined_shared_secret in the three checked dirs"
       - name: "CI grep gate: no ecdhEncode/ecdhDecode outside Ledger"
         run: |
-          if grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/ | grep -v device_ledger; then
+          # Two defects, both fail-open. (1) A pipeline's exit status is the
+          # LAST command's, so piping into `grep -v` discarded the producer's
+          # status entirely — this never read the grep it appears to read
+          # (.cursor/rules/46-shell-gate-exits). (2) grep exits 2 on error,
+          # which `if` cannot tell from exit 1 "no match". Both are fixed by
+          # capturing the producer's status before filtering.
+          matches=$(grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/) && rc=0 || rc=$?
+          [ "$rc" -le 1 ] || { echo "FATAL: ecdh grep errored (rc=$rc)"; exit 1; }
+          outside=$(printf '%s' "$matches" | grep -v device_ledger) && frc=0 || frc=$?
+          [ "$frc" -le 1 ] || { echo "FATAL: ecdh filter errored (rc=$frc)"; exit 1; }
+          if [ -n "$outside" ]; then
+            echo "$outside"
             echo "FATAL: ecdhEncode/ecdhDecode used outside Ledger gate"
             exit 1
           fi

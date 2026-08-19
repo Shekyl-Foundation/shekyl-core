@@ -47,6 +47,63 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **`combined_shared_secret` gate is vacuous: delete it or re-point it**
+  (added 2026-08-19, Phase-5 follow-up round). The
+  [`rust-audit-test.yml`](../.github/workflows/rust-audit-test.yml) step *"CI
+  grep gate: combined_shared_secret confined to wallet"* searches
+  `src/common/ src/rpc/ src/cryptonote_protocol/` and fails with *"leaked
+  outside wallet boundary"*. There is no wallet boundary — Phase 5 deleted it
+  — and `combined_shared_secret` now has **zero** occurrences anywhere in
+  `src/` or `tests/`. The gate cannot fail and cannot inform.
+
+  Its fail-open shape was fixed in this round along with the other six, so it
+  is now honest about erroring; that does not make it *meaningful*. **This one
+  needs a decision, not a repair**, and the decision is not mechanical:
+
+  - **Delete it.** The invariant was "the C++ side of this secret stays inside
+    the wallet." The C++ side is gone, so the invariant has no subject.
+  - **Re-point it at Rust.** Only correct if someone establishes that the Rust
+    surface needs this specific bound — which is a different claim, about a
+    different codebase, with a different set of directories that would count
+    as "outside".
+
+  Per the retire-don't-retarget corollary
+  ([`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md) §Phase 5), the
+  default is **retire**: a check that measured a deleted C++ surface does not
+  become a check of the Rust one by re-pointing it, because the Rust surface
+  may already be bounded by construction, may not need the bound, or may need
+  a different one. Re-pointing picks one of those by accident.
+
+  **Not deferred for want of effort** — deferred because the answer requires
+  knowing what `combined_shared_secret`'s Rust analogue is and who may hold
+  it, which is FA-6 / view-tag territory, not CI hygiene. **Closed when** the
+  step is either removed or replaced by a bound whose subject exists, with the
+  reasoning recorded. *Target: V3.0 pre-genesis* — it guards an
+  address-freeze-adjacent property, so a placeholder that always passes is
+  worse than no step at all.
+
+- **`src/device/device_ledger.*` may be the next `device_cold.hpp`**
+  (added 2026-08-19, Phase-5 follow-up round). Phase 5 deleted
+  `src/device/device_cold.hpp` because its only consumer was `wallet2.cpp`,
+  despite `src/device/` being explicitly scoped *out* of the deletion by
+  directory. `device_ledger.{cpp,hpp}` and `device_io_hid.*` are in the same
+  directory, compile only `if(HIDAPI_FOUND)`, and `USE_HW_DEVICE` is `OFF` in
+  V3 ([`CMakeLists.txt`](../CMakeLists.txt); see
+  [`HARDWARE_WALLETS.md`](HARDWARE_WALLETS.md)) — so they may build for nobody.
+
+  They are also named in a live CI exclusion (the `ecdhEncode`/`ecdhDecode`
+  gate excludes `device_ledger`), which means deleting them without checking
+  that gate would leave a filter naming a file that does not exist — the exact
+  shape this round exists to stop.
+
+  **Not scoped here.** Hardware-device retirement is a daemon-side lane with
+  its own reversion clause (see the B2 entry: reopen when a vendor ships
+  hybrid PQ signing, as a Rust `Signer` impl). This entry only records that a
+  **consumer check is owed** on `src/device/`'s remaining files, by consumer
+  set rather than by directory. **Closed when** each remaining file in
+  `src/device/` has a named live consumer outside the directory, or is
+  deleted. *Target: V3.1.*
+
 - **Staking has no exit: the wallet can build one of the four bond-post
   kinds, and the refusal cites a consensus fact that is not true**
   (added 2026-08-19, surfaced while scoping the Phase-5 deletion).
