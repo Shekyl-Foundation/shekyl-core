@@ -120,5 +120,7 @@ pub mod mode_adversarial_ratio;
 pub mod mode_concurrent;
 pub mod mode_correctness;
 pub mod mode_latency;
+pub mod mode_rotating;
 pub mod parity_corpus;
+pub mod rotating_corpus;
 pub mod rust_subject;

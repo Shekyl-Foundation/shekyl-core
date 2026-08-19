@@ -118,6 +118,40 @@ on:
           - daily
           - full
         default: daily
+      run_mutants:
+        description: >-
+          Also run the weekly cargo-mutants job (T18) on this dispatch.
+          Off by default: until the re-scope lands, that job exceeds
+          the 6-hour hosted-runner ceiling and is guaranteed to red, so
+          an unrelated dispatch must not spend a runner on it (MR-F6).
+        type: boolean
+        default: false
+      checkout_ref:
+        description: >-
+          Git ref the matrix lanes check out, instead of the matrix
+          branch. Exists so a lane can be REHEARSED on a feature branch
+          before it first runs unattended: the matrix jobs otherwise
+          hardcode `ref: <matrix.branch>`, so dispatching against a
+          feature branch runs that branch's workflow file but checks
+          out main/dev — which do not contain the code under test, so
+          the run reds for a reason unrelated to the wiring. Leave
+          empty for normal operation. No T-A11 exposure: any dispatch
+          is `operator-supplied` by construction and can never be cited
+          as coverage.
+        type: string
+        default: ''
+      rotation_index:
+        description: >-
+          Replay a specific rotating-lane index. Leave empty for a
+          normal run (the scheduled lane derives its own index from
+          the date). A value here is a REPLAY of an already-explored
+          index, and the harness banner labels it `operator-supplied`
+          so a green replay cannot be cited as a green sweep (§4.5
+          T-A11). The corresponding input set is reconstructable by
+          anyone from the integer alone, so the choice is auditable
+          rather than trusted.
+        type: string
+        default: ''
       runtime_modes:
         description: >-
           Also run the runtime-modes job (T5 latency + T7/T8
@@ -380,7 +414,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ matrix.branch }}
+          # Same rehearsal override as the rotating lane: this job had
+          # the identical limitation — a dispatch could not exercise a
+          # change to it on the branch carrying that change, because
+          # the ref is pinned to the matrix branch. Default unchanged,
+          # so scheduled runs behave exactly as before.
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || matrix.branch }}
           submodules: recursive
       - name: Install Rust toolchain
         # Composite action (.github/actions/install-rust); see the
@@ -459,7 +498,20 @@ jobs:
     name: 'weekly: cargo-mutants (T18)'
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1' || github.event_name == 'workflow_dispatch'
+    # MR-F6: `&&` binds tighter than `||`, so the previous condition
+    # parsed as `(schedule && monday) || dispatch` — EVERY dispatch,
+    # including an unrelated parity-recovery or lane-rehearsal one,
+    # spent a 6-hour runner on a run that is guaranteed to red until
+    # the T18 re-scope lands. The job's only execution ever (run
+    # 31346130482) was in fact a dispatch. Now gated on an explicit
+    # boolean input, the same shape `runtime_modes` already uses, with
+    # the schedule arm parenthesised so precedence is stated rather
+    # than relied on.
+    #
+    # Fixed here rather than filed because it directly obstructs the
+    # rehearsal mechanism this PR adds: dispatching to exercise the
+    # rotating lane would otherwise launch this job too.
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.run_mutants)
     steps:
       - uses: actions/checkout@v5
         with:
@@ -504,6 +556,293 @@ jobs:
         # job is arch parity, not mutant killing. (First `--` = cargo
         # test args, second = test-binary args.)
         run: cargo mutants --package shekyl-randomx-differential --package shekyl-pow-randomx --in-place -- -- --skip canonical_pins_full
+
+  verdict-ratchet:
+    # MR-DQ-2 (per-PR leg) + re-scope item 3, converged
+    # (RANDOMX_V2_MUTATION_REGIME.md §6.6, §7.5 item 3).
+    #
+    # Mutation testing scoped to the harness's VERDICT FUNCTIONS, not
+    # to whole modules. §6.6 measured why: at module scope the
+    # survivors are dominated by orchestration reachable only through
+    # live sessions — the API-shape artifacts MR-F10 predicted — while
+    # the verdict functions kill 11/11. Narrow scope, real signal.
+    #
+    # WHAT THIS ASSERTS, both halves (§7.5 item 3):
+    #   1. the verdicts stay MUTATION-REACHABLE — i.e. they remain
+    #      functions returning Result, never bare assertion macros.
+    #      Per MR-F12 cargo-mutants does not mutate macro invocations,
+    #      so a verdict rewritten as `assert_eq!` drops out of coverage
+    #      WITHOUT CHANGING A SINGLE NUMBER;
+    #   2. their negative tests stay LOAD-BEARING.
+    # It makes no T-A9 claim (MR-F11).
+    #
+    # Cost: 11 mutants in 36 s measured locally, ~58 s on the
+    # committed runner class — it finishes inside the structural job's
+    # measured 31-44 min many times over, so per-PR is free in
+    # wall-clock terms.
+    #
+    # PATHS FILTERING is inherited, not re-declared: the workflow-level
+    # positive `pull_request: paths:` filter (R1-D12) already means an
+    # unrelated PR never triggers this workflow at all, so it never
+    # pays the C-reference build. The structural job relies on exactly
+    # the same mechanism and carries no filter of its own.
+    name: 'pr: verdict mutation ratchet (T18)'
+    runs-on: ubuntu-latest
+    # Dominated by the C-reference build and the cargo build, not by
+    # the 36 s ratchet itself.
+    timeout-minutes: 30
+    if: github.event_name != 'schedule' || github.event.schedule == '0 5 * * *'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+      - name: Install CMake + Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Configure + build randomx-v2 C reference
+        uses: ./.github/actions/build-randomx-v2-ref
+      - name: Install cargo-mutants
+        # VERSION-PINNED per MR-F7: `--locked` pins the tool's own
+        # dependency tree, not the tool. Every behaviour this gate
+        # depends on — which constructs are mutation sites, `--re`
+        # matching, the default test scoping — can shift on a release
+        # day, and an unpinned bump would move the mutant count under
+        # a gate whose whole job is to notice that count changing.
+        run: cargo install cargo-mutants --version 27.1.0 --locked
+      - name: Assert the ratchet's subject exists
+        working-directory: rust
+        # THE GATE MUST ASSERT ITS OWN SUBJECT EXISTS (§13). `--re`
+        # matches mutant NAMES, so renaming a verdict function silently
+        # empties the population and the ratchet then reports a clean
+        # green over nothing — the exact failure shape this round was
+        # opened to catch, reproduced inside its own fix. The floor is
+        # a pin: raising it is fine when a verdict is added, lowering
+        # it requires deleting one deliberately.
+        #
+        # `wc -l < file` is a redirect, not a pipe, so no verdict
+        # travels through a pipeline (rule 46).
+        run: |
+          set -euo pipefail
+          cargo mutants --package shekyl-randomx-differential \
+            --re 'verdict' --list > verdict-mutants.txt
+          count=$(wc -l < verdict-mutants.txt)
+          echo "verdict-scoped mutants: ${count}"
+          cat verdict-mutants.txt
+          if [ "${count}" -lt 11 ]; then
+            echo "FATAL: expected at least 11 verdict-scoped mutants, found ${count}." >&2
+            echo "  A verdict was renamed, deleted, or rewritten as a bare assertion" >&2
+            echo "  macro (MR-F12: macros are not mutation sites). The ratchet would" >&2
+            echo "  otherwise report a clean green over an empty population." >&2
+            exit 1
+          fi
+      - name: Verdict mutation ratchet
+        working-directory: rust
+        # Verdict unpiped per rule 46; cargo-mutants exits non-zero on
+        # any surviving mutant.
+        #
+        # A survivor here means a harness negative test stopped being
+        # load-bearing — NOT a consensus finding. Fix the test (or the
+        # verdict), do not add a skip-list entry without the §4.6 M2
+        # substrate-anchored justification and a FOLLOWUPS cite.
+        run: |
+          set -euo pipefail
+          cargo mutants --package shekyl-randomx-differential \
+            --re 'verdict' --in-place --profile release \
+            -- -- --skip canonical_pins_full
+      - name: Upload ratchet diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verdict-ratchet-failure-${{ github.run_id }}
+          path: |
+            rust/verdict-mutants.txt
+            rust/mutants.out/
+          retention-days: 30
+
+  rotating:
+    # The exploring differential lane (RANDOMX_V2_MUTATION_REGIME.md
+    # §7.5 item 2). Every other differential lane re-verifies the same
+    # 1024 pinned pairs; this one derives a fresh input set per
+    # rotation index and runs rust-vs-C over inputs the project has
+    # never tested.
+    #
+    # COVERAGE CLAIM, stated in full because the short version gets
+    # miscredited: this lane advances the EXPLORED boundary, never the
+    # PINNED one. It bites against spec-non-equivalence on inputs
+    # outside the pinned corpus; it does NOT grow the regression corpus
+    # absent a finding, and does NOT prove spec-equivalence at any
+    # sizing. The pinned corpus grows only through the §7.9 MR-R3
+    # promotion path — divergence, halt, root-cause, fix, THEN promote
+    # against the fixed build. Never at discovery: at discovery
+    # rust != c and neither leg is authoritative.
+    #
+    # Branch matrix per the house pattern (runtime-modes) and MR-F3:
+    # schedule events fire on the default branch only, so without a
+    # matrix this cron would never exercise dev, where verifier work
+    # lands first.
+    #
+    # BOTH LEGS GET THE SAME INDEX, deliberately. The index is resolved
+    # once per run and shared, so main and dev explore identical
+    # inputs — which is what makes "diverged on dev, clean on main"
+    # immediately informative about the delta between them. Giving each
+    # branch its own index to "double throughput" is the plausible-
+    # sounding optimisation that would silently destroy that
+    # comparison: two lanes exploring disjoint inputs can never tell
+    # you which branch is responsible for a divergence. Written down
+    # because nothing in the code prevents it.
+    #
+    # NO SCHEDULED EXECUTION UNTIL THIS REACHES main. Schedule events
+    # use the DEFAULT branch's workflow file, so while this job exists
+    # only on dev it has no cron. Every pre-main run is therefore a
+    # dispatch, and every dispatch is `operator-supplied` by
+    # construction — so the EXPLORED BOUNDARY DOES NOT ADVANCE AT ALL
+    # before the main merge, and no pre-main green may be credited as
+    # coverage. A run history full of green operator-supplied rows
+    # reads like coverage to anyone who was not here; it is not.
+    name: 'cron: rotating differential lane (${{ matrix.branch }})'
+    runs-on: ubuntu-latest
+    # Measured DIRECTLY at the sizing this job runs — 32x32 = 1024
+    # pairs in 515 s on the measurement box — rather than extrapolated
+    # from a smaller run. The earlier extrapolation (128 pairs in 69 s,
+    # scaled ~8x) landed close, but it scaled through a factor that is
+    # not uniform: seedhashes go 8->32 (4x, on Argon2d cache derives)
+    # while pairs go 128->1024 (8x, on hashes), so the agreement was
+    # reassurance rather than derivation. At the ~1.58x runner factor
+    # (RANDOMX_V2_MUTATION_REGIME.md §2.2.1) that is ~13.6 min. 40
+    # leaves margin without becoming a place a hang can hide.
+    #
+    # FIRST REHEARSAL (run 32214326519, 2026-08-19): the whole job —
+    # C-reference build, cargo build and the rotation — took 8-9 min
+    # per leg, i.e. the ~13.6 min projection for the rotation ALONE
+    # was conservative. Recorded rather than re-tuned: the 1.58x factor
+    # was derived from a debug test-suite baseline and evidently does
+    # not transfer uniformly to this workload either, which is the same
+    # lesson as the extrapolation it replaced. 40 stays.
+    timeout-minutes: 40
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.rotation_index != '')
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, dev]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          # `checkout_ref` lets a dispatch rehearse this lane on a
+          # feature branch. Without it the first-ever execution of any
+          # change to this job is unattended, on both matrix legs at
+          # once, on a lane whose documented posture is halt-and-
+          # escalate — so a wiring defect would arrive dressed as a
+          # plausible consensus finding, which is the response you
+          # least want to train on a false alarm.
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || matrix.branch }}
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+      - name: Install CMake + Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Configure + build randomx-v2 C reference
+        uses: ./.github/actions/build-randomx-v2-ref
+      - name: Resolve rotation index
+        id: rotation
+        # Computed ONCE here and consumed by the run step, per §7.9
+        # MR-R1: a lane straddling midnight UTC that re-derived the
+        # index mid-run would emit a banner index that does not
+        # describe all of its own inputs — a record that lies while
+        # looking complete.
+        #
+        # Schedule runs take days-since-epoch, so consecutive days
+        # explore different inputs and the sequence is reconstructable
+        # from a date alone. A dispatch supplies its own index, which
+        # is a REPLAY and is labelled as such: an operator-chosen index
+        # must never be citable as routine coverage (§4.5 T-A11).
+        run: |
+          set -euo pipefail
+          # Provenance is bound to the EVENT, not to whether an index
+          # input happens to be empty. Keying it on input-emptiness
+          # would be correct only while the job's `if:` refuses a
+          # dispatch with no index — an invariant held by a different
+          # expression thirty lines away, with nothing asserting the
+          # coupling. Relax that condition later ("let dispatch do a
+          # fresh sweep too" is an obvious future request) and a
+          # manual run would be labelled schedule-derived: exactly the
+          # §4.5 T-A11 laundering the label exists to prevent. Bound
+          # this way the label is true by construction however the
+          # `if:` evolves.
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            provenance="schedule-derived"
+          else
+            provenance="operator-supplied"
+          fi
+          if [ -n "${{ inputs.rotation_index }}" ]; then
+            index="${{ inputs.rotation_index }}"
+          else
+            index=$(( $(date -u +%s) / 86400 ))
+          fi
+          echo "index=${index}"           >> "$GITHUB_OUTPUT"
+          echo "provenance=${provenance}" >> "$GITHUB_OUTPUT"
+          echo "rotation index ${index} (${provenance})"
+      - name: rotating mode (fresh inputs vs the C oracle)
+        working-directory: rust
+        # 32 x 32 = 1024 pairs the project has never tested, matching
+        # the pinned lane's nightly sizing so the two are comparable.
+        #
+        # The verdict is NOT piped (rule 46): a `| tee` pipeline exits
+        # with tee's status under `bash -e` without pipefail, which
+        # would make this gate structurally incapable of failing. The
+        # binary writes to a log via redirection and the exit code is
+        # the step's own.
+        #
+        # A divergence here is a plausible REAL consensus finding:
+        # halt and escalate per RANDOMX_V2_PHASE3_PLAN.md §7.3. Under a
+        # rotating seed that needs saying twice — re-running on a later
+        # index WOULD come back green. Replay the recorded
+        # (seedhash, data) pair from the failure record instead.
+        run: |
+          set -euo pipefail
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- \
+            --mode=rotating \
+            --rotation-index=${{ steps.rotation.outputs.index }} \
+            --rotation-provenance=${{ steps.rotation.outputs.provenance }} \
+            --random-corpus-seedhashes=32 \
+            --random-corpus-data-per-seedhash=32 \
+            > "rotating-${{ matrix.branch }}.log" 2>&1
+      - name: Surface the lane's own record
+        if: always()
+        # The run step redirects to a log (rule 46: the verdict must
+        # not travel through a `tee`), which means that on a GREEN run
+        # nothing the harness printed reaches the job log — the
+        # artifact only uploads `if: failure()`. So a lane that checked
+        # 1024 pairs and a lane that checked ZERO would look
+        # identical: the same green tick, the same absent output.
+        #
+        # That is §13 in this job: a clean signal that does not
+        # evidence its own subject. `always()` so the record appears on
+        # success and failure alike, and the banner's rotation binding
+        # is readable without downloading an artifact.
+        run: cat "rust/rotating-${{ matrix.branch }}.log"
+      - name: Upload divergence forensics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        # FORENSICS, not recovery — the division matters and §7.9 MR-R1
+        # records which half may be lost. The *inputs* are
+        # reconstructable from the rotation index alone, forever, with
+        # no artifact and no retention window; that is why the seed is
+        # derived rather than drawn. What the artifact carries is the
+        # *observed outputs on this runner at this toolchain state* —
+        # both hashes, both cache SHAs, the harness version and the
+        # fork pin — which are NOT reconstructable, and which are the
+        # whole investigation when a divergence later fails to
+        # reproduce locally.
+        with:
+          name: randomx-rotating-${{ matrix.branch }}-idx${{ steps.rotation.outputs.index }}-failure-${{ github.run_id }}
+          path: rust/rotating-${{ matrix.branch }}.log
+          retention-days: 90
 
   full-parity:
     # Phase 3a Hole-1 gate wiring (RandomX v2 test-regime hardening F1):

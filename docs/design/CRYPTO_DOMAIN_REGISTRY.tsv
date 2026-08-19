@@ -194,6 +194,7 @@
 1	Email Signature	rust/shekyl-crypto-hash/src/lib.rs	(NIST SP 800-185 KAT)	test-only		NIST cSHAKE sample customization (cfg(test) KATs)
 1	shekyl/domain-a-v1	rust/shekyl-crypto-hash/src/lib.rs	(cfg(test) inline)	test-only		domain-separation smoke test
 1	shekyl/domain-b-v1	rust/shekyl-crypto-hash/src/lib.rs	(cfg(test) inline)	test-only		domain-separation smoke test
+1	shekyl/randomx-rotating-corpus-v1	rust/shekyl-randomx-differential/src/rotating_corpus.rs	ROTATING_CORPUS_CUSTOMIZATION	test-only		rotating differential-lane corpus seed = cSHAKE256-32(customization, index_le); derived-not-drawn so a red reproduces by index (MUTATION_REGIME MR-R1). Test-harness surface, not consensus: never mixed with RANDOM_CORPUS_SEED_V1 (bare SHA-256, positionally bound to the canonical tables)
 5	shekyl/schnorr-test-v1	rust/shekyl-crypto-pq/src/schnorr.rs	DOMAIN	test-only		cfg(test) module schnorr domain
 #
 # ── EXCLUDED — named, not domain separation for our purposes ────────────────

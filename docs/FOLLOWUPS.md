@@ -161,6 +161,17 @@ sustainability is unaffected by the recalibration.
   `workflow_dispatch` launches the doomed 6-hour run; **MR-F7** — the
   tool version is unpinned (`--locked` pins deps, not the version).
 
+  **UPDATE 2026-08-19: MR-F6 and MR-F7 are FIXED** (PR #505). MR-F6 is
+  now gated on an explicit `run_mutants` boolean input, the shape
+  `runtime_modes` already uses, with the schedule arm parenthesised so
+  precedence is stated rather than relied on — fixed there rather than
+  filed because it directly obstructed the lane-rehearsal dispatch that
+  PR adds. MR-F7 is pinned at `cargo-mutants --version 27.1.0` on the
+  new per-PR verdict ratchet. **The mutants job itself remains
+  inoperative** — this entry's substance is unchanged: it will still
+  exceed the ceiling whenever it is deliberately run, until the
+  re-scope's remaining work lands.
+
   **Round state 2026-08-18:** MR-DQ-1 ruled (drop `--check`) and
   MR-DQ-8 ruled C1 (harness-only test scoping) after measurement showed
   the harness suite is *cheaper* than the verifier's (26 s vs 63 s), so
@@ -197,6 +208,27 @@ sustainability is unaffected by the recalibration.
   produced, and it cost four minutes on one file — see
   [`RANDOMX_V2_MUTATION_REGIME.md`](./design/RANDOMX_V2_MUTATION_REGIME.md)
   §6.6. **Target: V3.0 pre-genesis.**
+
+- **`economics-c2a-prime.yml`'s layer gate cannot fail: the verdict is
+  swallowed by `tee` (added 2026-08-18, rule-46 instance).** The step
+  runs `scripts/ci/run_economics_c2a_prime.sh <subcommand> 2>&1 | tee
+  "economics-c2a-layer<N>.log"` under a plain `run:`, which on Linux is
+  `bash -e {0}` — **`-e` without `pipefail`**. A pipeline's exit status
+  is its last command's, so the step reports `tee`'s success and the
+  script's verdict is discarded; a failing layer would go green. The
+  `shell: bash` + `set -euo pipefail` that appears earlier in the same
+  workflow applies only to the "Verify artifact manifest" step, not to
+  this one. Fix per
+  [`46-shell-gate-exits`](../.cursor/rules/46-shell-gate-exits.mdc): run
+  the script unpiped with output redirected to the log, then read the
+  log afterwards — or capture `${PIPESTATUS[0]}` on the very next line.
+  Found while mirroring this workflow's `if: failure()` artifact-upload
+  pattern for the RandomX rotating lane; **not fixed there** because it
+  is a different validation surface (rule 19). Worth noting it is the
+  same shape as
+  [`RANDOMX_V2_MUTATION_REGIME.md`](./design/RANDOMX_V2_MUTATION_REGIME.md)
+  §13 — a gate producing a clean signal from a verdict that never
+  reached it. **Target: V3.0 pre-genesis.**
 
 - **Promote "a gate must assert its own subject exists" to a
   `.cursor/rules` entry (added 2026-08-18).** The T18 mutation-regime

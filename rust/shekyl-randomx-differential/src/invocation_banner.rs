@@ -46,6 +46,8 @@
 
 use std::io::{self, Write};
 
+use crate::rotating_corpus::RotationContext;
+
 use crate::failure_output::FORK_PIN_SHA;
 
 /// Emit the §5.1.18 + §4.6 M4 banner to `writer` (typically
@@ -66,7 +68,11 @@ use crate::failure_output::FORK_PIN_SHA;
 /// regression that breaks the stderr channel is loud per the
 /// §00-mission.mdc "deletion or migration" stance against
 /// graceful-degradation defaults.
-pub fn emit_banner<W: Write>(writer: &mut W, mode: &str) -> io::Result<()> {
+pub fn emit_banner<W: Write>(
+    writer: &mut W,
+    mode: &str,
+    rotation: Option<RotationContext>,
+) -> io::Result<()> {
     writeln!(writer, "Shekyl RandomX v2 Differential Harness")?;
     writeln!(
         writer,
@@ -90,6 +96,20 @@ pub fn emit_banner<W: Write>(writer: &mut W, mode: &str) -> io::Result<()> {
     )?;
     writeln!(writer, "Mode: {mode}")?;
     writeln!(writer, "Fork-pin: {FORK_PIN_SHA}")?;
+    // Rotation binding (§7.9 MR-R1 + MR-R4). Emitted only for a
+    // rotating lane, so a non-rotating run cannot be misread as
+    // having explored an index. The index is what makes a divergence
+    // reproducible offline — the artifact upload carries the observed
+    // outputs, this line carries the inputs — and the provenance is
+    // what stops a green REPLAY being cited as a green SWEEP (T-A11).
+    if let Some(rotation) = rotation {
+        writeln!(writer, "Rotation-index: {}", rotation.index)?;
+        writeln!(writer, "Rotation-provenance: {}", rotation.provenance.tag())?;
+        writeln!(
+            writer,
+            "Rotation-replay: re-derive inputs from the index; never re-run the lane to retest a red"
+        )?;
+    }
     Ok(())
 }
 
@@ -100,9 +120,9 @@ pub fn emit_banner<W: Write>(writer: &mut W, mode: &str) -> io::Result<()> {
 /// emission failure must not block the divergence-detection
 /// pipeline that the banner exists to attest to. Returns `true`
 /// when the banner was emitted, `false` on absorbed I/O error.
-pub fn emit_banner_to_stderr(mode: &str) -> bool {
+pub fn emit_banner_to_stderr(mode: &str, rotation: Option<RotationContext>) -> bool {
     let mut stderr = io::stderr();
-    match emit_banner(&mut stderr, mode) {
+    match emit_banner(&mut stderr, mode, rotation) {
         Ok(()) => true,
         Err(err) => {
             // Best-effort second attempt — if stderr is broken,
@@ -130,9 +150,15 @@ mod tests {
     /// the banner is caught.
     #[test]
     fn t17_invocation_banner_emission() {
-        for mode in ["correctness", "worst-case", "latency", "concurrent"] {
+        for mode in [
+            "correctness",
+            "worst-case",
+            "latency",
+            "concurrent",
+            "rotating",
+        ] {
             let mut buf: Vec<u8> = Vec::new();
-            emit_banner(&mut buf, mode).expect("emit_banner succeeds");
+            emit_banner(&mut buf, mode, None).expect("emit_banner succeeds");
             let banner = String::from_utf8(buf).expect("banner is UTF-8");
 
             // (1) Disposition-source citation.
@@ -186,7 +212,7 @@ mod tests {
     #[test]
     fn banner_line_count_matches_template() {
         let mut buf: Vec<u8> = Vec::new();
-        emit_banner(&mut buf, "correctness").expect("emit");
+        emit_banner(&mut buf, "correctness", None).expect("emit");
         let banner = String::from_utf8(buf).expect("utf8");
         // 8 `writeln!` calls produce 8 newlines; splitting by
         // `\n` yields 9 elements (the trailing empty after the
@@ -198,6 +224,29 @@ mod tests {
             "banner line count drift; expected 8, got {}: {banner}",
             lines.len()
         );
+
+        // A rotating lane adds exactly three lines (index,
+        // provenance, replay instruction). Asserted here rather than
+        // only in the T17 substring checks because this test is the
+        // one that catches a line being dropped SILENTLY — a
+        // substring check on the other two would still pass if the
+        // third vanished.
+        let mut buf: Vec<u8> = Vec::new();
+        emit_banner(
+            &mut buf,
+            "rotating",
+            Some(crate::rotating_corpus::RotationContext::new(
+                47,
+                crate::rotating_corpus::IndexProvenance::ScheduleDerived,
+            )),
+        )
+        .expect("emit");
+        let rotating = String::from_utf8(buf).expect("utf8");
+        assert_eq!(
+            rotating.lines().count(),
+            11,
+            "rotating banner line count drift; expected 11: {rotating}"
+        );
     }
 
     /// The header line is exactly the §4.6 M4 template's
@@ -208,9 +257,61 @@ mod tests {
     #[test]
     fn banner_header_is_fixed() {
         let mut buf: Vec<u8> = Vec::new();
-        emit_banner(&mut buf, "correctness").expect("emit");
+        emit_banner(&mut buf, "correctness", None).expect("emit");
         let banner = String::from_utf8(buf).expect("utf8");
         let first_line = banner.lines().next().expect("at least one line");
         assert_eq!(first_line, "Shekyl RandomX v2 Differential Harness");
+    }
+
+    /// T17 extension (§7.9 MR-R4): a rotating lane's banner carries
+    /// the index and its provenance, and a non-rotating lane's does
+    /// not.
+    ///
+    /// Bites against two distinct failures. First, a rotating run that
+    /// omits the index — the divergence it finds would then be
+    /// irreproducible from the log, which is the whole hazard MR-R1
+    /// exists to close. Second, a *replay* being indistinguishable
+    /// from a *sweep*: without the provenance line an operator-chosen
+    /// index could be cited as routine coverage (§4.5 T-A11).
+    ///
+    /// Does NOT assert that the index is correct for the schedule —
+    /// that is the CI lane's surface, not the banner's.
+    #[test]
+    fn t17_rotation_binding_is_emitted_only_for_rotating_lanes() {
+        use crate::rotating_corpus::{IndexProvenance, RotationContext};
+
+        let mut buf: Vec<u8> = Vec::new();
+        emit_banner(&mut buf, "rotating", None).expect("emit succeeds");
+        let plain = String::from_utf8(buf).expect("utf8");
+        assert!(
+            !plain.contains("Rotation-index:"),
+            "a non-rotating invocation must not claim a rotation: {plain}"
+        );
+
+        for (provenance, tag) in [
+            (IndexProvenance::ScheduleDerived, "schedule-derived"),
+            (IndexProvenance::OperatorSupplied, "operator-supplied"),
+        ] {
+            let mut buf: Vec<u8> = Vec::new();
+            emit_banner(
+                &mut buf,
+                "rotating",
+                Some(RotationContext::new(47, provenance)),
+            )
+            .expect("emit succeeds");
+            let banner = String::from_utf8(buf).expect("utf8");
+            assert!(
+                banner.contains("Rotation-index: 47"),
+                "index missing; a divergence would be irreproducible from the log: {banner}"
+            );
+            assert!(
+                banner.contains(&format!("Rotation-provenance: {tag}")),
+                "provenance missing; a replay could be cited as a sweep: {banner}"
+            );
+            assert!(
+                banner.contains("never re-run the lane"),
+                "replay instruction missing: {banner}"
+            );
+        }
     }
 }

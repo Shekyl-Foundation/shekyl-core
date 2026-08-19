@@ -75,8 +75,10 @@
 use std::env;
 use std::process::ExitCode;
 
+use shekyl_randomx_differential::rotating_corpus::{IndexProvenance, RotationContext};
 use shekyl_randomx_differential::{
     invocation_banner, mode_adversarial_ratio, mode_concurrent, mode_correctness, mode_latency,
+    mode_rotating,
 };
 
 /// R4-D6 default for `--random-corpus-seedhashes` (nightly sizing
@@ -135,6 +137,12 @@ enum Mode {
     /// `concurrent` — multi-worker concurrent correctness with RSS
     /// bound assertion; per-PR cadence (§5.1.13).
     Concurrent,
+    /// `rotating` — the exploring differential lane
+    /// (`RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 2). Derives a fresh
+    /// input set per rotation index and runs rust-vs-C over inputs
+    /// outside the pinned corpus. Weekly/nightly cadence; advances
+    /// the **explored** boundary, never the pinned one.
+    Rotating,
 }
 
 impl Mode {
@@ -146,8 +154,9 @@ impl Mode {
             "adversarial-ratio" => Ok(Self::AdversarialRatio),
             "latency" => Ok(Self::Latency),
             "concurrent" => Ok(Self::Concurrent),
+            "rotating" => Ok(Self::Rotating),
             other => Err(format!(
-                "unknown mode '{other}'; valid modes: correctness, adversarial-ratio, latency, concurrent"
+                "unknown mode '{other}'; valid modes: correctness, adversarial-ratio, latency, concurrent, rotating"
             )),
         }
     }
@@ -159,6 +168,7 @@ impl Mode {
             Self::AdversarialRatio => "adversarial-ratio",
             Self::Latency => "latency",
             Self::Concurrent => "concurrent",
+            Self::Rotating => "rotating",
         }
     }
 }
@@ -199,6 +209,12 @@ struct ModeInvocation {
     /// valid on `adversarial-ratio` only; default is
     /// [`shekyl_randomx_differential::adversarial_canonical_outputs::SAMPLE_BUDGET_PER_RECIPE`]).
     samples_per_recipe: Option<usize>,
+    /// Rotation binding for `--mode=rotating`, from
+    /// `--rotation-index=<N>` (§7.9 MR-R1). `None` on every other
+    /// mode; a rotating run without one is a parse error rather than
+    /// a defaulted index, because an unlabelled rotation produces a
+    /// record that cannot be replayed.
+    rotation: Option<RotationContext>,
 }
 
 /// Top-level parsed command. The C4 skeleton recognized only
@@ -285,6 +301,8 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
     let mut samples: Option<usize> = None;
     let mut workers: Option<usize> = None;
     let mut samples_per_recipe: Option<usize> = None;
+    let mut rotation_index: Option<u64> = None;
+    let mut rotation_provenance: Option<IndexProvenance> = None;
     for arg in args {
         if arg == "--help" || arg == "-h" {
             return Ok(Command::Help);
@@ -301,6 +319,32 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
                 return Err("--debug-cache-divergence specified more than once".to_owned());
             }
             debug_cache_divergence = true;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--rotation-index=") {
+            if rotation_index.is_some() {
+                return Err("--rotation-index specified more than once".to_owned());
+            }
+            rotation_index = Some(
+                value
+                    .parse::<u64>()
+                    .map_err(|_| format!("--rotation-index expects a u64; got '{value}'"))?,
+            );
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--rotation-provenance=") {
+            if rotation_provenance.is_some() {
+                return Err("--rotation-provenance specified more than once".to_owned());
+            }
+            rotation_provenance = Some(match value {
+                "schedule-derived" => IndexProvenance::ScheduleDerived,
+                "operator-supplied" => IndexProvenance::OperatorSupplied,
+                other => {
+                    return Err(format!(
+                        "--rotation-provenance expects schedule-derived or operator-supplied; got '{other}'"
+                    ))
+                }
+            });
             continue;
         }
         if let Some(value) = arg.strip_prefix("--seedhash=") {
@@ -376,16 +420,18 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
     // only. Reject at parse time with a clear "flag X is valid only
     // for --mode=Y" message rather than letting the mode-module
     // ignore it silently.
-    if random_corpus_seedhashes.is_some() && mode != Mode::Correctness {
+    if random_corpus_seedhashes.is_some() && !matches!(mode, Mode::Correctness | Mode::Rotating) {
         return Err(format!(
-            "--random-corpus-seedhashes is valid only with --mode=correctness; \
+            "--random-corpus-seedhashes is valid only with --mode=correctness or --mode=rotating; \
              got --mode={}",
             mode.as_str()
         ));
     }
-    if random_corpus_data_per_seedhash.is_some() && mode != Mode::Correctness {
+    if random_corpus_data_per_seedhash.is_some()
+        && !matches!(mode, Mode::Correctness | Mode::Rotating)
+    {
         return Err(format!(
-            "--random-corpus-data-per-seedhash is valid only with --mode=correctness; \
+            "--random-corpus-data-per-seedhash is valid only with --mode=correctness or --mode=rotating; \
              got --mode={}",
             mode.as_str()
         ));
@@ -408,6 +454,27 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             mode.as_str()
         ));
     }
+    if (rotation_index.is_some() || rotation_provenance.is_some()) && mode != Mode::Rotating {
+        return Err(format!(
+            "--rotation-index / --rotation-provenance are valid only with --mode=rotating; got --mode={}",
+            mode.as_str()
+        ));
+    }
+    // A rotating run MUST name its index and provenance. Defaulting
+    // either would produce a run whose record cannot be replayed
+    // (§7.9 MR-R1) or whose replay could be cited as a sweep (MR-R4) —
+    // both are silent, so this fails at parse time instead.
+    let rotation = if mode == Mode::Rotating {
+        let index = rotation_index
+            .ok_or_else(|| "--mode=rotating requires --rotation-index=<N>".to_owned())?;
+        let provenance = rotation_provenance.ok_or_else(|| {
+            "--mode=rotating requires --rotation-provenance=<schedule-derived|operator-supplied>"
+                .to_owned()
+        })?;
+        Some(RotationContext::new(index, provenance))
+    } else {
+        None
+    };
     Ok(Command::Mode(ModeInvocation {
         mode,
         debug_cache_divergence_seedhash,
@@ -416,6 +483,7 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
         samples,
         workers,
         samples_per_recipe,
+        rotation,
     }))
 }
 
@@ -499,7 +567,7 @@ fn dispatch(invocation: &ModeInvocation) -> ExitCode {
     // emit failed:`) per `emit_banner_to_stderr`'s contract;
     // the divergence-detection pipeline must not be blocked by
     // a broken stderr channel.
-    invocation_banner::emit_banner_to_stderr(invocation.mode.as_str());
+    invocation_banner::emit_banner_to_stderr(invocation.mode.as_str(), invocation.rotation);
 
     match invocation.mode {
         Mode::Correctness => {
@@ -550,6 +618,46 @@ fn dispatch(invocation: &ModeInvocation) -> ExitCode {
                 }
                 Err(err) => {
                     eprintln!("error: {err}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Mode::Rotating => {
+            // Unwrap is safe: parse rejects a rotating invocation
+            // without a rotation binding (see the parse-time check).
+            let rotation = invocation
+                .rotation
+                .expect("parse guarantees a rotation binding on --mode=rotating");
+            // Sizing reuses the correctness-mode corpus flags rather
+            // than minting a parallel pair: the knobs mean the same
+            // thing (how many seedhashes, how many data values each),
+            // and a second spelling would be one more surface to keep
+            // in sync.
+            match mode_rotating::run(
+                rotation,
+                invocation
+                    .random_corpus_seedhashes
+                    .unwrap_or(mode_rotating::DEFAULT_ROTATION_SEEDHASHES),
+                invocation
+                    .random_corpus_data_per_seedhash
+                    .unwrap_or(mode_rotating::DEFAULT_ROTATION_DATA_PER_SEEDHASH),
+            ) {
+                Ok(report) => {
+                    println!("{report}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    // Same halt-and-escalate posture as the concurrent
+                    // and native-arm lanes, and it needs saying twice
+                    // here: under a rotating seed, re-running on a
+                    // later index WOULD come back green. Replay the
+                    // recorded (seedhash, data) pair instead.
+                    eprintln!("error: {err}");
+                    eprintln!(
+                        "error: rotating-lane divergence at index {} — halt and escalate; \
+                         replay the recorded pair, do NOT re-run the lane",
+                        rotation.index
+                    );
                     ExitCode::FAILURE
                 }
             }
