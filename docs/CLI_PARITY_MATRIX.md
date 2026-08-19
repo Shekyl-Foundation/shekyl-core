@@ -1,9 +1,14 @@
 # shekyl-cli / simplewallet Parity Matrix
 
-simplewallet registers **81** commands via `m_cmd_binder.set_handler`
-(verified by `grep -c m_cmd_binder.set_handler src/simplewallet/simplewallet.cpp` on the current tree).
+simplewallet registered **81** commands via `m_cmd_binder.set_handler`.
 
-Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-scope list has a tested equivalent in shekyl-cli, verified by this matrix.**
+**This matrix is a capability ledger, not a gate.** It was written as the
+Phase 3 deletion gate, and that gate is discharged: `src/simplewallet/` was
+deleted at `a36224bde`, so its verification recipe (`grep -c
+m_cmd_binder.set_handler src/simplewallet/simplewallet.cpp`) no longer
+resolves and the count above is historical. What the matrix tracks now is
+which capabilities `shekyl-cli` carries — so a **Planned** row is an open
+capability, never a blocker on deleting C++ that no longer exists.
 
 ## Legend
 
@@ -39,7 +44,7 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 > refuses to print the seed to a non-TTY (pipe/redirect/log) rather than leak
 > it — so the `seed`-safety row's guarantee now holds on every path.
 
-## Parity matrix (27 covered, 5 planned, 49 out of scope)
+## Parity matrix (27 covered, 3 planned, 2 rejected, 49 out of scope)
 
 | # | simplewallet command | shekyl-cli equivalent | Status | Notes |
 |---|---|---|---|---|
@@ -69,8 +74,8 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 23 | `check_reserve_proof` | `check_reserve_proof` | Covered | Wallet-less verification with daemon spent-status reporting (WI-RPC-3) |
 | 24 | `sign` | `sign` | Covered | Native `sign_message` (PR-SM-2): the ratified nested hybrid (SLH-DSA-192s inner / spend-Schnorr outer, [`WALLET_MESSAGE_SIGNING.md`](design/WALLET_MESSAGE_SIGNING.md) §7). Multi-second by design (~4 s floor); the CLI prints the expectation before the call |
 | 25 | `verify` | `verify` | Covered | Native `verify_message` (PR-SM-2), **session-less** — works with no wallet open (SM-R-6). Signature pastes are kept out of readline history; `@path` reads a file so a mail-wrapped 21.7 KB line does not have to survive the REPL tokenizer. Live end to end since the fork-(ii) address layout landed (2026-08-15): every address carries the 48-byte signing anchor |
-| 26 | `sign_transfer` | RESERVED | Planned | Gated on the Phase 2d offline cold-signing workflow (with `describe_transfer`, `submit_transfer`, `transfer --do-not-relay`) |
-| 27 | `submit_transfer` | RESERVED | Planned | As row 26 |
+| 26 | `sign_transfer` | RESERVED | Rejected (V3.0) | A4 (2026-08-06) descoped air-gapped cold bundles from V3.0: V3.0 ships cold *storage*, not cold *signing*. Not a pending gate — `export_unsigned`/`submit_signed` are REJECTED in [`wallet_rpc.yaml`](api/wallet_rpc.yaml). **Rule-21 reopen:** a concrete offline-signing workflow, landed as `UnsignedTxBundle`/`SignedTxBundle`, never as a wallet2-era binary format. See [`FOLLOWUPS.md`](FOLLOWUPS.md) A4 |
+| 27 | `submit_transfer` | RESERVED | Rejected (V3.0) | As row 26 |
 | 28 | `password` | `password` | Covered | Native `change_password` flow, old-first |
 | 29 | `rescan_bc` | `rescan` | Covered | Native `rescan_blockchain` via `Engine::start_rescan` (Phase 4c). `hard` is accepted for wallet2 muscle memory and reported as equivalent — Shekyl has one rescan, which already rebuilds every scan-derived fact |
 | 30 | `refresh` | `refresh` | Covered | Native `refresh` |
@@ -88,15 +93,15 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 42 | `apropos` | N/A | Out of scope | Help search, low value |
 | 43 | `donate` | N/A | Out of scope | Monero donation address |
 | 44 | `encrypted_seed` | N/A | Out of scope | Encrypted seed export not needed with display.rs safety |
-| 45 | `export_outputs` | N/A | Out of scope | Output export for multisig, not supported |
+| 45 | `export_outputs` | N/A | Out of scope | Removed by construction: the cold-coordination flow it served is descoped by A4, and FCMP++ membership proofs need no per-wallet output export |
 | 46 | `export_transfers` | N/A | Out of scope | CSV export, low priority |
-| 47 | `freeze` | N/A | Out of scope | Output freezing, Monero-specific feature |
-| 48 | `frozen` | N/A | Out of scope | List frozen outputs |
+| 47 | `freeze` | N/A | Out of scope | Removed by construction (rule 60): freezing exists to keep a poisoned decoy out of a ring. FCMP++ has no decoy selection, so the hazard has no referent |
+| 48 | `frozen` | N/A | Out of scope | As row 47 — nothing can be frozen |
 | 49 | `get_description` | N/A | Out of scope | Wallet description, trivial metadata |
 | 50 | `get_tx_note` | N/A | Planned | RPC **landed** (PR-SA-4 / SJ-DQ-7): `get_tx_note` in [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml). Only the CLI command is outstanding — unblocked, not gated |
 | 51 | `hw_key_images_sync` | N/A | Out of scope | Hardware wallet, not supported |
 | 52 | `hw_reconnect` | N/A | Out of scope | Hardware wallet, not supported |
-| 53 | `import_outputs` | N/A | Out of scope | Output import for multisig, not supported |
+| 53 | `import_outputs` | N/A | Out of scope | As row 45 |
 | 54 | `integrated_address` | N/A | Out of scope | Shekyl uses different addressing |
 | 55 | `lock` | N/A | Out of scope | Wallet locking, low priority |
 | 56 | `net_stats` | N/A | Out of scope | Network stats, daemon concern |
@@ -122,6 +127,6 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 76 | `sweep_below` | N/A | Out of scope | Dust sweeping, niche |
 | 77 | `sweep_single` | N/A | Out of scope | Single output sweep, niche |
 | 78 | `sweep_unmixable` | N/A | Out of scope | Monero mixin rules, not applicable |
-| 79 | `thaw` | N/A | Out of scope | Unfreeze outputs, not supported |
+| 79 | `thaw` | N/A | Out of scope | As row 47 |
 | 80 | `unspent_outputs` | N/A | Out of scope | UTXO listing, low priority |
 | 81 | `welcome` | N/A | Out of scope | Interactive tutorial, replaced by help |

@@ -56,9 +56,6 @@ shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-units = { path = "../shekyl-units" }
 shekyl-proofs = { path = "../shekyl-proofs" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
-shekyl-engine-file = { path = "../shekyl-engine-file" }
-shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
-shekyl-engine-state = { path = "../shekyl-engine-state" }
 # Single-Rust-image contract: every binary links exactly one Rust archive,
 # and that archive must carry the `shekyl_log_*` exports plus the one
 # `tracing-core` GLOBAL_DISPATCH that this crate graph's `tracing::*`

@@ -346,14 +346,20 @@ jobs:
         run: bash scripts/lint_cpp_clamp_ban.sh
       - name: "CI grep gate: no shekyl_y in C++ source"
         run: |
-          if grep -rn 'shekyl_y' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then
+          # src/wallet/ was deleted at Phase 5. Left in the path list it would
+          # make grep exit 2 (error) even on a match, which `if` reads as
+          # "not found" — the gate would pass while blind.
+          if grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'; then
             echo "FATAL: 'shekyl_y' salt still present in C++ source"
             exit 1
           fi
           echo "PASS: no shekyl_y in C++ source"
       - name: "CI grep gate: no derivation_to_y_scalar in C++ source"
         run: |
-          if grep -rn 'derivation_to_y_scalar' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then
+          # src/wallet/ was deleted at Phase 5. Left in the path list it would
+          # make grep exit 2 (error) even on a match, which `if` reads as
+          # "not found" — the gate would pass while blind.
+          if grep -rn 'derivation_to_y_scalar' src/crypto/ --include='*.cpp' --include='*.h'; then
             echo "FATAL: derivation_to_y_scalar still present in C++ source"
             exit 1
           fi

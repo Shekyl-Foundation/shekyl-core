@@ -207,7 +207,7 @@ This claim was surfaced during PR #46 Copilot review as needing
 verification, because [`src/fcmp/bulletproofs_plus.cc`](../src/fcmp/bulletproofs_plus.cc)
 exists as a ~1000-line C++ implementation with active callers:
 
-- [`src/wallet/wallet2.cpp:10036`](../src/wallet/wallet2.cpp) calls
+- `src/wallet/wallet2.cpp:10036` calls
   `rct::bulletproof_plus_PROVE`.
 - ~~`src/device_trezor/trezor/protocol.cpp:700` called
   `bulletproof_plus_PROVE` and (line 720)

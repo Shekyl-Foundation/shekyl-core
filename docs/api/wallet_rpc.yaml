@@ -174,7 +174,13 @@
 #   -29400..-29499           transfers / history queries
 #   -29500..-29599           staking (RESERVED range)
 #   -29600..-29699           payment requests (RESERVED range)
-#   -29700..-29799           air-gapped bundles (RESERVED range)
+#   -29700..-29799           air-gapped bundles (RESERVED, UNUSED --
+#                            not pending work. A4 (2026-08-06) descoped
+#                            cold bundles from V3.0; the range is held,
+#                            not withdrawn, so a reopening under the
+#                            rule-21 clause cannot collide with a reused
+#                            code, and so no client can pin a meaning we
+#                            later reassign)
 #   -29800..-29899           sign / verify message (PR-SM-2:
 #                            -29800..-29802 allocated; -29803
 #                            ADDRESS_UNBOUND was allocated for the

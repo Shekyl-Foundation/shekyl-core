@@ -3419,7 +3419,7 @@ mirror image — and sets the precedent this round follows (below). The rest hol
 | The 39 s constant | `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE` (`cryptonote_config.h`) |
 | The F-1 ghost, in prose | the derivation comment, [tx_pool.cpp:66–86](../../src/cryptonote_core/tx_pool.cpp#L66) — its own formula over `k=5, ep=0.10, hop=175 ms` gives **16.61 s**; 39 s reproduces only under `log10` for `ln` |
 | The F-2 draw | `crypto::random_poisson_seconds embargo_duration{…}` ([tx_pool.cpp:1031](../../src/cryptonote_core/tx_pool.cpp#L1031)), applied at [:1053](../../src/cryptonote_core/tx_pool.cpp#L1053) |
-| The wallet consumer | `tx_propagation_timeout = EMBARGO_AVERAGE * 3/2` ([wallet2.cpp](../../src/wallet/wallet2.cpp)) — second consumer of the constant; on expiry marks the transfer failed and un-spends key images |
+| The wallet consumer | `tx_propagation_timeout = EMBARGO_AVERAGE * 3/2` (the deleted `wallet2.cpp`) — second consumer of the constant; on expiry marks the transfer failed and un-spends key images |
 | The other timer | `MIN_RELAY_TIME = 300` ([tx_pool.cpp:94](../../src/cryptonote_core/tx_pool.cpp#L94)) |
 | The Rust primitive | `EmbargoTimer::{adopted, inherited, geometric_with_tick, …}` (`schedule.rs`) — already landed, unmoved |
 
@@ -3487,7 +3487,7 @@ process-wide `OnceLock` (the tables are immutable once built) and the same
 | C++ call site | FFI |
 | --- | --- |
 | `embargo_duration()` per stem tx ([tx_pool.cpp](../../src/cryptonote_core/tx_pool.cpp)) | `shekyl_dandelionpp_embargo_draw_seconds(zone: u8) -> u64` |
-| `tx_propagation_timeout` in `wallet2` ([wallet2.cpp](../../src/wallet/wallet2.cpp)) | `shekyl_dandelionpp_propagation_timeout_seconds() -> u64` |
+| `tx_propagation_timeout` in `wallet2` (the deleted `wallet2.cpp`) | `shekyl_dandelionpp_propagation_timeout_seconds() -> u64` |
 
 `crypto::random_poisson_seconds embargo_duration{…}` and the
 `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE` constant are then **deleted**. The

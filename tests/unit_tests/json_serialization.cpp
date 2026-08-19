@@ -386,7 +386,8 @@ namespace test
         EXPECT_TRUE(result.proofs_json.ptr != nullptr && result.proofs_json.len > 0)
             << "DEBUG: proofs_json is empty on success";
 
-        // --- 9. Parse SignedProofs JSON (mirrors wallet2.cpp pattern) ---
+        // --- 9. Parse SignedProofs JSON (the pattern wallet2.cpp used, before
+//        it was deleted at Phase 5; the shape is the contract here) ---
         std::string proofs_str(
             reinterpret_cast<const char*>(result.proofs_json.ptr),
             result.proofs_json.len);
@@ -465,7 +466,7 @@ namespace test
         }
 
         // BP+ range proof: deserialize Rust blob -> C++ BulletproofPlus
-        // (mirrors wallet2.cpp deserialization pattern exactly)
+        // (the deserialization pattern wallet2.cpp used, before Phase 5)
         {
             std::string bp_bin;
             epee::string_tools::parse_hexstr_to_binbuff(

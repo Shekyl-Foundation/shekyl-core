@@ -32,7 +32,8 @@
 // for flags removed in V3.1: the daemonizer flags (--detach, --pidfile, the
 // Windows --*-service set), shekyld's inbound RPC TLS/auth flags (--rpc-login,
 // --rpc-ssl*), and the transitional --no-rust-rpc opt-out. Call sites are the
-// two main() functions in src/daemon/main.cpp and src/wallet/wallet_args.cpp;
+// the daemon main() in src/daemon/main.cpp (the second site, the C++
+// wallet's src/wallet/wallet_args.cpp, was deleted at Phase 5);
 // both disappear at V3.2 (shekyld keeps its caller, shekyl-wallet-rpc is
 // replaced by the Rust binary).
 

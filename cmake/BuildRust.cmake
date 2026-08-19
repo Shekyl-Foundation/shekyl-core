@@ -379,8 +379,8 @@ endif()
 # listed as a build output — did not exist.
 #
 # The binaries are built and staged here, not in `src/wallet/CMakeLists.txt`,
-# because that file is deleted wholesale with wallet2: install rules parked
-# there would have to be re-cut by the very commit this one exists to unblock.
+# because that file was deleted wholesale with wallet2 at Phase 5: install
+# rules parked there would have had to be re-cut by that commit.
 #
 # Staging into `${CMAKE_BINARY_DIR}/bin` is load-bearing beyond developer
 # convenience: contrib/gitian/gitian-*.yml does not run `make install`, it
