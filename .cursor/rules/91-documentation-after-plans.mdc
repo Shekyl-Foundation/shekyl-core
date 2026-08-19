@@ -39,6 +39,36 @@ the changes.
   blocker had been removed in the body still read *"provisional pin awaiting
   the W₂ rig"* in its title.
 
+- **A constant's doc is part of the edit, not adjacent to it.** When a constant's
+  *value* changes, its own doc comment changes in the same edit — not in a later
+  sweep. This is a narrower and more dangerous class than a stale comment
+  elsewhere in the tree, because **proximity implies authority**: a reader trusts
+  a comment attached to the thing it describes far more than one three files
+  away, so the two disagreeing *inside one declaration* is the worst possible
+  place for the disagreement to sit, and nothing checks the pair. Landed
+  2026-08-19: `WITNESS_PREFIX_LEN` moved `40 → 8` while its own doc still read
+  *"`r(32) ‖ count_le(8)`"* — a reader trusting the comment over the value would
+  conclude the wire still carried a field that had been deleted.
+
+- **The sweep covers claims about the present, never the record of what was.**
+  A released `CHANGELOG` entry, a shipped release note, a dated audit record, or
+  a "superseded text, retained" block describing a value **as it shipped** is
+  *correct* — it is history, not staleness. A mechanical sweep that "fixes" every
+  match corrupts the record **while reporting success**, which is worse than the
+  staleness it set out to remove: the file now lies about what shipped, and
+  nothing flags it. Before editing a match, ask whether the text asserts
+  something *is* true or records something *was* true. Landed 2026-08-19: a
+  transport-cap sweep matched a released `CHANGELOG` entry stating the old cap;
+  the four live comments were corrected and that entry deliberately was not.
+
+**Why this discipline exists at all, stated plainly:** the tree's **executable**
+surface is checked continuously — by builds, tests, const-asserts, CI gates. Its
+**descriptive** surface is checked *never*. One round in August 2026 turned up
+**eight** stale numerals, and not one of them sat where any gate reads. A wrong
+constant fails a build; a wrong comment *about* a constant becomes the next
+person's starting assumption. Sweeping is the only thing standing in for a gate
+there, which is why it keeps paying.
+
 ## Example
 
 When a Plan has N tasks, the (N+1)th task is:
