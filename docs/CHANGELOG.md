@@ -51,6 +51,18 @@
 
 ### Changed
 
+- **The serve-credit response-format round is open (`RF-D1…RF-Dn`).** Unblocked
+  by the carrier round's ruling, and unusual in shape: **every input is pinned
+  except one**, so it is mostly transcription of settled rulings into bytes. The
+  exception is `RF-D3` — whether `r` survives. The nonce is re-pinned as
+  `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` with `r` deleted on the ground
+  that `block_hash(h−1)` is ungrindable by block `h`'s producer; the falsifier is
+  that block `h`'s producer may also have produced `h−1`. The `q²` pool-grinding
+  precedent says the disposition is likely the same, and it is tested anyway,
+  because a field doing no work on a genesis-frozen surface can never be removed.
+  `CR-F2`'s `prefix_hash`/tx-id change is carried as a first-class input rather
+  than a cross-reference to the round that discovered it.
+
 - **`shekyl-wallet-rpc` now names the Rust binary, everywhere.** The C++
   `wallet_rpc_server` keeps building under its own target name through
   the transition but is no longer installed and no longer claims that
