@@ -2160,6 +2160,24 @@ sustainability is unaffected by the recalibration.
   `shekyl-wallet-rpc` compile for `x86_64-pc-windows-*`; the Windows CI job
   builds and smoke-tests them; `BuildRust.cmake` drops the platform gate.
 
+  **UPDATE 2026-08-19 — the design round is RULED; the port is not built.**
+  [`WINDOWS_WALLET_SUPPORT.md`](design/WINDOWS_WALLET_SUPPORT.md) closes the
+  first criterion: Q-1 ruled to a **named pipe with an owner-only security
+  descriptor**, with the pipe name per-user SID-derived (load-bearing, because
+  the pipe namespace has no analogue of the 0700 parent directory that carries
+  access control on Unix), a client-side peer check requiring **same owner SID
+  *and* at least Medium integrity** (a Low-integrity process running as the
+  same user passes a SID-only check), cross-user connection refused with **no
+  opt-in flag**, the logon SID on the DACL for `IPC$`/terminal-session
+  separation, and an explicit rejection of ever running as a service or
+  SYSTEM. Scope correction recorded in that document's §3: the external
+  `--rpc-url uds://` form is a real out-of-process transport that does **not**
+  port, so "external mode already works on Windows" was true only of the
+  `http://` form. Slices WP-W1…WP-W5 are provisional pending the §7 scouting
+  CI run. **The remaining three criteria are unchanged and unmet** — nothing
+  compiles for Windows yet, and Windows release archives still carry the
+  daemon but no wallet.
+
 - **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
   (decided 2026-08-06, executed in the Phase-5 wallet2 cutover;
   `src/device_trezor/`, `tests/trezor/`, `cmake/CheckTrezor.cmake` and

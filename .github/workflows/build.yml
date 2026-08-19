@@ -423,7 +423,7 @@ jobs:
       # docs/design/WINDOWS_WALLET_SUPPORT.md. The Windows wallet gap is
       # neither caused nor widened here: the `wallet` target built a binary
       # that has not shipped since the C1/C2 install cutover (#500). Slice
-      # W-4 of that design round owns renaming this job back.
+      # WP-W5 of that design round owns renaming this job back.
       - name: build daemon
         shell: pwsh
         run: |
