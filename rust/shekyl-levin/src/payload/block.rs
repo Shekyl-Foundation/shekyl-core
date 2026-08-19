@@ -15,14 +15,14 @@ use super::PortableMap;
 /// `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES`
 /// (`src/cryptonote_config.h`) / `shekyl-archival-retention::MAX_ATTESTATION_WITNESS_BYTES`.
 ///
-/// Formula: `r(32) + count(8) + 256 * 3385` (`PQC_HYBRID_SINGLE_SIG_LEN` /
+/// Formula: `count(8) + 256 * 3385` (`PQC_HYBRID_SINGLE_SIG_LEN` /
 /// `HybridSignature::CANONICAL_LEN`). This crate does **not** take
 /// `shekyl-archival-retention` as a production dependency (that stack is
 /// heavier than a framing crate). The numeric identity is pinned below and
 /// in `tests/notify_kats.rs`.
-pub const ATTESTATION_WITNESS_MAX_BYTES: usize = 32 + 8 + 256 * 3385;
+pub const ATTESTATION_WITNESS_MAX_BYTES: usize = 8 + 256 * 3385;
 
-const _: () = assert!(ATTESTATION_WITNESS_MAX_BYTES == 866_600);
+const _: () = assert!(ATTESTATION_WITNESS_MAX_BYTES == 866_568);
 
 /// `cryptonote::tx_blob_entry`.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1868,9 +1868,15 @@ struct shekyl_archival_pid_pubkey {
 /// headers is the RAW 49-byte-record tx_extra blob — Rust splits and parses it;
 /// headers_readable == 0 means C++ could not parse the coinbase tx_extra at all
 /// (-> ERR_HEADERS_UNREADABLE, never misread as the committed empty set).
+/// prev_block_hash is block_hash(h-1) -- the nonce's anchor term, replacing the deleted `r`.
+/// It must be the VALIDATED predecessor, not prev_id as supplied: an unvalidated header field is
+/// producer-chosen, which is the property `r` was deleted for having. All-zeros is refused
+/// (-> ERR_PREVHASH_UNPOPULATED); there is deliberately NO _readable flag, because a verifier
+/// holding a block has parsed its header, so such an arm could never legitimately fire.
 struct shekyl_archival_attestation_verify_ctx {
     uint8_t attestation_root[32];
     uint8_t cb_out_key[32];
+    uint8_t prev_block_hash[32];
     uint8_t cb_out_key_readable;
     uint8_t headers_readable;
     const uint8_t* headers_ptr;
@@ -1891,6 +1897,7 @@ struct shekyl_archival_attestation_verify_ctx {
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH 9
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY   10
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE 11
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED 12
 
 /// Step 1: name the distinct pass p_ids in a block's attestation headers, so C++ knows which
 /// archival-bond pubkeys to read before it can build the ctx pairs above. Parses the same raw
