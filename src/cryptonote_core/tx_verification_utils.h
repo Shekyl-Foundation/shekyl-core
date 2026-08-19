@@ -81,7 +81,7 @@ struct block_connect_supplement
 {
     pool_supplement pool;
     // Per-block credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2).
-    // Opaque Rust-canonical bytes (r ‖ count ‖ pass signatures). Empty until the
+    // Opaque Rust-canonical bytes (count ‖ pass signatures). Empty until the
     // transport populates it; empty means "no witness supplied" and stores no
     // side-table row on main-chain add.
     blobdata attestation_witness;

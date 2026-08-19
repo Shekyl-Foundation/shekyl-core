@@ -114,7 +114,7 @@ pub extern "C" fn shekyl_archival_attestation_header_bytes() -> u64 {
 }
 
 /// The EXACT maximum canonical byte length of a block's attestation witness
-/// (`r ‖ count ‖ MAX records × HybridSignature`).
+/// (`count ‖ MAX records × HybridSignature`).
 ///
 /// `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` is defined as this same
 /// quantity and C++ asserts equality. Below it, C++ would reject on the wire a

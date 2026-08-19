@@ -62,7 +62,7 @@ pub const ATTESTATION_HEADER_LEN: usize = 32 + 8 + 8 + 1;
 /// unbounded reservation before the length is validated.
 pub const MAX_ATTESTATION_RECORDS: usize = 256;
 
-/// Fixed framing prefix of a canonical witness: `r(32) ‖ count_le(8)`.
+/// Fixed framing prefix of a canonical witness: `count_le(8)`.
 pub const WITNESS_PREFIX_LEN: usize = 8;
 
 /// The EXACT maximum canonical byte length of a [`BlockAttestationWitness`]:
@@ -700,7 +700,7 @@ mod tests {
         );
 
         // Codec-defined-empty: a zero-signature witness is still a valid
-        // `r ‖ count=0` encoding. That is distinct from the C++ side-table
+        // `count=0` encoding. That is distinct from the C++ side-table
         // convention, which skips writing a row for empty/absent witnesses
         // (interim / all-miss blocks store nothing; absent key ≡ no witness).
         let empty = BlockAttestationWitness {
