@@ -17,24 +17,30 @@ change after genesis, which is the only reason the round exists as a round.
 Disposition IDs **`RF-D1` … `RF-Dn`**, registered at birth per
 [`94-tracking-index`](../../.cursor/rules/94-tracking-index.mdc).
 
-**Every input below is pinned except one.** That is unusual and it is the point:
-this round is mostly *transcription of settled rulings into bytes*, with a single
-genuine test in it — whether `r` survives. Rounds where everything is open
-produce prose; this one should produce a wire.
+**Every input below is pinned.** `RF-D3` was carried as the round's one open test
+— *whether `r` survives* — and it **dissolved on grounding** (§2): the ruling had
+already settled it on 2026-08-10, by an argument my restatement had replaced with
+a weaker one. So the round is **pure transcription of settled rulings into
+bytes**, which is a cleaner statement than the one it replaces. Rounds where
+everything is open produce prose; this one should produce a wire, and now nothing
+stands between it and doing so.
 
 ---
 
 ## 1. The inputs, and where each was settled
 
-Verified at source on 2026-08-18 against `dev@69e76a7be`. Nothing here is
-transcribed from conversation.
+Verified at source on 2026-08-18 against `dev@69e76a7be` — **with one exception,
+corrected 2026-08-19 and recorded rather than quietly fixed.** Input 4's
+*reasoning* was transcribed from the scoping conversation, not read from the
+ruling, and it was wrong in a way that produced a test of the wrong claim. See
+§2.
 
 | # | Input | Status | Settled at |
 | --- | --- | --- | --- |
 | 1 | **Leaf chunk is pruned-side by construction** | RULED | `ARCHIVAL_PASS_RECORD_CARRIER.md` CR-D2 |
 | 2 | **Reserved padding field; no padding scheme** | RULED 2026-08-08 (TJ-H) | `ARCHIVAL_CHALLENGE_MECHANISM.md:1065` |
 | 3 | **Nonce anchor = `cb_out_key` of block `h`** | RULED 2026-08-10 (fork 2 closed) | `ARCHIVAL_CHALLENGE_MECHANISM.md:40-43` |
-| 4 | **`r` deleted**; nonce `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` | re-pinned — **the round's one test** | `ARCHIVAL_CHALLENGE_MECHANISM.md:48` |
+| 4 | **`r` deleted**; nonce `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` | **RULED 2026-08-10** — `RF-D3` resolved, see §2 | `ARCHIVAL_CHALLENGE_MECHANISM.md:48`, `:820-850` |
 | 5 | **`CR-F2`'s `prefix_hash` / tx-id change** | priced, **lands here** | `ARCHIVAL_PASS_RECORD_CARRIER.md` CR-F2 |
 
 ### 1.1 The carrier's answer, which this format must express
@@ -80,38 +86,86 @@ shrink, or become a distinct kept-leg field with the container retired?
 
 ---
 
-## 2. `RF-D3` — the one genuine test: does `r` survive?
+## 2. `RF-D3` — RESOLVED 2026-08-19: `r` deletes, and the test was of the wrong claim
 
-The nonce is re-pinned as `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` with `r`
-**deleted**. The reasoning: under derived assignment `block_hash(h−1)` is already
-unpredictable to `P` and ungrindable by block `h`'s producer, so `r` may do no
-work at all — and a field that does no work on a **genesis-frozen** surface is a
-field that can never be removed.
+**The disposition is unchanged — `r` goes — but the round did not settle it. The
+2026-08-10 ruling did, and this round had restated its argument incorrectly.**
 
-**This must be tested, not assumed.** The claim to falsify is precisely
-**"ungrindable by block `h`'s producer"**, and the falsifier is stated:
+### 2.1 What the ruling actually argues (`ARCHIVAL_CHALLENGE_MECHANISM.md:820-850`)
 
-> Block `h`'s producer **may also have produced `h−1`**.
+Not unpredictability-by-grinding. **Shared chooser, plus an existence bound.**
+`attestation_wire.rs:191-195` assigns the roles at source: `cb_out_key` is *"the
+copy-freeride bind; kept"*, `r` is *"the producer's revealed randomness"* — whose
+only job is nonce unpredictability, stopping `P` pre-signing a countersignature
+it hands out without ever being contacted.
 
-If it did, it chose `block_hash(h−1)`, and the anchor it is being bound to is
-partly of its own making.
+> `r` **cannot do that job**: both `r` and `cb_out_key` are chosen by the same
+> party, so a producer willing to leak one is equally willing to leak the other —
+> *"a second producer-chosen random term does not strengthen a property that fails
+> exactly when the producer defects."*
 
-**Precedent, cited so the disposition is not re-litigated as novel.** This is the
-same `q²` case already ruled on pool grinding — an edge gated behind a
-**discarded-block cost**, dismissed on the merits:
-[`ARCHIVAL_CHALLENGE_MECHANISM.md:958`](ARCHIVAL_CHALLENGE_MECHANISM.md#L958)
-(*"countersigning-as-P harmless (the priced q² case)"*) with the success
-arithmetic at
-[`:222`](ARCHIVAL_CHALLENGE_MECHANISM.md#L222) — `3q²(1−q)+q³` at hashrate share
-`q`, i.e. `0.10` at `q = 0.2` against `0.20` unpriced. The disposition is
-**likely the same**. It is still
-tested, because "likely the same" and "the same" differ, and the cost of being
-wrong is a field that cannot be added back.
+And the substitution is justified by **existence**, not by cost:
 
-**What a pass and a fail each mean.** Pass ⇒ `r` is deleted and a field
-disappears from a genesis-frozen surface, which is worth the check on its own.
-Fail ⇒ `r` is retained, and the round must say what it is anchored to — the
-falsifier does not by itself supply a replacement.
+> `block_hash(h−1)` *"cannot exist before block h−1 does, **regardless of any
+> party's behaviour**"* — collusive pre-signing narrows from unbounded lead time
+> to one block.
+
+The ruling states its own residual plainly: **fully-collusive passes remain
+possible** (`P` can countersign whatever a colluding producer shows it at block
+time) and stay priced by the 2-of-3 quadratic and the outer window. The property
+bought is *pre-signing resistance against a colluding producer — which `r` never
+provided.*
+
+### 2.2 The error this round made, recorded because the class recurs
+
+This document carried input 4 as *"`block_hash(h−1)` is ungrindable by block
+`h`'s producer, so `r` may do no work"*, with the falsifier *"block `h`'s producer
+may also have produced `h−1`"*.
+
+**"Not choosable" became "ungrindable", and a test was written for the paraphrase
+rather than the ruling.** The ruling never claims ungrindability; it claims a
+shared chooser and an existence bound. The falsifier was then aimed at a property
+nobody had asserted — and it is *pre-answered* by the ruling's own honest-strength
+sentence: a producer of both blocks gets exactly **one block of lead**, which is
+the bound the ruling concedes, not a break of it.
+
+This is the third dissolve-on-grounding in this arc — the W₂ floor check, the
+Pi-4 device-requirement question, and now `RF-D3` — and the class is identical
+each time: **a residual carried into a new round without re-grounding its
+reasoning.** The premise travels, the argument behind it does not, and the new
+round tests a claim its source never made.
+
+### 2.3 Additionally observed in this round (not part of the 2026-08-10 ruling)
+
+A sharpening, attributed so it is not later read back as the ruling's own:
+
+**Grinding the nonce has no objective.** Grinding requires a target — a value the
+ground quantity is compared against. The nonce is a *binding input* to a
+countersignature, not a threshold: no nonce value is better for an adversary than
+any other, and changing it does not unbind `P`, `shard_id`, `E`, or `cb_out_key`.
+Whatever grind-value exists in choosing `block_hash(h−1)` lives on the
+**assignment** side — who gets challenged — which is separately priced at
+discarded-block cost (`challenge_assignment.rs`: *"Grinding the assignment costs
+discarding a valid block"*).
+
+So the falsifier fails for a cleaner reason than the `q²` cost argument would
+give: the `q²` precedent prices the *cost* of producing two consecutive blocks,
+and here the *benefit* is zero, which makes the cost moot.
+
+### 2.4 The implementation surface, named but not touched
+
+`r` deletes at the format **cut**, not in this document. The surfaces:
+
+| Surface | Location |
+| --- | --- |
+| Nonce function signature (`r` is its first parameter) | `attestation_wire.rs:199` |
+| Per-block `r` field | `attestation_wire.rs:294` |
+| Wire side-table field | `shekyl-wire/src/transaction.rs:932` (`pub r: Vec<[u8; 32]>`) |
+| Pinned nonce KATs — **regenerate under [rule 30](../../.cursor/rules/30-cryptography.mdc)** | `attestation_wire_kat.rs:48`, `:147`, `:278` |
+
+The KAT regeneration is the part to plan for: the nonce preimage changes shape,
+so the pinned vectors change, and a pinned vector that changes without its
+derivation changing is exactly what those KATs exist to catch.
 
 ---
 
