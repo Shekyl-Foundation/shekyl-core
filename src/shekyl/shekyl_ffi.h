@@ -61,7 +61,7 @@
 /// field of the `#[repr(C)]` blob.
 ///
 /// This is the FULL field. The `version || spend || view` prefix alone is
-/// `SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES` (65); the difference
+/// `SHEKYL_CLASSICAL_ADDRESS_PREFIX_BYTES` (65); the difference
 /// between them is `msg_sign_pk`, which is why the two are pinned together.
 #define SHEKYL_CLASSICAL_ADDRESS_BYTES 113
 
@@ -69,18 +69,18 @@
 /// Matches Rust `shekyl_address::MSG_SIGN_PK_LEN`.
 #define SHEKYL_MSG_SIGN_PK_BYTES 48
 
-/// Byte offset of `msg_sign_pk` inside the `#[repr(C)]` blob's classical
-/// address field: version(1) || spend(32) || view(32) = 65.
+/// The classical address PREFIX: version(1) || spend(32) || view(32) = 65.
+/// Equivalently, the byte offset of `msg_sign_pk` inside the `#[repr(C)]`
+/// blob's classical address field, which is how its one consumer uses it —
+/// `populate_account_from_blob` (`cryptonote_basic/account.cpp`).
 ///
-/// Named for the wallet envelope because that is where the layout was first
-/// pinned, but its surviving consumer is daemon-side —
-/// `populate_account_from_blob` (`cryptonote_basic/account.cpp`) uses it as
-/// the offset that locates the fourth classical field. The C++ envelope
-/// parser it was named after is gone with `wallet2`; the layout fact is not.
-#define SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES 65
+/// The `static_assert` below is what makes that offset arithmetic safe: it
+/// pins the full field as prefix + `msg_sign_pk`, so a drift in either
+/// constant fails the build rather than silently shifting the read.
+#define SHEKYL_CLASSICAL_ADDRESS_PREFIX_BYTES 65
 static_assert(
     SHEKYL_CLASSICAL_ADDRESS_BYTES
-        == SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES + SHEKYL_MSG_SIGN_PK_BYTES,
+        == SHEKYL_CLASSICAL_ADDRESS_PREFIX_BYTES + SHEKYL_MSG_SIGN_PK_BYTES,
     "blob classical bytes are the classical prefix plus msg_sign_pk");
 
 /// BIP-39 inputs: 32-byte entropy, 24 words, 64-byte PBKDF2-HMAC-SHA512 output,

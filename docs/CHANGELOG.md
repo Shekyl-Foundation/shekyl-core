@@ -82,6 +82,19 @@
   queues to `covert_cadence`; `Driver::poll` still takes no queue.
   C++ `send_noise` still executes in production until step 4 wires
   notify and deletes the inherited covert branch.
+- **Rule 91's sweep discipline gains its two boundaries.** *(1) A constant's doc
+  is part of the edit, not adjacent to it* — when a value changes, its own doc
+  comment changes in the same edit, because **proximity implies authority** and a
+  declaration whose comment and value disagree is the worst place for that
+  disagreement to sit. *(2) The sweep covers claims about the present, never the
+  record of what was* — a released CHANGELOG entry describing a value as it
+  shipped is history, not staleness, and a mechanical sweep that "fixes" it
+  corrupts the record **while reporting success**. Both landed from a
+  transport-cap sweep that found four live stale comments (including a constant
+  whose own doc described the pre-change fields) and one released entry that was
+  correctly left alone. Stated plainly in the rule: the tree's **executable**
+  surface is checked continuously and its **descriptive** surface is checked
+  never — eight stale numerals in one round, none where a gate reads.
 - **`r` deletes from the attestation nonce and the witness — replaced, not
   removed (`RF-D3`/`RF-D5`).** The nonce's first term becomes the block's
   **validated** predecessor hash: `r` and `cb_out_key` were chosen by the same
@@ -10237,7 +10250,8 @@ production callers.
     signature-audit pin — matches the bindings file's fork-pin
     SHA against the submodule HEAD at
     `external/randomx-v2`). New
-    [`.cargo/mutants.toml`](../.cargo/mutants.toml) configures
+    `.cargo/mutants.toml` (deleted 2026-08-19 with the T18 re-scope;
+    see `docs/design/RANDOMX_V2_MUTATION_REGIME.md` MR-DQ-8) configured
     `cargo-mutants` with `timeout_multiplier = 5.0` and skip-globs
     for tooling binaries (`src/bin/**`) and canonical outputs
     (`canonical_outputs.rs`) per the skip-list discipline. New

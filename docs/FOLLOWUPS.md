@@ -47,6 +47,63 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **`combined_shared_secret` gate is vacuous: delete it or re-point it**
+  (added 2026-08-19, Phase-5 follow-up round). The
+  [`rust-audit-test.yml`](../.github/workflows/rust-audit-test.yml) step *"CI
+  grep gate: combined_shared_secret confined to wallet"* searches
+  `src/common/ src/rpc/ src/cryptonote_protocol/` and fails with *"leaked
+  outside wallet boundary"*. There is no wallet boundary — Phase 5 deleted it
+  — and `combined_shared_secret` now has **zero** occurrences anywhere in
+  `src/` or `tests/`. The gate cannot fail and cannot inform.
+
+  Its fail-open shape was fixed in this round along with the other six, so it
+  is now honest about erroring; that does not make it *meaningful*. **This one
+  needs a decision, not a repair**, and the decision is not mechanical:
+
+  - **Delete it.** The invariant was "the C++ side of this secret stays inside
+    the wallet." The C++ side is gone, so the invariant has no subject.
+  - **Re-point it at Rust.** Only correct if someone establishes that the Rust
+    surface needs this specific bound — which is a different claim, about a
+    different codebase, with a different set of directories that would count
+    as "outside".
+
+  Per the retire-don't-retarget corollary
+  ([`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md) §Phase 5), the
+  default is **retire**: a check that measured a deleted C++ surface does not
+  become a check of the Rust one by re-pointing it, because the Rust surface
+  may already be bounded by construction, may not need the bound, or may need
+  a different one. Re-pointing picks one of those by accident.
+
+  **Not deferred for want of effort** — deferred because the answer requires
+  knowing what `combined_shared_secret`'s Rust analogue is and who may hold
+  it, which is FA-6 / view-tag territory, not CI hygiene. **Closed when** the
+  step is either removed or replaced by a bound whose subject exists, with the
+  reasoning recorded. *Target: V3.0 pre-genesis* — it guards an
+  address-freeze-adjacent property, so a placeholder that always passes is
+  worse than no step at all.
+
+- **`src/device/device_ledger.*` may be the next `device_cold.hpp`**
+  (added 2026-08-19, Phase-5 follow-up round). Phase 5 deleted
+  `src/device/device_cold.hpp` because its only consumer was `wallet2.cpp`,
+  despite `src/device/` being explicitly scoped *out* of the deletion by
+  directory. `device_ledger.{cpp,hpp}` and `device_io_hid.*` are in the same
+  directory, compile only `if(HIDAPI_FOUND)`, and `USE_HW_DEVICE` is `OFF` in
+  V3 ([`CMakeLists.txt`](../CMakeLists.txt); see
+  [`HARDWARE_WALLETS.md`](HARDWARE_WALLETS.md)) — so they may build for nobody.
+
+  They are also named in a live CI exclusion (the `ecdhEncode`/`ecdhDecode`
+  gate excludes `device_ledger`), which means deleting them without checking
+  that gate would leave a filter naming a file that does not exist — the exact
+  shape this round exists to stop.
+
+  **Not scoped here.** Hardware-device retirement is a daemon-side lane with
+  its own reversion clause (see the B2 entry: reopen when a vendor ships
+  hybrid PQ signing, as a Rust `Signer` impl). This entry only records that a
+  **consumer check is owed** on `src/device/`'s remaining files, by consumer
+  set rather than by directory. **Closed when** each remaining file in
+  `src/device/` has a named live consumer outside the directory, or is
+  deleted. *Target: V3.1.*
+
 - **Staking has no exit: the wallet can build one of the four bond-post
   kinds, and the refusal cites a consensus fact that is not true**
   (added 2026-08-19, surfaced while scoping the Phase-5 deletion).
@@ -144,9 +201,13 @@ sustainability is unaffected by the recalibration.
   production C++ caller could wire a non-derived keypair — or a multisig
   participant signature — into an unintended path. **Target: V3.0 pre-genesis.**
 
-- **T18 weekly cargo-mutants gate no longer fits its 360-minute budget
-  (surfaced 2026-08-10, dispatch run 31346130482 — the job's first
-  execution after the severed-header restore).** `cargo mutants` found
+- **T18 weekly cargo-mutants sweep — RESOLVED 2026-08-19 by deletion;
+  replaced by the per-PR verdict ratchet.** *(Original heading: "no
+  longer fits its 360-minute budget", surfaced 2026-08-10, dispatch run
+  31346130482 — the job's first execution after the severed-header
+  restore. The heading is updated per rule 91's sweep-the-indexes
+  clause: this entry is read by heading, and a stale one would route
+  readers to a gate that no longer exists.)* `cargo mutants` found
   1322 mutants against a debug-mode baseline suite that now takes
   ~22 min (1334 s test + auto-set 6673 s per-mutant timeout); the job
   timed out having completed zero mutants in 5.5 h. The suite outgrew
@@ -210,6 +271,20 @@ sustainability is unaffected by the recalibration.
   inoperative** — this entry's substance is unchanged: it will still
   exceed the ceiling whenever it is deliberately run, until the
   re-scope's remaining work lands.
+
+  **RESOLUTION 2026-08-19 (PR for T18 re-scope item 3).** The sweep is
+  **deleted**, not re-budgeted. The re-scope established that mutation
+  testing was the wrong instrument for two of its three claimed threats
+  (MR-F11 for T-A9; MR-F12 — assertion macros are not mutation sites at
+  all — for T-A1), so no sizing of the whole-crate sweep was worth
+  buying. What replaces it is narrower and true: a per-PR ratchet over
+  the **verdict functions**, measured at 11 mutants / 11 caught in ~2
+  min, asserting that the verdicts stay mutation-reachable and their
+  negative tests stay load-bearing. `.cargo/mutants.toml` is deleted
+  with it — read by nothing (MR-F2′) and, once the sweep is gone,
+  consumed by nothing. The `0 6 * * 1` cron is **kept**: `full-parity`
+  selects its full 1024-pin label from it, so removing it alongside the
+  job would have silently downgraded that sweep. This entry is closed.
 
   **Round state 2026-08-18:** MR-DQ-1 ruled (drop `--check`) and
   MR-DQ-8 ruled C1 (harness-only test scoping) after measurement showed
