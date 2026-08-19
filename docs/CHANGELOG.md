@@ -74,6 +74,14 @@
 
 ### Changed
 
+- **Covert executor is a real port (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2, #508).**
+  `CovertQueues` owns the fragment window (`dummy.len()`), refuses a
+  non-multiple, and emits exactly one window per take — real or cover.
+  `CovertSend` is epoch-bound so a dropped token restarts and a stale
+  resolve cannot advance a later message. CV-4 still hands distinct
+  queues to `covert_cadence`; `Driver::poll` still takes no queue.
+  C++ `send_noise` still executes in production until step 4 wires
+  notify and deletes the inherited covert branch.
 - **Rule 91's sweep discipline gains its two boundaries.** *(1) A constant's doc
   is part of the edit, not adjacent to it* — when a value changes, its own doc
   comment changes in the same edit, because **proximity implies authority** and a

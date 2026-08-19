@@ -6,50 +6,168 @@
 //! Per-channel covert fragment queues — the **executor** half of the covert
 //! path, deliberately separated from the scheduler.
 //!
-//! # Why this is its own module and not a field of [`crate::Zone`]
+//! Step 2 of the relay-logic cutover (`COVER_TRAFFIC_RESTORATION.md` §2.9):
+//! the Rust port of C++'s `send_noise` / `queue_covert_notify` /
+//! `clear_channel`.
 //!
-//! **CV-4 (`DAEMON_RELAY_PRIVACY.md` §20.2): the covert schedule must carry no
-//! information about whether real traffic is pending.** A cadence that reacts
-//! to queue depth is a timing channel, and constant-rate cover exists to defeat
-//! exactly that. So the scheduler decides *when* and *who*; this decides
-//! *what*.
+//! # CV-4: why this is its own module and not a field of [`crate::Zone`]
 //!
-//! Until the daemon Rust cutover that separation was enforced by an accident of
-//! the C++/Rust split — the queue lived in `levin_notify.cpp` and Rust had no
-//! handle to it. **That was never the mechanism**, only a strong incidental
-//! barrier: `Zone` already owns the *fluff* queue (`contexts`), so there is no
-//! rule that queues live in C++. The rule is narrower — *the covert scheduler
-//! does not see the covert queue* — and once both halves are Rust, the barrier
-//! has to be rebuilt in types rather than inherited from the language boundary.
+//! **The covert schedule must carry no information about whether real traffic
+//! is pending** (§20.2). A cadence that reacts to queue depth is a timing
+//! channel, and constant-rate cover exists to defeat exactly that. The
+//! scheduler decides *when* and *who*; this decides *what*.
 //!
-//! What the boundary supplied was **friction**: wiring queue depth into the
-//! schedule meant a `#[repr(C)]` field or a new FFI entry point, loud in
-//! review. In one crate the same violation is `if q.has_pending() { … }` — one
-//! line that reads as a latency improvement. That is §20.2's named failure
-//! mode, and `cv4_the_cadence_does_not_depend_on_queue_depth` is what replaces
-//! the friction.
+//! Before the cutover that separation was enforced by an accident of the
+//! C++/Rust split — the queue lived in `levin_notify.cpp` and Rust had no
+//! handle to it. **That was never the mechanism**, only friction: `Zone`
+//! already owns the *fluff* queue, so the rule is narrower — *the covert
+//! scheduler does not see the covert queue* — and once both halves are Rust it
+//! has to hold in types. `cv4_the_cadence_does_not_depend_on_queue_depth` is
+//! what replaces the friction.
 //!
-//! This type does **not** expose a depth query. A `len` / `is_empty` /
-//! `has_pending` method would be the API the leak writes itself against.
+//! # Length is the invariant, and it has ONE owner
+//!
+//! **Every emission is exactly [`CovertQueues::window`] bytes — real fragment
+//! and dummy alike.** Length is the one thing a covert channel holds constant,
+//! so anything that can make a real send a different size from a dummy is a
+//! leak, not a degradation.
+//!
+//! The window is `dummy.len()` and nothing else. There is no exported
+//! constant to disagree with it: the dummy is built by
+//! `shekyl_levin::noise_notify(n)`, which produces exactly `n` bytes, and a
+//! caller that needs the window reads [`CovertQueues::window`]. A second
+//! readable source would be the `transit_for` literal one layer up — a
+//! duplicate that drifts.
 
 use std::collections::VecDeque;
 
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
-/// One channel's pending work, matching `noise_channel` (`levin_notify.cpp`).
-///
-/// `pending` holds the original framed messages. `active` is the unsent
-/// remainder of the message currently being sliced. The original stays in
-/// `pending` until every fragment has gone, so a CV-1 rebind can *restart*
-/// the same message rather than resume a mid-message remainder (length is
-/// the leak) or drop the payload (liveness).
+/// One channel's pending work.
 #[derive(Debug, Default)]
 struct ChannelQueue {
+    /// Framed messages waiting for this channel's due ticks. Each is a whole
+    /// multiple of the window (enforced at [`CovertQueues::enqueue`]).
     pending: VecDeque<Vec<u8>>,
-    /// Unsent tail of the current message. `None` / empty means the next
-    /// take clones `pending.front()` and starts from the beginning.
-    active: Option<Vec<u8>>,
+    /// How far into `pending.front()` the send has got. `None` when no message
+    /// is mid-flight.
+    offset: Option<usize>,
+    /// The peer this channel was bound to when the in-flight run started.
     bound: Option<ConnectionId>,
+    /// Invalidates outstanding [`CovertSend`] tokens. Bumped on take, on
+    /// [`CovertSend::failed`], and on [`CovertQueues::unbind`] — the three
+    /// events that mean a previously taken fragment is no longer the live
+    /// send. `sent`/`failed` apply only when this still matches the token.
+    epoch: u64,
+}
+
+impl ChannelQueue {
+    fn bump(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+    }
+}
+
+/// A fragment taken for exactly one send, awaiting its outcome.
+///
+/// # Dropping this is a FAILURE, and that is correct without any `Drop` code
+///
+/// [`CovertQueues::take_for_send`] is **non-destructive**: it computes the
+/// fragment without advancing anything. Only [`CovertSend::sent`] advances.
+/// So a token that is dropped, forgotten, or lost to an early return leaves the
+/// queue exactly as it was, and the next take on that channel produces the same
+/// fragment — a restart, which is the CV-1 behaviour anyway.
+///
+/// This is deliberate rather than incidental. A `Drop` that had to *restore*
+/// state would need a handle back into the queue, which would make this a
+/// borrow — and a borrow cannot span the send, because the transport
+/// (`shekyl-tor`) is async even though the relay logic is not. Non-destructive
+/// take is what lets the token cross an await and still be correct when it is
+/// dropped.
+///
+/// # A stale resolve is a no-op
+///
+/// The token carries the channel's epoch at take. A later take, `failed`, or
+/// `unbind` bumps that epoch, so resolving the old token cannot advance a
+/// different message — take → unbind → enqueue → `sent()` would otherwise
+/// walk into the successor. The type exists to cross an await; without the
+/// epoch it would only be safe to drop, not to resolve late.
+#[must_use = "a covert send must be resolved with `sent()` or `failed()`; \
+              dropping it restarts the fragment on the next take"]
+#[derive(Debug)]
+pub struct CovertSend {
+    channel: usize,
+    bytes: Vec<u8>,
+    /// False for a dummy: there is nothing to advance on success.
+    real: bool,
+    epoch: u64,
+}
+
+impl CovertSend {
+    fn live<'a>(&self, queues: &'a mut CovertQueues) -> Option<&'a mut ChannelQueue> {
+        let q = queues.channels.get_mut(self.channel)?;
+        (q.epoch == self.epoch).then_some(q)
+    }
+
+    /// The send succeeded: advance past this fragment.
+    ///
+    /// The only thing that consumes queue state. A message whose last window
+    /// just went out leaves the queue.
+    ///
+    /// Takes `self` — the token is single-use, so a caller cannot resolve one
+    /// twice — and takes the queue as an argument rather than holding a
+    /// reference, which is what lets the token cross an await. A stale token
+    /// (epoch moved on) is a no-op rather than a mutation of a later send.
+    pub fn sent(self, queues: &mut CovertQueues) {
+        if !self.real {
+            return; // A dummy advances nothing.
+        }
+        let window = queues.window();
+        let Some(q) = self.live(queues) else {
+            return;
+        };
+        let Some(message) = q.pending.front() else {
+            return;
+        };
+        let next = q
+            .offset
+            .unwrap_or(0)
+            .checked_add(window)
+            .expect("covert offset + window");
+        if next >= message.len() {
+            q.offset = None;
+            let _ = q.pending.pop_front();
+        } else {
+            q.offset = Some(next);
+        }
+    }
+
+    /// The send failed: drop the in-flight run and unbind.
+    ///
+    /// Mirrors C++ `send_noise`'s failure arm, which clears `active` and nils
+    /// the connection so the caller can refresh stems. The message is **not**
+    /// dropped — it restarts on the next take, so a failed send costs a
+    /// fragment rather than a transaction. A stale token is a no-op: it must
+    /// not unbind a later binding.
+    pub fn failed(self, queues: &mut CovertQueues) {
+        let Some(q) = self.live(queues) else {
+            return;
+        };
+        q.offset = None;
+        q.bound = None;
+        q.bump();
+    }
+
+    /// The bytes to put on the wire — always exactly the window.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Which channel this belongs to.
+    #[must_use]
+    pub fn channel(&self) -> usize {
+        self.channel
+    }
 }
 
 /// Per-channel covert queues, indexed by channel — which **is** the stem slot
@@ -60,15 +178,29 @@ struct ChannelQueue {
 #[derive(Debug)]
 pub struct CovertQueues {
     channels: Vec<ChannelQueue>,
+    /// The dummy payload. **Its length is the fragment window** — one value, so
+    /// a real fragment and a dummy cannot disagree about length.
+    dummy: Vec<u8>,
 }
 
 impl CovertQueues {
-    /// One queue per channel, sized to the stem width.
+    /// `None` when `dummy` is empty: a zero window would make every emission
+    /// zero-length, which is not cover.
     #[must_use]
-    pub fn new(channels: usize) -> Self {
-        Self {
-            channels: (0..channels).map(|_| ChannelQueue::default()).collect(),
+    pub fn new(channels: usize, dummy: Vec<u8>) -> Option<Self> {
+        if dummy.is_empty() {
+            return None;
         }
+        Some(Self {
+            channels: (0..channels).map(|_| ChannelQueue::default()).collect(),
+            dummy,
+        })
+    }
+
+    /// The fragment window, in bytes — **the only definition**.
+    #[must_use]
+    pub fn window(&self) -> usize {
+        self.dummy.len()
     }
 
     /// Channel count — the stem width, not a queue depth.
@@ -79,34 +211,24 @@ impl CovertQueues {
 
     /// Offer a framed message to `channel`.
     ///
-    /// Refused when the channel index is out of range, **or when `message` is
-    /// empty**. Not refused on an unbound channel: binding is the scheduler's
-    /// fact and travels with each send, so the discard happens at
-    /// [`Self::take_for_send`] where the current binding is known (CV-1)
-    /// rather than against a copy kept here.
+    /// Refused when the channel is out of range, the message is empty, or its
+    /// length is **not a whole multiple of [`Self::window`]**.
     ///
-    /// # Why empty is refused at the boundary
+    /// # Why a non-multiple is refused rather than padded
     ///
-    /// A framed levin notify always carries a header, so an empty message is a
-    /// caller bug rather than a state the wire can produce. Refusing it here —
-    /// the queue's only insertion point — establishes the invariant
-    /// *`pending` never holds an empty message*, which
-    /// [`Self::take_for_send`] depends on to make progress.
-    ///
-    /// **Without it the channel wedges silently and permanently.** An empty
-    /// head is reloaded on every take and never popped, so every later message
-    /// on that channel is blocked forever — and the failure is *invisible by
-    /// construction*: a wedged channel keeps emitting dummies, which is
-    /// precisely what a healthy idle channel looks like. Constant-rate cover
-    /// means nothing observable changes when the queue stops draining.
+    /// A message that is not a multiple ends in a short fragment, and a short
+    /// send is distinguishable from a dummy — the leak this channel exists to
+    /// prevent. Padding here would make the queue format-aware (it would have
+    /// to know that trailing bytes are safe, which is true for levin but is not
+    /// this type's business). Refusing keeps the queue format-agnostic while
+    /// leaving one owner for the number: the caller cannot pad to a window it
+    /// invented, because [`Self::window`] is the only place to read one.
     pub fn enqueue(&mut self, channel: usize, message: Vec<u8>) -> bool {
-        // Refusal travels in the return value, not a `debug_assert!`. The
-        // out-of-range arm below already signals that way, and a debug-only
-        // panic would both break the symmetry and make the guard untestable —
-        // any test exercising the refusal would abort instead of observing it.
-        // A `false` return is also the stronger signal: it survives into
-        // release, where a caller bug is no less a bug.
-        if message.is_empty() {
+        // Refusal travels in the return value, not a `debug_assert!` — the
+        // out-of-range arm signals that way, a debug-only panic would make the
+        // guard untestable, and `false` survives into release where a caller
+        // bug is no less a bug.
+        if message.is_empty() || !message.len().is_multiple_of(self.window()) {
             return false;
         }
         match self.channels.get_mut(channel) {
@@ -118,67 +240,69 @@ impl CovertQueues {
         }
     }
 
-    /// Take the next `fragment_len` bytes `channel` should put on the wire
-    /// for `peer`.
+    /// Take what `channel` should put on the wire for `peer` — **always
+    /// exactly [`Self::window`] bytes**, real or cover.
     ///
-    /// `None` means **send a dummy** — the common case, not an error.
-    /// `fragment_len` is the covert fragment window (`CRYPTONOTE_NOISE_BYTES`
-    /// in production). A zero window is a caller bug: nothing is consumed.
+    /// `None` means *no such channel*, a caller bug. It never means "nothing to
+    /// send": a bound covert channel always sends, which is what constant-rate
+    /// cover is. An unbound slot emits nothing, but that is the scheduler's
+    /// call — it yields `Effect::CovertUnbind` rather than asking here.
     ///
-    /// **CV-1: a rebind discards the in-flight remainder and restarts.** If
-    /// `peer` differs from the binding the active tail was taken under, that
-    /// tail is dropped and the next take clones `pending.front()` from the
-    /// start. Resuming would let the extra send time leak that this node was
-    /// pushing something real (§20.5). Restarting keeps the payload live
-    /// (the C++ `send_noise` shape) without the length leak.
-    pub fn take_for_send(
-        &mut self,
-        channel: usize,
-        peer: ConnectionId,
-        fragment_len: usize,
-    ) -> Option<Vec<u8>> {
-        if fragment_len == 0 {
-            debug_assert!(false, "covert fragment window must be non-zero");
-            return None;
-        }
+    /// **CV-1: a rebind discards the in-flight remainder.** If `peer` differs
+    /// from the binding the run started under, the offset is dropped and the
+    /// message restarts from its first fragment. Resuming would make this send
+    /// the tail of a run rather than a whole window — and length is the one
+    /// thing held constant (§20.5).
+    ///
+    /// Non-destructive: see [`CovertSend`].
+    pub fn take_for_send(&mut self, channel: usize, peer: ConnectionId) -> Option<CovertSend> {
+        let window = self.window();
         let q = self.channels.get_mut(channel)?;
-        if q.bound != Some(peer) {
-            q.active = None;
-            q.bound = Some(peer);
-        }
-        if q.active.as_ref().is_none_or(Vec::is_empty) {
-            q.active = q.pending.front().cloned();
-        }
-        let active = q.active.as_mut()?;
-        if active.is_empty() {
-            /* Unreachable: `enqueue` refuses empty messages, so `pending`
-            cannot hold one. Handled anyway, and **by discarding rather than
-            returning early**, because the early return is what wedges the
-            channel: the empty head would be reloaded on every subsequent
-            take and never popped, blocking the queue permanently while the
-            channel went on emitting dummies — indistinguishable from idle.
 
-            Discarding costs one dummy tick and the channel recovers. */
-            debug_assert!(false, "covert queue holds an empty message");
-            q.active = None;
-            let _ = q.pending.pop_front();
-            return None;
+        if q.bound != Some(peer) {
+            q.bound = Some(peer);
+            q.offset = None; // CV-1: restart, never resume.
         }
-        let n = fragment_len.min(active.len());
-        let fragment: Vec<u8> = active.drain(..n).collect();
-        if active.is_empty() {
-            q.active = None;
-            let _ = q.pending.pop_front();
+        q.bump();
+        let epoch = q.epoch;
+
+        if q.pending.is_empty() {
+            return Some(CovertSend {
+                channel,
+                bytes: self.dummy.clone(),
+                real: false,
+                epoch,
+            });
         }
-        Some(fragment)
+
+        let offset = q.offset.unwrap_or(0);
+        let end = offset.checked_add(window).expect("covert offset + window");
+        // A short slice would PUBLISH — length is the invariant. Enqueue
+        // proved the message is a whole number of windows, and `sent` only
+        // advances by one window, so this is unreachable except as a bug.
+        // Panic rather than emit a distinguishable send, and rather than
+        // dummy-without-pop (the empty-head wedge this type already knows).
+        let Some(bytes) = q.pending.front().and_then(|m| m.get(offset..end)) else {
+            panic!(
+                "covert fragment [{offset}, {end}) is not a slice of a message \
+                 that enqueue proved to be a whole number of windows"
+            );
+        };
+        Some(CovertSend {
+            channel,
+            bytes: bytes.to_vec(),
+            real: true,
+            epoch,
+        })
     }
 
     /// The channel's stem slot went unbound: drop everything it held.
     pub fn unbind(&mut self, channel: usize) {
         if let Some(q) = self.channels.get_mut(channel) {
             q.pending.clear();
-            q.active = None;
+            q.offset = None;
             q.bound = None;
+            q.bump();
         }
     }
 }

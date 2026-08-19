@@ -813,14 +813,49 @@ guarantee while parallelism comes from the matrix rather than from
 from sharding. This preserves the disk rationale on the record instead
 of silently dropping it.
 
-### MR-DQ-6 — how is MR-F3 (branch coverage) closed?
+### MR-DQ-6 — how is MR-F3 (branch coverage) closed? — **RULED 2026-08-19**
 
 Options: (a) a `matrix.branch: [main, dev]` on the sweep job, mirroring
 `runtime-modes`; (b) rely on the per-PR `--in-diff` leg, which runs on
 PRs targeting `dev` and therefore covers `dev` at the moment code
 arrives; (c) both.
 
-**Recommendation: (c)**, weighted to (b). The per-PR leg is the real
+**RULING (2026-08-19): single leg on `pull_request`, alongside the
+cron matrix.** Budget answered the question — measured per-PR critical
+path is `structural-validate` at ~26 min, and the rotating mode is
+444 s plus ~44 s of setup, so the leg hides inside the existing
+critical path: **+8 runner-minutes, +0 wall-clock**.
+
+The argument that decided it is not cost but a gap: **before this leg
+no per-PR gate exercised a single input outside the pinned corpus.**
+`structural-validate` runs `--mode=correctness` over the pinned corpus,
+`native-arm` runs the pinned 1024, the verdict ratchet mutates verdict
+functions. A verifier change diverging only *off-corpus* passed every
+per-PR gate, landed on `dev`, and waited for a cron that — per MR-R1a —
+does not exist until `dev` reaches `main`.
+
+**It is a tripwire, not coverage, and the distinction is pinned in the
+type.** The index is days-since-epoch, so every PR on a given day
+re-checks the *same* inputs; the per-PR leg advances nothing. A third
+provenance `pull-request` was added rather than reusing either sibling,
+because both would be untrue: not `schedule-derived` (it advances no
+boundary) and not `operator-supplied` (nobody chose the index). Only
+`schedule-derived` may ever be credited as coverage (T-A11), asserted
+by `only_schedule_derived_counts_as_coverage`.
+
+**No index override on the PR leg**, deliberately: a tripwire whose
+index a contributor could choose would let a diff be checked against an
+input set the contributor picked (T-A7/T-A11).
+
+**A per-PR red is ambiguous and cheaply disambiguated** — "this PR
+broke it" versus "today's index already diverges on `dev`" — by
+replaying the same index against `dev`, which is a one-command question
+rather than an investigation. That is the derived seed paying off a
+second time, and the instruction is in the job comment because a
+halt-and-escalate posture with an ambiguous trigger is how false
+escalations start.
+
+Superseded recommendation: **(c)**, weighted to (b). The per-PR leg is the real
 fix — it puts mutation coverage at the point where T-A1/T-A3 enter —
 and the matrix on the sweep closes the residual for T-A9 on code that
 reaches `dev` by a path with no PR (merge commits, direct pushes).
