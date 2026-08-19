@@ -158,13 +158,52 @@ pub fn assert_equivalent(
         c_oracle.seedhash(),
         "cache-precondition called with mismatched session seedhashes"
     );
-    let rust_sha = rust_cache_sha256(rust_subject.prepared());
-    let c_sha = c_oracle.cache_sha256();
+    verdict(
+        *rust_subject.seedhash(),
+        rust_cache_sha256(rust_subject.prepared()),
+        c_oracle.cache_sha256(),
+    )
+}
+
+/// The R1-D14 precondition **verdict**, as a pure function of the two
+/// fingerprints.
+///
+/// # Why this is separate from [`assert_equivalent`]
+///
+/// Per `RANDOMX_V2_MUTATION_REGIME.md` MR-F10, the verdict used to be
+/// reachable only through [`assert_equivalent`], which takes live
+/// sessions — so exercising the `Err` branch required a 256-MiB
+/// Argon2d derive *and* a linked C oracle, and consequently no
+/// negative test for it existed anywhere in the harness. That is the
+/// §4.5 T-A1 surface (an attacker weakens the comparison and nothing
+/// fails) left to detection rather than enforcement.
+///
+/// Splitting the comparison out makes the negative test three lines
+/// and no cache derive. [`assert_equivalent`] remains the only
+/// production call path and still computes both fingerprints from the
+/// real sessions, so `50-testing.mdc`'s test-the-production-code rule
+/// is satisfied: this is the same code the modes run, not a local
+/// re-implementation.
+///
+/// # Coverage boundary
+///
+/// Bites against a weakened or vacuous cache-equivalence comparison.
+/// Does **not** cover fingerprint *computation* — if
+/// [`rust_cache_sha256`] or `COracleSession::cache_sha256` is wrong,
+/// both legs can agree on a wrong value and this verdict correctly
+/// returns `Ok`. That surface belongs to the three-leg canonical
+/// comparison (T16), not here.
+#[must_use = "the precondition verdict must be propagated, not discarded"]
+pub fn verdict(
+    seedhash: Seedhash,
+    rust_sha: [u8; 32],
+    c_sha: [u8; 32],
+) -> Result<(), PreconditionMismatch> {
     if rust_sha == c_sha {
         Ok(())
     } else {
         Err(PreconditionMismatch {
-            seedhash: *rust_subject.seedhash(),
+            seedhash,
             rust_sha,
             c_sha,
         })
@@ -373,6 +412,89 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- MR-F10 / item 1: induced-divergence negative tests for the
+    // R1-D14 precondition verdict. Before this block the harness had
+    // NO test that induces a divergence and asserts the verdict
+    // reports it — the only `#[should_panic]` tests in the crate were
+    // input validation and a rationale-format check. See
+    // `docs/design/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 1.
+
+    /// Baseline: identical fingerprints are accepted.
+    ///
+    /// Bites against a verdict that rejects agreement (an inverted
+    /// comparison). Does NOT cover fingerprint computation.
+    #[test]
+    fn verdict_accepts_identical_fingerprints() {
+        let sha = [0xABu8; 32];
+        assert!(verdict(Seedhash::from_bytes([0x11; 32]), sha, sha).is_ok());
+    }
+
+    /// The load-bearing case: a divergence is reported, and reported
+    /// with the operands intact.
+    ///
+    /// Bites against `rust_sha == c_sha` weakened to a constant
+    /// `true`, to a length comparison, or to a comparison of one side
+    /// with itself — every shape §4.5 T-A1 names. Does NOT cover the
+    /// call sites' handling of the returned error; that is the modes'
+    /// surface.
+    #[test]
+    fn verdict_rejects_divergent_fingerprints_and_preserves_operands() {
+        let seedhash = Seedhash::from_bytes([0x22; 32]);
+        let rust_sha = [0x01u8; 32];
+        let c_sha = [0x02u8; 32];
+        let err = verdict(seedhash, rust_sha, c_sha)
+            .expect_err("divergent fingerprints must not be accepted");
+        assert_eq!(err.seedhash, seedhash, "seedhash must round-trip");
+        assert_eq!(err.rust_sha, rust_sha, "rust operand must round-trip");
+        assert_eq!(err.c_sha, c_sha, "c operand must round-trip");
+    }
+
+    /// Single-bit sensitivity at both ends of the fingerprint.
+    ///
+    /// Bites against a truncated comparison — the §4.5 T-A3 shape,
+    /// where the precondition is narrowed to a prefix (e.g. the first
+    /// 64 bytes) so divergence beyond the prefix passes. A prefix
+    /// comparison would still catch the first-byte case, so the
+    /// last-byte case is the one that discriminates; both are asserted
+    /// so the pair fails loudly rather than half-passing.
+    #[test]
+    fn verdict_is_sensitive_to_a_single_bit_at_either_end() {
+        let seedhash = Seedhash::from_bytes([0x33; 32]);
+        let base = [0x00u8; 32];
+
+        let mut first_byte = base;
+        first_byte[0] = 0x01;
+        assert!(
+            verdict(seedhash, base, first_byte).is_err(),
+            "a one-bit difference in byte 0 must be reported"
+        );
+
+        let mut last_byte = base;
+        last_byte[31] = 0x01;
+        assert!(
+            verdict(seedhash, base, last_byte).is_err(),
+            "a one-bit difference in the FINAL byte must be reported; \
+             passing here means the comparison is prefix-truncated"
+        );
+    }
+
+    /// Argument order is not silently symmetric in the report.
+    ///
+    /// Bites against a verdict that swaps the operands when
+    /// constructing the mismatch — which would misattribute which
+    /// implementation produced which fingerprint and send triage at
+    /// the wrong leg.
+    #[test]
+    fn verdict_does_not_transpose_the_operands() {
+        let seedhash = Seedhash::from_bytes([0x44; 32]);
+        let a = [0x0Au8; 32];
+        let b = [0x0Bu8; 32];
+        let err = verdict(seedhash, a, b).expect_err("must diverge");
+        assert_eq!(err.rust_sha, a);
+        assert_eq!(err.c_sha, b);
+        assert_ne!(err.rust_sha, err.c_sha, "operands must stay distinct");
+    }
 
     /// Equal slices return `None`.
     #[test]
