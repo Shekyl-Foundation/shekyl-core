@@ -4,7 +4,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **RATIFIED 2026-08-18 — round 1 CLOSED on the §7.5 re-scope; item 1 LANDED (`1cbb21fab`, 9/9 on the verdict surface). MR-F12 then established that §4.6 M2's T-A1 mechanism was never mechanically possible, which makes item 1 its precondition rather than a convenience.** MR-DQ-1 RULED; MR-DQ-8 HELD (C1 withdrawn); item 2 carries construction requirements MR-R1–MR-R4 (§7.9). MR-DQ-2/4/6 remain open by design — they change meaning under the re-scope, and MR-DQ-4 is to be **re-derived, not dispositioned**, once item 1 lands. Substrate survey (§2) is measured and complete; findings MR-F1–MR-F12 (§4) are source-verified (MR-F2 superseded by **MR-F2′**); MR-DQ-1 + MR-DQ-8 are ruled (§5). The rule-26 halt is **discharged for item 1 only**; items 2 and 3 remain design-gated per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). |
+| Status | **RATIFIED 2026-08-18; items 1–3 LANDED/IN-REVIEW as of 2026-08-19 — round 1 CLOSED on the §7.5 re-scope; item 1 LANDED (`1cbb21fab`, 9/9 on the verdict surface). MR-F12 then established that §4.6 M2's T-A1 mechanism was never mechanically possible, which makes item 1 its precondition rather than a convenience.** MR-DQ-1 RULED; MR-DQ-8 HELD (C1 withdrawn); item 2 carries construction requirements MR-R1–MR-R4 (§7.9). MR-DQ-2/4/6 remain open by design — they change meaning under the re-scope, and MR-DQ-4 is to be **re-derived, not dispositioned**, once item 1 lands. Substrate survey (§2) is measured and complete; findings MR-F1–MR-F12 (§4) are source-verified (MR-F2 superseded by **MR-F2′**); MR-DQ-1 + MR-DQ-8 are ruled (§5). The rule-26 halt is **discharged for item 1 only**; items 2 and 3 remain design-gated per [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). |
 | Kind | Test-regime redesign. **Opened** as execution-shape-only; the second review round established that T18 is the wrong instrument for two of its three claimed threats (MR-F10, MR-F11), so the round now also re-scopes **what T18 is for** — §7.5. §4.6 M2's premise is amended, not merely its cadence. |
 | Amends | [`RANDOMX_V2_PHASE2G_PLAN.md`](../completed/RANDOMX_V2_PHASE2G_PLAN.md) **§5.5.6** (the nightly-mutants CI row) and **§4.6 M2** (mutation testing as active-threat-surface mitigation). The 2g plan's §5.7 + §8.3 require that any change to harness behavior carry a plan-doc amendment; this document **is** that amendment carrier. The 2g plan is in `docs/completed/` and is not reopened as an active design — §11 records the amendment against it. |
 | Spec authority | 2g plan §4.5 (active threat surface T-A1–T-A11), §4.6 M2 (mitigation premise), §6 T18 row (the assertion). This doc **cites**; it does not re-derive the threat model. |
@@ -715,7 +715,7 @@ separate sweep. The 2g plan lives in `docs/completed/`, so the
 amendment follows the completed-doc convention (§11) — the doc is not
 reopened as an active design.
 
-### MR-DQ-2 — per-PR `--in-diff`, weekly whole-crate sweep, or both?
+### MR-DQ-2 — per-PR `--in-diff`, weekly whole-crate sweep, or both? — **RULED 2026-08-19**
 
 Per §3.1 the assignment is the reverse of the intuitive one.
 `--in-diff` mutates the lines a PR touches, which is precisely where
@@ -731,11 +731,32 @@ the surface the assertion covers — which, per MR-F5, currently means
 the **assertion-bearing harness modules** (305 mutants), and would
 additionally mean the verifier surface if MR-DQ-8 fixes test scoping.
 
-**Recommendation: both legs, mapped correctly** — per-PR `--in-diff`
-as the merge-blocking T-A9 leg, and a periodic sweep carrying
-T-A1/T-A3. §6 prices whether that sweep is the 305-mutant
-assertion-module slice, the full 1290, or the full set under corrected
-scoping.
+**RULING (2026-08-19): per-PR, converged with item 3 — the
+verdict-scoped ratchet IS the per-PR leg.**
+
+The question was posed before §6.6 re-derived item 3's scope, and the
+re-derivation collapses it. `--in-diff` was proposed as a way to bound
+per-PR cost; at verdict scope no bounding is needed, because the whole
+population is **11 mutants in 36 s** (measured; ~58 s on the committed
+runner class). That finishes inside the structural job's measured
+31–44 min many times over, so the per-PR leg is free in wall-clock
+terms and needs no diff-scoping machinery at all.
+
+Two consequences worth stating rather than leaving implicit:
+
+- **`--in-diff` is not adopted.** It would have served T-A9 (§3.1),
+  and per MR-F11 T-A9 is the claim this regime no longer makes. Adding
+  diff-scoping to bound a 36-second job would be machinery bought for
+  a threat the gate does not defend.
+- **Paths filtering is inherited, not re-declared.** The workflow-level
+  positive `pull_request: paths:` filter (R1-D12) already means an
+  unrelated PR never triggers the workflow, so it never pays the
+  C-reference build — the one real cost. The structural job relies on
+  exactly the same mechanism and carries no filter of its own;
+  re-declaring one at job level would be a second source of truth for
+  the same decision.
+
+The periodic whole-crate sweep stays **HELD** under MR-DQ-8, unchanged.
 
 ### MR-DQ-3 — release-mode or debug-mode per-mutant test runs?
 
@@ -1397,6 +1418,27 @@ house shape, raise retention to the maximum, and let
 That division goes in the doc because it tells the next reader **which
 one they are allowed to lose.**
 
+#### MR-R1a — no pre-`main` run advances the explored boundary
+
+A consequence of MR-F3 applied to the rotating lane itself, recorded
+because it is invisible from a run history.
+
+Schedule events use the **default branch's** workflow file. Until the
+lane exists on `main` it therefore has **no scheduled execution at
+all**, and every run is a dispatch. Every dispatch is
+`operator-supplied` by construction (MR-R4). So in the pre-`main`
+window:
+
+- the **explored boundary does not advance**, at all;
+- **no green run may be credited as coverage**, ever.
+
+The hazard is not the delay, it is the record. A run history full of
+green `operator-supplied` rows reads like coverage to any reader who
+was not present when the lane landed — the same decayed-claim shape
+§13 names, arriving through the lane built to fix it. The workflow
+comment carries this text too, so the reader who checks the job rather
+than the doc also finds it.
+
 #### MR-R2 — the promotion target is the adversarial corpus, not the random one
 
 "Promote into the pinned corpus" cannot mean the random corpus. That
@@ -1663,3 +1705,5 @@ was itself "promoted from RandomX v2 Phase 2c" for the same reason. A
 promotion is **not** made here, because minting a rule from inside the
 round that discovered it is precisely the self-auditing move this round
 has been arguing against. It wants a reader who was not in it.
+| PR #505 review | 2026-08-19 | Four findings on the rotating lane, all confirmed at source. **PR-F1** — the job's `if:` omitted `pull_request`, so **#505's CI did not exercise the job #505 adds**; the Rust side was covered by the harness suite but the YAML wiring was not. **PR-F2** — and it was unexercisable by dispatch either, since `ref:` was pinned to the matrix branch, so a dispatch ran this workflow file while checking out `main`/`dev`, which lack `mode_rotating`. Fixed by a `checkout_ref` dispatch input defaulting to the matrix branch, **wired into `runtime-modes` too** because it carried the identical limitation — one mechanism, two jobs, converting "first execution is in production" into "first execution is a rehearsal". This matters more than an ordinary CI red: a wiring defect on a lane whose documented posture is halt-and-escalate arrives dressed as a plausible consensus finding, training the response you least want trained. **PR-F3** — provenance was keyed on input-emptiness, correct only while the `if:` refused an empty-index dispatch, an invariant held thirty lines away with nothing asserting the coupling; now bound to `github.event_name == 'schedule'` so the label is true by construction however the `if:` evolves (a fourth instance of the fix-reproduces-the-defect shape). **PR-F4** — the timeout was extrapolated through a non-uniform factor; replaced by a direct measurement at the exact CI sizing (32×32 = 1024 pairs, **515 s**, ~13.6 min on CI). Also recorded: **MR-R1a** (no pre-`main` run advances the explored boundary), and the deliberate choice that both matrix legs share one index so "diverged on dev, clean on main" stays informative. |
+| MR-DQ-2 ruled | 2026-08-19 | Per-PR leg **converged with item 3**: the verdict-scoped ratchet is the per-PR leg. Measured **11 mutants in 36 s, 11 caught** (~58 s on CI) — it fits inside the structural job's measured 31–44 min many times over, so no diff-scoping machinery is needed. `--in-diff` **not adopted**: it served T-A9, which per MR-F11 this regime no longer claims. Paths filtering **inherited** from the workflow-level positive filter rather than re-declared per job. The ratchet carries the §13 guard the scope demands — a minimum-mutant-count floor, because `--re` matches names and a rename would otherwise green over an empty population. |
