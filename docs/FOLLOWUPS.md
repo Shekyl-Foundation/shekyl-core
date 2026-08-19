@@ -144,9 +144,13 @@ sustainability is unaffected by the recalibration.
   production C++ caller could wire a non-derived keypair — or a multisig
   participant signature — into an unintended path. **Target: V3.0 pre-genesis.**
 
-- **T18 weekly cargo-mutants gate no longer fits its 360-minute budget
-  (surfaced 2026-08-10, dispatch run 31346130482 — the job's first
-  execution after the severed-header restore).** `cargo mutants` found
+- **T18 weekly cargo-mutants sweep — RESOLVED 2026-08-19 by deletion;
+  replaced by the per-PR verdict ratchet.** *(Original heading: "no
+  longer fits its 360-minute budget", surfaced 2026-08-10, dispatch run
+  31346130482 — the job's first execution after the severed-header
+  restore. The heading is updated per rule 91's sweep-the-indexes
+  clause: this entry is read by heading, and a stale one would route
+  readers to a gate that no longer exists.)* `cargo mutants` found
   1322 mutants against a debug-mode baseline suite that now takes
   ~22 min (1334 s test + auto-set 6673 s per-mutant timeout); the job
   timed out having completed zero mutants in 5.5 h. The suite outgrew
@@ -210,6 +214,20 @@ sustainability is unaffected by the recalibration.
   inoperative** — this entry's substance is unchanged: it will still
   exceed the ceiling whenever it is deliberately run, until the
   re-scope's remaining work lands.
+
+  **RESOLUTION 2026-08-19 (PR for T18 re-scope item 3).** The sweep is
+  **deleted**, not re-budgeted. The re-scope established that mutation
+  testing was the wrong instrument for two of its three claimed threats
+  (MR-F11 for T-A9; MR-F12 — assertion macros are not mutation sites at
+  all — for T-A1), so no sizing of the whole-crate sweep was worth
+  buying. What replaces it is narrower and true: a per-PR ratchet over
+  the **verdict functions**, measured at 11 mutants / 11 caught in ~2
+  min, asserting that the verdicts stay mutation-reachable and their
+  negative tests stay load-bearing. `.cargo/mutants.toml` is deleted
+  with it — read by nothing (MR-F2′) and, once the sweep is gone,
+  consumed by nothing. The `0 6 * * 1` cron is **kept**: `full-parity`
+  selects its full 1024-pin label from it, so removing it alongside the
+  job would have silently downgraded that sweep. This entry is closed.
 
   **Round state 2026-08-18:** MR-DQ-1 ruled (drop `--check`) and
   MR-DQ-8 ruled C1 (harness-only test scoping) after measurement showed
