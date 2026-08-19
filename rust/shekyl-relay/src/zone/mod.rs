@@ -8,10 +8,11 @@
 //! A zone is the unit the inherited C++ calls `detail::zone` — public,
 //! or i2p/tor. This type owns the state §18.5's inventory assigned to Rust:
 //! peer fluff queues, the stem map, the epoch role, and the covert **schedule**
-//! (enable bit, cadence, per-channel deadlines). Covert **buffers** are
-//! moving to [`crate::CovertQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.7 /
-//! §2.9 step 2); transport (framing, padding, the socket) stays on the I/O
-//! side. A transaction body is still an opaque blob here. See
+//! (enable bit, cadence, per-channel deadlines). Covert **buffers** live in
+//! [`crate::CovertQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2);
+//! production still runs C++ `send_noise` until step 4 wires notify.
+//! Transport (framing, padding, the socket) stays on the I/O side. A
+//! transaction body is still an opaque blob here. See
 //! `DAEMON_RELAY_PRIVACY.md` §20.2 / §20.4 for the post-RP-3b inventory.
 
 use std::collections::BTreeMap;
