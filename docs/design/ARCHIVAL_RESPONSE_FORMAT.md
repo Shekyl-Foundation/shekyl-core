@@ -17,7 +17,9 @@ change after genesis, which is the only reason the round exists as a round.
 Disposition IDs **`RF-D1` … `RF-Dn`**, registered at birth per
 [`94-tracking-index`](../../.cursor/rules/94-tracking-index.mdc).
 
-**Every input below is pinned.** `RF-D3` was carried as the round's one open test
+**Every input below is pinned; one implementation question is open** (`RF-D5`,
+§2.5 — surfaced by grounding the deletion, not by the ruling). `RF-D3` was
+carried as the round's one open test
 — *whether `r` survives* — and it **dissolved on grounding** (§2): the ruling had
 already settled it on 2026-08-10, by an argument my restatement had replaced with
 a weaker one. So the round is **pure transcription of settled rulings into
@@ -166,6 +168,43 @@ and here the *benefit* is zero, which makes the cost moot.
 The KAT regeneration is the part to plan for: the nonce preimage changes shape,
 so the pinned vectors change, and a pinned vector that changes without its
 derivation changing is exactly what those KATs exist to catch.
+
+### 2.5 `RF-D5` (OPEN) — **`r` does not merely delete: `block_hash(h−1)` has to arrive**
+
+Found while grounding the deletion surface, and recorded because the ruling's
+phrasing (*"the nonce's `r` term DELETES"*) reads as a pure removal and **is
+not one**.
+
+`attestation_nonce`'s first term is *replaced*, not dropped — same arity, new
+source — and the new source is **chain state the verifier does not currently
+receive**. `ShekylArchivalAttestationVerifyCtx`
+(`shekyl-ffi/src/archival_ffi/attestation.rs:81-90`) carries `attestation_root`,
+`cb_out_key`, `headers`, and `pairs`. **There is no previous-block hash**, and
+Rust has no chain access at that call site — admission calls in from C++.
+
+So the deletion implies, as one indivisible change:
+
+| Surface | Change | Rule |
+| --- | --- | --- |
+| `ShekylArchivalAttestationVerifyCtx` | gains `prev_block_hash: [u8; 32]` — a `#[repr(C)]` **ABI widening** | [40](../../.cursor/rules/40-ffi-discipline.mdc) |
+| The C++ admission call site | must populate it | [20](../../.cursor/rules/20-rust-vs-cpp-policy.mdc) — a boundary advance, not a C++ patch |
+| Witness blob | `r ‖ count ‖ sigs` → `count ‖ sigs` | — |
+| `cryptonote_config.h:444` | `32 + 8 + MAX·SIG` → `8 + MAX·SIG`, plus the `:429`/`:437` comments | — |
+| Persisted-block wire | version-constant bump, CI-enforced | [42](../../.cursor/rules/42-serialization-policy.mdc) |
+| Pinned nonce + witness KATs | regenerate | [30](../../.cursor/rules/30-cryptography.mdc) |
+
+**`RF-D5` is: does `cb_out_key`'s existing readability protocol extend to the new
+term, or does an unreadable predecessor hash need its own failure code?** The ctx
+already models "C++ could not read this" explicitly — `cb_out_key_readable == 0`
+→ `ERR_CBKEY_UNREADABLE`, *"never garbage"* — and a new required term inherits
+that question rather than the answer. A field added without a readability arm
+would be the one input that fails silently.
+
+**Why this belongs in the round rather than the cut.** It is the only part of the
+`r` deletion that is *not* transcription: every other surface follows mechanically
+from the ruling, and this one asks a question the ruling never reached, because
+the ruling was reasoning about a nonce term and not about who hands it across a
+boundary.
 
 ---
 
