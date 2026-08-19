@@ -51,6 +51,15 @@
 
 ### Changed
 
+- **Covert executor is a real port (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2, #508).**
+  `CovertQueues` owns the fragment window (`dummy.len()`), refuses a
+  non-multiple, and emits exactly one window per take — real or cover.
+  `CovertSend` is epoch-bound so a dropped token restarts and a stale
+  resolve cannot advance a later message. CV-4 still hands distinct
+  queues to `covert_cadence`; `Driver::poll` still takes no queue.
+  C++ `send_noise` still executes in production until step 4 wires
+  notify and deletes the inherited covert branch.
+
 - **The serve-credit response-format round is open (`RF-D1…RF-Dn`).** Unblocked
   by the carrier round's ruling (merged in PR #501). Unusual in shape: **every input is pinned
   except one**, so it is mostly transcription of settled rulings into bytes. The

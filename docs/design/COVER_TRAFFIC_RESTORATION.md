@@ -1,9 +1,10 @@
 # Cover traffic restoration — audit, plan, and status
 
-**Status: PR 1 of the relay-logic Rust cutover is on this branch.** The C++
-covert restructure (§2.1 stages 1–3) is not being pursued; stage 4 enablement
-is not startable. See §2.9 for the series, §3 for what this PR actually
-landed.
+**Status: step 1 merged (#498); step 2 is in review on this branch (#508).**
+Step 3 is zone fan-out. Step 4 wires notify and deletes the inherited covert
+branch. The C++ covert restructure (§2.1 stages 1–3) is not being pursued;
+stage 4 enablement is not startable. See §2.9 for the series, §3 for what
+has landed.
 
 This document exists because the cover mechanism is **deliberately inert, fully
 built, and has no production caller** — which is indistinguishable, to a
@@ -263,10 +264,11 @@ survives.
 
 ## 2.7 The Rust covert state machine — the work that survives
 
-**Forced by the cutover regardless of §42.** Step 1 of §2.9 lands the
-module split and the CV-4 shape; the executor body is step 2. Do not read
-"unbuilt" below the inventory table as "the Rust side does not exist" —
-`CovertQueues` is on this branch. The C++ inventory is what still *executes*.
+**Forced by the cutover regardless of §42.** Step 1 of §2.9 landed the
+module split and the CV-4 shape; step 2 (`#508`) is the executor type.
+Do not read "no production caller" as "the Rust side does not exist" —
+`CovertQueues` is a real port. The C++ inventory is what still *executes*
+until step 4 deletes the inherited covert branch.
 
 ### What C++ owns today
 
@@ -360,7 +362,7 @@ advances that boundary, not on whether the condemned C++ still "works."
 | step | what Rust must own | this PR (`feat/cover-restoration`) | next PR that owns it |
 | --- | --- | --- | --- |
 | **1** | **The decisions.** Fluff floods every zone (`BroadcastAllZones`). Carrier is a function of phase (`RelayCarrier` / `RelayDispatch`). Covert cadence is queue-blind (CV-4's type barrier). | **This PR.** Truth table, dispatch types (`RelayCarrier::Covert` carries `SlotIndex`), `CovertQueues` as a module `Driver` does not hold, complete `shekyl_relay_zone_plan_dispatch_with_refresh` crossing (header + signature gate + null-handle). The C++ flood arm is a **shim so production is correct until step 3 deletes it** — do not extend it. | Step 2. |
-| **2** | **The covert executor.** Per-channel pending, in-flight remainder, bind, CV-1 discard — today's `send_noise` / `queue_covert_notify` / `clear_channel`. | Skeleton only (`CovertQueues`). Must become a real port or stop claiming CV-1. | The PR that ports `send_noise`. Fragment window lives where remainder length is observable. `Driver::poll` still takes no queue. |
+| **2** | **The covert executor.** Per-channel pending, in-flight remainder, bind, CV-1 discard — today's `send_noise` / `queue_covert_notify` / `clear_channel`. | Skeleton only (`CovertQueues`). Must become a real port or stop claiming CV-1. | **This PR (`#508`).** Window is `dummy.len()`; `CovertSend` is epoch-bound; enqueue refuses a non-multiple; CV-4 still hands distinct queues to `covert_cadence`. `Driver::poll` still takes no queue. No production caller — step 4 wires notify. |
 | **3** | **Zone fan-out.** Which configured zones receive a fluff. | C++ `broadcast_all_zones` loop in `net_node.inl`. **Delete target.** | The PR that names the zone set in Rust and reduces C++ to "send these bytes on this zone." The loop in `net_node.inl` does not grow another arm. |
 | **4** | **Production notify.** `send_txs` consumes `plan_dispatch` (phase + carrier + slot in one call). The inherited covert branch — carrier above phase, stem→`local`, all-channels broadcast — is deleted, not repaired. | FFI exists; no C++ caller. That is step 1's seam, not a finished notify path. | Wire the shim, *or* skip if step 5 lands first and notify is already Rust. Do not restructure `levin_notify.cpp` "for a month of life" — §2.6 already discarded that. |
 | **5** | **C++ relay path gone.** `levin_notify.cpp`, `net_node.inl`'s `send_txs` routing, the `zone_route` token in `enums.h`, every `levin.cpp` covert/route oracle, and any `shekyl_relay_zone_*` crossing that exists only for C++. | — | The cutover PR. In-process Rust calls `Zone` / `Driver` directly. A crossing with no remaining C++ consumer is deleted in this step, not kept as a souvenir. |
@@ -377,15 +379,15 @@ flood-suite reconciliation, stage-4 cover *enablement* (§2.3 / §92.5).
 
 ## 3. Status against the plan
 
-**Verified against this branch (`feat/cover-restoration`), 2026-08-18.**
+**Verified against this branch (`feat/covert-executor`), 2026-08-19.**
 
 | item | status | evidence |
 | --- | --- | --- |
 | audit | **done** | §1, this document |
 | C++ stages 1–3 (stem→`local`, carrier-below-phase, per-slot send) | **not being pursued in C++** | §2.6 — written, validated, discarded; dies with the cutover |
 | 4 — enablement | **not startable** | §2.3's two criteria both unmet |
-| **§2.9 step 1 — decisions in Rust (this PR)** | **landed** | `BroadcastAllZones` truth table; `RelayCarrier::Covert` carries `SlotIndex`; `CovertQueues` fragments + CV-1 restart; CV-4 hands distinct queues to `covert_cadence`; FFI export in `shekyl_ffi.h` with null-handle fail-closed. C++ flood arm is the step-3 delete target, present as a shim. |
-| §2.9 step 2 — covert executor | **skeleton only** | `rust/shekyl-relay/src/covert_queue/` exists; `send_noise` still owns the real remainder |
+| **§2.9 step 1 — decisions in Rust** | **landed (#498)** | `BroadcastAllZones` truth table; `RelayCarrier::Covert` carries `SlotIndex`; `CovertQueues` as a module `Driver` does not hold; CV-4 hands distinct queues to `covert_cadence`; FFI export in `shekyl_ffi.h` with null-handle fail-closed. C++ flood arm is the step-3 delete target, present as a shim. |
+| **§2.9 step 2 — covert executor (this PR)** | **landed (type)** | `CovertQueues` is a real port: constant window, CV-1 restart, epoch-bound `CovertSend`, enqueue refuses a non-multiple. CV-4 still threads distinct queues through `covert_cadence`. No production caller — that is step 4. C++ `send_noise` still owns the live remainder. |
 | §2.9 step 3 — zone fan-out in Rust | **not started** | `net_node.inl` still iterates `m_network_zones` |
 | §2.9 step 4 — notify consumes `plan_dispatch` | **not started** | no C++ caller of the new FFI |
 | §2.9 step 5 — C++ relay path deleted | **not started** | cutover PR |

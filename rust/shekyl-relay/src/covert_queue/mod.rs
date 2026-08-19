@@ -54,6 +54,17 @@ struct ChannelQueue {
     offset: Option<usize>,
     /// The peer this channel was bound to when the in-flight run started.
     bound: Option<ConnectionId>,
+    /// Invalidates outstanding [`CovertSend`] tokens. Bumped on take, on
+    /// [`CovertSend::failed`], and on [`CovertQueues::unbind`] — the three
+    /// events that mean a previously taken fragment is no longer the live
+    /// send. `sent`/`failed` apply only when this still matches the token.
+    epoch: u64,
+}
+
+impl ChannelQueue {
+    fn bump(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+    }
 }
 
 /// A fragment taken for exactly one send, awaiting its outcome.
@@ -61,7 +72,7 @@ struct ChannelQueue {
 /// # Dropping this is a FAILURE, and that is correct without any `Drop` code
 ///
 /// [`CovertQueues::take_for_send`] is **non-destructive**: it computes the
-/// fragment without advancing anything. Only [`CovertQueues::sent`] advances.
+/// fragment without advancing anything. Only [`CovertSend::sent`] advances.
 /// So a token that is dropped, forgotten, or lost to an early return leaves the
 /// queue exactly as it was, and the next take on that channel produces the same
 /// fragment — a restart, which is the CV-1 behaviour anyway.
@@ -72,6 +83,14 @@ struct ChannelQueue {
 /// (`shekyl-tor`) is async even though the relay logic is not. Non-destructive
 /// take is what lets the token cross an await and still be correct when it is
 /// dropped.
+///
+/// # A stale resolve is a no-op
+///
+/// The token carries the channel's epoch at take. A later take, `failed`, or
+/// `unbind` bumps that epoch, so resolving the old token cannot advance a
+/// different message — take → unbind → enqueue → `sent()` would otherwise
+/// walk into the successor. The type exists to cross an await; without the
+/// epoch it would only be safe to drop, not to resolve late.
 #[must_use = "a covert send must be resolved with `sent()` or `failed()`; \
               dropping it restarts the fragment on the next take"]
 #[derive(Debug)]
@@ -80,9 +99,15 @@ pub struct CovertSend {
     bytes: Vec<u8>,
     /// False for a dummy: there is nothing to advance on success.
     real: bool,
+    epoch: u64,
 }
 
 impl CovertSend {
+    fn live<'a>(&self, queues: &'a mut CovertQueues) -> Option<&'a mut ChannelQueue> {
+        let q = queues.channels.get_mut(self.channel)?;
+        (q.epoch == self.epoch).then_some(q)
+    }
+
     /// The send succeeded: advance past this fragment.
     ///
     /// The only thing that consumes queue state. A message whose last window
@@ -90,19 +115,24 @@ impl CovertSend {
     ///
     /// Takes `self` — the token is single-use, so a caller cannot resolve one
     /// twice — and takes the queue as an argument rather than holding a
-    /// reference, which is what lets the token cross an await.
+    /// reference, which is what lets the token cross an await. A stale token
+    /// (epoch moved on) is a no-op rather than a mutation of a later send.
     pub fn sent(self, queues: &mut CovertQueues) {
         if !self.real {
             return; // A dummy advances nothing.
         }
         let window = queues.window();
-        let Some(q) = queues.channels.get_mut(self.channel) else {
+        let Some(q) = self.live(queues) else {
             return;
         };
         let Some(message) = q.pending.front() else {
             return;
         };
-        let next = q.offset.unwrap_or(0) + window;
+        let next = q
+            .offset
+            .unwrap_or(0)
+            .checked_add(window)
+            .expect("covert offset + window");
         if next >= message.len() {
             q.offset = None;
             let _ = q.pending.pop_front();
@@ -116,12 +146,15 @@ impl CovertSend {
     /// Mirrors C++ `send_noise`'s failure arm, which clears `active` and nils
     /// the connection so the caller can refresh stems. The message is **not**
     /// dropped — it restarts on the next take, so a failed send costs a
-    /// fragment rather than a transaction.
+    /// fragment rather than a transaction. A stale token is a no-op: it must
+    /// not unbind a later binding.
     pub fn failed(self, queues: &mut CovertQueues) {
-        if let Some(q) = queues.channels.get_mut(self.channel) {
-            q.offset = None;
-            q.bound = None;
-        }
+        let Some(q) = self.live(queues) else {
+            return;
+        };
+        q.offset = None;
+        q.bound = None;
+        q.bump();
     }
 
     /// The bytes to put on the wire — always exactly the window.
@@ -224,32 +257,42 @@ impl CovertQueues {
     /// Non-destructive: see [`CovertSend`].
     pub fn take_for_send(&mut self, channel: usize, peer: ConnectionId) -> Option<CovertSend> {
         let window = self.window();
-        let dummy = self.dummy.clone();
         let q = self.channels.get_mut(channel)?;
 
         if q.bound != Some(peer) {
             q.bound = Some(peer);
             q.offset = None; // CV-1: restart, never resume.
         }
+        q.bump();
+        let epoch = q.epoch;
 
-        let Some(message) = q.pending.front() else {
+        if q.pending.is_empty() {
             return Some(CovertSend {
                 channel,
-                bytes: dummy,
+                bytes: self.dummy.clone(),
                 real: false,
+                epoch,
             });
-        };
+        }
+
         let offset = q.offset.unwrap_or(0);
-        debug_assert!(
-            offset + window <= message.len(),
-            "offset ran past a message that enqueue proved to be a whole \
-             number of windows"
-        );
-        let end = (offset + window).min(message.len());
+        let end = offset.checked_add(window).expect("covert offset + window");
+        // A short slice would PUBLISH — length is the invariant. Enqueue
+        // proved the message is a whole number of windows, and `sent` only
+        // advances by one window, so this is unreachable except as a bug.
+        // Panic rather than emit a distinguishable send, and rather than
+        // dummy-without-pop (the empty-head wedge this type already knows).
+        let Some(bytes) = q.pending.front().and_then(|m| m.get(offset..end)) else {
+            panic!(
+                "covert fragment [{offset}, {end}) is not a slice of a message \
+                 that enqueue proved to be a whole number of windows"
+            );
+        };
         Some(CovertSend {
             channel,
-            bytes: message[offset..end].to_vec(),
+            bytes: bytes.to_vec(),
             real: true,
+            epoch,
         })
     }
 
@@ -259,6 +302,7 @@ impl CovertQueues {
             q.pending.clear();
             q.offset = None;
             q.bound = None;
+            q.bump();
         }
     }
 }
