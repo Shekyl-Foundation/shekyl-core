@@ -381,6 +381,13 @@ jobs:
           # "no match" — so a deleted directory silently disables the gate, even
           # when the forbidden pattern is present. Capture the status instead:
           # 1 is the only passing value.
+          # `\s`, `\b` and `\|` are GNU extensions to BRE, not PCRE-only escapes:
+          # GNU grep honours all three without -E or -P. Verified against GNU grep
+          # 3.11 — the pattern matches `tx.version == 1`, `tx.version==1` and
+          # `hf_version < 1`, and `\b` correctly rejects `== 11` / `< 10`. This job
+          # pins runs-on: ubuntu-latest, so the GNU implementation is guaranteed;
+          # a move to a BSD-grep runner would need `-E` plus a `\b` replacement.
+          # Stated because the escapes read as PCRE and have been misread once.
           grep -rn 'tx\.version\s*==\s*1\b\|tx\.version\s*<\s*2\b\|hf_version\s*<\s*1\b' src/ --include='*.cpp' --include='*.h' && rc=0 || rc=$?
           [ "$rc" -eq 1 ] || { echo "FATAL: legacy v1/v2 transaction version checks still present (grep rc=$rc)"; exit 1; }
           echo "PASS: no v1/v2 tx version branches"
