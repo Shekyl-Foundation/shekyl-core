@@ -10222,7 +10222,8 @@ production callers.
     signature-audit pin — matches the bindings file's fork-pin
     SHA against the submodule HEAD at
     `external/randomx-v2`). New
-    [`.cargo/mutants.toml`](../.cargo/mutants.toml) configures
+    `.cargo/mutants.toml` (deleted 2026-08-19 with the T18 re-scope;
+    see `docs/design/RANDOMX_V2_MUTATION_REGIME.md` MR-DQ-8) configured
     `cargo-mutants` with `timeout_multiplier = 5.0` and skip-globs
     for tooling binaries (`src/bin/**`) and canonical outputs
     (`canonical_outputs.rs`) per the skip-list discipline. New

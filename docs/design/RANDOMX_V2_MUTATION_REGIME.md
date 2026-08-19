@@ -877,7 +877,7 @@ is a bug, not a no-op.
 
 ---
 
-### MR-DQ-8 — how is test scoping pinned (MR-F5)? — **HELD 2026-08-18 (ruling withdrawn)**
+### MR-DQ-8 — how is test scoping pinned (MR-F5)? — **DISSOLVED 2026-08-19**
 
 The 2g contract never pinned which packages *test* a mutant; the tool's
 `TestPackages::Mutated` default silently became the contract, and it is
@@ -894,7 +894,58 @@ as described, at higher per-mutant cost (the harness suite replaces the
 verifier suite); (c) `test_workspace = true` — broadest, most
 expensive.
 
-**HELD (2026-08-18, superseding the same-day C1 ruling).** The C1
+**DISSOLVED (2026-08-19), superseding both the C1 ruling and the hold.**
+
+DQ-8 asks which suite judges a **verifier** mutant: `Mutated` (a),
+`test_package = ["shekyl-randomx-differential"]` (b/C1), or
+`test_workspace` (c). After item 3 deletes the whole-crate sweep, the
+question has **no live subject**. Item 3's scope is
+`cache_precondition.rs` + `mode_correctness.rs`, both in
+`shekyl-randomx-differential` — **no verifier mutants exist in scope**,
+so (a)/(b)/(c) have nothing to decide between, and the rule-21
+8-shards×6h trigger has nothing to fire on.
+
+Third instance of one cause, after MR-DQ-2 and MR-DQ-4: a question
+posed before §6.6 re-derived the scope, dissolved *by* the
+re-derivation rather than answered. Recorded with its reasoning rather
+than struck, because a struck row reads as abandoned and the next
+reader re-asks it.
+
+**Two obligations survive the dissolution, and both land with item 3:**
+
+1. **Test scoping is pinned explicitly even though the pin equals the
+   default.** DQ-8's own text is the binding part — *"the amendment
+   must state test scoping explicitly rather than inherit a default —
+   that is the specific failure this whole round exists to stop
+   recurring."* Under `Mutated`, a harness-crate mutant is judged by
+   the harness suite, which is now the eleven negative tests: correct,
+   but correct **by luck of scope**. Inheriting it silently would close
+   the round by re-committing its founding error with the excuse that
+   the default happened to be right this time. The ratchet therefore
+   passes `--test-package shekyl-randomx-differential` on both
+   invocations, with a comment saying it currently equals the default
+   and is pinned anyway. Verified identical: 11 mutants listed, 11
+   caught.
+2. **The orphaned config is disposed of, not queued.**
+   `.cargo/mutants.toml` at the repo root is read by nothing (MR-F2′),
+   and once the sweep is deleted its skip-list and multiplier have no
+   consumer at all. A file that looks like live configuration and is
+   not is the exact artifact that cost this round five sessions —
+   rule-15 debris of the worst kind. Item 3 is CLI-only, so it is
+   **deleted**, in the same diff.
+
+**Lineage.** Prerequisite 2 of the withdrawn C1 ruling — a structural
+guard asserting the config is live, using the 1322→1290 delta — carries
+over in *shape* rather than substance: the ratchet's
+minimum-mutant-count assertion is the same defensive pattern (a config
+present but unread, or a scope present but empty, must fail loudly)
+applied to what item 3 actually has. That is the third instance of one
+rule, alongside the §13 grep gate and `ctest --no-tests=error`, and the
+generalization is what should survive this round.
+
+---
+
+**Superseded hold, retained for its analysis (2026-08-18).** The C1
 reasoning below stands *on its own terms* — the timing inversion is
 real and C1-over-C2 is correct — but it prices an instrument whose
 **yield has never been derived**. The round built a rigorous cost model

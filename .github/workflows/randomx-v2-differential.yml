@@ -30,9 +30,15 @@
 #   dispatch can still produce a green run while the T5 budget
 #   question is open.
 #
-# * Weekly cron (`0 6 * * 1`): `cargo-mutants` per §5.5.6 + §4.6 M2.
-#   Mutation-tests the harness + verifier under the §1.4 sole-consumer
-#   discipline. Skip-list discipline lives in `.cargo/mutants.toml`.
+# * Weekly cron (`0 6 * * 1`): the FULL 1024-pin `full-parity` sweep.
+#   The daily 05:00 cron runs that job's 19-dataset subset; the Monday
+#   cron is what selects the full label (see `PARITY_CTEST_LABEL`,
+#   which keys on `schedule != '0 5 * * *'`). This cron previously also
+#   drove the weekly `cargo-mutants` sweep; that job is DELETED (see
+#   below), but the cron is deliberately KEPT because full-parity's
+#   full sweep is its other consumer — removing it alongside the job
+#   would have silently downgraded the 1024-pin sweep to never running
+#   on schedule.
 #
 # * Daily cron / weekly full sweep / dispatch: `full-parity` — the
 #   Phase 3a C-full-dataset vs Rust-light parity gate + post-link nm
@@ -60,7 +66,8 @@
 # resource collisions).
 #
 # Cron offset: `0 5 * * *` for daily structural-validate runs;
-# `0 6 * * 1` for the weekly cargo-mutants run.
+# `0 6 * * 1` for the weekly full-parity sweep (formerly also the
+# cargo-mutants run, deleted with the T18 re-scope).
 
 name: randomx-v2-differential
 
@@ -83,7 +90,6 @@ on:
       - '.github/actions/build-randomx-v2-ref/**'
       - '.github/workflows/randomx-v2-differential.yml'
       - '.github/workflows/randomx-v2-adversarial-ratio.yml'
-      - '.cargo/mutants.toml'
   pull_request:
     paths:
       - 'rust/shekyl-randomx-differential/**'
@@ -96,13 +102,12 @@ on:
       - '.github/actions/build-randomx-v2-ref/**'
       - '.github/workflows/randomx-v2-differential.yml'
       - '.github/workflows/randomx-v2-adversarial-ratio.yml'
-      - '.cargo/mutants.toml'
   schedule:
     # Daily structural-validate at 05:00 UTC. Staggered from existing
     # `nightly.yml` (03:00 UTC) + `shekyl-oxide-divergence.yml`
     # (Mon 04:00 UTC) + `codeql.yml` (Mon 04:30 UTC).
     - cron: "0 5 * * *"
-    # Weekly `cargo-mutants` on Monday at 06:00 UTC.
+    # Weekly full-parity sweep on Monday at 06:00 UTC.
     - cron: "0 6 * * 1"
   workflow_dispatch:
     inputs:
@@ -118,14 +123,6 @@ on:
           - daily
           - full
         default: daily
-      run_mutants:
-        description: >-
-          Also run the weekly cargo-mutants job (T18) on this dispatch.
-          Off by default: until the re-scope lands, that job exceeds
-          the 6-hour hosted-runner ceiling and is guaranteed to red, so
-          an unrelated dispatch must not spend a runner on it (MR-F6).
-        type: boolean
-        default: false
       checkout_ref:
         description: >-
           Git ref the matrix lanes check out, instead of the matrix
@@ -518,115 +515,6 @@ jobs:
           cargo run --release --locked -p shekyl-randomx-differential \
             --bin shekyl-randomx-differential -- --mode=latency
 
-  mutants:
-    # Weekly cargo-mutants run per §5.5.6 + §4.6 M2 (Round-3
-    # substrate-completeness amendment). Mutation testing is
-    # nightly-only (not per-PR) per the F5 budget — `cargo mutants`
-    # against the harness + verifier surfaces is multi-hour work; the
-    # weekly cadence balances substrate signal against runner cost.
-    #
-    # Skip-list discipline lives in `.cargo/mutants.toml`
-    # (`exclude_globs` for the tooling binaries + canonical-output
-    # data file per §5.5.6 row). Each entry in the skip list is a
-    # substrate-anchored carve-out; new skip-list entries require a
-    # §5.5.6-row plan-doc amendment.
-    #
-    # RESTORED 2026-08: this job's header (name/runs-on/timeout/if +
-    # checkout) was accidentally severed by 5736453c8's T5-step
-    # simplification, which orphaned the job's remaining steps into
-    # the tail of runtime-modes. The severed state (a) left T18 with
-    # NO trigger — the Monday 06:00 cron ran no mutants job at all
-    # (armed-gate instance five) — and (b) would have run multi-hour
-    # mutation work inside runtime-modes' 90-minute timeout on every
-    # daily cron had T8 not been failing first.
-    name: 'weekly: cargo-mutants (T18)'
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    # MR-F6: `&&` binds tighter than `||`, so the previous condition
-    # parsed as `(schedule && monday) || dispatch` — EVERY dispatch,
-    # including an unrelated parity-recovery or lane-rehearsal one,
-    # spent a 6-hour runner on a run that is guaranteed to red until
-    # the T18 re-scope lands. The job's only execution ever (run
-    # 31346130482) was in fact a dispatch. Now gated on an explicit
-    # boolean input, the same shape `runtime_modes` already uses, with
-    # the schedule arm parenthesised so precedence is stated rather
-    # than relied on.
-    #
-    # Fixed here rather than filed because it directly obstructs the
-    # rehearsal mechanism this PR adds: dispatching to exercise the
-    # rotating lane would otherwise launch this job too.
-    if: (github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.run_mutants)
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-      - name: Install Rust toolchain
-        # Composite action (.github/actions/install-rust); see the
-        # structural-validate job's step comment.
-        uses: ./.github/actions/install-rust
-      - name: Verify CMake + Ninja are present
-        # NO apt install, deliberately. `ubuntu-latest` maps to
-        # ubuntu-24.04, whose image already ships CMake and Ninja
-        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
-        # ninja (1.11.1) over the network, untimed, for no benefit.
-        #
-        # That step has now cost this repo four killed jobs: three on
-        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
-        # stall, and this lane's own merge gate on 2026-08-19, cancelled
-        # at 30 minutes with the rotation never run. A merge gate must
-        # not depend on an apt mirror being reachable.
-        #
-        # Verifying instead of installing removes the network from these
-        # jobs entirely, and asserts the gate's own prerequisites exist
-        # rather than assuming them: if a future runner image drops
-        # either tool this fails in seconds with an actionable message,
-        # instead of failing later inside cmake with a generator error.
-        run: |
-          set -euo pipefail
-          for tool in cmake ninja; do
-            if ! command -v "${tool}" >/dev/null 2>&1; then
-              echo "FATAL: ${tool} is not on PATH." >&2
-              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
-              echo "  ships CMake + Ninja). If the image changed, install it" >&2
-              echo "  here explicitly rather than assuming it is present." >&2
-              exit 1
-            fi
-          done
-          cmake --version
-          ninja --version
-      - name: Configure + build randomx-v2 C reference
-        uses: ./.github/actions/build-randomx-v2-ref
-      - name: Install cargo-mutants
-        # `cargo install --locked` is idempotent: on workflow re-run
-        # the binary is already present in `~/.cargo/bin`. The
-        # `--locked` flag pins against `cargo-mutants`' own
-        # `Cargo.lock`; absent that pin a transitive dep can shift
-        # the binary's behavior between runs.
-        run: cargo install cargo-mutants --locked
-      - name: cargo mutants (harness + verifier)
-        working-directory: rust
-        # Per `.cargo/mutants.toml`: invokes mutation testing across
-        # `shekyl-randomx-differential` + `shekyl-pow-randomx` with
-        # the skip-list discipline. T18 asserts that survival rate
-        # is bounded by the skip-list; new survivors require either
-        # (a) a §5.5.6-row plan-doc amendment justifying the skip
-        # addition, or (b) a verifier/harness-side change that
-        # collapses the survivor.
-        #
-        # `--in-place` runs mutations inline rather than in a
-        # parallel worktree; the runner's 14 GB SSD is tight for
-        # multi-worktree mutation runs at workspace scale.
-        #
-        # canonical_pins_full is skipped here for the same
-        # reason structural-validate's debug step skips it: mutants
-        # runs the suite in DEBUG once per mutant, and 1024 interpreted
-        # hashes are hours in debug — the baseline alone would eat the
-        # 360-minute cap. Mutation coverage of the verifier's hashing
-        # is already carried by the rest of the suite; the pins test's
-        # job is arch parity, not mutant killing. (First `--` = cargo
-        # test args, second = test-binary args.)
-        run: cargo mutants --package shekyl-randomx-differential --package shekyl-pow-randomx --in-place -- -- --skip canonical_pins_full
-
   verdict-ratchet:
     # MR-DQ-2 (per-PR leg) + re-scope item 3, converged
     # (RANDOMX_V2_MUTATION_REGIME.md §6.6, §7.5 item 3).
@@ -720,9 +608,20 @@ jobs:
         #
         # `wc -l < file` is a redirect, not a pipe, so no verdict
         # travels through a pipeline (rule 46).
+        #
+        # `--test-package` is PINNED EXPLICITLY even though it currently
+        # equals cargo-mutants' default (`TestPackages::Mutated`, which
+        # judges a mutant by its own crate's tests). Both scoped files
+        # live in `shekyl-randomx-differential`, so the default is
+        # correct here — but correct BY LUCK OF SCOPE. MR-F5 is the
+        # record of what an unpinned default costs: it silently became
+        # the contract, and the whole re-scope followed. Inheriting it
+        # again, with the excuse that this time it happens to be right,
+        # would close the round by re-committing its founding error.
         run: |
           set -euo pipefail
           cargo mutants --package shekyl-randomx-differential \
+            --test-package shekyl-randomx-differential \
             --re 'verdict' --list > verdict-mutants.txt
           count=$(wc -l < verdict-mutants.txt)
           echo "verdict-scoped mutants: ${count}"
@@ -746,6 +645,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo mutants --package shekyl-randomx-differential \
+            --test-package shekyl-randomx-differential \
             --re 'verdict' --in-place --profile release \
             -- -- --skip canonical_pins_full
       - name: Upload ratchet diagnostics
