@@ -83,7 +83,7 @@ TEST(archival_credit_wire, attestation_root_defaults_to_empty_set_root)
 // a current archive stores class version 1, so loading it must NOT trip the
 // pre-V9 rejection, and attestation_root must ride the archive. (The stored
 // version is delivered to serialize() at load — the wallet cache's
-// `assert(ver == 4)` in wallet2.h relies on the same mechanism.)
+// `assert(ver == 4)` in the deleted wallet2.h relied on the same one.)
 TEST(archival_credit_wire, block_boost_archive_round_trips_attestation_root)
 {
   cryptonote::block bl{};

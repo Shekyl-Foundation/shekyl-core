@@ -1557,7 +1557,7 @@ orchestration method to `tools::wallet2`. The BIP-39 orchestration
 chain (validate → entropy-extract → account-generate →
 entropy-persist → keys-file-create) inlines into the existing call
 site `tools::generate_from_json` (the JSON-restore-from-phrase
-path at [`src/wallet/wallet2.cpp:521`](../../src/wallet/wallet2.cpp)).
+path at `src/wallet/wallet2.cpp:521`).
 Entropy persistence to `m_bip39_entropy` is handled via friend
 access from the namespace-scope `generate_from_json` function;
 implementation-shape choice (friend vs. narrow private setter

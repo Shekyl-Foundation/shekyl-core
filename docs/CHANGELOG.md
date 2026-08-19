@@ -26,6 +26,29 @@
 
 ### Removed
 
+- **The C++ wallet stack is deleted — `wallet2` and everything that
+  existed only to serve it** (Phase 5 of the Rust wallet rewrite,
+  `docs/design/WALLET_REWRITE_PLAN.md`). 27,579 lines: all of
+  `src/wallet/` (24,239 — `wallet2.{h,cpp}`, `wallet2_ffi.{h,cpp}`, the
+  two remaining `wallet_rpc_server_*` headers, `wallet_args`,
+  `node_rpc_proxy`, `fee_priority`, `fee_algorithm`, `wallet_errors`),
+  `src/device/device_cold.hpp` (typed entirely on `tools::wallet2::*`,
+  included only by `wallet2.cpp`), the `account_base` SHKW1 transitional
+  helpers, and the two Rust FFI modules whose only consumer was
+  `wallet2.cpp` (`engine_file_ffi.rs`, `wallet_envelope_ffi.rs` — 15
+  exports, 6 of which already had no C++ caller). `src/shekyl/shekyl_ffi.h`
+  loses its wallet section; one constant survives, relocated, because a
+  daemon-side call site uses it as a byte offset.
+
+  Nothing shipped changes. The C++ wallet has been unshipped since the
+  C1/C2 install cutover handed its binary name and install slot to the
+  Rust `shekyl-wallet-rpc`, and it never carried a staking surface at all
+  — so deleting it removes no capability and unblocks staking exit being
+  built once, in Rust. The Windows CI job drops the `wallet` target and
+  is renamed accordingly: Windows wallet support was already absent
+  before this change and is not affected by it (see
+  `docs/design/WINDOWS_WALLET_SUPPORT.md`).
+
 - **The C++ `wallet_rpc_server` executable is deleted**, in the same PR
   that handed its binary name and install slot to the Rust
   `shekyl-wallet-rpc`. Keeping it would have left an uninstalled second
@@ -51,6 +74,14 @@
 
 ### Changed
 
+- **Covert executor is a real port (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2, #508).**
+  `CovertQueues` owns the fragment window (`dummy.len()`), refuses a
+  non-multiple, and emits exactly one window per take — real or cover.
+  `CovertSend` is epoch-bound so a dropped token restarts and a stale
+  resolve cannot advance a later message. CV-4 still hands distinct
+  queues to `covert_cadence`; `Driver::poll` still takes no queue.
+  C++ `send_noise` still executes in production until step 4 wires
+  notify and deletes the inherited covert branch.
 - **`r` deletes from the attestation nonce and the witness — replaced, not
   removed (`RF-D3`/`RF-D5`).** The nonce's first term becomes the block's
   **validated** predecessor hash: `r` and `cb_out_key` were chosen by the same
@@ -20245,8 +20276,8 @@ production callers.
      wallet-cache I/O) to drive
      `shekyl-engine-state::TransferDetails` through FFI, then deletes
      the C++ struct from
-     [`src/wallet/wallet2.h`](../src/wallet/wallet2.h) and
-     [`src/wallet/wallet_rpc_server_commands_defs.h`](../src/wallet/wallet_rpc_server_commands_defs.h).
+     `src/wallet/wallet2.h` and
+     `src/wallet/wallet_rpc_server_commands_defs.h`.
      Closes either at V3.1 or by superseding deletion in the V3.2
      `wallet2.cpp` retirement.
 
@@ -20720,7 +20751,7 @@ production callers.
   the current `m_wallet_file`) and password change
   (`force_rewrite_keys=true`, as routed from
   `wallet2::change_password`) — now throw a typed
-  [`tools::error::wallet_shkw1_operation_unsupported`](../src/wallet/wallet_errors.h)
+  `tools::error::wallet_shkw1_operation_unsupported`
   before any wallet-state mutation (no `trim_hashchain` cache
   touch, no `prepare_file_names` path rewrite, no cache
   serialization). Both flows require FFI that doesn't exist
@@ -20789,7 +20820,7 @@ production callers.
   runs while C++ secrets are still live, and the C++ wipe
   happens after the handle drops. Three new typed refusals
   in
-  [`src/wallet/wallet_errors.h`](../src/wallet/wallet_errors.h)
+  `src/wallet/wallet_errors.h`
   discriminate structural failure modes (wrong network vs.
   AAD-bound cryptographic inconsistency vs. unsupported
   capability) so CLI, wallet RPC, and tests can render

@@ -241,15 +241,33 @@ jobs:
         # sites add a separate `rustup target add` step, the
         # depends.yml pattern).
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
-        # `ubuntu-latest` images carry CMake by default, but we pin
-        # Ninja explicitly because the submodule's CMakeLists builds
-        # ~50 translation units and Ninja's parallelism is materially
-        # faster than the default Makefile generator on the 4-vCPU
-        # runner. Cost: a few seconds of `apt install`.
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. The submodule's CMakeLists wants
+        # Ninja (it builds ~50 translation units and Ninja's parallelism
+        # beats the Makefile generator on a 4-vCPU runner) — but
+        # ubuntu-24.04 already ships Ninja 1.13.2 and CMake 3.31.6, so
+        # the old `apt-get install ninja-build` fetched an OLDER ninja
+        # (1.11.1) over the network for no benefit.
+        #
+        # That step has cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and a merge gate on 2026-08-19 cancelled at 30 minutes
+        # with its actual checks never run. Verifying instead removes
+        # the network from this job and asserts the prerequisites exist
+        # rather than assuming them.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  and ubuntu-24.04-arm both ship CMake + Ninja). If the image" >&2
+              echo "  changed, install it here explicitly rather than assuming." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         # Composite action (.github/actions/build-randomx-v2-ref): one
         # recipe for every lane — the rationale (out-of-band submodule
@@ -425,10 +443,36 @@ jobs:
         # Composite action (.github/actions/install-rust); see the
         # structural-validate job's step comment.
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         uses: ./.github/actions/build-randomx-v2-ref
       - name: concurrent mode (T7 byte-equality + T8 RSS ceiling)
@@ -520,10 +564,36 @@ jobs:
         # Composite action (.github/actions/install-rust); see the
         # structural-validate job's step comment.
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         uses: ./.github/actions/build-randomx-v2-ref
       - name: Install cargo-mutants
@@ -598,10 +668,36 @@ jobs:
           submodules: recursive
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         uses: ./.github/actions/build-randomx-v2-ref
       - name: Install cargo-mutants
@@ -661,6 +757,148 @@ jobs:
             rust/verdict-mutants.txt
             rust/mutants.out/
           retention-days: 30
+
+  rotating-pr:
+    # MR-DQ-6 RULED (2026-08-19): single leg on pull_request.
+    #
+    # WHAT THIS IS, and what it deliberately is NOT. The index is
+    # days-since-epoch, so every PR on a given day derives the SAME
+    # index and re-checks the SAME inputs. This leg therefore does
+    # **not** advance the explored boundary — that still moves once per
+    # day, on the cron. It is a TRIPWIRE ON THE CHANGE: does this diff
+    # diverge against the C oracle on a non-pinned input set?
+    #
+    # Reading it as coverage would be the decay this round exists to
+    # stop, so the banner labels it `pull-request`, a provenance
+    # distinct from both siblings: not schedule-derived (it advances
+    # nothing) and not operator-supplied (nobody chose the index).
+    # Only `schedule-derived` may ever be credited as coverage (T-A11).
+    #
+    # WHY IT EARNS ITS RUNNER. Before this leg, no per-PR gate
+    # exercised a single input outside the pinned corpus:
+    # structural-validate runs --mode=correctness at per-PR sizing over
+    # the PINNED corpus, native-arm runs the pinned 1024, and the
+    # verdict ratchet mutates verdict functions. A verifier change that
+    # diverges only OFF-corpus passed every per-PR gate, landed on dev,
+    # and waited for the daily cron — which, per MR-R1a, does not exist
+    # until dev reaches main. That class of regression had no per-PR
+    # tripwire at all and an unbounded window before detection.
+    #
+    # BUDGET (measured, run 32214326519): 444 s in the mode plus ~44 s
+    # of setup and builds. The per-PR critical path is
+    # structural-validate at ~26 min, so this hides inside it entirely:
+    # +8 runner-minutes, +0 wall-clock. Unrelated PRs never reach here
+    # — the workflow-level positive `paths:` filter (R1-D12) is the
+    # gate, exactly as it is for structural-validate.
+    #
+    # SINGLE LEG, NO MATRIX, on purpose: the cron's [main, dev] matrix
+    # is meaningless here. A PR is one head, checked out once by the
+    # default checkout.
+    #
+    # TRIAGING A RED. It is ambiguous between "this PR broke it" and
+    # "today's index already diverges on dev". Disambiguate by REPLAYING
+    # THE SAME INDEX against dev — which is exactly what the derived
+    # seed buys, and which is a one-command question rather than an
+    # investigation. Do not escalate as a consensus finding before that
+    # replay; do not re-run this job to retest, since a same-day re-run
+    # re-checks identical inputs and a next-day one changes them.
+    name: 'pr: rotating tripwire (non-pinned inputs)'
+    runs-on: ubuntu-latest
+    # Mode measured at 444 s; 30 leaves room for a slow runner without
+    # becoming a place a hang can hide.
+    timeout-minutes: 30
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
+        run: |
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
+      - name: Configure + build randomx-v2 C reference
+        uses: ./.github/actions/build-randomx-v2-ref
+      - name: Resolve rotation index
+        id: rotation
+        # Same derivation as the cron leg, resolved once. Deliberately
+        # NOT accepting an override here: a PR tripwire whose index a
+        # contributor could choose would let a diff be checked against
+        # an input set the contributor picked (§4.5 T-A7/T-A11).
+        run: |
+          set -euo pipefail
+          index=$(( $(date -u +%s) / 86400 ))
+          echo "index=${index}" >> "$GITHUB_OUTPUT"
+          echo "rotation index ${index} (pull-request tripwire)"
+      - name: rotating tripwire (non-pinned inputs vs the C oracle)
+        working-directory: rust
+        # Verdict unpiped (rule 46). Same sizing as the cron leg so a
+        # PR red and a cron red are directly comparable.
+        run: |
+          set -euo pipefail
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- \
+            --mode=rotating \
+            --rotation-index=${{ steps.rotation.outputs.index }} \
+            --rotation-provenance=pull-request \
+            --random-corpus-seedhashes=32 \
+            --random-corpus-data-per-seedhash=32 \
+            > rotating-pr.log 2>&1
+      - name: Surface the lane's own record
+        if: always()
+        # §13: a green tick that does not evidence its own subject is
+        # not evidence. Without this, a run checking 1024 pairs and one
+        # checking zero look identical.
+        run: |
+          set -euo pipefail
+          # Guarded: if the job failed BEFORE the lane wrote its log —
+          # a toolchain install stall, a C-reference build failure —
+          # then an unguarded `cat` fails too and buries the real error
+          # under a missing-file message. A diagnostic step that can
+          # itself fail is a diagnostic that obscures.
+          if [ -f "rust/rotating-pr.log" ]; then
+            cat "rust/rotating-pr.log"
+          else
+            echo "no rotating log at rust/rotating-pr.log — the lane did not reach its run step."
+            echo "The failure is in an earlier step; this is not a divergence."
+          fi
+      - name: Upload divergence forensics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        # Forensics, not recovery: the INPUTS are reconstructable from
+        # the index alone; what is not reconstructable is the observed
+        # output on this runner at this toolchain state.
+        with:
+          name: randomx-rotating-pr-idx${{ steps.rotation.outputs.index }}-failure-${{ github.run_id }}
+          path: rust/rotating-pr.log
+          retention-days: 90
 
   rotating:
     # The exploring differential lane (RANDOMX_V2_MUTATION_REGIME.md
@@ -741,10 +979,36 @@ jobs:
           ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || matrix.branch }}
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         uses: ./.github/actions/build-randomx-v2-ref
       - name: Resolve rotation index
@@ -825,7 +1089,19 @@ jobs:
         # evidence its own subject. `always()` so the record appears on
         # success and failure alike, and the banner's rotation binding
         # is readable without downloading an artifact.
-        run: cat "rust/rotating-${{ matrix.branch }}.log"
+        run: |
+          set -euo pipefail
+          # Guarded: if the job failed BEFORE the lane wrote its log —
+          # a toolchain install stall, a C-reference build failure —
+          # then an unguarded `cat` fails too and buries the real error
+          # under a missing-file message. A diagnostic step that can
+          # itself fail is a diagnostic that obscures.
+          if [ -f "rust/rotating-${{ matrix.branch }}.log" ]; then
+            cat "rust/rotating-${{ matrix.branch }}.log"
+          else
+            echo "no rotating log at rust/rotating-${{ matrix.branch }}.log — the lane did not reach its run step."
+            echo "The failure is in an earlier step; this is not a divergence."
+          fi
       - name: Upload divergence forensics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -1036,14 +1312,32 @@ jobs:
         # Composite action (.github/actions/install-rust); rustup-init
         # resolves the aarch64 host triple itself.
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
-        # cmake is listed explicitly (unlike the x86 jobs, which lean on
-        # ubuntu-latest carrying it): the arm image is a separate build
-        # and this lane must not die at `cmake: command not found`
-        # before its actual checks run. Idempotent if preinstalled.
+      - name: Verify CMake + Ninja are present
+        # The arm image is a separate build, so its inventory was
+        # checked separately rather than assumed to match x86:
+        # ubuntu-24.04-arm ships CMake 3.31.6 and Ninja 1.13.2, the same
+        # as ubuntu-24.04. The old apt step was therefore not merely
+        # redundant here — it installed cmake 3.28.3 over the image's
+        # 3.31.6, actively DOWNGRADING the toolchain this lane tests
+        # with, on top of the mirror-stall risk that killed four jobs
+        # across 2026-08-18/19.
+        #
+        # The concern the old comment named — dying at `cmake: command
+        # not found` before the real checks run — is now met directly by
+        # asserting both tools rather than by installing them.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  and ubuntu-24.04-arm both ship CMake + Ninja). If the image" >&2
+              echo "  changed, install it here explicitly rather than assuming." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference (aarch64)
         # Composite action: the SAME recipe as the x86 lanes by
         # construction — on this runner it produces the arm

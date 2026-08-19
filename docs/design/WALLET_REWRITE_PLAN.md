@@ -713,6 +713,37 @@ OpenAPI 3.1 spec at [docs/api/wallet_rpc.yaml](../api/wallet_rpc.yaml) lands **b
 
 ## Phase 5 — C++ deletion
 
+**LANDED 2026-08-19.** One commit; `src/wallet/` no longer exists. What
+actually gated it was not the Phase-4 method list: `unstake`/`claim` were
+ruled **out** of the completion gate, because `wallet2` never carried a
+staking surface (`grep -ci` for stake/bond over `wallet2.{cpp,h}` and
+`wallet_rpc_server_commands_defs.h` = 0/0/0), so holding the deletion for
+an unbond producer would have kept 13,360 lines compiling to serve a
+capability they never had. The inventory below is preserved as written;
+six of its targets were already gone when the commit was cut, and five
+files it did not list had to be added — see the commit message.
+
+**Boundary rule, restated after this phase (the §Phase 5 note below scoped
+`src/device/` out by directory, and `device_cold.hpp` slipped through):**
+scope a deletion by **consumer set, not container**. Any file whose only
+consumer is `wallet2` dies with `wallet2`, wherever it lives. This phase
+produced five instances of the same error — directory (`device_cold.hpp`,
+`object_sizes.cpp`), name prefix (a `shekyl_wallet_` grep blind to
+`shekyl_engine_state_*`), doc section (a FOLLOWUPS sweep scoped to §V3.1+
+that missed two Phase-5-triggered entries in §V3.0), and header
+declaration block (two wrong counts of the export set). Four of the five
+fail *silently green*, because header-only and declaration-only misses
+dangle rather than break the build. **Enumerate the reference set, then
+verify — never enumerate the container.**
+
+**Corollary:** a check that measured the deleted C++ surface is **retired
+with rationale, not retargeted** at Rust. Its Rust equivalent may already
+exist, may be unnecessary, or may need designing — those are three
+different answers, and re-pointing the check picks one by accident. The
+`engine_file_ffi.rs` row in the FFI boundary ratchet is the worked example.
+
+Original plan text follows.
+
 After Phase 4 lands and the binaries pass acceptance tests. Single commit, separately reviewable, long commit message naming every deleted path. Per [.cursor/rules/15-deletion-and-debt.mdc](../../.cursor/rules/15-deletion-and-debt.mdc): "git history is the archive."
 
 **Rule for this phase:** if a Rust symbol exists only because C++ called it, and C++ is deleted, the Rust symbol is deleted in the same commit. The "FFI surface" is part of the C++ surface as far as deletion goes. Leaving dead `extern "C"` exports because "we might need them later" is exactly the debt this phase exists to liquidate.

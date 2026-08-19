@@ -472,13 +472,15 @@ open time from `.wallet.keys`'s last 16 bytes.
   — the normative envelope module. `seal_keys_file`, `inspect_keys_file`,
   `open_keys_file`, `rewrap_keys_file_password`, `seal_state_file`,
   `open_state_file`.
-- [`rust/shekyl-ffi/src/wallet_envelope_ffi.rs`](../rust/shekyl-ffi/src/wallet_envelope_ffi.rs)
-  — C-ABI surface for the above. Two-call sizing, zeroize-on-failure,
-  narrow-error discipline per
-  [.cursor/rules/40-ffi-discipline.mdc](../.cursor/rules/40-ffi-discipline.mdc).
-- [`src/shekyl/shekyl_ffi.h`](../src/shekyl/shekyl_ffi.h) — the C-side
-  prototypes. Constants and struct layouts pinned by `static_assert`
-  against the Rust `#[repr(C)]` definitions.
+- **There is no longer a C-ABI surface for this format.**
+  `rust/shekyl-ffi/src/wallet_envelope_ffi.rs` and the wallet section of
+  `src/shekyl/shekyl_ffi.h` existed so `wallet2.cpp` could open and seal
+  these files; both were deleted at Phase 5 (2026-08-19) with the C++
+  wallet stack. The format is now consumed only from Rust, through
+  `shekyl-engine-file`, which takes `shekyl-crypto-pq` directly. A future
+  C consumer would need a new surface designed for it — the deleted one
+  should not be resurrected from git history without re-deciding its
+  shape.
 - [`docs/test_vectors/WALLET_FILE_FORMAT_V1/`](test_vectors/WALLET_FILE_FORMAT_V1/)
   — Tier-3 KATs: three sealed blobs (`full.hex`, `view_only.hex`,
   `hardware_offload.hex`) plus a `manifest.json` describing the inputs
