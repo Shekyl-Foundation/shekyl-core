@@ -12,10 +12,17 @@ a **shape and a placement**; see §3.1.
 Disposition IDs in this round are **`CR-D1` … `CR-Dn`**, registered at birth
 per [`94-tracking-index`](../../.cursor/rules/94-tracking-index.mdc).
 
-This document **opens** the question. It does not answer it. Every number and
-every file:line below was verified at source on 2026-08-17 against
-`c92f10ed4`; the round's job is to price the options, and the pricing is not
-done.
+This document **opened** the round on 2026-08-17 and now **carries its ruling**.
+The two are kept in one file deliberately: the findings that moved the framing
+are what make the ruling checkable, and splitting them would leave a verdict
+whose reasoning lives elsewhere.
+
+**Verification stamps are per-section, because the round accreted over three
+days and a single stamp would be wrong for two thirds of it.** §0 (`CR-F1`…`F3`)
+and §1–§2 were verified at source on **2026-08-17** against **`c92f10ed4`**;
+`CR-D2` (§2, the segment arithmetic and the `proxy.rs` correction) and `CR-D1`
+(§0) on **2026-08-18** against **`99a2f4f8c`**. Nothing below is transcribed
+from discussion.
 
 ---
 
