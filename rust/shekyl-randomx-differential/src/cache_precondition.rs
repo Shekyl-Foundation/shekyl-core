@@ -647,10 +647,15 @@ mod tests {
     /// Lets the window tests assert a byte **sequence** rather than a
     /// membership count, which is what makes an off-by-one inside a
     /// block detectable.
+    ///
+    /// Derived **from `fill_block` itself**, not from a second copy of
+    /// its formula. A re-implementation here would be one fact in two
+    /// places: change the fixture and the expectation silently follows
+    /// it, so the tests keep passing while asserting something other
+    /// than what the fixture produces. Slicing the real block is
+    /// slightly less direct and strictly harder to get wrong.
     fn block_bytes(sentinel: u8, range: std::ops::Range<usize>) -> Vec<u8> {
-        range
-            .map(|i| sentinel ^ u8::try_from(i % 256).expect("modulus is under 256"))
-            .collect()
+        fill_block(sentinel)[range].to_vec()
     }
 
     /// Window fully contained in the current block: only the

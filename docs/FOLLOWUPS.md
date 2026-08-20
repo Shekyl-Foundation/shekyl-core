@@ -292,11 +292,6 @@ sustainability is unaffected by the recalibration.
   the corrected scoping costs **less** than the status quo — 12.6 h / 5
   shards against 23.9 h / 8. MR-DQ-2–MR-DQ-7 remain open.
 
-
-
-
-
-
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) —
   REQUIRED BEFORE THE FORMAT FREEZE (added 2026-08-08, escalated from
   the message-signing round, SM-DQ-7).** Address v1 anchors signatures
@@ -2088,7 +2083,6 @@ sustainability is unaffected by the recalibration.
   2026-07-10). Axum `RESTRICTED_METHODS` and any remaining C++ notions
   of “admin-only” should share one table. Note-only until a consumer
   drifts. *Target: V3.1.*
-
 
 - **Phase 4b: `rescan_blockchain` needs an Engine rescan API** —
   **CLOSED 2026-08-04 (Phase 4c, `feat/wallet-rpc-phase-4c-rescan`)**.
