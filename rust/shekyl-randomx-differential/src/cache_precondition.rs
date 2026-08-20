@@ -631,15 +631,46 @@ mod tests {
     /// whose tests passed while their arithmetic was mutated. The
     /// weakness was in the FIXTURE, not in the assertions.
     ///
-    /// XOR with the low byte of the offset keeps the source
-    /// recognisable (a reader who knows `i` recovers the sentinel)
-    /// while making any shift of the copied range change the bytes.
+    /// The pattern mixes BOTH halves of the offset, and the high half
+    /// is not decoration. An earlier version used `sentinel ^ (i % 256)`
+    /// alone and was therefore periodic with period 256: `[436..565]`
+    /// and `[692..821]` of the same block are byte-identical, so a
+    /// 256-byte indexing shift stayed invisible and the claim that "any
+    /// shift changes the bytes" was false. Folding in `i / 256` (four
+    /// spans across a 1-KiB block, spaced 0x40 apart so each is
+    /// distinct) makes the block aperiodic over its whole length.
+    ///
+    /// The source stays recoverable — a reader who knows `i` recovers
+    /// the sentinel — which is what keeps failure output readable.
     fn fill_block(sentinel: u8) -> [u8; 1024] {
         let mut block = [0u8; 1024];
         for (i, byte) in block.iter_mut().enumerate() {
-            *byte = sentinel ^ u8::try_from(i % 256).expect("modulus is under 256");
+            let low = u8::try_from(i % 256).expect("modulus is under 256");
+            let span = u8::try_from(i / 256).expect("a 1-KiB block spans four 256-byte runs");
+            *byte = sentinel ^ low ^ (span * 0x40);
         }
         block
+    }
+
+    /// The fixture is aperiodic across the whole block.
+    ///
+    /// Bites against the fixture regressing to a period that hides a
+    /// shift — the exact blind spot the earlier `i % 256`-only version
+    /// had. Pins the 256 case explicitly because that is the one a
+    /// low-byte-only pattern reintroduces; the 1-byte case is covered
+    /// by the window tests themselves.
+    #[test]
+    fn fill_block_has_no_repeating_period_within_a_block() {
+        let block = fill_block(0xBB);
+        for shift in [1usize, 64, 128, 256, 512] {
+            let a = &block[..1024 - shift];
+            let b = &block[shift..];
+            assert_ne!(
+                a, b,
+                "fill_block repeats at a shift of {shift} bytes; an intra-block \
+                 index error of that size would be invisible to every window test"
+            );
+        }
     }
 
     /// The exact bytes `fill_block(sentinel)` holds over `range`.

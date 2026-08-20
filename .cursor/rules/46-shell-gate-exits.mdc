@@ -36,10 +36,23 @@ A wait-loop written as
 until ! pgrep -f cargo-mutants; do sleep 15; done
 ```
 
-never terminates. `-f` matches against the **full command line**, and
-the waiting shell's own command line contains the pattern — so `pgrep`
-finds itself and the condition is never false. `pkill -f` has the
-mirror form: it can kill the script that invoked it.
+can fail to terminate. `-f` matches against the **full command line**,
+so whether the caller matches depends on how the loop was invoked:
+
+- **Inline** — `bash -c 'until ! pgrep -f cargo-mutants; …'`, an agent
+  or CI one-liner, a `sh -c` wrapper — the pattern is *in* the argv, so
+  `pgrep` finds itself and the condition is never false.
+- **From a script file** — the argv is the interpreter plus the script
+  path, so the pattern normally does **not** appear and the loop
+  terminates as intended.
+
+`pkill -f` has the mirror form and the same qualification: from an
+inline invocation it can kill the shell that ran it.
+
+Treat this as a hazard of inline and wrapper command lines rather than
+a property of every such loop — but note that the inline form is the
+one used in agent sessions and CI `run:` blocks, which is where it has
+actually bitten.
 
 This is silent and it looks exactly like a slow job, which is what makes
 it expensive: the loop sits there consuming its timeout while the thing
