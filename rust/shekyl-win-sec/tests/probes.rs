@@ -55,6 +55,44 @@ fn p9_current_user_sid_is_wellformed_and_stable() {
     );
 }
 
+/// P-15 — the logon SID must actually be a logon SID.
+///
+/// Added 2026-08-20 (PR #516 review). `SE_GROUP_LOGON_ID` is `0xC000_0000`, a
+/// **two-bit** marker, and an `& … != 0` test accepts either bit alone. The
+/// failure mode is not "no match" but a silent widening: it would select some
+/// other group this token belongs to, and WP-D6's DACL would grant *that*
+/// group access to the wallet pipe — invisible to the client-side owner check,
+/// because the owner would still be us.
+///
+/// Predicted: `S-1-5-5-<high>-<low>` — NT authority, `SECURITY_LOGON_IDS_RID`,
+/// then the session LUID.
+#[test]
+fn p15_logon_sid_has_the_logon_shape() {
+    let logon = current_logon_sid().expect("P-15: logon SID");
+    assert!(
+        logon.as_str().starts_with("S-1-5-5-"),
+        "P-15: `{}` is not a logon SID. WP-D6's DACL grants this value, so a \
+         wrong selection here is a wrong grant.",
+        logon.as_str()
+    );
+    // A session LUID is two sub-authorities, so the full form has five dashes.
+    assert_eq!(
+        logon.as_str().matches('-').count(),
+        5,
+        "P-15: `{}` has the right prefix but the wrong shape for a session LUID",
+        logon.as_str()
+    );
+    // And it must differ from the user SID — the whole point of WP-D6 is that
+    // these are two different principals.
+    let user = current_user_sid().expect("P-15: user SID");
+    assert_ne!(
+        logon.as_str(),
+        user.as_str(),
+        "P-15: the logon SID equals the user SID, so the DACL would grant the \
+         whole account and the session boundary would not exist"
+    );
+}
+
 /// P-1 — the SDDL string must produce the DACL we meant.
 ///
 /// **Prediction corrected 2026-08-20 by the first real run.** The original

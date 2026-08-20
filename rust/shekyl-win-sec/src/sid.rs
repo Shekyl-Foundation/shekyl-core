@@ -155,6 +155,10 @@ pub fn current_user_sid() -> Result<SidString, SidError> {
     sid_to_string(sid_ptr)
 }
 
+/// The prefix every logon SID carries: NT authority (5) then
+/// `SECURITY_LOGON_IDS_RID` (5). What follows is the session LUID.
+const LOGON_SID_PREFIX: &str = "S-1-5-5-";
+
 /// Read the calling process's **logon SID** — the per-logon-session identity
 /// (`S-1-5-5-X-Y`) that WP-D6 uses to separate terminal-services sessions.
 ///
@@ -219,14 +223,39 @@ pub fn current_logon_sid() -> Result<SidString, SidError> {
     for i in 0..count {
         // SAFETY: `i < GroupCount`, and the array is that long by contract.
         let entry = unsafe { &*first.add(i) };
-        // `Attributes` is a `u32` bitmask; windows-sys declares the constant
-        // as an `i32` whose top bit is set (0xC000_0000), so `as u32` is a
-        // sign-loss cast. `cast_unsigned` is the bit-preserving reinterpretation
-        // this actually wants, and it says so at the call site instead of
-        // needing a comment to promise it.
-        if entry.Attributes & SE_GROUP_LOGON_ID.cast_unsigned() != 0 {
-            return sid_to_string(entry.Sid);
+        // `SE_GROUP_LOGON_ID` is `0xC000_0000` — a marker of TWO bits, not one.
+        // The test is equality, not "any bit set": `& … != 0` would accept a
+        // group carrying either constituent bit on its own, and Microsoft's own
+        // documented predicate is `(Attributes & SE_GROUP_LOGON_ID) ==
+        // SE_GROUP_LOGON_ID`.
+        //
+        // The failure mode of the weaker test is not "no match" but a SILENT
+        // WIDENING: it would select some other group this token belongs to —
+        // `Users`, say — and WP-D6's DACL would then grant *that* group access
+        // to the wallet pipe. The client-side owner check cannot notice,
+        // because the owner is still us. (PR #516 review.)
+        //
+        // `cast_unsigned` rather than `as u32` because windows-sys declares the
+        // constant as an `i32` with the top bit set; the reinterpretation is
+        // bit-preserving and says so at the call site.
+        const LOGON_ID_MARKER: u32 = SE_GROUP_LOGON_ID.cast_unsigned();
+        if entry.Attributes & LOGON_ID_MARKER != LOGON_ID_MARKER {
+            continue;
         }
+
+        // Independent structural check on a value that decides the DACL.
+        //
+        // A logon SID is `S-1-5-5-<high>-<low>`: NT authority, the
+        // `SECURITY_LOGON_IDS_RID` sub-authority, then the session's 64-bit
+        // LUID. Verifying the shape means a wrong selection cannot quietly
+        // become a wrong grant — which is the same class of defect the
+        // allow-ACE union bug was, and this round has already paid for that
+        // lesson once.
+        let sid = sid_to_string(entry.Sid)?;
+        if !sid.as_str().starts_with(LOGON_SID_PREFIX) {
+            continue;
+        }
+        return Ok(sid);
     }
     Err(SidError::NoLogonSid)
 }
