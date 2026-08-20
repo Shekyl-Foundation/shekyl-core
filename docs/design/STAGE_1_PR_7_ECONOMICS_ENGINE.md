@@ -874,21 +874,39 @@ binding pins for C2/C4 and segment **2i**.
 |---------|-------------------|-----------|
 | DAA (LWMA-1) | Rust `shekyl-difficulty` | Yes — cross-checked (`tests/difficulty/lwma1_cross_check.cpp`) |
 | Burn / emission-share / release | Rust `shekyl-economics` | Yes — C++ orchestrates |
-| **Base CryptoNote subsidy** | **Rust `shekyl-economics`** (canonical `base_block_reward`) — **C2c landed 2026-05-30**; the C++ ESF body is deleted | Yes — `get_block_reward` → `shekyl::base_subsidy_before_penalty` → `shekyl_base_block_reward` (+ 5-arg release-multiplier FFI), thin wrapper like `compute_fee_burn` |
+| **Base CryptoNote subsidy + weight penalty** | **Rust `shekyl-economics`** (`base_block_reward`, `block_reward_with_penalty`) — C2c landed 2026-05-30, penalty followed 2026-08-20; the C++ ESF body and the `mul128`/`div128_64` penalty are both deleted | Yes — `get_block_reward` → `shekyl_block_reward` (one call: base + median clamp + penalty + reject arm), plus the 5-arg release-multiplier FFI composed C++-side |
 
-**End-state (C2c, landed 2026-05-30).** After cutover, `get_block_reward`
-is structurally identical to `shekyl::compute_fee_burn` / `compute_emission_split`
-in [`economics.h`](../../src/shekyl/economics.h): C++ gathers inputs, calls the
-Rust FFI (`shekyl::base_subsidy_before_penalty` → `shekyl_base_block_reward`),
-applies the weight penalty / 5-arg release multiplier, and returns the result.
-The duplicated `(MONEY_SUPPLY − ag) >> ESF` body in
-`cryptonote_basic_impl.cpp` was deleted after the C2a′ KAT legs passed (H1) and
-7-base merged to `dev` (H3).
+**End-state (C2c, landed 2026-05-30; completed 2026-08-20).** C2c made
+`get_block_reward` delegate the base subsidy and left the weight penalty in
+C++. That remainder is now gone too: the penalty is
+`shekyl_economics::block_reward_with_penalty`, reached through
+`shekyl_block_reward`, and `get_block_reward` is a pure marshaling shim that
+computes nothing. `shekyl::base_subsidy_before_penalty` was deleted with its
+last caller. The duplicated `(MONEY_SUPPLY − ag) >> ESF` body in
+`cryptonote_basic_impl.cpp` was deleted at C2c, after the C2a′ KAT legs passed
+(H1) and 7-base merged to `dev` (H3). The 5-arg release multiplier still
+composes C++-side over `shekyl_calc_release_multiplier` /
+`shekyl_apply_release_multiplier`.
 
-`already_generated` accumulation also runs C++-side (`blockchain.cpp` — accept
-path, fee estimate, `bei.already_generated_coins` at ~2293, **pop_block**
-reversal). Per-block subsidy rounding differences **compound** across height;
-single-block KAT grids are necessary but not sufficient (H2).
+The penalty move honoured **H1** rather than bypassing it. H1's worked example
+of the risk is, verbatim, a "`div128_64` overflow-guard shape in the
+weight-penalty path" becoming canonical once C++ is deleted. So the witness was
+extracted first: an 81-vector KAT over
+{median 0, 300000, 2100000} × {m/2 … 2m+1} × {ag 0, 2048000000000,
+near-cap} was pinned from C++ in its own commit, with expected values derived
+independently in arbitrary-precision integer arithmetic from the documented
+formula rather than transcribed from C++ output (leg B in H1's sense), and only
+then asserted from **both** languages. The C++ table and
+`c2a_prime_layer1_weight_penalty_pinned_vectors` in `shekyl-economics` are the
+same numbers and must move together.
+
+`already_generated` accumulation still runs C++-side (`blockchain.cpp` — accept
+path, fee estimate, **pop_block** reversal), but the **supply-advance clamp**
+within it is now `shekyl_advance_already_generated`: it had been written out
+twice (main-chain connect and `bei.already_generated_coins` on the alt-chain
+path), and two hand-written copies of a consensus clamp are a drift pair.
+Per-block subsidy rounding differences **compound** across height; single-block
+KAT grids are necessary but not sufficient (H2).
 
 **Test trap:** engine-vs-sim differential (both Rust) proves **Rust self-consistency
 only** — not consensus correctness vs C++, and not accumulation over a chain.
