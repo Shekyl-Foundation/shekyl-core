@@ -130,11 +130,11 @@ B5Operands expected_operands(const Blockchain& bc)
   EXPECT_TRUE(get_block_reward(median, 0, kAlreadyGenerated, ops.base_reward,
     kHfVersion, tx_volume_avg));
   ops.split = shekyl::compute_emission_split(ops.base_reward, kBlockHeight,
-    /*genesis_ng_height=*/0, kHfVersion);
+    /*genesis_ng_height=*/0);
   // n = 0 is the same parent-state operand the production check reads:
   // B5TestDB's curve tree is empty, so parent_frozen_segment_count yields 0.
   ops.burn = shekyl::compute_fee_burn(kFee, tx_volume_avg,
-    kAlreadyGenerated, /*frozen_segment_count=*/0, kHfVersion);
+    kAlreadyGenerated, /*frozen_segment_count=*/0);
   return ops;
 }
 

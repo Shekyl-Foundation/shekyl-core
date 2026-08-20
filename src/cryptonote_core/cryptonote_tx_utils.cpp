@@ -140,7 +140,7 @@ namespace cryptonote
     }
 
     // Component 4: split emission between miner and staker pool
-    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, genesis_ng_height, hard_fork_version);
+    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, genesis_ng_height);
     block_reward = em_split.miner_emission;
 
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -150,7 +150,7 @@ namespace cryptonote
     // Component 2: adaptive fee burn. frozen_segment_count must be the same
     // parent-state n connect-time validation will judge this coinbase against
     // (create_block_template computes it once for both construction passes).
-    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, frozen_segment_count, hard_fork_version);
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, frozen_segment_count);
     block_reward += burn.miner_fee_income;
 
     // Single "dusty" output with identity-mask RCT (active from genesis on rebooted chain).

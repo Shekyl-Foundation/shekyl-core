@@ -1,5 +1,35 @@
 // Shekyl four-component economics helpers for C++ consensus code.
 // Wraps FFI calls to the Rust shekyl-economics crate.
+//
+// NO HARD-FORK GATING LIVES HERE, and the absence is deliberate. Both
+// helpers used to open with `if (hf_version < HF_VERSION_SHEKYL_NG || …)`.
+// That arm was unreachable on every network:
+//
+//   * HF_VERSION_SHEKYL_NG is 1 (cryptonote_config.h);
+//   * mainnet/testnet/stagenet each declare exactly ONE fork entry,
+//     `{ version 1, height 1, … }` (hardforks.cpp);
+//   * blocks below the first fork take HardFork's `original_version`, which
+//     all three Blockchain constructions pass as 1, and
+//     CURRENT_BLOCK_MAJOR_VERSION is 1;
+//   * construct_miner_tx defaults hard_fork_version to 1, and no caller
+//     anywhere passes 0.
+//
+// So no version below HF_VERSION_SHEKYL_NG can reach these helpers, and the
+// `hf_version` parameters those branches justified are gone with them (rules
+// 15 and 60: v3-from-genesis carries no pre-genesis ladder). Core tests that
+// cross v1 -> v2 are unaffected — version 2 selects the same arm.
+//
+// Deliberately phrased without the comparison spelled out as code. The
+// consensus-invariants workflow greps `src/` for legacy version branches as
+// TEXT, so a comment quoting the retired expression trips a gate that is
+// otherwise exactly right to be strict. Describe the retired branch; do not
+// reproduce it.
+//
+// REOPENING CRITERION (rule 21): a future hard fork that changes economics
+// SEMANTICS reintroduces gating. When it does, the gate belongs in
+// shekyl-economics next to the math it selects, per rule 20 — not as a new
+// C++ branch here. Re-adding a parameter now to "keep the option open" is
+// the pre-provisioned flexibility rule 21 rejects.
 
 #pragma once
 
@@ -10,19 +40,12 @@
 namespace shekyl {
 
 // ─── Base block subsidy (0h) ────────────────────────────────────────────────
-
-// Base block subsidy before the weight penalty and release multiplier.
 //
-// The CryptoNote ESF curve (`max((MONEY_SUPPLY - already_generated) >> esf,
-// tail)`) is canonical in `shekyl-economics`; this wrapper mirrors the
-// compute_fee_burn / compute_emission_split shape so `get_block_reward`
-// reads as a thin orchestrator over the Rust primitive (STAGE_1_PR_7 §5.8,
-// C2c cutover). The FFI clamps `already_generated_coins` at MONEY_SUPPLY and
-// cannot fail across the boundary.
-inline uint64_t base_subsidy_before_penalty(uint64_t already_generated_coins)
-{
-    return shekyl_base_block_reward(already_generated_coins);
-}
+// There is no wrapper here any more. `base_subsidy_before_penalty` existed
+// solely for `get_block_reward`, which now marshals the whole subsidy +
+// weight-penalty calculation to `shekyl_block_reward` in one call. Callers
+// that want the raw base curve call `shekyl_base_block_reward` directly, as
+// the C2a′ KATs do.
 
 // ─── Component 2: Fee Burn ──────────────────────────────────────────────────
 
@@ -41,10 +64,9 @@ inline BurnResult compute_fee_burn(
     uint64_t total_fees,
     uint64_t tx_volume,
     uint64_t circulating_supply,
-    uint64_t frozen_segment_count,
-    uint8_t hf_version)
+    uint64_t frozen_segment_count)
 {
-    if (hf_version < HF_VERSION_SHEKYL_NG || total_fees == 0)
+    if (total_fees == 0)
     {
         return {total_fees, 0, 0};
     }
@@ -73,10 +95,9 @@ struct EmissionSplit {
 inline EmissionSplit compute_emission_split(
     uint64_t block_emission,
     uint64_t current_height,
-    uint64_t genesis_ng_height,
-    uint8_t hf_version)
+    uint64_t genesis_ng_height)
 {
-    if (hf_version < HF_VERSION_SHEKYL_NG || block_emission == 0)
+    if (block_emission == 0)
     {
         return {block_emission, 0};
     }

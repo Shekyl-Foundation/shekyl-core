@@ -2304,9 +2304,65 @@ sustainability is unaffected by the recalibration.
   internal type hygiene. Deferred from the WI-2 orchestrator PR as beyond its
   validation surface (rule 19). *Target: V3.1+.*
 
-- **Economics C2a′ layer gate — stacked silent failures; layer verdicts
-  currently vacuous** (surfaced 2026-07-04 when PR #241's hardened rustup
-  install turned the first layer of it loud). Three independent silent
+- **Alt-chain supply accumulation advances by the coinbase, not the emission
+  subsidy** (surfaced 2026-08-20 in PR #518 review). `handle_alternative_block`
+  advances `bei.already_generated_coins` by `get_outs_money_amount(b.miner_tx)`
+  — the miner leg plus `miner_fee_income` — while the main-chain path advances
+  by the full emission subsidy (`validate_miner_transaction`'s `base_reward`,
+  fix alpha at `blockchain.cpp:1788`). Per block the two differ by
+  `miner_fee_income - staker_emission`: an undercount on fee-poor blocks, an
+  overcount when fees exceed the staker leg. `tests/core_tests/chaingen.cpp:459`
+  documents the same asymmetry and recomputes the full reward to avoid it.
+
+  **Bounded, and the one escaping consumer is fixed.** No consensus decision
+  reads the value: alt blocks get `prevalidate_miner_transaction` only, and
+  promotion does not carry it into the ledger — `handle_block_to_main_chain`
+  re-reads `already_generated_coins` from the DB, with only the attestation
+  witness passed through `switch_to_alternative_blockchain`. Its one external
+  consumer was the post-reorg `send_miner_notifications`, which was overwriting
+  the correct per-block notifications the promotion loop had just issued; that
+  now reads the DB (PR #518). What remains is alt-chain bookkeeping that
+  chains into subsequent alt blocks and is discarded on promotion.
+
+  **Named blocker (rule 22):** the correct value is what the ledger would hold
+  if this chain were promoted, and computing it needs (a) the reward validation
+  the alt path deliberately defers and (b) an alt-chain weight median that does
+  not exist — `get_last_n_blocks_weights` reads the MAIN chain, and the fee and
+  miner legs cannot be separated back out of `get_outs_money_amount`, so there
+  is no cheap inversion either. Recomputing with main-chain medians would
+  fabricate a plausible-looking wrong number, which is worse than an honest
+  approximation. Deferred rather than papered over.
+
+  **Reopening criteria:** any of — a consensus decision starts reading
+  `bei.already_generated_coins`; alt-chain weight-median machinery lands for
+  another reason (difficulty or weight-limit work on alt chains); or the field
+  is persisted somewhere a external consumer can read it. *Target: with
+  alt-chain reorg accounting, a different validation surface from the economics
+  FFI port (rule 19).*
+
+- **[Done 2026-08-20] Economics C2a′ layer gate — stacked silent failures;
+  layer verdicts vacuous** (surfaced 2026-07-04 when PR #241's hardened rustup
+  install turned the first layer of it loud).
+
+  **Closed, but sub-item (2) below was MISDIAGNOSED and the correction is the
+  useful part.** The §5.8 harness had landed: `economics_c2a_prime.cpp` held
+  five unguarded `TEST(EconomicsC2aPrime, …)` cases, registered in
+  `tests/unit_tests/CMakeLists.txt`, and the core_tests leg was registered in
+  `chaingen_main.cpp`. The gate reported zero because the test binaries
+  **exited 127 at the dynamic loader** — the layer job's runtime `apt` list was
+  missing `libunwind8`, `libboost-program-options1.74.0` and
+  `libboost-serialization1.74.0` — while `count_gtest_cases` ran them under
+  `2>/dev/null` ending in `grep -c … || true`, discarding both the loader error
+  and the exit status. "No cases found" was the only symptom a missing library
+  could produce, so the filed reading was the natural one; it was still wrong,
+  and acting on it literally would have meant writing a harness that already
+  existed. Fixed by adding the three packages and by making the script EXECUTE
+  each binary before counting (rule 47). Sub-item (1) was fixed in PR #241 and
+  (3) in PR #514.
+
+  *Lesson, promoted rather than left here: absence of signal is first evidence
+  the SUBJECT is absent, not that the thing it looks for is —
+  `47-gate-subject-assertion.mdc`.* Three independent silent
   failures stack in `economics-c2a-prime.yml`'s layer jobs, verified in the
   last green `dev` run (28669067396): (1) the layer containers never had
   `curl`, so the `curl | sh` rustup install exited 0 having installed
@@ -4565,7 +4621,13 @@ sustainability is unaffected by the recalibration.
     `src/cryptonote_basic/cryptonote_basic_impl.cpp`;
   - the weight penalty (`mul128` / `div128_64`) and the 5-arg release
     multiplier path stay in C++ (per §5.8, behavior-identical to C2a′
-    witnesses);
+    witnesses) — **superseded 2026-08-20: the weight penalty and the
+    supply-advance clamp moved to `shekyl-economics`
+    (`shekyl_block_reward`), and `base_subsidy_before_penalty` was deleted
+    with its last caller. The release multiplier still composes C++-side.**
+    The move followed this document's own H1 discipline: the 81-vector
+    weight-penalty KAT was pinned from C++ FIRST, then asserted from both
+    languages, so the witness was extracted before the original changed;
   - fix α (`:1608–1609` un-overwrite) was already landed in 7-base.
 
   No production path computes the ESF curve in C++ after this cutover. The

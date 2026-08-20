@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **The block-reward weight penalty moved to Rust; `get_block_reward` is
+  now a marshaling shim.** It was the last economics arithmetic C++
+  performed itself — `mul128` plus two `div128_64` on an amount — while
+  the base subsidy, burn and emission split already delegated to
+  `shekyl-economics`. `shekyl_block_reward` now performs the base
+  subsidy, the "make it soft" median clamp, the penalty and the
+  above-`2 × median` rejection in one call. It is the first fallible
+  entry in the economics FFI family (rejection is a consensus outcome,
+  not an error, and is reported as a positive status; caller misuse is
+  negative). The supply-advance clamp, previously written out at both the
+  main-chain and alt-chain connect paths, moved with it as
+  `shekyl_advance_already_generated`. Values are pinned across the
+  boundary by an 81-vector KAT asserted from **both** languages, derived
+  independently of the C++ implementation and landed *before* the move.
+- **`compute_fee_burn` and `compute_emission_split` no longer take an
+  `hf_version`.** Their `hf_version < HF_VERSION_SHEKYL_NG` guard could
+  not execute: the constant is 1, each network declares exactly one fork
+  entry at version 1, and no code path produces a lower version. The
+  dead branch and the parameters that existed to feed it are removed. A
+  future hard fork that changes economics semantics reintroduces gating
+  in `shekyl-economics`, beside the math it selects.
+
+### Fixed
+
+- **The block-reward supply-headroom cap underflowed past full emission.**
+  `get_block_reward`'s 6-argument overload capped a block's reward at
+  `MONEY_SUPPLY - already_generated_coins`, computed in `uint64_t`. Once
+  `already_generated_coins` passed the cap that subtraction wrapped to a
+  near-`UINT64_MAX` headroom, so the comparison guarding the cap was
+  never true and the cap silently did nothing — the inverse of its
+  purpose. No production path reached it (the connect path caps the
+  stored total), but both Rust reward entry points already defended
+  against an out-of-range total and this was the one member of the family
+  that did not. Now `shekyl_cap_reward_to_remaining_supply`, saturating,
+  beside the supply-advance clamp it is the twin of.
+
+- **The four `ci/economics-c2a-prime` layer gates had never run a test.**
+  The layer jobs' runtime package list was missing `libunwind8`,
+  `libboost-program-options1.74.0` and `libboost-serialization1.74.0`, so
+  the test binaries exited 127 at the dynamic loader; the gate discarded
+  both the loader error and the exit status and reported "no test cases
+  found", which read as a missing harness. The harnesses existed
+  throughout. The gate now executes each binary before counting, so a
+  binary that cannot start is never again reported as a missing test.
+
 ### Added
 
 - **The CMake build now produces the Rust `shekyl-cli` and

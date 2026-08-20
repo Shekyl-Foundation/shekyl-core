@@ -1505,7 +1505,23 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
   if (!get_block_hash(alt_chain.back().bl, prev_id))
     MERROR("Failed to get block hash of an alternative chain's tip");
   else
-    send_miner_notifications(new_height, seedhash, prev_id, alt_chain.back().already_generated_coins);
+    // The LEDGER's cumulative supply, not the alt block's bookkeeping copy.
+    // bei.already_generated_coins is advanced by get_outs_money_amount (see the
+    // note at the alt-chain accumulation site), which differs from the ledger by
+    // miner_fee_income - staker_emission per block. That approximation is
+    // harmless inside alt bookkeeping — nothing validates against it — but this
+    // send is the reorg's LAST WORD to miners, and it was overwriting the correct
+    // notifications that each promoted block just issued from
+    // handle_block_to_main_chain. A miner templating on a wrong cumulative supply
+    // computes a wrong subsidy and builds a block consensus then rejects.
+    //
+    // Safe to read unguarded: the promotion loop above committed at least one
+    // block (switch_to_alternative_blockchain asserts a non-empty alt_chain), so
+    // new_height >= 1. This is the same quantity the main-chain send passes —
+    // add_block stores the post-advance total for the block it returns the height
+    // for, so get_block_already_generated_coins(new_height - 1) IS that value.
+    send_miner_notifications(new_height, seedhash, prev_id,
+                             m_db->get_block_already_generated_coins(new_height - 1));
 
   for (const auto& notifier : m_block_notifiers)
   {
@@ -1765,14 +1781,14 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
 
   // Component 4: split emission between miner and staker pool.
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height, genesis_ng_height, version);
+  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height, genesis_ng_height);
   uint64_t miner_base_reward = em_split.miner_emission;
 
   // Component 2: fee burn split — miner only receives miner_fee_income.
   // frozen_segment_count is the caller's parent-state read (the asserting
   // read-point above); the escalated share cannot reach miner_fee_income
   // (§12.11.1 Leg 1), so this stays the security-budget-preserving split.
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, frozen_segment_count, version);
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, frozen_segment_count);
   uint64_t effective_fee = burn.miner_fee_income;
 
   if(miner_base_reward + effective_fee < money_in_use)
@@ -2258,9 +2274,33 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     bei.bl = b;
     const uint64_t prev_height = alt_chain.size() ? prev_data.height : m_db->get_block_height(b.prev_id);
     bei.height = prev_height + 1;
+    // NOT the same quantity the main-chain path accumulates, despite sharing the
+    // clamp with it. The main chain advances by the full emission subsidy
+    // (validate_miner_transaction's base_reward — fix alpha, :1788); this
+    // advances by what the coinbase PAYS, which carries the miner leg plus
+    // miner_fee_income and omits the staker leg entirely. Per block the two
+    // differ by (miner_fee_income - staker_emission): an undercount on fee-poor
+    // blocks, an overcount when fees exceed the staker leg.
+    // tests/core_tests/chaingen.cpp:459 documents the same asymmetry, and
+    // recomputes the full reward for exactly this reason.
+    //
+    // It is an approximation BY CONSTRUCTION, not an oversight: the correct
+    // value is what the ledger would hold if this chain were promoted, and
+    // obtaining it requires the reward validation the alt path deliberately
+    // defers (alt blocks get prevalidate_miner_transaction only) plus an
+    // alt-chain weight median that does not exist — get_last_n_blocks_weights
+    // reads the MAIN chain. Recomputing with main-chain medians would fabricate
+    // a plausible-looking wrong number, which is worse than an honest one.
+    //
+    // Nothing reads it that can be harmed: no consensus decision consults it,
+    // and promotion does not carry it into the ledger — handle_block_to_main_chain
+    // re-reads already_generated_coins from the DB and only the attestation
+    // witness is passed through. Its one external consumer, the post-reorg miner
+    // notification, now reads the DB instead (see switch_to_alternative_blockchain).
+    // Tracked in docs/FOLLOWUPS.md ("Alt-chain supply accumulation").
     uint64_t block_reward = get_outs_money_amount(b.miner_tx);
     const uint64_t prev_generated_coins = alt_chain.size() ? prev_data.already_generated_coins : m_db->get_block_already_generated_coins(prev_height);
-    bei.already_generated_coins = (block_reward < (MONEY_SUPPLY - prev_generated_coins)) ? prev_generated_coins + block_reward : MONEY_SUPPLY;
+    bei.already_generated_coins = shekyl_advance_already_generated(prev_generated_coins, block_reward);
 
     // verify that the block's timestamp is within the acceptable range
     // (not earlier than the median of the last X blocks)
@@ -6323,14 +6363,13 @@ leave:
   if (blockchain_height > 0)
   {
     const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-    const uint8_t connect_hf_version = bl.major_version;
 
     const shekyl::EmissionSplit em_split = shekyl::compute_emission_split(
-        base_reward, blockchain_height, genesis_ng_height, connect_hf_version);
+        base_reward, blockchain_height, genesis_ng_height);
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
         fee_summary, get_tx_volume_avg(blockchain_height), already_generated_coins,
-        frozen_segment_count, connect_hf_version);
+        frozen_segment_count);
 
     archival_budget_accrual = em_split.staker_emission + burn.staker_pool_amount;
     block_burn_amount = burn.actually_destroyed;
@@ -6346,7 +6385,13 @@ leave:
   // coins will eventually exceed MONEY_SUPPLY and overflow a uint64. To prevent overflow, cap already_generated_coins
   // at MONEY_SUPPLY. already_generated_coins is only used to compute the block subsidy and MONEY_SUPPLY yields a
   // subsidy of 0 under the base formula and therefore the minimum subsidy >0 in the tail state.
-  already_generated_coins = base_reward < (MONEY_SUPPLY-already_generated_coins) ? already_generated_coins + base_reward : MONEY_SUPPLY;
+  //
+  // The clamp itself is Rust-side (shekyl_advance_already_generated). It was
+  // written out here AND in the alt-chain path above; two hand-written copies
+  // of a consensus clamp are a drift pair, so both now call the one entry
+  // point (the division-one-site discipline consensus_constants.json records
+  // for segment_leaf_count).
+  already_generated_coins = shekyl_advance_already_generated(already_generated_coins, base_reward);
   if(blockchain_height)
     cumulative_difficulty += m_db->get_block_cumulative_difficulty(blockchain_height - 1);
 

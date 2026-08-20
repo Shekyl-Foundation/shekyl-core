@@ -305,6 +305,49 @@ uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
+/// shekyl_block_reward status codes. Rejection is POSITIVE, caller misuse
+/// NEGATIVE, so "the block is invalid" is never confused with "the call was".
+#define SHEKYL_BLOCK_REWARD_OK             0
+#define SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG  1
+#define SHEKYL_BLOCK_REWARD_INVALID       (-1)
+
+/// Block reward after the median-weight penalty.
+/// The only fallible entry in the economics family: BLOCK_TOO_BIG is a
+/// consensus rejection, not an internal error. The limit is INCLUSIVE — a
+/// block at exactly 2 * effective median is accepted and earns zero; only
+/// current_block_weight > 2 * effective median is rejected. out_weight_limit
+/// receives that doubled effective median on EVERY path so a caller can report
+/// the limit it was rejected against without recomputing the clamp.
+/// already_generated_coins is clamped at money_supply, as in
+/// shekyl_base_block_reward. INVALID covers a null out-pointer and an input
+/// beyond the exact arithmetic domain (medians around 2^43 and above, where
+/// the product leaves 128 bits) — fail-closed rather than wrapping.
+/// Neither out-pointer may be null.
+int32_t shekyl_block_reward(
+    uint64_t median_weight,
+    uint64_t current_block_weight,
+    uint64_t already_generated_coins,
+    uint64_t full_reward_zone,
+    uint64_t *out_reward,
+    uint64_t *out_weight_limit);
+
+/// Cap a block reward at the supply headroom still unminted. The emission-side
+/// twin of shekyl_advance_already_generated: that one stops the running total
+/// at the cap, this one stops a single block from exceeding what remains.
+/// Saturating, so an already_generated_coins beyond the cap yields zero
+/// headroom rather than the underflowed near-UINT64_MAX the C++ it replaces
+/// produced. Cannot fail.
+uint64_t shekyl_cap_reward_to_remaining_supply(
+    uint64_t reward,
+    uint64_t already_generated_coins);
+
+/// Advance already_generated_coins by a block reward, saturating at money_supply.
+/// One entry point for the main-chain and alt-chain connect paths, which each
+/// carried their own copy of this clamp.
+uint64_t shekyl_advance_already_generated(
+    uint64_t already_generated_coins,
+    uint64_t block_reward);
+
 /// Calculate emission share (Component 4) based on chain age and decay curve.
 uint64_t shekyl_calc_emission_share(
     uint64_t current_height,

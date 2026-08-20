@@ -91,44 +91,57 @@ namespace cryptonote {
   }
   //-----------------------------------------------------------------------------------------------
   bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version) {
-    // Base subsidy curve (0h) is canonical in Rust (`shekyl-economics`); this
-    // delegates to the `shekyl_base_block_reward` FFI rather than recomputing
-    // the ESF formula in C++ (STAGE_1_PR_7 §5.8, C2c cutover). Only the weight
-    // penalty below stays in C++.
-    uint64_t base_reward = shekyl::base_subsidy_before_penalty(already_generated_coins);
+    // Marshaling shim. The base subsidy curve, the "make it soft" median
+    // clamp, the 2*median rejection and the 128-bit weight-penalty arithmetic
+    // are all canonical in `shekyl-economics` and reached through
+    // `shekyl_block_reward` (STAGE_1_PR_7 §5.8, C2c cutover). Nothing is
+    // computed here.
+    //
+    // The penalty was the last economics ARITHMETIC C++ performed itself —
+    // `mul128` plus two `div128_64` on an amount, which is rule 20's "integer
+    // arithmetic on amounts" category verbatim. Its values are pinned across
+    // the boundary by the 81-vector KAT asserted from BOTH languages
+    // (EconomicsC2aPrime.Layer1WeightPenaltyPinnedVectors and
+    // shekyl-economics' c2a_prime_layer1_weight_penalty_pinned_vectors).
+    //
+    // `get_min_block_weight` stays on this side and crosses as an argument:
+    // CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 is a block-policy constant
+    // with ~40 C++ consumers and no Rust consumer, so copying it into a Rust
+    // constant would manufacture the C++/Rust drift pair that
+    // config/consensus_constants.json exists to prevent.
+    uint64_t computed = 0;
+    uint64_t weight_limit = 0;
+    const int32_t status = shekyl_block_reward(
+        median_weight,
+        current_block_weight,
+        already_generated_coins,
+        get_min_block_weight(version),
+        &computed,
+        &weight_limit);
 
-    uint64_t full_reward_zone = get_min_block_weight(version);
-
-    //make it soft
-    if (median_weight < full_reward_zone) {
-      median_weight = full_reward_zone;
-    }
-
-    if (current_block_weight <= median_weight) {
-      reward = base_reward;
-      return true;
-    }
-
-    if(current_block_weight > 2 * median_weight) {
-      MERROR("Block cumulative weight is too big: " << current_block_weight << ", expected less than " << 2 * median_weight);
+    if (status == SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG)
+    {
+      // weight_limit is the doubled EFFECTIVE median, written by the same call
+      // that made the rejection — the message cannot disagree with the
+      // decision, which a locally recomputed clamp could.
+      //
+      // "at most", not the inherited "less than": the limit is INCLUSIVE.
+      // A block at exactly 2*median is accepted and earns a zero reward
+      // (pinned by the 2m rows of the weight-penalty KAT); only above it is
+      // rejected. The old wording named a bound one byte off from the rule it
+      // described, which is a bad thing for an operator to read while
+      // debugging a rejected block.
+      MERROR("Block cumulative weight is too big: " << current_block_weight << ", expected at most " << weight_limit);
       return false;
     }
 
-    uint64_t product_hi;
-    // BUGFIX: 32-bit saturation bug (e.g. ARM7), the result was being
-    // treated as 32-bit by default.
-    uint64_t multiplicand = 2 * median_weight - current_block_weight;
-    multiplicand *= current_block_weight;
-    uint64_t product_lo = mul128(base_reward, multiplicand, &product_hi);
+    if (status != SHEKYL_BLOCK_REWARD_OK)
+    {
+      MERROR("shekyl_block_reward rejected its arguments (status " << status << ")");
+      return false;
+    }
 
-    uint64_t reward_hi;
-    uint64_t reward_lo;
-    div128_64(product_hi, product_lo, median_weight, &reward_hi, &reward_lo, NULL, NULL);
-    div128_64(reward_hi, reward_lo, median_weight, &reward_hi, &reward_lo, NULL, NULL);
-    assert(0 == reward_hi);
-    assert(reward_lo < base_reward);
-
-    reward = reward_lo;
+    reward = computed;
     return true;
   }
   //-----------------------------------------------------------------------------------------------
@@ -143,9 +156,16 @@ namespace cryptonote {
           tx_volume_avg, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
       reward = shekyl_apply_release_multiplier(reward, multiplier);
 
-      uint64_t remaining = MONEY_SUPPLY - already_generated_coins;
-      if (reward > remaining)
-        reward = remaining;
+      // The supply-headroom cap. Was `MONEY_SUPPLY - already_generated_coins`
+      // in uint64_t here, which UNDERFLOWS to a near-UINT64_MAX headroom once
+      // already_generated_coins passes the cap — silently disabling the clamp
+      // it computed. Both Rust reward entry points already defend against an
+      // out-of-range total; this was the one member of the family that did
+      // not. Now saturating, and Rust-side with the rest of the amount
+      // arithmetic (rule 20's fourth criterion) — leaving the last multiply
+      // and subtract of this function on the C++ side would have made
+      // "get_block_reward computes nothing" untrue in the 6-arg overload.
+      reward = shekyl_cap_reward_to_remaining_supply(reward, already_generated_coins);
     }
 
     return true;

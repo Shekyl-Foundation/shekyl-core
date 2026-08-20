@@ -101,9 +101,19 @@ verify_build_artifact_layout() {
   # Layer jobs consume the build/ tarball from the build job. The CALIBRATION
   # build is CMAKE_BUILD_TYPE=Release, so BUILD_SHARED_LIBS defaults OFF
   # (CMakeLists.txt:608-612 flips it ON only for Debug). Internal libraries are
-  # static .a archives and the test binaries are statically linked against them,
-  # so no internal .so files exist — the binaries are self-contained. This must
-  # stay in lockstep with the build job's manifest step in economics-c2a-prime.yml.
+  # therefore static .a archives with no internal .so files — which is why the
+  # tarball can exclude *.a and *.o and still ship working binaries.
+  #
+  # "No internal .so" is NOT "self-contained", and reading it that way is what
+  # made this gate vacuous for its whole life. The binaries still carry a
+  # DT_NEEDED list of SYSTEM libraries (boost, libunwind, ssl, sodium), which
+  # the layer job installs by hand. When one is absent the binary exits 127 at
+  # the dynamic loader, and a check that only tests for presence on disk calls
+  # that "no tests found". So presence is necessary and not sufficient: the
+  # binaries are EXECUTED below (47-gate-subject-assertion.mdc — a gate must
+  # assert its own subject exists, and for a binary "exists" means "runs").
+  # This must stay in lockstep with the build job's manifest step in
+  # economics-c2a-prime.yml.
   # tests/data/ is repo-tracked and comes from checkout, not the tarball.
   local missing=0
   local required=(
@@ -122,7 +132,35 @@ verify_build_artifact_layout() {
   if [[ ! -d "$REPO_ROOT/tests/data" ]]; then
     die "tests/data/ missing from checkout — unit_tests needs --data-dir or DEFAULT_DATA_DIR"
   fi
-  echo "OK: build artifact layout (statically-linked test binaries); tests/data from checkout"
+  require_binary_runs "$UNIT_TESTS" \
+    --gtest_list_tests --gtest_filter='ShekylGateRunnabilityProbe.NoSuchTest'
+  require_binary_runs "$CORE_TESTS" --list_tests
+  echo "OK: build artifact layout + both test binaries execute; tests/data from checkout"
+}
+
+# Execute a test binary with a flag that lists and exits, purely to prove the
+# dynamic loader can resolve it. The probe is deliberately a NO-OP workload: a
+# non-matching gtest filter and core_tests' own --list_tests, so this costs
+# milliseconds and cannot itself fail for test-content reasons.
+#
+# stderr is captured and echoed on failure. The loader's message names the
+# missing library, which is the single most useful line in the whole job and
+# was previously discarded by `2>/dev/null`.
+require_binary_runs() {
+  local bin="$1"; shift
+  local out rc=0
+  # `|| rc=$?` inside the assignment, not a bare assignment — under `set -e` a
+  # bare `out="$(...)"` takes the script down before the diagnostic prints.
+  out="$("$bin" "$@" 2>&1)" || rc=$?
+  if (( rc != 0 )); then
+    die "${bin#"$REPO_ROOT/"} exists but did not run (exit ${rc}).
+This is a BUILD/RUNTIME-ENVIRONMENT fault, not a missing test harness.
+Exit 127 with 'error while loading shared libraries' means the layer job's
+apt list in .github/workflows/economics-c2a-prime.yml is missing a package;
+derive the truth with: readelf -d ${bin#"$REPO_ROOT/"} | grep NEEDED
+Its output was:
+${out}"
+  fi
 }
 
 count_gtest_cases() {
@@ -162,7 +200,20 @@ count_core_tests() {
   local filter="$1"
   # core_tests --filter uses glob; strip trailing * for fixed-string prefix match.
   local prefix="${filter%\*}"
-  "$CORE_TESTS" --list_tests 2>/dev/null | grep -cF "$prefix" || true
+  local out rc=0
+  # Symmetric with count_gtest_cases: capture stderr and the exit status rather
+  # than discarding both. The `2>/dev/null | grep -cF` form this replaces could
+  # not distinguish "ran and matched nothing" from "never ran", so layers 3 and
+  # conservation reported a missing harness whenever the binary failed to load.
+  # See require_binary_runs above for why that was not hypothetical.
+  out="$("$CORE_TESTS" --list_tests 2>&1)" || rc=$?
+  if (( rc != 0 )); then
+    die "core_tests could not be listed (exit ${rc}) for filter '${filter}'. \
+This is NOT a missing harness -- the binary exists but did not run. \
+Its output was:
+${out}"
+  fi
+  printf '%s\n' "$out" | grep -cF "$prefix" || true
 }
 
 require_gtest_harness() {
