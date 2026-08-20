@@ -323,26 +323,6 @@ sustainability is unaffected by the recalibration.
   [`RANDOMX_V2_MUTATION_REGIME.md`](./design/RANDOMX_V2_MUTATION_REGIME.md)
   §6.6. **Target: V3.0 pre-genesis.**
 
-- **`economics-c2a-prime.yml`'s layer gate cannot fail: the verdict is
-  swallowed by `tee` (added 2026-08-18, rule-46 instance).** The step
-  runs `scripts/ci/run_economics_c2a_prime.sh <subcommand> 2>&1 | tee
-  "economics-c2a-layer<N>.log"` under a plain `run:`, which on Linux is
-  `bash -e {0}` — **`-e` without `pipefail`**. A pipeline's exit status
-  is its last command's, so the step reports `tee`'s success and the
-  script's verdict is discarded; a failing layer would go green. The
-  `shell: bash` + `set -euo pipefail` that appears earlier in the same
-  workflow applies only to the "Verify artifact manifest" step, not to
-  this one. Fix per
-  [`46-shell-gate-exits`](../.cursor/rules/46-shell-gate-exits.mdc): run
-  the script unpiped with output redirected to the log, then read the
-  log afterwards — or capture `${PIPESTATUS[0]}` on the very next line.
-  Found while mirroring this workflow's `if: failure()` artifact-upload
-  pattern for the RandomX rotating lane; **not fixed there** because it
-  is a different validation surface (rule 19). Worth noting it is the
-  same shape as
-  [`RANDOMX_V2_MUTATION_REGIME.md`](./design/RANDOMX_V2_MUTATION_REGIME.md)
-  §13 — a gate producing a clean signal from a verdict that never
-  reached it. **Target: V3.0 pre-genesis.**
 
 - **Promote "a gate must assert its own subject exists" to a
   `.cursor/rules` entry (added 2026-08-18).** The T18 mutation-regime

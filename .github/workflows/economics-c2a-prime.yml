@@ -270,7 +270,20 @@ jobs:
         id: layer_run
         env:
           CTEST_OUTPUT_ON_FAILURE: ON
+        # `set -eo pipefail` is load-bearing, not decoration (rule 46).
+        # A GitHub `run:` block without an explicit `shell:` is
+        # `bash -e {0}` — `-e` but NOT pipefail — so a pipeline's exit
+        # status is its LAST command's. Piping this gate's verdict
+        # through `tee` therefore reported tee's success and discarded
+        # the script's: a failing layer would have gone GREEN. pipefail
+        # makes the pipeline carry the script's status while keeping the
+        # live streaming that `tee` exists for.
+        #
+        # The rule-46 SIGPIPE trap does not apply here: it bites when an
+        # early-exiting consumer (`rg -q`, `head`) kills its producer,
+        # and `tee` consumes to completion.
         run: |
+          set -eo pipefail
           scripts/ci/run_economics_c2a_prime.sh ${{ matrix.subcommand }} \
             2>&1 | tee "economics-c2a-layer${{ matrix.layer }}.log"
       - name: Upload failure diagnostics
