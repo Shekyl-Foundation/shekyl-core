@@ -1,5 +1,29 @@
 // Shekyl four-component economics helpers for C++ consensus code.
 // Wraps FFI calls to the Rust shekyl-economics crate.
+//
+// NO HARD-FORK GATING LIVES HERE, and the absence is deliberate. Both
+// helpers used to open with `if (hf_version < HF_VERSION_SHEKYL_NG || …)`.
+// That arm was unreachable on every network:
+//
+//   * HF_VERSION_SHEKYL_NG is 1 (cryptonote_config.h);
+//   * mainnet/testnet/stagenet each declare exactly ONE fork entry,
+//     `{ version 1, height 1, … }` (hardforks.cpp);
+//   * blocks below the first fork take HardFork's `original_version`, which
+//     all three Blockchain constructions pass as 1, and
+//     CURRENT_BLOCK_MAJOR_VERSION is 1;
+//   * construct_miner_tx defaults hard_fork_version to 1, and no caller
+//     anywhere passes 0.
+//
+// So `hf_version < 1` was never true, and the `hf_version` parameters those
+// branches justified are gone with them (rules 15 and 60: v3-from-genesis
+// carries no pre-genesis ladder). Core tests that cross v1 -> v2 are
+// unaffected — 2 >= 1 selected the same arm.
+//
+// REOPENING CRITERION (rule 21): a future hard fork that changes economics
+// SEMANTICS reintroduces gating. When it does, the gate belongs in
+// shekyl-economics next to the math it selects, per rule 20 — not as a new
+// C++ branch here. Re-adding a parameter now to "keep the option open" is
+// the pre-provisioned flexibility rule 21 rejects.
 
 #pragma once
 
@@ -41,10 +65,9 @@ inline BurnResult compute_fee_burn(
     uint64_t total_fees,
     uint64_t tx_volume,
     uint64_t circulating_supply,
-    uint64_t frozen_segment_count,
-    uint8_t hf_version)
+    uint64_t frozen_segment_count)
 {
-    if (hf_version < HF_VERSION_SHEKYL_NG || total_fees == 0)
+    if (total_fees == 0)
     {
         return {total_fees, 0, 0};
     }
@@ -73,10 +96,9 @@ struct EmissionSplit {
 inline EmissionSplit compute_emission_split(
     uint64_t block_emission,
     uint64_t current_height,
-    uint64_t genesis_ng_height,
-    uint8_t hf_version)
+    uint64_t genesis_ng_height)
 {
-    if (hf_version < HF_VERSION_SHEKYL_NG || block_emission == 0)
+    if (block_emission == 0)
     {
         return {block_emission, 0};
     }

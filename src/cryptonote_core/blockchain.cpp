@@ -1765,14 +1765,14 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
 
   // Component 4: split emission between miner and staker pool.
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height, genesis_ng_height, version);
+  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height, genesis_ng_height);
   uint64_t miner_base_reward = em_split.miner_emission;
 
   // Component 2: fee burn split — miner only receives miner_fee_income.
   // frozen_segment_count is the caller's parent-state read (the asserting
   // read-point above); the escalated share cannot reach miner_fee_income
   // (§12.11.1 Leg 1), so this stays the security-budget-preserving split.
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, frozen_segment_count, version);
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, frozen_segment_count);
   uint64_t effective_fee = burn.miner_fee_income;
 
   if(miner_base_reward + effective_fee < money_in_use)
@@ -6323,14 +6323,13 @@ leave:
   if (blockchain_height > 0)
   {
     const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-    const uint8_t connect_hf_version = bl.major_version;
 
     const shekyl::EmissionSplit em_split = shekyl::compute_emission_split(
-        base_reward, blockchain_height, genesis_ng_height, connect_hf_version);
+        base_reward, blockchain_height, genesis_ng_height);
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
         fee_summary, get_tx_volume_avg(blockchain_height), already_generated_coins,
-        frozen_segment_count, connect_hf_version);
+        frozen_segment_count);
 
     archival_budget_accrual = em_split.staker_emission + burn.staker_pool_amount;
     block_burn_amount = burn.actually_destroyed;

@@ -1309,10 +1309,10 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     if (!get_block_reward(median_block_weight, target_block_weight, already_generated_coins, block_reward, hf_version, 0))
       return false;
 
-    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0, hf_version);
+    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0);
     block_reward = em_split.miner_emission;
 
-    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, /*frozen_segment_count=*/0, hf_version);
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, /*frozen_segment_count=*/0);
     block_reward += burn.miner_fee_income;
 
     tx_extra_pqc_kem_ciphertext kem_field;

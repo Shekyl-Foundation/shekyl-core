@@ -264,7 +264,7 @@ bool gen_block_reward::check_block_rewards(cryptonote::core& /*c*/, size_t /*ev_
     uint64_t multiplier = shekyl_calc_release_multiplier(0, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
     base_reward = shekyl_apply_release_multiplier(base_reward, multiplier);
 
-    shekyl::EmissionSplit em = shekyl::compute_emission_split(base_reward, 0, 0, 1);
+    shekyl::EmissionSplit em = shekyl::compute_emission_split(base_reward, 0, 0);
 
     block blk_0 = std::get<block>(events[m_checked_blocks_indices[0]]);
     CHECK_EQ(em.miner_emission, get_tx_out_amount(blk_0.miner_tx));
