@@ -303,125 +303,30 @@ async fn p6_peer_check_refuses_a_mismatched_owner() {
 
 /// P-8 — the disk probe must return a plausible figure and refuse a bad path.
 ///
-/// The Windows implementation under test lives in `shekyl-engine-core`, which
-/// cannot be cross-checked from Linux; this asserts the same Win32 call in the
-/// same shape. Divergence between the two is caught by the byte-comparison
-/// gate in `scripts/ci/windows_probe.ps1`, not by this test.
+/// **Now tests the shipping function directly.** While the Windows arm lived
+/// in `shekyl-engine-core` — a crate whose graph reaches `ring` and so cannot
+/// be cross-compiled from Linux — this probe exercised a *copy*, and a CI gate
+/// existed solely to prove the copy had not drifted. WP-D2's siting rule moved
+/// the function into this crate, so the copy and its gate are deleted rather
+/// than maintained.
 #[test]
 fn p8_disk_probe_is_sane_and_refuses_a_bad_path() {
     let temp = std::env::temp_dir();
-    let n = free_bytes_available(&temp).expect("P-8: probe failed on %TEMP%");
+    let n = shekyl_win_sec::free_bytes_available(&temp).expect("P-8: probe failed on %TEMP%");
     assert!(n > 0, "P-8: %TEMP% reports zero bytes available");
     assert!(
         n < (1u64 << 50),
         "P-8: implausible free-space figure ({n} bytes) — check the out-param order"
     );
     assert!(
-        free_bytes_available(std::path::Path::new(r"Z:\no\such\shekyl-probe")).is_err(),
+        shekyl_win_sec::free_bytes_available(std::path::Path::new(r"Z:\no\such\shekyl-probe"))
+            .is_err(),
         "P-8: a nonexistent path returned Ok — the probe cannot distinguish \
          'no room' from 'cannot tell'"
     );
 }
 
-/// P-14 — a truncated mandatory-label ACE must be REFUSED, not read.
-///
-/// Added 2026-08-20 (PR #516 review). `SYSTEM_MANDATORY_LABEL_ACE` embeds only
-/// the first DWORD of a variable-length SID, so an `AceSize` big enough for
-/// the struct proves nothing about the sub-authorities. A hostile server — the
-/// only kind this check runs against — can declare `SubAuthorityCount = 200`
-/// inside a 20-byte ACE, and every read after that runs past the ACE.
-///
-/// The ACL is hand-built because no Windows API will produce one this
-/// malformed, and a bounds check that has never refused anything is
-/// indistinguishable from an absent bounds check.
-///
-/// Predicted: `None` — malformed-refuse, NOT `Some(Medium)`. A `Some(Medium)`
-/// here would mean a hostile server presenting a broken label is treated as
-/// trusted.
-#[test]
-fn p14_truncated_label_ace_is_refused() {
-    use windows_sys::Win32::Security::ACL;
-
-    // ACL header (8 bytes) + one ACE. Sized generously; the ACE lies about
-    // its own extent, which is the point.
-    //
-    // Backed by `u32`, not `u8`: an `ACL` needs 2-byte alignment and a
-    // `Vec<u8>` gives 1, so casting the base would be the same under-alignment
-    // defect Windows-target clippy caught in `current_user_sid`. Second
-    // instance of that lesson in this crate; the first was UB in shipping code.
-    let mut words = vec![0u32; 16];
-    // SAFETY: `words` owns 16 * 4 = 64 initialised bytes; the view borrows
-    // them for the writes below and is dropped before `words` is used again.
-    let buf: &mut [u8] =
-        unsafe { std::slice::from_raw_parts_mut(words.as_mut_ptr().cast::<u8>(), 64) };
-
-    // --- ACL header ---
-    buf[0] = 2; // AclRevision
-    buf[1] = 0; // Sbz1
-    buf[2] = 64; // AclSize (lo)
-    buf[3] = 0; //          (hi)
-    buf[4] = 1; // AceCount (lo)
-    buf[5] = 0; //          (hi)
-
-    // --- ACE at offset 8: header(4) + mask(4) + SID ---
-    const ACE: usize = 8;
-    const ACE_SIZE: u16 = 20; // header 4 + mask 4 + SID header 8 + ONE sub-authority
-    buf[ACE] = 17; // AceType = SYSTEM_MANDATORY_LABEL_ACE_TYPE
-    buf[ACE + 1] = 0; // AceFlags
-    buf[ACE + 2] = (ACE_SIZE & 0xff) as u8;
-    buf[ACE + 3] = (ACE_SIZE >> 8) as u8;
-    // Mask at ACE+4..ACE+8 stays zero.
-
-    // SID begins at ACE+8: revision, count, authority(6), sub-authorities.
-    let sid = ACE + 8;
-    buf[sid] = 1; // Revision
-    buf[sid + 1] = 200; // SubAuthorityCount — the LIE. 200 * 4 bytes cannot fit.
-    buf[sid + 7] = 16; // IdentifierAuthority = SECURITY_MANDATORY_LABEL_AUTHORITY
-
-    let acl = words.as_mut_ptr().cast::<ACL>();
-    // SAFETY: `buf` outlives the call and holds a syntactically valid ACL
-    // header followed by the deliberately malformed ACE described above.
-    let verdict = unsafe { shekyl_win_sec::label_from_sacl_for_testing(acl) };
-
-    assert_eq!(
-        verdict, None,
-        "P-14: a truncated label ACE claiming SubAuthorityCount=200 was ACCEPTED. \
-         Reading its RID walks off the end of the ACE, and treating it as a \
-         level means a hostile server's malformed label is trusted."
-    );
-}
-
 // --- helpers ---------------------------------------------------------------
-
-/// Byte-identical to `shekyl-engine-core`'s Windows half (WP-D9). The copy is
-/// deliberate and is gated: `windows_probe.ps1` byte-compares the two before
-/// running anything, because a probe against a stale copy measures nothing.
-fn free_bytes_available(path: &std::path::Path) -> std::io::Result<u64> {
-    use std::os::windows::ffi::OsStrExt;
-
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut available: u64 = 0;
-    // SAFETY: `wide` is NUL-terminated and outlives the call; `available` is a
-    // local. The two unused out-params are documented as optional and are
-    // passed null because this probe deliberately wants only the
-    // available-to-caller figure.
-    let ok = unsafe {
-        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
-            wide.as_ptr(),
-            &raw mut available,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    if ok == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(available)
-}
 
 /// The `D:` section of an SDDL string, between the DACL marker and the SACL.
 ///

@@ -352,6 +352,14 @@ seed being readable by one account or by every account on the box.
 
 ### WP-D9 — WP-B4, the disk probe
 
+**Siting corrected 2026-08-20.** The Windows arm lives in `shekyl-win-sec`,
+not beside its caller. `shekyl-engine-core` is `#![deny(unsafe_code)]` and the
+Win32 call needs `unsafe`, so by WP-D2's rule the dedicated crate carries it —
+the subject being a disk rather than a descriptor does not change the rule.
+The first version shipped the `unsafe` in `shekyl-engine-core` and did not
+compile on Windows; nothing on Linux could see it, because the arm is `cfg`'d
+out there.
+
 `GetDiskFreeSpaceExW`'s `lpFreeBytesAvailableToCaller` is the exact semantic
 analog of `statvfs`'s `f_bavail` — space available *to this writer*, which is
 what the module's own rationale already argues for. Already type-checked
@@ -437,12 +445,23 @@ verifiable.** What is not is *integration into the crates that carry TLS*.
   `create_with_security_attributes_raw`, the `GetSecurityInfo` / token-SID
   side of WP-D4, and the integrity-level query — are **discharged**.
 
-- **Local gate — the scratch-crate pattern, for code inside a TLS-carrying
-  crate.** WP-D9's Windows half lives in `shekyl-engine-core`, which cannot be
-  cross-checked here, so it is compiled as a copy in an isolated crate. **The
-  copy is byte-compared against the original before it is compiled** — a gate
-  that builds a stale copy measures nothing, which is the same defect class as
-  a grep gate that passes because its path vanished.
+- **The copy gate is gone, because its subject moved** (2026-08-20). WP-D9's
+  Windows half used to live in `shekyl-engine-core`, which cannot be
+  cross-checked here, so the probe suite held a byte-compared *copy* of it and
+  a CI gate existed to prove the copy had not drifted.
+
+  The first real scouting run made that arrangement untenable for a better
+  reason: `shekyl-engine-core` is `#![deny(unsafe_code)]`, and the Win32 call
+  needs `unsafe`, so **the merged probe did not compile on Windows at all**.
+  The lint could not fire on Linux, where the arm is `cfg`'d out — the same
+  blind-gate shape this round keeps meeting.
+
+  WP-D2 already answered it: the dedicated `cfg(windows)` crate carries the
+  `unsafe`. Moving the function into `shekyl-win-sec` restores the deny
+  untouched, makes the real function directly compilable, clippy-able and
+  testable for a Windows target, and **deletes the copy and its gate rather
+  than maintaining them** (`delete-the-duplicate-dont-synchronize-it`). P-8
+  now exercises what ships.
 
 - **Full-closure gate — the Windows runner.** The `Windows (MSVC, daemon)` job
   has the pinned toolchain and a native C compiler, so it is the only place a

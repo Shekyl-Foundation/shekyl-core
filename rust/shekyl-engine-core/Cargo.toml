@@ -235,11 +235,12 @@ zeroize = { workspace = true }
 # This is the first live consumer (closes the FOLLOWUP kameo pin).
 kameo = { workspace = true }
 
-# WP-D9: the disk probe's Windows half (`GetDiskFreeSpaceExW`). Unix keeps
-# rustix's `statvfs`; neither crate is resolved on the other platform. Already
-# in Cargo.lock via `shekyl-win-sec`, so no new supply-chain surface.
+# WP-D9: the disk probe's Windows half. The Win32 call itself lives in
+# `shekyl-win-sec` because it needs `unsafe` and this crate denies it (WP-D2);
+# what is here is a delegation. Unix keeps rustix's `statvfs`; neither is
+# resolved on the other platform.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
 # Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`

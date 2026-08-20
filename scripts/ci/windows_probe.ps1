@@ -42,30 +42,6 @@ function Add-Result {
 }
 
 # ---------------------------------------------------------------------------
-# GATE 0 — the copied WP-D9 probe must not be stale.
-#
-# shekyl-engine-core carries TLS (`ring`), so its Windows disk probe cannot be
-# cross-compiled from a Linux box and the probe suite holds a copy of it. A
-# suite that exercises a STALE copy measures nothing — the same defect class as
-# a grep gate that passes because its path vanished.
-#
-# The comparison lives in check_win_probe_copy.py rather than here, and that is
-# deliberate: it is the load-bearing logic, PowerShell cannot be executed on the
-# development box, and a gate whose only implementation is unverifiable is the
-# thing this round keeps finding. The Python version was tested against three
-# injected drifts (swapped out-param, dropped error branch, reworded safety
-# comment) and refused all three. This script calls it; there is one comparison
-# and it is the tested one.
-# ---------------------------------------------------------------------------
-Write-Host '== GATE 0: WP-D9 copy is not stale ==' -ForegroundColor Cyan
-
-python (Join-Path $repo 'scripts/ci/check_win_probe_copy.py')
-if ($LASTEXITCODE -ne 0) {
-    Write-Host 'GATE 0 failed — nothing below would be trustworthy, so stopping here.' -ForegroundColor Red
-    exit 2
-}
-
-# ---------------------------------------------------------------------------
 # §1 — the CI-durable probes, as Rust tests.
 # ---------------------------------------------------------------------------
 Write-Host ''
