@@ -1,0 +1,21 @@
+--- shekyl-randomx-differential/src/cache_precondition.rs
++++ replace < with > in build_divergence_window
+@@ -367,17 +367,17 @@
+ 
+     let current_block_end = current_block_start + current_block.len();
+     debug_assert!(
+         offset >= current_block_start && offset < current_block_end,
+         "divergent offset must lie within the current block"
+     );
+ 
+     // Leading slice: previous block, if window crosses backwards.
+-    if window_start < current_block_start {
++    if window_start > /* ~ changed by cargo-mutants ~ */ current_block_start {
+         let (prev_start, prev_bytes) =
+             prev_block.expect("window crosses backwards but no previous block buffered");
+         debug_assert_eq!(prev_start + prev_bytes.len(), current_block_start);
+         let copy_start = window_start - prev_start;
+         rust_window.extend_from_slice(&prev_bytes[copy_start..]);
+     }
+ 
+     // Body slice: current block, clipped to the window's intersection.

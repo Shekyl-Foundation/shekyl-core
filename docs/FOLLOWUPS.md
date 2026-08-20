@@ -292,36 +292,6 @@ sustainability is unaffected by the recalibration.
   the corrected scoping costs **less** than the status quo — 12.6 h / 5
   shards against 23.9 h / 8. MR-DQ-2–MR-DQ-7 remain open.
 
-- **Divergence-window arithmetic is under-asserted (added 2026-08-18,
-  found by the first scoped mutation run the project has completed).**
-  `cache_precondition.rs`'s `byte_diff` and `build_divergence_window`
-  carry tests (`find_first_divergence_*`,
-  `build_divergence_window_crosses_backwards/forwards/interior`) that
-  **pass while their arithmetic is mutated**: nine survivors across
-  `+`→`-`, `+`→`*`, `+=`→`-=`, `+=`→`*=`, and `>`→`>=`. The tests
-  assert something weaker than the arithmetic they cover. This is the
-  T4 diagnostic path — the ±64-byte context window an operator reads
-  when `--debug-cache-divergence` fires — so a wrong window
-  mis-reports *where* a consensus divergence sits, without affecting
-  whether one is detected. Not consensus-critical, which is why it is
-  filed rather than fixed in the item-1 PR (different validation
-  surface, rule 19). Root cause is the **fixture, not the assertions**: `fill_block` returns
-  `[sentinel; 1024]`, a uniform block, so copying `[10..139]` versus
-  `[11..140]` of it is byte-identical — the tests assert window length,
-  window start, and per-source byte *counts*, all invariant under an
-  off-by-one *inside* a block. They therefore catch boundary-crossing
-  errors and miss intra-block index errors. Fix shape is two lines and
-  touches no production code: make `fill_block` position-derived
-  (`block[i] = sentinel ^ (i as u8)`) and assert the window's byte
-  *sequence* rather than its composition; every intra-block index
-  mutant then dies. Note this is a fixture weakness, distinct from the
-  `assert_equivalent`-wrapper survivor, which is a genuine skip-list
-  entry — conflating them would credit the fixture with mutants it
-  never covered. Notable as evidence:
-  this is the **first genuine T18-style yield** the project has
-  produced, and it cost four minutes on one file — see
-  [`RANDOMX_V2_MUTATION_REGIME.md`](./design/RANDOMX_V2_MUTATION_REGIME.md)
-  §6.6. **Target: V3.0 pre-genesis.**
 
 
 - **Promote "a gate must assert its own subject exists" to a

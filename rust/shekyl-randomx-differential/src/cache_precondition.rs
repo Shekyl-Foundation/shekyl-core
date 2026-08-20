@@ -582,11 +582,75 @@ mod tests {
         assert_eq!(hex_lower(&[]), "");
     }
 
-    /// Synthesize a single 1-KiB block filled with a sentinel byte
-    /// so window-construction tests can identify which source
-    /// (previous / current / next) supplied each window byte.
+    // ---- Window-construction coverage, and its honest boundary.
+    //
+    // Mutation-measured (cargo-mutants over this file, release,
+    // --test-package shekyl-randomx-differential): 13 survivors before
+    // this work, 11 after. What changed and what did not is recorded
+    // here so the next reader does not re-derive it:
+    //
+    //  KILLED by making the fixture position-derived and asserting byte
+    //  SEQUENCES rather than membership counts, plus two discriminating
+    //  cases the suite had no input for at all:
+    //    * `copy_start = window_start - prev_start` -> `+`  (every
+    //      backwards test passed prev_start = 0, where the two
+    //      operators are indistinguishable — the special case was the
+    //      only one tested);
+    //    * `window_end > current_block_end` -> `>=`  (no test sat
+    //      exactly on the boundary).
+    //
+    //  UNKILLABLE by any behavioural test, and correctly so:
+    //    * `window_len = window_end - window_start` feeds only
+    //      `Vec::with_capacity`. Capacity is a performance hint, not
+    //      semantics; a wrong value changes no observable output. This
+    //      is a legitimate skip-list candidate, not a coverage gap.
+    //
+    //  OUT OF REACH from unit tests, structurally:
+    //    * the `byte_diff` block-walk arithmetic (offsets and the
+    //      `absolute_offset += block_len` cursor) only executes over a
+    //      real 256-MiB cache pair. This is MR-F10 one level up —
+    //      orchestration untestable without the expensive path, exactly
+    //      as the verdicts were before they were split out. Closing it
+    //      means giving `byte_diff` the same treatment: a pure inner
+    //      function over block indices with the session-taking walk as
+    //      a wrapper.
+    //
+    // The fixture note below explains why membership assertions could
+    // not have caught any of the above.
+
+    /// Synthesize a 1-KiB block whose bytes identify **both** their
+    /// source block and their offset within it.
+    ///
+    /// Position-derived, not uniform, and that is the whole point. A
+    /// uniform `[sentinel; 1024]` makes every intra-block index error
+    /// invisible: copying `[10..139]` instead of `[11..140]` of a
+    /// constant block yields byte-identical output, so assertions on
+    /// window length, window start, and per-source byte *counts* all
+    /// still pass. Mutation testing surfaced exactly that — nine
+    /// arithmetic survivors in `byte_diff` / `build_divergence_window`
+    /// whose tests passed while their arithmetic was mutated. The
+    /// weakness was in the FIXTURE, not in the assertions.
+    ///
+    /// XOR with the low byte of the offset keeps the source
+    /// recognisable (a reader who knows `i` recovers the sentinel)
+    /// while making any shift of the copied range change the bytes.
     fn fill_block(sentinel: u8) -> [u8; 1024] {
-        [sentinel; 1024]
+        let mut block = [0u8; 1024];
+        for (i, byte) in block.iter_mut().enumerate() {
+            *byte = sentinel ^ u8::try_from(i % 256).expect("modulus is under 256");
+        }
+        block
+    }
+
+    /// The exact bytes `fill_block(sentinel)` holds over `range`.
+    ///
+    /// Lets the window tests assert a byte **sequence** rather than a
+    /// membership count, which is what makes an off-by-one inside a
+    /// block detectable.
+    fn block_bytes(sentinel: u8, range: std::ops::Range<usize>) -> Vec<u8> {
+        range
+            .map(|i| sentinel ^ u8::try_from(i % 256).expect("modulus is under 256"))
+            .collect()
     }
 
     /// Window fully contained in the current block: only the
@@ -610,9 +674,12 @@ mod tests {
         );
         assert_eq!(window_start, 1024 + 500 - 64);
         assert_eq!(rust_window.len(), 129);
-        assert!(
-            rust_window.iter().all(|&b| b == 0xBB),
-            "all bytes must come from current block"
+        // Exact sequence, not membership: `all(|b| b == 0xBB)` passed
+        // for any shift of the copied range.
+        assert_eq!(
+            rust_window,
+            block_bytes(0xBB, 436..565),
+            "window must be current_block[436..565] exactly"
         );
         assert_eq!(c_window.len(), 129);
         // The remainder iterator must not have been advanced.
@@ -640,11 +707,17 @@ mod tests {
         );
         assert_eq!(window_start, 1024 + 10 - 64);
         assert_eq!(rust_window.len(), 129);
-        let prev_count = rust_window.iter().filter(|&&b| b == 0xAA).count();
-        let current_count = rust_window.iter().filter(|&&b| b == 0xBB).count();
-        assert_eq!(prev_count, 54, "54 leading bytes from previous block");
-        assert_eq!(current_count, 75, "75 trailing bytes from current block");
-        assert_eq!(prev_count + current_count, rust_window.len());
+        // Exact sequence across the seam. Counting per-source bytes
+        // pinned only WHERE the seam fell, never which bytes each side
+        // contributed, so an intra-block off-by-one on either side kept
+        // the counts at 54/75 and passed.
+        let mut expected = block_bytes(0xAA, 970..1024);
+        expected.extend(block_bytes(0xBB, 0..75));
+        assert_eq!(expected.len(), 129);
+        assert_eq!(
+            rust_window, expected,
+            "54 bytes of prev_block[970..1024] then 75 of current_block[0..75]"
+        );
         assert_eq!(iter.count(), 1, "next block must still be available");
     }
 
@@ -668,11 +741,85 @@ mod tests {
         );
         assert_eq!(window_start, 1024 + 1013 - 64);
         assert_eq!(rust_window.len(), 129);
-        let current_count = rust_window.iter().filter(|&&b| b == 0xBB).count();
-        let next_count = rust_window.iter().filter(|&&b| b == 0xCC).count();
-        assert_eq!(current_count, 75, "75 leading bytes from current block");
-        assert_eq!(next_count, 54, "54 trailing bytes from next block");
+        let mut expected = block_bytes(0xBB, 949..1024);
+        expected.extend(block_bytes(0xCC, 0..54));
+        assert_eq!(expected.len(), 129);
+        assert_eq!(
+            rust_window, expected,
+            "75 bytes of current_block[949..1024] then 54 of next_block[0..54]"
+        );
         assert_eq!(iter.count(), 0, "next block must have been consumed");
+    }
+
+    /// Backwards crossing at a **non-zero** previous-block start.
+    ///
+    /// Bites against `copy_start = window_start - prev_start` becoming
+    /// `+`. The other backwards test passes `prev_start = 0`, where
+    /// subtraction and addition are indistinguishable — so it could
+    /// never catch that mutation however exactly it asserted the
+    /// bytes. Mid-cache blocks are the normal case; block 0 is the
+    /// special one, and testing only the special one hid the operator.
+    ///
+    /// Does NOT re-check seam placement, which the block-0 test
+    /// already pins.
+    #[test]
+    fn build_divergence_window_crosses_backwards_from_a_mid_cache_block() {
+        let prev = fill_block(0xAA);
+        let current = fill_block(0xBB);
+        let next = fill_block(0xCC);
+        let mut iter = std::iter::once(next);
+        // prev occupies [1024, 2048); current occupies [2048, 3072).
+        let (window_start, rust_window, _c_window) = build_divergence_window(
+            2048 + 10,
+            2048,
+            &current,
+            Some((1024, &prev)),
+            &mut iter,
+            &vec![0xFF_u8; 8192],
+        );
+        assert_eq!(window_start, 2048 + 10 - 64);
+        let mut expected = block_bytes(0xAA, 970..1024);
+        expected.extend(block_bytes(0xBB, 0..75));
+        assert_eq!(
+            rust_window, expected,
+            "prev_bytes must be indexed relative to prev_start, not absolutely"
+        );
+        assert_eq!(iter.count(), 1, "next block must still be available");
+    }
+
+    /// Window ending exactly on the current block's boundary.
+    ///
+    /// Bites against `if window_end > current_block_end` becoming
+    /// `>=`: at exact equality the window is already complete, so a
+    /// `>=` would consume a next block that is not needed — visible
+    /// both as a longer window and as a consumed iterator. Every other
+    /// window test sits strictly inside or strictly across the
+    /// boundary, so none of them can distinguish the two operators.
+    #[test]
+    fn build_divergence_window_ending_exactly_at_block_end_takes_no_next_block() {
+        let current = fill_block(0xBB);
+        let next = fill_block(0xCC);
+        let mut iter = std::iter::once(next);
+        // window_end = offset + 64 + 1 = 2048 = current_block_end.
+        let (window_start, rust_window, _c_window) = build_divergence_window(
+            1024 + 959,
+            1024,
+            &current,
+            None,
+            &mut iter,
+            &vec![0xFF_u8; 4096],
+        );
+        assert_eq!(window_start, 1024 + 959 - 64);
+        assert_eq!(
+            rust_window,
+            block_bytes(0xBB, 895..1024),
+            "the window ends flush with the block; no next-block bytes belong in it"
+        );
+        assert_eq!(
+            iter.count(),
+            1,
+            "a window ending exactly at the boundary must NOT consume the next block"
+        );
     }
 
     /// Window at the cache's first byte (`offset = 0`): the
@@ -686,6 +833,10 @@ mod tests {
             build_divergence_window(0, 0, &current, None, &mut iter, &vec![0xFF_u8; 4096]);
         assert_eq!(window_start, 0);
         assert_eq!(rust_window.len(), 65, "0..65 (offset + half_width + 1)");
-        assert!(rust_window.iter().all(|&b| b == 0xBB));
+        assert_eq!(
+            rust_window,
+            block_bytes(0xBB, 0..65),
+            "window must be current_block[0..65] exactly"
+        );
     }
 }

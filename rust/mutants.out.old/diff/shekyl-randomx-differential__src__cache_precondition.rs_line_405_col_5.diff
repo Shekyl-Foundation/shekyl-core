@@ -1,0 +1,25 @@
+--- shekyl-randomx-differential/src/cache_precondition.rs
++++ replace hex_lower -> String with String::new()
+@@ -397,21 +397,17 @@
+     debug_assert_eq!(rust_window.len(), window_len);
+     (window_start, rust_window, c_window)
+ }
+ 
+ /// Format bytes as lowercase-hex without separators. Used by both
+ /// `PreconditionMismatch::Display` and `ByteDivergence::Display`
+ /// to keep the failure output consistent across the two paths.
+ fn hex_lower(bytes: &[u8]) -> String {
+-    let mut s = String::with_capacity(bytes.len() * 2);
+-    for byte in bytes {
+-        s.push_str(&format!("{byte:02x}"));
+-    }
+-    s
++    String::new() /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
+     // ---- MR-F10 / item 1: induced-divergence negative tests for the
+     // R1-D14 precondition verdict. Before this block the harness had

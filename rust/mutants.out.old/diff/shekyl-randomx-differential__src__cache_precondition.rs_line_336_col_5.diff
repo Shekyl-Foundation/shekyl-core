@@ -1,0 +1,22 @@
+--- shekyl-randomx-differential/src/cache_precondition.rs
++++ replace find_first_divergence -> Option<usize> with None
+@@ -328,18 +328,17 @@
+ }
+ 
+ /// Return the index of the first divergent byte between two equal-
+ /// length slices, or `None` if the slices are equal.
+ ///
+ /// Pulled out as a free function so the C6 unit tests can exercise
+ /// the comparison logic without paying the full 256-MiB cache cost.
+ fn find_first_divergence(rust: &[u8], c: &[u8]) -> Option<usize> {
+-    debug_assert_eq!(rust.len(), c.len());
+-    rust.iter().zip(c.iter()).position(|(a, b)| a != b)
++    None /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Build the ±[`DIVERGENCE_WINDOW_HALF_WIDTH`] window for a byte
+ /// divergence at `offset` in both caches.
+ ///
+ /// The Rust side reuses the `current_block` (already in hand from
+ /// [`byte_diff`]'s active iteration); when the window's leading edge
+ /// crosses into the previous block, `prev_block` (the most recent

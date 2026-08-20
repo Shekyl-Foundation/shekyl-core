@@ -1,0 +1,13 @@
+shekyl-randomx-differential/src/cache_precondition.rs:93:5: replace rust_cache_sha256 -> [u8; 32] with [0; 32]
+shekyl-randomx-differential/src/cache_precondition.rs:93:5: replace rust_cache_sha256 -> [u8; 32] with [1; 32]
+shekyl-randomx-differential/src/cache_precondition.rs:156:5: replace assert_equivalent -> Result<(), PreconditionMismatch> with Ok(())
+shekyl-randomx-differential/src/cache_precondition.rs:286:5: replace byte_diff -> Result<(), ByteDivergence> with Ok(())
+shekyl-randomx-differential/src/cache_precondition.rs:304:65: replace + with - in byte_diff
+shekyl-randomx-differential/src/cache_precondition.rs:304:65: replace + with * in byte_diff
+shekyl-randomx-differential/src/cache_precondition.rs:306:52: replace + with - in byte_diff
+shekyl-randomx-differential/src/cache_precondition.rs:306:52: replace + with * in byte_diff
+shekyl-randomx-differential/src/cache_precondition.rs:324:25: replace += with -= in byte_diff
+shekyl-randomx-differential/src/cache_precondition.rs:324:25: replace += with *= in byte_diff
+shekyl-randomx-differential/src/cache_precondition.rs:364:33: replace - with + in build_divergence_window
+shekyl-randomx-differential/src/cache_precondition.rs:379:39: replace - with + in build_divergence_window
+shekyl-randomx-differential/src/cache_precondition.rs:389:19: replace > with >= in build_divergence_window

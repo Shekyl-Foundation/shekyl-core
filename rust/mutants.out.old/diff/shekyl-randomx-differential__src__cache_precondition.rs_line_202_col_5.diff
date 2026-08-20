@@ -1,0 +1,29 @@
+--- shekyl-randomx-differential/src/cache_precondition.rs
++++ replace verdict -> Result<(), PreconditionMismatch> with Ok(())
+@@ -194,25 +194,17 @@
+ /// returns `Ok`. That surface belongs to the three-leg canonical
+ /// comparison (T16), not here.
+ #[must_use = "the precondition verdict must be propagated, not discarded"]
+ pub fn verdict(
+     seedhash: Seedhash,
+     rust_sha: [u8; 32],
+     c_sha: [u8; 32],
+ ) -> Result<(), PreconditionMismatch> {
+-    if rust_sha == c_sha {
+-        Ok(())
+-    } else {
+-        Err(PreconditionMismatch {
+-            seedhash,
+-            rust_sha,
+-            c_sha,
+-        })
+-    }
++    Ok(()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Diagnostic-path precondition failure: first divergent offset +
+ /// ±[`DIVERGENCE_WINDOW_HALF_WIDTH`] context window. Surfaced by
+ /// [`byte_diff`] when invoked under `--debug-cache-divergence`.
+ ///
+ /// The windows are bounded to the cache's actual range (`0 ..
+ /// RANDOMX_CACHE_SIZE_BYTES`) so divergences near the cache's

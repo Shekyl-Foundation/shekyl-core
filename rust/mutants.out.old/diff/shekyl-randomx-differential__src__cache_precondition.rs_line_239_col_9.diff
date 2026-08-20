@@ -1,0 +1,35 @@
+--- shekyl-randomx-differential/src/cache_precondition.rs
++++ replace <impl fmt::Display for ByteDivergence>::fmt -> fmt::Result with Ok(Default::default())
+@@ -231,31 +231,17 @@
+     /// `window_start + 2 * DIVERGENCE_WINDOW_HALF_WIDTH + 1`.
+     pub rust_window: Vec<u8>,
+     /// C reference's bytes over the same range.
+     pub c_window: Vec<u8>,
+ }
+ 
+ impl fmt::Display for ByteDivergence {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        writeln!(
+-            f,
+-            "cache-precondition byte-diff divergence for seedhash {}:",
+-            self.seedhash
+-        )?;
+-        writeln!(
+-            f,
+-            "  first divergent offset: {} (0x{:08x}); window: [{}, {})",
+-            self.offset,
+-            self.offset,
+-            self.window_start,
+-            self.window_start + self.rust_window.len()
+-        )?;
+-        writeln!(f, "  rust: {}", hex_lower(&self.rust_window))?;
+-        write!(f, "  c:    {}", hex_lower(&self.c_window))
++        Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ impl std::error::Error for ByteDivergence {}
+ 
+ /// Byte-by-byte diff of the two caches; on first divergence returns
+ /// a [`ByteDivergence`] with the offset + ±64-byte window.
+ ///

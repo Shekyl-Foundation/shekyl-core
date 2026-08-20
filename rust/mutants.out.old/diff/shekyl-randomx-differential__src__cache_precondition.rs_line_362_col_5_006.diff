@@ -1,0 +1,57 @@
+--- shekyl-randomx-differential/src/cache_precondition.rs
++++ replace build_divergence_window -> (usize, Vec<u8>, Vec<u8>) with (0, vec![1], vec![])
+@@ -354,53 +354,17 @@
+ fn build_divergence_window(
+     offset: usize,
+     current_block_start: usize,
+     current_block: &[u8],
+     prev_block: Option<(usize, &[u8; 1024])>,
+     remainder_iter: &mut impl Iterator<Item = [u8; 1024]>,
+     c_bytes: &[u8],
+ ) -> (usize, Vec<u8>, Vec<u8>) {
+-    let window_start = offset.saturating_sub(DIVERGENCE_WINDOW_HALF_WIDTH);
+-    let window_end = (offset + DIVERGENCE_WINDOW_HALF_WIDTH + 1).min(RANDOMX_CACHE_SIZE_BYTES);
+-    let window_len = window_end - window_start;
+-    let c_window = c_bytes[window_start..window_end].to_vec();
+-    let mut rust_window: Vec<u8> = Vec::with_capacity(window_len);
+-
+-    let current_block_end = current_block_start + current_block.len();
+-    debug_assert!(
+-        offset >= current_block_start && offset < current_block_end,
+-        "divergent offset must lie within the current block"
+-    );
+-
+-    // Leading slice: previous block, if window crosses backwards.
+-    if window_start < current_block_start {
+-        let (prev_start, prev_bytes) =
+-            prev_block.expect("window crosses backwards but no previous block buffered");
+-        debug_assert_eq!(prev_start + prev_bytes.len(), current_block_start);
+-        let copy_start = window_start - prev_start;
+-        rust_window.extend_from_slice(&prev_bytes[copy_start..]);
+-    }
+-
+-    // Body slice: current block, clipped to the window's intersection.
+-    let current_copy_start = window_start.saturating_sub(current_block_start);
+-    let current_copy_end = (window_end - current_block_start).min(current_block.len());
+-    rust_window.extend_from_slice(&current_block[current_copy_start..current_copy_end]);
+-
+-    // Trailing slice: next block, if window crosses forwards.
+-    if window_end > current_block_end {
+-        let next_bytes = remainder_iter
+-            .next()
+-            .expect("window crosses forwards but no next block available");
+-        let copy_end = window_end - current_block_end;
+-        rust_window.extend_from_slice(&next_bytes[..copy_end]);
+-    }
+-
+-    debug_assert_eq!(rust_window.len(), window_len);
+-    (window_start, rust_window, c_window)
++    (0, vec![1], vec![]) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Format bytes as lowercase-hex without separators. Used by both
+ /// `PreconditionMismatch::Display` and `ByteDivergence::Display`
+ /// to keep the failure output consistent across the two paths.
+ fn hex_lower(bytes: &[u8]) -> String {
+     let mut s = String::with_capacity(bytes.len() * 2);
+     for byte in bytes {
