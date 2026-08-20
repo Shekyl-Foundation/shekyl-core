@@ -4,6 +4,28 @@
 
 ### Added
 
+- **`shekyl-win-sec`: the Windows security primitives for the wallet
+  transport** (WP-W1, first implementing slice of the Windows wallet round —
+  `docs/design/WINDOWS_WALLET_SUPPORT.md`). Owner-only security descriptors
+  built from SDDL, the current-user SID the pipe name is derived from, and the
+  client-side peer check that requires the server's owner SID to match **and**
+  its integrity level to be at least Medium. Its own crate because both sides
+  of the transport need the same Win32 token/SID calls and one of them
+  (`shekyl-wallet-rpc`) is `#![deny(unsafe_code)]`. Compiles to nothing off
+  Windows; no new supply-chain surface (`windows-sys` was already in
+  `Cargo.lock`).
+
+  The wallet's disk-headroom probe gains a Windows half in the same slice —
+  `GetDiskFreeSpaceExW`'s `lpFreeBytesAvailableToCaller`, the exact analog of
+  `statvfs`'s `f_bavail`, chosen so both platforms answer the same question:
+  how many bytes the process filling the disk may actually write.
+
+  **No Windows wallet ships yet.** The transport itself (WP-W2/W3) is not
+  built, `BuildRust.cmake` still skips the Rust binaries for Windows targets,
+  and Windows release archives still carry the daemon and no wallet — unchanged
+  from the C1/C2 cutover. What this adds is the foundation plus the CI gates
+  that will catch it regressing.
+
 - **The CMake build now produces the Rust `shekyl-cli` and
   `shekyl-wallet-rpc` binaries** (C1/C2 install cutover).
   `cmake/BuildRust.cmake` previously invoked `cargo` only for the two
