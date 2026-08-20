@@ -27,3 +27,33 @@ one SA round alone.
 - Chains matter: in `gate && commit && push`, a swallowed gate exit
   makes the push unconditional. Anything that publishes (commit, push,
   tag) never shares a chain with a piped verdict.
+
+## `pgrep -f` / `pkill -f` match the caller
+
+A wait-loop written as
+
+```bash
+until ! pgrep -f cargo-mutants; do sleep 15; done
+```
+
+never terminates. `-f` matches against the **full command line**, and
+the waiting shell's own command line contains the pattern — so `pgrep`
+finds itself and the condition is never false. `pkill -f` has the
+mirror form: it can kill the script that invoked it.
+
+This is silent and it looks exactly like a slow job, which is what makes
+it expensive: the loop sits there consuming its timeout while the thing
+it waits for finished long ago. Cost one round a 19-minute stall on a
+measurement that had already completed.
+
+Fixes, in order of preference:
+
+- **Wait on the process, not a pattern** — keep the PID (`$!`, or a
+  pidfile) and `wait "$pid"`.
+- **Match the binary, not the command line** — `pgrep -x <name>`.
+- **Exclude the caller** — `pgrep -f <pat> | grep -v "^$$\$"`, which is
+  the weakest form because it still depends on the pattern.
+
+The same shape appears whenever a command inspects the process table
+that it is itself part of; treat "does my own invocation match this
+predicate?" as the first question, not an afterthought.

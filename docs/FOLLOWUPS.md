@@ -294,64 +294,8 @@ sustainability is unaffected by the recalibration.
 
 
 
-- **Promote "a gate must assert its own subject exists" to a
-  `.cursor/rules` entry (added 2026-08-18).** The T18 mutation-regime
-  round produced six defects and three near-miss fixes that all share
-  one shape: the gate computed a *correct* answer about a surface that
-  was not there, and reported it as a clean signal — a severed job
-  header (green cron), a config file at a path nothing reads
-  (discipline "enforced"), test scoping that excluded the judging crate
-  (mutants "caught"), assertion macros that are not mutation sites at
-  all (survivor count clean), verdicts whose branches no test could
-  reach (tests "passing"), and an `if:` whose operator precedence
-  silently widened the trigger. The three proposed fixes that shared
-  the defect's shape — a setting in an unread file, an exclusion for a
-  class that cannot occur, a `--re` scope that greens over an empty set
-  — were each caught only by asking "does the thing this acts on
-  exist?", which was not part of the process at the round's start. The
-  rule: **absence of signal is first evidence that the subject may be
-  absent.** The house already applies it in two places without having
-  written it down (`ctest --no-tests=error` in the full-parity job; the
-  domain-registry gate reading comment-stripped source so a quoted
-  literal in a doc comment cannot keep it green), which is precisely
-  why it was never applied to T18. Precedent for promotion:
-  [`26-sub-pr-design-discipline`](../.cursor/rules/26-sub-pr-design-discipline.mdc)
-  was promoted from RandomX v2 Phase 2c on the same grounds. **The
-  promotion is deliberately not made by the round that found it** —
-  minting a rule from inside the round that discovered it is the
-  self-auditing move the round spent five sessions arguing against; it
-  wants a reader who was not in it. Substrate:
-  [`RANDOMX_V2_MUTATION_REGIME.md`](./design/RANDOMX_V2_MUTATION_REGIME.md)
-  §13. **Target: V3.0 pre-genesis.**
 
-- **Plan-doc structural integrity gate: assert every identifier heading
-  has a non-empty body (added 2026-08-18).** During the T18
-  mutation-regime round, a scripted section reorder silently orphaned
-  the body of an `MR-F#` finding under a neighbouring heading, leaving
-  a heading with a truncated stub. It was caught by eye, one edit
-  before it would have been committed as the round's record. The
-  failure class is general — `docs/FOLLOWUPS.md` and
-  `docs/design/IMPLEMENTATION_INDEX.md` are both edited by script and
-  both read by heading — and vigilance is the wrong countermeasure. A
-  cheap structural check (every `MR-F#` / `T-A#` / `DQ-#`-style heading
-  in a plan doc is followed by a non-empty body before the next heading
-  of equal or higher level) would have caught it mechanically. Scope
-  note: this is a **doc-hygiene** surface, deliberately not bundled
-  into the mutation-regime round per
-  [`19-validation-surface-discipline`](../.cursor/rules/19-validation-surface-discipline.mdc).
-  Natural home is `scripts/ci/` alongside `check_doc_links.py`, which
-  already walks the same files. **Target: V3.0 pre-genesis.**
 
-- **Agent-brief boilerplate: `pgrep -f` / `pkill -f` match the caller
-  (added 2026-08-18).** A wait-loop written as
-  `until ! pgrep -f cargo-mutants; do sleep 15; done` never terminates,
-  because the pattern matches the waiting shell's own command line. Cost
-  the T18 round a 19-minute measurement stall before the self-match was
-  spotted. Fixes: filter the caller (`pgrep -f pat | grep -v $$`), match
-  the binary rather than the command line (`pgrep -x`), or wait on the
-  process/PID directly. Worth landing in the agent-brief boilerplate
-  rather than being rediscovered — it is silent, and it looks exactly
-  like a slow job. **Target: V3.0 pre-genesis (docs-only).**
 
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) —
   REQUIRED BEFORE THE FORMAT FREEZE (added 2026-08-08, escalated from
