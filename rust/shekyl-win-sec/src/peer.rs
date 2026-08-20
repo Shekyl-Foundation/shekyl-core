@@ -131,7 +131,17 @@ impl PeerCheck {
     /// Call this **after connecting and before writing anything**. Returning
     /// `Ok` is the only thing that licenses sending a passphrase over the
     /// handle.
-    pub fn verify(handle: HANDLE, expected_owner: &SidString) -> Result<Self, PeerCheckError> {
+    /// # Safety
+    ///
+    /// `handle` must be a live handle to a named pipe this process opened.
+    /// The call reads the object's security descriptor through it, so a
+    /// dangling or foreign handle is undefined behaviour — and the caller is
+    /// the only party that knows the handle is still valid, which is why this
+    /// is `unsafe` rather than defensively checked.
+    pub unsafe fn verify(
+        handle: HANDLE,
+        expected_owner: &SidString,
+    ) -> Result<Self, PeerCheckError> {
         let mut owner_sid: *mut c_void = std::ptr::null_mut();
         let mut label_sid: *mut c_void = std::ptr::null_mut();
         let mut sacl: *mut windows_sys::Win32::Security::ACL = std::ptr::null_mut();
@@ -148,11 +158,11 @@ impl PeerCheck {
                 handle,
                 SE_KERNEL_OBJECT,
                 OWNER_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
-                &mut owner_sid,
+                &raw mut owner_sid,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                &mut sacl,
-                &mut psd,
+                &raw mut sacl,
+                &raw mut psd,
             )
         };
         if rc != 0 {
@@ -199,7 +209,7 @@ unsafe fn label_from_sacl(
     }
     // The mandatory label is the first (and, for a label SACL, only) ACE.
     let mut ace: *mut c_void = std::ptr::null_mut();
-    let got = unsafe { windows_sys::Win32::Security::GetAce(sacl, 0, &mut ace) };
+    let got = unsafe { windows_sys::Win32::Security::GetAce(sacl, 0, &raw mut ace) };
     if got == 0 || ace.is_null() {
         return IntegrityLevel::Medium;
     }
@@ -227,7 +237,7 @@ unsafe fn label_from_sacl(
 fn sid_to_string(sid: *mut c_void) -> Result<SidString, PeerCheckError> {
     let mut wide: *mut u16 = std::ptr::null_mut();
     // SAFETY: `sid` points into a live security descriptor.
-    let ok = unsafe { ConvertSidToStringSidW(sid, &mut wide) };
+    let ok = unsafe { ConvertSidToStringSidW(sid, &raw mut wide) };
     if ok == 0 {
         return Err(PeerCheckError::Unreadable(last_error()));
     }

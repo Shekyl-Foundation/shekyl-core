@@ -383,6 +383,16 @@ ring signatures either; `ring` is a Rust wrapper around a BoringSSL fork.
 Consequence: **the entire Win32 API surface this round depends on is locally
 verifiable.** What is not is *integration into the crates that carry TLS*.
 
+- **Pre-registration.** The probes and their predictions are committed
+  *before* any Windows machine is touched, in
+  [`WINDOWS_WALLET_PROBE_SHEET.md`](WINDOWS_WALLET_PROBE_SHEET.md). Each row
+  names the **decision a failure revisits**, which is what turns a checklist
+  into a decision rule — without it a failed probe becomes a bug report against
+  the probe. They are `#[cfg(windows)]` tests plus one runner, so the Windows
+  machine's output is exit codes rather than prose that has to be summarised
+  back; nothing has to survive a session boundary because nothing is held in a
+  session.
+
 - **Local gate — direct, where the graph allows it.** `shekyl-win-sec` is a
   real workspace member and is checked for `x86_64-pc-windows-gnu` directly;
   no scratch crate is involved and nothing can drift from it. All four items

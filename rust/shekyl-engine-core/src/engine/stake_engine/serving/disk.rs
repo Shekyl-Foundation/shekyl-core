@@ -121,7 +121,7 @@ fn free_bytes_available(path: &Path) -> std::io::Result<u64> {
     let ok = unsafe {
         windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
             wide.as_ptr(),
-            &mut available,
+            &raw mut available,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         )

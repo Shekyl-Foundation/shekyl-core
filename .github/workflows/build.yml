@@ -393,6 +393,18 @@ jobs:
         working-directory: rust
         run: cargo check -p shekyl-win-sec --all-targets
 
+      # Clippy for a WINDOWS target, which the workspace gate on Linux cannot
+      # do: this crate is cfg(windows), so the Linux run sees an empty crate
+      # and passes. That is not hypothetical — the first Windows-target clippy
+      # run on this code found 18 errors including a genuine SOUNDNESS bug (a
+      # `Vec<u8>` buffer cast to a `TOKEN_USER`, which needs 8-byte alignment).
+      # A gate that cannot see its subject is the defect this round keeps
+      # finding; this is the fix for it.
+      - name: "WP-W1: clippy -D warnings (Windows target)"
+        shell: pwsh
+        working-directory: rust
+        run: cargo clippy -p shekyl-win-sec --features test-utils --all-targets -- -D warnings
+
       # The rustdoc gate for this crate lives HERE, not in rust-audit-test.yml's
       # persona-serving list, and the reason is the point: that list runs on
       # Linux, where `shekyl-win-sec` compiles to nothing. Adding it there would
@@ -407,6 +419,20 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --locked --no-deps --lib -p shekyl-win-sec
+
+      # The pre-registered probes (docs/design/WINDOWS_WALLET_PROBE_SHEET.md).
+      # BLOCKING, and that is the point of writing them down first: each probe
+      # carries a prediction made before any Windows machine ran it, and the
+      # sheet names the DECISION a failure revisits. A red here is a finding
+      # about the design, not a flaky test.
+      #
+      # `-CiOnly` skips exactly the two probes §3 pre-declares as needing an
+      # interactive logon. It is a switch rather than auto-detection so a CI run
+      # cannot silently skip more than was pre-registered — the skips are
+      # printed and are not passes.
+      - name: "WP probes: pre-registered Windows behaviour"
+        shell: pwsh
+        run: ./scripts/ci/windows_probe.ps1 -CiOnly
 
       # WP-W5 SCOUTING STEP — informational by design, and NOT a gate.
       #

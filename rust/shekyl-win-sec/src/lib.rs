@@ -66,6 +66,24 @@ pub use sddl::{OwnerOnlyDescriptor, SddlError};
 #[cfg(windows)]
 pub use sid::{current_user_sid, SidError, SidString};
 
+/// Build a [`SidString`] from an arbitrary string, for probes only.
+///
+/// Behind `test-utils` because the type's guarantee is that a `SidString` came
+/// from this process's token or from a descriptor read. P-6 needs a
+/// well-known SID that is definitively *not* us (LocalSystem) in order to
+/// assert that the peer check **refuses** — and a check that is never
+/// exercised against a mismatch is the fail-open shape this crate exists to
+/// avoid, so the probe is worth the narrow door.
+#[cfg(all(windows, feature = "test-utils"))]
+pub fn sid_for_testing(s: &str) -> SidString {
+    SidString::from_raw(s.to_owned())
+}
+
+/// The pipe-name prefix. The SID goes in literally (WP-D1), so the client can
+/// compare the owner it reads back against the SID it derived the name from.
+#[cfg(windows)]
+pub const PIPE_PREFIX: &str = r"\\.\pipe\shekyl-wallet-";
+
 /// The mandatory-label component granting no-write-up at Medium integrity.
 ///
 /// `ML` = mandatory label, `NW` = no-write-up, `ME` = medium integrity level.

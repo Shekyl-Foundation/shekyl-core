@@ -33,9 +33,13 @@ use std::ffi::c_void;
 use std::fmt;
 
 use windows_sys::Win32::Security::Authorization::{
+    ConvertSecurityDescriptorToStringSecurityDescriptorW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
-use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+use windows_sys::Win32::Security::{
+    GetSecurityDescriptorControl, DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION,
+    LABEL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, SECURITY_ATTRIBUTES, SE_DACL_PROTECTED,
+};
 
 use crate::sid::{last_error, SidString};
 use crate::MEDIUM_INTEGRITY_SACL;
@@ -102,7 +106,7 @@ impl OwnerOnlyDescriptor {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
                 wide.as_ptr(),
                 SDDL_REVISION_1,
-                &mut psd,
+                &raw mut psd,
                 std::ptr::null_mut(),
             )
         };
@@ -112,7 +116,8 @@ impl OwnerOnlyDescriptor {
 
         Ok(Self {
             attributes: SECURITY_ATTRIBUTES {
-                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+                nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>())
+                    .expect("SECURITY_ATTRIBUTES is a small fixed-size struct"),
                 lpSecurityDescriptor: psd,
                 // Never inheritable. A child process inheriting the pipe
                 // handle would hold the server end without having satisfied
@@ -130,7 +135,58 @@ impl OwnerOnlyDescriptor {
     /// pointer to `&self` is what makes that a compile-time property rather
     /// than a comment.
     pub fn attributes_ptr(&self) -> *const SECURITY_ATTRIBUTES {
-        &self.attributes
+        &raw const self.attributes
+    }
+}
+
+impl OwnerOnlyDescriptor {
+    /// Read the descriptor back as an SDDL string (**P-1**).
+    ///
+    /// This is the self-check the SDDL choice buys and hand-assembled ACLs
+    /// cannot offer: the policy went in as a string, so it can come back out
+    /// as one and be compared. Used by the probe suite to assert that the OS
+    /// preserved what we wrote — which is a claim about the OS, not about our
+    /// formatting, and therefore worth testing rather than assuming.
+    pub fn to_sddl(&self) -> Result<String, SddlError> {
+        let mut wide: *mut u16 = std::ptr::null_mut();
+        let mut len: u32 = 0;
+        // SAFETY: `lpSecurityDescriptor` is a live descriptor owned by `self`.
+        // On success the callee allocates `wide` with `LocalAlloc`.
+        let ok = unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                self.attributes.lpSecurityDescriptor,
+                SDDL_REVISION_1,
+                OWNER_SECURITY_INFORMATION
+                    | GROUP_SECURITY_INFORMATION
+                    | DACL_SECURITY_INFORMATION
+                    | LABEL_SECURITY_INFORMATION,
+                &raw mut wide,
+                &raw mut len,
+            )
+        };
+        if ok == 0 {
+            return Err(SddlError::Convert(last_error()));
+        }
+        let guard = crate::sid::LocalFreeGuard(wide);
+        // SAFETY: `wide` is a NUL-terminated wide string owned by `guard`.
+        Ok(unsafe { crate::sid::wide_to_string(guard.0) })
+    }
+
+    /// Whether the DACL is **protected** — inherited ACEs cannot widen it
+    /// (**P-2**). `D:P` in the SDDL should produce this; the probe asserts the
+    /// OS agrees.
+    pub fn dacl_is_protected(&self) -> bool {
+        let mut control: u16 = 0;
+        let mut revision: u32 = 0;
+        // SAFETY: live descriptor owned by `self`; both out-params are locals.
+        let ok = unsafe {
+            GetSecurityDescriptorControl(
+                self.attributes.lpSecurityDescriptor,
+                &raw mut control,
+                &raw mut revision,
+            )
+        };
+        ok != 0 && (control & SE_DACL_PROTECTED) != 0
     }
 }
 

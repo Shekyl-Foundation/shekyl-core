@@ -24,5 +24,20 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
 ] }
 
+[features]
+# Exposes `sid_for_testing`, which builds a `SidString` from an arbitrary
+# string. OFF by default and never enabled in production: the type's guarantee
+# is that a `SidString` came from this process's token or from a descriptor
+# read, and a public constructor would let a caller compare a peer's owner
+# against a value they invented.
+test-utils = []
+
+[target.'cfg(windows)'.dev-dependencies]
+# The probe suite drives real pipes. Same tokio the transport will use, so a
+# version bump that breaks `create_with_security_attributes_raw` fails here
+# rather than in WP-W2.
+tokio = { version = "1", features = ["net", "rt", "macros"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 [lints]
 workspace = true

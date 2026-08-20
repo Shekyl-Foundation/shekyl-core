@@ -92,7 +92,7 @@ pub fn current_user_sid() -> Result<SidString, SidError> {
     // `token` is written only on success, and `TokenGuard` closes it on every
     // path out of this function.
     let mut token: HANDLE = std::ptr::null_mut();
-    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
+    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) };
     if opened == 0 {
         return Err(SidError::OpenToken(last_error()));
     }
@@ -104,22 +104,29 @@ pub fn current_user_sid() -> Result<SidString, SidError> {
     let mut needed: u32 = 0;
     // SAFETY: a null buffer with zero length is the documented sizing form.
     unsafe {
-        GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &mut needed);
+        GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &raw mut needed);
     }
     if needed == 0 {
         return Err(SidError::QueryToken(last_error()));
     }
 
-    let mut buf = vec![0u8; needed as usize];
-    // SAFETY: `buf` is `needed` bytes, which is exactly what the sizing call
-    // asked for, and it outlives the call.
+    // Allocated as `u64`, not `u8`, and that is a soundness requirement rather
+    // than a style choice: `Vec<u8>`'s buffer is 1-byte aligned, `TOKEN_USER`
+    // needs 8, and casting a `*const u8` to `*const TOKEN_USER` and
+    // dereferencing it is undefined behaviour when the allocation is
+    // under-aligned. Caught by clippy for the Windows target — the workspace
+    // Linux run cannot see this code at all.
+    let words = (needed as usize).div_ceil(std::mem::size_of::<u64>());
+    let mut buf = vec![0u64; words];
+    // SAFETY: `buf` is at least `needed` bytes (rounded up to a whole number
+    // of `u64`s), is 8-byte aligned by construction, and outlives the call.
     let read = unsafe {
         GetTokenInformation(
             token.0,
             TokenUser,
             buf.as_mut_ptr().cast::<c_void>(),
             needed,
-            &mut needed,
+            &raw mut needed,
         )
     };
     if read == 0 {
@@ -127,13 +134,14 @@ pub fn current_user_sid() -> Result<SidString, SidError> {
     }
 
     // SAFETY: on success the buffer holds a `TOKEN_USER` whose `User.Sid`
-    // points into that same allocation, which is still live here.
+    // points into that same allocation, which is still live here. The cast is
+    // sound because the allocation is `u64`-aligned (see above).
     let sid_ptr = unsafe { (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid };
 
     let mut wide: *mut u16 = std::ptr::null_mut();
     // SAFETY: `sid_ptr` came from the token read above and is valid while
     // `buf` lives. On success the callee allocates `wide` with `LocalAlloc`.
-    let converted = unsafe { ConvertSidToStringSidW(sid_ptr, &mut wide) };
+    let converted = unsafe { ConvertSidToStringSidW(sid_ptr, &raw mut wide) };
     if converted == 0 {
         return Err(SidError::Stringify(last_error()));
     }
