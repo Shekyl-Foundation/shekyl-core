@@ -84,6 +84,43 @@
   `static_assert` that went with `send_noise`. The unused
   `CRYPTONOTE_NOISE_MIN_EPOCH` / `_EPOCH_RANGE` `#define`s went with
   `noise_zone_params`; every C++ zone now passes the Dandelion++ epoch.
+- **The serve-credit response wire is drafted, and it is TWO artifacts
+  (`RF-D1`/`RF-D2`/`RF-D4`).** A scoping premise was corrected before drafting:
+  TJ-H's reserved padding belongs to the **Tor-served shard payload** (its attack
+  is an observed response size), not the on-chain vin, so `RF-D1`/`RF-D2` and
+  `RF-D4` govern different wires and cannot share a boundary. They stay one slice
+  because they share a *validation surface*: does each artifact make its hashed
+  region unambiguous to a verifier?
+
+  On-chain: the kept/pruned boundary is structural (the vin/prunable split), with
+  the **pairing** stated rather than inferred — pruned entries in serve-credit-vin
+  order, one per serve-credit vin — and stating the pairing is what removes the
+  count field, which would have been a MUST-equal check on a length the tx
+  already determines. `segment_subroot_rk` and `leaf_index_in_segment` come off
+  the wire entirely (`RF-D6`): both are derivable by the verifier, and a
+  wire-supplied verification target is *unsound if trusted*, not merely
+  redundant. `hybrid_signature` becomes
+  `ed25519_countersignature: [u8; 64]`, a **fixed array**: a name that no longer
+  asserts contents it lacks, with the length prefix and bound check gone because
+  a wrong length is now unrepresentable.
+
+  Served payload: `leaf_count varint ‖ padding_len varint ‖ segment_bytes ‖
+  padding_bytes`, with only `segment_bytes` hashed against `R_k` — a leaf
+  **count** makes multiple-of-128 structural, and an explicit `padding_len`
+  keeps the frame self-delimiting rather than deriving padding extent from
+  `content-length`.
+  `RF-D7`: "read-anything" is about **content, never length** — `padding_len` is
+  adversary-declared, so readers MUST reject
+  `padding_len > leaf_count × LEAF_BYTES` **before allocating or draining**,
+  bounding a body at 2× a segment. An earlier cut claimed the response was
+  "bounded by the transport cap"; it is not — `shekyl-p-serve` has no
+  response-length cap and the fetcher's is 256 MB, 77× a segment. `content-length` cannot stand in — it
+  does not locate the split, verification is by reconstruction rather than
+  delimiter, and it is a property of the transport rather than the format.
+  Forward-compatibility posture ruled **write-zero, read-anything**, so a future
+  padding scheme needs no flag day. Pinned now because
+  `recompute_segment_r_k` has **no production consumer** — the definition has one
+  side to change, not two.
 
 - **Relay axes stay un-collapsed (`DAEMON_RELAY_PRIVACY.md` §93, #513).**
   Dandelion++ runs on every zone; noise is a carrier on encrypted links only,
@@ -185,7 +222,9 @@
   record is ~10,243 B ≈ 262 GB/yr, so **`path` is the dominant term and the
   signature is not**: pruning only the ML-DSA leg keeps ~177 GB/yr, twice the
   figure that disqualified doing nothing. The surviving option prunes the leaf
-  chunk, branch layers, and ML-DSA leg together, keeping ~278 B ≈ 7.1 GB/yr —
+  chunk, branch layers, and ML-DSA leg together, keeping ~278 B ≈ 7.1 GB/yr
+  (**refined to ~230 B ≈ 5.9 GB/yr by `RF-D6` later in this same release**, which
+  drops two verifier-derivable fields from the record) —
   enough to identify the record and check the classical signature, **not**
   enough to re-verify the opening, which is stated on the ruling rather than
   left to be discovered.

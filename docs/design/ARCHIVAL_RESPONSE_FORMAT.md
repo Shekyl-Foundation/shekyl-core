@@ -1,7 +1,8 @@
 # Serve-credit response format — design round (RF)
 
-**Status:** OPEN — `RF-D3` and `RF-D5` **resolved and implemented** 2026-08-19;
-`RF-D1`, `RF-D2`, `RF-D4` remain (the wire's own layout). Round opened 2026-08-18.
+**Status:** OPEN — `RF-D3`/`RF-D5` resolved and implemented 2026-08-19;
+`RF-D1`/`RF-D2`/`RF-D4` **drafted 2026-08-20** (§3.5), implementation pending.
+Round opened 2026-08-18.
 **Unblocked by:** the carrier round
 ([`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md)) — **RULED
 2026-08-18, merged to `dev` in PR #501.**
@@ -48,10 +49,17 @@ ruling, and it was wrong in a way that produced a test of the wrong claim. See
 
 ### 1.1 The carrier's answer, which this format must express
 
-Kept, on the vin in the prefix — **278 B/record ≈ 7.1 GB/yr**: the record header,
-`leaf_bytes`, and the 64 B Ed25519 leg. Pruned, as a **parallel structure keyed
-to the vin, inside `serialize_rctsig_prunable`** — ~9,965 B: the ML-DSA leg and
-`path` including the leaf chunk.
+Kept, on the vin in the prefix: the record header, `leaf_bytes`, and the 64 B
+Ed25519 leg. Pruned, as a **parallel structure keyed to the vin, inside
+`serialize_rctsig_prunable`** — ~9,965 B: the ML-DSA leg and `path` including the
+leaf chunk.
+
+`CR-D2` sized the kept side at **~278 B ≈ 7.1 GB/yr**. **`RF-D6` (§3.5) refines
+that to ~230 B ≈ 5.9 GB/yr** by removing `segment_subroot_rk` and
+`leaf_index_in_segment` from the record entirely — they are neither kept nor
+pruned, because the verifier derives both and trusting a wire-supplied one is
+unsound. The *partition* `CR-D2` ruled is unchanged; what changed is the record's
+contents.
 
 **A vin cannot straddle `unprunable_size`** — `tx.vin` serializes wholly inside
 the prefix — so the pruned parts are not fields within the vin. And by the
@@ -372,6 +380,272 @@ change.
 what is its zero/absent form, and what does a verifier do with a non-zero value
 it does not understand? A reserved field with no defined handling for unknown
 content is reserved in name only.
+
+---
+
+## 3.5 The wire draft — `RF-D1` / `RF-D2` / `RF-D4`
+
+**Two artifacts, not one.** This is a premise correction, made before drafting
+because the round's scoping argument had assumed a shared boundary that does not
+exist:
+
+| Artifact | Governs | Gated by |
+| --- | --- | --- |
+| **A — the on-chain record** `txin_archival_serve_credit_response` | `RF-D1`, `RF-D2` | the carrier ruling (§3.1) |
+| **B — the served shard payload** (`shekyl-p-serve` → fetcher) | `RF-D4` | TJ-H only |
+
+TJ-H's attack is Tor-observed **response size** — *"the adversary receives the
+padded response over its own circuit"*, *"every padded byte crosses two Tor legs
+and inflates W₂"* — so the padded thing is the shard payload `P` serves, not the
+vin. §9.5's own live-remainder list separates them (*"response wire, pass-record
+tx carrier + prunable residence, …"*).
+
+They are still one slice, because they share a **validation surface**: *does each
+artifact make its hashed region unambiguous to a verifier?* Same question, same
+reviewer, two artifacts.
+
+---
+
+### `RF-D1` / `RF-D2` — artifact A, the on-chain record
+
+**Kept, in the vin (prefix) — ~230 B/record ≈ 5.9 GB/yr**
+
+| Field | Bytes | Note |
+| --- | ---: | --- |
+| `p_canonical_id` | 32 | identity |
+| `shard_id` | varint | identity |
+| `settlement_epoch` | varint | identity |
+| `leaf_bytes` | 128 | the challenged leaf — the *claim* |
+| **`ed25519_countersignature`** | **64** | see `RF-D2` |
+
+**`RF-D6` (ruled here) — `segment_subroot_rk` and `leaf_index_in_segment` come
+OFF the wire, and the reason is soundness, not thrift.**
+
+An earlier cut of this table carried both. `CR-D2`'s ruling said the kept side is
+*"header + `leaf_bytes` + 64 B Ed25519 — identifies the record, cannot re-verify
+the opening"*, and these two are **not identifiers**:
+
+- `segment_subroot_rk` is the **verification target**. `LeafStore::frozen_segment(id)`
+  returns a `FrozenSegmentRecord { r_k, .. }`, and one shard is one segment
+  (`25,992 × 128 = 3,326,976 B` = `SHARD_BYTES`), so every verifier reads the
+  authoritative `R_k` locally.
+- `leaf_index_in_segment` is **derived**:
+  `challenge_leaf_index(p_id, shard_id, settlement_epoch, segment_leaf_count)`,
+  every input of which the verifier already has.
+
+**Carrying them is worse than redundant — a wire-supplied value is unsound if
+trusted.** A verifier that checks the path against the *supplied* `R_k` lets the
+prover choose its own tree root; one that opens at the *supplied* leaf index lets
+the prover choose which leaf to prove. Either **defeats** the challenge — not
+degrades it. So the correct verifier must ignore both wire values and use its
+own — and **a wire field a correct implementation must ignore is worse than
+absent**: it is an invitation, sitting in the record, in the position a reader
+trusts.
+
+**The two fail differently, which is why they come off together under one
+criterion rather than one at a time.** Supplied-`R_k` is the classic
+self-attesting root, and an implementer is likely to spot it. Supplied-leaf-index
+is subtler: **the root is right, the opening is valid, and the prover simply
+proves the one leaf it kept.** Nothing looks wrong at any step. Someone who
+catches the first may well miss the second, so the durable form of this ruling is
+the shared test — *is this an identifier, or a verification input?* — not the two
+removals.
+
+**What the verifier uses instead, stated because the record no longer declares
+it.** With both fields off the wire, a reader of the vin alone cannot see what
+the proof is checked against; that dependency is now implicit, and "the fields
+were forgotten" is the natural wrong conclusion. It is deliberate, and the
+sources are:
+
+| Input | Where the verifier gets it |
+| --- | --- |
+| `R_k` | `LeafStore::frozen_segment(shard_id)` → `FrozenSegmentRecord { r_k, .. }` |
+| leaf index | `challenge_leaf_index(p_id, shard_id, settlement_epoch, segment_leaf_count)` |
+
+Both are chain-derived and identical on every honest node, which is exactly what
+makes them unnecessary — and unsafe — to transmit.
+
+That is ~**0.9 GB/yr** saved, and the saving is the lesser half. **There is no
+production verifier yet** (`RF-D4` below), so this is pinned before the first one
+can read the wrong value.
+
+**A field is kept only if the verifier cannot derive it.** `leaf_bytes` stays
+because it is the prover's *claim* — the bytes alleged to sit at the derived
+index — which is exactly what nothing else supplies.
+
+**Pruned, keyed to the vin, inside `serialize_rctsig_prunable` — ~9,965 B**
+
+| Field | Bytes |
+| --- | ---: |
+| leaf-chunk scalars (`4 · 38 · 32`) | 4,864 |
+| `c1_layers` / `c2_layers` (`(18 + 38) · 32`) | 1,792 |
+| `ml_dsa_countersignature` | 3,309 |
+
+**`RF-D1` — the kept/pruned boundary is structural, and the pairing is stated.**
+The boundary is the vin/prunable split itself: `tx.vin` serializes wholly inside
+the prefix, so a field's side is a fact of *where it is written*, not a
+convention a pruner infers. What must be stated is the **pairing**, because that
+is the part an implementation could infer differently: entries appear in
+**serve-credit-vin order**, one per serve-credit vin. That mirrors
+`pass_signatures[i]` ↔ i-th pass header, whose own doc says the zip must be
+"stated, not inferred".
+
+**And stating the pairing is what makes a count field unnecessary.** An earlier
+cut wrote `count_le(8) ‖ entry[0..count]` with *"`count` MUST equal the number of
+serve-credit vins"* — a `MUST` that is a consistency check on a value the tx
+already determines. That is `WITNESS_PREFIX_LEN`'s lesson arriving two paragraphs
+after `RF-D2` deletes the same redundant framing from `hybrid_signature`: a
+length carried beside data whose length is already known. The length is **implied
+by the vin count**, and `serialize_rctsig_prunable` already takes vin-derived
+counts (`count_spend_inputs(vin)`), so the precedent for deriving rather than
+carrying is in the signature it will be written into.
+
+**The leaf chunk is pruned-side by construction** (`CR-D2`), and the tidiness
+hazard is why it is written down: `leaf_bytes` is kept-side and the leaf chunk is
+the same conceptual object, so grouping them is the unremarkable move and
+reintroduces ~124 GB/yr. One field **identifies** the record; the other **proves**
+it. Only the first survives pruning.
+
+**`RF-D2` — the container is renamed and fixed-width, not slimmed in place.**
+Today `hybrid_signature: Vec<u8>` holds 3,385 B (`12 framing + 64 Ed25519 + 3309
+ML-DSA`) with a length prefix and a `> PQC_HYBRID_SINGLE_SIG_LEN` bound check.
+After the split the vin holds **only the Ed25519 leg**.
+
+Keeping the name would be the `WITNESS_PREFIX_LEN` failure *in advance*: a name
+asserting contents it does not have, in the declaration a reader trusts most.
+So:
+
+- `ed25519_countersignature: [u8; 64]` — **fixed array, not `Vec`**. No length
+  prefix on the wire, no bound check to get wrong, and a wrong-length value is
+  **unrepresentable** rather than rejected. The framing bytes and the check both
+  disappear because the ambiguity they existed to police is gone.
+- `ml_dsa_countersignature: [u8; 3309]` on the pruned side, same reasoning.
+
+`CR-F2`'s `prefix_hash`/tx-id change is being paid for the split regardless, so
+the rename costs nothing additional — and paying it *without* fixing the name
+would be spending the change and keeping the defect.
+
+---
+
+### `RF-D4` — artifact B, the served payload
+
+**Today there is no format.** `shekyl-p-serve` streams a raw `FrozenSegmentBody`
+— a flat concatenation of leaf bytes — with `content-length = (end − next) ·
+LEAF_BYTES` (`redb_backend.rs:363-365`). No envelope, no fields.
+
+**`content-length` cannot be TJ-H's reserved header**, for three reasons:
+
+1. **It does not locate the split.** One number covers segment *and* padding, so
+   a padded response is indistinguishable from a longer segment.
+2. **Self-authentication is by reconstruction, not delimiter.**
+   `recompute_segment_r_k(&[[u8; 128]])` hashes *what was received*. Any trailing
+   byte changes the input, so undeclared padding breaks verification outright
+   rather than merely confusing it.
+3. **It is a property of this transport, not of the format.** TJ-H reserves a
+   field *in the frozen format*; anything living only in HTTP/1.1 headers does
+   not survive a transport change.
+
+**Draft: one length field, ahead of the body.**
+
+```text
+served response := leaf_count  varint    (≤ leaves_per_segment = 25 992)
+                 ‖ padding_len varint
+                 ‖ segment_bytes         (leaf_count × LEAF_BYTES, exactly)
+                 ‖ padding_bytes         (padding_len, exactly)
+
+hashed against R_k: segment_bytes ONLY
+```
+
+The fetcher reads the two lengths, hashes `segment_bytes` via
+`recompute_segment_r_k`, and compares to its **local** `R_k`. Padding sits
+**outside the bytes hashed against `R_k`** — TJ-H's framing constraint discharged
+structurally rather than by prose.
+
+**Both lengths are in a leading header so the response head can go out before any
+store read**, preserving the property `remaining_bytes()` exists to give.
+
+**`leaf_count`, not a byte length.** An earlier cut wrote `segment_len_le(8)` — 8
+bytes for a quantity with ~25 992 legal values, carrying a *"MUST be a multiple
+of `LEAF_BYTES`"* validity rule alongside. A leaf count is 2–3 bytes as a varint
+and makes the multiple-of-128 property **structural**: a non-multiple is
+unrepresentable rather than rejected. That is the same argument `RF-D2` makes for
+the fixed-width signature arrays, applied to a length instead of a payload.
+
+**`padding_len` is explicit, and the format is self-delimiting.** An earlier cut
+had no such field while the prose still said *"writers MUST emit
+`padding_len == 0`"* — prose and grammar describing different formats. Without
+it, padding extent is whatever remains after the segment, i.e. **derived from
+`content-length`** — reintroducing precisely the transport dependency this
+section spends three reasons rejecting. With it, the frame is complete on its own
+terms and survives a transport change.
+
+**The forward-compatibility posture, argued rather than defaulted.** The question
+is what a reader does with padding it does not understand:
+
+- **Reject non-zero padding** — safe, and **forecloses the field**. Any future
+  scheme needs every fetcher updated first: a flag day, which
+  [rule 75](../../.cursor/rules/75-system-autonomy.mdc) exists to avoid. It also
+  makes the reservation self-defeating: TJ-H reserved the field precisely so a
+  later scheme would *not* need a format change, and this reintroduces one.
+- **Ignore padding content** — a future scheme works on deployment. Rollout is
+  non-uniform (some serve padded, some not), and **that is the mechanism working,
+  not failing**: padding is a privacy measure with no correctness role, so a
+  fetcher that receives none is not wronged.
+
+**Ruled: write-zero, read-anything.**
+
+> **Writers** MUST emit `padding_len == 0` until a scheme is specified.
+> **Readers** MUST NOT reject on padding **content**, and MUST NOT include
+> padding in the `R_k` input.
+> **Readers MUST reject `padding_len > leaf_count × LEAF_BYTES` before
+> allocating or draining any of it.**
+
+That is the reserved-field posture that permits future use with **no flag day**:
+the strictness lives on the write side where it costs nothing to relax, and the
+permissiveness on the read side where tightening later would be the breaking
+change.
+
+**`RF-D7` (ruled here) — "read-anything" is about content, never about length.**
+An earlier cut wrote *"total response length remains bounded by the transport
+cap"*, and that was **an unchecked premise**: `shekyl-p-serve` has a request-head
+cap (`MAX_REQUEST_BYTES` 8 KB), a concurrency cap (`MAX_INFLIGHT` 64) and a drain
+cap (`MAX_DRAIN_BYTES` 8 KB) — **no response-length cap at all**. The fetcher side
+has `MAX_RESPONSE_BODY_SIZE` = 256 MB (`shekyl-p-transport`), which is **77× a
+segment** and therefore no bound on this format.
+
+`padding_len` is declared by a **potentially adversarial server**, so an unbounded
+declaration is a resource-exhaustion path: a fetcher expecting ~3.33 MB drained to
+256 MB, once per request, against `MAX_INFLIGHT` concurrent slots.
+
+**The two halves of "read-anything" are separable, and running them together was
+the error.** Not rejecting on *content* is what buys forward compatibility — a
+future scheme's bytes must not trip a reader written before it. Not bounding
+*length* buys nothing and costs the DoS path. A bound is compatible with any
+scheme that fits inside it.
+
+**The bound, derived rather than picked:** `padding_len ≤ leaf_count ×
+LEAF_BYTES` — at most one segment's worth, so a body never exceeds **2× a
+segment** (~6.65 MB). The fetcher already must accept a full segment; this admits
+exactly one more. And TJ-H's own third leg against padding is that *"every padded
+byte crosses two Tor legs and inflates W₂"* — a scheme wanting more than 100%
+overhead is arguing against that cost analysis and should **reopen this cap
+deliberately** ([rule 21](../../.cursor/rules/21-reversion-clause-discipline.mdc))
+rather than inherit an absent one.
+
+**This is enforceable only because `RF-D4` made `padding_len` explicit.** With
+padding extent derived from `content-length`, a reader could not reject an
+oversized declaration *before* draining it — the check would arrive after the
+bytes did. The self-delimiting frame is what makes the bound a pre-allocation
+test rather than a post-hoc complaint.
+
+**`RF-D4` is the more open of the two decisions, and this is why it should be
+pinned now.** `recompute_segment_r_k` has **no production consumer** — outside
+`shekyl-curve-tree`'s own store operations its only caller is
+`p-serve/tests/store_axis.rs:105`, a test. There is no production fetcher, so
+content-addressed self-authentication is today a property of the *design*, not of
+the tree. **Whatever this round pins is the definition, not a change to a shared
+contract**, and the first fetcher will be written against it — one side to
+change instead of two.
 
 ---
 
