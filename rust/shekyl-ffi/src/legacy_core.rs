@@ -501,6 +501,98 @@ pub extern "C" fn shekyl_base_block_reward(already_generated_coins: u64) -> u64 
     shekyl_economics::base_block_reward(clamped, &params).unwrap_or(0)
 }
 
+/// Status: reward computed. `out_reward` and `out_weight_limit` are written.
+pub const SHEKYL_BLOCK_REWARD_OK: i32 = 0;
+/// Status: the block exceeds twice the effective median — a CONSENSUS
+/// REJECTION the caller is expected to act on, not an internal fault.
+/// `out_weight_limit` is written so the caller can report the limit it was
+/// rejected against; `out_reward` is left untouched.
+pub const SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG: i32 = 1;
+/// Status: a required out-pointer was null, or the inputs were out of domain.
+/// A CALLER BUG. Negative to keep misuse distinguishable from rejection.
+pub const SHEKYL_BLOCK_REWARD_INVALID: i32 = -1;
+
+/// Block reward after the median-weight penalty.
+///
+/// The C2c cutover's last step: the `mul128`/`div128_64` penalty arithmetic
+/// that lived in `get_block_reward` (`cryptonote_basic_impl.cpp`) now lives in
+/// `shekyl-economics`, and C++ marshals to it here.
+///
+/// THIS IS THE FIRST FALLIBLE ENTRY IN THE ECONOMICS FFI FAMILY, and the break
+/// is deliberate. The other economics exports document themselves as unable to
+/// fail across the boundary (they clamp their inputs instead). This one has a
+/// genuine consensus outcome to report — "too big" is how a block gets
+/// rejected — and collapsing it into a sentinel reward would make an invalid
+/// block indistinguishable from a valid one paying zero at exactly
+/// `2 * median`. Hence a status return, with rejection POSITIVE and caller
+/// misuse NEGATIVE.
+///
+/// `full_reward_zone` is supplied by the caller rather than read here; see
+/// `block_reward_with_penalty` for why the constant is not duplicated in Rust.
+///
+/// `already_generated_coins` is clamped at `money_supply` before use, matching
+/// [`shekyl_base_block_reward`], so an out-of-range supply is not an error.
+///
+/// # Safety
+///
+/// `out_reward` and `out_weight_limit` must each be either null or a valid,
+/// writable `u64`. Null is checked, not assumed: the function returns
+/// [`SHEKYL_BLOCK_REWARD_INVALID`] without writing through either pointer.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_block_reward(
+    median_weight: u64,
+    current_block_weight: u64,
+    already_generated_coins: u64,
+    full_reward_zone: u64,
+    out_reward: *mut u64,
+    out_weight_limit: *mut u64,
+) -> i32 {
+    if out_reward.is_null() || out_weight_limit.is_null() {
+        return SHEKYL_BLOCK_REWARD_INVALID;
+    }
+    let params = shekyl_economics::params::EconomicParams::default();
+
+    // Written on every path, including rejection: the caller logs the limit it
+    // was rejected against, and it must come from the same clamp that made the
+    // decision rather than a recomputation on the C++ side.
+    let limit = shekyl_economics::block_weight_limit(median_weight, full_reward_zone);
+    // SAFETY: non-null per the check above; the caller guarantees writability.
+    unsafe { out_weight_limit.write(limit) };
+
+    let clamped = already_generated_coins.min(params.money_supply);
+    match shekyl_economics::block_reward_with_penalty(
+        median_weight,
+        current_block_weight,
+        clamped,
+        full_reward_zone,
+        &params,
+    ) {
+        Ok(reward) => {
+            // SAFETY: non-null per the check above.
+            unsafe { out_reward.write(reward) };
+            SHEKYL_BLOCK_REWARD_OK
+        }
+        Err(shekyl_economics::EmissionError::BlockTooBig) => SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG,
+        // The supply clamp above removes the only other reachable error; a
+        // tail-subsidy overflow cannot occur with canonical params. Report
+        // misuse rather than panicking across the boundary.
+        Err(_) => SHEKYL_BLOCK_REWARD_INVALID,
+    }
+}
+
+/// Advance `already_generated_coins` by a block reward, saturating at supply.
+///
+/// One entry point for both C++ connect paths (main-chain and alt-chain),
+/// which each carried their own copy of the clamp. Cannot fail.
+#[no_mangle]
+pub extern "C" fn shekyl_advance_already_generated(
+    already_generated_coins: u64,
+    block_reward: u64,
+) -> u64 {
+    let params = shekyl_economics::params::EconomicParams::default();
+    shekyl_economics::advance_already_generated(already_generated_coins, block_reward, &params)
+}
+
 // ─── Emission Share (Component 4) ───────────────────────────────────────────
 
 /// Calculate the effective staker emission share at a given block height.

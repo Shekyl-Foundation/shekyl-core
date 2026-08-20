@@ -11,6 +11,15 @@ pub enum EmissionError {
     AlreadyGeneratedExceedsSupply,
     #[error("arithmetic overflow projecting emission")]
     Overflow,
+    /// The block exceeds twice the effective median and earns no reward.
+    ///
+    /// A CONSENSUS REJECTION, not an internal fault: the caller is expected to
+    /// reject the block. It is an `Err` rather than `Ok(0)` because a zero
+    /// reward is a legitimate result at exactly `2 * median`, and collapsing
+    /// the two would make an invalid block indistinguishable from a valid one
+    /// that happens to pay nothing.
+    #[error("block weight exceeds twice the effective median")]
+    BlockTooBig,
 }
 
 /// Effective emission speed factor for the configured DAA target block time.
@@ -79,6 +88,105 @@ pub fn projected_already_generated(
 pub fn base_emission_at(height: u64, params: &EconomicParams) -> Result<u64, EmissionError> {
     let ag = projected_already_generated(height, params)?;
     base_block_reward(ag, params)
+}
+
+/// Block reward after the median-weight penalty (0h + penalty).
+///
+/// Ports the arithmetic that lived in `get_block_reward`
+/// (`cryptonote_basic_impl.cpp`) — the last economics calculation C++ still
+/// performed itself. C++ now marshals to this function through
+/// `shekyl_block_reward`.
+///
+/// The shape, preserved exactly:
+///
+/// 1. `base = base_block_reward(already_generated_coins)`;
+/// 2. the effective median is `max(median_weight, full_reward_zone)` — the
+///    "make it soft" clamp;
+/// 3. at or below the effective median there is no penalty;
+/// 4. above twice it the block is rejected ([`EmissionError::BlockTooBig`]);
+/// 5. otherwise `base * (2m - current) * current / m / m`.
+///
+/// `full_reward_zone` is a PARAMETER rather than a constant read here.
+/// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` is a block-policy constant
+/// with ~40 consumers across the C++ tree and none in Rust; copying it into a
+/// Rust-side constant would create exactly the C++/Rust drift pair that
+/// `config/consensus_constants.json` exists to prevent. Passing it keeps one
+/// authority. If a second Rust consumer ever appears, it earns an entry in
+/// that JSON and this parameter goes away.
+///
+/// Total for all `u64` inputs: step 5 evaluates in `u128`, where the largest
+/// possible numerator (`u64::MAX * u64::MAX`) still fits, so no input can
+/// overflow or panic. The C++ original relied on `mul128`/`div128_64` for the
+/// same reason — the product exceeds 64 bits for realistic operands.
+pub fn block_reward_with_penalty(
+    median_weight: u64,
+    current_block_weight: u64,
+    already_generated_coins: u64,
+    full_reward_zone: u64,
+    params: &EconomicParams,
+) -> Result<u64, EmissionError> {
+    let base = base_block_reward(already_generated_coins, params)?;
+
+    // "make it soft" — a median below the free zone is raised to it.
+    let median = median_weight.max(full_reward_zone);
+
+    if current_block_weight <= median {
+        return Ok(base);
+    }
+    // `2 * median` in u128: the comparison must not wrap for medians above
+    // u64::MAX / 2, which consensus never produces but the FFI edge cannot
+    // assume away.
+    let double_median = u128::from(median) * 2;
+    if u128::from(current_block_weight) > double_median {
+        return Err(EmissionError::BlockTooBig);
+    }
+
+    let current = u128::from(current_block_weight);
+    let multiplicand = (double_median - current) * current;
+    let median = u128::from(median);
+    let reward = u128::from(base) * multiplicand / median / median;
+
+    // `reward < base` always: `multiplicand = (2m - c) * c` is strictly below
+    // `m^2` for every `c` in `(m, 2m]` (it would peak at `c == m`, which the
+    // branch above already returned), so dividing by `m^2` cannot reach
+    // `base`. `min` makes that bound structural instead of a comment, and
+    // `try_from` means a future change to the bound fails loudly rather than
+    // wrapping silently — the fallback arm is unreachable today.
+    let capped = reward.min(u128::from(base));
+    Ok(u64::try_from(capped).unwrap_or(base))
+}
+
+/// The block weight limit implied by an effective median: `2 * max(median, zone)`.
+///
+/// Exposed so a caller that must REPORT the limit it rejected against reads it
+/// from the same place the rejection came from, instead of recomputing the
+/// clamp and risking a message that disagrees with the decision.
+/// Saturating: the true limit above `u64::MAX / 2` is unrepresentable, and a
+/// saturated value is only ever used for diagnostics.
+pub fn block_weight_limit(median_weight: u64, full_reward_zone: u64) -> u64 {
+    median_weight.max(full_reward_zone).saturating_mul(2)
+}
+
+/// Advance `already_generated_coins` by a block's base reward, capped at supply.
+///
+/// The supply-advance clamp, previously written out at two C++ call sites
+/// (`blockchain.cpp` main-chain connect and alt-chain). Past the cap the total
+/// would overflow `u64`; `already_generated_coins` only feeds the subsidy
+/// curve, and the curve yields the tail floor at full emission, so saturating
+/// is the correct behaviour rather than a defensive guard.
+///
+/// One entry point for both call sites on purpose — the same
+/// division-one-site discipline `config/consensus_constants.json` records for
+/// `segment_leaf_count`. Two copies of a consensus clamp are a drift pair
+/// waiting to happen.
+pub fn advance_already_generated(
+    already_generated_coins: u64,
+    block_reward: u64,
+    params: &EconomicParams,
+) -> u64 {
+    already_generated_coins
+        .saturating_add(block_reward)
+        .min(params.money_supply)
 }
 
 #[cfg(test)]
@@ -262,5 +370,212 @@ mod tests {
             let q_full = base_block_reward(ag, &p).unwrap();
             ag = ag.saturating_add(q_full).min(p.money_supply);
         }
+    }
+
+    /// The C2a′ weight-penalty transition KAT — the SAME vectors asserted by
+    /// `EconomicsC2aPrime.Layer1WeightPenaltyPinnedVectors` in
+    /// `tests/unit_tests/economics_c2a_prime.cpp`.
+    ///
+    /// Duplicated across the language boundary deliberately. These vectors
+    /// pinned the C++ implementation before the penalty moved here; asserting
+    /// them only from C++ would let the pin die with the C++ tests, and
+    /// asserting them only here would not prove the move preserved behaviour.
+    /// Both copies must be edited together, and a divergence between them is
+    /// the signal the KAT exists to raise.
+    ///
+    /// Layout: (median_weight, current_block_weight, already_generated_coins,
+    /// expect_ok, expect_reward). `expect_reward` is meaningless when
+    /// `expect_ok` is false.
+    #[test]
+    fn c2a_prime_layer1_weight_penalty_pinned_vectors() {
+        const ZONE: u64 = 300_000; // CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5
+        const VECTORS: &[(u64, u64, u64, bool, u64)] = &[
+            (0, 150000, 0, true, 2048000000000),
+            (0, 150000, 2048000000000, true, 2047999023437),
+            (0, 150000, 2756434948434199641, true, 733629392416),
+            (0, 300000, 0, true, 2048000000000),
+            (0, 300000, 2048000000000, true, 2047999023437),
+            (0, 300000, 2756434948434199641, true, 733629392416),
+            (0, 300001, 0, true, 2047999999977),
+            (0, 300001, 2048000000000, true, 2047999023414),
+            (0, 300001, 2756434948434199641, true, 733629392407),
+            (0, 337500, 0, true, 2016000000000),
+            (0, 337500, 2048000000000, true, 2015999038695),
+            (0, 337500, 2756434948434199641, true, 722166433159),
+            (0, 450000, 0, true, 1536000000000),
+            (0, 450000, 2048000000000, true, 1535999267577),
+            (0, 450000, 2756434948434199641, true, 550222044312),
+            (0, 562500, 0, true, 480000000000),
+            (0, 562500, 2048000000000, true, 479999771118),
+            (0, 562500, 2756434948434199641, true, 171944388847),
+            (0, 599999, 0, true, 13653310),
+            (0, 599999, 2048000000000, true, 13653304),
+            (0, 599999, 2756434948434199641, true, 4890854),
+            (0, 600000, 0, true, 0),
+            (0, 600000, 2048000000000, true, 0),
+            (0, 600000, 2756434948434199641, true, 0),
+            (0, 600001, 0, false, 0),
+            (0, 600001, 2048000000000, false, 0),
+            (0, 600001, 2756434948434199641, false, 0),
+            (300000, 150000, 0, true, 2048000000000),
+            (300000, 150000, 2048000000000, true, 2047999023437),
+            (300000, 150000, 2756434948434199641, true, 733629392416),
+            (300000, 300000, 0, true, 2048000000000),
+            (300000, 300000, 2048000000000, true, 2047999023437),
+            (300000, 300000, 2756434948434199641, true, 733629392416),
+            (300000, 300001, 0, true, 2047999999977),
+            (300000, 300001, 2048000000000, true, 2047999023414),
+            (300000, 300001, 2756434948434199641, true, 733629392407),
+            (300000, 337500, 0, true, 2016000000000),
+            (300000, 337500, 2048000000000, true, 2015999038695),
+            (300000, 337500, 2756434948434199641, true, 722166433159),
+            (300000, 450000, 0, true, 1536000000000),
+            (300000, 450000, 2048000000000, true, 1535999267577),
+            (300000, 450000, 2756434948434199641, true, 550222044312),
+            (300000, 562500, 0, true, 480000000000),
+            (300000, 562500, 2048000000000, true, 479999771118),
+            (300000, 562500, 2756434948434199641, true, 171944388847),
+            (300000, 599999, 0, true, 13653310),
+            (300000, 599999, 2048000000000, true, 13653304),
+            (300000, 599999, 2756434948434199641, true, 4890854),
+            (300000, 600000, 0, true, 0),
+            (300000, 600000, 2048000000000, true, 0),
+            (300000, 600000, 2756434948434199641, true, 0),
+            (300000, 600001, 0, false, 0),
+            (300000, 600001, 2048000000000, false, 0),
+            (300000, 600001, 2756434948434199641, false, 0),
+            (2100000, 1050000, 0, true, 2048000000000),
+            (2100000, 1050000, 2048000000000, true, 2047999023437),
+            (2100000, 1050000, 2756434948434199641, true, 733629392416),
+            (2100000, 2100000, 0, true, 2048000000000),
+            (2100000, 2100000, 2048000000000, true, 2047999023437),
+            (2100000, 2100000, 2756434948434199641, true, 733629392416),
+            (2100000, 2100001, 0, true, 2047999999999),
+            (2100000, 2100001, 2048000000000, true, 2047999023436),
+            (2100000, 2100001, 2756434948434199641, true, 733629392415),
+            (2100000, 2362500, 0, true, 2016000000000),
+            (2100000, 2362500, 2048000000000, true, 2015999038695),
+            (2100000, 2362500, 2756434948434199641, true, 722166433159),
+            (2100000, 3150000, 0, true, 1536000000000),
+            (2100000, 3150000, 2048000000000, true, 1535999267577),
+            (2100000, 3150000, 2756434948434199641, true, 550222044312),
+            (2100000, 3937500, 0, true, 480000000000),
+            (2100000, 3937500, 2048000000000, true, 479999771118),
+            (2100000, 3937500, 2756434948434199641, true, 171944388847),
+            (2100000, 4199999, 0, true, 1950475),
+            (2100000, 4199999, 2048000000000, true, 1950474),
+            (2100000, 4199999, 2756434948434199641, true, 698694),
+            (2100000, 4200000, 0, true, 0),
+            (2100000, 4200000, 2048000000000, true, 0),
+            (2100000, 4200000, 2756434948434199641, true, 0),
+            (2100000, 4200001, 0, false, 0),
+            (2100000, 4200001, 2048000000000, false, 0),
+            (2100000, 4200001, 2756434948434199641, false, 0),
+        ];
+
+        let p = EconomicParams::default();
+        let mut penalty_bearing = 0usize;
+        let mut rejected = 0usize;
+
+        for &(median, current, ag, expect_ok, expect_reward) in VECTORS {
+            match block_reward_with_penalty(median, current, ag, ZONE, &p) {
+                Ok(reward) => {
+                    assert!(
+                        expect_ok,
+                        "median={median} current={current} ag={ag}: expected rejection"
+                    );
+                    assert_eq!(
+                        reward, expect_reward,
+                        "median={median} current={current} ag={ag}"
+                    );
+                    if reward != base_block_reward(ag, &p).unwrap() {
+                        penalty_bearing += 1;
+                    }
+                }
+                Err(EmissionError::BlockTooBig) => {
+                    assert!(
+                        !expect_ok,
+                        "median={median} current={current} ag={ag}: unexpected rejection"
+                    );
+                    rejected += 1;
+                }
+                Err(e) => panic!("median={median} current={current} ag={ag}: {e}"),
+            }
+        }
+
+        // The table must reach the arithmetic it claims to pin (rule 47).
+        assert!(
+            penalty_bearing > 0,
+            "no vector exercises the weight penalty"
+        );
+        assert!(rejected > 0, "no vector exercises the reject arm");
+    }
+
+    /// The C++ table pins the CONSENSUS-REACHABLE region. These pin that the
+    /// function is total at the u64 extremes, which C++ never reaches and
+    /// which therefore must not be added to the shared vector table.
+    #[test]
+    fn block_reward_with_penalty_is_total_at_u64_extremes() {
+        let p = EconomicParams::default();
+        const ZONE: u64 = 300_000;
+
+        // A median above u64::MAX/2: `2 * median` is not representable in u64.
+        // current = u64::MAX then sits JUST BELOW the doubled median, i.e. deep
+        // in the penalty band where the reward rounds to zero — it is accepted,
+        // not rejected. A u64 doubling would wrap to 0 here and reject every
+        // block instead, so this pins the u128 comparison specifically.
+        let huge = u64::MAX / 2 + 1;
+        assert_eq!(
+            block_reward_with_penalty(huge, u64::MAX, 0, ZONE, &p).unwrap(),
+            0
+        );
+
+        // One weight above the doubled median IS rejected, and computing that
+        // boundary must not wrap either. `huge * 2 == u64::MAX + 1`, so no u64
+        // current can exceed it: the whole domain is accepted at this median.
+        assert!(block_reward_with_penalty(huge - 1, u64::MAX, 0, ZONE, &p).is_err());
+
+        // Maximum median with maximum weight: current <= median, so the base
+        // reward is returned untouched. No panic, no overflow.
+        assert_eq!(
+            block_reward_with_penalty(u64::MAX, u64::MAX, 0, ZONE, &p).unwrap(),
+            base_block_reward(0, &p).unwrap()
+        );
+
+        // already_generated_coins beyond the supply cap is the FFI's clamp
+        // responsibility, not this function's: it reports the domain error
+        // rather than silently saturating.
+        assert!(block_reward_with_penalty(0, ZONE, u64::MAX, ZONE, &p).is_err());
+    }
+
+    #[test]
+    fn block_weight_limit_reports_the_effective_double_median() {
+        assert_eq!(block_weight_limit(0, 300_000), 600_000);
+        assert_eq!(block_weight_limit(2_100_000, 300_000), 4_200_000);
+        // Saturating rather than wrapping — diagnostics only.
+        assert_eq!(block_weight_limit(u64::MAX, 300_000), u64::MAX);
+    }
+
+    /// The supply-advance clamp, pinned at the boundary the two former C++
+    /// copies had to agree on.
+    #[test]
+    fn advance_already_generated_saturates_at_money_supply() {
+        let p = EconomicParams::default();
+        assert_eq!(advance_already_generated(0, 100, &p), 100);
+        // Exactly at the cap with a nonzero reward stays at the cap.
+        assert_eq!(
+            advance_already_generated(p.money_supply, 1, &p),
+            p.money_supply
+        );
+        // Crossing the cap lands on it, not past it.
+        assert_eq!(
+            advance_already_generated(p.money_supply - 1, 50, &p),
+            p.money_supply
+        );
+        // u64 overflow saturates before the supply cap is applied.
+        assert_eq!(
+            advance_already_generated(u64::MAX, u64::MAX, &p),
+            p.money_supply
+        );
     }
 }

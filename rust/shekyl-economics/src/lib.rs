@@ -30,7 +30,8 @@ pub use burn::{
 };
 pub use digest::{params_digest, DIGEST_FORMAT_VERSION};
 pub use emission::{
-    base_block_reward, base_emission_at, projected_already_generated, EmissionError,
+    advance_already_generated, base_block_reward, base_emission_at, block_reward_with_penalty,
+    block_weight_limit, projected_already_generated, EmissionError,
 };
 pub use emission_share::{calc_effective_emission_share, split_block_emission};
 pub use escalation::{

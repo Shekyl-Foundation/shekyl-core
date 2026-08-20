@@ -2260,7 +2260,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     bei.height = prev_height + 1;
     uint64_t block_reward = get_outs_money_amount(b.miner_tx);
     const uint64_t prev_generated_coins = alt_chain.size() ? prev_data.already_generated_coins : m_db->get_block_already_generated_coins(prev_height);
-    bei.already_generated_coins = (block_reward < (MONEY_SUPPLY - prev_generated_coins)) ? prev_generated_coins + block_reward : MONEY_SUPPLY;
+    bei.already_generated_coins = shekyl_advance_already_generated(prev_generated_coins, block_reward);
 
     // verify that the block's timestamp is within the acceptable range
     // (not earlier than the median of the last X blocks)
@@ -6345,7 +6345,13 @@ leave:
   // coins will eventually exceed MONEY_SUPPLY and overflow a uint64. To prevent overflow, cap already_generated_coins
   // at MONEY_SUPPLY. already_generated_coins is only used to compute the block subsidy and MONEY_SUPPLY yields a
   // subsidy of 0 under the base formula and therefore the minimum subsidy >0 in the tail state.
-  already_generated_coins = base_reward < (MONEY_SUPPLY-already_generated_coins) ? already_generated_coins + base_reward : MONEY_SUPPLY;
+  //
+  // The clamp itself is Rust-side (shekyl_advance_already_generated). It was
+  // written out here AND in the alt-chain path above; two hand-written copies
+  // of a consensus clamp are a drift pair, so both now call the one entry
+  // point (the division-one-site discipline consensus_constants.json records
+  // for segment_leaf_count).
+  already_generated_coins = shekyl_advance_already_generated(already_generated_coins, base_reward);
   if(blockchain_height)
     cumulative_difficulty += m_db->get_block_cumulative_difficulty(blockchain_height - 1);
 
