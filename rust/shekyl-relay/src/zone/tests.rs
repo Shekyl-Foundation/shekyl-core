@@ -6,7 +6,7 @@
 use super::*;
 use std::sync::Arc;
 
-use shekyl_relay_privacy::params::DandelionParams;
+use shekyl_relay_privacy::params::{inherited, DandelionParams};
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::{LinkSecrecy, RelayZone};
 
@@ -666,9 +666,9 @@ fn a_noise_deadline_survives_wakes_it_did_not_cause() {
     );
 }
 
-/// Production noise zones pass `stems == inherited::NOISE_CHANNELS`; C++ sizes
-/// its channel deque from `shekyl_relay_zone_stem_width`. Pin the coupling so a
-/// future parameter split cannot silently OOB-drop on the C++ side.
+/// Production noise zones pass `stems == inherited::NOISE_CHANNELS`. The
+/// schedule is that wide; pin the coupling so a future parameter split
+/// cannot size the map against a different channel count.
 #[test]
 fn noise_enabled_pins_stem_width_to_noise_channels() {
     use shekyl_relay_privacy::params::inherited;
@@ -687,7 +687,7 @@ fn noise_enabled_pins_stem_width_to_noise_channels() {
     assert_eq!(
         z.stem_width(),
         inherited::NOISE_CHANNELS,
-        "configured width is what C++ sizes its channel deque from"
+        "configured width is the noise channel count"
     );
     // Covert deadlines are armed at full width at construction, even before
     // any peer populates the map (an empty outbound set leaves stem_slots
@@ -888,7 +888,7 @@ fn a_noise_carrier_does_not_change_the_phase() {
 /// secrecy; it does NOT cover the FFI flag-decode.** Reach is an independent
 /// argument, not a proxy for encryption — `Encrypted + EveryPeer` is the
 /// case the axis exists for (encrypted clearnet), and
-/// `Cleartext + OutboundOnly` is §25.5's live configuration. The two
+/// `Cleartext + OutboundOnly` is §25.5's live configuration. The three
 /// refusals are distinct [`ZoneNewError`] variants so they cannot collapse
 /// into one `None`.
 #[test]
@@ -905,7 +905,7 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
             &mut rng,
         )
     };
-    const CHANNELS: usize = shekyl_relay_privacy::params::inherited::NOISE_CHANNELS;
+    const CHANNELS: usize = inherited::NOISE_CHANNELS;
 
     assert_eq!(
         build(RelayZone::Public, FluffReach::OutboundOnly, CHANNELS, true).err(),
@@ -932,73 +932,34 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
     );
 
     // Was a `debug_assert!`, which compiles out in release and therefore
-    // admitted the mismatch in exactly the build that ships. C++ indexes its
-    // channel deque by this count, so the mismatch is a silent OOB drop there.
+    // admitted the mismatch in exactly the build that ships.
     assert_eq!(
         build(RelayZone::Tor, FluffReach::OutboundOnly, CHANNELS + 1, true).err(),
         Some(ZoneNewError::NoiseChannelCount { got: CHANNELS + 1 }),
-        "a channel count C++'s deque cannot index is refused, not asserted"
+        "a channel count the schedule is not sized for is refused, not asserted"
     );
-}
 
-/// The invariant this pins was a C++ `static_assert` inside `send_noise`, and
-/// it was **deleted silently** when that function went — the second
-/// compile-time guard lost to the same deletion pass, in a commit whose own
-/// message said enumerating what a deletion strands has to cover compile-time
-/// artifacts. It is restored here as a refusal rather than an assertion,
-/// because the epoch is not a constant on this side: it crosses as
-/// `min_epoch_secs`.
-///
-/// **Why it is fatal rather than merely wasteful.** Each noise send waits at
-/// most `NOISE_MIN_DELAY_SECS + NOISE_DELAY_JITTER_SECS`, so an epoch affords
-/// `min_epoch_secs / that` windows. A full-size message needs `MAX_FRAGMENTS`.
-/// If the budget is short the message is still in flight when the epoch rolls,
-/// and CV-1 discards the in-flight remainder on the rebind that follows — so
-/// it restarts, runs short again, and never arrives. A slow carrier would be a
-/// cost; this is a message that cannot cross at all.
-///
-/// The inherited configuration sits exactly ON the boundary — 300 s / 15 s = 20
-/// windows against `MAX_FRAGMENTS` = 20 — which is why the comparison is `<`
-/// and not `<=`, and why shortening the epoch by a single second is a defect
-/// rather than a tuning choice.
-#[test]
-fn a_noise_epoch_too_short_to_carry_a_full_message_is_refused() {
-    use shekyl_relay_privacy::params::inherited;
+    // Arithmetic is `inherited::noise_windows_in_epoch`. This pins that
+    // Zone::new consumes it for a noise zone and ignores it otherwise.
+    let mut rng = SplitMix64::new(0x0820);
     let per_send = inherited::NOISE_MIN_DELAY_SECS + inherited::NOISE_DELAY_JITTER_SECS;
-
-    let build = |min_epoch_secs: u32| {
-        let mut rng = SplitMix64::new(0x0820);
-        let mut params = DandelionParams::inherited();
-        params.min_epoch_secs = min_epoch_secs;
-        Zone::new(
-            params,
-            inherited::NOISE_CHANNELS,
-            FluffReach::OutboundOnly,
-            LinkSecrecy::of(RelayZone::Tor),
-            true,
-            0,
-            &mut rng,
-        )
-    };
-
-    // Exactly the budget a full message needs — the inherited configuration.
-    let exact = inherited::MAX_FRAGMENTS * per_send;
-    assert!(
-        build(exact).is_ok(),
-        "the shipped configuration sits on the boundary and must be accepted"
-    );
-
-    // One window short. Not "slower" — unable to complete, ever.
-    match build(exact - per_send) {
+    let mut short = DandelionParams::inherited();
+    short.min_epoch_secs = inherited::MAX_FRAGMENTS * per_send - 1;
+    match Zone::new(
+        short,
+        CHANNELS,
+        FluffReach::OutboundOnly,
+        LinkSecrecy::of(RelayZone::Tor),
+        true,
+        0,
+        &mut rng,
+    ) {
         Err(ZoneNewError::NoiseCannotCrossOneEpoch { needs, affords }) => {
             assert_eq!(needs, inherited::MAX_FRAGMENTS);
             assert_eq!(affords, inherited::MAX_FRAGMENTS - 1);
         }
         other => panic!("expected a one-epoch refusal, got {other:?}"),
     }
-
-    // A zone with noise OFF is unaffected: the budget is a carrier property.
-    let mut rng = SplitMix64::new(0x0820);
     let mut params = DandelionParams::inherited();
     params.min_epoch_secs = 1;
     assert!(

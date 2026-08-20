@@ -127,9 +127,11 @@
 // derivation live in the same place and are pinned by tests.
 // Derivation and guard: docs/design/DAEMON_RELAY_PRIVACY.md sec 17.
 
-// see src/cryptonote_protocol/levin_notify.cpp
-#define CRYPTONOTE_NOISE_MIN_EPOCH                      5      // minutes
-#define CRYPTONOTE_NOISE_EPOCH_RANGE                    30     // seconds
+// Noise cadence and fragment window. The epoch pair
+// (CRYPTONOTE_NOISE_MIN_EPOCH / _EPOCH_RANGE) went with noise_zone_params:
+// C++ no longer selects a noise epoch; the Dandelion++ epoch crosses as
+// min_epoch_secs. MIN_DELAY / DELAY_RANGE are the source the Rust
+// inherited mirrors transcribe.
 #define CRYPTONOTE_NOISE_MIN_DELAY                      10     // seconds
 #define CRYPTONOTE_NOISE_DELAY_RANGE                    5      // seconds
 #define CRYPTONOTE_NOISE_BYTES                          3*1024 // 3 KiB
