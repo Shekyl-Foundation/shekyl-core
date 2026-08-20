@@ -21,7 +21,9 @@
 // suite it was never asked to build — which is how this PR first went red.
 #![cfg(all(windows, feature = "test-utils"))]
 
-use shekyl_win_sec::{current_user_sid, OwnerOnlyDescriptor, PeerCheck, PeerCheckError};
+use shekyl_win_sec::{
+    current_logon_sid, current_user_sid, OwnerOnlyDescriptor, PeerCheck, PeerCheckError,
+};
 
 /// P-9 — the SID the pipe name is derived from must be this process's own.
 ///
@@ -62,7 +64,8 @@ fn p9_current_user_sid_is_wellformed_and_stable() {
 #[test]
 fn p1_descriptor_roundtrips_to_the_policy_we_wrote() {
     let sid = current_user_sid().expect("P-1: SID");
-    let d = OwnerOnlyDescriptor::new(&sid, None).expect("P-1: descriptor");
+    let logon = current_logon_sid().expect("P-1: logon SID");
+    let d = OwnerOnlyDescriptor::new(&sid, &logon).expect("P-1: descriptor");
     let back = d.to_sddl().expect("P-1: readback");
 
     assert!(
@@ -97,6 +100,22 @@ fn p1_descriptor_roundtrips_to_the_policy_we_wrote() {
             "P-1: descriptor grants {broad}, which widens past owner-only: {back}"
         );
     }
+
+    // WP-D6, and the reason PR #516's review round exists: allow-ACEs are
+    // combined as a UNION, so granting the user SID **as well as** the logon
+    // SID would authorise every session for that account and leave the
+    // session boundary unenforced. The grant must be the logon SID and only
+    // the logon SID.
+    assert!(
+        back.contains(&format!("(A;;GA;;;{})", logon.as_str())),
+        "P-1: the logon SID is not granted, so WP-D6's session scope is absent: {back}"
+    );
+    assert!(
+        !back.contains(&format!("(A;;GA;;;{})", sid.as_str())),
+        "P-1: the descriptor ALSO grants the user SID — allow-ACEs union, so \
+         this re-widens the DACL to every session for this account and undoes \
+         WP-D6: {back}"
+    );
 }
 
 /// P-2 — the DACL must be protected, so inherited ACEs cannot widen it.
@@ -107,7 +126,8 @@ fn p1_descriptor_roundtrips_to_the_policy_we_wrote() {
 #[test]
 fn p2_dacl_is_protected() {
     let sid = current_user_sid().expect("P-2: SID");
-    let d = OwnerOnlyDescriptor::new(&sid, None).expect("P-2: descriptor");
+    let logon = current_logon_sid().expect("P-2: logon SID");
+    let d = OwnerOnlyDescriptor::new(&sid, &logon).expect("P-2: descriptor");
     assert!(
         d.dacl_is_protected(),
         "P-2: DACL is NOT protected — `D:P` did not survive, so inherited \
@@ -124,7 +144,8 @@ fn p3_first_pipe_instance_refuses_a_taken_name() {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     let sid = current_user_sid().expect("P-3: SID");
-    let d = OwnerOnlyDescriptor::new(&sid, None).expect("P-3: descriptor");
+    let logon = current_logon_sid().expect("P-3: logon SID");
+    let d = OwnerOnlyDescriptor::new(&sid, &logon).expect("P-3: descriptor");
     let name = unique_pipe_name("p3");
 
     let _first = unsafe {
@@ -182,7 +203,8 @@ fn p5_peer_check_accepts_our_own_pipe() {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     let sid = current_user_sid().expect("P-5: SID");
-    let d = OwnerOnlyDescriptor::new(&sid, None).expect("P-5: descriptor");
+    let logon = current_logon_sid().expect("P-5: logon SID");
+    let d = OwnerOnlyDescriptor::new(&sid, &logon).expect("P-5: descriptor");
     let name = unique_pipe_name("p5");
     let server = unsafe {
         ServerOptions::new()
@@ -204,7 +226,8 @@ fn p6_peer_check_refuses_a_mismatched_owner() {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     let sid = current_user_sid().expect("P-6: SID");
-    let d = OwnerOnlyDescriptor::new(&sid, None).expect("P-6: descriptor");
+    let logon = current_logon_sid().expect("P-6: logon SID");
+    let d = OwnerOnlyDescriptor::new(&sid, &logon).expect("P-6: descriptor");
     let name = unique_pipe_name("p6");
     let server = unsafe {
         ServerOptions::new()

@@ -21,7 +21,10 @@ use std::fmt;
 
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
-use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+use windows_sys::Win32::Security::{
+    GetTokenInformation, TokenGroups, TokenUser, TOKEN_GROUPS, TOKEN_QUERY, TOKEN_USER,
+};
+use windows_sys::Win32::System::SystemServices::SE_GROUP_LOGON_ID;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 /// A Windows security identifier in string form (`S-1-5-21-…`).
@@ -67,6 +70,13 @@ pub enum SidError {
     QueryToken(u32),
     /// `ConvertSidToStringSidW` failed.
     Stringify(u32),
+    /// The token carries no `SE_GROUP_LOGON_ID` group.
+    ///
+    /// Every interactive and service logon has one, so this is a refusal
+    /// rather than a fallback: see `sddl.rs` — a descriptor built without the
+    /// logon SID does not have the property WP-D6 claims, and issuing one
+    /// anyway would be worse than not starting.
+    NoLogonSid,
 }
 
 impl fmt::Display for SidError {
@@ -75,6 +85,10 @@ impl fmt::Display for SidError {
             Self::OpenToken(e) => write!(f, "could not open the process token (os error {e})"),
             Self::QueryToken(e) => write!(f, "could not read the token's user SID (os error {e})"),
             Self::Stringify(e) => write!(f, "could not format the SID as a string (os error {e})"),
+            Self::NoLogonSid => f.write_str(
+                "this process's token carries no logon SID, so a session-scoped \
+                 pipe descriptor cannot be built",
+            ),
         }
     }
 }
@@ -138,17 +152,96 @@ pub fn current_user_sid() -> Result<SidString, SidError> {
     // sound because the allocation is `u64`-aligned (see above).
     let sid_ptr = unsafe { (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid };
 
+    sid_to_string(sid_ptr)
+}
+
+/// Read the calling process's **logon SID** — the per-logon-session identity
+/// (`S-1-5-5-X-Y`) that WP-D6 uses to separate terminal-services sessions.
+///
+/// It is a *group* in the token, marked with `SE_GROUP_LOGON_ID`, so this walks
+/// `TokenGroups` and returns the first group carrying that attribute. Every
+/// interactive and service logon has exactly one.
+///
+/// This is what the pipe DACL grants. Granting the **user** SID instead would
+/// not narrow anything — see `sddl.rs` for why that distinction is the whole
+/// point of WP-D6.
+pub fn current_logon_sid() -> Result<SidString, SidError> {
+    // SAFETY: pseudo-handle needing no close; `token` written only on success
+    // and closed by `TokenGuard` on every path out.
+    let mut token: HANDLE = std::ptr::null_mut();
+    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) };
+    if opened == 0 {
+        return Err(SidError::OpenToken(last_error()));
+    }
+    let token = TokenGuard(token);
+
+    let mut needed: u32 = 0;
+    // SAFETY: the documented sizing form (null buffer, zero length).
+    unsafe {
+        GetTokenInformation(
+            token.0,
+            TokenGroups,
+            std::ptr::null_mut(),
+            0,
+            &raw mut needed,
+        );
+    }
+    if needed == 0 {
+        return Err(SidError::QueryToken(last_error()));
+    }
+
+    // `u64`-aligned for the same reason as `current_user_sid`: `TOKEN_GROUPS`
+    // contains pointers, so a `Vec<u8>` allocation would be under-aligned and
+    // the cast below would be UB.
+    let words = (needed as usize).div_ceil(std::mem::size_of::<u64>());
+    let mut buf = vec![0u64; words];
+    // SAFETY: `buf` is at least `needed` bytes and outlives the call.
+    let read = unsafe {
+        GetTokenInformation(
+            token.0,
+            TokenGroups,
+            buf.as_mut_ptr().cast::<c_void>(),
+            needed,
+            &raw mut needed,
+        )
+    };
+    if read == 0 {
+        return Err(SidError::QueryToken(last_error()));
+    }
+
+    // SAFETY: on success the buffer holds a `TOKEN_GROUPS` whose `Groups` array
+    // is `GroupCount` long and lives in the same allocation.
+    let groups = buf.as_ptr().cast::<TOKEN_GROUPS>();
+    let count = unsafe { (*groups).GroupCount } as usize;
+    let first = unsafe { std::ptr::addr_of!((*groups).Groups) }
+        .cast::<windows_sys::Win32::Security::SID_AND_ATTRIBUTES>();
+
+    for i in 0..count {
+        // SAFETY: `i < GroupCount`, and the array is that long by contract.
+        let entry = unsafe { &*first.add(i) };
+        // `Attributes` is a `u32` bitmask; windows-sys declares the constant
+        // as an `i32` whose top bit is set (0xC000_0000), so `as u32` is a
+        // sign-loss cast. `cast_unsigned` is the bit-preserving reinterpretation
+        // this actually wants, and it says so at the call site instead of
+        // needing a comment to promise it.
+        if entry.Attributes & SE_GROUP_LOGON_ID.cast_unsigned() != 0 {
+            return sid_to_string(entry.Sid);
+        }
+    }
+    Err(SidError::NoLogonSid)
+}
+
+/// Format a SID pointer as a string. Shared by both readers above.
+fn sid_to_string(sid: *mut c_void) -> Result<SidString, SidError> {
     let mut wide: *mut u16 = std::ptr::null_mut();
-    // SAFETY: `sid_ptr` came from the token read above and is valid while
-    // `buf` lives. On success the callee allocates `wide` with `LocalAlloc`.
-    let converted = unsafe { ConvertSidToStringSidW(sid_ptr, &raw mut wide) };
+    // SAFETY: `sid` points into a live token buffer owned by the caller.
+    let converted = unsafe { ConvertSidToStringSidW(sid, &raw mut wide) };
     if converted == 0 {
         return Err(SidError::Stringify(last_error()));
     }
     let guard = LocalFreeGuard(wide);
-    // SAFETY: `wide` is a NUL-terminated wide string owned by `guard`.
-    let s = unsafe { wide_to_string(guard.0) };
-    Ok(SidString(s))
+    // SAFETY: NUL-terminated wide string owned by `guard`.
+    Ok(SidString(unsafe { wide_to_string(guard.0) }))
 }
 
 /// Closes a token handle on every exit path.

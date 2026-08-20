@@ -9,28 +9,51 @@
 //! The policy this crate exists to express is one string:
 //!
 //! ```text
-//! O:<sid>G:<sid>D:P(A;;GA;;;<sid>)[(A;;GA;;;<logon-sid>)]S:(ML;;NW;;;ME)
+//! O:<user-sid>G:<user-sid>D:P(A;;GA;;;<logon-sid>)S:(ML;;NW;;;ME)
 //! ```
 //!
-//! The logon-SID clause is in brackets because it is **optional** — `new`
-//! takes `Option<&SidString>` for it. The owner ACE and the label are not.
-//!
-//! - `O:` / `G:` — owner and group are the creating user, so a peer reading
-//!   the owner back off the handle sees the SID the pipe name was derived from
-//!   (the WP-D1 self-consistency property).
+//! - `O:` / `G:` — owner and group are the **user** SID, so a peer reading the
+//!   owner back off the handle sees the SID the pipe name was derived from
+//!   (the WP-D1 self-consistency property). Owner is identity, not access.
 //! - `D:P` — a **protected** DACL: `P` blocks inherited ACEs, so nothing in
 //!   the object's ancestry can widen access behind our back.
-//! - `(A;;GA;;;<sid>)` — generic-all for that user, and **no other ACE**. An
-//!   absent ACE is a denial; there is deliberately no explicit `NETWORK` deny,
-//!   because WP-D6 rules that the logon SID does that job better.
-//! - `(A;;GA;;;<logon-sid>)` — WP-D6. The logon SID is per-logon-session, so
-//!   it also separates terminal-services sessions, which an `S-1-5-2` deny
-//!   does not.
+//! - `(A;;GA;;;<logon-sid>)` — generic-all for the **logon session**, and
+//!   **no other ACE**. An absent ACE is a denial.
 //! - `S:(ML;;NW;;;ME)` — WP-D4's mandatory label. Asserted, not inherited.
 //!
-//! Building this as a string rather than assembling ACLs by hand is the whole
-//! point: the failure mode of hand-assembly is a descriptor that is subtly
-//! *wrong*, which no test on a Linux box would catch.
+//! # Why the DACL grants the logon SID and NOT the user SID
+//!
+//! **Corrected 2026-08-20 (PR #516 review).** The first version granted *both*
+//! — `(A;;GA;;;<user-sid>)(A;;GA;;;<logon-sid>)` — on the reasoning that the
+//! logon SID "narrows" the grant. **It does not.** Windows combines allow ACEs
+//! as a **union**, so the user-SID ACE alone authorises *any* token for that
+//! user: another terminal-services session, a remote logon over `IPC$`, a
+//! scheduled task. Adding a second allow-ACE cannot subtract from that. WP-D6
+//! was therefore unenforced, and the descriptor was exactly as wide as if the
+//! logon SID had never been mentioned.
+//!
+//! The fix is to grant the **logon SID alone**. It is present in the token of
+//! every process in the current logon session and absent from every other, so
+//! it is the ACE that actually carries the session boundary. The user SID stays
+//! as owner/group, where it is an identity for the peer check to compare
+//! against rather than a grant.
+//!
+//! This is also why [`OwnerOnlyDescriptor::new`] **requires** the logon SID
+//! rather than taking an `Option`. There is no meaningful fallback: a
+//! descriptor built without it would grant nothing (useless) or fall back to
+//! the user SID (the bug above, reintroduced silently). Failing to build is the
+//! honest outcome, and `SidError::NoLogonSid` says so.
+//!
+//! # Why SDDL rather than hand-assembled ACLs
+//!
+//! Every descriptor here is built by handing a **string** to
+//! `ConvertStringSecurityDescriptorToSecurityDescriptorW`. Assembling ACLs by
+//! hand means `InitializeAcl` / `AddAccessAllowedAce` / `SetSecurityDescriptorDacl`
+//! with manual size arithmetic — a long unsafe sequence whose failure mode is a
+//! descriptor that is *wrong* rather than one that fails to build. SDDL moves
+//! that work into the OS, so our `unsafe` reduces to one call plus a
+//! `LocalFree`, and the security policy becomes a reviewable string that a
+//! probe can read back and compare (P-1).
 
 use std::ffi::c_void;
 use std::fmt;
@@ -82,22 +105,21 @@ pub struct OwnerOnlyDescriptor {
 }
 
 impl OwnerOnlyDescriptor {
-    /// Build the descriptor granting access to `owner` alone (plus the logon
-    /// session, per WP-D6), labelled at Medium integrity.
+    /// Build the descriptor: owned by `owner`, access granted to `logon_sid`
+    /// alone, labelled at Medium integrity.
     ///
-    /// `logon_sid` is optional because it is read from the token's groups and
-    /// a caller that could not find one should still get a working owner-only
-    /// descriptor rather than no pipe at all — the logon SID narrows an
-    /// already-narrow grant; it is not what carries the boundary.
-    pub fn new(owner: &SidString, logon_sid: Option<&SidString>) -> Result<Self, SddlError> {
-        let mut sddl = format!(
-            "O:{owner}G:{owner}D:P(A;;GA;;;{owner})",
-            owner = owner.as_str()
+    /// `logon_sid` is **required**, not optional — see the module docs. A
+    /// descriptor without it either grants nothing or silently widens to the
+    /// whole user account, and neither is a thing to build by accident.
+    pub fn new(owner: &SidString, logon_sid: &SidString) -> Result<Self, SddlError> {
+        // The user SID is owner and group (identity, for the peer check); the
+        // logon SID is the ONLY grant (access, scoped to this session).
+        let sddl = format!(
+            "O:{owner}G:{owner}D:P(A;;GA;;;{logon}){label}",
+            owner = owner.as_str(),
+            logon = logon_sid.as_str(),
+            label = MEDIUM_INTEGRITY_SACL,
         );
-        if let Some(logon) = logon_sid {
-            sddl.push_str(&format!("(A;;GA;;;{})", logon.as_str()));
-        }
-        sddl.push_str(MEDIUM_INTEGRITY_SACL);
 
         let wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
 

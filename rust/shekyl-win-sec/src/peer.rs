@@ -97,6 +97,14 @@ pub enum PeerCheckError {
     /// The pipe is owned by the right user but at Low/Untrusted integrity —
     /// the sandboxed-escalation case of §6.
     IntegrityTooLow(IntegrityLevel),
+    /// The mandatory-label ACE is malformed — it declares the label type but
+    /// is too short to hold a SID, or the SID carries no integrity RID.
+    ///
+    /// A separate arm from [`Self::IntegrityTooLow`] because it means
+    /// something different: not "this peer is beneath us" but "this peer's
+    /// descriptor is lying about its own shape", which on a pipe we did not
+    /// create is a reason to leave rather than to measure again.
+    MalformedLabel,
 }
 
 impl fmt::Display for PeerCheckError {
@@ -114,6 +122,11 @@ impl fmt::Display for PeerCheckError {
                  accounts — run the wallet under your own account.",
                 found.as_str(),
                 expected.as_str()
+            ),
+            Self::MalformedLabel => f.write_str(
+                "refusing to use the wallet RPC pipe: its integrity label is \
+                 malformed, so the process that created it cannot be trusted \
+                 to be one that should hold your passphrase",
             ),
             Self::IntegrityTooLow(level) => write!(
                 f,
@@ -194,7 +207,12 @@ impl PeerCheck {
         // SACL is a PASS, not a failure. Reading it as a failure here would
         // refuse every ordinary unlabelled pipe.
         // SAFETY: `sacl` points into the descriptor `_guard` still owns.
-        let level = unsafe { label_from_sacl(sacl) };
+        let Some(level) = (unsafe { label_from_sacl(sacl) }) else {
+            // Malformed SACL. Refusing rather than defaulting is the point:
+            // "I could not parse the label" and "the label is Medium" are the
+            // two sentences this check exists to keep apart.
+            return Err(PeerCheckError::MalformedLabel);
+        };
         if level < IntegrityLevel::Medium {
             return Err(PeerCheckError::IntegrityTooLow(level));
         }
@@ -203,64 +221,97 @@ impl PeerCheck {
     }
 }
 
-/// Read the mandatory label out of a SACL, defaulting to Medium when absent.
+/// Read the mandatory label out of a SACL.
 ///
-/// **Iterates and type-checks every ACE** rather than assuming the label is
-/// ACE 0. A SACL may hold audit ACEs (`SYSTEM_AUDIT_ACE_TYPE`) and the ordering
-/// is not guaranteed, so an index-0 assumption can misparse an audit ACE's SID
-/// as a label — and on a pipe we did not create, that misparse resolves in the
-/// attacker's favour: a Low-integrity server would be read as Medium and
-/// accepted. This is the one check standing between a sandboxed process and a
-/// wallet passphrase (§6), so it reads what is actually there.
+/// `Some(level)` is a reading. **`None` means the SACL is malformed and the
+/// caller must refuse** — it is not "no label found", which is
+/// `Some(IntegrityLevel::Medium)`. The distinction is the whole safety
+/// property: a hostile server controls its own pipe's SACL, so "I could not
+/// parse this" must never collapse into "fine".
 ///
-/// Absence still means Medium — an object with no mandatory label is treated as
-/// Medium by the OS, and reading absence as failure would refuse every ordinary
-/// pipe (P-7).
+/// Iterates and type-checks every ACE rather than assuming the label is ACE 0.
+/// A SACL may hold audit ACEs and the ordering is not guaranteed, so an
+/// index-0 assumption can misparse an audit ACE's SID as a label — and on a
+/// pipe we did not create, that misparse resolves in the attacker's favour.
+///
+/// Absence of a mandatory-label ACE is `Some(Medium)`: an unlabelled object is
+/// treated as Medium by the OS, and reading absence as failure would refuse
+/// every ordinary pipe (P-7).
 ///
 /// # Safety
 /// `sacl` must be null or point to a valid ACL that outlives the call.
-unsafe fn label_from_sacl(sacl: *mut windows_sys::Win32::Security::ACL) -> IntegrityLevel {
+unsafe fn label_from_sacl(sacl: *mut windows_sys::Win32::Security::ACL) -> Option<IntegrityLevel> {
     if sacl.is_null() {
-        return IntegrityLevel::Medium;
+        return Some(IntegrityLevel::Medium);
     }
+    // SAFETY: non-null and valid per the contract above.
     let ace_count = unsafe { (*sacl).AceCount };
 
     for index in 0..ace_count {
         let mut ace: *mut c_void = std::ptr::null_mut();
+        // SAFETY: `index < AceCount`; `ace` is a local out-param.
         let got =
             unsafe { windows_sys::Win32::Security::GetAce(sacl, u32::from(index), &raw mut ace) };
         if got == 0 || ace.is_null() {
             continue;
         }
-        // Every ACE begins with an ACE_HEADER; the type byte is what says
-        // whether the bytes after it are a mandatory label or something else.
-        let header = ace.cast::<windows_sys::Win32::Security::ACE_HEADER>();
-        if u32::from(unsafe { (*header).AceType }) != SYSTEM_MANDATORY_LABEL_ACE_TYPE {
+
+        // Read the header by value rather than holding a reference into the
+        // ACE: every ACE begins with an ACE_HEADER, and one unaligned read of
+        // a fixed-size struct is easier to justify — and for a static analyser
+        // to follow — than a borrow that stays live across later pointer math.
+        //
+        // SAFETY: `GetAce` succeeded, so `ace` addresses a well-formed ACE
+        // whose leading bytes are an ACE_HEADER.
+        let header: windows_sys::Win32::Security::ACE_HEADER =
+            unsafe { std::ptr::read_unaligned(ace.cast()) };
+
+        if u32::from(header.AceType) != SYSTEM_MANDATORY_LABEL_ACE_TYPE {
             continue;
+        }
+
+        // The ACE CLAIMS to be a mandatory label. Before trusting that claim
+        // enough to read a SID out of it, check it is big enough to hold one.
+        //
+        // This is not defensive padding: the SACL belongs to a pipe we did not
+        // create, so its bytes are attacker-chosen in exactly the case this
+        // function exists for. An ACE declaring type 17 with a truncated
+        // `AceSize` would send the `SidStart` read below past the end of the
+        // ACE. Refusing here is what stops that being an out-of-bounds read.
+        if usize::from(header.AceSize) < std::mem::size_of::<SYSTEM_MANDATORY_LABEL_ACE>() {
+            return None;
         }
 
         let label = ace.cast::<SYSTEM_MANDATORY_LABEL_ACE>();
         // `SidStart` is the first DWORD of an inline SID, not a pointer.
+        // SAFETY: the size check above proves the ACE spans a whole
+        // SYSTEM_MANDATORY_LABEL_ACE, so this field is within it.
         let sid = unsafe { std::ptr::addr_of_mut!((*label).SidStart) }.cast::<c_void>();
 
+        // SAFETY: `sid` addresses the inline SID inside the bounds-checked ACE.
         let count_ptr = unsafe { GetSidSubAuthorityCount(sid) };
         if count_ptr.is_null() {
-            continue;
+            return None;
         }
+        // SAFETY: non-null per the check above.
         let count = unsafe { *count_ptr };
         if count == 0 {
-            continue;
+            // A SID with no sub-authorities carries no integrity RID. The ACE
+            // said "label" and then did not supply one — malformed, refuse.
+            return None;
         }
         // The integrity RID is the LAST sub-authority.
+        // SAFETY: `count > 0`, so `count - 1` indexes an existing entry.
         let rid_ptr = unsafe { GetSidSubAuthority(sid, u32::from(count) - 1) };
         if rid_ptr.is_null() {
-            continue;
+            return None;
         }
-        return IntegrityLevel::from_rid(unsafe { *rid_ptr });
+        // SAFETY: non-null per the check above.
+        return Some(IntegrityLevel::from_rid(unsafe { *rid_ptr }));
     }
 
-    // No mandatory-label ACE among them: the documented default.
-    IntegrityLevel::Medium
+    // No mandatory-label ACE among them: the documented OS default.
+    Some(IntegrityLevel::Medium)
 }
 
 fn sid_to_string(sid: *mut c_void) -> Result<SidString, PeerCheckError> {

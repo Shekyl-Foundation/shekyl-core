@@ -64,7 +64,7 @@ pub use peer::{IntegrityLevel, PeerCheck, PeerCheckError};
 #[cfg(windows)]
 pub use sddl::{OwnerOnlyDescriptor, SddlError};
 #[cfg(windows)]
-pub use sid::{current_user_sid, SidError, SidString};
+pub use sid::{current_logon_sid, current_user_sid, SidError, SidString};
 
 /// Build a [`SidString`] from an arbitrary string, for probes only.
 ///

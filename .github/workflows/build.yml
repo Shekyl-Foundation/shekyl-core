@@ -379,7 +379,16 @@ jobs:
           submodules: recursive
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
+      #
+      # `components: clippy` is required for the WP-W1 clippy step below: the
+      # action installs a minimal toolchain, and without it the step dies with
+      # "'cargo-clippy.exe' is not installed for the toolchain". Declared here
+      # rather than in rust-toolchain.toml on purpose — that file explains why
+      # it carries no components (parallel cargo processes would race to
+      # auto-install into a shared dir during the daemon build).
       - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: clippy
       # WP-W1: the Windows security crate must compile for Windows, and this
       # is the only runner where that can be BLOCKING — the Linux boxes have no
       # C cross-compiler, so anything whose graph reaches `ring` (i.e. anything

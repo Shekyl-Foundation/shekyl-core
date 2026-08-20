@@ -284,16 +284,46 @@ concretely — expected SID, found SID, and "run the wallet under your own
 account". The error explains the security property rather than looking like a
 bug to route around.
 
-### WP-D6 — remote reachability: the logon SID on the DACL
+### WP-D6 — remote reachability: the DACL grants the logon SID **instead of** the user SID
 
 Named pipes are addressable as `\\host\pipe\name` through the `IPC$` share, an
 attack surface UDS does not have. Per-user naming does **not** address it: a
 remote caller who knows the SID can construct the name.
 
-**Use the logon SID on the DACL.** This is stronger than an explicit
-`NETWORK` (S-1-5-2) deny, which was the round's first answer: the logon SID
-also separates terminal-services sessions, which S-1-5-2 does not, and it is
-set at the same creation call. Recorded as superseding, not as an addition.
+**The DACL grants the logon SID, and grants nothing else.** The user SID stays
+as owner and group — identity for the peer check to compare against — but is
+**not** an ACE.
+
+**Corrected 2026-08-20 (PR #516 review); the first version of this decision was
+wrong in a way that left it unenforced.** It said to *"use the logon SID on the
+DACL"* and described it as narrowing an already-narrow grant, and the
+implementation duly emitted
+`(A;;GA;;;<user-sid>)(A;;GA;;;<logon-sid>)`.
+
+**Allow-ACEs are combined as a union.** The user-SID ACE alone authorises *any*
+token for that account — another terminal-services session, a remote logon over
+`IPC$`, a scheduled task — and a second allow-ACE cannot subtract from it. So
+the logon SID narrowed nothing, and the descriptor was exactly as wide as if
+WP-D6 had never been written. The decision was recorded, implemented, and inert.
+
+The correction is not "add a deny" but **remove the user-SID grant**. The logon
+SID is present in the token of every process in the current logon session and
+absent from every other, so it is the only ACE that carries the session
+boundary. It also subsumes the explicit `NETWORK` (S-1-5-2) deny that was this
+decision's first answer, and covers terminal-services separation, which
+S-1-5-2 does not.
+
+**Consequence for the API:** the logon SID is a **required** argument, not an
+`Option`. There is no honest fallback — a descriptor without it grants nothing
+(useless) or falls back to the user SID (the bug above, reintroduced silently),
+so `shekyl-win-sec` refuses to build one and `SidError::NoLogonSid` says why.
+Every interactive and service logon has a logon SID, so the refusal is a
+genuine "something is very wrong" path rather than a routine one.
+
+**Pinned by a probe, not by this paragraph.** P-1 now asserts both halves: the
+logon-SID ACE is present, *and* the user-SID ACE is absent. A design note that
+says "grant only X" is exactly the kind of claim that decays into "grant X too",
+and this round has now watched that happen once.
 
 ### WP-D7 — never a service, never SYSTEM
 
