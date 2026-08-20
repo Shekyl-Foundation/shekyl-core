@@ -176,6 +176,73 @@ TEST(tx_prunable_region, miner_tx_has_no_prunable_tail)
   expect_prunable_region_has_one_occupant(parsed, "construct_miner_tx");
 }
 
+// The serve-credit arm: the one shape whose prunable region is EMPTY *by
+// consensus mandate*, and whose tail is therefore the most easily mis-assumed
+// number in this file.
+//
+// `tx_verification_utils.cpp:113-127` does not merely permit an empty prunable
+// region for a serve-credit-only tx -- it REQUIRES it (`bulletproofs_plus`,
+// `fcmp_pp_proof` and `pseudoOuts` must all be empty, and
+// `verRctSemanticsFeeOnly` is called nowhere else). The bond-post arm twenty
+// lines below rejects on `fcmp_pp_proof.empty()`, i.e. the exact opposite. So
+// this shape is reachable through serve-credit txs and nothing else.
+//
+// # Why the tail is not zero
+//
+// The type is `CTTypeFcmpPlusPlusPqc`, not `CTTypeNull`, so
+// `cryptonote_basic.h:636` (`!pruned && type != CTTypeNull`) emits the
+// `ctsig_prunable` stanza anyway. Serializing zero of everything is not the
+// same as serializing nothing: three varint counts still go out. "Empty
+// prunable region" and "absent prunable region" differ by those bytes, they
+// are inside `unprunable_size`'s tail, and they are part of the tx id.
+//
+// That distinction is exactly what a second implementation can get wrong, and
+// the number is pinned here so the C++ oracle states it out loud rather than
+// leaving it to be inferred from the serializer.
+TEST(tx_prunable_region, serve_credit_tx_tail_is_the_empty_prunable_counts)
+{
+  transaction tx{};
+  tx.version = 3;
+  tx.unlock_time = 0;
+
+  txin_archival_serve_credit_response sc{};
+  memset(sc.p_canonical_id.data, 0x11, sizeof(sc.p_canonical_id.data));
+  sc.shard_id = 7;
+  sc.settlement_epoch = 3;
+  memset(sc.segment_subroot_rk.data, 0x22, sizeof(sc.segment_subroot_rk.data));
+  sc.leaf_index_in_segment = 5;
+  memset(sc.leaf_bytes.data, 0x33, sizeof(sc.leaf_bytes.data));
+  sc.hybrid_signature.assign(config::PQC_HYBRID_SINGLE_SIG_LEN, 0x44);
+  tx.vin.push_back(sc);
+  // No vout, no fee, no RCT output material: the non-spending shape.
+
+  rct::rctSig &rv = tx.rct_signatures;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  rv.txnFee = 0;
+
+  blobdata blob;
+  ASSERT_TRUE(t_serializable_object_to_blob(tx, blob));
+  const unsigned int unprunable_size = tx.unprunable_size;
+  ASSERT_GT(unprunable_size, 0u);
+  ASSERT_LE(static_cast<size_t>(unprunable_size), blob.size());
+
+  const size_t tail = blob.size() - unprunable_size;
+  EXPECT_EQ(tail, 3u)
+      << "the serve-credit prunable tail is not the three empty counts.\n"
+         "  observed tail: " << tail << " bytes\n"
+         "Expected `nbp = 0`, `curve_trees_tree_depth = 0`, `proof_len = 0` -- "
+         "one varint byte each, with an empty pseudoOuts array contributing "
+         "nothing (spend-input count is zero). If this moved, every "
+         "serve-credit tx id moved with it, and any second implementation of "
+         "this wire is now writing a different transaction.";
+
+  // The file's own property still holds for this shape: whatever the empty
+  // region is, both hash paths see the same bytes.
+  transaction parsed;
+  ASSERT_TRUE(parse_and_validate_tx_from_blob(blob, parsed));
+  expect_prunable_region_has_one_occupant(parsed, "serve_credit_only");
+}
+
 // The arm the file exists for: a tx whose prunable region is NON-EMPTY, so the
 // length equality is actually exercised.
 //

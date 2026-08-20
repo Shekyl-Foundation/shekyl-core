@@ -469,17 +469,103 @@ That is ~**0.9 GB/yr** saved, and the saving is the lesser half. **There is no
 production verifier yet** (`RF-D4` below), so this is pinned before the first one
 can read the wrong value.
 
-**A field is kept only if the verifier cannot derive it.** `leaf_bytes` stays
-because it is the prover's *claim* — the bytes alleged to sit at the derived
-index — which is exactly what nothing else supplies.
+### `RF-D8` — RULED 2026-08-20: the criterion is one rule, and it takes a third field
 
-**Pruned, keyed to the vin, inside `serialize_rctsig_prunable` — ~9,965 B**
+**State the rule once, generally.** `segment_subroot_rk`, `leaf_index_in_segment`
+and — below — the leaf chunk all come off the wire for a single reason:
+
+> **A value the verifier derives locally must not be transported, because
+> transporting it lets the prover choose it.**
+
+Three fields, one criterion. Stating the rule rather than enumerating the
+removals is what stops a fourth being added: the next person to propose a field
+answers *"can a correct verifier obtain this without the prover?"*, and if the
+answer is yes the field is not a saving to be weighed, it is a defect to be
+refused.
+
+**And name what stays, so the record looks deliberate rather than whittled.**
+The line is **proof versus identifier**:
+
+| Field | Side | Why |
+| --- | --- | --- |
+| `c1_layers` / `c2_layers` | **kept (pruned region)** | The actual proof — the prover's claim that *its* leaf sits under `R_k`. The verifier cannot derive it, because deriving it would require the very data being proven. |
+| `leaf_bytes` | **kept (vin)** | The prover's *claim*: the bytes alleged to sit at the derived index. Nothing else supplies it. |
+| `segment_subroot_rk` | **off** | Derived: `LeafStore::frozen_segment(shard_id)`. |
+| `leaf_index_in_segment` | **off** | Derived: `challenge_leaf_index(…)`. |
+| leaf chunk | **off** | Derived: the verifier reads it from its own store (below). |
+
+#### The leaf chunk — `CR-D2`'s term, and why it is reopened rather than rebuilt
+
+`CR-D2` priced **4,864 B** of leaf chunk as on-wire cost, on the stated basis
+that *"a verifier can neither run without it nor derive it, so it is
+transmitted."* **That premise is false at source.** The production verifier
+derives it:
+
+```text
+blockchain.cpp:5421-5428
+  chunk bounds  <- shekyl_archival_challenge_leaf_chunk_bounds(shard_id, leaf_index)
+  chunk bytes   <- m_db->get_curve_tree_leaf_chunk(chunk_first_leaf, chunk_leaf_count, buf)
+  ctx.leaf_layer_scalars_ptr = buf
+```
+
+The node reads the chunk from its **own LMDB** and hands it to the FFI through
+`ctx.leaf_layer_scalars_ptr`; it is not parsed from the vin, and
+`SegmentPathOpening` never had a field for it. The surrounding comment supplies
+the soundness argument itself — a frozen segment's leaves are immutable, so the
+live rows *are* the as-of-`H_fire` chunk.
+
+**A ruling whose premise is refuted is corrected, not overridden.** The
+partition `CR-D2` established is unchanged and remains correct; what moves is one
+term inside it. `CR-D2` is not being re-litigated on its merits — its stated
+basis simply does not hold against the code.
+
+**How the error entered, recorded because the round has now made it twice.**
+The term was priced against the **served payload**, where transmitting leaf bytes
+*is* the proof of possession, and carried into the **on-chain record**, where the
+verifier reads its own store. Two artifacts, one term. The same
+two-artifacts-conflated mistake produced the shared-boundary premise corrected
+before §3.5 was drafted — which is why `RF-D4`'s header now says which wire it
+governs.
+
+**Building `A` to the uncorrected spec was the alternative, and it was rejected
+for a reason stronger than thrift.** A serializer writing 4,864 B that the
+verifier at `:5428` ignores is not a suboptimal record — it is precisely the
+defect `RF-D6` removed two fields to prevent: a prover-supplied value a correct
+verifier must disregard, sitting in the record, inviting use. On a
+genesis-frozen surface, landing it to fix later means shipping that invitation
+for the duration.
+
+#### The arithmetic, pinned here; the verdict is not this document's
+
+| Term | `CR-D2` | Corrected |
+| --- | ---: | ---: |
+| leaf chunk | 4,864 | **0** |
+| `c1_layers` / `c2_layers` | 1,792 | 1,792 |
+| `ml_dsa_countersignature` | 3,309 | 3,309 |
+| kept side (vin) | ~278 | ~230 (`RF-D6`) |
+| **whole record** | **~10,243 B** | **~5,331 B** |
+
+≈ 262 GB/yr → ≈ **136 GB/yr**, and the pruned side loses its single largest
+term. **Whether A5/W10 survives is not decided here** — the arithmetic is pinned
+in this table and the verdict belongs to
+[`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md),
+the same handling the `RESPONSE_BYTES` correction received. A wire round does not
+re-rule the economics.
+
+
+
+**Pruned, keyed to the vin, inside `serialize_ctsig_prunable` — ~5,101 B**
 
 | Field | Bytes |
 | --- | ---: |
-| leaf-chunk scalars (`4 · 38 · 32`) | 4,864 |
+| ~~leaf-chunk scalars~~ | ~~4,864~~ → **0** (`RF-D8`: verifier-derived) |
 | `c1_layers` / `c2_layers` (`(18 + 38) · 32`) | 1,792 |
 | `ml_dsa_countersignature` | 3,309 |
+
+The leaf chunk is struck by [`RF-D8`](#rf-d8--ruled-2026-08-20-the-criterion-is-one-rule-and-it-takes-a-third-field):
+the verifier reads it from its own store (`blockchain.cpp:5428`), so
+transporting it would let the prover choose the set its leaf is "in" — the same
+defect `RF-D6` removed two fields to prevent.
 
 **`RF-D1` — the kept/pruned boundary is structural, and the pairing is stated.**
 The boundary is the vin/prunable split itself: `tx.vin` serializes wholly inside
@@ -543,6 +629,59 @@ So:
 `CR-F2`'s `prefix_hash`/tx-id change is being paid for the split regardless, so
 the rename costs nothing additional — and paying it *without* fixing the name
 would be spending the change and keeping the defect.
+
+### `RF-D9` — FOUND 2026-08-20 while building `A`: the serve-credit tx cannot be serialized by the C++ oracle
+
+**Measured, not read.** The tripwire's new serve-credit arm failed on its first
+run — not at its assertion, but because `t_serializable_object_to_blob` returned
+`false`. Two experiments isolated it:
+
+```text
+empty pqc_auths                 -> serialize = 0   (FAILS)
+pqc_auths.size() == vin.size()  -> serialize = 1   blob = 3636  unprunable = 3633  tail = 3
+```
+
+**Two requirements that cannot both hold:**
+
+| Site | Requires |
+| --- | --- |
+| `cryptonote_basic.h:621` (write path) | `pqc_auths.size() == vin.size()` |
+| `tx_verification_utils.cpp:118` (verify) | `tx.pqc_auths.empty()` |
+| `blockchain.cpp:3746` (verify) | serve-credit `pqc_auths` **must be empty** |
+
+The shape consensus accepts is the shape the serializer refuses to write. C++ can
+**parse** a serve-credit tx — the EOF-tolerant branch at `:609` clears
+`pqc_auths` — but can never **produce** one; the `if constexpr` guarding that
+tolerance is `binary_archive<false>`, read-only.
+
+**Why it survived: the asymmetry is the concealment.** The read direction is
+exercised by anything that ingests a block; the write direction had no
+exerciser, because nothing in C++ constructs a serve-credit tx. A defect on a
+path nobody walks leaves no trace until someone walks it.
+
+**It reframes the divergence rather than adding to it.** The natural reading of
+"Rust writes 0 prunable bytes, C++ writes 3" is that Rust drifted from a working
+oracle. It did not: the serve-credit wire has **never round-tripped in C++ at
+all**. `shekyl-wire`'s own comment — *"the live-oracle byte/hash parity for the
+fee-only/serve-credit shape … is validated when those post-genesis blobs are
+capturable"* — was pointing straight at this, and deferred to a condition that
+would never arrive on its own.
+
+**Only the write direction is claimed.** Whether C++ can read Rust's fee-only
+bytes (EOF arriving before the prunable stanza) is untested and is not asserted
+here.
+
+**`A` is the right place to fix it, not a separate slice.** `A` rewrites this
+shape entirely — kept side, pruned side, and the serializer's arity. A fix
+landed first would be bytes `A` immediately replaces. The cross-language
+byte-parity KAT `A` adds is what converts "never exercised" into "cannot
+regress".
+
+**Rule 47, again.** `archival_serve_credit_equivalence.cpp` is a cross-language
+equivalence test *for this exact shape* that asserts consensus **verdicts** over
+a JSON fixture and never full-tx bytes — so it could not detect a byte
+divergence in the thing it is named for. The gate did not assert its own
+subject. The byte-parity arm is owed regardless of how the rest of `A` lands.
 
 ---
 
@@ -740,11 +879,16 @@ outright rather than being mis-parsed under the wrong schema version. There is n
 stored artifact whose interpretation could drift, which is the hazard the version
 constant exists to prevent. No bump is owed; written down so nobody adds one.
 
-**Scope note — this is artifact B only.** `RF-D1`/`RF-D2`/`RF-D6` (the on-chain
-`ServeCredit` record) are a separate change on a separate validation surface
-([rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)): different
-crates, different tests, and a C++ serializer this one never touches. The shared
-*design* question did not make them a shared *validation* question. And the
+**Scope note — superseded 2026-08-20: `A` and `B` land together.** This section
+first recorded them as separate validation surfaces
+([rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)) — different
+crates, different tests, a C++ serializer `B` never touches. **The maintainer
+ruled otherwise, and the reason overrides the rule-19 reading:** the kept/pruned
+boundary is the decision under review, and a reviewer can only check it with both
+halves visible. A single-artifact PR does not complete the move. Recorded as a
+reversal rather than edited away, because the rule-19 argument was correctly
+applied to the wrong question — validation surfaces were separable, the *decision*
+was not. And the
 defect claim here is the narrow one — the served frame **avoids introducing** an
 unbounded-padding drain, rather than closing a landed one: `shekyl-p-serve`'s
 existing `MAX_DRAIN_BYTES` bounds a peer's unread **request** bytes before close
