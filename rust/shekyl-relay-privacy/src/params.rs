@@ -600,26 +600,12 @@ pub mod inherited {
 
     /// `CRYPTONOTE_NOISE_MIN_DELAY`, in seconds.
     ///
-    /// The epoch pair (`CRYPTONOTE_NOISE_MIN_EPOCH` / `_EPOCH_RANGE`) is
-    /// deliberately NOT mirrored here: those values are C++-owned and cross
-    /// the FFI as `shekyl_relay_zone_new` arguments. Rust mirrors of them
-    /// existed briefly with zero consumers and were deleted (Q-11 Unit 0) —
-    /// a dead duplicate of a C++-owned fact is the delete-don't-synchronize
-    /// class, not documentation.
-    /// `CRYPTONOTE_MAX_FRAGMENTS` — the most windows one real notification may
-    /// occupy on a noise channel.
-    ///
-    /// **This is a mirror of a C++ `#define`, which the epoch pair above is
-    /// deliberately not — the difference is a live consumer.** Q-11 Unit 0
-    /// deleted the epoch mirrors because nothing read them, and a dead
-    /// duplicate of a C++-owned fact is the delete-don't-synchronize class.
-    /// This one is read by `Zone::new`, which refuses a noise zone whose epoch
-    /// is too short to carry a full-size message (see
-    /// `ZoneNewError::NoiseCannotCrossOneEpoch`). The invariant it enforces
-    /// used to be a C++ `static_assert` inside `send_noise`; that function is
-    /// deleted and the assertion went with it, so this is where it lives now.
-    pub const MAX_FRAGMENTS: u32 = 20;
-
+    /// There is no Rust noise-epoch constant. C++ used to select
+    /// `CRYPTONOTE_NOISE_MIN_EPOCH` (5 min) via `noise_zone_params`; that
+    /// selector and the `#define` are gone. The value that ships is the
+    /// Dandelion++ epoch, and it already crosses as `min_epoch_secs`.
+    /// Mirroring a runtime FFI argument is the delete-don't-synchronize
+    /// class (Q-11 Unit 0).
     pub const NOISE_MIN_DELAY_SECS: u32 = 10;
     /// `CRYPTONOTE_NOISE_DELAY_RANGE`, in seconds.
     ///
@@ -644,6 +630,27 @@ pub mod inherited {
          metronome, which Q-11 Unit 2 (§56) disqualified at a 1.000 \
          re-identification rate"
     );
+
+    /// `CRYPTONOTE_MAX_FRAGMENTS` — the most windows one real notification
+    /// may occupy on a noise channel.
+    ///
+    /// Live consumer: [`noise_windows_in_epoch`] compared against this at
+    /// `Zone::new`. Q-11 Unit 0 deleted *dead* mirrors; this one has a
+    /// reader. The epoch is not mirrored next to it because the epoch is
+    /// not a constant — it crosses as `min_epoch_secs`.
+    pub const MAX_FRAGMENTS: u32 = 20;
+
+    /// Windows an epoch of `min_epoch_secs` affords at the slowest noise
+    /// cadence (`NOISE_MIN_DELAY_SECS + NOISE_DELAY_JITTER_SECS`).
+    ///
+    /// Integer division: one second under `MAX_FRAGMENTS * per_send` drops
+    /// a whole window. A full-size message that still occupies a window
+    /// when the epoch rolls is discarded by CV-1 and never arrives.
+    #[must_use]
+    pub const fn noise_windows_in_epoch(min_epoch_secs: u32) -> u32 {
+        min_epoch_secs / (NOISE_MIN_DELAY_SECS + NOISE_DELAY_JITTER_SECS)
+    }
+
     /// `CRYPTONOTE_NOISE_CHANNELS` — max outbound connections per zone used
     /// for covert sending.
     pub const NOISE_CHANNELS: usize = 2;
@@ -680,6 +687,29 @@ mod r1_tests {
         assert!(
             (observed - target).abs() < 0.01,
             "sampler rate {observed:.4} should be {target:.4}"
+        );
+    }
+
+    /// The budget `Zone::new` consumes. Arithmetic lives here so a change to
+    /// the delay pair or `MAX_FRAGMENTS` reds without a zone being built.
+    #[test]
+    fn a_full_noise_message_fits_exactly_at_the_cadence_boundary() {
+        let per_send = inherited::NOISE_MIN_DELAY_SECS + inherited::NOISE_DELAY_JITTER_SECS;
+        let exact = inherited::MAX_FRAGMENTS * per_send;
+        assert_eq!(
+            inherited::noise_windows_in_epoch(exact),
+            inherited::MAX_FRAGMENTS,
+            "the historical noise epoch sat on this boundary"
+        );
+        assert_eq!(
+            inherited::noise_windows_in_epoch(exact - 1),
+            inherited::MAX_FRAGMENTS - 1,
+            "one second under the boundary drops a whole window"
+        );
+        assert!(
+            inherited::noise_windows_in_epoch(DandelionParams::inherited().min_epoch_secs)
+                >= inherited::MAX_FRAGMENTS,
+            "the shipped Dandelion++ epoch must still carry a full message"
         );
     }
 }

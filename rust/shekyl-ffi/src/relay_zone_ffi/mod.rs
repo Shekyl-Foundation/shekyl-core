@@ -386,11 +386,11 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 
 /// Open a zone. Release with [`shekyl_relay_zone_free`].
 ///
-/// The epoch length is a parameter because the daemon runs two zone flavours
-/// with different ones — `CRYPTONOTE_DANDELIONPP_MIN_EPOCH` (600 s) on public
-/// zones, `CRYPTONOTE_NOISE_MIN_EPOCH` (300 s) on i2p/tor. C++ already selects
-/// between them at construction; passing the choice through keeps one owner of
-/// it rather than a second copy of the rule here.
+/// The epoch length is a parameter because it is C++-owned and already
+/// crosses this boundary. Every zone C++ constructs today uses
+/// `CRYPTONOTE_DANDELIONPP_MIN_EPOCH` (600 s); a future in-process caller
+/// may pass another. Passing the choice through keeps one owner of it
+/// rather than a second copy of the rule here.
 ///
 /// `outbound_fluff_only` is the i2p/tor rule: fluff to outbound connections
 /// only, never to an inbound peer. It is a property of the *network* rather than
@@ -418,11 +418,10 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// nothing an observer cannot already read. The fluff-reach bit is a different
 /// axis — `NOISE_ENABLED` without `OUTBOUND_FLUFF_ONLY` on an *encrypted*
 /// zone is a valid configuration (encrypted clearnet, when that exists) and
-/// builds. Noise with a `stems` other than the inherited channel count is
-/// refused for the same reason it was a `debug_assert!` before — C++ indexes
-/// its channel deque by that count. Both refusals are distinct
-/// [`shekyl_relay::ZoneNewError`] variants; this export maps them to null
-/// because that is the only channel a C ABI has. They are enforced at
+/// builds. [`Zone::new`] also refuses a channel count other than the
+/// inherited width, and a noise epoch too short to carry a full-size
+/// message. Every [`shekyl_relay::ZoneNewError`] maps to null because
+/// that is the only channel a C ABI has. They are enforced at
 /// [`Zone::new`], so an in-process Rust caller after the daemon cutover
 /// cannot route around them.
 #[no_mangle]
@@ -464,10 +463,8 @@ pub extern "C" fn shekyl_relay_zone_new(
     // the eligibility rule in one place — `RelayZone::is_encrypted`.
     let secrecy = LinkSecrecy::of(relay_zone);
     let mut rng = SecureRelayRng;
-    // `Err` is a refused configuration, not an allocation failure — a noise
-    // carrier on a cleartext zone, or a channel count C++'s deque cannot index.
-    // See `Zone::new`. Null is the only channel a C ABI has for saying so, and
-    // the one C++ construction site checks it.
+    // `Err` is a refused configuration, not an allocation failure. See
+    // `Zone::new`. Null is the only channel a C ABI has for saying so.
     let Ok(zone) = Zone::new(
         params,
         stems,
@@ -560,9 +557,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_live_stems(handle: *const RelayZoneHa
 }
 
 /// Configured stem width (slot count). When noise is enabled this is also the
-/// noise channel count — channel `i` follows slot `i`. C++ sizes its channel
-/// deque from this rather than from a parallel `#define`, so the two widths
-/// cannot silently diverge.
+/// noise channel count — channel `i` follows slot `i`.
 ///
 /// # Safety
 /// `handle` must be null or live. Null returns 0.

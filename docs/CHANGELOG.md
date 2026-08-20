@@ -74,6 +74,17 @@
 
 ### Changed
 
+- **C++ noise carrier deleted; the epoch-budget guard lives at `Zone::new`
+  (`COVER_TRAFFIC_RESTORATION.md` §2.9, #515).** `NoiseQueues` is the
+  carrier. C++ no longer builds a noise zone: `make_relay_zone` never sets
+  the flag, the channel deque and `send_noise` are gone, and the two
+  remaining noise callbacks fail loudly rather than no-op. A full-size
+  message must fit in one epoch (`inherited::noise_windows_in_epoch`
+  against `MAX_FRAGMENTS`) or `Zone::new` refuses — the C++
+  `static_assert` that went with `send_noise`. The unused
+  `CRYPTONOTE_NOISE_MIN_EPOCH` / `_EPOCH_RANGE` `#define`s went with
+  `noise_zone_params`; every C++ zone now passes the Dandelion++ epoch.
+
 - **Relay axes stay un-collapsed (`DAEMON_RELAY_PRIVACY.md` §93, #513).**
   Dandelion++ runs on every zone; noise is a carrier on encrypted links only,
   never a reason to demote a stem. `LinkSecrecy` is constructed only from a
