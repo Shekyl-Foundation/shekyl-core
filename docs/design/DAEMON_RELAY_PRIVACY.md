@@ -14792,3 +14792,128 @@ keeps the word** — "the covert branch" in §42.5a and §93.1 names a historica
 object, and renaming it there would falsify the record rather than correct it.
 A `Covert*` spelling surviving in either place is not evidence of a second
 concept.
+
+---
+
+## 94. PRE-REGISTERED before the number exists: Tor transit (2026-08-20)
+
+`ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625` is the dominant input to `F′` and it
+is **not a measurement**. §91.6 established that the admissible region spans
++15.2 % against transit's +42.9 %, so `beta` — which three rounds chased —
+moves the constant by about a seventh of what this assumption does. This
+section fixes the decision rule **before the instrument runs**, on §2.8's
+precedent: pre-registration written afterwards is worthless.
+
+### 94.1 The premise §91.6 stated has changed, and the change is what unblocks this
+
+§91.6 required the measurement be taken *"on the complete mechanism (§42's
+noise half landed, D++ already live per §89), not simulated."* That was written
+when §2.9 step 4 was expected to **wire** the carrier. It did not:
+`COVER_TRAFFIC_RESTORATION.md` §2.9a records step 4 as skip-and-delete and step
+5 as **blocked** on a p2p cutover that has no design doc.
+
+**This does not block the measurement, because it splits the quantity in two.**
+
+| regime | what a hop costs | status |
+| --- | --- | --- |
+| **1 — ordinary encrypted transport** | one onion-to-onion traversal of a levin message on an established connection | **complete today.** D++ is live on every zone (§89), Tor is the transport, and no carrier is in the path. **Measurable now.** |
+| **2 — noise carrier** | regime 1 **plus** `fragments × cadence draw` | **does not exist end-to-end.** `NoiseQueues` has no caller until step 5. |
+
+So regime 1 is measured and regime 2 is **arithmetic over the cadence
+constants**, not a second measurement. §91.6's rule — do not derive against a
+mechanism that does not exist — is precisely *why* regime 2 stays arithmetic
+rather than being simulated into a number.
+
+**Regime 2 is already pre-registered and is NOT re-registered here.**
+`COVER_TRAFFIC_RESTORATION.md` §2.8 fixed the rule for α at the covert hop: a
+carrier hop's added latency is an **input to `F′`**, never a reason to revisit
+`EMBARGO_FULL_TRAVEL_PROBABILITY`. Regime 2's hop is regime 1's measured
+transit **plus** the fragment/cadence term, additive, and it re-runs when the
+carrier gains a caller. A second covert-hop rule here would be a duplicate to
+synchronise.
+
+### 94.2 The five degrees of freedom, frozen
+
+These are the knobs that get turned *after* a number arrives to make it say
+something more comfortable. Each is fixed now.
+
+**(a) The quantity.** Per-message latency for one Shekyl hop = **one full
+onion-to-onion rendezvous traversal on an *established* connection**, because
+that is what a stem forward actually does. **Onion-to-onion only** — the
+anonymity zone addresses peers by `.onion` (`src/net/tor_address.h`), so no
+exit relay appears in any topology a stem will traverse, and §89.5 forbids
+substituting a clearnet-vs-exit delta.
+
+*Circuit rebuilds:* a sample where the message crosses **after** an in-band
+circuit rebuild **is** hop latency and stays in the distribution. A sample
+where the send *fails* and the relay re-plans to another peer is **not** — that
+is a different event, priced by the backstop (§92), and folding it in would
+double-count. Stated now because the rebuild tail is the single largest lever
+on an upper quantile.
+
+**(b) The payload.** The **modal Shekyl transaction**, not an empty ping: Tor
+cell quantisation makes size load-bearing, and §2.6 records the modal
+transaction as **three fragments in a twenty-fragment envelope**. The rig takes
+the serialized `NOTIFY_NEW_TRANSACTIONS` size from an **actual** transaction of
+the modal shape rather than a remembered constant — this arc has already shipped
+one constant that was a re-typed literal beside the doc naming its source.
+
+**(c) The estimator.** Two Shekyl nodes on **one host**, each with its **own**
+Tor daemon and its own onion service, so the clock is shared and one-way
+latency is directly observable. Circuits still traverse the real Tor network,
+so the path is real; only the clock is local. **RTT/2 is the fallback and is
+inferior**, because it assumes path symmetry that onion rendezvous does not
+guarantee — if it is used, that assumption is recorded beside the number.
+
+**(d) The statistic — and both tails are pre-registered.** The adopted value is
+the **p90**, with p50 and p99 reported alongside. The quantile is **not**
+revisited after the distribution is seen.
+
+> **The asymmetry the constant's own doc does not anticipate.** It says the
+> interim "**narrows** when the measurement lands" — that assumes the truth is
+> below 1625. **If the measured p90 exceeds 1625, the constant RISES to it.**
+> Under-estimating shortens the embargo, which is the privacy-losing direction
+> (§65, §66); over-estimating costs black-hole recovery latency and nothing
+> else (§44.3). A measurement above the ceiling is not a reason to keep the
+> ceiling — it is the finding.
+
+**(e) The convergence criterion.** §90 shipped an `F′` reading that a six-draw
+re-run moved, from a single seed at 24 trials. Tor latency is **diurnal**, so
+the analogue of "one seed" here is "one time of day."
+
+Stop when **all** hold: at least **5 sessions** across **≥3 distinct days**,
+covering both peak and off-peak hours; **≥200 samples** per session; and adding
+a further session moves the **pooled p90 by <5 %**. If that does not converge
+inside 10 sessions, the non-convergence **is** the result and the assumption
+stays with its instability recorded — a wide distribution honestly reported
+beats a point value with a tight-looking interval.
+
+### 94.3 Network, and what this round does NOT do
+
+**The public Tor network, not an owned testnet.** A private testnet answers
+functional viability (which prior rounds established); its latency is a
+property of the harness, not of the path a stem takes. If nodes are provisioned,
+the standing rules apply — `skl-` prefix only, destroyed and verified
+non-billing afterwards.
+
+**The re-derivation is the SUCCESSOR round, not this one's second half**, and
+the blocker is named rather than assumed: `F′`, the per-zone embargo, the
+wallet timeout and the §44 pins re-derive **together**, and doing that requires
+the flood-suite reconciliation first — `f7_directed`, `flood_convergence`,
+`d9_alpha`, `d9_floor_locality` and `f_prime_admissible_region` still hold
+**transit-less** recorded numbers sitting beside a transit-bearing instrument
+(§2.0). Re-deriving against those baselines would produce a number whose
+provenance is half-stale.
+
+Recording the split now matters because **the decision of what re-derives is
+exactly what a surprising measurement would distort.**
+
+### 94.4 What lands
+
+`ANON_ZONE_TRANSIT_MEASURED_MS` — registered at birth per rule 94 — replacing
+`ANON_ZONE_TRANSIT_ASSUMPTION_MS`, carrying the `Provenance` field §87.2
+introduced, so a reader can tell a measured value from a labelled assumption
+without leaving the code. The assumption constant is **deleted in the same
+commit**, not left beside its successor: two constants for one quantity is the
+duplicate-to-synchronise shape this arc has already paid for.
+
