@@ -84,13 +84,21 @@
 
   On-chain: the kept/pruned boundary is structural (the vin/prunable split), with
   the **pairing** stated rather than inferred — pruned entries in serve-credit-vin
-  order, count equal to the vin count. `hybrid_signature` becomes
+  order, one per serve-credit vin — and stating the pairing is what removes the
+  count field, which would have been a MUST-equal check on a length the tx
+  already determines. `segment_subroot_rk` and `leaf_index_in_segment` come off
+  the wire entirely (`RF-D6`): both are derivable by the verifier, and a
+  wire-supplied verification target is *unsound if trusted*, not merely
+  redundant. `hybrid_signature` becomes
   `ed25519_countersignature: [u8; 64]`, a **fixed array**: a name that no longer
   asserts contents it lacks, with the length prefix and bound check gone because
   a wrong length is now unrepresentable.
 
-  Served payload: `segment_len_le(8) ‖ segment_bytes ‖ padding`, with only
-  `segment_bytes` hashed against `R_k`. `content-length` cannot stand in — it
+  Served payload: `leaf_count varint ‖ padding_len varint ‖ segment_bytes ‖
+  padding_bytes`, with only `segment_bytes` hashed against `R_k` — a leaf
+  **count** makes multiple-of-128 structural, and an explicit `padding_len`
+  keeps the frame self-delimiting rather than deriving padding extent from
+  `content-length`. `content-length` cannot stand in — it
   does not locate the split, verification is by reconstruction rather than
   delimiter, and it is a property of the transport rather than the format.
   Forward-compatibility posture ruled **write-zero, read-anything**, so a future
@@ -198,7 +206,9 @@
   record is ~10,243 B ≈ 262 GB/yr, so **`path` is the dominant term and the
   signature is not**: pruning only the ML-DSA leg keeps ~177 GB/yr, twice the
   figure that disqualified doing nothing. The surviving option prunes the leaf
-  chunk, branch layers, and ML-DSA leg together, keeping ~278 B ≈ 7.1 GB/yr —
+  chunk, branch layers, and ML-DSA leg together, keeping ~278 B ≈ 7.1 GB/yr
+  (**refined to ~230 B ≈ 5.9 GB/yr by `RF-D6` later in this same release**, which
+  drops two verifier-derivable fields from the record) —
   enough to identify the record and check the classical signature, **not**
   enough to re-verify the opening, which is stated on the ruling rather than
   left to be discovered.

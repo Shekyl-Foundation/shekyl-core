@@ -49,10 +49,17 @@ ruling, and it was wrong in a way that produced a test of the wrong claim. See
 
 ### 1.1 The carrier's answer, which this format must express
 
-Kept, on the vin in the prefix — **278 B/record ≈ 7.1 GB/yr**: the record header,
-`leaf_bytes`, and the 64 B Ed25519 leg. Pruned, as a **parallel structure keyed
-to the vin, inside `serialize_rctsig_prunable`** — ~9,965 B: the ML-DSA leg and
-`path` including the leaf chunk.
+Kept, on the vin in the prefix: the record header, `leaf_bytes`, and the 64 B
+Ed25519 leg. Pruned, as a **parallel structure keyed to the vin, inside
+`serialize_rctsig_prunable`** — ~9,965 B: the ML-DSA leg and `path` including the
+leaf chunk.
+
+`CR-D2` sized the kept side at **~278 B ≈ 7.1 GB/yr**. **`RF-D6` (§3.5) refines
+that to ~230 B ≈ 5.9 GB/yr** by removing `segment_subroot_rk` and
+`leaf_index_in_segment` from the record entirely — they are neither kept nor
+pruned, because the verifier derives both and trusting a wire-supplied one is
+unsound. The *partition* `CR-D2` ruled is unchanged; what changed is the record's
+contents.
 
 **A vin cannot straddle `unprunable_size`** — `tx.vin` serializes wholly inside
 the prefix — so the pruned parts are not fields within the vin. And by the
@@ -401,17 +408,45 @@ reviewer, two artifacts.
 
 ### `RF-D1` / `RF-D2` — artifact A, the on-chain record
 
-**Kept, in the vin (prefix) — ~278 B/record ≈ 7.1 GB/yr**
+**Kept, in the vin (prefix) — ~230 B/record ≈ 5.9 GB/yr**
 
 | Field | Bytes | Note |
 | --- | ---: | --- |
-| `p_canonical_id` | 32 | |
-| `shard_id` | varint | |
-| `settlement_epoch` | varint | |
-| `segment_subroot_rk` | 32 | the `R_k` the proof targets |
-| `leaf_index_in_segment` | 4 | |
-| `leaf_bytes` | 128 | the challenged leaf |
+| `p_canonical_id` | 32 | identity |
+| `shard_id` | varint | identity |
+| `settlement_epoch` | varint | identity |
+| `leaf_bytes` | 128 | the challenged leaf — the *claim* |
 | **`ed25519_countersignature`** | **64** | see `RF-D2` |
+
+**`RF-D6` (ruled here) — `segment_subroot_rk` and `leaf_index_in_segment` come
+OFF the wire, and the reason is soundness, not thrift.**
+
+An earlier cut of this table carried both. `CR-D2`'s ruling said the kept side is
+*"header + `leaf_bytes` + 64 B Ed25519 — identifies the record, cannot re-verify
+the opening"*, and these two are **not identifiers**:
+
+- `segment_subroot_rk` is the **verification target**. `LeafStore::frozen_segment(id)`
+  returns a `FrozenSegmentRecord { r_k, .. }`, and one shard is one segment
+  (`25,992 × 128 = 3,326,976 B` = `SHARD_BYTES`), so every verifier reads the
+  authoritative `R_k` locally.
+- `leaf_index_in_segment` is **derived**:
+  `challenge_leaf_index(p_id, shard_id, settlement_epoch, segment_leaf_count)`,
+  every input of which the verifier already has.
+
+**Carrying them is worse than redundant — a wire-supplied value is unsound if
+trusted.** A verifier that checks the path against the *supplied* `R_k` lets the
+prover choose its own tree root; one that opens at the *supplied* leaf index lets
+the prover choose which leaf to prove. Either defeats the challenge entirely. So
+the correct verifier must ignore both wire values and use its own — at which
+point the fields are 36 B/record of pure invitation to get it wrong.
+
+That is ~**0.9 GB/yr** saved, and the saving is the lesser half. **There is no
+production verifier yet** (`RF-D4` below), so this is pinned before the first one
+can read the wrong value.
+
+**A field is kept only if the verifier cannot derive it.** `leaf_bytes` stays
+because it is the prover's *claim* — the bytes alleged to sit at the derived
+index — which is exactly what nothing else supplies.
 
 **Pruned, keyed to the vin, inside `serialize_rctsig_prunable` — ~9,965 B**
 
@@ -425,11 +460,20 @@ reviewer, two artifacts.
 The boundary is the vin/prunable split itself: `tx.vin` serializes wholly inside
 the prefix, so a field's side is a fact of *where it is written*, not a
 convention a pruner infers. What must be stated is the **pairing**, because that
-is the part an implementation could infer differently: the pruned block is
-`count_le(8) ‖ entry[0..count]`, entries in **serve-credit-vin order**, and
-`count` MUST equal the number of serve-credit vins. That mirrors
+is the part an implementation could infer differently: entries appear in
+**serve-credit-vin order**, one per serve-credit vin. That mirrors
 `pass_signatures[i]` ↔ i-th pass header, whose own doc says the zip must be
 "stated, not inferred".
+
+**And stating the pairing is what makes a count field unnecessary.** An earlier
+cut wrote `count_le(8) ‖ entry[0..count]` with *"`count` MUST equal the number of
+serve-credit vins"* — a `MUST` that is a consistency check on a value the tx
+already determines. That is `WITNESS_PREFIX_LEN`'s lesson arriving two paragraphs
+after `RF-D2` deletes the same redundant framing from `hybrid_signature`: a
+length carried beside data whose length is already known. The length is **implied
+by the vin count**, and `serialize_rctsig_prunable` already takes vin-derived
+counts (`count_spend_inputs(vin)`), so the precedent for deriving rather than
+carrying is in the signature it will be written into.
 
 **The leaf chunk is pruned-side by construction** (`CR-D2`), and the tidiness
 hazard is why it is written down: `leaf_bytes` is kept-side and the leaf chunk is
@@ -479,15 +523,36 @@ LEAF_BYTES` (`redb_backend.rs:363-365`). No envelope, no fields.
 **Draft: one length field, ahead of the body.**
 
 ```text
-served response := segment_len_le(8) ‖ segment_bytes ‖ padding
-                   └─ MUST be a multiple of LEAF_BYTES (128)
-                   └─ hashed against R_k: segment_bytes ONLY
+served response := leaf_count  varint    (≤ leaves_per_segment = 25 992)
+                 ‖ padding_len varint
+                 ‖ segment_bytes         (leaf_count × LEAF_BYTES, exactly)
+                 ‖ padding_bytes         (padding_len, exactly)
+
+hashed against R_k: segment_bytes ONLY
 ```
 
-The fetcher splits on `segment_len`, hashes `segment_bytes` via
-`recompute_segment_r_k`, and compares to `R_k`. Padding sits **outside the bytes
-hashed against `R_k`**, which is TJ-H's framing constraint discharged
+The fetcher reads the two lengths, hashes `segment_bytes` via
+`recompute_segment_r_k`, and compares to its **local** `R_k`. Padding sits
+**outside the bytes hashed against `R_k`** — TJ-H's framing constraint discharged
 structurally rather than by prose.
+
+**Both lengths are in a leading header so the response head can go out before any
+store read**, preserving the property `remaining_bytes()` exists to give.
+
+**`leaf_count`, not a byte length.** An earlier cut wrote `segment_len_le(8)` — 8
+bytes for a quantity with ~25 992 legal values, carrying a *"MUST be a multiple
+of `LEAF_BYTES`"* validity rule alongside. A leaf count is 2–3 bytes as a varint
+and makes the multiple-of-128 property **structural**: a non-multiple is
+unrepresentable rather than rejected. That is the same argument `RF-D2` makes for
+the fixed-width signature arrays, applied to a length instead of a payload.
+
+**`padding_len` is explicit, and the format is self-delimiting.** An earlier cut
+had no such field while the prose still said *"writers MUST emit
+`padding_len == 0`"* — prose and grammar describing different formats. Without
+it, padding extent is whatever remains after the segment, i.e. **derived from
+`content-length`** — reintroducing precisely the transport dependency this
+section spends three reasons rejecting. With it, the frame is complete on its own
+terms and survives a transport change.
 
 **The forward-compatibility posture, argued rather than defaulted.** The question
 is what a reader does with padding it does not understand:
