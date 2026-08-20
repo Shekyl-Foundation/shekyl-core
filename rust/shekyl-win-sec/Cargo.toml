@@ -1,0 +1,44 @@
+[package]
+name = "shekyl-win-sec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Windows security primitives for the wallet transport: owner-only security descriptors, current-user SID, and peer owner/integrity checks (WP-D2)"
+publish = false
+
+# Everything here is `cfg(windows)`. On every other target the crate compiles to
+# nothing, which is deliberate: callers `use` it unconditionally and gate at the
+# call site, so a missing `cfg` shows up as an unresolved item rather than as a
+# silently absent security check.
+[target.'cfg(windows)'.dependencies]
+# Already in Cargo.lock before this crate existed (the WP-D9 disk probe pinned
+# it), so this adds no new supply-chain surface. `windows-link` is its only
+# dependency.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Memory",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
+
+[features]
+# Exposes `sid_for_testing`, which builds a `SidString` from an arbitrary
+# string. OFF by default and never enabled in production: the type's guarantee
+# is that a `SidString` came from this process's token or from a descriptor
+# read, and a public constructor would let a caller compare a peer's owner
+# against a value they invented.
+test-utils = []
+
+[target.'cfg(windows)'.dev-dependencies]
+# The probe suite drives real pipes. Same tokio the transport will use, so a
+# version bump that breaks `create_with_security_attributes_raw` fails here
+# rather than in WP-W2.
+tokio = { version = "1", features = ["net", "rt", "macros"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[lints]
+workspace = true

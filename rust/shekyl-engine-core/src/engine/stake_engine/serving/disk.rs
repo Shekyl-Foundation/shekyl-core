@@ -72,38 +72,81 @@ pub(crate) fn spawn_disk_probe(
     })
 }
 
+/// Free space available *to this writer*, per platform (**WP-D9**).
+///
+/// The two implementations are chosen to answer the same question, which is
+/// the only thing that makes the cross-platform reading comparable: **how many
+/// bytes can the process filling this disk actually write**. Not "how many
+/// bytes are unallocated" — that counts space this process cannot have, and
+/// reporting it as headroom would promise room the wallet does not hold.
+#[cfg(unix)]
+fn free_bytes_available(path: &Path) -> std::io::Result<u64> {
+    let stat = rustix::fs::statvfs(path)?;
+    // `f_bavail` — blocks available to an unprivileged writer, deliberately
+    // not `f_bfree`, which includes the root-reserved blocks. rustix
+    // normalizes both fields to `u64`, so the product needs no conversion —
+    // only saturation, because a nonsense fragment size must not panic a
+    // serving task.
+    //
+    // A saturated product is still a MEASURED reading: it arms the condition
+    // and, being enormous, reads clean. That is *not* the same board state as
+    // an unreadable probe, which disarms — "the disk has room" and "I cannot
+    // tell" are the two sentences this channel exists to keep apart.
+    Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
+}
+
+/// Windows: `GetDiskFreeSpaceExW`'s `lpFreeBytesAvailableToCaller`.
+///
+/// The exact semantic analog of `f_bavail`: it already accounts for per-user
+/// disk quotas, so it is what *this* caller may write rather than what exists
+/// on the volume. `lpTotalNumberOfFreeBytes` would be the `f_bfree` mistake.
+///
+/// The path is passed through `OsStrExt::encode_wide` rather than a lossy
+/// `to_string_lossy`, so a wallet directory containing unpaired surrogates
+/// probes the directory the user actually named.
+#[cfg(windows)]
+fn free_bytes_available(path: &Path) -> std::io::Result<u64> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut available: u64 = 0;
+    // SAFETY: `wide` is NUL-terminated and outlives the call; `available` is a
+    // local. The two unused out-params are documented as optional and are
+    // passed null because this probe deliberately wants only the
+    // available-to-caller figure.
+    let ok = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &raw mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(available)
+}
+
 /// Read free space on the filesystem holding the store.
 ///
-/// `f_bavail × f_frsize` — blocks available *to an unprivileged writer*
-/// times the fragment size. Deliberately not `f_bfree`, which counts the
-/// root-reserved blocks the wallet cannot actually use: reporting those as
-/// headroom would promise room that the process filling the disk does not
-/// have.
+/// The per-platform measurement is [`free_bytes_available`]; this function
+/// owns only the Measured/Unreadable decision.
 ///
 /// A failed probe is [`DiskObservation::Unreadable`], never a guess and
 /// never a panic. The disk check is an observability feature; a serving
 /// host that stopped because it could not stat a path would have traded a
 /// real obligation for a diagnostic (rule 82's inverse).
 pub(crate) fn observe_disk(path: &Path, threshold_bytes: u64) -> DiskObservation {
-    match rustix::fs::statvfs(path) {
-        Ok(stat) => {
-            // rustix normalizes both fields to `u64` across platforms, so
-            // the product needs no conversion — only saturation, because a
-            // nonsense fragment size must not panic a serving task.
-            //
-            // A saturated product is still a MEASURED reading: it arms the
-            // condition and, being enormous, reads clean. That is *not*
-            // the same board state as an unreadable probe, which disarms
-            // — "the disk has room" and "I cannot tell" are the two
-            // sentences this channel exists to keep apart. Saturation here
-            // is the benign direction of a value that cannot occur on a
-            // real filesystem, not a stand-in for the failure path below.
-            let free_bytes = stat.f_bavail.saturating_mul(stat.f_frsize);
-            DiskObservation::Measured {
-                free_bytes,
-                threshold_bytes,
-            }
-        }
+    match free_bytes_available(path) {
+        Ok(free_bytes) => DiskObservation::Measured {
+            free_bytes,
+            threshold_bytes,
+        },
         Err(e) => {
             tracing::warn!(
                 error = %e,

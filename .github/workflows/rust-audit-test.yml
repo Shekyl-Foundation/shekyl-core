@@ -224,6 +224,14 @@ jobs:
         # this is a dev/test lane, and dev edges are deliberately in scope
         # for the feature (see gf7-no-emit-guard.yml header).
         run: cargo clippy -p shekyl-engine-core --all-targets --features gf7-hooks -- -D warnings
+      # GATE 0 for the Windows probe suite. Runs HERE, on Linux, because it is
+      # a pure text comparison and because the copy it guards can rot on any
+      # commit — not only on the ones that happen to reach a Windows runner.
+      # Waiting for the Windows job would mean the drift is caught late, or
+      # not at all if the probe suite is skipped.
+      - name: "WP GATE 0: the WP-D9 probe copy is not stale"
+        run: python3 scripts/ci/check_win_probe_copy.py
+
       - name: rustdoc -D warnings (persona serving path)
         working-directory: rust
         # These crates' docs carry load-bearing security contracts (shekyl-tor's
@@ -237,6 +245,11 @@ jobs:
         # rather than `--workspace` because other crates carry pre-existing
         # rustdoc warnings; widening to the whole workspace is a separate
         # hygiene task, tracked in FOLLOWUPS.
+        #
+        # `shekyl-win-sec` is deliberately NOT here: it is `cfg(windows)` and
+        # compiles to nothing on this runner, so documenting it would gate an
+        # empty crate and pass forever. Its rustdoc gate runs on the Windows
+        # job in build.yml, where its docs exist.
         run: >-
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
           -p shekyl-tor -p shekyl-p-serve -p shekyl-p-host

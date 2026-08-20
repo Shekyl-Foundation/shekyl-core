@@ -379,7 +379,100 @@ jobs:
           submodules: recursive
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
+      #
+      # `components: clippy` is required for the WP-W1 clippy step below: the
+      # action installs a minimal toolchain, and without it the step dies with
+      # "'cargo-clippy.exe' is not installed for the toolchain". Declared here
+      # rather than in rust-toolchain.toml on purpose — that file explains why
+      # it carries no components (parallel cargo processes would race to
+      # auto-install into a shared dir during the daemon build).
       - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: clippy
+      # WP-W1: the Windows security crate must compile for Windows, and this
+      # is the only runner where that can be BLOCKING — the Linux boxes have no
+      # C cross-compiler, so anything whose graph reaches `ring` (i.e. anything
+      # that can speak HTTPS) cannot be cross-checked there.
+      #
+      # `shekyl-win-sec` itself has no such dependency and is verified locally
+      # too (cargo check --target x86_64-pc-windows-gnu), so a failure here is a
+      # real regression, not an environment artifact.
+      - name: "WP-W1: shekyl-win-sec compiles for Windows"
+        shell: pwsh
+        working-directory: rust
+        # `--features test-utils` because the probe suite needs it, and
+        # `--all-targets` builds that suite: without the feature this step
+        # fails on a missing `sid_for_testing`, which is exactly how it
+        # failed on the first run of this PR. The clippy step below always
+        # had the feature; this one did not, so local verification and CI
+        # were not running the same thing.
+        run: cargo check --locked -p shekyl-win-sec --features test-utils --all-targets
+
+      # Clippy for a WINDOWS target, which the workspace gate on Linux cannot
+      # do: this crate is cfg(windows), so the Linux run sees an empty crate
+      # and passes. That is not hypothetical — the first Windows-target clippy
+      # run on this code found 18 errors including a genuine SOUNDNESS bug (a
+      # `Vec<u8>` buffer cast to a `TOKEN_USER`, which needs 8-byte alignment).
+      # A gate that cannot see its subject is the defect this round keeps
+      # finding; this is the fix for it.
+      - name: "WP-W1: clippy -D warnings (Windows target)"
+        shell: pwsh
+        working-directory: rust
+        run: cargo clippy --locked -p shekyl-win-sec --features test-utils --all-targets -- -D warnings
+
+      # The rustdoc gate for this crate lives HERE, not in rust-audit-test.yml's
+      # persona-serving list, and the reason is the point: that list runs on
+      # Linux, where `shekyl-win-sec` compiles to nothing. Adding it there would
+      # document an empty crate and pass forever — a gate checking nothing,
+      # which is precisely the defect the preceding follow-up round existed to
+      # remove. Its docs carry the WP-D4/WP-D5 security contracts and the safety
+      # arguments for every `unsafe` block, so they are worth gating; they just
+      # have to be gated where they exist.
+      - name: "WP-W1: rustdoc -D warnings (shekyl-win-sec)"
+        shell: pwsh
+        working-directory: rust
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps --lib -p shekyl-win-sec
+
+      # The pre-registered probes (docs/design/WINDOWS_WALLET_PROBE_SHEET.md).
+      # BLOCKING, and that is the point of writing them down first: each probe
+      # carries a prediction made before any Windows machine ran it, and the
+      # sheet names the DECISION a failure revisits. A red here is a finding
+      # about the design, not a flaky test.
+      #
+      # `-CiOnly` skips exactly the two probes §3 pre-declares as needing an
+      # interactive logon. It is a switch rather than auto-detection so a CI run
+      # cannot silently skip more than was pre-registered — the skips are
+      # printed and are not passes.
+      - name: "WP probes: pre-registered Windows behaviour"
+        shell: pwsh
+        run: ./scripts/ci/windows_probe.ps1 -CiOnly
+
+      # WP-W5 SCOUTING STEP — informational by design, and NOT a gate.
+      #
+      # `WINDOWS_WALLET_SUPPORT.md` §7 plans one deliberate run whose only job
+      # is to drain the remaining Windows error list, because §2's blocking
+      # surface was produced by grep and a compile stops at the first error per
+      # crate. This is that run, made continuous and cheap rather than
+      # one-shot.
+      #
+      # It does not fail the build, and that is a decision rather than an
+      # oversight: the port is incomplete on purpose (WP-D10 keeps the build
+      # gate on until WP-W5), so a red here would mean "still unported", which
+      # is already known and recorded. WP-W5 flips `continue-on-error` off in
+      # the same slice that makes it pass — that flip is the gate, and until
+      # then this step's output is read by a human, not by CI.
+      #
+      # The one thing it proves today: WP-D9's disk probe. engine-core cannot
+      # be Windows-checked on a Linux box, so this is the only place its
+      # `GetDiskFreeSpaceExW` half is compiled at all.
+      - name: "WP-W5 scouting: remaining Windows errors (informational)"
+        shell: pwsh
+        working-directory: rust
+        continue-on-error: true
+        run: cargo check --locked -p shekyl-engine-core -p shekyl-wallet-rpc -p shekyl-cli
+
       - name: restore vcpkg cache
         uses: actions/cache/restore@v5
         id: vcpkg-cache
@@ -423,7 +516,7 @@ jobs:
       # docs/design/WINDOWS_WALLET_SUPPORT.md. The Windows wallet gap is
       # neither caused nor widened here: the `wallet` target built a binary
       # that has not shipped since the C1/C2 install cutover (#500). Slice
-      # W-4 of that design round owns renaming this job back.
+      # WP-W5 of that design round owns renaming this job back.
       - name: build daemon
         shell: pwsh
         run: |
