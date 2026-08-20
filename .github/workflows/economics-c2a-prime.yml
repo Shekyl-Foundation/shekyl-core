@@ -161,9 +161,15 @@ jobs:
           # The CALIBRATION build is CMAKE_BUILD_TYPE=Release, so BUILD_SHARED_LIBS
           # defaults OFF (it only flips ON for Debug, CMakeLists.txt:608-612). Internal
           # libraries are therefore static .a archives and the test binaries are
-          # statically linked against them — no internal .so files exist, and the
-          # binaries are self-contained for the layer jobs. The deliverable to verify
-          # is the two test binaries themselves; the tar already excludes *.a and *.o.
+          # statically linked against them — no internal .so files exist, which is why
+          # the tar can exclude *.a and *.o and still ship working binaries.
+          #
+          # That does NOT make them self-contained, and this comment previously said it
+          # did. The binaries still need SYSTEM libraries (boost, libunwind, ssl,
+          # sodium) that the layer jobs install by hand; when one is missing the binary
+          # exits 127 at the loader. This step verifies the binaries are PRESENT, which
+          # is necessary and not sufficient — the layer jobs prove they RUN, via
+          # require_binary_runs in run_economics_c2a_prime.sh.
           required=(
             build/tests/unit_tests/unit_tests
             build/tests/core_tests/core_tests
@@ -234,9 +240,20 @@ jobs:
           # git is required by the "configure git" step and actions/checkout@v5
           # (submodules: recursive). The build job gets it via APT_INSTALL_LINUX;
           # the layer jobs install a minimal runtime set and must add it here.
+          #
+          # This list is the test binaries' DT_NEEDED set, not a guess. Derive it
+          # with `readelf -d build/tests/unit_tests/unit_tests | grep NEEDED`
+          # against a Release build and map each entry to its jammy package —
+          # a library missing here is not a link error, it is exit 127 at the
+          # dynamic loader before main, which the gate reports as "no tests".
+          # libunwind8 / program-options / serialization were absent from this
+          # list from the day the layer jobs landed, which is why every layer
+          # gate had reported zero cases (see the "Verify test binaries are
+          # runnable" step below, which now asserts this rather than trusting it).
           apt -y install git ripgrep python3 libboost-system1.74.0 libboost-filesystem1.74.0 \
             libboost-thread1.74.0 libboost-chrono1.74.0 libboost-regex1.74.0 \
-            libssl3 libsodium23 libprotobuf23
+            libboost-program-options1.74.0 libboost-serialization1.74.0 \
+            libssl3 libsodium23 libprotobuf23 libunwind8
       - name: install build toolchain for Rust tests
         # curl + ca-certificates: required by the install-Rust step
         # below. They were NEVER installed in this job — the old
