@@ -74,6 +74,30 @@
 
 ### Changed
 
+- **The serve-credit response wire is drafted, and it is TWO artifacts
+  (`RF-D1`/`RF-D2`/`RF-D4`).** A scoping premise was corrected before drafting:
+  TJ-H's reserved padding belongs to the **Tor-served shard payload** (its attack
+  is an observed response size), not the on-chain vin, so `RF-D1`/`RF-D2` and
+  `RF-D4` govern different wires and cannot share a boundary. They stay one slice
+  because they share a *validation surface*: does each artifact make its hashed
+  region unambiguous to a verifier?
+
+  On-chain: the kept/pruned boundary is structural (the vin/prunable split), with
+  the **pairing** stated rather than inferred — pruned entries in serve-credit-vin
+  order, count equal to the vin count. `hybrid_signature` becomes
+  `ed25519_countersignature: [u8; 64]`, a **fixed array**: a name that no longer
+  asserts contents it lacks, with the length prefix and bound check gone because
+  a wrong length is now unrepresentable.
+
+  Served payload: `segment_len_le(8) ‖ segment_bytes ‖ padding`, with only
+  `segment_bytes` hashed against `R_k`. `content-length` cannot stand in — it
+  does not locate the split, verification is by reconstruction rather than
+  delimiter, and it is a property of the transport rather than the format.
+  Forward-compatibility posture ruled **write-zero, read-anything**, so a future
+  padding scheme needs no flag day. Pinned now because
+  `recompute_segment_r_k` has **no production consumer** — the definition has one
+  side to change, not two.
+
 - **Relay axes stay un-collapsed (`DAEMON_RELAY_PRIVACY.md` §93, #513).**
   Dandelion++ runs on every zone; noise is a carrier on encrypted links only,
   never a reason to demote a stem. `LinkSecrecy` is constructed only from a
