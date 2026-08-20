@@ -127,7 +127,7 @@ verify_build_artifact_layout() {
 
 count_gtest_cases() {
   local filter="$1"
-  local out rc
+  local out rc=0
   # --gtest_list_tests is a boolean flag; the suite filter is --gtest_filter.
   #
   # stderr is CAPTURED, not discarded. Discarding it made this function
@@ -140,8 +140,15 @@ count_gtest_cases() {
   #
   # Verdict captured before any pipe (rule 46): `grep -c` on its own line
   # would otherwise be the exit status this function reports.
-  out="$("$UNIT_TESTS" --gtest_list_tests --gtest_filter="$filter" 2>&1)"
-  rc=$?
+  # `|| rc=$?`, not a bare assignment followed by `rc=$?`. This script
+  # runs under `set -e` (line 36), and the exit status of a simple
+  # assignment IS the command substitution's — so a bare
+  # `out="$(...)"` aborts the whole script the instant the binary fails,
+  # BEFORE the check below, and the diagnostic never prints. Verified:
+  # the bare form exits 127 silently; this form reaches the `die` and
+  # quotes the loader error. Putting the assignment in a compound
+  # command is what exempts it from `set -e`.
+  out="$("$UNIT_TESTS" --gtest_list_tests --gtest_filter="$filter" 2>&1)" || rc=$?
   if (( rc != 0 )); then
     die "unit_tests could not be listed (exit ${rc}) for filter '${filter}'. \
 This is NOT a missing harness -- the binary exists but did not run. \
