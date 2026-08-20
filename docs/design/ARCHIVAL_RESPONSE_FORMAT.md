@@ -436,9 +436,34 @@ the opening"*, and these two are **not identifiers**:
 **Carrying them is worse than redundant — a wire-supplied value is unsound if
 trusted.** A verifier that checks the path against the *supplied* `R_k` lets the
 prover choose its own tree root; one that opens at the *supplied* leaf index lets
-the prover choose which leaf to prove. Either defeats the challenge entirely. So
-the correct verifier must ignore both wire values and use its own — at which
-point the fields are 36 B/record of pure invitation to get it wrong.
+the prover choose which leaf to prove. Either **defeats** the challenge — not
+degrades it. So the correct verifier must ignore both wire values and use its
+own — and **a wire field a correct implementation must ignore is worse than
+absent**: it is an invitation, sitting in the record, in the position a reader
+trusts.
+
+**The two fail differently, which is why they come off together under one
+criterion rather than one at a time.** Supplied-`R_k` is the classic
+self-attesting root, and an implementer is likely to spot it. Supplied-leaf-index
+is subtler: **the root is right, the opening is valid, and the prover simply
+proves the one leaf it kept.** Nothing looks wrong at any step. Someone who
+catches the first may well miss the second, so the durable form of this ruling is
+the shared test — *is this an identifier, or a verification input?* — not the two
+removals.
+
+**What the verifier uses instead, stated because the record no longer declares
+it.** With both fields off the wire, a reader of the vin alone cannot see what
+the proof is checked against; that dependency is now implicit, and "the fields
+were forgotten" is the natural wrong conclusion. It is deliberate, and the
+sources are:
+
+| Input | Where the verifier gets it |
+| --- | --- |
+| `R_k` | `LeafStore::frozen_segment(shard_id)` → `FrozenSegmentRecord { r_k, .. }` |
+| leaf index | `challenge_leaf_index(p_id, shard_id, settlement_epoch, segment_leaf_count)` |
+
+Both are chain-derived and identical on every honest node, which is exactly what
+makes them unnecessary — and unsafe — to transmit.
 
 That is ~**0.9 GB/yr** saved, and the saving is the lesser half. **There is no
 production verifier yet** (`RF-D4` below), so this is pinned before the first one
