@@ -231,10 +231,21 @@ namespace levin
        between them per-field reads as an accident where choosing between the
        sets reads as the decision it is. */
 
-    constexpr relay_zone_params noise_zone_params()
-    {
-      return {CRYPTONOTE_NOISE_CHANNELS, noise_min_epoch, noise_epoch_range};
-    }
+    /* The fragment-size guard, kept where its CONSTANTS live rather than where
+       the fragmenting happens. C++ no longer cuts anything to this window —
+       `NoiseQueues` in `shekyl-relay` owns the carrier — but `CRYPTONOTE_NOISE_BYTES`
+       and `CRYPTONOTE_MAX_FRAGMENTS` are still C++ `#define`s, and a guard over
+       constants belongs beside the constants. It has survived two homes now: the
+       deleted covert branch, then the deleted channel constructor.
+
+       FOLLOWUP: the constants should cross to Rust and `NoiseQueues`' window
+       should be derived from them, at which point this assertion moves with
+       them. Until then, deleting it here would leave the constraint unguarded
+       in both languages. */
+    static_assert(
+      CRYPTONOTE_MAX_FRAGMENTS * CRYPTONOTE_NOISE_BYTES <= LEVIN_DEFAULT_MAX_PACKET_SIZE,
+      "most nodes will reject this fragment setting"
+    );
 
     constexpr relay_zone_params public_zone_params()
     {
@@ -249,20 +260,26 @@ namespace levin
         fluff reach from which *network* this is. An i2p zone with noise
         disabled still fluffs outbound-only. Everything the zone then *does*
         with them belongs to `shekyl-relay`. */
-    RelayZoneHandle* make_relay_zone(const epee::net_utils::zone nzone, const bool covert_enabled)
-    {
-      const relay_zone_params params = covert_enabled ? noise_zone_params() : public_zone_params();
+    /*! Build the Rust relay zone for `nzone`.
 
-      /* Named bits, not two bools: adjacent `bool` arguments transpose silently
-         across a C ABI, and transposing these two swaps the i2p/tor
-         outbound-only fluff rule with the covert enable — the regression RP-3a
-         shipped once. This is also the ONLY place the covert-enabled fact is
-         derived from the payload; every other site asks the zone. */
+        **No noise flag.** C++ cannot enable the carrier any more: the machinery
+        that executed it here is deleted and `NoiseQueues` is the port. The FFI
+        still accepts `SHEKYL_RELAY_ZONE_NOISE_ENABLED`, and the cutover's
+        in-process caller will set it — this function simply never does, which
+        is why `get_status().has_noise` reads false everywhere and
+        `select_anonymity`'s noise-priority arm stays dormant. */
+    RelayZoneHandle* make_relay_zone(const epee::net_utils::zone nzone)
+    {
+      const relay_zone_params params = public_zone_params();
+
+      /* One bit, and it is NOT the noise enable. The transposition hazard the
+         named bits were introduced for (RP-3a shipped it once: the i2p/tor
+         outbound-only fluff rule swapped with the noise enable) cannot recur
+         from here, because only one of the two is ever set. The Rust side
+         still pins both values and refuses noise on a cleartext zone. */
       std::uint32_t flags = 0;
       if (nzone != epee::net_utils::zone::public_)
         flags |= SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
-      if (covert_enabled)
-        flags |= SHEKYL_RELAY_ZONE_NOISE_ENABLED;
 
       return shekyl_relay_zone_new(
         now_ms(), std::uint8_t(nzone), params.stems,
@@ -356,88 +373,32 @@ namespace levin
        at a time. It also keeps `foreach_connection` — which takes a lock of its
        own — off the notifying thread.
 
-       The strand per "channel" may need a re-visit. The most "expensive" code
-       is figuring out the noise/notification to send. If levin code is
-       optimized further, it might be better to just use standard locks per
-       channel. */
-
-    //! A queue of levin messages for a noise i2p/tor link
-    struct noise_channel
-    {
-      explicit noise_channel(boost::asio::io_context& io_service)
-        : active(nullptr),
-          queue(),
-          strand(io_service),
-          connection(boost::uuids::nil_uuid())
-      {}
-
-      // `asio::io_context::strand` cannot be copied or moved
-      noise_channel(const noise_channel&) = delete;
-      noise_channel& operator=(const noise_channel&) = delete;
-
-      // Only read/write these values "inside the strand"
-
-      epee::byte_slice active;
-      std::deque<epee::byte_slice> queue;
-      boost::asio::io_context::strand strand;
-      boost::uuids::uuid connection;
-    };
+       The per-channel strand is gone with the noise machinery it serialized
+       (2026-08-20): there are no channels in this process any more, so the
+       zone strand is the only one left. */
   } // anonymous
 
   namespace detail
   {
     struct zone
     {
-      explicit zone(boost::asio::io_context& io_service, std::shared_ptr<connections> p2p, epee::byte_slice covert_payload_in, epee::net_utils::zone zone, bool pad_txs)
+      explicit zone(boost::asio::io_context& io_service, std::shared_ptr<connections> p2p, epee::net_utils::zone zone, bool pad_txs)
         : p2p(std::move(p2p)),
-          covert_payload(std::move(covert_payload_in)),
           wake(io_service),
           strand(io_service),
-          channels(),
-          relay(make_relay_zone(zone, !covert_payload.empty()), &shekyl_relay_zone_free),
+          relay(make_relay_zone(zone), &shekyl_relay_zone_free),
           pending_wakes(0),
           nzone(zone),
           pad_txs(pad_txs)
-      {
-        /* Channel construction asks the zone, not the payload: the enable fact
-           has exactly one birth site (the `make_relay_zone` argument above) and
-           every other reader — this loop included — consumes the zone's copy.
-           Width comes from the zone's stem count (channel i ↔ slot i), not a
-           parallel `#define`, so the two sides cannot silently diverge.
-           `relay` is fully initialized here because members initialize in
-           declaration order and this is the constructor body. */
-        /* Re-homed from the deleted covert branch (§93.1), NOT dropped with it.
-           The branch was the only site holding this, but the constraint it
-           guards outlives it: the channels built below emit dummies at the
-           payload's fragment size whether or not anything is ever queued, so a
-           fragment setting most nodes would reject is still reachable. Here is
-           where the channels are born, which is where it belongs. */
-        static_assert(
-          CRYPTONOTE_MAX_FRAGMENTS * CRYPTONOTE_NOISE_BYTES <= LEVIN_DEFAULT_MAX_PACKET_SIZE,
-          "most nodes will reject this fragment setting"
-        );
-
-        const std::size_t channel_width = shekyl_relay_zone_stem_width(relay.get());
-        for (std::size_t count = 0;
-             shekyl_relay_zone_noise_enabled(relay.get()) && count < channel_width;
-             ++count)
-          channels.emplace_back(io_service);
-      }
+      {}
 
       const std::shared_ptr<connections> p2p;
-      /*! The dummy covert packet, and the fragment unit every covert send is
-          cut to. Payload ONLY: whether the zone runs covert channels is the
-          zone's fact now (`shekyl_relay_zone_noise_enabled`), not this
-          field's emptiness. It used to be both, which is why nine sites
-          re-derived an enable flag from a byte buffer (§20.4). */
-      const epee::byte_slice covert_payload;
       /*! One timer for every scheduled relay step, armed from
           `shekyl_relay_zone_next_wake()`. The zone owns the deadline *value*;
           this owns the *sleep*. A second timer would need a second deadline,
           and that would be a copy of a fact the zone already holds. */
       boost::asio::steady_timer wake;
       boost::asio::io_context::strand strand;
-      std::deque<noise_channel> channels;  //!< Never touch after init; only update elements on `noise_channel.strand`
       //! Stem map, per-peer fluff batches, epoch role. Only touch in `strand`.
       const std::unique_ptr<RelayZoneHandle, void (*)(RelayZoneHandle*)> relay;
       /*! Outstanding `wake` callbacks. Re-arming cancels the pending wait, and a
@@ -452,83 +413,7 @@ namespace levin
 
   namespace
   {
-    //! Adds a message to the sending queue of the channel.
-    class queue_covert_notify
-    {
-      std::shared_ptr<detail::zone> zone_;
-      epee::byte_slice message_; // Requires manual copy constructor
-      const std::size_t destination_;
 
-    public:
-      queue_covert_notify(std::shared_ptr<detail::zone> zone, epee::byte_slice message, std::size_t destination)
-        : zone_(std::move(zone)), message_(std::move(message)), destination_(destination)
-      {}
-
-      queue_covert_notify(queue_covert_notify&&) = default;
-      queue_covert_notify(const queue_covert_notify& source)
-        : zone_(source.zone_), message_(source.message_.clone()), destination_(source.destination_)
-      {}
-
-      //! \pre Called within `zone_->channels[destionation_].strand`.
-      void operator()()
-      {
-        if (!zone_)
-          return;
-
-        noise_channel& channel = zone_->channels.at(destination_);
-        assert(channel.strand.running_in_this_thread());
-
-        /* Truthful within one covert interval: `clear_channel` nils this at
-           every due tick the stem slot spends unbound, and `send_noise` nils
-           it on a send failure — so nil here means the channel will not fire
-           and queuing would accumulate without bound. */
-        if (!channel.connection.is_nil())
-          channel.queue.push_back(std::move(message_));
-        else if (destination_ == 0 && shekyl_relay_zone_live_stems(zone_->relay.get()) == 0)
-          MWARNING("Unable to send transaction(s) to " << epee::net_utils::zone_to_string(zone_->nzone) <<
-			" - no available outbound connections");
-      }
-    };
-
-    //! Clears a channel whose stem slot is unbound at a due tick.
-    struct clear_channel
-    {
-      std::shared_ptr<detail::zone> zone_;
-      const std::size_t channel_;
-
-      //! \pre Called within `zone_->channels[channel_].strand`.
-      void operator()() const
-      {
-        if (!zone_)
-          return;
-
-        noise_channel& channel = zone_->channels.at(channel_);
-        assert(channel.strand.running_in_this_thread());
-
-        /* The inherited nil-repoint semantics (`update_channel` with a nil
-           connection), kept exactly. Nil the binding so `queue_covert_notify`'s
-           enqueue guard reads the truth and stops queuing to a channel that no
-           longer fires; drop the in-flight remainder (never resume it — CV-1);
-           drop the queue, because every covert message was cloned to every
-           channel, so the surviving channels still carry it, and holding it
-           here would grow without bound on a node with fewer peers than
-           channels — a permanent state for a one-outbound-connection zone.
-           The bound-to-bound repoint has no analogue here: the new binding
-           travels with the next send, where `send_noise` rebinds and discards
-           the remainder.
-
-           Runs at EVERY due tick while the slot stays unbound, not once at
-           the transition — Rust derives it from the map at each poll rather
-           than remembering what the binding used to be. Every line below is
-           idempotent, which is what makes that repetition free, and it is
-           what makes a lost or swallowed clear self-heal one covert interval
-           later instead of leaving the enqueue guard stale forever. */
-
-        channel.connection = boost::uuids::nil_uuid();
-        channel.active = nullptr;
-        channel.queue.clear();
-      }
-    };
 
     /*! Performs the effects a relay-zone call produced.
 
@@ -549,10 +434,6 @@ namespace levin
        dropped relay or a skipped repoint is recoverable; a corrupted unwind is
        not. `core` and `outs` exist for `on_outbound`, which the epoch branch of
        `poll` calls back to gather the outbound set lazily. */
-    //! Post a covert send to `channel`'s strand. Defined after `send_noise`.
-    void post_covert_send(const std::shared_ptr<detail::zone>& zone, std::size_t channel,
-                          const boost::uuids::uuid& peer, const i_core_events* core);
-
     struct relay_effects
     {
       std::shared_ptr<detail::zone> zone;
@@ -610,67 +491,30 @@ namespace levin
         }
       }
 
-      //! A covert channel came due with its stem slot unbound: clear it.
-      //!
-      //! The other half of the deleted slot array (§20.3): the binding travels
-      //! with each send, and the *loss* of a binding travels here — one channel
-      //! index, no array, no width to reconcile. Fires per due tick while the
-      //! slot stays unbound (see `clear_channel` for why that repetition is
-      //! the design). Runs on the zone strand (the wake fired there) and posts
-      //! to the channel's own strand, exactly like `on_noise` — nothing reads
-      //! the zone handle off the zone strand.
+      /* The two noise effects below are UNREACHABLE from this process, and
+         they fail loudly rather than returning quietly.
+
+         C++ no longer builds noise channels at all — `NoiseQueues` in
+         `shekyl-relay` is the carrier, and this file is a transport shim
+         until the daemon cutover deletes it (§2.9 step 5). Rust emits these
+         effects only for a zone with noise enabled, and no zone constructed
+         here can be: `make_relay_zone` never sets the flag. So reaching
+         either arm means a zone was enabled by a path that does not exist
+         yet, and the honest answer is to say so — a silent no-op would drop
+         a real carrier effect on the floor the moment that path is built. */
       static void on_noise_unbind(void* ctx, std::size_t channel) noexcept
       {
-        assert(ctx != nullptr);
-        try
-        {
-          relay_effects& self = *static_cast<relay_effects*>(ctx);
-          if (!self.zone || channel >= self.zone->channels.size())
-            return;
-          boost::asio::post(self.zone->channels[channel].strand, clear_channel{self.zone, channel});
-        }
-        catch (const std::exception& e)
-        {
-          MERROR("covert unbind dispatch threw, channel not cleared: " << e.what());
-        }
-        catch (...)
-        {
-          MERROR("covert unbind dispatch threw a non-standard exception, channel not cleared");
-        }
+        (void)ctx;
+        MERROR("noise unbind reached C++ for channel " << channel
+               << "; the carrier is Rust-owned and no zone here enables noise");
       }
 
-      //! A covert channel is due to send.
-      //!
-      //! Runs on the **zone strand** (the wake fired there) and does no byte
-      //! work: it posts to the channel's own strand, which still serializes
-      //! `active`/`queue`/`connection` against `queue_covert_notify`. So the
-      //! zone handle is never touched from a channel strand — acceptance
-      //! item 8 — and the `:374` discipline comment keeps its referent.
-      //!
-      //! Note what it does NOT take: any hint of what is being sent (CV-4).
-      //! C++ picks dummy-or-real from a queue Rust cannot see.
       static void on_noise(void* ctx, std::size_t channel, const std::uint8_t* peer) noexcept
       {
-        assert(ctx != nullptr);
-        try
-        {
-          relay_effects& self = *static_cast<relay_effects*>(ctx);
-          if (!self.zone || channel >= self.zone->channels.size())
-            return;
-          /* The binding travels with the send (§20.3's inversion): never nil,
-             because an unbound slot emits nothing at all (CV-2). */
-          boost::uuids::uuid destination{};
-          std::memcpy(std::addressof(destination), peer, sizeof(destination));
-          post_covert_send(self.zone, channel, destination, self.core);
-        }
-        catch (const std::exception& e)
-        {
-          MERROR("covert send dispatch threw, channel not sent: " << e.what());
-        }
-        catch (...)
-        {
-          MERROR("covert send dispatch threw a non-standard exception");
-        }
+        (void)ctx;
+        (void)peer;
+        MERROR("noise send reached C++ for channel " << channel
+               << "; the carrier is Rust-owned and no zone here enables noise");
       }
 
       //! Gather the outbound connection set on demand.
@@ -893,92 +737,10 @@ namespace levin
       }
     };
 
-    /*! Sends one covert packet on a channel the zone said is due.
-
-        No timer and no re-arm: the zone owns *when* (§20.2a), so this is a
-        handler posted to the channel's strand, not a self-perpetuating wait.
-        Deleting `next_noise` is what makes the zone strand the sole caller
-        into the relay handle — with per-channel timers, this ran on a channel
-        strand and would have had to reach the handle from there. */
-    struct send_noise
-    {
-      std::shared_ptr<detail::zone> zone_;
-      const std::size_t channel_;
-      const boost::uuids::uuid peer_;
-      const i_core_events* core_;
-
-      //! \pre Called within `zone_->channels[channel_].strand`.
-      void operator()()
-      {
-        if (!zone_ || !zone_->p2p)
-          return;
-
-        assert(zone_->channels.at(channel_).strand.running_in_this_thread());
-        static_assert(
-          CRYPTONOTE_MAX_FRAGMENTS <= (noise_min_epoch / (noise_min_delay + noise_delay_range)),
-          "Max fragments more than the max that can be sent in an epoch"
-        );
-
-        noise_channel& channel = zone_->channels.at(channel_);
-        if (channel.connection != peer_)
-        {
-          /* Rebind at send time — §20.3's inversion moves the binding here
-             from the pushed-slot repoint. Clearing `active` restarts any
-             in-flight message rather than resuming it (CV-1): the remainder
-             of a real fragment run sent to the new peer would make this send
-             longer than a dummy, and length is the one thing the covert
-             channel holds constant. */
-          channel.connection = peer_;
-          channel.active = nullptr;
-        }
-
-        if (!channel.connection.is_nil())
-        {
-          epee::byte_slice message = nullptr;
-          if (!channel.active.empty())
-            message = channel.active.take_slice(zone_->covert_payload.size());
-          else if (!channel.queue.empty())
-          {
-            channel.active = channel.queue.front().clone();
-            message = channel.active.take_slice(zone_->covert_payload.size());
-          }
-          else
-            message = zone_->covert_payload.clone();
-
-          if (zone_->p2p->send(std::move(message), channel.connection))
-          {
-            if (!channel.queue.empty() && channel.active.empty())
-              channel.queue.pop_front();
-          }
-          else
-          {
-            channel.active = nullptr;
-            channel.connection = boost::uuids::nil_uuid();
-            auto height = get_blockchain_height(*zone_->p2p, core_);
-
-            auto connections = get_out_connections(*zone_->p2p, height);
-            if (connections.empty())
-              MWARNING("Unable to send transaction(s) to " << epee::net_utils::zone_to_string(zone_->nzone) <<
-			" - no suitable outbound connections at height " << height);
-
-            boost::asio::post(zone_->strand, [z = zone_, connections = std::move(connections)] {
-              relay_update_stems(z, connections);
-            });
-          }
-        }
-
-      }
-    };
-
-    void post_covert_send(const std::shared_ptr<detail::zone>& zone, const std::size_t channel,
-                          const boost::uuids::uuid& peer, const i_core_events* core)
-    {
-      boost::asio::post(zone->channels[channel].strand, send_noise{zone, channel, peer, core});
-    }
   } // anonymous
 
-  notify::notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::byte_slice noise, epee::net_utils::zone zone, const bool pad_txs, i_core_events& core)
-    : zone_(std::make_shared<detail::zone>(service, std::move(p2p), std::move(noise), zone, pad_txs))
+  notify::notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::zone zone, const bool pad_txs, i_core_events& core)
+    : zone_(std::make_shared<detail::zone>(service, std::move(p2p), zone, pad_txs))
     , core_(std::addressof(core))
   {
     if (!zone_->p2p)

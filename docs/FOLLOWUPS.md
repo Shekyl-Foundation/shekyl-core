@@ -10020,6 +10020,20 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
+- **Relay: the noise fragment constants have no Rust home (opened 2026-08-20).**
+  `CRYPTONOTE_NOISE_BYTES`, `CRYPTONOTE_MAX_FRAGMENTS` and
+  `LEVIN_DEFAULT_MAX_PACKET_SIZE` are still C++ `#define`s, but C++ no longer
+  fragments anything to that window — `NoiseQueues` in `shekyl-relay` owns the
+  carrier and takes its window from `dummy.len()`, unrelated to those
+  constants. The `static_assert` that ties them together has now survived two
+  homes (the deleted covert branch, then the deleted channel constructor) and
+  currently sits at anonymous-namespace scope in `levin_notify.cpp` **beside
+  the constants rather than beside the fragmenting**, because deleting it
+  would leave the constraint unguarded in both languages. **Step 5 deletes
+  that file**, so the constants must cross to Rust and `NoiseQueues`' window
+  must be derived from them before then, or the guard is lost silently. Small,
+  and it has a deadline attached to something already scheduled.
+
 - **Relay: the `t_core` arrival harness — the witness this path has never
   had.** *(Rewritten 2026-08-12 by Q12-U2, which shipped the mechanism. The
   entry is no longer "make an anonymity arrival relay at arrival" — that
