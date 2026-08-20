@@ -595,14 +595,48 @@ is what a reader does with padding it does not understand:
 **Ruled: write-zero, read-anything.**
 
 > **Writers** MUST emit `padding_len == 0` until a scheme is specified.
-> **Readers** MUST NOT reject on padding content, and MUST NOT include padding
-> in the `R_k` input. Total response length remains bounded by the transport
-> cap.
+> **Readers** MUST NOT reject on padding **content**, and MUST NOT include
+> padding in the `R_k` input.
+> **Readers MUST reject `padding_len > leaf_count × LEAF_BYTES` before
+> allocating or draining any of it.**
 
 That is the reserved-field posture that permits future use with **no flag day**:
 the strictness lives on the write side where it costs nothing to relax, and the
 permissiveness on the read side where tightening later would be the breaking
 change.
+
+**`RF-D7` (ruled here) — "read-anything" is about content, never about length.**
+An earlier cut wrote *"total response length remains bounded by the transport
+cap"*, and that was **an unchecked premise**: `shekyl-p-serve` has a request-head
+cap (`MAX_REQUEST_BYTES` 8 KB), a concurrency cap (`MAX_INFLIGHT` 64) and a drain
+cap (`MAX_DRAIN_BYTES` 8 KB) — **no response-length cap at all**. The fetcher side
+has `MAX_RESPONSE_BODY_SIZE` = 256 MB (`shekyl-p-transport`), which is **77× a
+segment** and therefore no bound on this format.
+
+`padding_len` is declared by a **potentially adversarial server**, so an unbounded
+declaration is a resource-exhaustion path: a fetcher expecting ~3.33 MB drained to
+256 MB, once per request, against `MAX_INFLIGHT` concurrent slots.
+
+**The two halves of "read-anything" are separable, and running them together was
+the error.** Not rejecting on *content* is what buys forward compatibility — a
+future scheme's bytes must not trip a reader written before it. Not bounding
+*length* buys nothing and costs the DoS path. A bound is compatible with any
+scheme that fits inside it.
+
+**The bound, derived rather than picked:** `padding_len ≤ leaf_count ×
+LEAF_BYTES` — at most one segment's worth, so a body never exceeds **2× a
+segment** (~6.65 MB). The fetcher already must accept a full segment; this admits
+exactly one more. And TJ-H's own third leg against padding is that *"every padded
+byte crosses two Tor legs and inflates W₂"* — a scheme wanting more than 100%
+overhead is arguing against that cost analysis and should **reopen this cap
+deliberately** ([rule 21](../../.cursor/rules/21-reversion-clause-discipline.mdc))
+rather than inherit an absent one.
+
+**This is enforceable only because `RF-D4` made `padding_len` explicit.** With
+padding extent derived from `content-length`, a reader could not reject an
+oversized declaration *before* draining it — the check would arrive after the
+bytes did. The self-delimiting frame is what makes the bound a pre-allocation
+test rather than a post-hoc complaint.
 
 **`RF-D4` is the more open of the two decisions, and this is why it should be
 pinned now.** `recompute_segment_r_k` has **no production consumer** — outside
