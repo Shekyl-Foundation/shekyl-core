@@ -108,7 +108,13 @@
   padding_bytes`, with only `segment_bytes` hashed against `R_k` — a leaf
   **count** makes multiple-of-128 structural, and an explicit `padding_len`
   keeps the frame self-delimiting rather than deriving padding extent from
-  `content-length`. `content-length` cannot stand in — it
+  `content-length`.
+  `RF-D7`: "read-anything" is about **content, never length** — `padding_len` is
+  adversary-declared, so readers MUST reject
+  `padding_len > leaf_count × LEAF_BYTES` **before allocating or draining**,
+  bounding a body at 2× a segment. An earlier cut claimed the response was
+  "bounded by the transport cap"; it is not — `shekyl-p-serve` has no
+  response-length cap and the fetcher's is 256 MB, 77× a segment. `content-length` cannot stand in — it
   does not locate the split, verification is by reconstruction rather than
   delimiter, and it is a property of the transport rather than the format.
   Forward-compatibility posture ruled **write-zero, read-anything**, so a future
