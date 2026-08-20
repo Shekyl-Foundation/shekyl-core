@@ -25,6 +25,14 @@ members = [
     # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).
     "shekyl-wire",
 
+    # Windows security primitives for the wallet transport (WP-D2): owner-only
+    # security descriptors built from SDDL, the current-user SID the pipe name
+    # is derived from, and the client-side peer check. Its own crate rather
+    # than a module because BOTH sides need the same Win32 token/SID calls and
+    # one of them (`shekyl-wallet-rpc`) is `#![deny(unsafe_code)]`. Compiles to
+    # nothing off Windows. See docs/design/WINDOWS_WALLET_SUPPORT.md.
+    "shekyl-win-sec",
+
     # Genesis build/verify tool (`geblock`) — Rust replacement for the deleted
     # C++ genesis_builder (formerly shekyl-dev/tools/genesis_builder). Derives
     # the genesis tx key deterministically (domain-separated cSHAKE over the

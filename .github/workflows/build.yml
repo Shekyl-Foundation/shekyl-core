@@ -380,6 +380,58 @@ jobs:
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0
+      # WP-W1: the Windows security crate must compile for Windows, and this
+      # is the only runner where that can be BLOCKING — the Linux boxes have no
+      # C cross-compiler, so anything whose graph reaches `ring` (i.e. anything
+      # that can speak HTTPS) cannot be cross-checked there.
+      #
+      # `shekyl-win-sec` itself has no such dependency and is verified locally
+      # too (cargo check --target x86_64-pc-windows-gnu), so a failure here is a
+      # real regression, not an environment artifact.
+      - name: "WP-W1: shekyl-win-sec compiles for Windows"
+        shell: pwsh
+        working-directory: rust
+        run: cargo check -p shekyl-win-sec --all-targets
+
+      # The rustdoc gate for this crate lives HERE, not in rust-audit-test.yml's
+      # persona-serving list, and the reason is the point: that list runs on
+      # Linux, where `shekyl-win-sec` compiles to nothing. Adding it there would
+      # document an empty crate and pass forever — a gate checking nothing,
+      # which is precisely the defect the preceding follow-up round existed to
+      # remove. Its docs carry the WP-D4/WP-D5 security contracts and the safety
+      # arguments for every `unsafe` block, so they are worth gating; they just
+      # have to be gated where they exist.
+      - name: "WP-W1: rustdoc -D warnings (shekyl-win-sec)"
+        shell: pwsh
+        working-directory: rust
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps --lib -p shekyl-win-sec
+
+      # WP-W5 SCOUTING STEP — informational by design, and NOT a gate.
+      #
+      # `WINDOWS_WALLET_SUPPORT.md` §7 plans one deliberate run whose only job
+      # is to drain the remaining Windows error list, because §2's blocking
+      # surface was produced by grep and a compile stops at the first error per
+      # crate. This is that run, made continuous and cheap rather than
+      # one-shot.
+      #
+      # It does not fail the build, and that is a decision rather than an
+      # oversight: the port is incomplete on purpose (WP-D10 keeps the build
+      # gate on until WP-W5), so a red here would mean "still unported", which
+      # is already known and recorded. WP-W5 flips `continue-on-error` off in
+      # the same slice that makes it pass — that flip is the gate, and until
+      # then this step's output is read by a human, not by CI.
+      #
+      # The one thing it proves today: WP-D9's disk probe. engine-core cannot
+      # be Windows-checked on a Linux box, so this is the only place its
+      # `GetDiskFreeSpaceExW` half is compiled at all.
+      - name: "WP-W5 scouting: remaining Windows errors (informational)"
+        shell: pwsh
+        working-directory: rust
+        continue-on-error: true
+        run: cargo check -p shekyl-engine-core -p shekyl-wallet-rpc -p shekyl-cli
+
       - name: restore vcpkg cache
         uses: actions/cache/restore@v5
         id: vcpkg-cache

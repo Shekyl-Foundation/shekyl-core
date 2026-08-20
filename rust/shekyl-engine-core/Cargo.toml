@@ -235,6 +235,12 @@ zeroize = { workspace = true }
 # This is the first live consumer (closes the FOLLOWUP kameo pin).
 kameo = { workspace = true }
 
+# WP-D9: the disk probe's Windows half (`GetDiskFreeSpaceExW`). Unix keeps
+# rustix's `statvfs`; neither crate is resolved on the other platform. Already
+# in Cargo.lock via `shekyl-win-sec`, so no new supply-chain surface.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 # Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
 # for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles

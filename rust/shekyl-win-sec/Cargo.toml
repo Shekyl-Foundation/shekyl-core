@@ -1,0 +1,28 @@
+[package]
+name = "shekyl-win-sec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Windows security primitives for the wallet transport: owner-only security descriptors, current-user SID, and peer owner/integrity checks (WP-D2)"
+publish = false
+
+# Everything here is `cfg(windows)`. On every other target the crate compiles to
+# nothing, which is deliberate: callers `use` it unconditionally and gate at the
+# call site, so a missing `cfg` shows up as an unresolved item rather than as a
+# silently absent security check.
+[target.'cfg(windows)'.dependencies]
+# Already in Cargo.lock before this crate existed (the WP-D9 disk probe pinned
+# it), so this adds no new supply-chain surface. `windows-link` is its only
+# dependency.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
+
+[lints]
+workspace = true

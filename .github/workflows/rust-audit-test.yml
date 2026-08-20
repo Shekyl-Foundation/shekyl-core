@@ -237,6 +237,11 @@ jobs:
         # rather than `--workspace` because other crates carry pre-existing
         # rustdoc warnings; widening to the whole workspace is a separate
         # hygiene task, tracked in FOLLOWUPS.
+        #
+        # `shekyl-win-sec` is deliberately NOT here: it is `cfg(windows)` and
+        # compiles to nothing on this runner, so documenting it would gate an
+        # empty crate and pass forever. Its rustdoc gate runs on the Windows
+        # job in build.yml, where its docs exist.
         run: >-
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
           -p shekyl-tor -p shekyl-p-serve -p shekyl-p-host

@@ -363,40 +363,69 @@ and is not this round's to do.
 - **No new user-facing configuration** on any platform. WP-D5 is the reason
   there is no new flag, not an oversight.
 
-## 7. Verification plan (shaped by what this box can actually do)
+## 7. Verification plan — **corrected 2026-08-19, the constraint is narrower than stated**
 
-This machine **cannot compile Windows targets**: `ring`'s build script needs a
-C cross-compiler, mingw is not installed, and there is no root to install it.
-That constraint is why the plan is explicit.
+The R0-open version said this machine "cannot compile Windows targets." That
+is **too broad, and it understated the local gate.** Measured:
 
-- **Local gate — the scratch-crate pattern.** Each Windows module is
-  type-checked for `x86_64-pc-windows-gnu` in an isolated crate depending only
-  on `windows-sys`/`tokio` (pure Rust, no C build scripts). This is what
-  validated WP-D9's call signature before it was ever committed, and it catches
-  API-shape errors that are otherwise a 25-minute CI round trip each.
+| Surface | `--target x86_64-pc-windows-gnu` |
+|---|---|
+| `shekyl-win-sec` (windows-sys only) | **compiles** |
+| SD-from-SDDL, token/SID read, `GetDiskFreeSpaceExW` | **compiles** |
+| `first_pipe_instance` + `create_with_security_attributes_raw` + `NamedPipeServer::connect`, under the full axum/hyper/tokio graph | **compiles** |
+| `shekyl-engine-core` | fails — `ring` build script needs a C cross-compiler |
 
-  **Owed before the implementing slices cite them**, none of which compile
-  here: `ServerOptions::first_pipe_instance` and
-  `create_with_security_attributes_raw` on the pinned tokio (1.51); the
-  `GetSecurityInfo` / token-SID side of WP-D4; the integrity-level query; and
-  the logon-SID-on-DACL construction of WP-D6. All four are **API-shape and
-  behaviour** questions about code that has to compile — §9.1's design question
-  is closed by the §6 scope ruling and is no longer among them.
+**The real constraint: any crate whose dependency graph reaches `ring`.** That
+is `rustls` (via `hyper-rustls` and `ureq`) and `rcgen` — i.e. everything that
+can speak HTTPS. Nothing to do with Windows as such, and nothing to do with
+ring signatures either; `ring` is a Rust wrapper around a BoringSSL fork.
 
-- **Full-closure gate — CI only.** Nothing local can compile the whole binary
-  closure for Windows.
+Consequence: **the entire Win32 API surface this round depends on is locally
+verifiable.** What is not is *integration into the crates that carry TLS*.
 
-- **One deliberate scouting CI run.** §2's list is a floor. The normal batching
-  discipline (CI is ~2h) is **inverted once, on purpose**: an early run whose
-  only job is to drain the remaining Windows error list, because it is the only
-  available equivalent of "check the whole closure locally". Findings amend §2
-  before slicing is finalised.
+- **Local gate — direct, where the graph allows it.** `shekyl-win-sec` is a
+  real workspace member and is checked for `x86_64-pc-windows-gnu` directly;
+  no scratch crate is involved and nothing can drift from it. All four items
+  the round was waiting on — `first_pipe_instance`,
+  `create_with_security_attributes_raw`, the `GetSecurityInfo` / token-SID
+  side of WP-D4, and the integrity-level query — are **discharged**.
+
+- **Local gate — the scratch-crate pattern, for code inside a TLS-carrying
+  crate.** WP-D9's Windows half lives in `shekyl-engine-core`, which cannot be
+  cross-checked here, so it is compiled as a copy in an isolated crate. **The
+  copy is byte-compared against the original before it is compiled** — a gate
+  that builds a stale copy measures nothing, which is the same defect class as
+  a grep gate that passes because its path vanished.
+
+- **Full-closure gate — the Windows runner.** The `Windows (MSVC, daemon)` job
+  has the pinned toolchain and a native C compiler, so it is the only place a
+  TLS-carrying crate compiles for Windows at all. Two steps live there:
+
+  - **`WP-W1: shekyl-win-sec compiles for Windows`** — blocking. The crate has
+    no `ring` in its graph and is verified locally too, so a failure is a real
+    regression rather than an environment artifact.
+  - **`WP-W5 scouting: remaining Windows errors`** — `continue-on-error`,
+    **informational by design and named as such**, the standing form of the
+    one-shot scouting run this section used to plan. It does not gate, because
+    the port is deliberately incomplete until WP-W5 and a red would only
+    restate what WP-D10 already says. **WP-W5 flips `continue-on-error` off in
+    the slice that makes it pass — that flip is the gate.** Until then its
+    output is read by a human.
+
+    Today it proves one thing outright: WP-D9's `GetDiskFreeSpaceExW` half is
+    compiled *somewhere*, which no Linux runner can do.
+
+  The distinction matters because this round has spent two commits on gates
+  that passed while checking nothing. A permanently non-blocking step is that
+  antipattern unless its non-blocking-ness is deliberate, documented, and has a
+  named event that ends it. All three hold here; the `dalek_ff_group` step in
+  `rust-audit-test.yml` is the existing precedent.
 
 ## 8. Slicing (ratified after the §7 scouting run)
 
 | Slice | Content | Gate |
 |---|---|---|
-| WP-W1 | The WP-D2 crate + WP-D9 disk probe | smallest real Windows code; proves the unsafe-siting decision |
+| WP-W1 | The WP-D2 crate + WP-D9 disk probe | **LANDED** with this round — `shekyl-win-sec` + the `cfg`-split probe; compiles for `x86_64-pc-windows-gnu`, blocking-gated on the Windows runner |
 | WP-W2 | WP-B1/WP-B2 named-pipe listener + client, WP-D1 naming, WP-D3 mitigations 1 and 3, WP-D6 DACL | the security boundary; the bulk of the work |
 | WP-W3 | WP-D4 peer checks (owner SID + integrity) and WP-D5 refusal, on the external path | ships **with** WP-W2, never after — see WP-D3 |
 | WP-W4 | WP-B3 seed-file DACL | reuses WP-W1 |
