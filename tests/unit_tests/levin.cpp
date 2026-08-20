@@ -2752,6 +2752,19 @@ TEST_F(levin_notify, cpp_cannot_enable_the_noise_carrier)
         auto &notifier = *notifier_ptr;
         ASSERT_LT(0u, io_service_.poll());
 
+        /* Read what each arm actually demonstrates, because they are NOT the
+           same refusal and only one of them is this test's subject.
+
+           On i2p, `has_noise` is false because no C++ path sets the flag —
+           the property named above. On the PUBLIC zone there are two refusals
+           stacked, and the second one never runs: even with the flag forced
+           on, `Zone::new` rejects a noise carrier on a cleartext link (§93.2)
+           before the C++ question is reached. Verified by forcing the flag in
+           `make_relay_zone` — only the i2p arm reds.
+
+           So the public arm is coverage of the Rust gate, not of this test's
+           claim, and a reader taking both arms as evidence for "C++ cannot
+           enable noise" would be over-reading it by one refusal. */
         const auto status = notifier.get_status();
         EXPECT_FALSE(status.has_noise)
             << "no C++ path sets the noise flag; the carrier is Rust-owned "

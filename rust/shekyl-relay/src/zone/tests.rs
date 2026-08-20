@@ -940,3 +940,78 @@ fn a_noise_carrier_is_refused_where_it_buys_nothing() {
         "a channel count C++'s deque cannot index is refused, not asserted"
     );
 }
+
+/// The invariant this pins was a C++ `static_assert` inside `send_noise`, and
+/// it was **deleted silently** when that function went — the second
+/// compile-time guard lost to the same deletion pass, in a commit whose own
+/// message said enumerating what a deletion strands has to cover compile-time
+/// artifacts. It is restored here as a refusal rather than an assertion,
+/// because the epoch is not a constant on this side: it crosses as
+/// `min_epoch_secs`.
+///
+/// **Why it is fatal rather than merely wasteful.** Each noise send waits at
+/// most `NOISE_MIN_DELAY_SECS + NOISE_DELAY_JITTER_SECS`, so an epoch affords
+/// `min_epoch_secs / that` windows. A full-size message needs `MAX_FRAGMENTS`.
+/// If the budget is short the message is still in flight when the epoch rolls,
+/// and CV-1 discards the in-flight remainder on the rebind that follows — so
+/// it restarts, runs short again, and never arrives. A slow carrier would be a
+/// cost; this is a message that cannot cross at all.
+///
+/// The inherited configuration sits exactly ON the boundary — 300 s / 15 s = 20
+/// windows against `MAX_FRAGMENTS` = 20 — which is why the comparison is `<`
+/// and not `<=`, and why shortening the epoch by a single second is a defect
+/// rather than a tuning choice.
+#[test]
+fn a_noise_epoch_too_short_to_carry_a_full_message_is_refused() {
+    use shekyl_relay_privacy::params::inherited;
+    let per_send = inherited::NOISE_MIN_DELAY_SECS + inherited::NOISE_DELAY_JITTER_SECS;
+
+    let build = |min_epoch_secs: u32| {
+        let mut rng = SplitMix64::new(0x0820);
+        let mut params = DandelionParams::inherited();
+        params.min_epoch_secs = min_epoch_secs;
+        Zone::new(
+            params,
+            inherited::NOISE_CHANNELS,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::of(RelayZone::Tor),
+            true,
+            0,
+            &mut rng,
+        )
+    };
+
+    // Exactly the budget a full message needs — the inherited configuration.
+    let exact = inherited::MAX_FRAGMENTS * per_send;
+    assert!(
+        build(exact).is_ok(),
+        "the shipped configuration sits on the boundary and must be accepted"
+    );
+
+    // One window short. Not "slower" — unable to complete, ever.
+    match build(exact - per_send) {
+        Err(ZoneNewError::NoiseCannotCrossOneEpoch { needs, affords }) => {
+            assert_eq!(needs, inherited::MAX_FRAGMENTS);
+            assert_eq!(affords, inherited::MAX_FRAGMENTS - 1);
+        }
+        other => panic!("expected a one-epoch refusal, got {other:?}"),
+    }
+
+    // A zone with noise OFF is unaffected: the budget is a carrier property.
+    let mut rng = SplitMix64::new(0x0820);
+    let mut params = DandelionParams::inherited();
+    params.min_epoch_secs = 1;
+    assert!(
+        Zone::new(
+            params,
+            2,
+            FluffReach::EveryPeer,
+            LinkSecrecy::of(RelayZone::Public),
+            false,
+            0,
+            &mut rng,
+        )
+        .is_ok(),
+        "no carrier, no fragment budget to blow"
+    );
+}

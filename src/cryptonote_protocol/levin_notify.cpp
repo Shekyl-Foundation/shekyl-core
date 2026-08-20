@@ -83,14 +83,19 @@ namespace levin
   {
     constexpr const std::size_t connection_id_reserve_size = 100;
 
-    constexpr const std::chrono::minutes noise_min_epoch{CRYPTONOTE_NOISE_MIN_EPOCH};
-    constexpr const std::chrono::seconds noise_epoch_range{CRYPTONOTE_NOISE_EPOCH_RANGE};
+    /* The four `CRYPTONOTE_NOISE_*` timing constants are GONE from this file
+       (2026-08-20). They had survived only to feed the fragment-budget
+       `static_assert` inside `send_noise` — "a real notification must fit
+       inside one covert epoch" — and when the noise machinery was deleted that
+       assertion went with it silently, leaving four constants with one
+       reference each (their own definition) and a comment pointing at a guard
+       that no longer existed.
 
-    /* The covert send DELAY is drawn in `shekyl-relay` now (NoiseCadence); these
-       two survive only for the fragment-budget static_assert below, which is a
-       real invariant: a real notification must fit inside one covert epoch. */
-    constexpr const std::chrono::seconds noise_min_delay{CRYPTONOTE_NOISE_MIN_DELAY};
-    constexpr const std::chrono::seconds noise_delay_range{CRYPTONOTE_NOISE_DELAY_RANGE};
+       The invariant was real and is not lost: it moved to `Zone::new` in
+       `shekyl-relay` as `ZoneNewError::NoiseCannotCrossOneEpoch`. It is a
+       runtime refusal there rather than a `static_assert` because the epoch is
+       not a Rust constant — it crosses as `min_epoch_secs`, and mirroring the
+       epoch pair into Rust is exactly what Q-11 Unit 0 deleted. */
 
     constexpr const std::chrono::minutes dandelionpp_min_epoch{CRYPTONOTE_DANDELIONPP_MIN_EPOCH};
     constexpr const std::chrono::seconds dandelionpp_epoch_range{CRYPTONOTE_DANDELIONPP_EPOCH_RANGE};
