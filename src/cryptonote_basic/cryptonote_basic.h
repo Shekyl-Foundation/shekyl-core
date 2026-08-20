@@ -336,7 +336,7 @@ namespace cryptonote
   // The txin_to_key (spend) subset of vin. This count — not vin.size() — sizes
   // the prunable pseudoOuts array: an archival bond-post vin occupies a
   // pqc_auths slot but carries no pseudo-out (its cleartext bond_credit rides
-  // the CT balance instead; see rctTypes.h serialize_rctsig_prunable). For a
+  // the CT balance instead; see rctTypes.h serialize_ctsig_prunable). For a
   // pure spend every vin is txin_to_key, so the two counts coincide. The
   // authoritative wire definition is Rust-side (shekyl-wire, GENESIS_TX_WIRE_FORMAT.md
   // §9.9); this helper keeps the C++ parser byte-aligned with it.
@@ -604,9 +604,30 @@ namespace cryptonote
           pqc_auths_offset = ar.getpos() - start_pos;
         if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
         {
-          bool read_pqc = true;
+          // RF-D9. The serve-credit shape carries NO pqc_auths at all: the
+          // countersignature attests a *read* and rides the vin, while
+          // pqc_auths is per-input *spend* authorization
+          // (blockchain.cpp:3746, "signature is on the vin"). Consensus
+          // requires the vector empty (tx_verification_utils.cpp:118).
+          //
+          // Deciding that from the vin TYPES -- already parsed by the time
+          // this runs -- rather than by sniffing for EOF is what makes the
+          // write path possible at all. Before this, the tolerance below was
+          // guarded by `binary_archive<false>` and therefore existed only
+          // when READING: a serve-credit tx could be parsed and never
+          // produced, because the `pqc_auths.size() != vin.size()` check
+          // rejected the empty vector consensus mandates. The shape is a
+          // property of the transaction, not of how far a stream has been
+          // consumed, so it is read off the transaction.
+          const bool serve_credit_shape =
+            classify_archival_tx(vin).kind == archival_tx_kind::serve_credit_only;
+          bool read_pqc = !serve_credit_shape;
+          if (serve_credit_shape)
+            pqc_auths.clear();
           if constexpr (std::is_same_v<Archive<W>, binary_archive<false>>)
           {
+            // Retained for the storage-pruned full-spend form, which is a
+            // stream-position fact and genuinely cannot be typed off the vin.
             if (ar.eof() || ar.remaining_bytes() == 0)
             {
               read_pqc = false;
@@ -641,7 +662,7 @@ namespace cryptonote
             // / tx_verification_utils.cpp (`pseudoOuts.size() == num_spend`).
             ar.tag("ctsig_prunable");
             ar.begin_object();
-            bool r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, count_spend_inputs(vin), vout.size());
+            bool r = rct_signatures.p.serialize_ctsig_prunable(ar, rct_signatures.type, count_spend_inputs(vin), vout.size());
             if (!r || !ar.good()) return false;
             ar.end_object();
           }

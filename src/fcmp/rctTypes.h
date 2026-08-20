@@ -295,7 +295,7 @@ namespace rct {
         // `serialize_rctsig_base` so there is exactly one definition of the
         // bytes.
     };
-    struct rctSigPrunable {
+    struct CtSigPrunable {
         std::vector<BulletproofPlus> bulletproofs_plus;
         keyV pseudoOuts;
         uint8_t curve_trees_tree_depth;
@@ -310,7 +310,7 @@ namespace rct {
         // coincide. Callers compute the spend subset (cryptonote_basic.h
         // transaction serializer, tx_pqc_verify.cpp, get_transaction_prunable_hash).
         template<bool W, template <bool> class Archive>
-        bool serialize_rctsig_prunable(Archive<W> &ar, uint8_t type, size_t inputs, size_t outputs)
+        bool serialize_ctsig_prunable(Archive<W> &ar, uint8_t type, size_t inputs, size_t outputs)
         {
           if (inputs >= 0xffffffff)
             return false;
@@ -376,10 +376,10 @@ namespace rct {
         }
 
         // No standalone object serializer — see the rctSigBase note above.
-        // `serialize_rctsig_prunable` is the only encoding.
+        // `serialize_ctsig_prunable` is the only encoding.
     };
     struct rctSig: public rctSigBase {
-        rctSigPrunable p;
+        CtSigPrunable p;
 
         // The pseudo-out commitments live in the prunable section for every
         // rct type: CTTypeFcmpPlusPlusPqc carries one per spend input, and

@@ -152,7 +152,22 @@ namespace cryptonote
 
       if (!base_only)
       {
-        if (rct::is_rct_bulletproof_plus(rv.type))
+        // RF-D9. The serve-credit shape is non-spending: consensus REQUIRES
+        // `bulletproofs_plus`, `fcmp_pp_proof` and `pseudoOuts` to be empty
+        // (tx_verification_utils.cpp:117-124), because there are no outputs
+        // to range-prove and no membership to prove. The checks below assume
+        // a spend and demand exactly one bulletproof, so without this arm the
+        // type is unparseable: every serve-credit tx fails
+        // `parse_and_validate_tx_from_blob` with "Failed to expand
+        // transaction data", which is the second of the two gates that made
+        // this vin type unreachable end to end.
+        //
+        // Typed off the vin, like the pqc_auths arm in cryptonote_basic.h --
+        // the shape is a property of the transaction, not of what happens to
+        // be absent from the struct.
+        const bool serve_credit_shape =
+          classify_archival_tx(tx.vin).kind == archival_tx_kind::serve_credit_only;
+        if (rct::is_rct_bulletproof_plus(rv.type) && !serve_credit_shape)
         {
           if (rv.p.bulletproofs_plus.size() != 1)
           {
@@ -1150,7 +1165,7 @@ namespace cryptonote
       // pseudoOuts are sized by the spend subset, not vin.size() — see
       // count_spend_inputs (cryptonote_basic.h).
       const size_t outputs = t.vout.size();
-      bool r = tt.rct_signatures.p.serialize_rctsig_prunable(ba, t.rct_signatures.type, count_spend_inputs(t.vin), outputs);
+      bool r = tt.rct_signatures.p.serialize_ctsig_prunable(ba, t.rct_signatures.type, count_spend_inputs(t.vin), outputs);
       CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures prunable");
       cryptonote::get_blob_hash(ss.str(), res);
     }

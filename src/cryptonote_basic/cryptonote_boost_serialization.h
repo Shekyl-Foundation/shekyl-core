@@ -468,7 +468,7 @@ namespace boost
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, rct::rctSigPrunable &x, const boost::serialization::version_type ver)
+  inline void serialize(Archive &a, rct::CtSigPrunable &x, const boost::serialization::version_type ver)
   {
     a & x.bulletproofs_plus;
     a & x.pseudoOuts;
@@ -527,7 +527,7 @@ namespace boost
 }
 }
 
-BOOST_CLASS_VERSION(rct::rctSigPrunable, 2)
+BOOST_CLASS_VERSION(rct::CtSigPrunable, 2)
 BOOST_CLASS_VERSION(rct::rctSig, 2)
 // V1: attestation_root (ARCHIVAL_CREDIT_WIRE.md §3); version-0 archives are
 // refused in serialize() above.

@@ -671,11 +671,58 @@ would never arrive on its own.
 bytes (EOF arriving before the prunable stanza) is untested and is not asserted
 here.
 
+**What this means for the byte-parity KAT, which is not what it first appears.**
+"Rust and C++ disagree" invites the obvious remedy — take C++ as the reference
+and match it. **That remedy is not available**, and the measurement is what rules
+it out: C++ can parse but never produce, so there is no C++-authored byte string
+of this shape to match *even if matching were wanted*. There is no prior art
+here, only an unexercised path.
+
+So the KAT's job is **not to restore agreement but to establish it for the first
+time**, and the consequence is worth stating plainly: **the format is genuinely
+free.** Nothing about the current bytes is load-bearing — no deployed node has
+ever written them, no stored blob contains a C++-authored instance, and the
+"compatibility" that normally constrains a wire change has no referent. `A` may
+choose the layout on its merits. Recorded because the opposite assumption is the
+cheap one, and it would silently import a defect as a constraint.
+
+**Rule 47's third independent instance, and its cleanest.** The class now has
+three sightings from unrelated arcs — RandomX T18, the `CTTypeNull` tripwire arm,
+and this. A rule drawing instances from independent arcs is one that holds. This
+is the sharpest form of it: the gate was **not weak** — it ran, it passed, it
+tested something real. It measured a *different quantity than its name implied*.
+"Equivalence" named byte agreement; the assertions were verdicts over a JSON
+fixture. No amount of strengthening the verdict assertions would ever have
+surfaced a byte divergence.
+
 **`A` is the right place to fix it, not a separate slice.** `A` rewrites this
 shape entirely — kept side, pruned side, and the serializer's arity. A fix
 landed first would be bytes `A` immediately replaces. The cross-language
 byte-parity KAT `A` adds is what converts "never exercised" into "cannot
 regress".
+
+**The KAT pins the post-`A` format, never an intermediate.** Item 4 (the write
+path) is separable on its own validation surface — *can C++ produce a valid
+serve-credit tx* is answerable without items 1–3 — but a parity vector captured
+against the pre-`A` layout would pin bytes that never ship. It lands with the
+finished shape or not at all.
+
+**Prediction, stated before the fix is written.** The expected repair is to let
+the write path accept `pqc_auths.empty()` for the serve-credit shape, mirroring
+the read path's existing EOF tolerance — i.e. a change to the `if constexpr`
+branch **condition**, not to the field layout. If that is what it is,
+`unprunable_size` does not move and the #509 tripwire stays **green**.
+
+**If the tripwire goes red, stop rather than accommodate.** Red would mean the
+fix changed the prunable region's *extent* instead of its write condition, which
+is a different repair with different consequences, and the tripwire saying so is
+the whole reason it exists.
+
+The prediction is recorded because of this round's own history: **a green result
+nobody predicted is indistinguishable from a vacuous one.** Three times this
+round a check passed while measuring the wrong thing — the `CTTypeNull`-only
+tripwire arm, the equivalence test above, and the `cargo check` that missed a
+clippy-only lint.
 
 **Rule 47, again.** `archival_serve_credit_equivalence.cpp` is a cross-language
 equivalence test *for this exact shape* that asserts consensus **verdicts** over

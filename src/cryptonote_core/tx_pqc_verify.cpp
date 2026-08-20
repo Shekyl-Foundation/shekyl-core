@@ -102,9 +102,9 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
     const size_t outputs = tx.vout.size();
     std::ostringstream ss;
     binary_archive<true> ba(ss);
-    if (!const_cast<rct::rctSigPrunable&>(rv.p).serialize_rctsig_prunable(ba, rv.type, spend_inputs, outputs))
+    if (!const_cast<rct::CtSigPrunable&>(rv.p).serialize_ctsig_prunable(ba, rv.type, spend_inputs, outputs))
     {
-      MERROR("PQC payload: failed to serialize rctSigPrunable (input " << input_index << ")");
+      MERROR("PQC payload: failed to serialize CtSigPrunable (input " << input_index << ")");
       return false;
     }
     crypto::hash prunable_h;

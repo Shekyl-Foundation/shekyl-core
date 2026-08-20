@@ -10,7 +10,7 @@
 //
 //   blob path         get_blob_hash(blob + unprunable_size, blob.size() - unprunable_size)
 //                     -- the whole tail, wholesale
-//   re-serialize path rct_signatures.p.serialize_rctsig_prunable(...)
+//   re-serialize path rct_signatures.p.serialize_ctsig_prunable(...)
 //                     -- only rct_signatures.p
 //
 // They agree ONLY because `ctsig_prunable` is the last thing written by
@@ -65,7 +65,7 @@ namespace {
 //
 // Binary serialization MUTATES the transaction: `unprunable_size` is a
 // non-`mutable` `std::atomic<unsigned int>` assigned inside the serializer
-// (cryptonote_basic.h:635/707), and `serialize_rctsig_prunable` is a non-const
+// (cryptonote_basic.h:635/707), and `serialize_ctsig_prunable` is a non-const
 // member. Production reaches it through a `const transaction&` plus a local
 // `const_cast` (cryptonote_format_utils.cpp:1147) -- an inherited shape that is
 // well-defined only because every caller happens to hold a non-const object, and
@@ -84,7 +84,7 @@ bool prunable_reserialized_size(transaction &t, size_t &out)
     return false;
   std::stringstream ss;
   binary_archive<true> ba(ss);
-  if (!t.rct_signatures.p.serialize_rctsig_prunable(
+  if (!t.rct_signatures.p.serialize_ctsig_prunable(
           ba, t.rct_signatures.type, count_spend_inputs(t.vin), t.vout.size()))
     return false;
   out = ss.str().size();
@@ -119,7 +119,7 @@ void expect_prunable_region_has_one_occupant(transaction &t, const char *what)
 
   size_t reserialized = 0;
   ASSERT_TRUE(prunable_reserialized_size(t, reserialized))
-      << "serialize_rctsig_prunable failed on the fixture";
+      << "serialize_ctsig_prunable failed on the fixture";
   const size_t tail = blob.size() - unprunable_size;
 
   // THE ASSERTION THIS FILE EXISTS FOR. If it fails, someone appended to the
@@ -136,7 +136,7 @@ void expect_prunable_region_has_one_occupant(transaction &t, const char *what)
          "the disagreement surfaces as a 'tx hash cash integrity failure' throw at "
          "cryptonote_format_utils.cpp:1166.\n"
          "If the new bytes are meant to be prunable, put them INSIDE "
-         "serialize_rctsig_prunable, where both paths see them by construction. "
+         "serialize_ctsig_prunable, where both paths see them by construction. "
          "See docs/design/ARCHIVAL_PASS_RECORD_CARRIER.md §1.";
 
   // The consequence, asserted directly: with the blob and without it, same hash.
@@ -219,6 +219,12 @@ TEST(tx_prunable_region, serve_credit_tx_tail_is_the_empty_prunable_counts)
   rct::rctSig &rv = tx.rct_signatures;
   rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
+  // Explicitly zero, because the prunable stanza VARINT-encodes it and an
+  // indeterminate value changes the tail's LENGTH, not just its content: this
+  // arm read 208 on one run and 0 on the next, i.e. 4 bytes then 3. A pinned
+  // byte count cannot be measured against a fixture that leaves any field in
+  // the encoded region to chance.
+  rv.p.curve_trees_tree_depth = 0;
 
   blobdata blob;
   ASSERT_TRUE(t_serializable_object_to_blob(tx, blob));
