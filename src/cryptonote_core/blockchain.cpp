@@ -1505,7 +1505,23 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
   if (!get_block_hash(alt_chain.back().bl, prev_id))
     MERROR("Failed to get block hash of an alternative chain's tip");
   else
-    send_miner_notifications(new_height, seedhash, prev_id, alt_chain.back().already_generated_coins);
+    // The LEDGER's cumulative supply, not the alt block's bookkeeping copy.
+    // bei.already_generated_coins is advanced by get_outs_money_amount (see the
+    // note at the alt-chain accumulation site), which differs from the ledger by
+    // miner_fee_income - staker_emission per block. That approximation is
+    // harmless inside alt bookkeeping — nothing validates against it — but this
+    // send is the reorg's LAST WORD to miners, and it was overwriting the correct
+    // notifications that each promoted block just issued from
+    // handle_block_to_main_chain. A miner templating on a wrong cumulative supply
+    // computes a wrong subsidy and builds a block consensus then rejects.
+    //
+    // Safe to read unguarded: the promotion loop above committed at least one
+    // block (switch_to_alternative_blockchain asserts a non-empty alt_chain), so
+    // new_height >= 1. This is the same quantity the main-chain send passes —
+    // add_block stores the post-advance total for the block it returns the height
+    // for, so get_block_already_generated_coins(new_height - 1) IS that value.
+    send_miner_notifications(new_height, seedhash, prev_id,
+                             m_db->get_block_already_generated_coins(new_height - 1));
 
   for (const auto& notifier : m_block_notifiers)
   {
@@ -2258,6 +2274,30 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     bei.bl = b;
     const uint64_t prev_height = alt_chain.size() ? prev_data.height : m_db->get_block_height(b.prev_id);
     bei.height = prev_height + 1;
+    // NOT the same quantity the main-chain path accumulates, despite sharing the
+    // clamp with it. The main chain advances by the full emission subsidy
+    // (validate_miner_transaction's base_reward — fix alpha, :1788); this
+    // advances by what the coinbase PAYS, which carries the miner leg plus
+    // miner_fee_income and omits the staker leg entirely. Per block the two
+    // differ by (miner_fee_income - staker_emission): an undercount on fee-poor
+    // blocks, an overcount when fees exceed the staker leg.
+    // tests/core_tests/chaingen.cpp:459 documents the same asymmetry, and
+    // recomputes the full reward for exactly this reason.
+    //
+    // It is an approximation BY CONSTRUCTION, not an oversight: the correct
+    // value is what the ledger would hold if this chain were promoted, and
+    // obtaining it requires the reward validation the alt path deliberately
+    // defers (alt blocks get prevalidate_miner_transaction only) plus an
+    // alt-chain weight median that does not exist — get_last_n_blocks_weights
+    // reads the MAIN chain. Recomputing with main-chain medians would fabricate
+    // a plausible-looking wrong number, which is worse than an honest one.
+    //
+    // Nothing reads it that can be harmed: no consensus decision consults it,
+    // and promotion does not carry it into the ledger — handle_block_to_main_chain
+    // re-reads already_generated_coins from the DB and only the attestation
+    // witness is passed through. Its one external consumer, the post-reorg miner
+    // notification, now reads the DB instead (see switch_to_alternative_blockchain).
+    // Tracked in docs/FOLLOWUPS.md ("Alt-chain supply accumulation").
     uint64_t block_reward = get_outs_money_amount(b.miner_tx);
     const uint64_t prev_generated_coins = alt_chain.size() ? prev_data.already_generated_coins : m_db->get_block_already_generated_coins(prev_height);
     bei.already_generated_coins = shekyl_advance_already_generated(prev_generated_coins, block_reward);

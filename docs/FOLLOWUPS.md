@@ -2304,6 +2304,42 @@ sustainability is unaffected by the recalibration.
   internal type hygiene. Deferred from the WI-2 orchestrator PR as beyond its
   validation surface (rule 19). *Target: V3.1+.*
 
+- **Alt-chain supply accumulation advances by the coinbase, not the emission
+  subsidy** (surfaced 2026-08-20 in PR #518 review). `handle_alternative_block`
+  advances `bei.already_generated_coins` by `get_outs_money_amount(b.miner_tx)`
+  — the miner leg plus `miner_fee_income` — while the main-chain path advances
+  by the full emission subsidy (`validate_miner_transaction`'s `base_reward`,
+  fix alpha at `blockchain.cpp:1788`). Per block the two differ by
+  `miner_fee_income - staker_emission`: an undercount on fee-poor blocks, an
+  overcount when fees exceed the staker leg. `tests/core_tests/chaingen.cpp:459`
+  documents the same asymmetry and recomputes the full reward to avoid it.
+
+  **Bounded, and the one escaping consumer is fixed.** No consensus decision
+  reads the value: alt blocks get `prevalidate_miner_transaction` only, and
+  promotion does not carry it into the ledger — `handle_block_to_main_chain`
+  re-reads `already_generated_coins` from the DB, with only the attestation
+  witness passed through `switch_to_alternative_blockchain`. Its one external
+  consumer was the post-reorg `send_miner_notifications`, which was overwriting
+  the correct per-block notifications the promotion loop had just issued; that
+  now reads the DB (PR #518). What remains is alt-chain bookkeeping that
+  chains into subsequent alt blocks and is discarded on promotion.
+
+  **Named blocker (rule 22):** the correct value is what the ledger would hold
+  if this chain were promoted, and computing it needs (a) the reward validation
+  the alt path deliberately defers and (b) an alt-chain weight median that does
+  not exist — `get_last_n_blocks_weights` reads the MAIN chain, and the fee and
+  miner legs cannot be separated back out of `get_outs_money_amount`, so there
+  is no cheap inversion either. Recomputing with main-chain medians would
+  fabricate a plausible-looking wrong number, which is worse than an honest
+  approximation. Deferred rather than papered over.
+
+  **Reopening criteria:** any of — a consensus decision starts reading
+  `bei.already_generated_coins`; alt-chain weight-median machinery lands for
+  another reason (difficulty or weight-limit work on alt chains); or the field
+  is persisted somewhere a external consumer can read it. *Target: with
+  alt-chain reorg accounting, a different validation surface from the economics
+  FFI port (rule 19).*
+
 - **[Done 2026-08-20] Economics C2a′ layer gate — stacked silent failures;
   layer verdicts vacuous** (surfaced 2026-07-04 when PR #241's hardened rustup
   install turned the first layer of it loud).
