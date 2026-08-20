@@ -331,6 +331,16 @@ int32_t shekyl_block_reward(
     uint64_t *out_reward,
     uint64_t *out_weight_limit);
 
+/// Cap a block reward at the supply headroom still unminted. The emission-side
+/// twin of shekyl_advance_already_generated: that one stops the running total
+/// at the cap, this one stops a single block from exceeding what remains.
+/// Saturating, so an already_generated_coins beyond the cap yields zero
+/// headroom rather than the underflowed near-UINT64_MAX the C++ it replaces
+/// produced. Cannot fail.
+uint64_t shekyl_cap_reward_to_remaining_supply(
+    uint64_t reward,
+    uint64_t already_generated_coins);
+
 /// Advance already_generated_coins by a block reward, saturating at money_supply.
 /// One entry point for the main-chain and alt-chain connect paths, which each
 /// carried their own copy of this clamp.

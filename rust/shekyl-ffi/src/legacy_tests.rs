@@ -939,3 +939,23 @@ fn advance_already_generated_saturates_at_the_supply_cap() {
     assert_eq!(shekyl_advance_already_generated(cap, 1), cap);
     assert_eq!(shekyl_advance_already_generated(cap - 1, 50), cap);
 }
+
+#[test]
+fn cap_reward_to_remaining_supply_saturates_instead_of_underflowing() {
+    // Headroom available: the reward passes through.
+    assert_eq!(shekyl_cap_reward_to_remaining_supply(100, 0), 100);
+
+    // The C++ this replaced computed `MONEY_SUPPLY - already_generated_coins`
+    // in uint64_t. Past the cap that underflows to a near-UINT64_MAX headroom,
+    // so `if (reward > remaining)` is never true and the clamp does nothing —
+    // the exact inverse of its purpose. Saturating gives zero headroom.
+    let past_cap = shekyl_cap_reward_to_remaining_supply(u64::MAX, u64::MAX);
+    assert_eq!(past_cap, 0, "past the cap nothing remains to be minted");
+
+    // The pair is consistent: whatever advance() saturates to is the point at
+    // which cap() stops paying. Derived from the exports rather than from a
+    // literal, so the two cannot drift apart without this failing.
+    let cap = shekyl_advance_already_generated(u64::MAX, u64::MAX);
+    assert_eq!(shekyl_cap_reward_to_remaining_supply(1, cap), 0);
+    assert_eq!(shekyl_cap_reward_to_remaining_supply(1, cap - 1), 1);
+}

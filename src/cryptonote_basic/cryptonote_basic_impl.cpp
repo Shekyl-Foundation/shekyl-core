@@ -156,9 +156,16 @@ namespace cryptonote {
           tx_volume_avg, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
       reward = shekyl_apply_release_multiplier(reward, multiplier);
 
-      uint64_t remaining = MONEY_SUPPLY - already_generated_coins;
-      if (reward > remaining)
-        reward = remaining;
+      // The supply-headroom cap. Was `MONEY_SUPPLY - already_generated_coins`
+      // in uint64_t here, which UNDERFLOWS to a near-UINT64_MAX headroom once
+      // already_generated_coins passes the cap — silently disabling the clamp
+      // it computed. Both Rust reward entry points already defend against an
+      // out-of-range total; this was the one member of the family that did
+      // not. Now saturating, and Rust-side with the rest of the amount
+      // arithmetic (rule 20's fourth criterion) — leaving the last multiply
+      // and subtract of this function on the C++ side would have made
+      // "get_block_reward computes nothing" untrue in the 6-arg overload.
+      reward = shekyl_cap_reward_to_remaining_supply(reward, already_generated_coins);
     }
 
     return true;

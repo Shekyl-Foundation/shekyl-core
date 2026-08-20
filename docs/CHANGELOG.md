@@ -28,6 +28,18 @@
 
 ### Fixed
 
+- **The block-reward supply-headroom cap underflowed past full emission.**
+  `get_block_reward`'s 6-argument overload capped a block's reward at
+  `MONEY_SUPPLY - already_generated_coins`, computed in `uint64_t`. Once
+  `already_generated_coins` passed the cap that subtraction wrapped to a
+  near-`UINT64_MAX` headroom, so the comparison guarding the cap was
+  never true and the cap silently did nothing — the inverse of its
+  purpose. No production path reached it (the connect path caps the
+  stored total), but both Rust reward entry points already defended
+  against an out-of-range total and this was the one member of the family
+  that did not. Now `shekyl_cap_reward_to_remaining_supply`, saturating,
+  beside the supply-advance clamp it is the twin of.
+
 - **The four `ci/economics-c2a-prime` layer gates had never run a test.**
   The layer jobs' runtime package list was missing `libunwind8`,
   `libboost-program-options1.74.0` and `libboost-serialization1.74.0`, so

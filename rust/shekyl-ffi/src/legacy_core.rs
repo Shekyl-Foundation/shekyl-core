@@ -580,6 +580,20 @@ pub unsafe extern "C" fn shekyl_block_reward(
     }
 }
 
+/// Cap a block reward at the supply headroom still unminted.
+///
+/// The emission-side twin of [`shekyl_advance_already_generated`]. Replaces a
+/// C++ `MONEY_SUPPLY - already_generated_coins` that underflowed past the cap
+/// and so disabled the very clamp it computed. Cannot fail.
+#[no_mangle]
+pub extern "C" fn shekyl_cap_reward_to_remaining_supply(
+    reward: u64,
+    already_generated_coins: u64,
+) -> u64 {
+    let params = shekyl_economics::params::EconomicParams::default();
+    shekyl_economics::cap_reward_to_remaining_supply(reward, already_generated_coins, &params)
+}
+
 /// Advance `already_generated_coins` by a block reward, saturating at supply.
 ///
 /// One entry point for both C++ connect paths (main-chain and alt-chain),

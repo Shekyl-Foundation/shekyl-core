@@ -199,6 +199,31 @@ pub fn block_weight_limit(median_weight: u64, full_reward_zone: u64) -> u64 {
     median_weight.max(full_reward_zone).saturating_mul(2)
 }
 
+/// Cap a block reward at the supply headroom still unminted.
+///
+/// The emission-side twin of [`advance_already_generated`]: that one stops the
+/// running total at `money_supply`, this one stops a single block from
+/// exceeding what remains. Both express the same invariant — total emission
+/// never passes the cap — so they live together rather than one being C++-side
+/// arithmetic and the other Rust.
+///
+/// `saturating_sub`, not `-`. The C++ this replaces computed
+/// `MONEY_SUPPLY - already_generated_coins` in `uint64_t`, which UNDERFLOWS to
+/// a near-`u64::MAX` headroom when `already_generated_coins` exceeds the cap,
+/// silently disabling the clamp it was written to be. The connect path caps
+/// the stored total, so no production caller reaches that today — but
+/// `shekyl_base_block_reward` and `shekyl_block_reward` both defend against an
+/// out-of-range total explicitly, and leaving one member of the family
+/// undefended is how the next caller finds the edge. Rule 20's fourth
+/// criterion: this is integer arithmetic on an amount.
+pub fn cap_reward_to_remaining_supply(
+    reward: u64,
+    already_generated_coins: u64,
+    params: &EconomicParams,
+) -> u64 {
+    reward.min(params.money_supply.saturating_sub(already_generated_coins))
+}
+
 /// Advance `already_generated_coins` by a block's base reward, capped at supply.
 ///
 /// The supply-advance clamp, previously written out at two C++ call sites
@@ -677,6 +702,33 @@ mod tests {
         assert_eq!(block_weight_limit(2_100_000, 300_000), 4_200_000);
         // Saturating rather than wrapping — diagnostics only.
         assert_eq!(block_weight_limit(u64::MAX, 300_000), u64::MAX);
+    }
+
+    #[test]
+    fn cap_reward_to_remaining_supply_does_not_underflow_past_the_cap() {
+        let p = EconomicParams::default();
+        // Normal: plenty of headroom, the reward passes through.
+        assert_eq!(cap_reward_to_remaining_supply(100, 0, &p), 100);
+        // At the headroom exactly.
+        assert_eq!(
+            cap_reward_to_remaining_supply(100, p.money_supply - 100, &p),
+            100
+        );
+        // Above it: capped to what remains.
+        assert_eq!(
+            cap_reward_to_remaining_supply(100, p.money_supply - 10, &p),
+            10
+        );
+        // AT the cap: nothing remains, so nothing is paid.
+        assert_eq!(cap_reward_to_remaining_supply(100, p.money_supply, &p), 0);
+        // PAST the cap — the case the C++ `MONEY_SUPPLY - ag` got wrong. There
+        // it underflowed to a near-u64::MAX headroom and the clamp silently
+        // did nothing; here it saturates to zero headroom and pays nothing.
+        assert_eq!(
+            cap_reward_to_remaining_supply(100, p.money_supply + 1, &p),
+            0
+        );
+        assert_eq!(cap_reward_to_remaining_supply(u64::MAX, u64::MAX, &p), 0);
     }
 
     /// The supply-advance clamp, pinned at the boundary the two former C++
