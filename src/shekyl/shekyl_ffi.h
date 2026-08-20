@@ -313,11 +313,16 @@ uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
 /// Block reward after the median-weight penalty.
 /// The only fallible entry in the economics family: BLOCK_TOO_BIG is a
-/// consensus rejection (current_block_weight > 2 * effective median), not an
-/// internal error. out_weight_limit receives that doubled effective median on
-/// EVERY path so a caller can report the limit it was rejected against without
-/// recomputing the clamp. already_generated_coins is clamped at money_supply,
-/// as in shekyl_base_block_reward. Neither out-pointer may be null.
+/// consensus rejection, not an internal error. The limit is INCLUSIVE — a
+/// block at exactly 2 * effective median is accepted and earns zero; only
+/// current_block_weight > 2 * effective median is rejected. out_weight_limit
+/// receives that doubled effective median on EVERY path so a caller can report
+/// the limit it was rejected against without recomputing the clamp.
+/// already_generated_coins is clamped at money_supply, as in
+/// shekyl_base_block_reward. INVALID covers a null out-pointer and an input
+/// beyond the exact arithmetic domain (medians around 2^43 and above, where
+/// the product leaves 128 bits) — fail-closed rather than wrapping.
+/// Neither out-pointer may be null.
 int32_t shekyl_block_reward(
     uint64_t median_weight,
     uint64_t current_block_weight,

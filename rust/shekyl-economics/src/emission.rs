@@ -114,10 +114,31 @@ pub fn base_emission_at(height: u64, params: &EconomicParams) -> Result<u64, Emi
 /// authority. If a second Rust consumer ever appears, it earns an entry in
 /// that JSON and this parameter goes away.
 ///
-/// Total for all `u64` inputs: step 5 evaluates in `u128`, where the largest
-/// possible numerator (`u64::MAX * u64::MAX`) still fits, so no input can
-/// overflow or panic. The C++ original relied on `mul128`/`div128_64` for the
-/// same reason — the product exceeds 64 bits for realistic operands.
+/// DOMAIN. Step 5 evaluates in `u128` and is EXACT wherever
+/// `base * (2m - c) * c` fits there. `base` is bounded by the subsidy curve at
+/// ~2^41, and `(2m - c) * c < m^2`, so every median below ~2^43 — block
+/// weights around 8 TB, against a 300 KB free zone — is exact. Beyond that the
+/// product needs up to ~192 bits and the function returns
+/// [`EmissionError::Overflow`] rather than wrapping or panicking. It never
+/// panics for any `u64` input; "total" in that sense only.
+///
+/// WHY NOT REPRODUCE THE C++ WRAP. The original formed `(2m - c) * c` in
+/// `uint64_t`, so it wrapped once the median passed ~2^32 and produced a
+/// reward derived from truncated garbage. This function does not reproduce
+/// that. Pre-genesis there is no chain whose history the wrap defines, so
+/// there is nothing to stay bit-compatible WITH — and reproducing it is
+/// exactly the failure §5.8's H1 exists to prevent, where a C++-only oracle
+/// certifies a latent bug and makes it canonical once the original is
+/// deleted. Rule 16: inherited code is not inherited architecture. Rule 20's
+/// fourth Rust criterion names silent overflow on amounts as the bug class.
+/// `c2a_prime_layer1_penalty_diverges_from_the_legacy_u64_wrap` pins the
+/// divergence point so the choice stays visible rather than implicit.
+///
+/// Beyond the exact domain the result is fail-closed: `Overflow` surfaces as
+/// `SHEKYL_BLOCK_REWARD_INVALID` and the block is rejected. A block whose
+/// median is measured in terabytes is unreachable under every other weight
+/// limit in the system; rejecting is the safe reading of an impossible input,
+/// where wrapping would silently mint from truncation.
 pub fn block_reward_with_penalty(
     median_weight: u64,
     current_block_weight: u64,
@@ -142,9 +163,20 @@ pub fn block_reward_with_penalty(
     }
 
     let current = u128::from(current_block_weight);
+    // Cannot overflow and so is deliberately unguarded: `double_median -
+    // current` is below `median <= u64::MAX` (we are past the `current <=
+    // median` return), and `current <= 2 * median`, so the product stays under
+    // `2 * u64::MAX^2 < u128::MAX`. A `checked_mul` here would add an arm no
+    // input can reach, which is untestable by construction.
     let multiplicand = (double_median - current) * current;
     let median = u128::from(median);
-    let reward = u128::from(base) * multiplicand / median / median;
+
+    // This one CAN overflow — `base * multiplicand` needs up to ~192 bits once
+    // the median passes ~2^43 — so it is checked. Fail closed; do not wrap.
+    let numerator = u128::from(base)
+        .checked_mul(multiplicand)
+        .ok_or(EmissionError::Overflow)?;
+    let reward = numerator / median / median;
 
     // `reward < base` always: `multiplicand = (2m - c) * c` is strictly below
     // `m^2` for every `c` in `(m, 2m]` (it would peak at `c == m`, which the
@@ -511,11 +543,15 @@ mod tests {
         assert!(rejected > 0, "no vector exercises the reject arm");
     }
 
-    /// The C++ table pins the CONSENSUS-REACHABLE region. These pin that the
-    /// function is total at the u64 extremes, which C++ never reaches and
-    /// which therefore must not be added to the shared vector table.
+    /// The C++ table pins the CONSENSUS-REACHABLE region. These pin the
+    /// function's behaviour at the u64 extremes, which C++ never reaches and
+    /// which therefore must NOT be added to the shared vector table.
+    ///
+    /// "Never panics" — not "always exact". Past the exact domain the
+    /// function reports `Overflow`; the last case pins that, and pins that it
+    /// is an error rather than a panic or a wrap.
     #[test]
-    fn block_reward_with_penalty_is_total_at_u64_extremes() {
+    fn block_reward_with_penalty_never_panics_at_u64_extremes() {
         let p = EconomicParams::default();
         const ZONE: u64 = 300_000;
 
@@ -546,6 +582,93 @@ mod tests {
         // responsibility, not this function's: it reports the domain error
         // rather than silently saturating.
         assert!(block_reward_with_penalty(0, ZONE, u64::MAX, ZONE, &p).is_err());
+
+        // Past the exact domain: `base * (2m - c) * c` needs more than 128
+        // bits. Before this was checked it PANICKED here in debug builds and
+        // wrapped in release, while the doc comment claimed totality —
+        // observed, not reasoned about. Now it fails closed.
+        let m: u64 = 1 << 48;
+        assert_eq!(
+            block_reward_with_penalty(m, m + m / 2, 0, ZONE, &p),
+            Err(EmissionError::Overflow)
+        );
+    }
+
+    /// The deliberate divergence from the legacy C++ arithmetic, pinned so the
+    /// decision stays visible.
+    ///
+    /// The C++ original formed `(2m - c) * c` in `uint64_t`. Past a median of
+    /// ~2^32 that product wraps, and the reward derived from it is garbage.
+    /// This crate computes the same expression exactly, so the two disagree in
+    /// that region — deliberately, per rule 16 and rule 20's overflow
+    /// criterion, and safely because pre-genesis no chain history depends on
+    /// the wrapped values.
+    ///
+    /// The wrapped value is recomputed here with `wrapping_mul` rather than
+    /// asserted from memory, so the test shows the divergence instead of
+    /// claiming it. This is Rust-only: the shared 81-vector table pins the
+    /// TRANSITION and every one of its rows sits where the two agree.
+    #[test]
+    fn c2a_prime_layer1_penalty_diverges_from_the_legacy_u64_wrap() {
+        let p = EconomicParams::default();
+        const ZONE: u64 = 300_000;
+
+        // 2^33 median, block at 1.5x: the legacy multiplicand is
+        // 0.75 * 2^66, which is exactly 0 modulo 2^64 — the most legible
+        // possible divergence, since the legacy path pays nothing at all.
+        let m: u64 = 1 << 33;
+        let c: u64 = m + m / 2;
+
+        let legacy_multiplicand = (2u64.wrapping_mul(m).wrapping_sub(c)).wrapping_mul(c);
+        assert_eq!(legacy_multiplicand, 0, "fixture must sit on the wrap point");
+
+        let base = base_block_reward(0, &p).unwrap();
+        let legacy_reward = u64::try_from(
+            u128::from(base) * u128::from(legacy_multiplicand) / u128::from(m) / u128::from(m),
+        )
+        .expect("legacy reward is bounded by base");
+        assert_eq!(legacy_reward, 0, "the legacy path pays nothing here");
+
+        // Exact: (2m - c) * c = 0.5m * 1.5m = 0.75 m^2, so reward = 0.75 base.
+        let exact = block_reward_with_penalty(m, c, 0, ZONE, &p).unwrap();
+        assert_eq!(exact, base / 4 * 3);
+        assert_ne!(exact, legacy_reward, "this test exists to pin a divergence");
+    }
+
+    /// The exact/overflow boundary, from both sides.
+    ///
+    /// Copilot's review asked for vectors "around the 64-bit multiplicand
+    /// boundary". The multiplicand crossing 2^64 is not itself the boundary —
+    /// `u128` absorbs that — so these pin the boundary that IS real: where
+    /// `base * multiplicand` leaves `u128`.
+    #[test]
+    fn block_reward_with_penalty_exact_domain_boundary() {
+        let p = EconomicParams::default();
+        const ZONE: u64 = 300_000;
+        let base_u64 = base_block_reward(0, &p).unwrap();
+        let base = u128::from(base_u64);
+
+        // Walk medians upward at a fixed 1.5x block and find the first median
+        // whose product leaves u128; assert exact below it, Overflow at it.
+        let mut first_overflow: Option<u64> = None;
+        for shift in 30..56u32 {
+            let m: u64 = 1 << shift;
+            let c: u64 = m + m / 2;
+            let multiplicand = (u128::from(m) * 2 - u128::from(c)) * u128::from(c);
+            let fits = base.checked_mul(multiplicand).is_some();
+            let got = block_reward_with_penalty(m, c, 0, ZONE, &p);
+            if fits {
+                assert!(got.is_ok(), "median 2^{shift} should be exact");
+                assert_eq!(got.unwrap(), base_u64 / 4 * 3, "2^{shift}");
+            } else {
+                assert_eq!(got, Err(EmissionError::Overflow), "median 2^{shift}");
+                first_overflow.get_or_insert(m);
+            }
+        }
+        assert!(
+            first_overflow.is_some(),
+            "the sweep must cross the boundary, or it pins nothing"
+        );
     }
 
     #[test]

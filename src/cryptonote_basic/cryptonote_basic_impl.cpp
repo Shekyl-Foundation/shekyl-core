@@ -124,7 +124,14 @@ namespace cryptonote {
       // weight_limit is the doubled EFFECTIVE median, written by the same call
       // that made the rejection — the message cannot disagree with the
       // decision, which a locally recomputed clamp could.
-      MERROR("Block cumulative weight is too big: " << current_block_weight << ", expected less than " << weight_limit);
+      //
+      // "at most", not the inherited "less than": the limit is INCLUSIVE.
+      // A block at exactly 2*median is accepted and earns a zero reward
+      // (pinned by the 2m rows of the weight-penalty KAT); only above it is
+      // rejected. The old wording named a bound one byte off from the rule it
+      // described, which is a bad thing for an operator to read while
+      // debugging a rejected block.
+      MERROR("Block cumulative weight is too big: " << current_block_weight << ", expected at most " << weight_limit);
       return false;
     }
 

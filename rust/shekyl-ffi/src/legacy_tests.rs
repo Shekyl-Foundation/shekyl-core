@@ -794,3 +794,148 @@ fn label_plaintext_for_payment_uri_parse_fail_writes_sentinel() {
     assert_eq!(rc, -3);
     assert_eq!(out, sentinel_plaintext());
 }
+
+// ─── shekyl_block_reward — the boundary contract ────────────────────────────
+//
+// `block_reward_with_penalty`'s own tests cover the arithmetic. None of them
+// can cover what this entry point ADDS: the status mapping, the out-pointer
+// writes, and the null checks. Those only exist at the boundary, so they are
+// tested at the boundary — the gap Copilot raised on PR #518.
+
+/// The zone C++ passes in (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`).
+const ZONE: u64 = 300_000;
+/// A value no computed reward can equal, so "untouched" is distinguishable
+/// from "written with something plausible".
+const SENTINEL: u64 = 0xDEAD_BEEF_DEAD_BEEF;
+
+#[test]
+fn block_reward_ok_writes_both_out_params() {
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+    // Below the effective median: no penalty, so the base subsidy is returned.
+    let status =
+        unsafe { shekyl_block_reward(0, ZONE / 2, 0, ZONE, &raw mut reward, &raw mut limit) };
+
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(reward, shekyl_base_block_reward(0));
+    assert_eq!(limit, 2 * ZONE, "the limit is the doubled EFFECTIVE median");
+}
+
+#[test]
+fn block_reward_accepts_the_inclusive_limit_and_pays_zero() {
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+    // Exactly 2 * median is ACCEPTED, earning zero — the boundary the C++
+    // rejection message describes, which is why that message says "at most".
+    let status =
+        unsafe { shekyl_block_reward(0, 2 * ZONE, 0, ZONE, &raw mut reward, &raw mut limit) };
+
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(reward, 0);
+    assert_eq!(limit, 2 * ZONE);
+}
+
+#[test]
+fn block_reward_too_big_writes_the_limit_and_leaves_the_reward_untouched() {
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+    let status =
+        unsafe { shekyl_block_reward(0, 2 * ZONE + 1, 0, ZONE, &raw mut reward, &raw mut limit) };
+
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG);
+    assert!(status > 0, "rejection is positive; misuse is negative");
+    assert_eq!(
+        reward, SENTINEL,
+        "the reward must not be written on the reject path — C++ reads it \
+         only after checking the status, and a partial write would be a trap \
+         for any caller that does not"
+    );
+    assert_eq!(
+        limit,
+        2 * ZONE,
+        "the limit IS written on the reject path — it is the whole reason the \
+         out-param exists, so C++ can name the bound without recomputing the \
+         clamp that produced it"
+    );
+}
+
+#[test]
+fn block_reward_null_out_pointers_return_invalid_without_writing() {
+    // Each pointer null separately: a check that only covers the first
+    // argument passes while the second is still dereferenced.
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+
+    let status =
+        unsafe { shekyl_block_reward(0, ZONE / 2, 0, ZONE, std::ptr::null_mut(), &raw mut limit) };
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_INVALID);
+    assert!(
+        status < 0,
+        "caller misuse is negative; rejection is positive"
+    );
+    assert_eq!(
+        limit, SENTINEL,
+        "no write through the non-null pointer either"
+    );
+
+    let status =
+        unsafe { shekyl_block_reward(0, ZONE / 2, 0, ZONE, &raw mut reward, std::ptr::null_mut()) };
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_INVALID);
+    assert_eq!(
+        reward, SENTINEL,
+        "no write through the non-null pointer either"
+    );
+
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            0,
+            ZONE,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_INVALID);
+}
+
+#[test]
+fn block_reward_beyond_the_exact_domain_is_invalid_not_wrapped() {
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+    // A median around 2^48 puts `base * multiplicand` past 128 bits. The
+    // crate reports Overflow; the boundary maps it to INVALID and the block is
+    // rejected. Before this was checked it panicked across the FFI.
+    let m: u64 = 1 << 48;
+    let status =
+        unsafe { shekyl_block_reward(m, m + m / 2, 0, ZONE, &raw mut reward, &raw mut limit) };
+
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_INVALID);
+    assert_eq!(
+        reward, SENTINEL,
+        "no reward is written for an out-of-domain input"
+    );
+}
+
+#[test]
+fn block_reward_clamps_already_generated_like_the_base_export() {
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+    // Past the supply cap the input is clamped rather than rejected, matching
+    // shekyl_base_block_reward's documented behaviour.
+    let status = unsafe {
+        shekyl_block_reward(0, ZONE / 2, u64::MAX, ZONE, &raw mut reward, &raw mut limit)
+    };
+
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(reward, shekyl_base_block_reward(u64::MAX));
+}
+
+#[test]
+fn advance_already_generated_saturates_at_the_supply_cap() {
+    assert_eq!(shekyl_advance_already_generated(0, 100), 100);
+    // The boundary the two former C++ copies had to agree on.
+    let cap = shekyl_advance_already_generated(u64::MAX, u64::MAX);
+    assert_eq!(shekyl_advance_already_generated(cap, 1), cap);
+    assert_eq!(shekyl_advance_already_generated(cap - 1, 50), cap);
+}
