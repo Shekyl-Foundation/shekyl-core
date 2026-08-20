@@ -492,7 +492,7 @@ verifiable.** What is not is *integration into the crates that carry TLS*.
 | Slice | Content | Gate |
 |---|---|---|
 | WP-W1 | The WP-D2 crate + WP-D9 disk probe | **LANDED** with this round — `shekyl-win-sec` + the `cfg`-split probe; compiles for `x86_64-pc-windows-gnu`, blocking-gated on the Windows runner |
-| WP-W2 | WP-B1/WP-B2 named-pipe listener + client, WP-D1 naming, WP-D3 mitigations 1 and 3, WP-D6 DACL | the security boundary; the bulk of the work |
+| WP-W2 | WP-B1/WP-B2 named-pipe listener + client, WP-D1 naming, WP-D3 mitigations 1 and 3, WP-D6 DACL | the security boundary; the bulk of the work. **Read §8.1 first** — three of the five error sites delete rather than port, and one required decision (the parse surface) is invisible to the compiler |
 | WP-W3 | WP-D4 peer checks (owner SID + integrity) and WP-D5 refusal, on the external path | ships **with** WP-W2, never after — see WP-D3 |
 | WP-W4 | WP-B3 seed-file DACL | reuses WP-W1 |
 | WP-W5 | Remove the WP-D10 build gate; Windows CI builds and smoke-tests both binaries; FOLLOWUPS entry closed | the gate comes off only here |
@@ -506,6 +506,121 @@ archives, and until it lands the Windows release story is unchanged from
 PR #500 — daemon yes, wallet no. The Windows CI job is currently named
 `Windows (MSVC, daemon)` and builds `--target daemon`; **WP-W5 owns renaming it
 back** and re-adding the wallet binaries.
+
+## 8.1 WP-W2 preamble — what the scouting runs actually found
+
+Written **before WP-W2 cuts code**, because the naive shape is to `cfg`-split
+all five error sites and end up with a Windows arm full of stubs. Three of the
+five delete rather than port.
+
+### The error list, drained across two runs
+
+`shekyl-engine-core` compiles for Windows as of the WP-D9 siting fix. The
+scouting step then advanced and reported five errors, **all in one file**:
+
+| Site | Error | What it is |
+|---|---|---|
+| [`server.rs:22`](../../rust/shekyl-wallet-rpc/src/server.rs) | unresolved import `tokio::net::UnixListener` | the listener |
+| `server.rs:278` | `could not find unix in os` | `PermissionsExt` |
+| `server.rs:279` | no `from_mode` for `Permissions` | `restrict_socket_perms` |
+| `server.rs:294` | `could not find unix in os` | `DirBuilderExt` |
+| `server.rs:305` | no `mode` for `DirBuilder` | `private_socket_dir` |
+
+`shekyl-cli` was never reached — cargo stops per crate, and it depends on
+`shekyl-wallet-rpc`. Its sites, enumerated statically: `scripted.rs:18` and
+`:189` (WP-B3), `rpc_client.rs:460` (WP-B1). Zero sites beyond §2's original
+list, and **zero pre-existing `cfg(unix)`/`cfg(windows)` gates** in either
+crate, so nothing was already hidden behind one.
+
+### The seam is at listener construction, not at five call sites
+
+**One `cfg` split**, producing a `NamedPipeServer` or a `UnixListener`. The
+platform-specific work sits in `shekyl-win-sec` — the crate built to hold it
+(WP-D2) — and `server.rs` calls into it. Five splits at five call sites would
+scatter the platform boundary across a file whose job is the serve loop.
+
+### Three of the five DELETE rather than port
+
+This is the part that a `cfg`-split-everything reflex gets wrong, and it is
+wrong three times out of four:
+
+- **`restrict_socket_perms` — no Windows counterpart, because its reason is
+  gone.** Its own doc comment states the case: applied *after* `bind`, with a
+  0700 parent making the pre-chmod window unreachable. `CreateNamedPipe` takes
+  `SECURITY_ATTRIBUTES` **at creation** — the atomicity WP-Q1 was partly decided
+  on. There is no post-creation step to port. The function does not gain a
+  Windows arm; it ceases to exist on that platform.
+- **`private_socket_dir` — all three of its jobs are subsumed or absent.**
+  Access control moves to the DACL; collision-avoidance to the per-spawn random
+  name (WP-D1); and its third job, clearing a stale directory left by a
+  recycled pid, has *no analogue at all* — a pipe is a kernel object that
+  vanishes when the last handle closes, so there is no residue to clean.
+- **Only `server.rs:22` is a genuine substitution**: `UnixListener` →
+  `NamedPipeServer`.
+
+### The parse surface: WP-W2 must ANSWER this, not discover it
+
+`parse_rpc_url` ([`rpc_client.rs:517`](../../rust/shekyl-cli/src/rpc_client.rs))
+matches `uds://` with `strip_prefix` — a string comparison. **It compiles
+perfectly on Windows** and returns `RpcUrlForm::Uds`. The failure surfaces
+later and elsewhere, at `http_post_uds`.
+
+So the compiler under-reports. It enumerates the *transport* sites; it will
+never enumerate the *parse* surface that offers a transport the platform does
+not have. Once WP-W2 ports `http_post_uds`, `uds://` on Windows goes from
+"fails to compile" to "parses fine, then fails at connect with something
+unhelpful" — strictly worse than today.
+
+**Why it is invisible, stated precisely:** the platform constraint is encoded
+in the **implementation of a transport**, not in the **type that selects it**.
+`RpcUrlForm::Uds` is a platform-independent variant whose Unix-ness lives one
+layer downstream, so the compiler learns of the constraint too late to check
+the parse. No amount of care in porting `http_post_uds` changes that.
+
+**The fix is the project's own principle — gate the variant, not the
+implementation:**
+
+```rust
+enum RpcUrlForm<'a> {
+    Http,
+    #[cfg(unix)]
+    Uds(&'a str),
+    #[cfg(windows)]
+    NamedPipe(&'a str),   // or: no variant at all
+}
+```
+
+With the variant gated, the `uds://` arm **cannot compile** on Windows and the
+compiler does enumerate the parse surface. The blind spot becomes a build
+error. That is structural impossibility replacing a question nobody asked —
+the same move as deleting `wallet2.cpp` rather than documenting that agents
+should not extend it.
+
+It also **forces the `npipe://` ruling rather than deferring it**: with no
+`Uds` variant on Windows, that arm must become either an explicit rejection
+naming the platform, or an `npipe://` arm. There is no third shape in which it
+quietly parses.
+
+**The stakes are a live security decision, not bookkeeping.**
+[`rpc_client.rs:466-468`](../../rust/shekyl-cli/src/rpc_client.rs) already
+calls the external form *"an untrusted `uds://` server"* in tree. If `npipe://`
+ships, the client-side owner-SID check (WP-D4) is the only thing between a
+mistyped — or attacker-suggested — pipe name and a passphrase.
+
+**Status: OPEN, and the decision authority's to rule.** WP-W2 cites the ruling;
+it does not make it.
+
+### What §2's triple confirmation does and does not say
+
+§2's list has now been confirmed three times: by grep at R0, by the
+wallet-rpc errors, and by the static enumeration of `shekyl-cli`. Those
+confirmations are real, and they say **nothing** about the parse surface.
+
+A grep-derived enumeration of *Unix API usage* cannot contain a defect whose
+signature is the **absence** of a platform check in a string match. The list
+was confirmed; it is a list that could not have held this item. That is worth
+recording, because "confirmed three times" reads as coverage and here it is
+coverage of one class only.
 
 ## 9. Open and closed, with criteria
 
