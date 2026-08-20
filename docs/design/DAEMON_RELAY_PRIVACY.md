@@ -14917,3 +14917,130 @@ without leaving the code. The assumption constant is **deleted in the same
 commit**, not left beside its successor: two constants for one quantity is the
 duplicate-to-synchronise shape this arc has already paid for.
 
+### 94.5 AMENDMENT, before the first sample (2026-08-20)
+
+**Amending a pre-registration is legitimate only before data exists, and only
+through the same channel that would be demanded of anyone else.** These changes
+were found while grounding the rig against the code, not while looking at a
+number — no sample has been taken. Each says what §94 froze, what it becomes,
+and why the new form measures the quantity better rather than more
+conveniently.
+
+#### (c) The estimator: two Tor endpoints, not two Shekyl nodes
+
+§94.2(c) said *"two Shekyl nodes on one host."* **That measures the wrong
+quantity, and in the double-counting direction.**
+
+`hop = transit + verification + scheduling` (§71.3), and this constant is the
+**transit** term alone — the code says so outright: *"a property of the path
+between two nodes, not of the sender's hardware or the transaction's shape."*
+Verification is measured separately on the Pi surface. But a shekyld's earliest
+receive observable sits **after** levin parsing and a chunk of validation, so a
+shekyld-to-shekyld timing folds part of the verification term into transit and
+counts it twice. Timestamping earlier means instrumenting the C++ transport
+layer, which §2.6 discarded as month-of-life work.
+
+**Amended to:** two endpoints **in one process** — two threads, each dialing
+through its **own** Tor daemon's SOCKS, one publishing a hidden service. One
+process makes the shared clock structural rather than argued. The loopback
+SOCKS leg **stays in the sample**: it is what a stem forward actually crosses,
+and §93.2's ruling is that the hop that matters is the overlay leaving the
+machine, of which the SOCKS leg is the near end.
+
+This also removes `shekyld` from the rig entirely, so the measurement does not
+wait on anything in the §2.9 series.
+
+#### (b) The payload: unpadded, and measure the SLOPE rather than a point
+
+§94.2(b) said *"the modal Shekyl transaction, sized from an actual one."* Two
+changes, and the second is a correction to the prescription rather than to the
+worry behind it.
+
+**Unpadded.** `--pad-transactions` defaults to **`false`**
+(`net_node.cpp:176`), so the shipped wire size is the *unpadded* serialized
+`NOTIFY_NEW_TRANSACTIONS`. Pinned explicitly because the padded branch quantises
+to 1 KiB and would silently shift the measured size by up to a kilobyte if a rig
+were built with it on.
+
+**Two points, because a single payload produces a scalar that silently embeds a
+shape assumption** — which is the transit-less flood model's defect one layer
+along, and this round exists to stop repeating it. Measure the **modal**
+transaction (8395 B, ~17 cells) and the **max admissible** one (16651 B, ~33
+cells), in the same sessions.
+
+Two points answer the question a point cannot: **is a scalar defensible at
+all?** If the size term is small against the six-hop rendezvous RTT, a scalar
+stands. If it is material, transit becomes a function of payload — and the
+plumbing already exists: `adopted_hop_ms_with_transit(n_in, depth, transit_ms)`
+takes transit as a **parameter**, so the call sites pass a shape-derived value
+instead of a constant. No new mechanism either way.
+
+#### The §86.1 tension resolves — the acquittal survives and the sentence over-claims
+
+An earlier draft of this amendment had this backwards, and the correction is
+worth keeping because the reasoning generalises.
+
+§86.1's acquittal rests on **§83.4's test: *does this axis cost every
+participant the same?*** That is a question about sorting **nodes**, which is
+what the Pi floor exists to prevent. The transit doc states the premise as *"not
+of the sender's hardware, **nor of the transaction's shape**"* — two clauses,
+and **only the first is load-bearing.**
+
+**Size-dependence sorts transactions, not participants.** A 16 KiB 8-input
+transaction costs more transit than the 8 KiB modal one — but it costs *every*
+node relaying it the same extra transit. Nothing about it advantages a Xeon over
+a Pi, so §83.4's test still passes.
+
+**And shape-sorting is already inside `hop`, cited approvingly two paragraphs
+later.** Verification is `f_ms(n_in, depth)`: **23.6 ms** at the modal cell
+against **792 ms** at 8-input depth-7 — a **33×** spread on precisely the axis
+the sentence disclaims. So `hop` is already shape-dependent by a large factor,
+and a size term in transit **adds to an existing axis rather than opening a new
+one**.
+
+So the acquittal holds and the rider over-claims. **It was free when written** —
+at ~50 ms clearnet transit, size-dependence is buried — and it stops being free
+at 1625 ms on a cell-quantised transport. That is this arc's eighth instance of
+the same pattern: *a clause true under the regime it was written in, load-bearing
+under a regime that arrived later.*
+
+**The three regimes, recorded because otherwise this gets rediscovered as a
+contradiction:**
+
+| regime | size-dependence of transit |
+| --- | --- |
+| clearnet, ordinary | negligible — the size term is buried under ~50 ms |
+| **anonymity zone, ordinary** | **unknown; the slope is what this round measures** |
+| anonymity zone, **carrier** | **constant by construction** — fixed 3 KiB slots make per-slot transit invariant, and size enters only as *fragment count*, which is already explicit and already counted (§2.8) |
+
+So shape-independence is **true on the carrier and false on the ordinary
+encrypted link**. That is a real property of the mechanism rather than a
+coincidence: the carrier quantises, and quantisation is what removes the slope.
+
+The doc fix is narrowing, not rewriting — the original sentence was correct for
+the numbers in front of it, and its `hop`-level conclusion is unchanged.
+
+#### (e) "Peak and off-peak" gets a definition
+
+§94.2(e) required sessions spanning *"peak and off-peak"* and never said what
+that means — an unfrozen knob inside the criterion meant to freeze knobs, and
+exactly the kind that gets argued after the fact.
+
+**Amended to:** every sample records its UTC timestamp, and the session set
+must span **≥8 hours of time-of-day** across the ≥3 days. That is checkable
+from the recorded data rather than from anyone's recollection of when they ran
+it.
+
+#### The circuit-rebuild clause is expected to be vacuous, and the rig confirms it
+
+§94.2(a) keeps in-band circuit rebuilds inside the distribution and excludes
+send-failure-and-re-plan. **A Tor stream is bound to its circuit** — streams do
+not migrate — so for an *established* connection a circuit failure should
+present as stream death, i.e. as a send failure, which the existing rule
+already excludes. **The classification is therefore expected to be total with
+the rebuild arm empty.**
+
+Recorded as an expectation rather than a rule change, because it is reasoning
+about Tor's behaviour and not something this round has observed. The rig logs
+any sample that would populate the rebuild arm; if one appears, the reasoning
+is wrong and the clause was worth having.

@@ -278,11 +278,32 @@ impl SpecVerifyCost {
 /// which is the difference §86.2 asks for. It ships as an assumption because
 /// transit is the one term of `hop` that **passes** §83.4's sorting test —
 /// it is a property of the path between two nodes, not of the sender's
-/// hardware or the transaction's shape, so it cannot reintroduce the sorting
-/// the table and the Pi floor remove (§86.1 — recorded here per §87.4
-/// because a check that only ever convicts is a worry, not an instrument;
-/// transit is its first acquittal). It is also dominated at the tail: 792 ms
-/// of verification against ~50 of transit at the 8-input depth-7 cell.
+/// **hardware**, so it cannot reintroduce the sorting the table and the Pi
+/// floor remove (§86.1 — recorded here per §87.4 because a check that only
+/// ever convicts is a worry, not an instrument; transit is its first
+/// acquittal). It is also dominated at the tail: 792 ms of verification
+/// against ~50 of transit at the 8-input depth-7 cell.
+///
+/// > **Narrowed 2026-08-20 (§94.5).** This previously read "not of the
+/// > sender's hardware *or the transaction's shape*". **Only the hardware
+/// > clause was ever load-bearing.** §83.4 asks *does this axis cost every
+/// > participant the same?* — a question about sorting **nodes**. Size
+/// > sorts **transactions**: a 16 KiB spend costs more transit than the modal
+/// > one, but it costs *every* relaying node the same extra, and advantages
+/// > no machine over another. The acquittal is unaffected.
+/// >
+/// > The shape clause was also never true of `hop` as a whole, two lines
+/// > below: verification is `f_ms(n_in, depth)` and spans **23.6 ms to 792 ms**
+/// > — 33× on exactly the disclaimed axis. A size term in transit adds to an
+/// > existing axis rather than opening a new one.
+/// >
+/// > It was free to write at ~50 ms, where size-dependence is buried, and
+/// > stops being free at [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`] on a
+/// > cell-quantised transport. Three regimes: clearnet ordinary — negligible;
+/// > **anonymity ordinary — unknown, and §94's round measures the slope**;
+/// > anonymity **carrier** — constant by construction, since fixed 3 KiB slots
+/// > make per-slot transit invariant and size enters only as fragment count,
+/// > which §2.8 already counts explicitly.
 ///
 /// When it is measured (whenever convenient — it is a refinement, not a
 /// gate, §86.2): a **quantile, not a mean**, with `F`'s asymmetry —
