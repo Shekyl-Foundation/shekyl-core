@@ -34,16 +34,47 @@ jobs:
   cmake-gate-test:
     name: 64-bit-only CMake gate fires on fake 32-bit toolchain
     runs-on: ubuntu-latest
+    # Bounded so an unreachable package mirror costs minutes, not the
+    # 6-hour hosted-runner ceiling. On 2026-08-18 three small gates in
+    # this repo each sat SIX HOURS on an `apt-get update` stall against
+    # archive.ubuntu.com and were killed without ever running their
+    # check; the failure then presented as "gate failed" when the gate
+    # had not run at all. A short timeout keeps a red attributable to
+    # the gate's own subject.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
           submodules: false
 
-      - name: install cmake
+      - name: Verify CMake is present
+        # NO apt install. Both hosted images this repo uses
+        # (ubuntu-24.04 and ubuntu-24.04-arm) already ship CMake 3.31.6
+        # and Ninja 1.13.2, so installing cmake fetched an OLDER
+        # build over the network for no benefit — and put an
+        # apt-mirror round-trip in front of a gate that needs none.
+        # Four jobs in this repo were killed by exactly that on
+        # 2026-08-18/19, three of them sitting six hours each.
+        #
+        # Verifying instead asserts the gate's own prerequisites exist
+        # rather than assuming them: a future image change fails here in
+        # seconds with an actionable message, instead of failing later
+        # inside cmake with a generator error.
+        #
+        # ripgrep is NOT on the image, so gates that need `rg` still
+        # install it — those are bounded by `timeout-minutes` instead.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake
+          set -euo pipefail
+          for tool in cmake; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it. If the image" >&2
+              echo "  changed, install it here explicitly rather than assuming." >&2
+              exit 1
+            fi
+            "${tool}" --version
+          done
 
       - name: run gate test
         run: ./tests/cmake-gate-test/run.sh

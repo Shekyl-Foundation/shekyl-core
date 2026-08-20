@@ -56,6 +56,14 @@ jobs:
   p0n-doc-literals:
     name: "P0-n: multisig doc-literal gate"
     runs-on: ubuntu-latest
+    # Bounded so an unreachable package mirror costs minutes, not the
+    # 6-hour hosted-runner ceiling. On 2026-08-18 three small gates in
+    # this repo each sat SIX HOURS on an `apt-get update` stall against
+    # archive.ubuntu.com and were killed without ever running their
+    # check; the failure then presented as "gate failed" when the gate
+    # had not run at all. A short timeout keeps a red attributable to
+    # the gate's own subject.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - name: Install ripgrep

@@ -270,7 +270,36 @@ jobs:
         id: layer_run
         env:
           CTEST_OUTPUT_ON_FAILURE: ON
+        # `shell: bash` is load-bearing, not style (rule 46).
+        #
+        # THE DEFECT: a pipeline's exit status is its LAST command's, so
+        # piping this gate's verdict through `tee` reported tee's
+        # success and discarded the script's — a failing layer went
+        # GREEN. That holds under every shell; `sh` and `bash` alike.
+        #
+        # THE FIX, and why it names a shell. This job runs in
+        # `container: ubuntu:22.04`, and inside a container GitHub's
+        # default for a bare `run:` is **`sh`**, not the `bash -e` you
+        # get on a hosted runner. Ubuntu 22.04's `sh` is dash, whose
+        # `set` rejects `-o pipefail` outright — an earlier attempt to
+        # fix this with `set -eo pipefail` alone therefore turned a
+        # silently-passing gate into `Illegal option -o pipefail`.
+        # Naming `shell: bash` gives
+        # `bash --noprofile --norc -eo pipefail {0}`, which supplies
+        # both `-e` and pipefail by definition; the `build` job in this
+        # same workflow and same image already does it, so bash is
+        # known present.
+        #
+        # `set -eo pipefail` is kept explicitly as well, so the intent
+        # is legible at the step and survives a change to GitHub's
+        # defaults.
+        #
+        # The rule-46 SIGPIPE trap does not apply: it bites when an
+        # early-exiting consumer (`rg -q`, `head`) kills its producer,
+        # and `tee` consumes to completion.
+        shell: bash
         run: |
+          set -eo pipefail
           scripts/ci/run_economics_c2a_prime.sh ${{ matrix.subcommand }} \
             2>&1 | tee "economics-c2a-layer${{ matrix.layer }}.log"
       - name: Upload failure diagnostics

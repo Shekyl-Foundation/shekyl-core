@@ -32,6 +32,7 @@ on:
     paths:
       - "docs/**"
       - "scripts/ci/check_doc_links.py"
+      - "scripts/ci/check_doc_headings.py"
       - ".github/workflows/doc-links.yml"
 
 concurrency:
@@ -43,8 +44,12 @@ permissions:
 
 jobs:
   check-doc-links:
-    name: "Dead-relative-link gate (docs)"
+    name: "Docs structural gates (dead links + empty identifier headings)"
     runs-on: ubuntu-latest
+    # Both checks are pure-Python over a checkout; a minute is generous.
+    # Bounded per 47-gate-subject-assertion.mdc so an infrastructure stall
+    # cannot present as a docs failure.
+    timeout-minutes: 10
     steps:
       # Submodules required: docs cite files under external/* (e.g.
       # randomx-v2 headers). Without them the gate false-fails on correct
@@ -55,3 +60,14 @@ jobs:
 
       - name: Run doc-link check
         run: python3 scripts/ci/check_doc_links.py
+
+      - name: Run empty-identifier-heading check
+        # An identifier heading whose body vanished reads as answered and is
+        # not — invisible to every other gate, since the file still parses,
+        # the links still resolve, and the heading still answers a search.
+        # Instance of 47-gate-subject-assertion.mdc.
+        #
+        # Runs even if the link check failed, so one docs defect does not
+        # mask the other.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_doc_headings.py
