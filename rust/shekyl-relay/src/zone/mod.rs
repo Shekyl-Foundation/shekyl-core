@@ -118,6 +118,22 @@ pub enum ZoneNewError {
         /// The stem/channel count that was requested.
         got: usize,
     },
+    /// A full-size message could not cross a whole epoch, so it could never
+    /// cross at all.
+    ///
+    /// Each noise send waits at most `NOISE_MIN_DELAY_SECS +
+    /// NOISE_DELAY_JITTER_SECS`, so an epoch of `min_epoch_secs` carries at
+    /// most that many windows. A real notification may occupy up to
+    /// [`inherited::MAX_FRAGMENTS`] of them. If the budget is smaller, a
+    /// full-size message is still unfinished when the epoch rolls — and CV-1
+    /// discards the in-flight remainder on the rebind that follows, so it
+    /// restarts forever and never arrives.
+    NoiseCannotCrossOneEpoch {
+        /// Windows a full-size message needs.
+        needs: u32,
+        /// Windows the epoch affords.
+        affords: u32,
+    },
 }
 
 impl fmt::Display for ZoneNewError {
@@ -126,6 +142,11 @@ impl fmt::Display for ZoneNewError {
             Self::NoiseOnCleartext => {
                 write!(f, "noise carrier requires an encrypted link")
             }
+            Self::NoiseCannotCrossOneEpoch { needs, affords } => write!(
+                f,
+                "noise epoch carries {affords} windows but a full message needs \
+                 {needs}; the remainder is discarded at every epoch roll"
+            ),
             Self::NoiseChannelCount { got } => write!(
                 f,
                 "noise channel count must equal inherited::NOISE_CHANNELS (got {got})"
@@ -382,6 +403,25 @@ impl Zone {
         }
         if noise_enabled && stems != inherited::NOISE_CHANNELS {
             return Err(ZoneNewError::NoiseChannelCount { got: stems });
+        }
+        if noise_enabled {
+            /* Was a C++ `static_assert` inside `send_noise`, and it went with
+            that function when the C++ noise machinery was deleted — silently,
+            which is why it is a refusal here rather than a comment.
+
+            It is a RUNTIME check and not a `const` assertion because the
+            epoch is not a Rust constant: it arrives as `min_epoch_secs`
+            through `shekyl_relay_zone_new`. Mirroring the epoch pair into
+            Rust is what Q-11 Unit 0 deleted, so consuming the value that
+            already crosses is the form that does not re-create it. */
+            let per_send = inherited::NOISE_MIN_DELAY_SECS + inherited::NOISE_DELAY_JITTER_SECS;
+            let affords = params.min_epoch_secs / per_send;
+            if affords < inherited::MAX_FRAGMENTS {
+                return Err(ZoneNewError::NoiseCannotCrossOneEpoch {
+                    needs: inherited::MAX_FRAGMENTS,
+                    affords,
+                });
+            }
         }
         let epoch = EpochScheduler::new(params).start(now, rng);
         let noise = if noise_enabled {

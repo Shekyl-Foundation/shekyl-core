@@ -478,7 +478,7 @@ namespace nodetool
     m_use_ipv6 = command_line::get_arg(vm, arg_p2p_use_ipv6);
     m_require_ipv4 = !command_line::get_arg(vm, arg_p2p_ignore_ipv4);
     public_zone.m_notifier = cryptonote::levin::notify{
-      public_zone.m_net_server.get_io_context(), public_zone.m_net_server.get_config_shared(), nullptr, epee::net_utils::zone::public_, pad_txs, m_payload_handler.get_core()
+      public_zone.m_net_server.get_io_context(), public_zone.m_net_server.get_config_shared(), epee::net_utils::zone::public_, pad_txs, m_payload_handler.get_core()
     };
 
     if (command_line::has_arg(vm, arg_p2p_add_peer))
@@ -632,7 +632,7 @@ namespace nodetool
       // in net_node.cpp). The levin machinery behind `make_noise_notify`
       // stays as Q-11 Unit 2's substrate.
       zone.m_notifier = cryptonote::levin::notify{
-        zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), nullptr, proxy.zone, pad_txs, m_payload_handler.get_core()
+        zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), proxy.zone, pad_txs, m_payload_handler.get_core()
       };
     }
 
