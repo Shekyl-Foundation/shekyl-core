@@ -127,8 +127,28 @@ verify_build_artifact_layout() {
 
 count_gtest_cases() {
   local filter="$1"
+  local out rc
   # --gtest_list_tests is a boolean flag; the suite filter is --gtest_filter.
-  "$UNIT_TESTS" --gtest_list_tests --gtest_filter="$filter" 2>/dev/null | grep -c '^  ' || true
+  #
+  # stderr is CAPTURED, not discarded. Discarding it made this function
+  # unable to tell "the binary ran and matched nothing" from "the binary
+  # never ran at all" -- and the caller reports the first, so a missing
+  # shared library or an unrunnable binary was announced as "land the
+  # harness in tests/unit_tests/". That is a gate misnaming its own
+  # subject (47-gate-subject-assertion.mdc); the distinction is made here
+  # so the message points at the real cause.
+  #
+  # Verdict captured before any pipe (rule 46): `grep -c` on its own line
+  # would otherwise be the exit status this function reports.
+  out="$("$UNIT_TESTS" --gtest_list_tests --gtest_filter="$filter" 2>&1)"
+  rc=$?
+  if (( rc != 0 )); then
+    die "unit_tests could not be listed (exit ${rc}) for filter '${filter}'. \
+This is NOT a missing harness -- the binary exists but did not run. \
+Its output was:
+${out}"
+  fi
+  printf '%s\n' "$out" | grep -c '^  ' || true
 }
 
 count_core_tests() {
@@ -143,8 +163,16 @@ require_gtest_harness() {
   local count
   count="$(count_gtest_cases "$filter")"
   if [[ "$count" -eq 0 ]]; then
+    # Reaching here means the binary RAN and matched nothing -- the
+    # unrunnable case is caught in count_gtest_cases with its own
+    # message. Both possibilities are named because the harness file
+    # existing in the tree is not evidence it reached the binary.
     die "no C2a′ Layer ${layer} gtest cases (filter '${filter}'). \
-Land harness in tests/unit_tests/ per docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md §5.8."
+unit_tests ran but matched nothing: either the harness is absent, or it \
+is present in tests/unit_tests/ and did not reach this binary (stale \
+build artifact, or a source file not compiled into the target). Check \
+tests/unit_tests/economics_c2a_prime.cpp and its CMakeLists entry before \
+assuming the former. Spec: docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md §5.8."
   fi
   echo "Layer ${layer}: found ${count} gtest case(s) matching ${filter}"
 }
