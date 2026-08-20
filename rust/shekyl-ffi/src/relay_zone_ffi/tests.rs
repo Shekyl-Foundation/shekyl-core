@@ -10,6 +10,12 @@ use std::cell::RefCell;
 /// Spelled out rather than `1` so a change to the discriminant cannot silently
 /// re-point every fixture at a different transport.
 const PUBLIC: u8 = RelayZone::Public.as_u8();
+/// A noise carrier only exists on an encrypted zone, so covert fixtures build
+/// on tor rather than on the cleartext default. Both flags travel together for
+/// the same reason: the pair is what production forms at `make_relay_zone`.
+const TOR: u8 = RelayZone::Tor.as_u8();
+const NOISE_ON_ENCRYPTED: u32 =
+    SHEKYL_RELAY_ZONE_NOISE_ENABLED | SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
 
 // The "C++ side", simulated: recording callbacks that capture exactly what
 // crosses the boundary. This is the Effect seam test §18.4a asks for, and it
@@ -20,7 +26,7 @@ struct Recorder {
     fluffed: Vec<([u8; 16], Vec<Vec<u8>>)>,
     unbinds: Vec<usize>,
     /// `(channel, peer)` — peer bytes are the marshalling half of CV-2.
-    covert: Vec<(usize, [u8; 16])>,
+    noise: Vec<(usize, [u8; 16])>,
 }
 
 thread_local! {
@@ -73,10 +79,10 @@ extern "C" fn rec_gather(_: *mut c_void, out_n: *mut usize) -> *const u8 {
     })
 }
 
-extern "C" fn rec_covert(_: *mut c_void, channel: usize, peer: *const u8) {
+extern "C" fn rec_noise(_: *mut c_void, channel: usize, peer: *const u8) {
     let mut p = [0u8; 16];
     unsafe { p.copy_from_slice(slice::from_raw_parts(peer, 16)) };
-    REC.with(|r| r.borrow_mut().covert.push((channel, p)));
+    REC.with(|r| r.borrow_mut().noise.push((channel, p)));
 }
 
 fn reset() {
@@ -165,7 +171,7 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
     });
 }
 
-/// A due channel with an unbound slot crosses as a `CovertUnbind` at its own
+/// A due channel with an unbound slot crosses as a `NoiseUnbind` at its own
 /// channel index, at every due tick — the marshalling half of the property
 /// whose decision half lives in `shekyl-relay`'s
 /// `a_due_channel_with_an_unbound_slot_clears_at_every_tick`.
@@ -179,13 +185,13 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
 /// sourcing discipline the seal established.
 ///
 /// Negative-controlled: an off-by-one injected into `dispatch`'s
-/// `CovertUnbind` arm (`unbind(ctx, channel + 1)`) fails the index assertion.
+/// `NoiseUnbind` arm (`unbind(ctx, channel + 1)`) fails the index assertion.
 #[test]
-fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
+fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
     reset();
     unsafe {
         let peers: Vec<u8> = [id(1), id(2)].concat();
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
         shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
@@ -217,7 +223,7 @@ fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
         for _ in 0..12 {
             let done = REC.with(|r| {
                 let r = r.borrow();
-                2 <= r.unbinds.len() && !r.covert.is_empty()
+                2 <= r.unbinds.len() && !r.noise.is_empty()
             });
             if done {
                 break;
@@ -230,7 +236,7 @@ fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
                 rec_gather,
                 rec_fluff,
                 rec_unbind,
-                rec_covert,
+                rec_noise,
             );
         }
         shekyl_relay_zone_free(h);
@@ -251,14 +257,14 @@ fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
                 rec.unbinds
             );
             assert!(
-                !rec.covert.is_empty(),
+                !rec.noise.is_empty(),
                 "the bound channel really sent — liveness"
             );
-            for &(channel, peer) in &rec.covert {
+            for &(channel, peer) in &rec.noise {
                 assert_eq!(
                     (channel, peer),
                     (1, keep),
-                    "CovertSend must cross with the slot's own peer at its own \
+                    "NoiseSend must cross with the slot's own peer at its own \
                      index — a wrong peer slice is invisible if only the \
                      channel index is recorded"
                 );
@@ -449,7 +455,7 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
                 rec_gather,
                 rec_fluff,
                 rec_unbind,
-                rec_covert,
+                rec_noise,
             );
             REC.with(|r| assert!(r.borrow().fluffed.is_empty(), "not due yet"));
         }
@@ -461,7 +467,7 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
             rec_gather,
             rec_fluff,
             rec_unbind,
-            rec_covert,
+            rec_noise,
         );
         shekyl_relay_zone_free(h);
     }
@@ -508,7 +514,7 @@ fn polling_across_the_epoch_boundary_gathers_and_rebuilds() {
             rec_gather,
             rec_fluff,
             rec_unbind,
-            rec_covert,
+            rec_noise,
         );
 
         GATHER.with(|g| {
@@ -599,7 +605,7 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
             rec_gather,
             rec_fluff,
             rec_unbind,
-            rec_covert,
+            rec_noise,
         );
         shekyl_relay_zone_free(null);
     }
@@ -643,9 +649,9 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
     reset();
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
         assert!(
-            shekyl_relay_zone_covert_enabled(h),
+            shekyl_relay_zone_noise_enabled(h),
             "fixture must actually have covert on or the carrier cell is vacuous"
         );
 
@@ -660,7 +666,7 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
         );
 
         shekyl_relay_zone_free(h);
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
         let mut dest_dispatch = [0u8; 16];
         let mut carrier = 0xFFu8;
         let mut channel = 0xFFFF_FFFFu32;
@@ -681,7 +687,7 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
         );
         assert_eq!(via_dispatch, SHEKYL_RELAY_PLAN_STEM, "RD-4: origin stems");
         assert_eq!(
-            carrier, SHEKYL_RELAY_CARRIER_COVERT,
+            carrier, SHEKYL_RELAY_CARRIER_NOISE,
             "covert is on and this is a stem"
         );
         assert!(
@@ -732,9 +738,9 @@ fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
     }
 }
 
-/// The zone-flag bits do not transpose, and the covert bit round-trips.
+/// The zone-flag bits do not transpose, and the noise bit round-trips.
 ///
-/// This test is the *reason* [`SHEKYL_RELAY_ZONE_COVERT_ENABLED`] is a named bit
+/// This test is the *reason* [`SHEKYL_RELAY_ZONE_NOISE_ENABLED`] is a named bit
 /// rather than a second `bool` parameter, so it must be able to fail if the two
 /// bits were ever swapped. It is written as a **negative control on
 /// transposition**: each bit is set *alone*, so a swap flips both assertions
@@ -765,25 +771,40 @@ fn zone_flag_bits_do_not_transpose() {
         "ABI value; `shekyl_ffi.h` hardcodes 1u"
     );
     assert_eq!(
-        SHEKYL_RELAY_ZONE_COVERT_ENABLED, 2,
+        SHEKYL_RELAY_ZONE_NOISE_ENABLED, 2,
         "ABI value; `shekyl_ffi.h` hardcodes 2u"
     );
 
     unsafe {
-        // Covert bit ALONE. A swap makes this read the fluff bit → false.
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
-        assert!(
-            shekyl_relay_zone_covert_enabled(h),
-            "covert bit set alone must read back as covert-enabled; \
-             reading false here means the bits are transposed"
-        );
-        shekyl_relay_zone_free(h);
+        /* Noise bit ALONE on the CLEARTEXT zone byte. Refused because the
+        zone is cleartext, not because the fluff-reach bit is missing —
+        secrecy is the discriminant, reach is a different axis.
 
-        // Fluff bit ALONE. A swap makes this read the covert bit → true.
+        The negative control survives and is strictly sharper. Under a
+        transposition this call would decode as *fluff-only*, which is a
+        perfectly ordinary zone and would build — so a swap turns this
+        null into a handle, and the assertion flips. The refusal is the
+        observation; a readback is no longer available here because the
+        zone does not exist to be read. */
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_NOISE_ENABLED);
+        assert!(
+            h.is_null(),
+            "noise bit set alone on the cleartext zone is refused; a handle \
+             here means the bits are transposed and this decoded as the \
+             harmless fluff-only zone"
+        );
+
+        // Fluff bit ALONE. A swap makes this read the noise bit → refused
+        // on this cleartext zone, so the handle would be null and BOTH
+        // assertions below would fail.
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY);
         assert!(
-            !shekyl_relay_zone_covert_enabled(h),
-            "outbound-fluff bit set alone must NOT enable covert; \
+            !h.is_null(),
+            "an outbound-fluff-only zone is ordinary and builds"
+        );
+        assert!(
+            !shekyl_relay_zone_noise_enabled(h),
+            "outbound-fluff bit set alone must NOT enable noise; \
              reading true here means the bits are transposed"
         );
         shekyl_relay_zone_free(h);
@@ -791,20 +812,64 @@ fn zone_flag_bits_do_not_transpose() {
         // Neither, and both — the two ends, so an always-true or always-false
         // decode cannot pass the set above by accident.
         let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
-        assert!(!shekyl_relay_zone_covert_enabled(h), "no flags ⇒ no covert");
+        assert!(!shekyl_relay_zone_noise_enabled(h), "no flags ⇒ no noise");
         shekyl_relay_zone_free(h);
 
-        let both = SHEKYL_RELAY_ZONE_COVERT_ENABLED | SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
-        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, both);
+        /* Both flags, on an ENCRYPTED zone — the only configuration a noise
+        carrier is allowed in. Swap-blind by construction (both bits set),
+        so it is the positive readback and not part of the control. */
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
         assert!(
-            shekyl_relay_zone_covert_enabled(h),
-            "both flags ⇒ covert on"
+            shekyl_relay_zone_noise_enabled(h),
+            "both flags on an encrypted zone ⇒ noise on"
+        );
+        shekyl_relay_zone_free(h);
+
+        /* An OUT-OF-DOMAIN zone byte with noise flags — refused. The two
+        fail-safe directions point opposite ways on purpose: an unknown zone
+        draws the *anonymity* parameters (the longer embargo, the safe
+        direction there), but it is not presumed *encrypted*, so it earns no
+        noise. Pinned because an asymmetry that is not stated reads as an
+        accident, and the next reader "fixing" it would silently hand a
+        noise carrier to a link nobody could identify. */
+        let h = shekyl_relay_zone_new(0, 0xFF, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(
+            h.is_null(),
+            "an unknown link is not presumed encrypted and earns no noise"
+        );
+
+        /* Both flags on a CLEARTEXT zone — refused. This pins the axis split
+        the flags used to hide: outbound-only fluff does not imply an
+        encrypted link. It is a real configuration (§25.5 keeps
+        outbound-only fluff on clearnet open) and it is still cleartext, so
+        it earns no noise. Before secrecy was read from the zone byte this
+        case built a zone, because reach was standing in for encryption. */
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(
+            h.is_null(),
+            "outbound-only fluff is not encryption; a cleartext zone earns no \
+             noise however its fluff reach is configured"
+        );
+
+        /* Noise bit ALONE on an ENCRYPTED zone — builds. Missing the fluff
+        bit is not "noise on cleartext": secrecy comes from TOR, reach
+        defaults to EveryPeer, and that pairing is the case the axis exists
+        for. A comment that treated the flag pair as the encryption proxy
+        would refuse this. */
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, SHEKYL_RELAY_ZONE_NOISE_ENABLED);
+        assert!(
+            !h.is_null(),
+            "noise on an encrypted zone is not refused for lack of the fluff bit"
+        );
+        assert!(
+            shekyl_relay_zone_noise_enabled(h),
+            "encrypted + noise, reach = every peer — the axis split, built"
         );
         shekyl_relay_zone_free(h);
 
         // A null handle answers false rather than aborting: a caller that lost
-        // its zone has no covert channels by construction.
-        assert!(!shekyl_relay_zone_covert_enabled(std::ptr::null()));
+        // its zone has no noise channels by construction.
+        assert!(!shekyl_relay_zone_noise_enabled(std::ptr::null()));
     }
 }
 
@@ -865,7 +930,7 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
             rec_gather,
             rec_fluff,
             rec_unbind,
-            rec_covert,
+            rec_noise,
         );
         let t = h
             .as_ref()

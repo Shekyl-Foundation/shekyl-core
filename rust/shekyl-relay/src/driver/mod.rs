@@ -28,9 +28,9 @@
 //! read the stem map on its own schedule: with the zone strand gone, a
 //! caller-initiated read would race this driver's mutations, which is precisely
 //! the hazard the seal named (§18.5 finding 3). Nor is it pushed an array to
-//! decode: a covert binding travels with each [`Effect::CovertSend`], and a
+//! decode: a noise binding travels with each [`Effect::NoiseSend`], and a
 //! channel whose slot is unbound is told so at its own cadence by
-//! [`Effect::CovertUnbind`] — decisions leave, never the inputs to them
+//! [`Effect::NoiseUnbind`] — decisions leave, never the inputs to them
 //! (§20.3). Commands (`update_stems`, connection events) mutate and return
 //! nothing; every effect leaves through [`Driver::poll`] or a force hook.
 
@@ -56,7 +56,7 @@ pub enum Effect {
         /// The batched transaction blobs (shared handles; content-sorted).
         blobs: Vec<TxBlob>,
     },
-    /// Covert channel `channel` is due: send on it now.
+    /// Noise channel `channel` is due: send on it now.
     ///
     /// **Carries no payload discriminant, and that is CV-4** (§20.2). Whether
     /// this send is a dummy or drains a queued real fragment is a *queue*
@@ -67,11 +67,11 @@ pub enum Effect {
     /// `DUMMY | REAL` tag would let the cadence react to having something real
     /// to say — and the breaking change would look like an optimisation
     /// (*"a real fragment is pending, drain it sooner"*), which is a
-    /// covert-channel leak wearing a latency improvement's costume. Constant-rate
+    /// noise-channel leak wearing a latency improvement's costume. Constant-rate
     /// cover works precisely because the schedule cannot know. With no
     /// discriminant here, Rust is not *trusted* to ignore the queue — it is
     /// structurally unable to consult it.
-    CovertSend {
+    NoiseSend {
         /// Channel index. Positional: channel `i` is bound to stem slot `i`.
         channel: usize,
         /// The peer stem slot `channel` is bound to — **the inversion** (§20.3).
@@ -81,11 +81,11 @@ pub enum Effect {
         /// this is never nil.
         peer: ConnectionId,
     },
-    /// Covert channel `channel` is due but its stem slot is unbound: clear it.
+    /// Noise channel `channel` is due but its stem slot is unbound: clear it.
     ///
     /// **The other half of the deleted slot array** (§20.3, amended at the
     /// deletion). The array carried two facts per slot: *who* a bound channel
-    /// sends to — which now travels with each [`Effect::CovertSend`] — and
+    /// sends to — which now travels with each [`Effect::NoiseSend`] — and
     /// *that* an unbound channel stopped. The second fact cannot ride a send,
     /// because an unbound channel emits none (CV-2); without it, the C++
     /// enqueue guard (`queue_covert_notify`'s nil check) reads a stale binding
@@ -103,7 +103,7 @@ pub enum Effect {
     /// it is one-shot, so a clear that fails to take effect (a swallowed
     /// exception, a dropped post) leaves the guard stale *permanently*, which
     /// is the exact failure this effect exists to prevent. Per-tick derivation
-    /// caches nothing and self-heals: a lost clear repeats one covert interval
+    /// caches nothing and self-heals: a lost clear repeats one noise interval
     /// later, and the receiver (`clear_channel`) is idempotent, so repetition
     /// is free.
     ///
@@ -112,7 +112,7 @@ pub enum Effect {
     /// semantics — nil the binding, discard buffers — on the channel's strand.
     /// A rebind never emits this: the new binding travels with the next send,
     /// where the in-flight remainder is discarded (CV-1).
-    CovertUnbind {
+    NoiseUnbind {
         /// Channel index. Positional: channel `i` follows stem slot `i`.
         channel: usize,
     },
@@ -147,7 +147,7 @@ impl Driver {
     }
 
     /// When the driver next has work — the earliest of the epoch boundary,
-    /// any pending fluff batch, any covert channel, and any in-flight stem
+    /// any pending fluff batch, any noise channel, and any in-flight stem
     /// observation.
     ///
     /// **Derived on every call, never cached.** A stored copy would be a second
@@ -157,23 +157,23 @@ impl Driver {
     /// test that fails if someone adds that cache.
     pub fn next_wake(&self) -> Millis {
         // Four sources, folded into one answer: the epoch always has a
-        // deadline; fluff has one only with a batch pending; covert has one
-        // only when the zone runs covert channels; stem observations have one
+        // deadline; fluff has one only with a batch pending; noise has one
+        // only when the zone runs noise channels; stem observations have one
         // while anything is in flight (§38 — silence resolves on this clock).
         //
         // **Folding the sleep is not folding the schedule** (§20.2a). Each
-        // covert channel keeps its own deadline in the zone; this only asks
+        // noise channel keeps its own deadline in the zone; this only asks
         // which is earliest. That distinction is the whole of CV-3: the shared
         // wake is what makes a resample-on-foreign-wake bug *reachable*, so the
-        // re-arm stays in `Zone::due_covert_channel`, which touches only the
+        // re-arm stays in `Zone::due_noise_channel`, which touches only the
         // single channel that actually fired. Stem observation is the same
         // shape: per-tx deadlines live in `StemWatch`; this only folds the min.
         let mut wake = self.zone.epoch_deadline();
         if let Some(fluff) = self.zone.fluff_deadline() {
             wake = wake.min(fluff);
         }
-        if let Some(covert) = self.zone.covert_deadline() {
-            wake = wake.min(covert);
+        if let Some(noise) = self.zone.noise_deadline() {
+            wake = wake.min(noise);
         }
         if let Some(stem) = self.zone.stem_observation_deadline() {
             wake = wake.min(stem);
@@ -217,31 +217,31 @@ impl Driver {
         // selection tier that reads these tallies is §12.11 and is not built.
         // Said here because a production call with a dropped return is
         // otherwise indistinguishable from rot at the next census, which is
-        // the same note the covert machinery carries.
+        // the same note the noise machinery carries.
         let _resolved = self.zone.expire_stem_observations(now);
 
         for (peer, blobs) in self.zone.flush_fluff(now, false) {
             effects.push(Effect::Fluff { peer, blobs });
         }
 
-        // Covert steps last, and after the epoch block on purpose: a rollover
+        // Noise steps last, and after the epoch block on purpose: a rollover
         // rebuilds the stem slots, and channel `i` follows slot `i`, so
         // emitting before the rebuild would name a channel against the slots it
         // is about to stop being bound to.
         //
-        // At most one covert effect per poll (`due_covert_channel`): a late
+        // At most one noise effect per poll (`due_noise_channel`): a late
         // strand that finds several deadlines past must not emit them as a
         // synchronized multi-channel burst. Remaining due channels surface on
         // the next wake (immediate if their deadlines are still in the past).
         // Nothing here consults a queue or a payload — CV-4 by construction.
         // The binding is resolved HERE, against the map the zone owns: send or
         // unbind by the binding's current state. An unbound slot produces no
-        // covert SEND at its index and shifts no other (CV-2); its due tick
-        // carries the clear instead — see [`Effect::CovertUnbind`].
-        if let Some(channel) = self.zone.due_covert_channel(now, rng) {
+        // noise SEND at its index and shifts no other (CV-2); its due tick
+        // carries the clear instead — see [`Effect::NoiseUnbind`].
+        if let Some(channel) = self.zone.due_noise_channel(now, rng) {
             match self.zone.stem_slots().get(channel).copied().flatten() {
-                Some(peer) => effects.push(Effect::CovertSend { channel, peer }),
-                None => effects.push(Effect::CovertUnbind { channel }),
+                Some(peer) => effects.push(Effect::NoiseSend { channel, peer }),
+                None => effects.push(Effect::NoiseUnbind { channel }),
             }
         }
 

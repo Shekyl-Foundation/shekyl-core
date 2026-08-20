@@ -74,6 +74,14 @@
 
 ### Changed
 
+- **Relay axes stay un-collapsed (`DAEMON_RELAY_PRIVACY.md` §93, #513).**
+  Dandelion++ runs on every zone; noise is a carrier on encrypted links only,
+  never a reason to demote a stem. `LinkSecrecy` is constructed only from a
+  `RelayZone` (`of`), so a caller cannot mint "encrypted" beside the wrong
+  reach. `Zone::new` returns `Result<_, ZoneNewError>` — noise-on-cleartext
+  and a mismatched channel count stay distinct refusals; the FFI maps both
+  to null. The inherited covert branch in `send_txs` is deleted, not repaired.
+
 - **Covert executor is a real port (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2, #508).**
   `CovertQueues` owns the fragment window (`dummy.len()`), refuses a
   non-multiple, and emits exactly one window per take — real or cover.

@@ -26,7 +26,7 @@
 //! **A second dividend, unclaimed when this was decided and collected in RP-3b.**
 //! The original argument was only that dispatching here removes the *decoding*
 //! failure mode. It also makes **adding a variant a compile error at every
-//! consumer**: `Effect::CovertSend` broke [`dispatch`] and two further matches
+//! consumer**: `Effect::NoiseSend` broke [`dispatch`] and two further matches
 //! the moment it was introduced, and each had to be answered explicitly. Had the
 //! variant crossed as an integer tag, the new case would have been a silent
 //! default on the C++ side — which does not surface as a test failure but as a
@@ -62,7 +62,7 @@ use shekyl_relay::{
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::stem_map::ConnectionId;
-use shekyl_relay_privacy::zone::RelayZone;
+use shekyl_relay_privacy::zone::{LinkSecrecy, RelayZone};
 
 use crate::secure_relay_rng::SecureRelayRng;
 
@@ -79,11 +79,11 @@ pub const SHEKYL_RELAY_PLAN_FLUFF_EPOCH: i32 = 2;
 /// Carrier: the zone's ordinary connection.
 pub const SHEKYL_RELAY_CARRIER_ORDINARY: u8 = 0;
 /// Carrier: a covert channel, bound to the stem slot (§20.3).
-pub const SHEKYL_RELAY_CARRIER_COVERT: u8 = 1;
+pub const SHEKYL_RELAY_CARRIER_NOISE: u8 = 1;
 
 const _: () = {
     assert!(SHEKYL_RELAY_CARRIER_ORDINARY == 0);
-    assert!(SHEKYL_RELAY_CARRIER_COVERT == 1);
+    assert!(SHEKYL_RELAY_CARRIER_NOISE == 1);
 };
 
 /// One transaction blob: pointer and length, borrowed for the call.
@@ -115,7 +115,7 @@ pub type FluffCb =
 /// clear it — nil the binding, discard buffers — on the channel's strand.
 ///
 /// **The other half of the deleted slot array** (§20.3). The binding itself
-/// travels with each [`CovertSendCb`] call; the *loss* of a binding cannot,
+/// travels with each [`NoiseSendCb`] call; the *loss* of a binding cannot,
 /// because an unbound channel emits no sends (CV-2) — and without it the C++
 /// enqueue guard reads a stale binding forever, so a dormant channel
 /// accumulates queued messages without bound. One channel index crosses: no
@@ -127,7 +127,7 @@ pub type FluffCb =
 /// swallowed clear self-heals one covert interval later. This is why only
 /// [`shekyl_relay_zone_poll`] takes this callback: commands mutate and return
 /// nothing, and every covert consequence rides the schedule.
-pub type CovertUnbindCb = extern "C" fn(ctx: *mut c_void, channel: usize);
+pub type NoiseUnbindCb = extern "C" fn(ctx: *mut c_void, channel: usize);
 
 /// Called when covert channel `channel` is due to send.
 ///
@@ -142,13 +142,13 @@ pub type CovertUnbindCb = extern "C" fn(ctx: *mut c_void, channel: usize);
 /// **binding travels with the send** instead of as a pushed slot array: this is
 /// §20.3's inversion, and it is what lets the array (and its positional
 /// decoding on the C++ side) be deleted.
-pub type CovertSendCb = extern "C" fn(ctx: *mut c_void, channel: usize, peer: *const u8);
+pub type NoiseSendCb = extern "C" fn(ctx: *mut c_void, channel: usize, peer: *const u8);
 
 /// Zone-shape flags for [`shekyl_relay_zone_new`].
 ///
 /// **Named bits, deliberately, instead of a second `bool` parameter.** RP-3b
 /// needs the zone to carry a covert-enabled fact alongside the existing
-/// outbound-fluff rule; appending `covert_enabled: bool` would have put two
+/// outbound-fluff rule; appending `noise_enabled: bool` would have put two
 /// adjacent `bool`s at the end of a C signature, where a transposition
 /// compiles cleanly on both sides and is silent at runtime.
 ///
@@ -167,7 +167,7 @@ pub const SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY: u32 = 1 << 0;
 
 /// This zone runs covert (noise) channels. See
 /// [`SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY`] for why these are bits.
-pub const SHEKYL_RELAY_ZONE_COVERT_ENABLED: u32 = 1 << 1;
+pub const SHEKYL_RELAY_ZONE_NOISE_ENABLED: u32 = 1 << 1;
 
 /// Supplies the outbound connection set on demand.
 ///
@@ -265,8 +265,8 @@ fn dispatch(
     effects: Vec<Effect>,
     ctx: *mut c_void,
     fluff: FluffCb,
-    unbind: CovertUnbindCb,
-    covert: CovertSendCb,
+    unbind: NoiseUnbindCb,
+    noise: NoiseSendCb,
 ) {
     for effect in effects {
         match effect {
@@ -281,10 +281,10 @@ fn dispatch(
                     .collect();
                 fluff(ctx, peer.as_bytes().as_ptr(), spans.as_ptr(), spans.len());
             }
-            Effect::CovertSend { channel, peer } => {
-                covert(ctx, channel, peer.as_bytes().as_ptr());
+            Effect::NoiseSend { channel, peer } => {
+                noise(ctx, channel, peer.as_bytes().as_ptr());
             }
-            Effect::CovertUnbind { channel } => {
+            Effect::NoiseUnbind { channel } => {
                 unbind(ctx, channel);
             }
         }
@@ -293,8 +293,8 @@ fn dispatch(
 
 /// See [`noop_unbind`] — `force_fluff` releases batches and can produce
 /// neither covert variant.
-extern "C" fn noop_covert(_: *mut c_void, _: usize, _: *const u8) {
-    debug_assert!(false, "force_fluff produced a CovertSend effect");
+extern "C" fn noop_noise(_: *mut c_void, _: usize, _: *const u8) {
+    debug_assert!(false, "force_fluff produced a NoiseSend effect");
 }
 
 /// # Safety
@@ -410,6 +410,21 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// overflow the slot arithmetic, or a zero epoch — which is not merely useless
 /// but harmful, since every wake would find the epoch expired and the daemon's
 /// relay timer would spin. The caller treats null as a startup logic error.
+///
+/// It also returns null on a configuration [`Zone::new`] refuses, not only a
+/// malformed one. Secrecy is read from the **zone discriminant**, not from a
+/// flag bit: `SHEKYL_RELAY_ZONE_NOISE_ENABLED` on a cleartext `zone` byte
+/// (public, or out-of-domain) is noise on a link where padding sizes conceals
+/// nothing an observer cannot already read. The fluff-reach bit is a different
+/// axis — `NOISE_ENABLED` without `OUTBOUND_FLUFF_ONLY` on an *encrypted*
+/// zone is a valid configuration (encrypted clearnet, when that exists) and
+/// builds. Noise with a `stems` other than the inherited channel count is
+/// refused for the same reason it was a `debug_assert!` before — C++ indexes
+/// its channel deque by that count. Both refusals are distinct
+/// [`shekyl_relay::ZoneNewError`] variants; this export maps them to null
+/// because that is the only channel a C ABI has. They are enforced at
+/// [`Zone::new`], so an in-process Rust caller after the daemon cutover
+/// cannot route around them.
 #[no_mangle]
 pub extern "C" fn shekyl_relay_zone_new(
     now_ms: u64,
@@ -423,7 +438,8 @@ pub extern "C" fn shekyl_relay_zone_new(
         return std::ptr::null_mut();
     }
     let outbound_fluff_only = flags & SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY != 0;
-    let covert_enabled = flags & SHEKYL_RELAY_ZONE_COVERT_ENABLED != 0;
+    let noise_enabled = flags & SHEKYL_RELAY_ZONE_NOISE_ENABLED != 0;
+    let relay_zone = RelayZone::from_ffi_u8(zone);
     let params = DandelionParams {
         min_epoch_secs,
         epoch_jitter_secs,
@@ -435,15 +451,34 @@ pub extern "C" fn shekyl_relay_zone_new(
         // to re-relay, so `stem_tallies` would report the whole anonymity peer
         // set as withholding. The epoch pair stays C++-owned and crosses as
         // the arguments above.
-        ..DandelionParams::adopted_for(RelayZone::from_ffi_u8(zone))
+        ..DandelionParams::adopted_for(relay_zone)
     };
     let reach = if outbound_fluff_only {
         FluffReach::OutboundOnly
     } else {
         FluffReach::EveryPeer
     };
+    // Secrecy is a function of the zone discriminant, not a flag bit. The
+    // zone byte already crosses and encryption is a property of the network,
+    // so `LinkSecrecy::of` keeps one transposable bit off the ABI and keeps
+    // the eligibility rule in one place — `RelayZone::is_encrypted`.
+    let secrecy = LinkSecrecy::of(relay_zone);
     let mut rng = SecureRelayRng;
-    let zone = Zone::new(params, stems, reach, covert_enabled, now_ms, &mut rng);
+    // `Err` is a refused configuration, not an allocation failure — a noise
+    // carrier on a cleartext zone, or a channel count C++'s deque cannot index.
+    // See `Zone::new`. Null is the only channel a C ABI has for saying so, and
+    // the one C++ construction site checks it.
+    let Ok(zone) = Zone::new(
+        params,
+        stems,
+        reach,
+        secrecy,
+        noise_enabled,
+        now_ms,
+        &mut rng,
+    ) else {
+        return core::ptr::null_mut();
+    };
     let handle = RelayZoneHandle {
         driver: Driver::new(zone),
         rng,
@@ -524,8 +559,8 @@ pub unsafe extern "C" fn shekyl_relay_zone_live_stems(handle: *const RelayZoneHa
     (*handle).live_stems.load(Ordering::Acquire)
 }
 
-/// Configured stem width (slot count). When covert is enabled this is also the
-/// covert channel count — channel `i` follows slot `i`. C++ sizes its channel
+/// Configured stem width (slot count). When noise is enabled this is also the
+/// noise channel count — channel `i` follows slot `i`. C++ sizes its channel
 /// deque from this rather than from a parallel `#define`, so the two widths
 /// cannot silently diverge.
 ///
@@ -539,7 +574,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_width(handle: *const RelayZoneHa
     }
 }
 
-/// Whether this zone runs covert (noise) channels.
+/// Whether this zone runs noise channels.
 ///
 /// The **single owner** of a fact C++ used to re-derive at nine sites from
 /// `!zone::noise.empty()` — a byte payload doing double duty as its own enable
@@ -548,15 +583,15 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_width(handle: *const RelayZoneHa
 /// Frozen at construction, so this is a plain read with no publish/atomic
 /// dance: unlike `live_stems` there is no writer after `new`, and nothing to
 /// race. Returns `false` for a null handle — a caller that lost its zone has no
-/// covert channels by construction, and the alternative (abort) would turn a
+/// noise channels by construction, and the alternative (abort) would turn a
 /// C++ lifetime bug into a daemon crash at a read that cannot itself be wrong.
 ///
 /// # Safety
 /// `handle` must be null or a live zone from [`shekyl_relay_zone_new`].
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_relay_zone_covert_enabled(handle: *const RelayZoneHandle) -> bool {
+pub unsafe extern "C" fn shekyl_relay_zone_noise_enabled(handle: *const RelayZoneHandle) -> bool {
     match handle.as_ref() {
-        Some(h) => h.driver.zone().covert_enabled(),
+        Some(h) => h.driver.zone().noise_enabled(),
         None => false,
     }
 }
@@ -1099,9 +1134,9 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
             *out_carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
             *out_channel = 0;
         }
-        RelayCarrier::Covert { channel } => match u32::try_from(channel.get()) {
+        RelayCarrier::Noise { channel } => match u32::try_from(channel.get()) {
             Ok(channel) => {
-                *out_carrier = SHEKYL_RELAY_CARRIER_COVERT;
+                *out_carrier = SHEKYL_RELAY_CARRIER_NOISE;
                 *out_channel = channel;
             }
             Err(_) => {
@@ -1116,7 +1151,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
                 over the ordinary connection. §92.4's rule is that carrier
                 unavailability must never travel as a routing verdict, which
                 is why this is not a NO_ROUTE. */
-                debug_assert!(false, "covert channel {} exceeds u32", channel.get());
+                debug_assert!(false, "noise channel {} exceeds u32", channel.get());
                 *out_carrier = SHEKYL_RELAY_CARRIER_ORDINARY;
                 *out_channel = 0;
             }
@@ -1245,8 +1280,8 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
     ctx: *mut c_void,
     gather_outbound: OutboundCb,
     on_fluff: FluffCb,
-    on_unbind: CovertUnbindCb,
-    on_covert: CovertSendCb,
+    on_unbind: NoiseUnbindCb,
+    on_noise: NoiseSendCb,
 ) {
     if handle.is_null() {
         return;
@@ -1264,7 +1299,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
         &mut h.rng,
     );
     h.publish();
-    dispatch(effects, ctx, on_fluff, on_unbind, on_covert);
+    dispatch(effects, ctx, on_fluff, on_unbind, on_noise);
 }
 
 /// Release every pending fluff batch — what `notify::run_fluff()` drives.
@@ -1284,7 +1319,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_fluff(
     let h = &mut *handle;
     let effects = h.driver.force_fluff(now_ms);
     h.publish();
-    dispatch(effects, ctx, on_fluff, noop_unbind, noop_covert);
+    dispatch(effects, ctx, on_fluff, noop_unbind, noop_noise);
 }
 
 /// Start a new epoch immediately — what `notify::run_epoch()` drives. No
@@ -1314,7 +1349,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(
 /// Reaching one is a dispatch bug, so they assert in debug rather than failing
 /// silently.
 extern "C" fn noop_unbind(_: *mut c_void, _: usize) {
-    debug_assert!(false, "force_fluff produced a CovertUnbind effect");
+    debug_assert!(false, "force_fluff produced a NoiseUnbind effect");
 }
 
 #[cfg(test)]

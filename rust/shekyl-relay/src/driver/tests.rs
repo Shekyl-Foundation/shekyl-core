@@ -5,9 +5,11 @@
 
 use super::*;
 use crate::stem_watch::TxId;
+use crate::LinkSecrecy;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::schedule::PeerDirection;
+use shekyl_relay_privacy::RelayZone;
 
 fn id(byte: u8) -> ConnectionId {
     let mut b = [0u8; 16];
@@ -24,14 +26,18 @@ fn no_gather() -> Vec<ConnectionId> {
 }
 
 fn driver(rng: &mut SplitMix64) -> Driver {
-    Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        false,
-        0,
-        rng,
-    ))
+    Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::EveryPeer,
+            LinkSecrecy::of(RelayZone::Public),
+            false,
+            0,
+            rng,
+        )
+        .unwrap(),
+    )
 }
 
 #[test]
@@ -141,7 +147,7 @@ fn a_mid_epoch_refresh_fills_the_map_without_rolling_the_epoch() {
     );
 }
 
-/// A **due** channel whose slot is unbound emits [`Effect::CovertUnbind`]
+/// A **due** channel whose slot is unbound emits [`Effect::NoiseUnbind`]
 /// at its own index, **at every due tick** — the fact the deleted slot
 /// array carried that a send cannot: an unbound channel emits no sends
 /// (CV-2), so *stopping* must cross on its own, or the C++ enqueue guard
@@ -163,18 +169,22 @@ fn a_mid_epoch_refresh_fills_the_map_without_rolling_the_epoch() {
 ///   own-index assertion fails;
 /// - **invert the binding condition** (unbind when bound): the bound
 ///   channel's send assertion fails here, and the rebind leg of
-///   [`a_rebind_and_a_covert_disabled_zone_emit_no_unbind`] with it.
+///   [`a_rebind_and_a_noise_disabled_zone_emit_no_unbind`] with it.
 #[test]
 fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
     let mut rng = SplitMix64::new(31);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::of(RelayZone::Tor),
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     d.zone_mut()
         .on_handshake_complete(id(1), PeerDirection::Outbound);
     d.zone_mut()
@@ -211,7 +221,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
         let wake = d.next_wake();
         for e in d.poll(wake, no_gather, &mut rng) {
             match e {
-                Effect::CovertUnbind { channel } => {
+                Effect::NoiseUnbind { channel } => {
                     assert_eq!(
                         channel, 0,
                         "only the unbound channel clears — 1 here is the \
@@ -219,7 +229,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
                     );
                     unbinds += 1;
                 }
-                Effect::CovertSend { channel, peer } => {
+                Effect::NoiseSend { channel, peer } => {
                     assert_eq!(
                         (channel, peer),
                         (1, keep),
@@ -249,18 +259,22 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
 /// unbind to ride). Standing negative pair for
 /// [`a_due_channel_with_an_unbound_slot_clears_at_every_tick`].
 #[test]
-fn a_rebind_and_a_covert_disabled_zone_emit_no_unbind() {
+fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
     // Rebind: close slot 0's peer but offer a replacement, so the churned
     // slot refills — bound again by the time any tick comes due.
     let mut rng = SplitMix64::new(37);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::of(RelayZone::Tor),
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     d.zone_mut()
         .on_handshake_complete(id(1), PeerDirection::Outbound);
     d.zone_mut()
@@ -285,8 +299,8 @@ fn a_rebind_and_a_covert_disabled_zone_emit_no_unbind() {
         let wake = d.next_wake();
         for e in d.poll(wake, no_gather, &mut rng) {
             match e {
-                Effect::CovertSend { .. } => sends += 1,
-                Effect::CovertUnbind { channel } => panic!(
+                Effect::NoiseSend { .. } => sends += 1,
+                Effect::NoiseUnbind { channel } => panic!(
                     "channel {channel} cleared on a rebound slot — this \
                      drops queued messages the inherited repoint \
                      delivered to the successor"
@@ -317,7 +331,7 @@ fn a_rebind_and_a_covert_disabled_zone_emit_no_unbind() {
         "fixture: the hole exists on the disabled zone too"
     );
     assert_eq!(
-        d.zone().covert_deadline(),
+        d.zone().noise_deadline(),
         None,
         "no covert schedule ⇒ no tick for an unbind to ride"
     );
@@ -364,7 +378,7 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
     assert_ne!(d.zone().epoch_deadline(), before, "a new epoch was drawn");
 }
 
-/// Covert channels emit **independently**: one `CovertSend` per advance.
+/// Noise channels emit **independently**: one `NoiseSend` per advance.
 ///
 /// **This is a soundness property, not an implementation preference.**
 /// Constant-rate cover works because the aggregate rate is constant. Two
@@ -397,16 +411,20 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
 /// control that only reaches the precondition would be the
 /// asserted-a-constant-against-itself shape at one remove.
 #[test]
-fn covert_channels_emit_one_per_advance_not_synchronized() {
+fn noise_channels_emit_one_per_advance_not_synchronized() {
     let mut rng = SplitMix64::new(11);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::of(RelayZone::Tor),
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     // Bind both slots: since the inversion, an unbound slot emits no send
     // (CV-2), and this test is about cadence, not binding.
     d.zone_mut()
@@ -418,8 +436,8 @@ fn covert_channels_emit_one_per_advance_not_synchronized() {
     // Fixture requirement: distinct deadlines, or "one per advance" could
     // hold by coincidence rather than by independence.
     let (a, b) = (
-        d.zone().covert_deadline_at(0).expect("ch0 armed"),
-        d.zone().covert_deadline_at(1).expect("ch1 armed"),
+        d.zone().noise_deadline_at(0).expect("ch0 armed"),
+        d.zone().noise_deadline_at(1).expect("ch1 armed"),
     );
     assert_ne!(a, b, "the two channels must be armed independently");
 
@@ -429,7 +447,7 @@ fn covert_channels_emit_one_per_advance_not_synchronized() {
         .poll(first, Vec::new, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
-            Effect::CovertSend { channel, .. } => Some(channel),
+            Effect::NoiseSend { channel, .. } => Some(channel),
             _ => None,
         })
         .collect();
@@ -448,7 +466,7 @@ fn covert_channels_emit_one_per_advance_not_synchronized() {
         .poll(second, Vec::new, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
-            Effect::CovertSend { channel, .. } => Some(channel),
+            Effect::NoiseSend { channel, .. } => Some(channel),
             _ => None,
         })
         .collect();
@@ -478,16 +496,20 @@ fn covert_channels_emit_one_per_advance_not_synchronized() {
 ///   This control only exists because the inversion introduced a channel
 ///   index; the array had no index to be off by.
 #[test]
-fn covert_sends_carry_the_slots_own_peer_at_its_own_index() {
+fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
     let mut rng = SplitMix64::new(23);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::of(RelayZone::Tor),
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     d.zone_mut()
         .on_handshake_complete(id(1), PeerDirection::Outbound);
     d.zone_mut()
@@ -512,7 +534,7 @@ fn covert_sends_carry_the_slots_own_peer_at_its_own_index() {
         }
         let wake = d.next_wake();
         for e in d.poll(wake, Vec::new, &mut rng) {
-            if let Effect::CovertSend { channel, peer } = e {
+            if let Effect::NoiseSend { channel, peer } = e {
                 assert_eq!(
                     Some(peer),
                     truth[channel],
@@ -533,7 +555,7 @@ fn covert_sends_carry_the_slots_own_peer_at_its_own_index() {
 
 /// CV-2, half 2: an **unbound** slot emits no covert *send* at its index,
 /// and shifts no other channel's index. (Its due tick carries the clear
-/// instead — [`Effect::CovertUnbind`], witnessed separately — which this
+/// instead — [`Effect::NoiseUnbind`], witnessed separately — which this
 /// test's collector deliberately ignores: CV-2 is a statement about wire
 /// emissions, and an unbind never reaches the wire.)
 ///
@@ -549,14 +571,18 @@ fn covert_sends_carry_the_slots_own_peer_at_its_own_index() {
 #[test]
 fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
     let mut rng = SplitMix64::new(29);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::of(RelayZone::Tor),
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     d.zone_mut()
         .on_handshake_complete(id(1), PeerDirection::Outbound);
     d.zone_mut()
@@ -584,7 +610,7 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
         }
         let wake = d.next_wake();
         for e in d.poll(wake, Vec::new, &mut rng) {
-            if let Effect::CovertSend { channel, peer } = e {
+            if let Effect::NoiseSend { channel, peer } = e {
                 emissions.push((channel, peer));
             }
         }
@@ -613,30 +639,34 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
 /// Production `relay_wake` polls with wall-clock `now_ms()`, not `next_wake()`.
 /// After a stall both channels can be overdue; firing them together is the
 /// synchronized multi-channel burst constant-rate cover exists to deny (see
-/// [`covert_channels_emit_one_per_advance_not_synchronized`]). The remaining
+/// [`noise_channels_emit_one_per_advance_not_synchronized`]). The remaining
 /// due channel surfaces on the next wake.
 ///
 /// Also pins re-arm-from-`now`: the fired channel's new deadline is strictly
 /// after the poll time, so a multi-interval stall cannot catch-up-burst.
 #[test]
-fn a_late_poll_emits_at_most_one_covert_channel() {
+fn a_late_poll_emits_at_most_one_noise_channel() {
     let mut rng = SplitMix64::new(13);
-    let mut d = Driver::new(Zone::new(
-        DandelionParams::inherited(),
-        2,
-        FluffReach::EveryPeer,
-        true,
-        0,
-        &mut rng,
-    ));
+    let mut d = Driver::new(
+        Zone::new(
+            DandelionParams::inherited(),
+            2,
+            FluffReach::OutboundOnly,
+            LinkSecrecy::of(RelayZone::Tor),
+            true,
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     d.zone_mut()
         .on_handshake_complete(id(1), PeerDirection::Outbound);
     d.zone_mut()
         .on_handshake_complete(id(2), PeerDirection::Outbound);
     d.zone_mut().update_stems(vec![id(1), id(2)], &mut rng);
 
-    let a = d.zone().covert_deadline_at(0).expect("ch0 armed");
-    let b = d.zone().covert_deadline_at(1).expect("ch1 armed");
+    let a = d.zone().noise_deadline_at(0).expect("ch0 armed");
+    let b = d.zone().noise_deadline_at(1).expect("ch1 armed");
     assert_ne!(a, b, "fixture: independent arms");
     let late = a.max(b) + 60_000;
 
@@ -644,7 +674,7 @@ fn a_late_poll_emits_at_most_one_covert_channel() {
         .poll(late, no_gather, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
-            Effect::CovertSend { channel, .. } | Effect::CovertUnbind { channel } => Some(channel),
+            Effect::NoiseSend { channel, .. } | Effect::NoiseUnbind { channel } => Some(channel),
             Effect::Fluff { .. } => None,
         })
         .collect();
@@ -656,7 +686,7 @@ fn a_late_poll_emits_at_most_one_covert_channel() {
     let fired = first[0];
     let rearmed = d
         .zone()
-        .covert_deadline_at(fired)
+        .noise_deadline_at(fired)
         .expect("fired channel still scheduled");
     assert!(
         rearmed > late,
@@ -669,7 +699,7 @@ fn a_late_poll_emits_at_most_one_covert_channel() {
         .poll(late, no_gather, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
-            Effect::CovertSend { channel, .. } | Effect::CovertUnbind { channel } => Some(channel),
+            Effect::NoiseSend { channel, .. } | Effect::NoiseUnbind { channel } => Some(channel),
             Effect::Fluff { .. } => None,
         })
         .collect();

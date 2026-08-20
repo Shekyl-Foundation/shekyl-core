@@ -32,6 +32,44 @@ pub enum RelayZone {
 }
 
 impl RelayZone {
+    /// Whether this zone's links are encrypted.
+    ///
+    /// **This is what decides noise eligibility**, and it is deliberately not
+    /// the same question as anonymity. Anonymity is about who can be
+    /// *identified*; encryption is about what a wire observer can *read*.
+    /// Noise conceals packet sizing, and sizing is the only thing left to read
+    /// once the link is encrypted — on a cleartext link the observer reads the
+    /// contents outright, so padding the sizes conceals nothing and the
+    /// bandwidth is spent for no privacy.
+    ///
+    /// The two predicates coincide for the current zone set only because
+    /// ordinary internet traffic is not encrypted. Encrypting it would make
+    /// [`Self::Public`] eligible for noise **without** making it anonymous,
+    /// and this is the one place that would change.
+    ///
+    /// [`Self::Invalid`] answers **false**, and the asymmetry with
+    /// [`Self::from_ffi_u8`] is deliberate rather than an oversight. A corrupt
+    /// byte draws the *anonymity* parameters there because the longer embargo
+    /// is the safe direction when the zone is unknown. Here the safe direction
+    /// is the opposite one: an unknown link is not presumed encrypted, so it
+    /// earns no noise. Both choose the answer that cannot silently weaken a
+    /// protection — which is why they point opposite ways.
+    ///
+    /// **The hop that matters is the overlay leaving the machine.** A loopback
+    /// SOCKS into a local Tor/i2p daemon (`--tx-proxy tor,127.0.0.1:9050`) is
+    /// the standard first hop and is not a wire observer: Tor/i2p encrypts
+    /// what leaves. Do not re-key this predicate on the SOCKS endpoint's
+    /// address — that collapses overlay secrecy into first-hop locality, which
+    /// is a connect-path concern and a different axis.
+    ///
+    /// Callers that need secrecy as a *value* (a zone constructor argument,
+    /// a stored axis) go through [`LinkSecrecy::of`], which is the only way
+    /// to mint one. This predicate stays the defining function.
+    #[must_use]
+    pub const fn is_encrypted(self) -> bool {
+        matches!(self, Self::I2p | Self::Tor)
+    }
+
     /// Decode a zone arriving across the FFI as a whole byte.
     ///
     /// Out of `0..=3` → [`Self::Invalid`]. **Do not mask** (`raw & 0b11`):
@@ -65,9 +103,44 @@ impl RelayZone {
     }
 }
 
+/// Whether a zone's links are encrypted — the **network secrecy** axis.
+///
+/// Transform-shaped (rule 18): defined by [`RelayZone::is_encrypted`], so it
+/// lives next to that function rather than at the consumer. Constructed only
+/// from a [`RelayZone`] via [`LinkSecrecy::of`]. There is no `Encrypted` or
+/// `Cleartext` variant a caller can mint beside the wrong reach — that is
+/// the collapse this type exists to make unrepresentable.
+///
+/// Kept as its own type rather than a `bool` because adjacent same-typed
+/// arguments transpose silently, and because *reach* (who receives a fluff)
+/// and *secrecy* (what a wire observer can read) are independent axes that
+/// this subsystem keeps collapsing into one word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkSecrecy {
+    encrypted: bool,
+}
+
+impl LinkSecrecy {
+    /// The secrecy of `zone`'s links. **The only constructor.**
+    #[must_use]
+    pub const fn of(zone: RelayZone) -> Self {
+        Self {
+            encrypted: zone.is_encrypted(),
+        }
+    }
+
+    /// True when a wire observer cannot read contents — the noise-eligibility
+    /// predicate. Equal to [`RelayZone::is_encrypted`] on the zone this was
+    /// constructed from.
+    #[must_use]
+    pub const fn is_encrypted(self) -> bool {
+        self.encrypted
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::RelayZone;
+    use super::{LinkSecrecy, RelayZone};
     use crate::params::DandelionParams;
 
     #[test]
@@ -110,5 +183,34 @@ mod tests {
         assert!(RelayZone::Public.is_clearnet());
         assert!(!RelayZone::I2p.is_clearnet());
         assert!(!RelayZone::Tor.is_clearnet());
+    }
+
+    #[test]
+    fn invalid_is_not_encrypted_and_tor_i2p_are() {
+        // The fail-safe opposite of `from_ffi_u8`: unknown zone → longest
+        // embargo (safe for anonymity parameters) but NOT presumed encrypted
+        // (an unknown link earns no noise). Both pick the answer that cannot
+        // silently weaken a protection.
+        assert!(!RelayZone::Invalid.is_encrypted());
+        assert!(!RelayZone::Public.is_encrypted());
+        assert!(RelayZone::I2p.is_encrypted());
+        assert!(RelayZone::Tor.is_encrypted());
+    }
+
+    #[test]
+    fn link_secrecy_is_a_function_of_the_zone_and_nothing_else() {
+        assert!(!LinkSecrecy::of(RelayZone::Invalid).is_encrypted());
+        assert!(!LinkSecrecy::of(RelayZone::Public).is_encrypted());
+        assert!(LinkSecrecy::of(RelayZone::I2p).is_encrypted());
+        assert!(LinkSecrecy::of(RelayZone::Tor).is_encrypted());
+        assert_eq!(
+            LinkSecrecy::of(RelayZone::Tor),
+            LinkSecrecy::of(RelayZone::I2p),
+            "both encrypted networks are the same secrecy value — identity is not this axis"
+        );
+        assert_ne!(
+            LinkSecrecy::of(RelayZone::Tor),
+            LinkSecrecy::of(RelayZone::Public)
+        );
     }
 }

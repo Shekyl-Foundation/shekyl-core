@@ -262,7 +262,7 @@ namespace levin
       if (nzone != epee::net_utils::zone::public_)
         flags |= SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
       if (covert_enabled)
-        flags |= SHEKYL_RELAY_ZONE_COVERT_ENABLED;
+        flags |= SHEKYL_RELAY_ZONE_NOISE_ENABLED;
 
       return shekyl_relay_zone_new(
         now_ms(), std::uint8_t(nzone), params.stems,
@@ -406,9 +406,20 @@ namespace levin
            parallel `#define`, so the two sides cannot silently diverge.
            `relay` is fully initialized here because members initialize in
            declaration order and this is the constructor body. */
+        /* Re-homed from the deleted covert branch (§93.1), NOT dropped with it.
+           The branch was the only site holding this, but the constraint it
+           guards outlives it: the channels built below emit dummies at the
+           payload's fragment size whether or not anything is ever queued, so a
+           fragment setting most nodes would reject is still reachable. Here is
+           where the channels are born, which is where it belongs. */
+        static_assert(
+          CRYPTONOTE_MAX_FRAGMENTS * CRYPTONOTE_NOISE_BYTES <= LEVIN_DEFAULT_MAX_PACKET_SIZE,
+          "most nodes will reject this fragment setting"
+        );
+
         const std::size_t channel_width = shekyl_relay_zone_stem_width(relay.get());
         for (std::size_t count = 0;
-             shekyl_relay_zone_covert_enabled(relay.get()) && count < channel_width;
+             shekyl_relay_zone_noise_enabled(relay.get()) && count < channel_width;
              ++count)
           channels.emplace_back(io_service);
       }
@@ -416,7 +427,7 @@ namespace levin
       const std::shared_ptr<connections> p2p;
       /*! The dummy covert packet, and the fragment unit every covert send is
           cut to. Payload ONLY: whether the zone runs covert channels is the
-          zone's fact now (`shekyl_relay_zone_covert_enabled`), not this
+          zone's fact now (`shekyl_relay_zone_noise_enabled`), not this
           field's emptiness. It used to be both, which is why nine sites
           re-derived an enable flag from a byte buffer (§20.4). */
       const epee::byte_slice covert_payload;
@@ -606,9 +617,9 @@ namespace levin
       //! index, no array, no width to reconcile. Fires per due tick while the
       //! slot stays unbound (see `clear_channel` for why that repetition is
       //! the design). Runs on the zone strand (the wake fired there) and posts
-      //! to the channel's own strand, exactly like `on_covert` — nothing reads
+      //! to the channel's own strand, exactly like `on_noise` — nothing reads
       //! the zone handle off the zone strand.
-      static void on_covert_unbind(void* ctx, std::size_t channel) noexcept
+      static void on_noise_unbind(void* ctx, std::size_t channel) noexcept
       {
         assert(ctx != nullptr);
         try
@@ -638,7 +649,7 @@ namespace levin
       //!
       //! Note what it does NOT take: any hint of what is being sent (CV-4).
       //! C++ picks dummy-or-real from a queue Rust cannot see.
-      static void on_covert(void* ctx, std::size_t channel, const std::uint8_t* peer) noexcept
+      static void on_noise(void* ctx, std::size_t channel, const std::uint8_t* peer) noexcept
       {
         assert(ctx != nullptr);
         try
@@ -747,8 +758,8 @@ namespace levin
         shekyl_relay_zone_poll(
           zone_->relay.get(), now_ms(),
           std::addressof(sink), relay_effects::on_outbound,
-          relay_effects::on_fluff, relay_effects::on_covert_unbind,
-          relay_effects::on_covert
+          relay_effects::on_fluff, relay_effects::on_noise_unbind,
+          relay_effects::on_noise
         );
 
         arm(std::move(zone_), core_);
@@ -1007,7 +1018,7 @@ namespace levin
        single-writer atomic precisely because this method is callable from any
        thread (§18.5 finding 1). */
     const std::size_t connection_count = shekyl_relay_zone_live_stems(zone_->relay.get());
-    const bool noise = shekyl_relay_zone_covert_enabled(zone_->relay.get());
+    const bool noise = shekyl_relay_zone_noise_enabled(zone_->relay.get());
     bool has_outgoing = connection_count;
     if (!noise)
       has_outgoing = zone_->p2p->get_out_connections_count();
@@ -1134,7 +1145,7 @@ namespace levin
       shekyl_relay_zone_poll(
         z->relay.get(), shekyl_relay_zone_next_wake(z->relay.get()),
         std::addressof(sink), relay_effects::on_outbound,
-        relay_effects::on_fluff, relay_effects::on_covert_unbind, relay_effects::on_covert
+        relay_effects::on_fluff, relay_effects::on_noise_unbind, relay_effects::on_noise
       );
       relay_wake::arm(z, core);
     });
@@ -1281,88 +1292,63 @@ namespace levin
     if (!zone_)
       return false;
 
-    /* If noise is enabled in a zone, it always takes precedence. The technique
-       provides good protection against ISP adversaries, but not sybil
-       adversaries. Noise is currently only enabled over I2P/Tor - those
-       networks provide protection against sybil attacks (we only send to
-       outgoing connections).
+    /* Dandelion++ runs on every zone, regardless of noise (§93.1). The
+       inherited covert branch that stood here — noise taking precedence,
+       stem demoted to local, all-channel broadcast — is DELETED, not
+       repaired (§2.9 step 4). Its opening sentence ("If noise is enabled
+       in a zone, it always takes precedence") was the architecture; the
+       code no longer does that, and a comment that still said so would
+       instruct the next reader to rebuild it.
 
-       If noise is disabled, Dandelion++ runs on **every** zone (§89). The
-       inherited comment here said "public networks only", and named the
-       blocker as the mempool/stempool needing to know a tx's originating zone.
-       Both are retired: Tor is a transport like the clear internet, and
-       changing the transport does not change the graph; and the zone travels
-       as a parameter beside `tx_relay` into `set_relayed`, so nothing has to
-       be remembered to draw the embargo per zone (§89.2).
+       Noise masks the node↔proxy wire against an **external** observer;
+       Dandelion++ defends against an **internal** adversarial peer. Enabling
+       one is not a reason to disable the other. The Rust executor
+       (`NoiseQueues`) owns the carrier and attaches it *below* the phase
+       (`plan_dispatch`). Until step 5 gives that executor an in-process
+       caller, a noise-configured zone runs its channels and carries nothing:
+       it spends bandwidth and leaks no phase. The branch was unreachable in
+       production either way — both notifier constructions pass a null noise
+       payload.
+
+       Recording parity was checked before the deletion. `fluff` makes the
+       identical `on_transactions_relayed` call below. `stem`/`local` are
+       recorded inside `dandelionpp_notify`'s `record_relayed`, with
+       `originated_stays_in_zone` applied — the *planned* method rather than
+       the blanket `local` downgrade. `none`/`block` were being RELAYED by
+       the deleted branch, which had no switch at all; the arm below refuses
+       them, and `none` means do not relay.
 
        What is *not* symmetric is the txpool class an origin keeps — see
        `originated_stays_in_zone` at the record sites in `dandelionpp_notify`. */
 
-    if (shekyl_relay_zone_covert_enabled(zone_->relay.get()) && !zone_->channels.empty())
+    switch (tx_relay)
     {
-      // covert send in "noise" channel
-      static_assert(
-        CRYPTONOTE_MAX_FRAGMENTS * CRYPTONOTE_NOISE_BYTES <= LEVIN_DEFAULT_MAX_PACKET_SIZE, "most nodes will reject this fragment setting"
-      );
-
-      if (tx_relay == relay_method::stem)
-      {
-        MWARNING("Dandelion++ stem not supported over noise networks");
-        tx_relay = relay_method::local; // do not put into stempool embargo (hopefully not there already!).
-      }
-
-      core_->on_transactions_relayed(epee::to_span(txs), tx_relay, zone_->nzone);
-
-      // Padding is not useful when using noise mode. Send as stem so receiver
-      // forwards in Dandelion++ mode.
-      epee::byte_slice message = epee::levin::make_fragmented_notify(
-        zone_->covert_payload.size(), NOTIFY_NEW_TRANSACTIONS::ID, make_tx_message(std::move(txs), false, false)
-      );
-      if (CRYPTONOTE_MAX_FRAGMENTS * zone_->covert_payload.size() < message.size())
-      {
-        MERROR("notify::send_txs provided message exceeding covert fragment size");
+      default:
+      case relay_method::none:
+      case relay_method::block:
         return false;
-      }
+      case relay_method::stem:
+      case relay_method::local:
+        /* GATE 3 of 3, deleted at §89.5. This was gated on
+           `zone_->nzone == public_`, so stem/local on i2p/tor fell
+           through into the fluff arm and the anonymity zone diffused where
+           the design said it stemmed (§63). Tor is a transport like the
+           clear internet; changing the transport does not change the graph.
 
-      for (std::size_t channel = 0; channel < zone_->channels.size(); ++channel)
-      {
+           The outbound-only fluff rule is unaffected and still applies when
+           this stem later fluffs — it travels with the zone's `reach`
+           (`FluffReach::OutboundOnly`, set from `nzone != public_` in
+           `make_relay_zone`), which no stemming decision touches. */
+        // this will change a local tx to stem or fluff ...
         boost::asio::dispatch(
-          zone_->channels[channel].strand,
-          queue_covert_notify{zone_, message.clone(), channel}
+          zone_->strand,
+          dandelionpp_notify{zone_, core_, std::move(txs), source, tx_relay}
         );
-      }
-    }
-    else
-    {
-      switch (tx_relay)
-      {
-        default:
-        case relay_method::none:
-        case relay_method::block:
-          return false;
-        case relay_method::stem:
-        case relay_method::local:
-          /* GATE 3 of 3, deleted at §89.5. This was gated on
-             `zone_->nzone == public_`, so stem/local on i2p/tor fell
-             through into the fluff arm and the anonymity zone diffused where
-             the design said it stemmed (§63). Tor is a transport like the
-             clear internet; changing the transport does not change the graph.
-
-             The outbound-only fluff rule is unaffected and still applies when
-             this stem later fluffs — it travels with the zone's `reach`
-             (`FluffReach::OutboundOnly`, set from `nzone != public_` in
-             `make_relay_zone`), which no stemming decision touches. */
-          // this will change a local tx to stem or fluff ...
-          boost::asio::dispatch(
-            zone_->strand,
-            dandelionpp_notify{zone_, core_, std::move(txs), source, tx_relay}
-          );
-          break;
-        case relay_method::fluff:
-          core_->on_transactions_relayed(epee::to_span(txs), tx_relay, zone_->nzone);
-          boost::asio::dispatch(zone_->strand, relay_fluff{zone_, std::move(txs), source, core_});
-          break;
-      }
+        break;
+      case relay_method::fluff:
+        core_->on_transactions_relayed(epee::to_span(txs), tx_relay, zone_->nzone);
+        boost::asio::dispatch(zone_->strand, relay_fluff{zone_, std::move(txs), source, core_});
+        break;
     }
     return true;
   }
