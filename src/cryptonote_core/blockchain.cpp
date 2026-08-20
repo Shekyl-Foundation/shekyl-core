@@ -5628,6 +5628,15 @@ bool Blockchain::verify_block_attestation(const block& b, const blobdata& witnes
     std::memcpy(ctx.cb_out_key, cb_out_key.data, 32);
     ctx.cb_out_key_readable = 1;
   }
+  // prev_block_hash: the nonce's anchor term, replacing the producer's revealed randomness `r`
+  // (RF-D3). It must be the VALIDATED predecessor -- on the main-chain path `bl.prev_id` is checked
+  // against `top_hash` before this runs; on the alt-chain path it is the fork point the alt chain is
+  // built on. An unvalidated header field would be producer-chosen, which is exactly the property
+  // `r` was deleted for having. Rust refuses all-zeros (ERR_PREVHASH_UNPOPULATED) rather than
+  // verifying every countersignature against H(0..0), so a forgotten field is loud, not silent --
+  // deliberately with no `_readable` flag, since a verifier holding a block has parsed its header
+  // and that arm could never legitimately fire.
+  std::memcpy(ctx.prev_block_hash, b.prev_id.data, 32);
   ctx.headers_readable = headers_readable ? 1 : 0;
   ctx.headers_ptr = headers.empty() ? nullptr : reinterpret_cast<const uint8_t*>(headers.data());
   ctx.headers_len = headers.size();

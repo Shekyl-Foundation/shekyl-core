@@ -103,18 +103,46 @@
   correctly left alone. Stated plainly in the rule: the tree's **executable**
   surface is checked continuously and its **descriptive** surface is checked
   never — eight stale numerals in one round, none where a gate reads.
+- **`r` deletes from the attestation nonce and the witness — replaced, not
+  removed (`RF-D3`/`RF-D5`).** The nonce's first term becomes the block's
+  **validated** predecessor hash: `r` and `cb_out_key` were chosen by the same
+  party, so `r` never provided pre-signing resistance, while `block_hash(h−1)`
+  cannot exist before block `h−1` does. The witness blob drops its 32-byte
+  prefix (`count ‖ sigs`), and the transport cap moves 866,600 → 866,568 in
+  three places with three enforcement mechanisms.
+
+  `RF-D5`: the deletion is **not** a removal — it requires the anchor to *arrive*,
+  so the `#[repr(C)]` FFI ctx widens by `prev_block_hash` and C++ populates it.
+  All-zeros is refused with its own verdict code rather than a generic
+  malformed-ctx path, and there is deliberately **no readability flag**: a
+  verifier holding a block has parsed its header, so that arm could never fire,
+  and a flag is itself caller-populated so it would be forgotten alongside the
+  hash. Tested against real callers — **five C++ call sites forgot the field and
+  were refused loudly at build time**; under the flag design all five would have
+  passed silently on a consensus path.
+
+  Preserving the term's **arity** let the frozen cross-language KAT re-anchor
+  with nonce, countersignature and `attestation_root` byte-identical — rule 30
+  satisfied by construction rather than by regenerating a vector checkable only
+  against the code it tests. Rule 42 was checked and has **no instance** here
+  (globs, CI-gate scope, and purpose all exclude a consensus transport blob whose
+  integrity is the mined root); no bump owed, recorded so none is added.
 
 - **The serve-credit response-format round is open (`RF-D1…RF-Dn`).** Unblocked
-  by the carrier round's ruling (merged in PR #501). Unusual in shape: **every input is pinned
-  except one**, so it is mostly transcription of settled rulings into bytes. The
-  exception is `RF-D3` — whether `r` survives. The nonce is re-pinned as
-  `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` with `r` deleted on the ground
-  that `block_hash(h−1)` is ungrindable by block `h`'s producer; the falsifier is
-  that block `h`'s producer may also have produced `h−1`. The `q²` pool-grinding
-  precedent says the disposition is likely the same, and it is tested anyway,
-  because a field doing no work on a genesis-frozen surface can never be removed.
-  `CR-F2`'s `prefix_hash`/tx-id change is carried as a first-class input rather
-  than a cross-reference to the round that discovered it.
+  by the carrier round's ruling (merged in PR #501), and **now pure
+  transcription: every input is pinned.** `RF-D3` — whether `r` survives — was
+  carried as the round's one open test and **dissolved on grounding**. The
+  disposition is unchanged (`r` deletes) but the round did not settle it: the
+  2026-08-10 ruling did, on an argument this round had restated incorrectly.
+  The ruling's argument is *shared chooser plus an existence bound* — `r` and
+  `cb_out_key` are chosen by the same party, so `r` never provided pre-signing
+  resistance — where the round had converted "not choosable" into "ungrindable"
+  and written a falsifier for the paraphrase. Recorded rather than quietly
+  fixed, because it is the third dissolve-on-grounding in this arc and the class
+  is identical each time: a residual carried into a new round without
+  re-grounding its reasoning. `CR-F2`'s `prefix_hash`/tx-id change is carried as
+  a first-class input rather than a cross-reference to the round that discovered
+  it.
 
 - **`shekyl-wallet-rpc` now names the Rust binary, everywhere.** The C++
   `wallet_rpc_server` keeps building under its own target name through

@@ -426,7 +426,7 @@ namespace config
   constexpr size_t ARCHIVAL_MAX_ATTESTATION_RECORDS = 256;
   // Archival attestation-witness transport cap (ARCHIVAL_CREDIT_WIRE.md §3,
   // credit-wire CW-2). The block_complete_entry carries the Rust canonical witness
-  // encoding (r ‖ count ‖ count × HybridSignature) as an opaque blob, stored only
+  // encoding (count ‖ count × HybridSignature) as an opaque blob, stored only
   // in a prunable side table; the real structural bounds live in
   // shekyl-archival-retention::attestation_wire (BlockAttestationWitness). This is
   // an allocation guard, not a structural check: it bounds every deserializer that
@@ -434,14 +434,16 @@ namespace config
   // Rust decoder runs. Exact record-count/length validation is the Rust decoder's
   // job (Phase 2 admission), never this guard.
   //
-  // Written as the maximum itself — r(32) + count(8) + MAX records × one hybrid
-  // signature — rather than a round number above it. A hand-picked slack figure is
+  // Written as the maximum itself — count(8) + MAX records × one hybrid
+  // signature — rather than a round number above it. (The leading r(32) is gone:
+  // RF-D3 deleted the producer's revealed randomness from the witness, so the
+  // blob is framing plus signatures.) A hand-picked slack figure is
   // free padding an attacker may send on every block for no consensus reason, and
   // it silently stops tracking the real bound the moment either operand moves. The
   // FFI gate asserts this equals Rust's own maximum
   // (shekyl_archival_attestation_witness_max_bytes), so a divergence is loud.
   constexpr size_t ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES =
-    32 + 8 + ARCHIVAL_MAX_ATTESTATION_RECORDS * PQC_HYBRID_SINGLE_SIG_LEN;
+    8 + ARCHIVAL_MAX_ATTESTATION_RECORDS * PQC_HYBRID_SINGLE_SIG_LEN;
   // Transport-cap predicate shared by every codec that deserializes an opaque
   // attestation-witness blob (the p2p block_complete_entry KV map, the bootstrap
   // block_package). Enforced AT the codec, not at its callers: a call-site check

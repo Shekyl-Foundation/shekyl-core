@@ -58,6 +58,40 @@ pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY: u8 = 10;
 /// headers is unverifiable, and the settlement scan later reads those same coinbase bytes — so
 /// the block is rejected loudly rather than admitted as if it committed zero records.
 pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE: u8 = 11;
+/// `prev_block_hash` was all-zeros — the unpopulated-field sentinel.
+///
+/// **Distinguishable on purpose.** Folding this into a generic malformed-ctx
+/// verdict would tell the next reader the *record* was bad; this code tells them
+/// the *field* was never filled in, which is the only way that value arises.
+///
+/// **Why there is no `prev_block_hash_readable` flag** (`RF-D5`, ruled
+/// 2026-08-19), stated here because the asymmetry with `cb_out_key_readable`
+/// reads like an oversight otherwise:
+/// - `cb_out_key_readable` models a state that **can genuinely occur** —
+///   extracting the coinbase output key requires parsing the coinbase tx, which
+///   can fail on a malformed one.
+/// - `prev_block_hash` is the connecting block's own header field. A verifier
+///   that has a block has parsed its header, so an "unreadable" arm here could
+///   **never legitimately fire** — and a check that cannot fire is worse than no
+///   check, because it reads as protective. On a frozen surface that is permanent.
+/// - A flag would not buy the property anyway: the hazard is an *unpopulated*
+///   field, and the flag is itself caller-populated, so a caller that forgets the
+///   hash equally forgets the flag. What makes it fail-closed is
+///   zero-initialisation — and zero-rejection gets that without a second field
+///   the caller must get right.
+/// - **All-zeros is a sound sentinel only where a record consumes the anchor**,
+///   which is where the check lives. The reasoning first recorded here — *"a real
+///   block hash under RandomX has leading zeros, never thirty-two"* — was **wrong**:
+///   `prev_id` is the block *object* hash, not the RandomX PoW value, so no
+///   difficulty target constrains it. And the genesis block's `prev_id` **is**
+///   all-zeros, while genesis does reach this path (`top_block_hash()` returns
+///   `null_hash` on an empty chain, so `add_new_block` routes it to
+///   `handle_block_to_main_chain`). Gating on the ctx unconditionally would have
+///   **rejected genesis and prevented chain initialisation**. Scoped to
+///   record-bearing blocks — all of which are at height ≥ 1 with a real
+///   predecessor hash — all-zeros is again unreachable except by a caller that
+///   failed to populate the field.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED: u8 = 12;
 
 /// One `(p_id, hybrid pubkey)` pair C++ resolved for a distinct pass `p_id` that step-1 named.
 /// `pubkey_len == 0` is the bond-absent marker; `== HYBRID_PUBKEY_CANONICAL_BYTES` is a key; any
@@ -81,6 +115,15 @@ pub struct ShekylArchivalPidPubkey {
 pub struct ShekylArchivalAttestationVerifyCtx {
     pub attestation_root: [u8; 32],
     pub cb_out_key: [u8; 32],
+    /// `block_hash(h−1)` — the connecting block's **validated** predecessor hash.
+    ///
+    /// Must be the predecessor the block is actually being connected to, not
+    /// `prev_id` as supplied in the header: an unvalidated header field is
+    /// producer-chosen, which is exactly the property `r` was deleted for having.
+    /// All-zeros is rejected as the unpopulated-field sentinel
+    /// (`..._ERR_PREVHASH_UNPOPULATED`); there is deliberately no readability
+    /// flag, and the reasoning is on that constant.
+    pub prev_block_hash: [u8; 32],
     pub cb_out_key_readable: u8,
     pub headers_readable: u8,
     pub headers_ptr: *const u8,
@@ -91,7 +134,7 @@ pub struct ShekylArchivalAttestationVerifyCtx {
 
 /// Verify a block's attestation set against its mined `attestation_root` (Phase 2 admission).
 ///
-/// `witness` is the opaque `r ‖ count ‖ pass-signatures` blob (`connect.attestation_witness`); an
+/// `witness` is the opaque `count ‖ pass-signatures` blob (`connect.attestation_witness`); an
 /// empty blob is the zero-record set (the pre-cutover state). Returns a
 /// `SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_*` code; C++ rejects on any non-`OK`.
 ///
@@ -140,11 +183,9 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
         }
     }
 
-    // 2. Witness. An empty blob is the zero-signature set (r unused with no pass records); any
-    //    non-empty blob must decode exactly.
+    // 2. Witness. An empty blob is the zero-signature set; any non-empty blob must decode exactly.
     let witness = if witness_len == 0 {
         BlockAttestationWitness {
-            r: [0u8; 32],
             pass_signatures: Vec::new(),
         }
     } else {
@@ -221,6 +262,30 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
     }
 
     // 7. Per-pass countersignature — only after the root agrees.
+    // The nonce's anchor term, checked HERE rather than with the other ctx gates:
+    // all-zeros is refused only when a countersignature will actually be verified
+    // against it.
+    //
+    // **The genesis block is why.** `prev_id` is the block *object* hash, not the
+    // RandomX PoW value, so nothing about mining excludes an all-zero block id —
+    // and the genesis block's `prev_id` **is** all-zeros by construction. Genesis
+    // reaches this path: `top_block_hash()` returns `null_hash` on an empty chain,
+    // so `bl.prev_id == get_tail_id()` holds and `add_new_block` routes genesis to
+    // `handle_block_to_main_chain`. Gating on the ctx would have rejected genesis
+    // and the chain could never have initialised.
+    //
+    // Scoping the check to "a record will consume this" is not a genesis
+    // special-case; it is checking the value where it is load-bearing. With no
+    // pass records no nonce is computed, so the anchor is read by nothing and
+    // enforcing it there would be asserting on a value the code never uses. Every
+    // block that *does* carry a record is at height ≥ 1, whose `prev_id` is a real
+    // predecessor hash — so within this scope all-zeros remains unreachable except
+    // by a caller that failed to populate the field, which is exactly what the
+    // sentinel is for.
+    if !records.is_empty() && ctx.prev_block_hash == [0u8; 32] {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED;
+    }
+
     for record in &records {
         let (_, pk) = resolved
             .iter()
@@ -229,7 +294,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
         let Some(pk) = pk else {
             return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT;
         };
-        if !verify_pass_countersignature(&witness.r, &ctx.cb_out_key, pk, record) {
+        if !verify_pass_countersignature(&ctx.prev_block_hash, &ctx.cb_out_key, pk, record) {
             return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID;
         }
     }

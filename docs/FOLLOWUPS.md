@@ -15535,6 +15535,53 @@ one place to confirm each item's relationship to the wallet stack.
   a ruling premise returns, `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 6 is
   how a measurement ships — not before.
 
+- **Validate `prev_id` before attestation verify on the alt-chain path
+  (consensus ordering; independent hardening, NOT a defect).** On the main-chain
+  path `bl.prev_id` is checked against `top_hash` at
+  `blockchain.cpp:5690` **before** `verify_block_attestation` at `:5723`. On the
+  alt-chain path the call at `:2237` (`handle_alternative_block`) is preceded
+  only by a height check, an alternative-allowed check, and a hardfork check —
+  **nothing validates `prev_id`**. Parent existence is established later, inside
+  `build_alt_chain`.
+
+  *Why it matters now:* `RF-D3` re-anchored the attestation nonce to
+  `block_hash(h−1)` (PR #509). The property that substitution buys — the anchor
+  is not choosable by block `h`'s producer — holds only if the value is a
+  **validated** predecessor. `prev_id` *as supplied* is a producer-chosen header
+  field, which is exactly what `r` was deleted for being.
+
+  *Why it is NOT a defect, established by a bounded trace rather than assumed:*
+  `verify_block_attestation` is a **pure predicate** — only reads
+  (`parse_archival_attestation_from_extra`, the step-1 Rust call,
+  `get_archival_bond_hybrid_pubkey`, `get_output_public_key`), no DB write, no
+  member mutation, no cache insert; its own header says it *"parses nothing
+  structural and decides nothing"*. So a losing alt block leaves **no residue**.
+  The interesting case is a *real but non-tip* `prev_id` (alt-chain building on a
+  historical block is legitimate), but the choice set is bounded by the record's
+  own `E` term — a pass record for epoch `E` lands in a block within `E`, whose
+  predecessor is in `E` — and to make any of it land the alt chain must **win**,
+  at which point `prev_id` is a validated predecessor and the lead time collapses
+  to one block. Winning a reorg that deep is a majority capability, already
+  outside what this defends against.
+
+  **So: an ordering smell, not a soundness hole.** Filed because an ordering the
+  frozen surface depends on should not be satisfied *by design* on one path and
+  *by accident* on the other. The requirement is carried meanwhile by the
+  constraint stated on the field itself (`attestation_nonce`'s doc and the FFI
+  ctx field, PR #509): *the term must be a validated predecessor hash, not
+  `prev_id` as supplied.* That converts an invariant held only by call-site
+  ordering into a named property — the same move the prunable sole-occupant
+  tripwire made, for the same reason.
+
+  *Deliberately not bundled with #509:* the trace showed the current ordering is
+  **sound but unnamed**, so this is independent hardening rather than a fix
+  riding a format change. Bundled, a reviewer would read it as necessary to the
+  format, which it is not.
+
+  *Shape:* validate `prev_id` before `:2237` rather than inside `build_alt_chain`
+  — cheap, but it is a consensus ordering change with its own validation surface.
+  *Reference:* `ARCHIVAL_RESPONSE_FORMAT.md` §2.6; PR #509.
+
 ---
 
 ## V4+ — horizontal scaling
