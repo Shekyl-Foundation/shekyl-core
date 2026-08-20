@@ -14,10 +14,16 @@
 //   * construct_miner_tx defaults hard_fork_version to 1, and no caller
 //     anywhere passes 0.
 //
-// So `hf_version < 1` was never true, and the `hf_version` parameters those
-// branches justified are gone with them (rules 15 and 60: v3-from-genesis
-// carries no pre-genesis ladder). Core tests that cross v1 -> v2 are
-// unaffected — 2 >= 1 selected the same arm.
+// So no version below HF_VERSION_SHEKYL_NG can reach these helpers, and the
+// `hf_version` parameters those branches justified are gone with them (rules
+// 15 and 60: v3-from-genesis carries no pre-genesis ladder). Core tests that
+// cross v1 -> v2 are unaffected — version 2 selects the same arm.
+//
+// Deliberately phrased without the comparison spelled out as code. The
+// consensus-invariants workflow greps `src/` for legacy version branches as
+// TEXT, so a comment quoting the retired expression trips a gate that is
+// otherwise exactly right to be strict. Describe the retired branch; do not
+// reproduce it.
 //
 // REOPENING CRITERION (rule 21): a future hard fork that changes economics
 // SEMANTICS reintroduces gating. When it does, the gate belongs in
