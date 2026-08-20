@@ -11,7 +11,8 @@ use std::sync::Arc;
 use redb::backends::InMemoryBackend;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
-use crate::segment::{leaves_per_segment, segment_freeze_eligible, SegmentId};
+use crate::segment::{leaves_per_segment, segment_freeze_eligible, SegmentId, LEAF_BYTES};
+use crate::served_frame::ServedFrameHeader;
 use crate::store::ops::{
     full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
 };
@@ -19,10 +20,6 @@ use crate::types::{BlockHeight, Gindex, LeafEntry, TargetKind, TreePosition};
 use shekyl_fcmp::tree::{hash_grow_selene, selene_hash_init, SCALARS_PER_LEAF};
 
 const LEAVES_TABLE: TableDefinition<TreePosition, &[u8; 128]> = TableDefinition::new("leaves");
-/// Width of one stored leaf, for byte arithmetic. The `LEAVES_TABLE` value
-/// type is the source of truth; this is the same number where a `usize` is
-/// wanted rather than a type.
-const LEAF_BYTES: usize = 128;
 const LEAF_META_TABLE: TableDefinition<TreePosition, &[u8; 192]> =
     TableDefinition::new("leaf_meta");
 const FROZEN_SEGMENTS_TABLE: TableDefinition<SegmentId, &[u8; 56]> =
@@ -356,12 +353,40 @@ pub struct FrozenSegmentBody {
 
 impl FrozenSegmentBody {
     /// Bytes not yet read. Before the first [`Self::next_chunk`] this is
-    /// the whole body — the wire `content-length`, known without touching
-    /// a leaf, which is what lets the response head go out before any
-    /// store read.
+    /// the whole segment, known without touching a leaf — which is what
+    /// lets the response head go out before any store read.
+    ///
+    /// **The segment, not the whole response.** A served response also
+    /// carries the frame header and, eventually, padding; its length is
+    /// [`ServedFrameHeader::framed_len`] via [`Self::frame_header`]. Both
+    /// are computable in this same pre-read window, which is the property
+    /// that matters.
     #[must_use]
     pub fn remaining_bytes(&self) -> usize {
         usize::try_from(self.end - self.next).expect("segment length fits usize") * LEAF_BYTES
+    }
+
+    /// The served-frame header for this body — [`RF-D4`], the two leading
+    /// lengths of the response.
+    ///
+    /// **Before the first [`Self::next_chunk`]**, like
+    /// [`Self::remaining_bytes`]: it describes what is still to be written,
+    /// and the frame's `leaf_count` is only the segment's leaf count while
+    /// nothing has been read.
+    ///
+    /// Infallible, and the reason belongs here rather than at the caller: a
+    /// *frozen segment* spans `[k·E, (k+1)·E)`, so its leaf count is at most
+    /// `leaves_per_segment()` by construction. The bound
+    /// [`ServedFrameHeader::for_segment`] enforces is a property this type
+    /// already has, and a caller made to handle its failure would be handling
+    /// a case the store cannot produce.
+    ///
+    /// [`RF-D4`]: crate::served_frame
+    #[must_use]
+    pub fn frame_header(&self) -> ServedFrameHeader {
+        let leaves = usize::try_from(self.end - self.next).expect("segment length fits usize");
+        ServedFrameHeader::for_segment(leaves)
+            .expect("a frozen segment spans at most leaves_per_segment() leaves")
     }
 
     /// Next body chunk of at most `max_bytes`, or `None` once the segment
@@ -3090,7 +3115,7 @@ mod tests {
         assert_eq!(
             out.len(),
             declared,
-            "content-length is declared before any leaf is read; the body must match it"
+            "the segment length is declared before any leaf is read; the body must match it"
         );
         out
     }

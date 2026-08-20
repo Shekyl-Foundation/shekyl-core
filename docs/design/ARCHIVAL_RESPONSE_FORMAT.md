@@ -497,8 +497,27 @@ already determines. That is `WITNESS_PREFIX_LEN`'s lesson arriving two paragraph
 after `RF-D2` deletes the same redundant framing from `hybrid_signature`: a
 length carried beside data whose length is already known. The length is **implied
 by the vin count**, and `serialize_rctsig_prunable` already takes vin-derived
-counts (`count_spend_inputs(vin)`), so the precedent for deriving rather than
-carrying is in the signature it will be written into.
+counts, so the precedent for deriving rather than carrying is in the signature it
+will be written into.
+
+**Corrected 2026-08-20 — the derived count is not one of the four arguments, and
+artifact A must widen the signature.** The precedent holds, but the specific
+value does not: `serialize_rctsig_prunable(ba, type, count_spend_inputs(vin),
+vout.size())` is passed the count of **spend** inputs, and a serve-credit vin is
+explicitly *not* a spend input (`blockchain.cpp:3630` skips the whole spend arm
+for it — `CR-D1`). So "one entry per serve-credit vin, no count field" gives the
+deserializer a length it **cannot** currently see. Artifact A therefore widens
+`serialize_rctsig_prunable` by one argument, and every call site widens with it —
+including `tx_prunable_region_sole_occupant.cpp`'s
+`prunable_reserialized_size`, which reproduces the production call.
+
+Found while checking the #509 tripwire against `RF-D1`'s placement, before
+writing artifact A rather than during. **The tripwire itself is better than
+merely compatible**: it asserts *tail length equals re-serialized length*, so a
+parallel structure added **inside** `serialize_rctsig_prunable` grows both sides
+and passes — and its failure message already directs new prunable bytes to
+exactly where `RF-D1` puts them. It asserts the equivalence property, not the
+three blocks that happened to exist when it was written.
 
 **The leaf chunk is pruned-side by construction** (`CR-D2`), and the tidiness
 hazard is why it is written down: `leaf_bytes` is kept-side and the leaf chunk is
@@ -555,6 +574,18 @@ served response := leaf_count  varint    (≤ leaves_per_segment = 25 992)
 
 hashed against R_k: segment_bytes ONLY
 ```
+
+**`varint` names one encoding, and this document has to say which.** It is the
+workspace varint — `shekyl_curve_io::{write_varint, read_varint}`, the same
+encoder the archival wire modules use: unsigned **little-endian base-128**, seven
+payload bits per byte, high bit set on every byte but the last, and **canonical**
+(a continuation byte followed by a zero group is refused, so one length has
+exactly one encoding). Pinned here rather than left implicit because of the
+no-counterparty property this section closes on: the first fetcher is written
+from this grammar, and "varint" alone does not determine bytes. Worked example,
+which the implementation carries as a hand-derived test vector: a full segment
+with no padding is `88 CB 01 00` — `25 992 = 8 + 75·128 + 1·16 384`, then a
+single zero byte.
 
 The fetcher reads the two lengths, hashes `segment_bytes` via
 `recompute_segment_r_k`, and compares to its **local** `R_k`. Padding sits
@@ -637,6 +668,87 @@ padding extent derived from `content-length`, a reader could not reject an
 oversized declaration *before* draining it — the check would arrive after the
 bytes did. The self-delimiting frame is what makes the bound a pre-allocation
 test rather than a post-hoc complaint.
+
+**Implemented 2026-08-20 — `shekyl_curve_tree::served_frame::ServedFrameHeader`.**
+
+**Where it lives, and why not with the server.** The encoder is in the serving
+path; the decoder will be in a fetcher that does not exist yet. Putting the codec
+in `shekyl-p-serve` would make every future fetcher depend on the *server* — the
+wrong direction — so the discriminating question is which crate a reader must
+already have. A reader cannot verify a response without `recompute_segment_r_k`,
+so **`shekyl-curve-tree` is in every fetcher's dependency graph by necessity**;
+every other home either adds an edge or declares a second `LEAF_BYTES`. It sits
+at the crate root beside `segment.rs` rather than under `store/`, because the
+frame is a property of the segment *format* and a fetcher never touches the redb
+backend. `LEAF_BYTES` was promoted out of `redb_backend.rs` (where it was a
+private `128`) into `segment.rs`, derived as `SCALARS_PER_LEAF · 32` — a leaf
+**is** four Selene scalars, so its byte width is that fact, not a second number.
+
+**Write-zero is enforced by construction, not by a rule.** `for_segment` takes no
+padding argument at all: it is not that callers must remember to pass `0`, it is
+that there is nothing to pass. When a scheme lands, its PR adds the parameter —
+that change *is* the reopening criterion ([rule 21](../../.cursor/rules/21-reversion-clause-discipline.mdc)),
+rather than a flexibility provisioned ahead of the decision it serves.
+
+**The forward half of the streaming constraint, stated on the field.** The header
+is computable without a store read *today* because `leaf_count` comes from the
+segment record and `padding_len` is zero. That is a property of the current
+implementation, and left there it would die silently with the first padding
+scheme. It is therefore written as a constraint on `padding_len` itself: **the
+value must be decidable without a store read**, because the field is encoded in
+the leading header and a decision needing leaf bytes could not be made in time.
+A scheme requiring one is a format change, not an implementation detail — the
+same move as the *validated-predecessor* constraint on `RF-D5`'s nonce term, and
+for the same reason: an invariant held by circumstance has no name and no test.
+
+**`RF-D7`'s bound is unforgettable rather than merely documented.** Both checks
+run inside `ServedFrameHeader::read`, before it returns, so **the only way to
+obtain the two lengths is to obtain them already validated** — a caller cannot
+allocate against an unchecked `padding_len` because the check is what produces
+the value. The leaf-count bound is enforced *first*, which also keeps
+`leaf_count × LEAF_BYTES` from overflowing; that ordering dependency is stated at
+the site rather than left for a reader to reconstruct.
+
+**What the tests can and cannot prove, given no counterparty.** Round-tripping the
+encoder against the serve side's own parser proves internal consistency, not that
+an independent implementation can read the format. So the frame carries a
+**hand-derived** vector — `88 CB 01 00` for a full unpadded segment, computed from
+the grammar rather than from the encoder — which is the only test that checks the
+implementation against the *spec*. `p-serve/tests/store_axis.rs` was rewritten to
+read the frame the way a fetcher will (`ServedFrameHeader::read`, then slice at
+`segment_bytes()`) rather than assuming the body starts at byte zero, making it
+the nearest thing to a reference reader that exists. The first real fetcher is
+still the actual validation.
+
+**One consequence worth naming: an unframeable body is now unservable.** The frame
+declares a leaf count, so bytes that are not a leaf array have no representable
+header; `ShardBody::flat` returns `None` for them and the endpoint renders the
+ordinary shared 404. Before the frame, a flat body could be any length. That
+latitude is what buys "multiple of `LEAF_BYTES`" as a *structural* property
+instead of a validity rule written in prose.
+
+**[Rule 42](../../.cursor/rules/42-serialization-policy.mdc) — checked for
+artifact B, and again there is no instance.** §2.7 ran this for the attestation
+witness blob; the served frame is a *different* artifact and inherits nothing, so
+it is checked on its own terms and the answer recorded rather than assumed. The
+policy binds a **persisted-block wire change** to a version-constant bump. This
+frame is neither persisted nor a block: it is a transport payload, held only for
+the life of one response, and its integrity is **content-addressed** — a witness
+reconstructs `R_k` from the bytes it received and compares against the
+chain-committed record, so a malformed or altered frame fails verification
+outright rather than being mis-parsed under the wrong schema version. There is no
+stored artifact whose interpretation could drift, which is the hazard the version
+constant exists to prevent. No bump is owed; written down so nobody adds one.
+
+**Scope note — this is artifact B only.** `RF-D1`/`RF-D2`/`RF-D6` (the on-chain
+`ServeCredit` record) are a separate change on a separate validation surface
+([rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)): different
+crates, different tests, and a C++ serializer this one never touches. The shared
+*design* question did not make them a shared *validation* question. And the
+defect claim here is the narrow one — the served frame **avoids introducing** an
+unbounded-padding drain, rather than closing a landed one: `shekyl-p-serve`'s
+existing `MAX_DRAIN_BYTES` bounds a peer's unread **request** bytes before close
+(`close_gracefully`), which is a different path entirely.
 
 **`RF-D4` is the more open of the two decisions, and this is why it should be
 pinned now.** `recompute_segment_r_k` has **no production consumer** — outside

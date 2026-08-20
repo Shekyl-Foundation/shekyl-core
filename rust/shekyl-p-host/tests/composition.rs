@@ -21,7 +21,8 @@ use std::time::Duration;
 
 use shekyl_curve_tree::{
     leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity,
-    PostureDeclaration, SegmentPin, ServingReader, TargetKind, TreePosition,
+    PostureDeclaration, SegmentPin, ServedFrameHeader, ServingReader, TargetKind, TreePosition,
+    LEAF_BYTES,
 };
 use shekyl_p_host::{
     HostError, PersonaServing, PersonaServingHost, PinError, PinReport, PinnedServeSet,
@@ -256,6 +257,22 @@ fn body_of(response: &[u8]) -> &[u8] {
     &response[end + 4..]
 }
 
+/// Leaf bytes a 200 response actually carries, read through the served frame
+/// (`RF-D4`) the way a fetcher does: the two leading lengths, then the segment.
+/// Asserting on the raw body length would now be asserting on the header too,
+/// and would pass just as well if the frame were malformed.
+fn served_segment_len(response: &[u8]) -> u64 {
+    let mut body = body_of(response);
+    let frame = ServedFrameHeader::read(&mut body).expect("served body carries a frame header");
+    assert_eq!(frame.padding_len(), 0, "writers emit zero padding");
+    assert_eq!(
+        body.len() as u64,
+        frame.framed_len() - frame.encoded_len() as u64,
+        "the frame accounts for every byte after the header"
+    );
+    frame.segment_bytes()
+}
+
 async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
     let mut s = TcpStream::connect(addr).await.expect("connect");
     s.write_all(format!("GET {path} HTTP/1.1\r\nhost: x\r\n\r\n").as_bytes())
@@ -447,8 +464,8 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
 
     let first = fetch(addr, "/x-provisional/v0/shard/0").await;
     assert_eq!(
-        body_of(&first).len(),
-        leaves_per_segment() * 128,
+        served_segment_len(&first),
+        (leaves_per_segment() * LEAF_BYTES) as u64,
         "a whole shard, not a 404 that happens to be non-empty"
     );
 
@@ -645,8 +662,8 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     store.prune_frozen(&[]).expect("prune");
     let body = fetch(host.serve_addr(), "/x-provisional/v0/shard/1").await;
     assert_eq!(
-        body_of(&body).len(),
-        leaves_per_segment() * 128,
+        served_segment_len(&body),
+        (leaves_per_segment() * LEAF_BYTES) as u64,
         "the gained shard must be servable — an unrefreshed host loses it here"
     );
 
@@ -1045,8 +1062,8 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
     // And the pins it holds are still real.
     store.prune_frozen(&[]).expect("prune");
     assert_eq!(
-        body_of(&fetch(host.serve_addr(), "/x-provisional/v0/shard/0").await).len(),
-        leaves_per_segment() * 128
+        served_segment_len(&fetch(host.serve_addr(), "/x-provisional/v0/shard/0").await),
+        (leaves_per_segment() * LEAF_BYTES) as u64
     );
 
     host.shutdown().await;

@@ -197,7 +197,14 @@ impl FixtureShardProvider {
 
 impl ShardProvider for FixtureShardProvider {
     fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-        Ok(Some(ShardBody::flat(Arc::clone(&self.payload))))
+        // `flat` refuses a payload that is not a whole number of leaves —
+        // the served frame declares a leaf count, so such bytes have no
+        // representable header. [`ShardFixture::load`] already enforces
+        // exactly [`SHARD_BYTES`], so the `None` arm is the guard for a
+        // payload handed to [`FixtureShardProvider::new`] directly, and it
+        // renders the ordinary miss rather than a body no witness could
+        // verify.
+        Ok(ShardBody::flat(Arc::clone(&self.payload)))
     }
 }
 

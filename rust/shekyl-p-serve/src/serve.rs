@@ -111,13 +111,18 @@ const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Internal read/write granularity for the shard body.
 ///
-/// Not wire framing — the response is one `content-length` body; the wire
-/// bytes are identical to a single write. The loop is chunked for two
-/// reasons: peak memory per in-flight connection is one chunk rather than a
-/// whole shard, and resumability, if the format round rules it in, becomes
-/// a change of framing on top of an already-incremental reader-writer
-/// instead of a rewrite — the §9.5 discipline that a format property must
-/// never be foreclosed by what was convenient to build.
+/// **Not wire framing.** The frame is `RF-D4`'s, written once ahead of the
+/// body; this constant only sets how the already-framed payload is split
+/// across writes, and the wire bytes are identical to a single write.
+///
+/// The loop is chunked for two reasons: peak memory per in-flight
+/// connection is one chunk rather than a whole shard, and resumability —
+/// which `RF-D4` did **not** rule in, so the frame carries no resumption
+/// field and adding one is still a future format change — becomes a change
+/// of framing on top of an already-incremental reader-writer instead of a
+/// rewrite. That is the §9.5 discipline that a format property must never
+/// be foreclosed by what was convenient to build, and it held: the format
+/// round came and went without this loop constraining it.
 const WRITE_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Backoff when `accept` fails (e.g. transient FD pressure). Prevents a
@@ -406,12 +411,20 @@ async fn resolve_body(
     }
 }
 
-/// Write the head, then stream the body chunk by chunk.
+/// Write the head, then the frame header, then stream the body chunk by
+/// chunk.
 ///
-/// `content-length` comes from [`ShardBody::remaining_bytes`], which is
+/// `content-length` comes from [`ServedFrameHeader::framed_len`], which is
 /// exact before a single leaf is read — so the head is committed before the
 /// store is touched, and a store that fails mid-body can only truncate a
 /// response, never change which response was chosen.
+///
+/// The frame header ([`RF-D4`]) precedes the segment bytes and is written
+/// here rather than produced by the body, because it describes the *whole*
+/// response — segment and padding both — while a [`ShardBody`] knows only
+/// its own leaves.
+///
+/// [`RF-D4`]: shekyl_curve_tree::served_frame
 async fn write_response(
     stream: &mut TcpStream,
     body: Option<ShardBody>,
@@ -421,7 +434,17 @@ async fn write_response(
     let Some(mut body) = body else {
         return write_bounded(stream, NOT_FOUND.as_bytes()).await;
     };
-    write_bounded(stream, render_ok(body.remaining_bytes()).as_bytes()).await?;
+    // One write, not two. The wire bytes are identical either way — this is
+    // a loopback socket into tor, whose own cell framing quantizes
+    // everything downstream, so packet boundaries here are not an
+    // observable and no privacy claim rests on this. What it buys is a
+    // single commitment point: the status line, the headers and the frame
+    // are decided together, before the store is touched, leaving no seam
+    // between them for a later edit to slip something into.
+    let frame = body.header();
+    let mut head = render_ok(frame.framed_len()).into_bytes();
+    head.extend_from_slice(&frame.to_bytes());
+    write_bounded(stream, &head).await?;
     loop {
         // The store read is synchronous redb, so each chunk crosses to the
         // blocking pool and the body comes back with it.
@@ -519,7 +542,7 @@ fn parse_request(head: &[u8]) -> Option<Request> {
 /// The success head. Exactly [`RESPONSE_HEADER_NAMES`], nothing else — no
 /// `date` (a clock-skew fingerprint), no `server`, no `etag`, no
 /// `accept-ranges`.
-fn render_ok(len: usize) -> String {
+fn render_ok(len: u64) -> String {
     format!("HTTP/1.1 200 OK\r\ncontent-type: {CONTENT_TYPE}\r\ncontent-length: {len}\r\n\r\n")
 }
 
@@ -533,6 +556,7 @@ const NOT_FOUND: &str =
 mod tests {
     use super::*;
     use crate::provider::{ProviderError, ShardBody};
+    use shekyl_curve_tree::{ServedFrameHeader, LEAF_BYTES};
 
     /// In-memory provider: the loop's wire behaviour, storeless.
     struct FixtureProvider {
@@ -540,11 +564,24 @@ mod tests {
     }
 
     impl FixtureProvider {
+        /// Every fixture payload is asserted to be a whole number of leaves
+        /// **here**, at construction. `ShardBody::flat` returns `None` for
+        /// anything else, so without this a mis-sized fixture would arrive
+        /// as a 404 and read as a routing bug — the failure would be real
+        /// but would name the wrong thing.
         fn new(shards: impl IntoIterator<Item = (u64, Vec<u8>)>) -> Arc<Self> {
             Arc::new(Self {
                 shards: shards
                     .into_iter()
-                    .map(|(id, bytes)| (id, Arc::from(bytes.into_boxed_slice())))
+                    .map(|(id, bytes)| {
+                        assert!(
+                            bytes.len().is_multiple_of(LEAF_BYTES),
+                            "fixture for shard {id} is {} bytes, not a whole number of \
+                             {LEAF_BYTES}-byte leaves — a served body is a leaf array",
+                            bytes.len()
+                        );
+                        (id, Arc::from(bytes.into_boxed_slice()))
+                    })
                     .collect(),
             })
         }
@@ -552,8 +589,31 @@ mod tests {
 
     impl ShardProvider for FixtureProvider {
         fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-            Ok(self.shards.get(&shard_id).cloned().map(ShardBody::flat))
+            Ok(self
+                .shards
+                .get(&shard_id)
+                .cloned()
+                .and_then(ShardBody::flat))
         }
+    }
+
+    /// `n` leaves of distinguishable filler.
+    fn leaves(n: usize, seed: u8) -> Vec<u8> {
+        (0..n * LEAF_BYTES)
+            .map(|i| (u8::try_from(i % 251).expect("modulus is under 256")).wrapping_add(seed))
+            .collect()
+    }
+
+    /// Split a 200 response into (head, frame header, payload).
+    fn parse_served(response: &[u8]) -> (String, ServedFrameHeader, Vec<u8>) {
+        let end = response
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("response has a head");
+        let head = String::from_utf8_lossy(&response[..end]).to_string();
+        let mut body = &response[end + 4..];
+        let frame = ServedFrameHeader::read(&mut body).expect("served body carries a frame header");
+        (head, frame, body.to_vec())
     }
 
     /// Provider whose every lookup fails — the store-failure arm.
@@ -671,7 +731,7 @@ mod tests {
         // probe surface for the route table, the holdings, or store health.
         // Incomplete heads (oversized / EOF / timeout) are a different
         // wire class — close, like over-capacity — covered separately.
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(3, vec![7u8; 32])]))
+        let ep = PServeEndpoint::bind(FixtureProvider::new([(3, leaves(1, 7))]))
             .await
             .expect("bind");
         let mut seen: Vec<Vec<u8>> = Vec::new();
@@ -701,7 +761,7 @@ mod tests {
 
     #[tokio::test]
     async fn non_get_methods_are_not_served() {
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, vec![1u8; 8])]))
+        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]))
             .await
             .expect("bind");
         let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
@@ -722,7 +782,7 @@ mod tests {
         // deliver the whole shared 404 — the invariant says every
         // complete-head non-servable outcome renders *the same bytes*, and
         // "reset instead" is not the same bytes.
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, vec![1u8; 8])]))
+        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]))
             .await
             .expect("bind");
         let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
@@ -784,16 +844,76 @@ mod tests {
         // The body is streamed in WRITE_CHUNK_BYTES pieces; a chunking or
         // cursor bug shows up as reordering, duplication, or a short body,
         // none of which a same-length assertion alone would catch.
-        let payload: Vec<u8> = (0..WRITE_CHUNK_BYTES * 3 + 7)
+        // Three full chunks plus one leaf: still a short final chunk (the
+        // cursor bug this test exists for), now a whole number of leaves.
+        assert!(WRITE_CHUNK_BYTES.is_multiple_of(LEAF_BYTES));
+        let payload: Vec<u8> = (0..WRITE_CHUNK_BYTES * 3 + LEAF_BYTES)
             .map(|i| u8::try_from(i % 253).expect("modulus is under 256"))
             .collect();
         let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
             .await
             .expect("bind");
         let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
-        let head = head_of(&r);
-        assert!(head.contains(&format!("content-length: {}", payload.len())));
-        assert_eq!(&r[r.len() - payload.len()..], &payload[..]);
+        let (head, frame, body) = parse_served(&r);
+        assert!(head.contains(&format!("content-length: {}", frame.framed_len())));
+        assert_eq!(
+            frame.framed_len(),
+            (frame.encoded_len() + payload.len()) as u64,
+            "content-length covers the frame header as well as the segment"
+        );
+        assert_eq!(body, payload);
+    }
+
+    #[tokio::test]
+    async fn the_served_body_leads_with_the_frame_header() {
+        // RF-D4 on the wire. The witness reconstructs `R_k` from the
+        // segment bytes, so it needs to know where they stop; without the
+        // leading lengths a padded response is indistinguishable from a
+        // longer segment, and `content-length` cannot tell them apart
+        // because one number covers both.
+        let payload = leaves(9, 0x40);
+        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
+            .await
+            .expect("bind");
+        let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
+
+        let (head, frame, body) = parse_served(&r);
+        assert!(head.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(frame.leaf_count(), 9);
+        assert_eq!(frame.segment_bytes(), payload.len() as u64);
+        assert_eq!(
+            frame.padding_len(),
+            0,
+            "writers emit zero padding until a scheme is specified"
+        );
+        // The frame *delimits*: everything the header accounts for is
+        // present, and nothing beyond it arrived.
+        assert_eq!(body, payload);
+        assert_eq!(r.len() as u64 - (head.len() + 4) as u64, frame.framed_len());
+    }
+
+    #[tokio::test]
+    async fn a_body_that_is_not_a_leaf_array_is_not_servable() {
+        // The constructor-level half of the same rule, at the wire: the
+        // frame declares a leaf count, so bytes that are not a leaf array
+        // have no representable header. Rendering the shared 404 — rather
+        // than a body some witness would then fail to verify — is what
+        // keeps an unframeable payload from looking like a serve.
+        struct RaggedProvider;
+        impl ShardProvider for RaggedProvider {
+            fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
+                // One byte short of a leaf.
+                Ok(ShardBody::flat(Arc::from(
+                    vec![0u8; LEAF_BYTES - 1].into_boxed_slice(),
+                )))
+            }
+        }
+        let ep = PServeEndpoint::bind(Arc::new(RaggedProvider))
+            .await
+            .expect("bind");
+        let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
+        assert_eq!(r, NOT_FOUND.as_bytes(), "an unframeable body is not served");
+        assert_eq!(ep.served_count(), 0);
     }
 
     #[tokio::test]
@@ -802,7 +922,7 @@ mod tests {
         // until READ_TIMEOUT). Poll until the accept loop has actually
         // filled the cap and starts shedding by CLOSE — never a fixed
         // sleep that flakes under load.
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, vec![3u8; 64])]))
+        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 3))]))
             .await
             .expect("bind");
 
@@ -866,7 +986,7 @@ mod tests {
     async fn the_cap_does_not_refuse_below_it() {
         // Negative control: without it, a cap of zero would pass
         // "refusals happen" while breaking the endpoint entirely.
-        let payload = vec![9u8; 512];
+        let payload = leaves(4, 9);
         let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload)]))
             .await
             .expect("bind");
@@ -883,7 +1003,7 @@ mod tests {
         // Incomplete / hostile head: close with no HTTP bytes — same wire
         // class as over-capacity, not the complete-head shared 404. The
         // pre-allocation bound is enforced while reading.
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, vec![0u8; 8])]))
+        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 0))]))
             .await
             .expect("bind");
         let mut s = TcpStream::connect(ep.addr()).await.expect("connect");

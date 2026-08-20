@@ -29,6 +29,13 @@
 //! - the request/response shape is a placeholder for *transport
 //!   measurement*, and carries no claim about what TJ-B should freeze.
 //!
+//! One thing the shape inherited rather than chose: since `RF-D4`
+//! (2026-08-20) the served body leads with the frame header, so a measured
+//! response is the fixture plus a few bytes. It is below the noise floor of
+//! a Tor-transit measurement, and it is noted only so a future reader does
+//! not treat the difference between `SHARD_BYTES` and the observed length as
+//! a discrepancy to chase.
+//!
 //! # What is disposable and what might survive
 //!
 //! Disposable: everything in this crate. The fixture plumbing, the harness,

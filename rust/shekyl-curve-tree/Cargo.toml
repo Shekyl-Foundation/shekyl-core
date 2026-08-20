@@ -32,6 +32,10 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 # `COINBASE_LOCK_WINDOW` (+60). Sourced from the low-level protocol
 # crate rather than re-declared, per `17-dependency-discipline.mdc`.
 shekyl-consensus = { path = "../shekyl-consensus" }
+# The workspace varint used by the served-frame header (`served_frame.rs`).
+# The same encoder/decoder the archival wire modules use, so one length has
+# one encoding across every Shekyl format.
+shekyl-curve-io = { path = "../shekyl-curve-io" }
 
 # Reads `config/consensus_constants.json` to emit the FCMP++
 # reference-block age constants (`build.rs`). Mirrors

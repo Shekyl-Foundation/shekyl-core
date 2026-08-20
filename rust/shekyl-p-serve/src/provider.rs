@@ -28,7 +28,9 @@
 
 use std::sync::Arc;
 
-use shekyl_curve_tree::{FrozenSegmentBody, SegmentId, ServingReader, StoreError};
+use shekyl_curve_tree::{
+    FrozenSegmentBody, SegmentId, ServedFrameHeader, ServingReader, StoreError, LEAF_BYTES,
+};
 
 /// A shard lookup failed for an infrastructure reason (store I/O, pruned
 /// bytes) or a serve-set construction bug. Counted locally by the endpoint
@@ -104,6 +106,15 @@ impl std::fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
+/// The frame header for a flat body of `len` bytes, or `None` if `len` is
+/// not a whole number of leaves or spans more than one segment.
+fn flat_header(len: usize) -> Option<ServedFrameHeader> {
+    if !len.is_multiple_of(LEAF_BYTES) {
+        return None;
+    }
+    ServedFrameHeader::for_segment(len / LEAF_BYTES).ok()
+}
+
 /// The body of one served shard, read in bounded chunks.
 ///
 /// **Chunked, not materialised.** The serving loop holds one body per
@@ -113,11 +124,12 @@ impl std::error::Error for ProviderError {}
 /// rule-76 provisioning floor cannot pay, and one the cap does not claim to
 /// be charging. Peak cost here is one chunk.
 ///
+/// [`Self::header`] is fixed when the body is opened and
 /// [`Self::remaining_bytes`] is exact before the first chunk is read, which
 /// is what lets the response head — including `content-length` — go out
 /// before the store is touched at all.
 #[derive(Debug)]
-pub struct ShardBody(Source);
+pub struct ShardBody(Source, ServedFrameHeader);
 
 /// Where a body's bytes come from. Private: the production and fixture
 /// sources differ in cost, not in contract, and the wire path must not be
@@ -131,21 +143,52 @@ enum Source {
 }
 
 impl ShardBody {
-    /// An in-memory body of arbitrary length — fixtures and measurement
-    /// harnesses, which serve opaque bytes rather than a real segment.
+    /// An in-memory body — fixtures and measurement harnesses, which serve
+    /// opaque bytes rather than a real segment.
+    ///
+    /// `None` for a payload that is not a whole number of leaves, or that
+    /// exceeds one segment. **This is the served frame reaching back into
+    /// the constructor**: the response declares a `leaf_count`
+    /// ([`ServedFrameHeader`]), so a body that is not a leaf array has no
+    /// representable header and therefore is not a servable shard. Before
+    /// the frame existed a flat body could be any length, and that latitude
+    /// is what the frame spends to make "multiple of `LEAF_BYTES`"
+    /// structural instead of a validity rule written in prose.
     #[must_use]
-    pub fn flat(bytes: Arc<[u8]>) -> Self {
-        Self(Source::Flat { bytes, read: 0 })
+    pub fn flat(bytes: Arc<[u8]>) -> Option<Self> {
+        let header = flat_header(bytes.len())?;
+        Some(Self(Source::Flat { bytes, read: 0 }, header))
     }
 
     /// A store-backed frozen-segment body.
     #[must_use]
     pub fn segment(body: FrozenSegmentBody) -> Self {
-        Self(Source::Segment(body))
+        let header = body.frame_header();
+        Self(Source::Segment(body), header)
     }
 
-    /// Bytes not yet read; before the first [`Self::next_chunk`], the wire
-    /// `content-length`.
+    /// The served-frame header for this body — the two leading lengths, and
+    /// with them the exact `content-length`.
+    ///
+    /// **Computed once, when the body is opened**, and stored rather than
+    /// derived on demand. That is not a cache: the frame describes the
+    /// response that was *chosen*, and servability is settled before any
+    /// byte is written, so the header is fixed at exactly the moment the
+    /// response is. Deriving it from the body's remaining length would make
+    /// it shrink as chunks were read — a header that answers a different
+    /// question after the first chunk — and would put a panic path in the
+    /// serving task for the sake of a value that was already known.
+    #[must_use]
+    pub fn header(&self) -> ServedFrameHeader {
+        self.1
+    }
+
+    /// Bytes of *payload* not yet read.
+    ///
+    /// **Not the wire `content-length`** — that is
+    /// [`ServedFrameHeader::framed_len`], which also covers the frame header
+    /// and any padding. This is what remains to stream after the frame, and
+    /// it shrinks as chunks are taken.
     #[must_use]
     pub fn remaining_bytes(&self) -> usize {
         match &self.0 {
