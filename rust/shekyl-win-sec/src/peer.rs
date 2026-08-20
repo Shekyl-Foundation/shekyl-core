@@ -31,8 +31,8 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, GetSecurityInfo, SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    GetSidSubAuthority, GetSidSubAuthorityCount, LABEL_SECURITY_INFORMATION,
-    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SYSTEM_MANDATORY_LABEL_ACE,
+    LABEL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    SYSTEM_MANDATORY_LABEL_ACE,
 };
 // The ACE type constant lives under SystemServices, not Security, and is a
 // `u32` while `ACE_HEADER::AceType` is a `u8` — narrowed once, here, so the
@@ -221,6 +221,37 @@ impl PeerCheck {
     }
 }
 
+/// Parse a SACL's mandatory label, for probes only.
+///
+/// `None` means malformed-refuse; `Some(Medium)` means no label present. P-14
+/// hands this a hand-built truncated ACE, which is the only way to exercise
+/// the bounds check — a real Windows API will not produce one, and a bound
+/// that has never refused anything is indistinguishable from an absent bound.
+///
+/// # Safety
+/// Same contract as the internal parser: `sacl` must be null or a valid ACL
+/// that outlives the call.
+#[cfg(feature = "test-utils")]
+pub unsafe fn label_from_sacl_for_testing(
+    sacl: *mut windows_sys::Win32::Security::ACL,
+) -> Option<IntegrityLevel> {
+    // SAFETY: the caller upholds the same contract.
+    unsafe { label_from_sacl(sacl) }
+}
+
+/// A SID's fixed prefix: `Revision`(1) + `SubAuthorityCount`(1) +
+/// `IdentifierAuthority`(6). Everything after it is `SubAuthorityCount`
+/// four-byte entries.
+const SID_HEADER_LEN: usize = 8;
+/// One sub-authority.
+const SUB_AUTHORITY_LEN: usize = 4;
+/// The `IdentifierAuthority` field width.
+const SID_AUTHORITY_LEN: usize = 6;
+/// The only SID revision Windows defines.
+const SID_REVISION: u8 = 1;
+/// `SECURITY_MANDATORY_LABEL_AUTHORITY` — a mandatory label is `S-1-16-<rid>`.
+const MANDATORY_LABEL_AUTHORITY: [u8; SID_AUTHORITY_LEN] = [0, 0, 0, 0, 0, 16];
+
 /// Fetch ACE `index` from `sacl` as a **non-null** pointer.
 ///
 /// `NonNull` rather than `*mut c_void` so that "this is not null" becomes a
@@ -296,44 +327,64 @@ unsafe fn label_from_sacl(sacl: *mut windows_sys::Win32::Security::ACL) -> Optio
             continue;
         }
 
-        // The ACE CLAIMS to be a mandatory label. Before trusting that claim
-        // enough to read a SID out of it, check it is big enough to hold one.
+        // The ACE CLAIMS to be a mandatory label. Everything from here is
+        // attacker-chosen on a pipe we did not create, so each field is proved
+        // to be inside the ACE before it is read.
         //
-        // This is not defensive padding: the SACL belongs to a pipe we did not
-        // create, so its bytes are attacker-chosen in exactly the case this
-        // function exists for. An ACE declaring type 17 with a truncated
-        // `AceSize` would send the `SidStart` read below past the end of the
-        // ACE. Refusing here is what stops that being an out-of-bounds read.
-        if usize::from(header.AceSize) < std::mem::size_of::<SYSTEM_MANDATORY_LABEL_ACE>() {
+        // The SID is computed from bytes rather than handed to
+        // `GetSidSubAuthority`: that helper does no bounds checking, so its
+        // answer for a truncated SID is a pointer past the end of the ACE.
+        // Deriving the length here — from the two bytes the size check below
+        // guarantees — keeps every read inside a range we established.
+        let sid_offset = std::mem::offset_of!(SYSTEM_MANDATORY_LABEL_ACE, SidStart);
+        // `?` propagates None out of the whole function, which is the refusal
+        // this wants: an AceSize smaller than its own header is malformed.
+        let available = usize::from(header.AceSize).checked_sub(sid_offset)?;
+        if available < SID_HEADER_LEN {
             return None;
         }
 
-        let label = ace.as_ptr().cast::<SYSTEM_MANDATORY_LABEL_ACE>();
-        // `SidStart` is the first DWORD of an inline SID, not a pointer.
-        // SAFETY: the size check above proves the ACE spans a whole
-        // SYSTEM_MANDATORY_LABEL_ACE, so this field is within it.
-        let sid = unsafe { std::ptr::addr_of_mut!((*label).SidStart) }.cast::<c_void>();
+        // SAFETY: `sid_offset + SID_HEADER_LEN <= AceSize`, established above,
+        // and `ace` addresses an ACE of `AceSize` bytes.
+        let sid = unsafe { ace.as_ptr().byte_add(sid_offset) }.cast::<u8>();
+        // SAFETY: the first two bytes are within the range just proved.
+        let revision = unsafe { std::ptr::read_unaligned(sid) };
+        // SAFETY: as above.
+        let sub_authority_count = unsafe { std::ptr::read_unaligned(sid.add(1)) };
 
-        // SAFETY: `sid` addresses the inline SID inside the bounds-checked ACE.
-        let count_ptr = unsafe { GetSidSubAuthorityCount(sid) };
-        if count_ptr.is_null() {
+        if revision != SID_REVISION || sub_authority_count == 0 {
             return None;
         }
-        // SAFETY: non-null per the check above.
-        let count = unsafe { *count_ptr };
-        if count == 0 {
-            // A SID with no sub-authorities carries no integrity RID. The ACE
-            // said "label" and then did not supply one — malformed, refuse.
+
+        // THE CHECK THAT MATTERS. `SYSTEM_MANDATORY_LABEL_ACE` embeds only the
+        // FIRST DWORD of a variable-length SID, so `AceSize >= size_of::<ACE>()`
+        // proves nothing about the sub-authorities. A truncated ACE can declare
+        // `SubAuthorityCount = 200` and every later read would run past it.
+        // (PR #516 review — the previous version had exactly that hole.)
+        let sid_len = SID_HEADER_LEN + SUB_AUTHORITY_LEN * usize::from(sub_authority_count);
+        if sid_len > available {
             return None;
         }
+
+        // A mandatory label is `S-1-16-<rid>`. Any other identifier authority
+        // means the RID is not an integrity level, so reading one out would be
+        // interpreting unrelated bytes as a trust decision.
+        let mut authority = [0u8; SID_AUTHORITY_LEN];
+        // SAFETY: bytes 2..8 of the SID, inside the length just proved.
+        unsafe {
+            std::ptr::copy_nonoverlapping(sid.add(2), authority.as_mut_ptr(), SID_AUTHORITY_LEN);
+        }
+        if authority != MANDATORY_LABEL_AUTHORITY {
+            return None;
+        }
+
         // The integrity RID is the LAST sub-authority.
-        // SAFETY: `count > 0`, so `count - 1` indexes an existing entry.
-        let rid_ptr = unsafe { GetSidSubAuthority(sid, u32::from(count) - 1) };
-        if rid_ptr.is_null() {
-            return None;
-        }
-        // SAFETY: non-null per the check above.
-        return Some(IntegrityLevel::from_rid(unsafe { *rid_ptr }));
+        let rid_offset =
+            SID_HEADER_LEN + SUB_AUTHORITY_LEN * (usize::from(sub_authority_count) - 1);
+        // SAFETY: `rid_offset + 4 == sid_len <= available`, so the read is
+        // inside the ACE.
+        let rid = unsafe { std::ptr::read_unaligned(sid.add(rid_offset).cast::<u32>()) };
+        return Some(IntegrityLevel::from_rid(rid));
     }
 
     // No mandatory-label ACE among them: the documented OS default.

@@ -59,6 +59,8 @@ mod sddl;
 #[cfg(windows)]
 mod sid;
 
+#[cfg(all(windows, feature = "test-utils"))]
+pub use peer::label_from_sacl_for_testing;
 #[cfg(windows)]
 pub use peer::{IntegrityLevel, PeerCheck, PeerCheckError};
 #[cfg(windows)]
