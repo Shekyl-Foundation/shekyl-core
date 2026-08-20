@@ -1,0 +1,19 @@
+[package]
+name = "shekyl-tor-transit-spike"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DISPOSABLE measurement spike: §94 Tor transit (onion-to-onion, one-way). Not canonical; delete once ANON_ZONE_TRANSIT_MEASURED_MS lands."
+publish = false
+
+[dependencies]
+# The managed-tor lifecycle and the ADD_ONION surface this rides. Deliberately
+# NOT `shekyl-sp-t3-spike`: that harness times a `p-serve` FETCH, which is a
+# round trip with application handling in the path — the two things §94.5
+# amended the estimator away from.
+shekyl-tor = { path = "../shekyl-tor" }
+# The control actor's `ActorRef` issues ADD_ONION; kameo is the workspace stack.
+kameo = { workspace = true }
+tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "time", "macros", "sync"] }

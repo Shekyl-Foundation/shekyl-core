@@ -20,6 +20,15 @@ members = [
     # labelled at birth). See docs/design/SP_T3_SKELETON_MEASUREMENT.md.
     "shekyl-sp-t3-spike",
 
+    # DISPOSABLE measurement spike (§94): Tor transit, onion-to-onion, one-way.
+    # Named `-spike` on purpose -- nothing in it is canonical and it is deleted
+    # once `ANON_ZONE_TRANSIT_MEASURED_MS` lands (rule 15: debt, labelled at
+    # birth). Separate from `shekyl-sp-t3-spike` because that one times a
+    # `p-serve` fetch -- a round trip with application handling in the path,
+    # which is what §94.5 amended the estimator away from.
+    # See DAEMON_RELAY_PRIVACY.md §94.
+    "shekyl-tor-transit-spike",
+
     # Canonical genesis block/tx binary wire-format serializer — the clean,
     # Shekyl-owned replacement for the vendored shekyl-oxide block/tx/ct modules
     # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).

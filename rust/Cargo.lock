@@ -4556,6 +4556,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-tor-transit-spike"
+version = "3.1.0"
+dependencies = [
+ "kameo",
+ "shekyl-tor",
+ "tokio",
+]
+
+[[package]]
 name = "shekyl-tx-builder"
 version = "3.1.0"
 dependencies = [
