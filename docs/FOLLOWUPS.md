@@ -292,117 +292,6 @@ sustainability is unaffected by the recalibration.
   the corrected scoping costs **less** than the status quo — 12.6 h / 5
   shards against 23.9 h / 8. MR-DQ-2–MR-DQ-7 remain open.
 
-- **Divergence-window arithmetic is under-asserted (added 2026-08-18,
-  found by the first scoped mutation run the project has completed).**
-  `cache_precondition.rs`'s `byte_diff` and `build_divergence_window`
-  carry tests (`find_first_divergence_*`,
-  `build_divergence_window_crosses_backwards/forwards/interior`) that
-  **pass while their arithmetic is mutated**: nine survivors across
-  `+`→`-`, `+`→`*`, `+=`→`-=`, `+=`→`*=`, and `>`→`>=`. The tests
-  assert something weaker than the arithmetic they cover. This is the
-  T4 diagnostic path — the ±64-byte context window an operator reads
-  when `--debug-cache-divergence` fires — so a wrong window
-  mis-reports *where* a consensus divergence sits, without affecting
-  whether one is detected. Not consensus-critical, which is why it is
-  filed rather than fixed in the item-1 PR (different validation
-  surface, rule 19). Root cause is the **fixture, not the assertions**: `fill_block` returns
-  `[sentinel; 1024]`, a uniform block, so copying `[10..139]` versus
-  `[11..140]` of it is byte-identical — the tests assert window length,
-  window start, and per-source byte *counts*, all invariant under an
-  off-by-one *inside* a block. They therefore catch boundary-crossing
-  errors and miss intra-block index errors. Fix shape is two lines and
-  touches no production code: make `fill_block` position-derived
-  (`block[i] = sentinel ^ (i as u8)`) and assert the window's byte
-  *sequence* rather than its composition; every intra-block index
-  mutant then dies. Note this is a fixture weakness, distinct from the
-  `assert_equivalent`-wrapper survivor, which is a genuine skip-list
-  entry — conflating them would credit the fixture with mutants it
-  never covered. Notable as evidence:
-  this is the **first genuine T18-style yield** the project has
-  produced, and it cost four minutes on one file — see
-  [`RANDOMX_V2_MUTATION_REGIME.md`](./design/RANDOMX_V2_MUTATION_REGIME.md)
-  §6.6. **Target: V3.0 pre-genesis.**
-
-- **`economics-c2a-prime.yml`'s layer gate cannot fail: the verdict is
-  swallowed by `tee` (added 2026-08-18, rule-46 instance).** The step
-  runs `scripts/ci/run_economics_c2a_prime.sh <subcommand> 2>&1 | tee
-  "economics-c2a-layer<N>.log"` under a plain `run:`, which on Linux is
-  `bash -e {0}` — **`-e` without `pipefail`**. A pipeline's exit status
-  is its last command's, so the step reports `tee`'s success and the
-  script's verdict is discarded; a failing layer would go green. The
-  `shell: bash` + `set -euo pipefail` that appears earlier in the same
-  workflow applies only to the "Verify artifact manifest" step, not to
-  this one. Fix per
-  [`46-shell-gate-exits`](../.cursor/rules/46-shell-gate-exits.mdc): run
-  the script unpiped with output redirected to the log, then read the
-  log afterwards — or capture `${PIPESTATUS[0]}` on the very next line.
-  Found while mirroring this workflow's `if: failure()` artifact-upload
-  pattern for the RandomX rotating lane; **not fixed there** because it
-  is a different validation surface (rule 19). Worth noting it is the
-  same shape as
-  [`RANDOMX_V2_MUTATION_REGIME.md`](./design/RANDOMX_V2_MUTATION_REGIME.md)
-  §13 — a gate producing a clean signal from a verdict that never
-  reached it. **Target: V3.0 pre-genesis.**
-
-- **Promote "a gate must assert its own subject exists" to a
-  `.cursor/rules` entry (added 2026-08-18).** The T18 mutation-regime
-  round produced six defects and three near-miss fixes that all share
-  one shape: the gate computed a *correct* answer about a surface that
-  was not there, and reported it as a clean signal — a severed job
-  header (green cron), a config file at a path nothing reads
-  (discipline "enforced"), test scoping that excluded the judging crate
-  (mutants "caught"), assertion macros that are not mutation sites at
-  all (survivor count clean), verdicts whose branches no test could
-  reach (tests "passing"), and an `if:` whose operator precedence
-  silently widened the trigger. The three proposed fixes that shared
-  the defect's shape — a setting in an unread file, an exclusion for a
-  class that cannot occur, a `--re` scope that greens over an empty set
-  — were each caught only by asking "does the thing this acts on
-  exist?", which was not part of the process at the round's start. The
-  rule: **absence of signal is first evidence that the subject may be
-  absent.** The house already applies it in two places without having
-  written it down (`ctest --no-tests=error` in the full-parity job; the
-  domain-registry gate reading comment-stripped source so a quoted
-  literal in a doc comment cannot keep it green), which is precisely
-  why it was never applied to T18. Precedent for promotion:
-  [`26-sub-pr-design-discipline`](../.cursor/rules/26-sub-pr-design-discipline.mdc)
-  was promoted from RandomX v2 Phase 2c on the same grounds. **The
-  promotion is deliberately not made by the round that found it** —
-  minting a rule from inside the round that discovered it is the
-  self-auditing move the round spent five sessions arguing against; it
-  wants a reader who was not in it. Substrate:
-  [`RANDOMX_V2_MUTATION_REGIME.md`](./design/RANDOMX_V2_MUTATION_REGIME.md)
-  §13. **Target: V3.0 pre-genesis.**
-
-- **Plan-doc structural integrity gate: assert every identifier heading
-  has a non-empty body (added 2026-08-18).** During the T18
-  mutation-regime round, a scripted section reorder silently orphaned
-  the body of an `MR-F#` finding under a neighbouring heading, leaving
-  a heading with a truncated stub. It was caught by eye, one edit
-  before it would have been committed as the round's record. The
-  failure class is general — `docs/FOLLOWUPS.md` and
-  `docs/design/IMPLEMENTATION_INDEX.md` are both edited by script and
-  both read by heading — and vigilance is the wrong countermeasure. A
-  cheap structural check (every `MR-F#` / `T-A#` / `DQ-#`-style heading
-  in a plan doc is followed by a non-empty body before the next heading
-  of equal or higher level) would have caught it mechanically. Scope
-  note: this is a **doc-hygiene** surface, deliberately not bundled
-  into the mutation-regime round per
-  [`19-validation-surface-discipline`](../.cursor/rules/19-validation-surface-discipline.mdc).
-  Natural home is `scripts/ci/` alongside `check_doc_links.py`, which
-  already walks the same files. **Target: V3.0 pre-genesis.**
-
-- **Agent-brief boilerplate: `pgrep -f` / `pkill -f` match the caller
-  (added 2026-08-18).** A wait-loop written as
-  `until ! pgrep -f cargo-mutants; do sleep 15; done` never terminates,
-  because the pattern matches the waiting shell's own command line. Cost
-  the T18 round a 19-minute measurement stall before the self-match was
-  spotted. Fixes: filter the caller (`pgrep -f pat | grep -v $$`), match
-  the binary rather than the command line (`pgrep -x`), or wait on the
-  process/PID directly. Worth landing in the agent-brief boilerplate
-  rather than being rediscovered — it is silent, and it looks exactly
-  like a slow job. **Target: V3.0 pre-genesis (docs-only).**
-
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) —
   REQUIRED BEFORE THE FORMAT FREEZE (added 2026-08-08, escalated from
   the message-signing round, SM-DQ-7).** Address v1 anchors signatures
@@ -2194,7 +2083,6 @@ sustainability is unaffected by the recalibration.
   2026-07-10). Axum `RESTRICTED_METHODS` and any remaining C++ notions
   of “admin-only” should share one table. Note-only until a consumer
   drifts. *Target: V3.1.*
-
 
 - **Phase 4b: `rescan_blockchain` needs an Engine rescan API** —
   **CLOSED 2026-08-04 (Phase 4c, `feat/wallet-rpc-phase-4c-rescan`)**.
@@ -10019,6 +9907,23 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 `wallet2.cpp` wholesale at its Phase 5 — these items name the
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
+
+- **Relay: the packet-size fragment guard is still C++-bound (opened
+  2026-08-20).** `static_assert(CRYPTONOTE_MAX_FRAGMENTS * CRYPTONOTE_NOISE_BYTES
+  <= LEVIN_DEFAULT_MAX_PACKET_SIZE)` sits at anonymous-namespace scope in
+  `levin_notify.cpp`, beside the constants it guards rather than beside the
+  fragmenting, which is now Rust's. **Step 5 deletes that file**, so it needs a
+  home before then. The obstacle is `LEVIN_DEFAULT_MAX_PACKET_SIZE`: it is an
+  epee *transport* constant, not a relay one, so mirroring it into
+  `shekyl-relay-privacy` would put a transport fact in a privacy crate. The
+  likely answer is that this assertion belongs wherever the levin codec lands
+  in the p2p cutover, which makes it that design's problem rather than a
+  standalone port.
+
+  *(The sibling epoch-budget guard — `MAX_FRAGMENTS <= epoch / (min_delay +
+  delay_range)` — is CLOSED: it crossed to `Zone::new` as
+  `ZoneNewError::NoiseCannotCrossOneEpoch`. It could cross because the epoch
+  already travels as `min_epoch_secs`; this one cannot, for the reason above.)*
 
 - **Relay: the `t_core` arrival harness — the witness this path has never
   had.** *(Rewritten 2026-08-12 by Q12-U2, which shipped the mechanism. The

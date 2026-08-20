@@ -146,6 +146,13 @@ __pycache__/
 /target/
 **/target/
 
+# cargo-mutants working directories. It writes `mutants.out/` next to the
+# workspace and rotates the previous run to `mutants.out.old/`, so a
+# `git add -A` after a local mutation run sweeps in tens of generated
+# diffs and JSON. 65 such files reached a PR before review caught them.
+**/mutants.out/
+**/mutants.out.old/
+
 # Additional CMake/Ninja generated files
 cmake-build-*/
 compile_commands.json

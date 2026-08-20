@@ -606,6 +606,20 @@ pub mod inherited {
     /// existed briefly with zero consumers and were deleted (Q-11 Unit 0) —
     /// a dead duplicate of a C++-owned fact is the delete-don't-synchronize
     /// class, not documentation.
+    /// `CRYPTONOTE_MAX_FRAGMENTS` — the most windows one real notification may
+    /// occupy on a noise channel.
+    ///
+    /// **This is a mirror of a C++ `#define`, which the epoch pair above is
+    /// deliberately not — the difference is a live consumer.** Q-11 Unit 0
+    /// deleted the epoch mirrors because nothing read them, and a dead
+    /// duplicate of a C++-owned fact is the delete-don't-synchronize class.
+    /// This one is read by `Zone::new`, which refuses a noise zone whose epoch
+    /// is too short to carry a full-size message (see
+    /// `ZoneNewError::NoiseCannotCrossOneEpoch`). The invariant it enforces
+    /// used to be a C++ `static_assert` inside `send_noise`; that function is
+    /// deleted and the assertion went with it, so this is where it lives now.
+    pub const MAX_FRAGMENTS: u32 = 20;
+
     pub const NOISE_MIN_DELAY_SECS: u32 = 10;
     /// `CRYPTONOTE_NOISE_DELAY_RANGE`, in seconds.
     ///

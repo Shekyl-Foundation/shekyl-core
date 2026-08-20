@@ -384,14 +384,17 @@ namespace
             EXPECT_EQ(connection_ids_.size(), connections_->get_connections_count());
         }
 
-        std::shared_ptr<cryptonote::levin::notify> make_notifier(const std::size_t noise_size, bool is_public, bool pad_txs)
+        /*! Build a notifier on the clearnet or i2p zone.
+
+            No noise parameter: C++ cannot enable the carrier any more (the
+            machinery is deleted, `NoiseQueues` is the port), so a `noise_size`
+            argument could only ever have been 0. Every caller passed 0 once
+            the three covert gtests went. */
+        std::shared_ptr<cryptonote::levin::notify> make_notifier(bool is_public, bool pad_txs)
         {
-            epee::byte_slice noise = nullptr;
-            if (noise_size)
-                noise = epee::levin::make_noise_notify(noise_size);
             epee::net_utils::zone zone = is_public ? epee::net_utils::zone::public_ : epee::net_utils::zone::i2p;
             receiver_.notifier.reset(
-              new cryptonote::levin::notify{io_service_, connections_, std::move(noise), zone, pad_txs, events_}
+              new cryptonote::levin::notify{io_service_, connections_, zone, pad_txs, events_}
             );
             return receiver_.notifier;
         }
@@ -548,7 +551,7 @@ namespace
             and two fixed txs — shared setup for the stemming cases. */
         std::shared_ptr<cryptonote::levin::notify> make_private_stem_fixture(const bool padded)
         {
-            auto notifier_ptr = make_notifier(0, false, padded);
+            auto notifier_ptr = make_notifier(false, padded);
             auto& notifier = *notifier_ptr;
             for (unsigned count = 0; count < 10; ++count)
                 add_connection(count % 2 == 0);
@@ -1123,7 +1126,7 @@ TEST_F(levin_notify, defaulted)
 
 TEST_F(levin_notify, fluff_without_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1162,7 +1165,7 @@ TEST_F(levin_notify, fluff_without_padding)
 
 TEST_F(levin_notify, stem_without_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1236,7 +1239,7 @@ TEST_F(levin_notify, stem_without_padding)
 
 TEST_F(levin_notify, stem_no_outs_without_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1294,7 +1297,7 @@ TEST_F(levin_notify, stem_no_outs_without_padding)
 
 TEST_F(levin_notify, local_without_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1405,7 +1408,7 @@ TEST_F(levin_notify, local_without_padding)
 
 TEST_F(levin_notify, block_without_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1436,7 +1439,7 @@ TEST_F(levin_notify, block_without_padding)
 
 TEST_F(levin_notify, none_without_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1467,7 +1470,7 @@ TEST_F(levin_notify, none_without_padding)
 
 TEST_F(levin_notify, fluff_with_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1537,7 +1540,7 @@ TEST_F(levin_notify, fluff_with_padding)
 // quantization falls even when the transactions themselves are noise.
 TEST_F(levin_notify, padding_survives_the_emit_path)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1614,7 +1617,7 @@ TEST_F(levin_notify, padding_survives_the_emit_path)
 // wrong reason — by proving nothing at all.
 TEST_F(levin_notify, unpadded_messages_still_compress)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1664,7 +1667,7 @@ TEST_F(levin_notify, unpadded_messages_still_compress)
 
 TEST_F(levin_notify, stem_with_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1733,7 +1736,7 @@ TEST_F(levin_notify, stem_with_padding)
 
 TEST_F(levin_notify, stem_no_outs_with_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1791,7 +1794,7 @@ TEST_F(levin_notify, stem_no_outs_with_padding)
 
 TEST_F(levin_notify, local_with_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1893,7 +1896,7 @@ TEST_F(levin_notify, local_with_padding)
 
 TEST_F(levin_notify, block_with_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1924,7 +1927,7 @@ TEST_F(levin_notify, block_with_padding)
 
 TEST_F(levin_notify, none_with_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -1955,7 +1958,7 @@ TEST_F(levin_notify, none_with_padding)
 
 TEST_F(levin_notify, private_fluff_without_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -2012,7 +2015,7 @@ TEST_F(levin_notify, private_block_without_padding)
        stemming ruling does not touch this case. The inherited comment here
        said "private mode always uses fluff but marked as stem"; that is false
        since §89 and was never what this case tested. */
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -2048,7 +2051,7 @@ TEST_F(levin_notify, private_none_without_padding)
        stemming ruling does not touch this case. The inherited comment here
        said "private mode always uses fluff but marked as stem"; that is false
        since §89 and was never what this case tested. */
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -2079,7 +2082,7 @@ TEST_F(levin_notify, private_none_without_padding)
 
 TEST_F(levin_notify, private_fluff_with_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -2131,7 +2134,7 @@ TEST_F(levin_notify, private_fluff_with_padding)
 
 TEST_F(levin_notify, private_block_with_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -2162,7 +2165,7 @@ TEST_F(levin_notify, private_block_with_padding)
 
 TEST_F(levin_notify, private_none_with_padding)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, false, true);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(false, true);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -2195,7 +2198,7 @@ TEST_F(levin_notify, stem_mappings)
 {
     static constexpr const unsigned test_connections_count = (CRYPTONOTE_DANDELIONPP_STEMS + 1) * 2;
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < test_connections_count; ++count)
@@ -2320,7 +2323,7 @@ TEST_F(levin_notify, fluff_multiple)
 {
     static constexpr const unsigned test_connections_count = (CRYPTONOTE_DANDELIONPP_STEMS + 1) * 2;
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < test_connections_count; ++count)
@@ -2433,7 +2436,7 @@ TEST_F(levin_notify, fluff_multiple)
 
 TEST_F(levin_notify, fluff_with_duplicate)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -2502,7 +2505,7 @@ TEST_F(levin_notify, fluff_with_duplicate)
     forced side. */
 TEST_F(levin_notify, fluff_via_scheduled_drive)
 {
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < 10; ++count)
@@ -2634,7 +2637,7 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
     // the record_arrival dispatch leaves it at 2 (second assert fails).
     static constexpr const unsigned test_connections_count = (CRYPTONOTE_DANDELIONPP_STEMS + 1) * 2;
 
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(0, true, false);
+    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
 
     for (unsigned count = 0; count < test_connections_count; ++count)
@@ -2715,90 +2718,56 @@ TEST_F(levin_notify, stem_watch_records_and_arrival_resolves)
         << "the same txs arriving from another peer must resolve the observations";
 }
 
-/*! Ruling of 2026-08-19: **Dandelion++ runs on every zone regardless of
-    noise**, and **noise runs only on an encrypted zone**. Three independent
-    axes: *cleartext* versus *encrypted* for the network, *stem* versus *fluff*
-    for the phase, *ordinary* versus *noise* for the carrier.
+/*! C++ cannot enable the noise carrier, and this is what says so.
 
-    The inherited covert branch collapsed the phase into the carrier in both
-    directions at once — it demoted a `stem` to `local` under a warning that
-    "Dandelion++ stem not supported over noise networks", and then broadcast
-    the result to EVERY channel, which is the opposite of what a stem is. Its
-    premise was the sybil-substitution fallacy (§64): that a noise network
-    stands in for Dandelion++. It does not. Noise masks the node↔proxy wire
-    against an EXTERNAL observer; Dandelion++ defends against an INTERNAL
-    adversarial peer.
+    The predecessor of this test (`noise_does_not_override_the_phase`, #513)
+    drove a noise-enabled zone and asserted the phase survived. Its subject is
+    gone: the C++ noise machinery — `noise_channel`, `send_noise`,
+    `clear_channel`, `queue_covert_notify`, the channel deque and the payload —
+    is deleted, `NoiseQueues` in `shekyl-relay` is the carrier, and
+    `make_relay_zone` never sets `SHEKYL_RELAY_ZONE_NOISE_ENABLED`. A test
+    whose subject no longer exists is not coverage, so it is replaced rather
+    than kept limping.
 
-    That branch is deleted, and this is the witness. The discriminant is the
-    peer count, because it is the assertion the deleted branch would fail:
-    a stem reaches ONE peer; the all-channel broadcast reached two, and the
-    three tests removed with the branch pinned that two as though it were the
-    specification.
+    What replaces it is the invariant that makes the two remaining noise effect
+    callbacks unreachable. They are loud failures rather than no-ops, and this
+    is the assertion that says nothing can reach them: `has_noise` reads the
+    Rust-owned zone fact through `shekyl_relay_zone_noise_enabled`, so it is
+    not a constant this test could pass against by construction — it goes red
+    the moment any C++ path enables a noise zone again.
 
-    Driven on `relay_method::local` rather than `stem` deliberately. RD-4 makes
-    a local origin always attempt a stem, epoch roll or not, so this is
-    deterministic. The `stem` arm rides the epoch and fluffs correctly during a
-    fluff epoch — which is how the removed `noise_stem` came to pass only ~40%
-    of the time, a flake whose diagnosis was drive-independent and is recorded
-    at §2.6. Any future covert test, in any language, needs a determined epoch
-    rather than a wider drive budget. */
-TEST_F(levin_notify, noise_does_not_override_the_phase)
+    The phase-versus-carrier property itself now lives only in Rust
+    (`a_noise_carrier_does_not_change_the_phase`), which is correct: the
+    carrier is only in Rust. */
+TEST_F(levin_notify, cpp_cannot_enable_the_noise_carrier)
 {
     for (unsigned count = 0; count < 10; ++count)
         add_connection(count % 2 == 0);
 
-    std::vector<cryptonote::blobdata> txs(1);
-    txs[0].resize(1900, 'h');
-
-    const boost::uuids::uuid incoming_id = random_generator_();
-    // i2p: a noise carrier exists only on an encrypted zone, and `Zone::new`
-    // now refuses the cleartext pairing outright rather than downgrading it.
-    std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(2048, false, true);
-    auto &notifier = *notifier_ptr;
-
-    ASSERT_LT(0u, io_service_.poll());
+    // Both zone classes, because the flag is derived per zone: an encrypted
+    // zone is the one that WOULD be eligible, and it is still not enabled.
+    for (const bool is_public : {true, false})
     {
+        std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(is_public, true);
+        auto &notifier = *notifier_ptr;
+        ASSERT_LT(0u, io_service_.poll());
+
+        /* Read what each arm actually demonstrates, because they are NOT the
+           same refusal and only one of them is this test's subject.
+
+           On i2p, `has_noise` is false because no C++ path sets the flag —
+           the property named above. On the PUBLIC zone there are two refusals
+           stacked, and the second one never runs: even with the flag forced
+           on, `Zone::new` rejects a noise carrier on a cleartext link (§93.2)
+           before the C++ question is reached. Verified by forcing the flag in
+           `make_relay_zone` — only the i2p arm reds.
+
+           So the public arm is coverage of the Rust gate, not of this test's
+           claim, and a reader taking both arms as evidence for "C++ cannot
+           enable noise" would be over-reading it by one refusal. */
         const auto status = notifier.get_status();
-        EXPECT_TRUE(status.has_noise) << "the carrier machinery is still built and scheduled";
-        EXPECT_TRUE(status.connections_filled);
-    }
-
-    {
-        // Dummies still flow with nothing queued. The carrier is not disabled
-        // by this change — it is merely no longer allowed to decide the phase.
-        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 2u <= s; });
-        EXPECT_EQ(2u, sent);
-        EXPECT_EQ(0u, receiver_.notified_size());
-    }
-
-    EXPECT_TRUE(notifier.send_txs(txs, incoming_id, cryptonote::relay_method::local));
-    {
-        /* The stop condition counts SENDS, never `notified_size()`. A first
-           version stopped at `1u <= receiver_.notified_size()` and passed with
-           the deleted branch restored — because it halted the drive the moment
-           the first notification landed, so a second one arriving on the next
-           advance was never observed. The oracle was iterating on the very
-           quantity it asserts. Verified by restoring `origin/dev`'s
-           `levin_notify.cpp` and rebuilding: it stayed green, which is the
-           whole reason this control is run rather than assumed. */
-        const std::size_t sent = drive_schedule(notifier, [](std::size_t s) { return 6u <= s; });
-        /* The window is the assertion. Stopping at `sent >= 1` would pass on a
-           drive that died after the first send, which is the oracle bug the
-           first version of this test had — it never looked for the second
-           notification. Six sends is past both channels twice; if a second
-           notification were coming, it would have arrived. */
-        ASSERT_GE(sent, 6u) << "drive died before the observation window; cannot claim one peer";
-        ASSERT_EQ(1u, receiver_.notified_size())
-            << "a stem reaches one peer; two is the deleted all-channel broadcast";
-
-        auto notification = receiver_.get_notification<cryptonote::NOTIFY_NEW_TRANSACTIONS>().second;
-        EXPECT_EQ(txs, notification.txs);
-        EXPECT_FALSE(notification.dandelionpp_fluff) << "stemming, not fluffing";
-
-        // An origin on an anonymity zone keeps its `local` pool class
-        // (`originated_stays_in_zone`) — that is the backstop staying in-zone
-        // per §30.5, and is unrelated to the deleted downgrade, which applied
-        // the same class to transactions that were merely passing through.
-        EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::local));
+        EXPECT_FALSE(status.has_noise)
+            << "no C++ path sets the noise flag; the carrier is Rust-owned "
+            << "(zone is " << (is_public ? "public" : "i2p") << ")";
     }
 }

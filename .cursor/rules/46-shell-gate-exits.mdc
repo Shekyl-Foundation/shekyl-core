@@ -27,3 +27,46 @@ one SA round alone.
 - Chains matter: in `gate && commit && push`, a swallowed gate exit
   makes the push unconditional. Anything that publishes (commit, push,
   tag) never shares a chain with a piped verdict.
+
+## `pgrep -f` / `pkill -f` match the caller
+
+A wait-loop written as
+
+```bash
+until ! pgrep -f cargo-mutants; do sleep 15; done
+```
+
+can fail to terminate. `-f` matches against the **full command line**,
+so whether the caller matches depends on how the loop was invoked:
+
+- **Inline** — `bash -c 'until ! pgrep -f cargo-mutants; …'`, an agent
+  or CI one-liner, a `sh -c` wrapper — the pattern is *in* the argv, so
+  `pgrep` finds itself and the condition is never false.
+- **From a script file** — the argv is the interpreter plus the script
+  path, so the pattern normally does **not** appear and the loop
+  terminates as intended.
+
+`pkill -f` has the mirror form and the same qualification: from an
+inline invocation it can kill the shell that ran it.
+
+Treat this as a hazard of inline and wrapper command lines rather than
+a property of every such loop — but note that the inline form is the
+one used in agent sessions and CI `run:` blocks, which is where it has
+actually bitten.
+
+This is silent and it looks exactly like a slow job, which is what makes
+it expensive: the loop sits there consuming its timeout while the thing
+it waits for finished long ago. Cost one round a 19-minute stall on a
+measurement that had already completed.
+
+Fixes, in order of preference:
+
+- **Wait on the process, not a pattern** — keep the PID (`$!`, or a
+  pidfile) and `wait "$pid"`.
+- **Match the binary, not the command line** — `pgrep -x <name>`.
+- **Exclude the caller** — `pgrep -f <pat> | grep -v "^$$\$"`, which is
+  the weakest form because it still depends on the pattern.
+
+The same shape appears whenever a command inspects the process table
+that it is itself part of; treat "does my own invocation match this
+predicate?" as the first question, not an afterthought.
