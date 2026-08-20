@@ -75,7 +75,7 @@ Push-Location (Join-Path $repo 'rust')
 try {
     # `--features test-utils` for P-6's mismatched-SID constructor. Exit code
     # is read directly, never through a pipe (rule 46).
-    cargo test -p shekyl-win-sec --features test-utils --test probes -- --nocapture
+    cargo test --locked -p shekyl-win-sec --features test-utils --test probes -- --nocapture
     $cargoExit = $LASTEXITCODE
 } finally {
     Pop-Location
@@ -96,7 +96,7 @@ try {
     $whoami = (whoami /user /fo csv | ConvertFrom-Csv).SID
     Push-Location (Join-Path $repo 'rust')
     try {
-        $printed = cargo run -q -p shekyl-win-sec --features test-utils --example print_sid 2>$null
+        $printed = cargo run --locked -q -p shekyl-win-sec --features test-utils --example print_sid 2>$null
         $runExit = $LASTEXITCODE
     } finally { Pop-Location }
 

@@ -9,8 +9,11 @@
 //! The policy this crate exists to express is one string:
 //!
 //! ```text
-//! O:<sid>G:<sid>D:P(A;;GA;;;<sid>)(A;;GA;;;<logon-sid>)S:(ML;;NW;;;ME)
+//! O:<sid>G:<sid>D:P(A;;GA;;;<sid>)[(A;;GA;;;<logon-sid>)]S:(ML;;NW;;;ME)
 //! ```
+//!
+//! The logon-SID clause is in brackets because it is **optional** — `new`
+//! takes `Option<&SidString>` for it. The owner ACE and the label are not.
 //!
 //! - `O:` / `G:` — owner and group are the creating user, so a peer reading
 //!   the owner back off the handle sees the SID the pipe name was derived from
@@ -201,6 +204,12 @@ impl Drop for OwnerOnlyDescriptor {
     }
 }
 
-// Not `Clone`: two owners would double-free. Not `Sync`/`Send` by default
-// either — the descriptor is consumed by a create call on the thread that
-// built it, and widening that is a decision, not a convenience.
+// Not `Clone`: two owners would double-free.
+//
+// Not `Send`/`Sync` either, and that is enforced by the compiler rather than by
+// this comment: `SECURITY_ATTRIBUTES` holds a `*mut c_void`, raw pointers are
+// `!Send + !Sync`, and the auto-derive therefore does not fire. Verified by
+// compiling `assert_send::<T>()` against a struct holding one — it fails with
+// E0277. Adding the impls would be a decision about thread-affinity, not a
+// convenience, and nothing here needs it: the descriptor is consumed by a
+// create call on the thread that built it.

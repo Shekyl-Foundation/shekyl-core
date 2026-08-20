@@ -15,7 +15,11 @@
 //! Nothing in this file was written after seeing a result. It was committed
 //! before any Windows machine ran it.
 
-#![cfg(windows)]
+// Gated on BOTH windows and the feature the suite needs. Without the
+// feature-gate a plain `cargo check --all-targets` on a Windows runner
+// fails on the missing `sid_for_testing` rather than simply skipping a
+// suite it was never asked to build — which is how this PR first went red.
+#![cfg(all(windows, feature = "test-utils"))]
 
 use shekyl_win_sec::{current_user_sid, OwnerOnlyDescriptor, PeerCheck, PeerCheckError};
 
@@ -65,10 +69,25 @@ fn p1_descriptor_roundtrips_to_the_policy_we_wrote() {
         back.contains(sid.as_str()),
         "P-1: owner SID absent from the round-tripped descriptor: {back}"
     );
+    // The EXACT Medium label, with no `|| contains("S:")` fallback. That
+    // fallback would have passed for any SACL at all — including
+    // `(ML;;NW;;;LW)`, a LOW label, which is precisely the downgrade this
+    // probe exists to detect. A weakened assertion in a probe is worse than no
+    // probe: it reports green while measuring nothing.
     assert!(
-        back.contains("(ML;;NW;;;ME)") || back.contains("S:"),
-        "P-1: mandatory label absent from the round-tripped descriptor: {back}"
+        back.contains("(ML;;NW;;;ME)"),
+        "P-1: the Medium mandatory label is not in the round-tripped \
+         descriptor — a downgraded or missing label would read as fine: {back}"
     );
+    // And explicitly not a lower one, so a future edit to the SDDL constant
+    // has to fail here rather than pass by omission.
+    for lower in ["(ML;;NW;;;LW)", "(ML;;NW;;;UN)"] {
+        assert!(
+            !back.contains(lower),
+            "P-1: descriptor carries {lower}, below the Medium floor WP-D4 \
+             requires: {back}"
+        );
+    }
     // The grant must be to our SID and not to a broader principal. WD (world),
     // AU (authenticated users) and BU (builtin users) would each be a silent
     // widening of the boundary.

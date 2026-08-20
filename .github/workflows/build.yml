@@ -391,7 +391,13 @@ jobs:
       - name: "WP-W1: shekyl-win-sec compiles for Windows"
         shell: pwsh
         working-directory: rust
-        run: cargo check -p shekyl-win-sec --all-targets
+        # `--features test-utils` because the probe suite needs it, and
+        # `--all-targets` builds that suite: without the feature this step
+        # fails on a missing `sid_for_testing`, which is exactly how it
+        # failed on the first run of this PR. The clippy step below always
+        # had the feature; this one did not, so local verification and CI
+        # were not running the same thing.
+        run: cargo check --locked -p shekyl-win-sec --features test-utils --all-targets
 
       # Clippy for a WINDOWS target, which the workspace gate on Linux cannot
       # do: this crate is cfg(windows), so the Linux run sees an empty crate
@@ -403,7 +409,7 @@ jobs:
       - name: "WP-W1: clippy -D warnings (Windows target)"
         shell: pwsh
         working-directory: rust
-        run: cargo clippy -p shekyl-win-sec --features test-utils --all-targets -- -D warnings
+        run: cargo clippy --locked -p shekyl-win-sec --features test-utils --all-targets -- -D warnings
 
       # The rustdoc gate for this crate lives HERE, not in rust-audit-test.yml's
       # persona-serving list, and the reason is the point: that list runs on
@@ -456,7 +462,7 @@ jobs:
         shell: pwsh
         working-directory: rust
         continue-on-error: true
-        run: cargo check -p shekyl-engine-core -p shekyl-wallet-rpc -p shekyl-cli
+        run: cargo check --locked -p shekyl-engine-core -p shekyl-wallet-rpc -p shekyl-cli
 
       - name: restore vcpkg cache
         uses: actions/cache/restore@v5

@@ -34,6 +34,17 @@ use windows_sys::Win32::Security::{
     GetSidSubAuthority, GetSidSubAuthorityCount, LABEL_SECURITY_INFORMATION,
     OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SYSTEM_MANDATORY_LABEL_ACE,
 };
+// The ACE type constant lives under SystemServices, not Security, and is a
+// `u32` while `ACE_HEADER::AceType` is a `u8` — narrowed once, here, so the
+// comparison below reads as a comparison rather than as a cast.
+use windows_sys::Win32::System::SystemServices::SYSTEM_MANDATORY_LABEL_ACE_TYPE;
+
+// The ACE-type comparison is done in `u32`, by WIDENING the header's `u8`
+// rather than narrowing the constant. `u32::from` is lossless and total, so
+// there is no truncation to justify and no clippy `allow` to carry — SA-R-7's
+// rule (never a lossy conversion on a value that decides something) applied to
+// a two-byte problem. Narrowing would have needed a const assertion plus an
+// allow to say the same thing less safely.
 
 use crate::sid::{last_error, wide_to_string, LocalFreeGuard, SidString};
 
@@ -143,7 +154,6 @@ impl PeerCheck {
         expected_owner: &SidString,
     ) -> Result<Self, PeerCheckError> {
         let mut owner_sid: *mut c_void = std::ptr::null_mut();
-        let mut label_sid: *mut c_void = std::ptr::null_mut();
         let mut sacl: *mut windows_sys::Win32::Security::ACL = std::ptr::null_mut();
         let mut psd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
 
@@ -183,7 +193,8 @@ impl PeerCheck {
         // An object with NO label is treated by the OS as Medium, so an absent
         // SACL is a PASS, not a failure. Reading it as a failure here would
         // refuse every ordinary unlabelled pipe.
-        let level = unsafe { label_from_sacl(sacl, &mut label_sid) };
+        // SAFETY: `sacl` points into the descriptor `_guard` still owns.
+        let level = unsafe { label_from_sacl(sacl) };
         if level < IntegrityLevel::Medium {
             return Err(PeerCheckError::IntegrityTooLow(level));
         }
@@ -194,44 +205,62 @@ impl PeerCheck {
 
 /// Read the mandatory label out of a SACL, defaulting to Medium when absent.
 ///
+/// **Iterates and type-checks every ACE** rather than assuming the label is
+/// ACE 0. A SACL may hold audit ACEs (`SYSTEM_AUDIT_ACE_TYPE`) and the ordering
+/// is not guaranteed, so an index-0 assumption can misparse an audit ACE's SID
+/// as a label — and on a pipe we did not create, that misparse resolves in the
+/// attacker's favour: a Low-integrity server would be read as Medium and
+/// accepted. This is the one check standing between a sandboxed process and a
+/// wallet passphrase (§6), so it reads what is actually there.
+///
+/// Absence still means Medium — an object with no mandatory label is treated as
+/// Medium by the OS, and reading absence as failure would refuse every ordinary
+/// pipe (P-7).
+///
 /// # Safety
 /// `sacl` must be null or point to a valid ACL that outlives the call.
-unsafe fn label_from_sacl(
-    sacl: *mut windows_sys::Win32::Security::ACL,
-    label_sid: &mut *mut c_void,
-) -> IntegrityLevel {
+unsafe fn label_from_sacl(sacl: *mut windows_sys::Win32::Security::ACL) -> IntegrityLevel {
     if sacl.is_null() {
         return IntegrityLevel::Medium;
     }
     let ace_count = unsafe { (*sacl).AceCount };
-    if ace_count == 0 {
-        return IntegrityLevel::Medium;
-    }
-    // The mandatory label is the first (and, for a label SACL, only) ACE.
-    let mut ace: *mut c_void = std::ptr::null_mut();
-    let got = unsafe { windows_sys::Win32::Security::GetAce(sacl, 0, &raw mut ace) };
-    if got == 0 || ace.is_null() {
-        return IntegrityLevel::Medium;
-    }
-    let label = ace.cast::<SYSTEM_MANDATORY_LABEL_ACE>();
-    // `SidStart` is the first DWORD of an inline SID, not a pointer.
-    let sid = unsafe { std::ptr::addr_of_mut!((*label).SidStart) }.cast::<c_void>();
-    *label_sid = sid;
 
-    let count_ptr = unsafe { GetSidSubAuthorityCount(sid) };
-    if count_ptr.is_null() {
-        return IntegrityLevel::Medium;
+    for index in 0..ace_count {
+        let mut ace: *mut c_void = std::ptr::null_mut();
+        let got =
+            unsafe { windows_sys::Win32::Security::GetAce(sacl, u32::from(index), &raw mut ace) };
+        if got == 0 || ace.is_null() {
+            continue;
+        }
+        // Every ACE begins with an ACE_HEADER; the type byte is what says
+        // whether the bytes after it are a mandatory label or something else.
+        let header = ace.cast::<windows_sys::Win32::Security::ACE_HEADER>();
+        if u32::from(unsafe { (*header).AceType }) != SYSTEM_MANDATORY_LABEL_ACE_TYPE {
+            continue;
+        }
+
+        let label = ace.cast::<SYSTEM_MANDATORY_LABEL_ACE>();
+        // `SidStart` is the first DWORD of an inline SID, not a pointer.
+        let sid = unsafe { std::ptr::addr_of_mut!((*label).SidStart) }.cast::<c_void>();
+
+        let count_ptr = unsafe { GetSidSubAuthorityCount(sid) };
+        if count_ptr.is_null() {
+            continue;
+        }
+        let count = unsafe { *count_ptr };
+        if count == 0 {
+            continue;
+        }
+        // The integrity RID is the LAST sub-authority.
+        let rid_ptr = unsafe { GetSidSubAuthority(sid, u32::from(count) - 1) };
+        if rid_ptr.is_null() {
+            continue;
+        }
+        return IntegrityLevel::from_rid(unsafe { *rid_ptr });
     }
-    let count = unsafe { *count_ptr };
-    if count == 0 {
-        return IntegrityLevel::Medium;
-    }
-    // The integrity RID is the LAST sub-authority.
-    let rid_ptr = unsafe { GetSidSubAuthority(sid, u32::from(count) - 1) };
-    if rid_ptr.is_null() {
-        return IntegrityLevel::Medium;
-    }
-    IntegrityLevel::from_rid(unsafe { *rid_ptr })
+
+    // No mandatory-label ACE among them: the documented default.
+    IntegrityLevel::Medium
 }
 
 fn sid_to_string(sid: *mut c_void) -> Result<SidString, PeerCheckError> {
