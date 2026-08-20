@@ -148,6 +148,13 @@ reader looking), so it is corrected rather than left standing.
 
 ### The cost, stated
 
+**Round-trip qualification, from the first real run (2026-08-20).** The
+descriptor *can* be read back as a string, which is what P-1 rests on — but the
+returned form is **canonicalised**: Windows renders well-known SIDs as SDDL
+abbreviations (`LA`, `WD`, `AU`), so it is not verbatim. Comparisons must be
+structural, or restricted to SIDs with no abbreviation (a logon SID, `S-1-5-5-X-Y`,
+has none). The first version of P-1 assumed verbatim and could not pass.
+
 An axum `Listener` implementation for the create-instance-per-accept model
 (real plumbing, not a `cfg` swap), and `unsafe` for the security descriptor
 (see WP-D2).

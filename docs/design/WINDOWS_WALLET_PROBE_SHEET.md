@@ -3,9 +3,11 @@
 **Pre-registration for the Windows wallet round (WP).** Written and committed
 **before any Windows machine is touched**, and deliberately so.
 
-**Status:** pre-registered 2026-08-19 against `dev` @ `fbd7e770a`. No probe has
-been run. Every "Predicted" cell below is a claim about *documented* behaviour,
-not an observation.
+**Status:** pre-registered 2026-08-19 against `dev` @ `fbd7e770a`. **First run
+2026-08-20** on the `Windows (MSVC, daemon)` CI job — 3 passed, 5 failed, and
+one prediction was falsified in a way that also exposed a fail-open assertion.
+Results in §4. Predictions not yet exercised remain claims about *documented*
+behaviour, not observations.
 
 **Why this exists.** [`WINDOWS_WALLET_SUPPORT.md`](WINDOWS_WALLET_SUPPORT.md)
 rules a transport whose security properties have never been executed by anyone
@@ -90,10 +92,50 @@ blank is a finding.
 
 ## 4. Results
 
-*(empty — no probe has been run)*
-
 | Date | Probe | Machine / build | Result | Consequence |
 |---|---|---|---|---|
+| 2026-08-20 | P-2 (protected DACL) | `windows-2025-vs2026`, CI | **PASS** | `D:P` survives the round trip; WP-D1 holds |
+| 2026-08-20 | P-8 (disk probe) | `windows-2025-vs2026`, CI | **PASS** | WP-D9's `GetDiskFreeSpaceExW` half returns a sane figure and refuses a bad path |
+| 2026-08-20 | P-9 (user SID) | `windows-2025-vs2026`, CI | **PASS** | The SID the pipe name derives from is well-formed and stable |
+| 2026-08-20 | P-1 (SDDL round-trip) | `windows-2025-vs2026`, CI | **FAIL — prediction wrong** | See §4.1 |
+| 2026-08-20 | P-3, P-5, P-6, P-7 | `windows-2025-vs2026`, CI | **FAIL — harness defect** | `there is no reactor running`; the pipe probes were plain `#[test]` and tokio's named-pipe constructors register with a runtime. Now `#[tokio::test]`. No design consequence — they measured nothing, which is different from measuring a pass |
+
+### 4.1 P-1: the prediction was wrong, and its failure exposed a second defect
+
+The descriptor came back as:
+
+```text
+O:LAG:LAD:P(A;;GA;;;S-1-5-5-0-774477)S:(ML;;NW;;;ME)
+```
+
+**The policy is correct** — protected DACL, a single ACE, that ACE is the logon
+SID, Medium label present. **The prediction's method was wrong:** Windows
+**canonicalises well-known SIDs to SDDL abbreviations** on readback, so the
+owner rendered as `LA` rather than `S-1-5-21-…`, and an assertion looking for
+the literal owner SID could never pass on this account.
+
+Per §5 the prediction stays on the record as having been wrong. What changes is
+narrower than a decision: **WP-D2's claim that the policy "comes back out as a
+string and can be compared" survives, with the qualification that the returned
+string is *canonicalised*, not verbatim.**
+
+**The second defect is the one worth the run.** The WP-D6 union check added in
+PR #516's earlier review round asserted
+`!contains("(A;;GA;;;<literal user SID>)")`. That is **fail-open**: a
+regression granting the user SID would render as `(A;;GA;;;LA)` on any account
+whose SID has an abbreviation, and pass. A check that cannot fail on the thing
+it guards is the defect this whole round keeps finding, and it was introduced
+*by a fix for a previous instance of it*.
+
+P-1 now asserts the DACL **structurally** — exactly one ACE, and it is the
+logon SID's (session SIDs are `S-1-5-5-X-Y` and have no abbreviation, so they
+are safe to match literally). Owner identity moved to P-5, which reads SIDs off
+a real object via `ConvertSidToStringSidW` — always literal — so it is not
+exposed to canonicalisation at all.
+
+**None of this touched the implementation.** `PeerCheck` compares SIDs read
+from the object, never SDDL text, so the runtime check was never affected. The
+defect was entirely in how the probe *asked*.
 
 ---
 

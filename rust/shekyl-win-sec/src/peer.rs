@@ -221,6 +221,34 @@ impl PeerCheck {
     }
 }
 
+/// Fetch ACE `index` from `sacl` as a **non-null** pointer.
+///
+/// `NonNull` rather than `*mut c_void` so that "this is not null" becomes a
+/// type-level fact the caller inherits, instead of a check a later edit could
+/// drift away from — the same discipline as [`PeerCheck`] being constructible
+/// only by [`PeerCheck::verify`].
+///
+/// It also confines the null-initialised out-param to three lines that never
+/// dereference it, which is the shape a static analyser can follow: the value
+/// that reaches a dereference is one that has been through `NonNull::new`.
+///
+/// # Safety
+/// `sacl` must point to a valid ACL that outlives the call, and `index` must
+/// be less than its `AceCount`.
+unsafe fn ace_at(
+    sacl: *mut windows_sys::Win32::Security::ACL,
+    index: u32,
+) -> Option<std::ptr::NonNull<c_void>> {
+    let mut ace: *mut c_void = std::ptr::null_mut();
+    // SAFETY: preconditions are the caller's, per the contract above; `ace` is
+    // a local out-param written only on success.
+    let got = unsafe { windows_sys::Win32::Security::GetAce(sacl, index, &raw mut ace) };
+    if got == 0 {
+        return None;
+    }
+    std::ptr::NonNull::new(ace)
+}
+
 /// Read the mandatory label out of a SACL.
 ///
 /// `Some(level)` is a reading. **`None` means the SACL is malformed and the
@@ -248,23 +276,21 @@ unsafe fn label_from_sacl(sacl: *mut windows_sys::Win32::Security::ACL) -> Optio
     let ace_count = unsafe { (*sacl).AceCount };
 
     for index in 0..ace_count {
-        let mut ace: *mut c_void = std::ptr::null_mut();
-        // SAFETY: `index < AceCount`; `ace` is a local out-param.
-        let got =
-            unsafe { windows_sys::Win32::Security::GetAce(sacl, u32::from(index), &raw mut ace) };
-        if got == 0 || ace.is_null() {
+        // SAFETY: `index < AceCount`, and `sacl` is valid per the contract.
+        let Some(ace) = (unsafe { ace_at(sacl, u32::from(index)) }) else {
             continue;
-        }
+        };
 
         // Read the header by value rather than holding a reference into the
         // ACE: every ACE begins with an ACE_HEADER, and one unaligned read of
         // a fixed-size struct is easier to justify — and for a static analyser
         // to follow — than a borrow that stays live across later pointer math.
         //
-        // SAFETY: `GetAce` succeeded, so `ace` addresses a well-formed ACE
-        // whose leading bytes are an ACE_HEADER.
+        // SAFETY: `ace` is non-null by construction (`NonNull`) and `GetAce`
+        // succeeded, so it addresses a well-formed ACE whose leading bytes are
+        // an ACE_HEADER.
         let header: windows_sys::Win32::Security::ACE_HEADER =
-            unsafe { std::ptr::read_unaligned(ace.cast()) };
+            unsafe { std::ptr::read_unaligned(ace.as_ptr().cast()) };
 
         if u32::from(header.AceType) != SYSTEM_MANDATORY_LABEL_ACE_TYPE {
             continue;
@@ -282,7 +308,7 @@ unsafe fn label_from_sacl(sacl: *mut windows_sys::Win32::Security::ACL) -> Optio
             return None;
         }
 
-        let label = ace.cast::<SYSTEM_MANDATORY_LABEL_ACE>();
+        let label = ace.as_ptr().cast::<SYSTEM_MANDATORY_LABEL_ACE>();
         // `SidStart` is the first DWORD of an inline SID, not a pointer.
         // SAFETY: the size check above proves the ACE spans a whole
         // SYSTEM_MANDATORY_LABEL_ACE, so this field is within it.

@@ -57,10 +57,29 @@ fn p9_current_user_sid_is_wellformed_and_stable() {
 
 /// P-1 — the SDDL string must produce the DACL we meant.
 ///
-/// Predicted: round-trips to an equivalent string with the owner ACE present
-/// and the Medium label present. This is the self-check the SDDL choice buys;
-/// hand-assembled ACLs have no equivalent, which is part of why WP-D2 chose
-/// SDDL.
+/// **Prediction corrected 2026-08-20 by the first real run.** The original
+/// asserted that the owner SID appears literally in the round-tripped string.
+/// It does not: Windows **canonicalises well-known SIDs to SDDL
+/// abbreviations** on readback. The CI runner's descriptor came back as
+///
+/// ```text
+/// O:LAG:LAD:P(A;;GA;;;S-1-5-5-0-774477)S:(ML;;NW;;;ME)
+/// ```
+///
+/// — owner `LA`, not `S-1-5-21-…`. The *policy* was correct; the assertion's
+/// method was wrong, which is the distinction §5 of the probe sheet exists to
+/// keep straight.
+///
+/// That falsified more than one line. The WP-D6 union check added in the
+/// previous review round asserted `!contains("(A;;GA;;;<literal user sid>)")`
+/// — **fail-open**, because a regression that granted the user SID would
+/// render as `(A;;GA;;;LA)` on any machine where that SID has an abbreviation
+/// and sail past it. So the DACL is now asserted **structurally**: exactly one
+/// ACE, and it is the logon SID's.
+///
+/// Owner identity moved to P-5, which compares SIDs read off a real object via
+/// `ConvertSidToStringSidW` — always the literal form, never abbreviated — so
+/// it is not exposed to canonicalisation at all.
 #[test]
 fn p1_descriptor_roundtrips_to_the_policy_we_wrote() {
     let sid = current_user_sid().expect("P-1: SID");
@@ -68,54 +87,38 @@ fn p1_descriptor_roundtrips_to_the_policy_we_wrote() {
     let d = OwnerOnlyDescriptor::new(&sid, &logon).expect("P-1: descriptor");
     let back = d.to_sddl().expect("P-1: readback");
 
+    let dacl = dacl_section(&back)
+        .unwrap_or_else(|| panic!("P-1: no D: section in the descriptor: {back}"));
+
     assert!(
-        back.contains(sid.as_str()),
-        "P-1: owner SID absent from the round-tripped descriptor: {back}"
+        dacl.starts_with('P'),
+        "P-1: the DACL is not protected (`D:P`), so inherited ACEs can widen          it: {back}"
     );
-    // The EXACT Medium label, with no `|| contains("S:")` fallback. That
-    // fallback would have passed for any SACL at all — including
-    // `(ML;;NW;;;LW)`, a LOW label, which is precisely the downgrade this
-    // probe exists to detect. A weakened assertion in a probe is worse than no
-    // probe: it reports green while measuring nothing.
+
+    // Structural, and therefore immune to SID abbreviation: one ACE, no more.
+    let ace_count = dacl.matches('(').count();
+    assert_eq!(
+        ace_count, 1,
+        "P-1: the DACL holds {ace_count} ACEs, not 1. Allow-ACEs are combined          as a UNION, so any second grant re-widens the descriptor and undoes          WP-D6 — which is exactly the bug PR #516's review found: {back}"
+    );
+
+    // A logon SID (S-1-5-5-X-Y) is session-specific and has no SDDL
+    // abbreviation, so it is safe to match literally.
+    assert!(
+        dacl.contains(logon.as_str()),
+        "P-1: the single ACE is not the logon SID's, so the DACL is not          session-scoped: {back}"
+    );
+
     assert!(
         back.contains("(ML;;NW;;;ME)"),
-        "P-1: the Medium mandatory label is not in the round-tripped \
-         descriptor — a downgraded or missing label would read as fine: {back}"
+        "P-1: the Medium mandatory label is not in the round-tripped          descriptor — a downgraded or missing label would read as fine: {back}"
     );
-    // And explicitly not a lower one, so a future edit to the SDDL constant
-    // has to fail here rather than pass by omission.
     for lower in ["(ML;;NW;;;LW)", "(ML;;NW;;;UN)"] {
         assert!(
             !back.contains(lower),
-            "P-1: descriptor carries {lower}, below the Medium floor WP-D4 \
-             requires: {back}"
+            "P-1: descriptor carries {lower}, below the Medium floor WP-D4              requires: {back}"
         );
     }
-    // The grant must be to our SID and not to a broader principal. WD (world),
-    // AU (authenticated users) and BU (builtin users) would each be a silent
-    // widening of the boundary.
-    for broad in ["(A;;GA;;;WD)", "(A;;GA;;;AU)", "(A;;GA;;;BU)"] {
-        assert!(
-            !back.contains(broad),
-            "P-1: descriptor grants {broad}, which widens past owner-only: {back}"
-        );
-    }
-
-    // WP-D6, and the reason PR #516's review round exists: allow-ACEs are
-    // combined as a UNION, so granting the user SID **as well as** the logon
-    // SID would authorise every session for that account and leave the
-    // session boundary unenforced. The grant must be the logon SID and only
-    // the logon SID.
-    assert!(
-        back.contains(&format!("(A;;GA;;;{})", logon.as_str())),
-        "P-1: the logon SID is not granted, so WP-D6's session scope is absent: {back}"
-    );
-    assert!(
-        !back.contains(&format!("(A;;GA;;;{})", sid.as_str())),
-        "P-1: the descriptor ALSO grants the user SID — allow-ACEs union, so \
-         this re-widens the DACL to every session for this account and undoes \
-         WP-D6: {back}"
-    );
 }
 
 /// P-2 — the DACL must be protected, so inherited ACEs cannot widen it.
@@ -139,8 +142,8 @@ fn p2_dacl_is_protected() {
 ///
 /// Predicted: `Err`, never a silent join. This is WP-D3 mitigation (1); if it
 /// joins, squatting stops being DoS-only even on the self-hosted path.
-#[test]
-fn p3_first_pipe_instance_refuses_a_taken_name() {
+#[tokio::test]
+async fn p3_first_pipe_instance_refuses_a_taken_name() {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     let sid = current_user_sid().expect("P-3: SID");
@@ -172,8 +175,8 @@ fn p3_first_pipe_instance_refuses_a_taken_name() {
 /// Predicted: `Ok`. Absence of a mandatory label is Medium by OS default, so
 /// reading absence as failure would refuse every ordinary pipe and the wallet
 /// could not start. This is the false-positive guard on WP-D4.
-#[test]
-fn p7_unlabelled_pipe_is_read_as_medium() {
+#[tokio::test]
+async fn p7_unlabelled_pipe_is_read_as_medium() {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     let sid = current_user_sid().expect("P-7: SID");
@@ -198,8 +201,8 @@ fn p7_unlabelled_pipe_is_read_as_medium() {
 }
 
 /// P-5 — the peer check must accept our own pipe.
-#[test]
-fn p5_peer_check_accepts_our_own_pipe() {
+#[tokio::test]
+async fn p5_peer_check_accepts_our_own_pipe() {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     let sid = current_user_sid().expect("P-5: SID");
@@ -221,8 +224,8 @@ fn p5_peer_check_accepts_our_own_pipe() {
 ///
 /// A check that never refuses is the fail-open shape this project has now hit
 /// six times; asserting the happy path alone would repeat it exactly.
-#[test]
-fn p6_peer_check_refuses_a_mismatched_owner() {
+#[tokio::test]
+async fn p6_peer_check_refuses_a_mismatched_owner() {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     let sid = current_user_sid().expect("P-6: SID");
@@ -301,6 +304,18 @@ fn free_bytes_available(path: &std::path::Path) -> std::io::Result<u64> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(available)
+}
+
+/// The `D:` section of an SDDL string, between the DACL marker and the SACL.
+///
+/// Split on `"S:"` rather than `'S'` — SIDs are full of `S`s, and the marker is
+/// the only place the letter is followed by a colon.
+fn dacl_section(sddl: &str) -> Option<&str> {
+    let after = &sddl[sddl.find("D:")? + 2..];
+    Some(match after.find("S:") {
+        Some(i) => &after[..i],
+        None => after,
+    })
 }
 
 /// A per-test pipe name. Tests share a process, so a fixed name would make
