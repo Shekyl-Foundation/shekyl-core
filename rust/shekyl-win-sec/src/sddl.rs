@@ -112,13 +112,19 @@ impl OwnerOnlyDescriptor {
     /// descriptor without it either grants nothing or silently widens to the
     /// whole user account, and neither is a thing to build by accident.
     pub fn new(owner: &SidString, logon_sid: &SidString) -> Result<Self, SddlError> {
+        Self::build(owner, logon_sid, MEDIUM_INTEGRITY_SACL)
+    }
+
+    /// The one place the policy string is assembled. Both constructors route
+    /// through it so the label is the *only* thing that can differ between
+    /// them — a second `format!` would be a second policy to keep in sync.
+    fn build(owner: &SidString, logon_sid: &SidString, sacl: &str) -> Result<Self, SddlError> {
         // The user SID is owner and group (identity, for the peer check); the
         // logon SID is the ONLY grant (access, scoped to this session).
         let sddl = format!(
-            "O:{owner}G:{owner}D:P(A;;GA;;;{logon}){label}",
+            "O:{owner}G:{owner}D:P(A;;GA;;;{logon}){sacl}",
             owner = owner.as_str(),
             logon = logon_sid.as_str(),
-            label = MEDIUM_INTEGRITY_SACL,
         );
 
         let wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
@@ -165,6 +171,32 @@ impl OwnerOnlyDescriptor {
 }
 
 impl OwnerOnlyDescriptor {
+    /// The same descriptor **without** the mandatory label, for probes only.
+    ///
+    /// P-7 asserts that an object carrying no label reads as Medium — the OS
+    /// default, and the property that stops the peer check refusing every
+    /// ordinary pipe. Testing it needs an object that actually *reaches* the
+    /// integrity check, which means its owner must match ours.
+    ///
+    /// A pipe created with a **default** descriptor does not qualify, and the
+    /// first run of P-7 is why we know: on an account that is a member of
+    /// Administrators, Windows gives a default-owner object the owner
+    /// `S-1-5-32-544` (`BUILTIN\Administrators`) rather than the user, so the
+    /// probe failed on `OwnerMismatch` long before any label was read.
+    ///
+    /// That is a fact about the platform worth keeping visible: **any pipe we
+    /// create without an explicit owner would be refused by our own peer check
+    /// on an administrator account.** Production never does — every descriptor
+    /// comes from [`Self::new`], which sets `O:` explicitly — and P-1's
+    /// readback confirms it.
+    #[cfg(feature = "test-utils")]
+    pub fn without_label_for_testing(
+        owner: &SidString,
+        logon_sid: &SidString,
+    ) -> Result<Self, SddlError> {
+        Self::build(owner, logon_sid, "")
+    }
+
     /// Read the descriptor back as an SDDL string (**P-1**).
     ///
     /// This is the self-check the SDDL choice buys and hand-assembled ACLs

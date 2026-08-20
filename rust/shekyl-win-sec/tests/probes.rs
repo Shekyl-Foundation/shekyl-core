@@ -175,22 +175,33 @@ async fn p3_first_pipe_instance_refuses_a_taken_name() {
 /// Predicted: `Ok`. Absence of a mandatory label is Medium by OS default, so
 /// reading absence as failure would refuse every ordinary pipe and the wallet
 /// could not start. This is the false-positive guard on WP-D4.
+///
+/// **Construction corrected 2026-08-20 by the first real run.** The original
+/// created the pipe with a *default* descriptor to get "no label", and failed
+/// on `OwnerMismatch` before reaching the integrity check at all: on an
+/// account in Administrators, Windows gives a default-owner object the owner
+/// `S-1-5-32-544` (`BUILTIN\Administrators`), not the user. The probe now
+/// builds our own descriptor minus the label, so the only thing under test is
+/// the label path. The platform fact is recorded in the sheet's §4 — it means
+/// any pipe created without an explicit owner would be refused by our own peer
+/// check on an admin account, which production never does.
 #[tokio::test]
 async fn p7_unlabelled_pipe_is_read_as_medium() {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     let sid = current_user_sid().expect("P-7: SID");
+    let logon = current_logon_sid().expect("P-7: logon SID");
+    let d = OwnerOnlyDescriptor::without_label_for_testing(&sid, &logon).expect("P-7: descriptor");
     let name = unique_pipe_name("p7");
-    // No security attributes at all: the OS applies a default descriptor with
-    // no mandatory label.
-    let server = ServerOptions::new()
-        .first_pipe_instance(true)
-        .create(&name)
-        .expect("P-7: create");
+    let server = unsafe {
+        ServerOptions::new()
+            .first_pipe_instance(true)
+            .create_with_security_attributes_raw(&name, d.attributes_ptr() as *mut _)
+    }
+    .expect("P-7: create");
 
-    let handle = handle_of(&server);
-    // SAFETY: `server` is alive for the whole match; the handle is ours.
-    match unsafe { PeerCheck::verify(handle, &sid) } {
+    // SAFETY: `server` outlives the call; the handle is ours.
+    match unsafe { PeerCheck::verify(handle_of(&server), &sid) } {
         Ok(_) => {}
         Err(PeerCheckError::IntegrityTooLow(level)) => panic!(
             "P-7: an UNLABELLED pipe was read as {level:?} rather than Medium — \

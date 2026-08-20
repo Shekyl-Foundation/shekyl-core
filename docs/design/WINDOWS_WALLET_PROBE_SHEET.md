@@ -137,6 +137,34 @@ exposed to canonicalisation at all.
 from the object, never SDDL text, so the runtime check was never affected. The
 defect was entirely in how the probe *asked*.
 
+
+### 4.2 Second run: 7 of 8 pass; P-7 finds a platform fact
+
+`895129d95`, same job. P-1 (rebuilt structurally), P-2, P-3, P-5, P-6, P-8 and
+P-9 all **PASS** — which confirms at first hand that the WP-D6 correction works:
+P-1's readback shows a protected DACL holding exactly one ACE, the logon SID's.
+
+**P-7 failed, and its failure is worth keeping.** It refused with
+`OwnerMismatch`: the pipe was owned by `S-1-5-32-544` (`BUILTIN\Administrators`)
+while the process ran as `S-1-5-21-…-500`. P-7 had created the pipe with a
+**default** descriptor in order to get "no mandatory label", and on an account
+in the Administrators group Windows gives a default-owner object the
+*Administrators group* as owner, not the user. So it never reached the label
+path it exists to test.
+
+**The platform fact, recorded because it is a latent hazard:** any pipe we
+create **without an explicit owner** would be refused by our own peer check on
+an administrator account. Production never does — every descriptor comes from
+`OwnerOnlyDescriptor::new`, which sets `O:` explicitly, and P-1's readback
+(`O:LA`) plus P-5/P-6 passing confirm it. But a future code path that took the
+OS default would fail in a way that looks like a permissions bug rather than a
+missing owner.
+
+P-7 now builds our own descriptor minus the label
+(`without_label_for_testing`), so the label path is the only thing under test.
+Both constructors route through one `build()` so the label is the sole
+difference between them.
+
 ---
 
 ## 5. What a failure does *not* license
