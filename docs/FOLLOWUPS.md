@@ -2174,9 +2174,14 @@ sustainability is unaffected by the recalibration.
   `--rpc-url uds://` form is a real out-of-process transport that does **not**
   port, so "external mode already works on Windows" was true only of the
   `http://` form. Slices WP-W1…WP-W5 are provisional pending the §7 scouting
-  CI run. **The remaining three criteria are unchanged and unmet** — nothing
-  compiles for Windows yet, and Windows release archives still carry the
-  daemon but no wallet.
+  CI run. Scope pinned in that document's §6: a compromised same-user process
+  at Medium integrity or above, and any Administrator/SYSTEM compromise, are
+  **out of scope on both platforms** — such a process already holds the wallet
+  file and the CLI's memory, so defending the transport against it is theatre.
+  The round defends the OS's own sandbox boundary, which is what the
+  Low-integrity / AppContainer case (and only that case) needs. **The remaining
+  three criteria are unchanged and unmet** — nothing compiles for Windows yet,
+  and Windows release archives still carry the daemon but no wallet.
 
 - **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
   (decided 2026-08-06, executed in the Phase-5 wallet2 cutover;

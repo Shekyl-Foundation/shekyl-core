@@ -2,8 +2,8 @@
 
 **Status:** Design round R0 — **RULED 2026-08-19.** WP-Q1 is decided (named
 pipe with an owner-only security descriptor). Every other question raised in
-the round is decided here rather than deferred; the two items that remain
-open are named in §9 with reopening criteria.
+the round is decided here rather than deferred; **one** item remains open
+(§9.2, with a reopening criterion). §9.1 closed on the §6 scope ruling.
 **Verified against:** `shekyl-core` `dev` @ `fbd7e770a` (every claim
 re-anchored at file:line against that tree — see §2's drift note).
 **Decision authority:** Rick. Rulings recorded inline with dates.
@@ -210,18 +210,22 @@ three land **with the transport**, not after it.
 2. **Client-side owner-SID check before any secret is sent** (WP-D4).
 3. **The unpredictable per-spawn name** (WP-D1).
 
-**What each buys, stated precisely, because they are not interchangeable.**
-On the **self-hosted** path a squatter gets *DoS, not secrets* even with only
-(1): the server fails to create, `spawn_in_process` returns `Err`, and the
-client only ever dials an address read from a *successful* create. (3) removes
-even the DoS. On the **external** path the client dials a name it did not
-create, so (2) is the only thing standing between a squatted pipe and a
-wallet password — and it is the only mitigation that survives if a
-third-party client of the external form ever exists.
+**What each buys — and (1) and (3) are no longer security arguments.**
+Under §6's scope ruling most of the squatting wargame collapses: a same-user
+Medium-integrity squatter is out of scope, because it can read the wallet file
+directly and does not need the pipe. What (1) and (3) buy is **DoS prevention
+and namespace hygiene**, and they stay because they are free — `first_pipe_instance`
+is a builder flag, and the name is being generated anyway. They are kept on
+those grounds, not on security grounds, and should not be cited as security
+later.
 
-**(2) is therefore not polish.** It is what converts "our name is
-unpredictable and our client only dials its own handle" from an assumption
-into a verified property.
+**(2) is the one that survives, and only for the case §6 names.** A
+Low-integrity / AppContainer process running as the same user can create a
+pipe name while being unable to read the wallet file or the CLI's memory. On
+the **external** path the client dials a name it did not create, so the peer
+check is what stops that process holding a wallet password. Cost: one
+comparison, on a handle already open, at a call site being written anyway. If
+it were new machinery it would fail §6's test and be dropped.
 
 ### WP-D4 — the client-side peer check: same-SID **and** same-integrity
 
@@ -324,7 +328,33 @@ supply-chain surface.
 is removed in the slice that makes them build, not before — a half-ported
 wallet that compiles is worse than an honest skip.
 
-## 6. What this does not change
+## 6. Scope, and what this does not change
+
+**The adversary this round defends against, stated because everything below
+depends on it.** A compromised same-user process at **Medium integrity or
+above**, and any **Administrator / SYSTEM** compromise, are **out of scope on
+both platforms.** Such a process can already read the wallet file, read the
+CLI's process memory, and keylog the passphrase; defending the transport
+against it is theatre. The round defends **the OS's own sandbox boundary** —
+it declines to be the thing that lets a process cross a line the OS was
+holding. It does not defend against an adversary who has already crossed it.
+
+This is why WP-D4's integrity check is not defence-in-depth against an
+unbounded adversary. It honours an existing boundary: a Low-integrity or
+AppContainer process **cannot** read the wallet file or the CLI's memory —
+the OS blocks it — but it **can** create a pipe name. A same-SID check that
+ignored integrity would convert *"sandboxed, no access"* into *"holds your
+wallet password"*, which is escalation **up** to user trust by something that
+started below it. That is the exact inverse of the adversary above, and the
+only reason any of the peer-check machinery earns its place.
+
+The same premise governs the Unix path, and applies equally to a socket as to
+a pipe. It is stated here for want of a platform-neutral home:
+[`THREAT_MODEL_WALLET.md`](../THREAT_MODEL_WALLET.md) is scoped to wallet
+**privacy** (it is the subaddress round's adjunct), so a local-host security
+posture does not belong to it as written. **A reader looking for this ruling
+should not have to find it in a Windows document** — relocating it is owed,
+and is not this round's to do.
 
 - **No change to the Unix path.** The 0600/0700 construction stays exactly as
   it is; Windows gets a parallel implementation, not a lowest common
@@ -349,9 +379,9 @@ That constraint is why the plan is explicit.
   here: `ServerOptions::first_pipe_instance` and
   `create_with_security_attributes_raw` on the pinned tokio (1.51); the
   `GetSecurityInfo` / token-SID side of WP-D4; the integrity-level query; and
-  the logon-SID-on-DACL construction of WP-D6. **Also probe the open question in
-  §9.1** — whether a second process can attach an *instance* to an existing
-  pipe name — since WP-D3's reasoning assumes the owner-only DACL covers it.
+  the logon-SID-on-DACL construction of WP-D6. All four are **API-shape and
+  behaviour** questions about code that has to compile — §9.1's design question
+  is closed by the §6 scope ruling and is no longer among them.
 
 - **Full-closure gate — CI only.** Nothing local can compile the whole binary
   closure for Windows.
@@ -382,16 +412,36 @@ PR #500 — daemon yes, wallet no. The Windows CI job is currently named
 `Windows (MSVC, daemon)` and builds `--target daemon`; **WP-W5 owns renaming it
 back** and re-adding the wallet binaries.
 
-## 9. Open, with reopening criteria
+## 9. Open and closed, with criteria
 
-### 9.1 Pipe-instance semantics (probe owed)
+### 9.1 Pipe-instance semantics — **CLOSED 2026-08-19**, no probe needed
 
-Whether a second process can attach an *instance* to an existing pipe name,
-and under what ACL, is not verified here — it cannot be, on this box. WP-D3's
-reasoning assumes the owner-only DACL covers it. **This is the one place the
-round rests on an unverified platform property**, which is itself an argument
-for WP-D4 being unconditional. Discharged by the §7 scratch-crate probe before
-WP-W2 lands.
+The open question was whether a second process can attach an *instance* to an
+existing pipe name, and under what ACL. It was recorded as the one place the
+round rested on a platform property unverifiable on the development box.
+
+**It no longer changes any decision.** Enumerate the actors that could attach:
+
+| Actor | Disposition |
+|---|---|
+| same-user, Medium integrity or above | **out of scope** (§6) — already has the wallet file and the CLI's memory |
+| same-user, Low / AppContainer | **blocked** by the Medium mandatory label (WP-D4, asserted rather than inherited) |
+| different user | **blocked** by the DACL (WP-D1) |
+| Administrator / SYSTEM | **out of scope** (§6) |
+
+Every remaining actor is either out of scope or already covered, so the answer
+to "can a second process attach an instance" cannot move a decision either
+way. Closed by the §6 scope ruling, **not** by verification — which is the
+honest closure: the platform behaviour is still unknown to us, and the point
+is that it has stopped mattering.
+
+An earlier amendment argued the DACL cannot cover same-user attachment. That
+is true and now irrelevant, and is **retracted** rather than sharpened: once
+same-user-Medium is out of scope, the premise it was defending disappears.
+
+§7's scratch-crate probe keeps its place — `create_with_security_attributes_raw`
+and the SD construction are code that must compile and behave — but it no
+longer carries a **design** question.
 
 ### 9.2 Per-user naming for a third-party external client
 
