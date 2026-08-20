@@ -326,6 +326,74 @@ fn p8_disk_probe_is_sane_and_refuses_a_bad_path() {
     );
 }
 
+/// P-14 — a truncated mandatory-label ACE must be REFUSED, not read.
+///
+/// Added 2026-08-20 (PR #516 review). `SYSTEM_MANDATORY_LABEL_ACE` embeds only
+/// the first DWORD of a variable-length SID, so an `AceSize` big enough for
+/// the struct proves nothing about the sub-authorities. A hostile server — the
+/// only kind this check runs against — can declare `SubAuthorityCount = 200`
+/// inside a 20-byte ACE, and every read after that runs past the ACE.
+///
+/// The ACL is hand-built because no Windows API will produce one this
+/// malformed, and a bounds check that has never refused anything is
+/// indistinguishable from an absent bounds check.
+///
+/// Predicted: `None` — malformed-refuse, NOT `Some(Medium)`. A `Some(Medium)`
+/// here would mean a hostile server presenting a broken label is treated as
+/// trusted.
+#[test]
+fn p14_truncated_label_ace_is_refused() {
+    use windows_sys::Win32::Security::ACL;
+
+    // ACL header (8 bytes) + one ACE. Sized generously; the ACE lies about
+    // its own extent, which is the point.
+    //
+    // Backed by `u32`, not `u8`: an `ACL` needs 2-byte alignment and a
+    // `Vec<u8>` gives 1, so casting the base would be the same under-alignment
+    // defect Windows-target clippy caught in `current_user_sid`. Second
+    // instance of that lesson in this crate; the first was UB in shipping code.
+    let mut words = vec![0u32; 16];
+    // SAFETY: `words` owns 16 * 4 = 64 initialised bytes; the view borrows
+    // them for the writes below and is dropped before `words` is used again.
+    let buf: &mut [u8] =
+        unsafe { std::slice::from_raw_parts_mut(words.as_mut_ptr().cast::<u8>(), 64) };
+
+    // --- ACL header ---
+    buf[0] = 2; // AclRevision
+    buf[1] = 0; // Sbz1
+    buf[2] = 64; // AclSize (lo)
+    buf[3] = 0; //          (hi)
+    buf[4] = 1; // AceCount (lo)
+    buf[5] = 0; //          (hi)
+
+    // --- ACE at offset 8: header(4) + mask(4) + SID ---
+    const ACE: usize = 8;
+    const ACE_SIZE: u16 = 20; // header 4 + mask 4 + SID header 8 + ONE sub-authority
+    buf[ACE] = 17; // AceType = SYSTEM_MANDATORY_LABEL_ACE_TYPE
+    buf[ACE + 1] = 0; // AceFlags
+    buf[ACE + 2] = (ACE_SIZE & 0xff) as u8;
+    buf[ACE + 3] = (ACE_SIZE >> 8) as u8;
+    // Mask at ACE+4..ACE+8 stays zero.
+
+    // SID begins at ACE+8: revision, count, authority(6), sub-authorities.
+    let sid = ACE + 8;
+    buf[sid] = 1; // Revision
+    buf[sid + 1] = 200; // SubAuthorityCount — the LIE. 200 * 4 bytes cannot fit.
+    buf[sid + 7] = 16; // IdentifierAuthority = SECURITY_MANDATORY_LABEL_AUTHORITY
+
+    let acl = words.as_mut_ptr().cast::<ACL>();
+    // SAFETY: `buf` outlives the call and holds a syntactically valid ACL
+    // header followed by the deliberately malformed ACE described above.
+    let verdict = unsafe { shekyl_win_sec::label_from_sacl_for_testing(acl) };
+
+    assert_eq!(
+        verdict, None,
+        "P-14: a truncated label ACE claiming SubAuthorityCount=200 was ACCEPTED. \
+         Reading its RID walks off the end of the ACE, and treating it as a \
+         level means a hostile server's malformed label is trusted."
+    );
+}
+
 // --- helpers ---------------------------------------------------------------
 
 /// The `D:` section of an SDDL string, between the DACL marker and the SACL.

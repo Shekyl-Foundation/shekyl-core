@@ -224,6 +224,21 @@ jobs:
         # this is a dev/test lane, and dev edges are deliberately in scope
         # for the feature (see gf7-no-emit-guard.yml header).
         run: cargo clippy -p shekyl-engine-core --all-targets --features gf7-hooks -- -D warnings
+      # The probe sheet is a PRE-REGISTRATION: it records which probes exist
+      # and which decision each failure revisits. That only means something if
+      # the probes it names are implemented.
+      #
+      # Nothing else checks it. A deleted `#[test]` still compiles and still
+      # passes CI — unlike a deleted function it produces no error anywhere —
+      # which is exactly how P-14, the bounds check guarding an out-of-bounds
+      # read on an attacker-supplied SACL, was lost in PR #523 and caught only
+      # by a reviewer.
+      #
+      # Runs on Linux: it is a pure text comparison, and the drift can land on
+      # any commit rather than only ones that reach a Windows runner.
+      - name: "WP: probe sheet and probe suite agree"
+        run: python3 scripts/ci/check_probe_registry.py
+
       - name: rustdoc -D warnings (persona serving path)
         working-directory: rust
         # These crates' docs carry load-bearing security contracts (shekyl-tor's
