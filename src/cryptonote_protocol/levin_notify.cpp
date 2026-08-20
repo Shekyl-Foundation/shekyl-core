@@ -53,7 +53,6 @@
 #include <limits>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -83,20 +82,6 @@ namespace levin
   {
     constexpr const std::size_t connection_id_reserve_size = 100;
 
-    /* The four `CRYPTONOTE_NOISE_*` timing constants are GONE from this file
-       (2026-08-20). They had survived only to feed the fragment-budget
-       `static_assert` inside `send_noise` — "a real notification must fit
-       inside one covert epoch" — and when the noise machinery was deleted that
-       assertion went with it silently, leaving four constants with one
-       reference each (their own definition) and a comment pointing at a guard
-       that no longer existed.
-
-       The invariant was real and is not lost: it moved to `Zone::new` in
-       `shekyl-relay` as `ZoneNewError::NoiseCannotCrossOneEpoch`. It is a
-       runtime refusal there rather than a `static_assert` because the epoch is
-       not a Rust constant — it crosses as `min_epoch_secs`, and mirroring the
-       epoch pair into Rust is exactly what Q-11 Unit 0 deleted. */
-
     constexpr const std::chrono::minutes dandelionpp_min_epoch{CRYPTONOTE_DANDELIONPP_MIN_EPOCH};
     constexpr const std::chrono::seconds dandelionpp_epoch_range{CRYPTONOTE_DANDELIONPP_EPOCH_RANGE};
 
@@ -105,7 +90,7 @@ namespace levin
        distribution over quarter-seconds. It is drawn in `shekyl-relay` now, from
        the memoryless family the derivation actually calls for — the inherited
        draw is F-4 of DAEMON_RELAY_PRIVACY.md, and it is gone rather than ported
-       so it cannot be reintroduced by symmetry with the noise delays below. */
+       so it cannot be reintroduced by symmetry with a noise delay drawn here. */
 
     /* The relay FFI speaks whole milliseconds on the caller's own monotonic
        clock. `steady_clock`'s epoch is arbitrary but fixed for the process, so
@@ -230,12 +215,6 @@ namespace levin
       std::chrono::seconds epoch_range;
     };
 
-    /* Two independent parameter sets, kept whole rather than selected field by
-       field. `CRYPTONOTE_NOISE_CHANNELS` and `CRYPTONOTE_DANDELIONPP_STEMS`
-       happen to be equal today and have no reason to stay that way, so choosing
-       between them per-field reads as an accident where choosing between the
-       sets reads as the decision it is. */
-
     /* The fragment-size guard, kept where its CONSTANTS live rather than where
        the fragmenting happens. C++ no longer cuts anything to this window —
        `NoiseQueues` in `shekyl-relay` owns the carrier — but `CRYPTONOTE_NOISE_BYTES`
@@ -257,14 +236,6 @@ namespace levin
       return {CRYPTONOTE_DANDELIONPP_STEMS, dandelionpp_min_epoch, dandelionpp_epoch_range};
     }
 
-    /*! \return A relay zone for this daemon zone.
-
-        The relay parameters this side still chooses, because it is the only
-        side that knows how the zone is configured. Note the two questions are
-        independent: the epoch comes from whether *noise* is enabled, and the
-        fluff reach from which *network* this is. An i2p zone with noise
-        disabled still fluffs outbound-only. Everything the zone then *does*
-        with them belongs to `shekyl-relay`. */
     /*! Build the Rust relay zone for `nzone`.
 
         **No noise flag.** C++ cannot enable the carrier any more: the machinery
@@ -366,21 +337,16 @@ namespace levin
        be immediately executed. So if all work in a strand is minimal, a lock
        may be better.
 
-       This code uses a strand per "zone" and a strand per "channel in a zone".
-       `dispatch` is used heavily, which means "execute immediately in _this_
-       thread if the strand is not in use, otherwise queue the callback to be
-       executed immediately after the strand completes its current task".
-       `post` is used where deferred execution to an `asio::io_context::run`
-       thread is preferred.
+       This code uses one strand per zone. `dispatch` is used heavily, which
+       means "execute immediately in _this_ thread if the strand is not in
+       use, otherwise queue the callback to be executed immediately after the
+       strand completes its current task". `post` is used where deferred
+       execution to an `asio::io_context::run` thread is preferred.
 
-       The strand per "zone" serializes access to the relay zone handle, which
-       is a `&mut self` state machine in Rust and must have exactly one caller
-       at a time. It also keeps `foreach_connection` — which takes a lock of its
-       own — off the notifying thread.
-
-       The per-channel strand is gone with the noise machinery it serialized
-       (2026-08-20): there are no channels in this process any more, so the
-       zone strand is the only one left. */
+       The zone strand serializes access to the relay zone handle, which is a
+       `&mut self` state machine in Rust and must have exactly one caller at
+       a time. It also keeps `foreach_connection` — which takes a lock of its
+       own — off the notifying thread. */
   } // anonymous
 
   namespace detail
@@ -422,10 +388,11 @@ namespace levin
 
     /*! Performs the effects a relay-zone call produced.
 
-        Both handlers are transport: frame and send, or re-point a covert
-        channel at a new stem slot. Neither decides anything — the decisions were
-        taken in Rust before the callback fired, which is why no variant tag
-        crosses the boundary and there is nothing here to decode wrongly.
+        Handlers are transport: frame and send. Neither decides anything —
+        the decisions were taken in Rust before the callback fired, which is
+        why no variant tag crosses the boundary and there is nothing here to
+        decode wrongly. The noise arms log and return: no zone constructed
+        here enables the carrier.
 
         \pre A handler must NOT call back into the zone. It runs while Rust
         holds `&mut` on the zone's state, so re-entering through any

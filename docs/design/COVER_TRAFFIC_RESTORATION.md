@@ -1,10 +1,9 @@
 # Cover traffic restoration — audit, plan, and status
 
-**Status: step 1 merged (#498); step 2 is in review on this branch (#508).**
-Step 3 is zone fan-out. Step 4 wires notify and deletes the inherited covert
-branch. The C++ covert restructure (§2.1 stages 1–3) is not being pursued;
-stage 4 enablement is not startable. See §2.9 for the series, §3 for what
-has landed.
+**Status: steps 1–4 landed (#498, #508, #513, #515).** Step 5 is **blocked**
+on a daemon/p2p cutover this series excludes (§2.9a). The C++ covert
+restructure (§2.1 stages 1–3) is not being pursued; stage 4 enablement is
+not startable. See §2.9 for the series, §3 for what has landed.
 
 This document exists because the cover mechanism is **deliberately inert, fully
 built, and has no production caller** — which is indistinguishable, to a
@@ -24,6 +23,11 @@ architecture (§42.3), a ruled backstop (§92), and a scoped implementation
 ## 1. The audit — every component, and why each has no production caller
 
 ### 1.1 The mechanism is inert at exactly TWO points
+
+*(Superseded 2026-08-20, #515: the payload argument is gone. C++ cannot
+construct a noise zone at all — `make_relay_zone` never sets
+`SHEKYL_RELAY_ZONE_NOISE_ENABLED`. The two points below are the audit of
+the state this series then deleted.)*
 
 Everything else in this document is live, compiled, tested code that simply
 never executes in the shipped configuration. The inertness is entirely produced
@@ -48,14 +52,14 @@ what that change would wake up.
 
 | component | file | state |
 | --- | --- | --- |
-| `detail::zone::covert_payload` | `levin_notify.cpp` | built; empty in production |
-| `detail::zone::channels` (per-channel strands) | `levin_notify.cpp` | built; sized from `CRYPTONOTE_NOISE_CHANNELS` |
+| ~~`detail::zone::covert_payload`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-20 (#515)** with the rest of the C++ carrier |
+| ~~`detail::zone::channels`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-20 (#515)** |
 | ~~`queue_covert_notify`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-19 with the covert branch (§2.9 step 4)** — its one construction site was inside it. The enqueue path is now Rust's `NoiseQueues::enqueue`. |
-| `clear_channel` | `levin_notify.cpp` | complete; nils the binding at an unbound due tick |
-| `send_noise` | `levin_notify.cpp` | complete; **owns CV-1's rebind-at-send discard** — the single discard site |
-| the covert branch in `send_txs` | `levin_notify.cpp` | complete **and wrong** — see §1.4 |
-| `shekyl_relay_zone_covert_enabled` | FFI, called from `levin_notify.cpp` | live call, always returns false today |
-| `CRYPTONOTE_NOISE_{MIN_EPOCH,EPOCH_RANGE,MIN_DELAY,DELAY_RANGE,BYTES,CHANNELS}` | `cryptonote_config.h` | six constants, all consumed |
+| ~~`clear_channel`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-20 (#515)** |
+| ~~`send_noise`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-20 (#515)**. CV-1 lives in `NoiseQueues`. |
+| the covert branch in `send_txs` | `levin_notify.cpp` | **DELETED 2026-08-19 (§2.9 step 4)** — see §1.4 for why it was not restored |
+| `shekyl_relay_zone_noise_enabled` | FFI, called from `levin_notify.cpp` | live call, always returns false: C++ never sets the flag |
+| `CRYPTONOTE_NOISE_{MIN_DELAY,DELAY_RANGE,BYTES,CHANNELS}` / `CRYPTONOTE_MAX_FRAGMENTS` | `cryptonote_config.h` | cadence + fragment window. The epoch pair was deleted with `noise_zone_params`. |
 
 ### 1.3 Rust inventory
 
@@ -320,15 +324,13 @@ no longer a C++ inventory executing the carrier at all.)*
 
 ### What C++ owns today
 
-| state | where |
-| --- | --- |
-| dummy payload bytes | `detail::zone::covert_payload` |
-| per-channel `active` fragment buffer | `noise_channel::active` |
-| per-channel pending queue | `noise_channel::queue` |
-| per-channel bound peer | `noise_channel::connection` |
-| enqueue guard (nil binding) | `queue_covert_notify` |
-| unbind: nil the binding, discard buffers | `clear_channel` |
-| rebind-at-send + **CV-1 discard** | `send_noise` |
+Nothing of the carrier. `NoiseQueues` holds the buffers; C++ is transport
+(asio, levin framing, `p2p->send`) until step 5. The two noise effect
+callbacks remain as loud failures so a future in-process path cannot drop
+a real send on the floor.
+
+*(The table of `covert_payload` / `noise_channel` / `send_noise` that used
+to sit here was deleted with those types in #515.)*
 
 ### The invariant that must survive the move, and it is NOT the language split
 
@@ -452,7 +454,7 @@ flood-suite reconciliation, stage-4 cover *enablement* (§2.3 / §92.5).
 
 ## 3. Status against the plan
 
-**Verified against this branch (`feat/covert-executor`), 2026-08-19.**
+**Verified 2026-08-20 against `dev` after #515.**
 
 | item | status | evidence |
 | --- | --- | --- |
@@ -460,9 +462,9 @@ flood-suite reconciliation, stage-4 cover *enablement* (§2.3 / §92.5).
 | C++ stages 1–3 (stem→`local`, carrier-below-phase, per-slot send) | **not being pursued in C++** | §2.6 — written, validated, discarded; dies with the cutover |
 | 4 — enablement | **not startable** | §2.3's two criteria both unmet |
 | **§2.9 step 1 — decisions in Rust** | **landed (#498)** | `BroadcastAllZones` truth table; `RelayCarrier::Covert` carries `SlotIndex`; `CovertQueues` as a module `Driver` does not hold; CV-4 hands distinct queues to `covert_cadence`; FFI export in `shekyl_ffi.h` with null-handle fail-closed. C++ flood arm is the step-3 delete target, present as a shim. |
-| **§2.9 step 2 — covert executor (this PR)** | **landed (type)** | `CovertQueues` is a real port: constant window, CV-1 restart, epoch-bound `CovertSend`, enqueue refuses a non-multiple. CV-4 still threads distinct queues through `covert_cadence`. No production caller — that is step 4. C++ `send_noise` still owns the live remainder. |
+| **§2.9 step 2 — covert executor** | **landed (type)** | `NoiseQueues` is a real port: constant window, CV-1 restart, epoch-bound `CovertSend`, enqueue refuses a non-multiple. CV-4 still threads distinct queues through the cadence. No production caller — that waits on an in-process path step 5 cannot yet provide. |
 | **§2.9 step 3 — zone fan-out in Rust** | **satisfied by step 1 — reinterpreted, not skipped** | The step asked that Rust "name the zone set" and C++ reduce to "send these bytes on this zone". `ZoneRouteDecision::BroadcastAllZones` **is** that naming: Rust decides, and `net_node.inl` enumerates its own configured map without deciding anything. Under Design A the fan-out is *every* configured zone, so a Rust `fanout(configured) -> configured` behind the FFI would be an **identity function** — machinery with no content, and rule 21's shape. The loop's literal deletion belongs to step 5, where it goes with the rest of the file. **The step's real constraint holds: the loop did not grow another arm.** |
-| **§2.9 step 4 — the inherited covert branch is deleted** | **landed (deletion)** | The branch is **gone, not repaired**, per the step's own wording. The shim is **skipped** under the step's escape clause ("*or* skip if step 5 lands first"): with the branch deleted there is no C++ consumer for a carrier, so wiring `plan_dispatch` into `levin_notify.cpp` would be month-of-life plumbing §2.6 already discarded. `queue_covert_notify` went with the branch. A noise-configured zone now runs its channels and carries nothing until step 5 gives `NoiseQueues` an in-process caller — it spends bandwidth and leaks no phase, which is the honest interim state. |
+| **§2.9 step 4 — the inherited covert branch is deleted** | **landed (deletion)** | The branch is **gone, not repaired**, per the step's own wording. The shim is **skipped** under the step's escape clause ("*or* skip if step 5 lands first"): with the branch deleted there is no C++ consumer for a carrier, so wiring `plan_dispatch` into `levin_notify.cpp` would be month-of-life plumbing §2.6 already discarded. `queue_covert_notify` went with the branch. #515 then deleted the rest of the C++ carrier: C++ cannot enable noise at all. |
 | §2.9 step 5 — C++ relay path deleted | **BLOCKED, not pending** | §2.9a — it needs Rust to own the levin codec and the connection registry, i.e. the **p2p layer this series excludes**, and no daemon/p2p cutover design doc exists. Found by trying to start it. |
 | **superseded C++ noise machinery deleted** | **landed** | `noise_channel`, `queue_covert_notify`, `clear_channel`, `send_noise`, the `channels` deque, `covert_payload` and `noise_zone_params` are gone. `make_relay_zone` no longer takes a noise flag, so C++ cannot construct a noise zone at all — `get_status().has_noise` reads the Rust-owned fact and is false everywhere. The two noise effect callbacks remain as **loud failures**, not no-ops: a silent drop would lose a real carrier effect the moment the cutover builds the path that can reach them. |
 | §2.8 α rule | **pre-registered** | no number yet; the rule is the artifact |

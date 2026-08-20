@@ -9,9 +9,8 @@
 //! or i2p/tor. This type owns the state §18.5's inventory assigned to Rust:
 //! peer fluff queues, the stem map, the epoch role, and the noise **schedule**
 //! (enable bit, cadence, per-channel deadlines). Noise **buffers** live in
-//! [`crate::NoiseQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2);
-//! production still runs C++ `send_noise` until step 5's in-process caller.
-//! Transport (framing, padding, the socket) stays on the I/O side. A
+//! [`crate::NoiseQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2).
+//! C++ is transport until step 5; it cannot enable the carrier. A
 //! transaction body is still an opaque blob here. See
 //! `DAEMON_RELAY_PRIVACY.md` §20.2 / §20.4 for the post-RP-3b inventory.
 
@@ -103,31 +102,27 @@ pub enum RelayPlan {
 
 /// Why [`Zone::new`] refused a configuration.
 ///
-/// Two refusals, two variants — collapsing them to `None` would be the same
-/// axis-merge this type exists to prevent. The FFI maps both to a null handle;
-/// a future in-process caller matches.
+/// Three refusals, three variants — collapsing them to `None` would be the
+/// same axis-merge this type exists to prevent. The FFI maps every variant
+/// to a null handle; a future in-process caller matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZoneNewError {
     /// Noise conceals packet sizing. On a cleartext link the observer reads
     /// the contents outright, so padding sizes conceals nothing.
     NoiseOnCleartext,
-    /// `stems` doubles as the channel count and C++ indexes its channel deque
-    /// by [`inherited::NOISE_CHANNELS`]. A mismatch is a silent out-of-bounds
-    /// drop on that side.
+    /// `stems` doubles as the channel count. Noise is
+    /// [`inherited::NOISE_CHANNELS`] wide; a mismatch sizes the schedule
+    /// against a width the rest of the stack does not share.
     NoiseChannelCount {
         /// The stem/channel count that was requested.
         got: usize,
     },
-    /// A full-size message could not cross a whole epoch, so it could never
-    /// cross at all.
+    /// The epoch cannot carry a full-size message, so the message can never
+    /// arrive: CV-1 discards the in-flight remainder at every epoch roll.
     ///
-    /// Each noise send waits at most `NOISE_MIN_DELAY_SECS +
-    /// NOISE_DELAY_JITTER_SECS`, so an epoch of `min_epoch_secs` carries at
-    /// most that many windows. A real notification may occupy up to
-    /// [`inherited::MAX_FRAGMENTS`] of them. If the budget is smaller, a
-    /// full-size message is still unfinished when the epoch rolls — and CV-1
-    /// discards the in-flight remainder on the rebind that follows, so it
-    /// restarts forever and never arrives.
+    /// Budget is [`inherited::noise_windows_in_epoch`] against
+    /// [`inherited::MAX_FRAGMENTS`]. Runtime, not `const`, because the
+    /// epoch crosses as `min_epoch_secs`.
     NoiseCannotCrossOneEpoch {
         /// Windows a full-size message needs.
         needs: u32,
@@ -142,14 +137,14 @@ impl fmt::Display for ZoneNewError {
             Self::NoiseOnCleartext => {
                 write!(f, "noise carrier requires an encrypted link")
             }
+            Self::NoiseChannelCount { got } => write!(
+                f,
+                "noise channel count must equal inherited::NOISE_CHANNELS (got {got})"
+            ),
             Self::NoiseCannotCrossOneEpoch { needs, affords } => write!(
                 f,
                 "noise epoch carries {affords} windows but a full message needs \
                  {needs}; the remainder is discarded at every epoch roll"
-            ),
-            Self::NoiseChannelCount { got } => write!(
-                f,
-                "noise channel count must equal inherited::NOISE_CHANNELS (got {got})"
             ),
         }
     }
@@ -368,27 +363,26 @@ impl Zone {
     ///
     /// **A noise carrier's channel count must equal
     /// [`inherited::NOISE_CHANNELS`]** — `stems` doubles as the channel count
-    /// and C++ sizes its channel deque from `CRYPTONOTE_NOISE_CHANNELS`, so a
-    /// mismatch is a silent out-of-bounds drop on that side. This was a
-    /// `debug_assert!`, which compiles out in release and therefore let the
-    /// mismatched zone be built in exactly the configuration that ships.
+    /// and the schedule is that wide. This was a `debug_assert!`, which
+    /// compiles out in release and therefore let the mismatched zone be
+    /// built in exactly the configuration that ships.
     ///
-    /// The two refusals are distinct [`ZoneNewError`] variants. The FFI maps
-    /// both to null because that is the only channel a C ABI has; an
-    /// in-process caller after the daemon cutover matches.
+    /// **A noise epoch must carry a full-size message** — otherwise CV-1
+    /// discards the remainder at every roll. The budget is
+    /// [`inherited::noise_windows_in_epoch`] against
+    /// [`inherited::MAX_FRAGMENTS`]; the epoch is a runtime argument, so
+    /// this is a refusal rather than a `const` assertion.
+    ///
+    /// The three refusals are distinct [`ZoneNewError`] variants. The FFI
+    /// maps every one to null because that is the only channel a C ABI has;
+    /// an in-process caller after the daemon cutover matches.
     ///
     /// # Who can reach the refusals
     ///
-    /// No caller in the tree violates either today: every noise construction —
-    /// production and gtest alike — is on an encrypted zone, and production
-    /// supplies no noise payload at all. Two callers can reach them. The
-    /// nearer one is a misconfiguration: `make_relay_zone` derives the noise
-    /// flag from the payload and the secrecy from `nzone`, so a noise payload
-    /// on the clearnet zone forms the refused pair, and the FFI answers null
-    /// rather than building a node that pays for a protection it is not
-    /// getting. The further one is the daemon Rust cutover, which forms the
-    /// pair in Rust and stops routing it through that single derivation site
-    /// — which is why the check is here and not at the FFI edge.
+    /// C++ never sets the noise flag, so no production construction hits
+    /// these. Tests do. The cutover's in-process caller will: it forms the
+    /// pair in Rust and stops routing it through `make_relay_zone` — which
+    /// is why the checks are here and not at the FFI edge.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
@@ -398,24 +392,14 @@ impl Zone {
         now: Millis,
         rng: &mut R,
     ) -> Result<Self, ZoneNewError> {
-        if noise_enabled && !secrecy.is_encrypted() {
-            return Err(ZoneNewError::NoiseOnCleartext);
-        }
-        if noise_enabled && stems != inherited::NOISE_CHANNELS {
-            return Err(ZoneNewError::NoiseChannelCount { got: stems });
-        }
         if noise_enabled {
-            /* Was a C++ `static_assert` inside `send_noise`, and it went with
-            that function when the C++ noise machinery was deleted — silently,
-            which is why it is a refusal here rather than a comment.
-
-            It is a RUNTIME check and not a `const` assertion because the
-            epoch is not a Rust constant: it arrives as `min_epoch_secs`
-            through `shekyl_relay_zone_new`. Mirroring the epoch pair into
-            Rust is what Q-11 Unit 0 deleted, so consuming the value that
-            already crosses is the form that does not re-create it. */
-            let per_send = inherited::NOISE_MIN_DELAY_SECS + inherited::NOISE_DELAY_JITTER_SECS;
-            let affords = params.min_epoch_secs / per_send;
+            if !secrecy.is_encrypted() {
+                return Err(ZoneNewError::NoiseOnCleartext);
+            }
+            if stems != inherited::NOISE_CHANNELS {
+                return Err(ZoneNewError::NoiseChannelCount { got: stems });
+            }
+            let affords = inherited::noise_windows_in_epoch(params.min_epoch_secs);
             if affords < inherited::MAX_FRAGMENTS {
                 return Err(ZoneNewError::NoiseCannotCrossOneEpoch {
                     needs: inherited::MAX_FRAGMENTS,
