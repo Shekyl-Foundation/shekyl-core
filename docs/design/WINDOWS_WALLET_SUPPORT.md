@@ -10,6 +10,9 @@ the round is decided here rather than deferred; **one** item remains open
 form of that ruling, recorded in §8.1 as an error corrected by grounding.
 **Verified against:** `shekyl-core` `dev` @ `fbd7e770a` (every claim
 re-anchored at file:line against that tree — see §2's drift note).
+**Re-anchored 2026-08-20** against `4f7098d26`, the WP-W2 tree, for every
+*live* citation; §8.1's scouting and retraction records are **pinned** to
+`3382daa2c`, the tree they were checked against, and say so inline.
 **Decision authority:** Rick. Rulings recorded inline with dates.
 **Origin:** surfaced by PR #500 (C1/C2 install cutover), the first time
 `shekyl-cli` / `shekyl-wallet-rpc` were ever built for a Windows target.
@@ -46,10 +49,10 @@ mechanical.
 
 | # | Site | Unix mechanism | Nature |
 |---|---|---|---|
-| WP-B1 | [`rpc_client.rs:456`](../../rust/shekyl-cli/src/rpc_client.rs) `http_post_uds` | `std::os::unix::net::UnixStream` | transport |
-| WP-B2 | [`server.rs:277`](../../rust/shekyl-wallet-rpc/src/server.rs) `restrict_socket_perms` + [`:293`](../../rust/shekyl-wallet-rpc/src/server.rs) `private_socket_dir` | socket 0600 inside a 0700 dir | transport authz |
-| WP-B3 | [`scripted.rs:185`](../../rust/shekyl-cli/src/commands/scripted.rs) `open_seed_out` | `OpenOptionsExt::mode(0o600)` | secret at rest |
-| WP-B4 | [`disk.rs:88`](../../rust/shekyl-engine-core/src/engine/stake_engine/serving/disk.rs) `observe_disk` | `rustix::fs::statvfs` | mechanical |
+| WP-B1 | [`rpc_client.rs:499`](../../rust/shekyl-cli/src/rpc_client.rs) `http_post_uds` | `std::os::unix::net::UnixStream` | transport |
+| WP-B2 | [`server.rs:462`](../../rust/shekyl-wallet-rpc/src/server.rs) `restrict_socket_perms` + [`:492`](../../rust/shekyl-wallet-rpc/src/server.rs) `private_socket_dir` | socket 0600 inside a 0700 dir | transport authz |
+| WP-B3 | [`scripted.rs:189`](../../rust/shekyl-cli/src/commands/scripted.rs) `open_seed_out` (Unix arm; the Windows arm is [`:204`](../../rust/shekyl-cli/src/commands/scripted.rs)) | `OpenOptionsExt::mode(0o600)` | secret at rest |
+| WP-B4 | [`disk.rs:123`](../../rust/shekyl-engine-core/src/engine/stake_engine/serving/disk.rs) `observe_disk` | `rustix::fs::statvfs` | mechanical |
 
 **Anchors re-verified 2026-08-19; three of the four had drifted** from the
 R0-open version (WP-B1 `302→456`, WP-B2 `278/294→277/293`, WP-B3 `18→185`; only
@@ -57,6 +60,16 @@ WP-B4 held). None of the *claims* changed — the functions are where the round
 said they were, doing what it said — but a line number that silently ages is
 a citation a reader cannot check, and this document is meant to be checkable.
 Re-anchor at every base move, not at the end.
+
+**Re-anchored again 2026-08-20 against `4f7098d26`** — WP-W2 rewrote
+`server.rs` around one seam and grew `rpc_client.rs`'s header, and the first
+commit of that slice wrote new citations that the second commit then moved,
+which is exactly the drift the paragraph above forbids: WP-B1 `456→499`,
+WP-B2 `277/293→462/492`, WP-B3 `185→189` (Unix arm; the Windows arm is
+`:204`), WP-B4 `88→123` (moved by the WP-D9 siting fix and missed then).
+The citations inside §8.1's scouting record and retraction record are
+**historical** and pinned to `3382daa2c`, the tree they were checked
+against — renumbering those would falsify what the tree said.
 
 **This list is a floor, not a ceiling.** It was produced by grep, and a
 compile stops at the first error per crate. The lesson from #500 —
@@ -86,7 +99,7 @@ container*). The container here was "callers of `spawn_in_process`".
 
 ### 3.1 The seam that actually matters: self-hosted vs external
 
-The code already draws it. [`rpc_client.rs:466-468`](../../rust/shekyl-cli/src/rpc_client.rs),
+The code already draws it. [`rpc_client.rs:510-511`](../../rust/shekyl-cli/src/rpc_client.rs),
 verbatim: *"self-hosted mode is trusted; this guards the external
 `--rpc-url uds://` path."*
 
@@ -106,10 +119,11 @@ Two consequences, both load-bearing:
    **Qualified 2026-08-20.** That is true of the *configuration* and false of
    the *rendezvous*, and the first WP-W2 ruling read it as the latter. The
    self-hosted client does not receive a handle from the server; it receives
-   a **name** — a socket path today
-   ([`server.rs:311-316`](../../rust/shekyl-wallet-rpc/src/server.rs),
-   [`rpc_client.rs:282`](../../rust/shekyl-cli/src/rpc_client.rs)), a pipe
-   name on Windows — and resolves it through the OS namespace exactly as an
+   a **name** — a socket path today (`InProcessListen::Uds(PathBuf)`: at
+   `3382daa2c`, [`server.rs:311-316`](../../rust/shekyl-wallet-rpc/src/server.rs),
+   now [`:511-516`](../../rust/shekyl-wallet-rpc/src/server.rs); dialled by
+   `RpcSession::host_in_process`), a pipe name on Windows — and resolves it
+   through the OS namespace exactly as an
    external client would. Being in the same process is incidental to that
    step. What keeps a third party from standing at the name on Unix is the
    0700 directory; on Windows nothing inherits that job, which is why the
@@ -153,8 +167,8 @@ reader looking), so it is corrected rather than left standing.
 
 - **The DACL is applied atomically at creation** via `SECURITY_ATTRIBUTES` in
   `CreateNamedPipe`. The UDS path binds
-  ([`server.rs:241`](../../rust/shekyl-wallet-rpc/src/server.rs)) and *then*
-  chmods ([`:246`](../../rust/shekyl-wallet-rpc/src/server.rs)) — a real
+  ([`server.rs:320`](../../rust/shekyl-wallet-rpc/src/server.rs)) and *then*
+  chmods ([`:324`](../../rust/shekyl-wallet-rpc/src/server.rs)) — a real
   pre-chmod window, which the code's own comment concedes and mitigates by
   parenting the socket in a 0700 directory. The pipe has no window to mitigate.
 - **Peer identity is retrievable** (`GetNamedPipeClientProcessId`,
@@ -181,7 +195,7 @@ An axum `Listener` implementation for the create-instance-per-accept model
 
 The self-hosted UDS name is **predictable today**:
 `shekyl-rpc-<pid>-<counter>/wallet-rpc.sock`
-([`server.rs:302`](../../rust/shekyl-wallet-rpc/src/server.rs)). That is
+([`server.rs:499`](../../rust/shekyl-wallet-rpc/src/server.rs)). That is
 harmless on Unix **because the 0700 parent directory carries the access
 control** — the name does not have to.
 
@@ -529,7 +543,7 @@ verifiable.** What is not is *integration into the crates that carry TLS*.
   - **`WP-W1: shekyl-win-sec compiles for Windows`** — blocking. The crate has
     no `ring` in its graph and is verified locally too, so a failure is a real
     regression rather than an environment artifact.
-  - **`WP-W5 scouting: remaining Windows errors`** — `continue-on-error`,
+  - **`WP-W5 scouting: remaining Windows errors + pipe e2e`** — `continue-on-error`,
     **informational by design and named as such**, the standing form of the
     one-shot scouting run this section used to plan. It does not gate, because
     the port is deliberately incomplete until WP-W5 and a red would only
@@ -538,7 +552,12 @@ verifiable.** What is not is *integration into the crates that carry TLS*.
     output is read by a human.
 
     Today it proves one thing outright: WP-D9's `GetDiskFreeSpaceExW` half is
-    compiled *somewhere*, which no Linux runner can do.
+    compiled *somewhere*, which no Linux runner can do. **As of WP-W2** it is
+    also the only compiler that sees the `cfg(windows)` arms of
+    `shekyl-wallet-rpc` and `shekyl-cli`, and once the check passes it runs
+    the two end-to-end tests — the first execution anywhere of the
+    self-hosted pipe under axum (P-10). Same `continue-on-error`, same
+    ending event.
 
   The distinction matters because this round has spent two commits on gates
   that passed while checking nothing. A permanently non-blocking step is that
@@ -579,7 +598,9 @@ five delete rather than port.
 ### The error list, drained across two runs
 
 `shekyl-engine-core` compiles for Windows as of the WP-D9 siting fix. The
-scouting step then advanced and reported five errors, **all in one file**:
+scouting step then advanced and reported five errors, **all in one file**
+(line numbers as reported against `3382daa2c`; WP-W2 then rewrote the file
+around one seam, so these are a record, not live anchors):
 
 | Site | Error | What it is |
 |---|---|---|
@@ -590,8 +611,8 @@ scouting step then advanced and reported five errors, **all in one file**:
 | `server.rs:305` | no `mode` for `DirBuilder` | `private_socket_dir` |
 
 `shekyl-cli` was never reached — cargo stops per crate, and it depends on
-`shekyl-wallet-rpc`. Its sites, enumerated statically: `scripted.rs:18` and
-`:189` (WP-B3), `rpc_client.rs:460` (WP-B1). Zero sites beyond §2's original
+`shekyl-wallet-rpc`. Its sites, enumerated statically (at `3382daa2c`):
+`scripted.rs:18` and `:189` (WP-B3), `rpc_client.rs:460` (WP-B1). Zero sites beyond §2's original
 list, and **zero pre-existing `cfg(unix)`/`cfg(windows)` gates** in either
 crate, so nothing was already hidden behind one.
 
@@ -623,7 +644,7 @@ wrong three times out of four:
 
   **Corrected 2026-08-20: there were four jobs, and the one this list missed
   is the load-bearing one.** `spawn_in_process`'s own doc
-  ([`server.rs:355-358`](../../rust/shekyl-wallet-rpc/src/server.rs)) states
+  ([`server.rs:595-596`](../../rust/shekyl-wallet-rpc/src/server.rs)) states
   it: the socket lives in a fresh 0700 pid-scoped directory, and *"that
   filesystem gate is why `AuthConfig::Disabled` is sound here."* The fourth
   job is **containment** — nobody else can place an object at the name we are
@@ -634,12 +655,12 @@ wrong three times out of four:
   peer check at the dial (WP-D3, amended). The function still ceases to exist
   on Windows; what changes is that one of its jobs moves to the client
   rather than disappearing.
-- **Only `server.rs:22` is a genuine substitution**: `UnixListener` →
+- **Only `server.rs:22` (at `3382daa2c`) is a genuine substitution**: `UnixListener` →
   `NamedPipeServer`.
 
 ### The parse surface: WP-W2 must ANSWER this, not discover it
 
-`parse_rpc_url` ([`rpc_client.rs:517`](../../rust/shekyl-cli/src/rpc_client.rs))
+`parse_rpc_url` ([`rpc_client.rs:586`](../../rust/shekyl-cli/src/rpc_client.rs))
 matches `uds://` with `strip_prefix` — a string comparison. **It compiles
 perfectly on Windows** and returns `RpcUrlForm::Uds`. The failure surfaces
 later and elsewhere, at `http_post_uds`.
@@ -681,7 +702,7 @@ naming the platform, or an `npipe://` arm. There is no third shape in which it
 quietly parses.
 
 **The stakes are a live security decision, not bookkeeping.**
-[`rpc_client.rs:466-468`](../../rust/shekyl-cli/src/rpc_client.rs) already
+[`rpc_client.rs:510-511`](../../rust/shekyl-cli/src/rpc_client.rs) already
 calls the external form *"an untrusted `uds://` server"* in tree. If `npipe://`
 ships, the client-side owner-SID check (WP-D4) is the only thing between a
 mistyped — or attacker-suggested — pipe name and a passphrase.
@@ -696,7 +717,7 @@ form: no `npipe://`, and `uds://` does not parse. Concretely:
   server). A URL that parses and then fails at connect is the shape this
   section was written to prevent.
 - **The server side has the same surface, found while cutting.**
-  `ListenAddr::parse` ([`server.rs:49`](../../rust/shekyl-wallet-rpc/src/server.rs))
+  `ListenAddr::parse` ([`server.rs:90`](../../rust/shekyl-wallet-rpc/src/server.rs))
   string-matches `uds://` for `--rpc-bind` and would have compiled on Windows
   just as silently. `ListenAddr::Uds` is `#[cfg(unix)]` for the same reason,
   and the standalone `shekyl-wallet-rpc` binary on Windows listens on TCP
@@ -705,7 +726,7 @@ form: no `npipe://`, and `uds://` does not parse. Concretely:
   `--rpc-bind` string and no embedder can produce it: the absence of an
   external pipe form is structural, not a parse-time refusal.
 - The `UDS_IO_TIMEOUT` read/write bound
-  ([`rpc_client.rs:40-45`](../../rust/shekyl-cli/src/rpc_client.rs)) exists,
+  ([`rpc_client.rs:49-59`](../../rust/shekyl-cli/src/rpc_client.rs)) exists,
   by its own comment, to guard the *external* `uds://` path against a server
   that accepts and never replies. The Windows dial carries no timeout, and
   the reason is §6, not "same process": after the peer check returns `Ok`
@@ -726,7 +747,8 @@ load-bearing today; do not describe it as active protection.* It rested on
 "the Windows client dials the handle returned by `spawn_in_process`" — a
 handle passed within the process, nothing resolved.
 
-**What the tree says.** `InProcessListen::Uds(PathBuf)`
+**What the tree says** — at `3382daa2c`, the tree the ruling was checked
+against; these are pinned, not live. `InProcessListen::Uds(PathBuf)`
 ([`server.rs:311-316`](../../rust/shekyl-wallet-rpc/src/server.rs)) is a
 path, and the self-hosted client connects to it by name
 ([`rpc_client.rs:282`](../../rust/shekyl-cli/src/rpc_client.rs) →
