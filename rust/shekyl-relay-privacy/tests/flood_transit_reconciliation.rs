@@ -54,7 +54,6 @@
 //! behaviour a ruling contradicts.
 
 #![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_possible_truncation)]
 
 use shekyl_relay_privacy::conformance::{
     simulate_fluff_return, transit_for, FloodParams, FloodReach,
