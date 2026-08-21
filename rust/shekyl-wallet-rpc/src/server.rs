@@ -3,13 +3,23 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Axum JSON-RPC server: `POST /` over TCP or Unix domain socket.
+//! Axum JSON-RPC server: `POST /` over TCP, a Unix domain socket, or — for
+//! the in-process host on Windows — an owner-only named pipe.
 //!
 //! Also exposes [`spawn_in_process`] so Shape B (`shekyl-cli`) can host an
 //! in-process server without shelling out (`WALLET_REWRITE_PLAN.md` Phase 3).
+//!
+//! The platform seam is [`BoundListener`]: **one** `cfg` split, at listener
+//! construction, shared by [`run_server`] and [`spawn_in_process_with`] so the
+//! two cannot drift (`WINDOWS_WALLET_SUPPORT.md` §8.1). Everything
+//! Windows-specific below it lives in `shekyl-win-sec`, the crate built to
+//! hold the `unsafe` this one denies (WP-D2).
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -19,7 +29,9 @@ use axum::routing::post;
 use axum::{Json, Router};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
-use tokio::net::{TcpListener, UnixListener};
+use tokio::net::TcpListener;
+#[cfg(unix)]
+use tokio::net::UnixListener;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tower_http::cors::CorsLayer;
@@ -31,6 +43,8 @@ use crate::handlers;
 use crate::tenant::{DaemonEndpoint, TenantState};
 use crate::types::{JsonRpcRequest, JsonRpcResponse};
 
+type BoxErr = Box<dyn std::error::Error + Send + Sync>;
+
 /// Default max JSON-RPC body size (1 MiB). Wallet RPC payloads are small;
 /// this is a DoS bound, not a semantic limit.
 pub const DEFAULT_BODY_LIMIT: usize = 1024 * 1024;
@@ -41,28 +55,77 @@ pub enum ListenAddr {
     /// TCP bind address (e.g. `127.0.0.1:29500`).
     Tcp(SocketAddr),
     /// Unix domain socket path (recommended default for local clients).
+    #[cfg(unix)]
     Uds(PathBuf),
+    /// The in-process host's named pipe (Windows).
+    ///
+    /// Not a `--rpc-bind` form: [`ListenAddr::parse`] never produces it, and
+    /// [`SelfHostedPipe`] has no public constructor, so no string and no
+    /// embedder can stand up a pipe server by hand. Windows ships **no**
+    /// external local form (`WINDOWS_WALLET_SUPPORT.md` §8.1 ruling); the
+    /// absence is structural rather than a parse-time refusal.
+    #[cfg(windows)]
+    SelfHostedPipe(SelfHostedPipe),
+}
+
+/// The self-hosted pipe's name, constructible only by [`spawn_in_process`].
+#[cfg(windows)]
+#[derive(Clone)]
+pub struct SelfHostedPipe {
+    name: String,
+}
+
+/// Redacted: the name embeds the user's SID (WP-D1), and a SID is an account
+/// identifier that should not reach logs by accident — the same discipline
+/// `shekyl_win_sec::SidString` applies to itself.
+#[cfg(windows)]
+impl std::fmt::Debug for SelfHostedPipe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SelfHostedPipe(<redacted>)")
+    }
 }
 
 impl ListenAddr {
-    /// Parse a listen string: `uds:///path` or `host:port` / `ip:port`.
+    /// Parse a listen string: `uds:///path` (Unix) or `host:port` / `ip:port`.
     pub fn parse(s: &str) -> Result<Self, String> {
         if let Some(path) = s.strip_prefix("uds://") {
-            if path.is_empty() {
-                return Err("uds:// path must not be empty".into());
-            }
-            return Ok(Self::Uds(PathBuf::from(path)));
+            return Self::uds(path);
         }
         s.parse::<SocketAddr>()
             .map(Self::Tcp)
             .map_err(|e| format!("invalid listen address '{s}': {e}"))
+    }
+
+    /// The `uds://` form on Unix: a non-empty path.
+    #[cfg(unix)]
+    fn uds(path: &str) -> Result<Self, String> {
+        if path.is_empty() {
+            return Err("uds:// path must not be empty".into());
+        }
+        Ok(Self::Uds(PathBuf::from(path)))
+    }
+
+    /// The `uds://` form on Windows: refused, naming the platform.
+    ///
+    /// Same parse-surface class as the CLI's `--rpc-url`: a string match that
+    /// compiles everywhere and offers a transport the platform lacks. With no
+    /// `Uds` variant here, this arm cannot return one. The standalone server
+    /// on Windows listens on TCP (the external `http://` form, unchanged).
+    #[cfg(windows)]
+    fn uds(_path: &str) -> Result<Self, String> {
+        Err(
+            "uds:// listen addresses are not available on Windows: a Unix domain socket has \
+             no Windows form. The Windows wallet is self-hosted (run shekyl-cli without \
+             --rpc-url); a standalone shekyl-wallet-rpc listens on HOST:PORT with --rpc-login."
+                .into(),
+        )
     }
 }
 
 /// Server configuration.
 #[derive(Clone)]
 pub struct ServerConfig {
-    /// Bind address (TCP or UDS).
+    /// Bind address (TCP, UDS, or the in-process pipe).
     pub listen: ListenAddr,
     /// Directory for wallet files.
     pub wallet_dir: PathBuf,
@@ -138,7 +201,7 @@ impl AppState {
     }
 }
 
-/// Build the axum router (shared by TCP, UDS, and in-process tests).
+/// Build the axum router (shared by TCP, UDS, the pipe, and in-process tests).
 pub fn build_router(state: Arc<AppState>) -> Router {
     let auth = state.auth.clone();
     Router::new()
@@ -185,8 +248,10 @@ async fn json_rpc_handler(
 }
 
 /// Removes a UDS path on drop so serve errors cannot leave a stale socket.
+#[cfg(unix)]
 struct UdsCleanup(PathBuf);
 
+#[cfg(unix)]
 impl Drop for UdsCleanup {
     fn drop(&mut self) {
         drop(std::fs::remove_file(&self.0));
@@ -199,9 +264,7 @@ impl Drop for UdsCleanup {
 /// `open_wallet` as "daemon unreachable": the wrong remedy pointer
 /// (rule 82 — the failure must name the flag, at the moment it can be
 /// fixed).
-fn validate_daemon_endpoint(
-    config: &ServerConfig,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
     shekyl_rpc_transport::validate_endpoint(&config.daemon_address, config.proxy.as_deref())
         .map_err(|e| {
             // Both flags are named here; the inner cause identifies the half
@@ -217,45 +280,162 @@ fn validate_daemon_endpoint(
 
 /// Run the server until shutdown (SIGINT / SIGTERM via the Notify, or
 /// process exit). Blocks the calling task.
-pub async fn run_server(
-    config: ServerConfig,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
     validate_daemon_endpoint(&config)?;
     let state = AppState::new(&config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();
 
-    match &config.listen {
-        ListenAddr::Tcp(addr) => {
-            let listener = TcpListener::bind(addr).await?;
-            let local = listener.local_addr()?;
-            info!(%local, "shekyl-wallet-rpc listening (TCP)");
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    shutdown.notified().await;
-                })
-                .await?;
-        }
-        ListenAddr::Uds(path) => {
-            prepare_uds_path(path)?;
-            let listener = UnixListener::bind(path)?;
-            // Own the socket path for cleanup BEFORE any fallible step: a
-            // failure in restrict_socket_perms below must still unlink the
-            // bound socket, or the leftover path blocks the next bind.
-            let _cleanup = UdsCleanup(path.clone());
-            restrict_socket_perms(path)?;
-            info!(path = %path.display(), "shekyl-wallet-rpc listening (UDS)");
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    shutdown.notified().await;
-                })
-                .await?;
-        }
-    }
+    let bound = BoundListener::bind(&config.listen).await?;
+    bound.log_ready("shekyl-wallet-rpc listening")?;
+    bound.serve(app, shutdown).await?;
     Ok(())
 }
 
-fn prepare_uds_path(path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// A listener bound to its address, per platform — **the** `cfg` seam.
+///
+/// [`run_server`] and [`spawn_in_process_with`] both go through
+/// [`Self::bind`] and [`Self::serve`], so there is one place the platform
+/// decision is made and one place the serve loop is written. Five `cfg`
+/// splits at five call sites would scatter the boundary across a file whose
+/// job is the serve loop (`WINDOWS_WALLET_SUPPORT.md` §8.1).
+enum BoundListener {
+    Tcp(TcpListener),
+    /// The socket and the guard that unlinks its path. Owned here so a
+    /// failure between `bind` and serve still unlinks the bound socket,
+    /// rather than leaving a path that blocks the next bind.
+    #[cfg(unix)]
+    Uds(UnixListener, UdsCleanup),
+    #[cfg(windows)]
+    Pipe(PipeListener),
+}
+
+impl BoundListener {
+    async fn bind(listen: &ListenAddr) -> Result<Self, BoxErr> {
+        match listen {
+            ListenAddr::Tcp(addr) => Ok(Self::Tcp(TcpListener::bind(addr).await?)),
+            #[cfg(unix)]
+            ListenAddr::Uds(path) => {
+                prepare_uds_path(path)?;
+                let listener = UnixListener::bind(path)?;
+                // Own the socket path for cleanup BEFORE restrict_socket_perms
+                // so a chmod failure still unlinks the bound socket.
+                let cleanup = UdsCleanup(path.clone());
+                restrict_socket_perms(path)?;
+                Ok(Self::Uds(listener, cleanup))
+            }
+            #[cfg(windows)]
+            ListenAddr::SelfHostedPipe(pipe) => {
+                // The descriptor (owner-only, logon-SID DACL, Medium label)
+                // is applied at creation, and `first_pipe_instance(true)`
+                // refuses a name someone else already holds — both inside
+                // `shekyl-win-sec`. There is no post-bind step to mirror
+                // `restrict_socket_perms`, and no directory to mirror
+                // `private_socket_dir`: the containment those gave the Unix
+                // socket is rebuilt as the loud create here plus the peer
+                // check at the client's dial (§8.1).
+                let listener = shekyl_win_sec::OwnerOnlyPipeListener::bind(pipe.name.clone())?;
+                Ok(Self::Pipe(PipeListener(listener)))
+            }
+        }
+    }
+
+    /// Where this listener can be reached.
+    fn endpoint(&self) -> std::io::Result<InProcessListen> {
+        match self {
+            Self::Tcp(listener) => Ok(InProcessListen::Tcp(listener.local_addr()?)),
+            #[cfg(unix)]
+            Self::Uds(_, cleanup) => Ok(InProcessListen::Uds(cleanup.0.clone())),
+            #[cfg(windows)]
+            Self::Pipe(listener) => Ok(InProcessListen::NamedPipe(listener.0.name().to_owned())),
+        }
+    }
+
+    /// One `info!` line per transport. The pipe's name is deliberately not
+    /// logged: it carries the user's SID (see [`SelfHostedPipe`]).
+    fn log_ready(&self, what: &str) -> std::io::Result<()> {
+        match self {
+            Self::Tcp(listener) => {
+                let local = listener.local_addr()?;
+                info!(%local, "{what} (TCP)");
+            }
+            #[cfg(unix)]
+            Self::Uds(_, cleanup) => {
+                info!(path = %cleanup.0.display(), "{what} (UDS)");
+            }
+            #[cfg(windows)]
+            Self::Pipe(_) => {
+                info!("{what} (named pipe)");
+            }
+        }
+        Ok(())
+    }
+
+    /// Serve `app` until `shutdown` fires.
+    async fn serve(self, app: Router, shutdown: Arc<Notify>) -> std::io::Result<()> {
+        let graceful = async move {
+            shutdown.notified().await;
+        };
+        match self {
+            Self::Tcp(listener) => {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(graceful)
+                    .await
+            }
+            #[cfg(unix)]
+            Self::Uds(listener, cleanup) => {
+                // Owned by the serve future so the socket is unlinked on any
+                // exit path, success or error.
+                let _cleanup = cleanup;
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(graceful)
+                    .await
+            }
+            #[cfg(windows)]
+            Self::Pipe(listener) => {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(graceful)
+                    .await
+            }
+        }
+    }
+}
+
+/// The self-hosted pipe as an axum [`Listener`](axum::serve::Listener).
+///
+/// A named pipe has no accept queue; each connection consumes an instance and
+/// the server creates the next one itself. That loop lives in
+/// `shekyl_win_sec::OwnerOnlyPipeListener::accept` (it is where the `unsafe`
+/// create call is); this wrapper only adapts its fallible accept to axum's
+/// infallible one, retrying after a short pause the way axum's own TCP and
+/// UDS listeners do rather than tearing the server down on a transient error.
+#[cfg(windows)]
+struct PipeListener(shekyl_win_sec::OwnerOnlyPipeListener);
+
+#[cfg(windows)]
+impl axum::serve::Listener for PipeListener {
+    type Io = tokio::net::windows::named_pipe::NamedPipeServer;
+    type Addr = ();
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            match self.0.accept().await {
+                Ok(io) => return (io, ()),
+                Err(e) => {
+                    tracing::warn!(error = %e, "named pipe accept failed; retrying");
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn prepare_uds_path(path: &Path) -> Result<(), BoxErr> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
@@ -274,9 +454,22 @@ fn prepare_uds_path(path: &Path) -> Result<(), Box<dyn std::error::Error + Send 
 /// socket itself is permission-gated. Applied after `bind`; the in-process
 /// default additionally parents the socket in a 0700 directory so the
 /// pre-chmod window is unreachable.
+///
+/// Unix only, with no Windows counterpart: `CreateNamedPipe` takes the
+/// descriptor at creation, so there is no post-bind step to port
+/// (`WINDOWS_WALLET_SUPPORT.md` §8.1).
+#[cfg(unix)]
 fn restrict_socket_perms(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
+/// Per-process spawn counter, so multiple in-process servers in one process
+/// (test binaries; future multi-session hosts) never share an endpoint name.
+/// Feeds the UDS directory name on Unix and the pipe name on Windows.
+fn next_spawn() -> u64 {
+    static SPAWN_COUNTER: AtomicU64 = AtomicU64::new(0);
+    SPAWN_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Create the private, per-spawn runtime directory that holds the
@@ -285,21 +478,28 @@ fn restrict_socket_perms(path: &Path) -> std::io::Result<()> {
 /// Prefers `$XDG_RUNTIME_DIR` (user-private tmpfs per the XDG base-dir
 /// spec; `WALLET_REWRITE_PLAN.md` Phase 3 deliverables), falling back to
 /// the system temp dir. Created 0700. The name is pid- **and**
-/// spawn-counter-scoped so multiple in-process servers in one process
-/// (test binaries; future multi-session hosts) never collide. A
-/// pre-existing entry at the path is removed if we own it; if removal
-/// fails (e.g. an attacker-planted entry under a sticky-bit temp dir)
-/// creation fails loud rather than reusing it.
+/// spawn-counter-scoped ([`next_spawn`]). A pre-existing entry at the path
+/// is removed if we own it; if removal fails (e.g. an attacker-planted entry
+/// under a sticky-bit temp dir) creation fails loud rather than reusing it.
+///
+/// Unix only. Its four jobs on Windows: access control → the pipe's DACL;
+/// collision avoidance → the per-spawn pipe name; stale-directory cleanup →
+/// no analogue (a pipe is a kernel object); **containment** — nobody else
+/// can place an object at the name we are about to dial — → the loud
+/// first-instance create plus the client's peer check
+/// (`WINDOWS_WALLET_SUPPORT.md` §8.1, corrected 2026-08-20).
+#[cfg(unix)]
 fn private_socket_dir() -> std::io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SPAWN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    let n = SPAWN_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = base.join(format!("shekyl-rpc-{}-{n}", std::process::id()));
+    let dir = base.join(format!(
+        "shekyl-rpc-{}-{}",
+        std::process::id(),
+        next_spawn()
+    ));
     // Stale leftover from a crashed run with a recycled pid: remove if ours.
     drop(std::fs::remove_dir_all(&dir));
     std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
@@ -307,12 +507,33 @@ fn private_socket_dir() -> std::io::Result<PathBuf> {
 }
 
 /// Where an in-process server listens.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum InProcessListen {
     /// Loopback TCP (explicit opt-in via [`spawn_in_process_with`]).
     Tcp(SocketAddr),
     /// Unix domain socket (the secure default of [`spawn_in_process`]).
+    #[cfg(unix)]
     Uds(PathBuf),
+    /// The owner-only named pipe (the secure default of
+    /// [`spawn_in_process`] on Windows). The in-process client dials this
+    /// name through `shekyl_win_sec::open_verified`, which refuses it before
+    /// any byte is written unless the owner and integrity are ours.
+    #[cfg(windows)]
+    NamedPipe(String),
+}
+
+/// Manual: the pipe name embeds the user's SID and is redacted, as in
+/// [`SelfHostedPipe`]; the other arms render as derived.
+impl std::fmt::Debug for InProcessListen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tcp(addr) => f.debug_tuple("Tcp").field(addr).finish(),
+            #[cfg(unix)]
+            Self::Uds(path) => f.debug_tuple("Uds").field(path).finish(),
+            #[cfg(windows)]
+            Self::NamedPipe(_) => f.write_str("NamedPipe(<redacted>)"),
+        }
+    }
 }
 
 /// Handle returned by [`spawn_in_process`] / [`spawn_in_process_with`].
@@ -324,16 +545,18 @@ pub struct InProcessHandle {
     /// Where the server listens.
     pub listen: InProcessListen,
     /// Private socket dir removed on shutdown ([`spawn_in_process`] only).
+    #[cfg(unix)]
     socket_dir: Option<PathBuf>,
 }
 
 impl InProcessHandle {
     /// Request graceful shutdown and wait for the serve task to finish.
-    pub async fn shutdown(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn shutdown(self) -> Result<(), BoxErr> {
         self.state.shutdown.notify_one();
         self.join.await??;
         // The serve task's UdsCleanup already unlinked the socket; remove
-        // the private dir that held it.
+        // the private dir that held it. A pipe leaves nothing behind.
+        #[cfg(unix)]
         if let Some(dir) = &self.socket_dir {
             drop(std::fs::remove_dir(dir));
         }
@@ -341,44 +564,100 @@ impl InProcessHandle {
     }
 
     /// UDS socket path (`None` when listening on TCP).
+    #[cfg(unix)]
     pub fn socket_path(&self) -> Option<&Path> {
         match &self.listen {
             InProcessListen::Uds(path) => Some(path),
             InProcessListen::Tcp(_) => None,
         }
     }
+
+    /// Named-pipe name (`None` when listening on TCP).
+    #[cfg(windows)]
+    pub fn pipe_name(&self) -> Option<&str> {
+        match &self.listen {
+            InProcessListen::NamedPipe(name) => Some(name),
+            InProcessListen::Tcp(_) => None,
+        }
+    }
 }
 
-/// Spawn an in-process server on a private Unix domain socket.
+/// Spawn an in-process server on a private local endpoint.
 ///
 /// Shape B entry point: `shekyl-cli` one-shot / REPL hosts a server without
-/// a subprocess. The socket lives in a fresh 0700, pid-scoped directory
-/// (under `$XDG_RUNTIME_DIR`, temp-dir fallback) and is itself 0600, so
-/// only the owning user can connect — that filesystem gate is why
-/// [`AuthConfig::Disabled`] is sound here. Never binds TCP: an auth-less
-/// loopback port would let any local process drive the open wallet.
+/// a subprocess. Never binds TCP: an auth-less loopback port would let any
+/// local process drive the open wallet. The daemon is not dialed until
+/// refresh/send, so an unreachable `daemon_address` is fine for offline
+/// commands.
 ///
-/// The daemon is not dialed until refresh/send, so an unreachable
-/// `daemon_address` is fine for offline commands.
+/// **Unix:** the socket lives in a fresh 0700, pid-scoped directory (under
+/// `$XDG_RUNTIME_DIR`, temp-dir fallback) and is itself 0600, so only the
+/// owning user can connect — that filesystem gate is why
+/// [`AuthConfig::Disabled`] is sound here.
+///
+/// **Windows:** an owner-only named pipe, `\\.\pipe\shekyl-wallet-<sid>-<pid>-<n>`,
+/// created with its descriptor and with `first_pipe_instance(true)`, so a
+/// name already held fails loud rather than being joined. The 0700
+/// directory's containment — nobody else at the name we dial — has no pipe
+/// analogue, so `AuthConfig::Disabled` is sound here only together with the
+/// client's peer check at the dial (`shekyl_win_sec::open_verified`), which
+/// is why that check is load-bearing on this path
+/// (`WINDOWS_WALLET_SUPPORT.md` §8.1).
 pub async fn spawn_in_process(
     wallet_dir: PathBuf,
     network: Network,
     daemon_address: String,
     proxy: Option<String>,
-) -> Result<InProcessHandle, Box<dyn std::error::Error + Send + Sync>> {
-    let socket_dir = private_socket_dir()?;
-    let mut handle = spawn_in_process_with(ServerConfig {
-        listen: ListenAddr::Uds(socket_dir.join("wallet-rpc.sock")),
+) -> Result<InProcessHandle, BoxErr> {
+    #[cfg(unix)]
+    {
+        let socket_dir = private_socket_dir()?;
+        let listen = ListenAddr::Uds(socket_dir.join("wallet-rpc.sock"));
+        let mut handle = spawn_in_process_with(private_config(
+            listen,
+            wallet_dir,
+            network,
+            daemon_address,
+            proxy,
+        ))
+        .await?;
+        handle.socket_dir = Some(socket_dir);
+        Ok(handle)
+    }
+    #[cfg(windows)]
+    {
+        let owner = shekyl_win_sec::current_user_sid()?;
+        let name = shekyl_win_sec::self_hosted_pipe_name(&owner, next_spawn());
+        let listen = ListenAddr::SelfHostedPipe(SelfHostedPipe { name });
+        spawn_in_process_with(private_config(
+            listen,
+            wallet_dir,
+            network,
+            daemon_address,
+            proxy,
+        ))
+        .await
+    }
+}
+
+/// The auth-less configuration [`spawn_in_process`] uses on every platform;
+/// only `listen` differs, and it is the caller's.
+fn private_config(
+    listen: ListenAddr,
+    wallet_dir: PathBuf,
+    network: Network,
+    daemon_address: String,
+    proxy: Option<String>,
+) -> ServerConfig {
+    ServerConfig {
+        listen,
         wallet_dir,
         network,
         daemon_address,
         proxy,
         auth: AuthConfig::Disabled,
         kdf: KdfParams::default(),
-    })
-    .await?;
-    handle.socket_dir = Some(socket_dir);
-    Ok(handle)
+    }
 }
 
 /// Spawn an in-process server with a full [`ServerConfig`] (tests / CLI).
@@ -386,59 +665,23 @@ pub async fn spawn_in_process(
 /// Honors `config.listen`: UDS sockets are chmodded 0600 after bind; TCP
 /// is served as configured (callers binding auth-less TCP own that risk —
 /// prefer [`spawn_in_process`]).
-pub async fn spawn_in_process_with(
-    config: ServerConfig,
-) -> Result<InProcessHandle, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHandle, BoxErr> {
     validate_daemon_endpoint(&config)?;
     let state = AppState::new(&config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();
-    match &config.listen {
-        ListenAddr::Tcp(addr) => {
-            let listener = TcpListener::bind(addr).await?;
-            let local_addr = listener.local_addr()?;
-            let join = tokio::spawn(async move {
-                axum::serve(listener, app)
-                    .with_graceful_shutdown(async move {
-                        shutdown.notified().await;
-                    })
-                    .await
-            });
-            info!(%local_addr, "shekyl-wallet-rpc in-process server started (TCP)");
-            Ok(InProcessHandle {
-                state,
-                join,
-                listen: InProcessListen::Tcp(local_addr),
-                socket_dir: None,
-            })
-        }
-        ListenAddr::Uds(path) => {
-            prepare_uds_path(path)?;
-            let listener = UnixListener::bind(path)?;
-            // Own the socket path for cleanup BEFORE restrict_socket_perms so a
-            // chmod failure still unlinks the bound socket rather than leaking
-            // it. Ownership then moves into the serve task below.
-            let cleanup = UdsCleanup(path.clone());
-            restrict_socket_perms(path)?;
-            let join = tokio::spawn(async move {
-                // Owned by the serve task so the socket is unlinked on any
-                // exit path, success or error.
-                let _cleanup = cleanup;
-                axum::serve(listener, app)
-                    .with_graceful_shutdown(async move {
-                        shutdown.notified().await;
-                    })
-                    .await
-            });
-            info!(path = %path.display(), "shekyl-wallet-rpc in-process server started (UDS)");
-            Ok(InProcessHandle {
-                state,
-                join,
-                listen: InProcessListen::Uds(path.clone()),
-                socket_dir: None,
-            })
-        }
-    }
+
+    let bound = BoundListener::bind(&config.listen).await?;
+    let listen = bound.endpoint()?;
+    bound.log_ready("shekyl-wallet-rpc in-process server started")?;
+    let join = tokio::spawn(bound.serve(app, shutdown));
+    Ok(InProcessHandle {
+        state,
+        join,
+        listen,
+        #[cfg(unix)]
+        socket_dir: None,
+    })
 }
 
 #[cfg(test)]
@@ -483,5 +726,30 @@ mod tests {
         assert!(format!("{endpoint:?}").contains("<redacted>"));
         assert!(format!("{endpoint:?}").contains("127.0.0.1:28581"));
         assert!(format!("{:?}", config.auth).contains("rpcuser"));
+    }
+
+    /// `uds://` is a Unix form. On Windows it must be refused at parse, naming
+    /// the platform — not accepted and failed later at bind
+    /// (`WINDOWS_WALLET_SUPPORT.md` §8.1, the parse surface).
+    #[test]
+    fn uds_listen_form_is_unix_only() {
+        #[cfg(unix)]
+        assert!(matches!(
+            ListenAddr::parse("uds:///tmp/x.sock"),
+            Ok(ListenAddr::Uds(_))
+        ));
+        #[cfg(windows)]
+        {
+            let err = ListenAddr::parse("uds:///tmp/x.sock")
+                .err()
+                .expect("uds:// must be refused on Windows");
+            assert!(err.contains("Windows"), "{err}");
+        }
+        // Empty path is refused everywhere; the TCP form parses everywhere.
+        assert!(ListenAddr::parse("uds://").is_err());
+        assert!(matches!(
+            ListenAddr::parse("127.0.0.1:29500"),
+            Ok(ListenAddr::Tcp(_))
+        ));
     }
 }

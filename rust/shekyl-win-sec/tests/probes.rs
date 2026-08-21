@@ -394,6 +394,64 @@ fn p14_truncated_label_ace_is_refused() {
     );
 }
 
+/// P-16 — the exported seed file is owner-only from creation, and creation
+/// refuses an existing path.
+///
+/// Registered 2026-08-20 with WP-W2, which absorbed WP-W4 (WP-D8). The owner
+/// is asserted **literally**, read off the handle with `ConvertSidToStringSidW`
+/// — P-1's lesson, SDDL text canonicalises well-known SIDs — and the DACL is
+/// asserted **structurally**: protected, exactly one ACE, full file access. A
+/// second ACE here would be the PR #516 union shape, on a file.
+///
+/// Predicted: owner equals `current_user_sid()` even on an Administrators
+/// account (P-7's platform fact says a default-owner object would belong to
+/// `BUILTIN\Administrators`; this one sets `O:` explicitly); `D:P` holding one
+/// `(A;;FA;;;…)`; a second `create_owner_only_file` on the same path is `Err`.
+#[test]
+fn p16_seed_file_is_owner_only_and_refuses_to_overwrite() {
+    let path = std::env::temp_dir().join(format!("shekyl-p16-{}.seed", std::process::id()));
+    drop(std::fs::remove_file(&path));
+
+    let file = shekyl_win_sec::create_owner_only_file(&path).expect("P-16: create");
+    let me = current_user_sid().expect("P-16: SID");
+
+    let owner = shekyl_win_sec::file_owner_for_testing(&file).expect("P-16: owner readback");
+    assert_eq!(
+        owner.as_str(),
+        me.as_str(),
+        "P-16: the seed file is not owned by the user who exported it. On an \
+         administrator account that means BUILTIN\\Administrators — `O:` was \
+         meant to be explicit precisely so this could not happen"
+    );
+
+    let sddl = shekyl_win_sec::file_sddl_for_testing(&file).expect("P-16: SDDL readback");
+    let dacl = dacl_section(&sddl).unwrap_or_else(|| panic!("P-16: no D: section: {sddl}"));
+    assert!(
+        dacl.starts_with('P'),
+        "P-16: the seed file's DACL is not protected, so inherited ACEs from the \
+         directory can widen it: {sddl}"
+    );
+    let ace_count = dacl.matches('(').count();
+    assert_eq!(
+        ace_count, 1,
+        "P-16: the DACL holds {ace_count} ACEs, not 1 — a second grant widens a \
+         seed file exactly the way it widened the pipe in PR #516: {sddl}"
+    );
+    assert!(
+        dacl.contains(";FA;"),
+        "P-16: the single ACE is not full file access for the owner: {sddl}"
+    );
+
+    assert!(
+        shekyl_win_sec::create_owner_only_file(&path).is_err(),
+        "P-16: a second create on an existing path SUCCEEDED — the O_EXCL half \
+         is missing and an existing seed file would be clobbered"
+    );
+
+    drop(file);
+    std::fs::remove_file(&path).expect("P-16: cleanup");
+}
+
 // --- helpers ---------------------------------------------------------------
 
 /// The `D:` section of an SDDL string, between the DACL marker and the SACL.

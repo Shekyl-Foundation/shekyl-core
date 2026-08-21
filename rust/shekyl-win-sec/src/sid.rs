@@ -260,8 +260,9 @@ pub fn current_logon_sid() -> Result<SidString, SidError> {
     Err(SidError::NoLogonSid)
 }
 
-/// Format a SID pointer as a string. Shared by both readers above.
-fn sid_to_string(sid: *mut c_void) -> Result<SidString, SidError> {
+/// Format a SID pointer as a string. Shared by both readers above and by the
+/// P-16 file-owner readback.
+pub(crate) fn sid_to_string(sid: *mut c_void) -> Result<SidString, SidError> {
     let mut wide: *mut u16 = std::ptr::null_mut();
     // SAFETY: `sid` points into a live token buffer owned by the caller.
     let converted = unsafe { ConvertSidToStringSidW(sid, &raw mut wide) };

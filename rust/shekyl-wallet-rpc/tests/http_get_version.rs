@@ -315,6 +315,7 @@ async fn basic_auth_accepts_valid_credentials() {
     assert_eq!(json["result"]["api_version"], API_VERSION);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn spawn_in_process_serves_get_version_over_private_uds() {
     let handle = shekyl_wallet_rpc::spawn_in_process(
@@ -377,6 +378,71 @@ async fn spawn_in_process_serves_get_version_over_private_uds() {
     assert!(
         !dir.exists(),
         "private socket dir must be removed on shutdown"
+    );
+}
+
+/// The Windows twin of the test above: the secure default is an owner-only
+/// named pipe, dialled through the peer check. The dial is the shipping one
+/// (`open_verified`), so a pipe whose descriptor the check would refuse fails
+/// this test at connect rather than being read around.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_in_process_serves_get_version_over_the_verified_pipe() {
+    let handle = shekyl_wallet_rpc::spawn_in_process(
+        std::env::temp_dir(),
+        Network::Stagenet,
+        "http://127.0.0.1:1".into(),
+        None,
+    )
+    .await
+    .expect("spawn");
+    let name = handle
+        .pipe_name()
+        .expect("default spawn is a named pipe")
+        .to_owned();
+    assert!(
+        name.starts_with(shekyl_win_sec::PIPE_PREFIX),
+        "pipe name must carry the WP-D1 prefix"
+    );
+
+    let body = serde_json::to_vec(&json!({
+        "jsonrpc": "2.0",
+        "id": 42,
+        "method": "get_version"
+    }))
+    .unwrap();
+    let request = format!(
+        "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+
+    // The client side is synchronous by design (it is what shekyl-cli does);
+    // run it off the runtime threads the server needs.
+    let dial_name = name.clone();
+    let raw = tokio::task::spawn_blocking(move || {
+        use std::io::{Read, Write};
+        let mut pipe = shekyl_win_sec::open_verified(&dial_name).expect("open + peer check");
+        pipe.write_all(request.as_bytes()).unwrap();
+        pipe.write_all(&body).unwrap();
+        let mut buf = Vec::new();
+        pipe.read_to_end(&mut buf).unwrap();
+        buf
+    })
+    .await
+    .expect("client task");
+    let text = String::from_utf8_lossy(&raw);
+    let json: Value = serde_json::from_str(http_body(&text)).expect("parse body");
+    assert_eq!(json["result"]["api_version"], API_VERSION);
+    assert_eq!(json["id"], 42);
+
+    handle.shutdown().await.expect("shutdown");
+    // Nothing to unlink, but nothing may be left listening either.
+    let after = tokio::task::spawn_blocking(move || shekyl_win_sec::open_verified(&name))
+        .await
+        .expect("probe task");
+    assert!(
+        matches!(after, Err(shekyl_win_sec::DialError::NotFound)),
+        "shutdown must leave nothing listening at the pipe name"
     );
 }
 

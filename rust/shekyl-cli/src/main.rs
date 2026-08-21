@@ -49,7 +49,7 @@ pub struct ReplArgs {
     daemon_address: String,
 
     /// Connect to an external shekyl-wallet-rpc daemon instead of
-    /// self-hosting one (http://host:port or uds:///path/to.sock).
+    /// self-hosting one (http://host:port, or uds:///path/to.sock on Unix).
     #[arg(long)]
     rpc_url: Option<String>,
 

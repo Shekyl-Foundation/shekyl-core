@@ -4,14 +4,14 @@
 // BSD-3-Clause
 
 //! WI-RPC-2a integration tests: the CLI's `RpcSession` against a real
-//! self-hosted `shekyl-wallet-rpc` server over the private UDS socket.
+//! self-hosted `shekyl-wallet-rpc` server over its private local endpoint —
+//! the UDS socket on Unix, the owner-only named pipe on Windows (WP-W2; the
+//! probe sheet's P-10, observed on the Windows runner).
 //!
 //! The daemon address is a never-connecting endpoint (`http://127.0.0.1:1`),
 //! matching the wallet-rpc crate's own test posture: everything up to the
 //! first daemon-touching step runs for real, and daemon-touching steps fail
 //! with typed wallet-RPC errors (never transport errors or hangs).
-
-use std::os::unix::fs::PermissionsExt;
 
 use serde_json::json;
 use shekyl_cli::rpc_client::{RpcError, RpcSession};
@@ -31,25 +31,37 @@ fn host(dir: &std::path::Path) -> RpcSession {
     .expect("host in-process wallet RPC")
 }
 
-/// The self-hosted session serves over a private UDS socket (0600 in a 0700
-/// dir), answers `get_version`, and removes the socket dir on shutdown.
+/// The self-hosted session serves over a private local endpoint — a UDS
+/// socket (0600 in a 0700 dir) on Unix, an owner-only named pipe dialled
+/// through the peer check on Windows — answers `get_version`, and leaves
+/// nothing at the endpoint on shutdown.
 #[test]
-fn session_serves_over_private_uds_and_cleans_up() {
+fn session_serves_over_private_local_endpoint_and_cleans_up() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rpc = host(dir.path());
 
-    let socket = rpc
-        .socket_path()
-        .expect("self-hosted session exposes a UDS socket");
-    let socket_dir = socket
-        .parent()
-        .expect("socket has a parent dir")
-        .to_path_buf();
-
-    let mode =
-        |p: &std::path::Path| std::fs::metadata(p).expect("metadata").permissions().mode() & 0o777;
-    assert_eq!(mode(socket), 0o600, "socket must be owner-only");
-    assert_eq!(mode(&socket_dir), 0o700, "socket dir must be owner-only");
+    #[cfg(unix)]
+    let socket_dir = {
+        use std::os::unix::fs::PermissionsExt;
+        let socket = rpc
+            .socket_path()
+            .expect("self-hosted session exposes a UDS socket");
+        let socket_dir = socket
+            .parent()
+            .expect("socket has a parent dir")
+            .to_path_buf();
+        let mode = |p: &std::path::Path| {
+            std::fs::metadata(p).expect("metadata").permissions().mode() & 0o777
+        };
+        assert_eq!(mode(socket), 0o600, "socket must be owner-only");
+        assert_eq!(mode(&socket_dir), 0o700, "socket dir must be owner-only");
+        socket_dir
+    };
+    #[cfg(windows)]
+    let pipe_name = rpc
+        .pipe_name()
+        .expect("self-hosted session exposes a named pipe")
+        .to_owned();
 
     let version = rpc.call("get_version", json!({})).expect("get_version");
     assert_eq!(
@@ -61,9 +73,21 @@ fn session_serves_over_private_uds_and_cleans_up() {
     assert!(version.get("version").and_then(|v| v.as_str()).is_some());
 
     rpc.shutdown();
+    #[cfg(unix)]
     assert!(
         !socket_dir.exists(),
         "shutdown must remove the private socket dir"
+    );
+    // A pipe is a kernel object: nothing to unlink, but nothing may be left
+    // listening either. `NotFound` specifically — any other outcome (a
+    // successful open, a refusal) would mean something still holds the name.
+    #[cfg(windows)]
+    assert!(
+        matches!(
+            shekyl_win_sec::open_verified(&pipe_name),
+            Err(shekyl_win_sec::DialError::NotFound)
+        ),
+        "shutdown must leave nothing listening at the pipe name"
     );
 }
 
@@ -179,7 +203,8 @@ fn send_lifecycle_errors_are_typed_end_to_end() {
 
 /// The non-interactive `create`/`restore` subcommands (the scriptable path
 /// that closes the interactive seed-leak finding): `create` writes the
-/// one-time seed to a 0600 file and refuses to overwrite it, and `restore`
+/// one-time seed to an owner-only file (0600 on Unix, an owner-only DACL on
+/// Windows — WP-D8) and refuses to overwrite it, and `restore`
 /// reads it back to reproduce the same account — the seed never touches a
 /// terminal or a pipe.
 #[test]
@@ -202,12 +227,19 @@ fn scripted_create_writes_seed_file_and_restore_round_trips() {
     run_create(&rpc, &create).expect("scripted create");
 
     // Seed written owner-only and non-empty; the seed never reached stdout.
-    let mode = std::fs::metadata(&seed_out)
-        .expect("seed metadata")
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(mode, 0o600, "seed file must be owner-only");
+    // The Unix half is a mode; the Windows half is a DACL set at creation,
+    // which probe P-16 (`shekyl-win-sec`) asserts against the shipping
+    // function this path calls. The CREATE_NEW refusal below runs on both.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&seed_out)
+            .expect("seed metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "seed file must be owner-only");
+    }
     assert!(
         !std::fs::read_to_string(&seed_out)
             .expect("read seed")

@@ -24,7 +24,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
+    # `WaitNamedPipeW`, for the client's bounded busy-wait (WP-W2).
+    "Win32_System_Pipes",
 ] }
+# The self-hosted listener (WP-W2) is built on tokio's named-pipe support, so
+# the crate that holds the `unsafe` `create_with_security_attributes_raw` call
+# is the crate that depends on it. `net` only; the runtime is the caller's.
+tokio = { version = "1", features = ["net"] }
 
 [features]
 # Exposes `sid_for_testing`, which builds a `SidString` from an arbitrary
@@ -35,9 +41,8 @@ windows-sys = { version = "0.61", features = [
 test-utils = []
 
 [target.'cfg(windows)'.dev-dependencies]
-# The probe suite drives real pipes. Same tokio the transport will use, so a
-# version bump that breaks `create_with_security_attributes_raw` fails here
-# rather than in WP-W2.
+# The probe suite drives real pipes under a runtime; the runtime features are
+# test-only, the `net` half is the transport's own dependency above.
 tokio = { version = "1", features = ["net", "rt", "macros"] }
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 

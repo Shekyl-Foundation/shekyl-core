@@ -13,11 +13,18 @@
 //! Two transports:
 //!
 //! - **Self-hosted (default):** the CLI spawns an in-process
-//!   `shekyl-wallet-rpc` server over a private, owner-only UDS socket
-//!   ([`shekyl_wallet_rpc::spawn_in_process`]) and speaks HTTP/1.1 over that
-//!   socket. One-shot commands and the REPL both use this mode.
+//!   `shekyl-wallet-rpc` server over a private, owner-only local endpoint
+//!   ([`shekyl_wallet_rpc::spawn_in_process`]) and speaks HTTP/1.1 over it.
+//!   On Unix that is a UDS socket in a 0700 directory; on Windows it is an
+//!   owner-only named pipe, dialled through `shekyl_win_sec::open_verified`,
+//!   which refuses the pipe before a byte is written unless its owner and
+//!   integrity are ours (`WINDOWS_WALLET_SUPPORT.md` §8.1 — the directory's
+//!   containment has no pipe analogue, so the check is load-bearing here).
+//!   One-shot commands and the REPL both use this mode.
 //! - **Remote (`--rpc-url`):** the CLI connects to an externally managed
-//!   `shekyl-wallet-rpc` **server** over HTTP (or a `uds://` socket path).
+//!   `shekyl-wallet-rpc` **server** over HTTP (or, on Unix, a `uds://` socket
+//!   path; Windows ships no local external form, and `uds://` is refused at
+//!   parse there, naming the platform).
 //!   "Server" throughout, never "daemon" — in this codebase the daemon is the
 //!   *node* (`daemon::DaemonClient`), and the CLI talks to both at once.
 //!
@@ -28,12 +35,15 @@
 
 use std::cell::{Cell, RefCell};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(unix)]
 use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use shekyl_wallet_rpc::{InProcessHandle, Network};
+use shekyl_wallet_rpc::{InProcessHandle, InProcessListen, Network};
 use zeroize::Zeroizing;
 
 /// Idle read/write timeout for the self-hosted / `uds://` HTTP transport.
@@ -41,6 +51,11 @@ use zeroize::Zeroizing;
 /// that accepts the request but never replies. Applied per read/write
 /// syscall (not total), so a slow-but-progressing operation is unaffected;
 /// only a genuinely stalled socket trips it.
+///
+/// Unix only: the Windows dial has no external form to guard, and after the
+/// peer check passes the other end is either this process or a §6
+/// out-of-scope process (`WINDOWS_WALLET_SUPPORT.md` §8.1).
+#[cfg(unix)]
 const UDS_IO_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// JSON-RPC failure surfaced to command handlers.
@@ -85,7 +100,13 @@ impl RpcError {
 /// Where RPC requests go.
 enum Transport {
     /// HTTP/1.1 over a Unix domain socket.
+    #[cfg(unix)]
     Uds(PathBuf),
+    /// HTTP/1.1 over the self-hosted named pipe (Windows). Opened — and
+    /// peer-verified before any byte is written — on every call by
+    /// `shekyl_win_sec::open_verified`; the name is the only state held.
+    #[cfg(windows)]
+    NamedPipe(String),
     /// HTTP(S) over TCP to an external `shekyl-wallet-rpc` server (the
     /// `--rpc-url` target — not the node daemon; cf. `daemon::DaemonClient`),
     /// through a ureq agent that carries the `--proxy` SOCKS config (if any) —
@@ -251,8 +272,9 @@ pub mod params {
 }
 
 impl RpcSession {
-    /// Spawn an in-process `shekyl-wallet-rpc` server over a private UDS
-    /// socket and connect to it (the Shape B self-hosted default).
+    /// Spawn an in-process `shekyl-wallet-rpc` server over a private local
+    /// endpoint (UDS on Unix, an owner-only named pipe on Windows) and connect
+    /// to it (the Shape B self-hosted default).
     pub fn host_in_process(
         wallet_dir: PathBuf,
         network: Network,
@@ -274,12 +296,17 @@ impl RpcSession {
                 proxy,
             ))
             .map_err(|e| format!("failed to start in-process wallet RPC: {e}"))?;
-        let socket = handle
-            .socket_path()
-            .ok_or("in-process wallet RPC did not expose a UDS socket")?
-            .to_path_buf();
+        let transport = match &handle.listen {
+            #[cfg(unix)]
+            InProcessListen::Uds(path) => Transport::Uds(path.clone()),
+            #[cfg(windows)]
+            InProcessListen::NamedPipe(name) => Transport::NamedPipe(name.clone()),
+            InProcessListen::Tcp(_) => {
+                return Err("in-process wallet RPC did not expose a private local endpoint".into())
+            }
+        };
         Ok(Self {
-            transport: Transport::Uds(socket),
+            transport,
             hosted: Some(Hosted {
                 runtime,
                 handle: Some(handle),
@@ -293,13 +320,14 @@ impl RpcSession {
     /// Connect to an externally managed `shekyl-wallet-rpc` **server** (not the
     /// node daemon — cf. [`crate::daemon::DaemonClient`]).
     ///
-    /// Accepts `http://…` / `https://…` URLs or a `uds:///path/to.sock` socket
-    /// path. `proxy` (a SOCKS address) applies **only** to the HTTP(S)
-    /// transport; a `uds://` session is a local socket with no network path to
-    /// route, so the argument is ignored for it.
+    /// Accepts `http://…` / `https://…` URLs or, on Unix, a
+    /// `uds:///path/to.sock` socket path. `proxy` (a SOCKS address) applies
+    /// **only** to the HTTP(S) transport; a `uds://` session is a local socket
+    /// with no network path to route, so the argument is ignored for it.
     pub fn connect(rpc_url: &str, proxy: Option<&str>, debug: bool) -> Result<Self, String> {
         let transport = match parse_rpc_url(rpc_url)? {
-            RpcUrlForm::Uds(path) => Transport::Uds(PathBuf::from(path)),
+            #[cfg(unix)]
+            RpcUrlForm::Uds(path) => Transport::Uds(path),
             RpcUrlForm::Http => Transport::Http {
                 url: rpc_url.trim_end_matches('/').to_owned(),
                 agent: build_http_agent(proxy)?,
@@ -328,9 +356,20 @@ impl RpcSession {
     }
 
     /// The UDS socket path requests go to, when this is a UDS session.
+    #[cfg(unix)]
     pub fn socket_path(&self) -> Option<&Path> {
         match &self.transport {
             Transport::Uds(path) => Some(path),
+            Transport::Http { .. } => None,
+        }
+    }
+
+    /// The named-pipe name requests go to, when this is a self-hosted
+    /// Windows session.
+    #[cfg(windows)]
+    pub fn pipe_name(&self) -> Option<&str> {
+        match &self.transport {
+            Transport::NamedPipe(name) => Some(name),
             Transport::Http { .. } => None,
         }
     }
@@ -392,7 +431,10 @@ impl RpcSession {
         // methods (create_wallet returns the new BIP-39 mnemonic / raw seed).
         // Wrap it so the serialized bytes are wiped on drop (rule 35).
         let raw = Zeroizing::new(match &self.transport {
+            #[cfg(unix)]
             Transport::Uds(path) => http_post_uds(path, &payload)?,
+            #[cfg(windows)]
+            Transport::NamedPipe(name) => http_post_pipe(name, &payload)?,
             Transport::Http { url, agent } => http_post_tcp(agent, url, &payload)?,
         });
 
@@ -453,6 +495,7 @@ impl RpcSession {
 
 /// POST the JSON-RPC body over a Unix domain socket (HTTP/1.1,
 /// `Connection: close`) and return the response body.
+#[cfg(unix)]
 fn http_post_uds(path: &Path, payload: &[u8]) -> Result<String, RpcError> {
     // Takes the caller's already-serialized bytes: `RpcSession::call` owns the
     // one `Zeroizing` buffer, so this helper cannot make a second copy of a
@@ -468,7 +511,28 @@ fn http_post_uds(path: &Path, payload: &[u8]) -> Result<String, RpcError> {
     // the external `--rpc-url uds://` path).
     drop(stream.set_read_timeout(Some(UDS_IO_TIMEOUT)));
     drop(stream.set_write_timeout(Some(UDS_IO_TIMEOUT)));
+    http_post_over(&mut stream, payload)
+}
 
+/// POST the JSON-RPC body over the self-hosted named pipe (HTTP/1.1,
+/// `Connection: close`) and return the response body.
+///
+/// `open_verified` is the only pipe-open path this crate has. It runs the
+/// owner + integrity check and hands back a handle only if it passed, so the
+/// request bytes below cannot reach a pipe that is not ours — that ordering
+/// is the dial-side half of containment (`WINDOWS_WALLET_SUPPORT.md` §8.1),
+/// not a courtesy check. No timeout, for the reason at [`UDS_IO_TIMEOUT`].
+#[cfg(windows)]
+fn http_post_pipe(name: &str, payload: &[u8]) -> Result<String, RpcError> {
+    let mut pipe = shekyl_win_sec::open_verified(name)
+        .map_err(|e| RpcError::Transport(format!("cannot connect to the wallet RPC pipe: {e}")))?;
+    http_post_over(&mut pipe, payload)
+}
+
+/// The `Connection: close` HTTP/1.1 exchange both local transports speak:
+/// write the request, read to EOF, parse. Takes the caller's already-
+/// serialized bytes and re-serializes nothing (see [`RpcSession::call`]).
+fn http_post_over<S: Read + Write>(stream: &mut S, payload: &[u8]) -> Result<String, RpcError> {
     let request = format!(
         "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n",
@@ -488,13 +552,18 @@ fn http_post_uds(path: &Path, payload: &[u8]) -> Result<String, RpcError> {
     parse_http_response(&raw)
 }
 
-/// POST the JSON-RPC body to an HTTP(S) endpoint and return the response
-/// body. JSON-RPC application errors ride back as HTTP 200 with an `error`
-/// object, which the caller decodes.
 /// The accepted `--rpc-url` forms.
-enum RpcUrlForm<'a> {
+///
+/// `Uds` exists only on Unix. That is the point, not a convenience: the
+/// platform constraint used to live in the *implementation* of the transport
+/// (`http_post_uds`), one layer below the type that selects it, so a `uds://`
+/// URL parsed cleanly on Windows and failed later with something unhelpful.
+/// With the variant gated, a Windows arm that returned `Uds` cannot compile
+/// (`WINDOWS_WALLET_SUPPORT.md` §8.1, "the parse surface").
+enum RpcUrlForm {
     /// A `uds://` socket path, guaranteed non-empty.
-    Uds(&'a str),
+    #[cfg(unix)]
+    Uds(PathBuf),
     /// An `http(s)://` URL with a non-empty host.
     Http,
 }
@@ -514,12 +583,9 @@ enum RpcUrlForm<'a> {
 /// The host check reuses [`crate::network_posture::host_of`] rather than a
 /// second parser, for the same reason: one extractor cannot disagree with
 /// itself about what a host is.
-fn parse_rpc_url(rpc_url: &str) -> Result<RpcUrlForm<'_>, String> {
+fn parse_rpc_url(rpc_url: &str) -> Result<RpcUrlForm, String> {
     if let Some(path) = rpc_url.strip_prefix("uds://") {
-        if path.is_empty() {
-            return Err("--rpc-url uds:// path must not be empty".into());
-        }
-        return Ok(RpcUrlForm::Uds(path));
+        return uds_form(path);
     }
     if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
         if crate::network_posture::host_of(rpc_url).is_empty() {
@@ -531,9 +597,44 @@ fn parse_rpc_url(rpc_url: &str) -> Result<RpcUrlForm<'_>, String> {
         return Ok(RpcUrlForm::Http);
     }
     Err(format!(
-        "invalid --rpc-url '{rpc_url}': expected http://host:port, \
-         https://host:port, or uds:///path/to.sock"
+        "invalid --rpc-url '{rpc_url}': expected {ACCEPTED_RPC_URL_FORMS}"
     ))
+}
+
+/// What the rejection message offers, per platform.
+#[cfg(unix)]
+const ACCEPTED_RPC_URL_FORMS: &str = "http://host:port, https://host:port, or uds:///path/to.sock";
+/// What the rejection message offers, per platform.
+#[cfg(windows)]
+const ACCEPTED_RPC_URL_FORMS: &str =
+    "http://host:port or https://host:port (uds:// is Unix-only; omit --rpc-url to self-host)";
+
+/// The `uds://` form on Unix: a non-empty socket path.
+#[cfg(unix)]
+fn uds_form(path: &str) -> Result<RpcUrlForm, String> {
+    if path.is_empty() {
+        return Err("--rpc-url uds:// path must not be empty".into());
+    }
+    Ok(RpcUrlForm::Uds(PathBuf::from(path)))
+}
+
+/// The `uds://` form on Windows: refused, naming the platform.
+///
+/// [`RpcUrlForm`] has no `Uds` variant here, so this arm *cannot* hand back a
+/// transport the platform lacks — the parse surface that
+/// `WINDOWS_WALLET_SUPPORT.md` §8.1 found invisible to the compiler is now a
+/// compile error for anyone who adds one. The message says what works
+/// instead (rule 82): there is no `npipe://`, by ruling, and self-hosting
+/// needs no URL at all.
+#[cfg(windows)]
+fn uds_form(_path: &str) -> Result<RpcUrlForm, String> {
+    Err(
+        "--rpc-url uds:// is not available on Windows: a Unix domain socket has no \
+         Windows form, and Shekyl ships no other local external form there. Omit \
+         --rpc-url to self-host the wallet RPC in-process, or use http://host:port / \
+         https://host:port against an external server."
+            .into(),
+    )
 }
 
 /// Whether `rpc_url` is a form [`RpcSession::connect`] accepts. The
@@ -700,7 +801,22 @@ mod tests {
             assert!(err.contains("missing host"), "{bad}: {err}");
         }
         assert!(RpcSession::connect("http://127.0.0.1:29500", None, false).is_ok());
+        #[cfg(unix)]
         assert!(RpcSession::connect("uds:///tmp/x.sock", None, false).is_ok());
+        // Windows has no `uds://` form. The rejection must name the platform
+        // — "parses fine, fails at connect with something unhelpful" is the
+        // outcome `WINDOWS_WALLET_SUPPORT.md` §8.1 gated the variant against.
+        #[cfg(windows)]
+        {
+            let err = RpcSession::connect("uds:///tmp/x.sock", None, false)
+                .err()
+                .expect("uds:// must be rejected on Windows");
+            assert!(err.contains("Windows"), "{err}");
+            assert!(
+                err.contains("omit"),
+                "the rejection must say what works: {err}"
+            );
+        }
         // A well-formed SOCKS proxy builds the agent (reachability is not
         // checked at connect time — the open-state probe is best-effort).
         assert!(RpcSession::connect(
@@ -716,7 +832,10 @@ mod tests {
         // Accepted forms match connect_rejects_unknown_scheme above.
         assert!(is_supported_rpc_url("http://host:1"));
         assert!(is_supported_rpc_url("https://host:1"));
+        #[cfg(unix)]
         assert!(is_supported_rpc_url("uds:///tmp/x.sock"));
+        #[cfg(windows)]
+        assert!(!is_supported_rpc_url("uds:///tmp/x.sock"));
         // Rejected: empty uds path, unknown scheme, bare host:port, and any
         // hostless HTTP(S) form. This tracks `connect` by construction now —
         // both route through `parse_rpc_url` — so this test documents the rule
