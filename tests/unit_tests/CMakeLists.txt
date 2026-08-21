@@ -48,7 +48,6 @@ set(unit_tests_sources
   difficulty.cpp
   epee_boosted_tcp_server.cpp
   epee_levin_protocol_handler_async.cpp
-  epee_http_server.cpp
   epee_serialization.cpp
   epee_utils.cpp
   expect.cpp
@@ -56,7 +55,6 @@ set(unit_tests_sources
   json_serialization.cpp
   get_xtype_from_string.cpp
   hmac_keccak.cpp
-  http.cpp
   keccak.cpp
   levin.cpp
   logging.cpp

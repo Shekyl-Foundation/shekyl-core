@@ -79,8 +79,8 @@ int dispatch_bin(core_rpc_server& rpc,
     typename COMMAND::request req{};
     typename COMMAND::response res{};
 
-    // Always attempt deserialization, matching epee's MAP_URI_AUTO_BIN2 behavior.
-    // Empty or missing body will fail to parse -> 400 Bad Request.
+    // Always attempt deserialization. Empty or missing body will fail to
+    // parse -> 400 Bad Request.
     epee::span<const uint8_t> blob(body, body_len);
     if (!epee::serialization::load_t_from_binary(static_cast<typename COMMAND::request_t&>(req), blob))
         return -1;
@@ -96,7 +96,7 @@ int dispatch_bin(core_rpc_server& rpc,
     return 0;
 }
 
-// JSON-RPC: handler without error_resp (MAP_JON_RPC).
+// JSON-RPC: handler without error_resp.
 template<typename COMMAND>
 char* dispatch_jsonrpc(core_rpc_server& rpc,
     bool (core_rpc_server::*handler)(const typename COMMAND::request&, typename COMMAND::response&, const core_rpc_server::connection_context*),
@@ -123,7 +123,7 @@ char* dispatch_jsonrpc(core_rpc_server& rpc,
     return strdup(oss.str().c_str());
 }
 
-// JSON-RPC: handler with error_resp (MAP_JON_RPC_WE).
+// JSON-RPC: handler with error_resp.
 template<typename COMMAND>
 char* dispatch_jsonrpc_we(core_rpc_server& rpc,
     bool (core_rpc_server::*handler)(const typename COMMAND::request&, typename COMMAND::response&, epee::json_rpc::error&, const core_rpc_server::connection_context*),
@@ -365,7 +365,7 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         {"submit_block",       [](core_rpc_server& rpc, const char* p) { return dispatch_submitblock(rpc, p); }},
         {"submitblock",        [](core_rpc_server& rpc, const char* p) { return dispatch_submitblock(rpc, p); }},
         {"calc_pow",           [](core_rpc_server& rpc, const char* p) { return dispatch_calcpow(rpc, p); }},
-        // Standard MAP_JON_RPC_WE
+        // Handlers with error_resp
         DJRPC_WE("get_block_template",      on_getblocktemplate,          COMMAND_RPC_GETBLOCKTEMPLATE),
         DJRPC_WE("getblocktemplate",         on_getblocktemplate,          COMMAND_RPC_GETBLOCKTEMPLATE),
         DJRPC_WE("get_miner_data",          on_getminerdata,              COMMAND_RPC_GETMINERDATA),

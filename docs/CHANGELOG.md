@@ -152,6 +152,20 @@
 
 ### Removed
 
+- **epee's HTTP client is deleted.** `http_client.h` / `http_client_base.h`
+  / `abstract_http_client`, digest auth (`http_auth.{h,cpp}`, both the
+  client and the server halves), `net_helper` (the blocking asio
+  connector), the `invoke_http_*` templates (`http_abstract_invoke.h`,
+  `http_server_handlers_map2.h`), and the HTTP server request parser
+  (`http_server_impl_base.h`, `http_protocol_handler.{h,inl}`) that had no
+  production includer since the listener deletion and was kept compiling
+  by its own unit test. Its last two production consumers moved off it in
+  the preceding changes (the `shekyld <command>` control client onto the
+  Rust transport; the bootstrap forward deleted). With the listener
+  already gone, epee has no HTTP surface left; the `http-client` fuzz
+  target and the `HTTP_*Auth` / `http_server` unit tests go with the code
+  they exercised. `net_ssl` stays — the P2P TCP server still links it.
+
 - **The bootstrap-daemon forward is gone.** `--bootstrap-daemon-address`
   / `-login` / `-proxy`, the `set_bootstrap_daemon` RPC and console
   command, and the forward that — while the local node was more than ten

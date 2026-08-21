@@ -3,8 +3,12 @@
 Phase 1 of the epee-to-Rust migration replaces the daemon's HTTP transport layer
 with Axum while keeping all handler logic in C++. **Phase 1 is complete:** the
 epee HTTP listener, `--no-rust-rpc`, and inbound daemon `--rpc-login` /
-`--rpc-ssl*` surface are deleted. Phase 2 replaces epee KV serialization in the
-FFI dispatch path.
+`--rpc-ssl*` surface are deleted, and so (2026-08-21) is epee's HTTP **client**
+— `http_client.h`, digest auth (`http_auth`), `net_helper`, the abstract-invoke
+templates and the dead `http_server_impl_base` / `http_protocol_handler`
+parser that only its own unit test kept warm. epee has no HTTP surface left in
+this tree; what remains of it on the RPC path is KV serialization, which Phase
+2 replaces in the FFI dispatch path.
 
 ## Architecture
 
@@ -204,6 +208,7 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 | `get_output_distribution` (+ `.bin`) | **no** | **removed** | none (`get_rct_distribution` deleted) | deleted |
 | Bootstrap-daemon forward (`use_bootstrap_daemon_if_necessary`, `/set_bootstrap_daemon`) | **no** | **removed** | none | deleted (privacy ruling above) |
 | epee HTTP listener / `--no-rust-rpc` | n/a | n/a | none | deleted |
+| epee HTTP client (`http_client.h`, `http_auth`, `net_helper`, `http_abstract_invoke.h`) + dead server parser | n/a | n/a | none (control client → `shekyl_daemon_ctl_post`; bootstrap forward deleted) | deleted 2026-08-21 |
 
 ## Phase 2 (KV serialization)
 
