@@ -212,7 +212,11 @@ servers:
       owner-only named pipe that no URL names, and uds:// is refused at parse
       (docs/design/WINDOWS_WALLET_SUPPORT.md §8.1).
   - url: "http://127.0.0.1:29500"
-    description: Loopback HTTP with basic auth, for tooling compatibility.
+    description: >-
+      Loopback HTTP with basic auth, for tooling compatibility. The server
+      refuses to start on a wildcard address (0.0.0.0, ::) and refuses a
+      non-loopback address without --rpc-login
+      (docs/design/RPC_TRANSPORT_POSTURE.md RT-1/RT-2).
 
 paths:
   /:

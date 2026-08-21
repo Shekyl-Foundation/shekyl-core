@@ -278,10 +278,57 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
         })
 }
 
+/// Refuse a listen configuration that would expose the wallet RPC beyond what
+/// the operator can see or authenticate (`RPC_TRANSPORT_POSTURE.md`
+/// RT-1, RT-2). One function, called on every path that binds, so the two
+/// sites cannot disagree.
+///
+/// - **RT-1:** a wildcard address (`0.0.0.0`, `::`, and their IPv4-mapped
+///   forms, folded by `to_canonical`) is refused outright. A wildcard bind is
+///   a bind to interfaces that do not exist yet — the VPN that comes up
+///   tomorrow, the hotspot, the container bridge — so it is consent on behalf
+///   of the operator's future self, which no one-time confirmation can cover.
+/// - **RT-2:** `AuthConfig::Disabled` on a non-loopback address is refused.
+///   There is no defensible deployment of an unauthenticated wallet RPC that
+///   the network can reach; every request, spends included, would be honoured.
+///
+/// The socket and the pipe carry their authorization in the transport and
+/// pass through; the arms are explicit so a new variant has to decide.
+fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
+    let addr = match &config.listen {
+        ListenAddr::Tcp(addr) => addr,
+        #[cfg(unix)]
+        ListenAddr::Uds(_) => return Ok(()),
+        #[cfg(windows)]
+        ListenAddr::SelfHostedPipe(_) => return Ok(()),
+    };
+    let ip = addr.ip().to_canonical();
+    if ip.is_unspecified() {
+        return Err(format!(
+            "refusing to bind the wallet RPC to the wildcard address {addr}: 0.0.0.0 and :: \
+             bind every interface, including ones that do not exist yet (a VPN that comes up \
+             later, a hotspot, a container bridge). Bind a specific address instead: \
+             127.0.0.1 for this machine only, or the address of the one interface your \
+             clients are on."
+        )
+        .into());
+    }
+    if !ip.is_loopback() && matches!(config.auth, AuthConfig::Disabled) {
+        return Err(format!(
+            "refusing to serve the wallet RPC on {addr} with authentication disabled: the \
+             address is reachable from the network and every request, spends included, \
+             would be honoured. Bind 127.0.0.1, or set --rpc-login user:pass."
+        )
+        .into());
+    }
+    Ok(())
+}
+
 /// Run the server until shutdown (SIGINT / SIGTERM via the Notify, or
 /// process exit). Blocks the calling task.
 pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
     validate_daemon_endpoint(&config)?;
+    validate_listen(&config)?;
     let state = AppState::new(&config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();
@@ -671,10 +718,12 @@ fn private_config(
 /// Spawn an in-process server with a full [`ServerConfig`] (tests / CLI).
 ///
 /// Honors `config.listen`: UDS sockets are chmodded 0600 after bind; TCP
-/// is served as configured (callers binding auth-less TCP own that risk —
-/// prefer [`spawn_in_process`]).
+/// is served as configured, within [`validate_listen`]'s refusals — auth-less
+/// TCP is accepted on loopback only, and never on a wildcard address (prefer
+/// [`spawn_in_process`]).
 pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHandle, BoxErr> {
     validate_daemon_endpoint(&config)?;
+    validate_listen(&config)?;
     let state = AppState::new(&config);
     let app = build_router(state.clone());
     let shutdown = state.shutdown.clone();
@@ -734,6 +783,96 @@ mod tests {
         assert!(format!("{endpoint:?}").contains("<redacted>"));
         assert!(format!("{endpoint:?}").contains("127.0.0.1:28581"));
         assert!(format!("{:?}", config.auth).contains("rpcuser"));
+    }
+
+    /// A config with the given listen address and auth; everything else is
+    /// inert for the listen refusals.
+    fn listen_config(listen: &str, auth: AuthConfig) -> ServerConfig {
+        ServerConfig {
+            listen: ListenAddr::parse(listen).expect("listen parses"),
+            wallet_dir: std::path::PathBuf::from("."),
+            network: Network::Stagenet,
+            daemon_address: "http://127.0.0.1:1".into(),
+            proxy: None,
+            auth,
+            kdf: KdfParams::default(),
+        }
+    }
+
+    fn basic() -> AuthConfig {
+        AuthConfig::from_rpc_login(Some("user:pass"))
+    }
+
+    /// RT-1: every wildcard spelling is refused, with auth *enabled* so the
+    /// refusal is provably the wildcard rule and not RT-2.
+    #[test]
+    fn wildcard_binds_are_refused_even_with_auth() {
+        for addr in ["0.0.0.0:29500", "[::]:29500", "[::ffff:0.0.0.0]:29500"] {
+            let err = validate_listen(&listen_config(addr, basic()))
+                .expect_err("wildcard bind must be refused")
+                .to_string();
+            assert!(err.contains("wildcard"), "{addr}: {err}");
+            assert!(
+                err.contains("127.0.0.1"),
+                "{addr}: must say what to do: {err}"
+            );
+        }
+    }
+
+    /// RT-2: an unauthenticated, network-reachable bind is refused — the
+    /// IPv6 and IPv4-mapped spellings included, so the rule cannot be
+    /// sidestepped by notation.
+    #[test]
+    fn unauthenticated_non_loopback_bind_is_refused() {
+        for addr in [
+            "192.0.2.1:29500",
+            "[2001:db8::1]:29500",
+            "[::ffff:192.0.2.1]:29500",
+        ] {
+            let err = validate_listen(&listen_config(addr, AuthConfig::Disabled))
+                .expect_err("auth-less non-loopback bind must be refused")
+                .to_string();
+            assert!(err.contains("authentication disabled"), "{addr}: {err}");
+            assert!(
+                err.contains("--rpc-login"),
+                "{addr}: must say what to do: {err}"
+            );
+        }
+    }
+
+    /// The complements, so the refusals are seen to be narrow: loopback with
+    /// auth disabled passes (the in-process default's posture), and an
+    /// addressed bind with auth passes validation (binding is not attempted
+    /// here — the address is TEST-NET).
+    #[test]
+    fn loopback_and_authenticated_binds_pass_validation() {
+        for addr in ["127.0.0.1:0", "[::1]:0", "[::ffff:127.0.0.1]:0"] {
+            validate_listen(&listen_config(addr, AuthConfig::Disabled))
+                .unwrap_or_else(|e| panic!("{addr} with auth disabled must pass: {e}"));
+        }
+        validate_listen(&listen_config("192.0.2.1:29500", basic()))
+            .expect("an addressed bind with auth passes validation");
+        #[cfg(unix)]
+        validate_listen(&listen_config("uds:///tmp/x.sock", AuthConfig::Disabled))
+            .expect("the socket carries its own authorization");
+    }
+
+    /// The wiring, not the predicate: both bind paths must consult
+    /// `validate_listen`. The edit that turns each half red is deleting the
+    /// call at that site. `run_server` would block forever if the refusal
+    /// did not fire, hence the timeout — a hang here is a failure, not a
+    /// pass.
+    #[tokio::test]
+    async fn both_bind_paths_refuse_a_wildcard_before_binding() {
+        let config = listen_config("0.0.0.0:0", basic());
+        assert!(
+            spawn_in_process_with(config.clone()).await.is_err(),
+            "spawn_in_process_with must refuse a wildcard bind"
+        );
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), run_server(config))
+            .await
+            .expect("run_server must return (refuse) rather than bind and block");
+        assert!(outcome.is_err(), "run_server must refuse a wildcard bind");
     }
 
     /// `uds://` is a Unix form. On Windows it must be refused at parse, naming

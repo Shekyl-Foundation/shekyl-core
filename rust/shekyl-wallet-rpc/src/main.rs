@@ -32,15 +32,20 @@ struct Cli {
     /// Listen address: `HOST:PORT` (TCP) or `uds:///path/to.sock` (Unix only;
     /// refused on Windows, where the wallet is self-hosted by shekyl-cli).
     /// Default is loopback TCP; UDS is the recommended local deployment.
+    /// Wildcard addresses (0.0.0.0, ::) are refused — bind one specific
+    /// interface — and any non-loopback address requires --rpc-login.
     #[arg(long = "rpc-bind", default_value = "127.0.0.1:29500")]
     rpc_bind: String,
 
-    /// HTTP basic auth as `user:pass`. Empty / omitted disables auth
-    /// (appropriate for UDS + filesystem permissions).
+    /// HTTP basic auth as `user:pass`. Empty / omitted disables auth, which
+    /// is accepted only on loopback or a UDS socket (filesystem permissions
+    /// carry the authorization there); a non-loopback --rpc-bind refuses to
+    /// start without it.
     #[arg(long = "rpc-login", default_value = "")]
     rpc_login: String,
 
-    /// Disable RPC login even if `--rpc-login` is set.
+    /// Disable RPC login even if `--rpc-login` is set. Refused on a
+    /// non-loopback --rpc-bind.
     #[arg(long = "disable-rpc-login", default_value_t = false)]
     disable_rpc_login: bool,
 
