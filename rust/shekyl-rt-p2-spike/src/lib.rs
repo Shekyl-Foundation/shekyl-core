@@ -96,6 +96,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use x509_parser::prelude::FromDer as _;
+use zeroize::Zeroizing;
 
 /// SHA-256 over the certificate's `SubjectPublicKeyInfo` (DER).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -327,11 +328,25 @@ impl ClientCertVerifier for AllowlistClientVerifier {
 
 /// A freshly generated endpoint identity: self-signed certificate, its private
 /// key, and the fingerprint the *other* side pins.
+///
+/// # Secret hygiene (rule 35), and the one residual
+///
+/// The private key exists in exactly the allocations this type can wipe:
+/// rcgen's `KeyPair` is held in a `Zeroizing` for the duration of generation
+/// (its `zeroize` feature wipes the PKCS#8 it keeps), the exported DER is
+/// **moved** — not copied — into the [`PrivateKeyDer`] below, and that is
+/// held in a `Zeroizing` too (`rustls-pki-types` implements `Zeroize` for
+/// it). **Residual, recorded for RT-W4 rather than hidden:** pki-types
+/// provides `Zeroize` but no `Drop`, so the copy rustls takes through
+/// `with_single_cert` / `with_client_auth_cert` (`clone_key()` here) is
+/// dropped unwiped on rustls's side once it has parsed the key. That
+/// allocation is rustls's; RT-W4 re-checks it against the pki-types version
+/// it pins.
 pub struct Identity {
     /// The self-signed certificate.
     pub cert: CertificateDer<'static>,
-    /// Its private key (PKCS#8).
-    pub key: PrivateKeyDer<'static>,
+    /// Its private key (PKCS#8), wiped on drop.
+    pub key: Zeroizing<PrivateKeyDer<'static>>,
     /// What the peer enrols.
     pub fingerprint: SpkiFingerprint,
 }
@@ -339,9 +354,14 @@ pub struct Identity {
 impl Identity {
     /// Generate a new identity. The name is cosmetic — nothing verifies it.
     pub fn generate(name: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let ck = rcgen::generate_simple_self_signed(vec![name.to_owned()])?;
-        let cert = ck.cert.der().clone();
-        let key = PrivateKeyDer::try_from(ck.signing_key.serialize_der())?;
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec![name.to_owned()])?;
+        // Wiped when this scope ends, feature `zeroize` on rcgen.
+        let signing_key = Zeroizing::new(signing_key);
+        let cert = cert.der().clone();
+        // `serialize_der` allocates the export; it moves straight into the
+        // key type, so there is no second copy to lose track of.
+        let key = Zeroizing::new(PrivateKeyDer::try_from(signing_key.serialize_der())?);
         let fingerprint = SpkiFingerprint::of_cert(&cert)?;
         Ok(Self {
             cert,

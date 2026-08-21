@@ -21,9 +21,13 @@ publish = false
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pki-types = "1"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
-rcgen = "0.14"
+# `zeroize`: rcgen's KeyPair keeps the PKCS#8 DER in a plain Vec and has no
+# wiping Drop; the feature gives it `impl Zeroize`, so it can be held in a
+# `Zeroizing` (rule 35). The zeroize crate is a workspace dependency already.
+rcgen = { version = "0.14", features = ["zeroize"] }
 x509-parser = "0.18"
 sha2 = { workspace = true }
+zeroize = { workspace = true }
 axum = "0.8"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "io-util", "time", "sync"] }
 
