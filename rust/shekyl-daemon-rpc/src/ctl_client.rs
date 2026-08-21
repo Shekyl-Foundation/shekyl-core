@@ -65,22 +65,24 @@ unsafe fn emit(bytes: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize) {
     out_len.write(len);
 }
 
-/// Reconstruct a byte slice from an FFI `(ptr, len)`. Refuses null-with-
+/// Copy an FFI `(ptr, len)` body into an owned `Vec`. Refuses null-with-
 /// nonzero-len and `len > isize::MAX` *before* `from_raw_parts` (rule 40 /
 /// SA-R-7: that bound is a language-level precondition, not a courtesy).
+/// Owned for the same reason as [`c_string`]: the boundary never mints a
+/// borrow whose lifetime is the unconstrained lifetime of a raw pointer.
 ///
 /// # Safety
 ///
-/// A non-null `ptr` must address at least `len` bytes that outlive the
-/// returned slice.
-unsafe fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
+/// A non-null `ptr` must address at least `len` readable bytes for the
+/// duration of this call.
+unsafe fn body_from_ptr(ptr: *const u8, len: usize) -> Option<Vec<u8>> {
     if len == 0 {
-        return Some(&[]);
+        return Some(Vec::new());
     }
     if ptr.is_null() || len > isize::MAX as usize {
         return None;
     }
-    Some(std::slice::from_raw_parts(ptr, len))
+    Some(std::slice::from_raw_parts(ptr, len).to_vec())
 }
 
 /// Run one POST to completion on a private current-thread runtime.
@@ -168,7 +170,7 @@ pub unsafe extern "C" fn shekyl_daemon_ctl_post(
         emit(b"route was null or not UTF-8".to_vec(), out_ptr, out_len);
         return SHEKYL_DAEMON_CTL_ERR_NULL_PTR;
     };
-    let Some(body) = slice_from_ptr(body, body_len) else {
+    let Some(body) = body_from_ptr(body, body_len) else {
         emit(
             b"body was null with a non-zero length, or longer than isize::MAX".to_vec(),
             out_ptr,
@@ -176,7 +178,6 @@ pub unsafe extern "C" fn shekyl_daemon_ctl_post(
         );
         return SHEKYL_DAEMON_CTL_ERR_NULL_PTR;
     };
-    let body = body.to_vec();
 
     match post_blocking(&address, &route, body, Duration::from_secs(timeout_secs)) {
         Ok(response) => {
