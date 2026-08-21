@@ -58,6 +58,7 @@ fn main() {
     let mut excluded: BTreeMap<String, usize> = BTreeMap::new();
     let mut utc_lo = u128::MAX;
     let mut utc_hi = 0u128;
+    let mut days: std::collections::BTreeSet<u128> = std::collections::BTreeSet::new();
 
     for (idx, path) in paths.iter().enumerate() {
         let Ok(text) = std::fs::read_to_string(path) else {
@@ -72,6 +73,7 @@ fn main() {
             if let Some(u) = field(line, "utc_ms").and_then(|v| v.parse::<u128>().ok()) {
                 utc_lo = utc_lo.min(u);
                 utc_hi = utc_hi.max(u);
+                days.insert(u / 86_400_000); // distinct UTC day
             }
             if outcome != "ok" {
                 *excluded.entry(outcome.to_string()).or_default() += 1;
@@ -88,11 +90,28 @@ fn main() {
         }
     }
 
-    println!("sessions: {}", paths.len());
     let span_h = (utc_hi.saturating_sub(utc_lo)) as f64 / 3_600_000.0;
+    // §94.2(e)'s COUNTABLE gate: >=5 sessions, >=3 distinct days, >=8h span.
+    // Convergence (<5% pooled-p90 move) is the fourth condition and is reported
+    // per arm below; a candidate value needs BOTH this gate and convergence.
+    let count_met = paths.len() >= 5 && days.len() >= 3 && span_h >= 8.0;
     println!(
-        "time-of-day span across all samples: {span_h:.1} h  (§94.5(e) requires >= 8 h across >= 3 days)"
+        "sessions: {}   distinct days: {}   span: {span_h:.1} h",
+        paths.len(),
+        days.len()
     );
+    println!(
+        "§94.2(e) countable gate [>=5 sessions, >=3 days, >=8h]: {}",
+        if count_met { "MET" } else { "NOT MET" }
+    );
+    if !count_met {
+        println!(
+            "  -> NO candidate value will be emitted. Quantiles below are PROVISIONAL \
+             instrument-health readings, not adoptable numbers. This refusal is the \
+             point (§90's single-seed lesson): a warned number still gets quoted, so \
+             the headline is withheld, not annotated."
+        );
+    }
     if excluded.is_empty() {
         println!("excluded: none — the in-band-rebuild arm is empty, as §94.5 expected");
     } else {
@@ -106,7 +125,12 @@ fn main() {
         let mut pooled: Vec<u64> = sessions.iter().flatten().copied().collect();
         pooled.sort_unstable();
         let n = pooled.len();
-        println!("\n=== {arm}  (n={n}) ===");
+        let tag = if count_met {
+            ""
+        } else {
+            "  [PROVISIONAL — not adoptable]"
+        };
+        println!("\n=== {arm}  (n={n}){tag} ===");
         println!(
             "  p50 {:>8.1} ms   p90 {:>8.1} ms   p99 {:>8.1} ms",
             quantile(&pooled, 0.50) as f64 / 1000.0,
@@ -157,9 +181,14 @@ fn main() {
                 (x - m) / d_kib,
                 (x - m) / m * 100.0
             );
-            println!(
-                "  ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625.0 (the labelled assumption being replaced)"
-            );
+            if count_met {
+                println!(
+                    "  ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1625.0 (the labelled assumption this replaces)"
+                );
+                println!("  ^ candidate value: modal-arm p90 = {m:.1} ms, gate MET — verify convergence <5% above before adopting.");
+            } else {
+                println!("  slope is PROVISIONAL; no candidate transit value until the §94.2(e) gate is MET.");
+            }
         }
     }
 }
