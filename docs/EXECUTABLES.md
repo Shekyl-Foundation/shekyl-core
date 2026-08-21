@@ -297,7 +297,7 @@ shekyl-wallet-rpc [--wallet-dir <dir>] [--rpc-bind <addr>] [--rpc-login <user:pa
 | Option | Description |
 |--------|-------------|
 | `--wallet-dir <dir>` | Directory of wallet files (default `.`); `create_wallet` / `open_wallet` operate here |
-| `--rpc-bind <addr>` | Listen address: `HOST:PORT` (TCP; default `127.0.0.1:29500`) or `uds:///path/to.sock` (Unix only). **Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are refused** — bind one specific interface. **A non-loopback address refuses to start without `--rpc-login`** |
+| `--rpc-bind <addr>` | Listen address: a numeric `IP:PORT` (TCP; default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames such as `localhost` are **not** resolved) or `uds:///path/to.sock` (Unix only). **Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are refused** — bind a specific IP address. **A non-loopback address refuses to start without `--rpc-login`** |
 | `--rpc-login <user:pass>` | HTTP basic authentication. Required for any non-loopback `--rpc-bind`; omitted = auth disabled, accepted only on loopback or a UDS socket |
 | `--disable-rpc-login` | Disable auth even if `--rpc-login` is set. Refused on a non-loopback bind |
 | `--daemon-address <url>` | Daemon JSON-RPC base URL (default `http://127.0.0.1:28581`) |
@@ -312,10 +312,10 @@ comes up tomorrow, the hotspot enabled in an airport, the bridge a container
 runtime adds next week. A specific address is a decision about a network you
 can see; a wildcard is standing consent to networks you cannot. And an
 unauthenticated wallet RPC that the network can reach honours every request,
-spends included, so there is no deployment in which it is acceptable. **Your
-LAN is not a trust boundary** — it holds the TV, the plug with old firmware,
-a guest's phone and the router — so "it's only my network" is not a reason to
-disable authentication. Design record:
+spends included, so there is no deployment in which it is acceptable. **The
+network being yours is not what provides the security.** Your LAN holds the
+TV, the plug with old firmware, a guest's phone and the router, so "it's only
+my network" is not a reason to disable authentication. Design record:
 `docs/design/RPC_TRANSPORT_POSTURE.md` (RT-1, RT-2).
 
 ### Examples
@@ -332,7 +332,7 @@ shekyl-wallet-rpc --wallet-dir ~/wallets \
 shekyl-wallet-rpc --wallet-dir ~/wallets \
                   --rpc-bind uds:///run/user/1000/shekyl.sock
 
-# Reachable from one specific interface — authentication is mandatory here,
+# Reachable on one specific address — authentication is mandatory here,
 # and the transport is cleartext HTTP: see RPC_TRANSPORT_POSTURE.md for
 # the remote-transport round before exposing a wallet beyond the machine
 shekyl-wallet-rpc --wallet-dir ~/wallets \

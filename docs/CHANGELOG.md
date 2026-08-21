@@ -17,12 +17,13 @@
   one `validate_listen`, consulted by both bind paths (`run_server` and
   `spawn_in_process_with`), and the tests prove the wiring at each. Loopback
   with auth disabled and the Unix socket are unchanged. This is slice RT-W1
-  of the RPC transport posture (draft for ratification): every RPC leg is
+  of the RPC transport posture (RULED 2026-08-21): every RPC leg is
   operator-to-operator and the adversary is the network path; remote legs
   become pinned mutual TLS with a server-side fingerprint allowlist (RT-4,
   external PSK rejected on four hazards with RFC 8446 / 9257 / 9258 anchors
   read), Tor in addition to TCP under one auth story, and `--public-node`
-  slated for removal — with three probes pre-registered before they run.
+  slated for removal — with two probes (RT-P1, RT-P2) pre-registered before
+  they run; a third, RT-P3, was withdrawn when its premise proved false.
 
   The `shekyl-wallet-rpc` sections of `EXECUTABLES.md` and `USER_GUIDE.md`
   are rewritten against the Rust binary: they had described the retired C++

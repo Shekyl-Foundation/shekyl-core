@@ -29,11 +29,13 @@ struct Cli {
     #[arg(long = "wallet-dir", default_value = ".")]
     wallet_dir: PathBuf,
 
-    /// Listen address: `HOST:PORT` (TCP) or `uds:///path/to.sock` (Unix only;
-    /// refused on Windows, where the wallet is self-hosted by shekyl-cli).
-    /// Default is loopback TCP; UDS is the recommended local deployment.
-    /// Wildcard addresses (0.0.0.0, ::) are refused — bind one specific
-    /// interface — and any non-loopback address requires --rpc-login.
+    /// Listen address: a numeric `IP:PORT` (TCP — `127.0.0.1:29500`,
+    /// `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock`
+    /// (Unix only; refused on Windows, where the wallet is self-hosted by
+    /// shekyl-cli). Default is loopback TCP; UDS is the recommended local
+    /// deployment. Wildcard addresses (0.0.0.0, ::, [::]) are refused — bind
+    /// a specific IP address — and any non-loopback address requires
+    /// --rpc-login.
     #[arg(long = "rpc-bind", default_value = "127.0.0.1:29500")]
     rpc_bind: String,
 

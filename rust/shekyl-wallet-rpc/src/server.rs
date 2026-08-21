@@ -116,7 +116,7 @@ impl ListenAddr {
         Err(
             "uds:// listen addresses are not available on Windows: a Unix domain socket has \
              no Windows form. The Windows wallet is self-hosted (run shekyl-cli without \
-             --rpc-url); a standalone shekyl-wallet-rpc listens on HOST:PORT with --rpc-login."
+             --rpc-url); a standalone shekyl-wallet-rpc listens on IP:PORT with --rpc-login."
                 .into(),
         )
     }
@@ -295,6 +295,12 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
 /// The socket and the pipe carry their authorization in the transport and
 /// pass through; the arms are explicit so a new variant has to decide.
 fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
+    /// The local alternative the refusals point at, per platform: a `uds://`
+    /// socket exists on Unix only, so the hint must not name it elsewhere.
+    #[cfg(unix)]
+    const LOCAL_ENDPOINT_HINT: &str = " (or a uds:///path socket)";
+    #[cfg(windows)]
+    const LOCAL_ENDPOINT_HINT: &str = "";
     let addr = match &config.listen {
         ListenAddr::Tcp(addr) => addr,
         #[cfg(unix)]
@@ -307,9 +313,9 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
         return Err(format!(
             "refusing to bind the wallet RPC to the wildcard address {addr}: 0.0.0.0 and :: \
              bind every interface, including ones that do not exist yet (a VPN that comes up \
-             later, a hotspot, a container bridge). Bind a specific address instead: \
-             127.0.0.1 for this machine only, or the address of the one interface your \
-             clients are on."
+             later, a hotspot, a container bridge). Bind a specific IP address instead: \
+             127.0.0.1 or [::1] for this machine only{LOCAL_ENDPOINT_HINT}, or the address \
+             of the one interface your clients are on."
         )
         .into());
     }
@@ -317,7 +323,8 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
         return Err(format!(
             "refusing to serve the wallet RPC on {addr} with authentication disabled: the \
              address is reachable from the network and every request, spends included, \
-             would be honoured. Bind 127.0.0.1, or set --rpc-login user:pass."
+             would be honoured. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT}, or set \
+             --rpc-login user:pass."
         )
         .into());
     }

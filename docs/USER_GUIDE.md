@@ -790,7 +790,7 @@ process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
 | Flag | Description |
 |------|-------------|
 | `--wallet-dir <path>` | Directory of wallet files; `create_wallet` / `open_wallet` work here |
-| `--rpc-bind <addr>` | `HOST:PORT` (default `127.0.0.1:29500`) or `uds:///path/to.sock` (Unix). Wildcard addresses (`0.0.0.0`, `::`) are **refused**; a non-loopback address **requires** `--rpc-login` |
+| `--rpc-bind <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock` (Unix). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused** — bind a specific IP address; a non-loopback address **requires** `--rpc-login` |
 | `--rpc-login <user:pass>` | HTTP basic auth. Mandatory off loopback; on loopback or a UDS socket it may be omitted |
 | `--disable-rpc-login` | Disable auth even if `--rpc-login` is set — refused off loopback |
 | `--daemon-address <url>` | Your node's RPC URL |
@@ -802,8 +802,9 @@ process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
 (a VPN, a hotspot, a container bridge), so the server asks you to name the
 one interface you mean. And it will not serve without authentication on any
 address other than loopback: a wallet RPC the network can reach honours
-every request, spends included. Your home network is not a trust boundary —
-the TV, the smart plug and a guest's phone are on it too.
+every request, spends included. **The network being yours is not what
+provides the security** — the TV, the smart plug and a guest's phone are on
+your home network too.
 
 ### Method categories
 

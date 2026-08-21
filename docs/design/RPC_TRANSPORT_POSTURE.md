@@ -92,7 +92,7 @@ mitigation:
 belongs in the user-facing documentation verbatim, because "it's my own
 network" is precisely the reasoning that produces a request for a plaintext
 option. (*Landed with RT-W1:* `EXECUTABLES.md` §3 and `USER_GUIDE.md`'s
-wallet-RPC section now carry it.)
+wallet-RPC section carry the sentence verbatim, in bold.)
 
 ---
 
@@ -182,9 +182,19 @@ read for this document, not remembered:
 | Hazard | External PSK | Pinned certs |
 |---|---|---|
 | Forward secrecy | TLS 1.3 offers `psk_ke` (PSK only) and `psk_dhe_ke` (PSK + (EC)DHE) (RFC 8446 §4.2.9); PSK-only is "at the cost of losing forward secrecy for the application data" (§2.2). `psk_dhe_ke` must be **asserted** on the negotiated connection, not assumed from a library default | always (EC)DHE — no mode to get wrong |
-| Wire privacy | the PSK identity is carried in the ClientHello's `pre_shared_key` extension (RFC 8446 §4.2.11), and "TLS does little to keep PSK identity information private … the identifier appearing in cleartext in a ClientHello" lets a passive adversary link connections (RFC 9257 §7) | client certificates are sent after the ServerHello, encrypted |
+| Wire privacy | the PSK identity is carried in the ClientHello's `pre_shared_key` extension (RFC 8446 §4.2.11), and "TLS does little to keep PSK identity information private … the identifier appearing in cleartext in a ClientHello" lets a passive adversary link connections (RFC 9257 §7) | client certificates are sent after the ServerHello, encrypted — **in TLS 1.3**; see the protocol floor below |
 | Reflection | the Selfie attack "reroutes a connection from the client to the server on the same endpoint" and needs an endpoint holding both roles with one PSK (RFC 9257 §4.1) | distinct keypairs per role — no symmetry to exploit |
 | Provisioning | TLS 1.3 "mandates that each PSK only be used with a single hash function", and cross-version reuse "may produce related outputs" — hence RFC 9258's importer binding identity, context, protocol and KDF | none |
+
+**Protocol floor — TLS 1.3 only, stated rather than implied (review
+correction, 2026-08-21).** The wire-privacy row above holds only in TLS 1.3:
+TLS 1.2 sends the client certificate in cleartext, which would hand the
+device identity to exactly the passive path adversary §3 names. So RT-4's
+mechanism is TLS 1.3 with no 1.2 fallback (RT-6 forbids the fallback; this
+names the floor), and RT-P2 does not leave it to a library default: the probe
+builds both ends with `with_protocol_versions(&[&TLS13])` and **asserts the
+negotiated version** on the live connection. The ratified text depended on
+this; it is now written down.
 
 **Review note — citation correction.** The draft attributed the tracking
 language to "RFC 9973"; no such clause could be located. The sentence as
@@ -277,15 +287,19 @@ advertising. Rejected because it preserves the road while removing only the
 signpost, and because the restricted-RPC listener is the surface that has to
 be maintained either way.
 
-**Review note — scope of the removal.** `public_node` is referenced from ten
-C++ files at `abb4e58dd`, not two: `daemon/{command_line_args.h, daemon.h,
-main.cpp, command_server.cpp}` and `rpc/{core_rpc_server.{h,cpp},
-core_rpc_server_commands_defs.h, core_rpc_ffi.cpp, bootstrap_daemon.{h,cpp}}`.
-The bootstrap-daemon path is the client half of the same ecosystem (a node
-*using* a public remote) and falls under §1 as well. RT-W5 enumerates the
-reference set first (the Phase-5 lesson: enumerate the set, then verify;
-never enumerate the container) and decides the bootstrap-daemon disposition
-explicitly rather than deleting the flag and leaving the road.
+**Review note — scope of the removal.** `public_node` is referenced from
+**eleven** files at `abb4e58dd`, not two — the first count here said ten and
+was corrected by a second enumeration (`public_node|public-node|public_rpc_port`):
+`daemon/{command_line_args.h, daemon.h, main.cpp}`,
+`rpc/{core_rpc_server.{h,cpp}, core_rpc_server_commands_defs.h,
+core_rpc_ffi.cpp, bootstrap_daemon.{h,cpp}}`, `daemon/command_server.cpp`
+(help text only), and `utils/python-rpc/framework/daemon.py`. The
+bootstrap-daemon path is the client half of the same ecosystem (a node
+*using* a public remote) and falls under §1 as well; its disposition was
+taken explicitly in PR #533's `20c869b1d` (the forward deleted, with a
+rule-21 reopen in `DAEMON_RPC_RUST.md`). RT-W5 enumerates the reference set
+first (the Phase-5 lesson: enumerate the set, then verify; never enumerate
+the container) rather than deleting the flag and leaving the road.
 
 ---
 

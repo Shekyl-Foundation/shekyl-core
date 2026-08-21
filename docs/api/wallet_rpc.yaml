@@ -215,8 +215,8 @@ servers:
     description: >-
       Loopback HTTP with basic auth, for tooling compatibility. The server
       refuses to start on a wildcard address (0.0.0.0, ::) and refuses a
-      non-loopback address without --rpc-login
-      (docs/design/RPC_TRANSPORT_POSTURE.md RT-1/RT-2).
+      non-loopback address without --rpc-login. Design record:
+      docs/design/RPC_TRANSPORT_POSTURE.md, RT-1 and RT-2.
 
 paths:
   /:
