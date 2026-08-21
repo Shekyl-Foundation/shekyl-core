@@ -26,7 +26,9 @@ fn ffi_constants_match_timing_cluster() {
 
 #[test]
 fn ffi_rejects_null_context() {
-    let code = unsafe { shekyl_archival_verify_serve_credit_vin(ptr::null(), 0, ptr::null()) };
+    let code = unsafe {
+        shekyl_archival_verify_serve_credit_vin(ptr::null(), 0, ptr::null(), 0, ptr::null())
+    };
     assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR);
 }
 
@@ -815,8 +817,12 @@ fn ffi_rejects_leaf_layer_scalar_count_not_multiple_of_four() {
         leaf_layer_scalars_len: scalars.len(),
     };
     let payload = [0u8];
+    // Shape checks on the ctx precede both parses, so a dummy pruned slice
+    // is never read here -- the assertion is on the ORDER of the checks.
     let code = unsafe {
         shekyl_archival_verify_serve_credit_vin(
+            payload.as_ptr(),
+            payload.len(),
             payload.as_ptr(),
             payload.len(),
             std::ptr::from_ref(&ctx),

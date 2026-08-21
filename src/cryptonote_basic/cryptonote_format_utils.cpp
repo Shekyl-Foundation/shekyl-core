@@ -207,6 +207,19 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
+  bool get_archival_serve_credit_key(const txin_archival_serve_credit_response& vin,
+    crypto::hash& p_canonical_id, uint64_t& shard_id, uint64_t& settlement_epoch)
+  {
+    // The serializer guard already pinned size >= 2 and the tag byte; the
+    // FFI takes the body AFTER the tag, like the verify entry point.
+    if (vin.canonical_bytes.size() < 2)
+      return false;
+    return shekyl_archival_serve_credit_extract(
+      vin.canonical_bytes.data() + 1, vin.canonical_bytes.size() - 1,
+      reinterpret_cast<uint8_t*>(p_canonical_id.data), &shard_id, &settlement_epoch)
+      == SHEKYL_ARCHIVAL_VERIFY_OK;
+  }
+  //---------------------------------------------------------------
   bool parse_and_validate_tx_base_from_blob(const blobdata_ref& tx_blob, transaction& tx)
   {
     binary_archive<false> ba{epee::strspan<std::uint8_t>(tx_blob)};
@@ -345,6 +358,24 @@ namespace cryptonote
 
     // FCMP++ proof size (serialized as varint length + bytes) -- already in pruned blob
     // No CLSAG data in FCMP++
+
+    // RF-D1: a serve-credit tx's pruned region is its pass records, and each
+    // is a fixed size for a FROZEN segment at SEGMENT_LAYER_J = 2 (the opening
+    // of any leaf in a full segment is one Helios layer of 18 and one Selene
+    // layer of 38 scalars; the ML-DSA leg is fixed) -- so a pruned node
+    // reconstructs the weight exactly, the same way it does pseudoOuts for a
+    // spend. This RELIES ON ADMISSION: the record was verified against the
+    // registry's frozen-segment R_k (shekyl_archival_verify_serve_credit_vin),
+    // and a record of any other shape cannot hash to that root, so every
+    // admitted tx carries records of exactly this size. No bulletproof
+    // clawback: a non-spending tx has no outputs to range-prove.
+    if (classify_archival_tx(tx.vin).kind == archival_tx_kind::serve_credit_only)
+    {
+      extra = config::ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES * count_serve_credit_inputs(tx.vin);
+      CHECK_AND_ASSERT_THROW_MES_L1(extra <= std::numeric_limits<uint64_t>::max() - weight, "Weight overflow");
+      weight += extra;
+      return weight;
+    }
 
     // calculate deterministic pseudoOuts size: sized by the spend subset,
     // not vin.size() — see count_spend_inputs (cryptonote_basic.h).
@@ -1165,7 +1196,7 @@ namespace cryptonote
       // pseudoOuts are sized by the spend subset, not vin.size() — see
       // count_spend_inputs (cryptonote_basic.h).
       const size_t outputs = t.vout.size();
-      bool r = tt.rct_signatures.p.serialize_ctsig_prunable(ba, t.rct_signatures.type, count_spend_inputs(t.vin), outputs);
+      bool r = tt.rct_signatures.p.serialize_ctsig_prunable(ba, t.rct_signatures.type, count_spend_inputs(t.vin), count_serve_credit_inputs(t.vin), outputs);
       CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures prunable");
       cryptonote::get_blob_hash(ss.str(), res);
     }

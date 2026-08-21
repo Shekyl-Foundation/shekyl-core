@@ -22,9 +22,8 @@
 //! self-validates it against `shekyl_fcmp::proof::verify` (the consensus rule),
 //! then round-trips it through this serializer.
 
-use shekyl_wire::{
-    BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, ServeCredit, Transaction, TxPrefix,
-};
+use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
+use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
 /// Build a representative 1-in / 2-out FCMP++ spend. Field *sizes* mirror the
 /// real shape (single-key PQC pk/sig, one Bp+, per-input pseudo-out); the byte
@@ -43,6 +42,7 @@ fn synthetic_spend() -> Transaction {
         hybrid_signature: vec![0xCD; 3385],
     }];
     let prunable = Prunable {
+        serve_credit_pruned: Vec::new(),
         bulletproofs: vec![BpPlus {
             a: [0x10; 32],
             a1: [0x11; 32],
@@ -176,26 +176,28 @@ fn fcmp_spend_rejects_trailing_bytes() {
     );
 }
 
-#[test]
-fn fee_only_serve_credit_round_trips_and_validates() {
-    // The non-spend fee-only Fcmp shape (§2.5 serve-credit): one non-spending
-    // serve_credit input, no outputs, empty pqc_auths, no prunable. Ct::read's
-    // EOF-tolerant tail must parse it, and the shape-aware validate() must accept it.
-    let serve_credit = Input::ServeCredit(Box::new(ServeCredit {
-        p_canonical_id: [0x11; 32],
-        shard_id: 7,
-        settlement_epoch: 42,
-        segment_subroot_rk: [0x22; 32],
-        leaf_index_in_segment: 0x0403_0201,
-        leaf_bytes: [0x33; 128],
-        c1_layers: vec![vec![[0x44; 32]]],
-        c2_layers: vec![vec![[0x55; 32]]],
-        hybrid_signature: vec![0x66; 3385],
-    }));
-    let tx = Transaction {
+/// Build a serve-credit tx with `n` records, in the post-`RF-D1` shape: each
+/// vin an opaque kept-half blob, each pruned record an opaque blob in the
+/// prunable region, paired by position.
+fn serve_credit_tx(n: usize) -> Transaction {
+    let inputs = (0..n)
+        .map(|i| {
+            let mut b = vec![TAG_INPUT_SERVE_CREDIT];
+            b.extend_from_slice(&[0x11; 32]);
+            // Distinct per record, so a pairing bug shows as a mismatch
+            // rather than as two interchangeable copies.
+            b.extend_from_slice(&[7 + u8::try_from(i).expect("index fits u8"), 42]);
+            b.extend_from_slice(&[0x66; 64]);
+            Input::ServeCredit { canonical_bytes: b }
+        })
+        .collect();
+    let serve_credit_pruned = (0..n)
+        .map(|i| vec![0x44 + u8::try_from(i).expect("index fits u8"); 40])
+        .collect();
+    Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
-            inputs: vec![serve_credit],
+            inputs,
             outputs: vec![],
             extra: vec![],
         },
@@ -208,19 +210,98 @@ fn fee_only_serve_credit_round_trips_and_validates() {
                 commitments: vec![],
             },
             pqc_auths: vec![],
-            prunable: None,
+            prunable: Some(Prunable {
+                // Empty by consensus mandate: a non-spending tx has no outputs
+                // to range-prove and no membership to prove.
+                bulletproofs: vec![],
+                tree_depth: 0,
+                fcmp_proof: vec![],
+                pseudo_outs: vec![],
+                serve_credit_pruned,
+            }),
         },
-    };
-    let parsed = Transaction::from_bytes(&tx.serialize()).expect("parse fee-only serve-credit tx");
-    assert_eq!(parsed, tx, "fee-only form must round-trip");
-    assert!(
-        matches!(parsed.ct, Ct::Fcmp { prunable: None, .. }),
-        "fee-only ct parses with no prunable"
-    );
-    tx.validate()
-        .expect("fee-only serve-credit tx must validate");
-    // Distinct 3-part (no-pqc) hash form — just exercise it (live parity deferred).
+    }
+}
+
+#[test]
+fn serve_credit_tx_round_trips_and_validates() {
+    // The §2.5 serve-credit shape, INVERTED by RF-D1: one non-spending
+    // serve_credit input, no outputs, empty pqc_auths, and -- new -- a prunable
+    // region holding the pruned half of the record. It used to be identified by
+    // the ABSENCE of that region.
+    let tx = serve_credit_tx(1);
+    let parsed = Transaction::from_bytes(&tx.serialize()).expect("parse serve-credit tx");
+    assert_eq!(parsed, tx, "serve-credit form must round-trip");
+    tx.validate().expect("serve-credit tx must validate");
     let _ = tx.hash();
+}
+
+/// The shape is no longer identifiable by EOF, and this is the test that says
+/// so: bytes DO follow the base now, so a reader still using "nothing follows"
+/// as the discriminator would try to parse `pqc_auths` out of the prunable
+/// region. Both implementations type it off the vin instead (RF-D9).
+#[test]
+fn serve_credit_tx_has_bytes_after_the_base() {
+    let tx = serve_credit_tx(1);
+    let bytes = tx.serialize();
+    let parsed = Transaction::from_bytes(&bytes).expect("parse");
+    match &parsed.ct {
+        Ct::Fcmp {
+            pqc_auths,
+            prunable: Some(p),
+            ..
+        } => {
+            assert!(pqc_auths.is_empty(), "serve-credit carries no pqc_auths");
+            assert_eq!(p.serve_credit_pruned.len(), 1);
+            assert!(p.bulletproofs.is_empty() && p.fcmp_proof.is_empty());
+            assert!(p.pseudo_outs.is_empty());
+        }
+        other => panic!("expected a populated prunable region, got {other:?}"),
+    }
+}
+
+/// One record per serve-credit vin, in vin order, with NO count on the wire.
+/// Multiple records is where a pairing bug becomes visible at all -- with one
+/// record, order and count are unfalsifiable.
+#[test]
+fn serve_credit_records_pair_with_their_vins_in_order() {
+    let tx = serve_credit_tx(3);
+    let parsed = Transaction::from_bytes(&tx.serialize()).expect("parse");
+    let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &parsed.ct
+    else {
+        panic!("expected prunable");
+    };
+    assert_eq!(p.serve_credit_pruned.len(), 3);
+    for (i, record) in p.serve_credit_pruned.iter().enumerate() {
+        assert_eq!(
+            record[0],
+            0x44 + u8::try_from(i).expect("index fits u8"),
+            "record {i} is not the one that belongs to vin {i}"
+        );
+    }
+}
+
+/// The count is DERIVED from the vin count, so a record array that disagrees
+/// with it must not validate -- that is what makes omitting the count field
+/// safe rather than merely smaller.
+#[test]
+fn a_record_count_disagreeing_with_the_vin_count_is_refused() {
+    let mut tx = serve_credit_tx(2);
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut tx.ct
+    {
+        p.serve_credit_pruned.pop();
+    }
+    let err = tx
+        .validate()
+        .expect_err("one record for two serve-credit vins must be refused");
+    assert!(
+        err.to_string().contains("one pruned pass record"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

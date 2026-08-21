@@ -99,10 +99,11 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
     // pseudoOuts are sized by the spend subset, not vin.size() — see
     // count_spend_inputs (cryptonote_basic.h).
     const size_t spend_inputs = count_spend_inputs(tx.vin);
+    const size_t serve_credit_inputs = count_serve_credit_inputs(tx.vin);
     const size_t outputs = tx.vout.size();
     std::ostringstream ss;
     binary_archive<true> ba(ss);
-    if (!const_cast<rct::CtSigPrunable&>(rv.p).serialize_ctsig_prunable(ba, rv.type, spend_inputs, outputs))
+    if (!const_cast<rct::CtSigPrunable&>(rv.p).serialize_ctsig_prunable(ba, rv.type, spend_inputs, serve_credit_inputs, outputs))
     {
       MERROR("PQC payload: failed to serialize CtSigPrunable (input " << input_index << ")");
       return false;

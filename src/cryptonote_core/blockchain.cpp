@@ -3776,11 +3776,21 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           tvc.m_verifivation_failed = true;
           return false;
         }
+        // RF-D1: one pruned pass record per serve-credit vin, in vin order.
+        // Every vin is a serve-credit in this shape, so index i pairs them.
+        const auto& pruned_records = tx.rct_signatures.p.serve_credit_pruned;
+        if (pruned_records.size() != num_inputs)
+        {
+          MERROR_VER("Archival serve-credit: " << pruned_records.size()
+            << " pruned records for " << num_inputs << " vins");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
         for (size_t i = 0; i < num_inputs; ++i)
         {
           const txin_archival_serve_credit_response& resp =
             std::get<txin_archival_serve_credit_response>(tx.vin[i]);
-          if (!check_archival_serve_credit_input(resp, chain_height))
+          if (!check_archival_serve_credit_input(resp, pruned_records[i], chain_height))
           {
             MERROR_VER("Archival serve-credit validation failed for input " << i);
             tvc.m_verifivation_failed = true;
@@ -5277,64 +5287,60 @@ bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_cano
 // re-authoring the fixture's expected-reason column and updating the mirror
 // in the same change.
 bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
-  uint64_t current_height) const
+  const std::vector<uint8_t>& pruned_record, uint64_t current_height) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
-  if (resp.path.c1_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND
-    || resp.path.c2_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND)
+  // RF-D1 / rule 40: the vin is an opaque blob. The three fields this function
+  // indexes by come through the Rust codec; every structural bound on the
+  // record (branch-layer counts and widths, leg lengths) is the Rust parser's
+  // and is enforced inside the FFI verify below. Nothing here reads inside the
+  // bytes.
+  crypto::hash sc_p_id{};
+  uint64_t sc_shard_id = 0;
+  uint64_t sc_settlement_epoch = 0;
+  if (!get_archival_serve_credit_key(resp, sc_p_id, sc_shard_id, sc_settlement_epoch))
   {
-    MERROR_VER("Archival serve-credit path layer count exceeds bound");
+    MERROR_VER("Archival serve-credit vin did not parse");
     return false;
   }
-  for (const auto& branch : resp.path.c1_layers)
+  if (pruned_record.empty() || pruned_record.size() > config::ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES)
   {
-    if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
-    {
-      MERROR_VER("Archival serve-credit c1 branch scalar count exceeds bound");
-      return false;
-    }
-  }
-  for (const auto& branch : resp.path.c2_layers)
-  {
-    if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
-    {
-      MERROR_VER("Archival serve-credit c2 branch scalar count exceeds bound");
-      return false;
-    }
+    MERROR_VER("Archival serve-credit pruned record size out of bounds");
+    return false;
   }
 
-  if (m_db->has_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch))
+  if (m_db->has_archival_serve_credit_bit(sc_p_id, sc_shard_id, sc_settlement_epoch))
   {
     MERROR_VER("Duplicate archival serve-credit for (P, shard, E)");
     return false;
   }
 
   std::vector<uint8_t> bond_pubkey;
-  if (!m_db->get_archival_bond_hybrid_pubkey(resp.p_canonical_id, bond_pubkey))
+  if (!m_db->get_archival_bond_hybrid_pubkey(sc_p_id, bond_pubkey))
   {
     MERROR_VER("Archival serve-credit rejected: bond record substrate not available for P_id");
     return false;
   }
 
-  const uint64_t join_epoch = m_db->archival_bond_join_epoch(resp.p_canonical_id);
-  if (!shekyl_archival_serve_credit_epoch_ok(resp.settlement_epoch, join_epoch))
+  const uint64_t join_epoch = m_db->archival_bond_join_epoch(sc_p_id);
+  if (!shekyl_archival_serve_credit_epoch_ok(sc_settlement_epoch, join_epoch))
   {
-    MERROR_VER("Archival serve-credit settlement epoch " << resp.settlement_epoch
+    MERROR_VER("Archival serve-credit settlement epoch " << sc_settlement_epoch
       << " before E_first (join_settlement_epoch+1) for join_settlement_epoch "
       << join_epoch);
     return false;
   }
 
-  if (!m_db->archival_bond_good_through(resp.p_canonical_id, resp.settlement_epoch))
+  if (!m_db->archival_bond_good_through(sc_p_id, sc_settlement_epoch))
   {
     MERROR_VER("Archival serve-credit rejected: P not good_through at epoch "
-      << resp.settlement_epoch);
+      << sc_settlement_epoch);
     return false;
   }
 
-  const uint64_t h_open = shekyl_archival_epoch_open_height(resp.settlement_epoch);
-  const uint64_t h_close = shekyl_archival_epoch_close_height(resp.settlement_epoch);
+  const uint64_t h_open = shekyl_archival_epoch_open_height(sc_settlement_epoch);
+  const uint64_t h_close = shekyl_archival_epoch_close_height(sc_settlement_epoch);
   const uint64_t h_seal = shekyl_archival_challenge_seal_height(h_open);
   if (current_height > h_close)
   {
@@ -5381,19 +5387,19 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   // the check at both consumers).
   const uint64_t h_fire = shekyl_archival_challenge_fire_height(
     h_open, h_close, reinterpret_cast<const uint8_t*>(seal_hash.data),
-    reinterpret_cast<const uint8_t*>(resp.p_canonical_id.data),
-    resp.shard_id, resp.settlement_epoch);
+    reinterpret_cast<const uint8_t*>(sc_p_id.data),
+    sc_shard_id, sc_settlement_epoch);
 
-  if (!m_db->archival_bond_holds_shard(resp.p_canonical_id, resp.shard_id, h_fire))
+  if (!m_db->archival_bond_holds_shard(sc_p_id, sc_shard_id, h_fire))
   {
-    MERROR_VER("Archival serve-credit: shard " << resp.shard_id
+    MERROR_VER("Archival serve-credit: shard " << sc_shard_id
       << " not in bond holdings at H_fire=" << h_fire);
     return false;
   }
 
   crypto::hash registry_rk{};
   uint64_t segment_leaf_count = 0;
-  if (!m_db->get_archival_shard_segment_at_height(resp.shard_id, h_fire, registry_rk, segment_leaf_count))
+  if (!m_db->get_archival_shard_segment_at_height(sc_shard_id, h_fire, registry_rk, segment_leaf_count))
   {
     MERROR_VER("Archival serve-credit: shard registry substrate not available at H_fire="
       << h_fire);
@@ -5406,9 +5412,18 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   // a first-crossing rule over the append-only leaf count), so the live rows
   // ARE the as-of-H_fire chunk; no snapshot table exists. Chunk-bounds
   // arithmetic lives in Rust only (same one-site family as the freeze rule).
+  // RF-D6: the challenged index is DERIVED, never read off the vin.
+  uint32_t leaf_index = 0;
+  if (shekyl_archival_challenge_leaf_index(
+        reinterpret_cast<const uint8_t*>(sc_p_id.data), sc_shard_id, sc_settlement_epoch,
+        segment_leaf_count, &leaf_index) != SHEKYL_ARCHIVAL_VERIFY_OK)
+  {
+    MERROR_VER("Archival serve-credit: leaf index derivation refused");
+    return false;
+  }
   uint64_t chunk_first_leaf = 0;
   uint64_t chunk_leaf_count = 0;
-  if (!shekyl_archival_challenge_leaf_chunk_bounds(resp.shard_id, resp.leaf_index_in_segment,
+  if (!shekyl_archival_challenge_leaf_chunk_bounds(sc_shard_id, leaf_index,
         &chunk_first_leaf, &chunk_leaf_count))
   {
     MERROR_VER("Archival serve-credit: challenged leaf index out of segment range");
@@ -5432,25 +5447,11 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     return false;
   }
 
-  txin_v vin_variant = resp;
-  std::ostringstream oss;
-  binary_archive<true> oar(oss);
-  if (!::do_serialize(oar, vin_variant))
-  {
-    MERROR_VER("Archival serve-credit: failed to serialize vin for FFI verify");
-    return false;
-  }
-  const std::string wire = oss.str();
-  // Must match VARIANT_TAG(binary_archive, txin_archival_serve_credit_response) — the
-  // dense genesis scheme is 0x02 (§2.0; renumbered from the legacy 0x04 in PR #168).
-  if (wire.empty() || static_cast<uint8_t>(wire[0]) != 0x02)
-  {
-    MERROR_VER("Archival serve-credit: unexpected vin wire tag");
-    return false;
-  }
+  // The FFI takes the kept half AFTER its tag byte (the serializer guard
+  // already pinned the tag) and this vin's pruned record alongside.
   shekyl_archival_verify_ctx ctx{};
   ctx.current_height = current_height;
-  ctx.settlement_epoch = resp.settlement_epoch;
+  ctx.settlement_epoch = sc_settlement_epoch;
   memcpy(ctx.block_hash_at_seal, seal_hash.data, 32);
   memcpy(ctx.registry_segment_subroot_rk, registry_rk.data, 32);
   ctx.segment_leaf_count = segment_leaf_count;
@@ -5460,7 +5461,8 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   ctx.leaf_layer_scalars_len = leaf_layer_scalars_len;
 
   const uint8_t verify_rc = shekyl_archival_verify_serve_credit_vin(
-    reinterpret_cast<const uint8_t*>(wire.data() + 1), wire.size() - 1, &ctx);
+    resp.canonical_bytes.data() + 1, resp.canonical_bytes.size() - 1,
+    pruned_record.data(), pruned_record.size(), &ctx);
   if (verify_rc != SHEKYL_ARCHIVAL_VERIFY_OK)
   {
     MERROR_VER("Archival serve-credit FFI verify failed (code " << (int)verify_rc << ")");
@@ -6094,9 +6096,14 @@ leave:
         if (!std::holds_alternative<txin_archival_serve_credit_response>(vin))
           continue;
         const auto& resp = std::get<txin_archival_serve_credit_response>(vin);
+        crypto::hash sc_p_id{}; uint64_t sc_shard = 0, sc_epoch = 0;
+        if (!get_archival_serve_credit_key(resp, sc_p_id, sc_shard, sc_epoch))
+        {
+          MERROR_VER("Archival serve-credit vin unparseable in block");
+          return false;
+        }
         const shekyl::db::ArchivalServeCreditKey credit_key(
-          reinterpret_cast<const uint8_t*>(resp.p_canonical_id.data),
-          resp.shard_id, resp.settlement_epoch);
+          reinterpret_cast<const uint8_t*>(sc_p_id.data), sc_shard, sc_epoch);
         std::string key(reinterpret_cast<const char*>(credit_key.bytes().data()),
           credit_key.bytes().size());
         if (!block_serve_credits.insert(std::move(key)).second)

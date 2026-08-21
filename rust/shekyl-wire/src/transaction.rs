@@ -166,9 +166,29 @@ pub const UNLOCK_TIME_BLOCK_SENTINEL: u64 = 500_000_000;
 /// Single hybrid public-key length — twin of `SINGLE_KEY_CANONICAL_LEN`. Used
 /// for the exact bond-post `hybrid_public_key` / `bond_spend_pk` length checks.
 pub const PQC_HYBRID_SINGLE_KEY_LEN: usize = 1996;
-/// Single hybrid signature length — twin of `SINGLE_SIG_CANONICAL_LEN`. Used
-/// for the serve-credit `hybrid_signature` bound.
+/// Single hybrid signature length — twin of `SINGLE_SIG_CANONICAL_LEN`.
 pub const PQC_HYBRID_SINGLE_SIG_LEN: usize = 3385;
+
+/// Transport bound on a serve-credit vin's opaque `canonical_bytes` (kept
+/// half, `RF-D1`): `tag(1) + p_id(32) + shard varint(≤10) + epoch varint(≤10)
+/// + Ed25519(64)`. The Rust codec (`shekyl-archival-retention::wire`) is the
+/// only parser of the interior; this is the C++-twin allocation ceiling
+/// (`ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES` in `cryptonote_config.h`).
+pub const ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES: usize = 1 + 32 + 10 + 10 + 64;
+
+/// Transport bound on one pruned pass record (`RF-D1`): two branch-layer
+/// kinds of at most `MAX_PATH_LAYERS` layers × `MAX_BRANCH_SCALARS` scalars
+/// (each layer carries a varint width, each kind a varint count), plus the
+/// ML-DSA-65 leg. A DoS ceiling for the opaque blob, not a layout claim — the
+/// interior is the retention codec's.
+pub const ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES: usize =
+    2 * (10 + MAX_PATH_LAYERS * (10 + MAX_BRANCH_SCALARS * 32)) + 3309;
+
+// Twins of `cryptonote_config.h`'s `ARCHIVAL_SERVE_CREDIT_{VIN,PRUNED}_MAX_BYTES`,
+// pinned to the same literals on both sides: a change to either formula fails
+// one side's assertion until the other is moved with it.
+const _: () = assert!(ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES == 117);
+const _: () = assert!(ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES == 1_053_185);
 /// Max tx-level `pqc_auths` public-key / signature blob — the DoS ceilings.
 /// Round, generous, DECOUPLED from MAX (correctness is the exact-length
 /// container parse in crypto-pq / verify_multisig, not these bounds). Twins of
@@ -278,39 +298,10 @@ impl Write for CountingWriter {
     }
 }
 
-/// Write segment-path branch layers: `V(n_layers) · per-layer[ V(width) · scalar[32]… ]`
-/// (matches `shekyl-archival-retention::wire::write_branch_layers`).
-fn write_branch_layers<W: Write>(w: &mut W, layers: &[Vec<[u8; 32]>]) -> io::Result<()> {
-    write_varint(layers.len(), w)?;
-    for branch in layers {
-        write_varint(branch.len(), w)?;
-        for scalar in branch {
-            w.write_all(scalar)?;
-        }
-    }
-    Ok(())
-}
-
-/// Read segment-path branch layers (bounds match the source reader).
-fn read_branch_layers<R: Read>(r: &mut R, kind: &str) -> io::Result<Vec<Vec<[u8; 32]>>> {
-    let n_layers: usize = read_varint(r)?;
-    if n_layers > MAX_PATH_LAYERS {
-        return Err(io::Error::other(format!(
-            "shekyl-wire: {kind} layer count {n_layers} exceeds {MAX_PATH_LAYERS}"
-        )));
-    }
-    let mut layers = Vec::new();
-    for _ in 0..n_layers {
-        let width: usize = read_varint(r)?;
-        if width > MAX_BRANCH_SCALARS {
-            return Err(io::Error::other(format!(
-                "shekyl-wire: {kind} branch width {width} exceeds {MAX_BRANCH_SCALARS}"
-            )));
-        }
-        layers.push(read_points(r, width)?);
-    }
-    Ok(layers)
-}
+// The branch-layer codec that used to live here moved with the opening into
+// the pruned record's opaque blob; `shekyl-archival-retention::wire` is its
+// only home now (rule 15). `MAX_PATH_LAYERS` / `MAX_BRANCH_SCALARS` survive
+// solely to size `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`.
 
 /// A transaction input.
 ///
@@ -334,7 +325,14 @@ pub enum Input {
         key_image: [u8; 32],
     },
     /// Archival serve-credit response (dense tag `0x02`, gate-2) — non-spending.
-    ServeCredit(Box<ServeCredit>),
+    /// Archival serve-credit response (dense tag `0x02`) — the KEPT half of a
+    /// pass record as an opaque blob, `RF-D1` / rule 40. `canonical_bytes` is
+    /// the complete retention-codec encoding, leading tag byte included, the
+    /// same shape as [`Input::ArchivalRewardEmission`].
+    ServeCredit {
+        /// Complete Rust canonical encoding of the kept half (tag included).
+        canonical_bytes: Vec<u8>,
+    },
     /// Archival bond-post (dense tag `0x03`, gate-4) — JoinMarket-only at genesis.
     BondPost(Box<BondPost>),
     /// Archival reward-emission (dense tag `0x04`, C-1) — the complete Rust
@@ -395,9 +393,11 @@ impl Input {
                 }
                 w.write_all(key_image)
             }
-            Input::ServeCredit(sc) => {
+            Input::ServeCredit { canonical_bytes } => {
+                // C++ `FIELD(canonical_bytes)` encoding, as for the emission arm.
                 w.write_all(&[TAG_INPUT_SERVE_CREDIT])?;
-                sc.write(w)
+                write_varint(canonical_bytes.len(), w)?;
+                w.write_all(canonical_bytes)
             }
             Input::BondPost(bp) => {
                 w.write_all(&[TAG_INPUT_BOND_POST])?;
@@ -437,7 +437,15 @@ impl Input {
                     key_image: read_array(r)?,
                 })
             }
-            TAG_INPUT_SERVE_CREDIT => Ok(Input::ServeCredit(Box::new(ServeCredit::read(r)?))),
+            TAG_INPUT_SERVE_CREDIT => {
+                let canonical_bytes = read_len_prefixed_bounded(
+                    r,
+                    "serve_credit canonical_bytes",
+                    ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES,
+                )?;
+                check_serve_credit_blob(&canonical_bytes)?;
+                Ok(Input::ServeCredit { canonical_bytes })
+            }
             TAG_INPUT_BOND_POST => Ok(Input::BondPost(Box::new(BondPost::read(r)?))),
             TAG_INPUT_ARCHIVAL_REWARD_EMISSION => {
                 let canonical_bytes = read_len_prefixed_bounded(
@@ -521,102 +529,43 @@ impl Holdings {
     }
 }
 
-/// Archival serve-credit response payload (dense tag `0x02`, gate-2 §5.1.1).
+/// Shape check on a serve-credit vin's opaque `canonical_bytes` — the kept half
+/// of a pass record (`RF-D1`). Mirrors [`check_emission_blob`]: length ceiling
+/// and the leading tag byte, nothing about the interior. The interior has ONE
+/// parser, `shekyl-archival-retention::wire`; C++ indexes the vin through the
+/// `shekyl_archival_serve_credit_extract` FFI and reads nothing else.
 ///
-/// Non-spending: no key image; the `hybrid_signature` is on the vin and the tx
-/// carries empty `pqc_auths`. Layout per
-/// `shekyl-archival-retention::wire::ArchivalServeCreditResponse`.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ServeCredit {
-    /// The serving `P`'s canonical id.
-    pub p_canonical_id: [u8; 32],
-    /// Shard being served.
-    pub shard_id: u64,
-    /// Settlement epoch this response covers.
-    pub settlement_epoch: u64,
-    /// Frozen segment sub-root `R_k`.
-    pub segment_subroot_rk: [u8; 32],
-    /// Leaf index within the segment.
-    pub leaf_index_in_segment: u32,
-    /// Challenged leaf bytes (4 scalars × 32).
-    pub leaf_bytes: [u8; 128],
-    /// Selene (`c1`) branch layers, bottom-to-top.
-    pub c1_layers: Vec<Vec<[u8; 32]>>,
-    /// Helios (`c2`) branch layers, bottom-to-top.
-    pub c2_layers: Vec<Vec<[u8; 32]>>,
-    /// Canonical hybrid signature bytes.
-    pub hybrid_signature: Vec<u8>,
+/// This is why the typed `ServeCredit` struct this crate briefly carried is
+/// gone: it was a second codec of one layout, and two codecs of one layout
+/// drift (rule 15). `shekyl-wire` models the C++ *transport* of the blob;
+/// the bytes inside are someone else's to define.
+fn check_serve_credit_blob(canonical_bytes: &[u8]) -> io::Result<()> {
+    if canonical_bytes.len() < 2 || canonical_bytes.len() > ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES {
+        return Err(io::Error::other(format!(
+            "shekyl-wire: serve_credit canonical_bytes length {} outside 2..={ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES}",
+            canonical_bytes.len()
+        )));
+    }
+    if canonical_bytes[0] != TAG_INPUT_SERVE_CREDIT {
+        return Err(io::Error::other(format!(
+            "shekyl-wire: serve_credit canonical_bytes leading byte {:#04x} != wire tag \
+             {TAG_INPUT_SERVE_CREDIT:#04x}",
+            canonical_bytes[0]
+        )));
+    }
+    Ok(())
 }
 
-impl ServeCredit {
-    fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        w.write_all(&self.p_canonical_id)?;
-        write_varint(self.shard_id, w)?;
-        write_varint(self.settlement_epoch, w)?;
-        w.write_all(&self.segment_subroot_rk)?;
-        w.write_all(&self.leaf_index_in_segment.to_le_bytes())?;
-        w.write_all(&self.leaf_bytes)?;
-        write_branch_layers(w, &self.c1_layers)?;
-        write_branch_layers(w, &self.c2_layers)?;
-        write_varint(self.hybrid_signature.len(), w)?;
-        w.write_all(&self.hybrid_signature)
+/// Shape check on one pruned pass record (`RF-D1`), the opaque per-vin blob in
+/// the prunable region. Bounded, non-empty; interior is the retention codec's.
+fn check_serve_credit_pruned_blob(bytes: &[u8]) -> io::Result<()> {
+    if bytes.is_empty() || bytes.len() > ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES {
+        return Err(io::Error::other(format!(
+            "shekyl-wire: serve_credit pruned record length {} outside 1..={ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES}",
+            bytes.len()
+        )));
     }
-
-    fn read<R: Read>(r: &mut R) -> io::Result<ServeCredit> {
-        let p_canonical_id = read_array(r)?;
-        let shard_id = read_varint(r)?;
-        let settlement_epoch = read_varint(r)?;
-        let segment_subroot_rk = read_array(r)?;
-        let leaf_index_in_segment = u32::from_le_bytes(read_array::<4, _>(r)?);
-        let leaf_bytes = read_array::<128, _>(r)?;
-        let c1_layers = read_branch_layers(r, "c1")?;
-        let c2_layers = read_branch_layers(r, "c2")?;
-        let hybrid_signature = read_len_prefixed_bounded(
-            r,
-            "serve_credit hybrid_signature",
-            PQC_HYBRID_SINGLE_SIG_LEN,
-        )?;
-        Ok(ServeCredit {
-            p_canonical_id,
-            shard_id,
-            settlement_epoch,
-            segment_subroot_rk,
-            leaf_index_in_segment,
-            leaf_bytes,
-            c1_layers,
-            c2_layers,
-            hybrid_signature,
-        })
-    }
-
-    /// In-memory consensus-bound check — mirrors the per-field `read` caps so a
-    /// hand-built arm passes [`Transaction::validate`] iff it would re-parse (`write`
-    /// is faithful, not a gate).
-    fn validate(&self) -> io::Result<()> {
-        for (which, layers) in [("c1", &self.c1_layers), ("c2", &self.c2_layers)] {
-            if layers.len() > MAX_PATH_LAYERS {
-                return Err(io::Error::other(format!(
-                    "shekyl-wire: serve_credit {which} path layers {} exceed {MAX_PATH_LAYERS}",
-                    layers.len()
-                )));
-            }
-            for layer in layers {
-                if layer.len() > MAX_BRANCH_SCALARS {
-                    return Err(io::Error::other(format!(
-                        "shekyl-wire: serve_credit {which} branch scalars {} exceed {MAX_BRANCH_SCALARS}",
-                        layer.len()
-                    )));
-                }
-            }
-        }
-        if self.hybrid_signature.len() > PQC_HYBRID_SINGLE_SIG_LEN {
-            return Err(io::Error::other(format!(
-                "shekyl-wire: serve_credit hybrid_signature {} exceeds {PQC_HYBRID_SINGLE_SIG_LEN}",
-                self.hybrid_signature.len()
-            )));
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
 /// The `post_kind` discriminant of a [`BondPost`], with its coupled payload.
@@ -1021,6 +970,18 @@ pub struct Prunable {
     /// rides the CT balance directly (blockchain.cpp bond-post arm pins
     /// `pseudoOuts.size() == num_spend`).
     pub pseudo_outs: Vec<[u8; 32]>,
+    /// The pruned half of each pass record as an opaque blob, in
+    /// **serve-credit-vin order, one per serve-credit vin** (`RF-D1`). No
+    /// record COUNT on the wire — it is the vin count — but each record
+    /// carries its own byte length, because C++ transports these bytes without
+    /// parsing them and must still hand each vin's slice to the verifier.
+    ///
+    /// Empty for every shape but the serve-credit one, and for that shape it is
+    /// the *only* populated member — `bulletproofs`, `fcmp_proof` and
+    /// `pseudo_outs` are all empty there by consensus mandate
+    /// (`tx_verification_utils.cpp:117-124`), because a non-spending tx has no
+    /// outputs to range-prove and no membership to prove.
+    pub serve_credit_pruned: Vec<Vec<u8>>,
 }
 
 impl Prunable {
@@ -1035,10 +996,20 @@ impl Prunable {
         for pseudo_out in &self.pseudo_outs {
             w.write_all(pseudo_out)?;
         }
+        // Last, keyed by position to the serve-credit vins; each blob
+        // length-prefixed (C++ `FIELD(std::vector<uint8_t>)` encoding).
+        for record in &self.serve_credit_pruned {
+            write_varint(record.len(), w)?;
+            w.write_all(record)?;
+        }
         Ok(())
     }
 
-    fn read<R: Read>(spend_inputs: usize, r: &mut R) -> io::Result<Prunable> {
+    fn read<R: Read>(
+        spend_inputs: usize,
+        serve_credit_inputs: usize,
+        r: &mut R,
+    ) -> io::Result<Prunable> {
         let nbp: usize = read_varint(r)?;
         if nbp > READ_LEN_CAP {
             return Err(io::Error::other(format!(
@@ -1054,11 +1025,24 @@ impl Prunable {
         // pseudoOuts: one per ToKey (spend) input, no length prefix. A bond-post
         // input contributes no pseudo-out (module header / blockchain.cpp pin).
         let pseudo_outs = read_points(r, spend_inputs)?;
+        // One per serve-credit vin, no length prefix — the count comes from the
+        // prefix, which is already parsed.
+        let mut serve_credit_pruned = Vec::with_capacity(serve_credit_inputs);
+        for _ in 0..serve_credit_inputs {
+            let record = read_len_prefixed_bounded(
+                r,
+                "serve_credit pruned record",
+                ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES,
+            )?;
+            check_serve_credit_pruned_blob(&record)?;
+            serve_credit_pruned.push(record);
+        }
         Ok(Prunable {
             bulletproofs,
             tree_depth,
             fcmp_proof,
             pseudo_outs,
+            serve_credit_pruned,
         })
     }
 }
@@ -1133,6 +1117,7 @@ impl Ct {
     pub fn read<R: BufRead>(
         inputs: usize,
         spend_inputs: usize,
+        serve_credit_inputs: usize,
         outputs: usize,
         r: &mut R,
     ) -> io::Result<Ct> {
@@ -1162,9 +1147,22 @@ impl Ct {
                         prunable: None,
                     });
                 }
+                // The serve-credit shape carries no `pqc_auths` at all, and
+                // after `RF-D1` it is no longer identifiable by EOF: it now has
+                // a prunable region (the pruned pass records), so bytes remain
+                // after the base and the branch above does not fire.
+                //
+                // Type it off the vin, exactly as the C++ oracle does
+                // (`cryptonote_basic.h`, `RF-D9`). Deciding a transaction's
+                // shape from how far a stream has been consumed is what made
+                // that side unwritable; the same heuristic would make this side
+                // unreadable.
+                let serve_credit_shape = inputs > 0 && serve_credit_inputs == inputs;
                 let mut pqc_auths = Vec::new();
-                for _ in 0..inputs {
-                    pqc_auths.push(PqcAuth::read(r)?);
+                if !serve_credit_shape {
+                    for _ in 0..inputs {
+                        pqc_auths.push(PqcAuth::read(r)?);
+                    }
                 }
                 // EOF after pqc_auths ⇒ the **storage-pruned full-spend form**: the
                 // daemon's pruned fetch (`get_transactions prune:true`) keeps the
@@ -1178,7 +1176,7 @@ impl Ct {
                 let prunable = if r.fill_buf()?.is_empty() {
                     None
                 } else {
-                    Some(Prunable::read(spend_inputs, r)?)
+                    Some(Prunable::read(spend_inputs, serve_credit_inputs, r)?)
                 };
                 Ok(Ct::Fcmp {
                     fee,
@@ -1303,7 +1301,21 @@ impl Transaction {
             .iter()
             .filter(|i| matches!(i, Input::ToKey { .. }))
             .count();
-        let ct = Ct::read(prefix.inputs.len(), spend_inputs, prefix.outputs.len(), r)?;
+        // Serve-credit vins size the pruned pass-record array (`RF-D1`), the
+        // same way spend vins size pseudoOuts: a count taken from the prefix,
+        // never carried on the wire.
+        let serve_credit_inputs = prefix
+            .inputs
+            .iter()
+            .filter(|i| matches!(i, Input::ServeCredit { .. }))
+            .count();
+        let ct = Ct::read(
+            prefix.inputs.len(),
+            spend_inputs,
+            serve_credit_inputs,
+            prefix.outputs.len(),
+            r,
+        )?;
         Ok(Transaction { prefix, ct })
     }
 
@@ -1658,7 +1670,7 @@ impl Transaction {
             .prefix
             .inputs
             .iter()
-            .filter(|i| matches!(i, Input::ServeCredit(_)))
+            .filter(|i| matches!(i, Input::ServeCredit { .. }))
             .count();
         let bond_post_count = self
             .prefix
@@ -1683,17 +1695,47 @@ impl Transaction {
                     "shekyl-wire: serve_credit must not mix with other input arms (§2.5)",
                 ));
             }
-            let fee_only = self.prefix.outputs.is_empty()
-                && matches!(
-                    &self.ct,
-                    Ct::Fcmp { pqc_auths, prunable, .. }
-                        if pqc_auths.is_empty() && prunable.is_none()
-                );
-            if !fee_only {
+            // The shape check, INVERTED by `RF-D1`: a serve-credit tx now
+            // carries a prunable region. It used to be identified by the
+            // absence of one.
+            //
+            // What stayed true: no outputs, empty `pqc_auths`, and none of the
+            // spend-proof material (`bulletproofs`, `fcmp_proof`,
+            // `pseudo_outs`), all of which consensus requires empty
+            // (`tx_verification_utils.cpp:117-124`) because a non-spending tx
+            // has nothing to range-prove and no membership to prove.
+            //
+            // What changed: the region is now `Some`, holding exactly one
+            // pruned pass record per serve-credit vin.
+            let shape_ok = self.prefix.outputs.is_empty()
+                && match &self.ct {
+                    Ct::Fcmp {
+                        pqc_auths,
+                        prunable: Some(p),
+                        ..
+                    } => {
+                        pqc_auths.is_empty()
+                            && p.bulletproofs.is_empty()
+                            && p.fcmp_proof.is_empty()
+                            && p.pseudo_outs.is_empty()
+                            && p.serve_credit_pruned.len() == serve_credit_count
+                    }
+                    _ => false,
+                };
+            if !shape_ok {
                 return Err(io::Error::other(
                     "shekyl-wire: serve_credit tx must be fee-only — no outputs, empty \
-                     pqc_auths, no prunable (§2.5)",
+                     pqc_auths, no spend-proof material, and exactly one pruned pass \
+                     record per serve-credit vin (§2.5, RF-D1)",
                 ));
+            }
+            if let Ct::Fcmp {
+                prunable: Some(p), ..
+            } = &self.ct
+            {
+                for record in &p.serve_credit_pruned {
+                    check_serve_credit_pruned_blob(record)?;
+                }
             }
         }
         // At most one bond_post per tx (check_inputs_types_supported:726). bond_post may
@@ -1786,11 +1828,11 @@ impl Transaction {
         // arm could pass `validate` yet serialize to bytes `from_bytes` rejects.
         for input in &self.prefix.inputs {
             match input {
-                Input::ServeCredit(sc) => sc.validate()?,
                 Input::BondPost(bp) => bp.validate()?,
                 Input::ArchivalRewardEmission { canonical_bytes } => {
                     check_emission_blob(canonical_bytes)?
                 }
+                Input::ServeCredit { canonical_bytes } => check_serve_credit_blob(canonical_bytes)?,
                 _ => {}
             }
         }
@@ -1905,9 +1947,21 @@ impl Transaction {
                 .iter()
                 .filter(|i| matches!(i, Input::ToKey { .. }))
                 .count();
+            // The serve-credit shape also carries a prunable region now
+            // (`RF-D1`), so "a prunable proof is present" no longer identifies
+            // a spend. Type it off the vin — the third site in this change
+            // where a shape was being inferred from absence, and the third
+            // that breaks the moment the shape acquires content.
+            let serve_credit_shape = n_in > 0
+                && self
+                    .prefix
+                    .inputs
+                    .iter()
+                    .all(|i| matches!(i, Input::ServeCredit { .. }));
             match prunable {
-                // Spend / bond-post: a prunable proof is present.
-                Some(prunable) => {
+                // Spend / bond-post: a prunable proof is present AND the tx is
+                // not the non-spending serve-credit shape.
+                Some(prunable) if !serve_credit_shape => {
                     // >= 2 outputs (anti-deanonymization; blockchain.cpp:3599-3602).
                     // Spends are already gated in `validate_context_free_pruned` (keyed
                     // on key-image inputs, pruned-safe); this guards a bond_post, whose
@@ -1968,9 +2022,17 @@ impl Transaction {
                         )));
                     }
                 }
-                // Fee-only / serve-credit: no prunable proof, no outputs, pqc_auths
-                // empty (the hybrid signature rides the vin, §9.10).
-                None => {
+                // Fee-only / serve-credit: no SPEND-proof material, no outputs,
+                // pqc_auths empty (the classical countersignature rides the
+                // vin, §9.10).
+                //
+                // Reached two ways after `RF-D1`: a genuinely absent prunable
+                // region, or the serve-credit shape — whose region exists but
+                // holds only pruned pass records, never a spend proof. The
+                // arm's checks are the same for both, because what it asserts
+                // is the absence of *spend* material, not the absence of a
+                // region.
+                _ => {
                     if n_out != 0 {
                         return Err(io::Error::other(format!(
                             "shekyl-wire: fee-only ct (no prunable) must have no \

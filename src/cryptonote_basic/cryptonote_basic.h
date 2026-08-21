@@ -275,27 +275,34 @@ namespace cryptonote
   };
 
   // Gate-2 §5.1 — archival serve-credit response vin (dense tag 0x02; see VARIANT_TAG below).
+  // RF-D1 / rule 40 (ARCHIVAL_RESPONSE_FORMAT.md §3.5): the serve-credit vin
+  // is the KEPT half of a pass record as an OPAQUE blob, the same shape as
+  // txin_archival_reward_emission. `canonical_bytes` is the complete Rust
+  // canonical encoding (leading wire tag 0x02 included); the retention codec
+  // owns the layout, the parse and every structural bound. C++ never reads
+  // inside: the three fields consensus indexes by -- (P, shard, E) -- come
+  // through `shekyl_archival_serve_credit_extract`, and admission verifies
+  // through `shekyl_archival_verify_serve_credit_vin` with this vin's pruned
+  // record (rctSig.p.serve_credit_pruned[i]) alongside.
+  //
+  // This used to be a typed struct with nine fields. Two of those were values
+  // the verifier derives (RF-D6), one more was the challenged leaf the
+  // verifier reads from its own chunk (RF-D8), and the signature container
+  // was split across the kept/pruned boundary (RF-D2). What remained was a
+  // second codec of one layout, and two codecs of one layout drift.
+  constexpr uint8_t TXIN_ARCHIVAL_SERVE_CREDIT_WIRE_TAG = 0x02;
+
   struct txin_archival_serve_credit_response
   {
-    crypto::hash p_canonical_id;
-    uint64_t shard_id;
-    uint64_t settlement_epoch;
-    crypto::hash segment_subroot_rk;
-    uint32_t leaf_index_in_segment;
-    archival_leaf_bytes leaf_bytes;
-    archival_segment_path_opening path;
-    std::vector<uint8_t> hybrid_signature;
+    std::vector<uint8_t> canonical_bytes;
 
     BEGIN_SERIALIZE_OBJECT()
-      FIELD(p_canonical_id)
-      VARINT_FIELD(shard_id)
-      VARINT_FIELD(settlement_epoch)
-      FIELD(segment_subroot_rk)
-      FIELD(leaf_index_in_segment)
-      FIELD(leaf_bytes)
-      FIELD(path)
-      FIELD(hybrid_signature)
-      if (hybrid_signature.size() > config::PQC_HYBRID_SINGLE_SIG_LEN)
+      FIELD(canonical_bytes)
+      // Transport-layer shape only (allocation bound + wire-tag echo); a blob
+      // passing here can still be garbage -- the Rust parser is the validator.
+      if (canonical_bytes.size() < 2 || canonical_bytes.size() > config::ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES)
+        return false;
+      if (canonical_bytes[0] != TXIN_ARCHIVAL_SERVE_CREDIT_WIRE_TAG)
         return false;
     END_SERIALIZE()
   };
@@ -345,6 +352,18 @@ namespace cryptonote
     size_t n = 0;
     for (const auto& in : vin)
       if (std::holds_alternative<txin_to_key>(in))
+        ++n;
+    return n;
+  }
+
+  // The serve-credit subset of vin. This count -- not vin.size() -- sizes the
+  // prunable region's pruned pass-record array (RF-D1: one record per
+  // serve-credit vin, in vin order, no count on the wire).
+  inline size_t count_serve_credit_inputs(const std::vector<txin_v>& vin)
+  {
+    size_t n = 0;
+    for (const auto& in : vin)
+      if (std::holds_alternative<txin_archival_serve_credit_response>(in))
         ++n;
     return n;
   }
@@ -616,7 +635,7 @@ namespace cryptonote
             // / tx_verification_utils.cpp (`pseudoOuts.size() == num_spend`).
             ar.tag("ctsig_prunable");
             ar.begin_object();
-            bool r = rct_signatures.p.serialize_ctsig_prunable(ar, rct_signatures.type, count_spend_inputs(vin), vout.size());
+            bool r = rct_signatures.p.serialize_ctsig_prunable(ar, rct_signatures.type, count_spend_inputs(vin), count_serve_credit_inputs(vin), vout.size());
             if (!r || !ar.good()) return false;
             ar.end_object();
           }
@@ -659,7 +678,22 @@ namespace cryptonote
         classify_archival_tx(vin).kind == archival_tx_kind::serve_credit_only;
       bool read_pqc = !serve_credit_shape;
       if (serve_credit_shape)
-        pqc_auths.clear();
+      {
+        // Saving: REFUSE a non-empty vector, never normalise it. A serializer
+        // is a faithful encoder, not a validator that rewrites its input --
+        // clearing here would mutate a (const_cast) object and emit the bytes
+        // of a different, valid transaction, silently. The pre-RF-D9 code
+        // rejected the mismatch; that behaviour is kept. Loading: nothing is
+        // read for this shape, so the vector is "read as zero elements" --
+        // clear() is the correct deserialisation of an absent array.
+        if constexpr (typename Archive<W>::is_saving())
+        {
+          if (!pqc_auths.empty())
+            return false;
+        }
+        else
+          pqc_auths.clear();
+      }
       if constexpr (std::is_same_v<Archive<W>, binary_archive<false>>)
       {
         // Retained for the storage-pruned full-spend form, which is a

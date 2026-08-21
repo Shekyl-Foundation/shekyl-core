@@ -1344,8 +1344,8 @@ struct shekyl_archival_verify_ctx {
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW 3
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING 4
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH  5
-#define SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_INDEX        6
-#define SHEKYL_ARCHIVAL_VERIFY_ERR_REGISTRY_RK       7
+/* 6 (ERR_LEAF_INDEX) RETIRED by RF-D6: the index is derived, not transported. Not reused. */
+/* 7 (ERR_REGISTRY_RK) RETIRED by RF-D6: R_k is not on the wire. Not reused. */
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_FIRE_NOT_REACHED  8
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE   9
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_VERIFY       10
@@ -1395,10 +1395,33 @@ uint64_t shekyl_archival_challenge_fire_height(
     uint64_t shard_id,
     uint64_t settlement_epoch);
 
-/// `vin_payload` is the vin body after the `0x04` type tag.
+/// Extract `(P, shard, E)` from a serve-credit vin's opaque `canonical_bytes`
+/// (tag byte EXCLUDED). The Rust codec is the only parser of those bytes
+/// (RF-D1 / rule 40): C++ indexes by these three fields and reads nothing
+/// else. Returns SHEKYL_ARCHIVAL_VERIFY_OK or a wire error code.
+uint8_t shekyl_archival_serve_credit_extract(
+    const uint8_t* vin_ptr,
+    size_t vin_len,
+    uint8_t* out_p_canonical_id,
+    uint64_t* out_shard_id,
+    uint64_t* out_settlement_epoch);
+
+/// The verifier-derived challenge leaf index (RF-D6: never on the wire).
+uint8_t shekyl_archival_challenge_leaf_index(
+    const uint8_t* p_canonical_id,
+    uint64_t shard_id,
+    uint64_t settlement_epoch,
+    uint64_t segment_leaf_count,
+    uint32_t* out_leaf_index);
+
+/// Verify one pass record: the vin's `canonical_bytes` (tag byte EXCLUDED)
+/// plus this vin's slice of the prunable region's serve-credit records
+/// (RF-D1: one per serve-credit vin, in vin order).
 uint8_t shekyl_archival_verify_serve_credit_vin(
     const uint8_t* vin_payload_ptr,
     size_t vin_payload_len,
+    const uint8_t* pruned_ptr,
+    size_t pruned_len,
     const struct shekyl_archival_verify_ctx* ctx_ptr);
 
 // ---------------------------------------------------------------------------

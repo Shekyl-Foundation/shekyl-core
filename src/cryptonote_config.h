@@ -415,6 +415,30 @@ namespace config
   constexpr size_t ARCHIVAL_LEAF_BYTES = 128;
   constexpr size_t ARCHIVAL_MAX_PATH_LAYERS_PER_KIND = 64;
   constexpr size_t ARCHIVAL_MAX_BRANCH_SCALARS = 256;
+
+  // RF-D1 / rule 40: the serve-credit vin is an OPAQUE blob (`canonical_bytes`,
+  // tag byte included) whose only parser is shekyl-archival-retention::wire.
+  // These are transport ceilings, twins of shekyl-wire's
+  // `ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES` / `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`
+  // (pinned there by const-assert to the same literals; a drift fails one side).
+  //   kept:   tag(1) + p_id(32) + shard varint(<=10) + epoch varint(<=10) + Ed25519(64)
+  //   pruned: 2 kinds x (count varint(<=10) + 64 layers x (width varint(<=10) + 256 x 32))
+  //           + ML-DSA-65 (3309) -- a DoS ceiling, not a layout claim.
+  constexpr size_t ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES = 1 + 32 + 10 + 10 + 64;
+  constexpr size_t ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES =
+    2 * (10 + ARCHIVAL_MAX_PATH_LAYERS_PER_KIND * (10 + ARCHIVAL_MAX_BRANCH_SCALARS * 32)) + 3309;
+  static_assert(ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES == 117, "twin of shekyl-wire's ceiling");
+  static_assert(ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES == 1053185, "twin of shekyl-wire's ceiling");
+  // The DETERMINISTIC size of one pruned pass record for a frozen segment at
+  // SEGMENT_LAYER_J = 2 (depth 3: one Selene branch layer of 38 scalars, one
+  // Helios of 18 -- CR-D2's 1,792 B) plus the ML-DSA leg, plus the per-record
+  // length prefix C++ transports it under. `get_pruned_transaction_weight`
+  // needs this so a pruned node reconstructs a serve-credit tx's weight exactly,
+  // the way it reconstructs pseudoOuts for a spend.
+  //   encode_path = [1][38] 38x32 + [1][18] 18x32 = 2 + 1216 + 2 + 576 = 1796
+  //   record      = 1796 + 3309 = 5105;  varint(5105) = 2 bytes  => 5107
+  constexpr size_t ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES = 2 + (2 + 38 * 32) + (2 + 18 * 32) + 3309;
+  static_assert(ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES == 5107, "CR-D2 arithmetic + framing");
   constexpr size_t ARCHIVAL_MAX_HOLDINGS_SHARDS = 4096;
   // Archival credit-wire attestation (ARCHIVAL_CREDIT_WIRE.md §3): the coinbase
   // tx_extra carries per-record kept headers (p_id·s·E·kind), each

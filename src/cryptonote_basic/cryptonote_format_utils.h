@@ -57,6 +57,12 @@ namespace cryptonote
   bool parse_and_validate_tx_from_blob(const blobdata_ref& tx_blob, transaction& tx, crypto::hash& tx_hash);
   bool parse_and_validate_tx_from_blob(const blobdata_ref& tx_blob, transaction& tx);
   bool parse_and_validate_tx_base_from_blob(const blobdata_ref& tx_blob, transaction& tx);
+  // RF-D1 / rule 40: the three fields consensus indexes a serve-credit by,
+  // extracted from the opaque vin through the Rust codec (its only parser).
+  // The ONE site every C++ consumer (DB bit set/remove, pool key, block-unique
+  // key, admission) goes through; returns false if the blob does not parse.
+  bool get_archival_serve_credit_key(const txin_archival_serve_credit_response& vin,
+    crypto::hash& p_canonical_id, uint64_t& shard_id, uint64_t& settlement_epoch);
   bool is_v1_tx(const blobdata_ref& tx_blob);
   bool is_v1_tx(const blobdata& tx_blob);
 

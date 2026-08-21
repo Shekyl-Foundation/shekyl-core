@@ -302,14 +302,7 @@ namespace boost
   template <class Archive>
   inline void serialize(Archive &a, cryptonote::txin_archival_serve_credit_response &x, const boost::serialization::version_type ver)
   {
-    a & x.p_canonical_id;
-    a & x.shard_id;
-    a & x.settlement_epoch;
-    a & x.segment_subroot_rk;
-    a & x.leaf_index_in_segment;
-    a & x.leaf_bytes;
-    a & x.path;
-    a & x.hybrid_signature;
+    a & x.canonical_bytes;
   }
 
   template <class Archive>
@@ -472,6 +465,7 @@ namespace boost
   {
     a & x.bulletproofs_plus;
     a & x.pseudoOuts;
+    a & x.serve_credit_pruned;
   }
 
   template <class Archive>
