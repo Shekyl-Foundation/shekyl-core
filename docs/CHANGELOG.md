@@ -4,6 +4,31 @@
 
 ### Changed
 
+- **`shekyl-wallet-rpc` refuses two listen configurations it used to
+  accept** (RT-1 / RT-2, `docs/design/RPC_TRANSPORT_POSTURE.md`).
+  A wildcard `--rpc-bind` (`0.0.0.0`, `::`, `[::]`, and their IPv4-mapped
+  spellings) is refused at startup: a wildcard bind is a bind to interfaces
+  that do not exist yet — the VPN that comes up tomorrow, a hotspot, a
+  container bridge — so it is consent on behalf of the operator's future
+  self, which is why it is a refusal rather than the daemon's one-time
+  `--confirm-external-bind`. And a non-loopback bind with authentication
+  disabled is refused: there is no deployment in which an unauthenticated
+  wallet RPC that the network can reach is acceptable. Both rules live in
+  one `validate_listen`, consulted by both bind paths (`run_server` and
+  `spawn_in_process_with`), and the tests prove the wiring at each. Loopback
+  with auth disabled and the Unix socket are unchanged. This is slice RT-W1
+  of the RPC transport posture (draft for ratification): every RPC leg is
+  operator-to-operator and the adversary is the network path; remote legs
+  become pinned mutual TLS with a server-side fingerprint allowlist (RT-4,
+  external PSK rejected on four hazards with RFC 8446 / 9257 / 9258 anchors
+  read), Tor in addition to TCP under one auth story, and `--public-node`
+  slated for removal — with three probes pre-registered before they run.
+
+  The `shekyl-wallet-rpc` sections of `EXECUTABLES.md` and `USER_GUIDE.md`
+  are rewritten against the Rust binary: they had described the retired C++
+  server (`--rpc-bind-port`, `--rpc-ssl*`, `--confirm-external-bind`, digest
+  auth), none of which exists.
+
 - **The block-reward weight penalty moved to Rust; `get_block_reward` is
   now a marshaling shim.** It was the last economics arithmetic C++
   performed itself — `mul128` plus two `div128_64` on an amount — while

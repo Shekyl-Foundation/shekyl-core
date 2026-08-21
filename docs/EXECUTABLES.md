@@ -276,69 +276,69 @@ shekyl-cli --proxy socks5://127.0.0.1:9050 \
 
 ## 3. `shekyl-wallet-rpc` — Wallet RPC Server
 
-A headless wallet that exposes all wallet operations through a JSON-RPC
-interface. Designed for integration with exchanges, payment processors, and
-application backends.
+The Shekyl-native wallet JSON-RPC server (`docs/api/wallet_rpc.yaml`). Most
+users never start it by hand: `shekyl-cli` hosts one in-process over a
+private, owner-only local endpoint. Run it standalone for tooling that speaks
+JSON-RPC over HTTP, or to serve several wallets from one process.
+
+> The flags below are those of the Rust binary under `rust/shekyl-wallet-rpc`.
+> An earlier revision of this section described the retired C++
+> `shekyl-wallet-rpc` (`--rpc-bind-port`, `--rpc-ssl*`, `--confirm-external-bind`,
+> digest auth); none of those exist.
 
 ### Usage
 
 ```
-shekyl-wallet-rpc [--wallet-file=<file> | --wallet-dir=<dir>] --rpc-bind-port=<port> [options]
+shekyl-wallet-rpc [--wallet-dir <dir>] [--rpc-bind <addr>] [--rpc-login <user:pass>] [options]
 ```
 
-### Key options
+### Options
 
 | Option | Description |
 |--------|-------------|
-| `--wallet-file <file>` | Wallet file to open at startup |
-| `--wallet-dir <dir>` | Directory of wallets (enables `open_wallet` / `create_wallet` RPC) |
-| `--generate-from-json <file>` | Create wallet from a JSON descriptor |
-| `--rpc-bind-port <port>` | Port for the RPC server (required) |
-| `--rpc-bind-ip <ip>` | RPC listen address (default `127.0.0.1`) |
-| `--rpc-login <user:pass>` | HTTP digest authentication |
-| `--disable-rpc-login` | Explicitly disable authentication |
-| `--restricted-rpc` | Restrict to view-only methods |
-| `--confirm-external-bind` | Required when binding to non-loopback |
-| `--daemon-address <host:port>` | Daemon to connect to |
-| `--trusted-daemon` | Trust the daemon |
-| `--testnet` | Use testnet |
-| `--stagenet` | Use stagenet |
-| `--password <pass>` | Wallet password |
-| `--password-file <file>` | Read password from a file |
-| `--no-initial-sync` | Skip initial blockchain sync at startup |
-| `--non-interactive` | Disable console input (for use under a service manager) |
-| `--rpc-ssl <mode>` | TLS for the RPC server |
-| `--rpc-ssl-certificate <pem>` | TLS certificate |
-| `--rpc-ssl-private-key <pem>` | TLS private key |
-| `--daemon-ssl <mode>` | TLS for daemon connection |
+| `--wallet-dir <dir>` | Directory of wallet files (default `.`); `create_wallet` / `open_wallet` operate here |
+| `--rpc-bind <addr>` | Listen address: `HOST:PORT` (TCP; default `127.0.0.1:29500`) or `uds:///path/to.sock` (Unix only). **Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are refused** — bind one specific interface. **A non-loopback address refuses to start without `--rpc-login`** |
+| `--rpc-login <user:pass>` | HTTP basic authentication. Required for any non-loopback `--rpc-bind`; omitted = auth disabled, accepted only on loopback or a UDS socket |
+| `--disable-rpc-login` | Disable auth even if `--rpc-login` is set. Refused on a non-loopback bind |
+| `--daemon-address <url>` | Daemon JSON-RPC base URL (default `http://127.0.0.1:28581`) |
+| `--proxy <socks5h://host:port>` | SOCKS5h proxy for the daemon connection; the proxy resolves the hostname |
+| `--network <mainnet\|testnet\|stagenet>` | Network every create/open binds to (default `mainnet`) |
+| `--log-file <path>` | Optional file sink for `tracing` events |
+
+### Why the two bind refusals exist
+
+A wildcard bind is a bind to interfaces that do not exist yet: the VPN that
+comes up tomorrow, the hotspot enabled in an airport, the bridge a container
+runtime adds next week. A specific address is a decision about a network you
+can see; a wildcard is standing consent to networks you cannot. And an
+unauthenticated wallet RPC that the network can reach honours every request,
+spends included, so there is no deployment in which it is acceptable. **Your
+LAN is not a trust boundary** — it holds the TV, the plug with old firmware,
+a guest's phone and the router — so "it's only my network" is not a reason to
+disable authentication. Design record:
+`docs/design/RPC_TRANSPORT_POSTURE.md` (RT-1, RT-2).
 
 ### Examples
 
 ```bash
-# Single-wallet mode with authentication
-shekyl-wallet-rpc --wallet-file ~/wallets/main \
-                  --rpc-bind-port 18083 \
+# Local tooling over loopback, with authentication
+shekyl-wallet-rpc --wallet-dir ~/wallets \
+                  --rpc-bind 127.0.0.1:29500 \
                   --rpc-login user:password \
-                  --daemon-address 127.0.0.1:11029
+                  --daemon-address http://127.0.0.1:28581
 
-# Multi-wallet mode (exchange use case; supervise with systemd/launchd/
-# Task Scheduler — V3.1 removed the in-process --detach flag)
-shekyl-wallet-rpc --wallet-dir ~/wallets/ \
-                  --rpc-bind-port 18083 \
-                  --rpc-login user:password \
-                  --disable-rpc-login \
-                  --non-interactive
+# Local deployment over a Unix socket (filesystem permissions carry the
+# authorization; auth may be left disabled)
+shekyl-wallet-rpc --wallet-dir ~/wallets \
+                  --rpc-bind uds:///run/user/1000/shekyl.sock
 
-# Testnet with TLS
-shekyl-wallet-rpc --testnet --wallet-file ~/wallets/testnet \
-                  --rpc-bind-port 28083 \
-                  --rpc-ssl enabled \
-                  --rpc-ssl-certificate /etc/ssl/rpc.pem \
-                  --rpc-ssl-private-key /etc/ssl/rpc.key \
-                  --daemon-address 127.0.0.1:12029
+# Reachable from one specific interface — authentication is mandatory here,
+# and the transport is cleartext HTTP: see RPC_TRANSPORT_POSTURE.md for
+# the remote-transport round before exposing a wallet beyond the machine
+shekyl-wallet-rpc --wallet-dir ~/wallets \
+                  --rpc-bind 192.168.1.20:29500 \
+                  --rpc-login user:password
 ```
-
----
 
 ## 4. `shekyl-gen-trusted-multisig` — Multisig Wallet Generator
 

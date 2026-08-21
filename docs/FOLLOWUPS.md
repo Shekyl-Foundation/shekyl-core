@@ -1994,6 +1994,25 @@ sustainability is unaffected by the recalibration.
   through their double floor equalities. *Target: V3.0 (with or shortly
   after the `ShardSet` PR — same validation surface).*
 
+- **RPC transport posture — draft for ratification; RT-W1 landed**
+  (added 2026-08-21, `docs/design/RPC_TRANSPORT_POSTURE.md`). Posture: every
+  RPC leg is operator-to-operator, the adversary is the network path, never
+  the peer; no recommended configuration has a wallet speak to a stranger's
+  daemon. **Landed (RT-W1):** `shekyl-wallet-rpc` refuses wildcard binds
+  (RT-1) and auth-less non-loopback binds (RT-2) at both bind paths; its
+  operator docs rewritten against the Rust binary (they described the
+  retired C++ server). **Open:** RT-O1 the rustls external-PSK probe
+  (provisional no; RT-4 no longer depends on it but the record should say
+  what support was), RT-O2 the `ring` consequence — TLS ends wallet-rpc's
+  Linux cross-compilability, which the Windows scouting step runs on, so
+  RT-W4 does not land before PR #526 merges — RT-O3 C++-now vs
+  after-the-Rust-migration for L2/L3, RT-O4 the phone-only gap (proposed:
+  deliberate boundary, light client as named successor). Distinct from the
+  daemon entry below on purpose: the wallet holds spend authority and its
+  clients are the user's own devices, so mutual authentication is the
+  requirement; RT-O3's ruling must say in one sentence whether the daemon's
+  no-in-process-TLS reasoning transfers. *Target: V3.0.*
+
 - **Daemon Axum: onion-as-remote-RPC docs + operator story** (added
   2026-07-10, epee HTTP listener deletion). shekyld no longer exposes
   inbound `--rpc-login` / `--rpc-ssl*`. Local = plaintext loopback;
