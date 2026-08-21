@@ -303,21 +303,24 @@ async fn p6_peer_check_refuses_a_mismatched_owner() {
 
 /// P-8 — the disk probe must return a plausible figure and refuse a bad path.
 ///
-/// The Windows implementation under test lives in `shekyl-engine-core`, which
-/// cannot be cross-checked from Linux; this asserts the same Win32 call in the
-/// same shape. Divergence between the two is caught by the byte-comparison
-/// gate in `scripts/ci/windows_probe.ps1`, not by this test.
+/// **Now tests the shipping function directly.** While the Windows arm lived
+/// in `shekyl-engine-core` — a crate whose graph reaches `ring` and so cannot
+/// be cross-compiled from Linux — this probe exercised a *copy*, and a CI gate
+/// existed solely to prove the copy had not drifted. WP-D2's siting rule moved
+/// the function into this crate, so the copy and its gate are deleted rather
+/// than maintained.
 #[test]
 fn p8_disk_probe_is_sane_and_refuses_a_bad_path() {
     let temp = std::env::temp_dir();
-    let n = free_bytes_available(&temp).expect("P-8: probe failed on %TEMP%");
+    let n = shekyl_win_sec::free_bytes_available(&temp).expect("P-8: probe failed on %TEMP%");
     assert!(n > 0, "P-8: %TEMP% reports zero bytes available");
     assert!(
         n < (1u64 << 50),
         "P-8: implausible free-space figure ({n} bytes) — check the out-param order"
     );
     assert!(
-        free_bytes_available(std::path::Path::new(r"Z:\no\such\shekyl-probe")).is_err(),
+        shekyl_win_sec::free_bytes_available(std::path::Path::new(r"Z:\no\such\shekyl-probe"))
+            .is_err(),
         "P-8: a nonexistent path returned Ok — the probe cannot distinguish \
          'no room' from 'cannot tell'"
     );
@@ -392,36 +395,6 @@ fn p14_truncated_label_ace_is_refused() {
 }
 
 // --- helpers ---------------------------------------------------------------
-
-/// Byte-identical to `shekyl-engine-core`'s Windows half (WP-D9). The copy is
-/// deliberate and is gated: `windows_probe.ps1` byte-compares the two before
-/// running anything, because a probe against a stale copy measures nothing.
-fn free_bytes_available(path: &std::path::Path) -> std::io::Result<u64> {
-    use std::os::windows::ffi::OsStrExt;
-
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut available: u64 = 0;
-    // SAFETY: `wide` is NUL-terminated and outlives the call; `available` is a
-    // local. The two unused out-params are documented as optional and are
-    // passed null because this probe deliberately wants only the
-    // available-to-caller figure.
-    let ok = unsafe {
-        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
-            wide.as_ptr(),
-            &raw mut available,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    if ok == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(available)
-}
 
 /// The `D:` section of an SDDL string, between the DACL marker and the SACL.
 ///

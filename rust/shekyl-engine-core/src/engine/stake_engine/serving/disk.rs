@@ -95,41 +95,20 @@ fn free_bytes_available(path: &Path) -> std::io::Result<u64> {
     Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
-/// Windows: `GetDiskFreeSpaceExW`'s `lpFreeBytesAvailableToCaller`.
+/// Windows: delegated to [`shekyl_win_sec::free_bytes_available`].
 ///
-/// The exact semantic analog of `f_bavail`: it already accounts for per-user
-/// disk quotas, so it is what *this* caller may write rather than what exists
-/// on the volume. `lpTotalNumberOfFreeBytes` would be the `f_bfree` mistake.
+/// The Win32 call needs `unsafe`, and this crate is `#![deny(unsafe_code)]`.
+/// Per WP-D2 the dedicated `cfg(windows)` crate carries it rather than the
+/// deny being punctured here — so what is left in this crate is a call, and
+/// the platform detail lives with the other Windows platform calls.
 ///
-/// The path is passed through `OsStrExt::encode_wide` rather than a lossy
-/// `to_string_lossy`, so a wallet directory containing unpaired surrogates
-/// probes the directory the user actually named.
+/// That siting is also what lets the function be compiled, linted and TESTED
+/// for a Windows target: `shekyl-engine-core` cannot be cross-compiled from
+/// Linux because its graph reaches `ring`, and `shekyl-win-sec` has no such
+/// dependency.
 #[cfg(windows)]
 fn free_bytes_available(path: &Path) -> std::io::Result<u64> {
-    use std::os::windows::ffi::OsStrExt;
-
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut available: u64 = 0;
-    // SAFETY: `wide` is NUL-terminated and outlives the call; `available` is a
-    // local. The two unused out-params are documented as optional and are
-    // passed null because this probe deliberately wants only the
-    // available-to-caller figure.
-    let ok = unsafe {
-        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
-            wide.as_ptr(),
-            &raw mut available,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    if ok == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(available)
+    shekyl_win_sec::free_bytes_available(path)
 }
 
 /// Read free space on the filesystem holding the store.

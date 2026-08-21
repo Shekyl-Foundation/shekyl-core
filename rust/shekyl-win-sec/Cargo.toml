@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Windows security primitives for the wallet transport: owner-only security descriptors, current-user SID, and peer owner/integrity checks (WP-D2)"
+description = "The wallet's Windows platform calls, sited here because the crates that need them deny unsafe: owner-only security descriptors, current-user and logon SID, peer owner/integrity checks, and the disk-headroom probe (WP-D2)"
 publish = false
 
 # Everything here is `cfg(windows)`. On every other target the crate compiles to
@@ -21,6 +21,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_System_Memory",
+    "Win32_Storage_FileSystem",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
 ] }

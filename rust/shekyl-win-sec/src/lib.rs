@@ -53,12 +53,16 @@
 #![cfg_attr(not(windows), allow(unused))]
 
 #[cfg(windows)]
+mod disk;
+#[cfg(windows)]
 mod peer;
 #[cfg(windows)]
 mod sddl;
 #[cfg(windows)]
 mod sid;
 
+#[cfg(windows)]
+pub use disk::free_bytes_available;
 #[cfg(all(windows, feature = "test-utils"))]
 pub use peer::label_from_sacl_for_testing;
 #[cfg(windows)]
