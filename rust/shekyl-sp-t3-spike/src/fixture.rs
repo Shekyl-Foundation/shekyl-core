@@ -231,6 +231,21 @@ mod tests {
         assert!((3_320_000..3_340_000).contains(&SHARD_BYTES));
     }
 
+    /// The body a reader actually receives is the frame header plus the
+    /// shard, and the apparatus derives that number through the production
+    /// contract rather than taking it from a caller. Pinned here because the
+    /// first version of the harness compared against `SHARD_BYTES` directly,
+    /// and when RF-D4's frame landed every probe went stale at once.
+    ///
+    /// `4` is the hand-derived header for a full unpadded segment
+    /// (`88 CB 01 00`, `ARCHIVAL_RESPONSE_FORMAT.md` §3.5).
+    #[test]
+    fn served_body_is_the_frame_plus_the_shard() {
+        let payload: std::sync::Arc<[u8]> = vec![0u8; SHARD_BYTES].into();
+        let body = shekyl_p_serve::ShardBody::flat(payload).expect("a full shard is framable");
+        assert_eq!(body.header().framed_len(), (SHARD_BYTES + 4) as u64);
+    }
+
     #[test]
     fn a_missing_fixture_fails_loudly_and_names_the_remedy() {
         // The no-silent-fallback property: absence must be an error whose message

@@ -124,14 +124,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Loud, first: no synthetic fallback exists, so a missing fixture stops the
     // run here rather than producing a number about the wrong payload.
     let fixture = ShardFixture::load(&shard_path)?;
-    let payload_len = fixture.len();
-    println!("shard fixture: {payload_len} bytes");
+    println!("shard fixture: {} bytes", fixture.len());
 
     let dir = tempfile::tempdir()?;
     println!("bringing up 2 personas behind one tor (this includes a bootstrap)...");
     let app = Apparatus::bring_up(tor, dir.path().join("tor-data"), 2, fixture.bytes()).await?;
 
-    let publish = app.await_reachable(payload_len).await?;
+    // The expected body length is the apparatus's to know, not this binary's
+    // to pass: it is derived from the payload through the production serving
+    // contract (RF-D4's frame included), so no caller here can hand in a
+    // number that the wire has since moved away from.
+    println!(
+        "served body: {} bytes (frame + shard)",
+        app.expected_body_len()
+    );
+    let publish = app.await_reachable().await?;
     println!(
         "personas reachable after {:.1} s (descriptor publication — EXCLUDED from every arm)",
         publish.as_secs_f64()
@@ -148,10 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // faithful model of a drawn miner and is expected to dominate the tail.
     let mut cold = Vec::new();
     for i in 0..cold_n {
-        cold.push(
-            app.timed_fetch(&cold_client_id(i as u64), 0, payload_len)
-                .await,
-        );
+        cold.push(app.timed_fetch(&cold_client_id(i as u64), 0).await);
         if (i + 1) % 10 == 0 {
             println!("  cold {}/{cold_n}", i + 1);
         }
@@ -164,7 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let warm_id = warm_client_id();
     let mut warm = Vec::new();
     for i in 0..warm_n {
-        warm.push(app.timed_fetch(&warm_id, 0, payload_len).await);
+        warm.push(app.timed_fetch(&warm_id, 0).await);
         if (i + 1) % 10 == 0 {
             println!("  warm {}/{warm_n}", i + 1);
         }
@@ -179,10 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..conc_n {
         let id_a = cold_client_id(1_000_000 + i as u64);
         let id_b = cold_client_id(2_000_000 + i as u64);
-        let (ra, rb) = tokio::join!(
-            app.timed_fetch(&id_a, 0, payload_len),
-            app.timed_fetch(&id_b, 1, payload_len)
-        );
+        let (ra, rb) = tokio::join!(app.timed_fetch(&id_a, 0), app.timed_fetch(&id_b, 1));
         conc.push(ra);
         conc.push(rb);
         if (i + 1) % 10 == 0 {
@@ -202,7 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut soak = Vec::new();
         let mut seq = 5_000_000u64;
         while Instant::now() < until {
-            soak.push(app.timed_fetch(&cold_client_id(seq), 0, payload_len).await);
+            soak.push(app.timed_fetch(&cold_client_id(seq), 0).await);
             seq += 1;
             // Flush EVERY observation, not every 25th. A 24 h run on a dev box is
             // a run that gets killed, and the doc comment on `append_rows`
