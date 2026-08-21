@@ -34,6 +34,11 @@ const GATE2_FIXTURE: &str =
 const PARITY_FIXTURE: &str = "tests/fixtures/serve_credit_tx_parity_v1.json";
 
 fn hex_bytes(s: &str) -> Vec<u8> {
+    assert!(
+        s.len().is_multiple_of(2),
+        "hex length {} is odd; fixture is malformed",
+        s.len()
+    );
     (0..s.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))

@@ -324,6 +324,13 @@ impl ArchivalServeCreditResponse {
         Self::read_payload(r)
     }
 
+    /// Length-delimited parse of a tagged vin (`canonical_bytes`, tag included).
+    pub fn read_exact<R: Read>(r: &mut R) -> Result<Self, WireError> {
+        let response = Self::read(r)?;
+        ensure_payload_fully_consumed(r)?;
+        Ok(response)
+    }
+
     /// cSHAKE256 preimage for hybrid signature verification (gate-2 §5.2).
     ///
     /// # Why two of the terms are parameters rather than fields
@@ -436,6 +443,24 @@ mod tests {
         let bytes = pruned.serialize().expect("serialize");
         let decoded = ArchivalServeCreditPruned::read_exact(&mut bytes.as_slice()).expect("read");
         assert_eq!(decoded, pruned);
+    }
+
+    #[test]
+    fn tagged_read_exact_rejects_wrong_tag() {
+        let bytes = ArchivalServeCreditResponse {
+            p_canonical_id: [0x11; 32],
+            shard_id: 1,
+            settlement_epoch: 2,
+            ed25519_countersignature: [0x66; ED25519_COUNTERSIGNATURE_LEN],
+        }
+        .serialize()
+        .expect("serialize");
+        let mut bad = bytes;
+        bad[0] = 0xFF;
+        assert!(matches!(
+            ArchivalServeCreditResponse::read_exact(&mut bad.as_slice()),
+            Err(WireError::UnknownVinType(0xFF))
+        ));
     }
 
     #[test]

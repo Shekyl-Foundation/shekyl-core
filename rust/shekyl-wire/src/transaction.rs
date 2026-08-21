@@ -545,7 +545,8 @@ impl Holdings {
 /// of a pass record (`RF-D1`). Mirrors [`check_emission_blob`]: length ceiling
 /// and the leading tag byte, nothing about the interior. The interior has ONE
 /// parser, `shekyl-archival-retention::wire`; C++ indexes the vin through the
-/// `shekyl_archival_serve_credit_extract` FFI and reads nothing else.
+/// `shekyl_archival_serve_credit_extract` FFI (tagged blob, whole) and reads
+/// nothing else.
 ///
 /// This is why the typed `ServeCredit` struct this crate briefly carried is
 /// gone: it was a second codec of one layout, and two codecs of one layout

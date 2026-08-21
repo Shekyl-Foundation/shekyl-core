@@ -210,12 +210,12 @@ namespace cryptonote
   bool get_archival_serve_credit_key(const txin_archival_serve_credit_response& vin,
     crypto::hash& p_canonical_id, uint64_t& shard_id, uint64_t& settlement_epoch)
   {
-    // The serializer guard already pinned size >= 2 and the tag byte; the
-    // FFI takes the body AFTER the tag, like the verify entry point.
-    if (vin.canonical_bytes.size() < 2)
+    // Empty cannot form a tagged blob; the codec (tag, interior, trailing
+    // bytes) is otherwise the FFI's. C++ does not slice the tag off.
+    if (vin.canonical_bytes.empty())
       return false;
     return shekyl_archival_serve_credit_extract(
-      vin.canonical_bytes.data() + 1, vin.canonical_bytes.size() - 1,
+      vin.canonical_bytes.data(), vin.canonical_bytes.size(),
       reinterpret_cast<uint8_t*>(p_canonical_id.data), &shard_id, &settlement_epoch)
       == SHEKYL_ARCHIVAL_VERIFY_OK;
   }

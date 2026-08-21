@@ -1396,9 +1396,10 @@ uint64_t shekyl_archival_challenge_fire_height(
     uint64_t settlement_epoch);
 
 /// Extract `(P, shard, E)` from a serve-credit vin's opaque `canonical_bytes`
-/// (tag byte EXCLUDED). The Rust codec is the only parser of those bytes
+/// (tag byte INCLUDED). The Rust codec is the only parser of those bytes
 /// (RF-D1 / rule 40): C++ indexes by these three fields and reads nothing
-/// else. Returns SHEKYL_ARCHIVAL_VERIFY_OK or a wire error code.
+/// else. Returns SHEKYL_ARCHIVAL_VERIFY_OK or a wire error code. Empty
+/// length is a wire failure, not ERR_NULL_PTR.
 uint8_t shekyl_archival_serve_credit_extract(
     const uint8_t* vin_ptr,
     size_t vin_len,
@@ -1414,7 +1415,7 @@ uint8_t shekyl_archival_challenge_leaf_index(
     uint64_t segment_leaf_count,
     uint32_t* out_leaf_index);
 
-/// Verify one pass record: the vin's `canonical_bytes` (tag byte EXCLUDED)
+/// Verify one pass record: the vin's `canonical_bytes` (tag byte INCLUDED)
 /// plus this vin's slice of the prunable region's serve-credit records
 /// (RF-D1: one per serve-credit vin, in vin order).
 uint8_t shekyl_archival_verify_serve_credit_vin(

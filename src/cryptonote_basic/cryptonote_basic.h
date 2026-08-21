@@ -247,9 +247,9 @@ namespace cryptonote
   // canonical encoding (leading wire tag 0x02 included); the retention codec
   // owns the layout, the parse and every structural bound. C++ never reads
   // inside: the three fields consensus indexes by -- (P, shard, E) -- come
-  // through `shekyl_archival_serve_credit_extract`, and admission verifies
-  // through `shekyl_archival_verify_serve_credit_vin` with this vin's pruned
-  // record (rctSig.p.serve_credit_pruned[i]) alongside.
+  // through `shekyl_archival_serve_credit_extract` (the tagged blob, whole),
+  // and admission verifies through `shekyl_archival_verify_serve_credit_vin`
+  // with this vin's pruned record (rctSig.p.serve_credit_pruned[i]) alongside.
   //
   // This used to be a typed struct with nine fields. Two of those were values
   // the verifier derives (RF-D6), one more was the challenged leaf the

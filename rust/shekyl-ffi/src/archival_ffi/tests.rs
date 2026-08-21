@@ -33,6 +33,43 @@ fn ffi_rejects_null_context() {
 }
 
 #[test]
+fn extract_empty_slice_is_wire_not_null() {
+    // A Rust empty slice has a non-null `as_ptr()`; length 0 is a parse
+    // failure, not a call-site pointer bug.
+    let empty: [u8; 0] = [];
+    let mut p_id = [0u8; 32];
+    let mut shard = 0u64;
+    let mut epoch = 0u64;
+    let code = unsafe {
+        shekyl_archival_serve_credit_extract(
+            empty.as_ptr(),
+            0,
+            p_id.as_mut_ptr(),
+            &raw mut shard,
+            &raw mut epoch,
+        )
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE);
+}
+
+#[test]
+fn extract_null_ptr_is_null() {
+    let mut p_id = [0u8; 32];
+    let mut shard = 0u64;
+    let mut epoch = 0u64;
+    let code = unsafe {
+        shekyl_archival_serve_credit_extract(
+            ptr::null(),
+            0,
+            p_id.as_mut_ptr(),
+            &raw mut shard,
+            &raw mut epoch,
+        )
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR);
+}
+
+#[test]
 fn checked_sum_amounts_sums_overflows_and_guards() {
     // Empty set (null allowed iff len == 0) sums to 0.
     let mut out: u64 = 7;

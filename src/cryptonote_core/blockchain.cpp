@@ -5461,7 +5461,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   ctx.leaf_layer_scalars_len = leaf_layer_scalars_len;
 
   const uint8_t verify_rc = shekyl_archival_verify_serve_credit_vin(
-    resp.canonical_bytes.data() + 1, resp.canonical_bytes.size() - 1,
+    resp.canonical_bytes.data(), resp.canonical_bytes.size(),
     pruned_record.data(), pruned_record.size(), &ctx);
   if (verify_rc != SHEKYL_ARCHIVAL_VERIFY_OK)
   {
