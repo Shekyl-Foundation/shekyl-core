@@ -291,6 +291,62 @@ pub unsafe extern "C" fn shekyl_submit_facts_rust_check(
     }
 }
 
+// Seed-derived per-field values are deliberately truncated into the narrow
+// fields — the point is to exercise every byte of the layout (F26).
+#[allow(clippy::cast_possible_truncation)]
+fn chain_tip_facts_filled(seed: u64) -> crate::ffi::ChainTipFactsFfi {
+    let mut top_hash = [0u8; 32];
+    let word = submit_facts_field_value(seed, 1);
+    for (i, byte) in top_hash.iter_mut().enumerate() {
+        *byte = (word >> ((i % 8) * 8)) as u8;
+    }
+    crate::ffi::ChainTipFactsFfi {
+        chain_height: submit_facts_field_value(seed, 0),
+        top_hash,
+        target_height: submit_facts_field_value(seed, 2),
+        synchronized: submit_facts_field_value(seed, 3) as u8,
+        release_build: submit_facts_field_value(seed, 4) as u8,
+        reserved: [0; 6],
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_chain_tip_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_chain_tip_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_chain_tip_facts_rust_fill(
+    out: *mut crate::ffi::ChainTipFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(chain_tip_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_chain_tip_facts`: 0 iff every field matches
+/// the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_chain_tip_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_chain_tip_facts_rust_check(
+    facts: *const crate::ffi::ChainTipFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == chain_tip_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

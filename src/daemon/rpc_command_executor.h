@@ -69,6 +69,11 @@ public:
   // this is the signal the `shekyld <command>` exit status is derived from.
   bool rpc_request_failed() const { return m_rpc_client != NULL && m_rpc_client->failed(); }
 
+private:
+  bool run_rust_console(const std::vector<std::string>& argv);
+
+public:
+
   bool print_peer_list(bool white = true, bool gray = true, size_t limit = 0, bool pruned_only = false);
 
   bool print_peer_list_stats();

@@ -122,6 +122,56 @@ impl CoreRpc {
         self.handle
     }
 
+    /// Chain-tip facts (`shekyl_rpc_chain_tip`); `Err(code)` on a non-OK
+    /// return, including a null handle.
+    pub fn chain_tip(&self) -> Result<ffi::ChainTipFactsFfi, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::ChainTipFactsFfi {
+            chain_height: 0,
+            top_hash: [0; 32],
+            target_height: 0,
+            synchronized: 0,
+            release_build: 0,
+            reserved: [0; 6],
+        };
+        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        let rc = unsafe { ffi::shekyl_rpc_chain_tip(self.handle, &raw mut pod) };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(pod)
+        } else {
+            Err(rc)
+        }
+    }
+
+    /// The hard-fork schedule (`shekyl_rpc_hardforks`), copied out of the
+    /// C++-owned view before it is released.
+    pub fn hardforks(&self) -> Result<Vec<ffi::HardforkEntryFfi>, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut rows: *const ffi::HardforkEntryFfi = std::ptr::null();
+        let mut len: usize = 0;
+        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: live handle; the three out pointers are valid; on OK the
+        // view is valid until `shekyl_rpc_hardforks_free(owner)`.
+        unsafe {
+            let rc =
+                ffi::shekyl_rpc_hardforks(self.handle, &raw mut rows, &raw mut len, &raw mut owner);
+            if rc != ffi::SHEKYL_RPC_FACTS_OK {
+                return Err(rc);
+            }
+            let copied = if rows.is_null() || len == 0 {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(rows, len).to_vec()
+            };
+            ffi::shekyl_rpc_hardforks_free(owner);
+            Ok(copied)
+        }
+    }
+
     /// Dispatch a JSON-RPC 2.0 method.
     /// Returns the raw response string from C++ (contains ok/error envelope).
     pub fn json_rpc(&self, method: &str, params: &str) -> Option<String> {

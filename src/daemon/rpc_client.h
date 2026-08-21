@@ -191,15 +191,20 @@ namespace tools
 
     // Liveness: a `/get_height` round trip that the transport completes. The
     // reply's content is not consulted — any answer means a daemon is there.
+    // (Raw body on purpose: get_height's wire type is Rust's since RK-1.)
     bool check_connection()
     {
-      cryptonote::COMMAND_RPC_GET_HEIGHT::request req{};
-      cryptonote::COMMAND_RPC_GET_HEIGHT::response res{};
+      std::string body;
       std::string reason;
-      return invoke_json("/get_height", req, res, reason);
+      return post("/get_height", "{}", body, reason);
     }
 
     // True once any request through this client has failed.
     bool failed() const { return m_failed; }
+    // A request made on this client's behalf elsewhere (the Rust console
+    // renderer) failed: fold it into the exit status.
+    void note_failure() { m_failed = true; }
+    const std::string& address() const { return m_address; }
+    static uint64_t timeout_secs() { return static_cast<uint64_t>(TIMEOUT().count()); }
   };
 }

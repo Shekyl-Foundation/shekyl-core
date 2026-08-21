@@ -208,18 +208,6 @@ namespace cryptonote
 #define CHECK_CORE_READY() do { if(!check_core_ready()){res.status =  CORE_RPC_STATUS_BUSY;return true;} } while(0)
 
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_height(const COMMAND_RPC_GET_HEIGHT::request& req, COMMAND_RPC_GET_HEIGHT::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_height);
-
-    crypto::hash hash;
-    m_core.get_blockchain_top(res.height, hash);
-    ++res.height; // block height to chain height
-    res.hash = string_tools::pod_to_hex(hash);
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_info(const COMMAND_RPC_GET_INFO::request& req, COMMAND_RPC_GET_INFO::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(get_info);
@@ -2277,20 +2265,6 @@ namespace cryptonote
         res.histogram.push_back(COMMAND_RPC_GET_OUTPUT_HISTOGRAM::entry(i.first, std::get<0>(i.second), std::get<1>(i.second), std::get<2>(i.second)));
     }
 
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_version(const COMMAND_RPC_GET_VERSION::request& req, COMMAND_RPC_GET_VERSION::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_version);
-
-    res.version = CORE_RPC_VERSION;
-    res.release = SHEKYL_VERSION_IS_RELEASE;
-    res.current_height = m_core.get_current_blockchain_height();
-    res.target_height = m_p2p.get_payload_object().is_synchronized() ? 0 : m_core.get_target_blockchain_height();
-    for (const auto &hf : m_core.get_blockchain_storage().get_hardforks())
-       res.hard_forks.push_back({hf.version, hf.height});
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

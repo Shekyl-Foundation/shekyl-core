@@ -101,7 +101,26 @@ macro_rules! json_handler {
 }
 
 // Unrestricted endpoints
-json_handler!(get_height, "/get_height");
+
+/// `/get_height` (alias `/getheight`) — served natively (RK-1,
+/// `docs/design/DAEMON_RPC_KV_CUTOVER.md`): the body is ignored, as the C++
+/// handler ignored its empty request struct. A facts fault answers with the
+/// same envelope a failed FFI dispatch does.
+pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
+    let core = state.core.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let facts = crate::chain_facts::FfiChainFacts::new(core);
+        crate::methods::get_height(&facts)
+    })
+    .await;
+    match result {
+        Ok(Ok(reply)) => match serde_json::to_string(&reply) {
+            Ok(json) => json_ok(json),
+            Err(_) => json_dispatch_error(),
+        },
+        _ => json_dispatch_error(),
+    }
+}
 json_handler!(get_transactions, "/get_transactions");
 json_handler!(get_alt_blocks_hashes, "/get_alt_blocks_hashes");
 json_handler!(is_key_image_spent, "/is_key_image_spent");

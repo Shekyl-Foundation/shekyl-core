@@ -87,6 +87,18 @@ pub async fn handle(
         );
     }
 
+    // Natively-served methods (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`)
+    // never reach the C++ dispatch table.
+    if let Some(native) = native_method(&state, &method).await {
+        return match native {
+            Ok(value) => (StatusCode::OK, Json(JsonRpcResponse::success(id, value))),
+            Err(_) => (
+                StatusCode::OK,
+                Json(JsonRpcResponse::error(id, -32603, "Internal error".into())),
+            ),
+        };
+    }
+
     let params_str = if request.params.is_null()
         || request.params.is_object()
             && request
@@ -158,6 +170,34 @@ pub async fn handle(
                 Json(JsonRpcResponse::error(id, -32603, "Internal error".into())),
             )
         }
+    }
+}
+
+/// Dispatch `method` natively if Rust owns it; `None` hands it to the C++
+/// table. Each arm is one `methods::*` call framed as a JSON value.
+async fn native_method(
+    state: &Arc<AppState>,
+    method: &str,
+) -> Option<Result<serde_json::Value, crate::methods::RpcFault>> {
+    match method {
+        "get_version" => {
+            let core = state.core.clone();
+            let out = tokio::task::spawn_blocking(move || {
+                let facts = crate::chain_facts::FfiChainFacts::new(core);
+                crate::methods::get_version(&facts)
+            })
+            .await;
+            Some(match out {
+                Ok(Ok(reply)) => serde_json::to_value(reply).map_err(|_| {
+                    crate::methods::RpcFault::Facts(crate::chain_facts::FactsFault::Unknown(0))
+                }),
+                Ok(Err(fault)) => Err(fault),
+                Err(_) => Err(crate::methods::RpcFault::Facts(
+                    crate::chain_facts::FactsFault::Unknown(0),
+                )),
+            })
+        }
+        _ => None,
     }
 }
 

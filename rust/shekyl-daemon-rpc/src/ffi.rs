@@ -225,6 +225,53 @@ pub struct SubmitEmissionFactsHandle {
     _opaque: [u8; 0],
 }
 
+// ── RPC facts shims (src/rpc/rpc_facts_ffi.h; DAEMON_RPC_KV_CUTOVER.md §3.2) ──
+
+/// `shekyl_rpc_chain_tip` succeeded / the facts POD is filled.
+pub const SHEKYL_RPC_FACTS_OK: i32 = 0;
+/// Null handle or null out pointer.
+pub const SHEKYL_RPC_FACTS_ERR_NULL: i32 = -1;
+/// The core is not initialized.
+pub const SHEKYL_RPC_FACTS_ERR_NOT_READY: i32 = -2;
+
+/// Twin of `shekyl_rpc_chain_tip_facts`. Layout pinned both directions by
+/// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
+/// `shekyl_rpc_chain_tip_facts_rust_{fill,check}`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainTipFactsFfi {
+    /// Top block height + 1.
+    pub chain_height: u64,
+    pub top_hash: [u8; 32],
+    /// Raw core target height (the synchronized rule is the handler's).
+    pub target_height: u64,
+    pub synchronized: u8,
+    pub release_build: u8,
+    pub reserved: [u8; 6],
+}
+
+/// Twin of `shekyl_rpc_hardfork_entry`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HardforkEntryFfi {
+    pub version: u8,
+    pub reserved: [u8; 7],
+    pub height: u64,
+}
+
+extern "C" {
+    pub fn shekyl_rpc_chain_tip(h: *mut CoreRpcHandle, out: *mut ChainTipFactsFfi) -> i32;
+    /// Fills a C++-owned view of the hard-fork schedule; release the owner
+    /// with `shekyl_rpc_hardforks_free`.
+    pub fn shekyl_rpc_hardforks(
+        h: *mut CoreRpcHandle,
+        out: *mut *const HardforkEntryFfi,
+        out_len: *mut usize,
+        out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32;
+    pub fn shekyl_rpc_hardforks_free(owner: *mut std::ffi::c_void);
+}
+
 extern "C" {
     pub fn core_rpc_ffi_create(rpc_server_ptr: *mut std::ffi::c_void) -> *mut CoreRpcHandle;
     pub fn core_rpc_ffi_destroy(h: *mut CoreRpcHandle);
@@ -309,4 +356,44 @@ extern "C" {
     // C++-driven (tests/unit_tests/daemon_submit_ffi_roundtrip.cpp), which
     // calls the Rust twins exported from ffi_exports.rs. No Rust caller of
     // the C++ hooks exists.
+}
+
+/// Link-time stubs for the crate's **unit** tests only.
+///
+/// The lib test binary links no C++ archive, and GNU ld resolves every
+/// symbol a retained function references — the console's remote-arm tests
+/// reach `FfiChainFacts` through the same function as the live arm, so the
+/// five symbols that path names must exist. Each stub is the "no core here"
+/// answer: a null handle or the NULL error code. Only symbols a unit test
+/// actually retains are stubbed; a new one shows up as a link error, never
+/// as a silently-stubbed production path. Integration tests (`tests/*.rs`)
+/// link the lib without `cfg(test)` and see none of this.
+#[cfg(test)]
+mod unit_test_link_stubs {
+    use super::*;
+
+    #[no_mangle]
+    pub extern "C" fn core_rpc_ffi_create(_p: *mut std::ffi::c_void) -> *mut CoreRpcHandle {
+        std::ptr::null_mut()
+    }
+    #[no_mangle]
+    pub extern "C" fn core_rpc_ffi_destroy(_h: *mut CoreRpcHandle) {}
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_chain_tip(
+        _h: *mut CoreRpcHandle,
+        _out: *mut ChainTipFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_hardforks(
+        _h: *mut CoreRpcHandle,
+        _out: *mut *const HardforkEntryFfi,
+        _out_len: *mut usize,
+        _out_owner: *mut *mut std::ffi::c_void,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_hardforks_free(_owner: *mut std::ffi::c_void) {}
 }

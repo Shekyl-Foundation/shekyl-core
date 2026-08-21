@@ -1408,6 +1408,28 @@ int32_t shekyl_daemon_ctl_post(
 /// Release a buffer returned through shekyl_daemon_ctl_post's out pair.
 void shekyl_daemon_ctl_free(uint8_t* ptr, size_t len);
 
+// Console rendering for natively-served methods (DAEMON_RPC_KV_CUTOVER.md
+// §3.4). Rust: shekyl-daemon-rpc/src/console.rs.
+#define SHEKYL_DAEMON_CONSOLE_OK            0
+#define SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR -1
+#define SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN  -2
+#define SHEKYL_DAEMON_CONSOLE_ERR_REQUEST  -3
+
+/// Run one console command (`argv[0]` selects) and return its rendered text.
+/// rpc_server_ptr: the live core_rpc_server in-process, else NULL.
+/// address: "host:port" of the daemon RPC when running as `shekyld <cmd>`,
+///   else NULL. Exactly one of the two is set.
+/// out_ptr / out_len: on OK the text to print, on ERR_REQUEST the reason;
+///   release with shekyl_daemon_ctl_free.
+int32_t shekyl_daemon_console_run(
+    const char* const* argv,
+    size_t argc,
+    void* rpc_server_ptr,
+    const char* address,
+    uint64_t timeout_secs,
+    uint8_t** out_ptr,
+    size_t* out_len);
+
 
 // ---------------------------------------------------------------------------
 // Archival serve-credit verification (ARCHIVAL_RETENTION_GATE2.md §5.3)

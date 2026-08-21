@@ -94,7 +94,7 @@ calls in the handler (`core_rpc_server.cpp`).
 
 | Slice | Surface | Methods (REST `/path` · JSON-RPC `name` · `.bin`) | KV fields | Facts | Consumers |
 | --- | --- | --- | --- | --- | --- |
-| **RK-1** | Chain tip + version (the pattern slice) | `/get_height` `/getheight` · `get_version` | 8 + 15 | `get_blockchain_top`, `get_current_blockchain_height`, `get_target_blockchain_height`, `is_synchronized`, `get_hardforks` | W K P |
+| **RK-1** — **landed** (this branch; PR #, sha stamped at merge) | Chain tip + version (the pattern slice) | `/get_height` `/getheight` · `get_version` | 8 + 15 | `shekyl_rpc_chain_tip`, `shekyl_rpc_hardforks` (`src/rpc/rpc_facts_ffi.cpp`) | W K P |
 | **RK-2** | Fork + count | `hard_fork_info` · `get_block_count` · `on_get_block_hash` | 15 + 4 + — | hard-fork voting info, `get_block_id_by_height` | K P |
 | **RK-3** | Block headers / blocks | `get_last_block_header` · `get_block_header_by_hash` · `…_by_height` · `get_block_headers_range` · `get_block` | 8 + 11 + 9 + 10 + 22 (+ shared `block_header_response`, 25) | `get_block_by_hash`, `get_block_id_by_height`, reward/weight fills | W C G K R P |
 | **RK-4** | Wallet sync (binary + its JSON siblings) | `/get_blocks.bin` `/getblocks.bin` · `/get_blocks_by_height.bin` · `/get_hashes.bin` · `/get_o_indexes.bin` · `/get_transactions` · `/is_key_image_spent` · `get_fee_estimate` | 33 + 15 + 11 + 12 + 31 + 8 + 10 | `find_blockchain_supplement`, `get_pool_info`, `get_tx_outputs_gindexs`, `get_split_transactions_blobs`, `are_key_images_spent[_in_pool]`, `get_dynamic_base_fee_estimate_*` | **W** (the wallet's refresh path) K P R |
@@ -256,4 +256,5 @@ contract's memory of the C++ oracle after the oracle is gone.
 
 | Date | Entry |
 | --- | --- |
+| 2026-08-21 | **RK-1 landed** on the design's own branch: `shekyl-rpc-types::chain` (GetHeightResponse, GetVersionResponse, HardForkEntry, RpcStatus, CORE_RPC_VERSION); `shekyl-daemon-rpc::{chain_facts, methods, console}`; `src/rpc/rpc_facts_ffi.{h,cpp}` + layout-twin test; oracle vectors captured from the C++ handlers before they, `COMMAND_RPC_GET_HEIGHT` / `_GET_VERSION`, the three handler-less structs (`GET_OUTPUTS`, `GET_OUTPUTS_BIN` — and the dead `core::get_outs` / `Blockchain::get_outs` chain behind it — `FAST_EXIT`) and the C++ `CORE_RPC_VERSION` macros were deleted. Console `print_height` renders in Rust on both arms. `shekyl-rpc-client`'s private `HeightResponse` retired for the shared type. |
 | 2026-08-21 | Document opened after #533 (epee HTTP surface gone). Census at `077d97c4e`: 65 structs / 872 KV fields / 59 dispatch rows; per-handler core/p2p facts counted; consumers mapped (W/C/G/K/P/F/R). RK-D1…D9 bound. Phase 2 re-scoped from "Rust codec in `core_rpc_ffi.cpp`" (unbuildable without a façade) to method-wise native handlers over facts FFI. Slices RK-1…RK-9, RK-C, RK-X. RK-1 = `get_height` + `get_version` + deletion of the three handler-less structs. |

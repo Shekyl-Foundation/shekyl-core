@@ -2671,51 +2671,6 @@ crypto::public_key Blockchain::get_output_key(uint64_t amount, uint64_t global_i
 }
 
 //------------------------------------------------------------------
-bool Blockchain::get_outs(const COMMAND_RPC_GET_OUTPUTS_BIN::request& req, COMMAND_RPC_GET_OUTPUTS_BIN::response& res) const
-{
-  LOG_PRINT_L3("Blockchain::" << __func__);
-  CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  res.outs.clear();
-  res.outs.reserve(req.outputs.size());
-
-  std::vector<cryptonote::output_data_t> data;
-  try
-  {
-    std::vector<uint64_t> amounts, offsets;
-    amounts.reserve(req.outputs.size());
-    offsets.reserve(req.outputs.size());
-    for (const auto &i: req.outputs)
-    {
-      amounts.push_back(i.amount);
-      offsets.push_back(i.index);
-    }
-    m_db->get_output_key(epee::span<const uint64_t>(amounts.data(), amounts.size()), offsets, data);
-    if (data.size() != req.outputs.size())
-    {
-      MERROR("Unexpected output data size: expected " << req.outputs.size() << ", got " << data.size());
-      return false;
-    }
-    const uint8_t hf_version = m_hardfork->get_current_version();
-    for (const auto &t: data)
-      res.outs.push_back({t.pubkey, t.commitment, is_tx_spendtime_unlocked(t.unlock_time, hf_version), t.height, crypto::null_hash});
-
-    if (req.get_txid)
-    {
-      for (size_t i = 0; i < req.outputs.size(); ++i)
-      {
-        tx_out_index toi = m_db->get_output_tx_and_index(req.outputs[i].amount, req.outputs[i].index);
-        res.outs[i].txid = toi.first;
-      }
-    }
-  }
-  catch (const std::exception &e)
-  {
-    return false;
-  }
-  return true;
-}
-//------------------------------------------------------------------
 void Blockchain::get_output_key_mask_unlocked(const uint64_t& amount, const uint64_t& index, crypto::public_key& key, rct::key& mask, bool& unlocked) const
 {
   const auto o_data = m_db->get_output_key(amount, index);

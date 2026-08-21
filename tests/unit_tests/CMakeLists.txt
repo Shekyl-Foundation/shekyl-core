@@ -77,7 +77,7 @@ set(unit_tests_sources
   random.cpp
   rpc_target_wire_contract.cpp
   rpc_args_daemon_surface.cpp
-  rpc_oracle_vectors.cpp
+  rpc_facts_ffi_roundtrip.cpp
   rolling_median.cpp
   scaling_2021.cpp
   seed_epoch.cpp
@@ -191,8 +191,6 @@ if (NOT MSVC)
 endif ()
 
 SET_PROPERTY(SOURCE main.cpp PROPERTY COMPILE_FLAGS -DDEFAULT_DATA_DIR="\\"${CMAKE_SOURCE_DIR}/tests/data\\"")
-SET_PROPERTY(SOURCE rpc_oracle_vectors.cpp PROPERTY COMPILE_DEFINITIONS
-  RPC_ORACLE_VECTOR_DIR="${CMAKE_SOURCE_DIR}/rust/shekyl-rpc-types/tests/vectors/rpc")
 SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_DEFINITIONS
   GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json"
   SERVE_CREDIT_TX_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json")

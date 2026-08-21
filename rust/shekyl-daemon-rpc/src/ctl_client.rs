@@ -51,7 +51,7 @@ pub const SHEKYL_DAEMON_CTL_ERR_RUNTIME: i32 = -4;
 ///
 /// `out_ptr` and `out_len` are valid for writes (checked non-null by the
 /// caller before reaching here).
-unsafe fn emit(bytes: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize) {
+pub(crate) unsafe fn emit(bytes: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize) {
     if bytes.is_empty() {
         out_ptr.write(std::ptr::null_mut());
         out_len.write(0);
@@ -86,7 +86,7 @@ unsafe fn body_from_ptr(ptr: *const u8, len: usize) -> Option<Vec<u8>> {
 }
 
 /// Run one POST to completion on a private current-thread runtime.
-fn post_blocking(
+pub(crate) fn post_blocking(
     address: &str,
     route: &str,
     body: Vec<u8>,
@@ -213,7 +213,7 @@ pub unsafe extern "C" fn shekyl_daemon_ctl_free(ptr: *mut u8, len: usize) {
 /// # Safety
 ///
 /// `p` must be null or a valid NUL-terminated C string.
-unsafe fn c_string(p: *const c_char) -> Option<String> {
+pub(crate) unsafe fn c_string(p: *const c_char) -> Option<String> {
     if p.is_null() {
         return None;
     }

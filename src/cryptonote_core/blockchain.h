@@ -568,21 +568,6 @@ namespace cryptonote
     crypto::public_key get_output_key(uint64_t amount, uint64_t global_index) const;
 
     /**
-     * @brief gets specific outputs to mix with
-     *
-     * This function takes an RPC request for outputs to mix with
-     * and creates an RPC response with the resultant output indices.
-     *
-     * Outputs to mix with are specified in the request.
-     *
-     * @param req the outputs to return
-     * @param res return-by-reference the resultant output indices and keys
-     *
-     * @return true
-     */
-    bool get_outs(const COMMAND_RPC_GET_OUTPUTS_BIN::request& req, COMMAND_RPC_GET_OUTPUTS_BIN::response& res) const;
-
-    /**
      * @brief gets an output's key and unlocked state
      *
      * @param amount in - the output amount

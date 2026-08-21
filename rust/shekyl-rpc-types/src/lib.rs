@@ -59,6 +59,12 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod chain;
+pub use chain::{
+    GetHeightResponse, GetVersionResponse, HardForkEntry, RpcStatus, CORE_RPC_VERSION,
+    CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR,
+};
+
 /// Request body for `POST /submit_transaction` (§2.4).
 ///
 /// The transaction blob is hex-encoded raw tx bytes. There are no other
