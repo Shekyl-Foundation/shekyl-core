@@ -15108,3 +15108,85 @@ becomes a project.
 a shipped `hop`, this term is either measured on the floor device or explicitly
 ruled negligible with a number attached. *"We did not measure it"* is not a
 finding that it is small.
+
+### 94.8 The transit round does NOT reopen err-high — §44.3 already settled it (2026-08-21)
+
+> **Corrected before merge.** A first draft of this section claimed
+> transit-dominance makes err-high a *"first-order privacy loss"* and made
+> per-zone `F` the *"presumed default"* on privacy grounds. **Both were wrong,
+> and §44.3 already contained the refutation** — recorded as a correction rather
+> than silently reversed, because a design section that argues the opposite of a
+> resolved one leaves the next reader to pick by reading order.
+
+**§43.2 raised the two-consumers worry; §44.3 resolved it, and the resolution
+survives the transit round.** §44.3 separated two referents that share the name
+`F`:
+
+- **§6.7's `F` is the *wire* quantity** — the real first-passage of the return
+  flood. A larger *real* `F` raises the leak (measured).
+- **`fluff_return_ms` (which the transit constant feeds) is a *derivation
+  input*** whose only production consumer is the embargo solve. Over-estimating
+  **it** does not change the wire; it lengthens the derived embargo, which
+  **reduces** the prefix-fire leak (measured 2.91 → 2.23 %) and improves disarm.
+
+So **over-estimating the transit constant is privacy-safe** — the **wire**
+leak is untouched (the constant is a derivation input, not the wire quantity),
+while **prefix-fire** leak *decreases* and **disarm** improves — at a
+**black-hole recovery-latency** cost only. This is
+**magnitude-independent**: a longer embargo reduces prefix-fire leak
+monotonically, so the sign does not flip when transit becomes the dominant term
+(§91.6). **Transit-dominance therefore does not reopen the err-high sign.** What
+it changes is priced below.
+
+**Three consequences, fixed before the number:**
+
+1. **Compose the constant at the measured p90 (§94.2(d)) — not the p90 plus a
+   margin, and the reason is provenance, not privacy.** §44.3 shows extra margin
+   above the measurement would be privacy-safe, so the objection to it is *not* a
+   leak cost; it is that bolting the old assumption's cushion onto a measured
+   value **contaminates the measurement with the assumption it replaced** (§87.2:
+   a measured value must be distinguishable from an assumed one). The p90 is the
+   adequate-conservative reduction of the distribution; more buys only recovery
+   latency and muddies provenance.
+
+2. **The p90 is a privacy FLOOR, not a privacy ceiling — asymmetric, each bound
+   with its own reason.** Going *below* the p90 (reducing toward the mean at an
+   attractive-low reading) under-provisions the derivation input, shortens the
+   embargo and *raises* leak — the genuine privacy-losing direction (§65, §66).
+   Going *above* it is privacy-safe (§44.3) and barred only on the provenance
+   ground in (1). The temptation a low number invites — "so shorten everything" —
+   is the one this floor refuses.
+
+3. **Per-zone `F` stays a LIVENESS call (§44.3), which the transit round
+   amplifies but does not promote to a privacy default.** §44.3 ruled worst-zone
+   provisioning privacy-safe by construction and per-zone `F` a recovery-latency
+   optimisation, left unbuilt. The transit round widens the anon/clearnet gap, so
+   worst-zone provisioning wastes *more* recovery latency on clearnet — the
+   liveness case strengthens, the privacy-neutrality does not change. It remains a
+   liveness decision for the re-derivation round.
+
+   **If it is built, the axis is *posture*, not zone.** `record_arrival` fans to
+   every zone (`i_p2p_endpoint::record_tx_arrivals`), so a dual-stack node
+   stemming on the anon zone still sees its return over clearnet: the node's
+   **transport posture** selects the return graph, not the zone it stemmed on.
+   The constant is network-wide and cannot adapt — §18 refused a degree-adaptive
+   embargo because embargo length is measurable from fluff timing, and the same
+   argument forbids a posture-adaptive one — so each zone must cover its **worst
+   posture**: clearnet's worst posture is clearnet-capable (every clearnet node) →
+   clearnet `F` = the clearnet flood; the anon zone's worst posture is Tor-only →
+   anon `F` = the anon flood. That collapses per-posture to **two determinate
+   values**, the operational form, reached through posture rather than zone.
+
+   **§89.2's keeper is superseded by Design A — tenth instance.** Its rebuttal of
+   per-zone `F` — *"a dual-stack node's fluff returns over both networks, so there
+   is no per-zone value to pick"* — was a **Design B** statement: under B the
+   fluff exits to clearnet and never traverses the anon zone, so there was one
+   flood graph and genuinely no per-zone value. Design A created the second
+   graph. Correct for the architecture it was written under, stale when A landed —
+   exactly like §25.1's *"no fluff path on a noise zone"*. The **governing**
+   analysis is §44.3 (liveness, not privacy), which is *not* stale.
+
+This changes no constant. It aligns the transit round with §44.3's resolved
+policy instead of re-deriving a contradiction of it, and fixes the axis
+(posture) and the superseded keeper (§89.2) so the re-derivation composes against
+one coherent rule.
