@@ -489,19 +489,27 @@ jobs:
         working-directory: rust
         continue-on-error: true
         run: |
+          # Commands are argument arrays invoked through the call operator,
+          # not strings through Invoke-Expression: no quoting to reason about,
+          # and nothing that becomes code execution if an argument ever stops
+          # being a constant. The step's exit is the FIRST non-zero code — with
+          # run-everything semantics the earliest failure is the informative
+          # one (a failed check makes the test results moot); every command's
+          # own code is in the table regardless.
           $results = @()
-          $worst = 0
-          foreach ($cmd in @(
-            'cargo check --locked -p shekyl-engine-core -p shekyl-wallet-rpc -p shekyl-cli',
-            'cargo test --locked -p shekyl-wallet-rpc --test http_get_version',
-            'cargo test --locked -p shekyl-cli --test rpc_session_e2e'
+          $first_failure = 0
+          foreach ($argv in @(
+            @('cargo', 'check', '--locked', '-p', 'shekyl-engine-core', '-p', 'shekyl-wallet-rpc', '-p', 'shekyl-cli'),
+            @('cargo', 'test', '--locked', '-p', 'shekyl-wallet-rpc', '--test', 'http_get_version'),
+            @('cargo', 'test', '--locked', '-p', 'shekyl-cli', '--test', 'rpc_session_e2e')
           )) {
-            Write-Host "::group::$cmd"
-            Invoke-Expression $cmd
+            $shown = $argv -join ' '
+            Write-Host "::group::$shown"
+            & $argv[0] @($argv[1..($argv.Length - 1)])
             $code = $LASTEXITCODE
             Write-Host "::endgroup::"
-            $results += [pscustomobject]@{ Command = $cmd; Exit = $code }
-            if ($code -ne 0) { $worst = $code }
+            $results += [pscustomobject]@{ Command = $shown; Exit = $code }
+            if ($code -ne 0 -and $first_failure -eq 0) { $first_failure = $code }
           }
           $lines = @('## WP-W5 scouting (informational, Windows)', '', '| Command | Exit |', '|---|---|')
           foreach ($r in $results) {
@@ -512,7 +520,7 @@ jobs:
           $lines += 'Non-blocking until WP-W5 flips it; a FAIL here is a finding to read, not a flake to rerun.'
           $lines -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           $results | Format-Table -AutoSize | Out-String | Write-Host
-          exit $worst
+          exit $first_failure
 
       - name: restore vcpkg cache
         uses: actions/cache/restore@v5
