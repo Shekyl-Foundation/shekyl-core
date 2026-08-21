@@ -148,7 +148,10 @@ fn free_port() -> std::io::Result<u16> {
 /// different causes and distinguishes none of them. A plain-tor probe reaches
 /// `Bootstrapped 100%` from this host, so the network is not the suspect; what
 /// is unknown is whether this gate never fires, fires late, or is killed while
-/// waiting. Silence answered none of that. Progress output does.
+/// waiting. Silence answered none of that. Progress output does — and the
+/// "killed while waiting" case is now its own exit: a readiness publisher that
+/// goes away without a terminal state returns at once instead of being polled
+/// until the deadline.
 ///
 /// The label matters as much as the timestamps: the two daemons are brought up
 /// concurrently, so unlabelled lines would interleave into something unreadable.
@@ -159,7 +162,6 @@ async fn bring_up(
 ) -> Result<(ActorRef<TorControl>, u16), String> {
     let started = Instant::now();
     let socks_port = free_port().map_err(|e| format!("[{label}] free port: {e}"))?;
-    let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
     let (readiness, mut ready_rx) = BootstrapReadiness::new();
     let verified = shekyl_tor::binary::discover_and_verify_at(binary)
         .map_err(|e| format!("[{label}] tor binary: {e}"))?;
@@ -172,7 +174,11 @@ async fn bring_up(
             disable_network: false,
             exit_observer: None,
         }),
-        events: EventSink::new(events_tx),
+        // No `SETEVENTS` is ever issued here, so the sink receives nothing;
+        // `unsubscribed()` is the crate's named form of that fact, and it
+        // drops rather than queues. A kept-alive `_rx` on an unbounded channel
+        // would have accumulated every event routed, forever.
+        events: EventSink::unsubscribed(),
         readiness,
     });
     let deadline = started + Duration::from_secs(300);
@@ -213,9 +219,22 @@ async fn bring_up(
                 "[{label}] bootstrap did not reach Ready in 300s (last state {last:?})"
             ));
         }
-        tokio::time::timeout(Duration::from_secs(5), ready_rx.changed())
-            .await
-            .ok();
+        // Three outcomes: a change (loop and report it), a 5s tick with no
+        // change (loop and re-check the deadline), or the readiness sender
+        // dropped without a terminal state — the actor is going down. The
+        // third must return: `changed()` on a closed channel fails
+        // immediately, so swallowing it would spin this loop hot until the
+        // 300s deadline and then report a timeout for something that already
+        // died (the same arm `shekyl-tor`'s own service loop takes).
+        if let Ok(Err(_closed)) =
+            tokio::time::timeout(Duration::from_secs(5), ready_rx.changed()).await
+        {
+            return Err(format!(
+                "[{label}] readiness publisher dropped without a terminal state after {:.0}s \
+                 (last state {last:?})",
+                started.elapsed().as_secs_f64()
+            ));
+        }
     }
 }
 
