@@ -15108,3 +15108,58 @@ becomes a project.
 a shipped `hop`, this term is either measured on the floor device or explicitly
 ruled negligible with a number attached. *"We did not measure it"* is not a
 finding that it is small.
+
+### 94.8 AMENDMENT: err-high is re-ruled at the top of the F-7 unit, NOT inherited (2026-08-21)
+
+§43.2 already ruled that `params.rs`'s safety policy — *over-estimating `F`
+lengthens the embargo (safe); under-estimating shortens it (a privacy loss)* —
+**is re-examined at the top of the F-7 unit rather than inherited through it**,
+because §6.7 gives it a second, opposite-signed consumer: a larger `F` gives
+every prefix embargo longer to fire, so over-estimating is safe on the *disarm*
+axis and adverse on the *leak* axis. That ruling was written when transit was a
+**minor** term (~50 ms against a 5000 ms flush). The transit round makes it the
+**dominant** term (§91.6: transit moves `F′` about 7× more than `beta`), so the
+policy's second consumer is no longer buried, and the direction decision must be
+fixed **before the number converges** — pre-registration one level up.
+
+**The decision, fixed now:**
+
+1. **Err-high on the transit term is DISCHARGED by the p90 statistic, not
+   applied again on top of it.** §94.2(d) already composes the constant from the
+   measured **p90**, with both tails pre-registered (§94.5). Choosing p90 over
+   the mean *is* the conservative margin for transit. Adding §43.2's err-high
+   margin **above** the p90 would be double-counting conservatism on the term
+   that now dominates the embargo — and because the leak-axis cost (§6.7) is now
+   first-order, that second margin is a **priced privacy loss, not free
+   insurance.** The constant is composed at the measured p90; a gratuitous
+   cushion above it must be argued on privacy grounds, not assumed safe.
+
+2. **A measurement BELOW 1625 does not license shortening past the p90.**
+   Symmetrically to (1): if transit lands well under the assumption (the
+   provisional readings suggest it might — not established, §94.2(e) governs),
+   the constant narrows to the measured p90 and no further. The temptation at an
+   attractive-low number is to reach past the quantile toward the mean; the p90
+   is the floor of the err-high commitment and the narrowing stops there.
+
+3. **Per-zone `F` is the default to reconsider, because the zones now differ by
+   a MEASURED amount.** §43.2 named this a real option once the difference was
+   measured rather than suspected. A dual-stack node running the anonymity-zone
+   transit on its clearnet zone over-provisions clearnet by the transit gap and
+   **pays §6.6 leak for a path clearnet never takes.** "One process-wide `F`"
+   was a convenience, not a derivation; with a measured per-zone transit it is
+   defended on that basis or dropped. This is a seam question (a second constant,
+   an owner) carried into the re-derivation round, not settled here — but the
+   **default flips**: per-zone is presumed, and a single global value must now
+   justify itself.
+
+**Why this is written before the number.** The re-derivation round composes
+`F′`, the per-zone embargo, the wallet timeout and the §44 pins together (§90),
+and *which direction is safe* is exactly the question a surprising transit
+reading would distort — a low number invites "so shorten everything", a high one
+invites "so err higher still." Both are answered here against the rule: the
+statistic is the margin, the p90 is both the floor and the ceiling of the
+err-high commitment, and per-zone is the presumption. *"The number came out
+low/high"* is not a ground to move any of the three.
+
+This does not change a constant. It fixes the rule the constant will be composed
+under, so the composition is arithmetic rather than an argument.
