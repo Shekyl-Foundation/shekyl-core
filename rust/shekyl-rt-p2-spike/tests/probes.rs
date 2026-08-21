@@ -101,6 +101,11 @@ async fn p2_wrong_server_pin_is_refused_before_any_byte_is_written() {
         1,
         "the server must have seen exactly one refused handshake"
     );
+    assert_eq!(
+        served.accept_errors.load(Ordering::SeqCst),
+        0,
+        "the refusal must be classified as policy, not as a generic accept error"
+    );
 }
 
 /// 3. A client whose key is not enrolled is refused by the server: zero
@@ -134,6 +139,7 @@ async fn p2_unenrolled_client_is_refused_server_side() {
         "handler must see nothing"
     );
     assert_eq!(served.rejected.load(Ordering::SeqCst), 1);
+    assert_eq!(served.accept_errors.load(Ordering::SeqCst), 0);
 }
 
 /// 4. Distinguishability (rule 82): a pin mismatch and a dead network are
@@ -152,10 +158,10 @@ async fn p2_pin_mismatch_is_not_a_connection_failure() {
     .await
     .expect_err("mismatch");
 
-    // A port nothing listens on.
-    let free = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind");
-    let dead = free.local_addr().expect("addr");
-    drop(free);
+    // Port 0 is never listened on, so connect() refuses deterministically
+    // (ECONNREFUSED here) — unlike "bind, read the port, drop, dial", where
+    // another process can take the port in the gap.
+    let dead = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0));
     let refused = dial(
         dead,
         client_config(&laptop, server.fingerprint).expect("config"),

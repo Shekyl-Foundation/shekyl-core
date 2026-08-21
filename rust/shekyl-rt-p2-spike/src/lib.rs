@@ -389,13 +389,47 @@ pub fn client_config(
 }
 
 /// TLS over TCP as an axum listener: the handshake happens in `accept`, so
-/// axum only ever sees connections whose client passed the allowlist. Failed
+/// axum only ever sees connections whose client passed the allowlist. Refused
 /// handshakes are counted — that counter is the server-side half of the bite
-/// check.
+/// check — and **only** policy refusals count toward it: our allowlist
+/// refusing the client, or the client refusing us with a certificate-class
+/// alert (a wrong server pin reaches the server as the peer's
+/// `certificate_unknown` alert, never as a `PinError`). Every other accept
+/// failure — a non-TLS client, an abrupt disconnect, a malformed record —
+/// goes to a separate counter, so the probes can assert the refusal they
+/// caused and that nothing else happened.
 pub struct TlsListener {
     tcp: TcpListener,
     acceptor: TlsAcceptor,
     rejected: Arc<AtomicUsize>,
+    accept_errors: Arc<AtomicUsize>,
+}
+
+/// Was this accept failure a policy refusal — by us or by the peer?
+fn is_policy_refusal(err: &std::io::Error) -> bool {
+    use rustls::AlertDescription as A;
+    // Two shapes of policy refusal. Ours: the verifier refused the client's
+    // certificate (a PinError travels under CertificateError::Other; any
+    // certificate verdict counts). Theirs: the peer refused ours — a wrong
+    // server pin makes the client's verifier fail, and rustls maps that
+    // CertificateError::Other to a `certificate_unknown` alert on the wire;
+    // the whole certificate class is accepted so this does not hinge on one
+    // mapping.
+    matches!(
+        rustls_error_in(err),
+        Some(
+            TlsError::InvalidCertificate(_)
+                | TlsError::AlertReceived(
+                    A::CertificateUnknown
+                        | A::BadCertificate
+                        | A::UnknownCA
+                        | A::CertificateExpired
+                        | A::CertificateRevoked
+                        | A::UnsupportedCertificate
+                        | A::AccessDenied
+                )
+        )
+    )
 }
 
 impl axum::serve::Listener for TlsListener {
@@ -410,8 +444,13 @@ impl axum::serve::Listener for TlsListener {
             };
             match self.acceptor.accept(tcp).await {
                 Ok(tls) => return (tls, peer),
-                Err(_) => {
-                    self.rejected.fetch_add(1, Ordering::SeqCst);
+                Err(e) => {
+                    let counter = if is_policy_refusal(&e) {
+                        &self.rejected
+                    } else {
+                        &self.accept_errors
+                    };
+                    counter.fetch_add(1, Ordering::SeqCst);
                     // Each iteration awaits a fresh TCP connection, so this is
                     // work proportional to inbound traffic, not a spin. The
                     // yield keeps a burst of bad handshakes from starving
@@ -436,8 +475,10 @@ pub struct Served {
     pub addr: SocketAddr,
     /// Requests that reached the handler — must stay 0 for every rejection.
     pub hits: Arc<AtomicUsize>,
-    /// Handshakes the acceptor refused.
+    /// Handshakes refused on policy — by our allowlist or by the peer's pin.
     pub rejected: Arc<AtomicUsize>,
+    /// Accept failures that were not policy refusals; the probes require 0.
+    pub accept_errors: Arc<AtomicUsize>,
     /// The serve task.
     pub task: tokio::task::JoinHandle<std::io::Result<()>>,
 }
@@ -451,10 +492,12 @@ pub async fn serve(
     let addr = tcp.local_addr()?;
     let hits = Arc::new(AtomicUsize::new(0));
     let rejected = Arc::new(AtomicUsize::new(0));
+    let accept_errors = Arc::new(AtomicUsize::new(0));
     let listener = TlsListener {
         tcp,
         acceptor: TlsAcceptor::from(server_config(identity, allowlist)?),
         rejected: Arc::clone(&rejected),
+        accept_errors: Arc::clone(&accept_errors),
     };
     let counter = Arc::clone(&hits);
     let app = axum::Router::new().route(
@@ -472,6 +515,7 @@ pub async fn serve(
         addr,
         hits,
         rejected,
+        accept_errors,
         task,
     })
 }
