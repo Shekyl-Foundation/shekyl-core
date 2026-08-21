@@ -56,13 +56,14 @@ public:
   t_command_server(
       uint32_t ip
     , uint16_t port
-    , const std::optional<tools::login>& login
-    , const epee::net_utils::ssl_options_t& ssl_options
     , bool is_rpc = true
     , cryptonote::core_rpc_server* rpc_server = NULL
     );
 
   bool process_command_str(const std::string& cmd);
+
+  // RPC mode: whether a request issued by a processed command failed.
+  bool rpc_request_failed() const { return m_parser.rpc_request_failed(); }
 
   bool process_command_vec(const std::vector<std::string>& cmd);
 

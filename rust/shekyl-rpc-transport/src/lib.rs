@@ -23,7 +23,7 @@ use zeroize::Zeroizing;
 use shekyl_rpc_client::{Rpc, RpcError};
 
 mod http_client;
-use http_client::{error_chain, HttpClient};
+use http_client::{error_chain, HttpClient, TransportTls};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -78,6 +78,9 @@ struct ParsedEndpoint {
     /// already split and shape-checked, so the offline validator and the
     /// constructor share one credential grammar structurally.
     credentials: Option<(Zeroizing<String>, Zeroizing<String>)>,
+    /// Whether the client builds a TLS layer. `http://` never loads a
+    /// root store (see `HttpClient`).
+    tls: TransportTls,
 }
 
 /// Locate a URL's authority userinfo '@' — the credential terminator:
@@ -183,24 +186,30 @@ fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
     // `Uri::path()` is "/" for a path-less URL; the trailing-slash strip
     // above means any real path already ends in a non-'/' character.
     let path_prefix = parsed.path().trim_end_matches('/').to_string();
+    let tls = match parsed.scheme_str() {
+        Some("https") => TransportTls::On,
+        _ => TransportTls::Off,
+    };
     Ok(ParsedEndpoint {
         url,
         path_prefix,
         credentials,
+        tls,
     })
 }
 
 /// Validate a daemon URL and optional proxy **offline** — every construction
 /// check short of dialing: the authority credential grammar, the URL shape
 /// (http(s) scheme, authority, no query, base-path normalization), the proxy
-/// string, and the TLS root store. Server startup calls this so a malformed
+/// string, and — for an `https://` endpoint only — the TLS root store. Server
+/// startup calls this so a malformed
 /// `--daemon-address` / `--proxy` refuses loud at launch, instead of
 /// surfacing on first use as a misdiagnosed "daemon unreachable" (rule 82:
 /// the failure must name its cause). An unreachable-but-well-formed daemon
 /// passes — reachability is not a startup requirement.
 pub fn validate_endpoint(url: &str, proxy: Option<&str>) -> Result<(), RpcError> {
-    parse_endpoint(url.to_owned())?;
-    HttpClient::new(proxy).map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
+    let endpoint = parse_endpoint(url.to_owned())?;
+    HttpClient::new(proxy, endpoint.tls).map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
     Ok(())
 }
 
@@ -281,10 +290,11 @@ impl HttpRpc {
             url,
             path_prefix,
             credentials,
+            tls,
         } = parse_endpoint(url)?;
 
         let authentication = if let Some((username, password)) = credentials {
-            let client = HttpClient::new(proxy.as_deref())
+            let client = HttpClient::new(proxy.as_deref(), tls)
                 .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
             // Obtain the initial challenge, which also somewhat validates this connection
             let response = client
@@ -310,7 +320,7 @@ impl HttpRpc {
             // its classification must not depend on whether the daemon URL
             // happened to carry credentials.
             Authentication::Unauthenticated(
-                HttpClient::new(proxy.as_deref())
+                HttpClient::new(proxy.as_deref(), tls)
                     .map_err(|e| RpcError::ConnectionError(format!("{e}")))?,
             )
         };

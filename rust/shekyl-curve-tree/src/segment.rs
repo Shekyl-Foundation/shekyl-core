@@ -24,6 +24,19 @@ pub const SEGMENT_FREEZE_REORG_MARGIN_BLOCKS: u64 = 720;
 /// Output maturity / spendable age in blocks (`CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE`).
 pub const SPENDABLE_AGE_BLOCKS: u64 = DEFAULT_LOCK_WINDOW as u64;
 
+/// Width of one stored leaf, in bytes.
+///
+/// Derived from the leaf's scalar content rather than written as `128`: a
+/// leaf **is** `SCALARS_PER_LEAF` Selene scalars, so the byte width is that
+/// fact times the scalar width, not an independent number that has to be
+/// kept in step ([rule 17](../../../.cursor/rules/17-dependency-discipline.mdc)).
+/// The `LEAVES_TABLE` value type (`&[u8; 128]`) is the persisted layout;
+/// this is the same width where a `usize` is wanted rather than a type, and
+/// the assertion below is what keeps the two from parting company.
+pub const LEAF_BYTES: usize = SCALARS_PER_LEAF * 32;
+
+const _: () = assert!(LEAF_BYTES == 128);
+
 /// Dense segment identifier (`SegmentId` 0 covers tree positions `[0, E)`).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct SegmentId(pub u32);

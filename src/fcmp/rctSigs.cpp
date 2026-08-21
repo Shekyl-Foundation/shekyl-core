@@ -379,12 +379,12 @@ namespace
       }
     }
 
-    bool verRctSemanticsFeeOnly(const rctSig &rv)
+    bool verCtSemanticsFeeOnly(const rctSig &rv)
     {
       try
       {
         CHECK_AND_ASSERT_MES(rv.type == CTTypeFcmpPlusPlusPqc, false,
-            "verRctSemanticsFeeOnly called on unsupported rctSig type");
+            "verCtSemanticsFeeOnly called on unsupported rctSig type");
         CHECK_AND_ASSERT_MES(rv.p.fcmp_pp_proof.empty(), false, "FCMP++ proof must be empty");
         CHECK_AND_ASSERT_MES(rv.p.pseudoOuts.empty(), false, "pseudoOuts must be empty");
         CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
@@ -423,12 +423,12 @@ namespace
       }
       catch (const std::exception &e)
       {
-        LOG_PRINT_L1("Error in verRctSemanticsFeeOnly: " << e.what());
+        LOG_PRINT_L1("Error in verCtSemanticsFeeOnly: " << e.what());
         return false;
       }
       catch (...)
       {
-        LOG_PRINT_L1("Error in verRctSemanticsFeeOnly, but not an actual exception");
+        LOG_PRINT_L1("Error in verCtSemanticsFeeOnly, but not an actual exception");
         return false;
       }
     }

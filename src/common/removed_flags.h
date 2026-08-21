@@ -47,13 +47,14 @@
 
 namespace shekyl { namespace cli {
 
-// If `ex` names a flag removed in V3.1 — the daemonizer flags
-// (--detach, --pidfile, --install-service, --uninstall-service,
+// If `ex` names a flag shekyld no longer registers — the V3.1 daemonizer
+// flags (--detach, --pidfile, --install-service, --uninstall-service,
 // --start-service, --stop-service, --run-as-service), shekyld's inbound
-// RPC TLS/auth flags (--rpc-login, --rpc-ssl and the --rpc-ssl-* set), or
-// the transitional --no-rust-rpc — write a migration message to stderr
-// appropriate to that flag's removal reason, then return true. Caller
-// should exit nonzero.
+// RPC TLS/auth flags (--rpc-login, --rpc-ssl and the --rpc-ssl-* set), the
+// transitional --no-rust-rpc, the bootstrap-daemon forward
+// (--bootstrap-daemon-address / -login / -proxy), or --public-node —
+// write a migration message to stderr appropriate to that flag's removal
+// reason, then return true. Caller should exit nonzero.
 //
 // Otherwise returns false — caller should re-throw / print the normal
 // parse error.

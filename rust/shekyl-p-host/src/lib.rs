@@ -50,10 +50,15 @@
 //!
 //! # What is not here
 //!
-//! The pass-record axis, the response wire format, and the countersignature
-//! are all format-round decisions, and the provisional framing this host
-//! serves over (`x-provisional/v0`) is **THROWAWAY and gets no vote** in
-//! that round. Calling [`PersonaServingHost::refresh`] from the P-scan
+//! The pass-record axis and the countersignature are format-round decisions,
+//! and the provisional **transport** framing this host serves over
+//! (`x-provisional/v0` — status line, header set, route) is **THROWAWAY and
+//! gets no vote** in that round. The response *payload* is no longer open:
+//! `RF-D4` ruled it on 2026-08-20 and `shekyl-p-serve` emits the frame
+//! (`shekyl_curve_tree::served_frame`). Nothing in this crate reads or
+//! writes it — the host wires lifecycle, not bytes — but "the response wire
+//! format is undecided" has stopped being true and should not be repeated
+//! from here. Calling [`PersonaServingHost::refresh`] from the P-scan
 //! sweep is the wiring slice's job (SH-2b), on the crate that owns the
 //! claim-source decode and the curve-tree actor; this crate owns the
 //! refresh *behaviour* and the seam ([`ServeSetPinner`]) the sweep plugs

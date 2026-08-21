@@ -111,13 +111,18 @@ const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Internal read/write granularity for the shard body.
 ///
-/// Not wire framing — the response is one `content-length` body; the wire
-/// bytes are identical to a single write. The loop is chunked for two
-/// reasons: peak memory per in-flight connection is one chunk rather than a
-/// whole shard, and resumability, if the format round rules it in, becomes
-/// a change of framing on top of an already-incremental reader-writer
-/// instead of a rewrite — the §9.5 discipline that a format property must
-/// never be foreclosed by what was convenient to build.
+/// **Not wire framing.** The frame is `RF-D4`'s, written once ahead of the
+/// body; this constant only sets how the already-framed payload is split
+/// across writes, and the wire bytes are identical to a single write.
+///
+/// The loop is chunked for two reasons: peak memory per in-flight
+/// connection is one chunk rather than a whole shard, and resumability —
+/// which `RF-D4` did **not** rule in, so the frame carries no resumption
+/// field and adding one is still a future format change — becomes a change
+/// of framing on top of an already-incremental reader-writer instead of a
+/// rewrite. That is the §9.5 discipline that a format property must never
+/// be foreclosed by what was convenient to build, and it held: the format
+/// round came and went without this loop constraining it.
 const WRITE_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Backoff when `accept` fails (e.g. transient FD pressure). Prevents a
@@ -406,12 +411,18 @@ async fn resolve_body(
     }
 }
 
-/// Write the head, then stream the body chunk by chunk.
+/// Write the head, then the frame header, then stream the body chunk by
+/// chunk.
 ///
-/// `content-length` comes from [`ShardBody::remaining_bytes`], which is
+/// `content-length` comes from [`ServedFrameHeader::framed_len`], which is
 /// exact before a single leaf is read — so the head is committed before the
 /// store is touched, and a store that fails mid-body can only truncate a
 /// response, never change which response was chosen.
+///
+/// The frame header ([`RF-D4`]) is taken from [`ShardBody::header`] — fixed
+/// when the body was opened — and written ahead of the leaf stream.
+///
+/// [`RF-D4`]: shekyl_curve_tree::served_frame
 async fn write_response(
     stream: &mut TcpStream,
     body: Option<ShardBody>,
@@ -421,7 +432,17 @@ async fn write_response(
     let Some(mut body) = body else {
         return write_bounded(stream, NOT_FOUND.as_bytes()).await;
     };
-    write_bounded(stream, render_ok(body.remaining_bytes()).as_bytes()).await?;
+    // One write, not two. The wire bytes are identical either way — this is
+    // a loopback socket into tor, whose own cell framing quantizes
+    // everything downstream, so packet boundaries here are not an
+    // observable and no privacy claim rests on this. What it buys is a
+    // single commitment point: the status line, the headers and the frame
+    // are decided together, before the store is touched, leaving no seam
+    // between them for a later edit to slip something into.
+    let frame = body.header();
+    let mut head = render_ok(frame.framed_len()).into_bytes();
+    head.extend_from_slice(&frame.to_bytes());
+    write_bounded(stream, &head).await?;
     loop {
         // The store read is synchronous redb, so each chunk crosses to the
         // blocking pool and the body comes back with it.
@@ -519,7 +540,7 @@ fn parse_request(head: &[u8]) -> Option<Request> {
 /// The success head. Exactly [`RESPONSE_HEADER_NAMES`], nothing else — no
 /// `date` (a clock-skew fingerprint), no `server`, no `etag`, no
 /// `accept-ranges`.
-fn render_ok(len: usize) -> String {
+fn render_ok(len: u64) -> String {
     format!("HTTP/1.1 200 OK\r\ncontent-type: {CONTENT_TYPE}\r\ncontent-length: {len}\r\n\r\n")
 }
 
@@ -530,411 +551,5 @@ const NOT_FOUND: &str =
     "HTTP/1.1 404 Not Found\r\ncontent-type: application/octet-stream\r\ncontent-length: 0\r\n\r\n";
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::provider::{ProviderError, ShardBody};
-
-    /// In-memory provider: the loop's wire behaviour, storeless.
-    struct FixtureProvider {
-        shards: std::collections::HashMap<u64, Arc<[u8]>>,
-    }
-
-    impl FixtureProvider {
-        fn new(shards: impl IntoIterator<Item = (u64, Vec<u8>)>) -> Arc<Self> {
-            Arc::new(Self {
-                shards: shards
-                    .into_iter()
-                    .map(|(id, bytes)| (id, Arc::from(bytes.into_boxed_slice())))
-                    .collect(),
-            })
-        }
-    }
-
-    impl ShardProvider for FixtureProvider {
-        fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-            Ok(self.shards.get(&shard_id).cloned().map(ShardBody::flat))
-        }
-    }
-
-    /// Provider whose every lookup fails — the store-failure arm.
-    struct FailingProvider;
-
-    impl ShardProvider for FailingProvider {
-        fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-            Err(ProviderError::other("synthetic store failure"))
-        }
-    }
-
-    async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
-        let mut s = TcpStream::connect(addr).await.expect("connect");
-        s.write_all(format!("GET {path} HTTP/1.1\r\nhost: x\r\n\r\n").as_bytes())
-            .await
-            .expect("write request");
-        let mut out = Vec::new();
-        s.read_to_end(&mut out).await.expect("read response");
-        out
-    }
-
-    fn head_of(response: &[u8]) -> String {
-        let end = response
-            .windows(4)
-            .position(|w| w == b"\r\n\r\n")
-            .expect("response has a head");
-        String::from_utf8_lossy(&response[..end]).to_string()
-    }
-
-    fn header_names(head: &str) -> Vec<String> {
-        head.lines()
-            .skip(1)
-            .filter(|l| !l.is_empty())
-            .map(|l| l.split(':').next().unwrap_or_default().to_ascii_lowercase())
-            .collect()
-    }
-
-    #[tokio::test]
-    async fn binds_loopback_only() {
-        // A wildcard or routable bind would make the endpoint reachable
-        // without the rendezvous and attributable to the host's IP.
-        let ep = PServeEndpoint::bind(FixtureProvider::new([]))
-            .await
-            .expect("bind");
-        assert!(ep.addr().ip().is_loopback());
-        assert_ne!(ep.addr().port(), 0, "an ephemeral port was actually bound");
-    }
-
-    #[tokio::test]
-    async fn serves_each_shard_by_its_own_id() {
-        // The capability the spike lacked: the id in the route selects the
-        // shard. Two ids must return their own bytes, not a shared buffer.
-        let a: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
-        let b: Vec<u8> = (0..4096u32).map(|i| (i % 241) as u8).collect();
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(7, a.clone()), (9, b.clone())]))
-            .await
-            .expect("bind");
-
-        let ra = fetch(ep.addr(), "/x-provisional/v0/shard/7").await;
-        assert!(head_of(&ra).starts_with("HTTP/1.1 200 OK"));
-        assert_eq!(&ra[ra.len() - a.len()..], &a[..], "shard 7 serves a-bytes");
-
-        let rb = fetch(ep.addr(), "/x-provisional/v0/shard/9").await;
-        assert_eq!(&rb[rb.len() - b.len()..], &b[..], "shard 9 serves b-bytes");
-
-        assert_eq!(ep.served_count(), 2);
-        assert_eq!(ep.lookup_failure_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn two_personas_are_header_identical() {
-        // Two endpoints (as two personas' loops would be), different
-        // payload bytes of equal length so the assertion cannot pass
-        // vacuously by serving identical bodies.
-        let a = PServeEndpoint::bind(FixtureProvider::new([(0, vec![0xAA; 2048])]))
-            .await
-            .expect("bind a");
-        let b = PServeEndpoint::bind(FixtureProvider::new([(1, vec![0xBB; 2048])]))
-            .await
-            .expect("bind b");
-        let ha = head_of(&fetch(a.addr(), "/x-provisional/v0/shard/0").await);
-        let hb = head_of(&fetch(b.addr(), "/x-provisional/v0/shard/1").await);
-        assert_eq!(ha, hb, "two personas must be header-identical");
-
-        // The header set is exactly the declared one — checked by name so
-        // a future addition fails here instead of widening the
-        // fingerprint.
-        assert_eq!(header_names(&ha), RESPONSE_HEADER_NAMES);
-        for banned in ["server", "date", "etag", "accept-ranges", "connection"] {
-            assert!(
-                !ha.to_ascii_lowercase().contains(banned),
-                "{banned} must not be emitted: {ha}"
-            );
-        }
-    }
-
-    #[test]
-    fn not_found_uses_the_declared_header_set_and_content_type() {
-        // One source of truth: 404 is not a second fingerprint with a
-        // divergent header list or content-type spelling.
-        assert!(NOT_FOUND.contains(&format!("content-type: {CONTENT_TYPE}")));
-        let head = NOT_FOUND
-            .split("\r\n\r\n")
-            .next()
-            .expect("status + headers");
-        assert_eq!(header_names(head), RESPONSE_HEADER_NAMES);
-    }
-
-    #[tokio::test]
-    async fn every_non_servable_outcome_renders_one_identical_404() {
-        // The full *complete-head* miss set in one sweep: wrong path, wrong
-        // prefix, malformed id, UNKNOWN shard id (a valid route to a shard
-        // this persona does not hold), and a provider infrastructure
-        // failure. All must be byte-identical, or the differences become a
-        // probe surface for the route table, the holdings, or store health.
-        // Incomplete heads (oversized / EOF / timeout) are a different
-        // wire class — close, like over-capacity — covered separately.
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(3, vec![7u8; 32])]))
-            .await
-            .expect("bind");
-        let mut seen: Vec<Vec<u8>> = Vec::new();
-        for path in [
-            "/",
-            "/health",
-            "/x-spike/v0/shard/3",
-            "/x-provisional/v0/shard/",
-            "/x-provisional/v0/shard/abc",
-            "/x-provisional/v0/shard/4", // valid route, unheld shard
-        ] {
-            seen.push(fetch(ep.addr(), path).await);
-        }
-        let failing = PServeEndpoint::bind(Arc::new(FailingProvider))
-            .await
-            .expect("bind failing");
-        seen.push(fetch(failing.addr(), "/x-provisional/v0/shard/3").await);
-        assert_eq!(failing.lookup_failure_count(), 1);
-
-        assert!(
-            seen.windows(2).all(|w| w[0] == w[1]),
-            "every miss must render byte-identically"
-        );
-        assert!(head_of(&seen[0]).starts_with("HTTP/1.1 404"));
-        assert_eq!(ep.served_count(), 0, "a miss is not counted as a serve");
-    }
-
-    #[tokio::test]
-    async fn non_get_methods_are_not_served() {
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, vec![1u8; 8])]))
-            .await
-            .expect("bind");
-        let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-        s.write_all(b"POST /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
-            .await
-            .expect("write");
-        let mut out = Vec::new();
-        s.read_to_end(&mut out).await.expect("read");
-        assert!(head_of(&out).starts_with("HTTP/1.1 404"));
-        assert_eq!(ep.served_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn a_request_body_does_not_reset_the_response() {
-        // Unread bytes left in the receive queue at close make Linux send
-        // RST instead of FIN, and the RST can destroy the response already
-        // queued for sending. A complete head followed by a body must still
-        // deliver the whole shared 404 — the invariant says every
-        // complete-head non-servable outcome renders *the same bytes*, and
-        // "reset instead" is not the same bytes.
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, vec![1u8; 8])]))
-            .await
-            .expect("bind");
-        let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-        let body = vec![b'z'; 64 * 1024];
-        s.write_all(
-            format!(
-                "POST /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\ncontent-length: {}\r\n\r\n",
-                body.len()
-            )
-            .as_bytes(),
-        )
-        .await
-        .expect("write head");
-        s.write_all(&body).await.expect("write body");
-
-        let mut out = Vec::new();
-        s.read_to_end(&mut out).await.expect("read response");
-        assert_eq!(
-            out,
-            NOT_FOUND.as_bytes(),
-            "the complete shared 404 must survive a request that carried a body"
-        );
-    }
-
-    #[tokio::test]
-    async fn unread_request_bytes_do_not_truncate_the_served_shard() {
-        // The same mechanism with real stakes. A peer that pipelines, or
-        // that sends anything after a complete head, leaves bytes in the
-        // receive queue; closing on top of them resets the connection and
-        // the witness sees a *short shard*, failing content verification on
-        // bytes this endpoint sent correctly.
-        let payload: Vec<u8> = (0..256 * 1024u32).map(|i| (i % 251) as u8).collect();
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
-            .await
-            .expect("bind");
-        let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-        s.write_all(b"GET /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
-            .await
-            .expect("write request");
-        // Never answered — no keep-alive — and exactly the unread remainder
-        // that provokes the reset.
-        s.write_all(&vec![b'q'; 64 * 1024])
-            .await
-            .expect("write trailing bytes");
-
-        let mut out = Vec::new();
-        s.read_to_end(&mut out).await.expect("read response");
-        assert!(head_of(&out).starts_with("HTTP/1.1 200 OK"));
-        assert_eq!(
-            &out[out.len() - payload.len()..],
-            &payload[..],
-            "the whole shard must arrive intact"
-        );
-        assert_eq!(ep.served_count(), 1);
-    }
-
-    #[tokio::test]
-    async fn a_multi_chunk_body_arrives_whole_and_in_order() {
-        // The body is streamed in WRITE_CHUNK_BYTES pieces; a chunking or
-        // cursor bug shows up as reordering, duplication, or a short body,
-        // none of which a same-length assertion alone would catch.
-        let payload: Vec<u8> = (0..WRITE_CHUNK_BYTES * 3 + 7)
-            .map(|i| u8::try_from(i % 253).expect("modulus is under 256"))
-            .collect();
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
-            .await
-            .expect("bind");
-        let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
-        let head = head_of(&r);
-        assert!(head.contains(&format!("content-length: {}", payload.len())));
-        assert_eq!(&r[r.len() - payload.len()..], &payload[..]);
-    }
-
-    #[tokio::test]
-    async fn concurrency_past_the_cap_is_refused_by_close_not_by_a_status_code() {
-        // Hold connections open (no request head → each keeps a permit
-        // until READ_TIMEOUT). Poll until the accept loop has actually
-        // filled the cap and starts shedding by CLOSE — never a fixed
-        // sleep that flakes under load.
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, vec![3u8; 64])]))
-            .await
-            .expect("bind");
-
-        let mut held: Vec<TcpStream> = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let mut saw_close_refusal = false;
-        let mut refused_bodies = Vec::new();
-
-        while tokio::time::Instant::now() < deadline {
-            while held.len() < MAX_INFLIGHT {
-                held.push(TcpStream::connect(ep.addr()).await.expect("connect hold"));
-            }
-            // Let the accept loop drain the backlog.
-            tokio::task::yield_now().await;
-            tokio::time::sleep(Duration::from_millis(5)).await;
-
-            let before = ep.refused_count();
-            let mut s = TcpStream::connect(ep.addr()).await.expect("probe");
-            let mut out = Vec::new();
-            tokio::time::timeout(Duration::from_millis(100), s.read_to_end(&mut out))
-                .await
-                .ok();
-            if ep.refused_count() > before {
-                assert!(
-                    !out.starts_with(b"HTTP/"),
-                    "a refusal must be a close, never a status line"
-                );
-                saw_close_refusal = true;
-                refused_bodies.push(out);
-                // A few more excess arrivals for confidence.
-                for _ in 0..4 {
-                    let mut s = TcpStream::connect(ep.addr()).await.expect("excess");
-                    let mut out = Vec::new();
-                    tokio::time::timeout(Duration::from_millis(100), s.read_to_end(&mut out))
-                        .await
-                        .ok();
-                    refused_bodies.push(out);
-                }
-                break;
-            }
-            // Still under capacity: this probe was accepted — hold it so
-            // we fill the remaining slots.
-            held.push(s);
-        }
-
-        assert!(
-            saw_close_refusal && ep.refused_count() > 0,
-            "the cap must shed load without a fixed sleep; refused = {}",
-            ep.refused_count()
-        );
-        for body in &refused_bodies {
-            assert!(
-                !body.starts_with(b"HTTP/"),
-                "a refusal must be a close, never a status line"
-            );
-        }
-        drop(held);
-    }
-
-    #[tokio::test]
-    async fn the_cap_does_not_refuse_below_it() {
-        // Negative control: without it, a cap of zero would pass
-        // "refusals happen" while breaking the endpoint entirely.
-        let payload = vec![9u8; 512];
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload)]))
-            .await
-            .expect("bind");
-        for _ in 0..8 {
-            let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
-            assert!(head_of(&r).starts_with("HTTP/1.1 200 OK"));
-        }
-        assert_eq!(ep.refused_count(), 0, "no refusal below the cap");
-        assert_eq!(ep.served_count(), 8);
-    }
-
-    #[tokio::test]
-    async fn oversized_request_head_is_closed_not_answered() {
-        // Incomplete / hostile head: close with no HTTP bytes — same wire
-        // class as over-capacity, not the complete-head shared 404. The
-        // pre-allocation bound is enforced while reading.
-        let ep = PServeEndpoint::bind(FixtureProvider::new([(0, vec![0u8; 8])]))
-            .await
-            .expect("bind");
-        let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-        s.write_all(b"GET /x-provisional/v0/shard/0 HTTP/1.1\r\n")
-            .await
-            .expect("write line");
-        let filler = vec![b'x'; MAX_REQUEST_BYTES * 2];
-        s.write_all(&filler).await.ok();
-        let mut out = Vec::new();
-        s.read_to_end(&mut out).await.ok();
-        assert!(
-            !out.starts_with(b"HTTP/"),
-            "an incomplete/oversized head must close, not invent a status: {out:?}"
-        );
-        assert_eq!(ep.served_count(), 0);
-    }
-
-    #[test]
-    fn request_parsing_accepts_only_the_provisional_route() {
-        assert_eq!(
-            parse_request(b"GET /x-provisional/v0/shard/42 HTTP/1.1\r\n\r\n"),
-            Some(Request::Shard(42))
-        );
-        assert_eq!(parse_request(b"GET /shard/42 HTTP/1.1\r\n\r\n"), None);
-        // The spike's route is dead here — its framing did not carry over.
-        assert_eq!(
-            parse_request(b"GET /x-spike/v0/shard/42 HTTP/1.1\r\n\r\n"),
-            None
-        );
-        assert_eq!(
-            parse_request(b"HEAD /x-provisional/v0/shard/1 HTTP/1.1\r\n\r\n"),
-            None
-        );
-        // A negative id is not a u64 — rejected rather than wrapped.
-        assert_eq!(
-            parse_request(b"GET /x-provisional/v0/shard/-1 HTTP/1.1\r\n\r\n"),
-            None
-        );
-        // No version token / extra tokens → miss.
-        assert_eq!(
-            parse_request(b"GET /x-provisional/v0/shard/1\r\n\r\n"),
-            None
-        );
-        assert_eq!(
-            parse_request(b"GET /x-provisional/v0/shard/1 HTTP/1.1 extra\r\n\r\n"),
-            None
-        );
-        // Query / suffix is not a bare u64.
-        assert_eq!(
-            parse_request(b"GET /x-provisional/v0/shard/1?x=1 HTTP/1.1\r\n\r\n"),
-            None
-        );
-    }
-}
+#[path = "serve_tests.rs"]
+mod tests;

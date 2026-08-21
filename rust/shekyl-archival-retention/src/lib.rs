@@ -157,7 +157,9 @@ pub use failure_window::{
     FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
 };
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
-pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
+pub use path::{
+    challenged_leaf_bytes, verify_segment_path, SegmentPathOpening, CHALLENGED_LEAF_LEN,
+};
 pub use release_cooldown::{release_cooldown_elapsed, whole_record_last_served};
 pub use reward_arithmetic::{
     curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_micro,
@@ -165,7 +167,8 @@ pub use reward_arithmetic::{
     WORK_MILLI_SCALE,
 };
 pub use segment_freeze::{
-    challenge_leaf_chunk_bounds, frozen_segment_count, LeafChunkBounds, SEGMENT_LEAF_COUNT,
+    challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, frozen_segment_count,
+    LeafChunkBounds, SEGMENT_LEAF_COUNT,
 };
 pub use serve_credit_decisions::{
     serve_credit_block_key, serve_credit_block_unique, serve_credit_gate_decision,
@@ -174,5 +177,7 @@ pub use serve_credit_decisions::{
 };
 pub use serve_eligibility::serve_credit_epoch_ok;
 pub use wire::{
-    encode_path, ArchivalServeCreditResponse, WireError, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
+    encode_path, hybrid_countersignature, split_countersignature, ArchivalServeCreditPruned,
+    ArchivalServeCreditResponse, WireError, ED25519_COUNTERSIGNATURE_LEN,
+    ML_DSA_COUNTERSIGNATURE_LEN, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };

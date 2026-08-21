@@ -269,7 +269,8 @@ following into it, sourced from C++ and pinned by KATs:
    Levin `default_levin_limits`: 8192 objects / 16384 fields / 16384
    strings (`levin_abstract_invoke2.h`). HTTP-binary
    `default_http_bin_limits`: 65536×3 each
-   (`http_abstract_invoke.h`). String length `< MAX_STRING_LEN_POSSIBLE`
+   (formerly `http_abstract_invoke.h`; since the epee HTTP client deletion
+   the only holder is `Limits::HTTP_BIN` in `shekyl-portable-storage`). String length `< MAX_STRING_LEN_POSSIBLE`
    (2_000_000_000). Section keys `< 255` bytes, length-prefixed by a
    single byte (already sketched).
 2. **`KV_SERIALIZE_OPT`.** Store omits the field when the value equals

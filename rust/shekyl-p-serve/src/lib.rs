@@ -10,11 +10,14 @@
 //! witness pulls the **entire shard** and verifies the bytes against the
 //! chain-committed sub-root `R_k` (§2) — the response is
 //! **self-authenticating by content**, which is why this crate signs
-//! nothing. The two inputs a countersignature would need — the session
-//! nonce construction and the signing key (attestation-leg-is-onion-key
-//! vs sibling + proof-of-possession) — are both open format-round forks;
-//! building either here would prejudge the fork, so the pass-record axis
-//! lands with the format round, not with this loop.
+//! nothing. The two inputs a countersignature would need are the session
+//! nonce construction and the signing key (attestation-leg-is-onion-key vs
+//! sibling + proof-of-possession). The **nonce is no longer a fork** —
+//! `RF-D3`/`RF-D5` settled it as
+//! `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)`, with `r` replaced rather
+//! than removed — while the signing key remains open. Either way the
+//! pass-record axis does not land in this loop: this crate is transport,
+//! and it still signs nothing.
 //!
 //! # This crate's place in the §9.5 item-3 arc
 //!
@@ -30,7 +33,7 @@
 //! bind → publish onion → tear down) and did not need to grow this
 //! crate's privacy contract to do it.
 //!
-//! # `x-provisional/v0` — THROWAWAY framing, no vote in the format round
+//! # `x-provisional/v0` — THROWAWAY *transport* framing, no vote in the format round
 //!
 //! The route is `GET /x-provisional/v0/shard/{shard_id}`. §9.5 records the
 //! discipline verbatim: *"the provisional framing is THROWAWAY and gets no
@@ -38,9 +41,20 @@
 //! genesis-irreversible decision made on its own merits (including
 //! resumability, which is a *format property* — the serving loop writes in
 //! bounded chunks precisely so a future resumable format is a change of
-//! framing, not a rewrite of the loop). Nothing about these bytes is a
-//! proposal; a reviewer who finds `x-provisional/v0` cited in a design doc
+//! framing, not a rewrite of the loop). Nothing about the **HTTP** shape is
+//! a proposal; a reviewer who finds `x-provisional/v0` cited in a design doc
 //! should treat that as a bug.
+//!
+//! **The body is a different matter as of `RF-D4` (2026-08-20), and the two
+//! must not be confused.** The response *payload* now carries the ruled
+//! served frame — [`shekyl_curve_tree::served_frame::ServedFrameHeader`],
+//! `leaf_count ‖ padding_len ‖ segment_bytes ‖ padding_bytes` — which **is**
+//! genesis-frozen. The throwaway half is the status line, the header set and
+//! the route; the framed half is everything after `\r\n\r\n`. This crate
+//! *emits* that frame, it does not define it: the definition lives in
+//! `shekyl-curve-tree` because any fetcher already depends on that crate to
+//! recompute `R_k`, and a format owned by the server would make every reader
+//! depend on the writer.
 //!
 //! # What this crate is, and is not
 //!
@@ -51,7 +65,8 @@
 //! material at all — and, since [`StoreShardProvider`] is built from a
 //! read-only `ServingReader`, it cannot write to the store either.
 //!
-//! **Is not:** a pass-record builder, a countersigner, a wire format, a
+//! **Is not:** a pass-record builder, a countersigner, the *definition* of a
+//! wire format (it emits `RF-D4`'s frame; `shekyl-curve-tree` owns it), a
 //! consensus surface, onion registration, or the W₂ rig. The rig extends
 //! this loop with the concurrent-batch measurement shape (§9); the
 //! placeholder [`serve::MAX_INFLIGHT`] (SPIKE-PIN-2) is derived there on

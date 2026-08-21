@@ -59,6 +59,12 @@ shekyl-units = { path = "../shekyl-units" }
 # Bp+ batch verification takes a CSPRNG for the batch weights; same 0.6 pin
 # and `std` (OsRng) feature as shekyl-fcmp's own verify path.
 rand_core = { version = "0.6", features = ["std"] }
+# The `shekyld <command>` control client (`ctl_client.rs`): the outbound
+# half of the daemon's HTTP surface rides the same first-party transport the
+# wallet dials the daemon with, replacing epee's `http_simple_client`.
+# `shekyl-rpc-client` supplies the `Rpc` trait that names `post`.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # Real consensus-valid spend fixture for the production-verifier oracle test

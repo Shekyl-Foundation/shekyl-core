@@ -163,7 +163,6 @@ pub(crate) enum Endpoint {
     GetAltBlocksHashes,
     IsKeyImageSpent,
     SubmitTransaction,
-    GetPublicNodes,
     GetTransactionPool,
     GetTransactionPoolHashesBin,
     GetTransactionPoolHashes,
@@ -183,7 +182,6 @@ pub(crate) enum Endpoint {
     SetLogHashRate,
     SetLogLevel,
     SetLogCategories,
-    SetBootstrapDaemon,
     StopDaemon,
     GetNetStats,
     SetLimit,
@@ -238,11 +236,6 @@ pub(crate) const ROUTES: &[Route] = &[
     Route {
         endpoint: Endpoint::SubmitTransaction,
         paths: &["/submit_transaction"],
-        visibility: Visibility::Always,
-    },
-    Route {
-        endpoint: Endpoint::GetPublicNodes,
-        paths: &["/get_public_nodes"],
         visibility: Visibility::Always,
     },
     Route {
@@ -343,11 +336,6 @@ pub(crate) const ROUTES: &[Route] = &[
         visibility: Visibility::AdminOnly,
     },
     Route {
-        endpoint: Endpoint::SetBootstrapDaemon,
-        paths: &["/set_bootstrap_daemon"],
-        visibility: Visibility::AdminOnly,
-    },
-    Route {
         endpoint: Endpoint::StopDaemon,
         paths: &["/stop_daemon"],
         visibility: Visibility::AdminOnly,
@@ -423,7 +411,6 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
         }
         Endpoint::IsKeyImageSpent => get(json::is_key_image_spent).post(json::is_key_image_spent),
         Endpoint::SubmitTransaction => post(submit::submit_transaction),
-        Endpoint::GetPublicNodes => get(json::get_public_nodes).post(json::get_public_nodes),
         Endpoint::GetTransactionPool => {
             get(json::get_transaction_pool).post(json::get_transaction_pool)
         }
@@ -453,9 +440,6 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
         Endpoint::SetLogHashRate => get(json::set_log_hash_rate).post(json::set_log_hash_rate),
         Endpoint::SetLogLevel => get(json::set_log_level).post(json::set_log_level),
         Endpoint::SetLogCategories => get(json::set_log_categories).post(json::set_log_categories),
-        Endpoint::SetBootstrapDaemon => {
-            get(json::set_bootstrap_daemon).post(json::set_bootstrap_daemon)
-        }
         Endpoint::StopDaemon => get(json::stop_daemon).post(json::stop_daemon),
         Endpoint::GetNetStats => get(json::get_net_stats).post(json::get_net_stats),
         Endpoint::SetLimit => get(json::set_limit).post(json::set_limit),
@@ -627,7 +611,6 @@ mod tests {
         "/get_alt_blocks_hashes",
         "/is_key_image_spent",
         "/submit_transaction",
-        "/get_public_nodes",
         "/get_transaction_pool",
         "/get_transaction_pool_hashes.bin",
         "/get_transaction_pool_hashes",
@@ -644,7 +627,7 @@ mod tests {
         "/get_o_indexes.bin",
     ];
 
-    /// Paths that must **never** be served on the restricted (public)
+    /// Paths that must **never** be served on the restricted (view-only)
     /// listener. §55: `/get_stem_tallies` is the anonymity graph; the rest are
     /// node administration (mine, ban, shut down, roll back).
     const SPECIFIED_ADMIN_ONLY_PATHS: &[&str] = &[
@@ -657,7 +640,6 @@ mod tests {
         "/set_log_hash_rate",
         "/set_log_level",
         "/set_log_categories",
-        "/set_bootstrap_daemon",
         "/stop_daemon",
         "/get_net_stats",
         "/set_limit",

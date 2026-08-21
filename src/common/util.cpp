@@ -69,7 +69,10 @@ using namespace epee;
 #include "util.h"
 #include "stack_trace.h"
 #include "memwipe.h"
-#include "net/http_client.h"                        // epee::net_utils::...
+#include "net/net_parse_helpers.h"                  // epee::net_utils::parse_url
+#include "string_tools.h"                           // epee::string_tools
+#include "string_tools_lexical.h"                   // epee::string_tools::get_xtype_from_string
+#include <openssl/ssl.h>                            // OPENSSL_init_ssl
 #include "readline_buffer.h"
 
 #ifdef WIN32

@@ -21,33 +21,20 @@ import sys, json
 # is ANY unrecognized response collapsing to zero, because zero is this run its
 # headline claim and the instrument must not be able to manufacture it.
 def absent_connections_is_empty(r):
-    """Decide an absent `connections` from the response's OWN shape.
+    """An absent `connections` is never a zero.
 
-    The previous version asked `get_info` to corroborate a zero. That check
-    could not fire. `get_info`'s counters come from
-    `get_public_outgoing_connections_count()`
-    (src/rpc/core_rpc_server.cpp:345) — the PUBLIC zone only, and additionally
-    hard-zeroed under `restricted` on the same line. Every node in this run is
-    anonymity-only, so `get_info` reports 0/0 whether the node holds zero anon
-    peers or twelve. Its "the node HAS peers, refuse the zero" branch needed
-    public peers to reach and was unreachable for the entire population it
-    guarded: a second instrument blind on exactly the axis under test, which
-    is the same defect it was written to close, one layer out.
-
-    A corroborating oracle is the wrong tool here. The ambiguity is "empty
-    list" vs "a response shape we do not understand", and that is decidable
-    from the reply itself: a get_connections reply affirmatively identifies
-    itself with `status` and `untrusted` (a genuinely isolated node returns
-    exactly `{"status":"OK","untrusted":false}`). Require those, and an absent
-    `connections` is an empty list. Anything else stays ERR.
-
-    Constrain what can match rather than asking something else to vouch.
+    The count is emitted only from a path that affirmatively parsed a list
+    of connection objects (file header). `untrusted` used to ride every RPC
+    response and was used here as a discriminator; it was deleted with the
+    bootstrap-daemon forward, and `status` is on every response too, so
+    neither field uniquely identifies get_connections. The discriminator is
+    the `connections` key itself: a genuine isolated node serializes
+    `"connections":[]`. A missing key is a different method or a malformed
+    reply — ERR, not a manufactured zero.
     """
     if r.get("status") != "OK":
         return "ERR no-connections-field:status=%r" % (r.get("status"),)
-    if "untrusted" not in r:
-        return "ERR no-connections-field:not-a-get_connections-reply"
-    return "OK 0 0 0"
+    return "ERR no-connections-field:not-a-get_connections-reply"
 
 def _excluded_onions():
     """Onions that must NOT appear in any fleet node's peer list.

@@ -3925,6 +3925,7 @@ dependencies = [
  "redb",
  "serde_json",
  "shekyl-consensus",
+ "shekyl-curve-io",
  "shekyl-fcmp",
  "tempfile",
 ]
@@ -3959,6 +3960,8 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
+ "shekyl-rpc-client",
+ "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-tx-builder",
  "shekyl-types",
@@ -4554,6 +4557,15 @@ dependencies = [
  "tempfile",
  "tokio",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-tor-transit-spike"
+version = "3.1.0"
+dependencies = [
+ "kameo",
+ "shekyl-tor",
+ "tokio",
 ]
 
 [[package]]

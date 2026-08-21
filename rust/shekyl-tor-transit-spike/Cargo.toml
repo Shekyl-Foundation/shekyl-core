@@ -1,0 +1,33 @@
+[package]
+name = "shekyl-tor-transit-spike"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DISPOSABLE measurement spike: §94 Tor transit (onion-to-onion, one-way). Not canonical; delete once ANON_ZONE_TRANSIT_MEASURED_MS lands."
+publish = false
+# Two bins now, so `cargo run -p` would be ambiguous; the session runner calls
+# the binary by path, but leaving that trap for the next person is free to fix.
+default-run = "shekyl-tor-transit-spike"
+
+[dependencies]
+# The managed-tor lifecycle and the ADD_ONION surface this rides. Deliberately
+# NOT `shekyl-sp-t3-spike`: that harness times a `p-serve` FETCH, which is a
+# round trip with application handling in the path — the two things §94.5
+# amended the estimator away from.
+shekyl-tor = { path = "../shekyl-tor" }
+# The control actor's `ActorRef` issues ADD_ONION; kameo is the workspace stack.
+kameo = { workspace = true }
+tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "time", "macros", "sync"] }
+
+[[bin]]
+name = "shekyl-tor-transit-spike"
+path = "src/main.rs"
+
+# `bins/` and not `bin/`: the repo's .gitignore has a bare `bin/` rule, which
+# silently swallows a Cargo binary directory — the file is present locally and
+# absent in CI. `shekyl-sp-t3-spike` hit this first and uses the same layout.
+[[bin]]
+name = "transit-analyze"
+path = "bins/analyze.rs"

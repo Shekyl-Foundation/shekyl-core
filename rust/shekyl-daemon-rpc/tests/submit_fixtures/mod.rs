@@ -21,10 +21,8 @@ use shekyl_daemon_rpc::submit::{
     SubmitStateShim, TxMeta, TxVerifier, VerificationCertificate, VerifyFailure,
 };
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
-use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
-use shekyl_wire::{
-    BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, ServeCredit, Transaction, TxPrefix,
-};
+use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, TAG_INPUT_SERVE_CREDIT};
+use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
 /// The curve-tree root the fixture facts report at the reference height.
 pub const FIXTURE_ROOT: [u8; 32] = [0xAA; 32];
@@ -116,6 +114,7 @@ pub fn spend_tx_with_kis(key_images: &[[u8; 32]], fee: u64) -> Transaction {
             base,
             pqc_auths: key_images.iter().map(|_| pqc_auth()).collect(),
             prunable: Some(Prunable {
+                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp_plus()],
                 tree_depth: 3,
                 fcmp_proof: vec![0xEF; 2500],
@@ -137,17 +136,16 @@ pub fn serve_credit_tx(fee: u64) -> Transaction {
     Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
-            inputs: vec![Input::ServeCredit(Box::new(ServeCredit {
-                p_canonical_id: [0x11; 32],
-                shard_id: 7,
-                settlement_epoch: 42,
-                segment_subroot_rk: [0x22; 32],
-                leaf_index_in_segment: 0x0403_0201,
-                leaf_bytes: [0x33; 128],
-                c1_layers: vec![vec![[0x44; 32], [0x45; 32]], vec![[0x46; 32]]],
-                c2_layers: vec![vec![[0x55; 32]]],
-                hybrid_signature: vec![0x66; 3385],
-            }))],
+            inputs: vec![Input::ServeCredit {
+                // Opaque kept half (RF-D1 / rule 40): tag ‖ p_id ‖ shard ‖ epoch ‖ ed25519.
+                canonical_bytes: {
+                    let mut b = vec![TAG_INPUT_SERVE_CREDIT];
+                    b.extend_from_slice(&[0x11; 32]);
+                    b.extend_from_slice(&[7, 42]);
+                    b.extend_from_slice(&[0x66; 64]);
+                    b
+                },
+            }],
             outputs: vec![],
             extra: vec![],
         },
@@ -160,7 +158,15 @@ pub fn serve_credit_tx(fee: u64) -> Transaction {
                 commitments: vec![],
             },
             pqc_auths: vec![],
-            prunable: None,
+            // RF-D1: the pruned half of the record, one per serve-credit vin.
+            prunable: Some(Prunable {
+                bulletproofs: vec![],
+                tree_depth: 0,
+                fcmp_proof: vec![],
+                pseudo_outs: vec![],
+                // One opaque pruned record per serve-credit vin.
+                serve_credit_pruned: vec![vec![0x77; 64]],
+            }),
         },
     }
 }
@@ -240,6 +246,8 @@ pub fn emission_tx(fee: u64) -> Transaction {
             base,
             pqc_auths: vec![pqc_auth(), pqc_auth()],
             prunable: Some(Prunable {
+                // Spend fixture: no pass records (RF-D1).
+                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp_plus()],
                 tree_depth: 3,
                 fcmp_proof: vec![0xEF; 2500],
