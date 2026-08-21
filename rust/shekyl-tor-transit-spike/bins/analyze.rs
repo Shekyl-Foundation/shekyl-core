@@ -59,6 +59,13 @@ fn main() {
     let mut utc_lo = u128::MAX;
     let mut utc_hi = 0u128;
     let mut days: std::collections::BTreeSet<u128> = std::collections::BTreeSet::new();
+    // A "session" for §94.2(e) is a session that produced data. A file is
+    // not a session: the four zero-sample runs this round opened with were
+    // each a file, and counting them would have let the gate read MET on
+    // sessions that measured nothing. Indices that contributed at least one
+    // accepted sample, in any arm.
+    let mut sessions_with_data: std::collections::BTreeSet<usize> =
+        std::collections::BTreeSet::new();
 
     for (idx, path) in paths.iter().enumerate() {
         let Ok(text) = std::fs::read_to_string(path) else {
@@ -87,6 +94,7 @@ fn main() {
                 sessions.push(Vec::new());
             }
             sessions[idx].push(us);
+            sessions_with_data.insert(idx);
         }
     }
 
@@ -94,9 +102,10 @@ fn main() {
     // §94.2(e)'s COUNTABLE gate: >=5 sessions, >=3 distinct days, >=8h span.
     // Convergence (<5% pooled-p90 move) is the fourth condition and is reported
     // per arm below; a candidate value needs BOTH this gate and convergence.
-    let count_met = paths.len() >= 5 && days.len() >= 3 && span_h >= 8.0;
+    let count_met = sessions_with_data.len() >= 5 && days.len() >= 3 && span_h >= 8.0;
     println!(
-        "sessions: {}   distinct days: {}   span: {span_h:.1} h",
+        "sessions with data: {} (of {} files)   distinct days: {}   span: {span_h:.1} h",
+        sessions_with_data.len(),
         paths.len(),
         days.len()
     );

@@ -202,15 +202,18 @@ async fn bring_up(
         // that sits at Connecting{95} for five minutes and a gate that never
         // publishes anything look identical from the outside and have different
         // causes.
+        // One clone, to release the watch borrow; the owned value is moved
+        // into `last` at the bottom of the iteration, after the match has
+        // borrowed it.
         let state = ready_rx.borrow_and_update().clone();
-        if last.as_ref() != Some(&state) {
+        let changed = last.as_ref() != Some(&state);
+        if changed {
             eprintln!(
                 "  [{label}] {:>4.0}s {state:?}",
                 started.elapsed().as_secs_f64()
             );
-            last = Some(state.clone());
         }
-        match state {
+        match &state {
             BootstrapState::Ready => {
                 eprintln!(
                     "  [{label}] ready in {:.0}s",
@@ -227,6 +230,9 @@ async fn bring_up(
                 ));
             }
             BootstrapState::Connecting { .. } => {}
+        }
+        if changed {
+            last = Some(state);
         }
         if Instant::now() >= deadline {
             return Err(format!(

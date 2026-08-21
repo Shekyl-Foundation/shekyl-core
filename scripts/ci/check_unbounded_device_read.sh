@@ -75,13 +75,15 @@ fi
 #
 # `-z` / `mapfile -d ''`: paths are NUL-delimited end to end, so a filename
 # with a space cannot split into two arguments.
-mapfile -d '' CORPUS < <(git ls-files -z -- 'rust/**/*.rs' | grep -zv '^rust/shekyl-oxide/')
+# The exclusion is a git pathspec, not a grep: one process, and no reliance
+# on GNU grep's `-z` (BSD grep lacks it — this script also runs on dev boxes).
+mapfile -d '' CORPUS < <(git ls-files -z -- 'rust/**/*.rs' ':(exclude)rust/shekyl-oxide/**')
 if [ "${#CORPUS[@]}" -eq 0 ]; then
   echo "FAIL: git tracks no Rust sources under rust/ (outside shekyl-oxide)." >&2
   echo "      A gate that searches nothing passes for the wrong reason." >&2
   exit 1
 fi
-CRATE_COUNT="${#CORPUS[@]}"
+SOURCE_COUNT="${#CORPUS[@]}"
 
 # Fail CLOSED on a scan error, and read the verdict UNPIPED (rule 46).
 #
@@ -95,11 +97,13 @@ CRATE_COUNT="${#CORPUS[@]}"
 # rg alone so its status is the verdict, then filter the allow-marker off the
 # captured text — where a "nothing left" grep exit cannot mask a scan failure.
 set +e
-RAW="$(rg -n 'fs::read(_to_string)?\(\s*"/dev/' -- "${CORPUS[@]}")"
+# `\s*` before the paren: rustfmt never emits `fs::read (…)`, but an
+# enforcement gate should not depend on the formatter having run.
+RAW="$(rg -n 'fs::read(_to_string)?\s*\(\s*"/dev/' -- "${CORPUS[@]}")"
 RG_STATUS=$?
 set -e
 if [ "$RG_STATUS" -ge 2 ]; then
-  echo "FAIL: ripgrep errored (exit ${RG_STATUS}) while scanning ${CRATE_COUNT} tracked sources." >&2
+  echo "FAIL: ripgrep errored (exit ${RG_STATUS}) while scanning ${SOURCE_COUNT} tracked sources." >&2
   echo "      The gate cannot certify a corpus it could not fully read." >&2
   exit 1
 fi
@@ -126,4 +130,4 @@ if [ -n "$HITS" ]; then
   exit 1
 fi
 
-echo "device-read gate: no unbounded /dev reads (${CRATE_COUNT} tracked sources scanned)"
+echo "device-read gate: no unbounded /dev reads (${SOURCE_COUNT} tracked sources scanned)"
