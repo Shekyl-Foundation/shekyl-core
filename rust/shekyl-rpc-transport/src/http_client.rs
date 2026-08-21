@@ -232,6 +232,12 @@ fn plain_http_connector() -> HttpConnector {
 /// Wrap `inner` in a rustls HTTPS connector using the system's native roots —
 /// the same root strategy `simple-request`'s `tls` feature used (native only;
 /// no webpki fallback).
+///
+/// `https_only()`: a [`TransportTls::On`] client is *incapable* of speaking
+/// plaintext, not merely never asked to. The plaintext arms refuse an
+/// `https://` URI in [`HttpClient::request`]; this is the mirror image, and
+/// for the same reason — "unreachable because the URL was validated
+/// upstream" is a property of today's callers, not of the client.
 fn https<C>(inner: C) -> Result<HttpsConnector<C>, HttpError>
 where
     C: Service<Uri>,
@@ -239,7 +245,7 @@ where
     Ok(HttpsConnectorBuilder::new()
         .with_native_roots()
         .map_err(|e| HttpError::Tls(format!("{e:?}")))?
-        .https_or_http()
+        .https_only()
         .enable_http1()
         .wrap_connector(inner))
 }
@@ -418,6 +424,29 @@ mod tests {
             HttpClient::new(Some("127.0.0.1:1"), TransportTls::Off).expect("plain socks"),
         )
         .await;
+    }
+
+    /// The mirror image: a TLS client handed an `http://` URI refuses at the
+    /// connector (`https_only`) instead of downgrading to plaintext. Swapping
+    /// `https_only()` back to `https_or_http()` turns this red — the request
+    /// would then dial port 1 and fail with a connect error, not the scheme
+    /// refusal. (Needs a native root store to construct, as every `On`
+    /// client does.)
+    #[tokio::test]
+    async fn tls_client_refuses_a_plaintext_uri() {
+        let client = HttpClient::new(None, TransportTls::On).expect("tls direct");
+        let err = client
+            .request(
+                hyper::Request::post("http://127.0.0.1:1/json_rpc")
+                    .body(Full::new(Bytes::new()))
+                    .expect("request"),
+            )
+            .await
+            .expect_err("an http URI on a TLS client must refuse");
+        assert!(
+            format!("{err}").contains("unsupported scheme http"),
+            "expected the connector's https-only refusal, got: {err}"
+        );
     }
 
     #[test]
