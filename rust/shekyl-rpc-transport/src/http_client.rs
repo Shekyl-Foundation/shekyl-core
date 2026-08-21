@@ -7,10 +7,12 @@
 //!
 //! The direct (no-proxy) path is a port of the vendored `simple-request` client
 //! (which this crate was relocated from; see the crate root): a pooled
-//! `hyper-util` client over `HttpsConnector<HttpConnector>`, built with the same
-//! connector settings. `simple-request`'s connector is private and
-//! un-injectable, so proxy support could not be added to it externally —
-//! re-absorbing the client here lets us add the one thing it could not do.
+//! `hyper-util` client. An `https://` endpoint wraps the connector in
+//! `HttpsConnector` with native roots; an `http://` endpoint gets a bare
+//! `HttpConnector` / `SocksConnector` and never loads a root store.
+//! `simple-request`'s connector is private and un-injectable, so proxy
+//! support could not be added to it externally — re-absorbing the client
+//! here lets us add the one thing it could not do.
 //!
 //! # Why the proxy is SOCKS5**h**
 //!
@@ -217,9 +219,25 @@ fn http_connector() -> HttpConnector {
     http
 }
 
+/// The direct connector for a **plaintext** endpoint — no TLS layer wrapped
+/// around it. `enforce_http(true)` makes the plaintext choice structural: a
+/// client built this way refuses an `https://` request URI outright instead
+/// of speaking plaintext to a TLS port.
+fn plain_http_connector() -> HttpConnector {
+    let mut http = http_connector();
+    http.enforce_http(true);
+    http
+}
+
 /// Wrap `inner` in a rustls HTTPS connector using the system's native roots —
 /// the same root strategy `simple-request`'s `tls` feature used (native only;
 /// no webpki fallback).
+///
+/// `https_only()`: a [`TransportTls::On`] client is *incapable* of speaking
+/// plaintext, not merely never asked to. The plaintext arms refuse an
+/// `https://` URI in [`HttpClient::request`]; this is the mirror image, and
+/// for the same reason — "unreachable because the URL was validated
+/// upstream" is a property of today's callers, not of the client.
 fn https<C>(inner: C) -> Result<HttpsConnector<C>, HttpError>
 where
     C: Service<Uri>,
@@ -227,18 +245,49 @@ where
     Ok(HttpsConnectorBuilder::new()
         .with_native_roots()
         .map_err(|e| HttpError::Tls(format!("{e:?}")))?
-        .https_or_http()
+        .https_only()
         .enable_http1()
         .wrap_connector(inner))
 }
 
+/// Whether the pooled client builds a TLS layer. Encoded as a type rather
+/// than a `bool` so a fifth `(proxy, tls)` arm cannot appear as another
+/// silent boolean combination.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransportTls {
+    /// `https://` endpoint: rustls + native roots.
+    On,
+    /// `http://` endpoint: no TLS layer, no root store.
+    Off,
+}
+
+fn pooled<C>(connector: C) -> HyperClient<C, Full<Bytes>>
+where
+    C: hyper_util::client::legacy::connect::Connect + Clone + Send + Sync + 'static,
+{
+    HyperClient::builder(TokioExecutor::new())
+        .pool_idle_timeout(Duration::from_secs(60))
+        .build(connector)
+}
+
 /// A pooled HTTP(S) client — direct or through a SOCKS5h proxy.
+///
+/// The TLS layer is built **only for an `https://` endpoint**. A plaintext
+/// endpoint gets a client with no TLS connector at all, so a host with no
+/// native root store (a minimal container image, a freshly provisioned
+/// device) can still dial a plaintext daemon — the loopback default — instead
+/// of failing at construction with "no native root CA certificates found".
+/// Before this split every endpoint paid for roots it would never use.
 #[derive(Clone)]
 pub(crate) enum HttpClient {
-    /// No proxy: connect directly, resolving DNS locally.
-    Direct(HyperClient<HttpsConnector<HttpConnector>, Full<Bytes>>),
-    /// Through a SOCKS5h proxy: the proxy resolves DNS.
-    Socks(HyperClient<HttpsConnector<SocksConnector>, Full<Bytes>>),
+    /// `https://`, no proxy: connect directly, resolving DNS locally.
+    TlsDirect(HyperClient<HttpsConnector<HttpConnector>, Full<Bytes>>),
+    /// `https://` through a SOCKS5h proxy: the proxy resolves DNS.
+    TlsSocks(HyperClient<HttpsConnector<SocksConnector>, Full<Bytes>>),
+    /// Plaintext `http://` endpoint, no proxy: no TLS layer is built.
+    PlainDirect(HyperClient<HttpConnector, Full<Bytes>>),
+    /// Plaintext `http://` endpoint through a SOCKS5h proxy: no TLS layer.
+    PlainSocks(HyperClient<SocksConnector, Full<Bytes>>),
 }
 
 impl std::fmt::Debug for HttpClient {
@@ -246,29 +295,31 @@ impl std::fmt::Debug for HttpClient {
     // hyper client's Debug bounds; the transport mode is all that's useful here.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Direct(_) => "HttpClient::Direct",
-            Self::Socks(_) => "HttpClient::Socks",
+            Self::TlsDirect(_) => "HttpClient::TlsDirect",
+            Self::TlsSocks(_) => "HttpClient::TlsSocks",
+            Self::PlainDirect(_) => "HttpClient::PlainDirect",
+            Self::PlainSocks(_) => "HttpClient::PlainSocks",
         })
     }
 }
 
 impl HttpClient {
-    /// Build the client, selecting the SOCKS path when `proxy` is `Some`.
-    pub(crate) fn new(proxy: Option<&str>) -> Result<Self, HttpError> {
-        // `Builder::pool_idle_timeout` returns `&mut Builder`, so the whole
-        // chain must land in one statement (ending in the owning `.build()`).
-        match proxy {
-            None => Ok(Self::Direct(
-                HyperClient::builder(TokioExecutor::new())
-                    .pool_idle_timeout(Duration::from_secs(60))
-                    .build(https(http_connector())?),
-            )),
-            Some(p) => Ok(Self::Socks(
-                HyperClient::builder(TokioExecutor::new())
-                    .pool_idle_timeout(Duration::from_secs(60))
-                    .build(https(SocksConnector::new(p)?)?),
-            )),
+    /// Build the client, selecting the SOCKS path when `proxy` is `Some` and
+    /// the TLS-wrapped connector only when `tls` is [`TransportTls::On`].
+    /// A plaintext endpoint never loads a root store.
+    pub(crate) fn new(proxy: Option<&str>, tls: TransportTls) -> Result<Self, HttpError> {
+        match (proxy, tls) {
+            (None, TransportTls::On) => Ok(Self::TlsDirect(pooled(https(http_connector())?))),
+            (Some(p), TransportTls::On) => {
+                Ok(Self::TlsSocks(pooled(https(SocksConnector::new(p)?)?)))
+            }
+            (None, TransportTls::Off) => Ok(Self::PlainDirect(pooled(plain_http_connector()))),
+            (Some(p), TransportTls::Off) => Ok(Self::PlainSocks(pooled(SocksConnector::new(p)?))),
         }
+    }
+
+    fn is_plaintext(&self) -> bool {
+        matches!(self, Self::PlainDirect(_) | Self::PlainSocks(_))
     }
 
     /// Send `request` and return the response.
@@ -276,13 +327,26 @@ impl HttpClient {
     /// The request URI must be absolute (carry an authority): the pooled client
     /// selects the connection from it. `hyper` rewrites it to origin-form on the
     /// wire, so a digest-auth `uri=` computed over the path still matches.
+    ///
+    /// A plaintext client refuses a non-`http` URI here, before the connector:
+    /// `PlainDirect` also has `enforce_http(true)` on the connector, but
+    /// `SocksConnector` has no scheme check of its own (it is also the inner
+    /// of `TlsSocks`), so this is the one place both plaintext arms share.
     pub(crate) async fn request(
         &self,
         request: hyper::Request<Full<Bytes>>,
     ) -> Result<hyper::Response<Incoming>, HttpError> {
+        if self.is_plaintext() && request.uri().scheme_str() != Some("http") {
+            return Err(HttpError::Request(format!(
+                "scheme is not http: {}",
+                request.uri().scheme_str().unwrap_or("<none>")
+            )));
+        }
         let res = match self {
-            Self::Direct(c) => c.request(request).await,
-            Self::Socks(c) => c.request(request).await,
+            Self::TlsDirect(c) => c.request(request).await,
+            Self::TlsSocks(c) => c.request(request).await,
+            Self::PlainDirect(c) => c.request(request).await,
+            Self::PlainSocks(c) => c.request(request).await,
         };
         res.map_err(|e| HttpError::Request(error_chain(&e)))
     }
@@ -308,6 +372,82 @@ pub(crate) fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plaintext endpoint selects a client with **no TLS layer**, with or
+    /// without a proxy. This is the property that keeps a root-store-less
+    /// host able to dial a plaintext daemon: the `https()` builder (and its
+    /// `with_native_roots()` load) is never reached on this arm. Routing
+    /// `TransportTls::Off` back through `TlsDirect`/`TlsSocks` turns this red.
+    #[test]
+    fn plaintext_endpoint_builds_no_tls_layer() {
+        assert!(matches!(
+            HttpClient::new(None, TransportTls::Off).expect("plain direct"),
+            HttpClient::PlainDirect(_)
+        ));
+        assert!(matches!(
+            HttpClient::new(Some("127.0.0.1:9050"), TransportTls::Off).expect("plain socks"),
+            HttpClient::PlainSocks(_)
+        ));
+    }
+
+    /// The plaintext client's choice is structural, not advisory: handed an
+    /// `https://` request URI it refuses before the connector rather than
+    /// opening a cleartext socket to a TLS port. Shared by both plaintext
+    /// arms — `PlainDirect` also has `enforce_http(true)`, but `PlainSocks`
+    /// would otherwise speak SOCKS to an `https://` URI. The target port
+    /// is one nothing listens on, so a client that had tried to dial would
+    /// have failed differently.
+    async fn plaintext_refuses_https(client: HttpClient) {
+        let err = client
+            .request(
+                hyper::Request::post("https://127.0.0.1:1/json_rpc")
+                    .body(Full::new(Bytes::new()))
+                    .expect("request"),
+            )
+            .await
+            .expect_err("an https URI on a plaintext client must refuse");
+        assert!(
+            format!("{err}").contains("scheme is not http"),
+            "expected the plaintext scheme refusal, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn plaintext_direct_client_refuses_a_tls_uri() {
+        plaintext_refuses_https(HttpClient::new(None, TransportTls::Off).expect("plain direct"))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn plaintext_socks_client_refuses_a_tls_uri() {
+        plaintext_refuses_https(
+            HttpClient::new(Some("127.0.0.1:1"), TransportTls::Off).expect("plain socks"),
+        )
+        .await;
+    }
+
+    /// The mirror image: a TLS client handed an `http://` URI refuses at the
+    /// connector (`https_only`) instead of downgrading to plaintext. Swapping
+    /// `https_only()` back to `https_or_http()` turns this red — the request
+    /// would then dial port 1 and fail with a connect error, not the scheme
+    /// refusal. (Needs a native root store to construct, as every `On`
+    /// client does.)
+    #[tokio::test]
+    async fn tls_client_refuses_a_plaintext_uri() {
+        let client = HttpClient::new(None, TransportTls::On).expect("tls direct");
+        let err = client
+            .request(
+                hyper::Request::post("http://127.0.0.1:1/json_rpc")
+                    .body(Full::new(Bytes::new()))
+                    .expect("request"),
+            )
+            .await
+            .expect_err("an http URI on a TLS client must refuse");
+        assert!(
+            format!("{err}").contains("unsupported scheme http"),
+            "expected the connector's https-only refusal, got: {err}"
+        );
+    }
 
     #[test]
     fn socks_connector_parses_and_strips_scheme() {

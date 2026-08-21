@@ -3925,6 +3925,7 @@ dependencies = [
  "redb",
  "serde_json",
  "shekyl-consensus",
+ "shekyl-curve-io",
  "shekyl-fcmp",
  "tempfile",
 ]
@@ -3959,6 +3960,8 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
+ "shekyl-rpc-client",
+ "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-tx-builder",
  "shekyl-types",

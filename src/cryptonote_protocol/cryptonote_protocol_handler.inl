@@ -407,9 +407,6 @@ namespace cryptonote
         cnx.ip = cnx.host;
         cnx.port = std::to_string(cntxt.m_remote_address.as<epee::net_utils::ipv4_network_address>().port());
       }
-      cnx.rpc_port = cntxt.m_rpc_port;
-      cnx.rpc_credits_per_hash = cntxt.m_rpc_credits_per_hash;
-
       cnx.peer_id = nodetool::peerid_to_string(peer_id);
       
       cnx.support_flags = support_flags;

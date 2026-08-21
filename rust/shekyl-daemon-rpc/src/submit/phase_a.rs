@@ -227,7 +227,7 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
                 n_to_key += 1;
                 key_images.push(*key_image);
             }
-            Input::ServeCredit(_) => n_serve_credit += 1,
+            Input::ServeCredit { .. } => n_serve_credit += 1,
             Input::BondPost(_) => n_bond_post += 1,
             Input::Gen(_) => {
                 // Unreachable: gen-mixed rejected by validate(), gen-sole

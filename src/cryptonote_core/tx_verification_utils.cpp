@@ -122,7 +122,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || !rv.p.fcmp_pp_proof.empty()
                     || !rv.p.pseudoOuts.empty()
                     || rv.type != rct::CTTypeFcmpPlusPlusPqc
-                    || !rct::verRctSemanticsFeeOnly(rv))
+                    || !rct::verCtSemanticsFeeOnly(rv))
                 {
                     tvc.m_verifivation_failed = true;
                     tvc.m_invalid_input = true;

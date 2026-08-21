@@ -78,7 +78,6 @@ shekyld [options] [command]
 | `--in-peers <n>` | Maximum inbound connections |
 | `--hide-my-port` | Do not advertise this node to the network |
 | `--no-igd` | Disable UPnP port forwarding |
-| `--public-node` | Advertise as a public node |
 | `--prune-blockchain` | Enable blockchain pruning |
 | `--offline` | Run without P2P networking |
 | `--ban-list <file>` | File of IPs to ban |
@@ -135,10 +134,10 @@ shekyld
 # Start a testnet node bound to all interfaces
 shekyld --testnet --rpc-bind-ip 0.0.0.0 --confirm-external-bind
 
-# Start a restricted public node (background it via systemd — see
-# contrib/packaging/linux/shekyld.service for an example unit)
-shekyld --non-interactive --restricted-rpc --public-node \
-        --rpc-bind-ip 0.0.0.0 --confirm-external-bind \
+# Start a restricted (view-only) listener for your own wallet on a second
+# port; admin stays on the main RPC. RPC is operator-to-operator — this is
+# not a public remote node (shekyld does not advertise RPC over P2P).
+shekyld --non-interactive --rpc-restricted-bind-port 11030 \
         --config-file /etc/shekyl/shekyld.conf
 
 # Use a custom data directory

@@ -152,7 +152,22 @@ namespace cryptonote
 
       if (!base_only)
       {
-        if (rct::is_rct_bulletproof_plus(rv.type))
+        // RF-D9. The serve-credit shape is non-spending: consensus REQUIRES
+        // `bulletproofs_plus`, `fcmp_pp_proof` and `pseudoOuts` to be empty
+        // (tx_verification_utils.cpp:117-124), because there are no outputs
+        // to range-prove and no membership to prove. The checks below assume
+        // a spend and demand exactly one bulletproof, so without this arm the
+        // type is unparseable: every serve-credit tx fails
+        // `parse_and_validate_tx_from_blob` with "Failed to expand
+        // transaction data", which is the second of the two gates that made
+        // this vin type unreachable end to end.
+        //
+        // Typed off the vin, like the pqc_auths arm in cryptonote_basic.h --
+        // the shape is a property of the transaction, not of what happens to
+        // be absent from the struct.
+        const bool serve_credit_shape =
+          classify_archival_tx(tx.vin).kind == archival_tx_kind::serve_credit_only;
+        if (rct::is_rct_bulletproof_plus(rv.type) && !serve_credit_shape)
         {
           if (rv.p.bulletproofs_plus.size() != 1)
           {
@@ -190,6 +205,19 @@ namespace cryptonote
     tx.invalidate_hashes();
     tx.set_blob_size(tx_blob.size());
     return true;
+  }
+  //---------------------------------------------------------------
+  bool get_archival_serve_credit_key(const txin_archival_serve_credit_response& vin,
+    crypto::hash& p_canonical_id, uint64_t& shard_id, uint64_t& settlement_epoch)
+  {
+    // Empty cannot form a tagged blob; the codec (tag, interior, trailing
+    // bytes) is otherwise the FFI's. C++ does not slice the tag off.
+    if (vin.canonical_bytes.empty())
+      return false;
+    return shekyl_archival_serve_credit_extract(
+      vin.canonical_bytes.data(), vin.canonical_bytes.size(),
+      reinterpret_cast<uint8_t*>(p_canonical_id.data), &shard_id, &settlement_epoch)
+      == SHEKYL_ARCHIVAL_VERIFY_OK;
   }
   //---------------------------------------------------------------
   bool parse_and_validate_tx_base_from_blob(const blobdata_ref& tx_blob, transaction& tx)
@@ -330,6 +358,24 @@ namespace cryptonote
 
     // FCMP++ proof size (serialized as varint length + bytes) -- already in pruned blob
     // No CLSAG data in FCMP++
+
+    // RF-D1: a serve-credit tx's pruned region is its pass records, and each
+    // is a fixed size for a FROZEN segment at SEGMENT_LAYER_J = 2 (the opening
+    // of any leaf in a full segment is one Helios layer of 18 and one Selene
+    // layer of 38 scalars; the ML-DSA leg is fixed) -- so a pruned node
+    // reconstructs the weight exactly, the same way it does pseudoOuts for a
+    // spend. This RELIES ON ADMISSION: the record was verified against the
+    // registry's frozen-segment R_k (shekyl_archival_verify_serve_credit_vin),
+    // and a record of any other shape cannot hash to that root, so every
+    // admitted tx carries records of exactly this size. No bulletproof
+    // clawback: a non-spending tx has no outputs to range-prove.
+    if (classify_archival_tx(tx.vin).kind == archival_tx_kind::serve_credit_only)
+    {
+      extra = config::ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES * count_serve_credit_inputs(tx.vin);
+      CHECK_AND_ASSERT_THROW_MES_L1(extra <= std::numeric_limits<uint64_t>::max() - weight, "Weight overflow");
+      weight += extra;
+      return weight;
+    }
 
     // calculate deterministic pseudoOuts size: sized by the spend subset,
     // not vin.size() — see count_spend_inputs (cryptonote_basic.h).
@@ -1150,7 +1196,7 @@ namespace cryptonote
       // pseudoOuts are sized by the spend subset, not vin.size() — see
       // count_spend_inputs (cryptonote_basic.h).
       const size_t outputs = t.vout.size();
-      bool r = tt.rct_signatures.p.serialize_rctsig_prunable(ba, t.rct_signatures.type, count_spend_inputs(t.vin), outputs);
+      bool r = tt.rct_signatures.p.serialize_ctsig_prunable(ba, t.rct_signatures.type, count_spend_inputs(t.vin), count_serve_credit_inputs(t.vin), outputs);
       CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures prunable");
       cryptonote::get_blob_hash(ss.str(), res);
     }

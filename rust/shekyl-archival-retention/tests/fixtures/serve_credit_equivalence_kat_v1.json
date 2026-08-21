@@ -1,7 +1,7 @@
 {
  "format_version": 1,
  "substrate_commit": "ca8edce6b",
- "description": "Shared serve-credit equivalence-KAT fixture (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md section 5). Two legs: the Rust standing KAT (tests/serve_credit_equivalence_kat.rs) asserts verdict AND reason for every vector; the C++ leg (tests/unit_tests/archival_serve_credit_equivalence.cpp) drives the live check_archival_serve_credit_input over every cpp_reachable gate vector via cpp_setup seeded-state mutations and asserts the bool verdict ONLY. The expected_reason column is authored by SOURCE INSPECTION of which MERROR_VER branch each vector trips at substrate_commit -- never extracted from running C++ (section 5 leg-responsibility split). If dev reorders check_archival_serve_credit_input or inserts a predicate, re-author the reason column and bump substrate_commit. The gate base is the gate-2 integration substrate (gate2_serve_credit_kat_v1.json) so the C++ leg reuses its wire + seeding; step-9 expectations reflect the WS-1-corrected as-of-H_fire accessor at the pinned commit (PR #269) on purpose.",
+ "description": "Shared serve-credit equivalence-KAT fixture (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md section 5). Two legs: the Rust standing KAT (tests/serve_credit_equivalence_kat.rs) asserts verdict AND reason for every vector; the C++ leg (tests/unit_tests/archival_serve_credit_equivalence.cpp) drives the live check_archival_serve_credit_input over every cpp_reachable gate vector via cpp_setup seeded-state mutations and asserts the bool verdict ONLY. The expected_reason column is authored by SOURCE INSPECTION of which MERROR_VER branch each vector trips at substrate_commit -- never extracted from running C++ (section 5 leg-responsibility split). If dev reorders check_archival_serve_credit_input or inserts a predicate, re-author the reason column and bump substrate_commit. The gate base is the gate-2 integration substrate (gate2_serve_credit_kat_v1.json) so the C++ leg reuses its wire + seeding; step-9 expectations reflect the WS-1-corrected as-of-H_fire accessor at the pinned commit (PR #269) on purpose. Re-synced 2026-08-20 to the RF-D1 gate (opaque vin + pruned record): C++-side path bounds retired (now the Rust parser's, via FFI verify), wire round-trip/tag steps retired with the typed vin, leaf index derived (RF-D6).",
  "gate": {
   "base": {
    "p_canonical_id_hex": "f38cd27c60a017fd5d70b60ffbe870b85530ca6441e30612a676fc2c09986dab",
@@ -14,21 +14,17 @@
    "h_fire": 17426,
    "current_height": 17427,
    "seal_hash_hex": "abababababababababababababababababababababababababababababababab",
-   "c1_branch_scalar_counts": [],
-   "c2_branch_scalar_counts": [
-    4
-   ],
    "preblock_present": false,
    "bond_substrate_present": true,
    "good_through": true,
    "seal_hash_available": true,
    "held_at_fire": true,
    "registry_present_at_fire": true,
-   "leaf_index_in_segment": 562,
    "leaf_chunk_ok": true,
-   "wire_serialize_ok": true,
-   "wire_first_byte": 2,
-   "verify_ok": true
+   "verify_ok": true,
+   "vin_parsed": true,
+   "pruned_record_in_bounds": true,
+   "segment_leaf_count": 25992
   },
   "vectors": [
    {
@@ -41,121 +37,68 @@
     "cpp_setup": "baseline"
    },
    {
-    "id": "B-02-layer-count",
-    "note": "Step 1: 65 c1 layers exceeds ARCHIVAL_MAX_PATH_LAYERS_PER_KIND (64).",
+    "id": "B-00-vin-unparseable",
+    "note": "Step 0 (RF-D1): the opaque vin failed the Rust codec's parse. Rust-only: a blob the C++ serializer guard admits but the codec rejects needs a varint overflow, not worth a C++ setup.",
     "overrides": {
-     "c1_branch_scalar_counts": [
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0
-     ]
+     "vin_parsed": false
     },
     "expected_verdict": false,
-    "expected_reason": "PathLayerCountExceedsBound",
+    "expected_reason": "VinUnparseable",
+    "cpp_reachable": false,
+    "cpp_setup": null
+   },
+   {
+    "id": "B-00b-pruned-empty",
+    "note": "Step 0b (RF-D1): an empty pruned record fails the transport ceiling check before anything is parsed.",
+    "overrides": {
+     "pruned_record_in_bounds": false
+    },
+    "expected_verdict": false,
+    "expected_reason": "PrunedRecordSizeOutOfBounds",
+    "cpp_reachable": true,
+    "cpp_setup": "empty_pruned_record"
+   },
+   {
+    "id": "B-02-layer-count",
+    "note": "Step 1: 65 c1 layers exceeds ARCHIVAL_MAX_PATH_LAYERS_PER_KIND (64). [RF-D1: the path lives in the pruned record; its bounds are the Rust parser's, surfacing as the FFI verify's parse failure rather than a C++ pre-check.]",
+    "overrides": {
+     "verify_ok": false
+    },
+    "expected_verdict": false,
+    "expected_reason": "FfiVerifyFailed",
     "cpp_reachable": true,
     "cpp_setup": "inflate_c1_layers"
    },
    {
     "id": "B-03-fat-c1-branch",
-    "note": "Step 1: one c1 branch of 257 scalars exceeds ARCHIVAL_MAX_BRANCH_SCALARS (256).",
+    "note": "Step 1: one c1 branch of 257 scalars exceeds ARCHIVAL_MAX_BRANCH_SCALARS (256). [RF-D1: the path lives in the pruned record; its bounds are the Rust parser's, surfacing as the FFI verify's parse failure rather than a C++ pre-check.]",
     "overrides": {
-     "c1_branch_scalar_counts": [
-      257
-     ]
+     "verify_ok": false
     },
     "expected_verdict": false,
-    "expected_reason": "C1BranchScalarCountExceedsBound",
+    "expected_reason": "FfiVerifyFailed",
     "cpp_reachable": true,
     "cpp_setup": "fat_c1_branch"
    },
    {
     "id": "B-04-fat-c2-branch",
-    "note": "Step 1: one c2 branch of 257 scalars; c1 clean, so the c2 loop reports.",
+    "note": "Step 1: one c2 branch of 257 scalars; c1 clean, so the c2 loop reports. [RF-D1: the path lives in the pruned record; its bounds are the Rust parser's, surfacing as the FFI verify's parse failure rather than a C++ pre-check.]",
     "overrides": {
-     "c2_branch_scalar_counts": [
-      257
-     ]
+     "verify_ok": false
     },
     "expected_verdict": false,
-    "expected_reason": "C2BranchScalarCountExceedsBound",
+    "expected_reason": "FfiVerifyFailed",
     "cpp_reachable": true,
     "cpp_setup": "fat_c2_branch"
    },
    {
     "id": "B-05-c1-before-c2",
-    "note": "Step 1 ordering fidelity: fat c1 AND fat c2 must report c1 (the C++ loops c1 first).",
+    "note": "Step 1 ordering fidelity: fat c1 AND fat c2 must report c1 (the C++ loops c1 first). [RF-D1: the path lives in the pruned record; its bounds are the Rust parser's, surfacing as the FFI verify's parse failure rather than a C++ pre-check.]",
     "overrides": {
-     "c1_branch_scalar_counts": [
-      257
-     ],
-     "c2_branch_scalar_counts": [
-      257
-     ]
+     "verify_ok": false
     },
     "expected_verdict": false,
-    "expected_reason": "C1BranchScalarCountExceedsBound",
+    "expected_reason": "FfiVerifyFailed",
     "cpp_reachable": true,
     "cpp_setup": "fat_c1_and_c2_branch"
    },
@@ -227,7 +170,7 @@
    },
    {
     "id": "B-11b-seal-uncommitted",
-    "note": "Step 6b: current_height == H_seal — the seal block is one past the tip (chain_height is the block count), so it is not yet on chain; the seal-on-chain guard rejects before any block-hash read. Distinct from B-12, which is a read failure at a committed height (corruption).",
+    "note": "Step 6b: current_height == H_seal \u2014 the seal block is one past the tip (chain_height is the block count), so it is not yet on chain; the seal-on-chain guard rejects before any block-hash read. Distinct from B-12, which is a read failure at a committed height (corruption).",
     "overrides": {
      "current_height": 10001
     },
@@ -238,7 +181,7 @@
    },
    {
     "id": "B-12-no-seal-hash",
-    "note": "Step 7: the seal-block hash load throws at a COMMITTED height (current_height > H_seal), i.e. genuine DB corruption — the not-yet-committed case is caught earlier by the seal-on-chain guard (B-11b).",
+    "note": "Step 7: the seal-block hash load throws at a COMMITTED height (current_height > H_seal), i.e. genuine DB corruption \u2014 the not-yet-committed case is caught earlier by the seal-on-chain guard (B-11b).",
     "overrides": {
      "seal_hash_available": false
     },
@@ -279,15 +222,15 @@
     "cpp_setup": "omit_segment"
    },
    {
-    "id": "B-17-leaf-oob",
-    "note": "Step 11: challenged index == SEGMENT_LEAF_COUNT (25992) is out of segment range.",
+    "id": "B-17-zero-geometry",
+    "note": "Step 11 (RF-D6): the index is DERIVED; a zero registry segment_leaf_count makes the derivation refuse. (Was: wire index == 25992, unrepresentable now.)",
     "overrides": {
-     "leaf_index_in_segment": 25992
+     "segment_leaf_count": 0
     },
     "expected_verdict": false,
-    "expected_reason": "LeafIndexOutOfSegmentRange",
+    "expected_reason": "LeafIndexDerivationRefused",
     "cpp_reachable": true,
-    "cpp_setup": "leaf_index_oob"
+    "cpp_setup": "zero_registry_count"
    },
    {
     "id": "B-18-leaf-chunk-missing",
@@ -299,39 +242,6 @@
     "expected_reason": "LeafChunkReadFailed",
     "cpp_reachable": true,
     "cpp_setup": "omit_leaf_chunk"
-   },
-   {
-    "id": "B-19-serialize-fail",
-    "note": "Step 13: vin do_serialize failure; unreachable through the harness (a deserialized vin always re-serializes) -- mirror-only.",
-    "overrides": {
-     "wire_serialize_ok": false
-    },
-    "expected_verdict": false,
-    "expected_reason": "VinSerializeFailed",
-    "cpp_reachable": false,
-    "cpp_setup": null
-   },
-   {
-    "id": "B-20-wrong-tag",
-    "note": "Step 13: first wire byte != 0x02; unreachable through the harness (a valid vin round-trips its own tag) -- mirror-only.",
-    "overrides": {
-     "wire_first_byte": 7
-    },
-    "expected_verdict": false,
-    "expected_reason": "UnexpectedVinWireTag",
-    "cpp_reachable": false,
-    "cpp_setup": null
-   },
-   {
-    "id": "B-21-empty-wire",
-    "note": "Step 13: empty wire folds into the tag branch, as in the C++ (wire.empty() || tag check is one condition) -- mirror-only.",
-    "overrides": {
-     "wire_first_byte": null
-    },
-    "expected_verdict": false,
-    "expected_reason": "UnexpectedVinWireTag",
-    "cpp_reachable": false,
-    "cpp_setup": null
    },
    {
     "id": "B-22-verify-fail",

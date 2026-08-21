@@ -34,6 +34,10 @@
 #include "string_tools.h"
 #include "serialization/binary_archive.h"
 
+#ifndef SERVE_CREDIT_TX_PARITY_FIXTURE_PATH
+#define SERVE_CREDIT_TX_PARITY_FIXTURE_PATH \
+  "rust/shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json"
+#endif
 #ifndef GATE2_KAT_FIXTURE_PATH
 #define GATE2_KAT_FIXTURE_PATH "rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json"
 #endif
@@ -48,6 +52,8 @@ struct IntegrationKat {
   std::string seal_hash_hex;
   std::string bond_pubkey_hex;
   std::string leaf_scalars_hex;
+  std::string pruned_hex;      // RF-D1: this vin's pruned record
+  std::string segment_rk_hex;  // verifier-derived R_k, recorded by the fixture
   uint64_t shard_id = 0;
   uint64_t settlement_epoch = 0;
   uint64_t segment_leaf_count = 0;
@@ -78,6 +84,8 @@ IntegrationKat load_integration_kat()
   kat.seal_hash_hex = i["block_hash_at_seal_hex"].GetString();
   kat.bond_pubkey_hex = i["bond_hybrid_pubkey_hex"].GetString();
   kat.leaf_scalars_hex = i["leaf_layer_scalars_hex"].GetString();
+  kat.pruned_hex = i["pruned_hex"].GetString();
+  kat.segment_rk_hex = i["segment_subroot_rk_hex"].GetString();
   kat.shard_id = i["shard_id"].GetUint64();
   kat.settlement_epoch = i["settlement_epoch"].GetUint64();
   kat.segment_leaf_count = i["segment_leaf_count"].GetUint64();
@@ -300,12 +308,12 @@ struct BlockchainAndPool
 #endif
 };
 
-void seed_substrate(ArchivalServeCreditIntegrationDB& db, const IntegrationKat& kat,
-  const txin_archival_serve_credit_response& resp)
+void seed_substrate(ArchivalServeCreditIntegrationDB& db, const IntegrationKat& kat)
 {
   const crypto::hash p_id = hash_from_hex(kat.p_id_hex);
   const crypto::hash seal_hash = hash_from_hex(kat.seal_hash_hex);
-  const crypto::hash segment_rk = resp.segment_subroot_rk;
+  // RF-D6: R_k is the registry's, never the vin's; the fixture records it.
+  const crypto::hash segment_rk = hash_from_hex(kat.segment_rk_hex);
 
   shekyl::db::ArchivalBondValue bond{};
   bond.hybrid_pubkey = bytes_from_hex(kat.bond_pubkey_hex);
@@ -340,18 +348,24 @@ void seed_substrate(ArchivalServeCreditIntegrationDB& db, const IntegrationKat& 
   db.set_seal_hash(kat.h_seal, seal_hash);
 }
 
+// RF-D1 / rule 40: the fixture's `wire_hex` IS the vin's opaque
+// `canonical_bytes` (the Rust codec's encoding, tag included); C++ wraps it,
+// it does not parse it.
 txin_archival_serve_credit_response load_serve_credit_vin(const std::string& wire_hex)
 {
-  const std::vector<uint8_t> wire = bytes_from_hex(wire_hex);
-  txin_v vin;
-  binary_archive<false> iar({wire.data(), wire.size()});
-  if (!::do_serialize(iar, vin)
-      || !std::holds_alternative<txin_archival_serve_credit_response>(vin))
-  {
-    throw std::runtime_error("failed to deserialize serve-credit vin");
-  }
-  return std::get<txin_archival_serve_credit_response>(vin);
+  txin_archival_serve_credit_response resp{};
+  resp.canonical_bytes = bytes_from_hex(wire_hex);
+  if (resp.canonical_bytes.size() < 2 || resp.canonical_bytes[0] != TXIN_ARCHIVAL_SERVE_CREDIT_WIRE_TAG)
+    throw std::runtime_error("fixture wire_hex is not a serve-credit blob");
+  return resp;
 }
+
+// Byte offset of the settlement-epoch varint inside the kept blob, valid while
+// `shard_id` encodes as ONE varint byte (the fixture's does: 42): tag(1) +
+// p_id(32) + shard(1). A test that needs a different epoch patches this byte
+// rather than re-encoding -- C++ has no encoder for the Rust layout by design,
+// and a one-byte patch under a pinned fixture is the honest test-only seam.
+constexpr size_t KEPT_BLOB_EPOCH_OFFSET = 1 + 32 + 1;
 
 } // namespace
 
@@ -361,7 +375,7 @@ TEST(archival_serve_credit, gate2_integration_check_archival_serve_credit_input)
   const txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
 
   auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
-  seed_substrate(*db, kat, resp);
+  seed_substrate(*db, kat);
 
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;
@@ -373,17 +387,18 @@ TEST(archival_serve_credit, gate2_integration_check_archival_serve_credit_input)
   // init() takes ownership; ~Blockchain deletes the DB in deinit().
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
-  EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, kat.current_height));
+  EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height));
 }
 
 TEST(archival_serve_credit, gate2_integration_rejects_serve_at_join_epoch)
 {
   const IntegrationKat kat = load_integration_kat();
   txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
-  resp.settlement_epoch = kat.join_epoch;
+  ASSERT_LT(kat.join_epoch, 0x80u);
+  resp.canonical_bytes.at(KEPT_BLOB_EPOCH_OFFSET) = static_cast<uint8_t>(kat.join_epoch);
 
   auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
-  seed_substrate(*db, kat, resp);
+  seed_substrate(*db, kat);
 
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;
@@ -394,7 +409,7 @@ TEST(archival_serve_credit, gate2_integration_rejects_serve_at_join_epoch)
   const cryptonote::test_options test_options = {hard_forks, 5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
-  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.current_height));
+  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height));
 }
 
 // The seal-committed guard: a credit whose challenge-seal block is not yet on
@@ -419,14 +434,14 @@ TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_r
   // guard rejects and the block-hash read is never reached.
   {
     auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
-    seed_substrate(*db, kat, resp);
+    seed_substrate(*db, kat);
     ArchivalServeCreditIntegrationDB* db_raw = db.get();
     BlockchainAndPool bap;
     cryptonote::Blockchain* bc = &bap.bc;
     ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
     db_raw->block_hash_queried_heights.clear(); // ignore any init-time reads
-    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.h_seal));
+    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.h_seal));
     EXPECT_TRUE(db_raw->block_hash_queried_heights.empty());
   }
 
@@ -435,7 +450,7 @@ TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_r
   // downstream on H_fire timing — not what this KAT pins).
   {
     auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
-    seed_substrate(*db, kat, resp);
+    seed_substrate(*db, kat);
     ArchivalServeCreditIntegrationDB* db_raw = db.get();
     BlockchainAndPool bap;
     cryptonote::Blockchain* bc = &bap.bc;
@@ -446,7 +461,7 @@ TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_r
     // reaches the seal read exactly once, for h_seal. The credit is still
     // rejected — downstream on H_fire timing (current_height <= H_fire), not by
     // this guard.
-    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.h_seal + 1));
+    EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.h_seal + 1));
     ASSERT_EQ(db_raw->block_hash_queried_heights.size(), 1u);
     EXPECT_EQ(db_raw->block_hash_queried_heights[0], kat.h_seal);
   }
@@ -495,7 +510,7 @@ TEST(archival_serve_credit, gate2_accepts_credit_when_held_at_fire_but_dropped_b
   ASSERT_NE(h_fire, 0u);
 
   auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
-  seed_substrate(*db, kat, resp);
+  seed_substrate(*db, kat);
   // Removal strictly above the fire height: held at h_fire, gone at tip.
   db->set_shard_removed_at(kat.shard_id, h_fire + 1);
   ArchivalServeCreditIntegrationDB* db_raw = db.get();
@@ -509,7 +524,7 @@ TEST(archival_serve_credit, gate2_accepts_credit_when_held_at_fire_but_dropped_b
   const cryptonote::test_options test_options = {hard_forks, 5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
-  EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, kat.current_height));
+  EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height));
   // The gate asked the as-of-height question at exactly the derived h_fire.
   ASSERT_FALSE(db_raw->holds_shard_queried_heights.empty());
   for (const uint64_t queried : db_raw->holds_shard_queried_heights)
@@ -531,7 +546,7 @@ TEST(archival_serve_credit, gate2_rejects_credit_when_not_held_at_fire)
   ASSERT_NE(h_fire, 0u);
 
   auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
-  seed_substrate(*db, kat, resp);
+  seed_substrate(*db, kat);
   db->set_shard_removed_at(kat.shard_id, h_fire);
 
   BlockchainAndPool bap;
@@ -543,7 +558,7 @@ TEST(archival_serve_credit, gate2_rejects_credit_when_not_held_at_fire)
   const cryptonote::test_options test_options = {hard_forks, 5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
-  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.current_height));
+  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height));
 }
 
 TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
@@ -553,7 +568,7 @@ TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
   const crypto::hash p_id = hash_from_hex(kat.p_id_hex);
 
   auto db = std::make_unique<ArchivalServeCreditIntegrationDB>();
-  seed_substrate(*db, kat, resp);
+  seed_substrate(*db, kat);
   db->set_archival_serve_credit_bit(p_id, kat.shard_id, kat.settlement_epoch);
 
   BlockchainAndPool bap;
@@ -565,5 +580,82 @@ TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
   const cryptonote::test_options test_options = {hard_forks, 5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0, nullptr));
 
-  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, kat.current_height));
+  EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height));
+}
+
+// ── Cross-language byte parity of the serve-credit TRANSACTION (RF-D1/RF-D9) ──
+//
+// Until this arm the serve-credit shape had never round-tripped in C++ at all
+// (RF-D9), so there was no C++-authored byte string for Rust to match and the
+// format was genuinely free. This establishes agreement for the first time:
+// shekyl-wire (the Rust oracle of this wire) built the transaction around the
+// gate-2 fixture's two blobs and pinned its bytes; C++ builds the same
+// transaction, serializes it, and must produce the same bytes -- and must
+// parse them back to the same object. A divergence in the fee-only ct
+// encoding, the empty-pqc_auths rule, or the pruned-record framing fails here.
+namespace {
+
+struct TxParityKat {
+  std::string kept_wire_hex;
+  std::string pruned_hex;
+  std::string tx_hex;
+  std::string tx_hash_hex;
+};
+
+TxParityKat load_tx_parity_kat()
+{
+  std::ifstream ifs(SERVE_CREDIT_TX_PARITY_FIXTURE_PATH);
+  if (!ifs.good())
+    throw std::runtime_error(std::string("missing tx parity fixture at ") + SERVE_CREDIT_TX_PARITY_FIXTURE_PATH);
+  rapidjson::IStreamWrapper wrapper(ifs);
+  rapidjson::Document doc;
+  doc.ParseStream(wrapper);
+  if (doc.HasParseError() || !doc.HasMember("tx_hex"))
+    throw std::runtime_error("invalid tx parity fixture");
+  TxParityKat k{};
+  k.kept_wire_hex = doc["kept_wire_hex"].GetString();
+  k.pruned_hex = doc["pruned_hex"].GetString();
+  k.tx_hex = doc["tx_hex"].GetString();
+  k.tx_hash_hex = doc["tx_hash_hex"].GetString();
+  return k;
+}
+
+} // namespace
+
+TEST(archival_serve_credit, full_tx_bytes_match_the_rust_oracle)
+{
+  const TxParityKat k = load_tx_parity_kat();
+
+  transaction tx{};
+  tx.version = 3;
+  tx.unlock_time = 0;
+  txin_archival_serve_credit_response vin{};
+  vin.canonical_bytes = bytes_from_hex(k.kept_wire_hex);
+  tx.vin.push_back(vin);
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.txnFee = 0;
+  tx.rct_signatures.p.curve_trees_tree_depth = 0;
+  tx.rct_signatures.p.serve_credit_pruned = {bytes_from_hex(k.pruned_hex)};
+
+  blobdata blob;
+  ASSERT_TRUE(t_serializable_object_to_blob(tx, blob));
+  EXPECT_EQ(epee::string_tools::buff_to_hex_nodelimer(blob), k.tx_hex)
+      << "C++ and shekyl-wire disagree on the serve-credit transaction's bytes";
+
+  // The pinned bytes parse back, through the production entry point, to the
+  // same transaction -- and the tx id agrees across languages too.
+  transaction parsed;
+  const std::vector<uint8_t> pinned = bytes_from_hex(k.tx_hex);
+  const blobdata pinned_blob(reinterpret_cast<const char*>(pinned.data()), pinned.size());
+  ASSERT_TRUE(parse_and_validate_tx_from_blob(pinned_blob, parsed))
+      << "the Rust-authored bytes must be a transaction C++ can parse";
+  ASSERT_EQ(parsed.vin.size(), 1u);
+  ASSERT_TRUE(std::holds_alternative<txin_archival_serve_credit_response>(parsed.vin[0]));
+  EXPECT_EQ(std::get<txin_archival_serve_credit_response>(parsed.vin[0]).canonical_bytes,
+            bytes_from_hex(k.kept_wire_hex));
+  ASSERT_EQ(parsed.rct_signatures.p.serve_credit_pruned.size(), 1u);
+  EXPECT_EQ(parsed.rct_signatures.p.serve_credit_pruned[0], bytes_from_hex(k.pruned_hex));
+  EXPECT_TRUE(parsed.pqc_auths.empty());
+  EXPECT_EQ(epee::string_tools::pod_to_hex(get_transaction_hash(parsed)), k.tx_hash_hex)
+      << "tx id differs across languages";
 }

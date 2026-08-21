@@ -29,6 +29,20 @@
 //! - the request/response shape is a placeholder for *transport
 //!   measurement*, and carries no claim about what TJ-B should freeze.
 //!
+//! One thing the shape inherited rather than chose: since `RF-D4`
+//! (2026-08-20) the served body leads with the frame header, so a measured
+//! response is the fixture plus a few bytes — below the noise floor of a
+//! Tor-transit measurement. **No caller compares against `SHARD_BYTES`.**
+//! The apparatus derives the expected body length from the payload through
+//! the production serving contract (`ShardBody::header().framed_len()`) and
+//! owns it; `await_reachable` / `timed_fetch` take no length parameter. The
+//! first version of this note said only that the difference was "not a
+//! discrepancy to chase" while every probe still compared against the raw
+//! fixture length — so every reachability probe would have timed out and
+//! every timed fetch read as `Truncated`. A number a caller passes in is a
+//! number that goes stale when the wire moves; a number the apparatus
+//! derives cannot.
+//!
 //! # What is disposable and what might survive
 //!
 //! Disposable: everything in this crate. The fixture plumbing, the harness,

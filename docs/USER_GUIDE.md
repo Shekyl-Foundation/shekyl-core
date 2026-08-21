@@ -123,9 +123,9 @@ data-dir=/var/lib/shekyl
 log-file=/var/log/shekyl/shekyld.log
 log-level=0
 prune-blockchain=1
-rpc-bind-ip=0.0.0.0
-confirm-external-bind=1
-restricted-rpc=1
+# RPC defaults to loopback. For your own wallet on another machine you
+# control, bind a view-only second listener (not a public remote node):
+# rpc-restricted-bind-port=11030
 ```
 
 Load a config file with `--config-file /path/to/shekyld.conf`. See
@@ -159,7 +159,8 @@ example.
 |------|-------------|
 | `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet); Axum is the sole transport |
 | `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1) |
-| `--restricted-rpc` | Disable admin endpoints (safe for public-facing nodes) |
+| `--restricted-rpc` | Disable admin endpoints on the main listener (view-only for *your* wallet; not a public remote node) |
+| `--rpc-restricted-bind-port <port>` | Second view-only listener for a wallet you operate |
 | `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
 | `--confirm-external-bind` | Required when binding RPC to 0.0.0.0 |
 
@@ -196,6 +197,13 @@ and `--*-service` flags were removed in V3.1.
 
 When `shekyld` is running in the foreground, you get an interactive console.
 Type `help` to list all commands. The most useful ones, grouped by purpose:
+
+The same commands work from a second shell against a running daemon —
+`shekyld status`, `shekyld exit` — over its local RPC port (pass
+`--rpc-bind-port` / `--testnet` if the daemon is not on the defaults). The
+exit status is `0` when the daemon answered, `1` when the command is unknown
+or the request failed (daemon not running, connection refused, error reply),
+so scripts can check it without parsing the output.
 
 **Status and information**
 
@@ -255,7 +263,6 @@ Type `help` to list all commands. The most useful ones, grouped by purpose:
 | `flush_cache [bad-txs\|bad-blocks]` | Clear internal caches |
 | `pop_blocks <n>` | Roll back the last N blocks |
 | `prune_blockchain` | Enable pruning on a non-pruned database |
-| `set_bootstrap_daemon <addr>` | Set or clear a bootstrap daemon for fast-sync |
 
 **Exit**
 
@@ -321,9 +328,13 @@ different daemon:
     --trusted-daemon
 ```
 
-Use `--trusted-daemon` when you control the daemon (your own machine). Use
-`--untrusted-daemon` for remote public nodes -- the wallet will take extra
-precautions to avoid leaking information.
+Use `--trusted-daemon` when you control the daemon (your own machine, or
+another of yours reached over LAN / onion). Shekyl RPC is operator-to-
+operator: there is no recommended configuration in which the wallet talks
+to a daemon someone else controls, and shekyld does not advertise itself
+as a public remote node. `--untrusted-daemon` remains as a refuse-to-trust
+mode if you point the wallet at a daemon anyway; it is not a public-node
+product.
 
 To connect through a SOCKS proxy (e.g. Tor):
 

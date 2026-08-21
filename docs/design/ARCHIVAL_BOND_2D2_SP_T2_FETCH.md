@@ -162,9 +162,9 @@ URL — `DaemonClient::new` wraps what the embedder passes); no public-node defa
 auto-discovery, no localhost-else-remote fallback anywhere; `WalletPrefs` deliberately carries no
 daemon-address field. Two watch-items the build encodes: (a) the GUI's `DaemonMode
 {Managed, External, Unavailable}` classifies process *ownership*, not remoteness — it is not a
-posture enum and must not be mistaken for one; (b) the inherited C++ carries `get_public_nodes()`
-remote-node-discovery machinery (`wallet2.cpp:13374`) — a **pattern the Rust stack consciously does
-not inherit**; the no-silent-③ property is the standing refusal.
+posture enum and must not be mistaken for one; (b) `--public-node` and `/get_public_nodes` are
+deleted on the daemon (operator-to-operator RPC; see `docs/DAEMON_RPC_RUST.md`); the no-silent-③
+property is the standing refusal.
 
 ### DQ-T2.4 — `DaemonBlockSource` local-posture per-`P` connection (its own commit) — **and the enumeration tension**
 

@@ -42,9 +42,6 @@ use std::collections::BTreeSet;
 use crate::challenge::challenge_seal_on_chain;
 use crate::segment_freeze::challenge_leaf_chunk_bounds;
 use crate::serve_eligibility::serve_credit_epoch_ok;
-use crate::wire::{
-    MAX_BRANCH_SCALARS, MAX_PATH_LAYERS_PER_KIND, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
-};
 
 /// Byte length of the `(P, shard, E)` composite key — both the persistent
 /// LMDB key (D-SC-A) and the in-block key (D-SC-C) are
@@ -102,18 +99,24 @@ pub fn serve_credit_preblock_duplicate(
 /// `check_archival_serve_credit_input` (audit doc §2.2 table). LMDB reads and
 /// the wire round-trip stay C++-side; their *results* arrive here as data.
 #[derive(Clone, Debug)]
-pub struct ServeCreditGateInputs<'a> {
+pub struct ServeCreditGateInputs {
     /// The vin's `(P, shard, E)` identity triple.
     pub p_canonical_id: [u8; 32],
     /// Shard id from the vin.
     pub shard_id: u64,
     /// Settlement epoch from the vin.
     pub settlement_epoch: u64,
-    /// Step 1 (`:4224–4245`): per-branch scalar counts of `path.c1_layers`
-    /// (the layer count is the slice length).
-    pub c1_branch_scalar_counts: &'a [usize],
-    /// Step 1: per-branch scalar counts of `path.c2_layers`.
-    pub c2_branch_scalar_counts: &'a [usize],
+    /// Step 0 (RF-D1 / rule 40): the opaque vin parsed through the Rust codec
+    /// (`shekyl_archival_serve_credit_extract`). Every structural bound on the
+    /// record -- branch-layer counts and widths, leg lengths -- is the codec's
+    /// and surfaces through step 14's FFI verify, not as C++ pre-checks: the
+    /// path-bound rejects the gate used to carry are gone because C++ no
+    /// longer reads the path.
+    pub vin_parsed: bool,
+    /// Step 0b: this vin's pruned record is non-empty and within
+    /// `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES` (the one size check C++ keeps,
+    /// as a transport ceiling).
+    pub pruned_record_in_bounds: bool,
     /// Step 2 (`:4247`, D-SC-A): result of the pre-block
     /// `has_archival_serve_credit_bit` read.
     pub preblock_present: bool,
@@ -154,15 +157,13 @@ pub struct ServeCreditGateInputs<'a> {
     pub held_at_fire: bool,
     /// Step 10 (`:4321`): `get_archival_shard_segment_at_height` succeeded.
     pub registry_present_at_fire: bool,
-    /// Step 11 (`:4336`): the challenged leaf index from the vin.
-    pub leaf_index_in_segment: u64,
+    /// Step 11: the registry's `segment_leaf_count` at `H_fire`. The challenged
+    /// index is DERIVED from it (RF-D6: `challenge_leaf_index`), never read
+    /// off the vin; the C++ calls the same derivation through
+    /// `shekyl_archival_challenge_leaf_index`, which refuses a zero geometry.
+    pub segment_leaf_count: u64,
     /// Step 12 (`:4353`): `get_curve_tree_leaf_chunk` succeeded.
     pub leaf_chunk_ok: bool,
-    /// Step 13 (`:4363`): the vin `do_serialize` round-trip succeeded.
-    pub wire_serialize_ok: bool,
-    /// Step 13 (`:4371`): first byte of the serialized vin (`None` = empty
-    /// wire; the C++ folds empty and wrong-tag into one branch).
-    pub wire_first_byte: Option<u8>,
     /// Step 14 (`:4387`): `shekyl_archival_verify_serve_credit_vin` returned
     /// OK. Already Rust + gate-2 KAT'd; provided as a bool, not re-audited.
     pub verify_ok: bool,
@@ -174,12 +175,10 @@ pub struct ServeCreditGateInputs<'a> {
 /// the expected-reason column is authored by source inspection).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GateReject {
-    /// `:4227` — "path layer count exceeds bound".
-    PathLayerCountExceedsBound,
-    /// `:4234` — "c1 branch scalar count exceeds bound".
-    C1BranchScalarCountExceedsBound,
-    /// `:4242` — "c2 branch scalar count exceeds bound".
-    C2BranchScalarCountExceedsBound,
+    /// "serve-credit vin did not parse" (step 0, RF-D1).
+    VinUnparseable,
+    /// "pruned record size out of bounds" (step 0b, RF-D1).
+    PrunedRecordSizeOutOfBounds,
     /// `:4249` — "Duplicate archival serve-credit for (P, shard, E)"
     /// (D-SC-A composing in as step 2).
     DuplicatePreBlock,
@@ -205,14 +204,14 @@ pub enum GateReject {
     ShardNotHeldAtFire,
     /// `:4323` — "shard registry substrate not available at H_fire".
     ShardRegistryUnavailableAtFire,
-    /// `:4339` — "challenged leaf index out of segment range".
+    /// "leaf index derivation refused" -- a zero registry geometry (RF-D6).
+    LeafIndexDerivationRefused,
+    /// "challenged leaf index out of segment range". With the index DERIVED
+    /// (`< segment_leaf_count`), reachable only when the registry's count
+    /// exceeds `SEGMENT_LEAF_COUNT` -- kept because the C++ keeps the check.
     LeafIndexOutOfSegmentRange,
     /// `:4355` — "leaf chunk read failed" (registry/tree disagreement).
     LeafChunkReadFailed,
-    /// `:4365` — "failed to serialize vin for FFI verify".
-    VinSerializeFailed,
-    /// `:4373` — "unexpected vin wire tag" (empty wire folds in here).
-    UnexpectedVinWireTag,
     /// `:4391` — "FFI verify failed".
     FfiVerifyFailed,
 }
@@ -244,30 +243,17 @@ impl GateVerdict {
 /// top-to-bottom, and the C++ gate carries a guard comment naming the
 /// equivalence fixture so a reorder trips a signal at the edit site.
 #[must_use]
-pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs<'_>) -> GateVerdict {
+pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs) -> GateVerdict {
     use GateReject as R;
     use GateVerdict::Reject;
 
-    // Step 1 (:4224–4245): path-shape bounds — layer counts first (one
-    // combined condition in the C++), then the c1 branch loop, then c2.
-    if inputs.c1_branch_scalar_counts.len() > MAX_PATH_LAYERS_PER_KIND
-        || inputs.c2_branch_scalar_counts.len() > MAX_PATH_LAYERS_PER_KIND
-    {
-        return Reject(R::PathLayerCountExceedsBound);
+    // Step 0 (RF-D1): the opaque vin parsed through the Rust codec.
+    if !inputs.vin_parsed {
+        return Reject(R::VinUnparseable);
     }
-    if inputs
-        .c1_branch_scalar_counts
-        .iter()
-        .any(|&n| n > MAX_BRANCH_SCALARS)
-    {
-        return Reject(R::C1BranchScalarCountExceedsBound);
-    }
-    if inputs
-        .c2_branch_scalar_counts
-        .iter()
-        .any(|&n| n > MAX_BRANCH_SCALARS)
-    {
-        return Reject(R::C2BranchScalarCountExceedsBound);
+    // Step 0b (RF-D1): this vin's pruned record is within the transport ceiling.
+    if !inputs.pruned_record_in_bounds {
+        return Reject(R::PrunedRecordSizeOutOfBounds);
     }
 
     // Step 2 (:4247): D-SC-A dedup vs pre-block LMDB state.
@@ -329,9 +315,20 @@ pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs<'_>) -> GateVer
         return Reject(R::ShardRegistryUnavailableAtFire);
     }
 
-    // Step 11 (:4336): leaf-chunk bounds — the same Rust function the C++
-    // calls through `shekyl_archival_challenge_leaf_chunk_bounds`.
-    if challenge_leaf_chunk_bounds(inputs.shard_id, inputs.leaf_index_in_segment).is_none() {
+    // Step 11 (RF-D6): the challenged index is DERIVED -- the same function the
+    // C++ calls through `shekyl_archival_challenge_leaf_index`, which refuses a
+    // zero geometry -- then the leaf-chunk bounds over it, as the C++ calls
+    // through `shekyl_archival_challenge_leaf_chunk_bounds`.
+    if inputs.segment_leaf_count == 0 {
+        return Reject(R::LeafIndexDerivationRefused);
+    }
+    let leaf_index = crate::challenge::challenge_leaf_index(
+        &inputs.p_canonical_id,
+        inputs.shard_id,
+        inputs.settlement_epoch,
+        inputs.segment_leaf_count,
+    );
+    if challenge_leaf_chunk_bounds(inputs.shard_id, u64::from(leaf_index)).is_none() {
         return Reject(R::LeafIndexOutOfSegmentRange);
     }
 
@@ -340,14 +337,9 @@ pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs<'_>) -> GateVer
         return Reject(R::LeafChunkReadFailed);
     }
 
-    // Step 13 (:4360–4375): vin wire round-trip + tag pin (empty wire folds
-    // into the tag branch, as in the C++).
-    if !inputs.wire_serialize_ok {
-        return Reject(R::VinSerializeFailed);
-    }
-    if inputs.wire_first_byte != Some(VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE) {
-        return Reject(R::UnexpectedVinWireTag);
-    }
+    // (The former step 13 -- re-serialise the typed vin and pin its tag -- is
+    // gone with the typed vin: the blob is passed to the FFI as-is, and the
+    // tag is the serializer guard's, enforced at tx parse, before any gate.)
 
     // Step 14 (:4387): crypto/path/sig FFI verify — already Rust, already
     // gate-2 KAT'd; a marshaled bool here.
@@ -422,13 +414,18 @@ mod tests {
     /// An accepting input set: epoch 100 of the pinned formulas
     /// (`H_open = 1_000_000`, `H_close = 1_009_999`), all substrate probes
     /// green. Per-branch tests flip exactly one field.
-    fn accepting_inputs() -> ServeCreditGateInputs<'static> {
+    // The path-bound tests that lived beside these (layer count, c1/c2 branch
+    // width, c1-before-c2 order) were RETIRED with the C++ pre-checks they
+    // mirrored: under RF-D1 the path is inside the pruned record, which C++
+    // does not read, so those bounds are the Rust parser's and surface through
+    // the FFI verify (vectors B-02..B-05 now expect `FfiVerifyFailed`).
+    fn accepting_inputs() -> ServeCreditGateInputs {
         ServeCreditGateInputs {
             p_canonical_id: P,
             shard_id: 3,
             settlement_epoch: 100,
-            c1_branch_scalar_counts: &[38, 38],
-            c2_branch_scalar_counts: &[38],
+            vin_parsed: true,
+            pruned_record_in_bounds: true,
             preblock_present: false,
             bond_substrate_present: true,
             join_epoch: 50,
@@ -439,10 +436,8 @@ mod tests {
             seal_hash: Some([0xB4; 32]),
             held_at_fire: true,
             registry_present_at_fire: true,
-            leaf_index_in_segment: 12,
+            segment_leaf_count: 25_992,
             leaf_chunk_ok: true,
-            wire_serialize_ok: true,
-            wire_first_byte: Some(VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE),
             verify_ok: true,
         }
     }
@@ -492,47 +487,11 @@ mod tests {
     }
 
     #[test]
-    fn gate_step1_bounds_fire_in_cpp_order() {
-        let too_many_layers = vec![1usize; MAX_PATH_LAYERS_PER_KIND + 1];
-        let mut inputs = accepting_inputs();
-        inputs.c1_branch_scalar_counts = &too_many_layers;
-        assert_eq!(
-            serve_credit_gate_decision(&inputs),
-            GateVerdict::Reject(GateReject::PathLayerCountExceedsBound)
-        );
-
-        let fat_branch = [MAX_BRANCH_SCALARS + 1];
-        let mut inputs = accepting_inputs();
-        inputs.c1_branch_scalar_counts = &fat_branch;
-        assert_eq!(
-            serve_credit_gate_decision(&inputs),
-            GateVerdict::Reject(GateReject::C1BranchScalarCountExceedsBound)
-        );
-
-        let mut inputs = accepting_inputs();
-        inputs.c2_branch_scalar_counts = &fat_branch;
-        assert_eq!(
-            serve_credit_gate_decision(&inputs),
-            GateVerdict::Reject(GateReject::C2BranchScalarCountExceedsBound)
-        );
-
-        // Ordering fidelity inside step 1: a fat c1 branch AND a fat c2
-        // branch reports c1 (the C++ loops c1 first).
-        let mut inputs = accepting_inputs();
-        inputs.c1_branch_scalar_counts = &fat_branch;
-        inputs.c2_branch_scalar_counts = &fat_branch;
-        assert_eq!(
-            serve_credit_gate_decision(&inputs),
-            GateVerdict::Reject(GateReject::C1BranchScalarCountExceedsBound)
-        );
-    }
-
-    #[test]
     fn gate_rejects_each_branch_at_its_step() {
         // (mutator, expected reason) — one row per marshaled-bool branch, in
         // gate order; each mutation flips exactly one field of the green
         // path.
-        type Mutator = fn(&mut ServeCreditGateInputs<'static>);
+        type Mutator = fn(&mut ServeCreditGateInputs);
         let rows: &[(Mutator, GateReject)] = &[
             (|i| i.preblock_present = true, GateReject::DuplicatePreBlock),
             (
@@ -551,28 +510,28 @@ mod tests {
                 GateReject::SealBlockNotYetCommitted,
             ),
             (|i| i.seal_hash = None, GateReject::SealHashUnavailable),
+            (|i| i.vin_parsed = false, GateReject::VinUnparseable),
+            (
+                |i| i.pruned_record_in_bounds = false,
+                GateReject::PrunedRecordSizeOutOfBounds,
+            ),
             (|i| i.held_at_fire = false, GateReject::ShardNotHeldAtFire),
             (
                 |i| i.registry_present_at_fire = false,
                 GateReject::ShardRegistryUnavailableAtFire,
             ),
             (
-                |i| i.leaf_index_in_segment = u64::MAX,
+                |i| i.segment_leaf_count = 0,
+                GateReject::LeafIndexDerivationRefused,
+            ),
+            (
+                // A registry geometry larger than a segment derives an index
+                // the chunk arithmetic refuses -- the one way this reject
+                // stays reachable with the index derived.
+                |i| i.segment_leaf_count = u64::MAX,
                 GateReject::LeafIndexOutOfSegmentRange,
             ),
             (|i| i.leaf_chunk_ok = false, GateReject::LeafChunkReadFailed),
-            (
-                |i| i.wire_serialize_ok = false,
-                GateReject::VinSerializeFailed,
-            ),
-            (
-                |i| i.wire_first_byte = Some(0x07),
-                GateReject::UnexpectedVinWireTag,
-            ),
-            (
-                |i| i.wire_first_byte = None,
-                GateReject::UnexpectedVinWireTag,
-            ),
             (|i| i.verify_ok = false, GateReject::FfiVerifyFailed),
         ];
         for (mutate, want) in rows {

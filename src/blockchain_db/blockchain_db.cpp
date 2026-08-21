@@ -265,7 +265,12 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
     else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
     {
       const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
-      set_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
+      crypto::hash p_id{}; uint64_t shard_id = 0, settlement_epoch = 0;
+      // Validated at admission; an unparseable blob here is a store/verify
+      // split and must be loud, never a silently skipped credit bit.
+      if (!get_archival_serve_credit_key(resp, p_id, shard_id, settlement_epoch))
+        throw DB_ERROR("serve-credit vin did not parse at DB add (validated at admission?)");
+      set_archival_serve_credit_bit(p_id, shard_id, settlement_epoch);
     }
     else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
     {
@@ -816,7 +821,10 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
     {
       const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
-      remove_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
+      crypto::hash p_id{}; uint64_t shard_id = 0, settlement_epoch = 0;
+      if (!get_archival_serve_credit_key(resp, p_id, shard_id, settlement_epoch))
+        throw DB_ERROR("serve-credit vin did not parse at DB remove");
+      remove_archival_serve_credit_bit(p_id, shard_id, settlement_epoch);
     }
     else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
     {

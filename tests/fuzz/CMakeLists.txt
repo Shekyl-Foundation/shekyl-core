@@ -94,22 +94,6 @@ set_property(TARGET parse-url_fuzz_tests
   PROPERTY
     FOLDER "tests")
 
-monero_add_minimal_executable(http-client_fuzz_tests http-client.cpp fuzzer.cpp)
-target_link_libraries(http-client_fuzz_tests
-  PRIVATE
-    epee
-    ${Boost_THREAD_LIBRARY}
-    ${Boost_CHRONO_LIBRARY}
-    ${Boost_REGEX_LIBRARY}
-    ${Boost_PROGRAM_OPTIONS_LIBRARY}
-    ${Boost_SYSTEM_LIBRARY}
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${EXTRA_LIBRARIES}
-    $ENV{LIB_FUZZING_ENGINE})
-set_property(TARGET http-client_fuzz_tests
-  PROPERTY
-    FOLDER "tests")
-
 monero_add_minimal_executable(levin_fuzz_tests levin.cpp fuzzer.cpp)
 target_link_libraries(levin_fuzz_tests
   PRIVATE

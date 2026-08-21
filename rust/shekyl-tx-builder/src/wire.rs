@@ -242,6 +242,11 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
                 tree_depth: curve_trees_tree_depth,
                 fcmp_proof: input.fcmp_proof.clone(),
                 pseudo_outs: input.pseudo_outs.clone(),
+                // Empty, and structurally so: this builder constructs wallet
+                // *spends*, and a serve-credit vin cannot co-reside with one
+                // (the all-or-none mixing rule, §2.5). Pass records are built
+                // by the archival path, never here.
+                serve_credit_pruned: Vec::new(),
             }),
         },
     })

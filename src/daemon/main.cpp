@@ -33,14 +33,12 @@
 #include "common/command_line.h"
 #include "common/removed_flags.h"
 #include "common/scoped_message_writer.h"
-#include "common/password.h"
 #include "common/util.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_basic/miner.h"
 #include "daemon/command_server.h"
 #include "daemon/daemon.h"
 #include "misc_log_ex.h"
-#include "net/parse.h"
 #include "p2p/net_node.h"
 #include "rpc/core_rpc_server.h"
 #include "rpc/rpc_args.h"
@@ -61,58 +59,6 @@
 
 namespace po = boost::program_options;
 namespace bf = boost::filesystem;
-
-uint16_t parse_public_rpc_port(const po::variables_map &vm)
-{
-  const auto &public_node_arg = daemon_args::arg_public_node;
-  const bool public_node = command_line::get_arg(vm, public_node_arg);
-  if (!public_node)
-  {
-    return 0;
-  }
-
-  std::string rpc_port_str;
-  std::string rpc_bind_address = command_line::get_arg(vm, cryptonote::rpc_args::descriptors().rpc_bind_ip);
-  const auto &restricted_rpc_port = cryptonote::core_rpc_server::arg_rpc_restricted_bind_port;
-  if (!command_line::is_arg_defaulted(vm, restricted_rpc_port))
-  {
-    rpc_port_str = command_line::get_arg(vm, restricted_rpc_port);
-    rpc_bind_address = command_line::get_arg(vm, cryptonote::rpc_args::descriptors().rpc_restricted_bind_ip);
-  }
-  else if (command_line::get_arg(vm, cryptonote::core_rpc_server::arg_restricted_rpc))
-  {
-    rpc_port_str = command_line::get_arg(vm, cryptonote::core_rpc_server::arg_rpc_bind_port);
-  }
-  else
-  {
-    throw std::runtime_error("restricted RPC mode is required");
-  }
-
-  uint16_t rpc_port;
-  if (!epee::string_tools::get_xtype_from_string(rpc_port, rpc_port_str))
-  {
-    throw std::runtime_error("invalid RPC port " + rpc_port_str);
-  }
-
-  const auto address = net::get_network_address(rpc_bind_address, rpc_port);
-  if (!address) {
-    throw std::runtime_error("failed to parse RPC bind address");
-  }
-  if (address->get_zone() != epee::net_utils::zone::public_)
-  {
-    throw std::runtime_error(std::string(zone_to_string(address->get_zone()))
-      + " network zone is not supported, please check RPC server bind address");
-  }
-
-  if (address->is_loopback() || address->is_local())
-  {
-    MLOG_RED(el::Level::Warning, "--" << public_node_arg.name 
-      << " is enabled, but RPC server " << address->str() 
-      << " may be unreachable from outside, please check RPC server bind address");
-  }
-
-  return rpc_port;
-}
 
 #ifdef WIN32
 bool isFat32(const wchar_t* root_path)
@@ -163,7 +109,6 @@ int main(int argc, char const * argv[])
       command_line::add_arg(core_settings, daemon_args::arg_max_log_files);
       command_line::add_arg(core_settings, daemon_args::arg_max_concurrency);
       command_line::add_arg(core_settings, daemon_args::arg_proxy);
-      command_line::add_arg(core_settings, daemon_args::arg_public_node);
       command_line::add_arg(visible_options, daemon_args::arg_non_interactive);
 
       daemonize::Daemon::init_options(core_settings);
@@ -385,19 +330,18 @@ int main(int argc, char const * argv[])
 
         // The shekyld RPC listener is plaintext loopback with no digest auth
         // (rpc_args is registered with include_listener_tls_auth=false), so the
-        // control client connects without a login or TLS. The former
-        // --rpc-login / --rpc-ssl* flags are no longer registered for shekyld;
-        // reading them here (e.g. process_ssl) would throw boost::bad_any_cast
-        // on the unregistered variables_map entries. Remote/authenticated
+        // control client has no login or TLS to carry: the former --rpc-login /
+        // --rpc-ssl* flags are not registered for shekyld. Remote/authenticated
         // access is fronted by an onion service or reverse proxy outside the
         // daemon (docs/DAEMON_RPC_RUST.md).
-        std::optional<tools::login> login{};
-        epee::net_utils::ssl_options_t ssl_options{epee::net_utils::ssl_support_t::e_ssl_support_disabled};
-
-        daemonize::t_command_server rpc_commands{rpc_ip, rpc_port, std::move(login), std::move(ssl_options)};
+        daemonize::t_command_server rpc_commands{rpc_ip, rpc_port};
         if (rpc_commands.process_command_vec(command))
         {
-          return 0;
+          // A recognized command that could not get its answer from the
+          // daemon (unreachable, refused, non-OK status) exits non-zero: the
+          // failure is already on stderr, and a script must be able to see
+          // it without parsing that text.
+          return rpc_commands.rpc_request_failed() ? 1 : 0;
         }
         else
         {
@@ -412,9 +356,7 @@ int main(int argc, char const * argv[])
 
     LOG_PRINT_L0("Shekyl '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")");
 
-    daemonize::DaemonConfig daemon_config;
-    daemon_config.public_rpc_port = parse_public_rpc_port(vm);
-    daemonize::Daemon daemon{daemon_config, vm};
+    daemonize::Daemon daemon{vm};
     const bool interactive = !command_line::get_arg(vm, daemon_args::arg_non_interactive);
     return daemon.run(interactive) ? 0 : 1;
   }

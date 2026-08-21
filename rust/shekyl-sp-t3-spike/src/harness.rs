@@ -42,7 +42,7 @@ use shekyl_tor::control::{BootstrapReadiness, BootstrapState, Command, EventSink
 use shekyl_tor::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
 use shekyl_types::{PCanonicalId, PSlot};
 
-use shekyl_p_serve::{PServeEndpoint, ROUTE_PREFIX};
+use shekyl_p_serve::{PServeEndpoint, ShardBody, ROUTE_PREFIX};
 
 use crate::fixture::FixtureShardProvider;
 use crate::measure::{FailureKind, Observation};
@@ -117,6 +117,19 @@ pub struct Apparatus {
     socks: TorSocksEndpoint,
     /// The published personas, in slot order.
     pub personas: Vec<Persona>,
+    /// The body length every fetch is checked against — **derived, never
+    /// passed in.**
+    ///
+    /// Computed once at bring-up from the payload, through the production
+    /// serving contract ([`shekyl_p_serve::ShardBody::header`]), so it is
+    /// the length the endpoint will actually write: `RF-D4`'s frame header
+    /// plus the leaf bytes. Before this field existed every caller passed the
+    /// raw fixture length, and when the frame landed that number went stale
+    /// at four call sites at once — each reachability probe rejected until
+    /// timeout, each timed fetch classified `Truncated`. A number a caller
+    /// supplies is a number that drifts when the wire moves; a number the
+    /// apparatus derives from the same code that writes the wire cannot.
+    expected_len: usize,
 }
 
 /// Why the apparatus could not be brought up. Every arm is an *apparatus*
@@ -136,6 +149,13 @@ pub enum ApparatusError {
     Bind(std::io::Error),
     /// No persona became reachable within [`PUBLISH_TIMEOUT`].
     NotReachable,
+    /// The payload cannot be served at all: not a whole number of leaves, or
+    /// more than one segment. Refused at bring-up, because an apparatus that
+    /// serves a 404 for every shard measures nothing.
+    Unframeable {
+        /// The offending payload length.
+        bytes: usize,
+    },
 }
 
 impl std::fmt::Display for ApparatusError {
@@ -147,6 +167,11 @@ impl std::fmt::Display for ApparatusError {
             Self::NoServiceId => write!(f, "ADD_ONION reply carried no service id"),
             Self::Bind(e) => write!(f, "serve endpoint bind failed: {e}"),
             Self::NotReachable => write!(f, "no persona became reachable before the deadline"),
+            Self::Unframeable { bytes } => write!(
+                f,
+                "payload of {bytes} bytes is not servable (not a whole number of leaves, or \
+                 more than one segment)"
+            ),
         }
     }
 }
@@ -265,6 +290,18 @@ impl Apparatus {
                 .ok();
         }
 
+        // The expected body length, derived through the production contract
+        // BEFORE any persona is bound: the same `ShardBody::flat` the fixture
+        // provider will call per request, so what the probes compare against
+        // is what the endpoint will write — frame header included.
+        let expected_len = ShardBody::flat(Arc::clone(&payload))
+            .ok_or(ApparatusError::Unframeable {
+                bytes: payload.len(),
+            })?
+            .header()
+            .framed_len();
+        let expected_len = usize::try_from(expected_len).expect("framed length fits usize");
+
         let mut personas = Vec::new();
         for slot in 0..persona_count {
             let slot = PSlot::from_raw(slot);
@@ -319,7 +356,16 @@ impl Apparatus {
             control,
             socks: TorSocksEndpoint::loopback(socks_port),
             personas,
+            expected_len,
         })
+    }
+
+    /// The body length every fetch is checked against: frame header plus
+    /// shard, as the endpoint writes it. Exposed so operators and logs can
+    /// print the number a remote reader should expect.
+    #[must_use]
+    pub fn expected_body_len(&self) -> usize {
+        self.expected_len
     }
 
     /// Block until at least one persona answers, so the measurement does not
@@ -329,14 +375,14 @@ impl Apparatus {
     /// every arm: publication happens once when the persona comes online, not
     /// once per challenge, so folding it into the fetch distribution would
     /// inflate the tail with a cost a real drawn miner never pays.
-    pub async fn await_reachable(&self, expected_len: usize) -> Result<Duration, ApparatusError> {
+    pub async fn await_reachable(&self) -> Result<Duration, ApparatusError> {
         let started = Instant::now();
         let persona = self.personas.first().ok_or(ApparatusError::NotReachable)?;
         let url = persona.shard_url(0);
         while started.elapsed() < PUBLISH_TIMEOUT {
             let probe = PCanonicalId::from_bytes(persona_probe_id(PSlot::from_raw(u32::MAX)));
             if let Ok(bytes) = self.fetch_once(&probe, &url).await {
-                if bytes == expected_len {
+                if bytes == self.expected_len {
                     return Ok(started.elapsed());
                 }
             }
@@ -367,18 +413,14 @@ impl Apparatus {
         }
     }
 
-    /// Time one fetch of `expected_len` bytes from `persona` as `client_id`.
+    /// Time one fetch of the full served body from `persona` as `client_id`.
     ///
     /// The clock starts before the client is constructed and stops after the last
     /// byte, so circuit build is inside the timed path (§6.2) for a cold client
     /// and outside it for a warm one — which is exactly the difference the two
-    /// arms report.
-    pub async fn timed_fetch(
-        &self,
-        client_id: &PCanonicalId,
-        persona_index: usize,
-        expected_len: usize,
-    ) -> Observation {
+    /// arms report. Success means the body was exactly
+    /// [`Self::expected_body_len`] bytes; anything shorter is `Truncated`.
+    pub async fn timed_fetch(&self, client_id: &PCanonicalId, persona_index: usize) -> Observation {
         let Some(persona) = self.personas.get(persona_index) else {
             return Observation::failure(Duration::ZERO, FailureKind::Transport);
         };
@@ -389,7 +431,7 @@ impl Apparatus {
         match outcome {
             // A short body is an apparatus failure, not a fast success — the
             // distinction the `Truncated` class exists to keep visible.
-            Ok(len) if len == expected_len => Observation::success(elapsed),
+            Ok(len) if len == self.expected_len => Observation::success(elapsed),
             Ok(_) => Observation::failure(elapsed, FailureKind::Truncated),
             Err(kind) => Observation::failure(elapsed, kind),
         }

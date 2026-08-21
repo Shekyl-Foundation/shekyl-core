@@ -47,6 +47,20 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **`rct_signatures` / `rctSig` / `namespace rct` → CT names (rule 93 sweep,
+  ~290 sites)** — RF-D9 (PR #522) renamed the three RCT-named symbols it
+  edited (`serialize_rctsig_prunable` → `serialize_ctsig_prunable`,
+  `verRctSemanticsFeeOnly` → `verCtSemanticsFeeOnly`, `rctSigPrunable` →
+  `CtSigPrunable`); the first of those was emitting an archive tag already
+  named `ctsig_prunable`, so the function disagreed with its own bytes. The
+  remaining three families (`rct_signatures` 224 sites, `rctSig` 56,
+  `namespace rct` 10) are a mechanical sweep that would have swamped that
+  PR's review surface. Own PR; no behaviour change; rule 93's "when touching
+  code" clause made the partial rename right, and makes finishing it owed.
+  **Target: V3.0** (pre-genesis naming hygiene; the inherited name asserts a
+  construction Shekyl does not use — see `no-ringct-use-ct`).
+
+
 - **`combined_shared_secret` gate is vacuous: delete it or re-point it**
   (added 2026-08-19, Phase-5 follow-up round). The
   [`rust-audit-test.yml`](../.github/workflows/rust-audit-test.yml) step *"CI

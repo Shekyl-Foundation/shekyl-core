@@ -40,12 +40,10 @@ namespace daemonize {
 t_command_parser_executor::t_command_parser_executor(
     uint32_t ip
   , uint16_t port
-  , const std::optional<tools::login>& login
-  , const epee::net_utils::ssl_options_t& ssl_options
   , bool is_rpc
   , cryptonote::core_rpc_server* rpc_server
   )
-  : m_executor(ip, port, login, ssl_options, is_rpc, rpc_server)
+  : m_executor(ip, port, is_rpc, rpc_server)
 {}
 
 bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& args)
@@ -59,7 +57,6 @@ bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& 
   bool white = false;
   bool gray = false;
   bool pruned = false;
-  bool publicrpc = false;
   size_t limit = 0;
   for (size_t i = 0; i < args.size(); ++i)
   {
@@ -75,10 +72,6 @@ bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& 
     {
       pruned = true;
     }
-    else if (args[i] == "publicrpc")
-    {
-      publicrpc = true;
-    }
     else if (!epee::string_tools::get_xtype_from_string(limit, args[i]))
     {
       std::cout << "Invalid syntax: Unexpected parameter: " << args[i] << ". For more details, use the help command." << std::endl;
@@ -87,7 +80,7 @@ bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& 
   }
 
   const bool print_both = !white && !gray;
-  return m_executor.print_peer_list(white | print_both, gray | print_both, limit, pruned, publicrpc);
+  return m_executor.print_peer_list(white | print_both, gray | print_both, limit, pruned);
 }
 
 bool t_command_parser_executor::print_peer_list_stats(const std::vector<std::string>& args)
@@ -955,71 +948,6 @@ bool t_command_parser_executor::prune_blockchain(const std::vector<std::string>&
 bool t_command_parser_executor::check_blockchain_pruning(const std::vector<std::string>& args)
 {
   return m_executor.check_blockchain_pruning();
-}
-
-bool t_command_parser_executor::set_bootstrap_daemon(const std::vector<std::string>& args)
-{
-  struct parsed_t
-  {
-    std::string address;
-    std::string user;
-    std::string password;
-    std::string proxy;
-  };
-
-  std::optional<parsed_t> parsed = [&args]() -> std::optional<parsed_t> {
-    const size_t args_count = args.size();
-    if (args_count == 0)
-    {
-      return {};
-    }
-    if (args[0] == "auto")
-    {
-      if (args_count == 1)
-      {
-        return {{args[0], "", "", ""}};
-      }
-      if (args_count == 2)
-      {
-        return {{args[0], "", "", args[1]}};
-      }
-    }
-    else if (args[0] == "none")
-    {
-      if (args_count == 1)
-      {
-        return {{"", "", "", ""}};
-      }
-    }
-    else
-    {
-      if (args_count == 1)
-      {
-        return {{args[0], "", "", ""}};
-      }
-      if (args_count == 2)
-      {
-        return {{args[0], "", "", args[1]}};
-      }
-      if (args_count == 3)
-      {
-        return {{args[0], args[1], args[2], ""}};
-      }
-      if (args_count == 4)
-      {
-        return {{args[0], args[1], args[2], args[3]}};
-      }
-    }
-    return {};
-  }();
-
-  if (!parsed)
-  {
-    std::cout << "Invalid syntax: Wrong number of parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  return m_executor.set_bootstrap_daemon(parsed->address, parsed->user, parsed->password, parsed->proxy);
 }
 
 bool t_command_parser_executor::flush_cache(const std::vector<std::string>& args)

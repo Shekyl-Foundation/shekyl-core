@@ -103,6 +103,7 @@ fn emission_tx(inputs: Vec<Input>, outputs: Vec<Output>) -> Transaction {
                 })
                 .collect(),
             prunable: Some(Prunable {
+                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp(n_out)],
                 tree_depth: 1,
                 fcmp_proof: vec![],
