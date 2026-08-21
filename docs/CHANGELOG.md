@@ -28,6 +28,30 @@
 
 ### Fixed
 
+- **Opening a wallet on Windows failed with an internal error (`-32603`)
+  on every attempt.** `WalletFile::open` took the keys-file lock and then
+  read the file through a *second* handle (`std::fs::read`). The lock is
+  `fd-lock` over `LockFileEx`, which on Windows is a **mandatory**
+  byte-range lock — the locked byte cannot be read through any other
+  handle, the same process included — so the read failed with
+  `ERROR_LOCK_VIOLATION`, surfaced as a generic I/O detail, and reached
+  the RPC as `-32603`. POSIX `flock` is advisory, so nothing on Linux or
+  macOS could see it; the Windows CI scouting run of PR #526 did, on the
+  first wallet `open` ever executed there. The read now goes through the
+  handle that holds the lock (`KeysFileLock::acquire_and_read`) — one
+  handle, and the bytes of the file that was locked rather than whatever
+  sits at the path a moment later. A unit test pins the platform fact
+  (a path read while locked fails on Windows, succeeds on POSIX), and
+  `lock.rs` no longer claims the lock is advisory everywhere.
+
+  The Windows scouting step that found it reported **success** on the run
+  page — `continue-on-error` hides its command's result — with the failure
+  ~8,000 log lines deep. It now runs every command, publishes a per-command
+  exit table to the job summary, and fails the step (still non-blocking)
+  when any command failed. Results recorded in
+  `docs/design/WINDOWS_WALLET_PROBE_SHEET.md` §4.3: P-16 passed first
+  time; the self-hosted pipe under axum served its first real request.
+
 - **The block-reward supply-headroom cap underflowed past full emission.**
   `get_block_reward`'s 6-argument overload capped a block's reward at
   `MONEY_SUPPLY - already_generated_coins`, computed in `uint64_t`. Once
