@@ -467,12 +467,17 @@ jobs:
       # What it observes as of WP-W2: the `cfg(windows)` arms of
       # `shekyl-wallet-rpc` and `shekyl-cli` — the named-pipe listener seam
       # and the verified dial — which no Linux box can compile (their graphs
-      # reach `ring`). If the check passes, the two end-to-end tests run in
-      # the same step: the first execution, anywhere, of the self-hosted pipe
-      # under axum (the probe sheet's P-10). They are informational for the
-      # same reason and end the same way — WP-W5 turns the wallet test lane
-      # blocking. Exit codes are read directly, never through a pipe
-      # (rule 46).
+      # reach `ring`), plus the two end-to-end tests, which run in the same
+      # step regardless of whether the check or each other passed (see
+      # REPORTING below). Coverage as of the keys-file fix: the wallet-rpc
+      # end-to-end test HAS executed on this runner — the self-hosted pipe
+      # under axum served its first request there, and the mandatory-lock
+      # bug was found there (WINDOWS_WALLET_PROBE_SHEET.md §4.3); the
+      # shekyl-cli end-to-end test has NOT yet executed here, because the
+      # earlier form of this step stopped at the first failure before
+      # reaching it, so its next run is its first. They are informational
+      # for the same reason as the check and end the same way — WP-W5 turns
+      # the wallet test lane blocking.
       #
       # REPORTING (2026-08-21). A `continue-on-error` step shows
       # `conclusion: success` on the run page whatever its command did; the
