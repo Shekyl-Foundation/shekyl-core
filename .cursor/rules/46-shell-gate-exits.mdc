@@ -7,13 +7,6 @@ globs:
 
 # Gate verdicts never travel through a pipe
 
-> **First, the general rule this one is an instance of:** every check must be
-> able to fail, and you must be able to name the edit that makes it fail —
-> [`50-testing`](50-testing.mdc) §"Every check must be able to fail". A gate
-> whose exit code is swallowed is one of seven recorded ways a check ends up
-> structurally incapable of going red.
-
-
 `cmd | tail`, `cmd | grep`, `cmd | head` — the pipeline's exit status is
 the LAST command's, so the gate reads the filter's success and the real
 verdict is discarded. This has shipped a clippy-red commit and masked a
