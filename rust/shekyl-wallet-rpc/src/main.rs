@@ -39,7 +39,8 @@ struct Cli {
     #[arg(long = "rpc-bind", default_value = "127.0.0.1:29500")]
     rpc_bind: String,
 
-    /// HTTP basic auth as `user:pass`. Empty / omitted disables auth, which
+    /// HTTP basic auth as `NAME:PASSWORD`, both halves non-empty (anything
+    /// else is refused by name). Empty / omitted disables auth, which
     /// is accepted only on loopback or a UDS socket (filesystem permissions
     /// carry the authorization there); a non-loopback --rpc-bind refuses to
     /// start without it.
@@ -105,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let auth = if cli.disable_rpc_login || cli.rpc_login.is_empty() {
         AuthConfig::Disabled
     } else {
-        AuthConfig::from_rpc_login(Some(&cli.rpc_login))
+        AuthConfig::from_rpc_login(Some(&cli.rpc_login))?
     };
 
     let network = Network::from_str(&cli.network)

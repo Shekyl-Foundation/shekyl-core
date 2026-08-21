@@ -322,13 +322,22 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
         )
         .into());
     }
-    if !ip.is_loopback() && matches!(config.auth, AuthConfig::Disabled) {
+    // RT-2. A `Basic` with a blank user or password is not authentication:
+    // `Authorization: Basic Og==` satisfies it. The flag parser refuses that
+    // shape, but the enum's fields are public, so an embedder can construct
+    // it without ever calling the parser — the bind seam is where the
+    // invariant has to hold, whatever made the value.
+    let unauthenticated = match &config.auth {
+        AuthConfig::Disabled => true,
+        AuthConfig::Basic { username, password } => username.is_empty() || password.is_empty(),
+    };
+    if !ip.is_loopback() && unauthenticated {
         return Err(format!(
-            "refusing to serve the wallet RPC on {addr} with authentication disabled: the \
-             address is reachable from the network and every request, spends included, \
-             would be honoured. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT}, or set \
-             --rpc-login user:pass (and drop --disable-rpc-login if it is set — it wins \
-             over --rpc-login)."
+            "refusing to serve the wallet RPC on {addr} without usable authentication \
+             (disabled, or a blank user or password): the address is reachable from the \
+             network and every request, spends included, would be honoured. Bind 127.0.0.1 \
+             or [::1]{LOCAL_ENDPOINT_HINT}, or set --rpc-login NAME:PASSWORD (and drop \
+             --disable-rpc-login if it is set — it wins over --rpc-login)."
         )
         .into());
     }
@@ -773,7 +782,7 @@ mod tests {
             network: Network::Stagenet,
             daemon_address: endpoint.address.clone(),
             proxy: endpoint.proxy.clone(),
-            auth: AuthConfig::from_rpc_login(Some("rpcuser:opensesame")),
+            auth: AuthConfig::from_rpc_login(Some("rpcuser:opensesame")).expect("login parses"),
             kdf: KdfParams::default(),
         };
 
@@ -811,7 +820,7 @@ mod tests {
     }
 
     fn basic() -> AuthConfig {
-        AuthConfig::from_rpc_login(Some("user:pass"))
+        AuthConfig::from_rpc_login(Some("user:pass")).expect("login parses")
     }
 
     /// RT-1: every wildcard spelling is refused, with auth *enabled* so the
@@ -843,7 +852,7 @@ mod tests {
             let err = validate_listen(&listen_config(addr, AuthConfig::Disabled))
                 .expect_err("auth-less non-loopback bind must be refused")
                 .to_string();
-            assert!(err.contains("authentication disabled"), "{addr}: {err}");
+            assert!(err.contains("usable authentication"), "{addr}: {err}");
             assert!(
                 err.contains("--rpc-login"),
                 "{addr}: must say what to do: {err}"
@@ -866,6 +875,33 @@ mod tests {
         #[cfg(unix)]
         validate_listen(&listen_config("uds:///tmp/x.sock", AuthConfig::Disabled))
             .expect("the socket carries its own authorization");
+    }
+
+    /// RT-2 is about a credential existing, not about the enum's variant. A
+    /// `Basic` with a blank user or password — constructible directly, since
+    /// the fields are public — must be refused exactly like `Disabled`.
+    /// Observed red before the seam checked it: `--rpc-login :` passed.
+    #[test]
+    fn blank_basic_credentials_are_not_authentication() {
+        for (u, p) in [("", ""), ("user", ""), ("", "pass")] {
+            let auth = AuthConfig::Basic {
+                username: u.into(),
+                password: p.into(),
+            };
+            let err = validate_listen(&listen_config("192.0.2.1:29500", auth))
+                .expect_err("blank credentials must be refused off loopback")
+                .to_string();
+            assert!(err.contains("usable authentication"), "{u:?}:{p:?}: {err}");
+        }
+        // On loopback the same shape is tolerated, as `Disabled` is.
+        validate_listen(&listen_config(
+            "127.0.0.1:0",
+            AuthConfig::Basic {
+                username: String::new(),
+                password: String::new(),
+            },
+        ))
+        .expect("loopback is the machine's own boundary");
     }
 
     /// The wiring, not the predicate: both bind paths must consult

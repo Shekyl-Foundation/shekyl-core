@@ -16,7 +16,12 @@
   wallet RPC that the network can reach is acceptable. Both rules live in
   one `validate_listen`, consulted by both bind paths (`run_server` and
   `spawn_in_process_with`), and the tests prove the wiring at each. Loopback
-  with auth disabled and the Unix socket are unchanged. This is slice RT-W1
+  with auth disabled and the Unix socket are unchanged. `--rpc-login` must
+  be `NAME:PASSWORD` with both halves non-empty: `:` used to yield a blank
+  Basic credential that the listener counted as authentication (`Basic Og==`
+  satisfied it), and a value without `:` used to yield a username with an
+  empty password; both are now refused by name, and the bind seam treats a
+  blank-credential `Basic` exactly like `Disabled`. This is slice RT-W1
   of the RPC transport posture (RULED 2026-08-21): every RPC leg is
   operator-to-operator and the adversary is the network path; remote legs
   become pinned mutual TLS with a server-side fingerprint allowlist (RT-4,

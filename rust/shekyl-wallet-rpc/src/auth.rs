@@ -49,20 +49,30 @@ impl std::fmt::Debug for AuthConfig {
 }
 
 impl AuthConfig {
-    /// Build from optional `user:pass` login string.
+    /// Build from the `--rpc-login` value.
     ///
-    /// `None` or empty → [`AuthConfig::Disabled`]. A string without `:` is
-    /// treated as username with empty password.
-    pub fn from_rpc_login(login: Option<&str>) -> Self {
-        match login {
-            None | Some("") => Self::Disabled,
-            Some(raw) => {
-                let (username, password) = match raw.split_once(':') {
-                    Some((u, p)) => (u.to_owned(), p.to_owned()),
-                    None => (raw.to_owned(), String::new()),
-                };
-                Self::Basic { username, password }
-            }
+    /// `None` or empty → [`AuthConfig::Disabled`] (the flag was not given).
+    /// Otherwise the value must be `NAME:PASSWORD` with **both** halves
+    /// non-empty; anything else is refused by name rather than quietly
+    /// becoming a credential nobody set. `:` used to yield an empty user and
+    /// password — which `Authorization: Basic Og==` satisfies — and a value
+    /// without `:` used to yield a username with an empty password. A typo in
+    /// a flag must not become a passwordless listener (rule 82; RT-2).
+    pub fn from_rpc_login(login: Option<&str>) -> Result<Self, String> {
+        let Some(raw) = login.filter(|s| !s.is_empty()) else {
+            return Ok(Self::Disabled);
+        };
+        match raw.split_once(':') {
+            Some((u, p)) if !u.is_empty() && !p.is_empty() => Ok(Self::Basic {
+                username: u.to_owned(),
+                password: p.to_owned(),
+            }),
+            // The value is not echoed: it may hold a partial secret.
+            _ => Err(
+                "--rpc-login must be NAME:PASSWORD with both halves non-empty (omit the flag \
+                 to disable authentication on loopback or a UDS socket)"
+                    .into(),
+            ),
         }
     }
 
@@ -128,6 +138,35 @@ pub async fn require_basic_auth(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The parser refuses every shape that would have produced a blank
+    /// credential, and never echoes the value it refused.
+    #[test]
+    fn rpc_login_parses_name_password_and_refuses_blank_halves() {
+        assert!(matches!(
+            AuthConfig::from_rpc_login(None),
+            Ok(AuthConfig::Disabled)
+        ));
+        assert!(matches!(
+            AuthConfig::from_rpc_login(Some("")),
+            Ok(AuthConfig::Disabled)
+        ));
+        assert!(matches!(
+            AuthConfig::from_rpc_login(Some("alice:hunter2")),
+            Ok(AuthConfig::Basic { .. })
+        ));
+        for bad in [":", "alice:", ":hunter2", "alice"] {
+            let err = AuthConfig::from_rpc_login(Some(bad)).expect_err(bad);
+            assert!(
+                err.contains("--rpc-login"),
+                "{bad:?}: must name the flag: {err}"
+            );
+            assert!(
+                !err.contains("alice") && !err.contains("hunter2"),
+                "{bad:?}: the value must not be echoed: {err}"
+            );
+        }
+    }
 
     fn basic_header(user: &str, pass: &str) -> String {
         let enc = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
