@@ -569,7 +569,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_to_key& txin)
   GET_FROM_JSON_OBJECT(val, txin.k_image, key_image);
 }
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_serve_credit_response& txin);
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_serve_credit_response& txin)
 {
   dest.StartObject();
   INSERT_INTO_JSON_OBJECT(dest, canonical_bytes, txin.canonical_bytes);

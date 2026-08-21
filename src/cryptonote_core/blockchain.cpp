@@ -5304,7 +5304,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     MERROR_VER("Archival serve-credit vin did not parse");
     return false;
   }
-  if (pruned_record.empty() || pruned_record.size() > config::ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES)
+  if (pruned_record.empty() || pruned_record.size() > rct::CtSigPrunable::SERVE_CREDIT_PRUNED_MAX_BYTES)
   {
     MERROR_VER("Archival serve-credit pruned record size out of bounds");
     return false;

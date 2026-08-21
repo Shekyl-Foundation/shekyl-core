@@ -763,7 +763,7 @@ migration would ever have.
 | --- | --- | --- |
 | `txin_archival_serve_credit_response` | nine typed fields, C++ codec | `std::vector<uint8_t> canonical_bytes` (tag included), transport guard only |
 | pruned half | — | `CtSigPrunable::serve_credit_pruned: vector<vector<uint8_t>>`, one opaque record per serve-credit vin, each length-prefixed |
-| `(P, shard, E)` for DB bits, pool keys, block-unique keys | field reads at four sites | one helper, `get_archival_serve_credit_key`, over `shekyl_archival_serve_credit_extract` |
+| `(P, shard, E)` for DB bits, pool keys, block-unique keys | field reads at four sites | one helper, `get_archival_serve_credit_key`, over `shekyl_archival_serve_credit_extract` — given the **tagged blob whole**, as the emission extract is; C++ never slices the tag off, and an empty blob is a wire error, not a null-pointer error (review, 2026-08-21) |
 | challenge leaf index | read off the vin | `shekyl_archival_challenge_leaf_index` (RF-D6) |
 | admission | C++ path-bound checks + typed re-serialisation into the FFI | `shekyl_archival_verify_serve_credit_vin(kept, pruned, ctx)` — every structural bound is the Rust parser's |
 | JSON / boost archives | field-by-field | the blob, as for the emission vin |
@@ -823,10 +823,22 @@ could see it. The arithmetic now has one home beside
 `challenge_leaf_chunk_bounds` (`challenged_leaf_offset_in_chunk`), used by the
 FFI and both KATs.
 
-**Transport ceilings, twinned.** `ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES = 117` and
-`ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES = 1 053 185` are pinned to the same
-literals in `cryptonote_config.h` (static-assert) and `shekyl-wire`
-(const-assert); moving either formula fails one side until the other follows.
+**Transport ceilings, twinned — and the rule for when a twin is licensed.**
+`ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES = 117` lives in `cryptonote_config.h` and
+`shekyl-wire`; the pruned-record ceiling `1 053 185` lives in
+`rct::CtSigPrunable` (where it is **enforced**) and `shekyl-wire`. Each pair is
+pinned to the same literal by static/const-assert, so moving one side fails
+the other.
+
+Review (2026-08-21) removed a third copy of the pruned ceiling from
+`cryptonote_config.h`, and the reason generalises: **a deliberate duplicate is
+justified by a boundary that cannot be crossed, not by one that would be
+inconvenient to cross.** Rust↔C++ cannot share a header — that twin is
+licensed, as `shekyl-levin`'s copy of the witness cap is licensed by a crate
+that refuses the dependency. A C++ header declining to include another C++
+header is not that kind of boundary; the copy that only *declared* was the one
+to delete, and the site that *enforces* keeps the number. The pin is a
+tripwire: it makes a duplicate safe, not warranted.
 
 **`RF-D2` — the container is renamed and fixed-width, not slimmed in place.**
 Today `hybrid_signature: Vec<u8>` holds 3,385 B (`12 framing + 64 Ed25519 + 3309

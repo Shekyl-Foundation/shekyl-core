@@ -418,18 +418,19 @@ namespace config
 
   // RF-D1 / rule 40: the serve-credit vin is an OPAQUE blob (`canonical_bytes`,
   // tag byte included) whose only parser is shekyl-archival-retention::wire.
-  // These are transport ceilings, twins of shekyl-wire's
-  // `ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES` / `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`
-  // (pinned there by const-assert to the same literals; a drift fails one side).
-  //   kept:   tag(1) + p_id(32) + shard varint(<=10) + epoch varint(<=10) + Ed25519(64)
-  //   pruned: 2 kinds x (count varint(<=10) + 64 layers x (width varint(<=10) + 256 x 32))
-  //           + ML-DSA-65 (3309) -- a DoS ceiling, not a layout claim.
+  // This is a transport ceiling, twin of shekyl-wire's
+  // `ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES` (pinned there by const-assert to the
+  // same literal; a drift fails one side).
+  //   kept: tag(1) + p_id(32) + shard varint(<=10) + epoch varint(<=10) + Ed25519(64)
   constexpr size_t ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES = 1 + 32 + 10 + 10 + 64;
-  constexpr size_t ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES =
-    2 * (10 + ARCHIVAL_MAX_PATH_LAYERS_PER_KIND * (10 + ARCHIVAL_MAX_BRANCH_SCALARS * 32)) + 3309;
   static_assert(ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES == 117, "twin of shekyl-wire's ceiling");
-  static_assert(ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES == 1053185,
-    "twin of shekyl-wire and rct::CtSigPrunable::SERVE_CREDIT_PRUNED_MAX_BYTES");
+  // The PRUNED-record ceiling deliberately does NOT live here. It is enforced
+  // in rct::CtSigPrunable (rctTypes.h), which cannot include this header
+  // without a layering regression, so that is its one C++ home
+  // (`rct::CtSigPrunable::SERVE_CREDIT_PRUNED_MAX_BYTES`, pinned to the same
+  // literal as shekyl-wire's). A copy here would have been a third site that
+  // only declared -- a duplicate across a boundary that is inconvenient, not
+  // impossible, to cross, which is not the kind rule 17 licenses.
   // The DETERMINISTIC size of one pruned pass record for a frozen segment at
   // SEGMENT_LAYER_J = 2 (depth 3: one Selene branch layer of 38 scalars, one
   // Helios of 18 -- CR-D2's 1,792 B) plus the ML-DSA leg, plus the per-record

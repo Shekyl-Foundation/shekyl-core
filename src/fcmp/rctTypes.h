@@ -308,15 +308,17 @@ namespace rct {
         // (tests/unit_tests/tx_prunable_region_sole_occupant.cpp).
         std::vector<std::vector<uint8_t>> serve_credit_pruned;
 
-        // Twin of `config::ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES` and
-        // `shekyl-wire::ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`. Local so this
-        // header does not include cryptonote_config; the literal is pinned on
-        // every side (`== 1053185`). Formula: 2 kinds × (count varint + 64
-        // layers × (width varint + 256 × 32)) + ML-DSA-65.
+        // The ONE C++ home of the pruned-record transport ceiling -- this is
+        // where it is enforced, so this is where it lives (cryptonote_config
+        // deliberately does not hold a copy). Twin of shekyl-wire's
+        // `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`, a boundary no header can
+        // cross; the literal is pinned on both sides (`== 1053185`). Formula:
+        // 2 kinds × (count varint + 64 layers × (width varint + 256 × 32)) +
+        // ML-DSA-65.
         static constexpr size_t SERVE_CREDIT_PRUNED_MAX_BYTES =
           2 * (10 + 64 * (10 + 256 * 32)) + 3309;
         static_assert(SERVE_CREDIT_PRUNED_MAX_BYTES == 1053185,
-          "twin of cryptonote_config / shekyl-wire");
+          "twin of shekyl-wire's ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES");
 
         // when changing this function, update cryptonote::get_pruned_transaction_weight
         //
