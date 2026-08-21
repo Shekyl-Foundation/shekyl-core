@@ -53,8 +53,6 @@
 //! whoever hits it — the `noise_stem` hazard, where a green test defends the
 //! behaviour a ruling contradicts.
 
-#![allow(clippy::cast_precision_loss)]
-
 use shekyl_relay_privacy::conformance::{
     simulate_fluff_return, transit_for, FloodParams, FloodReach,
 };
@@ -85,6 +83,18 @@ fn p90_at(transit_ms: u64) -> u64 {
     .p90_ms
 }
 
+/// Percent/ratio of two millisecond counts as `f64`.
+///
+/// The only `u64 -> f64` casts in this file live here, behind a **targeted**
+/// allow — so a future precision-sensitive cast added anywhere else in the
+/// module is still flagged, rather than being masked by a file-level
+/// `#![allow]` (the suppression-outlives-its-trigger hazard §528's review
+/// flagged and the earlier truncation-allow removal already hit).
+#[allow(clippy::cast_precision_loss)]
+fn ratio(a: u64, b: u64) -> f64 {
+    a as f64 / b as f64
+}
+
 /// The provenance pin: the shipped constant IS the transit-less reading.
 ///
 /// This is the load-bearing half. If it ever stops reproducing, the shipped
@@ -105,15 +115,20 @@ fn the_shipped_fluff_return_is_the_transit_less_reading() {
     );
 }
 
-/// The discrepancy, stated so it cannot rot: **any** nonzero transit exceeds
-/// the shipped value.
+/// The discrepancy, stated so it cannot rot: **every sampled** nonzero transit
+/// exceeds the shipped value, and first passage is **monotone** in transit.
 ///
-/// Asserted over a sweep rather than at one point, because the claim is
-/// monotone in transit and a single point would invite the reading "true at
-/// 1625, unknown elsewhere" — which is exactly the ambiguity that let this sit
-/// unnoticed.
+/// The name says *sampled* rather than *any* deliberately: the loop checks a
+/// representative sweep, not the continuum. What extends it to "any nonzero
+/// transit" is not this test alone — it is this test's monotonicity assertion
+/// plus `the_shipped_fluff_return_is_the_transit_less_reading` (transit 0 →
+/// exactly the shipped value): monotone, pinned at the bottom of the range,
+/// and strictly above the shipped value at every sampled point. A single point
+/// would invite "true at 1625, unknown elsewhere" — the ambiguity that let
+/// this sit unnoticed — so the sweep plus monotonicity is the minimum that
+/// forecloses it.
 #[test]
-fn any_admissible_transit_exceeds_the_shipped_fluff_return() {
+fn every_sampled_transit_exceeds_the_shipped_fluff_return() {
     let shipped = u64::from(
         DandelionParams::adopted_for(shekyl_relay_privacy::RelayZone::Tor).fluff_return_ms,
     );
@@ -126,7 +141,7 @@ fn any_admissible_transit_exceeds_the_shipped_fluff_return() {
         let p90 = p90_at(t);
         println!(
             "  {t:10} | {p90:7} | {:+.1}%",
-            (p90 as f64 / shipped as f64 - 1.0) * 100.0
+            (ratio(p90, shipped) - 1.0) * 100.0
         );
         assert!(
             p90 > shipped,
@@ -147,7 +162,7 @@ fn any_admissible_transit_exceeds_the_shipped_fluff_return() {
     let shipped_assumption = p90_at(transit_for(FloodReach::OutboundOnly));
     println!(
         "\n  at transit_for(OutboundOnly): p90 = {shipped_assumption} ms  ({:.1}x shipped)",
-        shipped_assumption as f64 / shipped as f64
+        ratio(shipped_assumption, shipped)
     );
     println!("  NOT a candidate value: it is the 1625 ms ASSUMPTION amplified through");
     println!("  the flood arithmetic, and §94 is measuring that assumption. §90 rules");
@@ -188,7 +203,8 @@ fn the_degree_floor_argument_survives_the_transit_correction() {
             assert!(
                 *p90 > at_twelve,
                 "at transit_ms={transit_ms}, degree {peers} must be strictly worse \
-                 than the degree-12 floor ({p90} vs {at_twelve}) — this is the \
+                 than the degree-12 floor (degree {peers}: {p90} ms vs degree 12: \
+                 {at_twelve} ms) — this is the \
                  argument MIN_PROVISIONED_OUT_PEERS rests on, and it must hold \
                  independently of the transit level"
             );
