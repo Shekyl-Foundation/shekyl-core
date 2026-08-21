@@ -473,17 +473,46 @@ jobs:
       # same reason and end the same way — WP-W5 turns the wallet test lane
       # blocking. Exit codes are read directly, never through a pipe
       # (rule 46).
+      #
+      # REPORTING (2026-08-21). A `continue-on-error` step shows
+      # `conclusion: success` on the run page whatever its command did; the
+      # first real Windows-only wallet bug (the mandatory keys-file lock,
+      # WINDOWS_WALLET_PROBE_SHEET.md §4.3) was found ~8,000 log lines deep
+      # under a green tick. So: every command runs regardless of the earlier
+      # ones (a compile stops at the first error per crate; this step must
+      # not stop at the first error per command), each exit code lands in a
+      # table on the job summary, and the step fails — still non-blocking —
+      # when any of them did. Exit codes are read directly from
+      # $LASTEXITCODE, never through a pipe (rule 46).
       - name: "WP-W5 scouting: remaining Windows errors + pipe e2e (informational)"
         shell: pwsh
         working-directory: rust
         continue-on-error: true
         run: |
-          cargo check --locked -p shekyl-engine-core -p shekyl-wallet-rpc -p shekyl-cli
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p shekyl-wallet-rpc --test http_get_version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p shekyl-cli --test rpc_session_e2e
-          exit $LASTEXITCODE
+          $results = @()
+          $worst = 0
+          foreach ($cmd in @(
+            'cargo check --locked -p shekyl-engine-core -p shekyl-wallet-rpc -p shekyl-cli',
+            'cargo test --locked -p shekyl-wallet-rpc --test http_get_version',
+            'cargo test --locked -p shekyl-cli --test rpc_session_e2e'
+          )) {
+            Write-Host "::group::$cmd"
+            Invoke-Expression $cmd
+            $code = $LASTEXITCODE
+            Write-Host "::endgroup::"
+            $results += [pscustomobject]@{ Command = $cmd; Exit = $code }
+            if ($code -ne 0) { $worst = $code }
+          }
+          $lines = @('## WP-W5 scouting (informational, Windows)', '', '| Command | Exit |', '|---|---|')
+          foreach ($r in $results) {
+            $mark = if ($r.Exit -eq 0) { 'PASS' } else { "FAIL ($($r.Exit))" }
+            $lines += "| ``$($r.Command)`` | $mark |"
+          }
+          $lines += ''
+          $lines += 'Non-blocking until WP-W5 flips it; a FAIL here is a finding to read, not a flake to rerun.'
+          $lines -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $results | Format-Table -AutoSize | Out-String | Write-Host
+          exit $worst
 
       - name: restore vcpkg cache
         uses: actions/cache/restore@v5
