@@ -217,6 +217,16 @@ fn http_connector() -> HttpConnector {
     http
 }
 
+/// The direct connector for a **plaintext** endpoint — no TLS layer wrapped
+/// around it. `enforce_http(true)` makes the plaintext choice structural: a
+/// client built this way refuses an `https://` request URI outright instead
+/// of speaking plaintext to a TLS port.
+fn plain_http_connector() -> HttpConnector {
+    let mut http = http_connector();
+    http.enforce_http(true);
+    http
+}
+
 /// Wrap `inner` in a rustls HTTPS connector using the system's native roots —
 /// the same root strategy `simple-request`'s `tls` feature used (native only;
 /// no webpki fallback).
@@ -233,12 +243,23 @@ where
 }
 
 /// A pooled HTTP(S) client — direct or through a SOCKS5h proxy.
+///
+/// The TLS layer is built **only for an `https://` endpoint**. A plaintext
+/// endpoint gets a client with no TLS connector at all, so a host with no
+/// native root store (a minimal container image, a freshly provisioned
+/// device) can still dial a plaintext daemon — the loopback default — instead
+/// of failing at construction with "no native root CA certificates found".
+/// Before this split every endpoint paid for roots it would never use.
 #[derive(Clone)]
 pub(crate) enum HttpClient {
     /// No proxy: connect directly, resolving DNS locally.
     Direct(HyperClient<HttpsConnector<HttpConnector>, Full<Bytes>>),
     /// Through a SOCKS5h proxy: the proxy resolves DNS.
     Socks(HyperClient<HttpsConnector<SocksConnector>, Full<Bytes>>),
+    /// Plaintext `http://` endpoint, no proxy: no TLS layer is built.
+    PlainDirect(HyperClient<HttpConnector, Full<Bytes>>),
+    /// Plaintext `http://` endpoint through a SOCKS5h proxy: no TLS layer.
+    PlainSocks(HyperClient<SocksConnector, Full<Bytes>>),
 }
 
 impl std::fmt::Debug for HttpClient {
@@ -248,25 +269,39 @@ impl std::fmt::Debug for HttpClient {
         f.write_str(match self {
             Self::Direct(_) => "HttpClient::Direct",
             Self::Socks(_) => "HttpClient::Socks",
+            Self::PlainDirect(_) => "HttpClient::PlainDirect",
+            Self::PlainSocks(_) => "HttpClient::PlainSocks",
         })
     }
 }
 
 impl HttpClient {
-    /// Build the client, selecting the SOCKS path when `proxy` is `Some`.
-    pub(crate) fn new(proxy: Option<&str>) -> Result<Self, HttpError> {
+    /// Build the client, selecting the SOCKS path when `proxy` is `Some` and
+    /// the TLS-wrapped connector only when `tls` is set (an `https://`
+    /// endpoint). A plaintext endpoint never loads a root store.
+    pub(crate) fn new(proxy: Option<&str>, tls: bool) -> Result<Self, HttpError> {
         // `Builder::pool_idle_timeout` returns `&mut Builder`, so the whole
         // chain must land in one statement (ending in the owning `.build()`).
-        match proxy {
-            None => Ok(Self::Direct(
+        match (proxy, tls) {
+            (None, true) => Ok(Self::Direct(
                 HyperClient::builder(TokioExecutor::new())
                     .pool_idle_timeout(Duration::from_secs(60))
                     .build(https(http_connector())?),
             )),
-            Some(p) => Ok(Self::Socks(
+            (Some(p), true) => Ok(Self::Socks(
                 HyperClient::builder(TokioExecutor::new())
                     .pool_idle_timeout(Duration::from_secs(60))
                     .build(https(SocksConnector::new(p)?)?),
+            )),
+            (None, false) => Ok(Self::PlainDirect(
+                HyperClient::builder(TokioExecutor::new())
+                    .pool_idle_timeout(Duration::from_secs(60))
+                    .build(plain_http_connector()),
+            )),
+            (Some(p), false) => Ok(Self::PlainSocks(
+                HyperClient::builder(TokioExecutor::new())
+                    .pool_idle_timeout(Duration::from_secs(60))
+                    .build(SocksConnector::new(p)?),
             )),
         }
     }
@@ -283,6 +318,8 @@ impl HttpClient {
         let res = match self {
             Self::Direct(c) => c.request(request).await,
             Self::Socks(c) => c.request(request).await,
+            Self::PlainDirect(c) => c.request(request).await,
+            Self::PlainSocks(c) => c.request(request).await,
         };
         res.map_err(|e| HttpError::Request(error_chain(&e)))
     }
@@ -308,6 +345,46 @@ pub(crate) fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plaintext endpoint selects a client with **no TLS layer**, with or
+    /// without a proxy. This is the property that keeps a root-store-less
+    /// host able to dial a plaintext daemon: the `https()` builder (and its
+    /// `with_native_roots()` load) is never reached on this arm. Routing
+    /// `tls = false` back through `Direct`/`Socks` turns this red.
+    #[test]
+    fn plaintext_endpoint_builds_no_tls_layer() {
+        assert!(matches!(
+            HttpClient::new(None, false).expect("plain direct"),
+            HttpClient::PlainDirect(_)
+        ));
+        assert!(matches!(
+            HttpClient::new(Some("127.0.0.1:9050"), false).expect("plain socks"),
+            HttpClient::PlainSocks(_)
+        ));
+    }
+
+    /// The plaintext client's choice is structural, not advisory: handed an
+    /// `https://` request URI it refuses at the connector (`enforce_http`)
+    /// rather than opening a cleartext socket to a TLS port. The refusal is
+    /// the connector's own scheme check, not a connect failure — the target
+    /// port is one nothing listens on, so a client that had tried to dial
+    /// would have failed differently.
+    #[tokio::test]
+    async fn plaintext_client_refuses_a_tls_uri() {
+        let client = HttpClient::new(None, false).expect("plain direct");
+        let err = client
+            .request(
+                hyper::Request::post("https://127.0.0.1:1/json_rpc")
+                    .body(Full::new(Bytes::new()))
+                    .expect("request"),
+            )
+            .await
+            .expect_err("an https URI on a plaintext client must refuse");
+        assert!(
+            format!("{err}").contains("scheme is not http"),
+            "expected the connector's scheme refusal, got: {err}"
+        );
+    }
 
     #[test]
     fn socks_connector_parses_and_strips_scheme() {
