@@ -434,7 +434,7 @@ factual; RT-O2 is closed as a corrected error, not a ruling.
 | RT-W2 | RT-1 + RT-2 on the C++ daemon RPC (`rpc_args.cpp:168`, `:196`) | — | **authorized 2026-08-21** (RT-O3) |
 | RT-W3 | Stack probes (§7.1: RT-P1, RT-P2) | — | **starts now**; RT-P1's result cannot move RT-4 |
 | RT-W4 | RT-4/5/6/7 on L1 | RT-W3 | open |
-| RT-W5 | RT-9 removal, the ten-file reference set enumerated first | — | **authorized 2026-08-21** |
+| RT-W5 | RT-9 removal, the eleven-file reference set enumerated first | — | **authorized 2026-08-21** |
 | RT-W6 | RT-8 onion listener | RT-W4 | open |
 | RT-W7 | `--daemon-address` warns in §1's terms at the point of configuration, CLI and `shekyl-wallet-rpc` both (RT-O4's addition) | — | **authorized 2026-08-21** |
 

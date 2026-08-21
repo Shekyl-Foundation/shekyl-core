@@ -116,10 +116,9 @@ async fn post_raw(auth: AuthConfig, body: &'static [u8]) -> (StatusCode, Value) 
 async fn post_json_with_auth(user: &str, pass: &str, body: Value) -> (StatusCode, Value) {
     use base64::Engine as _;
     let cred = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
-    let state = test_state(AuthConfig::Basic {
-        username: user.to_owned(),
-        password: pass.to_owned(),
-    });
+    let state = test_state(AuthConfig::Basic(
+        shekyl_wallet_rpc::auth::BasicCredential::new(user, pass).expect("valid credential"),
+    ));
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
@@ -277,10 +276,9 @@ async fn invalid_id_type_responds_with_null_id() {
 
 #[tokio::test]
 async fn basic_auth_rejects_missing_header() {
-    let state = test_state(AuthConfig::Basic {
-        username: "alice".into(),
-        password: "secret".into(),
-    });
+    let state = test_state(AuthConfig::Basic(
+        shekyl_wallet_rpc::auth::BasicCredential::new("alice", "secret").expect("valid credential"),
+    ));
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
