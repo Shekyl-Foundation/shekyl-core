@@ -206,7 +206,11 @@ info:
 
 servers:
   - url: "uds:///run/user/{uid}/shekyl.sock"
-    description: Recommended — Unix domain socket, filesystem-permission auth.
+    description: >-
+      Recommended — Unix domain socket, filesystem-permission auth. Unix only:
+      on Windows the wallet RPC is self-hosted in-process by shekyl-cli over an
+      owner-only named pipe that no URL names, and uds:// is refused at parse
+      (docs/design/WINDOWS_WALLET_SUPPORT.md §8.1).
   - url: "http://127.0.0.1:29500"
     description: Loopback HTTP with basic auth, for tooling compatibility.
 
