@@ -77,9 +77,24 @@ const MAX_ADMISSIBLE_BYTES: usize = 16_651;
 /// Pinning bought tidiness and nothing else. Freshness costs nothing, since
 /// nothing in the measurement depends on which address it is.
 fn fresh_rig_seed() -> Result<[u8; 32], String> {
-    let bytes = std::fs::read("/dev/urandom").map_err(|e| format!("urandom: {e}"))?;
+    // `read_exact` of 32 bytes, NOT `fs::read`.
+    //
+    // `fs::read` reads to EOF, and `/dev/urandom` never reaches one: it is an
+    // infinite stream. The first version of this function called it and grew to
+    // **107 GB RSS** before the OOM killer took the process — which is the
+    // `EXIT=137` (SIGKILL) the cron session recorded, and the reason four
+    // consecutive sessions produced zero samples. Every one of those failures
+    // was misread at the time as teardown, volatile storage, or a slow
+    // bootstrap; instrumenting the bring-up is what finally located it, by
+    // showing both daemons Ready in ~14 s and the hang landing *after* them.
+    //
+    // A device file that never ends turns "read the file" into "consume all
+    // memory", and it is silent until the machine notices.
+    use std::io::Read as _;
+    let mut f = std::fs::File::open("/dev/urandom").map_err(|e| format!("urandom open: {e}"))?;
     let mut seed = [0u8; 32];
-    seed.copy_from_slice(bytes.get(..32).ok_or("urandom short read")?);
+    f.read_exact(&mut seed)
+        .map_err(|e| format!("urandom read: {e}"))?;
     Ok(seed)
 }
 
@@ -125,15 +140,30 @@ fn free_port() -> std::io::Result<u16> {
     Ok(l.local_addr()?.port())
 }
 
+/// Bring one tor daemon up and wait for the readiness gate.
+///
+/// **Every state transition is logged with a label and a timestamp**, because
+/// the first four sessions of this round produced zero samples and stderr said
+/// only "bringing up two tor daemons" — which is consistent with at least three
+/// different causes and distinguishes none of them. A plain-tor probe reaches
+/// `Bootstrapped 100%` from this host, so the network is not the suspect; what
+/// is unknown is whether this gate never fires, fires late, or is killed while
+/// waiting. Silence answered none of that. Progress output does.
+///
+/// The label matters as much as the timestamps: the two daemons are brought up
+/// concurrently, so unlabelled lines would interleave into something unreadable.
 async fn bring_up(
+    label: &'static str,
     binary: &std::path::Path,
     data_dir: std::path::PathBuf,
 ) -> Result<(ActorRef<TorControl>, u16), String> {
-    let socks_port = free_port().map_err(|e| format!("free port: {e}"))?;
+    let started = Instant::now();
+    let socks_port = free_port().map_err(|e| format!("[{label}] free port: {e}"))?;
     let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
     let (readiness, mut ready_rx) = BootstrapReadiness::new();
     let verified = shekyl_tor::binary::discover_and_verify_at(binary)
-        .map_err(|e| format!("tor binary: {e}"))?;
+        .map_err(|e| format!("[{label}] tor binary: {e}"))?;
+    eprintln!("  [{label}] spawning tor, socks={socks_port}");
     let control = TorControl::spawn(TorControlConfig {
         launch: TorLaunch::Managed(ManagedTor {
             tor_binary: verified,
@@ -145,15 +175,45 @@ async fn bring_up(
         events: EventSink::new(events_tx),
         readiness,
     });
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = started + Duration::from_secs(300);
+    let mut last = None;
     loop {
-        if matches!(*ready_rx.borrow_and_update(), BootstrapState::Ready) {
-            return Ok((control, socks_port));
+        // Report the state actually observed, not just the terminal one. A gate
+        // that sits at Connecting{95} for five minutes and a gate that never
+        // publishes anything look identical from the outside and have different
+        // causes.
+        let state = ready_rx.borrow_and_update().clone();
+        if last.as_ref() != Some(&state) {
+            eprintln!(
+                "  [{label}] {:>4.0}s {state:?}",
+                started.elapsed().as_secs_f64()
+            );
+            last = Some(state.clone());
+        }
+        match state {
+            BootstrapState::Ready => {
+                eprintln!(
+                    "  [{label}] ready in {:.0}s",
+                    started.elapsed().as_secs_f64()
+                );
+                return Ok((control, socks_port));
+            }
+            // Terminal: the control connection died. Waiting out the deadline
+            // here would report a timeout for something that already failed.
+            BootstrapState::Failed => {
+                return Err(format!(
+                    "[{label}] control connection died mid-bootstrap after {:.0}s",
+                    started.elapsed().as_secs_f64()
+                ));
+            }
+            BootstrapState::Connecting { .. } => {}
         }
         if Instant::now() >= deadline {
-            return Err("bootstrap did not reach Ready in 300s".into());
+            return Err(format!(
+                "[{label}] bootstrap did not reach Ready in 300s (last state {last:?})"
+            ));
         }
-        tokio::time::timeout(Duration::from_secs(10), ready_rx.changed())
+        tokio::time::timeout(Duration::from_secs(5), ready_rx.changed())
             .await
             .ok();
     }
@@ -260,9 +320,18 @@ async fn run(
     client_dir: std::path::PathBuf,
     service_dir: std::path::PathBuf,
 ) -> Result<(), String> {
-    eprintln!("bringing up two tor daemons (separate guards) …");
-    let (client_tor, client_socks) = bring_up(binary, client_dir).await?;
-    let (service_tor, _) = bring_up(binary, service_dir).await?;
+    /* Concurrently, not sequentially. Two 300 s budgets in series is a 10-minute
+    worst case, and the one session that produced an exit record was SIGKILLed
+    at 8 minutes — inside that window. Running them together halves the
+    wall clock and, more importantly, means a hang in one is visible against
+    the other's progress rather than hiding behind it. */
+    eprintln!("bringing up two tor daemons concurrently (separate guards) …");
+    let (client, service) = tokio::try_join!(
+        bring_up("client", binary, client_dir),
+        bring_up("service", binary, service_dir)
+    )?;
+    let (client_tor, client_socks) = client;
+    let (service_tor, _) = service;
 
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
