@@ -170,38 +170,42 @@ impl KeysFileLock {
 
         let mut lock = RwLock::new(file);
 
-        // Scope the acquire so the `Result<Guard, _>` temporary (which
-        // holds `lock` borrowed) is dropped before we try to move
-        // `lock` into `Self`. The guard derefs to the locked `File`, which
-        // is the only handle that may touch the locked byte on Windows —
-        // so whatever the caller needs to read happens here, before
-        // `mem::forget` ends the guard's lifetime without unlocking. The
-        // lock then stays held until the inner `File` closes on
-        // `KeysFileLock` drop.
-        let acquire: Result<R, io::Error> = match lock.try_write() {
-            Ok(mut guard) => {
-                let out = with_locked(&mut guard);
-                std::mem::forget(guard);
-                out
+        // Contention is decided HERE, on the lock attempt alone: only
+        // `try_write`'s `WouldBlock` means "another handle holds the lock".
+        // The callback's errors are I/O failures whatever their kind — a
+        // `WouldBlock` from a read must not be reported as a second wallet
+        // being open, because the remedies differ.
+        //
+        // The guard derefs to the locked `File`, the only handle that may
+        // touch the locked byte on Windows, so whatever the caller needs to
+        // read happens through it. On success the guard is `mem::forget`-ed:
+        // that ends its borrow of `lock` without unlocking, and the lock
+        // then stays held until the inner `File` closes on `KeysFileLock`
+        // drop. On a callback failure the guard simply drops — unlocking —
+        // and `lock` drops with it; nothing is returned that could hold it.
+        let out = match lock.try_write() {
+            Ok(mut guard) => match with_locked(&mut guard) {
+                Ok(out) => {
+                    std::mem::forget(guard);
+                    out
+                }
+                Err(e) => return Err(WalletFileError::Io(e)),
+            },
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                return Err(WalletFileError::AlreadyLocked {
+                    path: path.to_path_buf(),
+                });
             }
-            Err(e) => Err(e),
+            Err(e) => return Err(WalletFileError::Io(e)),
         };
 
-        match acquire {
-            Ok(out) => Ok((
-                Self {
-                    _lock: lock,
-                    path: path.to_path_buf(),
-                },
-                out,
-            )),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                Err(WalletFileError::AlreadyLocked {
-                    path: path.to_path_buf(),
-                })
-            }
-            Err(e) => Err(WalletFileError::Io(e)),
-        }
+        Ok((
+            Self {
+                _lock: lock,
+                path: path.to_path_buf(),
+            },
+            out,
+        ))
     }
 
     /// Path this lock is bound to; used by error-path reporting.
@@ -273,6 +277,29 @@ mod tests {
             second_handle.is_ok(),
             "POSIX: flock is advisory; a path read while locked must succeed"
         );
+    }
+
+    /// Contention is decided by the lock attempt alone. A callback that
+    /// happens to fail with `WouldBlock` — the kind `try_write` uses for
+    /// contention — must surface as the I/O failure it is, never as
+    /// `AlreadyLocked`: the two have different remedies ("close the other
+    /// wallet" vs "the file could not be read").
+    #[test]
+    fn callback_would_block_is_not_reported_as_contention() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.keys");
+        std::fs::write(&path, b"placeholder").unwrap();
+
+        let err = KeysFileLock::acquire_with(&path, |_file| {
+            Err::<(), _>(io::Error::from(io::ErrorKind::WouldBlock))
+        })
+        .expect_err("the callback failed");
+        assert!(
+            matches!(err, WalletFileError::Io(ref e) if e.kind() == io::ErrorKind::WouldBlock),
+            "a callback failure must be Io, not AlreadyLocked: {err:?}"
+        );
+        // And the failed attempt released the lock: the next acquire succeeds.
+        let _relock = KeysFileLock::acquire(&path).expect("lock released after a failed callback");
     }
 
     #[test]
