@@ -1,7 +1,8 @@
 # RPC transport posture
 
 **Status:** R0 — **draft for ratification** (Rick, first draft 2026-08-21;
-reviewed and re-anchored the same day). **RT-W1 (RT-1 + RT-2 on
+reviewed and re-anchored the same day; RT-O2 closed as a corrected error the
+same day — §7 lists exactly what ratification still has to decide). **RT-W1 (RT-1 + RT-2 on
 `shekyl-wallet-rpc`) landed on the branch ahead of ratification**, per §8's
 own "should not wait"; everything else is design until ratified.
 **Verified against:** `shekyl-core` @ `abb4e58dd` (PR #526 head). Every
@@ -337,18 +338,29 @@ again.)
   *Also verify:* pinned mutual TLS with a custom verifier under the
   `axum`/`hyper` shape `shekyl-wallet-rpc` uses. Pre-registered as RT-W3's
   table below.
-- **RT-O2 — cross-compile consequence.** `rustls` reaches `ring`/`aws-lc-rs`.
-  The Windows lane's §7 constraint is that crates reaching `ring` cannot be
-  cross-compiled from Linux. Today `shekyl-wallet-rpc` *is* cross-compilable,
-  which is what makes the WP-W2 scouting step work. Adding TLS ends that.
-  Not a reason to skip TLS — a reason to sequence WP-W2 first, or to decide
-  deliberately that the Windows lane's verification method changes.
-  **Review note — constraint, pending ratification:** RT-W4 does not land
-  before PR #526 (WP-W2) has merged and the Windows scouting step's method
-  has been re-specified with the loss in view, so the runner never goes red
-  for a reason unrelated to Windows.
+- **RT-O2 — cross-compile consequence. CLOSED 2026-08-21: the premise is
+  false.** The draft said `shekyl-wallet-rpc` is cross-compilable from Linux
+  today and that TLS would end that. Checked against the lock file
+  (`cargo tree -p shekyl-wallet-rpc -i ring`): `ring` is **already** in
+  both `shekyl-wallet-rpc`'s and `shekyl-cli`'s graphs, via
+  `rustls ← hyper-rustls ← shekyl-rpc-transport ← shekyl-engine-core` — the
+  daemon client already speaks HTTPS. Neither crate has ever been
+  cross-compilable from this box (the WP-W2 round worked around exactly
+  that), and the Windows scouting step runs **natively** on the MSVC runner,
+  where `ring` builds. Server-side TLS changes nothing about either. The
+  review note that recorded this as a hard sequencing constraint on RT-W4
+  was an error — a claim written down without being checked — and is
+  withdrawn; RT-P3 goes with it. RT-W4 depends on RT-W3 and ratification,
+  nothing else.
 - **RT-O3 — §6 ruling** (C++ now vs. after the Rust migration).
 - **RT-O4 — §5 disposition** (phone-only gap).
+
+**What ratification has to decide**, listed so nothing is ratified by
+omission: (a) RT-1…RT-9 as rulings, including RT-9's removal slice; (b) the
+review note on RT-1 — startup enforcement at both bind paths rather than
+parse-time; (c) RT-O3; (d) RT-O4. The citation, anchor and neighbour
+corrections are factual and need no ruling; RT-O2 is closed above as a
+corrected error, not a ruling.
 
 ### 7.1 RT-W3 probes, pre-registered (the scratch-crate treatment of `WINDOWS_WALLET_PROBE_SHEET.md`)
 
@@ -356,7 +368,7 @@ again.)
 |---|---|---|---|---|
 | RT-P1 | Does the pinned rustls expose an **external** (out-of-band) PSK API for TLS 1.3? | Scratch crate: configure client and server with an externally provisioned PSK, handshake, assert the negotiated mode is `psk_dhe_ke` | **No** public API (RT-O1's provisional answer) | Nothing in RT-4 — recorded for the record. If *yes*, the PQ trade in RT-4 gets a concrete alternative to weigh against at reopen time |
 | RT-P2 | Does pinned mutual TLS work in the shape `shekyl-wallet-rpc` uses — rustls under hyper under axum, custom server-cert verifier on the client, client cert **required** on the server, server-side fingerprint allowlist? | Scratch crate: self-signed keypairs both ends, pin by SPKI fingerprint, assert a wrong pin on **either** side fails the handshake (the bite check), assert an un-allowlisted client is refused | Works; all three refusals fire | **RT-4** — if axum/hyper cannot be driven with a required client cert without unacceptable plumbing, the mechanism is re-ranked |
-| RT-P3 | What does `ring` in the wallet-rpc graph do to the Windows lane? | `cargo check -p shekyl-wallet-rpc --target x86_64-pc-windows-gnu` on a Linux box with the TLS feature on | Fails in `ring`'s build script (no C cross-compiler) | **RT-O2** — confirms the sequencing constraint is real rather than assumed |
+| RT-P3 | ~~What does `ring` in the wallet-rpc graph do to the Windows lane?~~ **Withdrawn 2026-08-21** — `ring` is already in the graph (RT-O2), so the probe would measure today's state, not TLS's effect | — | — | — |
 
 ---
 
@@ -367,7 +379,7 @@ again.)
 | RT-W1 | RT-1 + RT-2 on `shekyl-wallet-rpc`; help text; operator docs rewritten against the real binary (they described the retired C++ server) | nothing — lands now | **LANDED on this branch 2026-08-21** (`validate_listen`, both bind paths, wiring tests observed red then green) |
 | RT-W2 | RT-1 + RT-2 on the C++ daemon RPC | RT-O3 | open |
 | RT-W3 | Stack probes (§7.1) | RT-O1, RT-O2 | open |
-| RT-W4 | RT-4/5/6/7 on L1 | RT-W3; PR #526 merged (RT-O2) | open |
+| RT-W4 | RT-4/5/6/7 on L1 | RT-W3, ratification | open |
 | RT-W5 | RT-9 removal, reference set enumerated first | ratification | open |
 | RT-W6 | RT-8 onion listener | RT-W4 | open |
 

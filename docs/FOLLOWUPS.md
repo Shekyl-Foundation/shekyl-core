@@ -2003,9 +2003,9 @@ sustainability is unaffected by the recalibration.
   operator docs rewritten against the Rust binary (they described the
   retired C++ server). **Open:** RT-O1 the rustls external-PSK probe
   (provisional no; RT-4 no longer depends on it but the record should say
-  what support was), RT-O2 the `ring` consequence — TLS ends wallet-rpc's
-  Linux cross-compilability, which the Windows scouting step runs on, so
-  RT-W4 does not land before PR #526 merges — RT-O3 C++-now vs
+  what support was), RT-O2 closed as a corrected error (`ring` is already in
+  wallet-rpc's graph via `shekyl-rpc-transport`; the Windows scouting step
+  runs natively on MSVC; TLS changes nothing there), RT-O3 C++-now vs
   after-the-Rust-migration for L2/L3, RT-O4 the phone-only gap (proposed:
   deliberate boundary, light client as named successor). Distinct from the
   daemon entry below on purpose: the wallet holds spend authority and its
