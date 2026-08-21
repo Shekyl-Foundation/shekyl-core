@@ -1,10 +1,9 @@
 # RPC transport posture
 
-**Status:** R0 — **draft for ratification** (Rick, first draft 2026-08-21;
-reviewed and re-anchored the same day; RT-O2 closed as a corrected error the
-same day — §7 lists exactly what ratification still has to decide). **RT-W1 (RT-1 + RT-2 on
-`shekyl-wallet-rpc`) landed on the branch ahead of ratification**, per §8's
-own "should not wait"; everything else is design until ratified.
+**Status:** R0 — **RULED 2026-08-21.** RT-1…RT-9 ratified as written; RT-O3
+and RT-O4 ruled (§7); RT-O2 closed as a corrected error; RT-O1 stays a
+probe whose result cannot move the mechanism (§7.1). **RT-W1 landed** with
+this round; RT-W2, RT-W5 and RT-W7 are authorized; RT-W3 starts now.
 **Verified against:** `shekyl-core` @ `abb4e58dd` (PR #526 head). Every
 `file:line` below was read at that commit; the draft's anchors were against
 the pre-#526 layout and are re-anchored here.
