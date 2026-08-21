@@ -54,13 +54,34 @@ if ! command -v rg >/dev/null 2>&1; then
   exit 1
 fi
 
-# The subject itself: if the search corpus is empty, the gate is vacuous.
-CRATE_COUNT="$(rg --files rust/ --glob '*.rs' --glob '!target' --glob '!shekyl-oxide' 2>/dev/null | wc -l)"
-if [ "$CRATE_COUNT" -lt 100 ]; then
-  echo "FAIL: expected >=100 Rust sources to scan, found ${CRATE_COUNT}." >&2
+# The subject itself, and exactly the subject: the corpus is the set of Rust
+# sources git TRACKS under rust/ (the vendored shekyl-oxide fork excluded —
+# rule 10, it is a disposable downstream consumer). Two reasons this is a
+# file list handed to rg rather than a directory walk with globs:
+#
+#   * A magic floor ("expect >= 100 files") is a number someone has to keep
+#     true; "at least one" is too weak to catch a wrong cwd or a shallow
+#     checkout. Deriving the corpus from git makes vacuity structural: if
+#     git tracks N sources, rg searches N sources, and N is asserted non-zero.
+#   * A directory walk honours .gitignore/.ignore, and this repo carries a
+#     bare `bin/` ignore rule (SPIKE-F-9) that hides TRACKED sources living
+#     under a directory of that name — on 2026-08-21 the walk searched 903
+#     files while git tracked 905. Explicit paths are always searched, so the
+#     two tracked files the walk skipped are now in the corpus. (For the
+#     record, rg's `--glob '!target'` did exclude the whole tree — a bare
+#     directory name is a gitignore-style pattern — measured at 0 hits under
+#     --no-ignore against 31 without it; the globs were correct, just not
+#     sufficient.)
+#
+# `-z` / `mapfile -d ''`: paths are NUL-delimited end to end, so a filename
+# with a space cannot split into two arguments.
+mapfile -d '' CORPUS < <(git ls-files -z -- 'rust/**/*.rs' | grep -zv '^rust/shekyl-oxide/')
+if [ "${#CORPUS[@]}" -eq 0 ]; then
+  echo "FAIL: git tracks no Rust sources under rust/ (outside shekyl-oxide)." >&2
   echo "      A gate that searches nothing passes for the wrong reason." >&2
   exit 1
 fi
+CRATE_COUNT="${#CORPUS[@]}"
 
 # Fail CLOSED on a scan error, and read the verdict UNPIPED (rule 46).
 #
@@ -74,13 +95,12 @@ fi
 # rg alone so its status is the verdict, then filter the allow-marker off the
 # captured text — where a "nothing left" grep exit cannot mask a scan failure.
 set +e
-RAW="$(rg -n 'fs::read(_to_string)?\(\s*"/dev/' rust/ \
-         --glob '*.rs' --glob '!target' --glob '!shekyl-oxide')"
+RAW="$(rg -n 'fs::read(_to_string)?\(\s*"/dev/' -- "${CORPUS[@]}")"
 RG_STATUS=$?
 set -e
 if [ "$RG_STATUS" -ge 2 ]; then
-  echo "FAIL: ripgrep errored (exit ${RG_STATUS}) while scanning rust/." >&2
-  echo "      The gate cannot certify a tree it could not fully read." >&2
+  echo "FAIL: ripgrep errored (exit ${RG_STATUS}) while scanning ${CRATE_COUNT} tracked sources." >&2
+  echo "      The gate cannot certify a corpus it could not fully read." >&2
   exit 1
 fi
 
@@ -106,4 +126,4 @@ if [ -n "$HITS" ]; then
   exit 1
 fi
 
-echo "device-read gate: no unbounded /dev reads (${CRATE_COUNT} sources scanned)"
+echo "device-read gate: no unbounded /dev reads (${CRATE_COUNT} tracked sources scanned)"
