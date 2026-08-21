@@ -1,5 +1,5 @@
 ---
-description: Test gate discipline, including diagnostic output rules. Absorbs former debug-test guidance.
+description: Verification-instrument discipline — every check must be able to fail. Covers tests, CI gates, ratchets, lints and triggers, plus diagnostic output rules. Absorbs former debug-test guidance.
 globs:
   - rust/**/tests/**
   - tests/**
@@ -7,9 +7,77 @@ globs:
   - "**/test*.cpp"
   - "**/*_test.rs"
   - "**/*_test.cpp"
+  # A gate, a ratchet row and a workflow assertion are checks too, and the
+  # rule below was written because they never got the negative control that
+  # tests get. Reaching only test files would miss every instance that
+  # produced it.
+  - scripts/**
+  - .github/workflows/**
 ---
 
 # Testing discipline
+
+## Every check must be able to fail
+
+**Every check must be able to fail, and you must be able to name the edit that
+makes it fail. Where no check exists, encode the constraint in a type so its
+absence cannot be silent.**
+
+This is the negative-control rule you already apply to tests, generalized to
+every verification instrument. A gate, a ratchet row, a lint, a retirement
+trigger and an assertion are all checks. None of them get the control a test
+gets, and the cost of that has been measured.
+
+**The operational test takes ten seconds, at the moment you write the check:**
+*name the edit that would make this red.* If you cannot, the check is
+decorative. Where it is cheap, do it rather than say it — inject the violation,
+watch it refuse, revert.
+
+### Seven instances, one property
+
+Every one of these was green, and none of them could have gone red:
+
+| Instrument | Why it could not fail |
+|---|---|
+| `if grep -rn PATTERN <paths>` | GNU grep exits **2** on a missing path and `if` cannot tell that from **1** (no match) — a deleted directory silently disabled the gate *including when the pattern was present* |
+| A pipeline gate, `grep … \| grep -v …` | a pipeline's status is the LAST command's, so the producer's verdict was discarded and never read |
+| An FFI boundary ratchet row | pinned to a file that had been deleted |
+| A FOLLOWUPS retirement trigger | never coupled to the call site it named; it fired twice and retired nothing |
+| `#![deny(unsafe_code)]` | its subject was inside a `cfg(windows)` arm, compiled away on the machine the lint ran on |
+| A `#[test]` | deleted by an over-wide edit; a missing test compiles clean and reports nothing |
+| `assert!(!s.contains(<literal SID>))` | Windows canonicalises well-known SIDs to SDDL abbreviations, so the literal never appears and the negation always held |
+
+Six of the seven would have been caught by asking the question once.
+
+### The seventh case: no check at all
+
+The last one is degenerate — you cannot mutation-test a check that does not
+exist. A `uds://` transport was selected by `strip_prefix` on a
+platform-independent enum variant, so the platform constraint lived in the
+*implementation* of the transport rather than in the *type that selects it*,
+and the compiler learned of it too late to check the parse surface.
+
+That is where the second half applies: **encode the constraint in a type.**
+Gating the variant with `#[cfg(unix)]` turns silence into a build error. The
+same move as deleting `wallet2.cpp` rather than documenting that nobody should
+extend it.
+
+### What this subsumes
+
+- **Scope by reference set, not by container** — a container-scoped check
+  cannot fail once the container empties.
+- **A seal is not coverage**; an armed trigger is not a fired one.
+- **Observe a new test failing before trusting it** — this is that rule, with
+  the word "test" replaced by "check".
+
+### Repetition of a blind method is not coverage
+
+A list confirmed three times by the same method is not three-times confirmed
+against a class that method cannot see. A grep of API *usage* cannot contain a
+defect whose signature is the *absence* of a check in a string match. Say what
+was confirmed and by what instrument, because "confirmed three times" reads as
+coverage.
+
 
 ## Property tests for cryptographic correctness
 
