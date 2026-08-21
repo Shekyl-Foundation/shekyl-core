@@ -27,9 +27,20 @@
 //!    there is the earliest point in the open sequence where contention
 //!    can be detected loudly.
 //!
-//! The lock is *advisory*, not mandatory. A malicious process can
-//! always race, since the OS does not enforce the lock. What the lock
-//! does buy:
+//! The lock is *advisory* on POSIX (`flock(2)`): the OS does not enforce
+//! it, and a malicious process can always race. **On Windows it is
+//! not.** `LockFileEx` is a mandatory byte-range lock: the byte it covers
+//! cannot be read or written through any *other* handle — a second
+//! handle in the same process included — until the locking handle
+//! closes. `fd-lock` locks byte 0. That single fact shaped the API
+//! below: **every read of the keys file while the lock is held goes
+//! through the handle that holds it** ([`KeysFileLock::acquire_and_read`]).
+//! The first `open` of a wallet on Windows failed with
+//! `ERROR_LOCK_VIOLATION` because it did `acquire` and then
+//! `std::fs::read(path)` — a second handle — and that surfaced as a
+//! `-32603` at the RPC, not as a locking error anyone could read (the
+//! Windows CI scouting run of PR #526, 2026-08-21). What the lock buys
+//! on both platforms:
 //!
 //! - Accidental double-open from the same user (e.g. two wallet GUIs,
 //!   a GUI + a CLI refresh) fails loudly instead of silently corrupting.
@@ -80,12 +91,15 @@
 //! `fd_lock` internally uses per-open-file-description `flock(2)` on
 //! POSIX, meaning the in-process contention path (two handles, same
 //! wallet) fires loudly in tests and in production. On Windows,
-//! `LockFileEx` is per-handle with matching semantics. NFS pre-2.6.12
-//! is unsupported as a wallet storage backend (documented in the V3
-//! README).
+//! `LockFileEx` is per-handle with matching *contention* semantics — and
+//! the stronger, mandatory *access* semantics described above, which is
+//! why `acquire_and_read` exists and why a unit test below pins that a
+//! path-based read while locked fails on Windows and succeeds on POSIX.
+//! NFS pre-2.6.12 is unsupported as a wallet storage backend (documented
+//! in the V3 README).
 
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
 use fd_lock::RwLock;
@@ -121,6 +135,33 @@ impl KeysFileLock {
     /// either creating it first, or failing with a more precise error
     /// if it doesn't).
     pub(crate) fn acquire(path: &Path) -> Result<Self, WalletFileError> {
+        Self::acquire_with(path, |_| Ok(())).map(|(lock, ())| lock)
+    }
+
+    /// Acquire the lock and read the whole file **through the locked
+    /// handle**, returning both.
+    ///
+    /// One handle, not two. On Windows the lock is mandatory for the
+    /// byte `fd-lock` covers (byte 0), so reading the path again through
+    /// a fresh handle — `std::fs::read(path)` after [`Self::acquire`] —
+    /// fails with `ERROR_LOCK_VIOLATION`, and every wallet `open` did
+    /// until this existed. Reading through the handle that holds the
+    /// lock is correct on both platforms, and it reads the file that was
+    /// locked rather than whatever sits at the path a moment later.
+    pub(crate) fn acquire_and_read(path: &Path) -> Result<(Self, Vec<u8>), WalletFileError> {
+        Self::acquire_with(path, |file| {
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        })
+    }
+
+    /// Open, lock, run `with_locked` against the locked handle, then keep
+    /// the lock held for the lifetime of the returned value.
+    fn acquire_with<R>(
+        path: &Path,
+        with_locked: impl FnOnce(&mut File) -> io::Result<R>,
+    ) -> Result<(Self, R), WalletFileError> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -131,22 +172,29 @@ impl KeysFileLock {
 
         // Scope the acquire so the `Result<Guard, _>` temporary (which
         // holds `lock` borrowed) is dropped before we try to move
-        // `lock` into `Self`. `mem::forget` on the guard ends the
-        // guard's lifetime without unlocking; the lock stays held
-        // until the inner `File` closes on `KeysFileLock` drop.
-        let acquire: Result<(), io::Error> = match lock.try_write() {
-            Ok(guard) => {
+        // `lock` into `Self`. The guard derefs to the locked `File`, which
+        // is the only handle that may touch the locked byte on Windows —
+        // so whatever the caller needs to read happens here, before
+        // `mem::forget` ends the guard's lifetime without unlocking. The
+        // lock then stays held until the inner `File` closes on
+        // `KeysFileLock` drop.
+        let acquire: Result<R, io::Error> = match lock.try_write() {
+            Ok(mut guard) => {
+                let out = with_locked(&mut guard);
                 std::mem::forget(guard);
-                Ok(())
+                out
             }
             Err(e) => Err(e),
         };
 
         match acquire {
-            Ok(()) => Ok(Self {
-                _lock: lock,
-                path: path.to_path_buf(),
-            }),
+            Ok(out) => Ok((
+                Self {
+                    _lock: lock,
+                    path: path.to_path_buf(),
+                },
+                out,
+            )),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 Err(WalletFileError::AlreadyLocked {
                     path: path.to_path_buf(),
@@ -179,6 +227,52 @@ mod tests {
         // On drop, the lock should have been released (via close-on-drop
         // of the inner `File`).
         let _lock2 = KeysFileLock::acquire(&path).expect("re-acquire after drop");
+    }
+
+    /// The read goes through the locked handle and returns the file's
+    /// bytes, and the lock is held afterwards (a second acquire fails).
+    #[test]
+    fn acquire_and_read_returns_contents_and_holds_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.keys");
+        std::fs::write(&path, b"keys-file-bytes").unwrap();
+
+        let (_lock, bytes) = KeysFileLock::acquire_and_read(&path).expect("acquire + read");
+        assert_eq!(bytes, b"keys-file-bytes");
+        assert!(
+            matches!(
+                KeysFileLock::acquire(&path),
+                Err(WalletFileError::AlreadyLocked { .. })
+            ),
+            "the lock must still be held after the read"
+        );
+    }
+
+    /// The platform fact this module's API is built around, pinned rather
+    /// than remembered: while the lock is held, a read of the same path
+    /// through a **second** handle fails on Windows (`LockFileEx` is
+    /// mandatory for the locked byte) and succeeds on POSIX (`flock` is
+    /// advisory). The edit that turns the Windows arm red is `fd-lock`
+    /// or std changing how the lock or the read is issued; the edit that
+    /// turns the POSIX arm red is someone making the lock mandatory there.
+    #[test]
+    fn path_read_while_locked_is_platform_dependent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.keys");
+        std::fs::write(&path, b"placeholder").unwrap();
+        let _lock = KeysFileLock::acquire(&path).expect("acquire");
+        let second_handle = std::fs::read(&path);
+        #[cfg(windows)]
+        assert!(
+            second_handle.is_err(),
+            "Windows: a path read while locked must fail — if it passes, the \
+             mandatory-lock premise behind acquire_and_read no longer holds"
+        );
+        #[cfg(unix)]
+        assert!(
+            second_handle.is_ok(),
+            "POSIX: flock is advisory; a path read while locked must succeed"
+        );
     }
 
     #[test]

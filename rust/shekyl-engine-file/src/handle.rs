@@ -455,9 +455,11 @@ impl WalletFile {
         let pscan_path = pscan_state_path_from(base_path);
         let pending_path = pending_post_path_from(base_path);
 
-        let lock = KeysFileLock::acquire(&keys_path)?;
-
-        let keys_bytes = std::fs::read(&keys_path)?;
+        // One handle: the read goes through the handle that holds the lock.
+        // On Windows the lock is mandatory for the locked byte, so a
+        // `std::fs::read(&keys_path)` here — a second handle — failed every
+        // open with `ERROR_LOCK_VIOLATION` (see `lock.rs`).
+        let (lock, keys_bytes) = KeysFileLock::acquire_and_read(&keys_path)?;
         let opened = open_keys_file(password, &keys_bytes)?;
 
         // Network-mismatch refusal happens BEFORE `.wallet` is touched
