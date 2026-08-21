@@ -324,7 +324,6 @@ pub enum Input {
         /// Key image (linking tag / nullifier).
         key_image: [u8; 32],
     },
-    /// Archival serve-credit response (dense tag `0x02`, gate-2) — non-spending.
     /// Archival serve-credit response (dense tag `0x02`) — the KEPT half of a
     /// pass record as an opaque blob, `RF-D1` / rule 40. `canonical_bytes` is
     /// the complete retention-codec encoding, leading tag byte included, the
@@ -373,6 +372,19 @@ fn check_emission_blob(canonical_bytes: &[u8]) -> io::Result<()> {
 }
 
 impl Input {
+    /// Key-imaged spend (`txin_to_key`). Twin of C++ `txin_to_key`.
+    #[must_use]
+    pub fn is_spend(&self) -> bool {
+        matches!(self, Input::ToKey { .. })
+    }
+
+    /// Serve-credit vin (kept half of a pass record). Twin of C++
+    /// `txin_archival_serve_credit_response`.
+    #[must_use]
+    pub fn is_serve_credit(&self) -> bool {
+        matches!(self, Input::ServeCredit { .. })
+    }
+
     /// Write the input.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         match self {
@@ -1056,10 +1068,11 @@ pub enum Ct {
     /// Coinbase confidential section (type 0x00): committed base only.
     Null(CtBase),
     /// FCMP++ confidential section (dense ct type `0x01`). Covers the full spend
-    /// (per-input `pqc_auths` + a `prunable` proof) **and** the non-spend fee-only
-    /// shapes (`serve_credit_only`: empty `pqc_auths`, no prunable, §2.5). `pqc_auths`
-    /// is EOF-tolerant on read and `prunable` is [`Option`] — both absent in the
-    /// fee-only form (GENESIS_TX_WIRE_FORMAT.md §9.8 / §4).
+    /// (per-input `pqc_auths` + a `prunable` proof), the storage-pruned spend
+    /// (`pqc_auths` present, `prunable` [`None`]), and the serve-credit form
+    /// (empty `pqc_auths`, `prunable` holding only pruned pass records, §2.5 /
+    /// `RF-D1`). Shape is typed off the vin, never off which of these is
+    /// absent (GENESIS_TX_WIRE_FORMAT.md §9.8 / §4).
     Fcmp {
         /// Transaction fee.
         fee: u64,
@@ -1067,11 +1080,12 @@ pub enum Ct {
         reference_block: [u8; 32],
         /// Committed base arrays (per output).
         base: CtBase,
-        /// Per-input PQC authentication (count == `nvin`, no length prefix; empty in
-        /// the fee-only / serve-credit form).
+        /// Per-input PQC authentication (count == `nvin`, no length prefix; empty
+        /// in the serve-credit form — the countersignature rides the vin).
         pqc_auths: Vec<PqcAuth>,
-        /// Prunable proof data — `None` in the fee-only / serve-credit form (no
-        /// bulletproof / fcmp proof / pseudoOuts).
+        /// Prunable region. `None` only for the storage-pruned *spend* form
+        /// (daemon `get_transactions prune:true`). Serve-credit carries
+        /// [`Some`] with only `serve_credit_pruned` populated.
         prunable: Option<Prunable>,
     },
 }
@@ -1095,12 +1109,13 @@ impl Ct {
                 write_varint(*fee, w)?;
                 w.write_all(reference_block)?;
                 base.write(w)?;
-                // tx-level pqc_auths: count == nvin, no length prefix (empty in the
-                // fee-only / serve-credit form).
+                // tx-level pqc_auths: count == nvin, no length prefix (empty in
+                // the serve-credit form).
                 for auth in pqc_auths {
                     auth.write(w)?;
                 }
-                // prunable follows iff present (absent in the fee-only form).
+                // prunable follows iff present (absent only for the
+                // storage-pruned spend form).
                 if let Some(prunable) = prunable {
                     prunable.write(w)?;
                 }
@@ -1112,12 +1127,15 @@ impl Ct {
     /// Read the ct section. `inputs`/`outputs` (the vin/vout counts) size the
     /// per-input/per-output arrays that carry no length prefix; `spend_inputs`
     /// (the `ToKey` subset of vin) sizes `pseudoOuts`, which a bond-post input
-    /// does not contribute to (module header). Takes a [`BufRead`] so the
-    /// EOF-tolerant tail (§9.8) can be detected without consuming bytes.
+    /// does not contribute to (module header). `serve_credit_only` is the vin
+    /// shape ([`TxPrefix::is_serve_credit_only`]), not a stream-position fact.
+    /// Takes a [`BufRead`] so the EOF-tolerant tail (§9.8) can be detected
+    /// without consuming bytes.
     pub fn read<R: BufRead>(
         inputs: usize,
         spend_inputs: usize,
         serve_credit_inputs: usize,
+        serve_credit_only: bool,
         outputs: usize,
         r: &mut R,
     ) -> io::Result<Ct> {
@@ -1128,16 +1146,13 @@ impl Ct {
                 let fee = read_varint(r)?;
                 let reference_block = read_array(r)?;
                 let base = CtBase::read(outputs, r)?;
-                // EOF-tolerant tail (§9.8 / §4). The full spend carries `nvin`
-                // pqc_auths then a prunable proof; the **fee-only / serve-credit**
-                // form ends right after the base — empty pqc_auths, no prunable
-                // (cryptonote_basic.h:491-530; tx_verification_utils.cpp:122-141).
-                // The ct is the last field of a transaction, so no remaining bytes
-                // here means the fee-only form. NOTE: the live-oracle byte/hash
-                // parity for the fee-only/serve-credit shape (and the bond_post
-                // pseudoOuts coupling, a §13 F1/F3 forward obligation) is validated
-                // when those post-genesis blobs are capturable; the round-trip here
-                // proves internal consistency.
+                // EOF-tolerant tail (§9.8 / §4). A genuine spend that ends
+                // after the base is the storage-pruned form with empty
+                // `pqc_auths` *and* no prunable — only reachable on a
+                // malformed blob; the live storage-pruned spend still
+                // carries `pqc_auths` and hits the second EOF check below.
+                // Serve-credit is **not** this case: after RF-D1 it has a
+                // prunable region, so bytes remain after the base.
                 if r.fill_buf()?.is_empty() {
                     return Ok(Ct::Fcmp {
                         fee,
@@ -1147,32 +1162,23 @@ impl Ct {
                         prunable: None,
                     });
                 }
-                // The serve-credit shape carries no `pqc_auths` at all, and
-                // after `RF-D1` it is no longer identifiable by EOF: it now has
-                // a prunable region (the pruned pass records), so bytes remain
-                // after the base and the branch above does not fire.
-                //
-                // Type it off the vin, exactly as the C++ oracle does
+                // Typed off the vin, exactly as the C++ oracle does
                 // (`cryptonote_basic.h`, `RF-D9`). Deciding a transaction's
                 // shape from how far a stream has been consumed is what made
-                // that side unwritable; the same heuristic would make this side
-                // unreadable.
-                let serve_credit_shape = inputs > 0 && serve_credit_inputs == inputs;
+                // that side unwritable; the same heuristic would make this
+                // side unreadable.
                 let mut pqc_auths = Vec::new();
-                if !serve_credit_shape {
+                if !serve_credit_only {
                     for _ in 0..inputs {
                         pqc_auths.push(PqcAuth::read(r)?);
                     }
                 }
-                // EOF after pqc_auths ⇒ the **storage-pruned full-spend form**: the
-                // daemon's pruned fetch (`get_transactions prune:true`) keeps the
-                // consensus pqc_auths but drops the prunable proof
-                // (cryptonote_basic.h:523 gates `rctsig_prunable` on `!pruned`, while
-                // pqc_auths at :491-517 are written regardless of pruning). The wallet
-                // ingests this to scan spend blocks on refresh; consensus code that needs
-                // the proof takes a `FullTransaction` via `into_full()` (so a pruned spend
-                // can never reach a verifier). Distinct from the EOF-after-base case above
-                // (the fee-only / serve-credit form: empty pqc_auths, no prunable).
+                // EOF after pqc_auths ⇒ the **storage-pruned full-spend form**:
+                // the daemon's pruned fetch (`get_transactions prune:true`)
+                // keeps consensus pqc_auths but drops the prunable proof
+                // (cryptonote_basic.h gates `rctsig_prunable` on `!pruned`).
+                // Serve-credit never takes this arm: it skipped pqc_auths
+                // and still has pruned-record bytes to read.
                 let prunable = if r.fill_buf()?.is_empty() {
                     None
                 } else {
@@ -1265,6 +1271,26 @@ impl TxPrefix {
     pub fn parse_extra(&self) -> io::Result<Vec<crate::tx_extra::TxExtraField>> {
         crate::tx_extra::parse(&self.extra)
     }
+
+    /// Twin of C++ `count_spend_inputs`.
+    #[must_use]
+    pub fn spend_input_count(&self) -> usize {
+        self.inputs.iter().filter(|i| i.is_spend()).count()
+    }
+
+    /// Twin of C++ `count_serve_credit_inputs`.
+    #[must_use]
+    pub fn serve_credit_input_count(&self) -> usize {
+        self.inputs.iter().filter(|i| i.is_serve_credit()).count()
+    }
+
+    /// Twin of C++ `classify_archival_tx(vin).kind == serve_credit_only`:
+    /// non-empty vin, every input a serve-credit. The shape is a property of
+    /// the prefix, not of what is absent from the confidential section.
+    #[must_use]
+    pub fn is_serve_credit_only(&self) -> bool {
+        !self.inputs.is_empty() && self.inputs.iter().all(Input::is_serve_credit)
+    }
 }
 
 /// A Shekyl transaction (version 3).
@@ -1293,26 +1319,13 @@ impl Transaction {
             )));
         }
         let prefix = TxPrefix::read(r)?;
-        // pseudoOuts are sized by the ToKey (spend) subset of vin — a bond-post or
-        // emission input occupies a pqc_auths slot but no pseudo-out slot (module
-        // header; C++ `count_spend_inputs` counts only `txin_to_key`).
-        let spend_inputs = prefix
-            .inputs
-            .iter()
-            .filter(|i| matches!(i, Input::ToKey { .. }))
-            .count();
-        // Serve-credit vins size the pruned pass-record array (`RF-D1`), the
-        // same way spend vins size pseudoOuts: a count taken from the prefix,
-        // never carried on the wire.
-        let serve_credit_inputs = prefix
-            .inputs
-            .iter()
-            .filter(|i| matches!(i, Input::ServeCredit { .. }))
-            .count();
+        // Counts taken from the prefix, never carried on the wire: spend vins
+        // size pseudoOuts, serve-credit vins size the pruned pass-record array.
         let ct = Ct::read(
             prefix.inputs.len(),
-            spend_inputs,
-            serve_credit_inputs,
+            prefix.spend_input_count(),
+            prefix.serve_credit_input_count(),
+            prefix.is_serve_credit_only(),
             prefix.outputs.len(),
             r,
         )?;
@@ -1666,12 +1679,7 @@ impl Transaction {
         let is_coinbase = gen_count == 1;
         // §2.5 / C++ `check_inputs_types_supported` — the (context-free) arm-mixing
         // matrix. Mirror the oracle's rejects exactly, no stricter:
-        let serve_credit_count = self
-            .prefix
-            .inputs
-            .iter()
-            .filter(|i| matches!(i, Input::ServeCredit { .. }))
-            .count();
+        let serve_credit_count = self.prefix.serve_credit_input_count();
         let bond_post_count = self
             .prefix
             .inputs
@@ -1687,10 +1695,9 @@ impl Transaction {
         // serve_credit is non-spending — it must not mix with any spend/bond/gen arm.
         // The oracle allows **multiple** serve_credits, only rejecting the *mixing*
         // (check_inputs_types_supported:720), so the rule is "all-or-none", not
-        // "exactly one". The serve-credit tx is fee-only: no outputs, empty pqc_auths,
-        // no prunable (its hybrid sig rides the vin, §9.10).
+        // "exactly one".
         if serve_credit_count > 0 {
-            if self.prefix.inputs.len() != serve_credit_count {
+            if !self.prefix.is_serve_credit_only() {
                 return Err(io::Error::other(
                     "shekyl-wire: serve_credit must not mix with other input arms (§2.5)",
                 ));
@@ -1940,28 +1947,14 @@ impl Transaction {
         {
             let n_in = self.prefix.inputs.len();
             let n_out = self.prefix.outputs.len();
-            // key-image (spend) inputs
-            let n_ki = self
-                .prefix
-                .inputs
-                .iter()
-                .filter(|i| matches!(i, Input::ToKey { .. }))
-                .count();
-            // The serve-credit shape also carries a prunable region now
-            // (`RF-D1`), so "a prunable proof is present" no longer identifies
-            // a spend. Type it off the vin — the third site in this change
-            // where a shape was being inferred from absence, and the third
-            // that breaks the moment the shape acquires content.
-            let serve_credit_shape = n_in > 0
-                && self
-                    .prefix
-                    .inputs
-                    .iter()
-                    .all(|i| matches!(i, Input::ServeCredit { .. }));
+            let n_ki = self.prefix.spend_input_count();
+            // Serve-credit also carries a prunable region (`RF-D1`), so
+            // "a prunable proof is present" no longer identifies a spend.
+            // Typed off the vin, same predicate as parse.
             match prunable {
                 // Spend / bond-post: a prunable proof is present AND the tx is
                 // not the non-spending serve-credit shape.
-                Some(prunable) if !serve_credit_shape => {
+                Some(prunable) if !self.prefix.is_serve_credit_only() => {
                     // >= 2 outputs (anti-deanonymization; blockchain.cpp:3599-3602).
                     // Spends are already gated in `validate_context_free_pruned` (keyed
                     // on key-image inputs, pruned-safe); this guards a bond_post, whose
@@ -2071,9 +2064,11 @@ impl Transaction {
     }
 
     /// Typed-view conversion (`GENESIS_TX_WIRE_FORMAT.md` §4): succeed only if this tx
-    /// carries prunable proof data, yielding a [`FullTransaction`] whose `prunable` is
-    /// *guaranteed* present. Returns [`PrunedError`] for a coinbase `Null` ct or a
-    /// fee-only / serve-credit `Fcmp` with no prunable.
+    /// carries prunable **spend-proof** data, yielding a [`FullTransaction`] whose
+    /// `prunable` is *guaranteed* present. Returns [`PrunedError`] for a coinbase
+    /// `Null` ct, a storage-pruned spend, or a serve-credit tx — the last of those
+    /// *has* a prunable region after `RF-D1`, but it holds pass records, not an
+    /// FCMP++ proof. Typed off the vin, not off `prunable.is_some()`.
     ///
     /// This is the **one boundary** where "pruned tx where full required" is made
     /// unrepresentable — consensus code that requires a full spend takes a
@@ -2081,6 +2076,9 @@ impl Transaction {
     /// consumer (the honest parse result keeps `prunable` as an `Option<Prunable>` on the
     /// `Ct::Fcmp` confidential section).
     pub fn into_full(self) -> Result<FullTransaction, PrunedError> {
+        if self.prefix.is_serve_credit_only() {
+            return Err(PrunedError);
+        }
         match &self.ct {
             Ct::Fcmp {
                 prunable: Some(_), ..
@@ -2090,8 +2088,8 @@ impl Transaction {
     }
 }
 
-/// The error from [`Transaction::into_full`]: the transaction carries no prunable proof
-/// data (a coinbase `Null` ct, or a fee-only / serve-credit `Fcmp` with `prunable: None`).
+/// The error from [`Transaction::into_full`]: the transaction carries no prunable
+/// spend-proof (coinbase `Null`, storage-pruned spend, or serve-credit).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PrunedError;
 
@@ -2103,9 +2101,10 @@ impl core::fmt::Display for PrunedError {
 
 impl std::error::Error for PrunedError {}
 
-/// A [`Transaction`] *guaranteed* to carry prunable proof data — the typed view produced
-/// by [`Transaction::into_full`] (`GENESIS_TX_WIRE_FORMAT.md` §4). Constructible only
-/// through that conversion, so the `prunable`-present invariant holds by construction.
+/// A [`Transaction`] *guaranteed* to carry prunable **spend-proof** data — the typed
+/// view produced by [`Transaction::into_full`] (`GENESIS_TX_WIRE_FORMAT.md` §4).
+/// Constructible only through that conversion, so serve-credit (pass records in the
+/// prunable region) and storage-pruned spends are unrepresentable here.
 /// Derefs to the underlying [`Transaction`].
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FullTransaction(Transaction);

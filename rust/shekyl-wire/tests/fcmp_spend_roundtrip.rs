@@ -585,4 +585,8 @@ fn into_full_typed_view() {
         commitments: Vec::new(),
     });
     assert!(null_ct.into_full().is_err());
+
+    // Serve-credit has a prunable *region* after RF-D1, but it is not a
+    // spend proof — `into_full` is typed off the vin, not off `Some`.
+    assert_eq!(serve_credit_tx(1).into_full().unwrap_err(), PrunedError);
 }

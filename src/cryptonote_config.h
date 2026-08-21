@@ -411,8 +411,8 @@ namespace config
       1 + MAX_MULTISIG_PARTICIPANTS * (PQC_HYBRID_SINGLE_SIG_LEN + 1),
       "PQC_MAX_SIGNATURE_BLOB below the largest legal MultisigSigContainer — see MSW-1/F-1");
 
-  // Archival serve-credit vin (gate-2 §5.1); bounds match shekyl-archival-retention::wire.
-  constexpr size_t ARCHIVAL_LEAF_BYTES = 128;
+  // Archival serve-credit transport ceilings (gate-2 §5.1 / RF-D1). The
+  // interior is shekyl-archival-retention::wire; these size the opaque blobs.
   constexpr size_t ARCHIVAL_MAX_PATH_LAYERS_PER_KIND = 64;
   constexpr size_t ARCHIVAL_MAX_BRANCH_SCALARS = 256;
 
@@ -428,7 +428,8 @@ namespace config
   constexpr size_t ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES =
     2 * (10 + ARCHIVAL_MAX_PATH_LAYERS_PER_KIND * (10 + ARCHIVAL_MAX_BRANCH_SCALARS * 32)) + 3309;
   static_assert(ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES == 117, "twin of shekyl-wire's ceiling");
-  static_assert(ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES == 1053185, "twin of shekyl-wire's ceiling");
+  static_assert(ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES == 1053185,
+    "twin of shekyl-wire and rct::CtSigPrunable::SERVE_CREDIT_PRUNED_MAX_BYTES");
   // The DETERMINISTIC size of one pruned pass record for a frozen segment at
   // SEGMENT_LAYER_J = 2 (depth 3: one Selene branch layer of 38 scalars, one
   // Helios of 18 -- CR-D2's 1,792 B) plus the ML-DSA leg, plus the per-record

@@ -57,6 +57,28 @@ use crate::segment::{leaves_per_segment, LEAF_BYTES};
 /// [`LEAF_BYTES`] where the arithmetic is in `u64`.
 const LEAF_BYTES_U64: u64 = LEAF_BYTES as u64;
 
+/// Which leading varint of a served frame failed to read.
+///
+/// Named because a fetcher parsing an untrusted response needs to know
+/// *which* length was malformed — a truncated `padding_len` is a different
+/// diagnosis from a non-canonical `leaf_count`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServedFrameField {
+    /// The first varint: declared leaf count.
+    LeafCount,
+    /// The second varint: declared padding length.
+    PaddingLen,
+}
+
+impl std::fmt::Display for ServedFrameField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LeafCount => f.write_str("leaf_count"),
+            Self::PaddingLen => f.write_str("padding_len"),
+        }
+    }
+}
+
 /// Why a frame header was refused.
 ///
 /// Both bounds are checked **before** the header is constructed, so a
@@ -83,14 +105,15 @@ pub enum ServedFrameError {
         /// `leaf_count x LEAF_BYTES` for the same header.
         max: u64,
     },
-    /// The header could not be read (short read, or a non-canonical varint).
-    Io(io::Error),
-}
-
-impl From<io::Error> for ServedFrameError {
-    fn from(e: io::Error) -> Self {
-        Self::Io(e)
-    }
+    /// A leading varint could not be read (short read, or a non-canonical
+    /// encoding). The `field` names which length failed so a fetcher does
+    /// not have to reconstruct it from stream position.
+    Io {
+        /// Which header field the reader was on.
+        field: ServedFrameField,
+        /// The underlying I/O or canonical-varint error.
+        source: io::Error,
+    },
 }
 
 impl std::fmt::Display for ServedFrameError {
@@ -105,7 +128,9 @@ impl std::fmt::Display for ServedFrameError {
                 "served frame declares {padding_len} padding bytes; at most {max} (one segment's \
                  worth) is accepted"
             ),
-            Self::Io(e) => write!(f, "served frame header unreadable: {e}"),
+            Self::Io { field, source } => {
+                write!(f, "served frame {field} unreadable: {source}")
+            }
         }
     }
 }
@@ -113,7 +138,7 @@ impl std::fmt::Display for ServedFrameError {
 impl std::error::Error for ServedFrameError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io(e) => Some(e),
+            Self::Io { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -242,12 +267,15 @@ impl ServedFrameHeader {
     ///
     /// # Errors
     ///
-    /// [`ServedFrameError::Io`] on a short read or a non-canonical varint,
-    /// [`ServedFrameError::LeafCountTooLarge`] past one segment, and
-    /// [`ServedFrameError::PaddingTooLarge`] past one segment's worth of
-    /// padding.
+    /// [`ServedFrameError::Io`] on a short read or a non-canonical varint
+    /// (the variant names which field), [`ServedFrameError::LeafCountTooLarge`]
+    /// past one segment, and [`ServedFrameError::PaddingTooLarge`] past one
+    /// segment's worth of padding.
     pub fn read<R: Read>(r: &mut R) -> Result<Self, ServedFrameError> {
-        let leaf_count: u64 = read_varint(r)?;
+        let leaf_count: u64 = read_varint(r).map_err(|source| ServedFrameError::Io {
+            field: ServedFrameField::LeafCount,
+            source,
+        })?;
         let max_leaves = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
         if leaf_count > max_leaves {
             return Err(ServedFrameError::LeafCountTooLarge {
@@ -255,7 +283,10 @@ impl ServedFrameHeader {
                 max: max_leaves,
             });
         }
-        let padding_len: u64 = read_varint(r)?;
+        let padding_len: u64 = read_varint(r).map_err(|source| ServedFrameError::Io {
+            field: ServedFrameField::PaddingLen,
+            source,
+        })?;
         // Safe only because `leaf_count` was bounded above: at
         // `leaves_per_segment()` this product is ~3.3e6, and an unbounded
         // `leaf_count` would overflow it (panicking in debug, wrapping in
@@ -439,7 +470,10 @@ mod tests {
         let bytes = [0x80u8, 0x00];
         assert!(matches!(
             ServedFrameHeader::read(&mut bytes.as_slice()),
-            Err(ServedFrameError::Io(_))
+            Err(ServedFrameError::Io {
+                field: ServedFrameField::LeafCount,
+                ..
+            })
         ));
     }
 
@@ -449,7 +483,10 @@ mod tests {
         let bytes = [0x01u8];
         assert!(matches!(
             ServedFrameHeader::read(&mut bytes.as_slice()),
-            Err(ServedFrameError::Io(_))
+            Err(ServedFrameError::Io {
+                field: ServedFrameField::PaddingLen,
+                ..
+            })
         ));
     }
 }

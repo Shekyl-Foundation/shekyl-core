@@ -48,7 +48,6 @@ extern "C" {
 #include "crypto/crypto.h"
 
 #include "hex.h"
-#include "cryptonote_config.h"
 #include "span.h"
 #include "memwipe.h"
 #include "serialization/containers.h"
@@ -309,6 +308,16 @@ namespace rct {
         // (tests/unit_tests/tx_prunable_region_sole_occupant.cpp).
         std::vector<std::vector<uint8_t>> serve_credit_pruned;
 
+        // Twin of `config::ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES` and
+        // `shekyl-wire::ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`. Local so this
+        // header does not include cryptonote_config; the literal is pinned on
+        // every side (`== 1053185`). Formula: 2 kinds × (count varint + 64
+        // layers × (width varint + 256 × 32)) + ML-DSA-65.
+        static constexpr size_t SERVE_CREDIT_PRUNED_MAX_BYTES =
+          2 * (10 + 64 * (10 + 256 * 32)) + 3309;
+        static_assert(SERVE_CREDIT_PRUNED_MAX_BYTES == 1053185,
+          "twin of cryptonote_config / shekyl-wire");
+
         // when changing this function, update cryptonote::get_pruned_transaction_weight
         //
         // `inputs` is the pseudo-out count: the number of txin_to_key (spend)
@@ -397,7 +406,7 @@ namespace rct {
             {
               FIELDS(serve_credit_pruned[i])
               if (serve_credit_pruned[i].empty()
-                  || serve_credit_pruned[i].size() > config::ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES)
+                  || serve_credit_pruned[i].size() > SERVE_CREDIT_PRUNED_MAX_BYTES)
                 return false;
               if (serve_credit_inputs - i > 1)
                 ar.delimit_array();

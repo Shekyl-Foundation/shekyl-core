@@ -251,19 +251,6 @@ namespace boost
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, cryptonote::archival_leaf_bytes &x, const boost::serialization::version_type ver)
-  {
-    a & x.data;
-  }
-
-  template <class Archive>
-  inline void serialize(Archive &a, cryptonote::archival_segment_path_opening &x, const boost::serialization::version_type ver)
-  {
-    a & x.c1_layers;
-    a & x.c2_layers;
-  }
-
-  template <class Archive>
   inline void serialize(Archive &a, cryptonote::archival_holdings_descriptor &x, const boost::serialization::version_type ver)
   {
     a & x.kind;

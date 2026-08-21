@@ -569,50 +569,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_to_key& txin)
   GET_FROM_JSON_OBJECT(val, txin.k_image, key_image);
 }
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_leaf_bytes& leaf)
-{
-  std::vector<uint8_t> bytes(leaf.data, leaf.data + ::config::ARCHIVAL_LEAF_BYTES);
-  toJsonValue(dest, bytes);
-}
-
-void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_leaf_bytes& leaf)
-{
-  std::vector<uint8_t> bytes;
-  fromJsonValue(val, bytes);
-  if (bytes.size() != ::config::ARCHIVAL_LEAF_BYTES)
-  {
-    const std::string expect = std::to_string(::config::ARCHIVAL_LEAF_BYTES) + " byte archival leaf";
-    throw WRONG_TYPE(expect.c_str());
-  }
-  memcpy(leaf.data, bytes.data(), ::config::ARCHIVAL_LEAF_BYTES);
-}
-
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_segment_path_opening& path)
-{
-  dest.StartObject();
-  INSERT_INTO_JSON_OBJECT(dest, c1_layers, path.c1_layers);
-  INSERT_INTO_JSON_OBJECT(dest, c2_layers, path.c2_layers);
-  dest.EndObject();
-}
-
-void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_segment_path_opening& path)
-{
-  if (!val.IsObject())
-    throw WRONG_TYPE("json object");
-  GET_FROM_JSON_OBJECT(val, path.c1_layers, c1_layers);
-  GET_FROM_JSON_OBJECT(val, path.c2_layers, c2_layers);
-  if (path.c1_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND
-    || path.c2_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND)
-    throw WRONG_TYPE("archival segment path layer count exceeds bound");
-  for (const auto& branch : path.c1_layers)
-    if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
-      throw WRONG_TYPE("archival segment path branch width exceeds bound");
-  for (const auto& branch : path.c2_layers)
-    if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
-      throw WRONG_TYPE("archival segment path branch width exceeds bound");
-}
-
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_serve_credit_response& txin)
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_serve_credit_response& txin);
 {
   dest.StartObject();
   INSERT_INTO_JSON_OBJECT(dest, canonical_bytes, txin.canonical_bytes);
@@ -1448,14 +1405,9 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
     GET_FROM_JSON_OBJECT(prunable->value, pseudo_outs, pseudo_outs);
     GET_FROM_JSON_OBJECT(prunable->value, sig.p.curve_trees_tree_depth, curve_trees_tree_depth);
     GET_FROM_JSON_OBJECT(prunable->value, sig.p.fcmp_pp_proof, fcmp_pp_proof);
-    if (prunable->value.HasMember("serve_credit_pruned"))
-    {
-      GET_FROM_JSON_OBJECT(prunable->value, sig.p.serve_credit_pruned, serve_credit_pruned);
-    }
-    else
-    {
-      sig.p.serve_credit_pruned.clear();
-    }
+    // Required, matching the binary array: a missing key is not an empty
+    // spend. Spends carry `[]`; serve-credit carries one blob per vin.
+    GET_FROM_JSON_OBJECT(prunable->value, sig.p.serve_credit_pruned, serve_credit_pruned);
 
     sig.get_pseudo_outs() = std::move(pseudo_outs);
   }

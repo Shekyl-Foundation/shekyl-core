@@ -109,7 +109,9 @@ pub fn challenged_leaf_offset_in_chunk(shard_id: u64, leaf_index_in_segment: u64
 /// the chunk is `[⌊global / W⌋ * W, +W)` with `W = SELENE_CHUNK_WIDTH`.
 /// Returns `None` when `leaf_index_in_segment` is out of segment range
 /// or the global position overflows `u64` — both are verifier-input
-/// rejections, not panics (the challenged index is untrusted wire input).
+/// rejections, not panics. After RF-D6 the index is **verifier-derived**
+/// (`challenge_leaf_index`), never a wire field; an out-of-range value is
+/// a geometry disagreement with the registry, not a prover-chosen index.
 #[must_use]
 pub fn challenge_leaf_chunk_bounds(
     shard_id: u64,

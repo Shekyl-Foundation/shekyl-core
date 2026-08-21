@@ -20,7 +20,7 @@ use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_io::{read_byte, read_bytes, read_varint, write_varint};
 
 use crate::challenge::SERVE_CREDIT_RESPONSE_CUSTOMIZATION;
-use crate::path::SegmentPathOpening;
+use crate::path::{SegmentPathOpening, CHALLENGED_LEAF_LEN};
 
 /// Vin type tag: `txin_archival_serve_credit_response` (gate-2 §5.1).
 ///
@@ -108,10 +108,7 @@ impl ArchivalServeCreditPruned {
     /// Length-delimited parse: reject unread trailing bytes (FFI slice).
     pub fn read_exact<R: Read>(r: &mut R) -> Result<Self, WireError> {
         let pruned = Self::read(r)?;
-        ensure_payload_fully_consumed(r).map_err(|e| match e {
-            ExactParseError::TrailingBytes => WireError::TrailingBytes,
-            ExactParseError::Io(err) => WireError::Io(err),
-        })?;
+        ensure_payload_fully_consumed(r)?;
         Ok(pruned)
     }
 }
@@ -151,7 +148,6 @@ pub enum WireError {
     UnknownVinType(u8),
     LayerCountExceeded { kind: &'static str, got: usize },
     BranchWidthExceeded { layer: usize, got: usize },
-    InvalidHybridSignature(String),
     TrailingBytes,
 }
 
@@ -166,7 +162,6 @@ impl fmt::Display for WireError {
             Self::BranchWidthExceeded { layer, got } => {
                 write!(f, "path branch {layer} too wide: {got} scalars")
             }
-            Self::InvalidHybridSignature(msg) => write!(f, "invalid hybrid signature: {msg}"),
             Self::TrailingBytes => write!(f, "trailing bytes after vin payload"),
         }
     }
@@ -208,6 +203,15 @@ impl std::error::Error for WireError {
 impl From<io::Error> for WireError {
     fn from(e: io::Error) -> Self {
         Self::Io(e)
+    }
+}
+
+impl From<ExactParseError> for WireError {
+    fn from(e: ExactParseError) -> Self {
+        match e {
+            ExactParseError::TrailingBytes => Self::TrailingBytes,
+            ExactParseError::Io(err) => Self::Io(err),
+        }
     }
 }
 
@@ -307,10 +311,7 @@ impl ArchivalServeCreditResponse {
     /// Length-delimited parse: reject unread trailing bytes (FFI vin payload).
     pub fn read_payload_exact<R: Read>(r: &mut R) -> Result<Self, WireError> {
         let response = Self::read_payload(r)?;
-        ensure_payload_fully_consumed(r).map_err(|e| match e {
-            ExactParseError::TrailingBytes => WireError::TrailingBytes,
-            ExactParseError::Io(err) => WireError::Io(err),
-        })?;
+        ensure_payload_fully_consumed(r)?;
         Ok(response)
     }
 
@@ -365,10 +366,10 @@ impl ArchivalServeCreditResponse {
         &self,
         segment_subroot_rk: &[u8; 32],
         leaf_index_in_segment: u32,
-        leaf_bytes: &[u8; 128],
+        leaf_bytes: &[u8; CHALLENGED_LEAF_LEN],
         path: &SegmentPathOpening,
     ) -> [u8; 32] {
-        let mut input = Vec::with_capacity(32 + 8 + 8 + 32 + 4 + 128 + 256);
+        let mut input = Vec::with_capacity(32 + 8 + 8 + 32 + 4 + CHALLENGED_LEAF_LEN + 256);
         input.extend_from_slice(&self.p_canonical_id);
         input.extend_from_slice(&self.shard_id.to_le_bytes());
         input.extend_from_slice(&self.settlement_epoch.to_le_bytes());

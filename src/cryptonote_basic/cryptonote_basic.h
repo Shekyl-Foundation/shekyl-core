@@ -154,40 +154,6 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  struct archival_leaf_bytes
-  {
-    uint8_t data[config::ARCHIVAL_LEAF_BYTES];
-
-    bool operator==(const archival_leaf_bytes& o) const
-    {
-      for (size_t i = 0; i < sizeof(data); ++i)
-        if (data[i] != o.data[i])
-          return false;
-      return true;
-    }
-  };
-
-  struct archival_segment_path_opening
-  {
-    std::vector<std::vector<crypto::hash>> c1_layers;
-    std::vector<std::vector<crypto::hash>> c2_layers;
-
-    BEGIN_SERIALIZE_OBJECT()
-      FIELD(c1_layers)
-      if (c1_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND)
-        return false;
-      for (const auto& branch : c1_layers)
-        if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
-          return false;
-      FIELD(c2_layers)
-      if (c2_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND)
-        return false;
-      for (const auto& branch : c2_layers)
-        if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
-          return false;
-    END_SERIALIZE()
-  };
-
   enum class archival_bond_post_kind : uint8_t
   {
     JoinMarket = 0,
@@ -1018,7 +984,6 @@ namespace std {
 
 BLOB_SERIALIZER(cryptonote::txout_to_key);
 BLOB_SERIALIZER(cryptonote::txout_to_scripthash);
-BLOB_SERIALIZER(cryptonote::archival_leaf_bytes);
 
 // Genesis dense tag scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c) item 2).
 // Surviving genesis arms are numbered dense from 0x00; the shed CryptoNote/legacy

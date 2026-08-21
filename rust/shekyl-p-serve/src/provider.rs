@@ -129,7 +129,10 @@ fn flat_header(len: usize) -> Option<ServedFrameHeader> {
 /// is what lets the response head — including `content-length` — go out
 /// before the store is touched at all.
 #[derive(Debug)]
-pub struct ShardBody(Source, ServedFrameHeader);
+pub struct ShardBody {
+    source: Source,
+    header: ServedFrameHeader,
+}
 
 /// Where a body's bytes come from. Private: the production and fixture
 /// sources differ in cost, not in contract, and the wire path must not be
@@ -157,14 +160,20 @@ impl ShardBody {
     #[must_use]
     pub fn flat(bytes: Arc<[u8]>) -> Option<Self> {
         let header = flat_header(bytes.len())?;
-        Some(Self(Source::Flat { bytes, read: 0 }, header))
+        Some(Self {
+            source: Source::Flat { bytes, read: 0 },
+            header,
+        })
     }
 
     /// A store-backed frozen-segment body.
     #[must_use]
     pub fn segment(body: FrozenSegmentBody) -> Self {
         let header = body.frame_header();
-        Self(Source::Segment(body), header)
+        Self {
+            source: Source::Segment(body),
+            header,
+        }
     }
 
     /// The served-frame header for this body — the two leading lengths, and
@@ -180,7 +189,7 @@ impl ShardBody {
     /// serving task for the sake of a value that was already known.
     #[must_use]
     pub fn header(&self) -> ServedFrameHeader {
-        self.1
+        self.header
     }
 
     /// Bytes of *payload* not yet read.
@@ -191,7 +200,7 @@ impl ShardBody {
     /// it shrinks as chunks are taken.
     #[must_use]
     pub fn remaining_bytes(&self) -> usize {
-        match &self.0 {
+        match &self.source {
             Source::Segment(body) => body.remaining_bytes(),
             Source::Flat { bytes, read } => bytes.len() - read,
         }
@@ -205,7 +214,7 @@ impl ShardBody {
     /// response head is already on the wire by then, so the loop can only
     /// close; the counter is the signal.
     pub fn next_chunk(&mut self, max_bytes: usize) -> Result<Option<Vec<u8>>, ProviderError> {
-        match &mut self.0 {
+        match &mut self.source {
             Source::Segment(body) => body
                 .next_chunk(max_bytes)
                 .map_err(ProviderError::from_store),

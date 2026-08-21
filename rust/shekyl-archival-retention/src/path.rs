@@ -50,6 +50,12 @@ use shekyl_fcmp::tree::{
 
 const ZERO: [u8; 32] = [0u8; 32];
 
+/// Width of one challenged leaf — `SCALARS_PER_LEAF` Selene scalars. Twin of
+/// `shekyl_curve_tree::LEAF_BYTES`; this crate does not take that edge, so
+/// the width is the scalar fact rather than a second imported number.
+pub const CHALLENGED_LEAF_LEN: usize = SCALARS_PER_LEAF * 32;
+const _: () = assert!(CHALLENGED_LEAF_LEN == 128);
+
 /// Sibling branches from a segment leaf to frozen sub-root `R_k`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SegmentPathOpening {
@@ -108,13 +114,13 @@ fn recompute_subroot(path: &SegmentPathOpening) -> [u8; 32] {
 pub fn challenged_leaf_bytes(
     leaf_layer_scalars: &[[u8; 32]],
     leaf_offset_in_chunk: usize,
-) -> Option<[u8; 128]> {
+) -> Option<[u8; CHALLENGED_LEAF_LEN]> {
     if !leaf_layer_scalars.len().is_multiple_of(SCALARS_PER_LEAF) {
         return None;
     }
     let start = leaf_offset_in_chunk.checked_mul(SCALARS_PER_LEAF)?;
     let scalars = leaf_layer_scalars.get(start..start.checked_add(SCALARS_PER_LEAF)?)?;
-    let mut packed = [0u8; 128];
+    let mut packed = [0u8; CHALLENGED_LEAF_LEN];
     for (j, scalar) in scalars.iter().enumerate() {
         packed[j * 32..(j + 1) * 32].copy_from_slice(scalar);
     }
