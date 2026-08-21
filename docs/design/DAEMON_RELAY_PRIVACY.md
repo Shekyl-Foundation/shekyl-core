@@ -15129,7 +15129,7 @@ survives the transit round.** §44.3 separated two referents that share the name
   **it** does not change the wire; it lengthens the derived embargo, which
   **reduces** the prefix-fire leak (measured 2.91 → 2.23 %) and improves disarm.
 
-So **over-estimating the transit constant is privacy-*safe*** — the **wire**
+So **over-estimating the transit constant is privacy-safe** — the **wire**
 leak is untouched (the constant is a derivation input, not the wire quantity),
 while **prefix-fire** leak *decreases* and **disarm** improves — at a
 **black-hole recovery-latency** cost only. This is
