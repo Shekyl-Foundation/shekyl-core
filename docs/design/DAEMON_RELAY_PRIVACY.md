@@ -15129,8 +15129,10 @@ survives the transit round.** §44.3 separated two referents that share the name
   **it** does not change the wire; it lengthens the derived embargo, which
   **reduces** the prefix-fire leak (measured 2.91 → 2.23 %) and improves disarm.
 
-So **over-estimating the transit constant is privacy-*safe*** — both privacy
-axes improve — at a **black-hole recovery-latency** cost only. This is
+So **over-estimating the transit constant is privacy-*safe*** — the **wire**
+leak is untouched (the constant is a derivation input, not the wire quantity),
+while **prefix-fire** leak *decreases* and **disarm** improves — at a
+**black-hole recovery-latency** cost only. This is
 **magnitude-independent**: a longer embargo reduces prefix-fire leak
 monotonically, so the sign does not flip when transit becomes the dominant term
 (§91.6). **Transit-dominance therefore does not reopen the err-high sign.** What
@@ -15138,7 +15140,7 @@ it changes is priced below.
 
 **Three consequences, fixed before the number:**
 
-1. **Compose the constant at the measured p90 (§94.2(d)) — not p90-plus-a-
+1. **Compose the constant at the measured p90 (§94.2(d)) — not the p90 plus a
    margin, and the reason is provenance, not privacy.** §44.3 shows extra margin
    above the measurement would be privacy-safe, so the objection to it is *not* a
    leak cost; it is that bolting the old assumption's cushion onto a measured
