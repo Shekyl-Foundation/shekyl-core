@@ -4442,6 +4442,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-rt-p2-spike"
+version = "3.1.0"
+dependencies = [
+ "axum",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "sha2",
+ "tokio",
+ "tokio-rustls",
+ "x509-parser",
+]
+
+[[package]]
 name = "shekyl-scanner"
 version = "3.1.0"
 dependencies = [

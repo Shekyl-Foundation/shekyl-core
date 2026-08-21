@@ -1,0 +1,31 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-rt-p2-spike"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DISPOSABLE probe: RT-P2, pinned mutual TLS under axum with the wrong-pin bite check (RPC_TRANSPORT_POSTURE.md §7.1). Not canonical; RT-W4 rewrites what it keeps."
+publish = false
+
+# Every dependency below was already in Cargo.lock before this crate existed
+# (rule 17: no new supply-chain surface for a probe). rustls/tokio-rustls come
+# through shekyl-rpc-transport's HTTPS client; rcgen and x509-parser through
+# shekyl-ffi; sha2 is a workspace dependency.
+[dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = "1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rcgen = "0.14"
+x509-parser = "0.18"
+sha2 = { workspace = true }
+axum = "0.8"
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "io-util", "time", "sync"] }
+
+[lints]
+workspace = true

@@ -29,6 +29,12 @@ members = [
     # See DAEMON_RELAY_PRIVACY.md §94.
     "shekyl-tor-transit-spike",
 
+    # DISPOSABLE probe (RT-P2, RPC_TRANSPORT_POSTURE.md §7.1): pinned mutual TLS
+    # under axum with the wrong-pin bite check. Named `-spike` on purpose --
+    # nothing in it is canonical; RT-W4 rewrites what it keeps and deletes the
+    # rest (rule 15: debt, labelled at birth).
+    "shekyl-rt-p2-spike",
+
     # Canonical genesis block/tx binary wire-format serializer — the clean,
     # Shekyl-owned replacement for the vendored shekyl-oxide block/tx/ct modules
     # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).
